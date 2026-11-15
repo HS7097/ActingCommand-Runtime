@@ -2215,11 +2215,12 @@
       "params": [
         {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: actinglab's default instance; on the command line only --instance <x> (actinglab's own command reads no positional instance)"},
         {"name": "record_id", "form": "option", "type": "string", "required": false, "note": "an archived recording of the instance, named again by the record_id its session header carried: no second manifest, its files checked, and copied with copy_to; or a recording record start --force left behind (its step table active, the session header another recording's): its manifest written from its own step table, the session header left as it is; absent: the instance's active recording"},
-        {"name": "copy_to", "form": "option", "type": "dir", "required": false, "note": "an absolute path of a directory that does not exist or is empty: the frames, the step table and the manifest are copied there and each copy is checked against the manifest; an empty, blank or relative path (validation_failed) or another directory is refused before anything is written"},
+        {"name": "copy_to", "form": "option", "type": "dir", "required": false, "note": "an absolute path of a directory that does not exist or is empty: the step table, the manifest and (#463 S1-5) the frames its material names are copied there and each copy is checked against the manifest; an empty, blank or relative path (validation_failed) or another directory is refused before anything is written"},
+        {"name": "all_frames", "form": "switch", "type": "boolean", "required": false, "note": "#463 S1-5, with copy_to: the copy holds every frame the manifest lists, superseded ones included, and its manifest says copy.frames all; without copy_to validation_failed (all_frames, copy_to_only)"},
         {"name": "state_dir", "form": "option", "type": "dir", "required": false, "note": "the recording session directory; default actinglab's"}
       ],
-      "help": "Ends the instance's active recording as material only: writes its manifest beside its frames and step table, keeps every file, and can copy them.",
-      "output": "the session header, archived, and the manifest of the recording; with copy_to the files copied and checked",
+      "help": "Ends a recording as material (stage one): writes its manifest (the presses, their screens and the final screen), keeps every file, and can copy them.",
+      "output": "the session header, archived, and the manifest of the recording with lab.warnings (final_frame_missing); with copy_to the files copied and checked",
       "writes": true,
       "irreversible": false,
       "runtime": "offline",
@@ -2229,7 +2230,7 @@
       "new": "#449",
       "slice": "REC-ARCH",
       "status": "planned",
-      "notes": "Workflow #449 REC-ARCH (0.12.59; contracts/lab-recording.md, Archiving): it requires no mark and no last step without an effect, writes archive-manifest-<n>.json into the recording's own directory and never deletes, moves or rewrites a frame or the step table; the session ends in its own state, archived, so that record start needs no --force; a copy that fails names the file and the reason, deletes nothing and leaves the recording archived. Fix 1: copy_to must be an absolute path; a recording record start --force left behind is archived by its record_id, its session header (another recording's) unchanged and named in the answer's lab.session_header"
+      "notes": "Workflow #449 REC-ARCH (0.12.59; contracts/lab-recording.md, Archiving): it requires no mark and no last step without an effect, writes archive-manifest-<n>.json into the recording's own directory and never deletes, moves or rewrites a frame or the step table; the session ends in its own state, archived, so that record start needs no --force; a copy that fails names the file and the reason, deletes nothing and leaves the recording archived. Fix 1: copy_to must be an absolute path; a recording record start --force left behind is archived by its record_id, its session header (another recording's) unchanged and named in the answer's lab.session_header. #463 S1-5 (0.12.63; contracts/lab-recording.md, Archiving, The manifest): the manifest written is actingcommand.lab-recording-archive.v2: each row names the frame its effect was on and the frame after it (derived: true where the step table named none), and material names what stage one hands over, each press with its frame and where it was pressed and the final screen; a v1 manifest on disk is read, verified, copied as it is and reopened, never rewritten; lab.warnings holds final_frame_missing when the manifest names no final screen, and the archive stands"
     },
     {
       "name": "record reopen",

@@ -151,6 +151,7 @@ fn completed() -> ApplicationExecution {
         before_frame: None,
         after_frame: None,
         after_capture: None,
+        executed_at_unix_ms: None,
     }
 }
 

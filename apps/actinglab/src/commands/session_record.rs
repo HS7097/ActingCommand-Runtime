@@ -12,12 +12,12 @@ use crate::{
 };
 use actingcommand_device::{CaptureBackendName, Frame, PixelFormat};
 use actingcommand_lab::{
-    ApplicationSpec, ClickRetry, ClickSpec, EndingSpec, LAB_RECORD_MARK_SCHEMA, MarkFamily,
-    MarkRequest, MarkSpec, RecordArchiveOptions, RecordRect, RecordReopenOptions,
+    ApplicationSpec, ArchiveCopyFrames, ClickRetry, ClickSpec, EndingSpec, LAB_RECORD_MARK_SCHEMA,
+    MarkFamily, MarkRequest, MarkSpec, RecordArchiveOptions, RecordRect, RecordReopenOptions,
     RecordStartOptions, RecordStopOptions, RecordingLock, StepAction, StepActionKind,
     TemplateScalesSpec, TransitionSpec, parse_mark_request, record_archive, record_archive_copy,
-    record_instance_check, record_mark, record_reopen, record_start, record_start_defaults,
-    record_status, record_stop, record_stop_close,
+    record_archive_warnings, record_instance_check, record_mark, record_reopen, record_start,
+    record_start_defaults, record_status, record_stop, record_stop_close,
 };
 use actingcommand_recognition::{MatchMetric, Rect as RecognitionRect};
 use actingcommand_resource_tooling::canonical_locale;
@@ -346,14 +346,14 @@ pub(crate) const RECORD_STATUS_READS: FlagReads = FlagReads {
 };
 
 /// Workflow #449 REC-ARCH: the flags `record archive` reads: the recording named by its id and the
-/// directory it is copied to.
+/// directory it is copied to; #463 S1-5: and whether the copy holds every frame (`--all-frames`).
 pub(crate) const RECORD_ARCHIVE_READS: FlagReads = FlagReads {
     row: "record archive",
     parts: &[
         &RECORD_SESSION_READS,
         &ReadPart {
             options: &["--record-id", "--copy-to"],
-            switches: &[],
+            switches: &["--all-frames"],
             refused: &[],
         },
     ],
@@ -2972,7 +2972,7 @@ pub(crate) fn read_mark_request_file(path: &str) -> CliOutcome<MarkRequest> {
     parse_mark_request(&text)
 }
 
-/// Workflow #449 REC-ARCH: `record archive [--record-id <id>] [--copy-to <dir>]`
+/// Workflow #449 REC-ARCH: `record archive [--record-id <id>] [--copy-to <dir> [--all-frames]]`
 /// (`contracts/lab-recording.md`, "Archiving"). The Lab writes the recording's manifest, or reads
 /// the one an archived recording named again has; the session header of the instance's active
 /// recording becomes `archived` before any copy; then the copy, checked against the manifest. A
@@ -2982,6 +2982,10 @@ pub(crate) fn read_mark_request_file(path: &str) -> CliOutcome<MarkRequest> {
 /// its manifest in its details too; a recording the header does not name (one `record start
 /// --force` left behind) leaves the header as it is (`ends_session` false). The copy target must be
 /// an absolute path: the Lab refuses another (`validation_failed`) before anything is written.
+/// #463 S1-5: the copy holds the manifest's material, or every frame with `--all-frames`, which
+/// without `--copy-to` is `validation_failed` (`details{argument: "all_frames", reason:
+/// "copy_to_only"}`) before the session is read; the answer's `lab.warnings` holds
+/// `final_frame_missing` when the manifest names no final screen.
 fn run_record_archive(
     flags: &FlagArgs,
     record_path: &Path,
@@ -2992,6 +2996,18 @@ fn run_record_archive(
         copy_to: record_flag_value(flags, "--copy-to")?,
         written_by: env!("ACTINGCOMMAND_RUNTIME_HEAD").to_owned(),
     };
+    let frames = if flags.bool("--all-frames") {
+        ArchiveCopyFrames::All
+    } else {
+        ArchiveCopyFrames::Material
+    };
+    if frames == ArchiveCopyFrames::All && options.copy_to.is_none() {
+        return Err(CliError::usage(
+            "--all-frames is accepted only with --copy-to: it names what the copy holds; nothing \
+             was written",
+        )
+        .with_details(json!({"argument": "all_frames", "reason": "copy_to_only"})));
+    }
     let mut archived = record_archive(lock, &options)?;
     // Fix 1: the manifest is there, written now or before; a person must learn that from a failure
     // of the session header as well.
@@ -3004,6 +3020,7 @@ fn run_record_archive(
             ],
         )
     };
+    let warnings = record_archive_warnings(&archived).map_err(with_manifest)?;
     let mut record = read_json_file::<SessionRecordContext>(record_path).map_err(with_manifest)?;
     if archived.ends_session
         && let Some(record) = record.as_mut()
@@ -3013,7 +3030,7 @@ fn run_record_archive(
         write_json_file_atomic(record_path, &*record).map_err(with_manifest)?;
     }
     if let Some(target) = &options.copy_to {
-        let copy = record_archive_copy(lock, &archived, target).map_err(|error| {
+        let copy = record_archive_copy(lock, &archived, target, frames).map_err(|error| {
             with_archive_context(
                 error,
                 &[
@@ -3027,12 +3044,14 @@ fn run_record_archive(
     }
     let status = archived.status.clone();
     let record = record.filter(|record| record.record_id == archived.record_id);
-    Ok(json!({
+    let mut answer = json!({
         "status": status,
         "record": record,
         "path": record_path.display().to_string(),
         "lab": archived
-    }))
+    });
+    answer["lab"]["warnings"] = json!(warnings);
+    Ok(answer)
 }
 
 /// Workflow #449 REC-ARCH: `error` with `context` added to its details, an object (details of

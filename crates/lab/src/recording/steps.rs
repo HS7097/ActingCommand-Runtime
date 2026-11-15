@@ -4125,7 +4125,8 @@ pub(crate) fn plan_application(
 /// Records the Runtime result of a planned application operation. Performed: the completed
 /// receipt is the step's executed effect and closes it (`closed_by:"application"`); #463 S1-3: it
 /// names the step's live primary frame as its `before_frame` (none on the entry step), and the
-/// first frame that arrives after it becomes its `after_frame` ([`note_after_frame`]).
+/// first frame that arrives after it becomes its `after_frame` ([`note_after_frame`]); #463 S1-5:
+/// and it is stamped `executed_at_unix_ms`, on the clock a click's execution is stamped with.
 /// Indeterminate: the step declares the operation with one more attempt and stays open.
 /// Returns the step's application, whether it was opened and whether it was closed.
 pub(crate) fn commit_application(
@@ -4168,6 +4169,7 @@ pub(crate) fn commit_application(
         CommitApplicationRequest::Performed(execution) => {
             application.executed = Some(super::model::ApplicationExecution {
                 before_frame,
+                executed_at_unix_ms: Some(now_unix_ms()),
                 ..execution.clone()
             });
             application.source = "executed".to_string();

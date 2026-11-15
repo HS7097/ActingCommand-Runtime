@@ -2319,3 +2319,15 @@ tests = [
     "actingcommand-lab-ops::lib::overview::tests::d4a_a_spent_call_budget_is_a_warning_beside_a_successful_answer",
 ]
 incident = ["#469 D4a"]
+
+# #463 S1-5 (0.12.63; register §1.406; brief rd-1115/brief-463-s15-manifest-v2.md; contracts/lab-recording.md, "Archiving", "The manifest"; contracts/lab-operations.json, the row record archive; board #463): record archive writes the manifest actingcommand.lab-recording-archive.v2 only. A business as stage one records it (a launch on the empty recording, a tap, a long press, a swipe and a restart): each row names the frames the step table names for its effect (before_frame, after_frame with its row, after_capture, derived false, outcome, tap.rect and long_press.rect null for a press declared by its point, the frames with superseded and recorded_at_unix_ms, the launch's time), material.clicks each press with its frame (none for the entry step, entry true) and where it was pressed, material.final_frame the screen after the restart, no warning. Presses of do --capture --record: before_frame the step's live primary frame, after_frame the next effective step's first frame or null after the last, derived true, the material's frames derived too, final_frame null and final_frame_missing. A v1 manifest on disk named again is read and verified (a changed frame record_archive_verify_failed), warns nothing, copies every file it lists and itself byte for byte, reopens, and the next archive writes archive-manifest-2.json as v2, the first as it was, its tap's after_frame a frame since superseded. Two taps whose screens after cannot be taken: the first's after_frame the second's capture before without after_capture; the archive stands with final_frame null and final_frame_missing. The copy holds the step table, the manifest and the frames the material names, not a superseded frame, its manifest copy.frames material; with every frame asked for the superseded one too and all; a superseded frame changed fails the archive named again
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-lab::lib::gate_449_rec_arch::s15_a_stage_one_recording_archives_its_presses_their_screens_and_the_final_screen",
+    "actingcommand-lab::lib::gate_449_rec_arch::s15_a_recording_made_with_do_archives_with_derived_frames",
+    "actingcommand-lab::lib::gate_449_rec_arch::s15_a_v1_manifest_on_disk_is_named_again_copied_as_it_is_and_reopened",
+    "actingcommand-lab::lib::gate_449_rec_arch::s15_without_a_screen_after_the_last_press_there_is_no_final_frame",
+    "actingcommand-lab::lib::gate_449_rec_arch::s15_the_copy_holds_the_material_unless_every_frame_is_asked_for",
+]
+incident = ["#463 S1-5"]

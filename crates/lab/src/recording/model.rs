@@ -323,6 +323,10 @@ pub struct ApplicationExecution {
     /// #463 S1-3: how the frame after the operation was taken.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub after_capture: Option<AfterCaptureRecord>,
+    /// #463 S1-5: when the completed receipt was recorded, on the Lab's clock as a click's
+    /// `executed_at_unix_ms` is; absent on every operation an earlier build recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub executed_at_unix_ms: Option<u64>,
 }
 
 /// An application operation without a completed receipt (it may have run), or a completed

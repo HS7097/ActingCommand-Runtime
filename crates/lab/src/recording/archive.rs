@@ -20,18 +20,26 @@
 //!   what was copied stays, and the recording stays archived.
 //! - `record reopen` ([`record_reopen`]) finds the archived recording the `record` command makes
 //!   the instance's active one again by writing its session header; the Lab writes nothing.
+//! - #463 S1-5 ("The manifest"): the manifest written is `actingcommand.lab-recording-archive.v2`,
+//!   and only it: each step's row names the frame its effect was on and the frame the screen
+//!   became (derived by a rule, and saying so, for an effect recorded before the step table named
+//!   them), and `material` is what stage one hands over: each press with the frame it happened on
+//!   and where it was pressed, and the final screen ([`record_archive_warnings`] when there is
+//!   none). A v1 manifest an earlier build wrote is read (named again, verified, copied as it is,
+//!   reopened) and never rewritten. A copy holds the material, or with `--all-frames` every frame,
+//!   and its manifest says which.
 //!
 //! Nothing here asks the Runtime anything or reads a frame's pixels: files are read, copied and
 //! hashed only.
 
 use super::RecordingLock;
 use super::model::{
-    ArchiveCopyOutcome, ArchiveManifestRef, ArchiveSessionHeader, ClickGesture,
+    AfterCaptureRecord, ArchiveCopyOutcome, ArchiveManifestRef, ArchiveSessionHeader, ClickGesture,
     LAB_RECORDING_ARCHIVE_SCHEMA, LAB_RECORDING_SCHEMA, LabRecording, OpaqueJson,
     RecordArchiveOptions, RecordArchiveOutcome, RecordPoint, RecordRect, RecordReopenOptions,
-    RecordReopenOutcome, RecordedFrame, RecordingStep, StepTransition,
+    RecordReopenOutcome, RecordSize, RecordedFrame, RecordingStep, StepTransition,
 };
-use super::steps::{lab_unavailable, not_active};
+use super::steps::{effective_indices, lab_unavailable, live_primary, not_active, step_ref};
 use super::store::{
     LabFile, OldRecordView, RECORDING_FILE, blocked, hex_sha256, invalid, lab_dir, load_lab,
     now_unix_ms, read_old_record, recording_path, state_io, with_details,
@@ -40,7 +48,7 @@ use crate::codes::LabCode;
 use actingcommand_contract::{LabError, LabErrorClass, LabResult};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, OpenOptions};
 use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
@@ -53,10 +61,23 @@ const MANIFEST_PREFIX: &str = "archive-manifest-";
 const MANIFEST_SUFFIX: &str = ".json";
 /// The frames' directory inside the recording's directory, as the manifest names its files.
 const FRAMES_DIR: &str = "frames";
+/// #463 S1-5: the schema of the manifest `record archive` writes. [`LAB_RECORDING_ARCHIVE_SCHEMA`]
+/// names v1, which builds before this one wrote, and which is read and never written.
+const LAB_RECORDING_ARCHIVE_V2_SCHEMA: &str = "actingcommand.lab-recording-archive.v2";
+/// #463 S1-5: the warning of `record archive`'s answer (`lab.warnings`) on a manifest that names no
+/// final screen.
+const FINAL_FRAME_MISSING: &str = "final_frame_missing";
+/// #463 S1-1: the source of the click a tap or a long press declares by its point.
+const POINT_SOURCE: &str = "point";
+/// #463 S1-5: the outcome of an application operation whose completed receipt is on record, and of
+/// one with attempts only (it may have run), in the words a click's execution records.
+const PERFORMED: &str = "performed";
+const INDETERMINATE: &str = "indeterminate";
 
-/// The manifest `record archive` writes (`actingcommand.lab-recording-archive.v1`): a header and
-/// one row per step of the step table, in its order. It holds only what the step table and the
-/// session header hold, and the sha256 of the step table file it describes.
+/// The manifest `record archive` writes (#463 S1-5, `actingcommand.lab-recording-archive.v2`): a
+/// header, the material stage one hands over, and one row per step of the step table, in its
+/// order. It holds only what the step table and the session header hold (a derived frame id says
+/// so), and the sha256 of the step table file it describes.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ArchiveManifest {
@@ -70,6 +91,12 @@ pub(crate) struct ArchiveManifest {
     pub(crate) task_id: String,
     /// The game and server the step table names (the session header names no application).
     pub(crate) application: ArchiveApplication,
+    /// The step table's locale and coordinate space (the size of its frames).
+    pub(crate) locale: Option<String>,
+    pub(crate) coordinate_space: Option<RecordSize>,
+    /// The recording's note and the archive's note; `None` without one.
+    pub(crate) note: Option<String>,
+    pub(crate) archive_note: Option<String>,
     pub(crate) started_at_unix_ms: u64,
     pub(crate) archived_at_unix_ms: u64,
     pub(crate) step_count: usize,
@@ -77,6 +104,11 @@ pub(crate) struct ArchiveManifest {
     pub(crate) written_by: String,
     /// The step table file and its sha256 when the manifest was written.
     pub(crate) step_table: ArchiveFile,
+    /// What stage one hands over.
+    pub(crate) material: ArchiveMaterial,
+    /// In a copy (`--copy-to`), what it holds of the frames; `None` in the recording's own
+    /// directory, which holds every file the manifest lists.
+    pub(crate) copy: Option<ArchiveCopy>,
     pub(crate) steps: Vec<ArchiveRow>,
 }
 
@@ -95,6 +127,81 @@ pub(crate) struct ArchiveFile {
     pub(crate) sha256: String,
 }
 
+/// #463 S1-5: what stage one hands over: the press of each effective step whose effect is on
+/// record, in the order of the steps, and the screen the business ended on (`None` when there is
+/// none).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ArchiveMaterial {
+    pub(crate) clicks: Vec<ArchiveClick>,
+    pub(crate) final_frame: Option<ArchiveFrameRef>,
+}
+
+/// #463 S1-5: one press of the material.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ArchiveClick {
+    pub(crate) step: u32,
+    /// The row's `kind`.
+    pub(crate) kind: String,
+    /// The frame the press happened on, the row's `before_frame`; `None` when no frame was stored
+    /// for it (the application entry step, which has no frame).
+    pub(crate) frame: Option<ArchiveFrameRef>,
+    /// `frame` was derived by the rule (the row's `derived`).
+    pub(crate) derived: bool,
+    /// The press was sent on a capture that was not stored (a step with marks), so that `frame` is
+    /// the stored frame the step stood on. The step table does not record it yet: `false`.
+    pub(crate) sent_on_unstored_capture: bool,
+    /// The operation opened the application entry step: there was no screen before it.
+    pub(crate) entry: bool,
+    /// Where it was pressed: the point of a tap or a long press, where a swipe began.
+    pub(crate) point: Option<RecordPoint>,
+    /// Where a swipe ended.
+    pub(crate) to: Option<RecordPoint>,
+    /// How long a swipe or a long press lasted.
+    pub(crate) duration_ms: Option<u64>,
+    /// The action of an application operation, in place of a point.
+    pub(crate) action: Option<String>,
+    /// The row's `outcome`.
+    pub(crate) outcome: String,
+}
+
+/// #463 S1-5: a frame some row lists: that row's step, the frame's id, its file and its sha256.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ArchiveFrameRef {
+    pub(crate) step: u32,
+    pub(crate) frame_id: String,
+    pub(crate) file: String,
+    pub(crate) sha256: String,
+}
+
+/// #463 S1-5: the frame after a step's effect: its id and the step of the row that lists it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ArchiveAfterFrame {
+    pub(crate) step: Option<u32>,
+    pub(crate) frame_id: String,
+}
+
+/// #463 S1-5: what a copy of the recording holds.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ArchiveCopy {
+    pub(crate) frames: ArchiveCopyFrames,
+}
+
+/// #463 S1-5: the frames `record archive --copy-to` copies, as the copy's manifest names them
+/// (`copy.frames`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ArchiveCopyFrames {
+    /// The frames the manifest's `material` names (the default).
+    Material,
+    /// Every frame the manifest lists, superseded ones included (`--all-frames`).
+    All,
+}
+
 /// One step of the step table.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -105,17 +212,39 @@ pub(crate) struct ArchiveRow {
     /// (`long_press`, `single_touch_drag_with_vertical_brake_v1`, `single_touch_path_drag_v1`,
     /// `application`).
     pub(crate) kind: String,
-    /// The step's frames and its page transition's, each file with its sha256.
+    /// #463 S1-5: as the step table has them.
+    pub(crate) dropped: bool,
+    pub(crate) converted_to_transition: bool,
+    /// The step's frames and its page transition's, in the step table's order, each file with its
+    /// sha256.
     pub(crate) frames: Vec<ArchiveFrame>,
+    /// #463 S1-5: the frame the step's effect was on and the frame after it, as the step table
+    /// names them, or for an effect recorded before it named them as the rule gives them
+    /// (`derived`); how the frame after it was taken.
+    pub(crate) before_frame: Option<String>,
+    pub(crate) after_frame: Option<ArchiveAfterFrame>,
+    pub(crate) after_capture: Option<AfterCaptureRecord>,
+    pub(crate) derived: bool,
+    /// #463 S1-5: `performed` or `indeterminate`; `None` without an effect on record.
+    pub(crate) outcome: Option<String>,
+    /// The effect by its kind (#463 S1-5: the long press and the application operation); none of
+    /// the four without an effect or for another gesture.
+    pub(crate) tap: Option<ArchiveTap>,
+    pub(crate) swipe: Option<ArchiveSwipe>,
+    pub(crate) long_press: Option<ArchiveLongPress>,
+    pub(crate) application_op: Option<ArchiveApplicationOp>,
     /// The Runtime frames before and after the input, as the step table names them.
     pub(crate) before: Option<ArchiveInputFrame>,
     pub(crate) after: Option<ArchiveInputFrame>,
     /// The page recognised on the frame before the input, and the package that recognised it.
     pub(crate) page: Option<Value>,
     pub(crate) package: Option<Value>,
-    pub(crate) tap: Option<ArchiveTap>,
-    pub(crate) swipe: Option<ArchiveSwipe>,
+    /// The step's note; `None` without one.
+    pub(crate) note: Option<String>,
     /// When the input was executed; for a step without one, when its first frame was recorded.
+    /// #463 S1-5: an application operation's is its completed receipt's time, `None` when the
+    /// step table has none (an operation an earlier build recorded, or one without a completed
+    /// receipt).
     pub(crate) at_unix_ms: Option<u64>,
     pub(crate) request_id: Option<Value>,
 }
@@ -128,6 +257,9 @@ pub(crate) struct ArchiveFrame {
     /// `frames/<file name>`, relative to the recording's directory.
     pub(crate) file: String,
     pub(crate) sha256: String,
+    /// #463 S1-5: as the step table has them.
+    pub(crate) superseded: bool,
+    pub(crate) recorded_at_unix_ms: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -137,11 +269,13 @@ pub(crate) struct ArchiveInputFrame {
     pub(crate) sha256: Option<Value>,
 }
 
+/// A tap; #463 S1-5: `rect` `None` for a tap declared by its point (`source` `point`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ArchiveTap {
-    pub(crate) rect: RecordRect,
+    pub(crate) rect: Option<RecordRect>,
     pub(crate) point: Option<RecordPoint>,
+    pub(crate) source: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -154,18 +288,49 @@ pub(crate) struct ArchiveSwipe {
     pub(crate) duration_ms: u64,
 }
 
+/// #463 S1-5: a long press; `rect` `None` for one declared by its point.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ArchiveLongPress {
+    pub(crate) point: Option<RecordPoint>,
+    pub(crate) duration_ms: u64,
+    pub(crate) rect: Option<RecordRect>,
+}
+
+/// #463 S1-5: an application operation, and whether its completed receipt is on record.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ArchiveApplicationOp {
+    pub(crate) action: String,
+    pub(crate) cli_verb: String,
+    pub(crate) executed: bool,
+}
+
 impl ArchiveManifest {
     /// The files of the recording's directory it lists, each once with its sha256: the step
-    /// table, then every frame file in the order of the rows.
+    /// table, then every frame file in the order of the rows (the frames `material` names are
+    /// among them).
     fn files(&self) -> Vec<(String, String)> {
-        let mut files = vec![(self.step_table.file.clone(), self.step_table.sha256.clone())];
-        let mut seen = BTreeSet::new();
-        for frame in self.steps.iter().flat_map(|row| &row.frames) {
-            if seen.insert(frame.file.clone()) {
-                files.push((frame.file.clone(), frame.sha256.clone()));
-            }
-        }
-        files
+        listed(
+            &self.step_table,
+            self.steps
+                .iter()
+                .flat_map(|row| &row.frames)
+                .map(|frame| (frame.file.as_str(), frame.sha256.as_str()))
+                .collect(),
+        )
+    }
+
+    /// #463 S1-5: the files the material names, each once with its sha256: the step table, then
+    /// each press's frame and the final frame.
+    fn material_files(&self) -> Vec<(String, String)> {
+        listed(
+            &self.step_table,
+            self.material
+                .frames()
+                .map(|frame| (frame.file.as_str(), frame.sha256.as_str()))
+                .collect(),
+        )
     }
 
     /// Every file it lists lies in the recording's directory: the step table, and frames as
@@ -176,8 +341,124 @@ impl ArchiveManifest {
                 .steps
                 .iter()
                 .flat_map(|row| &row.frames)
+                .map(|frame| frame.file.as_str())
+                .chain(self.material.frames().map(|frame| frame.file.as_str()))
+                .all(frame_file_valid)
+    }
+}
+
+impl ArchiveMaterial {
+    /// The frames it names: each press's, then the final frame.
+    fn frames(&self) -> impl Iterator<Item = &ArchiveFrameRef> {
+        self.clicks
+            .iter()
+            .filter_map(|click| click.frame.as_ref())
+            .chain(&self.final_frame)
+    }
+}
+
+/// The manifest builds before #463 S1-5 wrote (`actingcommand.lab-recording-archive.v1`), read
+/// only: its rows, with the step's frames, and the sha256 of the step table file it describes.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ArchiveManifestV1 {
+    pub(crate) schema_version: String,
+    pub(crate) record_id: String,
+    pub(crate) instance: String,
+    pub(crate) task_id: String,
+    pub(crate) application: ArchiveApplication,
+    pub(crate) started_at_unix_ms: u64,
+    pub(crate) archived_at_unix_ms: u64,
+    pub(crate) step_count: usize,
+    pub(crate) written_by: String,
+    pub(crate) step_table: ArchiveFile,
+    pub(crate) steps: Vec<ArchiveRowV1>,
+}
+
+/// One step of a v1 manifest.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ArchiveRowV1 {
+    pub(crate) step: u32,
+    pub(crate) kind: String,
+    pub(crate) frames: Vec<ArchiveFrameV1>,
+    pub(crate) before: Option<ArchiveInputFrame>,
+    pub(crate) after: Option<ArchiveInputFrame>,
+    pub(crate) page: Option<Value>,
+    pub(crate) package: Option<Value>,
+    pub(crate) tap: Option<ArchiveTapV1>,
+    pub(crate) swipe: Option<ArchiveSwipe>,
+    pub(crate) at_unix_ms: Option<u64>,
+    pub(crate) request_id: Option<Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ArchiveFrameV1 {
+    pub(crate) frame_id: String,
+    pub(crate) role: String,
+    pub(crate) file: String,
+    pub(crate) sha256: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ArchiveTapV1 {
+    pub(crate) rect: RecordRect,
+    pub(crate) point: Option<RecordPoint>,
+}
+
+impl ArchiveManifestV1 {
+    /// As [`ArchiveManifest::files`].
+    fn files(&self) -> Vec<(String, String)> {
+        listed(
+            &self.step_table,
+            self.steps
+                .iter()
+                .flat_map(|row| &row.frames)
+                .map(|frame| (frame.file.as_str(), frame.sha256.as_str()))
+                .collect(),
+        )
+    }
+
+    /// As [`ArchiveManifest::files_are_inside`].
+    fn files_are_inside(&self) -> bool {
+        self.step_table.file == RECORDING_FILE
+            && self
+                .steps
+                .iter()
+                .flat_map(|row| &row.frames)
                 .all(|frame| frame_file_valid(&frame.file))
     }
+}
+
+/// The schema a manifest file names, read before the manifest itself.
+#[derive(Deserialize)]
+struct ArchiveSchema {
+    schema_version: String,
+}
+
+/// #463 S1-5: a manifest read from the recording's directory, of either schema.
+struct ReadManifest {
+    /// Every file it lists, each once with its sha256 ([`ArchiveManifest::files`]).
+    files: Vec<(String, String)>,
+    /// How many rows it has.
+    steps: usize,
+    /// The manifest, when it is of the schema this build writes; `None` for one an earlier build
+    /// wrote (v1), which names no material and is never rewritten.
+    current: Option<ArchiveManifest>,
+}
+
+/// The step table with its sha256, then each of `frames` once (by its file) with its sha256.
+fn listed(step_table: &ArchiveFile, frames: Vec<(&str, &str)>) -> Vec<(String, String)> {
+    let mut files = vec![(step_table.file.clone(), step_table.sha256.clone())];
+    let mut seen = BTreeSet::new();
+    for (file, sha256) in frames {
+        if seen.insert(file) {
+            files.push((file.to_owned(), sha256.to_owned()));
+        }
+    }
+    files
 }
 
 /// `record archive`: the instance's active recording (or the one `record_id` names) archived, or
@@ -221,15 +502,21 @@ pub fn record_archive(
     }
 }
 
-/// The copy of an archived recording into `target` (`record archive --copy-to`): its frames, its
-/// step table and its manifest, each hashed against the manifest once all are copied. `target`
+/// The copy of an archived recording into `target` (`record archive --copy-to`): its step table,
+/// its manifest and its frames, each hashed against the manifest once all are copied. `target`
 /// must be an absolute path (fix 1) and must not exist or must be empty. A file that cannot be
 /// copied is `record_state_io_failed`, a copy that does not hold its sha256
-/// `record_archive_verify_failed`; both name the file, and nothing is deleted.
+/// `record_archive_verify_failed`; both name the file, and nothing is deleted. #463 S1-5: of a
+/// manifest of the schema this build writes, the frames are those its material names
+/// ([`ArchiveCopyFrames::Material`]) or every frame it lists ([`ArchiveCopyFrames::All`]), and
+/// the copy's manifest is that manifest saying which (`copy.frames`), checked against itself as
+/// written; a v1 manifest an earlier build wrote names no material, so its copy holds every file it
+/// lists and the manifest byte for byte, as before. The recording's directory keeps every file.
 pub fn record_archive_copy(
     lock: &RecordingLock,
     archived: &RecordArchiveOutcome,
     target: &str,
+    frames: ArchiveCopyFrames,
 ) -> LabResult<ArchiveCopyOutcome> {
     let target = copy_target(target)?;
     if archived.instance != lock.instance() {
@@ -237,28 +524,50 @@ pub fn record_archive_copy(
     }
     preflight_copy_target(target)?;
     let dir = Path::new(&archived.path);
-    let (manifest, _) = read_manifest(Path::new(&archived.manifest.path), &archived.record_id)?;
-    let mut files = manifest.files();
-    // The manifest's copy is checked against the manifest as it was written or verified.
-    files.insert(
-        1,
-        (
-            archived.manifest.file.clone(),
-            archived.manifest.sha256.clone(),
-        ),
-    );
-    let frames = target.join(FRAMES_DIR);
-    fs::create_dir_all(&frames).map_err(|error| {
+    let (read, _) = read_manifest(Path::new(&archived.manifest.path), &archived.record_id)?;
+    let (mut files, manifest_copy) = match read.current {
+        Some(manifest) => {
+            let held = match frames {
+                ArchiveCopyFrames::Material => manifest.material_files(),
+                ArchiveCopyFrames::All => manifest.files(),
+            };
+            let in_copy = ArchiveManifest {
+                copy: Some(ArchiveCopy { frames }),
+                ..manifest
+            };
+            let bytes = manifest_bytes(&in_copy, &under(target, &archived.manifest.file))?;
+            (held, Some(bytes))
+        }
+        None => (read.files, None),
+    };
+    // The manifest's copy is checked against the manifest as it was written or verified, or (#463
+    // S1-5) as the copy's own manifest was written.
+    let manifest_sha256 = manifest_copy
+        .as_deref()
+        .map_or_else(|| archived.manifest.sha256.clone(), hex_sha256);
+    files.insert(1, (archived.manifest.file.clone(), manifest_sha256));
+    let frames_dir = target.join(FRAMES_DIR);
+    fs::create_dir_all(&frames_dir).map_err(|error| {
         with_details(
-            state_io(format!("failed to create {}: {error}", frames.display())),
-            json!({"path": display(&frames), "copied": []}),
+            state_io(format!(
+                "failed to create {}: {error}",
+                frames_dir.display()
+            )),
+            json!({"path": display(&frames_dir), "copied": []}),
         )
     })?;
     let mut copied = Vec::new();
     for (file, _) in &files {
         let from = under(dir, file);
         let to = under(target, file);
-        fs::copy(&from, &to).map_err(|error| {
+        let written = match manifest_copy
+            .as_deref()
+            .filter(|_| *file == archived.manifest.file)
+        {
+            Some(bytes) => fs::write(&to, bytes),
+            None => fs::copy(&from, &to).map(|_bytes| ()),
+        };
+        written.map_err(|error| {
             with_details(
                 state_io(format!(
                     "failed to copy {} to {}: {error}; nothing was deleted and the recording \
@@ -285,6 +594,20 @@ pub fn record_archive_copy(
         path: display(target),
         files: copied,
     })
+}
+
+/// #463 S1-5 ("The manifest", `final_frame`): the warnings of `record archive`'s answer
+/// (`lab.warnings`) on the manifest `archived` names, written now or named again:
+/// `final_frame_missing` when that manifest names no final screen (`material.final_frame` `null`).
+/// The archive stands either way. A v1 manifest an earlier build wrote names no material and so
+/// claims no final screen: no warning. Nothing is written.
+pub fn record_archive_warnings(archived: &RecordArchiveOutcome) -> LabResult<Vec<String>> {
+    let (read, _) = read_manifest(Path::new(&archived.manifest.path), &archived.record_id)?;
+    Ok(read
+        .current
+        .filter(|manifest| manifest.material.final_frame.is_none())
+        .map(|_| vec![FINAL_FRAME_MISSING.to_owned()])
+        .unwrap_or_default())
 }
 
 /// `record reopen`: the archived recording of the instance that `record_id` (or the session
@@ -455,7 +778,7 @@ fn verified_again(
     let record_id = recording.record_id.as_str();
     let path = dir.join(&file);
     let (manifest, bytes) = read_manifest(&path, record_id)?;
-    let failures = check_files(dir, &manifest.files());
+    let failures = check_files(dir, &manifest.files);
     if !failures.is_empty() {
         return Err(verify_failed("recording", failures, &[]));
     }
@@ -469,7 +792,7 @@ fn verified_again(
             file,
             path: display(&path),
             sha256: hex_sha256(&bytes),
-            steps: manifest.steps.len(),
+            steps: manifest.steps,
             written: false,
         },
         copy: None,
@@ -535,29 +858,48 @@ fn read_recording(state_dir: &Path, record_id: &str) -> LabResult<Option<LabReco
     Ok(Some(recording))
 }
 
-/// The manifest at `path`, and its bytes; one that does not read as the manifest of `record_id`,
-/// or that lists a file outside the recording's directory, is `record_state_io_failed`.
-fn read_manifest(path: &Path, record_id: &str) -> LabResult<(ArchiveManifest, Vec<u8>)> {
+/// The manifest at `path`, and its bytes; one that does not read as a manifest of `record_id`, or
+/// that lists a file outside the recording's directory, is `record_state_io_failed`. #463 S1-5: a
+/// manifest is read by the schema it names, the one this build writes (v2) or the one builds
+/// before it wrote (v1), and no other.
+fn read_manifest(path: &Path, record_id: &str) -> LabResult<(ReadManifest, Vec<u8>)> {
     let bytes = fs::read(path)
         .map_err(|error| state_io(format!("failed to read {}: {error}", path.display())))?;
-    let manifest = serde_json::from_slice::<ArchiveManifest>(&bytes)
-        .ok()
-        .filter(|manifest| {
-            manifest.schema_version == LAB_RECORDING_ARCHIVE_SCHEMA
-                && manifest.record_id == record_id
-                && manifest.files_are_inside()
-        })
-        .ok_or_else(|| {
-            with_details(
-                state_io(format!(
-                    "{} does not read as the {LAB_RECORDING_ARCHIVE_SCHEMA} manifest of recording \
-                     {record_id}",
-                    path.display()
-                )),
-                json!({"path": display(path), "record_id": record_id}),
-            )
-        })?;
-    Ok((manifest, bytes))
+    let schema = serde_json::from_slice::<ArchiveSchema>(&bytes)
+        .map(|named| named.schema_version)
+        .unwrap_or_default();
+    let read = if schema == LAB_RECORDING_ARCHIVE_V2_SCHEMA {
+        serde_json::from_slice::<ArchiveManifest>(&bytes)
+            .ok()
+            .filter(|manifest| manifest.record_id == record_id && manifest.files_are_inside())
+            .map(|manifest| ReadManifest {
+                files: manifest.files(),
+                steps: manifest.steps.len(),
+                current: Some(manifest),
+            })
+    } else if schema == LAB_RECORDING_ARCHIVE_SCHEMA {
+        serde_json::from_slice::<ArchiveManifestV1>(&bytes)
+            .ok()
+            .filter(|manifest| manifest.record_id == record_id && manifest.files_are_inside())
+            .map(|manifest| ReadManifest {
+                files: manifest.files(),
+                steps: manifest.steps.len(),
+                current: None,
+            })
+    } else {
+        None
+    };
+    let read = read.ok_or_else(|| {
+        with_details(
+            state_io(format!(
+                "{} does not read as a manifest of recording {record_id} \
+                 ({LAB_RECORDING_ARCHIVE_V2_SCHEMA} or {LAB_RECORDING_ARCHIVE_SCHEMA})",
+                path.display()
+            )),
+            json!({"path": display(path), "record_id": record_id}),
+        )
+    })?;
+    Ok((read, bytes))
 }
 
 /// The number of a manifest file name, `archive-manifest-<n>.json` with `n` at least 1.
@@ -599,9 +941,7 @@ fn write_manifest(dir: &Path, manifest: &ArchiveManifest) -> LabResult<ArchiveMa
     let number = latest_manifest(dir)?.map_or(1, |(highest, _)| highest.saturating_add(1));
     let file = format!("{MANIFEST_PREFIX}{number}{MANIFEST_SUFFIX}");
     let path = dir.join(&file);
-    let mut bytes = serde_json::to_vec_pretty(manifest)
-        .map_err(|error| state_io(format!("failed to encode {}: {error}", path.display())))?;
-    bytes.push(b'\n');
+    let bytes = manifest_bytes(manifest, &path)?;
     let mut handle = OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -628,17 +968,39 @@ fn write_manifest(dir: &Path, manifest: &ArchiveManifest) -> LabResult<ArchiveMa
     })
 }
 
+/// The bytes of `manifest` as a manifest file holds them, indented JSON and a newline (`path`
+/// names the file in a failure).
+fn manifest_bytes(manifest: &ArchiveManifest, path: &Path) -> LabResult<Vec<u8>> {
+    let mut bytes = serde_json::to_vec_pretty(manifest)
+        .map_err(|error| state_io(format!("failed to encode {}: {error}", path.display())))?;
+    bytes.push(b'\n');
+    Ok(bytes)
+}
+
 /// The manifest of `recording`, whose step table file has the sha256 `step_table_sha256`. Its
 /// record id, instance, task id and start are the step table's, which are the session header's
 /// (`record start` writes them from the header, and every command holds the four equal to it);
 /// fix 1: for a recording `record start --force` left behind, what its replaced header held.
+/// #463 S1-5: of the schema v2, with the material.
 fn manifest_of(
     recording: &LabRecording,
     step_table_sha256: String,
     written_by: &str,
 ) -> ArchiveManifest {
+    let index = frame_index(recording);
+    let steps = recording
+        .steps
+        .iter()
+        .map(|step| row_of(recording, step, &index))
+        .collect::<Vec<_>>();
+    let clicks = recording
+        .steps
+        .iter()
+        .zip(&steps)
+        .filter_map(|(step, row)| click_of(step, row, &index))
+        .collect();
     ArchiveManifest {
-        schema_version: LAB_RECORDING_ARCHIVE_SCHEMA.to_owned(),
+        schema_version: LAB_RECORDING_ARCHIVE_V2_SCHEMA.to_owned(),
         record_id: recording.record_id.clone(),
         instance: recording.instance.clone(),
         task_id: recording.task_id.clone(),
@@ -646,6 +1008,10 @@ fn manifest_of(
             game: recording.game.clone(),
             server: recording.server.clone(),
         },
+        locale: recording.locale.clone(),
+        coordinate_space: recording.coordinate_space,
+        note: None,
+        archive_note: None,
         started_at_unix_ms: recording.record_started_at_unix_ms,
         archived_at_unix_ms: now_unix_ms(),
         step_count: recording.steps.len(),
@@ -654,8 +1020,204 @@ fn manifest_of(
             file: RECORDING_FILE.to_owned(),
             sha256: step_table_sha256,
         },
-        steps: recording.steps.iter().map(row_of).collect(),
+        material: ArchiveMaterial {
+            clicks,
+            final_frame: final_frame(recording, &index),
+        },
+        copy: None,
+        steps,
     }
+}
+
+/// #463 S1-5: every frame the rows list, by its id: the step of the row that lists it (its own
+/// frames and its page transition's) and the frame.
+type FrameIndex<'a> = BTreeMap<&'a str, (u32, &'a RecordedFrame)>;
+
+fn frame_index(recording: &LabRecording) -> FrameIndex<'_> {
+    recording
+        .steps
+        .iter()
+        .flat_map(|step| {
+            row_frames(step).map(move |frame| (frame.frame_id.as_str(), (step.index, frame)))
+        })
+        .collect()
+}
+
+/// A step's frames and its page transition's, in the step table's order: its own as they arrived,
+/// then its transition's.
+fn row_frames(step: &RecordingStep) -> impl Iterator<Item = &RecordedFrame> {
+    let transition: &[RecordedFrame] = match &step.transition {
+        Some(StepTransition::Page { frames, .. }) => frames,
+        _ => &[],
+    };
+    step.frames.iter().chain(transition)
+}
+
+/// #463 S1-5: the frame `frame_id` with the step of the row that lists it; `None` when no row lists
+/// it.
+fn frame_ref(index: &FrameIndex<'_>, frame_id: &str) -> Option<ArchiveFrameRef> {
+    index.get(frame_id).map(|&(step, frame)| ArchiveFrameRef {
+        step,
+        frame_id: frame.frame_id.clone(),
+        file: frame_file(frame),
+        sha256: frame.sha256.clone(),
+    })
+}
+
+/// #463 S1-5: what a row says of the frames of its step's effect.
+#[derive(Default)]
+struct Relation {
+    before_frame: Option<String>,
+    after_frame: Option<String>,
+    after_capture: Option<AfterCaptureRecord>,
+    derived: bool,
+}
+
+/// #463 S1-5 ("The manifest", `before_frame` and `after_frame`): the frames of the step's effect.
+/// A press or an application operation recorded with them (#463 S1-1, S1-3) names them in the step
+/// table: those, with how the frame after it was taken. An effect on record without them (recorded
+/// before the step table named them, or an application operation without a completed receipt)
+/// gets the rule's (`derived`): the frame it was on is the step's live primary frame (a step's
+/// primary frame cannot change once its effect is on record); the frame after a click is the first
+/// frame of the next effective step when that frame was recorded at or after the click was
+/// executed, else none; an application operation's receipt recorded before #463 S1-5 carries no
+/// time and an attempt none, so the rule finds none after it. The application entry step, which
+/// has no frame, and a step without an effect on record name none.
+fn relation(recording: &LabRecording, step: &RecordingStep) -> Relation {
+    let live = || live_primary(step).map(|frame| frame.frame_id.clone());
+    if let Some(execution) = step
+        .click
+        .as_ref()
+        .and_then(|click| click.execution.as_ref())
+    {
+        return match &execution.before_frame {
+            Some(before_frame) => Relation {
+                before_frame: Some(before_frame.clone()),
+                after_frame: execution.after_frame.clone(),
+                after_capture: execution.after_capture.clone(),
+                derived: false,
+            },
+            None => Relation {
+                before_frame: live(),
+                after_frame: derived_after(recording, step.index, execution.executed_at_unix_ms),
+                after_capture: None,
+                derived: true,
+            },
+        };
+    }
+    match step
+        .application
+        .as_ref()
+        .and_then(|application| application.executed.as_ref())
+    {
+        Some(executed) if executed.before_frame.is_some() => Relation {
+            before_frame: executed.before_frame.clone(),
+            after_frame: executed.after_frame.clone(),
+            after_capture: executed.after_capture.clone(),
+            derived: false,
+        },
+        _ if outcome_of(step).is_some() && !step.frames.is_empty() => Relation {
+            before_frame: live(),
+            derived: true,
+            ..Relation::default()
+        },
+        _ => Relation::default(),
+    }
+}
+
+/// The rule's frame after a click of step `index` executed at `executed_at_unix_ms`: the first
+/// frame of the next effective step by serial number, when it was recorded at or after it.
+fn derived_after(recording: &LabRecording, index: u32, executed_at_unix_ms: u64) -> Option<String> {
+    recording
+        .steps
+        .iter()
+        .filter(|step| step.is_effective() && step.index > index)
+        .min_by_key(|step| step.index)?
+        .frames
+        .first()
+        .filter(|frame| frame.recorded_at_unix_ms >= executed_at_unix_ms)
+        .map(|frame| frame.frame_id.clone())
+}
+
+/// #463 S1-5 ("The manifest", `outcome`): the outcome of the step's effect, when one is on record:
+/// a click's execution's, as the step table records it (`performed` or `indeterminate`); an
+/// application operation's `performed` with its completed receipt (attempts may stand beside it: it
+/// was run again), `indeterminate` with attempts and no completed receipt; `None` otherwise.
+fn outcome_of(step: &RecordingStep) -> Option<String> {
+    if let Some(execution) = step
+        .click
+        .as_ref()
+        .and_then(|click| click.execution.as_ref())
+    {
+        return Some(execution.effect.clone());
+    }
+    let application = step.application.as_ref()?;
+    if application.executed.is_some() {
+        Some(PERFORMED.to_owned())
+    } else if application.attempts.is_empty() {
+        None
+    } else {
+        Some(INDETERMINATE.to_owned())
+    }
+}
+
+/// #463 S1-5 ("The manifest", `material.clicks`): the press of the material the row of `step`
+/// gives, when the step is effective and its effect is on record: where it was pressed, as the
+/// step table holds it (a swipe's end only for a swipe), and the frame it happened on.
+fn click_of(
+    step: &RecordingStep,
+    row: &ArchiveRow,
+    index: &FrameIndex<'_>,
+) -> Option<ArchiveClick> {
+    if !step.is_effective() {
+        return None;
+    }
+    let outcome = row.outcome.clone()?;
+    let click = step.click.as_ref();
+    let execution = click.and_then(|click| click.execution.as_ref());
+    let swiped = matches!(
+        click.and_then(|click| click.gesture),
+        Some(ClickGesture::Drag { .. })
+    );
+    Some(ArchiveClick {
+        step: row.step,
+        kind: row.kind.clone(),
+        frame: row
+            .before_frame
+            .as_deref()
+            .and_then(|frame_id| frame_ref(index, frame_id)),
+        derived: row.derived,
+        sent_on_unstored_capture: false,
+        entry: step.is_application_entry(),
+        point: execution.map(|execution| execution.point),
+        to: execution
+            .and_then(|execution| execution.to_point)
+            .filter(|_| swiped),
+        duration_ms: execution.and_then(|execution| execution.duration_ms),
+        action: step
+            .application
+            .as_ref()
+            .map(|application| application.action.clone()),
+        outcome,
+    })
+}
+
+/// #463 S1-5 ("The manifest", `material.final_frame`): the screen the business ended on, the live
+/// primary frame of the last effective step when that step has no effect and the effective step
+/// before it has its effect on record (the step that effect's screen after opened); `None`
+/// otherwise.
+fn final_frame(recording: &LabRecording, index: &FrameIndex<'_>) -> Option<ArchiveFrameRef> {
+    let effective = effective_indices(recording);
+    let [.., previous, last_index] = effective.as_slice() else {
+        return None;
+    };
+    let last = step_ref(recording, *last_index)?;
+    let after_an_effect =
+        step_ref(recording, *previous).is_some_and(|step| outcome_of(step).is_some());
+    if last.click.is_some() || last.application.is_some() || !after_an_effect {
+        return None;
+    }
+    frame_ref(index, &live_primary(last)?.frame_id)
 }
 
 /// A step's kind: `tap` (a click without a gesture), `swipe` (a drag), `none` (no effect), or the
@@ -688,50 +1250,83 @@ fn input_frame(summary: Option<&OpaqueJson>) -> Option<ArchiveInputFrame> {
     })
 }
 
-/// The row of one step, from what the step table holds.
-fn row_of(step: &RecordingStep) -> ArchiveRow {
+/// The row of one step of `recording`, from what the step table holds; `index` gives the row that
+/// lists its frame after.
+fn row_of(recording: &LabRecording, step: &RecordingStep, index: &FrameIndex<'_>) -> ArchiveRow {
     let click = step.click.as_ref();
     let execution = click.and_then(|click| click.execution.as_ref());
     let before = execution.and_then(|execution| execution.before.as_ref());
     let after = execution.and_then(|execution| execution.after.as_ref());
     let kind = step_kind(step);
+    let point = execution.map(|execution| execution.point);
+    // #463 S1-5: a tap or a long press declared by its point has no rectangle of its own.
+    let rect = click
+        .filter(|click| click.source != POINT_SOURCE)
+        .map(|click| click.rect);
     let tap = click.filter(|_| kind == "tap").map(|click| ArchiveTap {
-        rect: click.rect,
-        point: execution.map(|execution| execution.point),
+        rect,
+        point,
+        source: click.source.clone(),
     });
     let swipe = click.and_then(|click| match click.gesture {
         Some(ClickGesture::Drag { to, duration_ms }) => Some(ArchiveSwipe {
             from_rect: click.rect,
             to_rect: to,
-            from: execution.map(|execution| execution.point),
+            from: point,
             to: execution.and_then(|execution| execution.to_point),
             duration_ms,
         }),
         _ => None,
     });
-    let transition_frames = match &step.transition {
-        Some(StepTransition::Page { frames, .. }) => frames.as_slice(),
-        _ => &[][..],
-    };
+    let long_press = click.and_then(|click| match click.gesture {
+        Some(ClickGesture::LongPress { duration_ms }) => Some(ArchiveLongPress {
+            point,
+            duration_ms,
+            rect,
+        }),
+        _ => None,
+    });
+    let application = step.application.as_ref();
+    let receipt = application.and_then(|application| application.executed.as_ref());
+    let application_op = application.map(|application| ArchiveApplicationOp {
+        action: application.action.clone(),
+        cli_verb: application.cli_verb.clone(),
+        executed: application.executed.is_some(),
+    });
+    let outcome = outcome_of(step);
     let request_id = execution
         .and_then(|execution| execution.req_id.as_ref())
         .map(|value| value.value().clone())
         .filter(|value| !value.is_null())
-        .or_else(|| {
-            step.application
-                .as_ref()
-                .and_then(|application| application.executed.as_ref())
-                .map(|executed| Value::String(executed.request_id.clone()))
-        });
+        .or_else(|| receipt.map(|completed| Value::String(completed.request_id.clone())));
+    // #463 S1-5: an application operation's time is its completed receipt's, absent on one an
+    // earlier build recorded and on one without a completed receipt; none is derived.
+    let at_unix_ms = match (execution, application) {
+        (Some(execution), _) => Some(execution.executed_at_unix_ms),
+        (None, Some(_)) if outcome.is_some() => {
+            receipt.and_then(|completed| completed.executed_at_unix_ms)
+        }
+        _ => step.frames.first().map(|frame| frame.recorded_at_unix_ms),
+    };
+    let effect_frames = relation(recording, step);
     ArchiveRow {
         step: step.index,
         kind: kind.to_owned(),
-        frames: step
-            .frames
-            .iter()
-            .chain(transition_frames)
-            .map(archive_frame)
-            .collect(),
+        dropped: step.dropped,
+        converted_to_transition: step.converted_to_transition,
+        frames: row_frames(step).map(archive_frame).collect(),
+        before_frame: effect_frames.before_frame,
+        after_frame: effect_frames.after_frame.map(|frame_id| ArchiveAfterFrame {
+            step: index.get(frame_id.as_str()).map(|&(listed, _)| listed),
+            frame_id,
+        }),
+        after_capture: effect_frames.after_capture,
+        derived: effect_frames.derived,
+        outcome,
+        tap,
+        swipe,
+        long_press,
+        application_op,
         before: input_frame(before),
         after: input_frame(after),
         page: member(before, "page"),
@@ -739,29 +1334,33 @@ fn row_of(step: &RecordingStep) -> ArchiveRow {
             execution.and_then(|execution| execution.carrier_package.as_ref()),
             "package_label",
         ),
-        tap,
-        swipe,
-        at_unix_ms: execution
-            .map(|execution| execution.executed_at_unix_ms)
-            .or_else(|| step.frames.first().map(|frame| frame.recorded_at_unix_ms)),
+        note: None,
+        at_unix_ms,
         request_id,
     }
 }
 
 fn archive_frame(frame: &RecordedFrame) -> ArchiveFrame {
-    // The frame's file name, from its recorded path (content-addressed, `<sha256>.png`).
+    ArchiveFrame {
+        frame_id: frame.frame_id.clone(),
+        role: frame.role.clone(),
+        file: frame_file(frame),
+        sha256: frame.sha256.clone(),
+        superseded: frame.superseded,
+        recorded_at_unix_ms: frame.recorded_at_unix_ms,
+    }
+}
+
+/// `frames/` and the frame's file name, from its recorded path (content-addressed,
+/// `<sha256>.png`).
+fn frame_file(frame: &RecordedFrame) -> String {
     let name = frame
         .path
         .rsplit(['/', '\\'])
         .next()
         .filter(|name| !name.is_empty())
         .map_or_else(|| format!("{}.png", frame.sha256), str::to_owned);
-    ArchiveFrame {
-        frame_id: frame.frame_id.clone(),
-        role: frame.role.clone(),
-        file: format!("{FRAMES_DIR}/{name}"),
-        sha256: frame.sha256.clone(),
-    }
+    format!("{FRAMES_DIR}/{name}")
 }
 
 /// `frames/<name>`, the name plain: ASCII letters, digits, `.`, `_` and `-`, not starting with a

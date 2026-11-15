@@ -674,7 +674,7 @@ impl RecordFramePorts for ApplicationFrames {
 
 /// The completed receipt of the application operation, as the recording stores it. #463 S1-3: its
 /// screens before and after are the recording's to name (`commit_application`, the frame after
-/// it), none here.
+/// it), none here; #463 S1-5: so is its time, stamped where it is committed as a click's is.
 fn performed_execution(output: &RuntimeFlowOutput) -> CliOutcome<ApplicationExecution> {
     let receipt = output.receipt();
     let Some(RuntimeResult::ApplicationLifecycleCompleted { action_id, .. }) = receipt.result()
@@ -705,6 +705,7 @@ fn performed_execution(output: &RuntimeFlowOutput) -> CliOutcome<ApplicationExec
         before_frame: None,
         after_frame: None,
         after_capture: None,
+        executed_at_unix_ms: None,
     })
 }
 
