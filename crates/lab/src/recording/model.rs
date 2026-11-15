@@ -4,8 +4,8 @@
 //! (`actingcommand.lab-record-mark.v1`) and the outcome views the CLI prints.
 
 use actingcommand_contract::{
-    InputSamplingEvidence, LabError, LabResult, OcrUnsignedIntegerFormat, OcrValueTrim,
-    SEGMENTED_SWIPE_BRAKE_DURATION_MS, SEGMENTED_SWIPE_CORNER_HOLD_MS,
+    InputFrameReference, InputSamplingEvidence, LabError, LabResult, OcrUnsignedIntegerFormat,
+    OcrValueTrim, SEGMENTED_SWIPE_BRAKE_DURATION_MS, SEGMENTED_SWIPE_CORNER_HOLD_MS,
     SEGMENTED_SWIPE_HORIZONTAL_DURATION_MS, ValueTestOp,
 };
 use actingcommand_execution_kernel::DriveDraw;
@@ -1794,13 +1794,39 @@ pub struct RecordPressRequest {
 }
 
 /// #463 S1-1: the frame on the screen when the press was committed, the open step's live primary
-/// frame; `refreshed` when the press's command took it itself.
+/// frame; `refreshed` when the press's command took it itself. Fix round 2: every such press is
+/// sent on a frame its command captured immediately before it; `sent_on_unstored_capture` when
+/// that capture was not stored (the open step carries marks, made on its stored frame), so that
+/// `frame_id` names the stored frame and not the one the press was sent on.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct BeforeFrame {
     pub frame_id: String,
     pub path: String,
     pub sha256: String,
     pub refreshed: bool,
+    pub sent_on_unstored_capture: bool,
+}
+
+/// #463 S1-1 fix round 2 (`contracts/lab-recording.md`, "Recording while playing"): one frame
+/// taken through the Runtime for a press recorded by the command that makes it: the frame as
+/// `capture --record` hands it to the recording, and the reference of the frame the Runtime
+/// committed for that observation, which an input planned on it names (`do --capture --record`
+/// names its before frame so). An observation without a frame id has none (`None`) and no press
+/// is sent on it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CapturedFrame {
+    pub frame: AttachFrameRequest,
+    pub input_frame: Option<InputFrameReference>,
+}
+
+/// #463 S1-1 fix round 2: the frame a press recorded by the command that makes it is sent on, the
+/// capture taken immediately before it: the Runtime's reference of it (`input_frame`, handed to
+/// the press) and its arrival in the recording (`arrived`), `None` when it was not stored (the
+/// open step carries marks).
+#[derive(Debug, Clone, PartialEq)]
+pub struct BeforeCapture {
+    pub input_frame: InputFrameReference,
+    pub arrived: Option<AttachFrameOutcome>,
 }
 
 /// #463 S1-1: the frame after the press, the first frame of the step it opened, and how it was

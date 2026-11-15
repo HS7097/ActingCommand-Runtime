@@ -1348,17 +1348,9 @@ fn load_runtime_lab2_scene(
     let png = frame.original_png.clone();
     let scene = scene_from_frame(&frame)?;
     // #411 Lab L3: the frame reference the Runtime committed for this observation, as the host
-    // names an online `do`'s before frame.
-    let input_frame =
-        observation
-            .artifact()
-            .frame_id()
-            .copied()
-            .map(|frame_id| InputFrameReference {
-                frame_id,
-                width: observation.width(),
-                height: observation.height(),
-            });
+    // names an online `do`'s before frame (#463 S1-1 fix round 2: the one function the device
+    // commands' `--record` builds theirs with).
+    let input_frame = runtime_capture_backend::input_frame_reference(observation);
     let loaded = Lab2Scene {
         scene,
         samples: Vec::new(),

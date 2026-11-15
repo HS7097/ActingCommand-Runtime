@@ -18,10 +18,12 @@
 //   `indeterminate`, the step open, `record_click_indeterminate` with the press as recorded
 //   (`press_indeterminate`), no wait and no capture after the press.
 // - `s11_a_press_not_performed_leaves_every_file_as_it_was`: the input's own error, and every file
-//   of the recording keeps its bytes.
+//   of the recording keeps its bytes (fix round 2: on an open step with a mark, whose capture
+//   before the press is not stored).
 // - `s11_a_refusal_before_the_press_presses_nothing`: a point outside the frame (`validation_failed`,
-//   `outside_frame`), a long press of 0 ms (`duration_range`) and a wait over 60000 ms (`range`):
-//   nothing pressed, nothing written.
+//   `outside_frame`), a long press of 0 ms (`duration_range`) and a wait over 60000 ms (`range`)
+//   (fix round 2: and a swipe outside the frame or of 0 ms, with the same argument and reason):
+//   nothing captured, nothing pressed, nothing written.
 // - `s11_a_step_that_declares_a_click_presses_nothing`: the open step's click declared by `record
 //   mark`: `record_click_exists`, nothing captured, pressed or written.
 // - `s11_a_frame_after_that_cannot_be_taken_leaves_the_press`: step 1 closed and performed, the
@@ -32,30 +34,42 @@
 // - `s11_a_recording_without_such_a_press_has_no_new_member`: a press of `do --capture --record`
 //   and the frame after it: no `before_frame`, `after_frame` or `after_capture` anywhere, the
 //   execution's members those an earlier build wrote.
+// Fix round 2 (B0: every press is sent on a frame captured immediately before it, with the
+// Runtime's reference of that frame):
+// - `s11_two_presses_each_capture_the_frame_they_are_sent_on`: two taps in a row: capture, press,
+//   wait, capture, then capture, press, wait, capture; the second capture of the open step 2
+//   replaces its live primary frame (f0002 superseded, f0003), each press's `before_frame` is its
+//   own capture (f0001, f0003), step 1's `after_frame` stays f0002, the frame its after capture
+//   opened step 2 with, and each press is handed the reference of its own before capture.
+// - `s11_after_a_failed_after_capture_the_next_capture_is_the_after_frame_once`: the after capture
+//   of a tap fails; the next tap's capture opens step 2 and becomes step 1's `after_frame` (f0002),
+//   step 1 gets no `after_capture`, and the frame after the second tap (f0003) leaves it as it is.
+// - `s11_a_step_with_marks_is_pressed_on_a_capture_that_is_not_stored`: the open step carries a
+//   mark: the capture before the tap is not stored (step 1 keeps its one frame, no file of it), the
+//   press's `before_frame` is the stored f0001, `before` says `refreshed` false and
+//   `sent_on_unstored_capture` true, and the press is handed that capture's reference.
+// - `s11_an_observation_without_a_frame_id_is_refused_before_the_press`: a capture without a
+//   frame id, on a new recording and on an open step: `device_error`, nothing pressed, every file
+//   as it was.
 // Frames are synthetic 1280x720 (a square of one colour at the top left on gray); no Runtime, no
 // device; the tests read no clock and never sleep.
-// #463 S1-2 (register §1.403) adapts six of these tests to what it deliberately changes: the frame
-// after a press is the capture that is still with the one before it, so the scripts give the
-// screen after twice (a wait of 300 ms between) and `after_capture` is `{800, 5000, true, 1100, 2,
-// 0}`; and an open step's frame stands only while it is younger than 1000 ms, so the two tests that
-// press on such a step record its frame at a time the clock has not reached.
 
-use crate::recording::store::{lab_dir, old_record_path, recording_path, save_recording};
+use crate::recording::store::{lab_dir, old_record_path, recording_path};
 use crate::{
-    AfterCapture, AttachFrameRequest, ClickEffect, ClickPlan, ClickSpec, CommitClickRequest,
-    LAB_RECORD_MARK_SCHEMA, LabOcr, LabRecording, MarkFamily, MarkRequest, MarkSpec, OpaqueJson,
-    PlanClickRequest, PlannedSwipe, PointPress, RecordFramePorts, RecordPoint, RecordPressOutcome,
-    RecordPressRequest, RecordRect, RecordStartOptions, RecordStopOptions, RecordingLock,
-    record_attach_frame, record_commit_click, record_mark, record_plan_click, record_press,
-    record_press_input, record_start, record_stop,
+    AfterCapture, AttachFrameRequest, CapturedFrame, ClickEffect, ClickPlan, ClickSpec,
+    CommitClickRequest, LAB_RECORD_MARK_SCHEMA, LabOcr, MarkFamily, MarkRequest, MarkSpec,
+    OpaqueJson, PlanClickRequest, PlannedSwipe, PointPress, RecordFramePorts, RecordPoint,
+    RecordPressOutcome, RecordPressRequest, RecordRect, RecordStartOptions, RecordStopOptions,
+    RecordingLock, record_attach_frame, record_commit_click, record_mark, record_plan_click,
+    record_press, record_press_input, record_start, record_stop,
 };
-use actingcommand_contract::{InputAction, LabError, LabResult};
+use actingcommand_contract::{InputAction, InputFrameReference, LabError, LabResult};
 use actingcommand_device::{CaptureBackendName, Frame, PixelFormat};
 use actingcommand_pack_containment::{
     ContainmentLimits, ContentContainer, expand_content_container,
 };
 use serde_json::{Value, json};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -73,9 +87,6 @@ const GRAY: [u8; 3] = [60, 60, 60];
 const COLORS: [[u8; 3]; 3] = [[230, 20, 20], [20, 230, 20], [20, 20, 230]];
 /// Each screen's square, a colour mark's region.
 const SQUARE: RecordRect = rect(0, 0, 40, 40);
-/// #463 S1-2: a time the clock has not reached (2100-01-01): a frame recorded then is younger than
-/// any bound, so a press on its step takes no frame before it.
-const UNREACHED_UNIX_MS: u64 = 4_102_444_800_000;
 
 const fn rect(x: i32, y: i32, width: i32, height: i32) -> RecordRect {
     RecordRect {
@@ -160,11 +171,37 @@ fn receipt(id: &str, effect: ClickEffect) -> CommitClickRequest {
     }
 }
 
-/// The fake Runtime's capture and the caller's clock: the screens its captures take, in order
-/// (`None`: that capture fails), and what it was asked, in the log it shares with the press.
+/// Fix round 2: the reference of the frame the fake Runtime committed for its `number`th capture
+/// of a bench (1 the first), of the synthetic frames' size.
+fn reference(number: u32) -> InputFrameReference {
+    InputFrameReference {
+        frame_id: serde_json::from_value(json!(format!("frame_{number:032x}")))
+            .expect("a frame id"),
+        width: WIDTH,
+        height: HEIGHT,
+    }
+}
+
+/// What one capture of the fake Runtime takes.
+#[derive(Clone, Copy, Debug)]
+enum Shot {
+    /// Screen `index`, with the reference of the frame the Runtime committed for it.
+    Screen(usize),
+    /// Fix round 2: screen `index` from an observation that carries no frame id.
+    Frameless(usize),
+    /// The capture fails.
+    Fails,
+}
+
+/// The fake Runtime's capture and the caller's clock: the shots its captures take, in order, the
+/// bench's count of the captures that took a frame (each one's reference is [`reference`] of its
+/// number), and what it was asked and answered, in the log it shares with the press and in
+/// `captured`.
 struct FakeDevice<'a> {
-    screens: VecDeque<Option<usize>>,
+    shots: VecDeque<Shot>,
+    count: &'a Cell<u32>,
     log: &'a RefCell<Vec<String>>,
+    captured: &'a RefCell<Vec<Option<InputFrameReference>>>,
 }
 
 impl RecordFramePorts for FakeDevice<'_> {
@@ -174,22 +211,36 @@ impl RecordFramePorts for FakeDevice<'_> {
             .push(format!("wait {}", duration.as_millis()));
     }
 
-    fn capture(&mut self) -> LabResult<AttachFrameRequest> {
+    fn capture(&mut self) -> LabResult<CapturedFrame> {
         self.log.borrow_mut().push("capture".to_owned());
-        match self.screens.pop_front() {
-            Some(Some(index)) => Ok(captured(index)),
-            Some(None) => Err(capture_failure()),
-            None => panic!("a capture the test did not script"),
-        }
+        let shot = self
+            .shots
+            .pop_front()
+            .expect("a capture the test did not script");
+        let (index, framed) = match shot {
+            Shot::Screen(index) => (index, true),
+            Shot::Frameless(index) => (index, false),
+            Shot::Fails => return Err(capture_failure()),
+        };
+        self.count.set(self.count.get() + 1);
+        let input_frame = framed.then(|| reference(self.count.get()));
+        self.captured.borrow_mut().push(input_frame);
+        Ok(CapturedFrame {
+            frame: captured(index),
+            input_frame,
+        })
     }
 }
 
 /// What one `record_press` call saw: its result, the log of the fake (`capture`, `press`,
-/// `wait <ms>`) and the inputs it was given, in order.
+/// `wait <ms>`), the inputs it was given and the frame reference handed with each (fix round 2),
+/// and the reference of each frame its captures took, in order.
 struct Pressed {
     result: LabResult<RecordPressOutcome>,
     log: Vec<String>,
     inputs: Vec<InputAction>,
+    frames: Vec<InputFrameReference>,
+    captured: Vec<Option<InputFrameReference>>,
 }
 
 // A state directory with an active session of `INSTANCE` (the header `record start` writes) and its
@@ -199,6 +250,9 @@ struct Bench {
     lock: RecordingLock,
     ocr: LabOcr,
     temp: TempDir,
+    /// Fix round 2: the fake Runtime's captures of this bench that took a frame, so that each
+    /// capture's frame reference is its own across presses.
+    captures: Cell<u32>,
 }
 
 impl Bench {
@@ -231,7 +285,12 @@ impl Bench {
             },
         )
         .expect("record start");
-        Self { lock, ocr, temp }
+        Self {
+            lock,
+            ocr,
+            temp,
+            captures: Cell::new(0),
+        }
     }
 
     fn state(&self) -> PathBuf {
@@ -244,47 +303,46 @@ impl Bench {
             .unwrap_or_else(|error| panic!("frame {index}: {}: {}", error.code, error.message));
     }
 
-    // #463 S1-2: the live primary frame of step `step` as recorded at `at_unix_ms`, written as the
-    // recording writes its step table: whether a press takes it again then depends on no clock.
-    fn recorded_at(&self, step: u32, at_unix_ms: u64) {
-        let state = self.state();
-        let path = recording_path(&state, RECORD_ID);
-        let mut recording: LabRecording =
-            serde_json::from_slice(&fs::read(&path).expect("step table")).expect("step table JSON");
-        let frame = recording
-            .steps
-            .iter_mut()
-            .find(|item| item.index == step)
-            .and_then(|item| {
-                item.frames
-                    .iter_mut()
-                    .rev()
-                    .find(|frame| frame.role == "primary" && !frame.superseded)
-            })
-            .expect("the step's live primary frame");
-        frame.recorded_at_unix_ms = at_unix_ms;
-        save_recording(&state, &recording)
-            .unwrap_or_else(|error| panic!("step table: {}: {}", error.code, error.message));
-    }
-
     // `record_press` of `request`, the fake Runtime answering `answer` to the input and its
-    // captures taking `screens`.
+    // captures taking `screens` (`None`: that capture fails), each with its frame reference.
     fn press<const N: usize>(
         &self,
         request: &RecordPressRequest,
         answer: Answer,
         screens: [Option<usize>; N],
     ) -> Pressed {
+        self.press_shots(
+            request,
+            answer,
+            screens.map(|screen| screen.map_or(Shot::Fails, Shot::Screen)),
+        )
+    }
+
+    // `record_press` of `request`, the fake Runtime answering `answer` to the input and its
+    // captures taking `shots`.
+    fn press_shots<const N: usize>(
+        &self,
+        request: &RecordPressRequest,
+        answer: Answer,
+        shots: [Shot; N],
+    ) -> Pressed {
         let log = RefCell::new(Vec::new());
         let inputs = RefCell::new(Vec::new());
+        let frames = RefCell::new(Vec::new());
+        let captured = RefCell::new(Vec::new());
         let result = {
             let mut device = FakeDevice {
-                screens: VecDeque::from(screens),
+                shots: VecDeque::from(shots),
+                count: &self.captures,
                 log: &log,
+                captured: &captured,
             };
-            let mut press = |plan: &ClickPlan| -> LabResult<CommitClickRequest> {
+            let mut press = |plan: &ClickPlan,
+                             frame: InputFrameReference|
+             -> LabResult<CommitClickRequest> {
                 log.borrow_mut().push("press".to_owned());
                 inputs.borrow_mut().push(record_press_input(plan)?);
+                frames.borrow_mut().push(frame);
                 match answer {
                     Answer::Performed => Ok(receipt("request-s11", ClickEffect::Performed)),
                     Answer::Indeterminate => Ok(receipt("request-s11", ClickEffect::Indeterminate)),
@@ -299,6 +357,8 @@ impl Bench {
             result,
             log: log.into_inner(),
             inputs: inputs.into_inner(),
+            frames: frames.into_inner(),
+            captured: captured.into_inner(),
         }
     }
 
@@ -425,15 +485,14 @@ fn performed(pressed: Pressed) -> (RecordPressOutcome, Vec<String>, Vec<InputAct
     (outcome, pressed.log, pressed.inputs)
 }
 
-// The frame after a press as #463 S1-2 takes it when the screen after is still at once: the wait,
-// one capture, 300 ms, a capture still with it, nothing kept between.
+// The frame after a press as S1-1 takes it: the wait, one capture, no stillness test.
 fn after_capture(after_ms: u64) -> Value {
     json!({
         "after_ms": after_ms,
-        "still_max_ms": 5000,
-        "still": true,
-        "waited_ms": after_ms + 300,
-        "captures": 2,
+        "still_max_ms": 0,
+        "still": null,
+        "waited_ms": after_ms,
+        "captures": 1,
         "kept": 0
     })
 }
@@ -444,16 +503,10 @@ fn s11_a_tap_on_a_new_recording_records_the_screens_before_and_after() {
     let (outcome, log, inputs) = performed(bench.press(
         &tap_request(100, 200),
         Answer::Performed,
-        [Some(0), Some(1), Some(1)],
+        [Some(0), Some(1)],
     ));
-    // One capture opens step 1, the input, the wait, one capture, 300 ms (#463 S1-2), a capture
-    // still with it, which opens step 2.
-    assert_eq!(
-        log,
-        [
-            "capture", "press", "wait 800", "capture", "wait 300", "capture"
-        ]
-    );
+    // One capture opens step 1, the input, the wait, one capture opens step 2.
+    assert_eq!(log, ["capture", "press", "wait 800", "capture"]);
     assert_eq!(inputs, [InputAction::Tap { x: 100, y: 200 }]);
 
     let recording = bench.recording();
@@ -507,10 +560,10 @@ fn s11_a_tap_on_a_new_recording_records_the_screens_before_and_after() {
             "path": next["frames"][0]["path"],
             "sha256": next["frames"][0]["sha256"],
             "after_ms": 800,
-            "still_max_ms": 5000,
-            "still": true,
-            "waited_ms": 1100,
-            "captures": 2,
+            "still_max_ms": 0,
+            "still": null,
+            "waited_ms": 800,
+            "captures": 1,
             "kept": 0
         }),
         "{record}"
@@ -523,14 +576,9 @@ fn s11_a_long_press_is_a_long_press_of_one_pixel() {
     let (outcome, log, inputs) = performed(bench.press(
         &long_press_request(640, 360, 800),
         Answer::Performed,
-        [Some(0), Some(1), Some(1)],
+        [Some(0), Some(1)],
     ));
-    assert_eq!(
-        log,
-        [
-            "capture", "press", "wait 800", "capture", "wait 300", "capture"
-        ]
-    );
+    assert_eq!(log, ["capture", "press", "wait 800", "capture"]);
     assert_eq!(
         inputs,
         [InputAction::LongTap {
@@ -568,14 +616,9 @@ fn s11_a_swipe_is_the_recorded_swipe_of_one_pixel_boxes() {
     let (outcome, log, inputs) = performed(bench.press(
         &swipe_request((900, 400), (300, 400), 300),
         Answer::Performed,
-        [Some(0), Some(1), Some(1)],
+        [Some(0), Some(1)],
     ));
-    assert_eq!(
-        log,
-        [
-            "capture", "press", "wait 800", "capture", "wait 300", "capture"
-        ]
-    );
+    assert_eq!(log, ["capture", "press", "wait 800", "capture"]);
     assert_eq!(
         inputs,
         [InputAction::Swipe {
@@ -648,13 +691,13 @@ fn s11_an_uncertain_answer_is_indeterminate_and_takes_no_frame_after() {
 #[test]
 fn s11_a_press_not_performed_leaves_every_file_as_it_was() {
     let bench = Bench::new();
-    // The open step, whose frame stands: no frame is taken before the press (#463 S1-2: its frame
-    // is young).
+    // The open step, whose frame stands. Fix round 2: the press is sent on a frame captured
+    // before it, which is not stored on a step that carries a mark.
     bench.capture(0);
-    bench.recorded_at(1, UNREACHED_UNIX_MS);
+    bench.mark(1, "first_square");
     let before = bench.files();
-    let pressed = bench.press(&tap_request(100, 200), Answer::NotPerformed, []);
-    assert_eq!(pressed.log, ["press"]);
+    let pressed = bench.press(&tap_request(100, 200), Answer::NotPerformed, [Some(1)]);
+    assert_eq!(pressed.log, ["capture", "press"]);
     let error = pressed.result.expect_err("a press not performed");
     assert_eq!(error.code, LabError::device("").code, "{}", error.message);
     assert_eq!(bench.files(), before, "a file changed");
@@ -664,8 +707,6 @@ fn s11_a_press_not_performed_leaves_every_file_as_it_was() {
 fn s11_a_refusal_before_the_press_presses_nothing() {
     let bench = Bench::new();
     bench.capture(0);
-    // #463 S1-2: the open step's frame is young, so no frame is taken before the press.
-    bench.recorded_at(1, UNREACHED_UNIX_MS);
     let before = bench.files();
     let too_long = RecordPressRequest {
         after: AfterCapture::for_press(Some(60_001)),
@@ -691,6 +732,19 @@ fn s11_a_refusal_before_the_press_presses_nothing() {
             "duration_range",
         ),
         ("a wait over 60000 ms", too_long, "after_ms", "range"),
+        // Fix round 2: a swipe's refusals name the same argument and reason.
+        (
+            "a swipe that ends outside the frame",
+            swipe_request((10, 10), (10, 720), 300),
+            "point",
+            "outside_frame",
+        ),
+        (
+            "a swipe of 0 ms",
+            swipe_request((10, 10), (300, 10), 0),
+            "duration_ms",
+            "duration_range",
+        ),
     ] {
         let pressed = bench.press(&request, Answer::Performed, []);
         assert!(pressed.log.is_empty(), "{case}: {:?}", pressed.log);
@@ -785,7 +839,7 @@ fn s11_marked_afterwards_the_recording_generates_a_one_pixel_click_the_kernel_ad
     performed(bench.press(
         &tap_request(100, 200),
         Answer::Performed,
-        [Some(0), Some(1), Some(1)],
+        [Some(0), Some(1)],
     ));
     bench.mark(1, "first_square");
     bench.mark(2, "last_square");
@@ -873,4 +927,222 @@ fn s11_a_recording_without_such_a_press_has_no_new_member() {
     .into_iter()
     .collect::<BTreeSet<_>>();
     assert_eq!(members, before_the_slice, "{recording}");
+}
+
+// Fix round 2: the answer of a performed press, borrowed, or the test's panic with its refusal.
+fn answered(pressed: &Pressed) -> &RecordPressOutcome {
+    pressed.result.as_ref().unwrap_or_else(|error| {
+        panic!(
+            "the press: {}: {} {:?}",
+            error.code, error.message, error.details
+        )
+    })
+}
+
+// Fix round 2: the names of the stored frame files of the recording (`frames/…`).
+fn frame_files(bench: &Bench) -> Vec<String> {
+    bench
+        .files()
+        .into_iter()
+        .map(|(name, _)| name)
+        .filter(|name| name.starts_with("frames/"))
+        .collect()
+}
+
+#[test]
+fn s11_two_presses_each_capture_the_frame_they_are_sent_on() {
+    let bench = Bench::new();
+    let first = bench.press(
+        &tap_request(100, 200),
+        Answer::Performed,
+        [Some(0), Some(1)],
+    );
+    let second = bench.press(
+        &tap_request(300, 400),
+        Answer::Performed,
+        [Some(2), Some(0)],
+    );
+    // The whole sequence: each press is captured for immediately before it.
+    let sequence = first
+        .log
+        .iter()
+        .chain(&second.log)
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        sequence,
+        [
+            "capture", "press", "wait 800", "capture", "capture", "press", "wait 800", "capture"
+        ]
+    );
+    // Each press is handed the reference of its own capture before it: the first and the third.
+    assert_eq!(first.captured, [Some(reference(1)), Some(reference(2))]);
+    assert_eq!(second.captured, [Some(reference(3)), Some(reference(4))]);
+    assert_eq!(first.frames, [reference(1)]);
+    assert_eq!(second.frames, [reference(3)]);
+    assert_eq!(
+        second.inputs,
+        [InputAction::Tap { x: 300, y: 400 }],
+        "the second input"
+    );
+
+    let first_outcome = answered(&first);
+    assert_eq!(first_outcome.before.frame_id, "f0001");
+    assert_eq!(
+        first_outcome
+            .after
+            .as_ref()
+            .map(|after| after.frame_id.as_str()),
+        Some("f0002")
+    );
+    let second_outcome = answered(&second);
+    assert_eq!(second_outcome.click.step, 2);
+    assert_eq!(second_outcome.before.frame_id, "f0003");
+    assert!(second_outcome.before.refreshed);
+    assert!(!second_outcome.before.sent_on_unstored_capture);
+    assert_eq!(
+        second_outcome
+            .after
+            .as_ref()
+            .map(|after| (after.step, after.frame_id.as_str())),
+        Some((3, "f0004"))
+    );
+
+    let recording = bench.recording();
+    let steps = recording["steps"].as_array().expect("steps");
+    assert_eq!(steps.len(), 3, "{recording}");
+    // Step 1: its after frame is the frame its own after capture opened step 2 with, and the
+    // capture before the second press does not rewrite it.
+    let first_execution = &steps[0]["click"]["execution"];
+    assert_eq!(first_execution["before_frame"], "f0001", "{recording}");
+    assert_eq!(first_execution["after_frame"], "f0002", "{recording}");
+    assert_eq!(steps[1]["frames"][0]["frame_id"], "f0002", "{recording}");
+    // Step 2: the capture before the second press is its live primary frame; the frame it opened
+    // with stays, superseded, as `capture --record` leaves it.
+    let frames = steps[1]["frames"].as_array().expect("step 2's frames");
+    assert_eq!(frames.len(), 2, "{recording}");
+    assert_eq!(frames[0]["superseded"], true, "{recording}");
+    assert_eq!(frames[1]["frame_id"], "f0003", "{recording}");
+    assert_ne!(frames[1]["superseded"], true, "{recording}");
+    let second_execution = &steps[1]["click"]["execution"];
+    assert_eq!(second_execution["before_frame"], "f0003", "{recording}");
+    assert_eq!(second_execution["after_frame"], "f0004", "{recording}");
+    assert_eq!(steps[1]["closed"], true, "{recording}");
+    assert_eq!(steps[2]["frames"][0]["frame_id"], "f0004", "{recording}");
+    assert_eq!(steps[2]["closed"], false, "{recording}");
+}
+
+#[test]
+fn s11_after_a_failed_after_capture_the_next_capture_is_the_after_frame_once() {
+    let bench = Bench::new();
+    let failed = bench.press(&tap_request(100, 200), Answer::Performed, [Some(0), None]);
+    assert_eq!(
+        failed.result.as_ref().expect_err("the capture fails").code,
+        capture_failure().code
+    );
+    let second = bench.press(
+        &tap_request(300, 400),
+        Answer::Performed,
+        [Some(1), Some(2)],
+    );
+    assert_eq!(second.log, ["capture", "press", "wait 800", "capture"]);
+    assert_eq!(second.frames, [reference(2)]);
+    let outcome = answered(&second);
+    assert_eq!(outcome.click.step, 2);
+    assert_eq!(outcome.before.frame_id, "f0002");
+    assert!(outcome.before.refreshed);
+
+    let recording = bench.recording();
+    let steps = recording["steps"].as_array().expect("steps");
+    assert_eq!(steps.len(), 3, "{recording}");
+    // Step 1: the capture before the second press opened step 2 and is its after frame, once; no
+    // `after_capture` was written for it, and the frame after the second press (f0003) left it.
+    let first_execution = &steps[0]["click"]["execution"];
+    assert_eq!(first_execution["effect"], "performed", "{recording}");
+    assert_eq!(first_execution["after_frame"], "f0002", "{recording}");
+    assert!(first_execution["after_capture"].is_null(), "{recording}");
+    assert_eq!(steps[1]["frames"][0]["frame_id"], "f0002", "{recording}");
+    let second_execution = &steps[1]["click"]["execution"];
+    assert_eq!(second_execution["before_frame"], "f0002", "{recording}");
+    assert_eq!(second_execution["after_frame"], "f0003", "{recording}");
+    assert_eq!(
+        second_execution["after_capture"],
+        after_capture(800),
+        "{recording}"
+    );
+    assert_eq!(steps[2]["frames"][0]["frame_id"], "f0003", "{recording}");
+}
+
+#[test]
+fn s11_a_step_with_marks_is_pressed_on_a_capture_that_is_not_stored() {
+    let bench = Bench::new();
+    bench.capture(0);
+    bench.mark(1, "first_square");
+    let pressed = bench.press(
+        &tap_request(100, 200),
+        Answer::Performed,
+        [Some(1), Some(2)],
+    );
+    assert_eq!(pressed.log, ["capture", "press", "wait 800", "capture"]);
+    // The press is handed the reference of the capture before it, which was not stored.
+    assert_eq!(pressed.captured[0], Some(reference(1)));
+    assert_eq!(pressed.frames, [reference(1)]);
+    let outcome = answered(&pressed);
+    assert_eq!(outcome.before.frame_id, "f0001");
+    assert!(!outcome.before.refreshed);
+    assert!(outcome.before.sent_on_unstored_capture);
+    let record = serde_json::to_value(outcome).expect("the record");
+    assert_eq!(
+        record["before"]["sent_on_unstored_capture"], true,
+        "{record}"
+    );
+    assert_eq!(record["before"]["refreshed"], false, "{record}");
+
+    let recording = bench.recording();
+    let steps = recording["steps"].as_array().expect("steps");
+    assert_eq!(steps.len(), 2, "{recording}");
+    let frames = steps[0]["frames"].as_array().expect("step 1's frames");
+    assert_eq!(frames.len(), 1, "{recording}");
+    assert_eq!(frames[0]["frame_id"], "f0001", "{recording}");
+    let execution = &steps[0]["click"]["execution"];
+    assert_eq!(execution["before_frame"], "f0001", "{recording}");
+    assert_eq!(execution["after_frame"], "f0002", "{recording}");
+    assert_eq!(steps[1]["frames"][0]["frame_id"], "f0002", "{recording}");
+    // Two stored frames: screen 0 (step 1) and screen 2 (step 2); none of screen 1.
+    assert_eq!(frame_files(&bench).len(), 2, "{recording}");
+}
+
+#[test]
+fn s11_an_observation_without_a_frame_id_is_refused_before_the_press() {
+    for open_step in [false, true] {
+        let bench = Bench::new();
+        if open_step {
+            bench.capture(0);
+        }
+        let before = bench.files();
+        let pressed = bench.press_shots(
+            &tap_request(100, 200),
+            Answer::Performed,
+            [Shot::Frameless(1)],
+        );
+        assert_eq!(pressed.log, ["capture"], "open step {open_step}");
+        assert_eq!(pressed.captured, [None], "open step {open_step}");
+        assert!(pressed.inputs.is_empty(), "open step {open_step}");
+        assert!(pressed.frames.is_empty(), "open step {open_step}");
+        let error = pressed
+            .result
+            .as_ref()
+            .expect_err("a capture without a frame id");
+        assert_eq!(
+            error.code,
+            LabError::device("").code,
+            "open step {open_step}: {}",
+            error.message
+        );
+        assert_eq!(
+            bench.files(),
+            before,
+            "open step {open_step}: a file changed"
+        );
+    }
 }
