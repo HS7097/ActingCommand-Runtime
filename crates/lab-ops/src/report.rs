@@ -28,7 +28,7 @@ mod scores;
 mod source;
 mod summary;
 
-pub use archive::{COMPUTER_MARK, Mask, SHORTEST_ANYWHERE, USER_MARK};
+pub use archive::{COMPUTER_MARK, Mask, SHORTEST_ALONE, SHORTEST_ANYWHERE, USER_MARK};
 // Fix round 2, item 4: the tests read the requests the errors view's search builds through it.
 #[cfg(test)]
 pub(crate) use source::errors_view;

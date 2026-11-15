@@ -262,35 +262,50 @@ the summary detail, the whole diagnostic stream.
 
 Every text part passes through the masks before it is written (fix round 1; fix round 2, the
 coordinator's ruling, which replaces round 1's rule on where a name is replaced and what the
-masks search):
+masks search; fix round 3, which narrows both):
 
 **The names.** The process's user name (`USERNAME`, else `USER`) becomes `<user>`; each of the
 computer's names becomes `<computer>`: its NetBIOS name (`COMPUTERNAME`), its DNS host name and its
 full DNS name (host and domain) as the operating system gives them (`GetComputerNameExW` with
-`ComputerNameDnsHostname` and `ComputerNameDnsFullyQualified`; on another system, none). A name of
-five characters or more is replaced wherever it stands, inside a longer word too, without regard
-to case (Unicode lowercase); a shorter one only where it stands alone, between characters that are
-no letter and no digit or at the text's ends: with the user `val`, `\Users\val\x`, `VAL-PC` and
-`val_packs` are replaced, `values` and `interval` are not. The longest name is tried first, and a
-mark already written is never searched again. The segment after a `Users` folder of a path, with
-one or more separators of either kind on each side (`\Users\`, `/users/`, a doubly escaped
-`\\Users\\`), up to the next separator, quote or line break, becomes `<user>`, whoever's it is and
-whatever its length. A name the masks could not learn (the variable is not set, the system cannot
-be asked for it, or the system gives none) was not looked for and may stand in the report: the
-manifest's `names_not_looked_for` names it (`user_name`, `netbios_name`, `dns_host_name`,
-`dns_full_name`).
+`ComputerNameDnsHostname` and `ComputerNameDnsFullyQualified`; on another system, none). Without
+regard to case (Unicode lowercase), a name is replaced by its length in characters (fix round 3;
+`SHORTEST_ANYWHERE` 5 and `SHORTEST_ALONE` 3 in `crates/lab-ops/src/report/archive.rs`):
 
-**What the masks search** (fix round 2):
+- a name of five characters or more, wherever it stands, inside a longer word too;
+- a name of three or four characters, only where it stands alone, between characters that are no
+  letter and no digit or at the text's ends: with the user `val`, `\Users\val\x`, `VAL-PC` and
+  `val_packs` are replaced, `values` and `interval` are not;
+- a name of one or two characters, only as the segment after a `Users` folder (the path form
+  below): with the user `an`, `\Users\an\x` is replaced, and `an`, `and` and `plan` stay. Outside a
+  path such a name stays in the report.
+
+The longest name is tried first, and a mark already written is never searched again. The segment
+after a `Users` folder of a path, with one or more separators of either kind on each side
+(`\Users\`, `/users/`, a doubly escaped `\\Users\\`), up to the next separator, quote or line
+break, becomes `<user>`, whoever's it is and whatever its length. A name the masks could not learn
+(the variable is not set, the system cannot be asked for it, or the system gives none) was not
+looked for and may stand in the report: the manifest's `names_not_looked_for` names it
+(`user_name`, `netbios_name`, `dns_host_name`, `dns_full_name`).
+
+**What the masks search** (fix round 2; fix round 3). A member's name, or in an outcome's `values`
+its key's type, keeps a string only when the string is shaped as a **word**: 1 to 128 characters,
+each an ASCII letter, a digit, `_`, `-`, `.` or `:`, with no whitespace and no path separator. The
+ids, the hashes, the codes and the words of closed vocabularies are words. Every other string of
+such a member or key is free text and searched: a member of the same name in a record copied from
+the Runtime's answers (an event's payload, a step) can hold anything, a path with the user's folder
+or a sentence with the computer's name. A string shaped as a hash or an id, and an entry's name,
+are kept wherever they stand.
 
 | Kept as it is | Searched and replaced |
 |---|---|
 | every member's name, of every JSON entry and line | |
 | numbers and booleans | |
-| a hash: `sha256:` and 64 hexadecimal digits, 40 or 64 hexadecimal digits (a commit, a tree, a digest), and the members `sha256`, `input_sha256`, `digest`, `commit`, `commit_sha`, `tree_sha` | |
-| an id the Runtime gave: a string of lowercase words, `_` and 32 hexadecimal digits (`request_…`, `run_…`, `evt_…`, `artifact_…`), a material reference `<sequence>:<event id>:<artifact id>`, and the members `request_id`, `run_id`, `event_id`, `correlation_id`, `causation_id`, `instance_id`, `artifact_id`, `frame_id`, `action_id`, `step_action_id`, `physical_action_id`, `recognition_id`, `lease_id`, `owner_epoch`, `ref`, `frame_ref` (a sequence is a number) | |
-| a code or a word of a closed vocabulary: the members `code`, `failure_code`, `ended_with`, `type`, `event_type`, `severity`, `state`, `kind`, `category`, `relation`, `schema`, `schema_version`, `payload_schema`, `view`, `module`, `media_type`, `why`, `from`, `phase`, `role`, `result`, `conclusion`, `match_mode`, `op`, `stopped`; in an outcome's `values` (and the records of a `records` value), every key the outcome key table types as a code, a location, a vocabulary's word, a token, an id, a pointer, a number, a time, a boolean, a hash, a commit or a version | in an outcome's `values`, a key the table types as a name, a path, a URL or evidence (`alias`, `path`, `file`, `raw_text`, …), and a key it does not hold |
-| the report's own fixed texts: `program`, `lab_ops`, `display`, `ended_with_description`, `secrets`, `names_not_looked_for`, `part`, `slice` | |
+| a hash, wherever it stands: `sha256:` and 64 hexadecimal digits, 40 or 64 hexadecimal digits (a commit, a tree, a digest); a word under the members `sha256`, `input_sha256`, `digest`, `commit`, `commit_sha`, `tree_sha` | |
+| an id the Runtime gave, wherever it stands: a string of lowercase words, `_` and 32 hexadecimal digits (`request_…`, `run_…`, `evt_…`, `artifact_…`), a material reference `<sequence>:<event id>:<artifact id>`; a word under the members `request_id`, `run_id`, `event_id`, `correlation_id`, `causation_id`, `instance_id`, `artifact_id`, `frame_id`, `action_id`, `step_action_id`, `physical_action_id`, `recognition_id`, `lease_id`, `owner_epoch`, `ref`, `frame_ref` (a sequence is a number) | |
+| a code or a word of a closed vocabulary: a word under the members `code`, `failure_code`, `ended_with`, `type`, `event_type`, `severity`, `state`, `kind`, `category`, `relation`, `schema`, `schema_version`, `payload_schema`, `view`, `module`, `media_type`, `why`, `from`, `phase`, `role`, `result`, `conclusion`, `match_mode`, `op`, `stopped`; in an outcome's `values` (and the records of a `records` value), a word under every key the outcome key table types as a code, a location, a vocabulary's word, a token, an id, a pointer, a number, a time, a boolean, a hash, a commit or a version | in an outcome's `values`, a key the table types as a name, a path, a URL or evidence (`alias`, `path`, `file`, `raw_text`, …), and a key it does not hold |
+| a word under the report's own members `program`, `lab_ops`, `display`, `ended_with_description`, `secrets`, `names_not_looked_for`, `part`, `slice` (a program's name, a version, a word that names what was not looked for) | their sentences (`display`, `ended_with_description`, `secrets`, `part`, …): free text, which the masks change only where a name stands in them |
 | the name of an entry of the archive, wherever it is written (below) | |
+| | under any member or key of the rows above, a string that is no word (fix round 3): a path, a sentence, whatever a record copied from the Runtime's answers holds under `from`, `result`, `why`, `role`, `display`, `part`, `phase`, `op` or another such name |
 | | every other string value: aliases, paths, names, labels, a package's, page's and target's ids, messages, notes, hosts, repositories, the text a frame showed, the summary page's values |
 
 The summary page masks each value as it writes it by the same table (an outcome's values by their
@@ -305,10 +320,11 @@ summary's data and the page name each entry by the name it has in the archive, n
 again, so that the manifest checks each of its entries by name and digest.
 
 **Not replaced.** A name in another form than the text's own (percent-encoded, base64, UTF-16,
-split by an escape); a name of fewer than five characters inside a longer word; another person's
-name that is not a `Users` folder's segment; the domain alone where it stands without the host;
-addresses (IP, MAC); what the table above keeps (a name that is also an id, a hash, a code or a
-word stays there); anything inside a frame's pixels (frames are written as the Runtime verified
+split by an escape); a name of three or four characters inside a longer word; a name of one or
+two characters anywhere but a `Users` folder's segment (fix round 3); another person's name that
+is not a `Users` folder's segment; the domain alone where it stands without the host; addresses
+(IP, MAC); what the table above keeps (a name inside an id, a hash, or a word under a member or key
+that keeps a word stays there); anything inside a frame's pixels (frames are written as the Runtime verified
 them; leave them out with `no_frames`).
 
 The manifest counts the masks applied (`masks_applied`). The answer line names the archive's

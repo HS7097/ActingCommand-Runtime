@@ -80,6 +80,18 @@
 //! - `rpt1_fix2_the_deadline_cuts_the_errors_search_and_the_part_says_so`: no read of the search
 //!   starts once its time is spent, and the errors view is the part missing with the word for
 //!   that (item 4).
+//!
+//! Fix round 3 (`rd-1115/brief-1725-fix3.md`), adapting round 1's masks test where item 2 changes
+//! what it pins (a name of two characters standing alone now stays), and two new tests:
+//! - `rpt1_fix3_a_kept_member_keeps_a_word_and_masks_a_path_or_a_sentence`: in a record copied
+//!   from an answer, the members `from` and `result` holding a user path and a sentence with the
+//!   computer's name are masked, `display` holding a word is kept, and a hash and an id under
+//!   kept members are whole; under an outcome's typed key a string that is no word is masked
+//!   (item 1).
+//! - `rpt1_fix3_a_name_of_one_or_two_characters_is_replaced_in_a_path_only`: with the user `an`,
+//!   `an`, `and`, `plan` and `values` are whole in a message and its `Users` folder's segment is
+//!   replaced, once and doubly escaped; with the user `val`, `val` alone is replaced and `values`
+//!   is not (item 2).
 
 use crate::code_lookup::{self, Answer, Query};
 use crate::codes::{
@@ -2357,8 +2369,10 @@ fn rpt1_fix1_the_masks_replace_names_inside_words_escaped_paths_and_dns_names() 
         user.text("the username in C:\\Users\\Bob\\x and User"),
         "the username in C:\\Users\\<user>\\x and <user>"
     );
+    // Fix round 3, item 2: a name of one or two characters is replaced only as a `Users` folder's
+    // segment, so `PC` standing alone stays.
     let short = Mask::new(Some("Al"), &["PC"]);
-    assert_eq!(short.text("Alpha on PC-2"), "Alpha on <computer>-2");
+    assert_eq!(short.text("Alpha on PC-2"), "Alpha on PC-2");
     assert_eq!(report::SHORTEST_ANYWHERE, 5);
 }
 
@@ -3007,4 +3021,85 @@ fn rpt1_fix2_the_deadline_cuts_the_errors_search_and_the_part_says_so() {
 fn export_from_source(source: &dyn Source, request: &Request) -> Exported {
     report::export(source, request, &versions(), &mask())
         .unwrap_or_else(|outcome| panic!("the report is written: {outcome}"))
+}
+
+// ---- Fix round 3 (`rd-1115/brief-1725-fix3.md`)
+
+#[test]
+fn rpt1_fix3_a_kept_member_keeps_a_word_and_masks_a_path_or_a_sentence() {
+    // The user `run` (three characters, replaced where it stands alone) and the computer
+    // `FACADE` (six, replaced wherever it stands, and made of the letters a to f, so that a hash
+    // or an id holding it would be cut if it were searched).
+    let mask = Mask::new(Some("run"), &["FACADE"]);
+    let digest = format!("sha256:{}1", "facade0".repeat(9));
+    let run_id = format!("run_{}", "facade01".repeat(4));
+    // A record copied from an answer: an event whose payload's members `from`, `result` and
+    // `display` hold a user path, a sentence with the computer's name and a closed word (which
+    // the masks would cut, `run` standing alone in it), with a hash and an id under kept
+    // members; and an outcome whose key typed as a vocabulary's word holds a sentence.
+    let mut record = json!({
+        "seq": 7,
+        "type": "task.step_completed",
+        "payload": {
+            "from": "C:\\Users\\run\\packs\\neutral",
+            "result": "the step stopped on FACADE after a retry",
+            "display": "run_frame",
+            "sha256": digest,
+            "run_id": run_id,
+        },
+        "outcome": {
+            "code": "run_failed",
+            "values": {"report_part": "run listing", "alias": "run"},
+        },
+    });
+    mask.value(&mut record);
+    assert_eq!(
+        record,
+        json!({
+            "seq": 7,
+            "type": "task.step_completed",
+            "payload": {
+                "from": "C:\\Users\\<user>\\packs\\neutral",
+                "result": "the step stopped on <computer> after a retry",
+                "display": "run_frame",
+                "sha256": digest,
+                "run_id": run_id,
+            },
+            "outcome": {
+                "code": "run_failed",
+                "values": {"report_part": "<user> listing", "alias": "<user>"},
+            },
+        })
+    );
+    // The summary page writes its values by the same rule.
+    assert_eq!(
+        mask.member("from", "C:\\Users\\run\\x"),
+        "C:\\Users\\<user>\\x"
+    );
+    assert_eq!(mask.member("display", "run_frame"), "run_frame");
+}
+
+#[test]
+fn rpt1_fix3_a_name_of_one_or_two_characters_is_replaced_in_a_path_only() {
+    assert_eq!(report::SHORTEST_ALONE, 3);
+    assert_eq!(report::SHORTEST_ANYWHERE, 5);
+    // The user `an`: outside a path the name stays, where it stands alone too.
+    let an = Mask::new(Some("an"), &[]);
+    let mut outside = json!({"message": "an and a plan of values"});
+    an.value(&mut outside);
+    assert_eq!(outside, json!({"message": "an and a plan of values"}));
+    assert_eq!(an.applied(), 0);
+    // As a `Users` folder's segment, once and doubly escaped, it is replaced.
+    for (given, masked) in [
+        ("C:\\Users\\an\\x", "C:\\Users\\<user>\\x"),
+        ("C:\\\\Users\\\\an\\\\x", "C:\\\\Users\\\\<user>\\\\x"),
+    ] {
+        assert_eq!(an.text(given), masked, "{given}");
+    }
+    assert_eq!(an.applied(), 2);
+    // The user `val` (three characters): standing alone it is replaced, inside `values` not.
+    let val = Mask::new(Some("val"), &[]);
+    let mut alone = json!({"message": "val read the values"});
+    val.value(&mut alone);
+    assert_eq!(alone, json!({"message": "<user> read the values"}));
 }

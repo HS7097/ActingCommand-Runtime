@@ -22,15 +22,27 @@ pub const USER_MARK: &str = "<user>";
 pub const COMPUTER_MARK: &str = "<computer>";
 /// Fix round 2, item 1 (the coordinator's ruling, which replaces item 11 of round 1): a name of
 /// at least this many characters is replaced wherever it stands, inside a longer word too; a
-/// shorter one only where it stands alone.
+/// shorter one only where it stands alone ([`SHORTEST_ALONE`]).
 pub const SHORTEST_ANYWHERE: usize = 5;
+/// Fix round 3, item 2: a name of at least this many characters, and fewer than
+/// [`SHORTEST_ANYWHERE`], is replaced only where it stands alone; a shorter one (one or two
+/// characters) only as the segment after a `Users` folder of a path, which is replaced whatever
+/// its length. Outside a path such a name stays in the report, so that a user called `an` leaves
+/// `an`, `and` and `plan` whole.
+pub const SHORTEST_ALONE: usize = 3;
+/// Fix round 3, item 1: the most characters a string has that its member's name keeps
+/// ([`word_shaped`]).
+const LONGEST_WORD: usize = 128;
 /// The end of central directory record a zip closes with, no comment: counted once a whole
 /// archive ([`packed_size`]).
 pub(super) const END_BYTES: u64 = 22;
-/// Fix round 2, item 1: the members whose string values are never replaced, in what the report
-/// writes outside an outcome's `values`: the ids the Runtime gives and the references made of
-/// them, the hashes, the codes and the words of closed vocabularies, and the report's own fixed
-/// texts. An outcome's `values` are told by the outcome key table instead ([`kept_value`]).
+/// Fix round 2, item 1, narrowed by fix round 3, item 1: the members whose string values are
+/// kept as they are when shaped as a word ([`word_shaped`]), in what the report writes outside an
+/// outcome's `values`: the ids the Runtime gives and the references made of them, the hashes,
+/// the codes and the words of closed vocabularies, and the report's own fixed texts. A member of
+/// such a name in a record copied from the Runtime's answers (an event's payload, a step) can
+/// hold anything, a path or a sentence: a string of it that is no word is free text, and masked.
+/// An outcome's `values` are told by the outcome key table instead ([`kept_value`]).
 const KEPT_MEMBERS: &[&str] = &[
     // The ids the Runtime gives, and the references made of them.
     "request_id",
@@ -82,7 +94,8 @@ const KEPT_MEMBERS: &[&str] = &[
     "match_mode",
     "op",
     "stopped",
-    // The report's own fixed texts.
+    // The report's own fixed texts: a word of them is kept (a program's name, a version); their
+    // sentences are free text, which the masks change only where a name stands in them.
     "program",
     "lab_ops",
     "display",
@@ -93,8 +106,9 @@ const KEPT_MEMBERS: &[&str] = &[
     "slice",
 ];
 
-/// One name the masks replace, its characters lowercased, its mark, and whether it is replaced
-/// inside a longer word too (at least [`SHORTEST_ANYWHERE`] characters).
+/// One name the masks replace (at least [`SHORTEST_ALONE`] characters), its characters
+/// lowercased, its mark, and whether it is replaced inside a longer word too (at least
+/// [`SHORTEST_ANYWHERE`] characters).
 #[derive(Debug)]
 struct Name {
     folded: Vec<char>,
@@ -108,10 +122,12 @@ struct Name {
 /// [`USER_MARK`], whatever its length. The user's name becomes [`USER_MARK`] and each of the
 /// computer's names (its NetBIOS name, its DNS host name, its full DNS name) [`COMPUTER_MARK`],
 /// without regard to case: a name of at least [`SHORTEST_ANYWHERE`] characters wherever it
-/// stands, a shorter one only where it stands alone (between characters that are no letter and
-/// no digit, or at the text's ends). The longest name is tried first, and a mark already written
-/// is never searched again. A value of JSON is masked in its free text only ([`Self::value`]).
-/// It counts what it masked, and it names the names it could not learn (fix round 2, item 6).
+/// stands, one of at least [`SHORTEST_ALONE`] only where it stands alone (between characters
+/// that are no letter and no digit, or at the text's ends), and a shorter one (one or two
+/// characters) only as a `Users` folder's segment, so that outside a path it stays (fix round 3,
+/// item 2). The longest name is tried first, and a mark already written is never searched
+/// again. A value of JSON is masked in its free text only ([`Self::value`]). It counts what it
+/// masked, and it names the names it could not learn (fix round 2, item 6).
 #[derive(Debug)]
 pub struct Mask {
     names: Vec<Name>,
@@ -120,21 +136,18 @@ pub struct Mask {
 }
 
 impl Mask {
-    /// The masks of the user's name `user` and the computer's names `computer` (an empty name is
-    /// left out).
+    /// The masks of the user's name `user` and the computer's names `computer`. A name of fewer
+    /// than [`SHORTEST_ALONE`] characters (an empty one too) is searched nowhere: the `Users`
+    /// folder's segment is replaced whatever it holds (fix round 3, item 2).
     pub fn new(user: Option<&str>, computer: &[&str]) -> Self {
         let mut names = Vec::new();
         let mut add = |name: &str, mark: &'static str| {
-            let folded = name
-                .trim()
-                .chars()
-                .flat_map(char::to_lowercase)
-                .collect::<Vec<_>>();
-            if !folded.is_empty() {
+            let length = name.trim().chars().count();
+            if length >= SHORTEST_ALONE {
                 names.push(Name {
-                    anywhere: name.trim().chars().count() >= SHORTEST_ANYWHERE,
-                    folded,
+                    folded: name.trim().chars().flat_map(char::to_lowercase).collect(),
                     mark,
+                    anywhere: length >= SHORTEST_ANYWHERE,
                 });
             }
         };
@@ -234,7 +247,7 @@ impl Mask {
 
     /// The end of the name that stands at `start` of `text` without regard to case, and its
     /// mark: the longest that does, a name shorter than [`SHORTEST_ANYWHERE`] only where it
-    /// stands alone.
+    /// stands alone (a name shorter than [`SHORTEST_ALONE`] is none of the names).
     fn name_at(&self, text: &str, start: usize) -> Option<(usize, &'static str)> {
         self.names.iter().find_map(|name| {
             let end = folded_end(&name.folded, text, start)?;
@@ -244,8 +257,9 @@ impl Mask {
 
     /// The text `text` of the member `member` (a member of the report's own data, outside an
     /// outcome's `values`) masked as [`Self::value`] masks it: kept as it is when the member
-    /// holds an id, a hash, a code or a word of a closed vocabulary, or the text is shaped as a
-    /// hash or an id; masked otherwise. The summary page writes its values through it.
+    /// holds an id, a hash, a code or a word of a closed vocabulary and the text is shaped as a
+    /// word (fix round 3, item 1), or the text is shaped as a hash or an id; masked otherwise.
+    /// The summary page writes its values through it.
     pub fn member(&self, member: &str, text: &str) -> String {
         if kept_value(Some(member), false, text, &BTreeSet::new()) {
             text.to_owned()
@@ -256,8 +270,8 @@ impl Mask {
 
     /// Fix round 2, item 1: the free text of `value` masked; never a member's name, a number, a
     /// boolean, or a string that holds an id, a hash, a code or a word of a closed vocabulary
-    /// (told by its member; in an outcome's `values`, by the outcome key table's type of its
-    /// key; or by its shape).
+    /// (told by its shape as a word and its member, or in an outcome's `values` the outcome key
+    /// table's type of its key, fix round 3, item 1; or by its shape as a hash or an id).
     pub fn value(&self, value: &mut Value) {
         self.walk(value, None, false, &BTreeSet::new());
     }
@@ -346,11 +360,13 @@ fn free_text(kind: KeyKind) -> bool {
     }
 }
 
-/// Fix round 2, item 1: whether the string `text` of the member `member` is kept as it is. It
-/// is when it names an entry of the archive (`entries`), when it is shaped as a hash or an id the
-/// Runtime gives ([`hash_or_id`]), when it lies in an outcome's `values` (`keyed`) under a key
-/// the outcome key table does not type as free text ([`free_text`]), and, elsewhere, when its
-/// member is one of [`KEPT_MEMBERS`]. Every other string is free text.
+/// Fix round 2, item 1, narrowed by fix round 3, item 1: whether the string `text` of the member
+/// `member` is kept as it is. It is, wherever it stands, when it names an entry of the archive
+/// (`entries`) or is shaped as a hash or an id the Runtime gives ([`hash_or_id`]); and when it is
+/// shaped as a word ([`word_shaped`]) and lies in an outcome's `values` (`keyed`) under a key the
+/// outcome key table does not type as free text ([`free_text`]) or, elsewhere, its member is one
+/// of [`KEPT_MEMBERS`]. Every other string is free text, a path or a sentence under such a
+/// member or key too.
 fn kept_value(member: Option<&str>, keyed: bool, text: &str, entries: &BTreeSet<String>) -> bool {
     if entries.contains(text) || hash_or_id(text) {
         return true;
@@ -358,10 +374,22 @@ fn kept_value(member: Option<&str>, keyed: bool, text: &str, entries: &BTreeSet<
     let Some(member) = member else {
         return false;
     };
-    if keyed {
-        return key_kind(member).is_some_and(|kind| !free_text(kind));
-    }
-    KEPT_MEMBERS.contains(&member)
+    let typed = if keyed {
+        key_kind(member).is_some_and(|kind| !free_text(kind))
+    } else {
+        KEPT_MEMBERS.contains(&member)
+    };
+    typed && word_shaped(text)
+}
+
+/// Fix round 3, item 1: whether `text` is shaped as a word: 1 to [`LONGEST_WORD`] characters,
+/// each an ASCII letter, a digit, `_`, `-`, `.` or `:` (no whitespace, no path separator). An
+/// id, a hash, a code and a word of a closed vocabulary are.
+fn word_shaped(text: &str) -> bool {
+    (1..=LONGEST_WORD).contains(&text.len())
+        && text
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.' | b':'))
 }
 
 /// Whether `text` is lowercase hexadecimal of `length` digits.
