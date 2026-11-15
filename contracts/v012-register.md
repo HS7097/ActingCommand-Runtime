@@ -27825,8 +27825,9 @@ ledger's latest time (the maximum over every row, which counts rows stamped by t
 nothing and ends no process. Fix round 3 adds its required value `break_in_problem` (the key and
 the vocabulary `break_in_problem`, `BreakInProblem` in `runtime-host/src/codes.rs`, two words:
 `content_unmeasured`, `record_unread`) and widens its texts to both. The outcome code index is
-regenerated after main `326ae285` (LAB-6S4a): 3873 active codes of 3961, runtime-host 1158 (1111
-active), warnings 153. `page_confirmation_failed` gains the optional value `artifact_id`; the two
+regenerated after main `326ae285` (LAB-6S4a) and again in the 0.12.63 train, beside R4's and
+S3-7's codes: 3875 active codes of 3963, runtime-host 1158 (1111 active), warnings 154.
+`page_confirmation_failed` gains the optional value `artifact_id`; the two
 kernel codes' descriptions say when each is raised.
 
 **Tests.** Gate `host.toml` "#463 U1b", `tests/gate_463_u1b.rs`, eight tests: inside (with K1's
