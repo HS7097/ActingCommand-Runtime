@@ -151,10 +151,12 @@ pub(crate) struct ArchiveClick {
     /// `frame` was derived by the rule (the row's `derived`).
     pub(crate) derived: bool,
     /// Whether the press was sent on a capture that was not stored (an open step with marks), so
-    /// that `frame` is the stored frame the step stood on. Fix round 2: the step table this build
-    /// reads does not say it, so every press is `None` (`null`, "the step table does not say"),
-    /// never a claim; the step table's own member (#463 S1-1's third round) is read once the two
-    /// are joined.
+    /// that `frame` is the stored frame the step stood on. Fix round 2: never a claim the step
+    /// table does not make (`None`, `null`: "the step table does not say"). The train of stage one
+    /// (#463 S1-1's third round joined): a press whose execution names its own frame before
+    /// (`derived` false) carries the step table's `sent_on_unstored_capture` (`false` where the
+    /// step table leaves it out); a press whose frame is derived, and an application operation,
+    /// stay `None`.
     pub(crate) sent_on_unstored_capture: Option<bool>,
     /// The operation opened the application entry step: there was no screen before it.
     pub(crate) entry: bool,
@@ -1184,7 +1186,13 @@ fn click_of(
             .as_deref()
             .and_then(|frame_id| frame_ref(index, frame_id)),
         derived: row.derived,
-        sent_on_unstored_capture: None,
+        // The train of stage one (#463 S1-1's third round joined): a press whose execution names
+        // its own frame before carries what the step table says (its member, absent when false);
+        // a press whose frame the rule derives, and an application operation, whose receipt does
+        // not record it, carry `None`.
+        sent_on_unstored_capture: execution
+            .filter(|_| !row.derived)
+            .map(|execution| execution.sent_on_unstored_capture),
         entry: step.is_application_entry(),
         point: execution.map(|execution| execution.point),
         to: execution

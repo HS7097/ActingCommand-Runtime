@@ -894,7 +894,10 @@ fn s15_fix2_all_frames_needs_copy_to_and_copies_every_frame() {
     // Without `--copy-to`: refused before the session is read; nothing written.
     let before = session_files(&state);
     let (code, refused) = record(&state, "archive", &["--all-frames"]);
-    assert_ne!(code, 0, "{refused}");
+    // The train of stage one (brief rd-1115/brief-463-train-s1b.md, h): a usage refusal, which
+    // actinglab's own command line answers with exit 1 as every failure (`own_line`), as the Lab's
+    // other refusals of a flag given without the flag it needs; 2 only on a `--via` line.
+    assert_eq!(code, 1, "{refused}");
     assert_eq!(refused["outcome"]["code"], "validation_failed", "{refused}");
     assert_eq!(refused["details"]["argument"], "all_frames", "{refused}");
     assert_eq!(refused["details"]["reason"], "copy_to_only", "{refused}");

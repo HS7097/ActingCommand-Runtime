@@ -2410,7 +2410,7 @@ files alone.
  "material":{
    "clicks":[{"step":1,"kind":"tap",
      "frame":{"step":1,"frame_id":"f0001","file":"frames/<sha256>.png","sha256":"…"},
-     "derived":false,"sent_on_unstored_capture":null,"entry":false,
+     "derived":false,"sent_on_unstored_capture":false,"entry":false,
      "point":{"x":962,"y":658},"to":null,"duration_ms":null,"action":null,"outcome":"performed"}],
    "final_frame":{"step":2,"frame_id":"f0002","file":"frames/<sha256>.png","sha256":"…"}},
  "copy":null,
@@ -2446,10 +2446,13 @@ files alone.
     its `sha256`, `null` when no frame was stored for it (the application entry step, which has no
     frame); `derived`, the row's (the frame was given by the rule below); `sent_on_unstored_capture`,
     whether the press was sent on a capture that was not stored (an open step with marks,
-    "Recording while playing"), so that `frame` is the stored frame the step stood on: `null` on
-    every entry ("the step table does not say"; the member is written, never left out) until the
-    step table's own member is read, which the join with #463 S1-1's third round does; the
-    manifest claims nothing the step table does not say; `entry`, the operation opened the
+    "Recording while playing"), so that `frame` is the stored frame the step stood on: for a press
+    whose execution names its own frame before (`derived: false`), the step table's own member
+    (`steps[].click.execution.sent_on_unstored_capture`, left out there when `false`), `true` or
+    `false`; `null` ("the step table does not say"; the member is written, never left out) for a
+    press whose frame the manifest derives (`derived: true`: a press of `do --capture --record`, a
+    press recorded the old way) and for an application operation, whose receipt does not record
+    it; the manifest claims nothing the step table does not say; `entry`, the operation opened the
     application entry step (there was no screen before it); where it was pressed: `point` (a tap's
     or a long press's point, where a swipe began), `to` (where a swipe ended), `duration_ms` (a
     swipe's or a long press's), `action` (an application operation's, in place of a point: a force
@@ -2477,7 +2480,9 @@ files alone.
     `after_capture`: the frame the step's effect was on, the frame the screen became and how that
     frame was taken, as the step table names them (`steps[].click.execution`,
     `steps[].application.executed`; "Recording while playing", "In the middle of a business").
-    `after_frame` is the first frame that arrived after the effect: it may name a frame that has
+    `after_frame` is the last capture of the effect's own captures after it (#463 S1-2, "The screen
+    after": the first opens the next step, each later one supersedes the one before it), or, when
+    those kept nothing, the first frame that arrived after the effect: it may name a frame that has
     since been superseded (by the capture before the next press, or a later capture), a frame of a
     dropped step, or a frame of the step's own transition after `--to-transition`. An `after_frame`
     with `after_capture` `null` is a frame that arrived after the effect's own screen after could
@@ -2516,10 +2521,11 @@ files alone.
   sha256, and `record archive` hashes every file it lists, superseded frames included.
 - **The frames around a press.** The frames before press k are the frames of row k up to and
   including its `before_frame`. The frames after it are the frames of the row `after_frame.step`
-  names, from `after_frame` on, up to and including the next frame some row names as its
-  `before_frame`, or to the end of that row's frames. A row lists its frames in the order they were
-  recorded, each with `recorded_at_unix_ms` and `superseded`, and its effect is at `at_unix_ms`, so
-  either run can be cut by time as well, however many captures a step holds.
+  names that were recorded at or after press k's `at_unix_ms` (its captures after it, the last of
+  them its `after_frame`, the train of stage one), up to and including the next frame some row
+  names as its `before_frame`, or to the end of that row's frames. A row lists its frames in the
+  order they were recorded, each with `recorded_at_unix_ms` and `superseded`, and its effect is at
+  `at_unix_ms`, so either run can be cut by time as well, however many captures a step holds.
 
 **Manifests written before 0.12.64** (`actingcommand.lab-recording-archive.v1`, Workflow #449
 REC-ARCH: the header without `locale`, `coordinate_space`, `note`, `archive_note`, `material` and
@@ -2557,8 +2563,11 @@ other); no flag writes v1.
   to a reader that reads `copy`: it stays in the recording's own directory, which keeps every
   file; an archive deletes nothing. The copy of a v1 manifest holds every file it lists and the
   manifest byte for byte, with or without `--all-frames`. `--all-frames` without `--copy-to` is
-  `validation_failed` (exit 2, `details{argument: "all_frames", reason: "copy_to_only"}`) before
-  the session is read and before anything is written.
+  `validation_failed` (`details{argument: "all_frames", reason: "copy_to_only"}`) before the
+  session is read and before anything is written: exit 1 on actinglab's own command line, as every
+  failure there and every other refusal of a flag given without the flag it needs; exit 2, the
+  usage class, only on a `--via` line (the train of stage one: the code's exit, which its test
+  pins).
 - A file that cannot be copied is `record_state_io_failed` (exit 5, `details{file, path, target,
   reason: "copy_failed", copied}`); a copy that cannot be read or does not hold its sha256 is
   `record_archive_verify_failed` (exit 5, `details{file, path, checked: "copy", reason:

@@ -61,6 +61,20 @@
 //   material, though the dropped step's press was performed.
 // - `s15_fix2_a_step_table_without_executed_at_is_written_back_byte_for_byte`: receipts without
 //   `executed_at_unix_ms`, as the layer below writes them, load and are written back byte for byte.
+// The train of stage one (rd-1115/brief-463-train-s1b.md: S1-5 and S1-7 joined to S1-1, S1-2 and
+// S1-3): the screen after a press or an application operation is captured until it is still
+// (#463 S1-2), on the fake's clock, which moves only by its waits; no test switches that off. What
+// each now captures: a point press one capture before it and four after it (every 100 ms, still
+// after 300 ms), an application operation (`Bench::operated`) one before it and three after it
+// (every 1000 ms, still after 2000 ms); a press whose first capture after it fails, one before it
+// and that one; a press of `do --capture --record` none. Adapted, as the join changes what they
+// pin: the frame ids, `after_frame`s, superseded frames and final frames of the tests above that
+// press or operate, the default wait after a press (100 ms), and `material_click`'s
+// `sent_on_unstored_capture`, `false` for a press whose frame is not derived (the step table's
+// member), `null` for a derived press and an application operation.
+// - `s15_train_the_material_says_what_the_step_table_says_of_the_capture_a_press_was_sent_on`: a
+//   point press on a stored capture is `false`, a point press on a marked step (its capture before
+//   it not stored) `true` as the step table records it, a press of `do --capture --record` `null`.
 // Frames are synthetic (16x9, a coloured square on gray); no Runtime, no device, no clock read by
 // the tests themselves; the session header is written as `record start` writes it.
 
@@ -213,10 +227,13 @@ fn completed(verb: &str) -> ApplicationExecution {
 }
 
 // #463 S1-5: the fake Runtime's captures, each the screen its script names (`None`: that capture
-// fails), with the reference of the frame it committed; the caller's clock waits for nothing.
+// fails), with the reference of the frame it committed. The train of stage one (#463 S1-2 joined):
+// the caller's clock (`now`) moves only by the waits, so that the captures after a press or an
+// operation end when the repeated screen has stood for `still_ms`; a capture takes no time.
 struct Screens {
     script: VecDeque<Option<u8>>,
     taken: u32,
+    now: Duration,
 }
 
 impl Screens {
@@ -224,12 +241,19 @@ impl Screens {
         Self {
             script: VecDeque::from(script),
             taken: 0,
+            now: Duration::ZERO,
         }
     }
 }
 
 impl RecordFramePorts for Screens {
-    fn wait(&mut self, _duration: Duration) {}
+    fn wait(&mut self, duration: Duration) {
+        self.now += duration;
+    }
+
+    fn elapsed(&mut self) -> Duration {
+        self.now
+    }
 
     fn capture(&mut self) -> LabResult<CapturedFrame> {
         let number = self
@@ -460,10 +484,12 @@ impl Bench {
 
     // #463 S1-5: `session app <verb> --record` on the open step, with a completed receipt, as it
     // records it: the capture before it (screen `before`), the operation, then the wait and the
-    // capture after it (screen `after`).
+    // capture after it (screen `after`). The train of stage one: the screen after is captured until
+    // it is still, with the operation's defaults (every 1000 ms, still after 2000 ms): three
+    // captures of `after`, the first opening the next step, the last its live primary frame.
     fn operated(&self, verb: &str, before: u8, after: u8) {
         let lock = self.lock("Lab-CLI");
-        let mut device = Screens::new([Some(before), Some(after)]);
+        let mut device = Screens::new([Some(before), Some(after), Some(after), Some(after)]);
         record_before_frame(&lock, &mut device)
             .unwrap_or_else(|error| panic!("before: {}: {:?}", error.code, error.details));
         let plan = record_plan_application(
@@ -733,7 +759,10 @@ fn named_frame(recording: &Value, step: u64, frame_id: &str) -> Value {
 // #463 S1-5: a press of the manifest's material: its step and kind, its frame and whether it was
 // derived, whether it opened the entry step, where it was pressed (`point`, `to`, `duration_ms`,
 // `action`) and its outcome, `performed`. Fix round 2: `sent_on_unstored_capture` `null`, since
-// the step table this build reads does not say it.
+// the step table that build read did not say it. The train of stage one (#463 S1-1's third round
+// joined): a press whose frame is not derived carries the step table's member, here `false` (a
+// test of a press sent on a capture that was not stored sets `true`); a derived press and an
+// application operation `null`.
 fn material_click(
     step: u64,
     kind: &str,
@@ -743,12 +772,17 @@ fn material_click(
     pressed: [Value; 4],
 ) -> Value {
     let [point, to, duration_ms, action] = pressed;
+    let unstored = if derived || kind == "application" {
+        Value::Null
+    } else {
+        json!(false)
+    };
     object([
         ("step", json!(step)),
         ("kind", json!(kind)),
         ("frame", frame),
         ("derived", json!(derived)),
-        ("sent_on_unstored_capture", Value::Null),
+        ("sent_on_unstored_capture", unstored),
         ("entry", json!(entry)),
         ("point", point),
         ("to", to),
@@ -1281,7 +1315,9 @@ fn rec_arch_without_an_active_recording_or_with_an_unknown_id_nothing_is_archive
 fn s15_a_stage_one_recording_archives_its_presses_their_screens_and_the_final_screen() {
     let bench = Bench::new();
     bench.entry_launch();
-    bench.pressed(&tap_at(3, 4), [Some(0), Some(1)]);
+    // The train of stage one: each press takes one capture before it and four after it (every
+    // 100 ms, still after 300 ms unchanged), the restart one before it and three after it.
+    bench.pressed(&tap_at(3, 4), [Some(0), Some(1), Some(1), Some(1), Some(1)]);
     bench.pressed(
         &RecordPressRequest {
             click: PlanClickRequest::default(),
@@ -1291,7 +1327,7 @@ fn s15_a_stage_one_recording_archives_its_presses_their_screens_and_the_final_sc
             }),
             after: AfterCapture::for_press(None),
         },
-        [Some(2), Some(3)],
+        [Some(2), Some(3), Some(3), Some(3), Some(3)],
     );
     bench.pressed(
         &RecordPressRequest {
@@ -1306,7 +1342,7 @@ fn s15_a_stage_one_recording_archives_its_presses_their_screens_and_the_final_sc
             point_press: None,
             after: AfterCapture::for_press(None),
         },
-        [Some(4), Some(5)],
+        [Some(4), Some(5), Some(5), Some(5), Some(5)],
     );
     bench.operated("restart", 6, 7);
     let recording = bench.recording();
@@ -1327,17 +1363,19 @@ fn s15_a_stage_one_recording_archives_its_presses_their_screens_and_the_final_sc
     let rows = manifest["steps"].as_array().expect("rows");
     assert_eq!(rows.len(), 6, "{manifest}");
     let after = |step: u64, frame_id: &str| json!({"step": step, "frame_id": frame_id});
+    // The train of stage one: each `after_frame` is the last capture after its effect, the
+    // captures before it superseded in the step the first opened.
     let expected = [
         ("application", [Value::Null, Value::Null, json!(false)]),
-        ("tap", [json!("f0001"), after(3, "f0002"), json!(false)]),
+        ("tap", [json!("f0001"), after(3, "f0005"), json!(false)]),
         (
             "long_press",
-            [json!("f0003"), after(4, "f0004"), json!(false)],
+            [json!("f0006"), after(4, "f0010"), json!(false)],
         ),
-        ("swipe", [json!("f0005"), after(5, "f0006"), json!(false)]),
+        ("swipe", [json!("f0011"), after(5, "f0015"), json!(false)]),
         (
             "application",
-            [json!("f0007"), after(6, "f0008"), json!(false)],
+            [json!("f0016"), after(6, "f0019"), json!(false)],
         ),
         ("none", [Value::Null, Value::Null, json!(false)]),
     ];
@@ -1378,7 +1416,9 @@ fn s15_a_stage_one_recording_archives_its_presses_their_screens_and_the_final_sc
         })
     );
     // The capture before a press supersedes the screen after the one before it, which stays the
-    // earlier press's `after_frame`: a step's frames in the order they were recorded.
+    // earlier press's `after_frame`: a step's frames in the order they were recorded. The train of
+    // stage one: the tap's four captures after it (each superseding the one before), then the
+    // long press's capture before it.
     let listed = rows[2]["frames"]
         .as_array()
         .expect("frames")
@@ -1389,11 +1429,19 @@ fn s15_a_stage_one_recording_archives_its_presses_their_screens_and_the_final_sc
         listed,
         [
             (json!("f0002"), json!(true)),
-            (json!("f0003"), json!(false))
+            (json!("f0003"), json!(true)),
+            (json!("f0004"), json!(true)),
+            (json!("f0005"), json!(true)),
+            (json!("f0006"), json!(false))
         ]
     );
-    assert_eq!(rows[1]["after_capture"]["after_ms"], 800);
+    // The train of stage one: a press waits 100 ms by default (#463 S1-2), its loop took four
+    // captures and found the screen still; the restart three.
+    assert_eq!(rows[1]["after_capture"]["after_ms"], 100);
+    assert_eq!(rows[1]["after_capture"]["captures"], 4);
+    assert_eq!(rows[1]["after_capture"]["still"], true);
     assert_eq!(rows[4]["after_capture"]["after_ms"], 2000);
+    assert_eq!(rows[4]["after_capture"]["captures"], 3);
     assert!(rows[4]["at_unix_ms"].is_u64(), "{}", rows[4]);
 
     // What stage one hands over.
@@ -1424,7 +1472,7 @@ fn s15_a_stage_one_recording_archives_its_presses_their_screens_and_the_final_sc
                     material_click(
                         3,
                         "long_press",
-                        frame(3, "f0003"),
+                        frame(3, "f0006"),
                         false,
                         false,
                         [point(8, 5), Value::Null, json!(800), Value::Null],
@@ -1432,7 +1480,7 @@ fn s15_a_stage_one_recording_archives_its_presses_their_screens_and_the_final_sc
                     material_click(
                         4,
                         "swipe",
-                        frame(4, "f0005"),
+                        frame(4, "f0011"),
                         false,
                         false,
                         [point(2, 2), point(12, 7), json!(300), Value::Null],
@@ -1440,14 +1488,14 @@ fn s15_a_stage_one_recording_archives_its_presses_their_screens_and_the_final_sc
                     material_click(
                         5,
                         "application",
-                        frame(5, "f0007"),
+                        frame(5, "f0016"),
                         false,
                         false,
                         [Value::Null, Value::Null, Value::Null, json!("restart")],
                     ),
                 ]),
             ),
-            ("final_frame", frame(6, "f0008")),
+            ("final_frame", frame(6, "f0019")),
         ])
     );
 }
@@ -1759,8 +1807,11 @@ fn s15_without_a_screen_after_the_last_press_there_is_no_final_frame() {
 #[test]
 fn s15_the_copy_holds_the_material_unless_every_frame_is_asked_for() {
     let bench = Bench::new();
-    bench.pressed(&tap_at(3, 4), [Some(0), Some(1)]);
-    bench.pressed(&tap_at(5, 6), [Some(2), Some(3)]);
+    // The train of stage one: each tap takes one capture before it and four after it; the four
+    // after the first tap are one file (screen 1), all superseded once the second tap's capture
+    // arrives, and the copy of the material leaves that file out.
+    bench.pressed(&tap_at(3, 4), [Some(0), Some(1), Some(1), Some(1), Some(1)]);
+    bench.pressed(&tap_at(5, 6), [Some(2), Some(3), Some(3), Some(3), Some(3)]);
     let recording = bench.recording();
     let replaced = &recording["steps"][1]["frames"][0];
     assert_eq!(replaced["frame_id"], "f0002", "{recording}");
@@ -1835,8 +1886,9 @@ fn s15_the_copy_holds_the_material_unless_every_frame_is_asked_for() {
 #[test]
 fn s15_fix2_a_copy_that_fails_after_its_first_frame_leaves_no_manifest() {
     let bench = Bench::new();
-    bench.pressed(&tap_at(3, 4), [Some(0), Some(1)]);
-    bench.pressed(&tap_at(5, 6), [Some(2), Some(3)]);
+    // The train of stage one: each tap takes one capture before it and four after it.
+    bench.pressed(&tap_at(3, 4), [Some(0), Some(1), Some(1), Some(1), Some(1)]);
+    bench.pressed(&tap_at(5, 6), [Some(2), Some(3), Some(3), Some(3), Some(3)]);
     let archived = bench.archived(None);
     let manifest = manifest_of(&archived);
     // The frames the copy takes, in its order: each press's, then the final screen.
@@ -1955,7 +2007,8 @@ fn s15_fix2_an_application_operation_recorded_the_old_way_is_derived() {
                     [Value::Null, Value::Null, Value::Null, json!("restart")],
                 )]),
             ),
-            ("final_frame", named_frame(&recording, 2, "f0002")),
+            // The train of stage one: the last of the restart's three captures after it.
+            ("final_frame", named_frame(&recording, 2, "f0004")),
         ])
     );
 }
@@ -2171,4 +2224,90 @@ fn s15_fix2_a_step_table_without_executed_at_is_written_back_byte_for_byte() {
     // Loaded and written back as it is.
     bench.rewrite_receipts(|_| {});
     assert_eq!(bench.recording_bytes(), below);
+}
+
+// The train of stage one (#463 S1-1's third round joined with S1-5; brief
+// rd-1115/brief-463-train-s1b.md, a): `material.clicks[].sent_on_unstored_capture` says what the
+// step table says. A point press on a new recording, its capture before it stored: `false` (the
+// step table leaves the member out). A point press on the step the first one's captures opened,
+// marked since, so that its capture before it is not stored and `frame` is the step's stored frame
+// (the last capture after the first press): `true`, as the step table records it. A press of `do
+// --capture --record` on the step the second one's captures opened, whose frame the manifest
+// derives: `null`. Each point press takes one capture before it and four after it.
+#[test]
+fn s15_train_the_material_says_what_the_step_table_says_of_the_capture_a_press_was_sent_on() {
+    let bench = Bench::new();
+    bench.pressed(&tap_at(3, 4), [Some(0), Some(1), Some(1), Some(1), Some(1)]);
+    bench.mark(2, "after_square");
+    bench.pressed(&tap_at(5, 6), [Some(2), Some(3), Some(3), Some(3), Some(3)]);
+    bench.commit_tap("Lab-CLI", "request-do");
+    let recording = bench.recording();
+    let steps = recording["steps"].as_array().expect("steps");
+    assert_eq!(steps.len(), 3, "{recording}");
+    let first = &steps[0]["click"]["execution"];
+    assert_eq!(first["before_frame"], "f0001", "{recording}");
+    assert!(
+        first.get("sent_on_unstored_capture").is_none(),
+        "{recording}"
+    );
+    let second = &steps[1]["click"]["execution"];
+    assert_eq!(second["before_frame"], "f0005", "{recording}");
+    assert_eq!(second["sent_on_unstored_capture"], true, "{recording}");
+    assert!(
+        steps[2]["click"]["execution"]["before_frame"].is_null(),
+        "{recording}"
+    );
+
+    let archived = bench.archived(None);
+    assert_eq!(
+        record_archive_warnings(&archived).expect("warnings"),
+        ["final_frame_missing"]
+    );
+    let manifest = manifest_of(&archived);
+    let point = |x: i32, y: i32| json!({"x": x, "y": y});
+    let mut unstored = material_click(
+        2,
+        "tap",
+        named_frame(&recording, 2, "f0005"),
+        false,
+        false,
+        [point(5, 6), Value::Null, Value::Null, Value::Null],
+    );
+    unstored["sent_on_unstored_capture"] = json!(true);
+    assert_eq!(
+        manifest["material"],
+        object([
+            (
+                "clicks",
+                Value::Array(vec![
+                    material_click(
+                        1,
+                        "tap",
+                        named_frame(&recording, 1, "f0001"),
+                        false,
+                        false,
+                        [point(3, 4), Value::Null, Value::Null, Value::Null],
+                    ),
+                    unstored,
+                    material_click(
+                        3,
+                        "tap",
+                        named_frame(&recording, 3, "f0009"),
+                        true,
+                        false,
+                        [point(10, 4), Value::Null, Value::Null, Value::Null],
+                    ),
+                ]),
+            ),
+            ("final_frame", Value::Null),
+        ])
+    );
+    let clicks = manifest["material"]["clicks"].as_array().expect("clicks");
+    assert_eq!(
+        clicks
+            .iter()
+            .map(|click| click["sent_on_unstored_capture"].clone())
+            .collect::<Vec<_>>(),
+        [json!(false), json!(true), Value::Null]
+    );
 }
