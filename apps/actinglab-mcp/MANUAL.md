@@ -219,6 +219,15 @@ naming this file.
   and `next_frame_after_ms` (0 to 60000) takes the next frame after
   a press performed without a failure, as `capture --record` takes it, opening the next step
   (`next_frame_out` writes its PNG); `dry_run` with `record` is refused by the command.
+- **Adoption** (Workflow #464 P1, 0.12.61; `contracts/standard-pack-authoring.md`).
+  `ac_standard_pack_adopt` (`repo`, `record_id` or `package`, `decide`, `replace`, `state_dir`)
+  makes a stopped recording's package, or any package, a member of its game's standard pack in a
+  resource repository's checkout, through a child: the pack directory, its rule (or held entry, or
+  maintenance entry) and the `requires` words, each derived member answered with where it came
+  from. Every check runs before the first write; a refusal is `adopt_refused`, its
+  `adopt_problem` naming the check, and wrote nothing; with `dry_run` nothing is written in the
+  checkout. Its `value` is `"pending"` or a number of the pack's own: a decision that names the
+  origin `model` is refused (`value_origin_model`).
 - **Busy** is `job_capacity_exhausted` with `limit_count`: a call that would start a job while
   `--jobs` jobs run (default 8), or that needs a child while all `--children` children (default 8)
   are working. It is refused, not queued, and nothing is sent: call again later. More calls at

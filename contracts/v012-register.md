@@ -25214,6 +25214,194 @@ a bundle that declares `package` 13 through its `package` edge. A rollback stays
 is placed from such a bundle. A bundle with such a package that declares less than 13 is placed by
 an earlier installer too, and every run of that package is refused (closing round, "Interface").
 
+### 1.377 Slice #464 P1 (0.12.61): `actinglab standard-pack adopt` makes a recorded package a member of its game's standard pack in a resource repository's checkout (Workflow #464; the design `rd-1114/464-pack-build-design.md`, sections A, B, C.1, C.2, D and the row "P1 adopt" of G with its tests, and the coordinator's rulings 1, 2, 7 and 8 on board #464, not the owner's words; the coordinator's ruling on the value's origin, sent during the slice: adopt never writes `fixed_value_origin: "model"` on a caller's word; coordinator work order `rd-1114/brief-464-p1-adopt.md`, read on main `17197d8e`; fix round 1, after an independent review, with the coordinator's rulings on what is derived and on the check tree, coordinator work order `rd-1114/brief-1722-fix1.md`, main `1e67d1c5`; fix round 2, after the review of fix round 1, with the coordinator's rulings on its other points, coordinator work order `rd-1115/brief-1722-fix2.md`, main `2eaf9b7e` (release 0.12.60) merged)
+
+This slice took 1.365, the next free number on main `17197d8e` (#456 and #458 hold §1.364); the
+train 0.12.60d (#453 S3, S4, S9 and S12) and #455 G-R2s, merged first, took §1.365 to §1.369, and
+the merge of main `1e67d1c5` renumbered this entry; in fix round 1 the coordinator assigned it
+1.377, the numbers before it being taken by other open pull requests. The slice ships in 0.12.61
+(release 0.12.60 is cut without it): its codes are `since` 0.12.61. The operation, its decision
+document, its checks, what it derives and what it writes are
+[standard-pack-authoring.md](standard-pack-authoring.md); this entry records what the slice
+established, built and left.
+
+**Established before building (the design's open points).** (1) An outcome predicate on the rule
+itself must name an outcome key its package declares: a scheduled run is refused for a key the
+package does not declare (the outcome declaration of [scheduling/README.md](scheduling/README.md),
+`policy_run_outcome_declaration_mismatch`), so every such predicate of the schedule as it would be
+written, given, derived or kept, is checked against every key the entry task's
+`scheduling_outcome.mappings` declares, and a key it does not declare refuses the call
+`decision_invalid` at the predicate's pointer before anything is written; a given predicate on a
+declared key keeps its key, and the derived `feedback_stop` names only declared keys (fix round 1;
+as first built the derivation put the first declared key into every such predicate it derived or
+copied, and given and kept predicates went unchecked; since fix round 2 every reader the compiled
+schedule holds, an activity target's measure included, and every key the rule reads of another
+task, below). The Tools do not check that key themselves (`standard-pack check` composes a rule on
+an undeclared key), so adopt is where it is kept. (2)
+Whether a recording's first decision
+was evaluated is read from the package itself: the entry task's provenance (`source` `lab_record`,
+`record_id`, `cross_check.status`, `warnings` with `first_decision_not_evaluated`,
+`steps[].click.needs_review`, [lab-recording.md](lab-recording.md)), and an application step,
+which the offline simulation never passes; nothing of the recording's state directory is read for
+it. (3) Nothing is deleted in the checkout, so a replaced pack directory is moved, not copied and
+removed: with the state directory on another volume than the checkout the move cannot be made, and
+since fix round 1 that is refused `replace_across_volumes` before the first write (as first built
+the move failed `adopt_write_failed` after the new directory was written as its `.part`, and every
+later call was refused `pack_exists`). (4) `--dry-run` runs the check tree too, which is written
+under the state directory only; nothing of the checkout is written. None of the four changes the
+operation's shape, so the slice was built as designed.
+
+**Fix round 1** (after an independent review; the coordinator's work order and rulings). The
+answer never says more than is true, and a call that cannot finish fails before it writes:
+
+| Item | Before | Now |
+|---|---|---|
+| `--replace` across volumes | the move of the replaced directory failed after the new one was written | the volumes of the checkout and of the kept place (the nearest existing part of each, links resolved: drive or share on Windows, device elsewhere) are compared before the first write; `replace_across_volumes` says to give a `--state-dir` on the checkout's volume and, for a recording, its package by `--package`; a seam of `AdoptWorktree` (`volume`) lets the gate stand for two volumes |
+| Outcome keys | the derivation forced the first declared key; given and kept predicates unchecked | every own-outcome predicate of the schedule as written checked against all declared keys, `decision_invalid` at its pointer (in the decision when it gave the member, else in `schedule.json`), the details `declared_outcome_keys` |
+| `feedback_stop` | the most frequent of the file's rules, copied and renamed | never copied: "this rule's own run ended with a key its package declares" for every key of a normal end (not `busy`, no `remedy`), under `any` for several (`package`, with `how`) |
+| `expected_duration_ms` | the package's waits (some 700 ms a step) | never below the neutral 60000 when derived (`neutral_floor`, with `how`); the decision may state it |
+| One role | a business decision left a `maintenance.json` entry, so the composer did not judge the rule; a lifted hold left no trace | the class decides: a business or held decision removes the package's `maintenance.json` entries, a decision of another class than held lifts a hold; `removed_entries` and `replaced_entries` list each with its pointer; a role `pages.json`, `navigation.json` or `interrupts.json` gives is refused `decision_invalid` at `/class`; without a decision the class reads a maintenance role as maintenance |
+| Warnings | only those naming the package or its rule | every warning of the check, the game's included |
+| `pending` | answered `undeclared` and a warning | `waits_for_value`: the evaluator's reason `benefit_unknown` with its `benefit_gap` (a registered code and word) and the same in words; `pending` for a follower of a chain refused `decision_invalid` at `/value`; a new business rule may give no value only when the check finds it a follower |
+| Writes | root files renamed over whatever was there; a failed second rename left the old directory moved away | each root file read again and compared before the first write and before its rename, `adopt_write_failed` when it changed, nothing more renamed; the old directory moved back by a rename when the new one cannot take its place |
+| Leftovers | `... is left from an earlier adoption` | the message names every leftover and says what to do ("If a call was interrupted") |
+| Check tree | a new `adopt-check/<ms>/` each call, never reused, colliding within a millisecond | one tree for each checkout, `adopt-check/<last segment>-<16 hex of the SHA-256 of its resolved path>/`, marked `.adopt-check-tree`, the marker locked for the call, emptied at the start of a call only when the marker is there; `check_tree_unmarked`, `check_tree_busy` |
+
+The lint finding of the first CI run (`clippy::unnecessary_to_owned` in `Existing::pointing`) is
+fixed. `BenefitGap` is exported by `crates/policy` for the answer's outcome; nothing of the policy
+crate's behaviour changes.
+
+**Fix round 2** (after the review of fix round 1; the coordinator's work order and rulings, not the
+owner's words):
+
+| Item | Before | Now |
+|---|---|---|
+| Outcome keys of the rule | only rules and pools scanned for readers of the rule's outcome; an activity target's measure, which the Runtime also compares, unchecked | after the check of the tree, every key the schedule as that check compiled it reads of the rule's outcome, from the policy crate's own `CompiledCatalog::referenced_outcome_keys` (rules' triggers and stops, pools' observations, activity targets' measures: the one copy of the rule the Runtime runs), against the package's declared keys; the refusal at the first reader in file order of the rules the composer composes, the pools and the activity profiles, its message naming that reader by its id (item 9) |
+| Outcome keys of another task | a predicate of the rule reading another task's outcome unchecked, so that task was refused at every dispatch and the rule never came due | every outcome predicate of the rule as it would be written that reads another task checked against the keys the package of that task declares (its `packs/<package_id>` read as `package preflight` reads it), `decision_invalid` at its pointer, the details naming that task, its package and its declared keys |
+| The check tree | a link at its place was emptied through; made by `create_dir` and then marked, so a crash between left it unmarked and two first calls could refuse one `check_tree_unmarked` | a link (a symbolic link, a junction) at its place refused `check_tree_link` before anything is opened or cleared; made whole as `<checkout>.new-<process>-<count>/` with its marker and renamed into place, a call that finds another's tree there first removing its own and going on (busy at worst) |
+| `/class` | refused for `business` and `held` beside a role another root file gives | refused for `business` only; a package `pages.json` names that is not run through is adoptable as held |
+| Maintenance by `uses` alone | the package's business rule silently given `maintenance: true` | refused `business_rule_in_the_way` at `/rules/<i>` of `schedule.json`, naming the rule's id |
+| A manual request | answered `waits_for_value` ("not dispatched") although the evaluator dispatches it unjudged | the policy crate's `is_manual_request` on the compiled task (new, the placement's own `manual_request`): `value_not_judged` `manual_request` and no `waits_for_value`; a follower `value_not_judged` `follower`; the contract's table of which rules are dispatched and which wait ("`pending`" with a valued `produces` is judged and dispatched) |
+| Two root files | each written as its `.part` and renamed in turn | both `.part` files written first, then renamed one after the other, first the file that gives the new role (`maintenance.json` for the class maintenance, `schedule.json` otherwise), so that an interruption between the two renames leaves a `.part` and two roles; the leftover's message says which file was not renamed and how to finish or undo; without a decision, a held entry or business rule beside a `maintenance.json` entry is refused `repository_invalid` at that entry, saying what to do; `written` lists the files in the order renamed |
+| Texts | the error of a member nothing derives named the file's rules for `feedback_stop`; "the task runs once for each time its trigger comes true"; `git diff` shows which | `feedback_stop`'s error names the package's keys (never copied); after one normal end inside the activity window the rule is not dispatched again in that window (`how` and the contract); "look whether the file holds the package's rule or entry" |
+
+The seam `AdoptWorktree::rename` (every rename of the writes, `fs::rename` by default) lets the gate
+make the second rename fail and let another writer change a root file in between. The answer's
+`written` follows the renames. Root files with changes not committed are still read and written as
+they are (several adoptions before one commit). The check of the tree keeps the catalog its
+composition compiled (`ScheduleReport::compiled` in `crates/resource-tooling/src/standard_pack_schedule.rs`,
+`check_standard_pack_root_with_catalog` in `standard_pack_check.rs`); the answer of `standard-pack
+check` and of `package bundle` is unchanged. `crates/policy` gains `is_manual_request`, a public
+call of the placement's own rule; nothing of its behaviour changes.
+
+**Fix round 3** (after the review of fix round 2; the coordinator's work order, not the owner's
+words; main `2eaf9b7e` unchanged, no merge):
+
+| Item | Before | Now |
+|---|---|---|
+| The advice after an interruption | "run adopt again with the decision it was given" (two roles) and "then run adopt again" (a leftover `.part`), which the call's own new `packs/<package_id>`, in place and not committed, refused `pack_exists` or, with `--replace`, `pack_dirty` | every message that meets what an interrupted or stopped call left says what does work, each step followed through the checks: move the root `.part` files out, commit `packs/<package_id>` or put it back as it was, then adopt with `--replace` and the decision (two roles, a leftover root `.part`, a root file another writer changed); move a `packs/<package_id>.part` out and run adopt as that call was run; to finish, rename a trusted `.part` only where that finishes the adoption |
+| A root file's `.part` | "that file whole as the call computed it"; the other root file "renamed or not changed" | trusted only when it reads as that root file (the schedule reader, the list of `maintenance.json` entries) and is in the canonical form, its final newline included, as a finished write leaves it; the message names each `.part` trusted or not and why; a `.part` not trusted means no root file was renamed; for one trusted `.part`, the other file's three states (renamed, not to change, to change with its `.part` not written yet) |
+| A business rule | a rule without the `maintenance` member, so an unmarked rule beside its package's `maintenance.json` entry (one legal role) was refused `business_rule_in_the_way` or as two roles | a rule the composer judges by its value, by the composer's own rule (the policy crate's new `is_judged_rule`, the composer's `judged`), in the `uses`-alone check, the two-roles check, the class an earlier adoption gave and the derivation's tiers |
+| The check tree's temporary directory | `<checkout>.new-<process>-<count>/`, never cleared after a crash, so a later process with the same number failed `adopt_write_failed` without advice | `<checkout>.new-<process>-<ms>-<count>/`, a name another directory holds passed over for the next count; while a call holds the tree, every directory beside it named so (three numbers) that carries the marker is cleared, one without the marker left alone, a link of that name refused `check_tree_link` before anything is cleared |
+| A crash that leaves nothing behind | after `packs/<package_id>` was put in place and before the first root `.part`: only "was adopted before; give --replace" | the `pack_exists` message names what the root files hold of the package and, when they hold nothing beside its directory, says that an adoption was interrupted before it wrote them (or the directory was put there by hand) and what to do; no new word |
+
+`crates/policy` gains `is_judged_rule`, a public call of the composer's own `judged`; nothing of
+its behaviour changes. The descriptions of `adopt_refused`, `adopt_write_failed` and the words
+`repository_invalid`, `pack_exists`, `check_tree_link` and `business_rule_in_the_way` say the same.
+
+**Fix round 4** (after the review of fix round 3; the coordinator's work order
+`rd-1115/brief-1722-fix4.md`, not the owner's words; main `2eaf9b7e` unchanged, no merge):
+
+| Item | Before | Now |
+|---|---|---|
+| "Commit `packs/<package_id>`, then `--replace`" | given as always followed, though a call that began without the directory never ran the volume check, so with the default state directory on another volume than the checkout the advised call was refused `replace_across_volumes` | the advice (after a leftover root `.part`, after a root file another writer changed) says that put back as it was the directory needs no state directory on the checkout's volume (absent, `--replace` moves nothing; committed, that call passed the check with its `--state-dir`), and that committed as that call left it, `--replace` needs a `--state-dir` on the checkout's volume and, with another one, a recording's package by `--package`; the contract's "always" is gone |
+| `pack_exists` with the directory alone | "interrupted or placed by hand", and "put it back, run again as before", which ends in the same refusal for a committed directory | told apart by what the call reads: a role `pages.json`, `navigation.json` or `interrupts.json` gives (the file named, and what the call accepts: `held` or `maintenance` with `--decide`, never `business`), or no root file naming the package (interrupted, or placed by hand); either way `git status` tells whether the directory is committed, and the advice ends: absent, adopt without `--replace`; committed, with `--replace` and a state directory on the checkout's volume |
+| Two roles | its message said `packs/<package_id>` is not committed, and told a business rule beside the entry, which the composer never judges there | only a call with `--replace` meets the check, after `pack_dirty` passed, so the message says the directory is committed or absent and to run adopt again with `--replace`, the same `--state-dir` and the decision; the branch of a business rule beside the entry, which could not be reached, is removed with its texts (the contract, `adopt_refused`, the word `repository_invalid`) |
+| A maintenance decision without a trigger | gave the rule beside its package's `maintenance.json` entry `"maintenance": true` | the rule declares maintenance only when the composer would otherwise judge it by its value (its own `is_judged_rule` on the rule without the declaration, with the role the call leaves); beside the entry or another root file's role the rule is kept as written, which the composer does not need changed, and a declaration would only add its checks of a declared rule (`limited` refused, the tier of its `priority`) |
+| Flushing | the `.part` files written and renamed without a flush, though the texts say an untrusted root `.part` means no root file was renamed | every file renamed into place, or whose directory is (`packs/<package_id>.part/`'s files, both root `.part` files, the check tree's marker), is flushed (`sync_all`) before the rename, as the Runtime's own writers of state do; the sentence stands |
+| The outcome guard's G2 (CI of fix round 3) | `finished_part` returned `Result<(), String>` | it returns the module's own `LabResult<()>`: `adopt_refused` `repository_invalid` at the `.part`, the operating system's refusal as the cause where there is one, whose message the leftover's message folds in |
+
+No code, word or key is added or removed: the vocabulary `adopt_problem` keeps its 17 words.
+
+**Built.**
+
+| Part | Where |
+|---|---|
+| The operation (repository, recording, package and decision read; the checks; the plan; the check tree; the writes) | `crates/resource-tooling/src/adopt.rs`, `standard_pack_adopt` |
+| The canonical form of a JSON document, shared | `crates/actingcommand-contract/src/standard_pack_schedule.rs`, `canonical_json_bytes` |
+| The command line, the version control's answer (`git status --porcelain=v1 -z --untracked-files=all`, `GIT_OPTIONAL_LOCKS=0`, the redirecting variables removed) | `apps/actinglab/src/standard_pack_cli.rs`, `run_adopt`, `GitWorktree` |
+| The row `standard-pack adopt` (authoring, slice `SP-ADOPT`, built: actinglab's `BUILT_SLICES` and the MCP server's `ACTINGLAB_SLICES`), its command, its strict flag lists, its census group, its capability, its options in `help`, its dry-run mode (preview `dry_run`), the inventory (103 commands) | `contracts/lab-operations.json`; `apps/actinglab/src/cli_module/{words,engine,own_flags}.rs`; `apps/actinglab-mcp/src/tools.rs`; `apps/actinglab/src/{commands/capabilities,cli_information,dry_run_gate}.rs`; `ratchet/actinglab_commands.json` |
+| Two codes, one value key and its vocabulary | below |
+
+**The value's origin (the coordinator's ruling).** A decided value is `"pending"` or a number of
+the pack's own, written as `fixed_value_milli` without `fixed_value_origin` and answered in
+`given` with the origin `pack`; a decision that names the origin `model` is refused
+`value_origin_model` at `/value/origin` before anything is written. A rule met again that carries
+`fixed_value_origin: "model"` keeps both members whatever the decision names, answered in
+`model_kept`. [standard-pack-schedule.md](standard-pack-schedule.md) ("The fixed value") gained
+that `acmodel bindings apply` is not built yet and that no writer of `model` exists today.
+
+**Outcome codes** (since 0.12.61; catalog domain `adopt_`, owners `resource-tooling` and
+`runtime-host`).
+
+| Code | Category, ladder | Values |
+|---|---|---|
+| `adopt_refused` | error, none | `adopt_problem` (required); `path`, `entry`, `json_pointer`, `package_id`, `member`, `count` |
+| `adopt_write_failed` | error, none | `path` (required); `paths` |
+
+The value key `adopt_problem` (codes mode kept) takes the vocabulary `adopt_problem`, 17 words:
+`repository_invalid`, `recording_not_current`, `package_invalid`, `package_mismatch`,
+`pack_exists`, `pack_dirty`, `recording_unreviewed`, `local_path`, `decision_invalid`,
+`value_origin_model`, `rule_refused`, `root_file_not_canonical`, since fix round 1
+`replace_across_volumes`, `check_tree_unmarked`, `check_tree_busy`, and since fix round 2
+`check_tree_link`, `business_rule_in_the_way` (`crates/resource-tooling/src/codes.rs`,
+`AdoptProblem`). The answer's `waits_for_value` carries the policy's registered `benefit_unknown`
+with its `benefit_gap`; no code is added for it, nor for `value_not_judged`, whose `because`
+(`follower`, `manual_request`) is a member of the answer, not a registered word.
+
+**Tests** (exec gate `#464 P1`, `crates/resource-tooling/src/gate_464_p1.rs`, a made-up repository
+of the game `neutral`, server `test`, whose rule stops on the key its package declares): the first
+adoption's exact writes (the derived `feedback_stop` from the package, `expected_duration_ms` at the
+neutral floor) and the post-check bundle; a second adoption refused; `--replace` keeping the rule
+byte for byte and the old directory; the model's value kept through three re-adoptions and the
+`model` origin refused; every check's refusal writing nothing; the classes `held` and
+`maintenance`; a pending value answering, in the evaluator's reason and in words, that the task
+waits for its value; `--dry-run`; a JSON container and a ZIP alike; and since fix round 1
+`--replace` across two volumes the test's machine tells apart refused before anything is written,
+an own-outcome predicate on an undeclared key refused at its pointer (a given trigger, a given
+`feedback_stop`, a kept rule) and a given one on a declared key written as given, and the check
+tree reused by the next call, emptied but for its marker, and a directory there without the marker
+left untouched with the call refused; and since fix round 2 that given stop on one of a package's
+two keys (not the derivation's stop on both), an activity target measuring the rule's outcome on an
+undeclared key refused at its pointer, a trigger reading another task's outcome on a key that
+task's package does not declare refused and on one it declares adopted, a business and a held
+adoption ending the package's `maintenance.json` entry and answering it, `pending` for a follower
+refused, another writer's `schedule.json` not renamed over, the old pack directory moved back when
+the new one cannot take its place, and a check tree another call holds refused `check_tree_busy`
+(seven tests; the test of fix round 1 on own-outcome keys adapted to the two-key package, as the
+work order asks); and since fix round 3 the steps the refusals advise after a call stopped between
+its two renames accepted one after the other, ending in one role, and a rule that declares no
+maintenance a business rule without its package's `maintenance.json` entry and that package's one
+maintenance role beside it (two tests); and since fix round 4 the directories a crash left beside
+the check tree, the one with the marker cleared, the one without it left, a link of that name
+refused `check_tree_link` before anything is cleared (one test), with the two tests of fix round 3
+adapted as the work order asks: the two roles' message saying the directory is committed or
+absent, and the maintenance decision by its uses alone keeping `schedule.json` byte for byte.
+
+**What is not added.** No configuration key, record type, payload member, fact, wire shape or
+interface revision; no persisted structure of the Runtime changes. No file of the recording, the
+rescue module, the kernel or `package bundle` changes.
+
+**What is left (reported, not built here).** The readiness of an adopted package (the slice
+`standard-pack ready`), building a pack without a recording (`standard-pack build`), the
+repository's regression case, catalog section and census row (named in the answer's `next`), and a
+writer of `fixed_value_origin: "model"`.
+
+**At deploy.** Nothing to do: the operation runs offline, on a checkout a person names.
+
+**Rollback** (below 0.12.61). Nothing is persisted; a build before the slice has no row
+`standard-pack adopt` and leaves an adopted checkout as it is.
+
 ### 1.378 Slice V1 (0.12.61): a package declares its variables, `control.json` `variables`, their root check and their place in `goals.json`; `package` revision 14 (Workflow #463 L4; the design `rd-1114/463-l4-design.md`, "Readings: what holds", section A, section D's "goals.json placement", section E, section F's second point, the row V1 of section G and section H items 1, 2, 5, 7 and 9 to 12, with "The coordinator's rulings on I", read on main `155366bb`; the coordinator's rulings of 11-14 in the work order and its two additions of the same night (the `package` revision is 14, revision 13 being Workflow #463 K1's; this section's number), not the owner's words; coordinator work order `rd-1114/brief-463-v1-package-variables.md`, read on main `155366bb`, main `1e67d1c5` merged; fix round 1, after the independent review, coordinator work order `rd-1114/brief-1723-fix1.md`; the closing round, after the review of fix round 1, coordinator work order `rd-1115/brief-1723-fix2.md`, main `2eaf9b7e` (release 0.12.60) merged; fix round 3, `goals.json` version 2, coordinator work order `rd-1115/brief-1723-fix3.md`, on main `2eaf9b7e`)
 
 The coordinator gave this slice 1.378: main `1e67d1c5` held the sections up to §1.369 (G-R2s), and

@@ -746,6 +746,14 @@ fn judged(rule: &ScheduleRule, classification: &StandardPackClassification) -> b
     !rule.maintenance && !classification.maintenance.contains(&rule.package_id)
 }
 
+/// Workflow #464 P1 fix round 3 (`contracts/standard-pack-authoring.md`, "One role"): whether the
+/// composer judges `rule` by its value ([`judged`]), the packages `classification` makes
+/// maintenance-role read as the composer reads them. The one rule the composer reads, so that
+/// `standard-pack adopt` takes a rule for a business rule exactly when the composer does.
+pub fn is_judged_rule(rule: &ScheduleRule, classification: &StandardPackClassification) -> bool {
+    judged(rule, classification)
+}
+
 /// SS-2b: the judged rules of one game read from its file (module doc): every rule that is not
 /// held, whose package is not maintenance-role and that does not declare itself maintenance
 /// (SS-2c), in file order, as complete, pending or undeclared; SS-2c: and the rules, not held,

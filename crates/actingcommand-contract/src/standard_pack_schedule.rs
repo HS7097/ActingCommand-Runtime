@@ -650,6 +650,19 @@ pub fn classify_standard_pack_packages(
     classification
 }
 
+/// Workflow #464 P1 (`contracts/standard-pack-authoring.md`, "The canonical form"): `value` in the
+/// serialization `actinglab package fmt` writes a package's JSON files in: two-space indentation,
+/// one member or element per line, `": "` after a member name, members in their document order,
+/// text as UTF-8 with only what JSON requires escaped, every line ending in LF (the last one too),
+/// no byte-order mark. `actinglab standard-pack adopt` writes `schedule.json` and
+/// `maintenance.json` in it only when the file it reads already is in it: such a file read and
+/// written again is the same bytes, so a rule it appends changes no other byte.
+pub fn canonical_json_bytes(value: &Value) -> Result<Vec<u8>, serde_json::Error> {
+    let mut bytes = serde_json::to_vec_pretty(value)?;
+    bytes.push(b'\n');
+    Ok(bytes)
+}
+
 /// The document as a JSON value, refusing a duplicate object key at any depth and trailing data.
 fn strict_json(bytes: &[u8]) -> Result<Value, serde_json::Error> {
     let mut deserializer = serde_json::Deserializer::from_slice(bytes);

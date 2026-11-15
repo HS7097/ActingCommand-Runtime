@@ -7,6 +7,8 @@
 #![forbid(unsafe_code)]
 #![allow(clippy::result_large_err)]
 
+// Workflow #464 P1 (register §1.377): `actinglab standard-pack adopt`.
+mod adopt;
 mod api;
 mod authoring;
 mod business_catalog;
@@ -119,6 +121,9 @@ mod gate_455_gr1;
 // tools read, over real packages, follow every chain link and the remedies' capabilities.
 #[cfg(test)]
 mod gate_455_gr2s;
+// Workflow #464 P1 (register §1.377): standard-pack adopt on a made-up resource repository.
+#[cfg(test)]
+mod gate_464_p1;
 
 // Workflow #463 V1 (register §1.378): standard-pack check's root check of the variables a game
 // root's packages declare.
@@ -142,6 +147,12 @@ mod standard_pack_goals;
 // ROUT-L RL-1a: `schedule.json` in `package bundle`, `standard-pack check` and `compose`.
 mod standard_pack_schedule;
 
+pub use adopt::{
+    AdoptClass, AdoptCoverage, AdoptSource, AdoptWorktree, DerivedDrift, DerivedFrom,
+    DerivedMember, GivenMember, NotJudgedBecause, PACK_DECISION_SCHEMA, RecordingReview,
+    RootEntryChange, StandardPackAdoptRequest, StandardPackAdoptResponse, ValueNotJudged,
+    ValueWait, standard_pack_adopt,
+};
 pub use api::*;
 pub use authoring::*;
 pub use business_catalog::*;
