@@ -27,7 +27,7 @@ schema version does not change: a record without it reads exactly as before, and
 `closed_by` on an active or a v1 record is `owner_record_invalid`. The checkpoint's
 `last_record` is an owner record and carries it verbatim. Since v0.12.0 every
 reader of the journal accepts it (actingd start, `ledger-maintenance`, and
-`actingctl request-shutdown --wait`, which reads loosely); the watchdog reads
+the Lab's `shutdown --wait`, which reads loosely); the watchdog reads
 records leniently and needs no change. The
 writers come with #389 slice U-4: the upgrade state's close record, and a
 maintenance owner (`ledger-maintenance`) whose previous close carries the marker
@@ -100,7 +100,7 @@ bytes after the checkpoint line past 64 KiB, the journal holds at least two
 physical records, the guard is not retained and has no cached journal failure.
 Acquire, retention, close and `unlock-owner` never fold. Every record but the last
 is folded, so the running epoch's latest record and every close record stay
-physical: readers of physical lines alone, such as `actingctl request-shutdown
+physical: readers of physical lines alone, such as the Lab's `shutdown
 --wait`, need no checkpoint support (the checkpoint has no top-level `owner_epoch`
 or `pid`). Acquire does not fold because an epoch that only starts and stops adds
 about as many bytes as its summary, and because startup reconciliation must read

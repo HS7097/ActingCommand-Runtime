@@ -311,7 +311,7 @@ Instance configuration (`actingd`, `contracts/actingd-check-config.md`):
 }
 ```
 
-Same semantics as `actingctl task-run --package <locator>`: the locator (relative paths
+Same semantics as the Lab's `run start <instance> <locator>`: the locator (relative paths
 resolve against the configuration file's directory; the assembled path must be absolute)
 names the package, a directory or a `.zip` or `.json` file read as its path chooses
 (`contracts/package-reference.md`); the response deadline is the contract maximum. Workflow

@@ -420,9 +420,9 @@ yet made rows; the crash itself is loud.
   only for a row that failed today, a cap used up today (a daily summary rule's cap of 1 never counts as
   used up), or an unreadable registry. A day is the host's local day (AGT-2; until then it was a UTC
   day).
-- **`actingctl overview`, `ac_overview`:** the block `agent_wake`, that member of the one Status read; MCP
+- **The Lab's `status` (MCP `ac_status`):** the block `agent_wake`, that member of the one Status read; MCP
   never cuts it.
-- **Rows:** `actingctl facts`, `ac_facts`, key `host.agent_wake`. **History:** `ac_events` by type, always
+- **Rows:** the Lab's `facts --program` (MCP `ac_facts`), key `host.agent_wake`. **History:** the Lab's `events` (MCP `ac_events`) by type, always
   with `after_sequence`.
 - **A console whose `runtime-client` `max` is below 5 refuses a status that carries the member** (the status
   denies unknown members), so update the console before adding the section.
@@ -430,14 +430,14 @@ yet made rows; the crash itself is loud.
 ## A person's test
 
 ```text
-actingctl agent-wake-test --state-root <root> --to <channel> [--instance <alias>] [--wait-s <seconds>]
+actinglab wake-test <channel> [--instance <alias>]
 ```
 
 The request `AgentWakeTest{to, instance_alias?}` took the origins (User, Ui) and (Cli, Cli) only, else
 `invalid_agent_wake_test_origin`, the same gate as a pause, until Workflow #434 LAB-6S1b (0.12.58) deleted the
 origin gates of `RuntimeRequest::validate()` ([lab-two-entries.md](lab-two-entries.md) §2.4): since then every
-client envelope sends it, the Lab's `wake-test` row included, and the code is retired. **Today's MCP server
-(`actingctl mcp-serve`) has no tool for it.** The Lab's MCP server (`actinglab-mcp`, Workflow #434 LAB-5,
+client envelope sends it, the Lab's `wake-test` row included, and the code is retired. The first MCP server
+(`actingctl mcp-serve`, deleted by LAB-7) had no tool for it. The Lab's MCP server (`actinglab-mcp`, Workflow #434 LAB-5,
 0.12.57) serves the row `wake-test` as it serves every row of the operation table, so an agent of a client
 registered there can send the test; that was so before this slice, since its core rows go out as `(Cli, Cli)`.
 The test goes through the real worker, file, row and transport with kind `delivery_test`,

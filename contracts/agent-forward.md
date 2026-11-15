@@ -12,16 +12,20 @@ Code channel restores its stopped session through Claude Desktop before a send**
 Nothing else here starts a stopped session or opens a task that is not loaded: its message waits and
 fails loudly at give-up ([agent-wake.md](agent-wake.md), "Delivery states").
 
-## `actingctl agent-channel`
+## The Lab's `agent` rows
 
 ```text
-actingctl agent-channel add --state-root <path> --name <name> --client <claude|codex|dsh|antigravity> --native-id <id> [--dsh-app-root <path> --dsh-home <path> --dsh-node <path>] [--restore <on|off>]
-actingctl agent-channel remove --state-root <path> --name <name>
-actingctl agent-channel list --state-root <path>
-actingctl agent-channel claude-hook <start|end> --state-root <path>
-actingctl agent-channel claude-register --state-root <path> --name <name>
-actingctl agent-channel notice
+actinglab agent add --name <name> --client <claude|codex|dsh|antigravity> --native-id <id> [--dsh-app-root <path> --dsh-home <path> --dsh-node <path>] [--restore <on|off>]
+actinglab agent remove --name <name>
+actinglab agent list
+actinglab agent claude-hook <start|end>
+actinglab agent claude-register --name <name>
+actinglab agent notice
 ```
+
+The rescue module's rows (`crates/lab-rescue`, `agent_channel`), which run the commands
+`actingctl agent-channel` ran until Workflow #434 LAB-7 (0.12.62) deleted it, on the state root of
+the root they run from.
 
 - None of them needs the Runtime or an installation slot, and none is an MCP tool. They touch only
   `<state_root>\agent-forward\`, under one file lock, each file through `.part`, flush and rename.
@@ -63,8 +67,8 @@ A `detail` also names neither the pipe nor the native id.
 ### The hook
 
 ```json
-"SessionStart": [{ "hooks": [{ "type": "command", "timeout": 30, "command": "<root>\\runtime\\actingctl.exe agent-channel claude-hook start --state-root <root>\\state" }] }],
-"SessionEnd":   [{ "hooks": [{ "type": "command", "timeout": 30, "command": "<root>\\runtime\\actingctl.exe agent-channel claude-hook end --state-root <root>\\state" }] }]
+"SessionStart": [{ "hooks": [{ "type": "command", "timeout": 30, "command": "<root>\\tools\\actinglab.exe agent claude-hook start" }] }],
+"SessionEnd":   [{ "hooks": [{ "type": "command", "timeout": 30, "command": "<root>\\tools\\actinglab.exe agent claude-hook end" }] }]
 ```
 
 | Case | `start` | `end` | Exit | Prints |
@@ -344,7 +348,7 @@ page; every method, member and text here comes from the adapted source. Whether 
 - **A Codex send reads the task's snapshot,** which holds its history: memory for the length of one
   send, at most 256 MiB a frame.
 - **`unsafe`:** three modules (`pipe`, `dpapi`, `ancestor`), each new to review. The crate denies it
-  everywhere else, and `actingctl` stays `forbid(unsafe_code)`. The Codex transport adds the pipe's
+  everywhere else, and the rescue module's crate that runs it (`crates/lab-rescue`) stays `forbid(unsafe_code)`. The Codex transport adds the pipe's
   overlapped read to `pipe` and no `unsafe` of its own.
 
 **#419 holds.** A client protocol failure is a value of `ForwardOutcome`. A hung client costs at most
@@ -360,7 +364,7 @@ whose `node_modules` the helper loads; `home_root` is the DSH home, with `sessio
 `node_executable` is the Node that runs the helper.
 
 ```text
-actingctl agent-channel add --state-root <path> --name <name> --client dsh --native-id <session id> --dsh-app-root <path> --dsh-home <path> --dsh-node <path>
+actinglab agent add --name <name> --client dsh --native-id <session id> --dsh-app-root <path> --dsh-home <path> --dsh-node <path>
 ```
 
 **No credential reaches the Runtime.** The local server's address is in `<home>\.web-url` and the
@@ -442,4 +446,4 @@ The method and parts of the code come from `HS7097/codex-goal-lifecycle` at `c95
 `dsh_notify.mjs` and `bridge/dsh.rs`.
 `crates/agent-forward/LICENSE-codex-goal-lifecycle.txt` holds the text verbatim, each adapted file
 says so at its top (the embedded DSH and Claude Desktop helpers too, so the line travels with them),
-`NOTICE.md` lists it, and `actingctl agent-channel notice` prints it, since binaries carry the code.
+`NOTICE.md` lists it, and the Lab's `agent notice` prints it, since binaries carry the code.
