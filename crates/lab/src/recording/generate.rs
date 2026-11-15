@@ -5,12 +5,13 @@
 //! task, control and resources documents, the guard of every click, and the timeouts with
 //! their clamp warnings. Everything here is computed in memory; nothing is written.
 
+use super::ending::{ending_page_id, refuse_ending_rules};
 use super::follow::{follow_invalid, located_page_problem};
 use super::marks::{value_test_declaration, value_test_side_ocr};
 use super::model::{
     ClickFollowForm, ClickGesture, LabRecording, MarkFamily, RecordRect, RecordSize, RecordedFrame,
-    RecordedMark, RecordingDefaults, RecordingStep, SelectConfirmSpec, SelectSpec, SelfTest,
-    SelfTestMargin, SelfTestStatus, StepClick, StepOptional, StepSelect, StepTransition,
+    RecordedMark, RecordingDefaults, RecordingEnding, RecordingStep, SelectConfirmSpec, SelectSpec,
+    SelfTest, SelfTestMargin, SelfTestStatus, StepClick, StepOptional, StepSelect, StepTransition,
 };
 use super::select::{on_empty_key, select_invalid};
 use super::store::{blocked, invalid, with_details};
@@ -194,6 +195,23 @@ fn optional_runs(steps: &[PlanStep]) -> LabResult<Vec<OptionalRun>> {
     Ok(runs)
 }
 
+/// #463 R2: one ending of the recording with its package number (from 1, in the order the
+/// recording took them), its page and the marks its page requires.
+#[derive(Debug, Clone)]
+pub(crate) struct PlanEnding {
+    pub(crate) number: u32,
+    pub(crate) ending: RecordingEnding,
+    pub(crate) page: String,
+    pub(crate) required: Vec<String>,
+}
+
+impl PlanEnding {
+    /// Its live frames: the primary frame and the samples.
+    pub(crate) fn live_frames(&self) -> Vec<&RecordedFrame> {
+        self.ending.live_frames()
+    }
+}
+
 /// The package a recording generates, before it is encoded.
 #[derive(Debug, Clone)]
 pub(crate) struct Plan {
@@ -226,6 +244,8 @@ pub(crate) struct Plan {
     pub(crate) warnings: Vec<Value>,
     /// Steps with a click or application operation marked `needs_review`.
     pub(crate) needs_review: Vec<Value>,
+    /// #463 R2: the recording's endings, in the order it took them.
+    pub(crate) endings: Vec<PlanEnding>,
 }
 
 impl Plan {
@@ -317,6 +337,23 @@ impl Plan {
             .any(|step| step.step.application.is_some())
     }
 
+    /// #463 R2: the steps after whose effect the run awaits the endings (`linear-steps.md`,
+    /// "Endings": only at the path's end): the step before the last, and, when it belongs to a run
+    /// of optional steps (which then ends the path), the step before that run and the run's
+    /// members, in path order.
+    pub(crate) fn ending_awaiting_steps(&self) -> Vec<&PlanStep> {
+        let Some(last_effect) = self.steps.len().checked_sub(2) else {
+            return Vec::new();
+        };
+        match self.run_of(last_effect) {
+            Some(run) => std::iter::once(run.previous)
+                .chain(run.members.iter().copied())
+                .filter_map(|index| self.steps.get(index))
+                .collect(),
+            None => self.steps.get(last_effect).into_iter().collect(),
+        }
+    }
+
     /// Workflow #390 LAB-2: the target id the package gives mark `id`: `page/<page>` for the
     /// template that anchors a page, the mark id otherwise.
     pub(crate) fn target_id(&self, id: &str) -> String {
@@ -359,6 +396,31 @@ impl Plan {
             }
         }
         Ok(false)
+    }
+
+    /// #463 R2 fix 1: whether a page whose rule requires the marks `required` rests on OCR alone:
+    /// it requires a mark, and every mark it requires reads OCR (an OCR mark or a value test, or a
+    /// check whose members all do), so that without an OCR model none of them decides anything.
+    pub(crate) fn rests_on_ocr(&self, required: &[String]) -> LabResult<bool> {
+        let reads_ocr =
+            |family: MarkFamily| matches!(family, MarkFamily::Ocr | MarkFamily::ValueTest);
+        for id in required {
+            let mark = self.mark(id)?;
+            let alone = if mark.family == MarkFamily::Check {
+                let members = mark.check_members();
+                let mut all = !members.is_empty();
+                for member in members {
+                    all &= reads_ocr(self.mark(member)?.family);
+                }
+                all
+            } else {
+                reads_ocr(mark.family)
+            };
+            if !alone {
+                return Ok(false);
+            }
+        }
+        Ok(!required.is_empty())
     }
 
     /// The template marks whose crops the package carries, as `(mark id, asset path)`.
@@ -830,6 +892,15 @@ pub(crate) fn plan(recording: &LabRecording, settings: &StopSettings) -> LabResu
             }
         }
     }
+    // #463 R2: the endings' own marks, after the steps' and the transitions'.
+    for mark in recording
+        .endings
+        .iter()
+        .flat_map(|ending| ending.marks.iter())
+    {
+        emitted.push(mark.id.clone());
+        marks.insert(mark.id.clone(), mark.clone());
+    }
     let mut steps = Vec::with_capacity(n);
     for (position, step) in effective.iter().enumerate() {
         let number = position + 1;
@@ -949,6 +1020,31 @@ pub(crate) fn plan(recording: &LabRecording, settings: &StopSettings) -> LabResu
     // #463 R1: the rules a select step keeps from its marking on, checked again where the package
     // is generated.
     refuse_select_rules(&steps, &recording.task_id)?;
+    // #463 R2: so are an ending's, a select declared after it among them; then each ending's page
+    // `ending_kk` (or `ending_kk_<page>`), numbered to the width of the steps' pages.
+    refuse_ending_rules(recording)?;
+    let mut endings = Vec::with_capacity(recording.endings.len());
+    for (position, ending) in recording.endings.iter().enumerate() {
+        let required = required_ids(&ending.marks, &ending.reused, &marks);
+        if let Some(id) = required.iter().find(|id| !marks.contains_key(*id)) {
+            return Err(with_details(
+                blocked(
+                    "record_mark_rejected",
+                    format!(
+                        "the ending '{}' names mark '{id}', which is not a mark of an effective step",
+                        ending.outcome_key
+                    ),
+                ),
+                json!({"marks": [{"id": id, "reason": "reuse_source_missing"}]}),
+            ));
+        }
+        endings.push(PlanEnding {
+            number: u32::try_from(position + 1).unwrap_or(u32::MAX),
+            page: ending_page_id(&numbered(position + 1), ending.page.as_deref()),
+            required,
+            ending: ending.clone(),
+        });
+    }
     let runs = optional_runs(&steps)?;
 
     let size = recording.coordinate_space.ok_or_else(|| {
@@ -1052,6 +1148,7 @@ pub(crate) fn plan(recording: &LabRecording, settings: &StopSettings) -> LabResu
         timeout_ms,
         warnings,
         needs_review,
+        endings,
     })
 }
 
@@ -1599,6 +1696,27 @@ fn step_provenance(plan: &Plan, step: &PlanStep) -> LabResult<Value> {
     Ok(Value::Object(entry))
 }
 
+/// #463 R2: the provenance of an ending: its number, key and page, the sha256 and size of its
+/// frames (never a path) and its marks with their mark-time results.
+fn ending_provenance(plan: &Plan, ending: &PlanEnding) -> LabResult<Value> {
+    let frames = ending.live_frames();
+    let primary = frames.iter().find(|frame| frame.role == "primary");
+    Ok(json!({
+        "ending": ending.number,
+        "outcome_key": ending.ending.outcome_key,
+        "page": ending.page,
+        "frame_sha256": primary.map(|frame| frame.sha256.clone()),
+        "sample_sha256": frames
+            .iter()
+            .filter(|frame| frame.role == "sample")
+            .map(|frame| frame.sha256.clone())
+            .collect::<Vec<_>>(),
+        "frame_size": primary.map(|frame| [frame.width, frame.height]),
+        "marks": mark_summaries(plan, &ending.ending.marks, &ending.ending.reused)?,
+        "marked_at_unix_ms": ending.ending.marked_at_unix_ms
+    }))
+}
+
 /// The provenance of an optional step (Workflow #339 section 2.5).
 fn optional_provenance(optional: &StepOptional) -> Value {
     json!({"settle_ms": optional.settle_ms, "marked_at_unix_ms": optional.marked_at_unix_ms})
@@ -1632,6 +1750,16 @@ fn mark_provenance(plan: &Plan, mark: &RecordedMark) -> Value {
     let mut provenance = Map::new();
     provenance.insert("source".into(), json!("lab_record"));
     provenance.insert("record_id".into(), json!(plan.record_id));
+    // #463 R2: a mark of an ending names the ending by its key, and no step.
+    if let Some(ending) = plan
+        .endings
+        .iter()
+        .find(|ending| ending.ending.marks.iter().any(|own| own.id == mark.id))
+    {
+        provenance.insert("ending".into(), json!(ending.ending.outcome_key));
+        provenance.insert("self_test".into(), json!(mark.self_test.status.as_str()));
+        return Value::Object(provenance);
+    }
     if let Some(step) = plan.steps.iter().find(|step| step.step.index == mark.step) {
         provenance.insert("step".into(), json!(step.number));
     }
@@ -2140,6 +2268,7 @@ pub(crate) fn select_probe_plan(
         timeout_ms: MAX_TIMEOUT_MS,
         warnings: Vec::new(),
         needs_review: Vec::new(),
+        endings: Vec::new(),
     })
 }
 
@@ -2423,6 +2552,13 @@ fn page_rules(plan: &Plan) -> Map<String, Value> {
             );
         }
     }
+    // #463 R2: an ending's page requires its marks.
+    for ending in &plan.endings {
+        rules.insert(
+            ending.page.clone(),
+            json!({"required": targets(ending.required.as_slice(), None)}),
+        );
+    }
     rules
 }
 
@@ -2506,6 +2642,18 @@ pub(crate) fn render(
                 .collect::<LabResult<Vec<_>>>()?,
         ),
     );
+    // #463 R2: the endings, present only when the recording has one.
+    if !plan.endings.is_empty() {
+        provenance.insert(
+            "endings".into(),
+            Value::Array(
+                plan.endings
+                    .iter()
+                    .map(|ending| ending_provenance(plan, ending))
+                    .collect::<LabResult<Vec<_>>>()?,
+            ),
+        );
+    }
     if let Some(checks) = checks {
         for (key, value) in checks {
             provenance.insert(key.clone(), value.clone());
@@ -2576,6 +2724,14 @@ pub(crate) fn render(
                 &select.declaration.wanted.default,
             ),
         ));
+    }
+    // #463 R2: after the select steps' mappings, one per ending: its key on its page.
+    for ending in &plan.endings {
+        mappings.push(json!({
+            "outcome_key": ending.ending.outcome_key,
+            "effect": "no_designated_effect",
+            "terminal_pages": [ending.page]
+        }));
     }
     task.insert("scheduling_outcome".into(), json!({"mappings": mappings}));
     for (name, targets) in target_families(plan)? {

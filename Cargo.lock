@@ -233,6 +233,7 @@ dependencies = [
  "actingcommand-artifact-store",
  "actingcommand-contract",
  "actingcommand-device",
+ "actingcommand-display-adapter",
  "actingcommand-execution-kernel",
  "actingcommand-host-metrics",
  "actingcommand-ledger",

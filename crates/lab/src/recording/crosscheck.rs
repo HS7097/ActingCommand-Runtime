@@ -7,9 +7,10 @@
 //! the first step under an overall darkening). Every refusal is
 //! `record_artifact_admission_failed` or `record_step_self_mismatch`; warnings never refuse.
 
+use super::ending::ending_invalid;
 use super::follow::followed_evaluation_box;
 use super::frames::LoadedFrame;
-use super::generate::{Plan, PlanStep, follows_located_text, select_policy_document};
+use super::generate::{Plan, PlanEnding, PlanStep, follows_located_text, select_policy_document};
 use super::model::{
     ClickFollow, ClickGesture, MarkFamily, RecordRect, RecordedFrame, SelectDecision,
     SelectFrameDecision, StepSelect,
@@ -19,7 +20,8 @@ use super::select::{
 };
 use super::store::{blocked, invalid, with_details};
 use crate::LabOcr;
-use crate::codes::LabCode;
+use crate::codes::{EndingAgainst, EndingProblem, LabCode};
+use actingcommand_contract::outcome::{Detail, Outcome};
 use actingcommand_contract::{
     InputAction, LabError, LabResult, SEGMENTED_SWIPE_BRAKE_DISTANCE_PX,
     SEGMENTED_SWIPE_BRAKE_DURATION_MS, SEGMENTED_SWIPE_CORNER_HOLD_MS,
@@ -1750,4 +1752,312 @@ pub(crate) fn cross_check(
         entry_overlay,
         same_as: optional.same_as,
     })
+}
+
+/// #463 R2: the warning that the usual ending's page passes on an ending's frames.
+pub(crate) const ENDING_USUAL_INSENSITIVE: &str = "ending_usual_insensitive";
+/// #463 R2: the warning that a check of item 9 could not be evaluated on some frames: a mark it
+/// needs reads OCR and the Lab has no OCR model (fix 1: an ending page that rests on OCR alone is
+/// refused instead, `ocr_alone_unchecked`).
+pub(crate) const ENDING_NOT_EVALUATED: &str = "ending_ambiguity_not_evaluated";
+
+const ENDING_USUAL_MESSAGE: &str = "The usual ending's page passes on this ending's frames too. The \
+    run evaluates the endings before the usual ending, so it ends on this ending there, as it \
+    should; but on a run whose screen shows the usual ending under this ending's message, the two \
+    are told apart by this ending's marks alone. Give the usual ending's page a mark that does not \
+    hold on this ending's screen if the two can look alike.";
+const ENDING_NOT_EVALUATED_MESSAGE: &str = "Not evaluated: a mark this check needs reads OCR and \
+    the Lab has no OCR model, so whether the page the check names passes on these frames is \
+    unknown. Check again with record stop --dry-run where the Lab has its OCR model, or give that \
+    page a mark that is not OCR and does not hold on these frames, such as a template of the \
+    ending's message.";
+
+/// #463 R2: what self-check item 9 leaves when it refuses nothing: one entry per ending (its page
+/// on its own frames and the usual ending's page on them), its warnings, and whether a check was
+/// not evaluated.
+pub(crate) struct EndingChecks {
+    pub(crate) endings: Vec<Value>,
+    pub(crate) warnings: Vec<Value>,
+    pub(crate) partial: bool,
+}
+
+/// #463 R2: a recorded screen an ending's page is checked against: which (`against`), what names
+/// it in the refusal's details, and its live frames.
+struct EndingScreen<'p> {
+    against: EndingAgainst,
+    names: Value,
+    frames: Vec<&'p RecordedFrame>,
+}
+
+/// #463 R2: an ending's page does not match one of its own frames: `record_step_self_mismatch`,
+/// as for a step's page.
+fn ending_self_mismatch(
+    ending: &PlanEnding,
+    frame: &RecordedFrame,
+    result: &PageResult,
+) -> LabError {
+    with_details(
+        blocked(
+            "record_step_self_mismatch",
+            format!(
+                "page {} of the ending '{}' does not match its own frame {}: {} fail on it",
+                ending.page,
+                ending.ending.outcome_key,
+                frame.frame_id,
+                result.failed.join(", ")
+            ),
+        ),
+        json!({
+            "outcome_key": ending.ending.outcome_key,
+            "page": ending.page,
+            "frame_id": frame.frame_id,
+            "failed": result.failed
+        }),
+    )
+}
+
+/// #463 R2: what names the recorded screen `against` in a message, and what would happen if the
+/// ending's page passed on it.
+const fn ending_screen_words(against: EndingAgainst) -> (&'static str, &'static str) {
+    match against {
+        EndingAgainst::Previous => (
+            "a step after whose press the run awaits the endings (its page, or its page \
+             transition's frames when it has one)",
+            "the run would end on the ending before the result of that press showed",
+        ),
+        EndingAgainst::Usual => (
+            "the last step, the usual ending",
+            "the run, which evaluates the endings first, would end on the ending wherever the usual \
+             ending shows",
+        ),
+        EndingAgainst::OtherEnding => (
+            "another ending",
+            "the run could not tell the two endings apart",
+        ),
+    }
+}
+
+/// #463 R2 fix 1: `record_ending_invalid` with `ocr_alone_unchecked`: the ending's page rests on
+/// OCR marks alone and, without an OCR model, item 9 could not check it on `frames` of `screen`.
+fn ending_unchecked(ending: &PlanEnding, screen: &EndingScreen<'_>, frames: &[String]) -> LabError {
+    let key = ending.ending.outcome_key.as_str();
+    let (what, consequence) = ending_screen_words(screen.against);
+    let mut extra = json!({
+        "page": ending.page,
+        "against": screen.against.as_str(),
+        "frames": frames
+    });
+    if let (Some(object), Some(names)) = (extra.as_object_mut(), screen.names.as_object()) {
+        for (name, value) in names {
+            object.insert(name.clone(), value.clone());
+        }
+    }
+    ending_invalid(
+        EndingProblem::OcrAloneUnchecked,
+        Some(key),
+        format!(
+            "page {} of the ending '{key}' rests on OCR marks alone and the Lab has no OCR \
+             model, so whether it passes on frames {} of {what} could not be checked; if it \
+             did, {consequence}, a failure taken for a success. Run record stop where the Lab \
+             has its OCR model, or give up the ending with record mark --remove-ending {key} \
+             and take it again with a mark that is not OCR, such as a template of its message; \
+             nothing was written",
+            ending.page,
+            frames.join(", ")
+        ),
+        extra,
+    )
+}
+
+/// #463 R2: `record_ending_ambiguous`: the ending's page passes on `frames` of `screen`.
+fn ending_ambiguous(ending: &PlanEnding, screen: &EndingScreen<'_>, frames: &[String]) -> LabError {
+    let (what, consequence) = ending_screen_words(screen.against);
+    let mut details = json!({
+        "outcome_key": ending.ending.outcome_key,
+        "page": ending.page,
+        "against": screen.against.as_str(),
+        "frames": frames,
+        "outcome": Outcome::new(LabCode::RecordEndingAmbiguous)
+            .against(screen.against)
+            .envelope(Detail::Full)
+    });
+    if let (Some(object), Some(names)) = (details.as_object_mut(), screen.names.as_object()) {
+        for (key, value) in names {
+            object.insert(key.clone(), value.clone());
+        }
+    }
+    with_details(
+        blocked(
+            LabCode::RecordEndingAmbiguous.as_str(),
+            format!(
+                "page {} of the ending '{}' passes on frames {} of {what}: {consequence}. Give up the \
+                 ending with record mark --remove-ending {} and take it again with a mark that \
+                 holds on its screen only, such as a template of its message, and check with \
+                 record stop --dry-run",
+                ending.page,
+                ending.ending.outcome_key,
+                frames.join(", "),
+                ending.ending.outcome_key
+            ),
+        ),
+        details,
+    )
+}
+
+/// #463 R2, self-check item 9 (the coordinator's ruling 4 on the design of board #463: the run
+/// evaluates the endings before the usual ending): on live frames with the evaluator of item 4,
+/// every ending's page matches its own frames (`record_step_self_mismatch` otherwise) and passes
+/// on no frame of a screen the run may show instead of it (`record_ending_ambiguous`, in this
+/// order): `previous`, each step after whose press the run awaits the endings (its page
+/// transition's frames when it has one, the screen left after its press); `usual`, the last step;
+/// `other_ending`, every other ending. Fix 1: an ending page that rests on OCR marks alone, which
+/// no OCR model checked against such a screen, is `record_ending_invalid` with
+/// `ocr_alone_unchecked`. Every refusal comes before every warning. The usual ending's page passing
+/// on an ending's frames is the warning `ending_usual_insensitive`; any other undetermined
+/// evaluation (OCR without a model) the warning `ending_ambiguity_not_evaluated`, and the
+/// cross-check is then `partially_evaluated`.
+pub(crate) fn ending_checks(
+    plan: &Plan,
+    evaluator: &RecognitionEvaluator,
+    cache: &FrameCache,
+    ocr: &LabOcr,
+) -> LabResult<EndingChecks> {
+    let mut checks = EndingChecks {
+        endings: Vec::new(),
+        warnings: Vec::new(),
+        partial: false,
+    };
+    if plan.endings.is_empty() {
+        return Ok(checks);
+    }
+    let evaluation = Evaluation {
+        plan,
+        evaluator,
+        ocr_available: ocr.ocr_provider().is_some(),
+    };
+    let last = plan
+        .steps
+        .last()
+        .ok_or_else(|| invalid("validation_failed", "the package has no step"))?;
+    let usual_page = last.page_id()?;
+    let awaiting = plan.ending_awaiting_steps();
+    for ending in &plan.endings {
+        let key = ending.ending.outcome_key.as_str();
+        let ocr_alone = !evaluation.ocr_available && plan.rests_on_ocr(&ending.required)?;
+        let own_frames = ending.live_frames();
+        let mut own = Vec::new();
+        for frame in &own_frames {
+            let result = evaluation.page(&cached(cache, frame)?.scene, &ending.required, &[])?;
+            if result.verdict == PageVerdict::NoMatch {
+                return Err(ending_self_mismatch(ending, frame, &result));
+            }
+            checks.partial |= result.verdict == PageVerdict::Undetermined;
+            own.push(json!({"frame_id": frame.frame_id, "result": result.verdict.as_str()}));
+        }
+        let mut screens = Vec::new();
+        for step in &awaiting {
+            screens.push(EndingScreen {
+                against: EndingAgainst::Previous,
+                names: json!({"step": step.number}),
+                frames: if step.transition_page.is_some() {
+                    step.transition_live_frames()
+                } else {
+                    step.live_frames()
+                },
+            });
+        }
+        screens.push(EndingScreen {
+            against: EndingAgainst::Usual,
+            names: json!({"step": last.number}),
+            frames: last.live_frames(),
+        });
+        for other in plan
+            .endings
+            .iter()
+            .filter(|other| other.number != ending.number)
+        {
+            screens.push(EndingScreen {
+                against: EndingAgainst::OtherEnding,
+                names: json!({"other_outcome_key": other.ending.outcome_key}),
+                frames: other.live_frames(),
+            });
+        }
+        for screen in &screens {
+            // An application entry step has no frame of its own.
+            if screen.frames.is_empty() {
+                continue;
+            }
+            let (matched, undetermined) =
+                page_on_frames(&evaluation, cache, &ending.required, &[], &screen.frames)?;
+            if !matched.is_empty() {
+                return Err(ending_ambiguous(ending, screen, &matched));
+            }
+            // Fix 1: an ending only OCR marks tell apart, which no model checked, could turn a
+            // failure into a silent success: refused; one with a mark of another family is the
+            // warning below.
+            if !undetermined.is_empty() && ocr_alone {
+                return Err(ending_unchecked(ending, screen, &undetermined));
+            }
+            if !undetermined.is_empty() {
+                checks.partial = true;
+                let mut warning = json!({
+                    "code": ENDING_NOT_EVALUATED,
+                    "check": LabCode::RecordEndingAmbiguous.as_str(),
+                    "outcome_key": key,
+                    "page": ending.page,
+                    "against": screen.against.as_str(),
+                    "frames": undetermined,
+                    "message": ENDING_NOT_EVALUATED_MESSAGE
+                });
+                if let (Some(object), Some(names)) =
+                    (warning.as_object_mut(), screen.names.as_object())
+                {
+                    for (name, value) in names {
+                        object.insert(name.clone(), value.clone());
+                    }
+                }
+                checks.warnings.push(warning);
+            }
+        }
+        let (matched, undetermined) = page_on_frames(
+            &evaluation,
+            cache,
+            &last.required,
+            &last.forbidden,
+            &own_frames,
+        )?;
+        let usual = if !matched.is_empty() {
+            checks.warnings.push(json!({
+                "code": ENDING_USUAL_INSENSITIVE,
+                "outcome_key": key,
+                "page": ending.page,
+                "usual_page": usual_page,
+                "frames": matched,
+                "message": ENDING_USUAL_MESSAGE
+            }));
+            "passes"
+        } else if !undetermined.is_empty() {
+            checks.partial = true;
+            checks.warnings.push(json!({
+                "code": ENDING_NOT_EVALUATED,
+                "check": ENDING_USUAL_INSENSITIVE,
+                "outcome_key": key,
+                "page": ending.page,
+                "usual_page": usual_page,
+                "frames": undetermined,
+                "message": ENDING_NOT_EVALUATED_MESSAGE
+            }));
+            "not_evaluated"
+        } else {
+            "distinct"
+        };
+        checks.endings.push(json!({
+            "ending": ending.number,
+            "outcome_key": key,
+            "page": ending.page,
+            "frames": own,
+            "usual": usual
+        }));
+    }
+    Ok(checks)
 }

@@ -654,6 +654,14 @@
       "type": "vocab:select_problem",
       "description": "Why a Lab recording step's select, a choice in a list of fixed slots by the name read in each (#463 R1), cannot be declared or generated."
     },
+    "ending_problem": {
+      "type": "vocab:ending_problem",
+      "description": "Why an ending of a stopped Lab recording, a screen that ends the business another way after its last press (#463 R2), cannot be taken, given up or generated."
+    },
+    "against": {
+      "type": "vocab:ending_against",
+      "description": "The recorded screen an ending's page passes on that it must not pass on (#463 R2, record stop's self-check item 9)."
+    },
     "unknown_reason": {
       "type": "vocab:unknown_reason",
       "description": "Why an input a selection document reads could not be read as a known value."
@@ -5142,6 +5150,69 @@
         },
         "kernel_refused": {
           "description": "The kernel's admission refuses the select step as record stop would generate it."
+        },
+        "no_select": {
+          "description": "clear_select names a step that has no select, so there is nothing to take off (#463 R2)."
+        },
+        "on_empty_key_of_ending": {
+          "description": "The on_empty key is the outcome key of an ending of the recording (#463 R2 fix 1)."
+        }
+      }
+    },
+    "ending_problem": {
+      "description": "Why an ending of a stopped Lab recording, a screen that ends the business another way after its last press (#463 R2), cannot be taken, given up or generated.",
+      "source": {
+        "file": "crates/lab/src/codes.rs",
+        "enum": "EndingProblem"
+      },
+      "tokens": {
+        "recording_active": {
+          "description": "The recording is active: an ending is taken after record stop, which records the usual ending first."
+        },
+        "with_other_change": {
+          "description": "The request names a step change beside ending or remove_ending, or both of these."
+        },
+        "key_invalid": {
+          "description": "The outcome key breaks the grammar ^[a-z0-9][a-z0-9_]{0,127}$."
+        },
+        "key_reserved": {
+          "description": "The outcome key is <task_id>_done, the key of the run's usual end."
+        },
+        "key_of_select": {
+          "description": "The outcome key is the on_empty key of a select step of the recording."
+        },
+        "key_exists": {
+          "description": "Another ending of the recording has the outcome key."
+        },
+        "key_unknown": {
+          "description": "remove_ending names a key no ending of the recording has."
+        },
+        "page_exists": {
+          "description": "Another ending of the recording has the page name."
+        },
+        "no_marks": {
+          "description": "The ending adds and reuses no mark, so its page would recognize nothing."
+        },
+        "ocr_alone_unchecked": {
+          "description": "record stop's self-check item 9 could not check the ending: its page rests on OCR marks alone and the Lab had no OCR model, so whether it passes on a screen the run may show instead is unknown (fix 1)."
+        }
+      }
+    },
+    "ending_against": {
+      "description": "The recorded screen an ending's page passes on that it must not pass on (#463 R2, record stop's self-check item 9).",
+      "source": {
+        "file": "crates/lab/src/codes.rs",
+        "enum": "EndingAgainst"
+      },
+      "tokens": {
+        "previous": {
+          "description": "The frames of a step after whose press the run awaits the endings (its page, or its page transition's frames when it has one): the result of that press has not shown yet."
+        },
+        "usual": {
+          "description": "The frames of the last step, the usual ending: the ending would always win there."
+        },
+        "other_ending": {
+          "description": "The frames of another ending of the recording."
         }
       }
     },

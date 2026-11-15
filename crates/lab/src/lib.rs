@@ -60,6 +60,9 @@ mod gate_463_l2;
 // #463 R1: a recorded step chooses in a list of fixed slots by the name read in each slot.
 #[cfg(test)]
 mod gate_463_r1;
+// #463 R2: a stopped recording takes an ending from a frame, and record stop generates it.
+#[cfg(test)]
+mod gate_463_r2;
 mod lab_run;
 mod lab_run_api;
 mod ledger_port;
@@ -75,6 +78,10 @@ mod readonly_api;
 mod recording;
 mod recording_api;
 mod scheduling;
+// #463 R2 fix 1: the scripted clock of a gate test that runs the kernel's interpreter on a device
+// of its own; no gate file reads a clock.
+#[cfg(test)]
+mod scripted_clock;
 mod state;
 // Workflow #406 T4: the touch keys of the Lab's root configuration.
 mod touch;
