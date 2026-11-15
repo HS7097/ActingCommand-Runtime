@@ -67,6 +67,10 @@ mod gate_463_r2;
 // --record`), with the screen before it and the screen after it.
 #[cfg(test)]
 mod gate_463_s11;
+// #463 S1-7: a recording holds its instance; the session header keeps the hold's facts and
+// `record status` shows them.
+#[cfg(test)]
+mod gate_463_s17;
 mod lab_run;
 mod lab_run_api;
 mod ledger_port;

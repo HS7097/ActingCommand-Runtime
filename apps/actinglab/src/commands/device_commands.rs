@@ -833,6 +833,7 @@ fn run_recorded_touch(
     let Some(SentPress {
         input_outcome,
         after_input,
+        hold_warning,
         ..
     }) = sent
     else {
@@ -843,7 +844,19 @@ fn run_recorded_touch(
             ),
         });
     };
-    let outcome = recorded.map_err(|error| with_input_outcome(error, &input_outcome))?;
+    // #463 S1-7: whether the instance was held when the press was made, in `record.warnings`.
+    let mut outcome = recorded.map_err(|error| {
+        let mut error = with_input_outcome(error, &input_outcome);
+        if let Some(record) = error
+            .details
+            .as_mut()
+            .and_then(|details| details.get_mut("record"))
+        {
+            super::record_hold::add_hold_warning(record, hold_warning);
+        }
+        error
+    })?;
+    outcome.warnings.extend(hold_warning.map(str::to_owned));
     let record = serde_json::to_value(&outcome)
         .map_err(|error| CliError::usage(format!("failed to encode the record: {error}")))?;
     if let Some(mut error) = after_input {
@@ -901,6 +914,9 @@ struct SentPress {
     commit: CommitClickRequest,
     input_outcome: Value,
     after_input: Option<CliError>,
+    /// #463 S1-7: the word of `record.warnings` from the status read before the press: none when
+    /// the instance's scheduling was paused (`record_hold::hold_warning`).
+    hold_warning: Option<&'static str>,
 }
 
 /// #463 S1-1: sends `action` once, naming `frame`, the Runtime frame it was planned on (fix round
@@ -919,6 +935,10 @@ fn send_recorded_press(
     let state_root = runtime_state_root().map_err(input_not_submitted)?;
     let client = RuntimeClient::connect(crate::lab_client_config(state_root))
         .map_err(|error| input_not_submitted(CliError::device(error.to_string())))?;
+    // #463 S1-7 (`contracts/lab-recording.md`, "A recording holds its instance"): whether the
+    // instance is held, one status read on the press's own connection before its lease; the
+    // input proxy's preparation reads none.
+    let hold_warning = super::record_hold::hold_warning(&client, instance);
     let mut proxy = RuntimeInputProxy::connect(client, instance)
         .map_err(|error| input_not_submitted(CliError::device(error.to_string())))?;
     let operation = proxy.input_with_frame(action, Some(frame));
@@ -995,6 +1015,7 @@ fn send_recorded_press(
         commit,
         input_outcome,
         after_input,
+        hold_warning,
     })
 }
 

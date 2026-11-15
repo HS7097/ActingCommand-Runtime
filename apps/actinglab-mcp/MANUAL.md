@@ -222,7 +222,16 @@ naming this file.
   transition, another step or a frame file, is `validation_failed`: send it with `ac_record_mark`),
   and `next_frame_after_ms` (0 to 60000) takes the next frame after
   a press performed without a failure, as `capture --record` takes it, opening the next step
-  (`next_frame_out` writes its PNG); `dry_run` with `record` is refused by the command.
+  (`next_frame_out` writes its PNG); `dry_run` with `record` is refused by the command. #463 S1-7
+  (0.12.63; `contracts/lab-recording.md`, "A recording holds its instance"): a recording holds its
+  instance, so no pause is asked of the agent: `ac_record_start` pauses the instance's scheduling
+  with the recording's own reason `lab-record-<ms>` (an instance already paused by another party is
+  held by that pause, which the recording never resumes; with no Runtime answering it starts
+  holding nothing, `hold.warnings` `runtime_not_answering`), and `ac_record_archive` and
+  `ac_record_stop` resume only that pause, found by its reason. A release that fails keeps the hold:
+  the archive or the stop stands, and the answer is the failure with `hold.kept` and
+  `next.resume`. A press with `record` on an instance that is not held is made and recorded with
+  `record.warnings` `instance_not_held`; `ac_record_status` shows the hold.
 - **Adoption** (Workflow #464 P1, 0.12.61; `contracts/standard-pack-authoring.md`).
   `ac_standard_pack_adopt` (`repo`, `record_id` or `package`, `decide`, `replace`, `state_dir`)
   makes a stopped recording's package, or any package, a member of its game's standard pack in a

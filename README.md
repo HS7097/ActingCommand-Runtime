@@ -343,8 +343,7 @@ actingledger replay --zip <evidence.zip> --expected-sha256 <hex>
 actingledger codes [--code <code>] [--json|--markdown]     # outcome codes of the embedded catalog (contracts/runtime-outcomes.md); no state root
 
 # Lab recording into a linear_steps package (contracts/lab-recording.md); actinglab finds the daemon through ACTINGCOMMAND_RUNTIME_STATE_ROOT
-actingctl pause --state-root <state-root> --instance <alias>     # first: no scheduled task may act on the instance between two recording commands
-actinglab --json --instance <alias> record start --task-id <task_id>
+actinglab --json --instance <alias> record start --task-id <task_id>     # holds the instance: its scheduling paused with the recording's own reason lab-record-<ms>, so no scheduled task acts on it between two recording commands; record stop or record archive resumes only that pause
 actinglab --json --instance <alias> capture --record     # the next step's screen; also observe --capture --record, or record mark --frame <png> offline
 actinglab --json --instance <alias> record mark --page <name> --template <id>=x,y,w,h --color <id>=x,y,w,h --click x,y,w,h
 actinglab --json --instance <alias> do --capture --record --package <carrier package>     # presses inside the step's click rectangle

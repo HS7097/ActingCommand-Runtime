@@ -17,6 +17,9 @@ pub(crate) mod ending;
 pub(crate) mod follow;
 pub(crate) mod frames;
 pub(crate) mod generate;
+// #463 S1-7: what a recording holds (the instance's scheduling pause), as its session header keeps
+// it, and what `record status` shows of it.
+pub(crate) mod hold;
 pub(crate) mod lock;
 pub(crate) mod marks;
 pub(crate) mod model;
@@ -26,5 +29,10 @@ pub(crate) mod steps;
 pub(crate) mod store;
 
 pub use archive::{record_archive, record_archive_copy, record_reopen};
+pub use hold::{
+    LAB_RECORDING_HOLD_PREFIX, LAB_RECORDING_WARNING_HOLD_UNREAD,
+    LAB_RECORDING_WARNING_INSTANCE_NOT_HELD, LAB_RECORDING_WARNING_RUNTIME_NOT_ANSWERING,
+    RecordingHold, RecordingHoldFound, RecordingHoldState, RecordingHoldView, record_hold_status,
+};
 pub use lock::RecordingLock;
 pub use model::*;

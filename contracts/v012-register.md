@@ -28383,6 +28383,103 @@ coordinator work order `rd-1115/brief-463-s11-fix2.md`, on the branch's head `61
   on a step with a mark (its capture is not stored, so every file still keeps its bytes); the
   refusals before the press add a swipe's two. No test leaves the gate map.
 
+### 1.424 Slice #463 S1-7 (0.12.63): a recording holds its instance (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, whose stage one asks nothing of the agent but to start recording, play and end recording; the read-only investigation `rd-1115/record-hold-investigation.md`; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s17-record-hold.md`, stacked on #463 S1-1, §1.402, head `24e48b47cd` on main `b7c47129`)
+
+The coordinator gave this slice 1.424. It ships in 0.12.63, after S1-1.
+
+**Why.** An agent's presses are separate commands with seconds or minutes between them, each
+holding the instance's input lease for its press alone, and a recording was only files of the
+Lab's state directory: nothing kept the scheduler from dispatching a scheduled task to the instance
+between two presses, whose screen then became a press's screen after it and opened the next step,
+silently. The contract's "pause the instance first" was a second thing the agent had to remember,
+and no tool checked it. Now `record start` holds the instance and the end of the recording releases
+the hold ([lab-recording.md](lab-recording.md), "A recording holds its instance").
+
+**Established by reading.**
+- *A press under the recording's own pause.* A pause gates only routine claims; client leases,
+  Lab operations and observations are operator claims (`ClaimKind::class`,
+  `crates/scheduler/src/lib.rs`), so a press is admitted under it. An instance outside the
+  multi-Nemu gate closes its device session at the pause's stage (c) (`release_paused_instance`,
+  `crates/runtime-host/src/host/policy_dispatch.rs`), as it closes it at every lease end
+  (`keeps_device_session`, `host/resource_close.rs`); after a confirmed close the kernel starts a
+  new session at the next operation (`ExecutionKernel::session`,
+  `crates/execution-kernel/src/kernel.rs`; only an unconfirmed close refuses), whose input and
+  capture open lazily (`SessionBackends`, `crates/execution-kernel/src/session.rs`). So the press
+  works on every path; the slice builds on it.
+- *What the end costs.* An instance resume reconnects the device and runs its self-check: up to
+  33 000 ms plus the IO timeout ([scheduling-pause.md](scheduling-pause.md), "Resume"). The archive's
+  manifest, the session header and the copy, or the stop's package, are written before it.
+- *A deploy.* The rescue module's guard `foreign_pauses` (`guards --for stop`,
+  `crates/lab-rescue/src/install/guards.rs`) lists a recording's pause as another party's, and the
+  deploy keeps it ([lab-two-entries.md](lab-two-entries.md) §6): its hold takes only the instances
+  not paused or paused with its own reason (`held_instances`, `install/hold.rs`), so the
+  recording's pause is neither taken again nor resumed, and the Runtime restores it at its start.
+- *Today's MCP server holds too* (the work order's "keeps starting recordings without a hold" is
+  not what the code does): its `ac_record_start`, `ac_record_stop` and `ac_record_archive` run the
+  installation's `actinglab.exe` with the command's words (`apps/actingctl/src/mcp/lab.rs`,
+  `Program::locate`, `author`), so they take and release the hold as the command line does. Nothing
+  of `apps/actingctl` is changed, its texts included; the contract says it.
+- *Another party's pause is told by the status, not by a code.* `record start` reads the status
+  first and sends no pause to an instance it shows paused; no decision names
+  `scheduling_already_paused` or any other code. A pause refused for any reason, the rare race
+  with another party's pause included, fails the start.
+- *Interface revisions.* None moves: no request kind, wire shape, outcome code, configuration key
+  or record of the Runtime is added; the session header's `hold` is absent on a header without one.
+
+**What it builds.**
+
+| Part | Where |
+|---|---|
+| The facts | `RecordingHold {reason, own, kept}` (the session header's `hold`), `RecordingHoldFound` (what `record start` met: `Paused`, `Shown`, `NoRuntime`), `RecordingHold::reason_for` (`lab-record-<ms>`), `at_start` (own, foreign, taken over, carried over with no Runtime), `taken_over`, `ended`; `RecordingHoldView {state, reason}` with `RecordingHoldState` `own`, `foreign`, `none`, `kept`, and `record_hold_status`; the three warning words (`crates/lab/src/recording/hold.rs`); the header view reads `hold` (`OldRecordView`, `store.rs`) |
+| The Runtime requests | `hold_for_recording` (one `Status`; an instance not paused then `PauseScheduling` as the `pause` row, `LAB_PAUSE_DRAIN_TIMEOUT_MS` 300000, which `core_ops`' `pause` default now names), `release_recording_hold` (one `Status`; the pause that shows the reason resumed by `resume_expected` with the status's owner epoch and that pause's revision; `RecordingHoldKept` names that pause), `instance_scheduling_paused` (one `Status`: the instance's pause or the global pause) (`crates/lab-ops/src/scheduling.rs`) |
+| The command | `record start` reads the replaced header (with `--force` leniently, as before), takes the hold (`record_hold::take`) before it writes anything and keeps it in `SessionRecordContext.hold`; `record status` adds `hold`; `record stop` (no dry run) and `record archive` write the header with the hold kept, then release (`record_hold::end`) and write it without; a release that fails answers `Kept::answer`; `record reopen` carries an own pause the replaced header kept (`apps/actinglab/src/commands/record_hold.rs`, `session_record.rs`); `tap`, `swipe` and `long-tap --record` read the hold on the press's own connection before its lease (`send_recorded_press`, `device_commands.rs`) and `session app --record` on a connection of its own before the operation, so that a read that fails cannot make the operation look indeterminate (`session_management.rs`), the word in `record.warnings` |
+| The table | the rows `record start` (`runtime` `optional`, `requests` `Status`, `PauseScheduling`, its help, output and notes), `record stop` (`optional`, `Status`, `ResumeScheduling`, help, output, notes), `record archive` (`optional`, `Status`, `ResumeScheduling`, output, notes) |
+| Texts | [lab-recording.md](lab-recording.md): "A recording holds its instance", the opening paragraphs, `record start`, `record status`, `record stop`, the four sentences that asked the agent to pause first, "Archiving" (what it asks the Runtime, the answer); `README.md`'s recording lines; `apps/actinglab-mcp/MANUAL.md`, "Recordings" |
+
+**Codes and words.** No outcome code is added and no fragment changes. New answer words, each in
+an answer or in the details of a failure, never in a text, and none read by a decision:
+
+| Word | The one situation | Refuses or warns | Exit |
+|---|---|---|---|
+| `hold.warnings` `runtime_not_answering` (`record start`) | no Runtime answered the connection, so the recording holds nothing | warns | 0 |
+| `record.warnings` `instance_not_held` (a `--record` press or application operation) | the status read before it showed the instance's scheduling not paused | warns | 0 |
+| `record.warnings` `instance_hold_unread` | that status read got no answer | warns | 0 |
+| `hold.state` `own`, `foreign`, `none`, `kept` (`record start`, `record status`) | the recording runs under its own pause; under another party's; under none; ended with its own pause kept | — | 0 |
+| `hold.release` `resumed`, `already_gone`, `not_own` (`record stop`, `record archive`) | the own pause found by its reason and resumed; no pause showed the reason; another party's pause left alone | — | 0 |
+| `hold.kept: true` with `next.resume` in the details of the release's failure (`runtime_not_running` or `device_error`) | the end's work stands and its own pause stays: the release failed or no Runtime answered | refuses | 1 (the class's 5 or 4 under `--via`) |
+
+**Tests.** `crates/lab/src/gate_463_s17.rs` (exec gate map "#463 S1-7"; temporary state directories,
+no Runtime): the header carries the hold and the Lab reads it as before; the four states; what
+`record start` met gives the hold; a header without a hold is unchanged byte for byte by the
+library. `apps/actinglab/src/tests/gate_463_s17.rs` (the runtime client's scripted Runtime, every
+request of every connection in order): the start's `status`, `pause_scheduling` with the
+recording's reason and the drain 300000; another party's pause, `status` only, and an archive that
+makes no connection (`not_own`); no Runtime (`runtime_not_answering`, no `hold` member); a denied
+pause starts nothing; after a restart (a second scripted Runtime, the pause at revision 1 in its
+epoch, another instance paused beside it) one `resume_scheduling` expecting that epoch and revision
+1; a denied resume keeps the hold with `next.resume --expect`, `record status` `kept`, and named
+again with no Runtime `runtime_not_running`; a refused `record stop` makes no connection and keeps
+the hold; `record start --force` takes the pause over with one pause in all.
+`apps/actinglab/tests/runtime_input_proxy.rs` (the fake Runtime host):
+`s17_record_start_and_archive_hold_and_release_the_instance_on_the_runtime`, the host's status
+shows the recording's pause, a tap under it warns nothing, the archive resumes it; and
+`s17_a_press_on_an_instance_that_is_not_held_says_so`, a recording started with no Runtime, then a
+tap on the unpaused instance pressed and recorded with `instance_not_held`, one under another
+party's pause with no warning, and an archive that leaves that pause. Adapted: none; no golden
+changes; no test leaves the gate map. The parent's tests that start a recording on the fake host
+now run under the recording's pause, which gates none of their requests.
+
+**What is not changed.** `apps/actingctl` (today's MCP server keeps its words and texts); the
+scheduler, the pause's own rules and the Runtime's crates; the rescue module; the parent's press
+path beyond the status read and the warning; `generate.rs`, `crosscheck.rs`, `select.rs`; the step
+table (`recording.json`) and the manifest; `do --capture --record`, `capture --record` and `observe
+--capture --record`, which take no hold and read none; the rows `tap`, `swipe`, `long-tap` and
+`app …`, whose `requests` do not list the one `Status` read (the parent's rows and S1-3's).
+
+**At deploy.** Nothing to configure. Recordings and session headers already on disk load as
+before and hold nothing; a recording active across the deploy holds nothing until it ends. Through
+MCP the hold is taken by both servers, which run the installation's actinglab.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

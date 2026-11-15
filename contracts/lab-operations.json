@@ -1964,16 +1964,17 @@
         {"name": "template_threshold", "form": "option", "type": "decimal", "required": false, "note": "a number 0 to 1"},
         {"name": "metric", "form": "option", "type": "enum:ccoeff_normed|ccorr_normed", "required": false}
       ],
-      "help": "Starts a recording session and its Lab recording for one task, kept in actinglab's state files.",
-      "output": "as today's command",
+      "help": "Starts a recording session for one task and pauses the instance's scheduling for it with a reason of its own; with no Runtime it starts holding nothing.",
+      "output": "as today's command, with hold: what the recording holds",
       "writes": true,
       "irreversible": false,
-      "runtime": "offline",
+      "runtime": "optional",
       "entries": ["lab"],
-      "requests": [],
+      "requests": ["Status", "PauseScheduling"],
       "source": ["actinglab record start", "actinglab session record start", "MCP ac_record_start"],
       "slice": "LAB-2",
-      "status": "planned"
+      "status": "planned",
+      "notes": "#463 S1-7 (contracts/lab-recording.md, A recording holds its instance): one status read; an instance not paused is paused as the pause row pauses it (drain 300s), reason lab-record-<the session's started_at_unix_ms>, kept in the session header's hold; an instance paused by another party is held by that pause and nothing is sent (foreign); with force the replaced recording's own pause is taken over; no Runtime answering: nothing held, hold.warnings runtime_not_answering; a status or pause refused starts nothing. Today's MCP server runs this command too"
     },
     {
       "name": "record mark",
@@ -2069,16 +2070,17 @@
         {"name": "dry_run", "form": "switch", "type": "boolean", "required": false, "note": "actinglab's global --dry-run"},
         {"name": "state_dir", "form": "option", "type": "dir", "required": false, "note": "the recording session directory; default actinglab's"}
       ],
-      "help": "Stops the recording session and generates its linear-steps package, with the binding parts record draft takes.",
-      "output": "as today's command",
+      "help": "Stops the recording session, generates its linear-steps package with the binding parts record draft takes, and resumes the recording's own pause.",
+      "output": "as today's command, with hold when the recording held one",
       "writes": true,
       "irreversible": false,
-      "runtime": "offline",
+      "runtime": "optional",
       "entries": ["lab"],
-      "requests": [],
+      "requests": ["Status", "ResumeScheduling"],
       "source": ["actinglab record stop", "actinglab session record stop", "MCP ac_record_stop"],
       "slice": "LAB-2",
-      "status": "planned"
+      "status": "planned",
+      "notes": "#463 S1-7 (contracts/lab-recording.md, A recording holds its instance): once a stop that is no dry run has ended the recording, the recording's own pause is found by its reason in one status read and resumed by the pause the status shows (its owner epoch and revision), another party's never; a refused stop sends nothing and keeps the hold; a release that fails or no Runtime answering keeps it: the stop stands and the answer is the release's failure with hold kept and next.resume"
     },
     {
       "name": "record candidates",
@@ -2210,17 +2212,17 @@
         {"name": "state_dir", "form": "option", "type": "dir", "required": false, "note": "the recording session directory; default actinglab's"}
       ],
       "help": "Ends the instance's active recording as material only: writes its manifest beside its frames and step table, keeps every file, and can copy them.",
-      "output": "the session header, archived, and the manifest of the recording; with copy_to the files copied and checked",
+      "output": "the session header, archived, and the manifest of the recording; with copy_to the files copied and checked; with hold when the recording held one",
       "writes": true,
       "irreversible": false,
-      "runtime": "offline",
+      "runtime": "optional",
       "entries": ["lab"],
-      "requests": [],
+      "requests": ["Status", "ResumeScheduling"],
       "source": ["actinglab record archive", "actinglab session record archive", "MCP ac_record_archive"],
       "new": "#449",
       "slice": "REC-ARCH",
       "status": "planned",
-      "notes": "Workflow #449 REC-ARCH (0.12.59; contracts/lab-recording.md, Archiving): it requires no mark and no last step without an effect, writes archive-manifest-<n>.json into the recording's own directory and never deletes, moves or rewrites a frame or the step table; the session ends in its own state, archived, so that record start needs no --force; a copy that fails names the file and the reason, deletes nothing and leaves the recording archived. Fix 1: copy_to must be an absolute path; a recording record start --force left behind is archived by its record_id, its session header (another recording's) unchanged and named in the answer's lab.session_header"
+      "notes": "Workflow #449 REC-ARCH (0.12.59; contracts/lab-recording.md, Archiving): it requires no mark and no last step without an effect, writes archive-manifest-<n>.json into the recording's own directory and never deletes, moves or rewrites a frame or the step table; the session ends in its own state, archived, so that record start needs no --force; a copy that fails names the file and the reason, deletes nothing and leaves the recording archived. Fix 1: copy_to must be an absolute path; a recording record start --force left behind is archived by its record_id, its session header (another recording's) unchanged and named in the answer's lab.session_header. #463 S1-7 (contracts/lab-recording.md, A recording holds its instance): once the manifest, the session header and the copy are written, the recording's own pause is found by its reason in one status read and resumed by the pause the status shows, another party's never; a release that fails or no Runtime answering keeps the hold: the archive stands and the answer is the release's failure with hold kept and next.resume; named again, an archived recording whose header kept its hold tries the release again"
     },
     {
       "name": "record reopen",

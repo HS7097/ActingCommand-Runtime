@@ -3370,3 +3370,24 @@ tests = [
     "actingcommand-actinglab::runtime_input_proxy::s11_tap_record_records_a_device_failure_of_the_input_as_indeterminate",
 ]
 incident = ["#463 S1-1"]
+
+# #463 S1-7 (0.12.63; register §1.424; brief rd-1115/brief-463-s17-record-hold.md; investigation rd-1115/record-hold-investigation.md; contracts/lab-recording.md, "A recording holds its instance"): a recording holds its instance. The library, on temporary state directories with no Runtime: a session header with an own hold, as the record command writes it, starts the Lab recording as before, record status's hold is own with its reason, the Lab view is a twin's without the hold and the step table names no hold (1); record status shows own, foreign with its reason, none (no hold, no header) and kept (an own hold of an ended session, written kept or not), the four words own, foreign, none, kept (2); what record start met gives the hold: the pause it set its own, a pause shown another party's unless it is the replaced header's own (taken over), with no Runtime the replaced header's own carried over and nothing else; at the end an own hold kept, another party's dropped (3); a header without a hold reads as none, the library's record start and record archive leave its bytes as written, kept is written only when true (4). actinglab against the scripted Runtime, every request of every connection in order: record start sends status then pause_scheduling of the instance with lab-record-<started_at_unix_ms> and the drain 300000, the header keeps {reason, own: true} and record status shows own (5); an instance paused with operator: status only, the header keeps the foreign reason, record archive makes no connection and answers release not_own (6); no Runtime: hold none with runtime_not_answering, a header without hold, no Runtime state root made (7); a denied pause: device_error, no session header, no recording directory (8); after a restart (a second scripted Runtime, the pause restored at revision 1, another instance paused by another party): record archive sends status then one resume_scheduling of the instance expecting that owner epoch and revision 1, release resumed, the header keeps no hold (9); a denied resume: the manifest and the archived header stand, details.hold kept and next.resume with --expect, record status kept; named again with no Runtime: runtime_not_running, next.resume without --expect (10); record stop --timeout-ms 0 refused: no connection, the header active with its own hold (11); record start --force over it: status only, the replaced recording's pause taken over, one pause in all (12). On the fake Runtime host: record start pauses node.a with the recording's reason, the header keeps it, tap --record under it warns nothing, record archive resumes it (release resumed) and the host's status shows it gone (13); a recording started with no Runtime holds nothing, then on the host a tap --record on the unpaused instance is pressed and recorded with record.warnings instance_not_held, under another party's pause the next warns nothing, and record archive leaves that pause (14)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-lab::lib::gate_463_s17::s17_the_session_header_carries_the_hold_and_the_lab_reads_it",
+    "actingcommand-lab::lib::gate_463_s17::s17_record_status_shows_each_of_the_four_states",
+    "actingcommand-lab::lib::gate_463_s17::s17_what_a_recording_holds_comes_from_what_record_start_met",
+    "actingcommand-lab::lib::gate_463_s17::s17_a_recording_without_a_hold_is_unchanged",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_463_s17::s17_record_start_pauses_the_instance_with_its_own_reason",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_463_s17::s17_an_instance_paused_by_another_party_is_held_by_that_pause_and_never_resumed",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_463_s17::s17_with_no_runtime_the_recording_starts_holding_nothing",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_463_s17::s17_a_refused_pause_starts_nothing",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_463_s17::s17_the_archive_releases_its_own_pause_found_by_its_reason_after_a_restart",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_463_s17::s17_a_release_that_fails_keeps_the_hold_and_names_the_resume",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_463_s17::s17_a_refused_stop_keeps_the_hold",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_463_s17::s17_record_start_force_takes_the_hold_over",
+    "actingcommand-actinglab::runtime_input_proxy::s17_record_start_and_archive_hold_and_release_the_instance_on_the_runtime",
+    "actingcommand-actinglab::runtime_input_proxy::s17_a_press_on_an_instance_that_is_not_held_says_so",
+]
+incident = ["#463 S1-7"]

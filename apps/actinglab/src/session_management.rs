@@ -373,6 +373,10 @@ fn run_session_app_recorded(global: &GlobalOptions, args: &[String]) -> CliOutco
             verb: verb.to_string(),
         },
     )?;
+    // #463 S1-7 (`contracts/lab-recording.md`, "A recording holds its instance"): whether the
+    // instance is held, one status read before the operation, on a connection of its own, so that a
+    // read that fails never stands in the operation's way.
+    let hold_warning = crate::commands::hold_warning_read(&instance_id);
     let client = RuntimeClient::connect(crate::lab_client_config(runtime_state_root()?))
         .map_err(runtime_slice_cli::map_runtime_error)?;
     let output = match client.control_application(&instance_id, action) {
@@ -397,6 +401,7 @@ fn run_session_app_recorded(global: &GlobalOptions, args: &[String]) -> CliOutco
             data["record"] = serde_json::to_value(outcome).map_err(|error| {
                 CliError::usage(format!("failed to encode the record: {error}"))
             })?;
+            crate::commands::add_hold_warning(&mut data["record"], hold_warning);
             Ok(data)
         }
         Err(mut error) => {
