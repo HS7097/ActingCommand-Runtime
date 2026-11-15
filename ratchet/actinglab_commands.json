@@ -3,7 +3,7 @@
   "source": "apps/actinglab/src/**/*.rs",
   "dispatch_function": "execute",
   "denominator_kind": "top_level_dispatch_arm",
-  "dispatch_arm_count": 47,
+  "dispatch_arm_count": 46,
   "dispatch_arms": [
     "help",
     "version",
@@ -50,10 +50,9 @@
     "standard-pack <subcommand>",
     "runtime <subcommand>",
     "session <subcommand>",
-    "run <subcommand>",
-    "report <subcommand>"
+    "run <subcommand>"
   ],
-  "command_count": 106,
+  "command_count": 105,
   "commands": [
     "help",
     "version",
@@ -159,8 +158,7 @@
     "run list",
     "run open",
     "run summary",
-    "run export",
-    "report export"
+    "run export"
   ],
   "pipeline_exemptions": [
     {

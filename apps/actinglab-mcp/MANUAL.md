@@ -32,7 +32,8 @@ naming this file.
   writes nothing, `destructiveHint` when the row is irreversible or disruptive, `openWorldHint`
   false.
 - **Members of the server's own.** A few tools differ from their row, and their schema shows it:
-  `ac_material` takes `export` and no `out`, `ac_frame` takes no `out` (section 6); `ac_run_show`
+  `ac_material` takes `export` and no `out`, `ac_frame` and `ac_report_export` take no `out`
+  (section 6); `ac_run_show`
   and `ac_run_stop` take `wait_s`, `ac_events` and `ac_codes` take `cursor` (section 4);
   `ac_deploy` and `ac_rollback` take no `detach` (section 9).
 - **No tiers.** Every tool may be called. `--tier`, today's server's option, refuses the start.
@@ -150,7 +151,9 @@ naming this file.
   operation again to see its answer.
 - `ac_material` takes `export` (a boolean): true writes the whole material there and answers the
   file; absent or false answers its text. `ac_frame` always writes the frame there and answers the
-  file. Neither takes `out`: the server gives its own directory.
+  file. `ac_report_export` (Workflow #467 RPT-1) always writes its problem report archive there,
+  `problem-report-<YYYYMMDD-HHMMSS>Z-<8 hex>.zip`, and answers its `path`, `sha256` and `size`
+  (`contracts/problem-report.md`). None of them takes `out`: the server gives its own directory.
 - A file that cannot be written is `material_export_failed`; on a child's overflow it is the first
   warning instead, and the answer has no `export`.
 - Every other row that takes a place on disk (an `out`, a `dir`, a `state_dir`) uses the place the

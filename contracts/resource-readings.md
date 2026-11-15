@@ -471,7 +471,8 @@ at least the OCR target's `minimum_confidence`.
   `ContainedTaskTrace::ResourceAdjustmentConfirmed { captured_at, operation_label }` for the
   frame captured last, and hands that frame to recognition for each amount; the run does not
   wait. An operation whose effect is not confirmed (a failed, retried or unconfirmed attempt)
-  confirms nothing.
+  confirms nothing; nor does (Workflow #463 K2, since 0.12.61) a linear operation that arrives on
+  an ending page ([linear-steps.md](linear-steps.md), "Endings").
 - **Join.** A successful run joins, after its readings and before `Finalizing`, within the same
   join timeout, each confirmation in order: `ContainedTaskTrace::ResourceAdjustments
   { captured_at, adjustments }`, each adjustment with its amount (value and confidence) or the

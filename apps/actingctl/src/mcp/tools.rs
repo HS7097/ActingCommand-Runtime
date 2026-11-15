@@ -936,7 +936,7 @@ pub(super) static TOOLS: &[ToolDef] = &[
         title: "Mark a recording step",
         tier: Tier::Author,
         description: concat!(
-            "Runs actinglab --json record mark --request-json <request> with one actingcommand.lab-record-mark.v1 request (marks, a click, samples, a transition or a step action; contracts/lab-recording.md). actinglab self-tests every mark on the step's frames; dry_run only checks. It changes the recording's files only: no Runtime connection, no client.action.",
+            "Runs actinglab --json record mark --request-json <request> with one actingcommand.lab-record-mark.v1 request (marks, a click, a select (a choice in a list of fixed slots by the name read in each) or clear_select, samples, a transition or a step action; contracts/lab-recording.md). actinglab self-tests every mark on the step's frames; dry_run only checks. It changes the recording's files only: no Runtime connection, no client.action.",
             lab_errors!(),
             lab_job!()
         ),

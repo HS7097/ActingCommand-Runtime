@@ -82,9 +82,10 @@ pub(crate) fn instructions(budget_s: u64) -> String {
 /// Workflow #464 P1: its row `standard-pack adopt` (slice SP-ADOPT), through a `serve` child.
 /// Workflow #464 P2 (`PACK-BUILD`): its row `standard-pack build`, the same.
 /// Workflow #464 P3: its row `standard-pack ready` (`ac_standard_pack_ready`), the same way.
+/// Workflow #467 RPT-1: its row `report export`, a core row served in this process.
 /// Workflow #463 V3: its rows `goals`, `goals get`, `goals set` and `goals clear`, served in this
 /// process (`lab_ops::core_ops`), and `package variables`, through a `serve` child.
-pub(crate) const ACTINGLAB_SLICES: [&str; 10] = [
+pub(crate) const ACTINGLAB_SLICES: [&str; 11] = [
     "463-V3",
     "464-P3",
     "LAB-1",
@@ -94,6 +95,7 @@ pub(crate) const ACTINGLAB_SLICES: [&str; 10] = [
     "R-6",
     "R-8",
     "REC-ARCH",
+    "RPT-1",
     "SP-ADOPT",
 ];
 /// The slice whose planned rows this server offers itself (§9.2): `record draft`, `mcp config`,
@@ -136,7 +138,8 @@ const OPERATION_ID_PATTERN: &str = "^op-[0-9]+$";
 /// leaves out of its schema and refuses as an argument it does not know.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Supplied {
-    /// This server's export directory, always: one frame is written there.
+    /// This server's export directory, always: one frame (Workflow #467 RPT-1: or one problem
+    /// report archive) is written there.
     ExportDirectory,
     /// This server's export directory when the tool's [`EXPORT`] is true: the whole material is
     /// written there, and the answer names the file.
@@ -150,11 +153,14 @@ pub(crate) enum Supplied {
 /// 6775192250; contract §5): the front's own members, in one place. Each entry is a row, its
 /// parameter the front gives itself and what it gives. A row with
 /// [`Supplied::ExportDirectoryOnExport`] also takes the boolean [`EXPORT`] beside its parameters.
-pub(crate) const SUPPLIED: [(&str, &str, Supplied); 4] = [
+/// Workflow #467 RPT-1 (the coordinator's ruling Q7): `report export` writes its archive into
+/// the export directory too.
+pub(crate) const SUPPLIED: [(&str, &str, Supplied); 5] = [
     ("material", "out", Supplied::ExportDirectoryOnExport),
     ("frame", "out", Supplied::ExportDirectory),
     ("deploy", "detach", Supplied::True),
     ("rollback", "detach", Supplied::True),
+    ("report export", "out", Supplied::ExportDirectory),
 ];
 /// Workflow #434 LAB-5G2b: the tool's own member of a row whose parameter is
 /// [`Supplied::ExportDirectoryOnExport`].

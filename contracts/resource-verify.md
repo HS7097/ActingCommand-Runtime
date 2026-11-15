@@ -341,10 +341,11 @@ ready to be dispatched is judged by another slice's function, which a later slic
 [component-interfaces.md](component-interfaces.md): "A bundle writes `package`: its `max` is the
 revision its packs need. Give `min` the same value." The build declares `[r, r]`, `r` the highest
 revision any entry of its zip needs, 3 (the bundle formats of Runtime v0.12.0) when none needs a
-later one. The table holds what each `package` row of that document names and, fix round 1, what
-the register sections it cites and the B train's sections put into a revision (their members
-joined revision 6, "which BT-PK6 declares", and DB-2 declared 6 in 0.12.37), each in the file it
-stands in and under its condition. The files of a pack: `control.json`; a task file
+later one. The table holds what each `package` row of that document names, but row 15 (the
+ending pages of a `linear_steps` task, Workflow #463 K2, register §1.380), which has no row here
+yet, so the build does not compute 15; and, fix round 1, what the register sections it cites and
+the B train's sections put into a revision (their members joined revision 6, "which BT-PK6
+declares", and DB-2 declared 6 in 0.12.37), each in the file it stands in and under its condition. The files of a pack: `control.json`; a task file
 `resources/operations/<task>/task.json`; a selection-policy document
 `resources/operations/<task>/policies/<name>.json`; the navigation projection below
 `resources/navigation/`. "Under `x`": a member of an object that the member `x` holds, itself or

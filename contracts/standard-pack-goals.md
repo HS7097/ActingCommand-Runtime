@@ -286,7 +286,7 @@ for that game, and a reader of the declaration says why.
 until version 2, below); a bundle without it keeps its revision, and the Runtime declares [3, 12]
 (from Workflow #463 K1 on [3, 13], [component-interfaces.md](component-interfaces.md), the
 `package` row 13; since Workflow #463 V1 [3, 14], [package-variables.md](package-variables.md),
-"Interface"). The installer of 0.12.60 refuses a zip that carries the file and declares a maximum
+"Interface"; since Workflow #463 K2 [3, 15], the `package` row 15). The installer of 0.12.60 refuses a zip that carries the file and declares a maximum
 below 12 (`goal_undeclared`, "Who reads it"; below 14 since version 2). An
 installer before 0.12.60 refuses such a zip in the plan, before the hold and any write: through its
 `package` edge (`interface_edge`) when the zip declares 12, at its layout check (`pack_invalid`

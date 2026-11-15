@@ -9,8 +9,14 @@
 
 use super::follow::followed_evaluation_box;
 use super::frames::LoadedFrame;
-use super::generate::{Plan, PlanStep, follows_located_text};
-use super::model::{ClickFollow, ClickGesture, MarkFamily, RecordRect, RecordedFrame};
+use super::generate::{Plan, PlanStep, follows_located_text, select_policy_document};
+use super::model::{
+    ClickFollow, ClickGesture, MarkFamily, RecordRect, RecordedFrame, SelectDecision,
+    SelectFrameDecision, StepSelect,
+};
+use super::select::{
+    NAME_UNREAD, PRESS_MISMATCH, PRESSED_ABSENT, SELF_TEST_ERROR, decide, on_empty_key,
+};
 use super::store::{blocked, invalid, with_details};
 use crate::LabOcr;
 use crate::codes::LabCode;
@@ -22,6 +28,7 @@ use actingcommand_contract::{
 use actingcommand_device::{CaptureBackendName, Frame, PixelFormat};
 use actingcommand_execution_kernel::{
     ExternallyVerifiedBundle, OfflineDecision, PreparedContainedTask, simulate_contained_task,
+    simulate_contained_task_at,
 };
 use actingcommand_pack_containment::{
     ContainmentError, ContainmentLimits, ContentContainer, expand_content_container,
@@ -273,9 +280,13 @@ pub(crate) fn first_decision(
             warning,
         });
     }
-    // #463 L2 fix 1: a guard on located text reads OCR though its page does not.
+    // #463 L2 fix 1: a guard on located text reads OCR though its page does not; #463 R1: so does
+    // a select, which reads its slots' names.
     if ocr.ocr_provider().is_none()
-        && (plan.involves_ocr(&first.required)? || plan.involves_ocr(&first.forbidden)? || rechecks)
+        && (plan.involves_ocr(&first.required)?
+            || plan.involves_ocr(&first.forbidden)?
+            || rechecks
+            || first.step.select.is_some())
     {
         let reason = LabCode::LabOcrUnavailable.as_str();
         return Ok(FirstDecision {
@@ -291,6 +302,11 @@ pub(crate) fn first_decision(
     let frame = first
         .primary()
         .ok_or_else(|| invalid("validation_failed", "step 1 has no frame"))?;
+    // #463 R1: a select at step 1 decides on its primary frame by the kernel's dry run; a slot it
+    // selects is then simulated as the run taps it, and an empty decision is the run's normal end.
+    if let Some(select) = &first.step.select {
+        return select_first_decision(prepared, plan, first, select, frame, cache);
+    }
     let result = simulate(frame)?;
     let operation = plan.operation_id(first);
     let click = first.step.click.as_ref();
@@ -486,6 +502,304 @@ pub(crate) fn first_decision(
     Ok(FirstDecision {
         value,
         warning: None,
+    })
+}
+
+fn rect_holds(x: i32, y: i32, rect: RecordRect) -> bool {
+    x >= rect.x
+        && y >= rect.y
+        && i64::from(x) < i64::from(rect.x) + i64::from(rect.width)
+        && i64::from(y) < i64::from(rect.y) + i64::from(rect.height)
+}
+
+/// #463 R1: the first decision of a package whose step 1 selects in a list: the kernel's dry run
+/// of the select on step 1's primary frame with the sealed policy (the wanted value's default).
+/// Every slot's name reads a known name there, or the decision is refused; a selected slot is
+/// then the tap the offline simulation of the package makes (`simulate_contained_task_at`, the
+/// confirmation on the same frame), inside that slot's click box; an empty decision is the run's
+/// normal end with the `on_empty` key, which the simulation does not report
+/// (`offline_simulation_executed_step_invariant`).
+fn select_first_decision(
+    prepared: &PreparedContainedTask,
+    plan: &Plan,
+    first: &PlanStep,
+    select: &StepSelect,
+    frame: &RecordedFrame,
+    cache: &FrameCache,
+) -> LabResult<FirstDecision> {
+    let operation = plan.operation_id(first);
+    let loaded = cached(cache, frame)?;
+    let decided = decide(
+        prepared,
+        &operation,
+        &loaded.frame,
+        None,
+        plan.generated_at_unix_ms,
+    )?
+    .map_err(|failure| {
+        admission_failed(
+            "first_decision",
+            format!(
+                "the dry run of step 1's select fails on its primary frame {}",
+                frame.frame_id
+            ),
+            json!({"frame": frame.frame_id, "failure": failure}),
+        )
+    })?;
+    if !decided.unread.is_empty() {
+        return Err(admission_failed(
+            "first_decision",
+            format!(
+                "on its primary frame {} a slot of step 1's select reads no known name",
+                frame.frame_id
+            ),
+            json!({
+                "frame": frame.frame_id,
+                "unread": decided
+                    .unread
+                    .iter()
+                    .map(|(slot, cause)| json!({"slot": slot, "cause": cause}))
+                    .collect::<Vec<_>>()
+            }),
+        ));
+    }
+    // #463 R1 fix 1: only an empty decision is the run's normal end; any other decision that
+    // selects no slot is one the run fails on.
+    let slot = match decided.kind {
+        SelectDecision::Selected { slot } => slot,
+        SelectDecision::Empty => {
+            return Ok(FirstDecision {
+                value: json!({
+                    "status": "would_end_empty",
+                    "operation_label": operation,
+                    "outcome_key": on_empty_key(&plan.task_id, &select.declaration),
+                    "frame": frame.frame_id
+                }),
+                warning: None,
+            });
+        }
+        other => {
+            return Err(admission_failed(
+                "first_decision",
+                format!(
+                    "on its primary frame {} the select of step 1 selects no slot, and the run \
+                     would fail there",
+                    frame.frame_id
+                ),
+                json!({"frame": frame.frame_id, "decision": other}),
+            ));
+        }
+    };
+    let rect = decided.clicks.get(&slot).copied().ok_or_else(|| {
+        invalid(
+            "validation_failed",
+            format!("the dry run of step 1 selected slot {slot}, which it lacks"),
+        )
+    })?;
+    let result = simulate_contained_task_at(
+        prepared,
+        vec![device_frame(loaded)?],
+        plan.generated_at_unix_ms,
+    )
+    .map_err(|error| {
+        admission_failed(
+            "first_decision",
+            format!("the offline simulation failed: {error}"),
+            json!({"code": error.code().as_str(), "detail": error.detail()}),
+        )
+    })?;
+    let inside = matches!(
+        &result.decision,
+        OfflineDecision::WouldClick {
+            operation_label,
+            action: InputAction::Tap { x, y },
+            ..
+        } if *operation_label == operation && rect_holds(*x, *y, rect)
+    );
+    if !inside {
+        return Err(admission_failed(
+            "first_decision",
+            format!(
+                "on its primary frame, step 1 must tap {operation} inside slot {slot}, the slot its \
+                 select chooses"
+            ),
+            json!({
+                "decision": result.decision,
+                "frame": frame.frame_id,
+                "slot": slot,
+                "rect": rect
+            }),
+        ));
+    }
+    let mut value = serde_json::to_value(&result.decision).map_err(|error| {
+        invalid(
+            "validation_failed",
+            format!("failed to encode the first decision: {error}"),
+        )
+    })?;
+    if let Some(object) = value.as_object_mut() {
+        object.insert("frame".to_string(), json!(frame.frame_id));
+        object.insert("slot".to_string(), json!(slot));
+    }
+    Ok(FirstDecision {
+        value,
+        warning: None,
+    })
+}
+
+/// #463 R1: what the cross-check of the select steps leaves: one entry per select step (its
+/// decisions on every live frame) and the steps not evaluated without an OCR model.
+pub(crate) struct SelectChecks {
+    pub(crate) selects: Vec<Value>,
+    pub(crate) not_evaluated: Vec<u32>,
+}
+
+/// #463 R1: a select step's frame on which the package would not choose as recorded:
+/// `record_step_self_mismatch` naming the step, the frame and why (`reason`).
+fn select_mismatch(
+    step: &PlanStep,
+    frame: &RecordedFrame,
+    reason: &str,
+    detail: Value,
+) -> LabError {
+    let mut details = json!({
+        "step": step.number,
+        "record_index": step.step.index,
+        "frame_id": frame.frame_id,
+        "reason": reason
+    });
+    if let (Some(object), Some(extra)) = (details.as_object_mut(), detail.as_object()) {
+        for (key, value) in extra {
+            object.insert(key.clone(), value.clone());
+        }
+    }
+    with_details(
+        blocked(
+            "record_step_self_mismatch",
+            format!(
+                "the select of step {} does not choose on its own frame {} as recorded: {reason}",
+                step.step.index, frame.frame_id
+            ),
+        ),
+        details,
+    )
+}
+
+/// #463 R1, self-check item 8: on every live frame of every select step the kernel's dry run of
+/// the admitted package decides; the step's page must be the one page of the package that passes
+/// on the frame (the page rule and the layout share it), every slot's name reads a known name, and
+/// on the primary frame the pressed name selects a slot, the slot the recorded press hit. Each
+/// frame's decisions are listed; any other frame is `record_step_self_mismatch`. Without an OCR
+/// model nothing is called and the step is undetermined.
+pub(crate) fn select_checks(
+    prepared: &PreparedContainedTask,
+    plan: &Plan,
+    cache: &FrameCache,
+    ocr: &LabOcr,
+) -> LabResult<SelectChecks> {
+    let mut selects = Vec::new();
+    let mut not_evaluated = Vec::new();
+    for (step, select) in plan.select_steps() {
+        let spec = &select.declaration;
+        let operation = plan.operation_id(step);
+        let mut item = json!({
+            "step": step.number,
+            "record_index": step.step.index,
+            "op": operation,
+            "layout": plan.select_layout_id(step),
+            "wanted": spec.wanted,
+            "pressed": spec.pressed_name(),
+            "on_empty_key": on_empty_key(&plan.task_id, spec)
+        });
+        if ocr.ocr_provider().is_none() {
+            not_evaluated.push(step.number);
+            item["frames"] = json!(
+                step.live_frames()
+                    .iter()
+                    .map(|frame| json!({"frame_id": frame.frame_id, "result": "undetermined"}))
+                    .collect::<Vec<_>>()
+            );
+            selects.push(item);
+            continue;
+        }
+        let override_document = (spec.pressed_name() != spec.wanted.default)
+            .then(|| select_policy_document(plan, step, spec, spec.pressed_name()));
+        let executed = step
+            .step
+            .click
+            .as_ref()
+            .filter(|click| click.executed())
+            .and_then(|click| click.execution.as_ref())
+            .map(|execution| execution.point);
+        let mut frames = Vec::new();
+        for frame in step.live_frames() {
+            let loaded = cached(cache, frame)?;
+            let run = |document: Option<&Value>| {
+                decide(
+                    prepared,
+                    &operation,
+                    &loaded.frame,
+                    document,
+                    plan.generated_at_unix_ms,
+                )
+                .and_then(|decided| {
+                    decided.map_err(|failure| {
+                        select_mismatch(step, frame, SELF_TEST_ERROR, json!({"failure": failure}))
+                    })
+                })
+            };
+            let default = run(None)?;
+            if let Some((slot, cause)) = default.unread.first() {
+                return Err(select_mismatch(
+                    step,
+                    frame,
+                    NAME_UNREAD,
+                    json!({"slot": slot, "cause": cause, "default": default.kind}),
+                ));
+            }
+            let pressed = match &override_document {
+                None => default.kind,
+                Some(document) => run(Some(document))?.kind,
+            };
+            if frame.role == "primary" {
+                let slot = pressed.slot().ok_or_else(|| {
+                    select_mismatch(
+                        step,
+                        frame,
+                        PRESSED_ABSENT,
+                        json!({"pressed": spec.pressed_name(), "decision": pressed}),
+                    )
+                })?;
+                if let Some(point) = executed {
+                    let rect = default.clicks.get(&slot).copied().ok_or_else(|| {
+                        invalid(
+                            "validation_failed",
+                            format!("the dry run selected slot {slot}, which it lacks"),
+                        )
+                    })?;
+                    if !rect_holds(point.x, point.y, rect) {
+                        return Err(select_mismatch(
+                            step,
+                            frame,
+                            PRESS_MISMATCH,
+                            json!({"slot": slot, "click_rect": rect, "point": point}),
+                        ));
+                    }
+                }
+            }
+            // #463 R1 fix 1: each decision by its kind, as at mark time.
+            frames.push(json!(SelectFrameDecision {
+                frame_id: frame.frame_id.clone(),
+                pressed,
+                default: default.kind,
+            }));
+        }
+        item["frames"] = json!(frames);
+        selects.push(item);
+    }
+    Ok(SelectChecks {
+        selects,
+        not_evaluated,
     })
 }
 

@@ -510,7 +510,8 @@ record ([resource-targets.md](resource-targets.md), "One value by name").
 `package` revision 14 ([component-interfaces.md](component-interfaces.md)); revision 13 is
 Workflow #463 K1's, a `linear_steps` task with a select step. A bundle whose packages declare
 variables declares `package` [14, 14] (the contract crate's `VARIABLES_PACKAGE_REVISION`); a
-bundle without them keeps its revision, and the Runtime declares [3, 14].
+bundle without them keeps its revision, and the Runtime declares [3, 14] ([3, 15] from Workflow
+#463 K2 on, the same release: the `package` row 15, a `linear_steps` task's ending pages).
 
 - **An older Runtime** refuses a pack that declares `variables`: every admission path runs the
   declaration gate on `control.json`, which closes its members, so the pack is refused

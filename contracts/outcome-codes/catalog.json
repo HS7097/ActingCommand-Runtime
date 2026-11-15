@@ -650,6 +650,10 @@
       "type": "vocab:follow_problem",
       "description": "Why a Lab recording's click that follows a template mark or a located-text mark does not hold."
     },
+    "select_problem": {
+      "type": "vocab:select_problem",
+      "description": "Why a Lab recording step's select, a choice in a list of fixed slots by the name read in each (#463 R1), cannot be declared or generated."
+    },
     "unknown_reason": {
       "type": "vocab:unknown_reason",
       "description": "Why an input a selection document reads could not be read as a known value."
@@ -2799,6 +2803,26 @@
     "blocking_package_id": {
       "type": "name",
       "description": "The package whose problem keeps another pack waiting: the pack of a follower's head (head_waiting), the layer a prerequisite chain was refused at (prerequisite_unregistered, prerequisite_refused), the return-home package the Runtime's entry would refuse for a page-graph pack's home entry (return_home_refused, fix round 2), the pack standard-pack check refused the root at (root_refused) (Workflow #464 P3 fix round 1, since 0.12.61)."
+    },
+    "report_part": {
+      "type": "vocab:report_part",
+      "description": "Which part of a problem report could not be read (Workflow #467 RPT-1, since 0.12.61)."
+    },
+    "report_part_reason": {
+      "type": "vocab:report_part_reason",
+      "description": "Why a part of a problem report is missing (Workflow #467 RPT-1, since 0.12.61)."
+    },
+    "report_write_step": {
+      "type": "vocab:report_write_step",
+      "description": "The step of writing a problem report that failed (Workflow #467 RPT-1, since 0.12.61)."
+    },
+    "report_fit": {
+      "type": "vocab:report_fit",
+      "description": "Whether a problem report fits its size bound after the parts the bound may leave out were left out (Workflow #467 RPT-1, since 0.12.61)."
+    },
+    "report_output_root": {
+      "type": "vocab:report_output_root",
+      "description": "The root a refused output directory of a problem report lies in (Workflow #467 RPT-1, since 0.12.61)."
     }
   },
   "vocabularies": {
@@ -5052,6 +5076,72 @@
         },
         "page_needs_followed_text": {
           "description": "The step's page would need the followed located text to be recognized: no other mark of the step recognizes it, or a check of the page names the located text (#463 L2 fix 1)."
+        }
+      }
+    },
+    "select_problem": {
+      "description": "Why a Lab recording step's select, a choice in a list of fixed slots by the name read in each (#463 R1), cannot be declared or generated.",
+      "source": {
+        "file": "crates/lab/src/codes.rs",
+        "enum": "SelectProblem"
+      },
+      "tokens": {
+        "with_follow": {
+          "description": "The request's click follows a mark beside the select: the select's click is the slot it chooses."
+        },
+        "with_gesture": {
+          "description": "The request or the step declares a drag, a long press or another gesture: a select taps once."
+        },
+        "with_click": {
+          "description": "The request declares a click rectangle or a click source beside the select: the select's click is the slot it chooses."
+        },
+        "with_retry": {
+          "description": "The request or the step declares a click retry: a select step declares no retry."
+        },
+        "on_optional_step": {
+          "description": "The step is optional, or the request makes it optional: a select step's page is its list."
+        },
+        "with_application": {
+          "description": "The request or the step declares an application operation: one step has one effect."
+        },
+        "on_final_step": {
+          "description": "The stopped recording's last step: the package ends on its page, which then would be the select's empty end too."
+        },
+        "slot_outside_frame": {
+          "description": "A slot's rectangle, click box or name region does not lie inside the frame."
+        },
+        "name_id_invalid": {
+          "description": "A name's id breaks the grammar ^[a-z][a-z0-9_]{0,63}$."
+        },
+        "wanted_name_invalid": {
+          "description": "The wanted value's name breaks the grammar ^[a-z][a-z0-9_]{0,63}$."
+        },
+        "name_duplicate": {
+          "description": "Two names of the select have one id."
+        },
+        "default_not_in_names": {
+          "description": "The wanted value's default is no id of the select's names."
+        },
+        "pressed_not_in_names": {
+          "description": "pressed is no id of the select's names."
+        },
+        "wanted_name_taken": {
+          "description": "Another select step of the recording names its wanted value alike."
+        },
+        "on_empty_key_invalid": {
+          "description": "The on_empty_key breaks the grammar ^[a-z0-9][a-z0-9_]{0,127}$."
+        },
+        "on_empty_key_reserved": {
+          "description": "The on_empty key is <task_id>_done, the key of the run's usual end."
+        },
+        "on_empty_key_taken": {
+          "description": "The on_empty key is another select step's of the recording."
+        },
+        "guard_missing": {
+          "description": "The step's page has no template, color, color digest or check mark (or a value test named as its click guard): a select step needs a guard."
+        },
+        "kernel_refused": {
+          "description": "The kernel's admission refuses the select step as record stop would generate it."
         }
       }
     },
@@ -9922,6 +10012,137 @@
         }
       }
     },
+    "report_part": {
+      "description": "Which part of a problem report could not be read, the value report_part of report_part_missing (Workflow #467 RPT-1, contracts/problem-report.md section 9, since 0.12.61).",
+      "review": "pending",
+      "source": {
+        "file": "crates/lab-ops/src/codes.rs",
+        "enum": "ReportPart"
+      },
+      "tokens": {
+        "run_listing": {
+          "description": "The listing of an instance's failed and unfinished runs in the window (alias the instance)."
+        },
+        "run_before": {
+          "description": "The listing of the run first recorded just before the newest failed or unfinished run on its instance (alias the instance)."
+        },
+        "run_status": {
+          "description": "A run's status, as run show reads it (request_id the run; file its run.json)."
+        },
+        "run_steps": {
+          "description": "A run's steps, as run evidence reads them (request_id the run; file its steps.json)."
+        },
+        "run_geometry": {
+          "description": "A run's task.geometry_observed records (request_id the run; file its geometry.json)."
+        },
+        "run_scores": {
+          "description": "The failing step's task.recognition_completed records (request_id the run; file its scores.json)."
+        },
+        "run_excerpt": {
+          "description": "The failing step's records of the run's diagnostic stream (request_id the run; file its overlay-excerpt.jsonl); without them the scores come from the recognition record."
+        },
+        "frame": {
+          "description": "One frame of a run (request_id the run; file the frame's entry)."
+        },
+        "errors_view": {
+          "description": "The errors view of an instance in the window (alias the instance; file its errors.jsonl)."
+        },
+        "versions": {
+          "description": "The installation's bundle sources in versions.json (file versions.json)."
+        }
+      }
+    },
+    "report_part_reason": {
+      "description": "Why a part of a problem report is missing, the value report_part_reason of report_part_missing (Workflow #467 RPT-1, contracts/problem-report.md section 9, since 0.12.61).",
+      "review": "pending",
+      "source": {
+        "file": "crates/lab-ops/src/codes.rs",
+        "enum": "ReportPartReason"
+      },
+      "tokens": {
+        "not_read_to_end": {
+          "description": "The read stopped before its end, at its own limit or at the Runtime's read budget (for an errors view, a read the Runtime cut short): what it holds may miss what came after, and a listing that was not read to its end never says none."
+        },
+        "budget_spent": {
+          "description": "The report's read budget was spent before the read began or while it ran (caused by call_budget_exhausted, or by the client's time limit once the budget was spent)."
+        },
+        "runtime_refused": {
+          "description": "The Runtime answered the read with its refusal (the caused_by link is the Runtime's outcome)."
+        },
+        "read_failed": {
+          "description": "The read failed: the connection, the client's own check, or the file system (the caused_by link is its failure)."
+        },
+        "not_recorded": {
+          "description": "The run records no such part: a run without a diagnostic stream."
+        },
+        "too_large": {
+          "description": "The part is larger than the bound it is read with (caused by material_too_large)."
+        },
+        "unreadable": {
+          "description": "What was read is not what it must be: lines of the diagnostic stream that are no record, a bundle file that is no JSON (caused by foreign_data_error)."
+        },
+        "search_windows_spent": {
+          "description": "The errors view's search for the newest rows read its largest window of ledger sequences without reaching the window's first record: older rows of the window were not searched (summary.json's searched_from is the lowest sequence searched)."
+        }
+      }
+    },
+    "report_write_step": {
+      "description": "The step of writing a problem report that failed, the value report_write_step of report_write_failed (Workflow #467 RPT-1, contracts/problem-report.md section 9, since 0.12.61).",
+      "review": "pending",
+      "source": {
+        "file": "crates/lab-ops/src/codes.rs",
+        "enum": "ReportWriteStep"
+      },
+      "tokens": {
+        "pack": {
+          "description": "Packing the archive in memory failed; nothing was written."
+        },
+        "create_directory": {
+          "description": "The output directory could not be made (path the directory)."
+        },
+        "name_exists": {
+          "description": "A file of the archive's name is already there (path the archive); it is never replaced."
+        },
+        "write_partial": {
+          "description": "The partial file could not be created or written (path the partial file); one that was created and is left behind is retained."
+        },
+        "rename": {
+          "description": "The partial file could not be moved into place (path the archive, from_path the partial file, which is retained)."
+        }
+      }
+    },
+    "report_fit": {
+      "description": "Whether a problem report fits its size bound after the parts the bound may leave out were left out, the value report_fit of report_trimmed (Workflow #467 RPT-1, contracts/problem-report.md section 8, since 0.12.61).",
+      "review": "pending",
+      "source": {
+        "file": "crates/lab-ops/src/codes.rs",
+        "enum": "ReportFit"
+      },
+      "tokens": {
+        "fits": {
+          "description": "The archive, as written, is within its bound."
+        },
+        "still_over": {
+          "description": "Every part the bound may leave out was left out and the archive, as written, is still over its bound: the parts that are never left out are larger than it."
+        }
+      }
+    },
+    "report_output_root": {
+      "description": "The root a refused output directory of a problem report lies in, the value report_output_root of report_output_refused (Workflow #467 RPT-1, contracts/problem-report.md section 1, since 0.12.61).",
+      "review": "pending",
+      "source": {
+        "file": "crates/lab-ops/src/codes.rs",
+        "enum": "ReportOutputRoot"
+      },
+      "tokens": {
+        "install_root": {
+          "description": "The installation root (install_root)."
+        },
+        "state_root": {
+          "description": "The Runtime's state root (state_root)."
+          }
+        }
+      },
     "goal_problem": {
       "description": "Why an EditGoal was refused under the fact write gate, after the version comparison, the value goal_problem of goal_value_invalid, one word per situation a reader can tell apart (Workflow #463 V3, contracts/runtime-interface.md \"Goal request kinds\", since 0.12.61).",
       "review": "pending",

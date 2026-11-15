@@ -186,6 +186,10 @@ mod gate_463_l1;
 // steps of `resource verify`, whose report is as before.
 #[path = "gate_464_p2.rs"]
 mod gate_464_p2;
+// Workflow #467 RPT-1: `report export` is the operation table's row; actinglab's placeholder of
+// those words is gone.
+#[path = "gate_467_rpt1.rs"]
+mod gate_467_rpt1;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
 use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{

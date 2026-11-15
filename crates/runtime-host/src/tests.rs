@@ -252,6 +252,9 @@ mod gate_463_u1;
 // Workflow #463 K1 (0.12.61; register §1.374): a linear select step that ends empty gets its
 // `on_empty` key from the host's scheduling disposition.
 mod gate_463_k1;
+// Workflow #463 K2 (0.12.61; register §1.380): a linear run that ends on an ending page gets that
+// page's mapping's key from the host's scheduling disposition.
+mod gate_463_k2;
 // Workflow #463 V2 (0.12.61; register §1.382): a dispatch hands its run the value set on the
 // application for its package's variable, a start reads it again, and a value not applied is
 // warned once.

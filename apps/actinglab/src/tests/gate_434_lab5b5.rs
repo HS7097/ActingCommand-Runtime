@@ -174,8 +174,9 @@ fn the_census_puts_every_inventory_word_in_one_group() {
 }
 
 /// The lines of the next test: the command of the work list, the name its refusal gives it (its
-/// read list's row) and the words of a command line that reaches that list.
-const LINES: [Line; 42] = [
+/// read list's row) and the words of a command line that reaches that list. Workflow #467 RPT-1
+/// (adapted): `report export`'s placeholder left the work list for the table's row.
+const LINES: [Line; 41] = [
     ("help", "help", &["help"]),
     ("version", "version", &["version"]),
     ("paths", "paths", &["paths"]),
@@ -284,7 +285,6 @@ const LINES: [Line; 42] = [
     ("session stream", "stream", &["session", "stream"]),
     ("run open", "run open", &["run", "open"]),
     ("run export", "run export", &["run", "export"]),
-    ("report export", "report export", &["report", "export"]),
     ("session stream", "stream", &["session", "stream", "check"]),
 ];
 
@@ -686,19 +686,8 @@ fn corpus() -> Vec<CorpusLine> {
             2,
             "validation_failed",
         ),
-        (
-            "report export",
-            vec!["report", "export"],
-            2,
-            "validation_failed",
-        ),
         // Lines that reach the reads after a command's first refusal; the paths name no file.
-        (
-            "report export",
-            vec!["report", "export", "--last-error"],
-            2,
-            "validation_failed",
-        ),
+        // Workflow #467 RPT-1 (adapted): `report export`'s two placeholder lines are gone with it.
         (
             "lab run",
             vec![
