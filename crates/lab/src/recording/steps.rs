@@ -498,45 +498,78 @@ pub(crate) fn live_primary(step: &RecordingStep) -> Option<&RecordedFrame> {
 /// is the after frame of the press of the step before it when that press was recorded by the
 /// command that makes it (its execution names its `before_frame`), was performed, and has no after
 /// frame yet. Returns that step. A press of `do --capture --record` names no `before_frame` and is
-/// left as it was. #463 S1-2: only the step; [`name_after_frame`] writes the frame.
+/// left as it was. #463 S1-2: only the step; [`name_after_frame`] writes the frame. #463 S1-3: so
+/// is the step of an application operation whose completed receipt names its `before_frame`
+/// (`session app <verb> --record` on a step with a frame) and has no after frame yet, when the step
+/// has no click; the entry step, whose receipt names none, is left as it was.
 fn awaiting_after_frame(recording: &LabRecording) -> Option<u32> {
     let index = last_effective(recording)?;
-    let click = step_ref(recording, index)?.click.as_ref()?;
-    let execution = click.execution.as_ref()?;
-    (click.executed() && execution.before_frame.is_some() && execution.after_frame.is_none())
-        .then_some(index)
+    let step = step_ref(recording, index)?;
+    let awaiting = match (&step.click, &step.application) {
+        (Some(click), _) => {
+            click.executed()
+                && click.execution.as_ref().is_some_and(|execution| {
+                    execution.before_frame.is_some() && execution.after_frame.is_none()
+                })
+        }
+        (None, Some(application)) => application.executed.as_ref().is_some_and(|execution| {
+            execution.before_frame.is_some() && execution.after_frame.is_none()
+        }),
+        (None, None) => false,
+    };
+    awaiting.then_some(index)
 }
 
 /// #463 S1-2 (`contracts/lab-recording.md`, "Recording while playing"): the one place a press's
 /// `after_frame` is written: the press of step `index` names `frame_id`, the last capture of its
 /// own after loop when the loop ends (`record_after_frame`), or, when the loop stored nothing, the
-/// first frame that opens a step after it ([`arrive`]).
+/// first frame that opens a step after it ([`arrive`]). #463 S1-3: on a step without a click, the
+/// completed receipt of its application operation names it so ([`after_members`]).
 pub(crate) fn name_after_frame(
     recording: &mut LabRecording,
     index: u32,
     frame_id: &str,
 ) -> LabResult<()> {
-    let execution = step_mut(recording, index)?
-        .click
-        .as_mut()
-        .and_then(|click| click.execution.as_mut())
-        .ok_or_else(|| step_not_found(index))?;
-    execution.after_frame = Some(frame_id.to_owned());
+    let (after_frame, _) = after_members(recording, index)?;
+    *after_frame = Some(frame_id.to_owned());
     Ok(())
 }
 
-/// #463 S1-1: how the frame after the press of step `index` was taken, on its execution.
+/// #463 S1-3 (the train of stage one, which joins S1-2's [`name_after_frame`] with S1-3's
+/// application steps): the `after_frame` and `after_capture` of the effect of step `index`: its
+/// click's execution when it has a click, else the completed receipt of its application operation;
+/// `record_step_not_found` when it has neither.
+fn after_members(
+    recording: &mut LabRecording,
+    index: u32,
+) -> LabResult<(
+    &mut Option<String>,
+    &mut Option<super::model::AfterCaptureRecord>,
+)> {
+    let step = step_mut(recording, index)?;
+    match (step.click.as_mut(), step.application.as_mut()) {
+        (Some(click), _) => click
+            .execution
+            .as_mut()
+            .map(|execution| (&mut execution.after_frame, &mut execution.after_capture)),
+        (None, Some(application)) => application
+            .executed
+            .as_mut()
+            .map(|execution| (&mut execution.after_frame, &mut execution.after_capture)),
+        (None, None) => None,
+    }
+    .ok_or_else(|| step_not_found(index))
+}
+
+/// #463 S1-1: how the frame after the press of step `index` was taken, on its execution; #463
+/// S1-3: or on the completed receipt of its application operation ([`after_members`]).
 pub(crate) fn note_after_capture(
     recording: &mut LabRecording,
     index: u32,
     record: &super::model::AfterCaptureRecord,
 ) -> LabResult<()> {
-    let execution = step_mut(recording, index)?
-        .click
-        .as_mut()
-        .and_then(|click| click.execution.as_mut())
-        .ok_or_else(|| step_not_found(index))?;
-    execution.after_capture = Some(record.clone());
+    let (_, after_capture) = after_members(recording, index)?;
+    *after_capture = Some(record.clone());
     Ok(())
 }
 
@@ -1604,7 +1637,7 @@ pub(crate) fn apply_marks(
                 json!({"step": target}),
             ));
         }
-        apply_application(session, request, target, None)?;
+        apply_application(session, request, target)?;
         apply_optional(&mut session.recording, request, target)?;
         return Ok(MarkApplied {
             step: target,
@@ -1772,7 +1805,7 @@ pub(crate) fn apply_marks(
         clear_select(step_mut(&mut session.recording, target)?)?;
     }
     if request.application.is_some() {
-        apply_application(session, request, target, Some(&batch))?;
+        apply_application(session, request, target)?;
     } else {
         select_fresh = declare_select(step_mut(&mut session.recording, target)?, request)?;
         apply_click(session, request, target, &batch)?;
@@ -3190,21 +3223,10 @@ fn application_entry_invalid() -> LabError {
     blocked(
         "record_application_entry_invalid",
         "an application entry step can only be step 1. After the effect of the previous step, \
-         capture the arrival screen with capture --record and mark it, then execute or declare \
-         the application operation on that step; offline, give the arrival screen with --frame",
-    )
-}
-
-fn application_marks_missing(index: u32) -> LabError {
-    with_details(
-        blocked(
-            "record_application_step_marks_missing",
-            format!(
-                "step {index} has a frame but no marks; mark the screen the application \
-                 operation starts from first"
-            ),
-        ),
-        json!({"step": index}),
+         `session app <action> --record` captures the arrival screen itself before the \
+         operation; to declare the operation, capture the arrival screen with capture --record \
+         first, then declare it on that step (no mark is needed); offline, give the arrival \
+         screen with --frame",
     )
 }
 
@@ -3223,12 +3245,11 @@ fn application_mark_target(recording: &mut LabRecording) -> LabResult<(u32, bool
 }
 
 /// `record mark --application <action>`: the declared application operation becomes the
-/// step's effect. `batch` holds the step's marks after this command (none for the entry step).
+/// step's effect. #463 S1-3: an open step needs no marks for it (their check is `record stop`'s).
 fn apply_application(
     session: &mut Session,
     request: &super::model::MarkRequest,
     target: u32,
-    batch: Option<&MarkBatch>,
 ) -> LabResult<()> {
     let Some(spec) = &request.application else {
         return Ok(());
@@ -3245,13 +3266,6 @@ fn apply_application(
             ));
         }
         _ => {}
-    }
-    if let Some(batch) = batch
-        && !step.closed
-        && batch.own.is_empty()
-        && batch.reused.is_empty()
-    {
-        return Err(application_marks_missing(target));
     }
     let attempts = step
         .application
@@ -4358,9 +4372,9 @@ pub(crate) fn plan_application(
     request: &super::model::PlanApplicationRequest,
 ) -> LabResult<super::model::ApplicationPlan> {
     let action = application_action(&request.verb)?;
-    let hint = "one step has one effect: capture and mark the next screen with capture --record \
-                first, or replace a declared effect with `record mark --application <action> \
-                --replace-click`";
+    let hint = "one step has one effect: capture the next screen with capture --record first (no \
+                mark is needed), or replace a declared effect with `record mark --application \
+                <action> --replace-click`";
     let plan = |step: u32, opens_entry_step: bool| super::model::ApplicationPlan {
         record_id: recording.record_id.clone(),
         step,
@@ -4391,14 +4405,16 @@ pub(crate) fn plan_application(
         // The operation would land on an optional step (Workflow #339): refused before any
         // request, as `record mark --application` is.
         _ if step.optional.is_some() => Err(optional_application(index, action)),
-        (None, Some(_)) => Ok(plan(index, false)),
-        (None, None) if !has_marks(step) => Err(application_marks_missing(index)),
-        (None, None) => Ok(plan(index, false)),
+        // #463 S1-3: the open step's effect, its marks or none (their check is `record stop`'s).
+        (None, _) => Ok(plan(index, false)),
     }
 }
 
 /// Records the Runtime result of a planned application operation. Performed: the completed
-/// receipt is the step's executed effect and closes it (`closed_by:"application"`).
+/// receipt is the step's executed effect and closes it (`closed_by:"application"`); #463 S1-3: it
+/// names the step's live primary frame as its `before_frame` (none on the entry step), and its
+/// screen after becomes its `after_frame` ([`name_after_frame`]: the last capture of its after
+/// loop, or, when that loop stored nothing, the first frame that opens a step after it).
 /// Indeterminate: the step declares the operation with one more attempt and stays open.
 /// Returns the step's application, whether it was opened and whether it was closed.
 pub(crate) fn commit_application(
@@ -4428,6 +4444,7 @@ pub(crate) fn commit_application(
         recording.steps.push(new_step(plan.step, Vec::new()));
     }
     let step = step_mut(recording, plan.step)?;
+    let before_frame = live_primary(step).map(|frame| frame.frame_id.clone());
     let application = step.application.get_or_insert_with(|| StepApplication {
         action: plan.action.clone(),
         cli_verb: plan.cli_verb.clone(),
@@ -4438,7 +4455,10 @@ pub(crate) fn commit_application(
     });
     let performed = match request {
         CommitApplicationRequest::Performed(execution) => {
-            application.executed = Some(execution.clone());
+            application.executed = Some(super::model::ApplicationExecution {
+                before_frame,
+                ..execution.clone()
+            });
             application.source = "executed".to_string();
             application.cli_verb = plan.cli_verb.clone();
             true

@@ -339,6 +339,19 @@ pub struct ApplicationExecution {
     pub action_id: String,
     pub receipt_state: String,
     pub application_event_ids: Vec<String>,
+    /// #463 S1-3 (`contracts/lab-recording.md`, "Application steps"): the id of the step's live
+    /// primary frame when the operation's completed receipt was recorded, the screen it was run on.
+    /// Absent on the application entry step, which has no frame, and on every operation an earlier
+    /// build recorded, as are the two members below.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before_frame: Option<String>,
+    /// #463 S1-3: the id of the first frame that arrived after the operation: what the screen
+    /// became.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after_frame: Option<String>,
+    /// #463 S1-3: how the frame after the operation was taken.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after_capture: Option<AfterCaptureRecord>,
 }
 
 /// An application operation without a completed receipt (it may have run), or a completed
