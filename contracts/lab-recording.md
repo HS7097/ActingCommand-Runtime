@@ -13,6 +13,8 @@ with `record reopen` ("Archiving"), and a swipe sent with `--record` is a step (
 device commands"). #463 L1: `do --capture --record` records a whole step in one call, its marks,
 its press and the next step's frame ("One call per step"). #463 R1: a step may choose in a list of
 fixed slots by the name read in each slot, its click the slot it chooses ("Selecting in a list").
+#463 R2: a stopped recording takes an ending from a frame, a screen that ends the business another
+way after its last press, without recording again ("Endings").
 
 The recording state lives in the Lab state directory. Nothing in this document writes to
 the Runtime ledger; the clicks and application operations themselves are executed by the
@@ -103,7 +105,10 @@ command deletes nothing and names the files it already wrote.
   recording. #463 R1 (since 0.12.61): a step's `select` is absent on every step without one
   ("Selecting in a list"), so a recording without a select is byte-identical to one an earlier
   build wrote; a build before 0.12.61 does not decode a recording that holds one (the step refuses
-  the unknown member), `lab_recording_unreadable` as above.
+  the unknown member), `lab_recording_unreadable` as above. #463 R2 (since 0.12.61): the
+  recording's `endings` is absent on a recording without one ("Endings"), so such a recording is
+  byte-identical to one an earlier build wrote; a build before 0.12.61 does not decode a recording
+  that holds one, `lab_recording_unreadable` as above.
 
 ## Commands
 
@@ -153,6 +158,9 @@ record mark --step <k> --transition none|page|window [--frame <png>] [--sample <
             [--template …]… [--color …]… [--reuse <id>]… [--transition-timeout-ms <ms>]
             [--min-ms <a> --max-ms <b>] [--replace-transition]
 record mark --drop-step <n> | --reopen-step <n> | --close-step | --to-transition <n>
+record mark --ending --frame <png> --outcome-key <key> [--sample <png>]… [--page <name>]
+            [--template <id>=x,y,w,h[@x,y,w,h]]… [--scales <f>,…] [--color <id>=x,y,w,h]… [--reuse <id>]…
+record mark --remove-ending <key>
 record mark --request <file> | --request-json <json>
 ```
 
@@ -338,7 +346,10 @@ Rules:
 
 Output: `{status, record_id, step, step_opened, frame, samples, marks, reused, removed,
 click, application, transition, step_state{marks, frames, effect, transition, closed,
-optional, forbidden?, anchor?}, closed_step, dry_run, forbidden?, after_stop?, select?}` (#463
+optional, forbidden?, anchor?}, closed_step, dry_run, forbidden?, after_stop?, select?, ending?,
+removed_ending?}` (#463 R2: `ending`, the ending the command took, and `removed_ending`, the one it
+gave up, are present only then; such an answer names no step, its `status` is `ending_recorded` or
+`ending_removed`, `marks_validated` with `--dry-run`; "Endings"; #463
 R1: `select`, the step's select with its self-test, is present only on a step that has one;
 Workflow #390 LAB-2: `forbidden` lists the page's forbidden marks tested on the step's frames, and
 `after_stop: true` says the recording is stopped and `record stop` will generate its package
@@ -363,8 +374,11 @@ reason}`, or
          optional: null | {settle_ms},
          transition: null | {kind:"page", frames, marks, timeout_ms, source} | {kind:"window", min_ms, max_ms},
          closed, closed_by, forbidden?, anchor?, select?}],
- artifact|null, amended_at_unix_ms?, record_flag_state_dir, record_flag_reachable}
+ artifact|null, amended_at_unix_ms?, endings?, record_flag_state_dir, record_flag_reachable}
 ```
+
+#463 R2: `endings` is present only on a recording that holds one, as `recording.json` holds them
+("Endings").
 
 #463 R1: `select` is present only on a step that chooses in a list, as `recording.json` holds it
 (its `declaration`, `marked_at_unix_ms` and `self_test`; "Selecting in a list"); its click's
@@ -667,8 +681,8 @@ choose in a list of fixed slots on one screen by the name read in each slot: the
 `select` (request form only, `record mark --request` or `--request-json`, MCP `ac_record_mark`, and
 the mark request of "One call per step"; no shortcut flag). `record stop` generates it as the
 select step of a `linear_steps` task ([linear-steps.md](linear-steps.md), "Select steps"). A list
-that scrolls, an ending added after the stop and the declaration of the wanted value as a variable
-are later slices.
+that scrolls and the declaration of the wanted value as a variable are later slices; an ending added
+after the stop is #463 R2's ("Endings").
 
 ```json
 {"schema_version":"actingcommand.lab-record-mark.v1","step":3,
@@ -710,7 +724,8 @@ are later slices.
   (exit 3), the kernel's code in `details.loader_code` and its text in `details.detail`.
 - **`clear_select`** (fix 1; request form only, `true` or absent, not with `select`:
   `validation_failed`) takes the step's select off, also after `record stop`: see "The click"
-  below. A step without a select is left as it is.
+  below. #463 R2: a step without a select has nothing to take off: `record_select_invalid`,
+  `no_select`, and nothing is written.
 - **The click.** The select is the step's effect: its click (`click.source: "select"`) is the
   click box of the slot the decision selects for `pressed` on the primary frame, which `do
   --capture --record` and the one call press as any recorded click ("One call per step": nothing
@@ -765,6 +780,7 @@ stop` generates the package:
 | `on_empty_key_taken` | the `on_empty` key is another select step's of the recording (a second select that leaves `on_empty_key` out takes the first one's default) |
 | `guard_missing` | the step's page gives no guard |
 | `kernel_refused` | the kernel's admission refuses the select step as `record stop` generates it (`details.loader_code`, the kernel's code, and `details.detail`): a bound of the read only the kernel checks ("What the Lab reads, and what only the kernel admits") |
+| `no_select` | #463 R2: `clear_select` names a step that has no select |
 
 **The mark-time self-test**, on every live frame of the step, is the kernel's own dry run of the
 select step (`dry_run_select`, called, never copied) on a probe package: the step alone as `record
@@ -865,6 +881,121 @@ repository's, and since Workflow #464 P2 the Lab's own `standard-pack build`, wh
 counts a select step as 13, [resource-verify.md](resource-verify.md), "The `package` revision");
 an earlier Runtime refuses such a package at admission (`contained_task_linear_invalid`,
 `reason=operation_effect`).
+
+### Endings
+
+#463 R2 (since 0.12.61, [v012-register.md](v012-register.md) §1.384; the owner's requirement on
+board #463 that the business is done with its last press, that every declared ending is a normal
+end and that a rare ending can be added later without recording again; the coordinator's rulings 4
+and 5 on the design of board #463 and the rulings of its work order). A business may end otherwise
+after its last press (too little balance, nothing to collect). A stopped recording takes such a
+screen as an **ending**, from a frame and without recording again, and `record stop` generates it as
+an ending page of the `linear_steps` task ([linear-steps.md](linear-steps.md), "Endings"): a run
+whose last press reaches that screen finishes Completed on it, keyed by the ending's key, and its
+pause written for that screen (Workflow #463 U1) lifts once the package that holds the ending is in
+place.
+
+```json
+{"schema_version":"actingcommand.lab-record-mark.v1",
+ "ending":{"frame":"D:\\frames\\short.png","samples":[],"page":"short",
+           "outcome_key":"daily_open_short",
+           "add":[{"id":"ui/short_dialog","family":"template","region":{"x":480,"y":260,"width":320,"height":48}}],
+           "reuse":[]}}
+```
+```json
+{"schema_version":"actingcommand.lab-record-mark.v1","remove_ending":"daily_open_short"}
+```
+
+- **The members.** `frame`, the ending's screen, a PNG file on the caller's machine (required);
+  `samples`, more frames of it; `page`, the name of its page (the grammar of a step's `--page`,
+  `validation_failed` otherwise); `outcome_key`, the key of the run's end on it (required,
+  `^[a-z0-9][a-z0-9_]{0,127}$`); `add`, its marks, of every family, made from its frame as a step's
+  are; `reuse`, marks of steps its page requires too. The command form is `record mark --ending
+  --frame <png> --outcome-key <key> [--sample <png>]… [--page <name>] [--template …]… [--color …]…
+  [--reuse <id>]…`: `--ending` makes these flags the ending's; `record mark --remove-ending <key>`
+  gives an ending up. The MCP tool `ac_record_mark` takes the request form and hands it to this
+  command unchanged, so the two faces answer the same.
+- **Alone.** An ending is no step and changes none: its request names nothing else, no step, no
+  frame, mark or click of a step, no step operation (`with_other_change`, `details.members` naming
+  them); nothing of it is cut away.
+- **Its frames** are stored as a step's are, content-addressed in the recording's `frames/` with the
+  next `frame_id`, and must have the recording's size (`record_frame_size_mismatch`). The caller's
+  path is written nowhere: `recording.json` names the stored copy, the package and its provenance
+  the frame's sha256.
+- **Its marks** are self-tested on its frames, the primary one and the samples, as any mark is
+  (`record_mark_rejected` when one fails, nothing written). Its own marks share the recording's ids
+  and asset names (`record_mark_id_conflict`, `record_asset_name_conflict`); a step's mark it reuses
+  is in use (`record_mark_in_use` for a `remove` of it). Its marks carry `step` 0, the number of no
+  step.
+- **`recording.json`** keeps `endings[{outcome_key, page, frames, marks, reused, marked_at_unix_ms,
+  initiator}]` in the order they were taken, absent without one. Taking or giving up an ending sets
+  `amended_at_unix_ms`, and the next `record stop` generates the package again (`regenerated`).
+  `remove_ending` takes the ending out of the list (its stored files stay, as every stored file
+  does), so that the next `record stop` generates the package it generated before.
+- **What `record stop` generates** ("Pages and documents"): the page `ending_kk` or
+  `ending_kk_<page>` whose rule requires the ending's marks, its marks' targets, and its
+  `scheduling_outcome` mapping `{outcome_key, "no_designated_effect", [its page]}` after the usual
+  ending's and the select steps'; then self-check item 9 ("Self-checks"). `record stop` writes no
+  `package` revision; a `linear_steps` task with an ending page needs `package` 15
+  ([component-interfaces.md](component-interfaces.md), row 15), and an earlier Runtime refuses it
+  at admission (`contained_task_linear_invalid`, `reason=terminal_page`).
+
+`record_ending_invalid` (exit 3, `details{outcome_key, ending_problem, outcome}`) refuses the
+command and nothing is written; the key rules are checked again when `record stop` generates the
+package:
+
+| `ending_problem` | when |
+|---|---|
+| `recording_active` | the recording is active: an ending is taken, or given up, after `record stop`, which records the usual ending first |
+| `with_other_change` | the request names a member of a step beside `ending` or `remove_ending`, or both of these (`details.members`) |
+| `key_invalid` | the outcome key breaks `^[a-z0-9][a-z0-9_]{0,127}$` |
+| `key_reserved` | the outcome key is `<task_id>_done`, the key of the run's usual end |
+| `key_of_select` | the outcome key is a select step's `on_empty` key; at `record stop` also of a select declared after the ending |
+| `key_exists` | another ending of the recording has the outcome key |
+| `key_unknown` | `remove_ending` names a key no ending has (`details.endings`, the keys there are) |
+| `page_exists` | another ending of the recording has the page name |
+| `no_marks` | the ending adds and reuses no mark |
+
+**Where the frame comes from.** A run that met a screen its package never recorded ends with
+`contained_task_linear_unrecorded_screen` ([linear-steps.md](linear-steps.md), "A screen the
+package never recorded"); its `artifact_id` names the frame of the run's `Failure` pin, the closing
+decision's last frame. That id is no material ref: `run evidence <request_id>` (actinglab and
+actingctl, MCP `ac_run_evidence`) lists the run's frames as material refs
+`<seq>:<event_id>:<artifact_id>`, the run's last one as `final.frame_ref`, and the ref whose last
+part is the failure's `artifact_id` is the frame; `material <ref> --out <dir>` (actinglab) writes
+it whole as `<dir>/<sha256>.png`, the file `--frame` takes (MCP `ac_material` with `mode: export`
+writes the same file into the server's materials folder). The
+pinned frame is the device's own capture: on an instance whose resolution differs from the one the
+recording was made at (a pure scale of the display adapter) it has another size, and the mark
+refuses it (`record_frame_size_mismatch`, `details{expected, actual}`): scale it to the recording's
+size first, outside the Lab, or take the frame on an instance of the recording's size.
+
+**What the kernel's admission asks of an ending** ([linear-steps.md](linear-steps.md), "Endings"):
+none of its rules can refuse a generated ending page, which is a page of its own name, in one
+mapping, off the path, no transition, loading or wait page, in a package whose control declares
+no `store_update` (`terminal_page`, `ending_page`, `terminal_page_duplicate`,
+`store_update_endings`). A key that the usual ending, a select step or another ending already has
+is refused at the mark with its own word. A package with an ending is no prerequisite and no
+return-home package (`contained_task_prerequisite_incompatible`, `reason=linear_endings`): that
+binds a later use of the package, and `binding_requires` says so.
+
+**Beside a select.** An ending stands after the last press and is no step; a select stands on no
+last step of a stopped recording (`on_final_step`): the two never meet on one step. A select step
+before the last press whose tap reaches the ending's screen ends the run on it
+([linear-steps.md](linear-steps.md), "Endings"). An ending page that passes on the frames of the
+step before the last press is item 9's `previous`, a select step's or not; one that passes on the
+frames of an earlier select step is item 8's refusal (the run's select would not know its page
+there).
+
+**An archived recording** takes no ending: `record mark` on it is `record_session_not_active`, as
+every `record mark` of a session that is not active ("Other commands on an archived recording");
+reopened, it is active (`recording_active`) until `record stop` generates its package.
+
+**What cannot be added this way:** an ending that needs a press to close (its message is left on
+the screen, and the next task's start clears it: the owner's default); a result after any press but
+the last; a branch that continues the business; a pop-up after which the path goes on (still a new
+recording, "Optional steps"); an ending that looks like the screen before the last press, the last
+step or another ending on the recorded frames (item 9).
 
 ### Forbidden marks and anchors
 
@@ -1552,7 +1683,9 @@ Right after the effect of the step before it was executed:
 Steps are only appended with new serial numbers, and a stopped recording takes marks on its
 existing steps only (Workflow #390 LAB-2, "Marking after stop"): a pop-up found missing after the
 recording means recording again, which can be assembled offline from frames kept with the
-earlier recording.
+earlier recording. #463 R2: a screen that ends the business another way after its last press (for
+example too little balance) is no pop-up: it is added after the stop as an ending, from its frame,
+without recording again ("Endings").
 
 ## Recording lock
 
@@ -1814,11 +1947,11 @@ recording again, when the tap lies in the slot the pressed name selects on the p
 step are refused, `record_select_invalid`), and the whole select is self-tested again on the
 step's kept frames; the tap's own rectangle, source and mark stay beside the select
 (`select.click_before`), and `clear_select` gives them back, so that the recording generates the
-package it generated before. It takes no new
-step (a frame that is not the targeted step's primary frame), no step operation and no
-application operation: each is `record_session_not_active` (exit 3) with `details{reason:
-"recording_stopped", change}`, and nothing is written; nor does any `--record` device command
-(`record_session_not_active`).
+package it generated before. #463 R2: it also takes an ending ("Endings"), and gives one up. It
+takes no new step (a frame that is not the targeted step's primary frame; an ending, "Endings", is
+not a step and is taken), no step operation and no application operation: each is
+`record_session_not_active` (exit 3) with `details{reason: "recording_stopped", change}`, and
+nothing is written; nor does any `--record` device command (`record_session_not_active`).
 
 - A change that is written sets the recording's `amended_at_unix_ms` (the status stays
   `stopped`); the output says `after_stop: true`. `--dry-run` writes nothing.
@@ -1904,7 +2037,14 @@ Numbers in page and operation ids have one width: two digits, or the digits of n
   `timeout_ms` and `max_steps` equal to the control's, `target_page` the last page, and the
   `scheduling_outcome` mapping `{"outcome_key": "<task_id>_done", "effect":
   "no_designated_effect", "terminal_pages": [<last page>]}`, then (#463 R1) one mapping per select
-  step, its `on_empty` key on its page ("Selecting in a list").
+  step, its `on_empty` key on its page ("Selecting in a list"), then (#463 R2) one per ending, its
+  key on its page, in the order the recording took them ("Endings").
+- #463 R2: an ending's page is `ending_kk`, or `ending_kk_<name>` with its `page`, `kk` its number
+  in the order the recording took the endings, in the width of the steps' numbers; its rule is
+  `{"required": [...]}`, its own and reused marks as a step's page; its own marks are targets as a
+  step's, their provenance naming the ending by its key (`ending`) and no step. The task's
+  provenance adds `endings[{ending, outcome_key, page, frame_sha256, sample_sha256, frame_size,
+  marks, marked_at_unix_ms}]`. A recording without an ending generates the same bytes as before.
 - A click step's operation is `step_ii_click`: `from` its page, `to` and `expect_after.page_id`
   the next page, `click: {"kind": "rect", …}` with the recorded rectangle (Workflow #396
   REC-4: `{"kind": "target", …}` or `{"kind": "offset", …}` for a click that follows a template,
@@ -2162,6 +2302,31 @@ guard execution still requires the corresponding frames, provider and Runtime ev
    result is the cross-check's `selects` (as `lab.selects`, each frame's decisions by their kind),
    present only with a select step; without an OCR model nothing is called, each frame is
    `undetermined`, the status `partially_evaluated` and `selects_not_evaluated` lists the steps.
+9. **Endings** (#463 R2, "Endings"; checked right after item 4 and before item 8, so that an ending
+   page that passes on the frames of a select step before the last press is the ending's refusal).
+   On live frames with the evaluator of item 4, in the order the recording took the endings: every
+   ending's page matches its own frames (`record_step_self_mismatch`, `details{outcome_key, page,
+   frame_id, failed}`), and passes on no frame of a screen the run may show instead of it, since the
+   run evaluates the endings before the usual ending (the coordinator's ruling 4):
+   `record_ending_ambiguous` (3, `details{outcome_key, page, against, frames, step |
+   other_outcome_key}`) with `against`:
+   - `previous`: the frames of a step after whose press the run awaits the endings: the step before
+     the last, and, when it is an optional step, the step before its run and the run's members (a
+     step's page transition's frames when it has one, the screen left after its press). The run
+     would end on the ending before the press took effect;
+   - `usual`: the frames of the last step, the usual ending: the ending would win wherever the
+     usual ending shows;
+   - `other_ending`: the frames of another ending: the two could not be told apart.
+
+   Give up such an ending (`--remove-ending`) and take it again with a mark of its own screen, such
+   as a template of its message. The usual ending's page passing on an ending's frames is no
+   refusal (the ending wins there, as it should), but the warning `ending_usual_insensitive`
+   (`outcome_key`, `page`, `usual_page`, `frames`). An undetermined evaluation (OCR without a model)
+   is the warning `ending_ambiguity_not_evaluated` (`check`: `record_ending_ambiguous` or
+   `ending_usual_insensitive`, with that check's details) and makes the cross-check
+   `partially_evaluated`. Every refusal comes before every warning. The result is the
+   cross-check's `endings[{ending, outcome_key, page, frames[{frame_id, result}], usual}]` (`usual`:
+   `distinct`, `passes` or `not_evaluated`), as `lab.endings`, present only with an ending.
 
 Warnings never refuse. The provenance and the output carry the same warnings.
 
@@ -2212,7 +2377,7 @@ equal value is accepted.
 {status, dry_run, session_already_stopped?, container, package_id, task_id,
  path, lab_dir_path, lab_dir_status, lab_dir_created, written_files | would_write,
  byte_count, entries, steps, click_steps, application_steps[{step, op, action, source}],
- pages, transitions, optional_steps[{step, op, settle_ms, skip_to, same_as}], selects?,
+ pages, transitions, optional_steps[{step, op, settle_ms, skip_to, same_as}], selects?, endings?,
  timeouts{timeout_ms, step_timeout_ms, arrival_timeout_ms,
  application_arrival_timeout_ms}, warnings, arrival_by_time_window, marks_not_evaluated,
  steps_needing_review, cross_check, first_decision, entry_overlay,
@@ -2254,6 +2419,11 @@ equal value is accepted.
   item 8), present only when the package has one; `click_steps` counts a select step, whose effect
   is its tap; `marks_not_evaluated` lists a select whose mark-time self-test was not evaluated as
   `select/<page>`.
+- #463 R2: `endings` lists every ending with item 9's result, present only when the recording has
+  one; `pages` lists the endings' pages after the steps' and the transitions'; `binding_requires`
+  then adds that a run ending on one is a success with its key, its message left on the screen, and
+  that such a package is no prerequisite or return-home package and needs a Runtime that admits
+  ending pages.
 - `binding_requires` lists what a binding also needs: the catalog task and its approval; the
   prerequisite package with `--requires` (listed by its game's installed standard pack,
   Workflow #373 NAV-3a); without it, the return-home fallback (step
@@ -2274,14 +2444,15 @@ equal value is accepted.
   scheduled run then pauses its task at once, until the package changes
   ([linear-steps.md](linear-steps.md), "Failure codes";
   [policy-suspension.md](policy-suspension.md), "A failure that pauses at its first occurrence").
-  Record the missing ending from that frame: an optional step, or a step and a page.
+  Record the missing ending from that frame: an optional step, or a step and a page; #463 R2: a
+  screen that ends the business after the last press is taken as an ending ("Endings").
 
 ## Error codes
 
 | exit | codes |
 |---|---|
 | 2 | `validation_failed` (Workflow #449 REC-ARCH fix 1: also `record archive --copy-to` empty, blank or relative), `record_flag_unsupported`, `record_flag_takes_no_value`, `record_state_dir_unsupported`, `record_frame_unreadable`, `record_transition_window_invalid`, `record_transition_has_click`, `record_application_action_invalid`, `record_application_with_click`, `record_optional_settle_invalid`, `record_locale_missing`, `record_lab_dir_invalid`, `record_requires_invalid` |
-| 3 | `record_session_not_active` (Workflow #390 LAB-2: also, with `details.reason: "recording_stopped"`, a change a stopped recording does not take), `record_lab_unavailable`, `record_instance_mismatch`, `record_step_not_found`, `record_step_not_last`, `record_step_frame_missing`, `record_step_frame_conflict`, `record_frame_size_mismatch`, `record_frame_hash_mismatch`, `record_mark_rejected`, `record_mark_id_conflict`, `record_mark_id_reserved`, `record_mark_in_use`, `record_asset_name_conflict`, `record_click_exists`, `record_click_executed`, `record_click_source_invalid`, `record_click_follow_invalid`, `record_click_rect_conflict`, `record_click_outside_step_rect`, `record_step_click_missing`, `record_step_click_not_executed`, `record_gesture_execution_unsupported` (#411 Lab BD), `record_guard_family_invalid`, `record_append_failed_after_input`, `record_transition_without_click`, `record_transition_exists`, `record_to_transition_invalid`, `record_busy`, `record_application_entry_invalid`, `record_application_step_marks_missing`, `record_step_effect_exists`, `record_optional_first_step`, `record_optional_application`, `record_select_invalid` (#463 R1); stop: `record_no_steps`, `record_application_entry_not_first`, `record_step_without_recognition`, `record_final_step_has_click`, `record_too_many_steps`, `record_step_after_stop_invalid`, `record_application_without_home`, `record_click_follow_invalid`, `record_optional_first_step`, `record_optional_final_step`, `record_optional_application`, `record_optional_restart_segment_end`, `record_step_self_mismatch`, `record_optional_step_ambiguous`, `record_optional_skip_target_insensitive`, `record_select_invalid` (#463 R1), `record_artifact_admission_failed`, `record_requires_conflict`, `record_stop_option_conflict`, and (Workflow #449 REC-ARCH) `record_session_not_active` with `details.reason: "recording_archived"`; archive and reopen (Workflow #449 REC-ARCH): `record_session_not_active`, `record_session_active` (reopen), `record_not_archived`, `record_archive_target_not_empty`, `record_instance_mismatch`, `record_lab_unavailable` |
+| 3 | `record_session_not_active` (Workflow #390 LAB-2: also, with `details.reason: "recording_stopped"`, a change a stopped recording does not take), `record_lab_unavailable`, `record_instance_mismatch`, `record_step_not_found`, `record_step_not_last`, `record_step_frame_missing`, `record_step_frame_conflict`, `record_frame_size_mismatch`, `record_frame_hash_mismatch`, `record_mark_rejected`, `record_mark_id_conflict`, `record_mark_id_reserved`, `record_mark_in_use`, `record_asset_name_conflict`, `record_click_exists`, `record_click_executed`, `record_click_source_invalid`, `record_click_follow_invalid`, `record_click_rect_conflict`, `record_click_outside_step_rect`, `record_step_click_missing`, `record_step_click_not_executed`, `record_gesture_execution_unsupported` (#411 Lab BD), `record_guard_family_invalid`, `record_append_failed_after_input`, `record_transition_without_click`, `record_transition_exists`, `record_to_transition_invalid`, `record_busy`, `record_application_entry_invalid`, `record_application_step_marks_missing`, `record_step_effect_exists`, `record_optional_first_step`, `record_optional_application`, `record_select_invalid` (#463 R1), `record_ending_invalid` (#463 R2); stop: `record_no_steps`, `record_application_entry_not_first`, `record_step_without_recognition`, `record_final_step_has_click`, `record_too_many_steps`, `record_step_after_stop_invalid`, `record_application_without_home`, `record_click_follow_invalid`, `record_optional_first_step`, `record_optional_final_step`, `record_optional_application`, `record_optional_restart_segment_end`, `record_step_self_mismatch`, `record_optional_step_ambiguous`, `record_optional_skip_target_insensitive`, `record_select_invalid` (#463 R1), `record_ending_invalid`, `record_ending_ambiguous` (#463 R2), `record_artifact_admission_failed`, `record_requires_conflict`, `record_stop_option_conflict`, and (Workflow #449 REC-ARCH) `record_session_not_active` with `details.reason: "recording_archived"`; archive and reopen (Workflow #449 REC-ARCH): `record_session_not_active`, `record_session_active` (reopen), `record_not_archived`, `record_archive_target_not_empty`, `record_instance_mismatch`, `record_lab_unavailable` |
 | 4 | `record_click_indeterminate`, `record_click_performed_with_failure`, `record_application_indeterminate` |
 | 5 | `record_lock_failed`, `record_state_io_failed` (Lab state files cannot be read or written; Workflow #449 REC-ARCH: also a copy file that cannot be written), the state directory cannot be created, `record_archive_verify_failed` (Workflow #449 REC-ARCH) |
 | 6 | `record_stop_generation_not_implemented` (a build without the package generator; the #336 L4 build also for a recording with optional steps, `details.reason: "optional_steps"`) |

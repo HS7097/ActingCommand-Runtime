@@ -177,6 +177,10 @@ outcome_keys! {
     follow_problem: vocab(follow_problem),
     // #463 R1.
     select_problem: vocab(select_problem),
+    // #463 R2: why an ending of a stopped recording cannot hold, and the screen an ending's page
+    // passes on.
+    ending_problem: vocab(ending_problem),
+    against: vocab(ending_against),
     unknown_reason: vocab(unknown_reason),
     rule_id: token,
     unknown_clause: vocab(unknown_clause),

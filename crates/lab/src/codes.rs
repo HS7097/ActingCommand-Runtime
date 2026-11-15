@@ -50,6 +50,16 @@ actingcommand_contract::outcome_codes! {
         /// name read in each) cannot be declared or generated (key `select_problem`: why); the
         /// command is refused and nothing is written (exit 3; actinglab details `step`).
         RecordSelectInvalid => "record_select_invalid": error / none,
+        /// Error. #463 R2: an ending of a stopped recording (`record mark --ending`, a request's
+        /// `ending` or `remove_ending`) cannot be taken, given up or generated (key
+        /// `ending_problem`: why); the command is refused and nothing is written (exit 3;
+        /// actinglab details `outcome_key`).
+        RecordEndingInvalid => "record_ending_invalid": error / none,
+        /// Error. #463 R2: `record stop`'s self-check item 9: an ending's page passes on recorded
+        /// frames of a screen the run may show instead (key `against`: which), so the run would
+        /// end on it there; nothing is written (exit 3; actinglab details `outcome_key`, `page`,
+        /// `frames`).
+        RecordEndingAmbiguous => "record_ending_ambiguous": error / none,
     }
 }
 
@@ -139,5 +149,48 @@ actingcommand_contract::outcome_vocabulary! {
         GuardMissing => "guard_missing",
         /// The kernel's admission refuses the select step as `record stop` would generate it.
         KernelRefused => "kernel_refused",
+        /// #463 R2: `clear_select` names a step that has no select, so there is nothing to take
+        /// off.
+        NoSelect => "no_select",
+    }
+}
+
+// #463 R2: why an ending of a stopped recording cannot be taken, given up or generated.
+actingcommand_contract::outcome_vocabulary! {
+    /// Why an ending of a stopped Lab recording cannot hold (`ending_problem`).
+    pub enum EndingProblem: "ending_problem" {
+        /// The recording is active: an ending is taken after `record stop`, which records the
+        /// usual ending first.
+        RecordingActive => "recording_active",
+        /// The request names a step change beside `ending` or `remove_ending`, or both of these.
+        WithOtherChange => "with_other_change",
+        /// The outcome key breaks the grammar `^[a-z0-9][a-z0-9_]{0,127}$`.
+        KeyInvalid => "key_invalid",
+        /// The outcome key is `<task_id>_done`, the key of the run's usual end.
+        KeyReserved => "key_reserved",
+        /// The outcome key is the `on_empty` key of a select step of the recording.
+        KeyOfSelect => "key_of_select",
+        /// Another ending of the recording has the outcome key.
+        KeyExists => "key_exists",
+        /// `remove_ending` names a key no ending of the recording has.
+        KeyUnknown => "key_unknown",
+        /// Another ending of the recording has the page name.
+        PageExists => "page_exists",
+        /// The ending adds and reuses no mark, so its page would recognize nothing.
+        NoMarks => "no_marks",
+    }
+}
+
+// #463 R2: which recorded screen an ending's page passes on (`record stop`'s self-check item 9).
+actingcommand_contract::outcome_vocabulary! {
+    /// The screen an ending's page must not pass on (`against`).
+    pub enum EndingAgainst: "ending_against" {
+        /// The frames of a step after whose press the run awaits the endings: the press may not
+        /// have taken effect yet.
+        Previous => "previous",
+        /// The frames of the last step, the usual ending: the ending would always win there.
+        Usual => "usual",
+        /// The frames of another ending of the recording.
+        OtherEnding => "other_ending",
     }
 }

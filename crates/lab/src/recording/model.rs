@@ -106,6 +106,62 @@ pub struct LabRecording {
     /// generated; the next `record stop` generates the package again and clears it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub amended_at_unix_ms: Option<u64>,
+    /// #463 R2: the endings a stopped recording took after its last press, each from a frame, in
+    /// the order they were taken; absent on a recording without one, so that it is byte-identical
+    /// to one an earlier build wrote.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub endings: Vec<RecordingEnding>,
+}
+
+/// #463 R2 (`contracts/lab-recording.md`, "Endings"): a screen that ends the business another way
+/// after the last press, taken by a stopped recording from a frame. It is no step: `record stop`
+/// generates its page (`ending_kk` or `ending_kk_<page>`), whose rule requires its marks, and its
+/// `scheduling_outcome` mapping (`outcome_key` on that page). Its marks carry `step` 0, the number
+/// of no step.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RecordingEnding {
+    /// The key of the run's end on this screen.
+    pub outcome_key: String,
+    /// The name its page takes, `ending_kk_<page>`; `None` names it `ending_kk`.
+    pub page: Option<String>,
+    /// Its primary frame and samples, stored in the recording as a step's are.
+    pub frames: Vec<RecordedFrame>,
+    /// Its own marks, self-tested on its frames.
+    pub marks: Vec<RecordedMark>,
+    /// The marks of steps its page requires too, self-tested on its frames.
+    pub reused: Vec<String>,
+    pub marked_at_unix_ms: u64,
+    /// Workflow #434 LAB-2: the initiator word of the process that took it.
+    pub initiator: String,
+}
+
+impl RecordingEnding {
+    /// Its live frames: the primary frame and the samples.
+    pub fn live_frames(&self) -> Vec<&RecordedFrame> {
+        self.frames
+            .iter()
+            .filter(|frame| !frame.superseded)
+            .collect()
+    }
+}
+
+/// #463 R2: the `ending` of a `record mark` request on a stopped recording: its frame and samples
+/// (files on the caller's machine, copied into the recording), its page's name, its outcome key and
+/// its marks.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EndingSpec {
+    pub frame: String,
+    #[serde(default)]
+    pub samples: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page: Option<String>,
+    pub outcome_key: String,
+    #[serde(default)]
+    pub add: Vec<MarkSpec>,
+    #[serde(default)]
+    pub reuse: Vec<String>,
 }
 
 /// Written by `record stop` (#336 L4): the package generated from the recording. Workflow #336
@@ -915,6 +971,14 @@ pub struct MarkRequest {
     /// select took over gets back its own rectangle, source and mark (`select.click_before`).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub clear_select: bool,
+    /// #463 R2: an ending the stopped recording takes after its last press (`record mark
+    /// --ending`); alone in the request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ending: Option<EndingSpec>,
+    /// #463 R2: the outcome key of the ending the stopped recording gives up (`record mark
+    /// --remove-ending <k>`); alone in the request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remove_ending: Option<String>,
 }
 
 /// #463 R1 (`contracts/lab-recording.md`, "Selecting in a list"): a select over fixed slots, the
@@ -1367,6 +1431,12 @@ pub struct MarkOutcome {
     /// #463 R1: the step's select with its self-test, on a step that has one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub select: Option<StepSelect>,
+    /// #463 R2: the ending the command took, with its marks' self-tests.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ending: Option<RecordingEnding>,
+    /// #463 R2: the ending the command gave up, as the recording held it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub removed_ending: Option<RecordingEnding>,
 }
 
 /// Workflow #390 LAB-2: a mark the step's page forbids, tested on every live frame of the step:
@@ -1467,6 +1537,9 @@ pub struct LabStatusView {
     /// Workflow #390 LAB-2: a stopped recording marked again since its package was generated.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub amended_at_unix_ms: Option<u64>,
+    /// #463 R2: the recording's endings as it holds them, when it has any.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub endings: Vec<RecordingEnding>,
 }
 
 /// `record status` lab field: unavailable with a reason, or the recording view.

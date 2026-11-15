@@ -4,6 +4,7 @@
 //! operations. Everything is computed in memory and written once, atomically.
 
 use super::RecordingLock;
+use super::ending::{ENDING_MARK_STEP, check_new_ending};
 use super::follow::{
     FollowFrames, check_follow_declaration, check_follow_frames, check_located_follow_frames,
     followed_template,
@@ -18,12 +19,12 @@ use super::marks::{
 };
 use super::model::{
     ApplicationAttempt, ClickExecution, ClickFollow, ClickFollowForm, ClickGesture, ClickSpec,
-    ForbiddenMarkView, LAB_RECORDING_DEFAULT_COLOR_MAX_DISTANCE,
+    EndingSpec, ForbiddenMarkView, LAB_RECORDING_DEFAULT_COLOR_MAX_DISTANCE,
     LAB_RECORDING_DEFAULT_MATCH_METRIC, LAB_RECORDING_DEFAULT_SETTLE_MS,
     LAB_RECORDING_DEFAULT_TEMPLATE_THRESHOLD, LAB_RECORDING_MAX_GESTURE_MS, LAB_RECORDING_SCHEMA,
     LabRecording, MarkFamily, MarkSpec, OpaqueJson, RecordPoint, RecordRect, RecordSize,
-    RecordedFrame, RecordedMark, RecordingDefaults, RecordingStep, SelfTestStatus, StepApplication,
-    StepClick, StepOptional, StepTransition, ValueTestRight, value_test_side_id,
+    RecordedFrame, RecordedMark, RecordingDefaults, RecordingEnding, RecordingStep, SelfTestStatus,
+    StepApplication, StepClick, StepOptional, StepTransition, ValueTestRight, value_test_side_id,
 };
 use super::select::{
     OTHER_PAGE_PASSES, SELECT_REJECTION_ID, SELF_TEST_ERROR, SelectChecked, SelectFrame,
@@ -115,6 +116,7 @@ pub(crate) fn new_recording(
         steps: Vec::new(),
         artifact: None,
         amended_at_unix_ms: None,
+        endings: Vec::new(),
     }
 }
 
@@ -316,7 +318,8 @@ fn effective_step(recording: &LabRecording, index: u32) -> LabResult<&RecordingS
         .ok_or_else(|| step_not_found(index))
 }
 
-/// The highest `fNNNN` frame number on record, steps and transitions included.
+/// The highest `fNNNN` frame number on record, steps and transitions included; #463 R2: and the
+/// endings' frames.
 fn highest_frame_number(recording: &LabRecording) -> u32 {
     let mut highest = 0_u32;
     for step in &recording.steps {
@@ -332,6 +335,19 @@ fn highest_frame_number(recording: &LabRecording) -> u32 {
             {
                 highest = highest.max(number);
             }
+        }
+    }
+    for frame in recording
+        .endings
+        .iter()
+        .flat_map(|ending| ending.frames.iter())
+    {
+        if let Some(number) = frame
+            .frame_id
+            .strip_prefix('f')
+            .and_then(|digits| digits.parse::<u32>().ok())
+        {
+            highest = highest.max(number);
         }
     }
     highest
@@ -627,7 +643,8 @@ pub(crate) fn arrive(
 }
 
 /// Every mark id in use: own marks of effective steps and the marks of their transitions, except
-/// the `released` ones. #411 Lab B-9: a value test's side target ids are in use too.
+/// the `released` ones. #411 Lab B-9: a value test's side target ids are in use too. #463 R2: and
+/// the endings' own marks.
 fn ids_in_use(recording: &LabRecording, released: &BTreeSet<String>) -> BTreeSet<String> {
     let mut ids = BTreeSet::new();
     for step in recording.steps.iter().filter(|step| step.is_effective()) {
@@ -640,6 +657,13 @@ fn ids_in_use(recording: &LabRecording, released: &BTreeSet<String>) -> BTreeSet
                 ids.extend(mark.target_ids());
             }
         }
+    }
+    for mark in recording
+        .endings
+        .iter()
+        .flat_map(|ending| ending.marks.iter())
+    {
+        ids.extend(mark.target_ids());
     }
     ids
 }
@@ -678,6 +702,16 @@ fn template_assets(recording: &LabRecording) -> BTreeMap<String, String> {
             if let Some(crop) = &mark.crop {
                 assets.insert(crop.asset.clone(), mark.id.clone());
             }
+        }
+    }
+    // #463 R2: an ending's template crop is an asset of the package too.
+    for mark in recording
+        .endings
+        .iter()
+        .flat_map(|ending| ending.marks.iter())
+    {
+        if let Some(crop) = &mark.crop {
+            assets.insert(crop.asset.clone(), mark.id.clone());
         }
     }
     assets
@@ -1001,9 +1035,19 @@ fn add_reuse(
 }
 
 /// Ids of own marks of `index` that other steps or transitions reuse or that checks name.
-/// Workflow #390 LAB-2: a mark another step's page forbids is in use too.
+/// Workflow #390 LAB-2: a mark another step's page forbids is in use too. #463 R2: so is one an
+/// ending reuses.
 fn reused_elsewhere(recording: &LabRecording, index: u32, ids: &BTreeSet<String>) -> Vec<String> {
     let mut used = BTreeSet::new();
+    for id in recording
+        .endings
+        .iter()
+        .flat_map(|ending| ending.reused.iter())
+    {
+        if ids.contains(id) {
+            used.insert(id.clone());
+        }
+    }
     for step in recording.steps.iter().filter(|step| step.is_effective()) {
         let transition_reused = match &step.transition {
             Some(StepTransition::Page { reused, .. }) => reused.as_slice(),
@@ -1706,6 +1750,83 @@ pub(crate) fn apply_marks(
         reused: result.reused,
         removed,
         forbidden: forbidden_views,
+    })
+}
+
+/// #463 R2: what `record mark --ending` took: the ending as the recording now holds it, its frames
+/// as admitted, its new marks and the reused ones with their self-tests.
+pub(crate) struct EndingApplied {
+    pub(crate) ending: RecordingEnding,
+    pub(crate) frame: RecordedFrame,
+    pub(crate) samples: Vec<RecordedFrame>,
+    pub(crate) added: Vec<RecordedMark>,
+    pub(crate) reused: Vec<RecordedMark>,
+}
+
+/// #463 R2 (`contracts/lab-recording.md`, "Endings"): a stopped recording takes the ending
+/// `spec`: its frame and samples, files on the caller's machine, are admitted as a step's are (one
+/// size, content-addressed in the recording's `frames/`, never named by the caller's path), its
+/// marks are made from its frame and self-tested with its reused marks on its frames as any mark is
+/// (`record_mark_rejected` when one fails), and the ending joins `endings[]`. An active recording
+/// takes none (`recording_active`); its key and page name are its own ([`check_new_ending`]).
+pub(crate) fn apply_ending(
+    session: &mut Session,
+    spec: &EndingSpec,
+    ocr: &LabOcr,
+) -> LabResult<EndingApplied> {
+    check_new_ending(session, &spec.outcome_key, spec.page.as_deref())?;
+    let local = FrameMeta::local();
+    let loaded = read_frame_file(&spec.frame)?;
+    let primary_sha = loaded.sha256.clone();
+    let frame = admit_frame(session, loaded, "primary", &local, &spec.frame)?;
+    let mut samples = Vec::new();
+    for path in &spec.samples {
+        let loaded = read_frame_file(path)?;
+        samples.push(admit_frame(session, loaded, "sample", &local, path)?);
+    }
+    let mut batch = MarkBatch {
+        own: Vec::new(),
+        reused: Vec::new(),
+        new_crops: BTreeMap::new(),
+        added_ids: BTreeSet::new(),
+    };
+    let mut rejections = Vec::new();
+    add_marks(
+        session,
+        &mut batch,
+        &spec.add,
+        &primary_sha,
+        ENDING_MARK_STEP,
+        None,
+        &BTreeSet::new(),
+        &mut rejections,
+    )?;
+    add_reuse(session, &mut batch, &spec.reuse, None)?;
+    let mut live = vec![frame.clone()];
+    live.extend(samples.iter().cloned());
+    let total = batch.own.len() + batch.reused.len();
+    let result = evaluate_batch(session, &batch, &live, ocr)?;
+    rejections.extend(result.rejections);
+    if !rejections.is_empty() {
+        return Err(rejected(&rejections, total));
+    }
+    queue_crops(session, &batch);
+    let ending = RecordingEnding {
+        outcome_key: spec.outcome_key.clone(),
+        page: spec.page.clone(),
+        frames: live,
+        marks: result.own,
+        reused: batch.reused,
+        marked_at_unix_ms: now_unix_ms(),
+        initiator: session.initiator.clone(),
+    };
+    session.recording.endings.push(ending.clone());
+    Ok(EndingApplied {
+        added: ending.marks.clone(),
+        reused: result.reused,
+        ending,
+        frame,
+        samples,
     })
 }
 

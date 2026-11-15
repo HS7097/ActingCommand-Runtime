@@ -12,12 +12,12 @@ use crate::{
 };
 use actingcommand_device::{CaptureBackendName, Frame, PixelFormat};
 use actingcommand_lab::{
-    ApplicationSpec, ClickRetry, ClickSpec, LAB_RECORD_MARK_SCHEMA, MarkFamily, MarkRequest,
-    MarkSpec, RecordArchiveOptions, RecordRect, RecordReopenOptions, RecordStartOptions,
-    RecordStopOptions, RecordingLock, StepAction, StepActionKind, TemplateScalesSpec,
-    TransitionSpec, parse_mark_request, record_archive, record_archive_copy, record_instance_check,
-    record_mark, record_reopen, record_start, record_start_defaults, record_status, record_stop,
-    record_stop_close,
+    ApplicationSpec, ClickRetry, ClickSpec, EndingSpec, LAB_RECORD_MARK_SCHEMA, MarkFamily,
+    MarkRequest, MarkSpec, RecordArchiveOptions, RecordRect, RecordReopenOptions,
+    RecordStartOptions, RecordStopOptions, RecordingLock, StepAction, StepActionKind,
+    TemplateScalesSpec, TransitionSpec, parse_mark_request, record_archive, record_archive_copy,
+    record_instance_check, record_mark, record_reopen, record_start, record_start_defaults,
+    record_status, record_stop, record_stop_close,
 };
 use actingcommand_recognition::{MatchMetric, Rect as RecognitionRect};
 use actingcommand_resource_tooling::canonical_locale;
@@ -516,7 +516,7 @@ fn record_reads(action: &str) -> Option<&'static FlagReads> {
 /// Workflow #434 LAB-5B4: the switches of `record mark` (read with `record_flag_switch`), which
 /// take no value from the next word but `true` or `false` (`FlagArgs::parse_switches`); the
 /// register reads them (`cli_module::own_flags`).
-pub(crate) const RECORD_MARK_SWITCHES: [&str; 7] = [
+pub(crate) const RECORD_MARK_SWITCHES: [&str; 8] = [
     "--dry-run",
     "--replace-click",
     "--replace-transition",
@@ -524,6 +524,8 @@ pub(crate) const RECORD_MARK_SWITCHES: [&str; 7] = [
     "--optional",
     "--not-optional",
     "--no-anchor",
+    // #463 R2.
+    "--ending",
 ];
 
 /// Workflow #434 LAB-5B4: the switch of `record stop` (read with `record_flag_switch`), as
@@ -2888,6 +2890,10 @@ pub(crate) const RECORD_MARK_SHORTCUT_FLAGS: &[&str] = &[
     "--duration-ms",
     // #411 Lab BD.
     "--brake-corner",
+    // #463 R2: an ending of a stopped recording, and the key of one to give up.
+    "--ending",
+    "--outcome-key",
+    "--remove-ending",
 ];
 
 /// Workflow #434 LAB-5B2: the other flags `record mark` takes besides its shortcut flags: the
@@ -3240,7 +3246,31 @@ fn record_mark_request_from_flags(flags: &FlagArgs) -> CliOutcome<MarkRequest> {
         // #463 R1: a select is declared, and (fix 1) taken off, by the request form only.
         select: None,
         clear_select: false,
+        ending: None,
+        remove_ending: record_flag_value(flags, "--remove-ending")?,
     };
+    // #463 R2: `--ending` makes `--frame`, `--sample`, `--page`, the marks (`--template`,
+    // `--color`) and `--reuse` the ending's, with `--outcome-key`, as the request form's `ending`
+    // holds them. Every other flag stays the request's own, which the Lab refuses beside an ending
+    // (`record_ending_invalid`, `with_other_change`): nothing is dropped.
+    let outcome_key = record_flag_value(flags, "--outcome-key")?;
+    if record_flag_switch(flags, "--ending")? {
+        let (Some(frame), Some(outcome_key)) = (request.frame.take(), outcome_key) else {
+            return Err(CliError::usage(
+                "--ending needs --frame <png> and --outcome-key <key>",
+            ));
+        };
+        request.ending = Some(EndingSpec {
+            frame,
+            samples: std::mem::take(&mut request.samples),
+            page: request.page.take(),
+            outcome_key,
+            add: std::mem::take(&mut request.add),
+            reuse: std::mem::take(&mut request.reuse),
+        });
+    } else if outcome_key.is_some() {
+        return Err(CliError::usage("--outcome-key needs --ending"));
+    }
     let timeout_ms = millis("--transition-timeout-ms")?;
     let min_ms = millis("--min-ms")?;
     let max_ms = millis("--max-ms")?;
@@ -3526,5 +3556,73 @@ mod lab2_tests {
                 .click
                 .is_some_and(|click| click.brake_corner.is_some())
         );
+    }
+
+    // #463 R2 (contracts/lab-recording.md, "Endings"): `record mark --ending` makes the frame, the
+    // samples, the page, the marks and the reused marks the ending's, with `--outcome-key`, as the
+    // request form's `ending` holds them, and `--remove-ending <k>` is the request form's
+    // `remove_ending`, so the command line and the MCP tool (which hands the request form to this
+    // command unchanged) give the Lab the same request. `--outcome-key` without `--ending` is
+    // refused, and a step's flag beside `--ending` stays in the request, which the Lab refuses
+    // (`with_other_change`): nothing is dropped.
+    #[test]
+    fn r2_the_ending_flags_declare_the_request_forms_ending() {
+        let shortcut = record_mark_request_from_flags(&flags(&[
+            "--ending",
+            "--frame",
+            "short.png",
+            "--sample",
+            "short_2.png",
+            "--page",
+            "short",
+            "--outcome-key",
+            "neutral_task_short",
+            "--color",
+            "ending/short=60,50,4,4",
+            "--reuse",
+            "state/list",
+        ]))
+        .expect("request");
+        let request: MarkRequest = serde_json::from_value(json!({
+            "schema_version": LAB_RECORD_MARK_SCHEMA,
+            "ending": {
+                "frame": "short.png",
+                "samples": ["short_2.png"],
+                "page": "short",
+                "outcome_key": "neutral_task_short",
+                "add": [{"id": "ending/short", "family": "color",
+                         "region": {"x": 60, "y": 50, "width": 4, "height": 4}}],
+                "reuse": ["state/list"]
+            }
+        }))
+        .expect("the request form");
+        assert_eq!(shortcut, request);
+
+        let removing =
+            record_mark_request_from_flags(&flags(&["--remove-ending", "neutral_task_short"]))
+                .expect("request");
+        let request: MarkRequest = serde_json::from_value(json!({
+            "schema_version": LAB_RECORD_MARK_SCHEMA,
+            "remove_ending": "neutral_task_short"
+        }))
+        .expect("the request form");
+        assert_eq!(removing, request);
+
+        let error =
+            record_mark_request_from_flags(&flags(&["--outcome-key", "neutral_task_short"]))
+                .expect_err("--outcome-key needs --ending");
+        assert_eq!(error.code, "validation_failed", "{}", error.message);
+        let beside = record_mark_request_from_flags(&flags(&[
+            "--ending",
+            "--frame",
+            "short.png",
+            "--outcome-key",
+            "neutral_task_short",
+            "--click",
+            "8,8,32,32",
+        ]))
+        .expect("request");
+        assert!(beside.ending.is_some());
+        assert!(beside.click.is_some(), "the click stays in the request");
     }
 }

@@ -60,6 +60,9 @@ mod gate_463_l2;
 // #463 R1: a recorded step chooses in a list of fixed slots by the name read in each slot.
 #[cfg(test)]
 mod gate_463_r1;
+// #463 R2: a stopped recording takes an ending from a frame, and record stop generates it.
+#[cfg(test)]
+mod gate_463_r2;
 mod lab_run;
 mod lab_run_api;
 mod ledger_port;

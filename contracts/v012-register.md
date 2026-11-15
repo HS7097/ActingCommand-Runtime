@@ -26619,6 +26619,102 @@ an earlier Runtime refuses it at admission).
 (`validation_failed`); a generated package with a select step is refused by an earlier Runtime at
 admission.
 
+### 1.384 Slice #463 R2 (0.12.61): a stopped recording takes an ending from a frame, and `record stop` generates it (Workflow #463; the owner's requirement on board #463 that the business is done with its last press, that every declared ending is a normal end and that a rare ending can be added later without recording again; the design note `rd-1114/463-l3l5-design.md`, its summary, sections B, C.3, E "R2 (L5b)" and F items 15 to 17 and 20, with "The coordinator's rulings on G" 4 and 5 and the owner's second default, read on main `d0bce861` (the train 0.12.61c, K2 and R1 merged); the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-r2-record-ending.md`)
+
+1.384 is the number the coordinator assigned this section (1.382 and 1.383 are open pull requests',
+1.385 a slice dispatched with this one). The slice ships in 0.12.61.
+
+**What it is.** The recording side of the design's L5: a `record mark` request's `ending` takes, on a
+stopped recording, a screen that ends the business another way after its last press, from its
+frame, its marks self-tested on its frames as any mark's; `record stop` generates it as an ending
+page of the `linear_steps` task K2 runs (§1.380; [linear-steps.md](linear-steps.md), "Endings").
+`remove_ending` gives one up. Contract: [lab-recording.md](lab-recording.md), "Endings", and
+self-check item 9. Nothing of the kernel changes.
+
+**Where, by reading.**
+- The frame the run pinned (Workflow #463 U1): `contained_task_linear_unrecorded_screen`'s
+  `artifact_id` is the `Failure` pin's artifact (runtime-host `contained_task.rs`, the frame pin of
+  the run's failed terminal), one of the run's persisted capture frames. `material` takes a ref
+  `<seq>:<event_id>:<artifact_id>` only (`crates/lab-ops/src/material.rs`, `parse_ref`), never an
+  artifact id alone; `run evidence` lists the run's capture frames as such refs, its last one as
+  `final.frame_ref` (`run_evidence.rs`). Since Workflow #434 LAB-5C `actinglab material <ref> --out
+  <dir>` writes the whole material as `<dir>/<sha256>.<ext>` (`core_ops.rs`, `MaterialRead::Whole`,
+  the writer MCP's `ac_material` shares for its `mode: export`); actingctl has no `material`
+  command, and the row's `source` in `lab-operations.json` names only MCP and acui. The command line therefore reaches the PNG with
+  `actinglab run evidence <request_id>`, then `actinglab material <ref> --out <dir>`.
+- The pinned frame is the device's capture (the capture store's persisted frame; recognition maps a
+  copy, [display-adapter.md](display-adapter.md) section 8), so on an instance of another resolution
+  than the recording's it has another size, and the mark refuses it `record_frame_size_mismatch`;
+  the contract says to scale it first or take it at the recording's size.
+- K2's admission rules (`ending_page`, `terminal_page`, `terminal_page_duplicate`,
+  `store_update_endings`) cannot refuse a generated ending: its page has a name of its own
+  (`ending_kk`), is in one mapping, off the path, no transition, loading or wait page, and the
+  generated control declares no `store_update`. `linear_endings` binds a later use of the package as
+  a prerequisite or return-home package; `binding_requires` says so. The keys the declaration or the
+  host would refuse later (the `_done` key, a select's `on_empty` key, another ending's) are refused
+  at the mark with their words, and again at stop (a select may be declared after the ending).
+- R1 (§1.381) made a select markable after stop on every step but the last (`on_final_step`); an
+  ending is no step and stands after the last press, so the two do not meet. Item 9 runs before
+  item 8, so that an ending page passing on a select step's frames before the last press is the
+  ending's refusal; on an earlier select step it is item 8's (`select_page_mismatch`).
+- An archived recording opens for no `record mark` (`record_session_not_active`); reopened it is
+  active, and an ending is `recording_active` until `record stop`.
+
+**The request members** `ending {frame, samples, page, outcome_key, add, reuse}` and `remove_ending`
+(both new members of `actingcommand.lab-record-mark.v1`; additive: an older build refuses them as
+unknown members). The command form `record mark --ending --frame <png> --outcome-key <key>
+[--sample]… [--page] [--template]… [--scales] [--color]… [--reuse]…` and `record mark
+--remove-ending <key>` (three flags, rows of `lab-operations.json` `record mark`). A member of a step
+beside either is refused (`with_other_change`), never dropped. `recording.json` gains `endings[]`,
+absent without one, and the amended time; a recording without an ending is byte-identical.
+
+**Codes and words** (`contracts/outcome-codes/lab.json`; catalog keys `ending_problem`, `against`,
+vocabularies `ending_problem`, `ending_against`): `record_ending_invalid` (error, exit 3, value
+`ending_problem`): `recording_active`, `with_other_change`, `key_invalid`, `key_reserved`,
+`key_of_select`, `key_exists`, `key_unknown`, `page_exists`, `no_marks`, nine words, the design's
+five (`key_exists`, `key_invalid`, `page_exists`, `no_marks`, `recording_active`) and, one situation
+each, four more (the design's `key_exists` stood for the usual ending's key and a select's too; an
+ending beside another change; a key to give up that no ending has). `record_ending_ambiguous`
+(error, exit 3, value `against`): `previous`, `usual`, `other_ending`. Warnings (unregistered, as
+every `record stop` warning): `ending_usual_insensitive`, and `ending_ambiguity_not_evaluated` for
+an OCR mark without a model. An ending page not matching its own frame is the existing
+`record_step_self_mismatch`. R1's review: a new word `no_select` of `record_select_invalid` for
+`clear_select` on a step without a select, which answered as if it had taken one off.
+
+**`record stop`** generates the page `ending_kk` or `ending_kk_<page>` (numbered in the steps'
+width), its rule `{"required": [...]}`, its marks' targets (provenance `{source, record_id, ending,
+self_test}`), its mapping after the select mappings, the task provenance's `endings[]` (sha256 and
+sizes, no path) and, in its output, `lab.endings` (item 9's result), the ending pages in `pages`
+and one `binding_requires` item. Self-check item 9 ([lab-recording.md](lab-recording.md),
+"Self-checks"): the page on its own frames; then `previous` (the step before the last, and, when it
+is optional, the step before its run and the run's members, each by its page transition's frames
+when it has one), `usual`, `other_ending`; the usual page on the ending's frames a warning.
+
+**The lift.** A regenerated package has new content, so a pause U1 wrote for the pair lifts by the
+existing rule ([policy-suspension.md](policy-suspension.md)); nothing is built for it, and a test
+shows the content hash differs.
+
+Tests: Lab `gate_463_r2.rs` (exec gate row "#463 R2", nine tests), actinglab's
+`r2_the_ending_flags_declare_the_request_forms_ending` and actingctl's
+`r2_ac_record_mark_hands_an_ending_request_to_actinglab_unchanged`: an ending taken from a PNG,
+regenerated (another content hash) and admitted; a run of that package through the kernel's
+interpreter over the list and the ending's screen Completed on the ending's page; every
+`ending_problem` word but `key_of_select`; `key_of_select` at the mark and at stop; every `against`;
+the warning; `remove_ending` giving back the package generated before but for its generation time;
+a recording without an ending; `clear_select` without a select; the flag form equal to the request
+form; the MCP tool handing both requests on unchanged. No existing test's expectation changes, no
+golden changes, no test leaves the gate map.
+
+**At deploy.** Nothing installed changes for a recording without an ending but one: `clear_select`
+on a step without a select is now refused (`no_select`), where it answered as if it had taken a
+select off (and, on a stopped recording, marked the recording amended). A package generated with an ending needs a Runtime of
+0.12.61 or later (`package` 15).
+
+**Rollback** (below 0.12.61). An earlier `actinglab` does not decode a recording that holds an
+ending (`lab_recording_unreadable`, the file left as it is) and refuses a request with `ending` or
+`remove_ending` (`validation_failed`); a generated package with an ending page is refused by an
+earlier Runtime at admission.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

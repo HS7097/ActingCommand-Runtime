@@ -11,6 +11,9 @@
 pub(crate) mod archive;
 pub(crate) mod container;
 pub(crate) mod crosscheck;
+// #463 R2: a screen that ends the business another way after the last press, taken by a stopped
+// recording from a frame.
+pub(crate) mod ending;
 pub(crate) mod follow;
 pub(crate) mod frames;
 pub(crate) mod generate;
