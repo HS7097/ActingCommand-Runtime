@@ -4066,3 +4066,18 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_463_v2::v2_fix3_a_dispatched_package_of_a_root_not_read_since_the_start_is_warned",
 ]
 incident = ["#463 V2"]
+
+# Workflow #469 H2 (0.12.62; register §1.398; brief rd-1115/brief-469-word-slices.md; design rd-1115/status-codes-a-design.md, place 4; contracts/policy-suspension.md, "Why a pair is paused"), the host's half, on a manual clock and the budget fixture's one task, each run a fresh start of the host on the root, its dispatch admitted and settled through record_policy_dispatch_outcome: one fixture per pause_cause word (a severe failure: severe_failure; contained_task_linear_unrecorded_screen, severe: unrecorded_screen; a recoverable failure over the 300 s runtime budget, rewritten to policy_runtime_budget_exceeded: runtime_budget_exceeded; policy_settlement_interrupted twice in a row: interrupted_again; a sensitive task's recoverable failure: sensitive_task; the same recoverable failure twice under escalation_threshold 2: repeated_failure; on_failure pause with retry_limit 0: retries_exhausted): the paused run's record keeps the input's failure identity byte for byte and the expected counts, and the pair's streak in its latest L7 value record serializes byte for byte as the one built from the record's own members (no pause_cause in it); the pair's policy_task_paused reason at its next due evaluation carries pause_cause and the record's failure_code, its detail naming neither, live and again after a restart that loads the streak from the value record; the closed root's actingd suspended row carries the same pause_cause, the failure's code and the count; and a recoverable failure with retries left: policy_retry_backoff_active carries the failure's code as failure_code and no pause_cause, live and after a restart
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_469_h2::h2_a_severe_failure_pauses_with_severe_failure",
+    "actingcommand-runtime-host::lib::tests::gate_469_h2::h2_an_unrecorded_screen_pauses_with_unrecorded_screen",
+    "actingcommand-runtime-host::lib::tests::gate_469_h2::h2_a_run_over_its_runtime_budget_pauses_with_runtime_budget_exceeded",
+    "actingcommand-runtime-host::lib::tests::gate_469_h2::h2_a_second_interrupted_settlement_in_a_row_pauses_with_interrupted_again",
+    "actingcommand-runtime-host::lib::tests::gate_469_h2::h2_a_sensitive_task_s_failure_pauses_with_sensitive_task",
+    "actingcommand-runtime-host::lib::tests::gate_469_h2::h2_the_same_failure_up_to_the_threshold_pauses_with_repeated_failure",
+    "actingcommand-runtime-host::lib::tests::gate_469_h2::h2_a_task_out_of_retries_set_to_pause_pauses_with_retries_exhausted",
+    "actingcommand-runtime-host::lib::tests::gate_469_h2::h2_a_backoff_names_the_failure_it_follows",
+]
+incident = ["#469 H2"]

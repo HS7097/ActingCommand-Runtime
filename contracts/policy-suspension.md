@@ -270,6 +270,35 @@ package fails with the same code and pauses nothing. The pair shows in `actingd 
 rows and `failures_grouped` by the code), and in `ac_schedule` as a candidate row whose `why` is
 `policy_task_paused`.
 
+## Why a pair is paused (Workflow #469 H2)
+
+Since 0.12.62 (register §1.398; the owner's option A on board #469). A paused pair's
+`policy_task_paused` carries `pause_cause`, the word of why its settlement paused it, and
+`failure_code`, the code of the failure it paused on (the record's failure code, "Replay"; left out
+for a relayed spelling the catalog does not register). A pair held by its retry backoff carries
+`failure_code` on `policy_retry_backoff_active` the same way, and no `pause_cause`. Both are values
+of the outcome only: the reason's detail, the record, its failure identity and the streak's
+comparison do not change, and nothing decides by them (when a pair is paused or lifted is as
+before). The word is read from the execution record the settlement wrote, in the settlement's own
+order, the first that holds:
+
+| `pause_cause` | When |
+|---|---|
+| `runtime_budget_exceeded` | the original class is `severe` and the failure is the runtime-budget rewrite `policy_runtime_budget_exceeded` |
+| `interrupted_again` | the original class is `severe` and the failure is `policy_settlement_interrupted` (only the second in a row holds the pair, "Lifting (R19)") |
+| `unrecorded_screen` | the original class is `severe` and the failure is `contained_task_linear_unrecorded_screen` ("A failure that pauses at its first occurrence") |
+| `severe_failure` | any other failure whose original class is `severe` |
+| `sensitive_task` | the task is `sensitive` |
+| `repeated_failure` | the effective class is `severe`: the streak reached `escalation_threshold` |
+| `retries_exhausted` | the effective class is `recoverable`: the retries are used up and `on_failure.action` is `pause` |
+
+The word is memory only, as the packages a pause is lifted against are: the live settlement and a
+replay set it from the record, and a start that loads the pair's streak from its value record
+(`ledger-observer.md` §11) takes it from the execution record of the streak's dispatch, which the
+dispatch journal holds; no persisted member is added. `actingd suspended` computes the same word
+from the same record for the pair's `suspended` row (`pause_cause`), and `ac_schedule`, the not-run
+rows of `ac_diagnose` and a `policy.dispatch_rejected` record show the outcome with its values.
+
 ## Settlement of an accumulating failure
 
 | Previous identity of the pair | Written | Count |
@@ -415,7 +444,7 @@ only its registered names (`"detail":"codes"`).
  "suspended":[{"task_id":"...","instance_id":"...","procedure_ref":"...",
    "failure":{"code":"...","category":"error","values":{}},"failure_identity":"...",
    "run_failure":{"code":"...","category":"error","values":{}},"consecutive_same_error":2,
-   "effective_class":"severe","severity":"error",
+   "effective_class":"severe","pause_cause":"repeated_failure","severity":"error",
    "paused":{"execution_sequence":0,"observed_at_unix_ms":0,"decision_id":"...","run_id":"..."},
    "previous":{"execution_sequence":0,"disposition":"retry_scheduled","run_id":"..."},
    "step":{"scope":"main","operation_label":"..."},
@@ -471,7 +500,9 @@ only its registered names (`"detail":"codes"`).
   `suspended_frame_missing` (a frame is absent), `suspended_frame_unreadable` (caused by the
   artifact read's failure) or `png_invalid` (the decoder's text as its `foreign_data_error`
   link). `ccoeff_failure` (v1's `ccoeff_error`) is the `png_invalid` outcome of a correlation
-  coefficient that could not be computed, else `null`.
+  coefficient that could not be computed, else `null`. Workflow #469 H2 (since 0.12.62):
+  `pause_cause` is the word of why the execution paused the pair, from the execution record, as
+  the pair's `policy_task_paused` carries it ("Why a pair is paused").
 - `package`: the content hash prefixes the pause recorded (`paused_hash_prefix`, `x` when the
   settlement could not measure the package, `null` for a pause without a failure identity) and
   the ones measured now (`current_hash_prefix`, `null` when the package cannot be measured or
