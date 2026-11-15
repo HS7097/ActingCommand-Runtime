@@ -2424,7 +2424,7 @@ tests = [
 ]
 incident = ["#463 S1-5"]
 
-# Workflow #463 S3-11 (0.12.64; register §1.418; brief rd-1115/brief-463-s311-trial-run.md, the review of S3-1's third round, its point 3; tests only, in S3-1's gate file; contracts/install-cli.md, "The prerequisite chains"): on the fake host of S3-1, place --plan of a zip whose new pack only holds a role (a startup entry of bundle.json) and is not scheduled, its control.json naming a new pack as its prerequisite: the prerequisite is listed absent to unclassified with the plan's role prerequisite and enters beside the role's pack (maintenance_role, roles [startup]), the scheduled pack both roots hold not listed; a new scheduled pack whose chain is four deep: its first three layers are listed absent to unclassified [prerequisite] and enter with it, the fourth is listed absent to unclassified with no role and does not enter
+# Workflow #463 S3-11 (0.12.65; register §1.418; brief rd-1115/brief-463-s311-trial-run.md, the review of S3-1's third round, its point 3; tests only, in S3-1's gate file; contracts/install-cli.md, "The prerequisite chains"): on the fake host of S3-1, place --plan of a zip whose new pack only holds a role (a startup entry of bundle.json) and is not scheduled, its control.json naming a new pack as its prerequisite: the prerequisite is listed absent to unclassified with the plan's role prerequisite and enters beside the role's pack (maintenance_role, roles [startup]), the scheduled pack both roots hold not listed; a new scheduled pack whose chain is four deep: its first three layers are listed absent to unclassified [prerequisite] and enter with it, the fourth is listed absent to unclassified with no role and does not enter
 [[gate]]
 coverage = "Y"
 tests = [

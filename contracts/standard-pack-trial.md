@@ -6,7 +6,7 @@ as each is run through; "run through" is one real run on a real application, and
 application is an act under the owner's explicit authorization. `actinglab standard-pack trial`
 is the tool of that one run. S3-10 built the half that shows and refuses and keeps the record: it
 answers the plan of the run and every refusal before it, and defines the trial record with its
-writer and its reader; a plan sends nothing. Slice S3-11 (Runtime 0.12.64; register §1.418) builds
+writer and its reader; a plan sends nothing. Slice S3-11 (Runtime 0.12.65; register §1.418) builds
 the run: without `--plan` the line sends the trial's one run, reads how its business ended and
 records it ("The run", "The end", "Reading the end later"). The tool records the authorization
 reference it is given and judges nothing: it never decides whether an authorization is good, and

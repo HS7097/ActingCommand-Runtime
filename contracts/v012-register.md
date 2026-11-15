@@ -30375,9 +30375,10 @@ reconnect meets another owner epoch), `s17_fix_a_stop_whose_release_fails_names_
 status read `s17_fix_a_press_whose_hold_read_fails_is_made_and_says_so` (`instance_hold_unread`).
 No code or word is added; no test leaves the gate map.
 
-### 1.418 Slice #463 S3-11 (0.12.64): `standard-pack trial` sends its one run and records the business end (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, whose stage three puts a trial on a real application under the owner's explicit authorization, and the owner's ruling of 11-15 that a trial of a held package, on the instance and application it was recorded on, is within her standing authorization, recorded as a reference; the design `rd-1115/pack-stage3-design.md`, §2.4 and §4.2 "S3-11"; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s311-trial-run.md`, built on the branch of #1758, which holds S3-10)
+### 1.418 Slice #463 S3-11 (0.12.65): `standard-pack trial` sends its one run and records the business end (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, whose stage three puts a trial on a real application under the owner's explicit authorization, and the owner's ruling of 11-15 that a trial of a held package, on the instance and application it was recorded on, is within her standing authorization, recorded as a reference; the design `rd-1115/pack-stage3-design.md`, §2.4 and §4.2 "S3-11"; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s311-trial-run.md`, built on the branch of #1758, which holds S3-10)
 
-The coordinator gave this slice 1.418; it stands on S3-10 (§1.417) and ships with it in 0.12.64.
+The coordinator gave this slice 1.418; it stands on S3-10 (§1.417) and ships in 0.12.65 (release
+0.12.64 was cut without it).
 
 **What it is.** Without `--plan` the row `standard-pack trial` is the run
 ([standard-pack-trial.md](standard-pack-trial.md), "The run", "The end", "Reading the end later"):

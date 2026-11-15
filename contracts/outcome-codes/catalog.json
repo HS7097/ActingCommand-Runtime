@@ -2866,7 +2866,7 @@
     },
     "trial_collect_problem": {
       "type": "vocab:trial_collect_problem",
-      "description": "Why the run a trial's --collect names is not a trial's run: its facts do not name the trial's package or the instance the trial is for, or (fix round 2) do not show a run sent by hand on the Lab's channel (Workflow #463 S3-11, since 0.12.64)."
+      "description": "Why the run a trial's --collect names is not a trial's run: its facts do not name the trial's package or the instance the trial is for, or (fix round 2) do not show a run sent by hand on the Lab's channel (Workflow #463 S3-11, since 0.12.65)."
     }
   },
   "vocabularies": {
@@ -10589,7 +10589,7 @@
       }
     },
     "trial_collect_problem": {
-      "description": "Why the run a trial's --collect names is not a run of the trial, the value trial_collect_problem of trial_collect_mismatch (Workflow #463 S3-11, contracts/standard-pack-trial.md \"Reading the end later\", since 0.12.64).",
+      "description": "Why the run a trial's --collect names is not a run of the trial, the value trial_collect_problem of trial_collect_mismatch (Workflow #463 S3-11, contracts/standard-pack-trial.md \"Reading the end later\", since 0.12.65).",
       "review": "pending",
       "source": {
         "file": "crates/resource-tooling/src/codes.rs",
