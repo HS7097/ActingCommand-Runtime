@@ -319,7 +319,7 @@
       "new": "#467 RPT-1 (contracts/problem-report.md)",
       "slice": "RPT-1",
       "status": "planned",
-      "notes": "RPT-1 builds the view errors while the Runtime runs; the views package and run (RPT-2), the part that needs no Runtime with the log tails, the configuration and the plan (RPT-3) and the tool on actingctl mcp-serve (RPT-4) come later. It replaces actinglab's placeholder report export --last-error, which RPT-1 deleted. writes is false: it changes nothing of the Runtime or the installation and writes one archive into out, as material with out writes its file"
+      "notes": "RPT-1 builds the view errors while the Runtime runs; the views package and run (RPT-2), the part that needs no Runtime with the log tails, the configuration and the plan (RPT-3) and an MCP tool of its own (RPT-4) come later. It replaces actinglab's placeholder report export --last-error, which RPT-1 deleted. writes is false: it changes nothing of the Runtime or the installation and writes one archive into out, as material with out writes its file"
     },
     {
       "name": "targets",
@@ -3042,7 +3042,7 @@
       "requests": ["Status", "PauseScheduling", "RequestShutdown", "ScheduleExplanation", "StartReport", "ResumeScheduling"],
       "slice": "LAB-3",
       "status": "planned",
-      "notes": "always detached through MCP. LAB-3: not served yet: its source, actingctl install convert (R-15e), is not built; the slice that builds it opens the row"
+      "notes": "always detached through MCP. LAB-3: not served yet: its source, the installer's install convert (R-15e), is not built; the slice that builds it opens the row"
     },
     {
       "name": "clean",
@@ -3057,7 +3057,7 @@
       "requests": [],
       "slice": "LAB-3",
       "status": "planned",
-      "notes": "LAB-3: not served yet: its source, actingctl install clean (R-15d), is not built; the slice that builds it opens the row"
+      "notes": "LAB-3: not served yet: its source, the installer's install clean (R-15d), is not built; the slice that builds it opens the row"
     },
     {
       "name": "undo",
@@ -3182,7 +3182,7 @@
       "source": ["acsetup: first-install wizard"],
       "slice": "S4",
       "status": "planned",
-      "notes": "#453 S4 (0.12.60; contracts/install-cli.md, Fresh root): the module's own command; actingctl install new is not built and actingctl install gains nothing. The one rescue row served without a located root: it acts on the root it names, so the release's own program and the Lab's MCP server run it before any root exists. Refused before anything is written: a new root or a state root that exists and is not empty (root_not_empty, state_root_not_empty), a build that does not verify (release_check_failed with the release reader's failures, or build_invalid, also for a build whose Runtime member has no actingd.config.first.json), an empty actingd-config edge between the running installer and the build (interface_edge). One journal of kind new (off the watchdog's pass list): copy_build, verify_tree, place_build, stage_file and swap_file for each file of the build into runtime and tools, verify_tree, write_config (the template filled with state_root, a 32-byte salt from the operating system's generator, lab_module_authoring and mumu_root when given, checked by the new live build's check-config with --install-root before it is renamed into place; a refusal ends the operation refused with the part kept), create_state_root (the folder, empty), create_vision_root (fix round 1: the default vision root <new_root>\\vision, empty, when the template names no vision root of its own), record_state; a refusal after the release was unpacked names its work folder (work_dir); no installation identity and no state-root record (the first start's, #453 S11); with watchdog, watchdog install last; resume and undo by install resume and install undo of the root (undo sets aside, deletes nothing)"
+      "notes": "#453 S4 (0.12.60; contracts/install-cli.md, Fresh root): the module's own command, which no other installer command has. The one rescue row served without a located root: it acts on the root it names, so the release's own program and the Lab's MCP server run it before any root exists. Refused before anything is written: a new root or a state root that exists and is not empty (root_not_empty, state_root_not_empty), a build that does not verify (release_check_failed with the release reader's failures, or build_invalid, also for a build whose Runtime member has no actingd.config.first.json), an empty actingd-config edge between the running installer and the build (interface_edge). One journal of kind new (off the watchdog's pass list): copy_build, verify_tree, place_build, stage_file and swap_file for each file of the build into runtime and tools, verify_tree, write_config (the template filled with state_root, a 32-byte salt from the operating system's generator, lab_module_authoring and mumu_root when given, checked by the new live build's check-config with --install-root before it is renamed into place; a refusal ends the operation refused with the part kept), create_state_root (the folder, empty), create_vision_root (fix round 1: the default vision root <new_root>\\vision, empty, when the template names no vision root of its own), record_state; a refusal after the release was unpacked names its work folder (work_dir); no installation identity and no state-root record (the first start's, #453 S11); with watchdog, watchdog install last; resume and undo by install resume and install undo of the root (undo sets aside, deletes nothing)"
     },
     {
       "name": "release verify",
@@ -3253,7 +3253,7 @@
       "requests": [],
       "slice": "LAB-3",
       "status": "planned",
-      "notes": "LAB-3: not served yet: its source, actingctl install prepare (R-15c), is not built; the slice that builds it opens the row"
+      "notes": "LAB-3: not served yet: its source, the installer's install prepare (R-15c), is not built; the slice that builds it opens the row"
     },
     {
       "name": "config replace",
@@ -3291,7 +3291,7 @@
       "source": ["script rd-1108/dml_switch.ps1 restore"],
       "slice": "LAB-3",
       "status": "planned",
-      "notes": "LAB-3: config replace with the kept file (operation install_config_restore); actingctl install config restore (INST-3) is not built. LAB-5B1c: declares sha as config replace does: config replace's path read it for this row since LAB-3 (the table follows the code). Workflow #453 S3: without a running Runtime, as config replace, the swap only after the update path's stopped rule under the writer lock: an actingd under the root runtime_running, the state root's owner lock held owner_lock_held, a probe that cannot decide processes_unreadable; undo and op resume of such an operation take the writer lock and the same stopped rule first"
+      "notes": "LAB-3: config replace with the kept file (operation install_config_restore); the installer's install config restore (INST-3) is not built. LAB-5B1c: declares sha as config replace does: config replace's path read it for this row since LAB-3 (the table follows the code). Workflow #453 S3: without a running Runtime, as config replace, the swap only after the update path's stopped rule under the writer lock: an actingd under the root runtime_running, the state root's owner lock held owner_lock_held, a probe that cannot decide processes_unreadable; undo and op resume of such an operation take the writer lock and the same stopped rule first"
     },
     {
       "name": "config file show",
@@ -3306,7 +3306,7 @@
       "requests": [],
       "slice": "LAB-3",
       "status": "planned",
-      "notes": "the configuration file's candidate, not a run-time setting (those are config set). LAB-3: not served yet: its source, actingctl install config show (INST-3), is not built; the slice that builds it opens the row"
+      "notes": "the configuration file's candidate, not a run-time setting (those are config set). LAB-3: not served yet: its source, the installer's install config show (INST-3), is not built; the slice that builds it opens the row"
     },
     {
       "name": "config file diff",
@@ -3321,7 +3321,7 @@
       "requests": [],
       "slice": "LAB-3",
       "status": "planned",
-      "notes": "the configuration file's candidate, not a run-time setting (those are config set). LAB-3: not served yet: its source, actingctl install config diff (INST-3), is not built; the slice that builds it opens the row"
+      "notes": "the configuration file's candidate, not a run-time setting (those are config set). LAB-3: not served yet: its source, the installer's install config diff (INST-3), is not built; the slice that builds it opens the row"
     },
     {
       "name": "config file set",
@@ -3336,7 +3336,7 @@
       "requests": [],
       "slice": "LAB-3",
       "status": "planned",
-      "notes": "the configuration file's candidate, not a run-time setting (those are config set). LAB-3: not served yet: its source, actingctl install config set (INST-3), is not built; the slice that builds it opens the row"
+      "notes": "the configuration file's candidate, not a run-time setting (those are config set). LAB-3: not served yet: its source, the installer's install config set (INST-3), is not built; the slice that builds it opens the row"
     },
     {
       "name": "config file bind",
@@ -3351,7 +3351,7 @@
       "requests": [],
       "slice": "LAB-3",
       "status": "planned",
-      "notes": "the configuration file's candidate, not a run-time setting (those are config set). LAB-3: not served yet: its source, actingctl install config bind (INST-3), is not built; the slice that builds it opens the row"
+      "notes": "the configuration file's candidate, not a run-time setting (those are config set). LAB-3: not served yet: its source, the installer's install config bind (INST-3), is not built; the slice that builds it opens the row"
     },
     {
       "name": "config file policy",
@@ -3366,7 +3366,7 @@
       "requests": [],
       "slice": "LAB-3",
       "status": "planned",
-      "notes": "the configuration file's candidate, not a run-time setting (those are config set). LAB-3: not served yet: its source, actingctl install config policy (INST-3), is not built; the slice that builds it opens the row"
+      "notes": "the configuration file's candidate, not a run-time setting (those are config set). LAB-3: not served yet: its source, the installer's install config policy (INST-3), is not built; the slice that builds it opens the row"
     },
     {
       "name": "config file lab-options",
@@ -3383,7 +3383,7 @@
       "requests": [],
       "slice": "LAB-3",
       "status": "planned",
-      "notes": "the configuration file's candidate, not a run-time setting (those are config set). LAB-3: not served yet: its source, actingctl install config lab-options (INST-3), is not built; the slice that builds it opens the row"
+      "notes": "the configuration file's candidate, not a run-time setting (those are config set). LAB-3: not served yet: its source, the installer's install config lab-options (INST-3), is not built; the slice that builds it opens the row"
     },
     {
       "name": "config file commit",
@@ -3401,7 +3401,7 @@
       "requests": [],
       "slice": "LAB-3",
       "status": "planned",
-      "notes": "the configuration file's candidate, not a run-time setting (those are config set). LAB-3: not served yet: its source, actingctl install config commit (INST-3), is not built; the slice that builds it opens the row"
+      "notes": "the configuration file's candidate, not a run-time setting (those are config set). LAB-3: not served yet: its source, the installer's install config commit (INST-3), is not built; the slice that builds it opens the row"
     },
     {
       "name": "config file discard",
@@ -3416,7 +3416,7 @@
       "requests": [],
       "slice": "LAB-3",
       "status": "planned",
-      "notes": "the configuration file's candidate, not a run-time setting (those are config set). LAB-3: not served yet: its source, actingctl install config discard (INST-3), is not built; the slice that builds it opens the row"
+      "notes": "the configuration file's candidate, not a run-time setting (those are config set). LAB-3: not served yet: its source, the installer's install config discard (INST-3), is not built; the slice that builds it opens the row"
     },
     {
       "name": "instance add",
@@ -3439,7 +3439,7 @@
       "requests": ["Status", "RuntimeFactSnapshot", "PauseScheduling", "RequestShutdown", "ScheduleExplanation", "StartReport", "ResumeScheduling"],
       "slice": "INST-5",
       "status": "planned",
-      "notes": "INST-5 first slice (an emulator instance; a handset, remove and INST-3's candidate commands later): the entry and its policy.facts.instances row written together until INST-R, a minted instance_id no present or journalled instance used; the entry's application_id the one given, else the one the game's root declares for the server (Workflow #452); the candidate beside the live file is committed by config replace's path (journal kind config_replace with the input instance_add and the initiator; actingd.config.json.prev-<ms> kept); after the start the new instance is paused with the reason instance.added, then the hold is handed back. Workflow #453 S3: with the Runtime stopped the instance is written to start paused: after the update path's stopped rule (runtime_running, owner_lock_held, processes_unreadable, before the candidate is written and again under the writer lock), the new entry, and no other, declares start_paused true and the swap alone commits it (steps check_config and swap, runtime_running false, no pause_added); the Runtime's next start holds it with instance.added until a person resumes it; undo and op resume of such an operation take the writer lock and the same stopped rule first. A live build before 0.12.60 refuses the member (config_refused_by_target). Not used on the production root before LAB-7; the source command actingctl install instance add is not built"
+      "notes": "INST-5 first slice (an emulator instance; a handset, remove and INST-3's candidate commands later): the entry and its policy.facts.instances row written together until INST-R, a minted instance_id no present or journalled instance used; the entry's application_id the one given, else the one the game's root declares for the server (Workflow #452); the candidate beside the live file is committed by config replace's path (journal kind config_replace with the input instance_add and the initiator; actingd.config.json.prev-<ms> kept); after the start the new instance is paused with the reason instance.added, then the hold is handed back. Workflow #453 S3: with the Runtime stopped the instance is written to start paused: after the update path's stopped rule (runtime_running, owner_lock_held, processes_unreadable, before the candidate is written and again under the writer lock), the new entry, and no other, declares start_paused true and the swap alone commits it (steps check_config and swap, runtime_running false, no pause_added); the Runtime's next start holds it with instance.added until a person resumes it; undo and op resume of such an operation take the writer lock and the same stopped rule first. A live build before 0.12.60 refuses the member (config_refused_by_target). Not used on the production root before LAB-7; the model's install instance add (INST-5 in full) is not built"
     },
     {
       "name": "instance remove",
@@ -3454,7 +3454,7 @@
       "requests": [],
       "slice": "LAB-3",
       "status": "planned",
-      "notes": "LAB-3: not served yet: its source, actingctl install instance remove (INST-5), is not built; the slice that builds it opens the row"
+      "notes": "LAB-3: not served yet: its source, the installer's install instance remove (INST-5), is not built; the slice that builds it opens the row"
     },
     {
       "name": "place",
@@ -3475,7 +3475,7 @@
       "source": ["script rd-1027/hotplace-r10/hotplace.ps1 (steps S4 to S8b)"],
       "slice": "LAB-3",
       "status": "planned",
-      "notes": "the games come from the bundle; no game is named in code. LAB-3: journal kind pack_place with a pack_item step per item; the instances bound to the bundle's game are held; idle within install.hot.idle_wait_ms; the composition waited for within standard_packs.check_interval_ms plus install.hot.idle_wait_ms; actingctl install pack plan|place (INST-4) is not built. LAB-3 fix 1: an instance of the game already paused by another party is kept, not held; not idle in time hands the operation's own pauses back at once; the release resumes only what its pause step paused. #444 NOTICES-2: the package edge is checked before the layout; the notices directory is one item, kind notices, placed first and set aside (retire) when a later bundle carries none. #451 LOAD-P (0.12.59): the loading templates directory loading/ is taken exactly for the templates the zip's own loading.json declares (an undeclared or deeper member, or one without loading.json, pack_invalid naming it; a declared template missing, loading_template_invalid; a pack named loading beside it, loading_pack_name; all before the hold) and is one item, kind loading, placed after the packs and before the root files and set aside (retire) when a later bundle carries none; no package revision moves. #453 S5 (0.12.59): the instances the running Runtime binds to the bundle's game are journalled as the input bound; the composition is waited for only when schedule.json changes and bound is not empty, with none bound it passes at its first read expecting the catalog unchanged; a journal without bound keeps the wait. #453 S6 (0.12.59): runtime optional: with no Runtime answering, under the writer lock and the stopped rule the update applies after its close and install start before it spawns (owner_lock_held, runtime_running, processes_unreadable), the same plan and plan id placed without a hold (the input cold; pack_item steps, none waiting, and post_check; no pause, no release_hold, no schedule read): the checks rerun, standard_pack_check, check_config (the live build's check-config of the live configuration) and composition not_evaluated; a failed check post_check_failed with the items placed and next naming undo. #453 S6 fix 1 (0.12.59): the cold journal also records bound, the instances the configuration's policy.facts.instances binds to the game; check_config also fails on a note of check-config that names the placed game (game_notes), and with bound empty says composition not_previewed; the composition is judged at the next start (next composition_at_start, up); a failed check closes its post_check step done with game, checks and failed, with a Runtime or without one; undo and op resume of a cold operation take the writer lock and the same stopped rule first. #453 S6 fix 2 (0.12.59): check_config judges the game from check-config's report, which the outcome's bounds do not cut, and fails on the game's root or tables (game_root), a composition problem naming the game (composition_problems), one naming no game (composition_refused, every placement) and a rule_id_conflict recorded on another game (collisions, collision_cause not_told); an outcome cut (notes cut, causes_total) whose entry of the game lists no table fails with game_tables not_judged; with bound empty next names composition_at_start_once_bound (up), the composition first judged at the first start after an instance is bound to the game"
+      "notes": "the games come from the bundle; no game is named in code. LAB-3: journal kind pack_place with a pack_item step per item; the instances bound to the bundle's game are held; idle within install.hot.idle_wait_ms; the composition waited for within standard_packs.check_interval_ms plus install.hot.idle_wait_ms; the installer's install pack plan|place (INST-4) is not built. LAB-3 fix 1: an instance of the game already paused by another party is kept, not held; not idle in time hands the operation's own pauses back at once; the release resumes only what its pause step paused. #444 NOTICES-2: the package edge is checked before the layout; the notices directory is one item, kind notices, placed first and set aside (retire) when a later bundle carries none. #451 LOAD-P (0.12.59): the loading templates directory loading/ is taken exactly for the templates the zip's own loading.json declares (an undeclared or deeper member, or one without loading.json, pack_invalid naming it; a declared template missing, loading_template_invalid; a pack named loading beside it, loading_pack_name; all before the hold) and is one item, kind loading, placed after the packs and before the root files and set aside (retire) when a later bundle carries none; no package revision moves. #453 S5 (0.12.59): the instances the running Runtime binds to the bundle's game are journalled as the input bound; the composition is waited for only when schedule.json changes and bound is not empty, with none bound it passes at its first read expecting the catalog unchanged; a journal without bound keeps the wait. #453 S6 (0.12.59): runtime optional: with no Runtime answering, under the writer lock and the stopped rule the update applies after its close and install start before it spawns (owner_lock_held, runtime_running, processes_unreadable), the same plan and plan id placed without a hold (the input cold; pack_item steps, none waiting, and post_check; no pause, no release_hold, no schedule read): the checks rerun, standard_pack_check, check_config (the live build's check-config of the live configuration) and composition not_evaluated; a failed check post_check_failed with the items placed and next naming undo. #453 S6 fix 1 (0.12.59): the cold journal also records bound, the instances the configuration's policy.facts.instances binds to the game; check_config also fails on a note of check-config that names the placed game (game_notes), and with bound empty says composition not_previewed; the composition is judged at the next start (next composition_at_start, up); a failed check closes its post_check step done with game, checks and failed, with a Runtime or without one; undo and op resume of a cold operation take the writer lock and the same stopped rule first. #453 S6 fix 2 (0.12.59): check_config judges the game from check-config's report, which the outcome's bounds do not cut, and fails on the game's root or tables (game_root), a composition problem naming the game (composition_problems), one naming no game (composition_refused, every placement) and a rule_id_conflict recorded on another game (collisions, collision_cause not_told); an outcome cut (notes cut, causes_total) whose entry of the game lists no table fails with game_tables not_judged; with bound empty next names composition_at_start_once_bound (up), the composition first judged at the first start after an instance is bound to the game"
     },
     {
       "name": "pack remove",
@@ -3493,7 +3493,7 @@
       "requests": ["Status", "PauseScheduling", "ResumeScheduling"],
       "slice": "LAB-3",
       "status": "planned",
-      "notes": "LAB-3: not served yet: its source, actingctl install pack remove (INST-4), is not built; the slice that builds it opens the row"
+      "notes": "LAB-3: not served yet: its source, the installer's install pack remove (INST-4), is not built; the slice that builds it opens the row"
     },
     {
       "name": "pack restore",
@@ -3509,7 +3509,7 @@
       "requests": [],
       "slice": "LAB-3",
       "status": "planned",
-      "notes": "LAB-3: not served yet: its source, actingctl install pack restore (INST-4), is not built; the slice that builds it opens the row"
+      "notes": "LAB-3: not served yet: its source, the installer's install pack restore (INST-4), is not built; the slice that builds it opens the row"
     },
     {
       "name": "unlock",
@@ -3665,7 +3665,7 @@
       "requests": [],
       "slice": "LAB-3",
       "status": "planned",
-      "notes": "the Lab's own command, with its rescue module (coordinator's ruling, #434 6743701251); it links crates/watchdog (LAB-4) and registers the task as actingctl watchdog install does; tools\\actingwatch.exe install answers the same since LAB-4. LAB-3: built (crates/lab-rescue, from crates/watchdog)"
+      "notes": "the Lab's own command, with its rescue module (coordinator's ruling, #434 6743701251); it links crates/watchdog (LAB-4) and registers the task; tools\\actingwatch.exe install answers the same since LAB-4. LAB-3: built (crates/lab-rescue, from crates/watchdog)"
     },
     {
       "name": "watchdog uninstall",
@@ -3680,7 +3680,7 @@
       "requests": [],
       "slice": "LAB-3",
       "status": "planned",
-      "notes": "the Lab's own command, with its rescue module (coordinator's ruling, #434 6743701251); it links crates/watchdog (LAB-4) and removes the task as actingctl watchdog uninstall does; tools\\actingwatch.exe uninstall answers the same since LAB-4. LAB-3: built (crates/lab-rescue, from crates/watchdog)"
+      "notes": "the Lab's own command, with its rescue module (coordinator's ruling, #434 6743701251); it links crates/watchdog (LAB-4) and removes the task; tools\\actingwatch.exe uninstall answers the same since LAB-4. LAB-3: built (crates/lab-rescue, from crates/watchdog)"
     },
     {
       "name": "agent add",
@@ -3823,7 +3823,7 @@
       "name": "mcp plan",
       "module": "rescue",
       "params": [
-        {"name": "entry_protocol", "form": "option", "type": "unsigned", "required": true, "note": "the entry's protocol: 2, the second generation's; another is refused (protocol 1 is actingctl mcp-entry plan's)"},
+        {"name": "entry_protocol", "form": "option", "type": "unsigned", "required": true, "note": "the entry's protocol: 2, the second generation's; another is refused (protocol 1 was the first generation's, deleted by LAB-7)"},
         {"name": "current_build", "form": "option", "type": "string", "required": false, "note": "the commit of the entry's current child; switch is true when the installed build is another"}
       ],
       "help": "Tells the second generation of the MCP entry which build is installed and which server program of it to start.",
@@ -3836,7 +3836,7 @@
       "new": "#434 LAB-5G5b (the MCP entry's second generation, entry_protocol 2)",
       "slice": "LAB-5",
       "status": "planned",
-      "notes": "LAB-5G5b: the plan actingcommand-mcp-entry-g2 asks as actinglab.exe --json mcp plan --entry-protocol 2; the rules of actingctl mcp-entry plan hold; a build whose manifests list no actinglab-mcp.exe refuses mcp_server_not_in_build; crates/lab-rescue/tests/fixtures/mcp-plan-entry-protocol-2.json is the sample both programs test against"
+      "notes": "LAB-5G5b: the plan actingcommand-mcp-entry-g2 asks as actinglab.exe --json mcp plan --entry-protocol 2; the rules of the first generation's plan hold (contracts/install-cli.md, The MCP entry); a build whose manifests list no actinglab-mcp.exe refuses mcp_server_not_in_build; crates/lab-rescue/tests/fixtures/mcp-plan-entry-protocol-2.json is the sample both programs test against"
     }
   ]
 }
