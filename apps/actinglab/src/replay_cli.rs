@@ -239,7 +239,7 @@ impl ReplayArgs {
                 "replay reads --parameter only with --select <operation> and --scan <file>",
             ));
         }
-        let variables = given_variables(flags)?;
+        let variables = given_variables(flags, "replay")?;
         if select.is_none() && !variables.is_empty() {
             return Err(variable_refusal(
                 "conflicting",
@@ -272,14 +272,16 @@ impl ReplayArgs {
 /// Workflow #463 V2: the `--variable <name>=<json>` values as given, before anything is read, one
 /// flag per distinct name: a flag without its value is `value_missing`, a value that is not
 /// `<name>=<json>` (no `=`, an empty name, or a right side that is no JSON) is `not_recognised`,
-/// and a name given twice is `repeated`, as `--parameter`'s.
-fn given_variables(flags: &FlagArgs) -> CliOutcome<Vec<(String, Value)>> {
+/// and a name given twice is `repeated`, as `--parameter`'s. Workflow #463 S3-10 fix round 2: the
+/// one parser of `--variable`, which `standard-pack trial` calls too; `command` is the command its
+/// messages name.
+pub(crate) fn given_variables(flags: &FlagArgs, command: &str) -> CliOutcome<Vec<(String, Value)>> {
     let mut given: Vec<(String, Value)> = Vec::new();
     for text in flags.values("--variable") {
         if text == "true" || text.trim().is_empty() {
             return Err(variable_refusal(
                 "value_missing",
-                "replay takes --variable <name>=<json>",
+                format!("{command} takes --variable <name>=<json>"),
             ));
         }
         let Some((name, value)) = text.split_once('=').and_then(|(name, json)| {
@@ -295,7 +297,7 @@ fn given_variables(flags: &FlagArgs) -> CliOutcome<Vec<(String, Value)>> {
             return Err(variable_refusal(
                 "repeated",
                 format!(
-                    "replay takes --variable {name} once; a repeated variable is refused, never last-wins"
+                    "{command} takes --variable {name} once; a repeated variable is refused, never last-wins"
                 ),
             ));
         }

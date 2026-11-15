@@ -2681,6 +2681,33 @@
       "notes": "#464 P3 (contracts/standard-pack-schedule.md, Readiness): the resource tooling's one function judge_standard_pack_readiness, which two answers call as this row does: standard-pack adopt's on the game root its check tree laid out (#463 S3-5, 0.12.63) and standard-pack build's on the installed root its steps laid out (#463 S3-7, 0.12.63; build.json does not carry it); the placement plan does not call it yet; this row gives it the game root only, so the five installation items I1, I2, I4, I5 and I6 are not_judged (installation_not_read) and I3 is information, and a pack answers ready_to_place (or not_scheduled) at best; fix round 1: it runs standard-pack check on the root first, each refusal carried under S1, S4 or S7; it writes nothing, starts nothing (no child process) and reads no installation, no secret and no Runtime"
     },
     {
+      "name": "standard-pack trial",
+      "module": "authoring",
+      "params": [
+        {"name": "instance", "form": "positional", "type": "instance", "required": true, "note": "the instance the trial is for, shown in the plan as given and not contacted; on the command line only --instance <x> (actinglab's own command reads no positional instance)"},
+        {"name": "package", "form": "option", "type": "dir", "required": true, "note": "a pack directory, packs/<id> of a checkout or a placed pack, read once; a file (a .zip or .json container) is validation_failed (--package unusable): what is tried must be what was adopted"},
+        {"name": "authorization", "form": "option", "type": "string", "required": false, "note": "the reference of the owner's authorization, 1 to 1024 bytes and no control character, recorded and never interpreted; a plan needs none and then says the run will require one (run_requires); given blank, too long or with a control character it is validation_failed (value_missing, out_of_range, not_recognised)"},
+        {"name": "variable", "form": "option", "type": "key_value", "required": false, "repeat": true, "note": "<name>=<json>, once per name, parsed by replay's own --variable parser; judged against the package's declaration as a dispatch judges a value"},
+        {"name": "expect", "form": "option", "type": "string", "required": false, "note": "an outcome key the package declares, the end the trial is expected to reach; another is validation_failed (--expect not_recognised, the declared keys in the details)"},
+        {"name": "irreversible", "form": "switch", "type": "boolean", "required": false, "note": "acknowledges a package the irreversible mark flags; the plan shows it as irreversible_acknowledged and refuses nothing for the mark"},
+        {"name": "root", "form": "option", "type": "dir", "required": false, "note": "a game root, installed or a bundle laid out as one: the irreversible mark is judged over it, and a package it does not register counts as marked; without it the mark is not_judged"},
+        {"name": "state_dir", "form": "option", "type": "dir", "required": false, "note": "the Lab's state directory, where trial records go (trials/<package_id>/); never inside an installed root (one whose install\\state.json is a file) or a repository (trial_state_dir_refused): a state directory kept inside a checkout, which recordings accept, is refused here, and --state-dir names another; default actinglab's"},
+        {"name": "plan", "form": "switch", "type": "boolean", "required": false, "note": "required in this release: the plan only, nothing sent; without it the line is refused validation_failed (--plan required) before anything is read"}
+      ],
+      "help": "Shows the plan of one trial run of a pack directory on a real application, with every refusal before it; this release sends nothing.",
+      "output": "sent (false), plan {package_id, content_hash_prefix, package, instance, authorization (null when not given), ends [{outcome_key, end, pages}], variables [{name, value, source}], irreversible, irreversible_basis?, irreversible_acknowledged, expect?}, run_requires, record_directory",
+      "writes": false,
+      "irreversible": false,
+      "runtime": "offline",
+      "entries": ["lab"],
+      "requests": [],
+      "source": ["actinglab standard-pack trial"],
+      "new": "#463 S3-10 (a trial on a real application: shown and refused before anything is sent, and recorded by content)",
+      "slice": "PACK-TRIAL",
+      "status": "planned",
+      "notes": "Workflow #463 S3-10 (0.12.63; contracts/standard-pack-trial.md): it answers only with plan; the run is S3-11's, which lifts the refusal without plan. A plan prepares and shows: it asks for no authorization and refuses nothing only the run needs (fix round 2); an irreversible package is shown, never refused. It reads the package directory once (over a root once more, for the irreversible mark alone: root_irreversibility is called, not copied, and its reader of a package's declarations takes only a path), the root given and the place of the state directory: no Runtime, no device, no installation, and it writes nothing; every member of the plan but the irreversible mark comes from that one reading; the content hash prefix is the 12 hex digits of the hash containment's measure_content_hash computes, the prefix a scheduled run's break-in keeps; ends are named target, on_empty, on_max_runs, on_guard_refused, on_timeout, end_page, ending or other, as the package's declarations name them; malformed arguments are validation_failed naming the flag; without root the irreversible mark is not judged (S3-11 decides whether the run requires root); the state directory is refused inside an installed root (install\\state.json, the resource tooling's installed_root_containing) or a repository; the record actingcommand.pack-trial.v1 under <state>/trials/<package_id>/<content12>-<ms>.json is never replaced (a .part hard-linked to its name, or, fix round 3, an exclusive create of the name where no hard link can be made; trial_record_exists), holds an authorization by its type, and has its writer and reader in the resource tooling, which nothing calls outside the tests in this release"
+    },
+    {
       "name": "scheduling compile",
       "module": "authoring",
       "params": [

@@ -29255,6 +29255,209 @@ separately.
 `--authorization` and `--enables` from this build on; a placement without them is refused before
 anything happens, so nothing is half done.
 
+### 1.417 Slice #463 S3-10 (0.12.63): `standard-pack trial`: its plan, its refusals and its record (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, whose stage three puts a trial on a real application under the owner's explicit authorization; the design `rd-1115/pack-stage3-design.md`, §2.4 and §4.2 "S3-10"; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s310-trial-plan.md`, read on main `44cbab53`)
+
+The coordinator gave this slice 1.417; the numbers between §1.400 and this one belong to slices
+dispatched with it. The slice ships in 0.12.63.
+
+**What it is.** A new authoring row, `standard-pack trial` (slice `PACK-TRIAL`; actinglab's own
+command `standard-pack trial`, MCP's `ac_standard_pack_trial` through a `serve` child), the half of
+the trial tool that shows and refuses and keeps the record
+([standard-pack-trial.md](standard-pack-trial.md)). **It sends nothing**: in this release the row
+answers only with `--plan`, and without it the line is refused before anything is read,
+`validation_failed` naming `--plan` `required` (the coordinator's ruling 1); S3-11 builds the run on
+this slice's branch and lifts that refusal. The offline part is one module of the resource tooling,
+`standard_pack_trial`: `plan_standard_pack_trial` (the plan and its refusals),
+`check_trial_state_dir`, `write_trial_record`, `trial_records` and `latest_trial_record`.
+
+**The plan** (ruling 5): the package id; `content_hash_prefix`, the first 12 hex digits of the
+content hash of the directory given, the digits the failure identity keeps and the break-in of
+#1737 takes of the same function's hash (#1737 is not on main; nothing of it is used); the instance
+as given, never contacted; the declared ends, each `scheduling_outcome` mapping of the entry task
+with its key, its kind and its pages; each declared variable with the value `--variable` gives
+(parsed by the scan replay's own parser, judged offline by the contract crate's
+`PackageVariable::judge`, the rule a dispatch resolves a value by, taken only as given) or its
+default; the irreversible mark; the authorization reference, `null` when none was given;
+`--expect`; `run_requires`, what the run will require that the plan was not given; and
+`record_directory`. It reads the package directory once, `--root`, and whether the state
+directory's path holds the entries below: no Runtime, no device, no installation, and it writes
+nothing (ruling 7).
+
+**A plan asks for nothing** (fix round 2, the coordinator's ruling 1, the review's item 1). The plan
+is "prepare and show" (the design's authorization line): it needs no authorization and refuses
+nothing only the run needs. `--authorization` is optional with `--plan`: given, it is bounded and
+checked and shown back; given without a value or blank, `validation_failed` `value_missing`, the
+command line's refusal of an option without its value; not given, the plan answers `authorization`
+`null` and `run_requires` `["authorization"]`. A package the irreversible mark flags is shown,
+`irreversible_acknowledged` true or false as `--irreversible` was given; nothing is refused for it.
+So `trial_authorization_missing` and `trial_irreversible_unacknowledged` had no path in this slice
+and are removed (enum entries, fragment, index, texts, tests); they arrive with the slice that sends
+the run. The record's writer is called by no command yet. Fix round 3 (the second review) corrects
+what fix round 2 said here: a record without an authorization was held by a `debug_assert`, which
+a release build does not run, and the sentence that no existing code fits was wrong, since the
+writer already refuses another malformed record `validation_failed`. Now it cannot be built: the
+record's plan is a type of its own, `TrialRecordPlan`, whose `authorization` is a text, made from a
+`TrialPlan` only by a conversion (`TryFrom`; outside the crate the type is `non_exhaustive`) that
+refuses a plan without one `validation_failed`, as the writer's other refusals of a malformed
+record; the writer takes it, and the reader decodes into it, so a stored record whose
+`authorization` is absent or `null` is `trial_record_unreadable` `undecodable`.
+
+**Malformed arguments are `validation_failed`** (fix round 2, the coordinator's ruling 2): one code,
+one cause, and one way for the same kind of mistake, as the slice already answered an undeclared
+`--variable` name. A `--package` that is a file is `validation_failed` naming `--package` with
+`unusable`, the vocabulary `argument_problem`'s word for an argument that names something not of its
+kind (no word of the command line names a path of the wrong kind more closely), the message saying
+why a directory is required; an `--expect` the package does not declare is `validation_failed`
+naming `--expect` with `not_recognised`, the word an undeclared `--variable` name gets, the details
+keeping `expected` and `declared_outcome_keys`. `trial_package_not_directory` and
+`trial_expectation_unknown` are removed.
+
+**One reading** (fix round 2, point 5): the plan read the package four times (its description, its
+remedy declarations, its content hash, its entry task) and, over a root, a fifth time for the
+irreversible mark. It now takes one bounded snapshot by the containment crate's
+`snapshot_content_directory` and derives everything from it: the hash is the contract crate's
+`content_directory_digest` of each file's SHA-256 (`Sha256Hash::digest`), exactly the directory
+branch of `measure_content_hash`, which the test compares it with; the kernel admits the same bytes
+(`PreparedContainedTask::load_content_entries`, offline without a vision provider); the package id,
+the entry task, the control declaration's `provides` and `variables` (the contract crate's
+`parse_package_variables`) come from the snapshot. Fix round 3 (the second review's suggestion c):
+fix round 2 also derived from the snapshot what the rule of irreversibility judges of the package,
+by a copy of `RemedyDeclarations::declared_capabilities`, and judged the root by a copy of the loop
+of `root_irreversibility`; copies drift, so both are gone. `declared_capabilities` takes the parsed
+declarations, but the only reader that makes them, the kernel's
+`PreparedContainedTask::read_remedy_declarations`, takes a path, and the kernel is not this
+slice's to change; so the mark is now judged by `root_irreversibility` itself, called with a
+directory map that gives the directory tried in place of the registered directory of its id, and
+over a root the directory tried is read once more, by that reader, for the mark alone.
+
+**The ends** (fix round 2, point 5): the first round listed the keyed ends of a page graph as
+`ending`. Each kind is now named by the declaration that makes it one, as the package's own
+contracts name them, told apart in this order: `target` (a target page of the task, by the kernel's
+`terminal_holds_page`), `on_empty`, `on_max_runs`, `on_guard_refused`, `on_timeout` (the key of an
+operation's select step, keyed cap, keyed guard refusal or wait step), `end_page` (a stage's
+`end_pages`), and for every other mapping `ending` in a `linear_steps` task or `other` in a page
+graph.
+
+**The refusals.**
+
+| Code (resource-tooling) | The one situation | Refuses / warns | Exit |
+|---|---|---|---|
+| `trial_state_dir_refused` (word `trial_state_place`: `installed_root`, `repository`) | the state directory is, or lies inside, an installed root or a repository (ruling 6) | refuses | 1 (envelope 2) |
+| `trial_record_exists` (fix round 2) | a record or its `.part` of that name is already there: it is never replaced; a person looks at that file | refuses | 1 (envelope 2) |
+| `trial_record_write_failed` | the operating system refused a step of the write, and no record was written (fix round 3) | refuses | 1 (envelope 2) |
+| `trial_record_unreadable` (word `trial_record_problem`, fix round 2: `read_failed`, `too_large`, `undecodable`, `name_mismatch`) | a file of a record's name is not that record | refuses | 1 (envelope 2) |
+| `trial_record_part_left` (fix round 3) | the record is written and in place, but the `.part` its write created could not be removed | warns, in the `warnings` of the writer's success | 0 |
+
+The command line's own refusals and the malformed arguments are `validation_failed` naming the
+flag: `--authorization` given blank (`value_missing`), longer than 1024 bytes (`out_of_range`) or
+with a control character (`not_recognised`); `--package` a file (`unusable`); a `--variable` the
+scan replay's parser refuses or the declaration does not take (the details carry `variable_name` and
+the judgement's `variable_problem`); `--expect` undeclared (`not_recognised`). A check of the state
+directory's path that the operating system refuses is `foreign_os_error`. Two new keys and their
+vocabularies, `trial_state_place` and `trial_record_problem`, and the domain `trial_` of the
+resource tooling's fragment. No decision point reads a code: each refusal is built where its
+situation is known.
+
+**Without `--root`** the mark cannot be judged: the plan answers `irreversible` `not_judged`. The
+row's notes and the contract say so; S3-11 decides whether the run requires `--root` (ruling 3).
+
+**The record** `actingcommand.pack-trial.v1` (ruling 6): `schema_version`, `at_unix_ms`, `plan`
+(whose `authorization` always holds a reference), `request_id`, `run_id`, `end` (`outcome`,
+`outcome_key`, `final_page`, `failure_code`, `failure_values`) and `matched`, under
+`<state>/trials/<package_id>/<content12>-<ms>.json`. Fix round 2 (the review's item 3): "never
+replaced" holds without a window between a check and the write. The writer writes the record whole,
+and flushed, under its name with `.part` added (a file created anew, `create_new`), then
+`hard_link`s it to its name, which fails when the name is taken (a rename would replace an existing
+file on Windows); a record or a `.part` of that name already there is `trial_record_exists`, built
+from what was found and from no forged I/O error; once linked, the `.part` it created is removed
+(fix round 3: a refused removal leaves the record written and is a warning, below, no longer
+`trial_record_write_failed`). The reader answers every record of a package and the latest of one
+content and refuses a file of a record's name that is not the record its name says, with the word
+that says why. Nothing writes one outside the tests in this release.
+
+**Fix round 3** (the second review; brief `rd-1115/brief-463-s310-fix3.md`). *A written record is
+never reported as not written*: fix round 2 answered a refused removal of the `.part` after the
+link `trial_record_write_failed`, so a record on disk was reported as not written and the code held
+two causes. Now the writer answers success, `WrittenTrialRecord`: the record's `path`, `part_left`
+naming the `.part` left, and in `warnings` the new warning `trial_record_part_left` (`path` the
+`.part`, the refusal of the removal its cause), in the shape the Lab's answers carry warnings in;
+`trial_record_write_failed` now means only that no record was written. *The failure paths*: after a
+refused write, flush or link (for another reason than the name being taken) the writer removes the
+files it created anew with `create_new`, so that the one retry of the same record is not blocked by
+its own leftovers; one whose removal is refused too is named by a `cleanup` link
+(`foreign_os_error`, `io_op` `remove`) and the answer is still the original failure. A refused
+flush is `io_op` `sync`, no longer `write`. *Without hard links* (FAT32, exFAT, some network
+shares), following main's precedent (`state_root_installation.rs`, `place_once` and
+`create_exclusive`; [install-cli.md](install-cli.md), `install\identity.json`): a link refused for
+another reason than the name being taken falls back to an exclusive create of the record's own
+name, the link's refusal a `note` link when that fails too. It keeps that no file of the name is
+ever written over; it gives up that the name exists before its bytes do, so a reader then, or a
+crash meanwhile, finds an incomplete record, which the reader refuses `undecodable`; a refused
+write or flush removes that file too. *The text*: the contract's order of the refusals names
+`--root`'s own last (a root that is no directory or names no game, a root file that cannot be read
+or is too large: `validation_failed`; a root without `bundle.json` or a root file refused:
+`standard_pack_root_invalid`), where the code has them.
+
+**The state directory's place** (fix round 2, the review's item 2). The work order asked to refuse a
+state directory inside a repository or an installed root "by the test the Lab already has for
+that". The first round recognised an installed root by `runtime\BUILD-MANIFEST.json` or
+`install\active.json` and said that main has no such test; both were wrong. The first file is in
+every unpacked release and every kept build (it marks a member folder, not an installation), the
+second exists only in one layout, and `install\state.json` is the installer's own state file in both
+layouts ([install-cli.md](install-cli.md), "Layout"); main recognises an installation by it for one
+directory (`actingcommand_runtime_host::installation_root_at`, `state_root_installation.rs`). Now one
+function of the resource tooling, `installed_root_containing`, answers the directory a path is or
+lies inside whose `install\state.json` is a file, along the path made absolute and then along its
+nearest existing part with its links resolved, a part whose existence or kind the operating system
+does not tell, or that cannot be resolved, being `foreign_os_error` (`try_exists`), never read as
+"absent". The resource tooling may not reach the host's crate (the architecture guard
+`production_packages_cannot_reach_resource_tooling`), so the function repeats only the file's name
+and none of `installation_root_at`. It sits below the Lab's crate so that both can call it: pull
+request #1736 (open) refuses a recording's output directory inside an installed root by the same
+file with its own walk, and the coordinator points it at this function once both are merged. A
+state directory inside a repository (a directory along the path that holds `.git`) keeps its
+refusal (the work order's "never in a repository"); what it costs: a state directory kept inside a
+checkout is refused for the trial's records though recordings accept it there, and `--state-dir`
+names another.
+
+**Where the row is wired.** Beside the module and actinglab's `standard_pack_cli.rs`: the row in
+`lab-operations.json`; `engine::COMMANDS` (68), the strict rows (33) with the command's flag lists
+`TRIAL_FLAGS` and `TRIAL_SWITCHES`, the census's group (a) (66), `BUILT_SLICES` and the MCP
+server's `ACTINGLAB_SLICES` (`PACK-TRIAL`), the capability (`offline`, `read_only`), the help's
+options, the dry-run declaration (`no_effect`, [actinglab-dry-run.md](actinglab-dry-run.md)) and
+the command inventory (106 commands); fix round 2: `--variable` by `replay_cli::given_variables`,
+the scan replay's own parser, which names the command in its messages, and the counts of
+[lab-two-entries.md](lab-two-entries.md) (23 rows take the instance on the command line only as
+`--instance`; 161 offered rows on Windows, 68 of them by children, 122 elsewhere) and the Files list
+of [README.md](README.md). The resource tooling reads the root by the contract crate's
+`read_standard_pack_root` and judges it by `IrreversiblePackages` as its own `root_irreversibility`
+builds it (fix round 3: called, not copied), every package of the root read by the Runtime's
+metadata reader, the directory tried read in place of the registered one of its id.
+
+**Tests.** `crates/resource-tooling/src/gate_463_s310.rs` (eleven) and
+`apps/actinglab/src/tests/gate_463_s310.rs` (two), gate map `exec.toml` "#463 S3-10": the plan of a
+`linear_steps` package with two ending pages lists three keys; a plan writes nothing; a plan without
+an authorization answers `null` and `run_requires`, a given one is bounded; a container, an
+undeclared `--expect` and unfit `--variable` values are `validation_failed`; a marked package is
+shown, not refused; a state directory in a repository or an installed root is refused by the plan
+and by the writer, and an unpacked release or a selection alone is no installed root; the writer
+never replaces a record or a `.part` (`trial_record_exists`) and the reader's three words; the
+command line without `--plan` and with it, with and without `--authorization`. Fix round 2 renames
+`s310_the_authorization_is_required_bounded_and_shown_back` to
+`s310_the_authorization_is_optional_bounded_and_shown_back` (neither is on main, so nothing leaves
+the gate map's merge base). Fix round 3 adds
+`s310_a_record_plan_is_made_only_from_a_plan_with_an_authorization` (the conversion of a plan
+without an authorization is `validation_failed`) and
+`s310_a_stored_record_whose_authorization_is_null_is_unreadable` (`undecodable`), and adapts two of
+this slice's own tests to the writer's new types (a record's plan made by the conversion; the
+writer's answer compared whole, no `.part` left and no warning). No golden changes, no test of
+main is adapted.
+
+**What is not changed.** `run start` and the run path of `crates/lab-ops`, the Runtime, `adopt.rs`,
+readiness, the placement, every interface revision and record shape.
+
+**At deploy.** Nothing to do: the row only reads, and nothing writes a trial record yet.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

@@ -2855,6 +2855,14 @@
     "break_in_problem": {
       "type": "vocab:break_in_problem",
       "description": "What of a scheduled run's break-in could not be established before the run executed: the package's content or the pair's break-in record (Workflow #463 U1b fix round 3, since 0.12.63)."
+    },
+    "trial_state_place": {
+      "type": "vocab:trial_state_place",
+      "description": "Where a state directory refused for trial records lies: a repository or an installed root (Workflow #463 S3-10, since 0.12.63)."
+    },
+    "trial_record_problem": {
+      "type": "vocab:trial_record_problem",
+      "description": "Why a file of a trial record's name is not read as that record: the read failed, it is too large, it does not decode, or it is not the record its name says (Workflow #463 S3-10 fix round 2, since 0.12.63)."
     }
   },
   "vocabularies": {
@@ -10537,6 +10545,44 @@
           "description": "The pair's break-in could not be judged before the run executed: the decision memory does not hold the run's dispatch, or scheduling.suspension.break_in_runs, scheduling.suspension.break_in_ms or the Runtime clock could not be read. The run counts as any run of its content does."
         }
       }
+    },
+    "trial_state_place": {
+      "description": "Where a state directory refused for trial records lies, the value trial_state_place of trial_state_dir_refused (Workflow #463 S3-10, contracts/standard-pack-trial.md \"The record\", since 0.12.63).",
+      "review": "pending",
+      "source": {
+        "file": "crates/resource-tooling/src/codes.rs",
+        "enum": "TrialStatePlace"
+      },
+      "tokens": {
+        "repository": {
+          "description": "It is, or lies inside, a Git work tree: a directory along its path holds .git."
+        },
+        "installed_root": {
+          "description": "It is, or lies inside, an installed root: a directory along its path whose install\\state.json is a file, the installer's own state file in both layouts (contracts/install-cli.md, fix round 2)."
+        }
+      }
+    },
+    "trial_record_problem": {
+      "description": "Why a file of a trial record's name is not read as that record, the value trial_record_problem of trial_record_unreadable (Workflow #463 S3-10 fix round 2, contracts/standard-pack-trial.md \"The record\", since 0.12.63).",
+      "review": "pending",
+      "source": {
+        "file": "crates/resource-tooling/src/codes.rs",
+        "enum": "TrialRecordProblem"
+      },
+      "tokens": {
+        "read_failed": {
+          "description": "The operating system refused to open or read the file, or to list its directory; its refusal is the cause."
+        },
+        "too_large": {
+          "description": "The file is larger than 1 MiB, the most a record is read up to."
+        },
+        "undecodable": {
+          "description": "The file does not decode as actingcommand.pack-trial.v1; the decoder's refusal is the cause."
+        },
+        "name_mismatch": {
+          "description": "The file decodes, but is not the record of the package, the content and the time its name says."
+        }
+      }
     }
   },
   "domains": {
@@ -13456,6 +13502,9 @@
     ],
     "display_": [
       "display-adapter"
+    ],
+    "trial_": [
+      "resource-tooling"
     ]
   },
   "fragments": {

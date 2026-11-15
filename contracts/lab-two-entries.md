@@ -771,12 +771,13 @@ sentence fails that test.
   whose next positional is not required (`targets set <inst> [<file>]`) a lone word beside the
   flag is that positional (`targets set <file> --instance <inst>`), and the two spellings are
   refused when the file is given too. A line without `--instance` is read as before; a line
-  with `--via` that begins with `--instance` stays actinglab's own, as before. The 22 rows
+  with `--via` that begins with `--instance` stays actinglab's own, as before. The 23 rows
   actinglab's own
   command serves under the row's own name (`tap`, `swipe`, `long-tap`, `key`, `text`,
   `touch-probe`, `do`, `ensure`, `wait`, `tap-target`, `navigate`, `observe`, the nine `record`
   rows that take an instance, `record archive` and `record reopen` among them since Workflow #449
-  REC-ARCH, and `locate`) take the instance on the command line only as `--instance`, as before (their
+  REC-ARCH, `locate`, and `standard-pack trial` since Workflow #463 S3-10) take the instance on the
+  command line only as `--instance`, as before (their
   note: "on the command line only --instance <x> …"); none gains a positional instance (for `do`,
   `ensure`, `wait` and `text` it would be read as the target, the page or the text). `remedy set`
   and `wake-test` declare `instance` as an option of their own and read `--instance` as that
@@ -1130,12 +1131,12 @@ sentence fails that test.
     - *Which.* A row the server gives neither to `lab_ops::core_ops` nor to the rescue module, and
       that is not refused for a reason of its own (a rescue row where the module does not run,
       which is not offered), is served by a child: one rule (`tools::serving`, `Serving::Child`),
-      no list of row names. On Windows all 160 offered rows are served (54 by `core_ops`, the four
+      no list of row names. On Windows all 161 offered rows are served (54 by `core_ops`, the four
       `goals` rows among them since Workflow #463 V3, and 39 by the rescue module in the server's
-      process, `deploy` and `rollback` among them since LAB-6S0, 67 by children, `standard-pack
+      process, `deploy` and `rollback` among them since LAB-6S0, 68 by children, `standard-pack
       adopt` among them since Workflow #464 P1, `standard-pack build` since Workflow #464 P2,
-      `standard-pack ready` since Workflow #464 P3 and `package variables` since Workflow #463
-      V3); elsewhere all 121 are served (54 and 67).
+      `standard-pack ready` since Workflow #464 P3, `package variables` since Workflow #463 V3 and
+      `standard-pack trial` since Workflow #463 S3-10); elsewhere all 122 are served (54 and 68).
     - *The children.* `actinglab.exe` beside the server's own file, started as `actinglab.exe
       serve --stdio --front mcp` (section 8.2) with the environment today's server gives its Lab
       child: `ACTINGCOMMAND_RUNTIME_STATE_ROOT` set to the server's state root when it is known,
@@ -1256,7 +1257,7 @@ sentence fails that test.
     whether it writes, is irreversible and needs the Runtime; each parameter with its form, type,
     whether it is required or repeats, its default and its note. The instance is written as the
     first rule of this section says: `<instance>` (`[<instance>]` when optional) on a row of the
-    CLI module or of an own command under other words, `--instance <instance>` on the 20 rows
+    CLI module or of an own command under other words, `--instance <instance>` on the 23 rows
     actinglab's own command serves under the row's name and on the two that take it as an option.
     Words beyond a command's own (its positionals) are left out; words that begin no command are
     refused as `help`'s unknown word (`validation_failed`, `argument_problem` `unknown`).
@@ -1313,7 +1314,7 @@ sentence fails that test.
     The global options a person gives are those `help` lists but `--via`, `--instances`,
     `--profile` and `--quiet`.
   - An instance, wherever a row's parameter is one (the positional, `--instance` before or after
-    the words, or the instance option of `remedy set` and `wake-test`; on the 20 rows actinglab's
+    the words, or the instance option of `remedy set` and `wake-test`; on the 23 rows actinglab's
     own command serves under the row's name only `--instance`, never in a positional's place):
     the aliases of the running Runtime, asked with `Status`, the read that resolves `<instance>`
     today, on one Lab connection whose every exchange ends by the wait (`--wait-ms`, default 500

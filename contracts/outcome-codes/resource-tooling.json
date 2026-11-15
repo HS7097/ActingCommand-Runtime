@@ -1294,6 +1294,88 @@
       "description": "Workflow #464 P3 (contracts/standard-pack-schedule.md, Readiness): a readiness item of a pack that was not judged from what the readiness was given, readiness_unjudged saying why (installation_not_read: no installation was read; part_not_read; not_admitted; composition_refused; no_rule; server_not_told; package_undeclared; check_stopped), never guessed and never passed; or, item unrecorded_screen_code (I3) only, the information line no_revision_tells, which never makes a pack wait (the coordinator's ruling 3 on board #464). An item not judged never counts as holding: a pack whose root items all hold and none of whose items fails, with an installation item not judged, answers ready_to_place, not dispatchable (fix round 1).",
       "common_causes": "The readiness ran without an installation (actinglab standard-pack ready reads none), or a part of the installation was not read.",
       "handling": "Act on the item it depends on where there is one. An installation item is judged only where an installation's readings are handed to the function; today no caller hands them (actinglab standard-pack ready reads none, and the placement plan does not call the readiness yet, a follow-up), so judge it by hand: the configuration's instances (I1), the installer's package range (I2), check-config's subsystems (I4), actingd suspended (I5), vision check (I6)."
+    },
+    "trial_state_dir_refused": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "resource-tooling",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "path": "required",
+        "trial_state_place": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.63",
+      "description": "Workflow #463 S3-10 (contracts/standard-pack-trial.md, \"The record\"): the state directory (path) where actinglab standard-pack trial keeps its records is, or lies inside, an installed root or a repository (trial_state_place says which: a directory along its path whose install\\state.json is a file, the installer's own state file, or one that holds .git). Trial records are Lab authoring state, kept beside the recordings. The plan and the record's writer both refuse it; nothing was written or sent. A check of the path that the operating system refuses is foreign_os_error, never passed.",
+      "common_causes": "--state-dir points into the installation root, or into a resource repository's checkout (recordings accept a state directory there; trial records do not).",
+      "handling": "Give a --state-dir outside every installation and repository, or leave it out for actinglab's own."
+    },
+    "trial_record_exists": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "resource-tooling",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "path": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.63",
+      "description": "Workflow #463 S3-10 fix round 2 (contracts/standard-pack-trial.md, \"The record\"): a trial record of that name, or the .part of one, is there already (path, the file that is there) and is never replaced: the writer writes a record under its name with .part added, a file created anew, and links it to its name, which fails when the name is taken (fix round 3: or, where the link cannot be made, creates the name exclusively, which fails the same way). Nothing was replaced or removed; when the link or the exclusive create found the record there, the .part this call wrote is left beside it.",
+      "common_causes": "Two trials of one content recorded in the same millisecond, or a .part an interrupted write left.",
+      "handling": "Look at the file the path names: a record there is kept, and a .part an interrupted write left may be moved away by hand; then write the record again."
+    },
+    "trial_record_write_failed": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "resource-tooling",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "path": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.63",
+      "description": "Workflow #463 S3-10 (contracts/standard-pack-trial.md, \"The record\"): the operating system refused a step of writing a trial record (path, the file or directory it refused; its refusal, with io_op, as the cause), and no record was written: making the directory, creating the record's .part, writing it (io_op write) or flushing it (io_op sync); or, fix round 3, where the hard link of the .part to the record's name was refused for another reason than the name being taken (a file system without hard links), the exclusive create of the record's name that stands in for the link, or writing or flushing that file, the link's refusal then a note link. After such a failure the writer removes the files it created anew (its .part, and the record's file of an exclusive create), so that writing the record again is not blocked by them; one whose removal the operating system refuses too is left, named by a cleanup link (foreign_os_error, io_op remove, path the file left). A record of that name already there is trial_record_exists instead; a .part left once the record is in place is the warning trial_record_part_left, beside a written record.",
+      "common_causes": "A full disk, a folder without the right to write, or another program holding the file.",
+      "handling": "Read the cause, free the place or give a --state-dir where actinglab may write, move away a file a cleanup link names, and write the record again."
+    },
+    "trial_record_unreadable": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "resource-tooling",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "path": "required",
+        "trial_record_problem": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.63",
+      "description": "Workflow #463 S3-10 (contracts/standard-pack-trial.md, \"The record\"): a file of a trial record's name (<content12>-<ms>.json) under <state>/trials/<package_id>/, or that directory, is not read as the record its name says, and trial_record_problem says why (fix round 2): read_failed (the operating system refused to open, read or list it; its refusal as the cause), too_large (larger than 1 MiB), undecodable (no actingcommand.pack-trial.v1 document; the decoder's refusal as the cause) or name_mismatch (a record, but not of the package, the content and the time its name says). The reader answers no record of that package rather than pass over one.",
+      "common_causes": "A record edited or copied by hand, or a file of another program under the trials directory.",
+      "handling": "Look at the file the path names; restore or move it away, then read again."
+    },
+    "trial_record_part_left": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "resource-tooling",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "path": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.63",
+      "description": "Workflow #463 S3-10 fix round 3 (contracts/standard-pack-trial.md, \"The record\"): a trial record is written and in place, but the .part its write created (path) is left beside it: the operating system refused to remove it (its refusal, with io_op remove, as the cause). The writer answers success, the record's path with the .part as its member part_left and this warning in warnings; the record is whole and is read as written, and the reader takes no .part for a record.",
+      "common_causes": "Another program (a virus scanner, an indexer, a backup tool) held the .part open when the writer removed it.",
+      "handling": "Nothing is lost: the record is in place. Move the .part the path names away by hand once nothing holds it."
     }
   }
 }

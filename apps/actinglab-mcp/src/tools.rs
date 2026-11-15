@@ -85,13 +85,15 @@ pub(crate) fn instructions(budget_s: u64) -> String {
 /// Workflow #467 RPT-1: its row `report export`, a core row served in this process.
 /// Workflow #463 V3: its rows `goals`, `goals get`, `goals set` and `goals clear`, served in this
 /// process (`lab_ops::core_ops`), and `package variables`, through a `serve` child.
-pub(crate) const ACTINGLAB_SLICES: [&str; 11] = [
+/// Workflow #463 S3-10 (`PACK-TRIAL`): its row `standard-pack trial`, through a `serve` child.
+pub(crate) const ACTINGLAB_SLICES: [&str; 12] = [
     "463-V3",
     "464-P3",
     "LAB-1",
     "LAB-1b",
     "LAB-2",
     "PACK-BUILD",
+    "PACK-TRIAL",
     "R-6",
     "R-8",
     "REC-ARCH",
