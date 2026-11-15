@@ -202,6 +202,10 @@ mod gate_463_s37;
 // sends nothing.
 #[path = "gate_463_s310.rs"]
 mod gate_463_s310;
+// Workflow #463 S3-11: without `--plan`, `standard-pack trial` sends its one run, reads its
+// business end and records it; `--collect` reads an end later.
+#[path = "gate_463_s311.rs"]
+mod gate_463_s311;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
 use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{

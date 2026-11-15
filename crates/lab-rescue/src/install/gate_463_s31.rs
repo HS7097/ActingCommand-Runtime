@@ -56,6 +56,11 @@
 // - `s31_fix3_an_installed_root_the_reader_refuses_counts_nothing_before` (the second review's
 //   point C): an installed `bundle.json` the root reader refuses leaves the installed side unread
 //   as a whole, and every pack the zip schedules or gives a role enters.
+// Workflow #463 S3-11 (the review of S3-1's third round, point 3; tests only):
+// - `s311_the_chain_of_a_package_holding_only_a_role_is_counted`: a package that only holds a role
+//   (`startup`) and is not scheduled starts a chain: its new prerequisite enters with it;
+// - `s311_the_fourth_layer_of_a_chain_is_not_counted`: of a chain four deep, the first three
+//   layers enter with the role `prerequisite`, the fourth is listed with no role and does not.
 // Each plan leaves the game root as it was and pauses nothing. The machine is the fake host of
 // `fixture.rs` with its fake Runtime: no device, no sleep, no clock read; every root is a
 // temporary folder with neutral files (made-up ids, no real game).
@@ -93,6 +98,9 @@ const EDGE: &str = "neutral.edge";
 /// Fix round 3: the first and the second layer of a prerequisite chain.
 const FIRST: &str = "neutral.first";
 const SECOND: &str = "neutral.second";
+/// Workflow #463 S3-11: the third layer of a chain, and a fourth, which is not counted.
+const THIRD: &str = "neutral.third";
+const FOURTH: &str = "neutral.fourth";
 /// A package no bundle carries.
 const GHOST: &str = "neutral.ghost";
 /// Two contents of a pack's `control.json`.
@@ -102,6 +110,9 @@ const CONTROL_REPLACED: &[u8] = br#"{"neutral": 2}"#;
 /// its prerequisite package.
 const NEEDS_FIRST: &[u8] = br#"{"prerequisite_package_id": "neutral.first"}"#;
 const NEEDS_SECOND: &[u8] = br#"{"prerequisite_package_id": "neutral.second"}"#;
+/// Workflow #463 S3-11: a `control.json` that names [`THIRD`], and one that names [`FOURTH`].
+const NEEDS_THIRD: &[u8] = br#"{"prerequisite_package_id": "neutral.third"}"#;
+const NEEDS_FOURTH: &[u8] = br#"{"prerequisite_package_id": "neutral.fourth"}"#;
 /// Fix round 3: a `bundle.json` that is no JSON document.
 const BUNDLE_BROKEN: &[u8] = b"{";
 /// A held entry's reason and reference.
@@ -1279,5 +1290,103 @@ fn s31_fix3_an_installed_root_the_reader_refuses_counts_nothing_before() {
             "values": root_invalid(&game_root.join("bundle.json"), "malformed", ""),
         }]),
         "{line}"
+    );
+}
+
+// Workflow #463 S3-11 (register §1.418; coordinator work order rd-1115/brief-463-s311-trial-run.md,
+// the review of S3-1's third round, its point 3; tests only): a package that only holds a role and
+// is not scheduled (a `startup` entry of `bundle.json`) starts a prerequisite chain: its new
+// prerequisite enters with the plan's role `prerequisite`, beside the package entering by its role.
+#[test]
+fn s311_the_chain_of_a_package_holding_only_a_role_is_counted() {
+    let before = Layout::default()
+        .pack(KEPT, CONTROL)
+        .rule("rule.kept", KEPT);
+    let after = Layout::default()
+        .pack(KEPT, CONTROL)
+        .pack(STARTER, NEEDS_FIRST)
+        .pack(FIRST, CONTROL)
+        .rule("rule.kept", KEPT)
+        .maintenance(STARTER, &["startup"]);
+    assert_eq!(
+        schedule_changes(Some(&before), &after),
+        json!({
+            "packages": [
+                {
+                    "package_id": FIRST,
+                    "before": {"state": "absent"},
+                    "after": {"state": "unclassified", "roles": ["prerequisite"]},
+                    "content": "new",
+                },
+                {
+                    "package_id": STARTER,
+                    "before": {"state": "absent"},
+                    "after": {"state": "maintenance_role", "roles": ["startup"]},
+                    "content": "new",
+                },
+            ],
+            "enters": [FIRST, STARTER],
+            "leaves": [],
+            "content_only": [],
+        })
+    );
+}
+
+// Workflow #463 S3-11 (the same point 3; tests only): a chain four deep from a new scheduled pack:
+// its first three layers enter with the role `prerequisite` (the kernel's depth, three layers), and
+// the fourth is listed from `absent` with no role and does not enter.
+#[test]
+fn s311_the_fourth_layer_of_a_chain_is_not_counted() {
+    let before = Layout::default()
+        .pack(KEPT, CONTROL)
+        .rule("rule.kept", KEPT);
+    let after = Layout::default()
+        .pack(KEPT, CONTROL)
+        .pack(ADDED, NEEDS_FIRST)
+        .pack(FIRST, NEEDS_SECOND)
+        .pack(SECOND, NEEDS_THIRD)
+        .pack(THIRD, NEEDS_FOURTH)
+        .pack(FOURTH, CONTROL)
+        .rule("rule.kept", KEPT)
+        .rule("rule.added", ADDED);
+    assert_eq!(
+        schedule_changes(Some(&before), &after),
+        json!({
+            "packages": [
+                {
+                    "package_id": ADDED,
+                    "before": {"state": "absent"},
+                    "after": {"state": "scheduled"},
+                    "content": "new",
+                },
+                {
+                    "package_id": FIRST,
+                    "before": {"state": "absent"},
+                    "after": {"state": "unclassified", "roles": ["prerequisite"]},
+                    "content": "new",
+                },
+                {
+                    "package_id": FOURTH,
+                    "before": {"state": "absent"},
+                    "after": {"state": "unclassified"},
+                    "content": "new",
+                },
+                {
+                    "package_id": SECOND,
+                    "before": {"state": "absent"},
+                    "after": {"state": "unclassified", "roles": ["prerequisite"]},
+                    "content": "new",
+                },
+                {
+                    "package_id": THIRD,
+                    "before": {"state": "absent"},
+                    "after": {"state": "unclassified", "roles": ["prerequisite"]},
+                    "content": "new",
+                },
+            ],
+            "enters": [ADDED, FIRST, SECOND, THIRD],
+            "leaves": [],
+            "content_only": [],
+        })
     );
 }

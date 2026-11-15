@@ -37,23 +37,45 @@
 //! standard-pack trial --instance <x> --package <dir> [--authorization <reference>] [--variable
 //! <name>=<json>]... [--expect <outcome_key>] [--irreversible] [--root <game root>] [--state-dir
 //! <dir>] --plan` answers the plan of one trial run on a real application and every refusal
-//! before it (the resource tooling's `plan_standard_pack_trial`). In this release it answers only
-//! with `--plan`: without it the line is refused before anything is read, and nothing is ever
-//! sent; the run is the next slice's. A plan asks for no authorization (fix round 2).
+//! before it (the resource tooling's `plan_standard_pack_trial`). A plan asks for no authorization
+//! (fix round 2).
+//!
+//! Workflow #463 S3-11 (contracts/standard-pack-trial.md, "The run"; register §1.418): without
+//! `--plan` the line sends the trial's one run, after everything the plan does and the refusals only
+//! the run needs (the resource tooling's `check_trial_run`), and before anything is written: the
+//! request `run start` sends, by its own function (`lab_ops::core_ops::run_start_prepared`), on the
+//! Lab channel with this process's initiator, waited for as `run start` waits (to its receipt, or
+//! up to `--wait` by `lab_ops::wait::wait_at_most`), then the run read as `run show` reads it
+//! (`lab_ops::run_show::read`). The end it reads is answered and recorded once by the resource
+//! tooling's writer; an end not read is answered with the run's request id and the line that reads
+//! it later, `--collect <request_id>`, which sends nothing. A result that is not known is answered
+//! as that; nothing is ever sent again. A passed trial is not an authorization to enable; a trial
+//! counts nothing toward a break-in; a trial is one run, sent once.
 
-use crate::{CliError, CliOutcome, FlagArgs, GlobalOptions};
-use actingcommand_contract::codes::ContractCode;
-use actingcommand_contract::outcome::{IoOp, Outcome, RawSource};
-use actingcommand_lab_ops::codes::ArgumentProblem;
+use crate::{CliError, CliOutcome, ErrorKind, FlagArgs, GlobalOptions};
+use actingcommand_contract::codes::{ContractCode, ContractLocation};
+use actingcommand_contract::outcome::{Detail, IoOp, Outcome, RawSource};
+use actingcommand_contract::{EventQuery, ProjectionProfile, RequestId};
+use actingcommand_lab_ops::cli_line::{self, Exit};
+use actingcommand_lab_ops::codes::{ArgumentProblem, RunState};
+use actingcommand_lab_ops::core_ops::{parse_duration, run_start_prepared};
+use actingcommand_lab_ops::wait::{Waited, wait_at_most};
+use actingcommand_lab_ops::{instance_selector, run_evidence, run_show, wait};
 use actingcommand_resource_tooling::{
-    AdoptDecision, AdoptSource, AdoptWorktree, StandardPackAdoptRequest, StandardPackCheckRequest,
-    StandardPackComposeRequest, StandardPackReadyRequest, StandardPackTrialRequest,
-    check_standard_pack_root, compose_standard_packs, judge_standard_pack_readiness,
-    plan_standard_pack_trial, standard_pack_adopt,
+    AdoptDecision, AdoptSource, AdoptWorktree, PackTrialRecord, ResourceToolingCode,
+    StandardPackAdoptRequest, StandardPackCheckRequest, StandardPackComposeRequest,
+    StandardPackReadyRequest, StandardPackTrialAnswer, StandardPackTrialRequest,
+    TrialCollectProblem, TrialRecordPlan, TrialRunEnd, check_standard_pack_root, check_trial_run,
+    compose_standard_packs, judge_standard_pack_readiness, plan_standard_pack_trial,
+    standard_pack_adopt, write_trial_record,
 };
-use serde_json::{Value, json};
+use actingcommand_runtime_client::{
+    ContainedRunState, ContainedRunStatus, RunKey, RuntimeClient, RuntimeClientError,
+};
+use serde_json::{Map, Value, json};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::time::Duration;
 
 /// Workflow #434 LAB-5B2: the flags `standard-pack check` takes.
 pub(crate) const CHECK_FLAGS: [&str; 1] = ["--root"];
@@ -91,8 +113,9 @@ const REDIRECTING_VARIABLES: [&str; 4] = [
 /// Workflow #464 P3: the flags `standard-pack ready` takes.
 pub(crate) const READY_FLAGS: [&str; 1] = ["--root"];
 /// Workflow #463 S3-10: the flags `standard-pack trial` takes; its instance is actinglab's global
-/// `--instance`, as on every own command that acts on one.
-pub(crate) const TRIAL_FLAGS: [&str; 8] = [
+/// `--instance`, as on every own command that acts on one. Workflow #463 S3-11: and the run's
+/// two, `--collect` and `--wait`.
+pub(crate) const TRIAL_FLAGS: [&str; 10] = [
     "--package",
     "--authorization",
     "--variable",
@@ -101,7 +124,13 @@ pub(crate) const TRIAL_FLAGS: [&str; 8] = [
     "--root",
     "--state-dir",
     "--plan",
+    COLLECT_FLAG,
+    WAIT_FLAG,
 ];
+/// Workflow #463 S3-11: the run's two flags: the run of an earlier trial whose end is read and
+/// recorded, and how long the run is waited for. A plan takes neither.
+const COLLECT_FLAG: &str = "--collect";
+const WAIT_FLAG: &str = "--wait";
 /// Workflow #463 S3-10: the flags of `standard-pack trial` that take no value, which take none
 /// from the next word but `true` or `false` (`FlagArgs::parse_switches`).
 pub(crate) const TRIAL_SWITCHES: [&str; 2] = ["--irreversible", "--plan"];
@@ -140,18 +169,20 @@ pub(crate) fn adopt_options() -> [&'static str; 8] {
     ]
 }
 
-/// Workflow #463 S3-10: the flags of `standard-pack trial`.
-pub(crate) fn trial_options() -> [&'static str; 9] {
+/// Workflow #463 S3-10: the flags of `standard-pack trial`. Workflow #463 S3-11: the run's.
+pub(crate) fn trial_options() -> [&'static str; 11] {
     [
-        "--instance <the instance the trial is for, shown as given; not contacted>",
+        "--instance <the instance the trial is for; the run is sent to it>",
         "--package <a pack directory: packs/<id> of a checkout or a placed pack; no container>",
         "--authorization <the owner's authorization reference, 1 to 1024 bytes; the run needs it>",
-        "--variable <name>=<json> (repeatable, once per name; judged by its declaration)",
-        "--expect <an outcome key the package declares>",
-        "--irreversible (acknowledges a package the irreversible mark flags)",
+        "--variable <name>=<json> (repeatable; judged by the plan; a run carries none yet)",
+        "--expect <an outcome key the package declares; the run answers whether it matched>",
+        "--irreversible (acknowledges a package the irreversible mark flags; its run needs it)",
         "--root <judges the mark; a pack it does not register is marked; without it not judged>",
         "--state-dir <the Lab's state directory, where trial records go; default actinglab's>",
-        "--plan (required in this release: the plan only; nothing is sent)",
+        "--plan (the plan only; nothing is sent or written)",
+        "--collect <request_id> (reads that run's end and records it; sends nothing)",
+        "--wait <duration> (the longest the run is waited for; absent: until its receipt)",
     ]
 }
 
@@ -251,7 +282,8 @@ pub(crate) fn run_standard_pack(
                 CliError::device(format!("failed to serialize the readiness: {error}"))
             })
         }
-        // Workflow #463 S3-10: the plan of a trial on a real application; it sends nothing.
+        // Workflow #463 S3-10: the plan of a trial on a real application; Workflow #463 S3-11:
+        // without `--plan`, its one run.
         "trial" => run_trial(global, args),
         other => Err(CliError::usage(format!(
             "unknown standard-pack command: {other}"
@@ -320,15 +352,21 @@ fn run_adopt(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
         .map_err(|error| CliError::device(format!("failed to serialize the adoption: {error}")))
 }
 
-/// Workflow #463 S3-10: `standard-pack trial` (module doc). The coordinator's ruling 1: in this
-/// release the row answers only with `--plan`; without it the line is refused before anything is
-/// read, `validation_failed` naming `--plan` `required`, the word the command line gives a
-/// required flag that is missing. The flags' own refusals come first, each naming its flag:
-/// a flag the row does not take or a positional word (`unknown`), a flag given twice but
-/// `--variable` (`repeated`), an option without its value (`value_missing`, `--authorization`
-/// among them), `--instance` or `--package` absent (`required`), a `--variable` as the scan
-/// replay refuses it (its own parser, `replay_cli::given_variables`). Fix round 2: a plan asks
-/// for no authorization; without `--authorization` it says that the run will require one.
+/// Workflow #463 S3-10: `standard-pack trial` (module doc). The flags' own refusals come first,
+/// each naming its flag: a flag the row does not take or a positional word (`unknown`), a flag
+/// given twice but `--variable` (`repeated`), an option without its value (`value_missing`,
+/// `--authorization` among them), `--instance` or `--package` absent (`required`), a `--variable`
+/// as the scan replay refuses it (its own parser, `replay_cli::given_variables`). Fix round 2: a
+/// plan asks for no authorization; without `--authorization` it says that the run will require
+/// one.
+///
+/// Workflow #463 S3-11: `--plan` is no longer required. Without it the line is the run (or, with
+/// `--collect`, the reading of an earlier run's end): `--collect` or `--wait` beside `--plan`, and
+/// `--wait` beside `--collect`, are `conflicting`; a `--collect` that is no request id
+/// `not_recognised`, a `--wait` that is no duration `wrong_type`; under the global `--dry-run` the
+/// run and `--collect` are `dry_run_unsupported` after the flags, before anything is read. Then
+/// everything the plan does, by the same function, then the refusals only the run needs
+/// (`check_trial_run`), and only then the Runtime is reached ([`TrialRun`]).
 fn run_trial(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse_switches(args, &TRIAL_SWITCHES);
     if let Some(flag) = flags
@@ -347,8 +385,11 @@ fn run_trial(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     {
         return Err(trial_refused(flag, ArgumentProblem::Repeated));
     }
-    if !flags.bool("--plan") {
-        return Err(trial_refused("--plan", ArgumentProblem::Required));
+    let plan_only = flags.bool("--plan");
+    if let Some(flag) = [COLLECT_FLAG, WAIT_FLAG].into_iter().find(|flag| {
+        flags.given(flag) && (plan_only || (*flag == WAIT_FLAG && flags.given(COLLECT_FLAG)))
+    }) {
+        return Err(trial_refused(flag, ArgumentProblem::Conflicting));
     }
     let instance = global
         .instance
@@ -361,8 +402,31 @@ fn run_trial(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let expect = trial_value(&flags, "--expect")?;
     let root = trial_value(&flags, "--root")?.map(PathBuf::from);
     trial_value(&flags, "--state-dir")?;
+    let collect = match trial_value(&flags, COLLECT_FLAG)? {
+        Some(id) => Some(
+            run_evidence::parse_request_id(&id)
+                .map(|request_id| (id, request_id))
+                .ok_or_else(|| trial_refused(COLLECT_FLAG, ArgumentProblem::NotRecognised))?,
+        ),
+        None => None,
+    };
+    let wait_for = match trial_value(&flags, WAIT_FLAG)? {
+        Some(text) => Some(
+            parse_duration(&text)
+                .ok_or_else(|| trial_refused(WAIT_FLAG, ArgumentProblem::WrongType))?,
+        ),
+        None => None,
+    };
     let variables = crate::replay_cli::given_variables(&flags, TRIAL)?;
-    let answer = plan_standard_pack_trial(&StandardPackTrialRequest {
+    if !plan_only {
+        crate::dry_run_gate::refuse(
+            global,
+            TRIAL,
+            Some("standard-pack trial --plan"),
+            Value::Null,
+        )?;
+    }
+    let request = StandardPackTrialRequest {
         package: PathBuf::from(package),
         instance,
         authorization,
@@ -371,9 +435,447 @@ fn run_trial(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
         irreversible: flags.bool("--irreversible"),
         root,
         state_dir: crate::session_state_dir_from_flags(&flags)?,
-    })?;
-    serde_json::to_value(answer)
-        .map_err(|error| CliError::device(format!("failed to serialize the trial plan: {error}")))
+    };
+    let answer = plan_standard_pack_trial(&request)?;
+    let encode_failed = |error: serde_json::Error| {
+        CliError::device(format!("failed to serialize the trial plan: {error}"))
+    };
+    if plan_only {
+        return serde_json::to_value(&answer).map_err(encode_failed);
+    }
+    let plan = serde_json::to_value(&answer.plan).map_err(encode_failed)?;
+    let run = TrialRun {
+        kept: check_trial_run(&answer, &request)?,
+        request: &request,
+        answer: &answer,
+        plan,
+    };
+    let client = RuntimeClient::connect(crate::lab_client_config(crate::runtime_state_root()?))
+        .map_err(crate::runtime_slice_cli::map_runtime_error)?;
+    match collect {
+        Some((id, request_id)) => run.collect(&client, &id, request_id),
+        None => run.send(&client, wait_for),
+    }
+}
+
+/// Workflow #463 S3-11: one trial's run, after its plan and the refusals only the run needs
+/// (contracts/standard-pack-trial.md, "The run").
+struct TrialRun<'a> {
+    /// The trial as the line asked for it.
+    request: &'a StandardPackTrialRequest,
+    /// Its plan, as `--plan` answers it.
+    answer: &'a StandardPackTrialAnswer,
+    /// The plan as the record keeps it, with the authorization the run is sent under.
+    kept: TrialRecordPlan,
+    /// The plan as the answer shows it.
+    plan: Value,
+}
+
+impl TrialRun<'_> {
+    /// Sends the trial's one run on `client`: the request `run start` sends, by its own function,
+    /// for the package directory tried, waited for as `run start` waits (to its receipt, the run's
+    /// deadline bounding it, or up to `wait_for`); then its end, read as `run show` reads it, is
+    /// answered and recorded ([`Self::ended`]). Nothing is ever sent again: a wait that ends first
+    /// is `command_wait_expired`, a Runtime that refused the run answers its refusal, and after a
+    /// result that is not known (no receipt came back) the end is read on the same connection,
+    /// which, lost, answers at once with the client's failure; each names the request id, and
+    /// those whose run may still end name the line that reads it later.
+    fn send(&self, client: &RuntimeClient, wait_for: Option<Duration>) -> CliOutcome<Value> {
+        let mut params = Map::new();
+        params.insert(
+            "instance".to_owned(),
+            Value::String(self.answer.plan.instance.clone()),
+        );
+        params.insert(
+            "package".to_owned(),
+            Value::String(self.answer.plan.package.clone()),
+        );
+        let prepared = run_start_prepared(&params, client).map_err(|exit| self.not_sent(&exit))?;
+        let request_id = prepared.request_id();
+        let correlation_id = prepared.correlation_id();
+        let id = run_evidence::id_text(&request_id);
+        let submitted = match wait_for {
+            None => client.submit_prepared(prepared),
+            Some(wait_for) => {
+                let submitter = client.clone();
+                match wait_at_most(wait_for, move || submitter.submit_prepared(prepared)) {
+                    Waited::Done(submitted) => submitted,
+                    Waited::Expired => {
+                        let (_, outcome) = wait::expired(
+                            ContractLocation::RunContainedTask,
+                            wait_for,
+                            Some(request_id),
+                            Some(correlation_id),
+                        );
+                        return Err(self.unread(
+                            &outcome,
+                            format!(
+                                "the trial's run {id} was sent and has not answered within \
+                                 {wait_for:?}; it goes on in the Runtime and no record was \
+                                 written: read its end later with the line in next"
+                            ),
+                            &id,
+                            true,
+                        ));
+                    }
+                }
+            }
+        };
+        // A receipt without a terminal: the Runtime refused the run, which never ran.
+        if let Err(error) = &submitted
+            && error.committed_receipt().is_none()
+            && error.received_receipt().is_some()
+        {
+            return Err(refusal(
+                &error.outcome(),
+                error.to_string(),
+                self.members(true, Some(&id)),
+                ErrorKind::DeviceInstance,
+            ));
+        }
+        // Otherwise the end is read: after a receipt, and after a result that is not known (no
+        // receipt came back), on the same connection, which, lost, answers the read with the
+        // client's failure at once and sends nothing.
+        let run = run_show::read(client, RunKey::RequestId(request_id))
+            .map_err(|error| self.unread(&error.outcome(), error.to_string(), &id, true))?;
+        self.ended(client, &id, request_id, run, true)
+    }
+
+    /// Workflow #463 S3-11: `--collect <request_id>`: sends nothing; reads the run `request_id` as
+    /// `run show` reads it, after one status read that resolves the trial's instance; a run whose
+    /// facts do not name the trial's package or its instance is `trial_collect_mismatch`; then its
+    /// end is answered and recorded as a sent run's is ([`Self::ended`]).
+    fn collect(
+        &self,
+        client: &RuntimeClient,
+        id: &str,
+        request_id: RequestId,
+    ) -> CliOutcome<Value> {
+        let plan = &self.answer.plan;
+        let relayed = |error: RuntimeClientError| {
+            refusal(
+                &error.outcome(),
+                error.to_string(),
+                self.members(false, Some(id)),
+                ErrorKind::DeviceInstance,
+            )
+        };
+        let status = client.status().map_err(relayed)?;
+        let instance =
+            instance_selector::select(status.instances(), &plan.instance).map_err(|miss| {
+                refusal(
+                    &miss.outcome(&plan.instance),
+                    format!(
+                        "the Runtime's status names no single instance {}",
+                        plan.instance
+                    ),
+                    self.members(false, Some(id)),
+                    ErrorKind::DeviceInstance,
+                )
+            })?;
+        let run = run_show::read(client, RunKey::RequestId(request_id))
+            .map_err(|error| self.unread(&error.outcome(), error.to_string(), id, false))?;
+        if run.state != ContainedRunState::NotFound {
+            let problem = if run.package_label.as_deref() != Some(plan.package_id.as_str()) {
+                Some(TrialCollectProblem::OtherPackage)
+            } else if run.instance_id != Some(instance.instance_id()) {
+                Some(TrialCollectProblem::OtherInstance)
+            } else {
+                None
+            };
+            if let Some(problem) = problem {
+                return Err(refusal(
+                    &Outcome::new(ResourceToolingCode::TrialCollectMismatch)
+                        .request_id(id)
+                        .trial_collect_problem(problem),
+                    format!(
+                        "the run {id} is not a run of {} on {} ({}): give --collect the request \
+                         id this trial's own answer named",
+                        plan.package_id,
+                        plan.instance,
+                        problem.as_str()
+                    ),
+                    self.members(false, Some(id)),
+                    ErrorKind::UsageValidation,
+                ));
+            }
+        }
+        self.ended(client, id, request_id, run, false)
+    }
+
+    /// Workflow #463 S3-11: the end of the run `id` as `run show` read it (`run`): with its terminal
+    /// and the time the ledger recorded that terminal (one read of that record by its request and
+    /// its sequence: the time names the record, so a run is recorded under one name), the record
+    /// is written once by the resource tooling's writer and the answer is `{sent, plan,
+    /// request_id, run_id?, end: {state, outcome_key?, final_page?, failure_code?,
+    /// failure_values?}, expected?, matched?, record, part_left?, warnings?}`. A run that ended
+    /// normally succeeds (another end than `--expect` named is `matched` false with the warning
+    /// `trial_end_unexpected`); a failed or cancelled run is refused with its own code and values
+    /// beside the same members, as `run start` answers a failed run. Without a terminal, or
+    /// without its record, nothing is written: `trial_end_unread`. A refused write answers the
+    /// writer's code beside the same members.
+    fn ended(
+        &self,
+        client: &RuntimeClient,
+        id: &str,
+        request_id: RequestId,
+        run: ContainedRunStatus,
+        sent: bool,
+    ) -> CliOutcome<Value> {
+        let state = run.state;
+        let Some(terminal) = run.terminal else {
+            return Err(self.end_unread(id, state, sent));
+        };
+        let recorded = client
+            .query_events(
+                EventQuery {
+                    request_id: Some(request_id),
+                    from_sequence: Some(terminal.sequence),
+                    to_sequence: Some(terminal.sequence),
+                    ..EventQuery::default()
+                },
+                ProjectionProfile::Forensic,
+            )
+            .map_err(|error| self.unread(&error.outcome(), error.to_string(), id, sent))?;
+        let Some(at_unix_ms) = recorded
+            .iter()
+            .find(|event| event.sequence == terminal.sequence)
+            .map(|event| event.timestamp_unix_ms)
+        else {
+            return Err(self.end_unread(id, state, sent));
+        };
+        let record = PackTrialRecord::of_run(
+            self.kept.clone(),
+            at_unix_ms,
+            id.to_owned(),
+            run.run_id.map(|run_id| run_evidence::id_text(&run_id)),
+            TrialRunEnd {
+                outcome: terminal.outcome,
+                outcome_key: terminal.outcome_key,
+                final_page: terminal.final_page,
+                failure_code: terminal.failure_code,
+                failure_values: terminal.failure_values,
+            },
+        );
+        let mut members = self.members(sent, Some(id));
+        if let Some(run_id) = &record.run_id {
+            members.insert("run_id".to_owned(), json!(run_id));
+        }
+        members.insert("end".to_owned(), end_answer(state, &record.end));
+        if let Some(expected) = &record.plan.expect {
+            members.insert("expected".to_owned(), json!(expected));
+        }
+        if let Some(matched) = record.matched {
+            members.insert("matched".to_owned(), json!(matched));
+        }
+        let mut warnings = record.unexpected_end().into_iter().collect::<Vec<_>>();
+        let written = match write_trial_record(&self.request.state_dir, &record) {
+            Ok(written) => written,
+            Err(error) => return Err(beside(error, members)),
+        };
+        members.insert(
+            "record".to_owned(),
+            Value::String(written.path.display().to_string()),
+        );
+        if let Some(part) = &written.part_left {
+            members.insert(
+                "part_left".to_owned(),
+                Value::String(part.display().to_string()),
+            );
+        }
+        warnings.extend(written.warnings);
+        if !warnings.is_empty() {
+            members.insert("warnings".to_owned(), json!(warnings));
+        }
+        let Some(failed) = &record.end.failure_code else {
+            return Ok(Value::Object(members));
+        };
+        members.insert(
+            "outcome".to_owned(),
+            json!({"code": failed, "values": record.end.failure_values}),
+        );
+        Err(CliError::new(
+            ErrorKind::DeviceInstance,
+            failed.as_str(),
+            format!(
+                "the trial's run {id} ended {} with {}; its record is {}",
+                run_state_word(state).as_str(),
+                failed.as_str(),
+                written.path.display()
+            ),
+            &[],
+        )
+        .with_details(Value::Object(members)))
+    }
+
+    /// The members every answer of the run carries: `sent`, `plan`, and the run's `request_id`
+    /// once it has one.
+    fn members(&self, sent: bool, request_id: Option<&str>) -> Map<String, Value> {
+        let mut members = Map::new();
+        members.insert("sent".to_owned(), Value::Bool(sent));
+        members.insert("plan".to_owned(), self.plan.clone());
+        if let Some(request_id) = request_id {
+            members.insert(
+                "request_id".to_owned(),
+                Value::String(request_id.to_owned()),
+            );
+        }
+        members
+    }
+
+    /// The refusal `outcome` (`message`) of a run `id` whose end was not read, so that no record
+    /// was written: the members and `next`, the line that reads the end later.
+    fn unread(&self, outcome: &Outcome, message: String, id: &str, sent: bool) -> CliError {
+        let mut members = self.members(sent, Some(id));
+        members.insert("next".to_owned(), self.collect_line(id));
+        refusal(outcome, message, members, ErrorKind::DeviceInstance)
+    }
+
+    /// `trial_end_unread`: the run `id` read in `state` shows no end a record can keep.
+    fn end_unread(&self, id: &str, state: ContainedRunState, sent: bool) -> CliError {
+        let word = run_state_word(state);
+        let outcome = Outcome::new(ResourceToolingCode::TrialEndUnread)
+            .request_id(id)
+            .run_state(word);
+        let mut error = self.unread(
+            &outcome,
+            format!(
+                "the run {id} reads {} and shows no end a record can keep: no record was written",
+                word.as_str()
+            ),
+            id,
+            sent,
+        );
+        if let Some(Value::Object(details)) = error.details.as_mut() {
+            details.insert("end".to_owned(), json!({"state": state}));
+        }
+        error
+    }
+
+    /// The refusal of a run that was not sent: the line `run start`'s own function answered
+    /// (`exit`), its outcome on top, beside the plan.
+    fn not_sent(&self, exit: &Exit) -> CliError {
+        let outcome = match &exit.line {
+            Ok(line) => line.get("outcome").cloned(),
+            Err(_) => None,
+        }
+        .unwrap_or_else(|| cli_line::outcome_value(&Exit::output_failed(), Detail::Full));
+        let message = exit
+            .developer
+            .as_ref()
+            .and_then(|developer| developer.text.clone())
+            .or_else(|| exit.line.as_ref().err().cloned())
+            .unwrap_or_else(|| "the trial's run was not sent".to_owned());
+        let code = outcome
+            .get("code")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .unwrap_or_else(|| Exit::output_failed().code().as_str().to_owned());
+        let mut members = self.members(false, None);
+        members.insert("outcome".to_owned(), outcome);
+        CliError::new(ErrorKind::DeviceInstance, code, message, &[])
+            .with_details(Value::Object(members))
+    }
+
+    /// The line that reads the end of the run `request_id` later and records it, as the words of
+    /// actinglab's command line after the program's name: the trial's own arguments with
+    /// `--collect <request_id>` (`{collect: [...]}`).
+    fn collect_line(&self, request_id: &str) -> Value {
+        let plan = &self.answer.plan;
+        let mut words = vec![
+            "standard-pack".to_owned(),
+            "trial".to_owned(),
+            "--instance".to_owned(),
+            plan.instance.clone(),
+            "--package".to_owned(),
+            plan.package.clone(),
+            "--authorization".to_owned(),
+            self.kept.authorization.clone(),
+        ];
+        if let Some(expected) = &plan.expect {
+            words.extend(["--expect".to_owned(), expected.clone()]);
+        }
+        if plan.irreversible_acknowledged {
+            words.push("--irreversible".to_owned());
+        }
+        if let Some(root) = &self.request.root {
+            words.extend(["--root".to_owned(), root.display().to_string()]);
+        }
+        words.extend([
+            "--state-dir".to_owned(),
+            self.request.state_dir.display().to_string(),
+            COLLECT_FLAG.to_owned(),
+            request_id.to_owned(),
+        ]);
+        json!({"collect": words})
+    }
+}
+
+/// Workflow #463 S3-11: the refusal of a trial's run with `outcome` on top (its code the error's
+/// code, its envelope the details' `outcome`, as actinglab's line reads it) and `members` beside
+/// it, of the class `class`.
+fn refusal(
+    outcome: &Outcome,
+    message: String,
+    mut members: Map<String, Value>,
+    class: ErrorKind,
+) -> CliError {
+    members.insert(
+        "outcome".to_owned(),
+        cli_line::outcome_value(outcome, Detail::Full),
+    );
+    CliError::new(class, outcome.code().as_str(), message, &[]).with_details(Value::Object(members))
+}
+
+/// Workflow #463 S3-11: the refusal `error` of the resource tooling (the writer's) with `members`
+/// beside its own details, which keep its outcome.
+fn beside(mut error: CliError, members: Map<String, Value>) -> CliError {
+    let mut details = match error.details.take() {
+        Some(Value::Object(details)) => details,
+        _ => Map::new(),
+    };
+    for (name, value) in members {
+        details.entry(name).or_insert(value);
+    }
+    error.with_details(Value::Object(details))
+}
+
+/// Workflow #463 S3-11: the end a trial's answer shows: the run's state as `run show` names it and
+/// its terminal's `outcome_key`, `final_page`, `failure_code` and `failure_values`, each when it
+/// has one.
+fn end_answer(state: ContainedRunState, end: &TrialRunEnd) -> Value {
+    let mut answer = Map::new();
+    answer.insert("state".to_owned(), json!(state));
+    if let Some(outcome_key) = &end.outcome_key {
+        answer.insert("outcome_key".to_owned(), json!(outcome_key));
+    }
+    if let Some(final_page) = &end.final_page {
+        answer.insert("final_page".to_owned(), json!(final_page));
+    }
+    if let Some(failure_code) = &end.failure_code {
+        answer.insert("failure_code".to_owned(), json!(failure_code));
+    }
+    if !end.failure_values.is_empty() {
+        answer.insert(
+            "failure_values".to_owned(),
+            Value::Object(end.failure_values.clone()),
+        );
+    }
+    Value::Object(answer)
+}
+
+/// Workflow #463 S3-11: a run's state as the word of the vocabulary `run_state`, which names the
+/// same states.
+fn run_state_word(state: ContainedRunState) -> RunState {
+    match state {
+        ContainedRunState::NotFound => RunState::NotFound,
+        ContainedRunState::Admitted => RunState::Admitted,
+        ContainedRunState::Running => RunState::Running,
+        ContainedRunState::Succeeded => RunState::Succeeded,
+        ContainedRunState::Failed => RunState::Failed,
+        ContainedRunState::Cancelled => RunState::Cancelled,
+        ContainedRunState::InterruptedUnterminated => RunState::InterruptedUnterminated,
+    }
 }
 
 /// Workflow #463 S3-10: the refusal of the word `word` of a `standard-pack trial` line, as the CLI

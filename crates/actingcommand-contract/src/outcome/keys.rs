@@ -877,4 +877,7 @@ outcome_keys! {
     // trial record's name is not read as that record; kept in codes mode. ----
     trial_state_place: vocab(trial_state_place),
     trial_record_problem: vocab(trial_record_problem),
+    // ---- Workflow #463 S3-11 (the run of `actinglab standard-pack trial`): why a run `--collect`
+    // names is not a run of the trial; kept in codes mode. ----
+    trial_collect_problem: vocab(trial_collect_problem),
 }

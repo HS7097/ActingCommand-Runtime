@@ -174,7 +174,8 @@ pub(crate) const COMMANDS: [(&str, &[&str], Line); 68] = [
         &["standard-pack", "ready"],
         Line::AsWritten,
     ),
-    // Workflow #463 S3-10: the plan of a trial on a real application; it sends nothing yet.
+    // Workflow #463 S3-10: the plan of a trial on a real application; Workflow #463 S3-11:
+    // without `--plan`, its one run.
     (
         "standard-pack trial",
         &["standard-pack", "trial"],

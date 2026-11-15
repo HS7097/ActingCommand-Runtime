@@ -144,6 +144,12 @@ const RECORD_FORMS: &[(&str, Mode)] = &[
     ("promote", Mode::Refused("resource_production_retired")),
     ("publish", Mode::Refused("resource_production_retired")),
 ];
+// Workflow #463 S3-11: `--plan` reads and writes nothing; the run sends one run and writes its
+// record, and `--collect` writes the record, so both are refused after the flags.
+const TRIAL_FORMS: &[(&str, Mode)] = &[
+    ("--plan", Mode::NoEffect),
+    ("without --plan (the run, --collect)", UNSUPPORTED),
+];
 
 /// The declaration table of `commands[].dry_run_mode`. A capability entry not listed here is
 /// `no_effect` when its status is retired, reserved or unavailable, and `undeclared` otherwise.
@@ -290,6 +296,9 @@ const DECLARATIONS: &[(&str, Mode)] = &[
     ("session record", Mode::Mixed(RECORD_FORMS)),
     ("package fmt", Mode::Mixed(PACKAGE_FMT_FORMS)),
     ("package loading", Mode::Mixed(PACKAGE_LOADING_FORMS)),
+    // Workflow #463 S3-10: `--plan` reads only and sends nothing; Workflow #463 S3-11: the run
+    // and `--collect` are refused.
+    ("standard-pack trial", Mode::Mixed(TRIAL_FORMS)),
     // no_effect
     ("version", Mode::NoEffect),
     ("doctor", Mode::NoEffect),
@@ -305,8 +314,6 @@ const DECLARATIONS: &[(&str, Mode)] = &[
     ("standard-pack check", Mode::NoEffect),
     // Workflow #464 P3: it reads a game root only.
     ("standard-pack ready", Mode::NoEffect),
-    // Workflow #463 S3-10: its one form in this release, `--plan`, reads only and sends nothing.
-    ("standard-pack trial", Mode::NoEffect),
     ("wait", Mode::NoEffect),
     ("package validate", Mode::NoEffect),
     ("package preflight", Mode::NoEffect),

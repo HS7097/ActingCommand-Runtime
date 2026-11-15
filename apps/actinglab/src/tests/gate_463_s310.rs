@@ -3,10 +3,12 @@
 // Workflow #463 S3-10 (register §1.417; contracts/standard-pack-trial.md; coordinator work order
 // rd-1115/brief-463-s310-trial-plan.md, ruling 1): `actinglab standard-pack trial` on the command
 // line.
-// - `s310_without_plan_the_line_is_refused_before_anything_is_read`: a line without `--plan` is
-//   `validation_failed` (exit 2) naming `--plan` `required`, whether it names a package that does
-//   not exist or nothing at all, and nothing is made; a flag the row does not take is refused
-//   naming it (`unknown`) first.
+// - `s310_without_plan_the_line_is_refused_before_anything_is_read` (adapted by Workflow #463
+//   S3-11, which lifted the refusal of a line without `--plan`: without it the line is the run):
+//   under the global `--dry-run` a line without `--plan` (and one with `--plan false`) is
+//   `dry_run_unsupported` (exit 2) before anything is read, the package named not existing, and
+//   nothing is made; a line naming nothing is `validation_failed` naming `--instance` `required`;
+//   a flag the row does not take is refused naming it (`unknown`) first.
 // - `s310_the_command_line_answers_the_plan_and_sends_nothing`: with `--plan` the line answers the
 //   plan of a made-up package (`sent` false, the package id, the instance as `--instance` gives
 //   it, the authorization, the variable given, the irreversible mark `not_judged`, the record's
@@ -157,9 +159,14 @@ fn s310_without_plan_the_line_is_refused_before_anything_is_read() {
     let state = context.path("state");
     let missing_text = missing.display().to_string();
     let state_text = state.display().to_string();
-
-    argument_refused(
-        &trial(&[
+    // Workflow #463 S3-11: without `--plan` the line is the run, which the global `--dry-run`
+    // refuses after the flags, before the package is read.
+    let dry_run = |extra: &[&str]| {
+        let line = [
+            "--json",
+            "--dry-run",
+            "standard-pack",
+            "trial",
             "--instance",
             "node-a",
             "--package",
@@ -168,18 +175,19 @@ fn s310_without_plan_the_line_is_refused_before_anything_is_read() {
             "board item 463",
             "--state-dir",
             state_text.as_str(),
-        ]),
-        "--plan",
-        "required",
-    );
-    // Nothing at all: still the plan first, before the instance, the package or the authorization.
-    argument_refused(&trial(&[]), "--plan", "required");
+        ]
+        .into_iter()
+        .chain(extra.iter().copied())
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+        run_cli(line, true)
+    };
+
+    refused(&dry_run(&[]), "dry_run_unsupported");
     // `--plan false` is no plan.
-    argument_refused(
-        &trial(&["--plan", "false", "--state-dir", state_text.as_str()]),
-        "--plan",
-        "required",
-    );
+    refused(&dry_run(&["--plan", "false"]), "dry_run_unsupported");
+    // Nothing at all: the instance first, before the package or the authorization.
+    argument_refused(&trial(&[]), "--instance", "required");
     // A flag the row does not take is refused by name before that.
     argument_refused(&trial(&["--frobnicate", "x"]), "--frobnicate", "unknown");
     assert!(!missing.exists());

@@ -2863,6 +2863,10 @@
     "trial_record_problem": {
       "type": "vocab:trial_record_problem",
       "description": "Why a file of a trial record's name is not read as that record: the read failed, it is too large, it does not decode, or it is not the record its name says (Workflow #463 S3-10 fix round 2, since 0.12.64)."
+    },
+    "trial_collect_problem": {
+      "type": "vocab:trial_collect_problem",
+      "description": "Why the run a trial's --collect names is not a run of the trial: its facts do not name the trial's package, or the instance the trial is for (Workflow #463 S3-11, since 0.12.64)."
     }
   },
   "vocabularies": {
@@ -10581,6 +10585,22 @@
         },
         "name_mismatch": {
           "description": "The file decodes, but is not the record of the package, the content and the time its name says."
+        }
+      }
+    },
+    "trial_collect_problem": {
+      "description": "Why the run a trial's --collect names is not a run of the trial, the value trial_collect_problem of trial_collect_mismatch (Workflow #463 S3-11, contracts/standard-pack-trial.md \"Reading the end later\", since 0.12.64).",
+      "review": "pending",
+      "source": {
+        "file": "crates/resource-tooling/src/codes.rs",
+        "enum": "TrialCollectProblem"
+      },
+      "tokens": {
+        "other_package": {
+          "description": "The run's facts do not name the trial's package as the package it admitted: they name another one, or none."
+        },
+        "other_instance": {
+          "description": "The run's facts do not name the instance the trial is for: they name another one, or none."
         }
       }
     }

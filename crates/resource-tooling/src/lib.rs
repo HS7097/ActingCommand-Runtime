@@ -145,6 +145,11 @@ mod gate_463_s36;
 #[cfg(test)]
 mod gate_463_s310;
 
+// Workflow #463 S3-11 (register §1.418): the run's own refusals, the record of its end, and the
+// writer's failure paths.
+#[cfg(test)]
+mod gate_463_s311;
+
 mod maa_task_graph;
 // Workflow #444 NOTICES-3: a notices directory on disk, held to the contract crate's rules.
 mod notices_directory;
@@ -218,11 +223,14 @@ pub use standard_pack_schedule::{
 // round 2: the one test of an installed root along a path, `installed_root_containing`; fix round
 // 3: the record's own plan type and the writer's answer.
 pub use codes::{TrialRecordProblem, TrialStatePlace};
+// Workflow #463 S3-11: the run's offline parts: its own refusals and the record of its end; the
+// word of a collected run that is not the trial's.
+pub use codes::TrialCollectProblem;
 pub use standard_pack_trial::{
     CONTENT_PREFIX_DIGITS, MAX_AUTHORIZATION_BYTES, PACK_TRIAL_SCHEMA, PackTrialRecord,
     StandardPackTrialAnswer, StandardPackTrialRequest, TRIALS_DIRECTORY, TrialDeclaredEnd,
     TrialEndKind, TrialIrreversible, TrialIrreversibleBasis, TrialPlan, TrialRecordPlan,
     TrialRunEnd, TrialRunRequirement, TrialValueSource, TrialVariable, WrittenTrialRecord,
-    check_trial_state_dir, installed_root_containing, latest_trial_record,
+    check_trial_run, check_trial_state_dir, installed_root_containing, latest_trial_record,
     plan_standard_pack_trial, trial_record_path, trial_records, write_trial_record,
 };

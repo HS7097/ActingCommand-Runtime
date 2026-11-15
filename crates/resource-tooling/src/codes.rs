@@ -173,6 +173,41 @@ actingcommand_contract::outcome_codes! {
         /// the `.part` its write created is left beside it, its removal refused (key `path`, the
         /// `.part`; the refusal as its cause). The writer answers success with it in `warnings`.
         TrialRecordPartLeft => "trial_record_part_left": warning / none,
+        // Workflow #463 S3-11: the run of `actinglab standard-pack trial`
+        // (contracts/standard-pack-trial.md, "The run"). The first three are the refusals only the
+        // run needs, before anything is sent or written (`check_trial_run`).
+        /// Workflow #463 S3-11: a trial's run was asked for without `--authorization` (key
+        /// `package_id`); a plan needs none.
+        TrialAuthorizationMissing => "trial_authorization_missing": error / none,
+        /// Workflow #463 S3-11: the irreversible mark flags the package over the root given, and
+        /// the run was asked for without `--irreversible` (key `package_id`).
+        TrialIrreversibleUnacknowledged => "trial_irreversible_unacknowledged": error / none,
+        /// Workflow #463 S3-11: the run was asked for with a `--variable`, and a direct run carries
+        /// no variable value yet (keys `package_id`, `variable_name`, the first given).
+        TrialVariablesNotCarried => "trial_variables_not_carried": error / none,
+        /// Warning (Workflow #463 S3-11): the trial's run ended normally on another end than the
+        /// one `--expect` named (key `package_id`; optional `outcome_key`, the end's key). The
+        /// command succeeds with `matched` false.
+        TrialEndUnexpected => "trial_end_unexpected": warning / none,
+        /// Workflow #463 S3-11: the read of the trial's run shows no end a record can keep (keys
+        /// `request_id`, `run_state`: a state that is no end, or an end whose terminal record the
+        /// read did not find), so no record was written.
+        TrialEndUnread => "trial_end_unread": error / none,
+        /// Workflow #463 S3-11: `--collect` names a run that is not a run of the trial's package on
+        /// its instance (keys `request_id`, `trial_collect_problem`).
+        TrialCollectMismatch => "trial_collect_mismatch": error / none,
+    }
+}
+
+actingcommand_contract::outcome_vocabulary! {
+    /// Workflow #463 S3-11: why the run `--collect` names is not a run of the trial (vocabulary
+    /// `trial_collect_problem`, the value `trial_collect_problem` of `trial_collect_mismatch`).
+    pub enum TrialCollectProblem: "trial_collect_problem" {
+        /// The run's facts do not name the trial's package as the package it admitted (another
+        /// one, or none).
+        OtherPackage => "other_package",
+        /// The run's facts do not name the instance the trial is for (another one, or none).
+        OtherInstance => "other_instance",
     }
 }
 
