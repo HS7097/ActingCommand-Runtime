@@ -414,7 +414,16 @@ Every request is recorded intent -> result, all linked to the instance:
    operation: control_instance}`, typed tokens only, where `stage` is the typed step
    (`mumu_manager_control_exit`, `_control_errcode`, `_launch_error`, `_wait_timeout`, `_run`,
    `_timeout`, `_path`, an `info` reader stage, `emulator_control_binding`,
-   `emulator_control_support`).
+   `emulator_control_support`). Workflow #469 H3 (since 0.12.62;
+   [v012-register.md](v012-register.md) §1.399): an `emulator_control_failed` outcome also
+   carries that stage and that category as its values `stage` (a location) and
+   `device_category` (vocabulary `device_category`), on the receipt, on this record and where
+   the outcome is a cause whole (a settled timeout's `caused_by` link); a failure without a
+   device diagnostic carries the detail's defaults, `mumu_manager_control` and `child_exit`. The
+   other codes of a provider control failure (`emulator_control_wait_timeout`,
+   `emulator_control_unavailable`, `emulator_control_unsupported`) carry neither. The detail, the
+   stop-result table and a restart's wrapping are unchanged: a failed restart's `caused_by` link
+   names the failing phase's code and operation alone (item 5), so it carries neither value.
 5. A failed restart records one `command.rejected` (action `emulator.instance.restart`, the
    receipt terminal) and one `runtime.failed`, after its Start phase when one ran (coordinator
    answer D2); a failed phase records nothing of its own. For `emulator_restart_stop_failed` and

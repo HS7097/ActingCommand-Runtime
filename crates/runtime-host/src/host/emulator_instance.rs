@@ -103,6 +103,7 @@ use actingcommand_contract::{
     CONNECTION_PREPARATION_WAIT_MS, EmulatorInstanceAction, EmulatorRunningState, FactValue,
     StartupPackageWithheld,
 };
+use actingcommand_device::DeviceErrorCategory;
 use actingcommand_device::codes::DeviceStage;
 use actingcommand_execution_kernel::ExecutionKernelLocation;
 
@@ -2197,7 +2198,9 @@ impl HostShared {
 /// effect claim. The vendor output goes to `native_detail` only; the device observations are
 /// the outcome's values and the primary detail keeps the stage (ledger revision 3). #411 A38:
 /// `status_read` is the one state read after a control command that passed its own bound; with
-/// no observation of the failure's own, it is the observation the failure carries.
+/// no observation of the failure's own, it is the observation the failure carries. Workflow #469
+/// H3 (register §1.399): `emulator_control_failed` also carries the stage and the device
+/// diagnostic's category the primary detail records, as its values `stage` and `device_category`.
 fn emulator_control_error(
     failure: &EmulatorControlFailure,
     instance_id: InstanceId,
@@ -2205,32 +2208,40 @@ fn emulator_control_error(
 ) -> (RuntimeHostError, RuntimeReceiptState, EffectDisposition) {
     let diagnostic = failure.error.diagnostic();
     let stage = failure_stage(failure);
-    let category = diagnostic.map_or("child_exit", |diagnostic| diagnostic.category().as_str());
-    let (code, runtime_code, state) = if stage == HostLocation::EmulatorControlBinding.location()
+    let device_category = diagnostic.map_or(DeviceErrorCategory::ChildExit, |diagnostic| {
+        diagnostic.category()
+    });
+    let category = device_category.as_str();
+    let (code, runtime_code, state, words) = if stage
+        == HostLocation::EmulatorControlBinding.location()
         || stage == HostLocation::EmulatorControlRegistration.location()
     {
         (
             HostCode::EmulatorControlUnavailable,
             RuntimeErrorCode::InvalidRequest,
             RuntimeReceiptState::Denied,
+            None,
         )
     } else if stage == ExecutionKernelLocation::EmulatorControlSupport.location() {
         (
             HostCode::EmulatorControlUnsupported,
             RuntimeErrorCode::InvalidRequest,
             RuntimeReceiptState::Denied,
+            None,
         )
     } else if stage == DeviceStage::MumuManagerWaitTimeout.location() {
         (
             HostCode::EmulatorControlWaitTimeout,
             RuntimeErrorCode::BackendOperationFailed,
             RuntimeReceiptState::Failed,
+            None,
         )
     } else {
         (
             HostCode::EmulatorControlFailed,
             RuntimeErrorCode::BackendOperationFailed,
             RuntimeReceiptState::Failed,
+            Some((stage, device_category)),
         )
     };
     // Once the vendor command has run, its effect on the emulator is not known.
@@ -2259,8 +2270,15 @@ fn emulator_control_error(
             // Workflow #381 B F2, F4 (coordinator answer D5): a Stop's process check, carried
             // by its failure record (on the ladder's rung, the one carrier of
             // `device_process_present=true`).
-            match failure.device_process_present {
+            let outcome = match failure.device_process_present {
                 Some(present) => outcome.device_process_present(ProcessPresenceToken(present)),
+                None => outcome,
+            };
+            // Workflow #469 H3: where the control failed, for `emulator_control_failed` alone.
+            match words {
+                Some((failed_at, failed_category)) => {
+                    outcome.stage(failed_at).device_category(failed_category)
+                }
                 None => outcome,
             }
         })
@@ -2382,3 +2400,8 @@ const fn fence_reason_token(reason: MonitorRecoveryCoordinationReason) -> &'stat
         MonitorRecoveryCoordinationReason::QueuedLeaseRequests => "queued_lease_requests",
     }
 }
+
+// Workflow #469 H3 (register §1.399): the stage and category a provider control failure without
+// a device diagnostic carries.
+#[cfg(test)]
+mod gate_469_h3;

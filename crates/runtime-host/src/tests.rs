@@ -272,6 +272,9 @@ mod gate_mapp2a;
 // Workflow #437 MAPP-2b (0.12.60; register §1.353): the switch's callers, the run's clock that
 // leaves the switch out, the member's lease, a failed switch and the member's switch cooldown.
 mod gate_mapp2b;
+// Workflow #469 H3 (0.12.62; register §1.399): an emulator control failure says where it failed
+// (`stage`, `device_category`).
+mod gate_469_h3;
 // Workflow #437 ORD-1c (0.12.60; register §1.373): the host passes the order within one device: the
 // member in front, the queue waits and the configured default limit.
 mod gate_ord1c;

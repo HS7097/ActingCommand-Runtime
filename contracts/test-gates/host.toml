@@ -4066,3 +4066,15 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_463_v2::v2_fix3_a_dispatched_package_of_a_root_not_read_since_the_start_is_warned",
 ]
 incident = ["#463 V2"]
+
+# Workflow #469 H3 (0.12.62; register §1.399; brief rd-1115/brief-469-word-slices.md; contracts/emulator-control.md, "Event shape", item 4): one discovery-bound instance on the scripted emulator controller, an operator start and then a stop the controller fails at one stage of each family it gives: the receipt and the control's one runtime.failed record are emulator_control_failed with stage and device_category (mumu_manager_control_exit and child_exit, mumu_manager_run and backend_launch, mumu_manager_control_errcode and response), the record keeps elapsed_ms, exit_code and device_process_present, and its primary detail is the same category and stage, mumu_manager and control_instance (1-3); on the building function and a hand-made failure: without a device diagnostic mumu_manager_control and child_exit as values and in the detail (4); the expired readiness wait, the binding refusal and the unsupported provider carry neither value (5)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_469_h3::h3_a_control_whose_vendor_command_exited_says_its_stage_and_child_exit",
+    "actingcommand-runtime-host::lib::tests::gate_469_h3::h3_a_control_whose_tool_could_not_run_says_its_stage_and_backend_launch",
+    "actingcommand-runtime-host::lib::tests::gate_469_h3::h3_a_control_the_vendor_refused_says_its_stage_and_response",
+    "actingcommand-runtime-host::lib::host::emulator_instance::gate_469_h3::h3_a_control_failure_without_a_diagnostic_says_the_default_stage_and_child_exit",
+    "actingcommand-runtime-host::lib::host::emulator_instance::gate_469_h3::h3_the_other_codes_of_a_provider_control_failure_carry_no_stage_value",
+]
+incident = ["#469 H3"]

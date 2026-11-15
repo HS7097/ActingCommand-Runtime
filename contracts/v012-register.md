@@ -27447,6 +27447,55 @@ revision or record shape is added.
 **At deploy.** Nothing to do: the member is computed when a run is read. A run recorded before
 0.12.62 shows the values its terminal outcome recorded.
 
+### 1.399 Slice #469 H3 (0.12.62): an emulator control failure says where it failed (Workflow #469; the owner's decision of 11-15 on board #469 that the most mixed codes carry a reason word; the design `rd-1115/status-codes-a-design.md`, Part 2's three facts, place 8 of A-1 and the slice row H3; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-469-word-slices.md`, read on main `a5827228` (after #1738 and #1739))
+
+The coordinator gave this slice 1.399; 1.395 to 1.398 belong to the slices dispatched with it (K1,
+K2, H1, H2). It ships in 0.12.62.
+
+**What it is.** `emulator_control_failed`, every provider control failure that is not a binding
+refusal, an unsupported provider or an expired readiness wait, carries the two values V0 declared
+for it (§1.386): `stage`, the location the failure arose at, and `device_category`, the device
+diagnostic's category (vocabulary `device_category`). Both are what the function that builds the
+failure (`emulator_control_error`, `crates/runtime-host/src/host/emulator_instance.rs`) already
+decided and wrote into the record's primary detail: the device diagnostic's stage and category, or
+without a diagnostic the detail's defaults `mumu_manager_control` and `child_exit`. No new
+vocabulary, no new code; the value stays optional ([emulator-control.md](emulator-control.md),
+"Event shape", item 4).
+
+**What does not change.** The code chosen for each stage, its class, the receipt state, the effect,
+the wire code `backend_operation_failed`, the other values, the primary detail and the native
+detail; the three other codes this function builds carry neither value; the stop-result table;
+a restart's wrapping, which compares the code and whose `caused_by` link is a fresh outcome of the
+failing phase's code (so a failed restart's record carries neither value: the design keeps the
+value optional until that is shown); the burst count, which reads class and severity. An operator,
+autostart or rung control is no run: no failure identity or streak reads this outcome. A settled
+timeout (`emulator_control_timeout_settled`) relays the failure whole as its `caused_by`, so the
+link carries both.
+
+**Texts.** `emulator_control_failed`'s catalog text (`runtime-host.json`) says when both are set;
+the index is regenerated; [emulator-control.md](emulator-control.md) item 4 says it.
+
+**Tests.** `crates/runtime-host/src/tests/gate_469_h3.rs` (gate map `host.toml`, "#469 H3"), one
+discovery-bound instance on the scripted emulator controller (HOST-I1), an operator `start` and
+then a `stop` the controller fails, one test per stage family the controller gives: the vendor
+command exited (`mumu_manager_control_exit`, `child_exit`, exit code 1), the tool could not run
+(`mumu_manager_run`, `backend_launch`, no exit code), the vendor's error envelope
+(`mumu_manager_control_errcode`, `response`, exit code 0): the receipt and the control's one
+`runtime.failed` record are `emulator_control_failed` with the two values, the record keeps
+`elapsed_ms`, `exit_code` and `device_process_present`, and its primary detail is the category,
+the stage, `mumu_manager` and `control_instance` (1-3).
+`crates/runtime-host/src/host/emulator_instance/gate_469_h3.rs` (the same gate row), on the
+building function and a hand-made failure, the family the scripted controller cannot reach (it
+gives every failure a diagnostic): no diagnostic gives `mumu_manager_control` and `child_exit` as
+values and in the detail (4); the expired readiness wait, the binding refusal and the unsupported
+provider carry neither value, their detail unchanged (5). No existing test changes, no golden
+changes, no test leaves the gate map.
+
+**Counts.** Two gate files (3 and 2 tests) and one gate map row. No code, key, word, configuration
+key, record shape or interface revision is added.
+
+**At deploy.** Nothing to do.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

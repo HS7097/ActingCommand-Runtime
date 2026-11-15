@@ -6350,7 +6350,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The Runtime host reports emulator control failed. Workflow #469 V0 (since 0.12.62): stage, when present, is the step of the emulator control the failure arose at, and device_category the device diagnostic's category.",
+      "description": "The Runtime host reports emulator control failed. Workflow #469 V0 (since 0.12.62): stage, when present, is the step of the emulator control the failure arose at, and device_category the device diagnostic's category. Workflow #469 H3 (since 0.12.62): every provider control failure built under this code carries both, the two its primary detail records: the device diagnostic's stage (a MuMuManager step: the control command's exit, error envelope or launch error; the tool's run, timeout or path; an info reader stage) and category, or without a diagnostic mumu_manager_control and child_exit.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
