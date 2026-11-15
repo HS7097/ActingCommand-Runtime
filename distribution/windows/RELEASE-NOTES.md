@@ -9,6 +9,193 @@ Cargo.lock hash, Rust toolchain, target, build profile, Actions run/attempt and
 file identities are recorded in the accompanying `BUILD-MANIFEST.json`; the zip
 and artifact names bind the complete source SHA.
 
+## v0.12.62
+
+本版是 v0.12.61 之后同一张单子（#469「状态码，A 档」）的 8 张 PR：V0 #1738、F1 #1739 直接合并，其余六张由并车 #1745 带着合（K2 #1745 自己、K1 #1743、H2 #1742、D4a #1746、
+H1 #1747、H3 #1748；车上除了各张的头和合并，只有一个改注释、说明文字和三处测试的提交）。#469 定的是：最混的几个码在码旁边带一个原因词（一个封闭词表里的值），程序怎么读码不变。
+**生产上跑的是 v0.12.61（2026-11-15 起）**：一台实例在跑调度的例行任务，其余实例暂停着、模拟器关着。从 v0.12.61 装本版：**Lab 救急模块的 `deploy` 和 `actingctl install`
+两面都能装，不用任何标志，没有 `ledger_verify`，`defaults_diff` 零行，没有新文件，能退回 v0.12.61**。接口一个都没升，没有新配置键，没有新码。
+
+- **在用的安装碰到的**（逐片核过代码）：
+  - **第一次启动**：`apps/actingd`、`crates/runtime-config` 一行没改，`crates/ledger` 只多一个测试文件，默认值文件和两个配置模板没改；启动写的事实、记录和启动日志都和 v0.12.61
+    相同。多做的只有 H2 一处：从值记录装载的暂停，在内存里补上它的原因词（读调度日志里那次派发的执行记录，`crates/runtime-host/src/policy_host.rs` 6347–6354、
+    `crates/runtime-host/src/policy_control.rs` 663–685），只读、不写。
+  - **每天的例行任务：运行、派单和恢复阶梯做的事都不变，只有一处例外（D4a，见下）。** 词只进结果的值、从不进说明文字，所以失败身份、连续计数、钉住的帧、线上的码和退出码都不变，
+    也没有哪处判断读这些词；多出来的只是已有形状的记录和答复里几个可选的值。
+  - **本版以前写下的记录不带词**：读者照旧只显示码（F1 的 `failure_values` 照样出现，里面是那次结局本来就带的码、位置和词表值）。现算的不受这条限：H1 的词每次评估从当前记录算，
+    `actingd suspended` 的暂停词每次从执行记录算。v0.12.61 记下的暂停，在 `ac_schedule` 这一类读法里第一次启动就补回词，条件是调度日志还留着那次派发的执行记录、而且它说的是同一个
+    失败（码、失败身份、原始类都对上）；对不上就只显示码，契约举的情形是暂停解除以后又有一次被条件结束的运行（`contracts/policy-suspension.md`「Why a pair is paused」）。
+
+- **现在哪里能读到「为什么」**（V0 写词表，K1、K2、H1、H2、H3 发词，F1 把运行结局的值带到读运行的地方；登记 §1.386、§1.387、§1.395 到 §1.399）：
+  - **一次运行失败**：`page_confirmation_failed`、`contained_task_step_unconfirmed`、`contained_task_error_page_reached`、`contained_task_linear_unrecorded_screen`、
+    `contained_task_requires_scheduler` 带 `confirmation_problem`（线性包 K1，页图包 K2），`contained_task_requires_scheduler` 还带让它请求恢复的那次失败的 `failure_code`；
+    `contained_task_guard_refused` 带 `guard_problem`，`target_not_passed` 旁边是目标自己登记的原因（有的话）作 `failure_code`。读的地方：运行的回执和账本记录（完整的值）；查一次运行（`ac_get_run`、
+    `actinglab run show`）、运行列表（`actingctl runs`、`ac_runs`、`actinglab run list`）、总览里每台实例的 `run`、诊断的 `runs` 行，都在结局的 `failure_code` 旁边多 `failure_values`：
+    只留码模式下留得住的结局值（码、位置、词表的词），没有就不出现（`crates/actingcommand-contract/src/run_summary.rs` 88–101、561–578，`crates/lab-ops/src/run_list.rs` 529–537）。
+    按码分组的 `runs_grouped`、`failures_grouped` 照旧只按码分。
+  - **一个应用不可用**：`instance_unavailable` 带 `availability_source`，`device_link` 旁边带 `device_link_state`，`device_state` 旁边带 `device_hold`。读的地方：`actingctl schedule`、
+    `ac_schedule` 的行和总览的 `not_running`，诊断的 `not_run` 行，挂起记录的原因（词在所有判断做完以后、建说明表之前才写上，`policy_host.rs` 388–412、4278–4281；来源的判断在
+    `crates/runtime-host/src/host/facts.rs` 913–967）。规划通道的同一个码不带词。
+  - **一个任务被暂停**：`policy_task_paused` 带 `pause_cause` 和让它暂停的那次失败的 `failure_code`，重试退避的 `policy_retry_backoff_active` 只带 `failure_code`
+    （`policy_control.rs` 53–78、819、832）。读的地方：`ac_schedule` 和诊断的行、`policy.dispatch_rejected` 记录、`actingd suspended` 的 `suspended` 行多 `pause_cause`
+    （`crates/runtime-host/src/suspension_report.rs` 1093–1096）。
+  - **一次模拟器控制失败**：`emulator_control_failed` 带已有的 `stage`（失败在哪一步，登记过的位置）和 `device_category`（设备诊断给的类别）。读的地方：控制的回执（`ac_emulator`、
+    `actingctl` 的模拟器命令）和结算了的超时的 `caused_by`（`crates/runtime-host/src/host/emulator_instance.rs` 2204–2283）；账本记录见「已知的限度」。
+
+  `confirmation_problem`（24 个词；修复轮加的是 `returned_to_own_page`、`final_state_unmet`、`wait_max_reached`）：一步等的页没确认到的地方、或运行停着的声明错误页上，程序看到了什么。
+
+  | 词 | 目录里的说明 |
+  |---|---|
+  | `input_not_taken` | 输入以后确认结束时程序看到的是这一步自己的页，而且输入以来没见过别的页（线性步判中间的帧，页图步只看最后一帧）：输入没生效；查它的目标和它之前的间隔 |
+  | `returned_to_own_page` | 输入以后画面显示过别的东西，结束时又是这一步自己的页：输入生效了、画面回来了；打开这次运行的帧看中间显示了什么 |
+  | `awaited_page_late` | 等的页在确认的等待结束以后才出现：调大这一步的时限，或查是什么让这一页变慢 |
+  | `other_page_shown` | 画面停在包声明的另一页上：把那一页声明成目的页或打断页 |
+  | `loading_page_shown` | 画面停在声明的加载页上：给这一步更多时间，或打开加载处理 |
+  | `transition_shown` | 等待结束时画面还是加载过渡 |
+  | `interrupt_shown` | 屏幕上有一个共享打断页没被处理：查这个打断页的处理 |
+  | `screen_moving` | 没有出现声明的页，画面一直在变：这一步的时限可能太短 |
+  | `unrecorded_screen` | 画面停在包从没录过的页上：把这一页录进包里 |
+  | `nothing_recognised` | 最后一帧没有匹配任何声明的页；打开这次运行的帧看它显示了什么 |
+  | `screen_still` | 画面直到静止上限都没变：输入多半什么都没做 |
+  | `final_state_unmet` | 结束时等的页在屏幕上，但这一步为它声明的状态不成立：查这一步的终态目标和那一页显示了什么 |
+  | `wait_max_reached` | 等待步自己的页一直在屏幕上，直到它的 `max_ms` 用完，等的页没来：调大 `max_ms` 或声明 `on_timeout` |
+  | `loading_limit` | 屏幕还在加载时，等待在它的加载额度上结束了 |
+  | `error_page` | 这一步到了包声明为错误页的页 |
+  | `error_page_no_exit` | 运行停在一个声明的错误页上，这一页没有哪个操作能离开它 |
+  | `deadline_reached` | 还没来得及判断画面，任务的时间就用完了 |
+  | `check_failed` | 最后看画面那一下失败了（截图或识别）；读这次运行的记录 |
+  | `neither_page` | 重试时，等的页和这一步自己的页都没出现 |
+  | `unjudged_layer_run` | 等待以后没判断画面：这次运行是某一层的（前置、回主页、导航或恢复运行）或宿主自己起的，不是任务自己的；打开这次运行的帧 |
+  | `unjudged_restart_segment` | 等待以后没判断画面：这一步跑在一次应用重启里面；打开这次运行的帧 |
+  | `unjudged_consensus` | 等待以后没判断画面：包声明了样本共识；打开这次运行的帧 |
+  | `unjudged_application_entry` | 等待以后没判断画面：这一步是应用入口；打开这次运行的帧 |
+  | `unjudged_time_short` | 等待以后没判断画面：任务剩的时间太少（不到步骤时限的两倍）；打开这次运行的帧 |
+
+  `guard_problem`（3 个词）：操作的守卫为什么拒了它的输入；不管哪个词，程序接下来做的都一样。
+
+  | 词 | 目录里的说明 |
+  |---|---|
+  | `page_mismatch` | 输入被拒：画面不是这个操作的守卫要的页 |
+  | `target_not_passed` | 输入被拒：守卫的目标在它的页上没过（见 `failure_code`） |
+  | `page_moved` | 信任坐标的输入之前的等待里，页变了 |
+
+  `availability_source`（6 个词）：是谁撤下了应用的可用性，取自撤下它的那条在用的 `session.instance.available` 记录的来源和应用的配置种子。配置把应用标成不可用的，不管那条「不可用」
+  记录是哪个发布者写的（自检这道门的也算）都读 `configured`（一条这样的记录都没有时读 `facts_missing`）；`self_check` 包括自检没过、还没记下（含准备步骤失败）或已失效的自检，和资源
+  围栏，门用同一个来源撤下它们。不管哪个词，应用都在派位时被挡下。
+
+  | 词 | 目录里的说明 |
+  |---|---|
+  | `configured` | 配置把这个应用标成不可用 |
+  | `self_check` | 设备自检没过（或实例被围栏）：看实例的自检和围栏 |
+  | `device_link` | 手机的线缆连接没连上（见 `device_link_state`） |
+  | `device_state` | 手机锁着、太热、电量低或正被使用（见 `device_hold`） |
+  | `other_publisher` | 别的发布者把这个应用标成不可用 |
+  | `facts_missing` | 实例的事实缺了或读不了 |
+
+  `pause_cause`（7 个词）：一次失败为什么让它的任务在这个应用上暂停，按结算自己的次序取：先严重失败，再敏感任务，再连续计数，最后 `on_failure`。目录里每个词的说明都以「包变了暂停才
+  解除，没有手动解除」结尾，下表省去这一句。
+
+  | 词 | 目录里的说明 |
+  |---|---|
+  | `severe_failure` | 这个失败是第一次出现就暂停它的任务的那一种 |
+  | `unrecorded_screen` | 包遇到了一个从没录过的画面 |
+  | `runtime_budget_exceeded` | 运行用的时间超过了它的运行预算 |
+  | `interrupted_again` | 运行连续两次被 Runtime 自己的结束打断（重启只解除第一次） |
+  | `sensitive_task` | 一个标为敏感的任务失败了；它立刻暂停 |
+  | `repeated_failure` | 同一个失败重复到了任务的阈值 |
+  | `retries_exhausted` | 任务用完了重试，并且设成失败时暂停 |
+
+- **唯一变了做法的一处（D4a #1746，登记 §1.400）**：`device_locked` 的阶梯类从 `budget_or_permission`、`contained_task_application_update_required` 从 `none` 改成 `planned_stop`；
+  `call_budget_exhausted` 的类别从 error 改成 warning。
+  - **变的**：账本错误视图的运行恢复分组按类 `planned_stop` 判（`crates/ledger/src/global/projection/views.rs` 419–427，读这个构建内嵌的目录），所以这两个码的记录不再算作它那次
+    运行的失败，也不再带来缺口：只因锁屏或要更新而停的运行不再成组；同一次运行里另有真失败的照样成组，组的状态可能从「不明」变成「已恢复」或「未解决」。分组是读的时候算的，**本版以前写下
+    的记录也照新的类分**。`call_budget_exhausted` 只作为成功答复旁边的提醒或 `report_part_missing` 的原因出现（只在 `crates/lab-ops` 里写），从不是头码，所以退出码和 MCP 的
+    `isError` 不变，只是那条提醒写 `category: warning`。
+  - **不变的**：默认配置里按类的触发只点名 `pack_logic_mismatch`、`stability_warning`、`environment_fault`（`distribution/windows/actingd.defaults.json` 18–28、97–98），三个码改前改后
+    都不在里面；锁屏跳过一级（`device_not_ready`）和更新码结束阶梯都按码判（`crates/runtime-host/src/host/recovery_ladder.rs` 4375–4386、2546），暂停和结算不读阶梯类。
+
+- **部署：本版是第一个经 Lab 救急模块部署到生产的版本**：用在线 v0.12.61 留下的那份 `actinglab` 跑 `release stage`（核标签和提交）、`deploy <提交> --plan` 预看、
+  `deploy <提交> --detach` 实做，再用 `op status` 看结果。Lab 这一面总带 `accept_ledger_one_way`（`crates/lab-rescue/src/install/update.rs` 93），本版账本修订不动，这一项不起作用。
+  原来「到 LAB-7 前生产只用 `actingctl install` 部署」的规矩，理由是 v0.12.47 及更早的安装工具读不了模块写的日志；11-15 定了不再兼容以前的构建，这个理由没了，
+  `contracts/install-cli.md`「Journals across versions」那条规矩和 `contracts/lab-two-entries.md` 里复述它的两处跟着改了；`apps/actinglab-mcp/MANUAL.md`（「Production」）和
+  `contracts/lab-operations.json` 的 `deploy` 一行的说明还写着旧规矩，本版没改。
+  - **退路**：v0.12.61 的 `actingctl install` 和 Lab 的救急行是同一份代码（`crates/lab-rescue`，自 v0.12.61 一行没改；`apps/actingctl/src/main.rs` 95–99），读得了 Lab 写的日志：
+    部署中途断了用 `install resume` 接着做或 `install undo` 撤回（有 actingd 在这个根下跑时 `undo` 拒），Lab 留下的暂停用 `install release-hold` 交回；部署做完以后回到 v0.12.61
+    是一次退回（见下面「升级与退回」）。
+
+- **已知的限度**（各片验收记录列的，逐条核过代码）：
+  - **还不带词的结束**：前置包和回主页这一层失败时，外面那次运行只带它的码（`crates/runtime-host/src/host/prerequisite.rs` 600–609，只有 `contained_task_state_invalid` 带值）；
+    `contained_task_requires_scheduler` 在输入之前被守卫或输入复核拦下、请求恢复时，只带 `failure_code`、不带 `confirmation_problem`（`crates/execution-kernel/src/contained_task.rs`
+    8842–8864）；漏看了中间页、没有尝试余下的 `contained_task_linear_intermediate_unobserved` 不带词；规划通道的 `instance_unavailable` 不带词。
+  - **`self_check` 仍然一词三用**：自检没过、还没记下自检、资源围栏共用一个记录来源（`host/facts.rs` 798–809、939–942），模拟器关着、还没自检过的应用读到的也是它。
+  - **模拟器控制失败的账本记录**（`runtime.failed`）只多 `device_category`，它的 `stage` 照旧是生命周期阶段 `runtime_lifecycle_operation_cleanup`（`host/lifecycle.rs` 243）；设备那一步
+    的阶段只在回执上。没有设备诊断的失败只带 `stage`、不带 `device_category`；重启失败时外层的 `caused_by` 两个值都不带。
+  - 本版里 `confirmation_problem` 和别的新值在目录里都是可选的（十个码加的值全是 `optional`）。
+
+配置：按代码、`distribution/windows/component-interfaces.json` 和 `contracts/component-interfaces.md` 核过，**一项都没升**：`component-interfaces.json`（4–10）自 v0.12.61 没改，
+`actingd-config` [5, 32]、`install-selection` [1, 1]、`install-control` [0, 1]、`ledger` [3, 8]、`runtime-client` [3, 9]、`package` [3, 15]、`runtime-outcomes` [1, 1]。
+
+- `runtime-outcomes` 1（`contracts/component-interfaces.md` 170）：四个新键、四个新词表和它们的词都加在修订 1 里（同一文件 479 行是同样的先例；升修订的规则 486–496：旧的一方容得下的
+  变化不升）。**v0.12.61 构建的读者碰到不认识的键或词**：结果的 `values` 是不带类型的映射，照收（`crates/actingcommand-contract/src/outcome.rs` 1568–1581、1709–1725），收到的结果不拿
+  目录核（`outcome/check.rs` 231–234），完整模式原样打印；只留码模式按它自己的键表留值，不认识的键丢掉（`outcome.rs` 1786–1795，`key_kind` 953–958）。两个文件自 v0.12.61 没改，
+  行号对两版都对。新词只在这四个新键下面；本版发词用到的已有键（`failure_code`、`stage`、`device_category`、`device_link_state`、`device_hold`）没有新词，码和位置也一个没加，所以
+  v0.12.61 认识的键下面没有它不认识的词。
+- `ledger` 不动：没有新的记录形状，新值都在已有结果的 `values` 里；`failure_values` 是读运行时折出来的，不落盘。`runtime-client` 不动：运行状态是客户端从 `QueryEvents` 页折出来的，
+  不在任何线上答复里，`QueryRuns` 还没有 Runtime 答（`contracts/runtime-state-observation.md`「Contained-run queries」）。`ContainedRunTerminal` 拒未知成员：用 v0.12.61 的契约库去解
+  本版程序打印的运行结局会被拒，要换新契约库重编。
+- 配置键：**没有新增，也没有去掉**；`actingd.defaults.json`（sha256 `9ee26e8fc203fef21234b072d5c0f02d0c33b6fbef1b6c3f1613d5b55a99666d`，和 v0.12.61 相同）、两个配置模板和
+  `apps/actingd/src/config/manifest.rs` 都没改，没有新的子系统名。
+- 结果码：仍是 3960 个码（在用 3932，`retired` 28）、1764 个位置、31 个分片，审阅定稿的仍是 172 个（在用 170）；键 672 → 676，词表 246 → 250，词 1895 → 1935；在用码按类别
+  success 132、info 213、warning 155 → 156、error 3415 → 3414、fatal 17。**没有码、位置、键或词去掉，没有新码，没有码 `retired`**。38 个码的说明改了：**改了类的五个**，V0 两个不改做法
+  （`recognition_sample_budget_invalid` 阶梯类 `budget_or_permission` → `declaration_error`，默认配置没有触发点名这两种类；`contained_task_declared_operation_page_mismatch` `none` →
+  `pack_logic_mismatch`，这个码只在 Lab 的声明操作里报，`crates/runtime-host/src/host/lab_operation.rs` 797，不进恢复阶梯），D4a 三个（上面）；十个码加了可选的值（上面四类）；
+  23 个只改了说明（V0 把几处实际做法写进说明）。本版的发布文件 `contracts/outcome-codes/released/0.12.62.json` 按合入全部 8 张 PR 以后的树生成，没有码、没有位置（改了的都不是定稿
+  条目）；索引照旧由脚本生成，仍是 32 个文件，核过是最新的，本版没有变化。
+- 别的都没变：Lab 的操作表行数不变（`status`、`runs`、`run show`、`diagnose` 的说明写上 `failure_values`），`apps/actinglab`、`apps/actinglab-mcp`、命令清单、`.github/`、
+  `INSTALL.md`、`Cargo.toml`、`Cargo.lock`、`ci/` 都没改（两个压缩包的文件表不变，不稳定表照旧是 FLK-08 和 FLK-10）；今天的 MCP 服务器仍是 46 个工具，只有 `ac_get_run`、`ac_runs`
+  的说明和 `ac_runs` 的行结构写上 `failure_values`，README 两种语言的工具表标题改成 v0.12.62。
+
+升级与退回（`crates/lab-rescue` 自 v0.12.61 一行没改，下面的行号对 v0.12.61 和本版都对；`actinglab deploy` 和 `actingctl install` 走的都是它，`apps/actinglab/src/cli_module.rs`
+476–494、`apps/actingctl/src/main.rs` 95–99）：
+
+- **v0.12.61 的安装工具装本版：两面都能装，不用任何标志。** 安装工具自己的声明和目标的声明逐项相同。计划的边（`install/plan.rs`）：`ledger` 两边 [3, 8]，`previous_max_in_next` 过、
+  `one_way` 不触发（298–310），`ledger_verify` 为 false（924）；`runtime-outcomes` 过（311–323）；`install-control`、`runtime-client` 相交（324–340）；`package` 的
+  `bundle_max_in_next`（341–364）比安装登记里每个根的范围，登记里一律没有，每个游戏一条 `pack_declaration_unknown` 警告，不挡；`installer_knows_keys`（368–385）、
+  `runtime_equals_tools`（765–772）、`next_check_config`（911–923，`apps/actingd` 和 `crates/runtime-config` 没改）都过。`defaults_diff`（583–607）零行；文件计划里没有 `new`。
+  启动后检查是 v0.12.61 那一版的（`postcheck.rs`），读的形状都没变。
+- **配置文件和已装的包**：v0.12.61 的配置文件照收；准入没改（内核只改了运行路径上的结束），本版的 `standard-pack check` 对今天的根答法和 v0.12.61 相同（`apps/actinglab`、
+  `crates/resource-tooling`、`crates/lab` 都没改），不出新的警告码。
+- **退回 v0.12.61**：回退门只放行这次部署替换掉的 v0.12.61（`install/update.rs` 410–447），边都过（修订全同），配置不变；回退门第 2 部分用 v0.12.61 自己的读者读部署以来的每一页
+  （421–427），它照收带新值的记录（见上「`runtime-outcomes`」）。v0.12.61 对本版写下的东西：显示码、不显示词（只留码模式丢掉不认识的键，完整模式原样打印）；错误视图对锁屏、要更新的
+  记录又照 v0.12.61 的类分组；`failure_values` 和暂停词都不落盘，退回以后没有。没有新文件、新事实或新键要处理。
+
+配对：
+
+- **控制台 UI**（最新发版 UI v0.12.20，就是 UI main `40c6d4be`，钉 Runtime v0.12.61 `5c629e3b`：`Cargo.toml` 41–46）：声明的范围和本版相同（`crates/acui-setup/component-interfaces.json`
+  3–11），向导的边照过，什么都不拒。**带新值的结果它显示什么**：一个 Runtime 码只显示码和它那一类的通用一句，类别取自钉住的目录（`crates/acui-rows/src/outcome.rs` 169–220）；排程那一页
+  每行只取 `why` 的码和 `benefit_gap`、`pool_line_hold` 两个值（`crates/acui-source/src/workbench.rs` 1828–1849、1873），新词解得出来、不显示；账本页的载荷窗格把记录的载荷整个显示成
+  JSON（`crates/acui-rows/src/lib.rs` 160–164），新词在那里看得到。**带 `failure_values` 的运行结局**：它的源码里没有读运行状态（`ContainedRunTerminal`）的地方，碰不到。**下一次钉**只要
+  把 `Cargo.toml` 41–46 的六个 `rev`（和锁文件）换成本版的提交，范围不用改；要显示这些词是控制台自己的活，钉不要求。
+- **部署工具包**（这次走 Lab 的行）：两个构建清单的 `speaks` 都照 `component-interfaces.json` 写（`.github/workflows/windows-remote-build.yml` 709–718、842），和 v0.12.61 相同；默认值
+  文件的哈希没变；`git diff --stat v0.12.61 <提交> -- apps/actingd/src/config/manifest.rs distribution/windows/actingd.defaults.json` 什么都不打印；不过的边只有每个游戏一条 `package`
+  的 `bundle_max_in_next` 警告；没有新文件；本版的 `standard-pack check` 不出新的警告码；启动日志不多一行。
+- **热放置工具包**：重钉只改标签和接受的 `validated_with` 那一行（构建记录照例换成本版的）；`package` 范围、`ledger`、`actingd-config` 和默认值哈希都留着。它读 `actingctl` 回答时按成员
+  名取值，多出的可选值不碍事。
+- **两个 MCP 服务器**：工具一个没变，答法照旧，读运行的工具（`ac_get_run`、`ac_runs`、`ac_overview`、`ac_diagnose`，Lab 那边的 `ac_run_show`）多 `failure_values`。
+
+运行上的变化：
+
+- 从 v0.12.61 部署，经 Lab 的 `release stage`、`deploy`、`op status`：不用标志，没有 `ledger_verify`，`defaults_diff` 零行，没有新文件，接口全不动；能退回 v0.12.61。
+- 失败的运行、被暂停的任务、不可用的应用、失败的模拟器控制都在码旁边说出原因（上面四张词表），在查运行、运行列表、总览、诊断、排程、`actingd suspended` 和控制回执里读得到。
+- 唯一变的做法：错误视图不再把锁屏、要更新的记录算作运行的失败；`call_budget_exhausted` 是警告。
+
+本版合并的 PR：
+
+- #1738 V0（登记 §1.386）：四个词表和键、十个码的可选值、几处不改做法的小毛病，`contracts/runtime-outcomes.md` 写上「新代码按类或按词决定」；没有测试改动。
+- #1739 F1（§1.387）、#1743 K1（§1.395）、#1747 H1（§1.397）、#1742 H2（§1.398）、#1748 H3（§1.399）：各自的门行 `#469 <片>`，没有改旧测试。
+- #1745 K2（§1.396，同时是这一趟并车）：门行 `#469 K2`；改了 `gate_rc2_a15` 四条和 `gate_still1` 一条，只在钉住的值里加上词。
+- #1746 D4a（§1.400）：账本、主机和 apps 的门行；改了更新码那条测试断言的类（`planned_stop`）。
+
 ## v0.12.61
 
 本版是 v0.12.60 之后的 12 张 PR：3 个直接合并（#1733、#1734 和 #1731；#1731 的合并 `d32d4d6c` 同时合入 #1728，它的提交都在 #1731 上）和 3 趟并车（#1726 带 #1720、#1723；
