@@ -1406,6 +1406,88 @@ fn gate_a_run_is_admitted_then_running_then_the_outcome_of_its_terminal() {
     }
 }
 
+// Workflow #469 F1 (register §1.387): the terminal of a run's status, brief and full, carries
+// what codes mode keeps of its terminal outcome's values (`Outcome::codes_only`) as
+// `failure_values`: a word of a vocabulary (`receipt_state`), and neither an id (`lease_id`) nor
+// a duration (`retry_after_ms`). A terminal outcome without such a value, and a terminal without
+// an outcome, give no member: the terminal's JSON is the text it was before the member.
+#[test]
+fn f1_a_run_terminal_carries_the_values_codes_mode_keeps_of_its_outcome() {
+    let running = || RunLedger::new().cli_command().admitted().step_started();
+    let failure = RuntimeErrorCode::ContainedTaskDeadlineExceeded;
+    for mode in [RunStatusMode::Brief, RunStatusMode::Full] {
+        let outcome = Outcome::new(failure)
+            .receipt_state(RuntimeReceiptState::Failed)
+            .lease_id("lease_00000000000000000000000000000001")
+            .retry_after_ms(1_500_u64);
+        let status = running()
+            .terminal(TaskOutcome::Failure, Some(outcome))
+            .by_request(mode);
+        assert_eq!(status.state, ContainedRunState::Failed, "{mode:?}");
+        let terminal = status
+            .terminal
+            .as_ref()
+            .unwrap_or_else(|| panic!("{mode:?}: the run's terminal"));
+        assert_eq!(
+            terminal.failure_code.as_ref().map(|code| code.as_str()),
+            Some(failure.as_str()),
+            "{mode:?}"
+        );
+        let mut kept = serde_json::Map::new();
+        kept.insert("receipt_state".to_owned(), serde_json::json!("failed"));
+        assert_eq!(terminal.failure_values, kept, "{mode:?}");
+        let value = serde_json::to_value(&status).expect("run status JSON");
+        assert_eq!(
+            value["terminal"]["failure_values"],
+            serde_json::Value::Object(kept),
+            "{mode:?}"
+        );
+    }
+
+    let not_kept = SharedCode::ContainedTaskHomeEntryNotMatched.code();
+    for (row, task_result, outcome) in [
+        ("succeeded, no outcome", TaskOutcome::Success, None),
+        (
+            "failed, only values codes mode drops",
+            TaskOutcome::Failure,
+            Some(
+                Outcome::new(not_kept)
+                    .request_id("request_00000000000000000000000000000001")
+                    .host_halted(false),
+            ),
+        ),
+    ] {
+        for mode in [RunStatusMode::Brief, RunStatusMode::Full] {
+            let status = running()
+                .terminal(task_result, outcome.clone())
+                .by_request(mode);
+            let terminal = status
+                .terminal
+                .as_ref()
+                .unwrap_or_else(|| panic!("{row}, {mode:?}: the run's terminal"));
+            assert!(terminal.failure_values.is_empty(), "{row}, {mode:?}");
+            // The members a terminal had before Workflow #469 F1, in their order.
+            let mut before = serde_json::Map::new();
+            before.insert("outcome".to_owned(), serde_json::json!(task_result));
+            if outcome.is_some() {
+                before.insert(
+                    "failure_code".to_owned(),
+                    serde_json::json!(not_kept.as_str()),
+                );
+            }
+            before.insert("final_page".to_owned(), serde_json::json!(PAGE));
+            before.insert("executed_steps".to_owned(), serde_json::json!(1));
+            before.insert("sequence".to_owned(), serde_json::json!(terminal.sequence));
+            before.insert("event_id".to_owned(), serde_json::json!(terminal.event_id));
+            assert_eq!(
+                serde_json::to_string(terminal).expect("terminal JSON"),
+                serde_json::Value::Object(before).to_string(),
+                "{row}, {mode:?}"
+            );
+        }
+    }
+}
+
 // G9 (R7): Workflow #338 R1. A run without a terminal whose admission a later Runtime start
 // or takeover follows is `interrupted_unterminated` (the two targeted queries the model names
 // find it: neither event links a request); a terminal recorded after the restart decides the

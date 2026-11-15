@@ -224,8 +224,9 @@ fn assert_ended_on_the_limit(error: &ContainedTaskError, held_ms: u64, case: &st
 
 // With no limit the wait runs its whole time as before: the pauses reach 6 350 ms, then 5 000 each
 // up to 56 350 ms, and the next is cut at the 3 650 ms left of a 60 000 ms confirmation. It ends
-// with its own code at 60 000 ms of 60 000 ms, and the outcome is the code alone. 0 and a cadence
-// that names no limit behave alike.
+// with its own code at 60 000 ms of 60 000 ms, and the outcome carries no still values: since
+// Workflow #469 K2 (register §1.396) only the word of its last frame, which matched no page. 0
+// and a cadence that names no limit behave alike.
 #[test]
 fn still_limit_off_keeps_todays_wait() {
     const WAIT_MS: u64 = 60_000;
@@ -247,7 +248,11 @@ fn still_limit_off_keeps_todays_wait() {
             (WAIT_MS, WAIT_MS),
             "{case}"
         );
-        assert!(!error.has_values(), "{case}: {:?}", error.outcome());
+        assert_eq!(
+            Value::Object(error.outcome().values().clone()),
+            json!({"confirmation_problem": "nothing_recognised"}),
+            "{case}"
+        );
         assert_eq!(pauses_after_input(&runtime, 1), expected, "{case}");
     }
 }

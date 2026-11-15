@@ -141,7 +141,7 @@ climbs by the section it was admitted with (§4.7).
 | `recovery_ladder.trigger_defaults.start_rung` | integer 1..=3 | `1` |
 | `recovery_ladder.trigger_defaults.respect_cooldown` | boolean | `true` |
 | `recovery_ladder.triggers` | list of trigger items `{id, stages, classes?, codes?, count?, window_ms?, start?, start_rung?, respect_cooldown?}` | `navigation_exhausted` (`start_rung` 3), `pack_logic`, `stability_burst`, `preparation_backend`, `task_capture_backend` |
-| `recovery_ladder.exclude_codes` | list of codes or `prefix*` | `contained_task_prerequisite_*`, `contained_task_return_home_entry_unmatched` |
+| `recovery_ladder.exclude_codes` | list of codes or `prefix*` | `contained_task_prerequisite_*`, `contained_task_return_home_entry_unmatched`, `device_link_lost` |
 | `recovery_ladder.rules.direct_runs` | `exempt` \| `trigger` | `exempt` |
 | `recovery_ladder.rules.preparation_superseded` | `suppress` \| `keep` | `suppress` |
 | `recovery_ladder.rules.already_running` | `suppress` \| `queue` | `suppress` |
@@ -334,7 +334,7 @@ configuration nor any installer writes a performance key.
 | `performance.responsiveness.*` (`src/performance/responsiveness.rs`) | PERF §10.2, 37 keys: window, smoothing, staleness, the timer and message probes, the capture, touch, recognition and page-settle signals (per-backend initial baselines are objects with a `default` member), the baseline | P-m |
 | `performance.pacing.*` (`src/performance/pacing.rs`) | PERF §10.3, 26 keys: `mode` (`observe` \| `pace` \| `full`; default `pace` since 0.12.31, Workflow #429 R-2 and Alice's ruling 98, `observe` before), `interpolate`, `curve` (a list of at most 70 points), the factor cap, hysteresis and sustains, pause timing, waits and gaps, `pressure_floor.*`, `tax_exempt_from_stage`, `heavy_dispatch_limit.normal` / `.paused`, `clock_jump_ms`, `hold.*`, `pause_probe.*`; and Workflow #427-B's optional `max_concurrent_runs` (an integer `1..=65535`, **no default**: a configuration that does not name it has no such limit and no `config.parameters` row; since 0.12.22; settable since 0.12.31, whether or not the file names it, Workflow #429 R-1 and R-2) | `clock_jump_ms`: the performance controller, handed over by the start-up assembly (P-c; before, code constants). `heavy_dispatch_limit.*` and `max_concurrent_runs` (from #427-B: at most that many policy dispatches admitted or running across every instance, those chosen earlier in the round included; `1` runs one at a time; [scheduling/README.md](scheduling/README.md), "Shared Run Limits"): handed over by the start-up assembly too, and since 0.12.31 (Workflow #429 R-2) read from the configuration in effect at every policy evaluation and forward projection, the heavy limits by the controller's resource overlay and `max_concurrent_runs` by the policy host; the assembly's values hold only for a key the configuration does not carry (a host without actingd's manifest, or `max_concurrent_runs` unset, which is no limit as at assembly). `pre_input_wait_base_ms`, `curve[].extra_retries` and `pressure_floor.extra_retries`: P-k (the pre-input wait and the extra wait rounds each step is handed, Workflow #385 P-k S5); `mode`: P-m at every evaluation; the rest: P-m, P-k, P-s, P-h |
 | `performance.presets` (`src/performance/presets.rs`; Workflow #429 R-2, since 0.12.31) | one key, an object: preset name → `{mode, max_concurrent_runs?, heavy_dispatch_limit_normal, parallel_enabled}` (below, "Presets") | read once at assembly, checked with the section; the CLI, MCP and the console read it from `config.parameters.performance` |
-| `performance.calibration.*` (`src/performance/calibration.rs`) | PERF §10.4, 19 keys: `apply`, `band_bp`, `trouble_codes` (a list of catalog codes), the learning period, `learning_max_stage` (S0..=S4), the backstop, interval, minimum steps, `tolerance.s0` / `.s1` / `.s2` / `.stop`, `bounds.s1` to `bounds.s4` (`[min, max]` basis points; PERF's `bounds.S1`, lowercase since a key is a token), `max_shift_bp`, `pressure_max_stage` | P-a |
+| `performance.calibration.*` (`src/performance/calibration.rs`) | PERF §10.4, 19 keys: `apply`, `band_bp`, `trouble_codes` (a list of catalog codes), the learning period, `learning_max_stage` (S0..=S4), the backstop, interval, minimum steps, `tolerance.s0` / `.s1` / `.s2` / `.stop`, `bounds.s1` to `bounds.s4` (`[min, max]` basis points; PERF's `bounds.S1`, lowercase since a key is a token), `max_shift_bp`, `pressure_max_stage` | `apply`, `learning_max_stage` and `learning_backstop_bp`: P-m's learning view (`LearningSettings`); the others: P-a, which is not built (Workflow #469 V0): they are checked and read by nothing, `trouble_codes` among them |
 
 - **Settable:** `performance.pacing.curve` and `performance.pacing.hold.*` (M387 §5.5), and since
   0.12.31 (Workflow #429 R-2, design `429-A-runtime.md` A.1 契约 1) `performance.pacing.mode`,
@@ -365,7 +365,8 @@ configuration nor any installer writes a performance key.
   the stage never steps back; no two neighbours drop the share from 1 000 straight to 0 (PERF
   §4.1). `tolerance` rises strictly; each `bounds.sN` has min below max, and a deeper stage's
   bounds lie no higher than the stage before it; `pressure_max_stage` is S0 to S2;
-  `trouble_codes` are active catalog codes (`code_unknown`, `code_retired`) (PERF §10.4). The
+  `trouble_codes` are active catalog codes (`code_unknown`, `code_retired`) (PERF §10.4; P-a, the
+  key's reader, is not built, so the list is checked and read by nothing, Workflow #469 V0). The
   context window and summary interval are at least the sampling period; each threshold pair
   ends below where it starts; an elevated severity is not above the critical one; each
   per-backend baseline has `default` and positive values; the baseline window holds at least
@@ -436,7 +437,8 @@ them. Their meaning is
 in [policy-suspension.md](policy-suspension.md) (`recognition`, `rerun`),
 [cost-commit.md](cost-commit.md) (`cost_commit`) and [scheduling-blackout.md](scheduling-blackout.md)
 (`blackout`); `feature_lock.*` (how long a recorded locked feature stays valid, and the codes
-that end a run on one) is read by slices SR-5a and SR-5b, `not_run.diagnose_rows` (the most rows
+that end a run on one) is for slices SR-5a and SR-5b, which are not built: nothing reads either
+key, and no run ends with `contained_task_feature_locked` (Workflow #469 V0); `not_run.diagnose_rows` (the most rows
 `ac_diagnose` lists under `not_run` per instance) by MCP-19b (Workflow #386 SR-6b: actingctl and
 MCP read it from the program fact `config.parameters.scheduling` at every diagnosis). Workflow #384 D2-S2 reads
 `fact_refresh.recognition_join_timeout_ms` when a successful run joins the readings it handed
@@ -475,8 +477,8 @@ both checks ([policy-suspension.md](policy-suspension.md), "Task package suspens
 | `scheduling.blackout.stop_in_flight_at_start` | boolean | `true` |
 | `scheduling.blackout.quiet_horizon` (Workflow #386 SR-4a1) | `deadline` \| `expected` | `deadline` |
 | `scheduling.day_boundary.quiet` (Workflow #386 SR-4a1) | boolean | `true` |
-| `scheduling.feature_lock.locked_valid_for_ms` | milliseconds | `86400000` |
-| `scheduling.feature_lock.codes` | list of codes, as `rerun.condition_codes` | `["contained_task_feature_locked"]` |
+| `scheduling.feature_lock.locked_valid_for_ms` (read by nothing: SR-5a and SR-5b are not built) | milliseconds | `86400000` |
+| `scheduling.feature_lock.codes` (read by nothing: SR-5a and SR-5b are not built) | list of codes, as `rerun.condition_codes` | `["contained_task_feature_locked"]` |
 | `scheduling.not_run.diagnose_rows` | integer `0..=4294967295` | `10` |
 | `scheduling.random_delay.enabled` (Workflow #405) | boolean | `false` |
 | `scheduling.random_delay.min_ms`, `.max_ms` (Workflow #405) | milliseconds `0..=86400000` | `60000`, `3600000` |

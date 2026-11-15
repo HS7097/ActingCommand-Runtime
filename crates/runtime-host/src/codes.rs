@@ -3331,8 +3331,9 @@ actingcommand_contract::outcome_codes! {
         /// game says its client must be updated, the run ends with no further input, and the
         /// instance fact `health.application.update_required` is true. A scheduled run ends by
         /// a condition (the default `scheduling.rerun.condition_codes`); no ladder by default.
-        /// Keys `page_id`.
-        RunEnded => "contained_task_application_update_required": warning / none,
+        /// Keys `page_id`. Workflow #469 D4a (since 0.12.62): of the ladder class
+        /// `planned_stop`, since the package declares the page and the run stops on purpose.
+        RunEnded => "contained_task_application_update_required": warning / planned_stop,
         /// Info. The candidate's instance waits for its game's client update
         /// (`health.application.update_required` true): every task of the instance except a
         /// `store_update` package's is deferred, position 4a, with no wake of its own. Keys
@@ -3497,3 +3498,50 @@ actingcommand_contract::outcome_vocabulary! {
     }
 }
 // ---- Workflow #438 HELD-1: end ----
+
+// ---- Workflow #469 V0 (register §1.386; the design's places 3 and 4): begin ----
+actingcommand_contract::outcome_vocabulary! {
+    /// Who withdrew an application's availability, from the source of the active
+    /// `session.instance.available` record that withdrew it (vocabulary `availability_source`,
+    /// since 0.12.62): the value of `instance_unavailable`. The host slice sets it.
+    pub enum AvailabilitySource: "availability_source" {
+        /// The configured seed: the configuration marks the application unavailable.
+        Configured => "configured",
+        /// The backend self-check gate: a self-check not passed, not yet recorded or no longer
+        /// valid, or a resource fence (they share the record's source); a gated instance the
+        /// configuration marks unavailable reads `configured` (Workflow #469 H1 fix round 2).
+        SelfCheck => "self_check",
+        /// The handset's wired device link is not `device` (with `device_link_state`).
+        DeviceLink => "device_link",
+        /// The handset is held (with `device_hold`).
+        DeviceState => "device_state",
+        /// A publisher other than these four.
+        OtherPublisher => "other_publisher",
+        /// The instance's facts are missing or unreadable.
+        FactsMissing => "facts_missing",
+    }
+}
+
+actingcommand_contract::outcome_vocabulary! {
+    /// Why a failure paused its task on the application, in the settlement's own order: a
+    /// severe failure first, then a sensitive task, then the streak, then `on_failure`
+    /// (vocabulary `pause_cause`, since 0.12.62): the value of `policy_task_paused`. The host
+    /// slice sets it.
+    pub enum PauseCause: "pause_cause" {
+        /// A failure that pauses its task at the first occurrence.
+        SevereFailure => "severe_failure",
+        /// The package met a screen it never recorded.
+        UnrecordedScreen => "unrecorded_screen",
+        /// The run took longer than its runtime budget.
+        RuntimeBudgetExceeded => "runtime_budget_exceeded",
+        /// The run was cut short by the Runtime's own end twice in a row.
+        InterruptedAgain => "interrupted_again",
+        /// A task marked sensitive failed.
+        SensitiveTask => "sensitive_task",
+        /// The same failure repeated up to the task's threshold.
+        RepeatedFailure => "repeated_failure",
+        /// The task used up its retries and is set to pause on failure.
+        RetriesExhausted => "retries_exhausted",
+    }
+}
+// ---- Workflow #469 V0: end ----

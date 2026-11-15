@@ -810,7 +810,7 @@
     },
     "device_locked": {
       "category": "warning",
-      "ladder_class": "budget_or_permission",
+      "ladder_class": "planned_stop",
       "owner": "device",
       "layer": "device",
       "uncertain": false,
@@ -825,7 +825,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A keyguard waits for a person on the handset: it asks for a credential (PIN, pattern, password or biometric), or it asks for none and device_state.keyguard_insecure is wait. The code covers \"locked, and a person is needed\", whether because of a secure lock or the wait policy. Nothing is sent; the Runtime never enters a credential.",
+      "description": "A keyguard waits for a person on the handset: it asks for a credential (PIN, pattern, password or biometric), or it asks for none and device_state.keyguard_insecure is wait. The code covers \"locked, and a person is needed\", whether because of a secure lock or the wait policy. Nothing is sent; the Runtime never enters a credential. Its ladder class is planned_stop (#469 D4a, since 0.12.62), as device_thermal_hold, device_battery_low and device_in_use are: the run stops on purpose, so the errors view's run-recovery grouping counts its record as no failure. A ladder rung whose entry it holds is skipped device_not_ready as theirs is (under recovery_ladder.rules.entry_unavailable skip, the default), and no default trigger item matches it.",
       "common_causes": "The phone locked itself after its screen timeout.",
       "handling": "Unlock the phone."
     },

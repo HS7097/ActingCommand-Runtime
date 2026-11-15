@@ -1378,15 +1378,17 @@ destination, and infers no click and no guard for a wait step; a wait step is no
     clock (Q9: paced like every kernel wait, bounded by the task deadline), and restarts the away
     clock from zero.
   - A frame on an error page fails the run with `contained_task_error_page_reached`, as a
-    confirmation does.
+    confirmation does (Workflow #469 K2: `confirmation_problem` `error_page`).
   - A frame of neither (another page, or none) is offered to the shared interrupt pages first; a
     handled one pauses both clocks. Otherwise it runs the away clock: `expect_after.timeout_ms`,
     else the step timeout. The away clock running out fails the run with
     `contained_task_step_unconfirmed` (`pack_operation_id`, `page_ids` the destinations, `attempts`
-    1, `page_id` the last frame's page when it matched one).
+    1, `page_id` the last frame's page when it matched one; Workflow #469 K2: and the
+    `confirmation_problem` of a page-graph confirmation, [linear-steps.md](linear-steps.md)).
   - `max_ms` reached on `from` ends the run there: with `on_timeout`, Completed on `from` with that
     key as its scheduling outcome, the step finishing on `from` (a keyed end); without it,
-    `contained_task_step_unconfirmed` with `page_id` the wait page.
+    `contained_task_step_unconfirmed` with `page_id` the wait page (Workflow #469 K2: and
+    `confirmation_problem` `wait_max_reached`).
   - The task deadline gives `contained_task_timeout`, as everywhere.
 - **A wait page.** In the confirmation of a `click`, `application` or `select` step, frames on the
   wait page pause the confirmation clock, as a handled shared interrupt does, up to `max_ms` of

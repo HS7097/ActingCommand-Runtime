@@ -572,6 +572,9 @@
       "layer": "policy",
       "uncertain": false,
       "values": {
+        "availability_source": "optional",
+        "device_link_state": "optional",
+        "device_hold": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
@@ -581,7 +584,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "Scheduling decision or planning-lane reason: the instance is unavailable.",
+      "description": "Scheduling decision or planning-lane reason: the instance is unavailable. Workflow #469 V0 (since 0.12.62): availability_source, when present, says who withdrew the application's availability, with device_link_state beside device_link and device_hold beside device_state; the host sets it on the reason, so it stays optional. Workflow #469 H1 (since 0.12.62): the host sets it on this reason of every decision of an instance its projection found unavailable, read from the active session.instance.available record it resolved and the instance's configured seed: configured (a record holds false and the configured seed is false, whichever publisher wrote the record, so also for an instance the backend self-check gates), self_check (the backend self-check gate withdrew it: a self-check that failed, one not recorded yet or invalidated, a preparation step that failed, or a resource fence), device_link, device_state, other_publisher (any other publisher), or facts_missing (no record holds false: a policy instance fact is missing or unreadable). The planning lane's reason of the same code carries none.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
