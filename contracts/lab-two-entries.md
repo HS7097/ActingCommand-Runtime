@@ -472,9 +472,8 @@ Alice's answer 4. From LAB-3, in the rescue module:
 - **What moves in** (LAB-3): `actingctl install`, `start` and `restart`, `mcp-config` and
   `mcp-entry list` (LAB-5), and `agent-channel`. The watchdog's logic becomes `crates/watchdog`
   and `actingwatch.exe` (LAB-4); `alive`, `watchdog install` and `watchdog uninstall` use it.
-- **Why it works while actingd is stopped.** It runs from
-  `install\builds\<commit>\runtime\actinglab.exe`, as the deploy runs actingctl today, and touches
-  only files, the owner lock, the WMI start and the watchdog.
+- **Why it works while actingd is stopped.** It runs from the root's `tools\actinglab.exe` or a
+  kept build's (`install\builds\<commit>\tools\actinglab.exe`), and touches only files, the owner lock, the WMI start and the watchdog.
 - **The composites:** `deploy <tag|commit>` (stage, plan, stop with hold, apply, start, alive,
   release); `config replace <file>` (guards, stop with hold, backup kept, swap, check-config, start,
   alive, release; never prints the file); `place <bundle.zip>` (plan, pause the instances bound to
@@ -517,7 +516,8 @@ Alice's answer 4. From LAB-3, in the rescue module:
   is the contract between the row and that entry); `mcp entries [--all]`, the entries' status
   files of both generations side by side, each with its generation; and `mcp config --client <c>
   [--list <modules>]`, the second generation's registration snippet, which writes no client file.
-  The first generation's `actingctl mcp-entry plan|list` and `mcp-config` stay as they are.
+  The first generation's plan, list and registration were actingctl's (`mcp-entry plan|list`,
+  `mcp-config --entry`) and went with it (LAB-7, 0.12.62).
 - **"Only the operation's own hold"** (§5), as LAB-3 fix 1 and 2 build it
   ([install-cli.md](install-cli.md), "The Lab's rescue module"): `release-hold <reason>` hands back
   only a hold that a journal of the module in this root recorded in its pause step, only the
@@ -543,7 +543,7 @@ Alice's answer 4. From LAB-3, in the rescue module:
 
 | Part | Program | Detachable | How |
 |---|---|---|---|
-| Lab core: the operation layer, the CLI, the debugging operations, the rescue module | `actinglab.exe` in the runtime member, where actingctl was | no | the one command line and the one installer; the debugging operations stay with it (Alice's answer 2) |
+| Lab core: the operation layer, the CLI, the debugging operations, the rescue module | `actinglab.exe` in `<root>\tools\` (LAB-7 kept it in the Tools member) | no | the one command line and the one installer; the debugging operations stay with it (Alice's answer 2) |
 | MCP | `actinglab-mcp.exe` and the MCP entry `g2` (`actingcommand-mcp-entry-g2.exe`) | yes | not installed, or not registered with a client; the CLI does not depend on it |
 | Authoring | `crates/lab`, through the cargo feature `authoring`, in `actinglab.exe` | yes | a build without the feature; `lab_module_authoring` absent or `false` only leaves its operations unlisted (section 8.3) |
 | Watchdog | `tools\actingwatch.exe` | its own program | `watchdog uninstall` removes its scheduled task |
@@ -554,10 +554,10 @@ The table's `modules` lists them with the module id each operation names (`core`
 **The MCP entry's generations** (LAB-5G5a; the coordinator's ruling of 2026-11-12 on board
 #434, which replaces ruling 6 of 6775192250; [install-cli.md](install-cli.md), "The MCP entry").
 The second generation is a second program with its own file name, `actingcommand-mcp-entry-g2.exe`,
-whose child is `actinglab-mcp.exe`; it goes only into `<root>\mcp-entry\g2\`. `g1\` only ever holds
-the first program, `actingcommand-mcp-entry.exe`, which stays generation 1 in every build (child
-`actingctl mcp-serve`, plan `actingctl mcp-entry plan --entry-protocol 1`) until the slice that
-removes actingctl, after the owner's registrations have moved. Why two programs: no installer
+whose child is `actinglab-mcp.exe`; it goes only into `<root>\mcp-entry\g2\`. `g1\` only ever held
+the first program, `actingcommand-mcp-entry.exe`, generation 1 in every build until LAB-7
+(0.12.62) deleted it with actingctl (its child `actingctl mcp-serve`, its plan `actingctl
+mcp-entry plan --entry-protocol 1`), after the owner's registrations moved. Why two programs: no installer
 code writes under `<root>\mcp-entry\`; placing `g1` is a copy of `tools\actingcommand-mcp-entry.exe`
 by hand, as the documents of every earlier build say, so a second generation under that file name
 would reach `g1\` by that copy, and a rollback would make one file name mean two generations.
@@ -582,7 +582,7 @@ deploy puts both in `<root>\tools\`. They are added inside `tools-layout` 3
 no registration names them until the owner registers a client with the second entry (G7), and
 placing that entry in `<root>\mcp-entry\g2\` stays the manual step above; no installer code writes
 under `<root>\mcp-entry\`. A running `actinglab-mcp.exe` never blocks a deploy that replaces its
-file: it is renamed aside as `actingctl.exe` is ([install-cli.md](install-cli.md), "Running
+file: it is renamed aside by its file name ([install-cli.md](install-cli.md), "Running
 images"); a running `actinglab.exe` other than the process that plans still blocks.
 
 ### 8.2 `actinglab serve --stdio`
