@@ -193,7 +193,14 @@ repository is refused `trial_state_dir_refused` with its `path` and the word `tr
 existing part's links resolved) has `install\state.json` as a file, the installer's own state
 file in both layouts ([install-cli.md](install-cli.md), "Layout"); `repository` when one holds
 `.git`. The installed root is recognised by one function of the resource tooling,
-`installed_root_containing`, below the Lab's crate so that both can call it; the Runtime host's
+`installed_root_containing`, which the plan and the writer call. It sits below the Lab's crate,
+which may call it, but the Lab's recordings keep their own walk (`installed_root` of
+`crates/lab/src/recording/container.rs`, #464 P4: an output directory inside an installed root is
+`record_lab_dir_invalid` `inside_installed_root`): the same file along the same two paths, but a
+check the operating system refuses is read there as "absent" and the walk goes on, and a path that
+cannot be made absolute is walked as given, where this function answers `foreign_os_error`
+(`validation_failed` for that path). The two name the same root only while every check is
+answered, so the recordings were not pointed at this function. The Runtime host's
 `installation_root_at` recognises an installation root of one directory by the same file, but the
 resource tooling may not reach the host's crate (an architecture guard), so the function repeats
 only the file's name and walks the path itself. A `runtime\BUILD-MANIFEST.json` (in every unpacked

@@ -29272,8 +29272,13 @@ this slice's branch and lifts that refusal. The offline part is one module of th
 
 **The plan** (ruling 5): the package id; `content_hash_prefix`, the first 12 hex digits of the
 content hash of the directory given, the digits the failure identity keeps and the break-in of
-#1737 takes of the same function's hash (#1737 is not on main; nothing of it is used); the instance
-as given, never contacted; the declared ends, each `scheduling_outcome` mapping of the entry task
+#1737 takes of the same function's hash (#1737, U1b, §1.389, is on main; the second train of stage
+three read the merged code: the two call two functions, not one, over one digest; the break-in
+measures by containment's `measure_content_hash`, through the host's `measure_package_hash` and the
+lift checks' memory, and cuts the digits by the host's `content_hash_prefix`; the plan reads its own
+snapshot, `snapshot_content_directory`, and calls the contract crate's `content_directory_digest`
+of each file's SHA-256 itself, the directory branch of `measure_content_hash`, keeping
+`CONTENT_PREFIX_DIGITS` (12) digits); the instance as given, never contacted; the declared ends, each `scheduling_outcome` mapping of the entry task
 with its key, its kind and its pages; each declared variable with the value `--variable` gives
 (parsed by the scan replay's own parser, judged offline by the contract crate's
 `PackageVariable::judge`, the rule a dispatch resolves a value by, taken only as given) or its
@@ -29413,8 +29418,12 @@ does not tell, or that cannot be resolved, being `foreign_os_error` (`try_exists
 "absent". The resource tooling may not reach the host's crate (the architecture guard
 `production_packages_cannot_reach_resource_tooling`), so the function repeats only the file's name
 and none of `installation_root_at`. It sits below the Lab's crate so that both can call it: pull
-request #1736 (open) refuses a recording's output directory inside an installed root by the same
-file with its own walk, and the coordinator points it at this function once both are merged. A
+request #1736 (R4 and P4, §1.388, on main since 0.12.63) refuses a recording's output directory
+inside an installed root by the same file with its own walk. The second train of stage three
+compared the two and left that walk in place: it reads a check the operating system refuses as
+"absent" and walks on (and walks a path that cannot be made absolute as given), where this
+function answers `foreign_os_error` (`validation_failed` for that path), so the two name the same
+root only while every check is answered ([standard-pack-trial.md](standard-pack-trial.md)). A
 state directory inside a repository (a directory along the path that holds `.git`) keeps its
 refusal (the work order's "never in a repository"); what it costs: a state directory kept inside a
 checkout is refused for the trial's records though recordings accept it there, and `--state-dir`
