@@ -1645,24 +1645,23 @@ the field is `"application": null | {"action": "restart"}`.
   separate field; `record status` shows `entry:"any"`). It can only be the first effective
   step; its package operation starts `from:"any"`. `coordinate_space` is set by the first
   frame after it.
-- No frame is stored before or after the operation: `session app` returns none, the entry
-  step has no screen before it, the screen right after the operation is usually a launcher
-  or splash screen, and the arrival screen comes from the next `capture --record`.
+- #463 S1-3 (since 0.12.63): on a step with a frame the operation is recorded with the screen
+  before it and the screen after it, as a press is ("In the middle of a business" below). The
+  entry step has no screen before it and takes none after it: its arrival screen comes from the
+  next press's screen before or the next `capture --record`.
 
 ### Where the operation lands
 
 | recording | `session app … --record` (device) | `record mark --application` (offline, without `--step` and `--frame`) |
 |---|---|---|
 | no effective step | Performed: a new application entry step, executed and closed (`closed_by:"application"`). Indeterminate: a new entry step, declared with the attempt, open | a new entry step, declared, open |
-| the last effective step is closed and no arrival screen came yet | `record_application_entry_invalid` (3), nothing sent | same |
-| open step, a frame without marks | `record_application_step_marks_missing` (3), nothing sent | same |
-| open step, marks, no effect | Performed: the step's effect, executed, the step closed. Indeterminate: declared with the attempt, open | the step's effect, declared, open |
+| the last effective step is closed and no arrival screen came yet | #463 S1-3: one capture first, as a press takes it, which opens the step the operation lands on (the next row) | `record_application_entry_invalid` (3) |
+| open step, no effect (#463 S1-3: with marks or without them) | Performed: the step's effect, executed, the step closed, then the screen after it. Indeterminate: declared with the attempt, open | the step's effect, declared, open |
 | open step with a click | `record_step_effect_exists` (3), nothing sent | replaced with `--replace-click`, otherwise `record_step_effect_exists`; a click with an outcome is `record_click_executed` |
 | open step with a declared application operation (also one left by an indeterminate result) | the same action is sent: Performed records the execution and closes the step, Indeterminate adds an attempt. Another action: `record_step_effect_exists` (3), nothing sent | replaced with `--replace-click` (its attempts are kept), otherwise `record_step_effect_exists` |
 
 - With `--frame` (a new offline frame) or `--step k` the operation becomes the effect of
-  that step, from its page. An open step needs marks first
-  (`record_application_step_marks_missing`); a declared effect is replaced only with
+  that step, from its page. A declared effect is replaced only with
   `--replace-click`, which now means "replace the step's effect" (`record_step_effect_exists`);
   an effect with an outcome on record is not replaced (`record_click_executed`).
 - `--application` with `--click`, `--click-from`, `--click-guard` or `--click-retry`, and a
@@ -1702,12 +1701,14 @@ the field is `"application": null | {"action": "restart"}`.
 - The record instance and the command instance must agree (`record_instance_mismatch`). The
   recording lock is taken before any Runtime request and held until the result is recorded;
   a busy lock is `record_busy` and nothing is sent.
-- Order: the step is planned first (the refusals above send nothing); the request is the
+- Order: #463 S1-3: the screen before (but on the entry step), then the step is planned (the
+  refusals above send nothing); the request is the
   `session app` request (`RuntimeClient::control_application`); then the Runtime result
   decides:
-  - a completed receipt: recorded, the step closed; the output is the `session app` output
-    plus `record{status:"application_recorded", record_id, step, step_opened, step_closed,
-    application}`;
+  - a completed receipt: recorded, the step closed, then (but on the entry step) the screen after
+    it; the output is the `session app` output plus `record{status:"application_recorded",
+    record_id, step, step_opened, step_closed, application, after}` ("In the middle of a
+    business");
   - a denied receipt (for example `fixture_execution_scope_forbidden` on a fixture instance,
     or a busy lease): the operation did not run; nothing is recorded and the error is
     returned as `session app` returns it;
@@ -1721,12 +1722,83 @@ the field is `"application": null | {"action": "restart"}`.
     with the plan, the effect and the cause.
 - **Error codes, not exit codes.** Only `record_application_indeterminate` and
   `record_append_failed_after_input` mean the application operation may have run or did
-  run; every other error means it did not run and the recording is unchanged. Several of
+  run; every other error means it did not run and the recording is unchanged. #463 S1-3: but
+  for two things: the screen before, when the command took it, stays recorded; and an error
+  whose details carry `after: {after_ms, taken: false}` is a screen after that was not taken,
+  the operation having run and been recorded. Several of
   these errors exit with 4 (also the Runtime refusals mapped to `device_error`): tell them
   apart by the error code.
 - The v0.9.0 ActingLab ignores `--record` on `session app` and runs the operation without
   recording it: do not use it during a recording. A build without application steps refuses
   the flag with `record_flag_unsupported` before any request.
+
+### In the middle of a business
+
+#463 S1-3 (0.12.63; the owner approved the three-stage blueprint of package making on board #463,
+whose stage one plays the business normally, and a business sometimes launches, restarts or stops
+the application in its middle; the rules here are the coordinator's). An application operation in
+the middle of a business is the open step's effect, as a press is ("Recording while playing"): the
+step needs no mark, and the operation is recorded with the screen before it and the screen after
+it.
+
+```
+session app <launch|restart|stop|force-stop> --record [--after-ms <0..60000>] [--still-max-ms <0..60000>]
+```
+
+All with the global `--json --instance <i>`; `session instance app` the same. Through the Lab's MCP
+server (`actinglab-mcp`) they are the tools of the rows `app launch`, `app restart` and `app stop`
+with `record`, `after_ms` and `still_max_ms` ([lab-operations.json](lab-operations.json));
+`lab_ops::apps::App::recorded` passes them on its actinglab child's line. Today's server
+(`actingctl mcp-serve`) is unchanged. The launch of a game is the application launch only: nothing
+here presses a launcher icon or reads the home screen but for the frame.
+
+- **The screen before.** When the recording has an effective step, the screen before is taken as a
+  press's: when no step is open, one frame as `capture --record` takes it, which opens the step the
+  operation lands on; when a step is open, its live primary frame stands and nothing is taken.
+  Then the step is planned, and its refusals ("Where the operation lands") send nothing.
+- **The entry step is as before.** On a recording without an effective step the operation opens
+  the application entry step, which has no frame: nothing is taken before it or after it, and no
+  device is asked for. Its package operation starts `from: "any"`. The next press's screen before
+  (or the next `capture --record`) is the business's first screen: it opens the step after the
+  entry step and is no screen after it.
+- **The screen after.** After a completed receipt (but on the entry step) the command waits
+  `--after-ms` (2000 without it) and takes the screen after it as a press's, `--still-max-ms`
+  (30000 without it) being the bound of the wait for a still screen (slice S1-2); it opens the
+  next step. A receipt without completion is recorded as before (`record_application_indeterminate`,
+  exit 4) and no screen after it is taken; a denied one records nothing. A screen after that cannot
+  be taken answers its own code and class, and the operation and its closed step stand: its details
+  begin with `record` (the operation as recorded), `after: {after_ms, taken: false}` and `operation`
+  (the `session app` output), then the capture's own members; take the screen with `capture
+  --record`, do not run the operation again.
+- **Refused before anything is sent** (exit 2): `validation_failed` with `details{argument,
+  reason}`: `--after-ms` or `--still-max-ms` outside 0..=60000 or no whole number (`after_ms` or
+  `still_max_ms`, `range`); either without `--record` (`record_only`: `--after-ms` by the gate of
+  "`--record` on device commands", `--still-max-ms` by `session app` itself). `--dry-run` stays
+  `record_flag_unsupported`.
+- **In `recording.json`** (every member absent on the entry step and on every operation an earlier
+  build recorded, so that a recording without such an operation is byte-identical to one an earlier
+  build wrote): the completed receipt `steps[].application.executed` names `before_frame`, the id of
+  the step's live primary frame when it was recorded (what was on the screen); `after_frame`, the id
+  of the first frame that arrived after it; and `after_capture: {after_ms, still_max_ms, still,
+  waited_ms, captures, kept}`, how the screen after was taken, as a press's.
+- **The answer.** The `session app` output with `record: {status: "application_recorded",
+  record_id, record_started_at_unix_ms, step, step_opened, step_closed, application, after: {step,
+  frame_id, path, sha256, after_ms, still_max_ms, still, waited_ms, captures, kept} | null}`
+  (`null` on the entry step). `path` is the stored frame: the agent reads the next screen there.
+- **`record stop`** still requires a recognition mark on every effective step but the entry step
+  (`record_step_without_recognition`, "Pre-checks"): the steps are marked afterwards with `record
+  mark --step k`, as a press's are.
+
+In PowerShell 7.3 or later, with the install root `C:\ActingCommand`:
+
+```powershell
+$lab = 'C:\ActingCommand\tools\actinglab.exe'
+& $lab --json --instance emu-a record start --task-id daily_open
+& $lab --json --instance emu-a tap 962 658 --record
+& $lab --json --instance emu-a session app restart --record --after-ms 3000
+& $lab --json --instance emu-a tap 640 360 --record
+& $lab --json --instance emu-a record archive
+```
 
 ## Optional steps
 
@@ -2582,7 +2654,7 @@ equal value is accepted.
 | exit | codes |
 |---|---|
 | 2 | `validation_failed` (Workflow #449 REC-ARCH fix 1: also `record archive --copy-to` empty, blank or relative), `record_flag_unsupported`, `record_flag_takes_no_value`, `record_state_dir_unsupported`, `record_frame_unreadable`, `record_transition_window_invalid`, `record_transition_has_click`, `record_application_action_invalid`, `record_application_with_click`, `record_optional_settle_invalid`, `record_locale_missing`, `record_lab_dir_invalid`, `record_requires_invalid` |
-| 3 | `record_session_not_active` (Workflow #390 LAB-2: also, with `details.reason: "recording_stopped"`, a change a stopped recording does not take), `record_lab_unavailable`, `record_instance_mismatch`, `record_step_not_found`, `record_step_not_last`, `record_step_frame_missing`, `record_step_frame_conflict`, `record_frame_size_mismatch`, `record_frame_hash_mismatch`, `record_mark_rejected`, `record_mark_id_conflict`, `record_mark_id_reserved`, `record_mark_in_use`, `record_asset_name_conflict`, `record_click_exists`, `record_click_executed`, `record_click_source_invalid`, `record_click_follow_invalid`, `record_click_rect_conflict`, `record_click_outside_step_rect`, `record_step_click_missing`, `record_step_click_not_executed`, `record_gesture_execution_unsupported` (#411 Lab BD), `record_guard_family_invalid`, `record_append_failed_after_input`, `record_transition_without_click`, `record_transition_exists`, `record_to_transition_invalid`, `record_busy`, `record_application_entry_invalid`, `record_application_step_marks_missing`, `record_step_effect_exists`, `record_optional_first_step`, `record_optional_application`, `record_select_invalid` (#463 R1), `record_ending_invalid` (#463 R2); stop: `record_no_steps`, `record_application_entry_not_first`, `record_step_without_recognition`, `record_final_step_has_click`, `record_too_many_steps`, `record_step_after_stop_invalid`, `record_application_without_home`, `record_click_follow_invalid`, `record_optional_first_step`, `record_optional_final_step`, `record_optional_application`, `record_optional_restart_segment_end`, `record_step_self_mismatch`, `record_optional_step_ambiguous`, `record_optional_skip_target_insensitive`, `record_select_invalid` (#463 R1), `record_ending_invalid`, `record_ending_ambiguous` (#463 R2), `record_artifact_admission_failed`, `record_requires_conflict`, `record_stop_option_conflict`, and (Workflow #449 REC-ARCH) `record_session_not_active` with `details.reason: "recording_archived"`; archive and reopen (Workflow #449 REC-ARCH): `record_session_not_active`, `record_session_active` (reopen), `record_not_archived`, `record_archive_target_not_empty`, `record_instance_mismatch`, `record_lab_unavailable` |
+| 3 | `record_session_not_active` (Workflow #390 LAB-2: also, with `details.reason: "recording_stopped"`, a change a stopped recording does not take), `record_lab_unavailable`, `record_instance_mismatch`, `record_step_not_found`, `record_step_not_last`, `record_step_frame_missing`, `record_step_frame_conflict`, `record_frame_size_mismatch`, `record_frame_hash_mismatch`, `record_mark_rejected`, `record_mark_id_conflict`, `record_mark_id_reserved`, `record_mark_in_use`, `record_asset_name_conflict`, `record_click_exists`, `record_click_executed`, `record_click_source_invalid`, `record_click_follow_invalid`, `record_click_rect_conflict`, `record_click_outside_step_rect`, `record_step_click_missing`, `record_step_click_not_executed`, `record_gesture_execution_unsupported` (#411 Lab BD), `record_guard_family_invalid`, `record_append_failed_after_input`, `record_transition_without_click`, `record_transition_exists`, `record_to_transition_invalid`, `record_busy`, `record_application_entry_invalid`, `record_step_effect_exists`, `record_optional_first_step`, `record_optional_application`, `record_select_invalid` (#463 R1), `record_ending_invalid` (#463 R2); stop: `record_no_steps`, `record_application_entry_not_first`, `record_step_without_recognition`, `record_final_step_has_click`, `record_too_many_steps`, `record_step_after_stop_invalid`, `record_application_without_home`, `record_click_follow_invalid`, `record_optional_first_step`, `record_optional_final_step`, `record_optional_application`, `record_optional_restart_segment_end`, `record_step_self_mismatch`, `record_optional_step_ambiguous`, `record_optional_skip_target_insensitive`, `record_select_invalid` (#463 R1), `record_ending_invalid`, `record_ending_ambiguous` (#463 R2), `record_artifact_admission_failed`, `record_requires_conflict`, `record_stop_option_conflict`, and (Workflow #449 REC-ARCH) `record_session_not_active` with `details.reason: "recording_archived"`; archive and reopen (Workflow #449 REC-ARCH): `record_session_not_active`, `record_session_active` (reopen), `record_not_archived`, `record_archive_target_not_empty`, `record_instance_mismatch`, `record_lab_unavailable` |
 | 4 | `record_click_indeterminate`, `record_click_performed_with_failure`, `record_application_indeterminate` |
 | 5 | `record_lock_failed`, `record_state_io_failed` (Lab state files cannot be read or written; Workflow #449 REC-ARCH: also a copy file that cannot be written), the state directory cannot be created, `record_archive_verify_failed` (Workflow #449 REC-ARCH) |
 | 6 | `record_stop_generation_not_implemented` (a build without the package generator; the #336 L4 build also for a recording with optional steps, `details.reason: "optional_steps"`) |

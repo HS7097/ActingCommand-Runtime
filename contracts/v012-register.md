@@ -28163,6 +28163,99 @@ frames of application operations (S1-3), `record frame` and the warning of an un
 three tools take `record` on the Lab's MCP server (`actinglab-mcp`); a client registered with
 today's server has no such tool until its registration moves, which is the owner's to do.
 
+### 1.404 Slice #463 S1-3 (0.12.63): an application operation in the middle of a business is a step like a press, with the screens before and after it (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, whose stage one starts recording, plays the business normally and ends recording; the design `rd-1115/pack-stage12-design.md`, the row S1-3 of A6, A4's row of the rule "an application operation needs a marked open step", A1's parts on application operations and A2.1's row of `steps[].application.executed`, read on main `44cbab53`; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s13-app-steps.md`, built on the branch of #463 S1-1 at `486f5ce7`)
+
+The coordinator gave this slice 1.404. It stands on #463 S1-1 (§1.402) and ships in 0.12.63.
+
+**Why.** A business sometimes launches, restarts or stops the application in its middle (a restart
+after an update prompt, for one). `session app <verb> --record` took such an operation only on a
+step that already carried marks (`record_application_step_marks_missing`), so the agent had to stop
+playing and describe the screen first, and the step had no screen before it and none after it in
+the material. Now the operation is the open step's effect, with both screens, as a press is
+([lab-recording.md](lab-recording.md), "Application steps", "In the middle of a business").
+
+**Established by reading** (the code's facts where the work order's notes or the design said
+otherwise first).
+- *Where the screen after is written.* `record_after_frame` writes the capture's record through
+  `attach_frame`, which asks the arrival's `pressed_step` (`note_after_frame`) and then writes
+  `after_capture` with `note_after_capture`; S1-1's `note_after_capture` knew only a click's
+  execution and would answer `record_step_not_found` for an application step. So both functions
+  (`crates/lab/src/recording/steps.rs`) read the completed receipt of an application operation as
+  they read a press's execution: the first frame that opens a step after it is its `after_frame`
+  when the receipt names its `before_frame` and has none yet. The work order named the first one;
+  the second is the smallest change that lets `record_after_frame` run as it is.
+- *The entry step.* `record_before_frame` takes a frame whenever no step is open, an empty recording
+  too; taken there it would make the launch the effect of a step with a frame, and the package
+  would no longer start `from: "any"`. So `session app --record` asks the plan first whether the
+  operation opens the entry step, and only otherwise takes the screen before and plans again (a
+  refusal of the first plan is the second's). The entry step's receipt names no `before_frame`, so
+  the frame after it is noted on nothing and opens the next step, as before; no screen after the
+  entry step is taken and no device configuration is read for it.
+- *Where the rule stood.* `plan_application` (the device, `session app --record`) and
+  `apply_application` (offline, `record mark --application`) refused an open step without marks
+  through `application_marks_missing`; both refusals and the function are gone, and
+  `apply_application` no longer takes the mark batch it read only for them. No test pinned the
+  code, and no fragment registers it. The generator's own check stays as it is: `record stop`
+  refuses a step but the entry step without an own or reused mark
+  (`record_step_without_recognition`, `crates/lab/src/recording/generate.rs`, the first loop over
+  the effective steps after the effect checks).
+- *The rows and the core module.* The coordinator's ruling of 2026-11-11 (L5C-7, "Slice LAB-5C")
+  kept `record` off the core rows `app launch|restart|stop`; this slice's ruling 4 gives them
+  `record`, `after_ms` and `still_max_ms`, so `own_flags::DECLARED_EXCEPTIONS` loses its one entry
+  (`session app`'s `--record`). Each screen is one capture as `capture --record` takes it, the
+  `ObserveReadonly` read, a kind of the UI list, so the rows keep `entries` `lab`, `ui`.
+- *The stillness test.* `AfterCapture::for_application` (S1-1) gives 2000 and 30000; the command
+  hands `record_after_frame` both numbers, the flags' or those, and the loop that reads
+  `still_max_ms` is slice S1-2's. S1-1's `record_after_frame` records `still_max_ms` 0.
+- *Interface revisions.* None moves: no request kind, wire shape, record, ledger member,
+  configuration key or outcome code is added, and `actingcommand.lab-recording.v1` keeps its name
+  (every new member is absent on the entry step and on every other operation).
+
+**What it builds.**
+
+| Part | Where |
+|---|---|
+| The model | `ApplicationExecution` gains `before_frame`, `after_frame` (frame ids) and `after_capture` (`AfterCaptureRecord`), each `serde(default, skip_serializing_if)` (`crates/lab/src/recording/model.rs`, that struct only) |
+| The steps | `plan_application` and `apply_application` without the marks rule; `commit_application` names the step's live primary frame as the receipt's `before_frame`; `note_after_frame` and `note_after_capture` read an application operation's receipt (`crates/lab/src/recording/steps.rs`) |
+| The command | `session app <verb> --record [--after-ms] [--still-max-ms]`: `application_after_capture` (the waits, their range, `AfterCapture::for_application`'s defaults), `record_application_operation` (the entry plan, else `record_before_frame` and the plan; the operation; the commit; then `record_after_frame`; the answer's `after`), `ApplicationFrames` (each capture as `capture --record` takes it); the plain `session app` refuses the waits without `--record` (`apps/actinglab/src/session_management.rs`); `SESSION_APP_READS` reads them |
+| lab-ops | `apps::App::recorded(after_ms, still_max_ms)`: the child's line ends with `--record` and the waits given (`crates/lab-ops/src/apps.rs`) |
+| The table | the rows `app launch`, `app restart`, `app stop`: `record` (switch), `after_ms`, `still_max_ms` (integers), their help, output and notes, `ObserveReadonly` beside `ApplicationLifecycle`; `own_flags::DECLARED_EXCEPTIONS` empty |
+| Texts | [lab-recording.md](lab-recording.md): "Application steps" (the screens' bullet, "Where the operation lands", the bullet of `--frame` and `--step`, the order and the error codes of `session app … --record`, the new "In the middle of a business"), "Error codes" (the removed code) |
+
+**Codes and words.** No outcome code is added and no fragment changes. `record_application_step_marks_missing`
+is no longer produced (it was in no fragment; the contract's tables drop it). New words of existing
+codes, each in the details, never in a text: `validation_failed` with `details{argument, reason}`,
+`argument` `after_ms` or `still_max_ms`, `reason` `range` (outside 0..=60000 or no whole number) or
+`record_only` (`--still-max-ms` without `--record` on `session app`; `--after-ms` without it stays
+the shared gate's, §1.402), each refusing, exit 2; `after: {after_ms, taken: false}` in the details
+of a screen after that was not taken (the capture's own code and class). The answer's `record.after`
+is a member, not a word. No decision reads a code.
+
+**Tests.** `apps/actinglab/src/tests/gate_463_s13.rs` (exec gate map "#463 S1-3"; fake Runtime,
+fake clock, captures repeating their last screen, synthetic 1280x720 frames): a tap, then `restart
+--record` on the unmarked step it opened (nothing captured before, the step's executed effect with
+`before_frame` its frame, the handed wait 2000 and a capture opening step 3, `after_frame` and
+`after_capture`, the answer with `after`); `launch --record` on an empty recording (the entry step
+without a frame, no device asked for, none of the three members; the next tap's screen before opens
+step 2 and is no screen after the entry step; marked afterwards, `record stop --dry-run` validated
+and the package's entry `from: "any"`); `record mark --application` on an open step without marks;
+the waits handed (none, both, the bound alone, and `range` refusals).
+`crates/lab-ops/src/gate_463_s13.rs`: `App`'s line with and without `recorded`, for each action.
+The assertions read what the command hands the screen after and the frames the step table names,
+not how many captures the screen after takes (slice S1-2's loop). No test is adapted, no golden
+changes, no test leaves the gate map.
+
+**What is not changed.** The entry launch (its step, its package's `from: "any"`); the indeterminate
+and denied answers of `session app --record`; `tap`, `swipe`, `long-tap --record` and their frames;
+`record_before_frame`, `record_after_frame` and `RecordFramePorts` (called as they are); the package
+generator and its marks check; the kernel and the Runtime; today's MCP server (`actingctl
+mcp-serve`); every recording without such an operation, byte for byte.
+
+**At deploy.** Nothing to configure. Recordings already on disk load as before. Through MCP the
+three tools take `record`, `after_ms` and `still_max_ms` on the Lab's MCP server (`actinglab-mcp`);
+a client registered with today's server has no such parameter until its registration moves, which
+is the owner's to do.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

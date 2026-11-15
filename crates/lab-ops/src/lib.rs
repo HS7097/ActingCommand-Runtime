@@ -177,6 +177,10 @@ mod gate_434_lab6s3;
 // the reads, no frames, the size bound, the errors view and the table's row).
 #[cfg(test)]
 mod gate_467_rpt1;
+// Test-only: #463 S1-3, `apps::App` passes `--record` and the waits of the screen after the
+// operation (`s13_the_app_line_carries_record_and_its_waits_when_asked`).
+#[cfg(test)]
+mod gate_463_s13;
 // Test-only: ROUT-L RL-1c (#411), the standard-pack game root fixtures of `packs::tests`.
 #[cfg(test)]
 #[path = "../../../tests/support/standard_pack_schedule.rs"]

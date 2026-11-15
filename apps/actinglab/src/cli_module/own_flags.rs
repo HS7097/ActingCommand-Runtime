@@ -176,14 +176,10 @@ pub(crate) const DECLARED_ROWS: [(&str, &FlagReads); 5] = [
 ];
 
 /// Workflow #434 LAB-5B1: the flags a list of [`DECLARED_ROWS`] reads that its rows do not declare,
-/// by design, each with its reason (the list's row, the flag, why).
-pub(crate) const DECLARED_EXCEPTIONS: [(&str, &str, &str); 1] = [(
-    "session app",
-    "--record",
-    "the core rows do not reach the authoring module's recording (Workflow #434 LAB-5C, L5C-7, \
-     the coordinator's ruling of 2026-11-11); `session app <action> --record` stays actinglab's \
-     own command line",
-)];
+/// by design, each with its reason (the list's row, the flag, why). #463 S1-3: none; the rows `app
+/// launch|restart|stop` declare `record` and the waits of the screen after the operation, which
+/// replaces the one exception, `session app`'s `--record` (Workflow #434 LAB-5C, L5C-7).
+pub(crate) const DECLARED_EXCEPTIONS: [(&str, &str, &str); 0] = [];
 
 /// How many positional words a command checks it is given: at least `least`, at most `most`
 /// (`None`: it checks no most).

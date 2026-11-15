@@ -793,57 +793,66 @@
       "name": "app launch",
       "module": "core",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": true, "note": "on the command line also --instance <x>, in place of the positional"}
+        {"name": "instance", "form": "positional", "type": "instance", "required": true, "note": "on the command line also --instance <x>, in place of the positional"},
+        {"name": "record", "form": "switch", "type": "boolean", "required": false, "note": "#463 S1-3: the launch is a step of the instance's recording, with the screen before it and the screen after it; on a recording without a step it is the entry step, with neither; no dry run"},
+        {"name": "after_ms", "form": "option", "type": "integer", "required": false, "note": "#463 S1-3, with record: 0 to 60000, default 2000: the wait between the launch and the screen after it"},
+        {"name": "still_max_ms", "form": "option", "type": "integer", "required": false, "note": "#463 S1-3, with record: 0 to 60000, default 30000: the bound of the wait for a still screen after the launch"}
       ],
-      "help": "Launches the application the Runtime configures for one instance.",
-      "output": "the receipt",
+      "help": "Launches the application the Runtime configures for one instance; with record, the launch is a step of the instance's recording.",
+      "output": "the receipt; with record, its record: the step, and the screen after it",
       "writes": true,
       "irreversible": false,
       "runtime": "required",
       "entries": ["lab", "ui"],
-      "requests": ["ApplicationLifecycle"],
+      "requests": ["ApplicationLifecycle", "ObserveReadonly"],
       "source": ["MCP ac_app (launch)", "actinglab session app launch", "actinglab session instance app launch", "acui: rescue bar game start and restart (crates/acui-source/src/workbench/device.rs)"],
       "slice": "LAB-1b",
       "status": "planned",
-      "notes": "LAB-1b moved its code into lab-ops: `apps::run`, the operation MCP ac_app runs (its actions and actinglab's session app command line, `apps::App`), with `lab_child`, which starts that actinglab child and reads its envelope into the answer; MCP keeps its arguments, its job and its tool error; the session command itself is actinglab's (LAB-2); LAB-2: actinglab's CLI module serves it with its own session app, in process; wait dropped, since session app bounds its request itself"
+      "notes": "LAB-1b moved its code into lab-ops: `apps::run`, the operation MCP ac_app runs (its actions and actinglab's session app command line, `apps::App`), with `lab_child`, which starts that actinglab child and reads its envelope into the answer; MCP keeps its arguments, its job and its tool error; the session command itself is actinglab's (LAB-2); LAB-2: actinglab's CLI module serves it with its own session app, in process; wait dropped, since session app bounds its request itself; #463 S1-3 (contracts/lab-recording.md, Application steps): with record, each screen is one capture through the Runtime as capture --record takes it, the ObserveReadonly read; `apps::App::recorded` passes record and the waits; no request kind is new to the Runtime"
     },
     {
       "name": "app restart",
       "module": "core",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": true, "note": "on the command line also --instance <x>, in place of the positional"}
+        {"name": "instance", "form": "positional", "type": "instance", "required": true, "note": "on the command line also --instance <x>, in place of the positional"},
+        {"name": "record", "form": "switch", "type": "boolean", "required": false, "note": "#463 S1-3: the restart is a step of the instance's recording, with the screen before it and the screen after it; on a recording without a step it is the entry step, with neither; no dry run"},
+        {"name": "after_ms", "form": "option", "type": "integer", "required": false, "note": "#463 S1-3, with record: 0 to 60000, default 2000: the wait between the restart and the screen after it"},
+        {"name": "still_max_ms", "form": "option", "type": "integer", "required": false, "note": "#463 S1-3, with record: 0 to 60000, default 30000: the bound of the wait for a still screen after the restart"}
       ],
-      "help": "Restarts the application the Runtime configures for one instance, ending what runs in it.",
-      "output": "the receipt",
+      "help": "Restarts the application the Runtime configures for one instance, ending what runs in it; with record, a step of the instance's recording.",
+      "output": "the receipt; with record, its record: the step, and the screen after it",
       "writes": true,
       "irreversible": false,
       "disruptive": true,
       "runtime": "required",
       "entries": ["lab", "ui"],
-      "requests": ["ApplicationLifecycle"],
+      "requests": ["ApplicationLifecycle", "ObserveReadonly"],
       "source": ["MCP ac_app (restart)", "actinglab session app restart", "actinglab session instance app restart", "acui: rescue bar game start and restart (crates/acui-source/src/workbench/device.rs)"],
       "slice": "LAB-1b",
       "status": "planned",
-      "notes": "LAB-1b moved its code into lab-ops: `apps::run`, the operation MCP ac_app runs (its actions and actinglab's session app command line, `apps::App`), with `lab_child`, which starts that actinglab child and reads its envelope into the answer; MCP keeps its arguments, its job and its tool error; the session command itself is actinglab's (LAB-2); LAB-2: actinglab's CLI module serves it with its own session app, in process; wait dropped, since session app bounds its request itself"
+      "notes": "LAB-1b moved its code into lab-ops: `apps::run`, the operation MCP ac_app runs (its actions and actinglab's session app command line, `apps::App`), with `lab_child`, which starts that actinglab child and reads its envelope into the answer; MCP keeps its arguments, its job and its tool error; the session command itself is actinglab's (LAB-2); LAB-2: actinglab's CLI module serves it with its own session app, in process; wait dropped, since session app bounds its request itself; #463 S1-3 (contracts/lab-recording.md, Application steps): with record, each screen is one capture through the Runtime as capture --record takes it, the ObserveReadonly read; `apps::App::recorded` passes record and the waits; no request kind is new to the Runtime"
     },
     {
       "name": "app stop",
       "module": "core",
       "params": [
-        {"name": "instance", "form": "positional", "type": "instance", "required": true, "note": "on the command line also --instance <x>, in place of the positional"}
+        {"name": "instance", "form": "positional", "type": "instance", "required": true, "note": "on the command line also --instance <x>, in place of the positional"},
+        {"name": "record", "form": "switch", "type": "boolean", "required": false, "note": "#463 S1-3: the stop is a step of the instance's recording, with the screen before it and the screen after it; on a recording without a step it is the entry step, with neither; no dry run"},
+        {"name": "after_ms", "form": "option", "type": "integer", "required": false, "note": "#463 S1-3, with record: 0 to 60000, default 2000: the wait between the stop and the screen after it"},
+        {"name": "still_max_ms", "form": "option", "type": "integer", "required": false, "note": "#463 S1-3, with record: 0 to 60000, default 30000: the bound of the wait for a still screen after the stop"}
       ],
-      "help": "Stops the application the Runtime configures for one instance, ending what runs in it.",
-      "output": "the receipt",
+      "help": "Stops the application the Runtime configures for one instance, ending what runs in it; with record, a step of the instance's recording.",
+      "output": "the receipt; with record, its record: the step, and the screen after it",
       "writes": true,
       "irreversible": false,
       "disruptive": true,
       "runtime": "required",
       "entries": ["lab", "ui"],
-      "requests": ["ApplicationLifecycle"],
+      "requests": ["ApplicationLifecycle", "ObserveReadonly"],
       "source": ["MCP ac_app (stop)", "actinglab session app stop", "actinglab session instance app stop", "actinglab session app force-stop", "actinglab session instance app force-stop"],
       "slice": "LAB-1b",
       "status": "planned",
-      "notes": "LAB-1b moved its code into lab-ops: `apps::run`, the operation MCP ac_app runs (its actions and actinglab's session app command line, `apps::App`), with `lab_child`, which starts that actinglab child and reads its envelope into the answer; MCP keeps its arguments, its job and its tool error; the session command itself is actinglab's (LAB-2); LAB-2: actinglab's CLI module serves it with its own session app, in process; wait dropped, since session app bounds its request itself"
+      "notes": "LAB-1b moved its code into lab-ops: `apps::run`, the operation MCP ac_app runs (its actions and actinglab's session app command line, `apps::App`), with `lab_child`, which starts that actinglab child and reads its envelope into the answer; MCP keeps its arguments, its job and its tool error; the session command itself is actinglab's (LAB-2); LAB-2: actinglab's CLI module serves it with its own session app, in process; wait dropped, since session app bounds its request itself; #463 S1-3 (contracts/lab-recording.md, Application steps): with record, each screen is one capture through the Runtime as capture --record takes it, the ObserveReadonly read; `apps::App::recorded` passes record and the waits; no request kind is new to the Runtime"
     },
     {
       "name": "shutdown",
