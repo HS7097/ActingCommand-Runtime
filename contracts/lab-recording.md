@@ -11,7 +11,8 @@ the package `record stop` generates, checks and writes ("Package generation"). W
 REC-ARCH: a recording kept only as material is ended with `record archive` and made active again
 with `record reopen` ("Archiving"), and a swipe sent with `--record` is a step ("`--record` on
 device commands"). #463 L1: `do --capture --record` records a whole step in one call, its marks,
-its press and the next step's frame ("One call per step").
+its press and the next step's frame ("One call per step"). #463 R1: a step may choose in a list of
+fixed slots by the name read in each slot, its click the slot it chooses ("Selecting in a list").
 
 The recording state lives in the Lab state directory. Nothing in this document writes to
 the Runtime ledger; the clicks and application operations themselves are executed by the
@@ -99,7 +100,10 @@ command deletes nothing and names the files it already wrote.
   click was executed. A build before #463 L2 does not decode a `recording.json` that holds one
   (`ocr` and `follow` refuse the unknown member): its Lab part is unavailable,
   `lab_recording_unreadable`, and the file is left as it is; do not mix versions during a
-  recording.
+  recording. #463 R1 (since 0.12.61): a step's `select` is absent on every step without one
+  ("Selecting in a list"), so a recording without a select is byte-identical to one an earlier
+  build wrote; a build before 0.12.61 does not decode a recording that holds one (the step refuses
+  the unknown member), `lab_recording_unreadable` as above.
 
 ## Commands
 
@@ -300,7 +304,8 @@ Rules:
   one `{id, reason, …}` per refused mark). `--dry-run` runs everything and writes nothing
   (`marks_validated`).
 - Mark ids: 1–128 bytes without surrounding whitespace or control characters, not starting
-  with `page/` (`record_mark_id_reserved`), unique among the marks of the effective steps
+  with `page/` or (#463 R1, the ids of a select's generated targets) `select/`
+  (`record_mark_id_reserved`), unique among the marks of the effective steps
   and their transitions (`record_mark_id_conflict`). A removed or dropped mark frees its id.
 - Template crops become `assets/<id lowercased, characters outside [a-z0-9_.-] replaced by
   _>.png`; two ids with one asset name are refused (`record_asset_name_conflict`).
@@ -333,8 +338,9 @@ Rules:
 
 Output: `{status, record_id, step, step_opened, frame, samples, marks, reused, removed,
 click, application, transition, step_state{marks, frames, effect, transition, closed,
-optional, forbidden?, anchor?}, closed_step, dry_run, forbidden?, after_stop?}` (Workflow #390
-LAB-2: `forbidden` lists the page's forbidden marks tested on the step's frames, and
+optional, forbidden?, anchor?}, closed_step, dry_run, forbidden?, after_stop?, select?}` (#463
+R1: `select`, the step's select with its self-test, is present only on a step that has one;
+Workflow #390 LAB-2: `forbidden` lists the page's forbidden marks tested on the step's frames, and
 `after_stop: true` says the recording is stopped and `record stop` will generate its package
 again; both are absent otherwise). `step_state.effect` is `none`, `click_declared`,
 `click_executed`, `click_indeterminate`, `application_declared` or `application_executed`;
@@ -356,9 +362,13 @@ reason}`, or
          application{action, cli_verb, source, executed, attempts[], needs_review}|null,
          optional: null | {settle_ms},
          transition: null | {kind:"page", frames, marks, timeout_ms, source} | {kind:"window", min_ms, max_ms},
-         closed, closed_by, forbidden?, anchor?}],
+         closed, closed_by, forbidden?, anchor?, select?}],
  artifact|null, amended_at_unix_ms?, record_flag_state_dir, record_flag_reachable}
 ```
+
+#463 R1: `select` is present only on a step that chooses in a list, as `recording.json` holds it
+(its `declaration`, `marked_at_unix_ms` and `self_test`; "Selecting in a list"); its click's
+`source` is `select`.
 
 Workflow #390 LAB-2: `gesture`, `forbidden` and `anchor` are present only on a drag or long
 press, a page that forbids marks and an anchored page; `amended_at_unix_ms` only on a stopped
@@ -617,8 +627,8 @@ template: one screen, the name found on it, no scrolling.
   the screen at run time leaves the step's page recognized by its other marks, and the guard
   refuses: the run fails with `contained_task_guard_refused` and the typed cause
   (`cause=text_locate_not_found` or the other typed reason), with no input, as a hand-written
-  package does; the same on the fresh frame of the recheck. There is no normal end for "not found"
-  yet.
+  package does; the same on the fresh frame of the recheck. A located-text click has no normal end
+  for "not found"; a select has one (#463 R1, "Selecting in a list").
 
 A screen with a row of four cards, the wanted card found by its name: the request above
 ("record mark") declares the title template `ui/title`, which recognizes the screen, and
@@ -646,6 +656,215 @@ inside the frame. The package declares:
 and its run presses the cell that holds `BETA` on the fresh frame, wherever the card stands; on a
 day without `BETA` on the row the screen is still `step_01` and the guard refuses with
 `cause=text_locate_not_found`, no input.
+
+### Selecting in a list
+
+#463 R1 (since 0.12.61, [v012-register.md](v012-register.md) §1.381; the owner's rule on board
+#463: what stands in a list is chosen by what is read, never by its position; it is confirmed on a
+fresh frame before the press; when the wanted item is not there the run ends normally with a
+result that has a name, and never guesses; the rules here are the coordinator's). A step may
+choose in a list of fixed slots on one screen by the name read in each slot: the request's
+`select` (request form only, `record mark --request` or `--request-json`, MCP `ac_record_mark`, and
+the mark request of "One call per step"; no shortcut flag). `record stop` generates it as the
+select step of a `linear_steps` task ([linear-steps.md](linear-steps.md), "Select steps"). A list
+that scrolls, an ending added after the stop and the declaration of the wanted value as a variable
+are later slices.
+
+```json
+{"schema_version":"actingcommand.lab-record-mark.v1","step":3,
+ "add":[{"id":"ui/list_title","family":"template","region":{"x":40,"y":20,"width":160,"height":32}}],
+ "select":{
+   "slots":[{"rect":{"x":100,"y":200,"width":180,"height":240},"name":{"x":110,"y":400,"width":160,"height":30}},
+            {"rect":{"x":300,"y":200,"width":180,"height":240},"name":{"x":310,"y":400,"width":160,"height":30}}],
+   "read":{"languages":["en"],"timeout_ms":1000,"minimum_confidence_milli":850,
+           "model_ref":"model","model_sha256":"<64 hex>"},
+   "names":[{"id":"item_a","aliases":["Item A"]},{"id":"item_b","aliases":["Item B"]}],
+   "match":{"max_distance":1,"minimum_margin":1},
+   "wanted":{"name":"list_item","default":"item_b"},
+   "pressed":"item_a"}}
+```
+
+- **The members.** `slots`, 1 to 16 (the projection's OCR budget of one frame), each its `rect`,
+  an optional `click` (the box a tap is drawn in, default `rect`) and `name`, the region its name is
+  read in; `read`, the OCR members of every name read (`languages`, `timeout_ms`,
+  `minimum_confidence_milli` 1 to 1000, `model_ref`, `model_sha256`); `names`, the identity domain:
+  every name the list may show, each an `id` of the grammar `^[a-z][a-z0-9_]{0,63}$` (the parameter
+  grammar, so a later slice needs no rename) and 1 to 8 `aliases`, the texts it is read as, up to
+  1024 names; `match`, the `ocr_aliases` mapping's `max_distance` (0 to 8) and `minimum_margin` (1
+  to 9); `wanted`, the wanted value: its `name` (the same grammar, its own in the recording) and its
+  `default` (one of the names); `pressed`, the name the agent presses now as a demonstration (absent:
+  the default); `on_empty_key`, the key of the run's normal end when the wanted name is on no slot
+  (`^[a-z0-9][a-z0-9_]{0,127}$`, default `<task_id>_not_found`, so a second select of the recording
+  gives its own: the default would be the first one's, `on_empty_key_taken`); `confirm`,
+  `candidate_set` (the kernel's default) or `decision`.
+- **What the Lab reads, and what only the kernel admits** (fix 1). The Lab's own reading of the
+  request refuses `validation_failed` (exit 2): an unknown member or a wrong type; a slot count
+  outside 1 to 16; a rectangle without width or height; an empty `languages` or a blank language, a
+  `timeout_ms` of 0, a `minimum_confidence_milli` outside 1 to 1000, a blank `model_ref` or a
+  `model_sha256` that is not 64 lowercase hex digits; and the identity domain and `match` as the
+  identity declaration validates them (1 to 1024 names, 1 to 8 aliases each that normalize to a
+  text, the match's distance and margin). Every other bound of the read is the kernel's alone, and
+  the Lab does not copy it: a `timeout_ms` above what an OCR target admits, more languages than it
+  takes or a `model_ref` it does not admit passes the Lab's reading and is refused by the kernel's
+  admission of the probe package at the self-test, `record_select_invalid` with `kernel_refused`
+  (exit 3), the kernel's code in `details.loader_code` and its text in `details.detail`.
+- **`clear_select`** (fix 1; request form only, `true` or absent, not with `select`:
+  `validation_failed`) takes the step's select off, also after `record stop`: see "The click"
+  below. A step without a select is left as it is.
+- **The click.** The select is the step's effect: its click (`click.source: "select"`) is the
+  click box of the slot the decision selects for `pressed` on the primary frame, which `do
+  --capture --record` and the one call press as any recorded click ("One call per step": nothing
+  there changed). A click with an outcome on record stays, the demonstration the self-test checks:
+  a select declared on a step whose tap was recorded, or declared again after its press (to change
+  its default, also after `record stop`). A click without an outcome, the select's own among them,
+  is replaced only with `replace_click` (`record_click_exists`, so that a one-call step sent again
+  presses nothing twice); a click declared in its place with `replace_click`, and an application
+  operation, end the select. `--click-guard` names the select step's guard as a click's.
+- **A recorded tap turned into a select** (fix 1), on an active recording or after `record stop`
+  ("Marking after stop"): a select declared on a step whose tap has an outcome on record makes that
+  tap the select's click (`source: "select"`, its rectangle the click box of the slot the pressed
+  name selects on the primary frame) without recording again, when the tap lies in that slot; the
+  whole select is self-tested again on the step's kept frames. It is refused when the tap does not
+  lie there (`select_press_mismatch`), when the recorded click was a drag or a long press
+  (`with_gesture`), followed a mark (`with_follow`) or declares a retry (`with_retry`), and on the
+  last step of a stopped recording (`on_final_step`). The tap's own rectangle, source and mark are
+  kept beside the select in `recording.json` (`select.click_before`) and carried over when the
+  select is declared again.
+- **Taking a select off** (fix 1): `clear_select` gives a tap the select took over its own
+  rectangle, source and mark back (`click_before`), so the step is the one recorded before the
+  select and the next `record stop` generates the package it generated before; the select's own
+  click without an outcome goes with the select, with its click guard (the step has no effect
+  again). The select's own press, once executed, has no click of its own to give back:
+  `record_click_executed` (exit 3; `--reopen-step` first, which a stopped recording does not take).
+- **The guard.** A select step needs a guard (its confirmation evaluates it on the fresh frame): the
+  guard comes from the page's required marks as a click's does ("Pages and documents"). A page with
+  only OCR marks gives none: `record_select_invalid`, `guard_missing`.
+
+`record_select_invalid` (exit 3, `details{step, select_problem, outcome}`) refuses the command and
+nothing is written; every rule is checked again on every `record mark` of the step and when `record
+stop` generates the package:
+
+| `select_problem` | when |
+|---|---|
+| `with_follow` | the request's click follows a mark, or the step's recorded click does |
+| `with_gesture` | the request declares a drag, a long press, a brake drag or a path drag, or the step's recorded click is one |
+| `with_click` | the request declares a click rectangle or a click source beside the select |
+| `with_retry` | the request declares a click retry, or the step's click has one |
+| `on_optional_step` | the request makes the step optional, or the step is |
+| `with_application` | the request or the step declares an application operation (fix 1: also on the application entry step, which has no frame; a select on any other step without a frame is `record_step_frame_missing`, as a mark is) |
+| `on_final_step` | the select is marked on the last step of a stopped recording: the package ends on its page, which would then be the select's empty end too (the kernel refuses that, `select_on_empty_target`); on an active recording the last step is the open step and gets its next screen |
+| `slot_outside_frame` | a slot's rectangle, click box or name region does not lie inside the frame |
+| `name_id_invalid` | a name's `id` breaks its grammar |
+| `wanted_name_invalid` | `wanted.name` breaks its grammar (fix 1) |
+| `name_duplicate` | two names have one `id` |
+| `default_not_in_names` | `wanted.default` is no name's `id` |
+| `pressed_not_in_names` | `pressed` is no name's `id` |
+| `wanted_name_taken` | another select step of the recording has the same `wanted.name` |
+| `on_empty_key_invalid` | `on_empty_key` breaks its grammar |
+| `on_empty_key_reserved` | the `on_empty` key is `<task_id>_done`, the key of the run's usual end (fix 1) |
+| `on_empty_key_taken` | the `on_empty` key is another select step's of the recording (a second select that leaves `on_empty_key` out takes the first one's default) |
+| `guard_missing` | the step's page gives no guard |
+| `kernel_refused` | the kernel's admission refuses the select step as `record stop` generates it (`details.loader_code`, the kernel's code, and `details.detail`): a bound of the read only the kernel checks ("What the Lab reads, and what only the kernel admits") |
+
+**The mark-time self-test**, on every live frame of the step, is the kernel's own dry run of the
+select step (`dry_run_select`, called, never copied) on a probe package: the step alone as `record
+stop` generates it (its page with every mark it names, its layout, slot targets, policy document and
+`on_empty` end), followed by a page that never passes, so that the step's page is the one page of
+the probe on its frames; its budgets are the largest a package declares, since a budget is checked
+by `record stop` only. Its refusals are reasons of `record_mark_rejected`, `{id: "select", reason,
+frame_id, …}`, checked once every mark of the step holds:
+
+| reason | when |
+|---|---|
+| `select_name_unread` | a slot's name reads no known name (nothing read, too low a confidence, a text out of the domain, two names within the margin): `slot` and the typed `cause` of the first, `unread` all of them, and `default`, the default's decision there (fix 1: `blocked` when it selects nothing) |
+| `select_pressed_absent` | on the primary frame the pressed name selects no slot (`pressed`; `decision`, its kind) |
+| `select_press_mismatch` | the step's press was executed and lies outside the slot the pressed name selects on the primary frame (`slot`, `click_rect`, `point`) |
+| `select_other_page_passes` | fix 1: the page of another effective step the mark knows (every step before it; on a stopped recording every other step), or its page transition's page, passes on a live frame of the select step too, each of its marks evaluated as its self-test evaluates it (`step`, the other step's index; `transition`, whether it is the transition's page); the run's select would not know its page there. Pages of steps recorded later are checked by `record stop` (self-check item 8) |
+| `self_test_error` | the dry run fails on a frame (`failure`: the kernel's `code` and `detail`), or (fix 1) a mark of another step's page cannot be evaluated on it (`step`, `mark_id`, `error`) |
+
+A sample frame on which the pressed name stands in another slot is accepted: that is the point of
+the select. The decision with the wanted value's default is reported on every frame, never a
+refusal. Fix 1: each decision is reported by its kind, so that a frame on which the run would fail
+shows: `{"result": "selected", "slot"}`, `{"result": "empty"}` (the run's normal end with the
+`on_empty` key), `ambiguous`, `insufficient` and `unknown` (the evaluator's kinds of a decision the
+run fails on) and `blocked` (an empty or insufficient decision while a slot reads no known name,
+which the run refuses, since that slot may hold the wanted name). Without an OCR model the select
+is `not_evaluated` (`lab_ocr_unavailable`), never passed, and `record stop` lists it in
+`marks_not_evaluated` as `select/<page>`; a select whose step has no recorded press to keep a click
+from is then refused `lab_ocr_unavailable` (exit 3), since its click comes from the read names.
+
+**`recording.json`** keeps the step's `select`: `{declaration, marked_at_unix_ms, self_test{status,
+reason?, frames[{frame_id, pressed, default}]}, click_before?}`, `pressed` the decision for the
+pressed name and `default` the default's, each by its kind as above (on a sample frame without the
+pressed name, `pressed` is `empty`); `click_before{rect, source, from}` (fix 1) the tap the select
+took over, present only then. A step without a select has no key.
+
+**What `record stop` generates** for a select on step i (page `step_ii`, [linear-steps.md](linear-steps.md)
+"Select steps"):
+
+- `task.json` `candidate_layouts[]`: `{"id": "layout/step_ii", "page_id": "step_ii", "kind":
+  "fixed_slots", "features": [{"name": "name", "value": "identity", "identity": {"entries":
+  [{"id", "aliases"}…], "recognition": {"kind": "ocr_aliases", "max_distance", "minimum_margin",
+  "minimum_confidence_milli"}}}], "slots": [{"rect", "click", "targets": {"name":
+  "select/step_ii/slot_kk"}}]}`;
+- `ocr_targets[]`: `select/step_ii/slot_kk` per slot, its `name` region and the `read` members,
+  `match_mode: "contains"`, `case_sensitive: false`, `minimum_confidence` the read's in milli / 1000,
+  and `expected` the names' distinct aliases in declaration order, at most 64 (an OCR target lists
+  at most 64 values; nothing reads the target's own verdict: the layout's identity feature maps the
+  read text over the whole domain, so a domain with more aliases lists its first 64);
+- the operation `step_ii_select`: `from`, `to`, `expect_after` and `post_delay_ms` as a click step,
+  `select: {"layout_id": "layout/step_ii", "policy": {"path": "policies/step_ii_select.json"},
+  "on_empty": {"outcome_key": K}}` (with `confirm` when declared), the guard, no click and no retry;
+- `policies/step_ii_select.json`, the selection-policy document:
+
+  ```json
+  {"schema_version": "actingcommand.selection-policy.v1", "policy_id": "step_ii_select",
+   "applies_to": {"candidate_layout_id": "layout/step_ii",
+     "outcome_keys": {"selected": "<task_id>_step_ii_selected", "empty": "K",
+                      "insufficient": "<task_id>_step_ii_insufficient",
+                      "ambiguous": "<task_id>_step_ii_ambiguous", "unknown": "<task_id>_step_ii_unknown"}},
+   "fields": [{"name": "name", "value_type": {"type": "enum_string", "allowed": ["item_a", "item_b"]}}],
+   "facts": [],
+   "gates": [{"gate_id": "wanted.list_item",
+              "predicate": {"kind": "string_in", "value": {"source": "field", "field": "name"},
+                            "allowed": ["item_b"]},
+              "on_unknown": {"kind": "drop_candidate"}}],
+   "scoring": [], "selection": {"mode": "none_allowed", "required_count": 1},
+   "tie_break": [{"kind": "candidate_id", "direction": "lowest_first"}]}
+  ```
+
+- `scheduling_outcome`: after `<task_id>_done`, the mapping `{K, no_designated_effect, [step_ii]}`;
+- the step's provenance: the declaration, the pressed name, K, `marked_at_unix_ms` and the
+  self-test's decisions; the output `lab.selects[{step, record_index, op, layout, wanted, pressed,
+  on_empty_key, frames[{frame_id, pressed, default}]}]`, each decision by its kind as at mark time
+  (`frames[{frame_id, result: "undetermined"}]` without an OCR model);
+- the default task timeout adds `S` (one confirmation capture) per select step.
+
+**The wanted value is a constant of the package** until a later slice declares it as a variable:
+`control.json` has no `variables` member for it, and the one gate `wanted.<name>` keeps
+`allowed: [<default>]`. It is changed today by `record mark` on the step with the select declared
+again with another `wanted.default` (on a stopped recording too, "Marking after stop"), then `record
+stop` (`regenerated`); or, in the package, by that one line of the policy document. The gate's
+name and the ids already follow the parameter grammar, so that slice rewrites only that gate and
+adds the declaration. The recording keeps the wanted value's name in `select.wanted.name`; the
+package's gate is `wanted.<name>` and its field is `name`, the layout's identity feature.
+
+**Self-checks** (see "Self-checks"): admission by the kernel (the select-step rules of
+[linear-steps.md](linear-steps.md)), the first decision of a select at step 1 and item 8.
+
+**Which to use.** A control found by its fixed label whose position moves (a "Confirm" button):
+a click that follows a located text ("Following a located text"). An item chosen by a value that
+may change, where "not there" is a normal result: a select. A list that scrolls is a later slice.
+The located text's `expected` names were the first form of the variable; since R1 the variable
+belongs to the select.
+
+**`package` revision.** A `linear_steps` task with a select step needs `package` 13
+([component-interfaces.md](component-interfaces.md), row 13). `record stop` writes no revision: a
+content directory declares none, and the revision of a bundle is the packaging's (the resource
+repository's, and since Workflow #464 P2 the Lab's own `standard-pack build`, whose revision table
+counts a select step as 13, [resource-verify.md](resource-verify.md), "The `package` revision");
+an earlier Runtime refuses such a package at admission (`contained_task_linear_invalid`,
+`reason=operation_effect`).
 
 ### Forbidden marks and anchors
 
@@ -745,7 +964,9 @@ and ONNX Runtime is initialised on the first OCR request. The mark
 self-test, `record stop`'s first decision and cross-check, `observe`, `recognize`, `is-visible`,
 `detect-page`, `current-page`, the guard target of `do`/`wait` and the `package dry-run` replay
 evaluate OCR targets with it. #411 Lab B-9: value-test marks are OCR: their self-test, `record
-stop`'s first decision and cross-check read their sides with the same provider.
+stop`'s first decision and cross-check read their sides with the same provider. #463 R1: so is a
+select: its self-test, `record stop`'s first decision and self-check item 8 read the slots' names
+with it ("Selecting in a list").
 
 #411 Lab L6: the provider serves the root's NN model folders as well, so the same commands
 evaluate NN targets with it; `observe` evaluates an action's NN target when the provider holds
@@ -1584,8 +1805,16 @@ missing step means recording again.
 Workflow #390 LAB-2 (compromise L-02). A stopped recording whose package was generated (the
 session file stopped too, as `record stop` leaves it) takes `record mark` on its existing
 effective steps: marks (added, reused, removed, forbidden, an anchor), samples, pages, clicks,
-click guards and retries (an executed click is still replaced only after `--reopen-step`, which
-is a step operation), transitions and optional steps, under the usual rules. It takes no new
+click guards and retries (an executed click is still replaced by another click only after
+`--reopen-step`, which is a step operation), transitions and optional steps, under the usual rules.
+#463 R1 (fix 1): it also takes a select ("Selecting in a list"), declared or declared again: on a
+step whose tap has an outcome on record the select turns that tap into its click, without
+recording again, when the tap lies in the slot the pressed name selects on the primary frame
+(`select_press_mismatch` otherwise; a drag, a long press, a followed or retried click and the last
+step are refused, `record_select_invalid`), and the whole select is self-tested again on the
+step's kept frames; the tap's own rectangle, source and mark stay beside the select
+(`select.click_before`), and `clear_select` gives them back, so that the recording generates the
+package it generated before. It takes no new
 step (a frame that is not the targeted step's primary frame), no step operation and no
 application operation: each is `record_session_not_active` (exit 3) with `details{reason:
 "recording_stopped", change}`, and nothing is written; nor does any `--record` device command
@@ -1618,7 +1847,7 @@ Only the effective steps count, numbered 1..n by serial number (`artifact_step`)
 |---|---|
 | at least two steps | `record_no_steps` (3) |
 | an application entry step is step 1 only | `record_application_entry_not_first` (3) |
-| steps 1..n−1 each have one effect (a click or an application operation) | `record_step_click_missing` (3) |
+| steps 1..n−1 each have one effect (a click, a select step's demonstrated press, or an application operation) | `record_step_click_missing` (3) |
 | step n only recognizes | `record_final_step_has_click` (3) |
 | every step but the application entry step has a mark; every page transition has a mark | `record_step_without_recognition` (3) |
 | at most 1000 steps with an effect | `record_too_many_steps` (3) |
@@ -1672,9 +1901,10 @@ Numbers in page and operation ids have one width: two digits, or the digits of n
   (the number of steps with an effect). `resources/operations/resources.json` is
   `{"schema_version":"1.0","resources":[],"resource_count":0}`.
 - `task.json` (schema `0.9`): `server_scope: [server]`, the locale, the recording defaults,
-  `timeout_ms` and `max_steps` equal to the control's, `target_page` the last page, and one
+  `timeout_ms` and `max_steps` equal to the control's, `target_page` the last page, and the
   `scheduling_outcome` mapping `{"outcome_key": "<task_id>_done", "effect":
-  "no_designated_effect", "terminal_pages": [<last page>]}`.
+  "no_designated_effect", "terminal_pages": [<last page>]}`, then (#463 R1) one mapping per select
+  step, its `on_empty` key on its page ("Selecting in a list").
 - A click step's operation is `step_ii_click`: `from` its page, `to` and `expect_after.page_id`
   the next page, `click: {"kind": "rect", …}` with the recorded rectangle (Workflow #396
   REC-4: `{"kind": "target", …}` or `{"kind": "offset", …}` for a click that follows a template,
@@ -1703,7 +1933,13 @@ Numbers in page and operation ids have one width: two digits, or the digits of n
   `"check": "<id>"`, with `expected_rect` the bounding box of its sides' regions (a value-test
   member of a check counts with that box). A page with only OCR marks gives no guard and
   `unguarded_trusted_coordinate: true`, unless the click follows one of them, a located-text
-  mark, which then guards it (`verify_text`).
+  mark, which then guards it (`verify_text`). #463 R1: a select step needs a guard: its page needs
+  a template, color, color digest or check mark (`record_select_invalid`, `select_problem:
+  guard_missing`).
+- #463 R1: a select step's operation is `step_ii_select`, with its `select`, its guard, its
+  `expect_after` and its `post_delay_ms` and no click; its layout is in `candidate_layouts[]`, its
+  slots' targets in `ocr_targets[]` and its policy document is `policies/step_ii_select.json`
+  ("Selecting in a list"). A recording without a select generates the same bytes as before.
 - An application step's operation is `step_ii_app`: `application: {"action"}`,
   `expect_after.timeout_ms` the application arrival timeout A
   (`--application-arrival-timeout-ms`, default 90000), `post_delay_ms` 1000, no guard and no
@@ -1742,6 +1978,8 @@ Numbers in page and operation ids have one width: two digits, or the digits of n
   default task timeout does not count that fresh frame (one capture of the step's page, within
   the margins of the usual path). A recording without a located-text mark generates the same
   bytes as before.
+- #463 R1: the default task timeout adds `S` for each select step, its confirmation on a fresh
+  frame.
 
 ### Container and name
 
@@ -1811,6 +2049,15 @@ guard execution still requires the corresponding frames, provider and Runtime ev
      `SingleTouchDragWithVerticalBrakeV1` with (x1, y1) inside its rectangle, (x2, y2) inside
      its corner box, x3 = x2 and y3 = y2 − 100, and the four constants (200, 150, 100, 200).
      A step 1 that forbids an OCR mark involves OCR as one that requires it does.
+   - #463 R1: a select at step 1 involves OCR (its slots' names). With an OCR model the kernel's
+     dry run of the select decides on the primary frame with the policy document as packaged (the
+     wanted value's default); every slot must read a known name there. An empty decision is the
+     run's normal end: `first_decision{status: "would_end_empty", operation_label, outcome_key,
+     frame}` (the offline simulation does not report it: an empty end counts its step,
+     `offline_simulation_executed_step_invariant`). A selected slot is then simulated as the run
+     taps it (with the evaluation instant `generated_at_unix_ms`, the confirmation on the same
+     frame): `would_click` of `step_01_select` with its point inside that slot's click box, the
+     decision with its `slot`.
 
    Anything else is `record_artifact_admission_failed` with the decision.
 4. **Cross-check.** Every target is evaluated on its own with the admitted evaluator, OCR
@@ -1901,6 +2148,20 @@ guard execution still requires the corresponding frames, provider and Runtime ev
    - f. Every pair of frames and page is evaluated once, and the gate of an optional step
      without a page transition is the result of b (`distinct` or `not_evaluated`). Any refusal
      comes before every warning.
+8. **Select steps** (#463 R1, "Selecting in a list"). On every live frame of every select step the
+   kernel's dry run of the admitted package decides, with the default and with the pressed name: the
+   step's page must be the one page of the package that passes on the frame (the page rule and the
+   layout share the frame; the run refuses a confirmation frame on which another page passes too,
+   `selection_page_changed`), every slot's name reads a known name, and on the primary frame the
+   pressed name selects a slot, the one the recorded press hit. A frame that does not hold is
+   `record_step_self_mismatch` (3, `details{step, record_index, frame_id, reason, …}`, `reason`
+   `self_test_error` with the kernel's `failure`, `select_name_unread`, `select_pressed_absent` or
+   `select_press_mismatch`, as at mark time). Fix 1: the page of a step the mark already knew is
+   refused at mark time (`select_other_page_passes`); another page that passes here (a step
+   recorded after the select) is `self_test_error` with the kernel's `select_page_mismatch`. The
+   result is the cross-check's `selects` (as `lab.selects`, each frame's decisions by their kind),
+   present only with a select step; without an OCR model nothing is called, each frame is
+   `undetermined`, the status `partially_evaluated` and `selects_not_evaluated` lists the steps.
 
 Warnings never refuse. The provenance and the output carry the same warnings.
 
@@ -1951,7 +2212,7 @@ equal value is accepted.
 {status, dry_run, session_already_stopped?, container, package_id, task_id,
  path, lab_dir_path, lab_dir_status, lab_dir_created, written_files | would_write,
  byte_count, entries, steps, click_steps, application_steps[{step, op, action, source}],
- pages, transitions, optional_steps[{step, op, settle_ms, skip_to, same_as}],
+ pages, transitions, optional_steps[{step, op, settle_ms, skip_to, same_as}], selects?,
  timeouts{timeout_ms, step_timeout_ms, arrival_timeout_ms,
  application_arrival_timeout_ms}, warnings, arrival_by_time_window, marks_not_evaluated,
  steps_needing_review, cross_check, first_decision, entry_overlay,
@@ -1989,6 +2250,10 @@ equal value is accepted.
 - `optional_steps` lists every optional step: its package step number, operation id,
   `settle_ms`, `skip_to` (the page of N) and `same_as` (the earlier step recorded for the same
   pop-up, or `null`); `[]` without optional steps.
+- #463 R1: `selects` lists every select step with its decisions on every live frame (self-check
+  item 8), present only when the package has one; `click_steps` counts a select step, whose effect
+  is its tap; `marks_not_evaluated` lists a select whose mark-time self-test was not evaluated as
+  `select/<page>`.
 - `binding_requires` lists what a binding also needs: the catalog task and its approval; the
   prerequisite package with `--requires` (listed by its game's installed standard pack,
   Workflow #373 NAV-3a); without it, the return-home fallback (step
@@ -2016,7 +2281,7 @@ equal value is accepted.
 | exit | codes |
 |---|---|
 | 2 | `validation_failed` (Workflow #449 REC-ARCH fix 1: also `record archive --copy-to` empty, blank or relative), `record_flag_unsupported`, `record_flag_takes_no_value`, `record_state_dir_unsupported`, `record_frame_unreadable`, `record_transition_window_invalid`, `record_transition_has_click`, `record_application_action_invalid`, `record_application_with_click`, `record_optional_settle_invalid`, `record_locale_missing`, `record_lab_dir_invalid`, `record_requires_invalid` |
-| 3 | `record_session_not_active` (Workflow #390 LAB-2: also, with `details.reason: "recording_stopped"`, a change a stopped recording does not take), `record_lab_unavailable`, `record_instance_mismatch`, `record_step_not_found`, `record_step_not_last`, `record_step_frame_missing`, `record_step_frame_conflict`, `record_frame_size_mismatch`, `record_frame_hash_mismatch`, `record_mark_rejected`, `record_mark_id_conflict`, `record_mark_id_reserved`, `record_mark_in_use`, `record_asset_name_conflict`, `record_click_exists`, `record_click_executed`, `record_click_source_invalid`, `record_click_follow_invalid`, `record_click_rect_conflict`, `record_click_outside_step_rect`, `record_step_click_missing`, `record_step_click_not_executed`, `record_gesture_execution_unsupported` (#411 Lab BD), `record_guard_family_invalid`, `record_append_failed_after_input`, `record_transition_without_click`, `record_transition_exists`, `record_to_transition_invalid`, `record_busy`, `record_application_entry_invalid`, `record_application_step_marks_missing`, `record_step_effect_exists`, `record_optional_first_step`, `record_optional_application`; stop: `record_no_steps`, `record_application_entry_not_first`, `record_step_without_recognition`, `record_final_step_has_click`, `record_too_many_steps`, `record_step_after_stop_invalid`, `record_application_without_home`, `record_click_follow_invalid`, `record_optional_first_step`, `record_optional_final_step`, `record_optional_application`, `record_optional_restart_segment_end`, `record_step_self_mismatch`, `record_optional_step_ambiguous`, `record_optional_skip_target_insensitive`, `record_artifact_admission_failed`, `record_requires_conflict`, `record_stop_option_conflict`, and (Workflow #449 REC-ARCH) `record_session_not_active` with `details.reason: "recording_archived"`; archive and reopen (Workflow #449 REC-ARCH): `record_session_not_active`, `record_session_active` (reopen), `record_not_archived`, `record_archive_target_not_empty`, `record_instance_mismatch`, `record_lab_unavailable` |
+| 3 | `record_session_not_active` (Workflow #390 LAB-2: also, with `details.reason: "recording_stopped"`, a change a stopped recording does not take), `record_lab_unavailable`, `record_instance_mismatch`, `record_step_not_found`, `record_step_not_last`, `record_step_frame_missing`, `record_step_frame_conflict`, `record_frame_size_mismatch`, `record_frame_hash_mismatch`, `record_mark_rejected`, `record_mark_id_conflict`, `record_mark_id_reserved`, `record_mark_in_use`, `record_asset_name_conflict`, `record_click_exists`, `record_click_executed`, `record_click_source_invalid`, `record_click_follow_invalid`, `record_click_rect_conflict`, `record_click_outside_step_rect`, `record_step_click_missing`, `record_step_click_not_executed`, `record_gesture_execution_unsupported` (#411 Lab BD), `record_guard_family_invalid`, `record_append_failed_after_input`, `record_transition_without_click`, `record_transition_exists`, `record_to_transition_invalid`, `record_busy`, `record_application_entry_invalid`, `record_application_step_marks_missing`, `record_step_effect_exists`, `record_optional_first_step`, `record_optional_application`, `record_select_invalid` (#463 R1); stop: `record_no_steps`, `record_application_entry_not_first`, `record_step_without_recognition`, `record_final_step_has_click`, `record_too_many_steps`, `record_step_after_stop_invalid`, `record_application_without_home`, `record_click_follow_invalid`, `record_optional_first_step`, `record_optional_final_step`, `record_optional_application`, `record_optional_restart_segment_end`, `record_step_self_mismatch`, `record_optional_step_ambiguous`, `record_optional_skip_target_insensitive`, `record_select_invalid` (#463 R1), `record_artifact_admission_failed`, `record_requires_conflict`, `record_stop_option_conflict`, and (Workflow #449 REC-ARCH) `record_session_not_active` with `details.reason: "recording_archived"`; archive and reopen (Workflow #449 REC-ARCH): `record_session_not_active`, `record_session_active` (reopen), `record_not_archived`, `record_archive_target_not_empty`, `record_instance_mismatch`, `record_lab_unavailable` |
 | 4 | `record_click_indeterminate`, `record_click_performed_with_failure`, `record_application_indeterminate` |
 | 5 | `record_lock_failed`, `record_state_io_failed` (Lab state files cannot be read or written; Workflow #449 REC-ARCH: also a copy file that cannot be written), the state directory cannot be created, `record_archive_verify_failed` (Workflow #449 REC-ARCH) |
 | 6 | `record_stop_generation_not_implemented` (a build without the package generator; the #336 L4 build also for a recording with optional steps, `details.reason: "optional_steps"`) |

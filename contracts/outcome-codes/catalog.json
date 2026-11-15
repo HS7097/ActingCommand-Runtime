@@ -650,6 +650,10 @@
       "type": "vocab:follow_problem",
       "description": "Why a Lab recording's click that follows a template mark or a located-text mark does not hold."
     },
+    "select_problem": {
+      "type": "vocab:select_problem",
+      "description": "Why a Lab recording step's select, a choice in a list of fixed slots by the name read in each (#463 R1), cannot be declared or generated."
+    },
     "unknown_reason": {
       "type": "vocab:unknown_reason",
       "description": "Why an input a selection document reads could not be read as a known value."
@@ -5005,6 +5009,72 @@
         },
         "page_needs_followed_text": {
           "description": "The step's page would need the followed located text to be recognized: no other mark of the step recognizes it, or a check of the page names the located text (#463 L2 fix 1)."
+        }
+      }
+    },
+    "select_problem": {
+      "description": "Why a Lab recording step's select, a choice in a list of fixed slots by the name read in each (#463 R1), cannot be declared or generated.",
+      "source": {
+        "file": "crates/lab/src/codes.rs",
+        "enum": "SelectProblem"
+      },
+      "tokens": {
+        "with_follow": {
+          "description": "The request's click follows a mark beside the select: the select's click is the slot it chooses."
+        },
+        "with_gesture": {
+          "description": "The request or the step declares a drag, a long press or another gesture: a select taps once."
+        },
+        "with_click": {
+          "description": "The request declares a click rectangle or a click source beside the select: the select's click is the slot it chooses."
+        },
+        "with_retry": {
+          "description": "The request or the step declares a click retry: a select step declares no retry."
+        },
+        "on_optional_step": {
+          "description": "The step is optional, or the request makes it optional: a select step's page is its list."
+        },
+        "with_application": {
+          "description": "The request or the step declares an application operation: one step has one effect."
+        },
+        "on_final_step": {
+          "description": "The stopped recording's last step: the package ends on its page, which then would be the select's empty end too."
+        },
+        "slot_outside_frame": {
+          "description": "A slot's rectangle, click box or name region does not lie inside the frame."
+        },
+        "name_id_invalid": {
+          "description": "A name's id breaks the grammar ^[a-z][a-z0-9_]{0,63}$."
+        },
+        "wanted_name_invalid": {
+          "description": "The wanted value's name breaks the grammar ^[a-z][a-z0-9_]{0,63}$."
+        },
+        "name_duplicate": {
+          "description": "Two names of the select have one id."
+        },
+        "default_not_in_names": {
+          "description": "The wanted value's default is no id of the select's names."
+        },
+        "pressed_not_in_names": {
+          "description": "pressed is no id of the select's names."
+        },
+        "wanted_name_taken": {
+          "description": "Another select step of the recording names its wanted value alike."
+        },
+        "on_empty_key_invalid": {
+          "description": "The on_empty_key breaks the grammar ^[a-z0-9][a-z0-9_]{0,127}$."
+        },
+        "on_empty_key_reserved": {
+          "description": "The on_empty key is <task_id>_done, the key of the run's usual end."
+        },
+        "on_empty_key_taken": {
+          "description": "The on_empty key is another select step's of the recording."
+        },
+        "guard_missing": {
+          "description": "The step's page has no template, color, color digest or check mark (or a value test named as its click guard): a select step needs a guard."
+        },
+        "kernel_refused": {
+          "description": "The kernel's admission refuses the select step as record stop would generate it."
         }
       }
     },

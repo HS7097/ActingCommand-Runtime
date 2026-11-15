@@ -97,6 +97,13 @@ pub(crate) fn validate_mark_id(id: &str) -> LabResult<()> {
             format!("mark id '{id}' uses the reserved page/ prefix of anchor targets"),
         ));
     }
+    // #463 R1: the targets `record stop` generates for a select step take ids `select/…`.
+    if id.starts_with(super::select::SELECT_TARGET_PREFIX) {
+        return Err(blocked(
+            "record_mark_id_reserved",
+            format!("mark id '{id}' uses the reserved select/ prefix of a select's targets"),
+        ));
+    }
     Ok(())
 }
 

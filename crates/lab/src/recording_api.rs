@@ -11,7 +11,7 @@ use crate::recording::container::{
     write_lab_dir,
 };
 use crate::recording::crosscheck::{
-    FrameCache, admit, cross_check, evaluator_bundle, first_decision, round_trip,
+    FrameCache, admit, cross_check, evaluator_bundle, first_decision, round_trip, select_checks,
 };
 use crate::recording::generate::{
     DEFAULT_APPLICATION_ARRIVAL_TIMEOUT_MS, DEFAULT_ARRIVAL_TIMEOUT_MS, Plan, StopSettings,
@@ -30,6 +30,7 @@ use crate::recording::model::{
     RecordingArtifact, RecordingDefaults, RecordingStep, SelfTestStatus, StepClick,
     StepOptionalView, StepStateView, StepTransition, StepView, TransitionSpec, TransitionView,
 };
+use crate::recording::select::{not_evaluated_id, validate_select_request};
 use crate::recording::steps::{
     ArrivalMode, FrameMeta, Session, application_action, application_with_click, apply_marks,
     apply_step_action, apply_transition, arrive, check_device_arrival, commit_application,
@@ -312,7 +313,22 @@ fn generate_and_write(
     })?;
     // Workflow #396 REC-4: the evaluator gives the box a followed template matches on a frame.
     let decision = first_decision(&first_prepared, &plan, &cache, ocr, evaluator)?;
-    let checks = cross_check(&plan, evaluator, &cache, ocr)?;
+    let mut checks = cross_check(&plan, evaluator, &cache, ocr)?;
+    // #463 R1, self-check item 8: every select step decides on its own frames as recorded; the
+    // result is part of the cross-check, present only when the package has a select step.
+    let selects = select_checks(&first_prepared, &plan, &cache, ocr)?;
+    if let Some(cross) = checks.cross_check.as_object_mut()
+        && !selects.selects.is_empty()
+    {
+        cross.insert("selects".to_string(), json!(selects.selects));
+        if !selects.not_evaluated.is_empty() {
+            cross.insert(
+                "selects_not_evaluated".to_string(),
+                json!(selects.not_evaluated),
+            );
+            cross.insert("status".to_string(), json!("partially_evaluated"));
+        }
+    }
     let mut warnings = plan.warnings.clone();
     warnings.extend(decision.warning.clone());
     warnings.extend(checks.warnings.clone());
@@ -502,6 +518,11 @@ fn generate_and_write(
         "optional_steps".to_string(),
         json!(optional_steps_summary(&plan, &checks.same_as)?),
     );
+    // #463 R1: the select steps with their decisions on every live frame, present only when the
+    // package has one.
+    if !selects.selects.is_empty() {
+        lab.insert("selects".to_string(), json!(selects.selects));
+    }
     lab.insert(
         "timeouts".to_string(),
         json!({
@@ -516,18 +537,23 @@ fn generate_and_write(
         "arrival_by_time_window".to_string(),
         json!(checks.arrival_by_time_window),
     );
-    lab.insert(
-        "marks_not_evaluated".to_string(),
-        json!(
-            plan.emitted
-                .iter()
-                .filter(|id| plan
-                    .marks
-                    .get(*id)
-                    .is_some_and(|mark| { mark.self_test.status == SelfTestStatus::NotEvaluated }))
-                .collect::<Vec<_>>()
-        ),
-    );
+    // #463 R1: a select whose mark-time self-test was not evaluated is listed as `select/<page>`.
+    let mut not_evaluated = plan
+        .emitted
+        .iter()
+        .filter(|id| {
+            plan.marks
+                .get(*id)
+                .is_some_and(|mark| mark.self_test.status == SelfTestStatus::NotEvaluated)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    for (step, select) in plan.select_steps() {
+        if select.self_test.status == SelfTestStatus::NotEvaluated {
+            not_evaluated.push(not_evaluated_id(step.page_id()?));
+        }
+    }
+    lab.insert("marks_not_evaluated".to_string(), json!(not_evaluated));
     lab.insert("steps_needing_review".to_string(), json!(plan.needs_review));
     lab.insert("cross_check".to_string(), checks.cross_check);
     lab.insert("first_decision".to_string(), final_decision.value);
@@ -972,6 +998,8 @@ fn validate_mark_request(request: &MarkRequest) -> LabResult<()> {
         || request.retry.is_some()
         || request.replace_click
         || request.application.is_some()
+        || request.select.is_some()
+        || request.clear_select
         || page_rule;
     if request.step_action.is_some() {
         if marks_or_click
@@ -993,6 +1021,8 @@ fn validate_mark_request(request: &MarkRequest) -> LabResult<()> {
             || request.retry.is_some()
             || request.replace_click
             || request.application.is_some()
+            || request.select.is_some()
+            || request.clear_select
         {
             return Err(invalid(
                 "record_transition_has_click",
@@ -1035,6 +1065,9 @@ fn validate_mark_request(request: &MarkRequest) -> LabResult<()> {
             ));
         }
     }
+    // #463 R1: a select is the step's one effect, beside no click, retry, optional step or
+    // application operation, and keeps its shape.
+    validate_select_request(request)?;
     if let Some(application) = &request.application {
         application_action(&application.action)?;
         if request.click.is_some() || request.click_guard.is_some() || request.retry.is_some() {
@@ -1140,6 +1173,7 @@ fn mark_session(
         dry_run,
         forbidden: Vec::new(),
         after_stop: session.stopped,
+        select: None,
     };
     let step = if let Some(action) = &request.step_action {
         let (status, step) = apply_step_action(session, action)?;
@@ -1173,6 +1207,8 @@ fn mark_session(
         outcome.application = recorded.application.clone();
         outcome.transition = recorded.transition.as_ref().map(transition_view);
         outcome.step_state = Some(step_state(recorded));
+        // #463 R1: the step's select with its self-test.
+        outcome.select = recorded.select.clone();
     }
     Ok(outcome)
 }
@@ -1936,5 +1972,7 @@ fn step_view(step: &RecordingStep, effective: &[u32]) -> StepView {
         closed_by: step.closed_by.clone(),
         forbidden: step.forbidden.clone(),
         anchor: step.anchor.clone(),
+        // #463 R1: where an agent reads the select it declares again to change its default.
+        select: step.select.clone(),
     }
 }

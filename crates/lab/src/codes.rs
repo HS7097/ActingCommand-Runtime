@@ -46,6 +46,10 @@ actingcommand_contract::outcome_codes! {
         /// reopen` names is not an archived recording of the instance; nothing was written (exit 3;
         /// actinglab details `record_id`, `state`).
         RecordNotArchived => "record_not_archived": error / none,
+        /// Error. #463 R1: a recording step's `select` (a choice in a list of fixed slots by the
+        /// name read in each) cannot be declared or generated (key `select_problem`: why); the
+        /// command is refused and nothing is written (exit 3; actinglab details `step`).
+        RecordSelectInvalid => "record_select_invalid": error / none,
     }
 }
 
@@ -83,5 +87,57 @@ actingcommand_contract::outcome_vocabulary! {
         /// #463 L2 fix 1: the step's page would need the followed located text to be recognized:
         /// no other mark of the step recognizes it, or a check of the page names the located text.
         PageNeedsFollowedText => "page_needs_followed_text",
+    }
+}
+
+// #463 R1: why a recording step's select cannot be declared or generated.
+actingcommand_contract::outcome_vocabulary! {
+    /// Why a Lab recording step's `select` cannot hold (`select_problem`).
+    pub enum SelectProblem: "select_problem" {
+        /// The request's click follows a mark beside the select: the select's click is the slot it
+        /// chooses.
+        WithFollow => "with_follow",
+        /// The request or the step declares a drag, a long press or another gesture: a select
+        /// taps once.
+        WithGesture => "with_gesture",
+        /// The request declares a click rectangle or a click source beside the select: the
+        /// select's click is the slot it chooses.
+        WithClick => "with_click",
+        /// The request or the step declares a click retry: a select step declares no retry.
+        WithRetry => "with_retry",
+        /// The step is optional, or the request makes it optional: a select step's page is its
+        /// list.
+        OnOptionalStep => "on_optional_step",
+        /// The request or the step declares an application operation: one step has one effect.
+        WithApplication => "with_application",
+        /// The stopped recording's last step: the package ends on its page, which then would be
+        /// the select's empty end too.
+        OnFinalStep => "on_final_step",
+        /// A slot's rectangle, click box or name region does not lie inside the frame.
+        SlotOutsideFrame => "slot_outside_frame",
+        /// A name's `id` breaks the grammar `^[a-z][a-z0-9_]{0,63}$`.
+        NameIdInvalid => "name_id_invalid",
+        /// Fix 1: the wanted value's `name` breaks the grammar `^[a-z][a-z0-9_]{0,63}$`.
+        WantedNameInvalid => "wanted_name_invalid",
+        /// Two names of the select have one `id`.
+        NameDuplicate => "name_duplicate",
+        /// The wanted value's `default` is no `id` of the select's names.
+        DefaultNotInNames => "default_not_in_names",
+        /// `pressed` is no `id` of the select's names.
+        PressedNotInNames => "pressed_not_in_names",
+        /// Another select step of the recording names its wanted value alike.
+        WantedNameTaken => "wanted_name_taken",
+        /// The `on_empty_key` breaks the grammar `^[a-z0-9][a-z0-9_]{0,127}$`.
+        OnEmptyKeyInvalid => "on_empty_key_invalid",
+        /// Fix 1: the `on_empty` key is `<task_id>_done`, the key of the run's usual end.
+        OnEmptyKeyReserved => "on_empty_key_reserved",
+        /// The `on_empty` key is another select step's of the recording (fix 1: the usual end's
+        /// key is `on_empty_key_reserved`).
+        OnEmptyKeyTaken => "on_empty_key_taken",
+        /// The step's page has no template, color, color digest or check mark (or a value test
+        /// named as its click guard): a select step needs a guard.
+        GuardMissing => "guard_missing",
+        /// The kernel's admission refuses the select step as `record stop` would generate it.
+        KernelRefused => "kernel_refused",
     }
 }
