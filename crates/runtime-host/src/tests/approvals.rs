@@ -37,26 +37,21 @@ fn approval_decision_is_authoritative_target_bound_and_revocable() {
         panic!("expected the approved dispatch to be granted");
     };
 
-    let mut client = TestClient::connect(&host);
-    client.declare_governance_identity();
-    let conflicting = client.governance_request(RuntimeOperation::RecordApprovalDecision {
-        decision: ApprovalDecisionRecord::new(
-            "approval:fixture-a",
-            ApprovalDisposition::Approved,
-            ApprovalTarget::Catalog {
-                catalog_hash: format!("sha256:{}", "f".repeat(64)),
-                catalog_version: 1,
-            },
-            actingcommand_contract::ApprovalReasonCode::new("user_confirmed")
-                .expect("approval reason"),
-        )
-        .expect("conflicting approval"),
-    });
-    assert_eq!(
-        client.send(&conflicting).state(),
-        RuntimeReceiptState::Denied
-    );
-    drop(client);
+    // Workflow #434 LAB-6S4a: the approval request is gone; a conflicting approval through the
+    // host's transcription is refused the same way, and nothing is recorded for it.
+    let conflicting = ApprovalDecisionRecord::new(
+        "approval:fixture-a",
+        ApprovalDisposition::Approved,
+        ApprovalTarget::Catalog {
+            catalog_hash: format!("sha256:{}", "f".repeat(64)),
+            catalog_version: 1,
+        },
+        actingcommand_contract::ApprovalReasonCode::new("user_confirmed").expect("approval reason"),
+    )
+    .expect("conflicting approval");
+    host.transcribe_configured_approval(&conflicting)
+        .expect_err("a conflicting approval is refused");
+    assert!(host.fatal_error().expect("runtime health").is_none());
 
     host.complete_policy_dispatch(&approved_intent.decision_id)
         .expect("complete approved dispatch");
@@ -128,12 +123,12 @@ fn approval_history_compacts_without_losing_durable_target_identity() {
         catalog_hash: format!("sha256:{}", "a".repeat(64)),
         catalog_version: 1,
     };
-    let mut client = TestClient::connect(&host);
-    client.declare_governance_identity();
+    // Workflow #434 LAB-6S4a: recorded by the host's transcription, the approval request being
+    // gone.
     for index in 0..257 {
         let approval_id = format!("approval:history-{index}");
-        let request = client.governance_request(RuntimeOperation::RecordApprovalDecision {
-            decision: ApprovalDecisionRecord::new(
+        host.transcribe_configured_approval(
+            &ApprovalDecisionRecord::new(
                 approval_id,
                 ApprovalDisposition::Rejected,
                 target.clone(),
@@ -141,13 +136,9 @@ fn approval_history_compacts_without_losing_durable_target_identity() {
                     .expect("approval reason"),
             )
             .expect("approval decision"),
-        });
-        assert_eq!(
-            client.send(&request).state(),
-            RuntimeReceiptState::Completed
-        );
+        )
+        .expect("approval recorded");
     }
-    drop(client);
 
     let mut client = TestClient::connect(&host);
     let request = client.request(RuntimeOperation::ProjectInterface {
@@ -194,166 +185,22 @@ fn approval_history_compacts_without_losing_durable_target_identity() {
         )),
     )
     .expect("reopen runtime host");
-    let mut client = TestClient::connect(&reopened);
-    client.declare_governance_identity();
-    let conflict = client.governance_request(RuntimeOperation::RecordApprovalDecision {
-        decision: ApprovalDecisionRecord::new(
-            "approval:history-0",
-            ApprovalDisposition::Approved,
-            ApprovalTarget::Catalog {
-                catalog_hash: format!("sha256:{}", "b".repeat(64)),
-                catalog_version: 1,
-            },
-            actingcommand_contract::ApprovalReasonCode::new("conflicting_target")
-                .expect("approval reason"),
-        )
-        .expect("conflicting approval"),
-    });
-    assert_eq!(client.send(&conflict).state(), RuntimeReceiptState::Denied);
-    assert!(reopened.fatal_error().expect("runtime health").is_none());
-    drop(client);
-    reopened.close().expect("close reopened host");
-}
-
-#[test]
-fn governance_authority_requires_an_accepted_identity_card_and_is_connection_bound() {
-    let root = TempDir::new().expect("tempdir");
-    let host = RuntimeHost::start(
-        config(&root).with_governance_policy(test_governance_policy()),
-        Arc::new(FakeProvider::one(
-            POLICY_INSTANCE_ALIAS,
-            instance_id(),
-            Arc::new(FakeState::default()),
-        )),
+    let conflict = ApprovalDecisionRecord::new(
+        "approval:history-0",
+        ApprovalDisposition::Approved,
+        ApprovalTarget::Catalog {
+            catalog_hash: format!("sha256:{}", "b".repeat(64)),
+            catalog_version: 1,
+        },
+        actingcommand_contract::ApprovalReasonCode::new("conflicting_target")
+            .expect("approval reason"),
     )
-    .expect("runtime host with a governance allow-list");
-    let target = ApprovalTarget::Catalog {
-        catalog_hash: format!("sha256:{}", "a".repeat(64)),
-        catalog_version: 1,
-    };
-    let approval = |disposition| {
-        ApprovalDecisionRecord::new(
-            "approval:governance-boundary",
-            disposition,
-            target.clone(),
-            actingcommand_contract::ApprovalReasonCode::new("user_confirmed")
-                .expect("approval reason"),
-        )
-        .expect("approval decision")
-    };
-
-    // Workflow #434 LAB-6S3: both connections bind `cli`, as actingctl's do; bound from the
-    // (User, Ui) envelope of their first request they would be `ui`, which the UI list refuses an
-    // approval and an identity card.
-    let bind_cli = |client: &mut TestClient| {
-        let bind = client.request(RuntimeOperation::BindChannel {
-            channel: actingcommand_contract::RuntimeChannel::Cli,
-            via: None,
-            initiator: None,
-        });
-        assert_eq!(client.send(&bind).state(), RuntimeReceiptState::Completed);
-    };
-    let mut client = TestClient::connect(&host);
-    bind_cli(&mut client);
-    let unauthenticated = client.governance_request(RuntimeOperation::RecordApprovalDecision {
-        decision: approval(ApprovalDisposition::Approved),
-    });
-    let receipt = client.send(&unauthenticated);
-    assert_eq!(receipt.state(), RuntimeReceiptState::Denied);
-    assert_eq!(
-        receipt.error_projection().expect("denial").code,
-        RuntimeErrorCode::InvalidRequest
-    );
-
-    let not_allowed = client.governance_request(RuntimeOperation::DeclareGovernanceIdentity {
-        card: actingcommand_contract::GovernanceIdentityCard {
-            client: "not-allowed-client".to_owned(),
-            ..test_governance_card()
-        },
-    });
-    let receipt = client.send(&not_allowed);
-    assert_eq!(receipt.state(), RuntimeReceiptState::Denied);
-    let denial = receipt.error_projection().expect("denial");
-    assert_eq!(denial.code, RuntimeErrorCode::InvalidRequest);
-    assert_eq!(
-        receipt.outcome().code().as_str(),
-        "governance_client_not_allowed"
-    );
-    assert!(receipt.terminal().is_some(), "the refusal is recorded");
-
-    client.declare_governance_identity();
-    let approved = client.governance_request(RuntimeOperation::RecordApprovalDecision {
-        decision: approval(ApprovalDisposition::Approved),
-    });
-    assert_eq!(
-        client.send(&approved).state(),
-        RuntimeReceiptState::Completed
-    );
-
-    let mut other = TestClient::connect(&host);
-    bind_cli(&mut other);
-    let forged_revocation = other.governance_request(RuntimeOperation::RecordApprovalDecision {
-        decision: approval(ApprovalDisposition::Revoked),
-    });
-    let receipt = other.send(&forged_revocation);
-    assert_eq!(receipt.state(), RuntimeReceiptState::Denied);
-    assert_eq!(
-        receipt.error_projection().expect("denial").code,
-        RuntimeErrorCode::InvalidRequest
-    );
-
-    let revoked = client.governance_request(RuntimeOperation::RecordApprovalDecision {
-        decision: approval(ApprovalDisposition::Revoked),
-    });
-    assert_eq!(
-        client.send(&revoked).state(),
-        RuntimeReceiptState::Completed
-    );
-
-    let events = projected_events(
-        &mut other,
-        EventQuery {
-            event_type: Some(EventType::ApprovalDecision),
-            ..EventQuery::default()
-        },
-    );
-    assert_eq!(events.len(), 2);
-    assert!(events.iter().all(|event| {
-        event.origin.source() == EventSource::Ui
-            && event.origin.module() == OriginModule::Governance
-            && event.origin.actor() == EventActor::User
-    }));
-    let declarations = projected_events(
-        &mut other,
-        EventQuery {
-            event_type: Some(EventType::GovernanceIdentityDeclared),
-            ..EventQuery::default()
-        },
-    );
-    let verdicts = declarations
-        .iter()
-        .map(|event| match &event.payload {
-            ProjectionPayload::Full(payload) => match payload.as_ref() {
-                EventPayload::Client(
-                    actingcommand_contract::ClientPayload::GovernanceIdentityDeclared(declared),
-                ) => declared.verdict(),
-                other => panic!("unexpected declaration payload {other:?}"),
-            },
-            other => panic!("unexpected declaration projection {other:?}"),
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(
-        verdicts,
-        [
-            actingcommand_contract::GovernanceIdentityVerdict::Refused {
-                code: actingcommand_contract::GovernanceIdentityRefusal::ClientNotAllowed,
-            },
-            actingcommand_contract::GovernanceIdentityVerdict::Accepted,
-        ]
-    );
-    drop(client);
-    drop(other);
-    host.close().expect("close host");
+    .expect("conflicting approval");
+    reopened
+        .transcribe_configured_approval(&conflict)
+        .expect_err("a conflicting approval is refused");
+    assert!(reopened.fatal_error().expect("runtime health").is_none());
+    reopened.close().expect("close reopened host");
 }
 
 #[test]
@@ -428,9 +275,9 @@ fn catalog_lineage_switch_and_rollbacks_replay_with_reapprovals() {
         }
         sources
     }
+    // Workflow #434 LAB-6S4a: the planned approvals are recorded by the host's transcription, as
+    // actingd records them, the approval request being gone.
     fn record_planned(host: &RuntimeHost, plan: &CatalogTransitionPlan) {
-        let mut client = TestClient::connect(host);
-        client.declare_governance_identity();
         let approvals = plan.approvals();
         for decision in approvals
             .revoke()
@@ -438,13 +285,8 @@ fn catalog_lineage_switch_and_rollbacks_replay_with_reapprovals() {
             .chain(approvals.record())
             .chain(approvals.reapprove())
         {
-            let request = client.governance_request(RuntimeOperation::RecordApprovalDecision {
-                decision: decision.clone(),
-            });
-            assert_eq!(
-                client.send(&request).state(),
-                RuntimeReceiptState::Completed
-            );
+            host.transcribe_configured_approval(decision)
+                .expect("planned approval recorded");
         }
     }
     fn ids(records: &[ApprovalDecisionRecord]) -> Vec<&str> {
@@ -586,26 +428,19 @@ fn catalog_lineage_switch_and_rollbacks_replay_with_reapprovals() {
     assert_eq!(unchanged.kind(), CatalogTransitionPlanKind::Unchanged);
     assert_eq!(unchanged.approvals(), &CatalogApprovalPlan::default());
 
-    let mut client = TestClient::connect(&reopened);
-    client.declare_governance_identity();
-    let revocation = client.governance_request(RuntimeOperation::RecordApprovalDecision {
-        decision: ApprovalDecisionRecord::new(
-            "approval:fixture-b",
-            ApprovalDisposition::Revoked,
-            ApprovalTarget::Catalog {
-                catalog_hash: generation_b.catalog_hash().to_owned(),
-                catalog_version: generation_b.catalog_version(),
-            },
-            actingcommand_contract::ApprovalReasonCode::new("user_revoked")
-                .expect("approval reason"),
-        )
-        .expect("revocation by a person"),
-    });
-    assert_eq!(
-        client.send(&revocation).state(),
-        RuntimeReceiptState::Completed
-    );
-    drop(client);
+    let revocation = ApprovalDecisionRecord::new(
+        "approval:fixture-b",
+        ApprovalDisposition::Revoked,
+        ApprovalTarget::Catalog {
+            catalog_hash: generation_b.catalog_hash().to_owned(),
+            catalog_version: generation_b.catalog_version(),
+        },
+        actingcommand_contract::ApprovalReasonCode::new("user_revoked").expect("approval reason"),
+    )
+    .expect("revocation by a person");
+    reopened
+        .transcribe_configured_approval(&revocation)
+        .expect("revocation recorded");
     assert_eq!(
         reopened
             .plan_policy_catalog_transition(&lineage_b, None, &ids_b)
@@ -621,9 +456,9 @@ fn catalog_lineage_switch_and_rollbacks_replay_with_reapprovals() {
 /// an ordinary forward step that records nothing new for it.
 #[test]
 fn catalog_rollback_then_forward_again_keeps_the_later_approval() {
+    // Workflow #434 LAB-6S4a: the planned approvals are recorded by the host's transcription, as
+    // actingd records them, the approval request being gone.
     fn record_planned(host: &RuntimeHost, plan: &CatalogTransitionPlan) {
-        let mut client = TestClient::connect(host);
-        client.declare_governance_identity();
         let approvals = plan.approvals();
         for decision in approvals
             .revoke()
@@ -631,13 +466,8 @@ fn catalog_rollback_then_forward_again_keeps_the_later_approval() {
             .chain(approvals.record())
             .chain(approvals.reapprove())
         {
-            let request = client.governance_request(RuntimeOperation::RecordApprovalDecision {
-                decision: decision.clone(),
-            });
-            assert_eq!(
-                client.send(&request).state(),
-                RuntimeReceiptState::Completed
-            );
+            host.transcribe_configured_approval(decision)
+                .expect("planned approval recorded");
         }
     }
     fn ids(records: &[ApprovalDecisionRecord]) -> Vec<&str> {

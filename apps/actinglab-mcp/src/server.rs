@@ -91,7 +91,6 @@ const STATE: &str = "state";
 const HANDLE: &str = "handle";
 const JOB_PHASE: &str = "job_phase";
 const CORRELATION_ID: &str = "correlation_id";
-const WARNINGS: &str = "warnings";
 const SUMMARY: &str = "summary";
 const JOB: &str = "job";
 const KIND: &str = "kind";
@@ -1098,20 +1097,17 @@ fn with_job(mut exit: Exit, job: &jobs::Job) -> Exit {
 }
 
 /// Workflow #434 LAB-5G3 (work order point 5; today's `ac_run_pack`): `ac_run_start`. The jobs'
-/// cap first, then the run prepared after today's provenance (`calls::Service::run_start`), then
-/// its submission in a job, a run's, whose handle is the run's Runtime request id. Without the
-/// row's `wait` the call answers at once `{handle, correlation_id, job_phase}` with the
-/// provenance's warnings; with it, it waits for the run's end as long, within the budget, and
-/// answers its line when it ended.
+/// cap first, then the run prepared on a connection of its own (`calls::Service::run_start`),
+/// then its submission in a job, a run's, whose handle is the run's Runtime request id. Without
+/// the row's `wait` the call answers at once `{handle, correlation_id, job_phase}` (Workflow #434
+/// LAB-6S4a, 0.12.63: with no provenance before the run, so with none of its warnings); with it,
+/// it waits for the run's end as long, within the budget, and answers its line when it ended.
 fn run_start(asked: &Asked<'_>, arguments: &Map<String, Value>) -> Answered {
     let shared = asked.shared;
     if let Err(refusal) = shared.jobs.has_capacity() {
         return asked.refused(&refusal);
     }
-    let started = match shared
-        .service
-        .run_start(asked.operation, asked.tool, arguments)
-    {
+    let started = match shared.service.run_start(asked.operation, arguments) {
         Ok(started) => started,
         Err(exit) => return asked.result(&exit),
     };
@@ -1122,9 +1118,6 @@ fn run_start(asked: &Asked<'_>, arguments: &Map<String, Value>) -> Answered {
     let mut members = Map::new();
     members.insert(HANDLE.to_owned(), json!(handle));
     members.insert(CORRELATION_ID.to_owned(), started.correlation_id());
-    if !started.warnings.is_empty() {
-        members.insert(WARNINGS.to_owned(), Value::Array(started.warnings.clone()));
-    }
     let tool = asked.tool.to_owned();
     let body = move || {
         let submitted = panic::catch_unwind(AssertUnwindSafe(|| started.submitted()));

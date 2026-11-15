@@ -46,12 +46,13 @@ mod gate_wd1;
 // Test-only: WD-MT (Workflow #421, INV-1119), a candidate log's time read from the file.
 #[cfg(test)]
 mod gate_wd_mt;
-// Test-only: Workflow #381 A, the held Runtime start and the provider without instances
-// (`gate_381a`, `gate_wd1`), mounted as actingctl mounts it.
+// Test-only: the provider without instances (`gate_wd1`), mounted as actingctl mounts it
+// (Workflow #434 LAB-6S4a: the held Runtime start it also held, which `gate_381a` read, went with
+// the held start).
 #[cfg(test)]
 #[allow(dead_code)]
-#[path = "../../../tests/support/held_runtime.rs"]
-mod held_runtime;
+#[path = "../../../tests/support/no_instance_runtime.rs"]
+mod no_instance_runtime;
 // Workflow #434 LAB-4: `install\current.json`, the installer's one unfinished operation (row 7a″),
 // moved from actingctl's `install::state`, which writes it through these types.
 pub mod install_state;

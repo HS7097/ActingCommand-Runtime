@@ -207,9 +207,20 @@ fn load_pack() -> RuntimeOperation {
     }
 }
 
-fn upgrade_state_status() -> RuntimeOperation {
-    RuntimeOperation::UpgradeStateStatus {
-        transition_id: "transition-1".to_owned(),
+// Workflow #434 LAB-6S4a (0.12.63): the pure read off the list (`UpgradeStateStatus` until the
+// kind went) and the second kind the host answers `not_implemented` on every other channel.
+fn policy_input_identity() -> RuntimeOperation {
+    RuntimeOperation::ProjectPolicyInputIdentity {
+        as_of_ledger_position: 1,
+    }
+}
+
+fn unload_pack() -> RuntimeOperation {
+    RuntimeOperation::UnloadPack {
+        key: PackRegistryKey::Procedure {
+            package_id: "package.example".to_owned(),
+        },
+        wait_ms: 0,
     }
 }
 
@@ -299,8 +310,8 @@ fn settings_state(reader: &mut TestClient) -> (Option<u64>, bool) {
 // gate_two_entries, the `ui` part: for every kind of `RuntimeOperationKind::ALL` the `ui` channel
 // takes it exactly when it is a handshake kind or `ui_allows` holds it, and `ui_allows` is the
 // list of §3 (the operation table's `ui_kinds`: lab-ops' `lab_ops_ui_allows_is_the_tables_ui_kinds`).
-// The identity card is no handshake kind there. Every kind the released console sends, and the
-// two its next release adds, is taken. A refusal names every kind by a registered location.
+// Every kind the released console sends, and the two its next release adds, is taken. A refusal
+// names every kind by a registered location.
 #[test]
 fn lab6s3_gate_two_entries_ui_takes_the_handshake_and_the_ui_list_only() {
     let mut refused = 0;
@@ -319,7 +330,6 @@ fn lab6s3_gate_two_entries_ui_takes_the_handshake_and_the_ui_list_only() {
         );
     }
     assert_eq!(refused, Kind::ALL.len() - UI_LIST.len() - 2);
-    assert!(!ui_takes_kind(Kind::DeclareGovernanceIdentity));
     for kind in CONSOLE_KINDS {
         assert!(ui_takes_kind(kind), "the console sends {kind:?}");
     }
@@ -328,7 +338,7 @@ fn lab6s3_gate_two_entries_ui_takes_the_handshake_and_the_ui_list_only() {
 // On a connection bound to `ui` by its `BindChannel` and on one bound by its first request's
 // (User, Ui) envelope: a kind of the list is taken; a write off the list (LoadPack) is refused
 // and leaves one `command.rejected` with the channel `ui`; a pure read off the list
-// (UpgradeStateStatus) is refused and leaves no record; a read that records (DebugPackage, sent
+// (ProjectPolicyInputIdentity) is refused and leaves no record; a read that records (DebugPackage, sent
 // with the Lab's envelope, which its own check asks for) is refused and recorded like a write. The
 // receipts are Denied `channel_request_refused` with `channel` `ui`, `operation` the kind and no
 // `config_key` (read in full on the connection whose envelope asks for the full outcome).
@@ -376,10 +386,10 @@ fn lab6s3_a_ui_connection_is_refused_a_kind_off_the_list_however_it_was_bound() 
         assert!(refused.terminal().is_some(), "{source:?}: {refused:?}");
         assert_rejected_on_ui(&host, &write, "load_pack");
 
-        let read = request_as(client, actor, source, upgrade_state_status());
+        let read = request_as(client, actor, source, policy_input_identity());
         let refused = client.send(&read);
         if full {
-            assert_refused(&refused, "upgrade_state_status", None);
+            assert_refused(&refused, "project_policy_input_identity", None);
         }
         assert_eq!(
             (refused.state(), refused.outcome().code().as_str()),
@@ -547,7 +557,7 @@ fn lab6s3_the_released_consoles_eleven_keys_are_taken_on_ui() {
 
 // On `lab`, `cli` and `mcp` (bound by their `BindChannel`) and on an unbound connection (bound
 // from its first request's (Cli, Cli) envelope, as before this slice), a kind off the UI list and a
-// key of no console tier are answered as before this slice: LoadPack and UpgradeStateStatus are
+// key of no console tier are answered as before this slice: LoadPack and UnloadPack are
 // `not_implemented` and record nothing, the instance's `stuck_recovery` is set, and an unknown key
 // is the checks' own `config_key_unknown`; no receipt is `channel_request_refused`.
 #[test]
@@ -580,7 +590,7 @@ fn lab6s3_every_other_connection_is_answered_as_before() {
             Some(bind) => bound_client(&host, bind),
             None => TestClient::connect(&host),
         };
-        for operation in [load_pack(), upgrade_state_status()] {
+        for operation in [load_pack(), unload_pack()] {
             let request = request_as(&client, actor, source, operation);
             let receipt = client.send(&request);
             assert_eq!(

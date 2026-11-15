@@ -11,10 +11,10 @@ use crate::client::{
 use crate::{RuntimeClientConfig, RuntimeClientError, RuntimeClientErrorClass};
 use actingcommand_contract::{
     ApplicationLifecycleAction, ArtifactKind, ArtifactMediaType, ArtifactProducer,
-    ArtifactRedactionState, EventActor, EventSource, GovernanceIdentityCard, IdentifierIssuer,
-    ProjectedArtifactReference, RetentionClass, RuntimeErrorCode, RuntimeErrorProjection,
-    RuntimeOperation, RuntimeReceipt, RuntimeReceiptState, RuntimeRequest, RuntimeResult,
-    SavedArtifactOcrRequest, SavedArtifactOcrSource, SchedulingPauseScope, TerminalEvent,
+    ArtifactRedactionState, EventActor, EventSource, IdentifierIssuer, ProjectedArtifactReference,
+    RetentionClass, RuntimeErrorCode, RuntimeErrorProjection, RuntimeOperation, RuntimeReceipt,
+    RuntimeReceiptState, RuntimeRequest, RuntimeResult, SavedArtifactOcrRequest,
+    SavedArtifactOcrSource, SchedulingPauseScope, TerminalEvent,
 };
 use std::time::Duration;
 
@@ -119,15 +119,11 @@ fn gate_failures_after_send_without_a_projection_are_uncertain() {
         // The receipt was not read or not confirmed.
         (
             crate::ClientCode::RuntimeReceiptHeaderFailed.code(),
-            actingcommand_contract::codes::ContractLocation::InstallTransition.location(),
+            actingcommand_contract::codes::ContractLocation::PauseScheduling.location(),
         ),
         (
             crate::ClientCode::RuntimeReceiptReadFailed.code(),
             actingcommand_contract::codes::ContractLocation::RequestRuntimeShutdown.location(),
-        ),
-        (
-            crate::ClientCode::InstallTransitionReceiptUnconfirmed.code(),
-            actingcommand_contract::codes::ContractLocation::InstallTransition.location(),
         ),
         (
             crate::ClientCode::RuntimeShutdownReceiptUnconfirmed.code(),
@@ -333,14 +329,8 @@ fn gate_documented_operations_wait_their_contract_receipt_budget() {
         // No budget of their own: the IPC read/write timeout.
         ("status", RuntimeOperation::Status, io),
         (
-            "declare_governance_identity",
-            RuntimeOperation::DeclareGovernanceIdentity {
-                card: GovernanceIdentityCard {
-                    client: "gate-c1".to_owned(),
-                    client_version: None,
-                    instance: None,
-                },
-            },
+            "runtime_fact_snapshot",
+            RuntimeOperation::RuntimeFactSnapshot,
             io,
         ),
     ] {

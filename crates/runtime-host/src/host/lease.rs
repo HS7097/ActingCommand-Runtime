@@ -3121,11 +3121,6 @@ impl HostShared {
         connection_id: ConnectionId,
         reason: LeaseReleaseReason,
     ) -> RuntimeHostResult<()> {
-        lock(
-            &self.governance_connections,
-            HostLocation::CleanupGovernanceConnection,
-        )?
-        .remove(&connection_id);
         // Workflow #389 U-2: the connection's channel binding leaves with it.
         self.forget_connection_channel(connection_id)?;
         // Workflow #191 ps2: a closed connection sends no further reset.
@@ -3907,44 +3902,6 @@ impl HostShared {
             .map_err(|failure| *failure.error)?;
         lock(&self.host_claim_work, HostLocation::ForgetHostClaimWork)?.remove(&request_id);
         Ok(true)
-    }
-
-    /// §5.2: an install drain cancels every waiting entry except a holding ladder's own
-    /// continuation (`lease.queue_cancelled`); a holder finishes, or stops at its next holding
-    /// check. Run by the sweep while the host drains.
-    pub(super) fn cancel_queues_for_drain(&self) -> RuntimeHostResult<()> {
-        let instance_ids = lock(
-            &self.registered_instances,
-            HostLocation::ReadInstanceRegistry,
-        )?
-        .keys()
-        .copied()
-        .collect::<Vec<_>>();
-        for instance_id in instance_ids {
-            let order_lock = self
-                .queue_order_lock(instance_id)
-                .map_err(|failure| *failure.error)?;
-            let _order = lock(&order_lock, HostLocation::LockInstanceQueueOrder)?;
-            let removed = lock(&self.scheduler, HostLocation::CancelQueuesForDrain)?
-                .remove_queued_for_drain(instance_id)
-                .map_err(|error| {
-                    RuntimeHostError::scheduler(HostLocation::CancelQueuesForDrain, &error)
-                })?;
-            for cancelled in removed {
-                let context = self
-                    .read_queued_context_for(cancelled.queued())
-                    .map_err(|failure| *failure.error)?;
-                self.finish_queue_terminal(
-                    &context,
-                    DiagnosticCode::LeaseQueueCancelled,
-                    QueueTerminalOutcome::Cancelled { instance_id },
-                )
-                .map_err(|failure| *failure.error)?;
-                lock(&self.host_claim_work, HostLocation::ForgetHostClaimWork)?
-                    .remove(&cancelled.queued().request_id());
-            }
-        }
-        Ok(())
     }
 
     /// W-2: a stopping host cancels every queue (`lease.queue_disconnected`) before it joins
