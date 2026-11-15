@@ -666,12 +666,18 @@ const RECORD_ONLY_FLAGS: [&str; 5] = [
     "--next-frame-out",
 ];
 
+/// #463 S1-1: the flag `tap`, `swipe` and `long-tap` take with `--record` only: the wait before the
+/// screen after the press.
+const PRESS_RECORD_ONLY_FLAGS: [&str; 1] = ["--after-ms"];
+
 /// Workflow #336: `--record` takes no value, never comes with `--state-dir`, and is accepted
-/// only on `capture`, `observe --capture`, `do --capture` and (R24) `session app` /
-/// `session instance app` with one of its four actions; `observe`, `do` and `session app` refuse it
-/// with `--dry-run`. `--tap-rect` exists only with it, and so (#463 L1) do the flags of the
-/// one-call form, [`RECORD_ONLY_FLAGS`]. FlagArgs accepts unknown flags, so without this gate they
-/// would be silently ignored.
+/// only on `capture`, `observe --capture`, `do --capture`, (R24) `session app` /
+/// `session instance app` with one of its four actions and (#463 S1-1) `tap`, `swipe` and
+/// `long-tap`; `observe`, `do`, `session app` and the three device commands refuse it with
+/// `--dry-run`. `--tap-rect` exists only with it, and so (#463 L1) do the flags of the one-call
+/// form, [`RECORD_ONLY_FLAGS`], and (#463 S1-1) the wait of a recorded press,
+/// [`PRESS_RECORD_ONLY_FLAGS`]. FlagArgs accepts unknown flags, so without this gate they would be
+/// silently ignored.
 fn record_flag_gate(invocation: &Invocation) -> CliOutcome<()> {
     let args = &invocation.args;
     if !args.iter().any(|arg| arg == "--record") {
@@ -686,6 +692,18 @@ fn record_flag_gate(invocation: &Invocation) -> CliOutcome<()> {
             return Err(CliError::usage(format!(
                 "{flag} is accepted only with do --capture --record"
             )));
+        }
+        if let Some(flag) = PRESS_RECORD_ONLY_FLAGS
+            .iter()
+            .find(|flag| args.iter().any(|arg| arg == **flag))
+        {
+            return Err(CliError::usage(format!(
+                "{flag} is accepted only with tap, swipe or long-tap --record"
+            ))
+            .with_details(serde_json::json!({
+                "argument": flag.trim_start_matches("--").replace('-', "_"),
+                "reason": "record_only"
+            })));
         }
         return Ok(());
     }
@@ -738,6 +756,8 @@ fn record_flag_gate(invocation: &Invocation) -> CliOutcome<()> {
             flags.positionals.first().is_some_and(|word| word == "app")
                 && application(&flags.positionals[1..])
         }
+        // #463 S1-1: a press recorded by the command that makes it; it has no dry run.
+        [cmd] if matches!(cmd.as_str(), "tap" | "swipe" | "long-tap") => !dry_run,
         _ => false,
     };
     if !supported {
@@ -746,9 +766,9 @@ fn record_flag_gate(invocation: &Invocation) -> CliOutcome<()> {
             "record_flag_unsupported",
             format!(
                 "--record is accepted only on capture, observe --capture, do --capture with a \
-                 point, rectangle or swipe input, and session app|session instance app \
-                 <launch|restart|stop|force-stop>, never with --dry-run on observe, do or session app; \
-                 not on {}",
+                 point, rectangle or swipe input, session app|session instance app \
+                 <launch|restart|stop|force-stop>, and tap, swipe and long-tap, never with \
+                 --dry-run on observe, do, session app, tap, swipe or long-tap; not on {}",
                 invocation.command_name
             ),
             &[],

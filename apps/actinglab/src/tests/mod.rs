@@ -182,6 +182,10 @@ mod gate_449_rec_arch;
 // `--record`.
 #[path = "gate_463_l1.rs"]
 mod gate_463_l1;
+// #463 S1-1: `tap`, `swipe` and `long-tap --record` refuse a dry run, and `--after-ms` needs
+// `--record`.
+#[path = "gate_463_s11.rs"]
+mod gate_463_s11;
 // Workflow #464 P2: `standard-pack build` builds a game's standard pack from one commit on the
 // steps of `resource verify`, whose report is as before.
 #[path = "gate_464_p2.rs"]

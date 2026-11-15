@@ -270,19 +270,20 @@ fn from_lists(
 pub(crate) fn accepted(row: &str) -> Option<Accepted> {
     let none = Positionals::exactly(0);
     Some(match row {
+        // #463 S1-1: `--record` a switch, `--after-ms` an option.
         "tap" => from_lists(
             device_commands::DIRECT_TOUCH_FLAGS,
-            &[],
+            &device_commands::DIRECT_TOUCH_SWITCHES,
             Positionals::exactly(2),
         ),
         "swipe" => from_lists(
             device_commands::DIRECT_TOUCH_FLAGS,
-            &[],
+            &device_commands::DIRECT_TOUCH_SWITCHES,
             Positionals::exactly(5),
         ),
         "long-tap" => from_lists(
             device_commands::DIRECT_TOUCH_FLAGS,
-            &[],
+            &device_commands::DIRECT_TOUCH_SWITCHES,
             Positionals::exactly(3),
         ),
         "key" => from_lists(

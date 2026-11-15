@@ -58,7 +58,7 @@ An entry the declaration table does not list is `no_effect` when its status is `
 | `offline_device_scope_forbidden` | 2 | `package dry-run`, `replay` | none |
 | `resource_production_retired` | 2 | `package build-task/build-pack`, `resource convert`, `record build-task/promote/publish`, including `session record` aliases | none; unconditional retirement refusal |
 | `validation_failed` | 2 | `scheduling compile`, `scheduling timeline` | none |
-| `record_flag_unsupported` | 2 | `observe --capture --record`, `do --capture --record`, `session app --record`, `session instance app --record` | none |
+| `record_flag_unsupported` | 2 | `observe --capture --record`, `do --capture --record`, `session app --record`, `session instance app --record`, #463 S1-1: `tap --record`, `swipe --record`, `long-tap --record` | none |
 
 The `dry_run_unsupported` envelope:
 
@@ -269,8 +269,9 @@ and its session alias likewise preview the mark changes with `dry_run: true`.
 
 `resource catalog` is `no_effect`: it reads the authoring catalog and its validation results.
 
-All six device recording forms declare `refused` and stop before recording locks, Runtime
-access or saved recording changes. `--dry-run` is recognized at every argv position.
+All nine device recording forms (#463 S1-1: the last three rows) declare `refused` and stop
+before recording locks, Runtime access or saved recording changes. `--dry-run` is recognized at
+every argv position.
 
 | Form | `dry_run_refusal_code` | Refusal owner |
 |---|---|---|
@@ -280,6 +281,9 @@ access or saved recording changes. `--dry-run` is recognized at every argv posit
 | `do --capture --record` | `record_flag_unsupported` | the shared record flag gate before dispatch |
 | `session app --record` | `record_flag_unsupported` | the shared record flag gate before dispatch |
 | `session instance app --record` | `record_flag_unsupported` | the shared record flag gate before dispatch |
+| `tap --record` | `record_flag_unsupported` | the shared record flag gate before dispatch |
+| `swipe --record` | `record_flag_unsupported` | the shared record flag gate before dispatch |
+| `long-tap --record` | `record_flag_unsupported` | the shared record flag gate before dispatch |
 
 ## Bootstrap and transient writes
 

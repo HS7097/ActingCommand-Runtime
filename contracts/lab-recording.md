@@ -14,7 +14,9 @@ device commands"). #463 L1: `do --capture --record` records a whole step in one 
 its press and the next step's frame ("One call per step"). #463 R1: a step may choose in a list of
 fixed slots by the name read in each slot, its click the slot it chooses ("Selecting in a list").
 #463 R2: a stopped recording takes an ending from a frame, a screen that ends the business another
-way after its last press, without recording again ("Endings").
+way after its last press, without recording again ("Endings"). #463 S1-1: `tap`, `swipe` and
+`long-tap --record` record a press by the command that makes it, with the screen before it and the
+screen after it, no rectangle and no carrier package ("Recording while playing").
 
 The recording state lives in the Lab state directory. Nothing in this document writes to
 the Runtime ledger; the clicks and application operations themselves are executed by the
@@ -111,7 +113,10 @@ command deletes nothing and names the files it already wrote.
   recording's `endings` is absent on a recording without one ("Endings"), so such a recording is
   byte-identical to one an earlier build wrote; a build before 0.12.61 does not decode a recording
   that holds one, `lab_recording_unreadable` as above. Fix 1: a frame's `scaled_from` is absent on
-  every frame the Lab did not convert.
+  every frame the Lab did not convert. #463 S1-1 (since 0.12.63): a click execution's
+  `before_frame`, `after_frame` and `after_capture` are absent on every press but one recorded by
+  the command that makes it ("Recording while playing"), so a recording without such a press is
+  byte-identical to one an earlier build wrote.
 
 ## Commands
 
@@ -1221,24 +1226,25 @@ next step
 ## `--record` on device commands
 
 Only `capture`, `observe --capture`, `do --capture` with a point, rectangle or (Workflow #390
-LAB-2) swipe input and
+LAB-2) swipe input,
 `session app` / `session instance app` with `launch`, `restart`, `stop` or `force-stop`
-(see "Application steps") accept `--record`; every other command or combination is refused
-before it runs:
+(see "Application steps") and (#463 S1-1) `tap`, `swipe` and `long-tap` (see "Recording while
+playing") accept `--record`; every other command or combination is refused before it runs:
 
 | code (exit 2) | when |
 |---|---|
-| `record_flag_unsupported` | offline commands, `capture diagnose`, element clicks, `observe --capture --dry-run`, `do --dry-run`, `session app --dry-run` (global or after the command, including the instance alias), `session app` without one of its four actions, `tap`/`swipe`/`long-tap` and every other command |
+| `record_flag_unsupported` | offline commands, `capture diagnose`, element clicks, `observe --capture --dry-run`, `do --dry-run`, `session app --dry-run` (global or after the command, including the instance alias), `session app` without one of its four actions, #463 S1-1: `tap`/`swipe`/`long-tap --record --dry-run` (global or after the command), `key`, `text` and every other command |
 | `dry_run_unsupported` | `capture --record --dry-run` and its `session capture` alias, global or after the command |
 | `record_flag_takes_no_value` | `--record <value>` |
 | `record_state_dir_unsupported` | `--record` with `--state-dir`; `--record` uses `ACTINGLAB_SESSION_STATE_DIR` or the default state root |
-| `validation_failed` | `--tap-rect` without `--record`; #463 L1: so are `--mark-request`, `--mark-request-json`, `--next-frame-after-ms` and `--next-frame-out` ("One call per step") |
+| `validation_failed` | `--tap-rect` without `--record`; #463 L1: so are `--mark-request`, `--mark-request-json`, `--next-frame-after-ms` and `--next-frame-out` ("One call per step"); #463 S1-1: and `--after-ms`, `details{argument: "after_ms", reason: "record_only"}` ("Recording while playing") |
 
 The record instance (`--instance` or the instance configuration) and the command instance
 must be the same (`record_instance_mismatch`, exit 3); a missing or inactive session is
 `record_session_not_active`. Every check runs before anything is captured or pressed.
-All six device recording forms refuse `--dry-run` before recording locks, Runtime access,
-frame attachment or recording persistence. The global parser handles the flag at any position.
+All nine device recording forms (#463 S1-1: `tap`, `swipe` and `long-tap --record` beside the
+six before) refuse `--dry-run` before recording locks, Runtime access, frame attachment or
+recording persistence. The global parser handles the flag at any position.
 
 - `capture --record` takes the frame through the Runtime as `capture` does; `--out` becomes
   optional. Output adds `record{status:"frame_recorded", record_id, record_started_at_unix_ms,
@@ -1510,6 +1516,99 @@ as the arguments of `ac_lab_do` (on the Lab's MCP server `ac_do`, with the reque
 `mark_request_json`, its JSON text, or `mark_request`, a file, in place of `mark`), then
 `ac_record_mark` of the final screen, `ac_record_stop` with `dry_run` and `ac_record_stop` (the same
 names on both servers).
+
+## Recording while playing
+
+#463 S1-1 (0.12.63; the owner approved the three-stage blueprint of package making on board #463:
+stage one starts recording, plays the business normally and ends recording, and asks nothing else
+of the agent while it plays; the rules here are the coordinator's). A press is recorded by the
+command that makes it: no rectangle, no carrier package, nothing marked. Each press is a step of
+the instance's recording with the screen before it and the screen after it.
+
+```
+tap <x> <y> --record [--after-ms <0..60000>]
+swipe <x1> <y1> <x2> <y2> <ms> --record [--after-ms <0..60000>]
+long-tap <x> <y> <ms> --record [--after-ms <0..60000>]
+```
+
+All with the global `--json --instance <i>`. Through the Lab's MCP server (`actinglab-mcp`) they are
+`ac_tap`, `ac_swipe` and `ac_long_tap` with `record` and `after_ms` ([lab-operations.json](lab-operations.json),
+the rows `tap`, `swipe` and `long-tap`); today's server (`actingctl mcp-serve`) has no such tool. A
+whole business is `record start`, its presses each with `--record`, and `record archive` ("Archiving"),
+which needs no device: the last press's screen after it is the business's final screen. Pause the
+instance's scheduling first, as for every recording.
+
+- **The screen before.** When no step is open (a new recording, or the screen after the previous
+  press could not be taken), the command first takes one frame as `capture --record` takes it, and
+  it opens the step the press lands on. When a step is open, its live primary frame stands and
+  nothing is taken. The step's frame is the screen the press is committed on.
+- **The press.** The open step must declare no effect. A tap or a long press declares a box of one
+  pixel at its point, `rect {x, y, 1, 1}`, `source: "point"`, rule `explicit` (a long press with
+  `gesture{kind: "long_press", duration_ms}`, ending where it began); a swipe is the recorded swipe
+  of "`--record` on device commands" (a drag between boxes of one pixel, `source: "swipe"`). The
+  input is sent once through the Runtime's input proxy, with its own lease as `tap` takes it: a tap,
+  one long tap or one swipe, as the kernel presses the click the recording generates for it.
+- **Refused before anything is pressed** (exit 2 or 3, nothing written but the frame before when
+  the command took one): `validation_failed` with `details{argument, reason}`: a point outside the
+  frame (`point`, `outside_frame`), a long press outside 1..=60000 ms (`duration_ms`,
+  `duration_range`), a wait outside 0..=60000 ms (`after_ms`, `range`; a value that is no whole
+  number too), `--after-ms` without `--record` (`after_ms`, `record_only`); a swipe's points and
+  duration as "`--record` on device commands" refuses them. An open step that declares a click
+  without an outcome is `record_click_exists`, one whose click has an outcome on record
+  `record_click_executed`, one that declares an application operation `record_step_effect_exists`:
+  such a step is pressed with `do --capture --record`. A frame of another size than the recording's
+  is `record_frame_size_mismatch`. `--dry-run` is `record_flag_unsupported`.
+- **The outcome.** A receipt is a performed press: recorded, its step closed. An error whose result
+  class is uncertain is an indeterminate press: recorded with the request and correlation ids the
+  error carries, its step open, exit 4 `record_click_indeterminate` with `details.record` (status
+  `press_indeterminate`), and no screen after it is taken; check the screen, then `record mark
+  --reopen-step k` or `--close-step`. Any other error was not performed: nothing is recorded and the
+  command answers as it does without `--record` (`device_error` with `input_outcome`). A press that
+  was sent and could not be recorded is `record_append_failed_after_input`.
+- **The screen after.** After a performed press the command waits `--after-ms` (800 without it),
+  takes one frame as `capture --record` takes it, and lets it arrive: it opens the next step. A
+  frame that cannot be taken answers its own code and class, and the press and its closed step
+  stand: its details begin with `record` (the press as recorded) and `after: {after_ms, taken:
+  false}`, then the capture's own members; take the screen with `capture --record` (MCP:
+  `ac_lab_observe` with `capture` and `record`), do not press again. A failure after a performed and
+  recorded press that does not undo it (the input lease's release, the receipt's encoding) is
+  answered after the screen after it, `device_error` with `record` and `input_outcome` in its
+  details. No stillness test runs yet, and an open step's frame is never taken again.
+- **In `recording.json`** (every member absent on every other press, so that a recording without
+  such a press, one of `do --capture --record` included, is byte-identical to one an earlier build
+  wrote): the click's `source` `point`; its execution's `before_frame`, the id of the step's live
+  primary frame when the press was committed (what was on the screen); its `after_frame`, the id of
+  the first frame that arrived after it (the screen after, or a `capture --record` or `record mark
+  --frame` that came first); its `after_capture: {after_ms, still_max_ms, still, waited_ms, captures,
+  kept}`, how the screen after was taken (today `{after_ms, 0, null, after_ms, 1, 0}`). Its
+  `carrier_package`, `before` and `after` are `null`: no Runtime Lab operation ran.
+- **The answer.** The command's own answer (`status: "sent"`, `action`, `input_outcome`, …) with
+  `record: {status: "press_recorded", record_id, record_started_at_unix_ms, step, step_closed, click,
+  before: {frame_id, path, sha256, refreshed}, after: {step, frame_id, path, sha256, after_ms,
+  still_max_ms, still, waited_ms, captures, kept} | null, warnings: []}`. `path` is the stored frame:
+  the agent reads the next screen there. `refreshed` says the command took the frame before itself.
+- **Coordinates.** The point is in the recording's coordinate space, the pixels of its frames. The
+  Runtime hands the input's coordinates to the instance's input backend as they are and takes the
+  frames from its capture backend; nothing converts between the two, so on an instance whose input
+  and capture backends see the display in different orientations the press and the frames differ.
+  Nothing is refused for it.
+- **A recording made with `do --capture --record`** goes on with these commands: a press on its open
+  step without a click declares the point click; a step that declares a click is refused
+  `record_click_exists`. A stopped or archived recording takes no press (`record_session_not_active`).
+- **`record stop`.** Once the steps are marked (`record mark --step k`), a point click is generated
+  as the click of its box of one pixel, `{"kind": "rect", "x", "y", "width": 1, "height": 1}` (a
+  long press `long_press` with that box), which the kernel admits and presses at its point.
+
+In PowerShell 7.3 or later, with the install root `C:\ActingCommand`:
+
+```powershell
+$lab = 'C:\ActingCommand\tools\actinglab.exe'
+& $lab --json --instance emu-a record start --task-id daily_open
+& $lab --json --instance emu-a tap 962 658 --record
+& $lab --json --instance emu-a swipe 900 400 300 400 300 --record --after-ms 1200
+& $lab --json --instance emu-a long-tap 640 360 800 --record
+& $lab --json --instance emu-a record archive
+```
 
 ## Application steps
 

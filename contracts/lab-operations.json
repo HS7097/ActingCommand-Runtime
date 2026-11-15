@@ -1283,18 +1283,21 @@
       "params": [
         {"name": "instance", "form": "positional", "type": "instance", "required": true, "note": "on the command line only --instance <x> (actinglab's own command reads no positional instance)"},
         {"name": "x", "form": "positional", "type": "integer", "required": true},
-        {"name": "y", "form": "positional", "type": "integer", "required": true}
+        {"name": "y", "form": "positional", "type": "integer", "required": true},
+        {"name": "record", "form": "switch", "type": "boolean", "required": false, "note": "#463 S1-1: the tap is a step of the instance's recording, a box of one pixel at the point, with the screen before it and the screen after it; no dry run"},
+        {"name": "after_ms", "form": "option", "type": "integer", "required": false, "note": "#463 S1-1, with record: 0 to 60000, default 800: the wait between the press and the screen after it"}
       ],
-      "help": "Taps one point of an instance's screen through the Runtime.",
-      "output": "as today's command",
+      "help": "Taps one point of an instance's screen through the Runtime; with record, the press is a step of the instance's recording, with the screens before and after.",
+      "output": "as today's command; with record, its record: the step, the screen before and the screen after",
       "writes": true,
       "irreversible": false,
       "runtime": "required",
       "entries": ["lab"],
-      "requests": ["AcquireLease", "QueueLease", "PollQueuedLease", "CancelQueuedLease", "RenewLease", "ReleaseLease", "Input"],
+      "requests": ["AcquireLease", "QueueLease", "PollQueuedLease", "CancelQueuedLease", "RenewLease", "ReleaseLease", "Input", "ObserveReadonly"],
       "source": ["actinglab tap"],
       "slice": "LAB-2",
-      "status": "planned"
+      "status": "planned",
+      "notes": "#463 S1-1 (contracts/lab-recording.md, Recording while playing): with record, each screen is one capture through the Runtime as capture --record takes it, the ObserveReadonly read; no request kind is new to the Runtime"
     },
     {
       "name": "swipe",
@@ -1305,18 +1308,21 @@
         {"name": "y1", "form": "positional", "type": "integer", "required": true},
         {"name": "x2", "form": "positional", "type": "integer", "required": true},
         {"name": "y2", "form": "positional", "type": "integer", "required": true},
-        {"name": "duration_ms", "form": "positional", "type": "integer", "required": true}
+        {"name": "duration_ms", "form": "positional", "type": "integer", "required": true},
+        {"name": "record", "form": "switch", "type": "boolean", "required": false, "note": "#463 S1-1: the swipe is a step of the instance's recording, a drag between boxes of one pixel at its two points, with the screen before it and the screen after it; no dry run"},
+        {"name": "after_ms", "form": "option", "type": "integer", "required": false, "note": "#463 S1-1, with record: 0 to 60000, default 800: the wait between the press and the screen after it"}
       ],
-      "help": "Swipes from one point of an instance's screen to another through the Runtime.",
-      "output": "as today's command",
+      "help": "Swipes from one point of an instance's screen to another through the Runtime; with record, the press is a step of the instance's recording, with the screens before and after.",
+      "output": "as today's command; with record, its record: the step, the screen before and the screen after",
       "writes": true,
       "irreversible": false,
       "runtime": "required",
       "entries": ["lab"],
-      "requests": ["AcquireLease", "QueueLease", "PollQueuedLease", "CancelQueuedLease", "RenewLease", "ReleaseLease", "Input"],
+      "requests": ["AcquireLease", "QueueLease", "PollQueuedLease", "CancelQueuedLease", "RenewLease", "ReleaseLease", "Input", "ObserveReadonly"],
       "source": ["actinglab swipe"],
       "slice": "LAB-2",
-      "status": "planned"
+      "status": "planned",
+      "notes": "#463 S1-1 (contracts/lab-recording.md, Recording while playing): with record, each screen is one capture through the Runtime as capture --record takes it, the ObserveReadonly read; no request kind is new to the Runtime"
     },
     {
       "name": "long-tap",
@@ -1325,18 +1331,21 @@
         {"name": "instance", "form": "positional", "type": "instance", "required": true, "note": "on the command line only --instance <x> (actinglab's own command reads no positional instance)"},
         {"name": "x", "form": "positional", "type": "integer", "required": true},
         {"name": "y", "form": "positional", "type": "integer", "required": true},
-        {"name": "duration_ms", "form": "positional", "type": "integer", "required": true}
+        {"name": "duration_ms", "form": "positional", "type": "integer", "required": true},
+        {"name": "record", "form": "switch", "type": "boolean", "required": false, "note": "#463 S1-1: the long press is a step of the instance's recording, a box of one pixel at the point held for duration_ms (1 to 60000), with the screen before it and the screen after it; no dry run"},
+        {"name": "after_ms", "form": "option", "type": "integer", "required": false, "note": "#463 S1-1, with record: 0 to 60000, default 800: the wait between the press and the screen after it"}
       ],
-      "help": "Presses and holds one point of an instance's screen through the Runtime.",
-      "output": "as today's command",
+      "help": "Presses and holds one point of an instance's screen through the Runtime; with record, the press is a step of the instance's recording, with the screens before and after.",
+      "output": "as today's command; with record, its record: the step, the screen before and the screen after",
       "writes": true,
       "irreversible": false,
       "runtime": "required",
       "entries": ["lab"],
-      "requests": ["AcquireLease", "QueueLease", "PollQueuedLease", "CancelQueuedLease", "RenewLease", "ReleaseLease", "Input"],
+      "requests": ["AcquireLease", "QueueLease", "PollQueuedLease", "CancelQueuedLease", "RenewLease", "ReleaseLease", "Input", "ObserveReadonly"],
       "source": ["actinglab long-tap"],
       "slice": "LAB-2",
-      "status": "planned"
+      "status": "planned",
+      "notes": "#463 S1-1 (contracts/lab-recording.md, Recording while playing): with record, each screen is one capture through the Runtime as capture --record takes it, the ObserveReadonly read; no request kind is new to the Runtime"
     },
     {
       "name": "key",

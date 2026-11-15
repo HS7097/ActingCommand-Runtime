@@ -27900,6 +27900,98 @@ revision.
 the build embeds when a page is read, so a run recorded before 0.12.62 that ended with
 `device_locked` or the update code shows no group in the errors view either.
 
+### 1.402 Slice #463 S1-1 (0.12.63): a press is recorded by the command that makes it, `tap`, `swipe` and `long-tap --record` (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, whose stage one starts recording, plays the business normally and ends recording; the design `rd-1115/pack-stage12-design.md`, A1, A2.1, A3, A5 and A6.1, read on main `44cbab53`; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s11-press-record.md`, read on main `44cbab53`)
+
+The coordinator gave this slice 1.402: main `44cbab53` holds the sections up to §1.400, and 1.401
+is #469 D4b. The slice ships in 0.12.63.
+
+**Why.** A press reached a recording only through `do --capture --record`, which needs a rectangle
+and a carrier package, and `tap`, `swipe` and `long-tap` refused `--record`
+(`record_flag_unsupported`), so an agent could not simply play. Now `record start`, the presses
+each with `--record`, and `record archive` record a business: each press a step with the screen
+before it and the screen after it ([lab-recording.md](lab-recording.md), "Recording while
+playing").
+
+**Established by reading.**
+- *A box of one pixel.* The kernel admits a `rect` click of width and height 1: `ClickRect`'s
+  `validate_shape` and `validate` (`crates/execution-kernel/src/contained_task.rs`) ask width and
+  height of at least 1 and both corners inside the resolution, and its draw's
+  `InputSamplingRegion::validate` (`crates/actingcommand-contract/src/event/payload.rs`) the same;
+  `record stop` writes a point click as that `rect` (`click_json`,
+  `crates/lab/src/recording/generate.rs`, unchanged). The gate's ninth test generates it and the
+  dry run's admission takes it.
+- *Coordinates* (the coordinator's ruling 3). The input proxy's tap, long tap and swipe reach the
+  instance's input backend with the coordinates they were given: the kernel's `prepare_input`
+  (`crates/execution-kernel/src/kernel.rs`) converts nothing. The ADB shell input takes the display's
+  coordinates in its current rotation (`connect_with_steps`, `crates/device/src/touch.rs`); a
+  DroidCast frame is turned to the display (`crates/device/src/capture.rs`); a MuMu IPC frame carries
+  `rotation: NotProvidedBySource` and an unproven ADB display mapping (the same file). So a recorded
+  point and the frames agree where both backends see the display alike, and the code proves nothing
+  more; no conversion is built and nothing new is refused. An instance whose input needs the
+  frame's reference (`nemu_input_frame_required`, `crates/runtime-host/src/host/input.rs`) refuses
+  the press as it refuses `tap`: the proxy sends none, and nothing is recorded.
+- *The after frame.* A performed press closes its step (`commit_click`), so the next frame finds no
+  open step and closes none (`plan_arrival`): the design's "`arrive` when it closes a step by click"
+  never runs for such a press. The after frame is noted where a frame opens a step, on the step
+  before it, when that step's press names its `before_frame` and has no after frame yet
+  (`note_after_frame`).
+- *What the model could not take in this slice.* `ApplicationExecution` is built member by member in
+  `apps/actinglab/src/session_management.rs` and `PlanClickRequest` in
+  `apps/actinglab/src/lab2_cli/operation.rs`, two files the work order keeps out of this slice: a
+  member added to either does not compile there. The application execution's three members come
+  with S1-3, which touches that file; the point press is a member of `RecordPressRequest`.
+- *The capture's request.* One frame taken as `capture --record` takes it (`capture_for_command`
+  without `--require-fresh`) is the `ObserveReadonly` read (`capture_runtime_sequence` of one
+  frame), not a `CaptureSequence`: the three rows name `ObserveReadonly`. No request kind is new.
+- *Interface revisions.* None moves: no request kind, wire shape, record, ledger member,
+  configuration key or outcome code is added, and `actingcommand.lab-recording.v1` keeps its name
+  (every new member is absent on every other press).
+
+**What it builds.**
+
+| Part | Where |
+|---|---|
+| The model | `ClickExecution` gains `before_frame`, `after_frame` and `after_capture` (`AfterCaptureRecord {after_ms, still_max_ms, still, waited_ms, captures, kept}`), each `serde(default, skip_serializing_if)`; `PointPress`, `AfterCapture` (`for_press` 800 and 5000, `for_application` 2000 and 30000), `RecordPressRequest {click, point_press, after}`, `BeforeFrame`, `AfterFrame`, `RecordPressOutcome {click, before, after, warnings}` (`crates/lab/src/recording/model.rs`) |
+| The steps | `plan_press` (refusals, then `plan_point`: `rect {x, y, 1, 1}`, `source: "point"`, a long press's `gesture`; a swipe through `plan_click`), `commit_click` naming the step's live primary frame with `names_frames`, `note_after_frame` in `arrive`, `note_after_capture` (`crates/lab/src/recording/steps.rs`) |
+| The recording API | `RecordFramePorts {wait, capture}`, `record_before_frame` (one capture when no step is open), `record_after_frame` (the wait, the preflight, one capture, its arrival with `after_capture`), `record_press`, `record_press_input` (the input of a plan); `record_commit_click`'s recording part shared as `commit_recorded`, its two exit-4 errors as functions, its answers unchanged (`crates/lab/src/recording_api.rs`) |
+| The command | `tap`, `swipe` and `long-tap` take `--record` and `--after-ms` (`DIRECT_TOUCH_FLAGS`, `DIRECT_TOUCH_SWITCHES`, parsed by `FlagArgs::parse_switches`); `run_recorded_touch`: the lock (`record_flag_begin`), the device configuration, `record_press` with the input sent through `RuntimeInputProxy` (`send_recorded_press`: a receipt performed, an uncertain error indeterminate, any other not performed) and the captures as `capture --record` takes them (`PressFrames`) (`apps/actinglab/src/commands/device_commands.rs`); `record_flag_gate` takes the three without `--dry-run` and refuses `--after-ms` without `--record` (`PRESS_RECORD_ONLY_FLAGS`, `apps/actinglab/src/main.rs`); `dry_run_gate.rs` declares the three forms refused, and the record policy's `record_flag` (`session_contracts.rs`) lists them |
+| The table | the rows `tap`, `swipe`, `long-tap`: `record` (switch), `after_ms` (integer), their help, output and notes, `ObserveReadonly` beside `Input`; `own_flags.rs` reads the switch from the command's constant |
+| Texts | [lab-recording.md](lab-recording.md): "Recording while playing", the opening paragraph, the members' paragraph of `recording.json`, "`--record` on device commands" (its first sentence, its table, nine forms); [actinglab-dry-run.md](actinglab-dry-run.md): the three forms |
+
+**Codes and words.** No outcome code is added and no fragment changes. New words of existing codes,
+each in the details of the refusal or the answer, never in a text: `validation_failed` with
+`details{argument, reason}`, `reason` one of `outside_frame` (the point, of a tap or a long press,
+outside the frame), `duration_range` (a long press outside 1..=60000 ms), `range` (`--after-ms`
+outside 0..=60000 or no whole number), `record_only` (`--after-ms` without `--record`), each
+refusing, exit 2; the answer's `record.status` `press_recorded`, and `press_indeterminate` in
+`record_click_indeterminate`'s `details.record` (exit 4); `after.taken: false` in the details of a
+frame after that was not taken (the capture's own code). No decision reads a code.
+
+**Tests.** `crates/lab/src/gate_463_s11.rs` (exec gate map "#463 S1-1"; fake Runtime, fake clock,
+synthetic 1280x720 frames): a tap on a new recording (one capture, the input, the wait, one capture;
+`rect {100, 200, 1, 1}`, `source "point"`, `before_frame` f0001, `after_frame` f0002,
+`after_capture`, the answer); a long press; a swipe; an uncertain answer (indeterminate, the step
+open, no frame after); a press not performed (every file byte for byte); refusals before the press
+(`outside_frame`, `duration_range`, `range`); a declared click (`record_click_exists`); a frame after
+that cannot be taken (details `record`, then `after`); marked afterwards, `record stop --dry-run`
+validated and the generated click the `rect` of one pixel; a press of `do --capture --record` and
+its next frame with none of the new members. `apps/actinglab/src/tests/gate_463_s11.rs`: the three
+commands with `--record --dry-run` and `key back --record` are `record_flag_unsupported`, `tap 1 2
+--after-ms 5` is `validation_failed` `record_only`. `apps/actinglab-mcp/src/gate_463_s11.rs`:
+`ac_tap`, `ac_swipe` and `ac_long_tap` list `record` and `after_ms`. No test is adapted, no golden
+changes, no test leaves the gate map.
+
+**What is not changed.** `do --capture --record`, its answers and what it records; `capture --record`;
+`session app --record`; the package generator and the kernel; today's MCP server (`actingctl
+mcp-serve`); every recording without a press of the three commands, byte for byte. Not built here (the
+design's later slices): the refresh of an old frame before and the stillness test after (S1-2), the
+frames of application operations (S1-3), `record frame` and the warning of an unrecorded input
+(S1-4), the manifest (S1-5), notes (S1-6).
+
+**At deploy.** Nothing to configure. Recordings already on disk load as before. Through MCP the
+three tools take `record` on the Lab's MCP server (`actinglab-mcp`); a client registered with
+today's server has no such tool until its registration moves, which is the owner's to do.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

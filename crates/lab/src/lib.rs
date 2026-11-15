@@ -63,6 +63,10 @@ mod gate_463_r1;
 // #463 R2: a stopped recording takes an ending from a frame, and record stop generates it.
 #[cfg(test)]
 mod gate_463_r2;
+// #463 S1-1: a press is recorded by the command that makes it (`tap`, `swipe`, `long-tap
+// --record`), with the screen before it and the screen after it.
+#[cfg(test)]
+mod gate_463_s11;
 mod lab_run;
 mod lab_run_api;
 mod ledger_port;

@@ -761,6 +761,38 @@ pub struct ClickExecution {
     /// evidence of `point_rule`'s draw: its algorithm, action seed, boxes and parameters).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sampling: Option<InputSamplingEvidence>,
+    /// #463 S1-1 (`contracts/lab-recording.md`, "Recording while playing"): on a press recorded by
+    /// the command that makes it (`tap`, `swipe` or `long-tap --record`), the id of the step's live
+    /// primary frame when the press was committed: what was on the screen. Absent on every other
+    /// press, as are the two members below, so that a recording without such a press is
+    /// byte-identical to one an earlier build wrote.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before_frame: Option<String>,
+    /// #463 S1-1: on such a press, the id of the first frame that arrived after it: what the
+    /// screen became.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after_frame: Option<String>,
+    /// #463 S1-1: on such a press, how the frame after it was taken.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after_capture: Option<AfterCaptureRecord>,
+}
+
+/// #463 S1-1 (`contracts/lab-recording.md`, "Recording while playing"): how the frame after a
+/// press recorded by the command that makes it was taken: the wait before the first capture
+/// (`after_ms`), the bound of the stillness test (`still_max_ms`, 0 when none ran), whether the
+/// screen was found still (`still`, `None` when no test ran), how long the press's command waited
+/// in all before the frame (`waited_ms`), how many captures it took (`captures`) and how many of
+/// them it kept beside the after frame (`kept`). Slice S1-1 waits `after_ms` and captures once:
+/// `still_max_ms` 0, `still` `None`, `waited_ms` the wait, one capture, none kept.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AfterCaptureRecord {
+    pub after_ms: u64,
+    pub still_max_ms: u64,
+    pub still: Option<bool>,
+    pub waited_ms: u64,
+    pub captures: u32,
+    pub kept: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1693,6 +1725,106 @@ pub struct RecordStepOutcome {
     /// The next frame, when one was asked for.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_frame: Option<NextFrameOutcome>,
+}
+
+/// #463 S1-1: the wait before the frame after a press (`--after-ms`) when none is given.
+pub const LAB_RECORDING_PRESS_AFTER_MS: u64 = 800;
+/// #463 S1-1: the bound of the stillness test after a press (`--still-max-ms`, slice S1-2) when
+/// none is given.
+pub const LAB_RECORDING_PRESS_STILL_MAX_MS: u64 = 5_000;
+/// #463 S1-1: the wait before the frame after an application operation (slice S1-3) when none is
+/// given.
+pub const LAB_RECORDING_APPLICATION_AFTER_MS: u64 = 2_000;
+/// #463 S1-1: the bound of the stillness test after an application operation (slice S1-3) when
+/// none is given.
+pub const LAB_RECORDING_APPLICATION_STILL_MAX_MS: u64 = 30_000;
+
+/// #463 S1-1 (`contracts/lab-recording.md`, "Recording while playing"): a tap or a long press that
+/// `tap --record` or `long-tap --record` declares by its point.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PointPress {
+    Tap {
+        point: RecordPoint,
+    },
+    LongPress {
+        point: RecordPoint,
+        duration_ms: u64,
+    },
+}
+
+/// #463 S1-1: how the frame after an effect is taken: the wait before it, in milliseconds (0 to
+/// [`LAB_RECORDING_MAX_NEXT_FRAME_MS`]), and the bound of the stillness test after it (slice S1-2
+/// runs it; S1-1 takes one frame after the wait).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AfterCapture {
+    pub after_ms: u64,
+    pub still_max_ms: u64,
+}
+
+impl AfterCapture {
+    /// After a press: `after_ms`, else [`LAB_RECORDING_PRESS_AFTER_MS`]; the bound
+    /// [`LAB_RECORDING_PRESS_STILL_MAX_MS`].
+    pub fn for_press(after_ms: Option<u64>) -> Self {
+        Self {
+            after_ms: after_ms.unwrap_or(LAB_RECORDING_PRESS_AFTER_MS),
+            still_max_ms: LAB_RECORDING_PRESS_STILL_MAX_MS,
+        }
+    }
+
+    /// After an application operation (slice S1-3): `after_ms`, else
+    /// [`LAB_RECORDING_APPLICATION_AFTER_MS`]; the bound
+    /// [`LAB_RECORDING_APPLICATION_STILL_MAX_MS`].
+    pub fn for_application(after_ms: Option<u64>) -> Self {
+        Self {
+            after_ms: after_ms.unwrap_or(LAB_RECORDING_APPLICATION_AFTER_MS),
+            still_max_ms: LAB_RECORDING_APPLICATION_STILL_MAX_MS,
+        }
+    }
+}
+
+/// #463 S1-1 (`contracts/lab-recording.md`, "Recording while playing"): a press `tap`, `swipe` or
+/// `long-tap --record` sends and records: a tap or a long press by its point (`point_press`), or a
+/// swipe as `do --capture --record --swipe` plans it (`click.swipe`); and how the frame after it is
+/// taken.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RecordPressRequest {
+    pub click: PlanClickRequest,
+    pub point_press: Option<PointPress>,
+    pub after: AfterCapture,
+}
+
+/// #463 S1-1: the frame on the screen when the press was committed, the open step's live primary
+/// frame; `refreshed` when the press's command took it itself.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct BeforeFrame {
+    pub frame_id: String,
+    pub path: String,
+    pub sha256: String,
+    pub refreshed: bool,
+}
+
+/// #463 S1-1: the frame after the press, the first frame of the step it opened, and how it was
+/// taken.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct AfterFrame {
+    pub step: u32,
+    pub frame_id: String,
+    pub path: String,
+    pub sha256: String,
+    #[serde(flatten)]
+    pub record: AfterCaptureRecord,
+}
+
+/// #463 S1-1: what a press recorded by the command that makes it recorded, as the command's answer
+/// carries it in `record`: the press (`status` `press_recorded`, the recording, the step and its
+/// click), the frame before it and the frame after it, and the warnings (none in slice S1-1).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct RecordPressOutcome {
+    #[serde(flatten)]
+    pub click: CommitClickOutcome,
+    pub before: BeforeFrame,
+    pub after: Option<AfterFrame>,
+    pub warnings: Vec<String>,
 }
 
 /// `session app <verb> --record`: the verb as given (`launch`, `restart`, `stop`,
