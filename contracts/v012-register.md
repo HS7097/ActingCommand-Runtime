@@ -27447,10 +27447,10 @@ revision or record shape is added.
 **At deploy.** Nothing to do: the member is computed when a run is read. A run recorded before
 0.12.62 shows the values its terminal outcome recorded.
 
-### 1.388 Slice #463 R4 and #464 P4 (0.12.62): a stopped recording takes an optional step after one of its steps from a frame; `record stop` keeps its earlier output, refuses an installed root and answers the adoption's skeleton (Workflow #463; the owner's rule two on board #463, that only the main path is recorded and that what a run meets later is added from that run's frame without recording again, with the owner's agreement of 11-15 that a stopped recording takes an optional step too; Workflow #464, the design `rd-1114/464-pack-build-design.md`, sections A and B and the slice row P4 with its tests, and the coordinator's ruling 5 on board #464, not the owner's words; coordinator work orders `rd-1115/brief-463-nb-common.md` and `rd-1115/brief-463-r4p4-after-stop.md`, read on main `1a962a54` (#463 R2 merged))
+### 1.388 Slice #463 R4 and #464 P4 (0.12.63): a stopped recording takes an optional step after one of its steps from a frame; `record stop` keeps its earlier output, refuses an installed root and answers the adoption's skeleton (Workflow #463; the owner's rule two on board #463, that only the main path is recorded and that what a run meets later is added from that run's frame without recording again, with the owner's agreement of 11-15 that a stopped recording takes an optional step too; Workflow #464, the design `rd-1114/464-pack-build-design.md`, sections A and B and the slice row P4 with its tests, and the coordinator's ruling 5 on board #464, not the owner's words; coordinator work orders `rd-1115/brief-463-nb-common.md` and `rd-1115/brief-463-r4p4-after-stop.md`, read on main `1a962a54` (#463 R2 merged))
 
 1.388 is the number the coordinator assigned this section (the numbers between are slices
-dispatched with this one). The slice ships in 0.12.62 (release 0.12.61 is cut without it).
+dispatched with this one). The slice ships in 0.12.63 (release 0.12.62 is cut without it).
 
 **What it is.** R4: a `record mark` request's `optional_after {step, frame, samples, page, add,
 reuse, click, settle_ms}` (command `record mark --optional-after <k>`) inserts, on a stopped

@@ -115,7 +115,7 @@ command deletes nothing and names the files it already wrote.
   recording's `endings` is absent on a recording without one ("Endings"), so such a recording is
   byte-identical to one an earlier build wrote; a build before 0.12.61 does not decode a recording
   that holds one, `lab_recording_unreadable` as above. Fix 1: a frame's `scaled_from` is absent on
-  every frame the Lab did not convert. #463 R4 (since 0.12.62): a step's `inserted_after`, the
+  every frame the Lab did not convert. #463 R4 (since 0.12.63): a step's `inserted_after`, the
   recorded step an optional step inserted after the stop runs after ("Inserting an optional step
   after stop"), is absent on every other step, so a recording without one is byte-identical to one
   written before; the frames of such a step may carry `scaled_from` as an ending's do.
@@ -1731,7 +1731,7 @@ as an ending, from its frame, without recording again ("Endings").
 
 ### Inserting an optional step after stop
 
-#463 R4 (since 0.12.62, [v012-register.md](v012-register.md) §1.388; the owner's rule two on board
+#463 R4 (since 0.12.63, [v012-register.md](v012-register.md) §1.388; the owner's rule two on board
 #463: only the main path is recorded, and what a run meets later is added from that run's frame
 without recording again). A pop-up that a run meets after the press of step k and after which the
 path goes on (a daily notice, a reward) is taken by the stopped recording as an optional step after
@@ -2094,7 +2094,12 @@ recording and run `record stop` again.
 
 ### Pre-checks
 
-Only the effective steps count, numbered 1..n by serial number (`artifact_step`).
+Only the effective steps count (neither dropped nor converted to a transition), numbered 1..n in
+the order a run meets them (`artifact_step`): the steps recorded on the path by their serial
+numbers, each followed by the optional steps inserted after it after the stop, by theirs (#463 R4,
+"Inserting an optional step after stop"); a recording without an inserted step is numbered in the
+order of its serial numbers. The rows below count steps by these numbers; where a refusal's
+`details` name a step, `step` is its serial number and `artifact_step` its number here.
 
 | check | code (exit) |
 |---|---|
@@ -2468,7 +2473,7 @@ D9: an output of the same name is replaced in place, never refused):
    needs an existing parent and only it is created (`lab_dir_created: true`), otherwise
    `record_lab_dir_invalid` (2); an existing `<lab-dir>/<package_id>.<ext>` must be a file (a
    directory or a link there is `record_lab_dir_invalid`, reason `target_not_a_file`), and is
-   replaced. #464 P4 (since 0.12.62; the coordinator's ruling 5 on board #464): a directory that is,
+   replaced. #464 P4 (since 0.12.63; the coordinator's ruling 5 on board #464): a directory that is,
    or lies inside, an installed root (a directory holding `install\`; looked for on the directory
    made absolute and on its nearest existing part with its links resolved) is refused
    `record_lab_dir_invalid` with the reason `inside_installed_root` and `details.installed_root`,
@@ -2488,7 +2493,7 @@ D9: an output of the same name is replaced in place, never refused):
 
 Every replacement (steps 2 and 3) writes `<name>.part` beside the target, sets an existing
 target aside as `<name>.old-<unix_ms>` and renames the `.part` file to the target. #464 P4 (since
-0.12.62): the set-aside file is kept, the output an earlier stop wrote: it is never deleted, and
+0.12.63): the set-aside file is kept, the output an earlier stop wrote: it is never deleted, and
 never overwritten (a name a file already holds is passed over for the next millisecond); the answer
 names it in `lab.kept`. The target's name only ever changes by rename, so a reader opens the old
 file, the new one or none (between the two renames), never part of one. A failed step is
@@ -2521,7 +2526,7 @@ equal value is accepted.
  catalog_on_failure_example, binding_requires}
 ```
 
-- #464 P4 (since 0.12.62): `kept` lists the files a replacement set aside and kept ("Writing"),
+- #464 P4 (since 0.12.63): `kept` lists the files a replacement set aside and kept ("Writing"),
   present only when one was. `adoption_example` is how the package becomes a member of its game's
   standard pack ([standard-pack-authoring.md](standard-pack-authoring.md)): `{command, decision}`,
   `command` the line `actinglab standard-pack adopt --repo <checkout> --record-id <record_id>
