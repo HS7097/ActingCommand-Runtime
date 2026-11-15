@@ -2362,6 +2362,8 @@ impl RuntimeHost {
             #[cfg(test)]
             fail_policy_run_budget_end_once_for_test: AtomicBool::new(false),
             #[cfg(test)]
+            break_in_failure_for_test: Mutex::new(None),
+            #[cfg(test)]
             pacing_factor_pins_for_test: Mutex::new(BTreeMap::new()),
             #[cfg(test)]
             pacing_stage_pins_for_test: Mutex::new(BTreeMap::new()),
@@ -5149,6 +5151,24 @@ impl RuntimeHost {
         Ok(())
     }
 
+    /// Workflow #463 U1b fix round 3, test only: the next scheduled run of this host cannot
+    /// establish its break-in, taken once: `ContentUnmeasured`, its preparation's measurement of
+    /// the package's content fails as the containment's refusal without a code does;
+    /// `RecordUnread`, its read of the pair's break-in fails as a dispatch the decision memory
+    /// does not hold fails it.
+    #[cfg(test)]
+    pub(crate) fn fail_next_break_in_read_for_test(
+        &self,
+        problem: crate::codes::BreakInProblem,
+    ) -> RuntimeHostResult<()> {
+        *self
+            .shared_ref(crate::codes::test_spellings::TestLocation::FailBreakInReadForTest)?
+            .break_in_failure_for_test
+            .lock()
+            .expect("the break-in failure of the gate tests") = Some(problem);
+        Ok(())
+    }
+
     /// Workflow #429 R-2, test only: what the shadow measurement's next evaluation reads from the
     /// `performance` section in effect, an instruction value included (the read of every
     /// performance tick).
@@ -6552,6 +6572,10 @@ struct HostShared {
     // runtime budget end (`policy_run_budget_end_ms`) fails, taken once.
     #[cfg(test)]
     fail_policy_run_budget_end_once_for_test: AtomicBool,
+    // Workflow #463 U1b fix round 3, test only: the next read of a scheduled run's break-in with
+    // this problem fails (the content's measurement or the pair's break-in), taken once.
+    #[cfg(test)]
+    break_in_failure_for_test: Mutex<Option<crate::codes::BreakInProblem>>,
     // #385 P-k, test only: the pacing factor and extra rounds an instance's contained runs are
     // handed, by alias, in place of the shadow measurement's.
     #[cfg(test)]

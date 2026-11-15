@@ -2847,6 +2847,10 @@
     "pause_cause": {
       "type": "vocab:pause_cause",
       "description": "Why a failure paused its task on the application, in the settlement's own order (Workflow #469 V0, since 0.12.62)."
+    },
+    "break_in_problem": {
+      "type": "vocab:break_in_problem",
+      "description": "What of a scheduled run's break-in could not be established before the run executed: the package's content or the pair's break-in record (Workflow #463 U1b fix round 3, since 0.12.63)."
     }
   },
   "vocabularies": {
@@ -10466,6 +10470,22 @@
         },
         "retries_exhausted": {
           "description": "The task used up its retries and is set to pause on failure. The pause lifts when the package changes; there is no manual lift."
+        }
+      }
+    },
+    "break_in_problem": {
+      "description": "What of a scheduled run's break-in could not be established before the run executed, the value break_in_problem of policy_break_in_unread, whose caused_by link is the failure behind it. The run is judged outside its break-in whichever word it is (Workflow #463 U1b fix round 3, contracts/policy-suspension.md \"Only during a package's break-in\", since 0.12.63).",
+      "review": "pending",
+      "source": {
+        "file": "crates/runtime-host/src/codes.rs",
+        "enum": "BreakInProblem"
+      },
+      "tokens": {
+        "content_unmeasured": {
+          "description": "The package's content was not measured when the run was prepared: the containment could not measure the package (caused_by its code when its refusal names one), or the Runtime clock, scheduling.suspension.lift_check_min_interval_ms or the lift checks' memory of the measurements could not be read. The run counts in no break-in."
+        },
+        "record_unread": {
+          "description": "The pair's break-in could not be judged before the run executed: the decision memory does not hold the run's dispatch, or scheduling.suspension.break_in_runs, scheduling.suspension.break_in_ms or the Runtime clock could not be read. The run counts as any run of its content does."
         }
       }
     }

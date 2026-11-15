@@ -125,8 +125,10 @@ lift check ("Lifting"), and (U1b) when a scheduled run of a `linear_steps` main 
 prepared, at the path the run reads it from ("A failure that pauses at its first occurrence"),
 through the lift checks' memory: a location measured within
 `scheduling.suspension.lift_check_min_interval_ms`, by a preparation or a lift check, is not
-measured again. Admission never computes or compares it; it is stored inside the failure identity
-and, as its first 12 hex digits, in the pair's break-in.
+measured again. For a package replaced inside that interval (fix round 3), until the interval ends
+its runs are judged and counted against the content measured before; the new content's break-in
+starts with the first measurement after it. Admission never computes or compares it; it is stored
+inside the failure identity and, as its first 12 hex digits, in the pair's break-in.
 
 Every other run writes no failure identity: a main package that was not admitted (its mode is
 unknown) and the startup reconciliation of an interrupted settlement.
@@ -279,8 +281,10 @@ coordinator's proposal the owner agreed to). A scheduled run raises the code onl
 - **The content.** The main package's content hash (above, "Content hash"), its first 12 hex
   digits as the failure identity's `m` segment writes them, read when a scheduled run of a
   `linear_steps` main package is prepared, at the path the run reads it from, through the lift
-  checks' memory. A page-graph package, and a package that cannot be measured then, has none: its
-  run is inside and counts nothing.
+  checks' memory. A page-graph package has none and counts nothing (its run never meets that
+  verdict). A `linear_steps` package whose content is not measured then has none either (fix round
+  3): its run counts nothing and is judged as one outside its break-in ("A break-in that cannot be
+  read").
 - **The break-in.** It starts at the first run of that content on that pair that began its
   package (its kernel run's `task.package_admitted` is recorded) and was settled as a success or
   as a failure, counts every such run of the same content, and ends once both hold: at least
@@ -289,7 +293,8 @@ coordinator's proposal the owner agreed to). A scheduled run raises the code onl
   seven days). Neither starts nor counts it: a stopped run ("A stopped run"), a condition end
   ("Condition termination and owed reruns"), and a run that never began its package (fix round
   2: a refused preparation or outcome declaration, a failed switch before the run, a refusal of
-  the handset's start gate, an interrupted settlement), which is no run of the package. A run
+  the handset's start gate, a prerequisite layer of the run's entry gate that failed, an
+  interrupted settlement), which is no run of the package. A run
   settled with another content starts a new break-in, that run its first. Both keys are settable
   and read before each scheduled run executes, so a change counts from the next run
   ([runtime-config.md](runtime-config.md)).
@@ -308,13 +313,25 @@ coordinator's proposal the owner agreed to). A scheduled run raises the code onl
   the frame of the run's `Failure` pin, the decision's last, is still named as `artifact_id` on
   the terminal, the receipt and the recorded failure. A direct run and a Lab run have no pair and
   raise this code always.
-- **A break-in that cannot be read** (fix round 2). A run is never ended because the host could
-  not judge its break-in (its two keys, the pair's break-in in the decision memory or the Runtime
-  clock could not be read): it goes on as a run outside its break-in (the ordinary code above),
-  and the host records `policy_break_in_unread` (warning; a Warning `runtime.failed` with the
-  run's links, `task_id`, `instance_id`, the read's code as `failure_code` when registered and
-  the read's failure as its `caused_by` link). Only a failure to write that record ends the run,
-  as any record the run cannot write does.
+- **A break-in that cannot be read** (fix rounds 2 and 3). A run is never ended, and its
+  preparation never fails, because the host could not establish its break-in; every such failure
+  falls on one side: the run goes on as a run outside its break-in (the ordinary code above), and
+  before it executes the host records `policy_break_in_unread` (warning; a Warning
+  `runtime.failed` with the run's links, `task_id`, `instance_id`, the failure's code as
+  `failure_code` when registered and the failure as its `caused_by` link) with the required word
+  `break_in_problem`:
+  - `content_unmeasured`: the package's content was not measured when the run was prepared: the
+    containment could not measure the package (its code as `failure_code` when its refusal names
+    one), or the Runtime clock, `scheduling.suspension.lift_check_min_interval_ms` or the lift
+    checks' memory could not be read. The run counts in no break-in.
+  - `record_unread`: the pair's break-in could not be judged before the run executed: the two
+    keys, the pair's break-in in the decision memory (its dispatch not held) or the Runtime clock
+    could not be read. The run counts as any run of its content does.
+
+  What the Runtime treats as fatal wherever it meets it is no failure of the break-in and is not
+  softened here: a lock of the host's own run state that another thread left broken (the
+  scheduled runs' resolutions, the policy's state) and a failure to write that record end the run
+  and stop the Runtime, as they do at every other place.
 - **Where it is kept.** In the pair's value record `policy.control_state_recorded` (register L7),
   the optional member `break_in: {content_hash, runs, first_settled_at_unix_ms}`, written by the
   live settlement that counts a run; nothing else is persisted. A loading start loads it with the

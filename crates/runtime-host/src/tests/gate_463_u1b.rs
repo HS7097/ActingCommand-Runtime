@@ -15,6 +15,11 @@
 // count nothing; a new content starts again; a restart keeps the count and the first time (the
 // pair's value record), on the root's seeding start and on a loading start alike; a direct run
 // raises the dedicated code always; the two keys set while the Runtime runs count from the next run.
+// Fix round 3 (`rd-1115/brief-463-u1b-fix3.md`): a run whose prerequisite layer failed never began
+// its package and counts nothing; a content its preparation could not measure and a break-in that
+// could not be read each record one `policy_break_in_unread` with its `break_in_problem`, the run
+// going on as one outside its break-in; `actingd suspended` lists the pair's break-in before and
+// after it ends.
 //
 // The package is gate_463_u1's: a `linear_steps` source package of game `neutral`, 2 x 1, one tap
 // `open` from `home` (first pixel red, the fake device's) to `list` (first pixel blue), attempted
@@ -26,12 +31,14 @@
 
 use super::instance_workers::{all_events, wait_for_ladder_end};
 use super::*;
+use crate::codes::BreakInProblem;
 use crate::host::ContainedTaskCheckpointPoint;
 use crate::policy_control::PolicyValueRecord;
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
     ConfigParameter, ConfigParameterSource, ConfigSettingChange, FactScalar, PolicyBreakInRecord,
     PolicyConditionSettlement, RequestId, RuntimeConfigManifest, StartReportTaggedState,
+    TaskEntryRecoveryRole,
 };
 use actingcommand_runtime_config::scheduling::{
     EXPECTED_RUNTIME_ENABLED, SUSPENSION_BREAK_IN_MS, SUSPENSION_BREAK_IN_RUNS,
@@ -46,6 +53,7 @@ const UNRECORDED_SCREEN: &str =
 const CONFIRMATION_FAILED: &str =
     actingcommand_execution_kernel::ExecutionKernelCode::PageConfirmationFailed.as_str();
 const CANCELLED: &str = "contained_task_cancelled";
+const BREAK_IN_UNREAD: &str = crate::codes::HostCode::PolicyBreakInUnread.as_str();
 // The fixture catalog's one task and its procedure.
 const TASK: &str = "fixture.observe";
 const PROCEDURE: &str = "procedure.observe";
@@ -72,13 +80,19 @@ enum AfterTap {
     Reached,
 }
 
-// Writes the package as a source package directory at `directory`, its taps `retry_interval_ms`
-// apart (another value is another content).
-fn write_package(directory: &Path, retry_interval_ms: u64) {
-    let control = json!({
+// A color probe of the first pixel.
+fn probe(id: &str, expected: [u8; 3]) -> Value {
+    json!({"id": id,
+           "region": {"mode": "rect", "rect": {"x": 0, "y": 0, "width": 1, "height": 1}},
+           "expected": expected})
+}
+
+// A package's control of game `neutral`, 2 x 1, one step at most.
+fn package_control(package_id: &str, execution_mode: &str) -> Value {
+    json!({
         "schema_version": "Lab-1y.control.v2",
-        "package_id": "neutral.u1b.open",
-        "execution_mode": "linear_steps",
+        "package_id": package_id,
+        "execution_mode": execution_mode,
         "game": "neutral",
         "server": "test",
         "resolution": {"width": 2, "height": 1},
@@ -87,12 +101,41 @@ fn write_package(directory: &Path, retry_interval_ms: u64) {
         "step_timeout_ms": 600,
         "timeout_ms": 8000,
         "max_steps": 1
-    });
-    let probe = |id: &str, expected: [u8; 3]| {
-        json!({"id": id,
-               "region": {"mode": "rect", "rect": {"x": 0, "y": 0, "width": 1, "height": 1}},
-               "expected": expected})
-    };
+    })
+}
+
+// Writes a source package directory at `directory`: its control, no resources, its one task.
+fn write_files(directory: &Path, control: Value, task: Value) {
+    for (path, value) in [
+        ("control.json", control),
+        (
+            "resources/operations/resources.json",
+            json!({"schema_version": "1.0", "resources": [], "resource_count": 0}),
+        ),
+        ("resources/operations/task/task.json", task),
+    ] {
+        let path = directory.join(path);
+        fs::create_dir_all(path.parent().expect("package file parent")).expect("package dir");
+        fs::write(
+            path,
+            serde_json::to_vec_pretty(&value).expect("package JSON"),
+        )
+        .expect("write package file");
+    }
+}
+
+// Writes the package as a source package directory at `directory`, its taps `retry_interval_ms`
+// apart (another value is another content); fix round 3: declaring the prerequisite package
+// `prerequisite` when one is given.
+fn write_package(directory: &Path, retry_interval_ms: u64) {
+    write_package_with(directory, retry_interval_ms, None);
+}
+
+fn write_package_with(directory: &Path, retry_interval_ms: u64, prerequisite: Option<&str>) {
+    let mut control = package_control("neutral.u1b.open", "linear_steps");
+    if let Some(prerequisite) = prerequisite {
+        control["prerequisite_package_id"] = json!(prerequisite);
+    }
     let task = json!({
         "schema_version": "0.9",
         "task_id": "task",
@@ -122,22 +165,43 @@ fn write_package(directory: &Path, retry_interval_ms: u64) {
             "retry_interval_ms": retry_interval_ms
         }]
     });
-    for (path, value) in [
-        ("control.json", control),
-        (
-            "resources/operations/resources.json",
-            json!({"schema_version": "1.0", "resources": [], "resource_count": 0}),
-        ),
-        ("resources/operations/task/task.json", task),
-    ] {
-        let path = directory.join(path);
-        fs::create_dir_all(path.parent().expect("package file parent")).expect("package dir");
-        fs::write(
-            path,
-            serde_json::to_vec_pretty(&value).expect("package JSON"),
-        )
-        .expect("write package file");
-    }
+    write_files(directory, control, task);
+}
+
+// Fix round 3: the prerequisite package `lead`, a page graph of game `neutral`, 2 x 1, from `away`
+// (first pixel green) to `home` (first pixel red), one tap, declaring nothing. Listed in the game
+// root of `neutral` (gate_373_nav3a's `StandardRoot`), it is the layer the gate runs when the
+// screen is not the bench's package's first page; on a screen of neither of its pages it meets a
+// page it does not know and fails, as gate_373_nav3a's failing prerequisite does.
+const LEAD: &str = "neutral.u1b.lead";
+
+fn write_lead(directory: &Path) {
+    let task = json!({
+        "schema_version": "0.9",
+        "task_id": "task",
+        "game": "neutral",
+        "server_scope": ["test"],
+        "locale": "en-US",
+        "goal": "U1b prerequisite fixture",
+        "coordinate_space": {"width": 2, "height": 1},
+        "defaults": {"template_threshold": 0.9, "color_max_distance": 0.0},
+        "color_probes": [probe("first_green", [0, 255, 0]), probe("first_red", [255, 0, 0])],
+        "page_rules": {
+            "away": {"required": ["first_green"]},
+            "home": {"required": ["first_red"]}
+        },
+        "entry_page": "away",
+        "target_page": "home",
+        "operations": [{
+            "id": "back",
+            "from": "away",
+            "to": "home",
+            "click": {"kind": "point", "x": 1, "y": 0},
+            "unguarded_trusted_coordinate": true,
+            "retryable": false
+        }]
+    });
+    write_files(directory, package_control(LEAD, "navigable_route"), task);
 }
 
 // From the next tap on, the device shows `after`; before it, the fake device's own frame (`home`).
@@ -156,6 +220,13 @@ fn show_after_next_tap(state: &FakeState, after: AfterTap) {
                 Vec::<(usize, [u8; 3])>::new()
             }
         }));
+}
+
+// Fix round 3: from now on every frame's first pixel is black, before any tap too: a screen
+// neither the bench's package nor `lead` knows.
+fn show_unknown_from_now(state: &FakeState) {
+    *state.pixel_script.lock().expect("pixel script") =
+        Some(Arc::new(|_: usize, _: usize| vec![(0_usize, [0_u8, 0, 0])]));
 }
 
 // The fixture manifest with the task's procedure bound at `package`, as actingd binds a scheduled
@@ -231,13 +302,14 @@ fn settings(break_in: Option<(u32, u64)>) -> RuntimeConfigManifest {
 // A host on `root` and the test's clock with the task's procedure bound at `package`, the instance
 // `registered` on the fake device `state`: a fixture simulation for scheduled runs, or (`device`)
 // a device instance whose display is observed, which a direct run and a stop's reset need
-// (Workflow #392 DA-A).
+// (Workflow #392 DA-A). Fix round 3: with the standard-pack root `standard_packs` when one is given.
 fn start(
     root: &TempDir,
     clock: &Arc<ManualRuntimeClock>,
     package: &Path,
     (state, registered, device): (&Arc<FakeState>, InstanceId, bool),
     manifest: RuntimeConfigManifest,
+    standard_packs: Option<std::path::PathBuf>,
 ) -> RuntimeHost {
     let provider = if device {
         state.physical_task_geometry.store(true, Ordering::Release);
@@ -253,7 +325,8 @@ fn start(
         config(root)
             .with_runtime_clock(clock.clone())
             .with_procedure_manifest(procedures_at(package))
-            .with_config_manifest(manifest),
+            .with_config_manifest(manifest)
+            .with_standard_packs_root(standard_packs),
         Arc::new(provider),
     )
     .expect("runtime host")
@@ -271,7 +344,8 @@ fn sources() -> CatalogSources {
     sources
 }
 
-// One test's package, request, clock, fake device and instance.
+// One test's package, request, clock, fake device and instance; fix round 3: and its standard-pack
+// root, none unless a test lists one.
 struct Bench {
     root: TempDir,
     package: std::path::PathBuf,
@@ -279,6 +353,7 @@ struct Bench {
     clock: Arc<ManualRuntimeClock>,
     state: Arc<FakeState>,
     registered: InstanceId,
+    standard_packs: Option<std::path::PathBuf>,
 }
 
 impl Bench {
@@ -295,6 +370,7 @@ impl Bench {
             clock: Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 0)),
             state: Arc::new(FakeState::default()),
             registered: instance_id(),
+            standard_packs: None,
         }
     }
 
@@ -306,6 +382,7 @@ impl Bench {
             &self.package,
             (&self.state, self.registered, device),
             manifest,
+            self.standard_packs.clone(),
         );
         if activate {
             host.activate_policy_catalog(&sources())
@@ -370,6 +447,16 @@ impl Bench {
         seed: u64,
     ) -> (Box<PolicyRunContext>, RuntimeHostError, usize) {
         show_after_next_tap(&self.state, after);
+        self.fail_as_shown(host, at, seed)
+    }
+
+    // Fix round 3: `fail` on the screen the device shows now.
+    fn fail_as_shown(
+        &self,
+        host: &RuntimeHost,
+        at: u64,
+        seed: u64,
+    ) -> (Box<PolicyRunContext>, RuntimeHostError, usize) {
         let taps_before = self.state.input_count.load(Ordering::Acquire);
         let context = self.admitted(host, at, seed);
         let error = host
@@ -875,4 +962,240 @@ fn u1b_t8_the_keys_set_while_running_count_from_the_next_run() {
         PolicyFailureDisposition::RetryScheduled
     );
     host.close().expect("close runtime host");
+}
+
+// ---- Fix round 3 (`rd-1115/brief-463-u1b-fix3.md`, C 5).
+
+// The task facts the host recorded for the run `run_id`.
+fn run_facts(host: &RuntimeHost, run_id: RunId) -> Vec<TaskSemanticFact> {
+    all_events(host)
+        .iter()
+        .filter(|event| event.links().run_id() == Some(&run_id))
+        .filter_map(|event| match event.payload() {
+            EventPayload::Task(TaskPayload::Semantic(payload)) => Some(payload.fact().clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+// The `policy_break_in_unread` warnings (Warning `runtime.failed`) recorded for the run `run_id`.
+fn break_in_unread_warnings(host: &RuntimeHost, run_id: RunId) -> Vec<Outcome> {
+    all_events(host)
+        .iter()
+        .filter(|event| event.links().run_id() == Some(&run_id))
+        .filter_map(|event| match event.payload() {
+            EventPayload::Runtime(actingcommand_contract::RuntimePayload::Failed(record))
+                if record.outcome().code().as_str() == BREAK_IN_UNREAD =>
+            {
+                Some(record.outcome().clone())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+// A run that never began its package counts nothing toward the break-in: the bench's package
+// declares the prerequisite package `lead`, which the game root of `neutral` lists. After one
+// settled success (on `home` the gate runs no layer and the package runs), a scheduled run on a
+// screen neither package knows: the gate runs `lead`, which fails (its `EntryRecoveryFailed`, role
+// `prerequisite`), so the run's own package never began (no `PackageAdmitted` in the run, no
+// input); the run fails without poisoning the Runtime and the break-in is as it was: one run, its
+// content, its first time. (The other example of the work order, a refusal of a handset's start
+// gate, needs a wired handset on a scheduled run, which this gate's fixtures do not have; the rule
+// is the same flag, `PackageAdmitted`, which the gate's check runs before.)
+#[test]
+fn u1b_t9_a_run_whose_prerequisite_layer_failed_counts_nothing() {
+    let mut bench = Bench::new();
+    write_package_with(&bench.package, 10, Some(LEAD));
+    let mut standard = super::gate_373_nav3a::StandardRoot::new(bench.root.path());
+    write_lead(&standard.list(LEAD));
+    standard.write_bundle();
+    bench.standard_packs = Some(standard.root.clone());
+    let host = bench.host(false, settings(Some((RUNS, BREAK_IN_MS))), true);
+    bench.succeed(&host, T0, 7);
+    let before = break_in(&host).expect("the success starts the break-in");
+    assert_eq!(before.runs, 1);
+    show_unknown_from_now(&bench.state);
+    let (context, _, taps) = bench.fail_as_shown(&host, T1, 8);
+    assert_eq!(taps, 0, "no input");
+    let facts = run_facts(&host, context.run_id());
+    let failed_layers = facts
+        .iter()
+        .filter_map(|fact| match fact {
+            TaskSemanticFact::EntryRecoveryFailed {
+                package_label,
+                role,
+                ..
+            } => Some((package_label.clone(), *role)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        failed_layers,
+        [(
+            Some(LEAD.to_owned()),
+            Some(TaskEntryRecoveryRole::Prerequisite)
+        )],
+        "{facts:?}"
+    );
+    assert!(
+        !facts
+            .iter()
+            .any(|fact| matches!(fact, TaskSemanticFact::PackageAdmitted { .. })),
+        "the run's own package never began: {facts:?}"
+    );
+    assert_eq!(
+        break_in(&host),
+        Some(before),
+        "a run that never began its package counts nothing"
+    );
+    host.close().expect("close runtime host");
+}
+
+// A break-in that cannot be established: after one settled success, a scheduled run on the screen
+// the package never recorded whose preparation cannot measure the package's content
+// (`content_unmeasured`), and on another bench one whose read of the pair's break-in fails as a
+// dispatch the decision memory does not hold fails it (`record_unread`). The failure is made once
+// at that read (`fail_next_break_in_read_for_test`), as gate_463_u1 makes the read of a run's
+// budget end fail: no fixture makes these reads fail otherwise, since the measurement reads the
+// package the preparation has just admitted and the decision memory holds every admitted
+// dispatch. Each run records one `policy_break_in_unread` with its word, its task and its instance,
+// goes on as one outside its break-in (`page_confirmation_failed` after one tap, retry scheduled,
+// so not paused at once, though one run of two is inside) and counts by the rule: a run whose
+// content was not measured counts nothing; a run whose break-in could not be read began its
+// measured content and counts.
+#[test]
+fn u1b_t10_a_break_in_that_cannot_be_established_warns_and_the_run_goes_on() {
+    for (problem, counted) in [
+        (BreakInProblem::ContentUnmeasured, 1),
+        (BreakInProblem::RecordUnread, 2),
+    ] {
+        let bench = Bench::new();
+        let host = bench.host(false, settings(Some((RUNS, BREAK_IN_MS))), true);
+        bench.succeed(&host, T0, 7);
+        let before = break_in(&host).expect("the break-in");
+        host.fail_next_break_in_read_for_test(problem)
+            .expect("arm the failed read");
+        let (context, error, taps) = bench.fail(&host, AfterTap::Unrecorded, T1, 8);
+        assert_eq!(error.code(), CONFIRMATION_FAILED, "{problem:?}");
+        assert_eq!(taps, 1, "{problem:?}");
+        assert_eq!(
+            recorded_failure(&host, context.run_id()).disposition,
+            PolicyFailureDisposition::RetryScheduled,
+            "{problem:?}"
+        );
+        let warnings = break_in_unread_warnings(&host, context.run_id());
+        let [warning] = warnings.as_slice() else {
+            panic!("{problem:?}: one warning: {warnings:?}");
+        };
+        assert_eq!(
+            warning.value("break_in_problem"),
+            Some(&json!(problem.as_str())),
+            "{warning:?}"
+        );
+        assert_eq!(warning.value("task_id"), Some(&json!(TASK)), "{warning:?}");
+        assert_eq!(
+            warning.value("instance_id"),
+            Some(&json!(POLICY_INSTANCE_ALIAS)),
+            "{warning:?}"
+        );
+        let after = break_in(&host).expect("the break-in");
+        assert_eq!(after.runs, counted, "{problem:?}");
+        assert_eq!(after.content_hash, before.content_hash, "{problem:?}");
+        assert_eq!(
+            after.first_settled_at_unix_ms, before.first_settled_at_unix_ms,
+            "{problem:?}"
+        );
+        host.close().expect("close runtime host");
+    }
+}
+
+// `actingd suspended` on the bench's closed root, judged by `settings(Some((RUNS, ms_needed)))`:
+// its one `break_ins` row.
+fn break_in_row(bench: &Bench, ms_needed: u64) -> Value {
+    let report = crate::suspension_report(&SuspensionReportRequest {
+        config_path: Path::new("actingd.config.json"),
+        config_modified_unix_ms: None,
+        host: &config(&bench.root)
+            .with_procedure_manifest(procedures_at(&bench.package))
+            .with_config_manifest(settings(Some((RUNS, ms_needed)))),
+        catalog: &sources(),
+    })
+    .unwrap_or_else(|error| panic!("actingd suspended: {error}"));
+    let rows = report["break_ins"]
+        .as_array()
+        .cloned()
+        .unwrap_or_else(|| panic!("the break_ins rows: {report:#}"));
+    let [row] = rows.as_slice() else {
+        panic!("one break_ins row: {report:#}");
+    };
+    row.clone()
+}
+
+// `actingd suspended` lists the pair's break-in row (`break_ins`), judged by the configuration the
+// report loads (two runs, one second): after the first settled run, one run of two and
+// `in_break_in` true; after a restart (the root's second start, which seeds, as its start report
+// says) and a second settled run an hour later, two runs of two, more than a second since the
+// first and `in_break_in` false. Each row carries the content and the first time the decision
+// memory held, the two needed values, and `since_first_ms`, the report's now (the ledger's head
+// row) less the first time: after the second run that now is no earlier than the second run.
+#[test]
+fn u1b_t11_actingd_suspended_lists_the_break_in_before_and_after_it_ends() {
+    const MS_NEEDED: u64 = 1_000;
+    let bench = Bench::new();
+    let host = bench.host(false, settings(Some((RUNS, MS_NEEDED))), true);
+    bench.succeed(&host, T0, 7);
+    let first = break_in(&host).expect("the break-in");
+    host.close().expect("close runtime host");
+    let row = break_in_row(&bench, MS_NEEDED);
+    let since = row["since_first_ms"]
+        .as_u64()
+        .unwrap_or_else(|| panic!("since_first_ms: {row:#}"));
+    assert_eq!(
+        row,
+        json!({
+            "task_id": TASK,
+            "instance_id": POLICY_INSTANCE_ALIAS,
+            "content_hash_prefix": first.content_hash,
+            "runs": 1,
+            "runs_needed": RUNS,
+            "first_settled_at_unix_ms": first.first_settled_at_unix_ms,
+            "since_first_ms": since,
+            "ms_needed": MS_NEEDED,
+            "in_break_in": true,
+        }),
+        "before the break-in ends"
+    );
+
+    let host = bench.host(false, settings(Some((RUNS, MS_NEEDED))), false);
+    assert_eq!(
+        tagged_start(&host),
+        Some(StartReportTaggedState::Seed),
+        "the root's second start seeds"
+    );
+    bench.succeed(&host, T1, 8);
+    host.close().expect("close the restarted host");
+    let row = break_in_row(&bench, MS_NEEDED);
+    let since = row["since_first_ms"]
+        .as_u64()
+        .unwrap_or_else(|| panic!("since_first_ms: {row:#}"));
+    assert!(
+        since >= MS_NEEDED && first.first_settled_at_unix_ms + since >= T1,
+        "{row:#}"
+    );
+    assert_eq!(
+        row,
+        json!({
+            "task_id": TASK,
+            "instance_id": POLICY_INSTANCE_ALIAS,
+            "content_hash_prefix": first.content_hash,
+            "runs": 2,
+            "runs_needed": RUNS,
+            "first_settled_at_unix_ms": first.first_settled_at_unix_ms,
+            "since_first_ms": since,
+            "ms_needed": MS_NEEDED,
+            "in_break_in": false,
+        }),
+        "after the break-in ends"
+    );
 }

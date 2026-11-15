@@ -8605,7 +8605,10 @@ impl HostShared {
         // so a value set while the Runtime runs counts from the next run. Fix round 2 (review
         // item 2): a break-in that cannot be read aborts no run, as the budget's end above does
         // not: the run goes on as one outside its break-in, and the host records
-        // `policy_break_in_unread` (`HostShared::scheduled_run_past_break_in`).
+        // `policy_break_in_unread` (`HostShared::scheduled_run_past_break_in`). Fix round 3: a
+        // content its preparation did not measure too (`content_unmeasured`); what goes up here
+        // is what goes up everywhere: a broken lock of the host's run state, or the record that
+        // cannot be written.
         if self
             .scheduled_run_past_break_in(context)
             .map_err(RequestFailure::poison_without_terminal)?

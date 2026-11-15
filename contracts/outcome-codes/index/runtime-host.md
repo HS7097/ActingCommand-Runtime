@@ -703,7 +703,7 @@ hand. The [summary](README.md) says what each column means. 1158 codes.
 | `policy_admission_context_untrusted` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports policy admission context untrusted. |
 | `policy_admission_event_invalid` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports policy admission event invalid. |
 | `policy_approval_fact_missing` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports policy approval fact missing. |
-| `policy_break_in_unread` | warning | none | 0.12.63 | active | pending | written | Workflow #463 U1b fix round 2 (contracts/policy-suspension.md, "Only during a package's break-in"): before a scheduled run of a linear_steps package executed,… |
+| `policy_break_in_unread` | warning | none | 0.12.63 | active | pending | written | Workflow #463 U1b fix rounds 2 and 3 (contracts/policy-suspension.md, "Only during a package's break-in"): the break-in of a scheduled run of a linear_steps… |
 | `policy_budget_counter_overflow` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports policy budget counter overflow. |
 | `policy_budget_exhausted` | error | budget_or_permission | 0.12.0 | active | pending | TBD | The Runtime host reports policy budget exhausted. |
 | `policy_budget_receipt_invalid` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports policy budget receipt invalid. |
