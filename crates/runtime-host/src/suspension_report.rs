@@ -1098,10 +1098,7 @@ fn report(inputs: &ReportInputs<'_>) -> Result<Value, SuspensionReportError> {
                 "package": package,
                 "frames": frames,
                 "lifts_when": LIFTS_WHEN,
-                "takeover": format!(
-                    "actingctl task-run --state-root {} --instance {instance_id} --package <package>",
-                    state_root.display()
-                ),
+                "takeover": format!("actinglab run start {instance_id} <package>"),
             }));
             continue;
         }

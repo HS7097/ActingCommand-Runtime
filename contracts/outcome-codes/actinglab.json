@@ -101,8 +101,8 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The --facts file of actinglab replay is not one complete instance fact answer of a Runtime: the result of actingctl facts --instance or of MCP ac_facts with scope instance (scope, read_at_unix_ms, snapshot, records_total, records_kept), read without key_prefix so that it holds every record, with a valid snapshot, within 4 MiB.",
-      "common_causes": "The answer was read with --key-prefix, is of another scope, or was edited.",
+      "description": "The --facts file of actinglab replay is not one complete instance fact answer of a Runtime: the result of actinglab facts <instance> or of the Lab's MCP tool ac_facts with instance (scope, read_at_unix_ms, snapshot, records_total, records_kept), read without prefix so that it holds every record, with a valid snapshot, within 4 MiB.",
+      "common_causes": "The answer was read with --prefix, is of another scope, or was edited.",
       "handling": "Read the instance's facts again without a key prefix and save the answer unchanged."
     },
     "replay_scan_refused": {
@@ -159,7 +159,7 @@
       "since": "0.12.0",
       "description": "actinglab recognition-regression could not open or read an --evidence file.",
       "common_causes": "The path does not exist or is not readable.",
-      "handling": "Name a readable file: the saved answer of actingctl run evidence or ac_run_evidence."
+      "handling": "Name a readable file: the saved answer of actinglab run evidence or of the Lab's MCP tool ac_run_evidence."
     },
     "recognition_regression_evidence_invalid": {
       "category": "error",
@@ -171,7 +171,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "An --evidence file of actinglab recognition-regression is not one page of a run's evidence as actingctl run evidence or ac_run_evidence answer it (request_id, and steps with step_index and frames[].ref), within 16 MiB; or two pages are of different runs; or the pages name no frame.",
+      "description": "An --evidence file of actinglab recognition-regression is not one page of a run's evidence as actinglab run evidence or ac_run_evidence answer it (request_id, and steps with step_index and frames[].ref), within 16 MiB; or two pages are of different runs; or the pages name no frame.",
       "common_causes": "The answer was edited or truncated, pages of two runs were given, or the run kept no frame.",
       "handling": "Save the run's evidence pages unchanged, all of one run, and name a run whose frames were kept."
     },

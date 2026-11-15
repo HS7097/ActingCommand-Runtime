@@ -86,7 +86,7 @@ use std::path::{Path, PathBuf};
 use std::process::{ExitCode, ExitStatus};
 use std::time::{Duration, SystemTime};
 
-pub(crate) const USAGE: &str = "usage: actingctl watchdog <status|run-once [--from-task]|install|uninstall> --root <install root>";
+pub(crate) const USAGE: &str = "usage: actingwatch [status|install|uninstall] (without a word: one tick of the watchdog's task)";
 /// The report's schema (model §7.5).
 pub(crate) const REPORT_SCHEMA: &str = "actingcommand.watchdog.report.v2";
 const RUN_LOCK: &str = "run.lock";

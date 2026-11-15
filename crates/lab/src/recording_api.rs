@@ -702,9 +702,7 @@ fn insert_binding(
     );
     lab.insert(
         "task_run_example".to_string(),
-        json!(format!(
-            "actingctl task-run --state-root <root> --instance <alias> --package \"{package_path}\""
-        )),
+        json!(format!("actinglab run start <alias> \"{package_path}\"")),
     );
     lab.insert(
         "catalog_on_failure_example".to_string(),
