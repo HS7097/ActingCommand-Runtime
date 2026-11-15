@@ -62,8 +62,8 @@ hand. The [summary](README.md) says what each column means. 1158 codes.
 | `approval_projection_position_invalid` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports approval projection position invalid. |
 | `approval_projection_query_failed` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports approval projection query failed. |
 | `approval_read_ids_exceeded` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports approval read ids exceeded. |
-| `approval_replay_conflict` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports approval replay conflict. |
-| `approval_replay_payload_mismatch` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports approval replay payload mismatch. |
+| `approval_replay_conflict` | error | none | 0.12.0 | retired | pending | TBD | Retired (Workflow #434 LAB-6S4a): RecordApprovalDecision went; approvals come only from the configuration's transcription, which never emits this code; a record… |
+| `approval_replay_payload_mismatch` | error | none | 0.12.0 | retired | pending | TBD | Retired (Workflow #434 LAB-6S4a): RecordApprovalDecision went; approvals come only from the configuration's transcription, which never emits this code; a record… |
 | `artifact_eviction_recovery_deadline` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports artifact eviction recovery deadline. |
 | `artifact_eviction_recovery_deferred` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports artifact eviction recovery deferred. |
 | `artifact_identity_encode_failed` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports artifact identity encode failed. |
@@ -322,7 +322,7 @@ hand. The [summary](README.md) says what each column means. 1158 codes.
 | `dispatch_player_held` | info | none | 0.12.35 | active | pending | written | Control gate 1 (R-7a section 2.6): the instance's player hold defers the dispatch; the effective code of the instance while the hold lasts. |
 | `dispatch_random_delay_waiting` | info | none | 0.12.5 | active | pending | written | Scheduling decision reason (Workflow #405): the instance has scheduling.random_delay enabled, so a task that passed every other gate waits a random delay before… |
 | `dispatch_resource_fenced` | info | none | 0.12.35 | active | pending | written | Control gate 4 (R-7a section 2.6): the instance's #403 resource fence defers the dispatch, after the pauses and before the instance's queue: the evaluation's… |
-| `drain_timeout` | error | none | 0.12.0 | active | settled | written | An install transition's drain did not finish before its deadline: the transition aborts and admission reopens on the old owner. |
+| `drain_timeout` | error | none | 0.12.0 | retired | settled | written | Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path… |
 | `duplicate_emulator_capability_requirement` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports duplicate emulator capability requirement. |
 | `duplicate_instance_alias` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports duplicate instance alias. |
 | `duplicate_instance_id` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports duplicate instance id. |
@@ -427,9 +427,9 @@ hand. The [summary](README.md) says what each column means. 1158 codes.
 | `goal_value_invalid` | error | none | 0.12.61 | active | pending | written | Workflow #463 V3 (contracts/runtime-interface.md, "Goal request kinds"): an EditGoal was refused under the fact write gate, after the version comparison (so a… |
 | `goal_value_not_applied` | warning | none | 0.12.61 | active | pending | written | Workflow #463 V2 (contracts/package-variables.md, "The run"): a new policy dispatch of task_id on the application instance_id reads the declared default of the… |
 | `goal_value_package_unreadable` | warning | none | 0.12.61 | active | pending | written | Workflow #463 V2 fix round 2 (contracts/package-variables.md, "A dispatched package whose variables cannot be read"): a new policy dispatch of task_id on the… |
-| `governance_authority_required` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports governance authority required. |
-| `governance_connection_state_conflict` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports governance connection state conflict. |
-| `held_timeout` | error | none | 0.11.6 | active | settled | written | A held start (actingd --install-held) received no release before its deadline; the transition fails with admission closed and the start ends with it. |
+| `governance_authority_required` | error | none | 0.12.0 | retired | pending | TBD | Retired (Workflow #434 LAB-6S4a): DeclareGovernanceIdentity and RecordApprovalDecision went, and with them every path that emitted this code; a record that… |
+| `governance_connection_state_conflict` | error | none | 0.12.0 | retired | pending | TBD | Retired (Workflow #434 LAB-6S4a): DeclareGovernanceIdentity and RecordApprovalDecision went, and with them every path that emitted this code; a record that… |
+| `held_timeout` | error | none | 0.11.6 | retired | settled | written | Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path… |
 | `host_config_overrides_fact_clock_overflow` | error | none | 0.12.0 | active | pending | TBD | A configuration fact cannot be recorded after the previous one: its observation time would overflow. |
 | `host_config_overrides_fact_invalid` | error | none | 0.12.0 | active | pending | written | At start the recorded host.config_overrides fact is not of the shape this build writes; the start fails, and every later start until the ledger is repaired. |
 | `host_config_overrides_persist_failed` | error | none | 0.12.0 | active | pending | written | A ConfigureSettings change could not record host.config_overrides; nothing changed and the request is refused (caused_by: the ledger's refusal). |
@@ -443,38 +443,38 @@ hand. The [summary](README.md) says what each column means. 1158 codes.
 | `input_action_unsupported` | error | none | 0.12.0 | active | pending | written | An input request names an action this build decodes but does not perform: the single-touch path drag (InputAction::SingleTouchPathDragV1) is reserved until… |
 | `input_execution_plan_invalid` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports input execution plan invalid. |
 | `input_frame_unavailable` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports input frame unavailable. |
-| `install_abort_state_invalid` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports install abort state invalid. |
-| `install_fact_clock_overflow` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports install fact clock overflow. |
-| `install_fact_field_invalid` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports install fact field invalid. |
-| `install_identity_encode_failed` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports install identity encode failed. |
-| `install_identity_required` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports install identity required. |
-| `install_not_drained` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports install not drained. |
-| `install_owner_mismatch` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports install owner mismatch. |
-| `install_owner_stopping` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports install owner stopping. |
-| `install_pause_scope_mismatch` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports install pause scope mismatch. |
-| `install_preparation_instance_unavailable` | warning | none | 0.12.0 | active | settled | written | An install start (a held start released by the installer) went on although the daemon-start preparation self-check of this instance (instance_id) failed,… |
-| `install_preparation_not_authorized` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports install preparation not authorized. |
-| `install_preparation_selfcheck_failed` | error | none | 0.12.0 | active | settled | written | An install start (a held start released by the installer) whose daemon-start preparation self-checks all failed: at least one instance was prepared and none… |
-| `install_previous_drain_unverified` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports install previous drain unverified. |
-| `install_previous_owner_invalid` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports install previous owner invalid. |
-| `install_previous_pause_identity_mismatch` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports install previous pause identity mismatch. |
-| `install_previous_pause_identity_missing` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports install previous pause identity missing. |
-| `install_previous_pause_not_settled` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports install previous pause not settled. |
-| `install_previous_pause_revision_invalid` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports install previous pause revision invalid. |
-| `install_previous_pause_scope_invalid` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports install previous pause scope invalid. |
-| `install_previous_pause_time_invalid` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports install previous pause time invalid. |
-| `install_previous_pauses_invalid` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports install previous pauses invalid. |
-| `install_previous_pauses_missing` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports install previous pauses missing. |
-| `install_previous_shutdown_unverified` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports install previous shutdown unverified. |
-| `install_previous_transition_invalid` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports install previous transition invalid. |
-| `install_previous_transition_missing` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports install previous transition missing. |
-| `install_previous_verification_timeout` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports install previous verification timeout. |
-| `install_release_state_invalid` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports install release state invalid. |
-| `install_startup_shut_down` | info | none | 0.11.6 | active | settled | written | A held start (actingd --install-held) ended because a shutdown request for its owner was accepted before it was released; the operation is install_transition. |
+| `install_abort_state_invalid` | error | none | 0.12.0 | retired | pending | TBD | Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path… |
+| `install_fact_clock_overflow` | error | none | 0.12.0 | retired | pending | TBD | Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path… |
+| `install_fact_field_invalid` | error | none | 0.12.0 | retired | pending | TBD | Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path… |
+| `install_identity_encode_failed` | error | none | 0.12.0 | retired | pending | TBD | Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path… |
+| `install_identity_required` | error | none | 0.12.0 | retired | pending | TBD | Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path… |
+| `install_not_drained` | error | none | 0.12.0 | retired | pending | TBD | Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path… |
+| `install_owner_mismatch` | error | none | 0.12.0 | retired | pending | TBD | Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path… |
+| `install_owner_stopping` | error | none | 0.12.0 | retired | pending | TBD | Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path… |
+| `install_pause_scope_mismatch` | error | none | 0.12.0 | retired | pending | TBD | Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path… |
+| `install_preparation_instance_unavailable` | warning | none | 0.12.0 | retired | settled | written | Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path… |
+| `install_preparation_not_authorized` | error | none | 0.12.0 | retired | pending | TBD | Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path… |
+| `install_preparation_selfcheck_failed` | error | none | 0.12.0 | retired | settled | written | Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path… |
+| `install_previous_drain_unverified` | error | none | 0.12.0 | retired | pending | TBD | Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path… |
+| `install_previous_owner_invalid` | error | none | 0.12.0 | retired | pending | TBD | Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path… |
+| `install_previous_pause_identity_mismatch` | error | none | 0.12.0 | retired | pending | TBD | Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path… |
+| `install_previous_pause_identity_missing` | error | none | 0.12.0 | retired | pending | TBD | Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path… |
+| `install_previous_pause_not_settled` | error | none | 0.12.0 | retired | pending | TBD | Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path… |
+| `install_previous_pause_revision_invalid` | error | none | 0.12.0 | retired | pending | TBD | Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path… |
+| `install_previous_pause_scope_invalid` | error | none | 0.12.0 | retired | pending | TBD | Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path… |
+| `install_previous_pause_time_invalid` | error | none | 0.12.0 | retired | pending | TBD | Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path… |
+| `install_previous_pauses_invalid` | error | none | 0.12.0 | retired | pending | TBD | Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path… |
+| `install_previous_pauses_missing` | error | none | 0.12.0 | retired | pending | TBD | Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path… |
+| `install_previous_shutdown_unverified` | error | none | 0.12.0 | retired | pending | TBD | Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path… |
+| `install_previous_transition_invalid` | error | none | 0.12.0 | retired | pending | TBD | Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path… |
+| `install_previous_transition_missing` | error | none | 0.12.0 | retired | pending | TBD | Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path… |
+| `install_previous_verification_timeout` | error | none | 0.12.0 | retired | pending | TBD | Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path… |
+| `install_release_state_invalid` | error | none | 0.12.0 | retired | pending | TBD | Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path… |
+| `install_startup_shut_down` | info | none | 0.11.6 | retired | settled | written | Retired (Workflow #434 LAB-6S4a): actingd's held start went, and a shutdown request sent while a start prepares is refused runtime_shutdown_denied… |
 | `install_startup_stopped` | error | none | 0.11.6 | active | settled | written | A held or released start stopped before it finished preparing because the Runtime latched a failure meanwhile. |
-| `install_ticket_mismatch` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports install ticket mismatch. |
-| `install_transition_conflict` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports install transition conflict. |
-| `install_transition_unknown` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports install transition unknown. |
+| `install_ticket_mismatch` | error | none | 0.12.0 | retired | pending | TBD | Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path… |
+| `install_transition_conflict` | error | none | 0.12.0 | retired | pending | TBD | Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path… |
+| `install_transition_unknown` | error | none | 0.12.0 | retired | pending | TBD | Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path… |
 | `instance_fact_snapshot_too_large_for_frame` | error | none | 0.12.0 | active | pending | TBD | An InstanceFactSnapshot read (Workflow #389 MCP-4) whose reply receipt would exceed the host's maximum_frame_bytes is refused (receipt state denied) instead of… |
 | `instance_idle_action` | info | none | 0.12.13 | active | pending | written | IDLE-1 (Alice's ruling 41 of 10-24 and her ruling of 10-25): an instance with no task soon. |
 | `instance_idle_action_unsupported` | warning | none | 0.12.13 | active | pending | written | IDLE-1 (Fail Loud): the instance's idle action in effect (idle_action, close_app or stop_emulator) cannot work, because the instance cannot be brought back… |
@@ -930,7 +930,7 @@ hand. The [summary](README.md) says what each column means. 1158 codes.
 | `recovery_ladder_adb_not_ready` | error | environment_fault | 0.12.0 | active | pending | TBD | The Runtime host reports recovery ladder adb not ready. |
 | `recovery_ladder_claim_request_invalid` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports recovery ladder claim request invalid. |
 | `recovery_ladder_continuation_granted_early` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports recovery ladder continuation granted early. |
-| `recovery_ladder_drain_requested` | error | planned_stop | 0.12.0 | active | pending | TBD | A stuck-recovery rung ended because an install drain began while the ladder held its instance. |
+| `recovery_ladder_drain_requested` | error | planned_stop | 0.12.0 | active | pending | TBD | A stuck-recovery rung ended because the Runtime's admission was stopping at the ladder's holding check while the ladder held its instance: a Runtime shutdown… |
 | `recovery_ladder_drill_already_running` | error | none | 0.12.0 | active | pending | written | A drill of an instance's stuck-recovery ladder was refused because a ladder already holds or waits for the instance and recovery_ladder.rules.already_running is… |
 | `recovery_ladder_drill_cooling_down` | error | none | 0.12.0 | active | pending | written | A drill of an instance's stuck-recovery ladder was refused because the instance's cool-down window is open and recovery_ladder.trigger_defaults.respect_cooldown… |
 | `recovery_ladder_drill_disabled` | error | none | 0.12.0 | active | pending | written | A drill of an instance's stuck-recovery ladder was refused because stuck recovery is off for that instance, so no ladder starts on it (Workflow #390 DRILL-1). |
@@ -973,7 +973,7 @@ hand. The [summary](README.md) says what each column means. 1158 codes.
 | `release_outcome_payload_invalid` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports release outcome payload invalid. |
 | `release_recovery_cursor_invalid` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports release recovery cursor invalid. |
 | `release_recovery_member_invalid` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports release recovery member invalid. |
-| `release_timeout` | error | none | 0.11.6 | active | settled | written | A released start did not finish preparing before its release deadline; the transition fails with admission closed and the start ends with it. |
+| `release_timeout` | error | none | 0.11.6 | retired | settled | written | Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path… |
 | `release_transition_effect_unresolved` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports release transition effect unresolved. |
 | `request_terminal_event_duplicated` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports request terminal event duplicated. |
 | `request_terminal_event_missing` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports request terminal event missing. |
@@ -1159,8 +1159,8 @@ hand. The [summary](README.md) says what each column means. 1158 codes.
 | `task_id_too_long_for_facts` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports task id too long for facts. |
 | `terminal_already_committed` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports terminal already committed. |
 | `unknown_emulator_capability` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports unknown emulator capability. |
-| `upgrade_state_aborted` | error | none | 0.12.0 | active | pending | written | The reply to an UpgradeState enter that was still waiting for the drain when an UpgradeState cancel withdrew the transition. |
-| `upgrade_state_cancelled` | success | none | 0.12.0 | active | pending | written | UpgradeState cancel took effect while the transition was still draining: admission reopened, the transition is recorded as aborted and the Runtime keeps… |
-| `upgrade_state_entered` | success | none | 0.12.0 | active | pending | written | UpgradeState enter succeeded (#389 U-4): the Runtime closed admission, drained, recorded its scheduling pause, accepted its own close while the requesting… |
-| `upgrade_state_released` | success | none | 0.12.0 | active | pending | written | UpgradeState leave succeeded: the Runtime that acsetup started with --install-held prepared its provider, restored the pause recorded by the transition and… |
-| `upgrade_state_requester_disconnected` | warning | none | 0.12.0 | active | pending | written | The connection that sent UpgradeState enter closed before the Runtime accepted its own close. |
+| `upgrade_state_aborted` | error | none | 0.12.0 | retired | pending | written | Retired (Workflow #434 LAB-6S4a): UpgradeState and UpgradeStateStatus went; they answered not_implemented and never emitted this code. |
+| `upgrade_state_cancelled` | success | none | 0.12.0 | retired | pending | written | Retired (Workflow #434 LAB-6S4a): UpgradeState and UpgradeStateStatus went; they answered not_implemented and never emitted this code. |
+| `upgrade_state_entered` | success | none | 0.12.0 | retired | pending | written | Retired (Workflow #434 LAB-6S4a): UpgradeState and UpgradeStateStatus went; they answered not_implemented and never emitted this code. |
+| `upgrade_state_released` | success | none | 0.12.0 | retired | pending | written | Retired (Workflow #434 LAB-6S4a): UpgradeState and UpgradeStateStatus went; they answered not_implemented and never emitted this code. |
+| `upgrade_state_requester_disconnected` | warning | none | 0.12.0 | retired | pending | written | Retired (Workflow #434 LAB-6S4a): UpgradeState and UpgradeStateStatus went; they answered not_implemented and never emitted this code. |

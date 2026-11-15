@@ -5,11 +5,11 @@
 //! (observer until U-3, always on), as `ac_config_set` is: applying a preset is one
 //! `ConfigureSettings`, and every change is recorded. Both actions read the preset table and the
 //! members in effect with RuntimeFactSnapshot and judge them with the shared function of
-//! `actingcommand-runtime-config`; a `set` writes on its own (Cli, Cli) connection the provenance
-//! way, as `ac_config_set` does, and what the Runtime refuses is passed on unchanged. The answers
+//! `actingcommand-runtime-config`; a `set` writes on its own (Cli, Cli) connection, as
+//! `ac_config_set` does, and what the Runtime refuses is passed on unchanged. The answers
 //! are the CLI's, without its outcome.
 
-use super::operator::{CLI, record_provenance};
+use super::operator::{CLI, write_interaction};
 use super::runtime::client_error;
 use super::tools::{Arguments, ToolContext, ToolError, ToolOutcome, ToolSuccess, invalid_argument};
 use crate::codes::ArgumentProblem;
@@ -77,13 +77,9 @@ pub(super) fn run(context: &ToolContext<'_>, arguments: &Map<String, Value>) -> 
         (SET, None) => Err(invalid_argument("preset", ArgumentProblem::Required)),
         (SET, Some(name)) => {
             let connection = context.runtime.connect_fresh(CLI.0, CLI.1)?;
-            let write = record_provenance(connection, "ac_perf_preset", None, CLI, None)?;
-            let answer =
-                perf_preset::set(&write.client, name).map_err(|failure| tool_error(&failure))?;
-            Ok(ToolSuccess {
-                result: answer,
-                warnings: write.warnings,
-            })
+            let client = write_interaction(&connection)?;
+            let answer = perf_preset::set(&client, name).map_err(|failure| tool_error(&failure))?;
+            Ok(ToolSuccess::new(answer))
         }
         _ => Err(invalid_argument("action", ArgumentProblem::NotRecognised)),
     }

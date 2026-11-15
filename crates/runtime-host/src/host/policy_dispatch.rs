@@ -566,24 +566,6 @@ pub(super) struct SchedulingPauseTable {
 }
 
 impl SchedulingPauseTable {
-    pub(super) fn from_install_pauses(
-        global: Option<SchedulingPauseState>,
-        instances: BTreeMap<String, InstancePauseState>,
-    ) -> Self {
-        Self {
-            global_revision: global.as_ref().map_or(0, |pause| pause.revision),
-            global,
-            instance_revisions: instances
-                .iter()
-                .map(|(alias, pause)| (alias.clone(), pause.revision))
-                .collect(),
-            instances,
-            client_resets: BTreeMap::new(),
-            origins: BTreeMap::new(),
-            player_held: BTreeSet::new(),
-        }
-    }
-
     /// #402 HS-2, test builds: a player holds `instance_alias` (`held`), or no longer does.
     #[cfg(test)]
     pub(super) fn hold_player_for_test(&mut self, instance_alias: &str, held: bool) {
@@ -632,23 +614,6 @@ impl SchedulingPauseTable {
 
     pub(super) fn holds_instance(&self, instance_alias: &str) -> bool {
         self.instances.contains_key(instance_alias)
-    }
-
-    pub(super) fn holds_pauses(&self) -> bool {
-        self.global.is_some() || !self.instances.is_empty()
-    }
-
-    /// Workflow #361 B1: gives `origin` to every held pause that has none (the pauses an
-    /// installer-held start restored from its transition).
-    pub(super) fn adopt_origins(&mut self, origin: &PauseOrigin) {
-        if self.global.is_some() {
-            self.origins.entry(None).or_insert_with(|| origin.clone());
-        }
-        for alias in self.instances.keys() {
-            self.origins
-                .entry(Some(alias.clone()))
-                .or_insert_with(|| origin.clone());
-        }
     }
 
     pub(super) fn set_global(&mut self, state: SchedulingPauseState, origin: PauseOrigin) {
@@ -724,24 +689,6 @@ impl SchedulingPauseTable {
         Ok(true)
     }
 
-    pub(super) fn validate_install_scopes(
-        &self,
-        registered: &BTreeMap<InstanceId, RegisteredInstance>,
-    ) -> RuntimeHostResult<()> {
-        if self.instances.keys().any(|alias| {
-            !registered
-                .values()
-                .any(|instance| &instance.instance_alias == alias)
-        }) {
-            return Err(RuntimeHostError::request(
-                HostCode::InstallPauseScopeMismatch,
-                HostLocation::RestoreInstallPauses,
-                RuntimeErrorCode::InvalidRequest,
-            ));
-        }
-        Ok(())
-    }
-
     /// Moves an instance pause of `revision` from stage `from` to `to`; any other state means
     /// the pause this request set was lost.
     fn advance_instance(
@@ -776,16 +723,6 @@ impl SchedulingPauseTable {
         self.client_resets
             .values()
             .any(|connections| !connections.is_empty())
-    }
-
-    pub(super) fn install_reset_continuation(
-        &self,
-        instance_alias: &str,
-        connection: ConnectionId,
-    ) -> bool {
-        self.client_resets
-            .get(instance_alias)
-            .is_some_and(|connections| connections.contains(&connection))
     }
 
     /// Workflow #429 R-7a2 (R-7a §2.6 O-3, O-4): the control gates of `instance_alias`, in the

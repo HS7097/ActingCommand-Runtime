@@ -328,7 +328,7 @@ pub fn foreign_data_error(error: &impl fmt::Display) -> Outcome {
 
 /// `top` caused by `cause`. A fatal cause is the top itself: a fatal link needs a fatal top
 /// (spec §5), and the operation ended in that condition. Workflow #434 LAB-1b: moved from
-/// actingctl's `main.rs`, where `install-transition` reads it too.
+/// actingctl's `main.rs` (where `install-transition` read it too until Workflow #434 LAB-6S4a).
 pub fn with_cause(top: Outcome, cause: Outcome) -> Outcome {
     if cause.category() == Category::Fatal {
         cause

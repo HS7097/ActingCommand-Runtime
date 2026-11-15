@@ -1078,10 +1078,6 @@ impl RuntimeHostError {
         self
     }
 
-    pub(crate) const fn latched_cause(&self) -> Option<(&'static str, &'static str)> {
-        self.lifecycle.latched_cause
-    }
-
     pub(crate) fn with_related_failure(mut self, relation: &'static str, other: &Self) -> Self {
         if self.has_ppocr_diagnostics() || other.has_ppocr_diagnostics() {
             return self

@@ -39,11 +39,12 @@ pub(super) struct Outstanding {
     pub(super) kinds: Vec<&'static str>,
 }
 
+/// Workflow #434 LAB-6S4a (0.12.63): a job no longer keeps the instance alias a run job
+/// submitted to, which only the stop's provenance read, nor warnings it starts with, which only
+/// the provenance before a write gave.
 pub(super) struct Job {
     pub(super) handle: String,
     pub(super) kind: &'static str,
-    /// The instance alias a run job submitted to.
-    pub(super) instance_alias: Option<String>,
     state: Mutex<JobState>,
     changed: Condvar,
 }
@@ -154,40 +155,33 @@ impl Jobs {
         &self,
         handle: String,
         kind: &'static str,
-        instance_alias: Option<String>,
         phase: &'static str,
-        warnings: Vec<Value>,
         body: impl FnOnce() -> Result<Value, ToolError> + Send + 'static,
     ) -> Result<Arc<Job>, ToolError> {
-        self.start_noted(handle, kind, instance_alias, phase, warnings, move || {
-            (body(), Vec::new())
-        })
+        self.start_noted(handle, kind, phase, move || (body(), Vec::new()))
     }
 
     /// As `start`, for a body that also reports warnings found while it ran (a Lab call's
-    /// client.action); they join the job's warnings before it ends. A thread the OS refuses is
+    /// client.action); they are the job's warnings when it ends. A thread the OS refuses is
     /// `job_start_failed`, caused by the OS error.
     pub(super) fn start_noted(
         &self,
         handle: String,
         kind: &'static str,
-        instance_alias: Option<String>,
         phase: &'static str,
-        warnings: Vec<Value>,
         body: impl FnOnce() -> JobEnd + Send + 'static,
     ) -> Result<Arc<Job>, ToolError> {
         self.has_capacity()?;
         let job = Arc::new(Job {
             handle,
             kind,
-            instance_alias,
             state: Mutex::new(JobState {
                 phase,
                 finished: false,
                 result: None,
                 collected: false,
                 issued: false,
-                warnings,
+                warnings: Vec::new(),
             }),
             changed: Condvar::new(),
         });

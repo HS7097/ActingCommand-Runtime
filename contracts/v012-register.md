@@ -12303,6 +12303,177 @@ each program is served by that Runtime's own rules (fix 1: the connections count
 
 **LAB-6S2-B2 rollback** (to 0.12.58). Two-way: nothing persisted changes shape or value.
 
+#### Slice LAB-6S4a (0.12.63): the five request kinds are deleted, with the identity card and the held start
+
+Coordinator work order `rd-1115/brief-434-lab6s4a-five-kinds.md`, after the survey
+`rd-1113/lab6-step0-survey.md` (its sections A and B.4, its row S4a and its open points N4,
+`install-control` [0, 0] in the same slice, and N8, MCP's client action provenance goes with the
+identity card); the coordinator's rulings on board #434, not the owner's words, but for the
+owner's ruling the work order quotes, that nothing is kept for what came before (an older console,
+an older client, a rollback get no work of their own); based on main `d32d4d6c` (0.12.61 with #463
+V3). The contracts are [lab-two-entries.md](lab-two-entries.md) (the slice table, §2.4, §2.5,
+§9.3, §12), [runtime-interface.md](runtime-interface.md) (the request kinds, "Old Runtimes", the
+upgrade state), [component-interfaces.md](component-interfaces.md) (`install-control`) and
+[client-interactions.md](client-interactions.md) (the identity card).
+
+**What.**
+- The request kinds `DeclareGovernanceIdentity`, `RecordApprovalDecision`, `InstallTransition`,
+  `UpgradeState` and `UpgradeStateStatus` leave `RuntimeOperation` with their results
+  (`GovernanceIdentityAccepted`, `ApprovalDecisionRecorded`, `InstallTransition`, `UpgradeState`,
+  `UpgradeStateStatus`), their validation, their success codes and their rows of the interface
+  table; the host's handlers go with them (the card's checks and the governance connections, the
+  approval request, the installer's transition with its drain, its held start and its release,
+  the upgrade state's `not_implemented`), and so do the runtime client's methods
+  (`declare_governance_identity`, `record_approval_decision`, `install_transition`) and the
+  operation table's four `not_exposed` rows. A request of a deleted kind carries an unknown
+  operation tag: it does not decode, the Runtime drops its connection without a receipt and records
+  `runtime_protocol_invalid` once at the request's decoding (runtime-interface.md, "Old
+  Runtimes"), and nothing else changes.
+- Their senders: `actingctl install-transition` (the command, its run budget and its three outcome
+  codes; the word is now refused as any word no subcommand is, `actingctl_usage_invalid`, before
+  any connection); actingd's `--install-held` start (a start that names it is `usage_invalid`,
+  exit 1); the identity card `actingctl-mcp` and the `client.action` of the tool that both MCP
+  servers recorded before a write (ruling N8: the initiator `Lab-MCP` the binding carries replaces
+  them), so a write's connection sends the write first after the handshake, and `actinglab-mcp` no
+  longer reads a write's instance on its kept connection first, which only that client action
+  named; the card `actingctl` of the row `evidence read`, whose `requests` drop the kind; and the
+  test support that held a Runtime with the held start (`tests/support/held_runtime.rs` becomes
+  `no_instance_runtime.rs`, its provider without instances and its salt kept).
+- `install-control` becomes [0, 0] (`distribution/windows/component-interfaces.json`, the pin in
+  `tools/actinglab-architecture/tests/component_interfaces.rs`). No other interface moves:
+  `runtime-client` stays [3, 9] and `actingd-config` [5, 32].
+
+**What stays.** Every record's shape, so a ledger of 0.12.61 reads as before: its
+`governance.identity_declared` records (and the registry `GovernanceIdentityRefusal` their verdict
+carries), its approval records, its lifecycle records whose stage was `install_drain`,
+`install_held` or `install_release` (the stages are no longer written; their locations stay
+registered), and `InstallTransitionPhase` as the vocabulary `install_phase`. The configured
+approvals' transcription in process; the configuration's `governance.allowed_clients`, still read,
+checked and reported, deciding nothing; the client action after a Lab call's capture, in both
+servers, now without the card before it; every other request; the refusal of `cli`, `mcp` and a
+`lab` binding without a word, `via`, and the initiator in the ledger (LAB-6S4b, LAB-6S5).
+
+**At deploy** (the owner's ruling as the work order quotes it: only how this build reaches a
+machine that runs v0.12.62, the live build when this one ships, and that its ledger and state root
+load).
+- *Production's installer, the rescue module of the live v0.12.62.* Since 0.12.62 production
+  deploys through the module (`actinglab release stage`, `deploy`, `op status`, run from the live
+  build's kept `actinglab`), with `actingctl install` of that build as the way back
+  ([install-cli.md](install-cli.md), "Journals across versions"); both faces are the same code,
+  `crates/lab-rescue`, whose code, like the watchdog's start and the runtime client's, is v0.12.61's
+  unchanged. `deploy` stages the release, plans (`update plan`, `--preview` while a Runtime runs;
+  neither reaches the Runtime) and runs the composite `update apply --stop --hold lab-deploy-<ms>
+  --start`. Its plan's edges pass: `install-control` I [0, 1] (v0.12.62's own declaration) meets
+  Rp [0, 1] and R\* [0, 0] (`installer_meets_previous`, `installer_meets_next`), `runtime-client`
+  [3, 9] on every side, `ledger` [3, 8] on both, the configuration's keys unchanged. It sends none
+  of the five kinds and never passes `--install-held` (neither is in its code): to the old Runtime
+  the module's own `Status` (whether a Runtime runs) and the N + 9 connections Slice LAB-6S2-B2
+  counts for the composite (`Status`, `RuntimeFactSnapshot`, `ScheduleExplanation`; `Status`, one
+  `PauseScheduling` per instance, `Status`; `Status`, `RuntimeFactSnapshot`, `Status`,
+  `RequestShutdown`), each after `Health` and `BindChannel` `lab` with the module's word
+  ([lab-two-entries.md](lab-two-entries.md) §4.2), answered by v0.12.62 as before; then it starts
+  this build with `--config` only (the watchdog's start), and to the new Runtime the readiness
+  probe (`Health`, `BindChannel`), the post-start check (`Status`, `RuntimeFactSnapshot`,
+  `StartReport`), the release (`Status`, each `ResumeScheduling`, `ScheduleExplanation`) and the
+  module's `alive` (the watchdog's probe, `Health` and `BindChannel`): kinds this build keeps,
+  answered as v0.12.62 answers them. No step changes.
+- *Back.* The composite's automatic rollback (the new start not ready, or a fail-class post-start
+  check failed) closes this build's Runtime with `RequestShutdown`, puts v0.12.62 back, starts it
+  with `--config` only and makes the same reads and the release against it; after the deployment
+  the way back is `actingctl install` of v0.12.62 (`install undo`, `install resume`,
+  `install release-hold`), whose rollback edges pass the same way (I [0, 1] meets [0, 0] and
+  [0, 1]). This build writes no record v0.12.62 cannot read (no shape changes; the invalidation of
+  the transition facts below is the record every start of v0.12.62 writes too, by v0.12.61's
+  code). Not run: the owner's ruling leaves the rollback without work.
+- *The console's installer* negotiates `install-control` per step (component-interfaces.md: I ∩ Rp
+  to close, I ∩ R\* to start), so it starts this build at revision 0, without `--install-held`,
+  and closes a Runtime of v0.12.62 through that slot's own `actingctl` as before. What this build's
+  tools answer it: `actingctl request-shutdown [--wait <seconds>]` as before;
+  `actingctl install-transition` `actingctl_usage_invalid` with exit 1 before any connection;
+  actingd with `--install-held` `usage_invalid` with exit 1. The console's repository was not read.
+- *A ledger and a state root of v0.12.62* load: the records under "What stays" decode; a retired
+  code a record carries is still the catalog's (retired, not removed, so a relayed spelling keeps
+  its category); the runtime facts `host.install_transition` and `host.install_transition.pauses`
+  a drained transition left are invalidated at the start as a takeover, as v0.12.62's starts do
+  on a new epoch, and nothing reads them (their tag pattern stays, so the start sees them); an
+  owner journal whose close carries `closed_by` `upgrade_state` reads as before; a configuration
+  that names `governance.allowed_clients` is accepted.
+- *This build's watchdog, rescue module and MCP servers.* The watchdog's probe (`Health`,
+  `BindChannel`) and its reading of logs and journals are unchanged: in a log of v0.12.62 or earlier
+  `install_startup_stopped`, `held_timeout` and `release_timeout` are errors that consider a start,
+  as before. The rescue module's rows never sent one of the five kinds. Each MCP write's
+  connection sends `Health`, `BindChannel` (`lab`, `Lab-MCP`), then the write; a capture's client
+  action is its connection's first request after the handshake.
+
+**Codes.** Retired in 0.12.63 (status `retired`, `retired_in` 0.12.63; the descriptions say why;
+the release files keep the released ones): contract `request_install_transition_completed`,
+`request_declare_governance_identity_completed`, `request_record_approval_decision_completed`,
+`invalid_approval_decision`, `invalid_install_transition_receipt`,
+`install_previous_transition_mismatch`, `invalid_install_transition_status`,
+`invalid_install_timeout`, `invalid_install_transition_id` and `invalid_governance_origin`;
+runtime-client `install_transition_receipt_unconfirmed`; actingd `install_held_input_invalid`;
+actingctl `install_transition_reported`, `install_transition_failed`, `install_transition_aborted`
+and `mcp_identity_card_refused`; actinglab-mcp `mcp_identity_declaration_refused`; runtime-host the
+43 codes only those paths emitted (60 codes in all): `drain_timeout`, `held_timeout`,
+`release_timeout`, `install_startup_shut_down` (the accepted shutdown of a held start: a starting
+Runtime answers a shutdown request busy, so no start ends as a requested stop, and actingd's
+branch for that end went with it), `governance_authority_required`,
+`governance_connection_state_conflict`, `approval_replay_conflict`, `approval_replay_payload_mismatch`, `install_abort_state_invalid`,
+`install_fact_clock_overflow`, `install_fact_field_invalid`, `install_identity_encode_failed`,
+`install_identity_required`, `install_not_drained`, `install_owner_mismatch`,
+`install_owner_stopping`, `install_pause_scope_mismatch`,
+`install_preparation_instance_unavailable`, `install_preparation_not_authorized`,
+`install_preparation_selfcheck_failed`, `install_previous_drain_unverified`,
+`install_previous_owner_invalid`, `install_previous_pause_identity_mismatch`,
+`install_previous_pause_identity_missing`, `install_previous_pause_not_settled`,
+`install_previous_pause_revision_invalid`, `install_previous_pause_scope_invalid`,
+`install_previous_pause_time_invalid`, `install_previous_pauses_invalid`,
+`install_previous_pauses_missing`, `install_previous_shutdown_unverified`,
+`install_previous_transition_invalid`, `install_previous_transition_missing`,
+`install_previous_verification_timeout`, `install_release_state_invalid`,
+`install_ticket_mismatch`, `install_transition_conflict`, `install_transition_unknown`, and the
+five `upgrade_state_*` codes, which nothing ever emitted. The closed Global list loses
+`approval_replay_conflict`, `approval_replay_payload_mismatch`, `install_abort_state_invalid` and
+`install_release_state_invalid` (146 codes to 142; [runtime-outcomes.md](runtime-outcomes.md)).
+No code is added. Kept: `install_startup_stopped` (a start whose preparation a latched failure
+stops), every location, the registry `GovernanceIdentityRefusal` (a record shape; nothing raises
+its three codes since this build, and their catalog texts say so) and
+`recovery_ladder_drain_requested`, which with the install drain gone only a shutdown accepted
+while a ladder's holding check runs raises (its catalog text says so). What only the deleted
+paths used went too: the lease sweep's cancellation of the waiting entries during an install
+drain, which no stop could reach; the contract's draft of a `governance.identity_declared` record
+(the record still decodes and validates); and the architecture tool's two inspectors of the
+retired governance guard (`inspect_function_origin_terms`, `inspect_field_accesses`).
+
+**Tests.** New: host row "#434 LAB-6S4a", `gate_434_lab6s4a`: each of the five in the complete
+shape 0.12.61 decoded (`install_transition` with the Runtime's target and the query action,
+`declare_governance_identity` with a card, `record_approval_decision` with a decision,
+`upgrade_state` with the target and `enter`, `upgrade_state_status` with a transition id), so
+that the contract refuses it for its unknown variant alone; on the test host a request of each,
+after a `Health` its connection answered, gets no receipt, its connection dropped, one
+`runtime_protocol_invalid` record at `runtime_request_decode_failed` each and no record that
+names the request; the Runtime latches nothing and does not stop, and a new connection's `Status`
+completes; no clock is read. **Retired** with their rows (`ci/retired-gates.toml`, 39 entries:
+31 tests and 8 row keys, each with what covers its risk): contract key R4 and its three tests, the two install-control
+tests of the transition's status and timeout, and the architecture guard's governance test of
+row A3; host keys 7, 8, 9, 10, 49 and 73 with their tests, the two install-drain tests of the
+ladder wait (H-4), the approvals' governance test and LAB-6S1b's test of the host's own checks;
+apps key 17 and its three tests, the watchdog's test of a real held start's state root and
+LAB-6S2-B2's test of the transition's receipts; renamed, the old names retired: actingd's
+`--install-held` tests, now `gate_install_held_is_refused_as_a_usage_error` and
+`gate_ledger_maintenance_refusals_carry_registered_error_codes`. **Adapted** for the wire as it now
+is: the scripted Runtimes of `actinglab-mcp`'s `serve_calls` (one row per kind, the write as
+today's server, the jobs, run show and run stop, the capture's client action, the two goals rows)
+and of `actingctl`'s `lab6s2b2` and `mcp_ladder_drill_parity`; `evidence_confirm_read` (no card
+record in the ledger); `mcp_instance_alias` (renamed
+`gate_mcp_pause_and_resume_take_an_upper_case_alias`, no client action of a write); `cli_grammar`
+and `flag_refusals` (`install-transition` is a usage error); the host's approval supports (the transcription instead of the request); the contract's
+and the client's tests beside the kinds; `gate_idle1p` (another stand-in code for a release's
+failure). Unmapped tests of the drain and the held start left with them.
+
+**LAB-6S4a rollback** (to v0.12.62). Two-way: no persisted shape changes, and nothing this build
+writes is new to v0.12.62.
+
 ### 1.288 Slice SS-2f (0.12.46): the business tier across instances goes to the instance least recently dispatched first (Workflow #428; Alice's answer K2 to question 137 of 2026-11-02 19:4x, recorded on board #428 and in the coordinator's pending list, 「137：K2」, with no reason given; design `rd-1031/design-acm-price-addendum2.1.md` §5.4 and its slice row SS-2f, read on main `eb1e946d`; placed before 116 is lifted by the research channel's `rd-1031/design-c424-redline-1109.md` §4.9, Q13; coordinator work order `rd-1109/brief-ss2f.md`)
 
 [scheduling/README.md](scheduling/README.md) ("Net benefit within a tier", "Turns across

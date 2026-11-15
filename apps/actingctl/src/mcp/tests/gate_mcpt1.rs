@@ -73,17 +73,10 @@ fn text_envelope(answer: &Value) -> Value {
 fn blocked_job(jobs: &Jobs, handle: &str, outcome: Value) -> (Arc<Job>, Sender<()>) {
     let (release, held) = mpsc::channel::<()>();
     let job = jobs
-        .start(
-            handle.to_owned(),
-            KIND,
-            None,
-            PHASE,
-            Vec::new(),
-            move || {
-                let _ = held.recv();
-                Ok(outcome)
-            },
-        )
+        .start(handle.to_owned(), KIND, PHASE, move || {
+            let _ = held.recv();
+            Ok(outcome)
+        })
         .unwrap_or_else(|error| panic!("job {handle} did not start: {}", error.to_value()));
     (job, release)
 }
@@ -161,17 +154,10 @@ fn gate_eight_jobs_run_a_ninth_is_refused_unrun_and_a_start_succeeds_once_one_en
         .collect::<Vec<_>>();
 
     let (ran, ran_signal) = mpsc::channel::<()>();
-    let ninth = jobs.start(
-        "gate_job_ninth".to_owned(),
-        KIND,
-        None,
-        PHASE,
-        Vec::new(),
-        move || {
-            let _ = ran.send(());
-            Ok(Value::Null)
-        },
-    );
+    let ninth = jobs.start("gate_job_ninth".to_owned(), KIND, PHASE, move || {
+        let _ = ran.send(());
+        Ok(Value::Null)
+    });
     assert!(ninth.is_err(), "a ninth job started while eight ran");
     assert_eq!(
         ran_signal.try_recv(),
