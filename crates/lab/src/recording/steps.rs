@@ -24,6 +24,10 @@ use super::model::{
     RecordedFrame, RecordedMark, RecordingDefaults, RecordingStep, SelfTestStatus, StepApplication,
     StepClick, StepOptional, StepTransition, ValueTestRight, value_test_side_id,
 };
+use super::select::{
+    SelectChecked, SelectFrame, SelectProbe, check_select_rules, check_step_select, declare_select,
+    probe_marks,
+};
 use super::store::{
     LabFile, OldRecordView, blocked, create_recording, invalid, lab_dir, load_lab, now_unix_ms,
     read_old_record, read_verified, save_recording, task_id_valid_for_lab, with_details,
@@ -567,6 +571,7 @@ fn new_step(index: u32, frames: Vec<RecordedFrame>) -> RecordingStep {
         optional: None,
         forbidden: Vec::new(),
         anchor: None,
+        select: None,
         transition: None,
         closed: false,
         closed_by: None,
@@ -1562,16 +1567,22 @@ pub(crate) fn apply_marks(
     let mut live = live_existing;
     live.extend(samples.iter().cloned());
 
-    // effect: a click or an application operation
+    // effect: a click or an application operation; #463 R1: or a select, which declares the click
+    // it presses (its click guard then applies to it)
+    let mut select_fresh = false;
     if request.application.is_some() {
         apply_application(session, request, target, Some(&batch))?;
     } else {
+        select_fresh = declare_select(step_mut(&mut session.recording, target)?, request)?;
         apply_click(session, request, target, &batch)?;
     }
     apply_optional(&mut session.recording, request, target)?;
+    // #463 R1: a select step keeps its rules whatever this command changed.
+    check_select_rules(effective_step(&session.recording, target)?)?;
 
     // self-test
-    let total = batch.own.len() + batch.reused.len() + forbidden.len();
+    let has_select = effective_step(&session.recording, target)?.select.is_some();
+    let total = batch.own.len() + batch.reused.len() + forbidden.len() + usize::from(has_select);
     let result = evaluate_batch(session, &batch, &live, ocr)?;
     // Workflow #396 REC-4: a click that follows a template holds on every live frame; #463 L2: so
     // does one that follows a located-text mark, which gives the click its box.
@@ -1585,6 +1596,33 @@ pub(crate) fn apply_marks(
     rejections.extend(followed.rejection);
     rejections.extend(anchor_problem);
     rejections.extend(forbidden_rejections);
+    // #463 R1: a select step's self-test, once every mark of its page holds: the kernel's dry run
+    // of the step as `record stop` generates it, on every live frame.
+    let mut select_update = None;
+    if rejections.is_empty()
+        && let Some(checked) = select_frames(
+            session,
+            SelectInputs {
+                target,
+                batch: &batch,
+                own: &result.own,
+                reused: &result.reused,
+                forbidden: &forbidden,
+                anchor: anchor.as_ref(),
+            },
+            &live,
+            select_fresh,
+            ocr,
+        )?
+    {
+        let SelectChecked {
+            select,
+            click_rect,
+            rejections: refused,
+        } = checked;
+        rejections.extend(refused);
+        select_update = Some((select, click_rect));
+    }
     if !rejections.is_empty() {
         return Err(rejected(&rejections, total));
     }
@@ -1610,6 +1648,14 @@ pub(crate) fn apply_marks(
             follow.names_changed_after_press = located.names_changed_after_press;
         }
     }
+    // #463 R1: the select with its self-test, and its click the slot the pressed name selects on
+    // the primary frame (kept as it was without an OCR model).
+    if let Some((select, click_rect)) = select_update {
+        step.select = Some(select);
+        if let (Some(rect), Some(click)) = (click_rect, step.click.as_mut()) {
+            click.rect = rect;
+        }
+    }
     removed.extend(removed_forbidden);
     Ok(MarkApplied {
         step: target,
@@ -1622,6 +1668,80 @@ pub(crate) fn apply_marks(
         removed,
         forbidden: forbidden_views,
     })
+}
+
+/// #463 R1: the step a select's self-test probes, as this command leaves it: its target, the
+/// batch with its new crops, its own and reused marks after their self-tests, the marks its page
+/// forbids and its anchor.
+struct SelectInputs<'a> {
+    target: u32,
+    batch: &'a MarkBatch,
+    own: &'a [RecordedMark],
+    reused: &'a [RecordedMark],
+    forbidden: &'a [String],
+    anchor: Option<&'a String>,
+}
+
+/// #463 R1: the self-test of the select of the step `inputs.target`, when it has one, on its live
+/// frames `live` ([`check_step_select`]): the probe package holds the step with the marks this
+/// command leaves it, every mark its page names and their template crops.
+fn select_frames(
+    session: &Session,
+    inputs: SelectInputs<'_>,
+    live: &[RecordedFrame],
+    fresh: bool,
+    ocr: &LabOcr,
+) -> LabResult<Option<SelectChecked>> {
+    let step = effective_step(&session.recording, inputs.target)?;
+    if step.select.is_none() {
+        return Ok(None);
+    }
+    let mut probe_step = step.clone();
+    probe_step.marks = inputs.own.to_vec();
+    probe_step.reused = inputs.batch.reused.clone();
+    probe_step.forbidden = inputs.forbidden.to_vec();
+    probe_step.anchor = inputs.anchor.cloned();
+    let marks = probe_marks(inputs.own, inputs.reused, inputs.forbidden, |id| {
+        find_step_mark(&session.recording, id)
+    })?;
+    let mut crops = BTreeMap::new();
+    for mark in marks
+        .iter()
+        .filter(|mark| mark.family == MarkFamily::Template)
+    {
+        let bytes = match inputs.batch.new_crops.get(&mark.id) {
+            Some(bytes) => bytes.clone(),
+            None => stored_crop(mark)?.ok_or_else(|| {
+                invalid(
+                    "validation_failed",
+                    format!("template '{}' has no crop", mark.id),
+                )
+            })?,
+        };
+        crops.insert(mark.id.clone(), bytes);
+    }
+    let frames = live
+        .iter()
+        .map(|entry| {
+            session
+                .cache
+                .get(&entry.sha256)
+                .map(|loaded| SelectFrame { entry, loaded })
+                .ok_or_else(|| invalid("validation_failed", "frame was not loaded"))
+        })
+        .collect::<LabResult<Vec<_>>>()?;
+    check_step_select(
+        &session.recording,
+        session.stopped,
+        SelectProbe {
+            step: probe_step,
+            marks,
+            crops,
+        },
+        &frames,
+        fresh,
+        ocr,
+    )
 }
 
 /// Workflow #390 LAB-2: the click declaration names a drag or a long press, or (#411 Lab BD) a
@@ -2070,6 +2190,8 @@ fn apply_click(
             .retry
             .clone()
             .or_else(|| step.click.as_ref().and_then(|click| click.retry.clone()));
+        // #463 R1: a click declared in place of a select's (with --replace-click) ends the select.
+        step.select = None;
         step.click = Some(StepClick {
             rect,
             source: source.to_string(),
@@ -2503,6 +2625,8 @@ fn apply_application(
         .unwrap_or_default();
     step.click = None;
     step.click_guard = None;
+    // #463 R1: an application operation in place of a select's click ends the select.
+    step.select = None;
     step.application = Some(StepApplication {
         action: action.to_string(),
         cli_verb: spec.action.clone(),

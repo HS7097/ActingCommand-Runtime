@@ -175,6 +175,8 @@ outcome_keys! {
     // Workflow #396 REC-4.
     mark_id: id,
     follow_problem: vocab(follow_problem),
+    // #463 R1.
+    select_problem: vocab(select_problem),
     unknown_reason: vocab(unknown_reason),
     rule_id: token,
     unknown_clause: vocab(unknown_clause),

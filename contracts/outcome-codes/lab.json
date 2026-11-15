@@ -137,6 +137,22 @@
       "description": "Workflow #449 REC-ARCH: the recording record archive --record-id or record reopen names is not an archived recording of the instance; nothing was written (exit 3; actinglab details record_id and state: missing, active, stopped, unarchived, or the session header's status).",
       "common_causes": "The id names no recording of the state directory, the instance's active recording (reopen), a stopped recording, or a recording left behind by record start --force that was never archived.",
       "handling": "Run record status for the instance's recording; archive the active one with record archive, and reopen only one an archive ended."
+    },
+    "record_select_invalid": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "lab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "select_problem": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.61",
+      "description": "#463 R1: the select of a Lab recording step (a request's select, the choice in a list of fixed slots by the name read in each slot) cannot be declared, or record stop cannot generate it; select_problem says why. record mark is refused (exit 3) and nothing is written; record stop refuses the same way and writes nothing. with_follow, with_gesture, with_click, with_retry, on_optional_step and with_application name what the step or the request declares beside the select; on_final_step a select on the last step of a stopped recording; slot_outside_frame a slot outside the frame; name_id_invalid, name_duplicate, default_not_in_names, pressed_not_in_names, wanted_name_taken, on_empty_key_invalid and on_empty_key_taken a name or key; guard_missing a page without a guard; kernel_refused the kernel's admission of the select step as record stop would generate it (actinglab details step, and loader_code and detail for kernel_refused).",
+      "common_causes": "The request also declares a click, a click follow, a gesture, a retry, an optional step or an application operation; the step's page has only OCR marks, so it gives no guard; a name or the wanted value breaks the parameter grammar, or the default or the pressed name is not one of the names; another select step of the recording uses the same wanted name or on_empty key; the select is marked on the last step of a stopped recording.",
+      "handling": "Send the select alone as the step's effect, without click, retry, optional or application; give the step's page a template, color, color digest or check mark that recognizes it; use names, a wanted name and an on_empty key of their grammars, distinct across the recording, with the default and the pressed name among the names; mark the select on a step before the last one."
     }
   },
   "locations": {

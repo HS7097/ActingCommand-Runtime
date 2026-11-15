@@ -194,6 +194,11 @@ pub struct RecordingStep {
     /// Workflow #390 LAB-2: the own template mark that anchors this step's page.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub anchor: Option<String>,
+    /// #463 R1: the step chooses in a list of fixed slots; its click (`source: "select"`) is the
+    /// slot the decision selects for the pressed name on the primary frame. Absent on every other
+    /// step.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub select: Option<StepSelect>,
     pub transition: Option<StepTransition>,
     pub closed: bool,
     pub closed_by: Option<String>,
@@ -902,6 +907,148 @@ pub struct MarkRequest {
     /// Workflow #390 LAB-2: the step's page has no anchor any more.
     #[serde(default)]
     pub clear_anchor: bool,
+    /// #463 R1 (request form only): the step chooses in a list of fixed slots by the name read in
+    /// each slot; its click is the slot the decision selects for `pressed` on the primary frame.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub select: Option<SelectSpec>,
+}
+
+/// #463 R1 (`contracts/lab-recording.md`, "Selecting in a list"): a select over fixed slots, the
+/// step's effect in place of a click. `record stop` generates its layout (`fixed_slots`, the one
+/// identity feature `name` over `names`), an OCR target per slot, the select operation with its
+/// `on_empty` end and the policy document whose one gate `wanted.<name>` keeps `default`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SelectSpec {
+    /// 1 to [`LAB_RECORDING_MAX_SELECT_SLOTS`] slots, slot `k` the candidate with instance index
+    /// `k`.
+    pub slots: Vec<SelectSlotSpec>,
+    /// The OCR members every slot's name is read with.
+    pub read: SelectReadSpec,
+    /// The identity domain: every name the list may show.
+    pub names: Vec<SelectNameSpec>,
+    /// How a read text is mapped to a name (`ocr_aliases`).
+    #[serde(rename = "match")]
+    pub matching: SelectMatchSpec,
+    /// The wanted value: its name (the parameter grammar) and its value, one of `names`.
+    pub wanted: SelectWantedSpec,
+    /// The name the agent presses now, as a demonstration; absent means `wanted.default`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pressed: Option<String>,
+    /// The key of the run's normal end when the wanted name is on no slot; absent means
+    /// `<task_id>_not_found`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_empty_key: Option<String>,
+    /// How the choice is confirmed on a fresh frame; absent is the kernel's default
+    /// (`candidate_set`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confirm: Option<SelectConfirmSpec>,
+}
+
+impl SelectSpec {
+    /// The name the demonstration presses: `pressed`, else the wanted value's default.
+    pub fn pressed_name(&self) -> &str {
+        self.pressed.as_deref().unwrap_or(&self.wanted.default)
+    }
+}
+
+/// #463 R1: the most slots one select declares, the projection's OCR budget of one frame.
+pub const LAB_RECORDING_MAX_SELECT_SLOTS: usize = 16;
+
+/// #463 R1: one slot: its rectangle, the box a tap is drawn in (absent: the rectangle) and the
+/// region its name is read in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SelectSlotSpec {
+    pub rect: RecordRect,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub click: Option<RecordRect>,
+    pub name: RecordRect,
+}
+
+impl SelectSlotSpec {
+    /// The box a tap on the slot is drawn in.
+    pub fn click_rect(&self) -> RecordRect {
+        self.click.unwrap_or(self.rect)
+    }
+}
+
+/// #463 R1: the OCR members of the slots' name reads.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SelectReadSpec {
+    pub languages: Vec<String>,
+    pub timeout_ms: u64,
+    pub minimum_confidence_milli: u16,
+    pub model_ref: String,
+    pub model_sha256: String,
+}
+
+/// #463 R1: one name of the identity domain: its id and the texts it is read as.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SelectNameSpec {
+    pub id: String,
+    pub aliases: Vec<String>,
+}
+
+/// #463 R1: the `ocr_aliases` mapping's distance and margin.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SelectMatchSpec {
+    pub max_distance: u16,
+    pub minimum_margin: u16,
+}
+
+/// #463 R1: the wanted value: its name and its default, a constant of the package until a later
+/// slice reads it as a variable.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SelectWantedSpec {
+    pub name: String,
+    pub default: String,
+}
+
+/// #463 R1: how a single-frame select over fixed slots confirms its choice (`track` needs a
+/// `repeated_anchor` layout and is not offered).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SelectConfirmSpec {
+    CandidateSet,
+    Decision,
+}
+
+/// #463 R1: a step's select as `recording.json` keeps it: the declaration as given, when it was
+/// marked, and its last self-test.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StepSelect {
+    pub declaration: SelectSpec,
+    pub marked_at_unix_ms: u64,
+    pub self_test: SelectSelfTest,
+}
+
+/// #463 R1: the mark-time self-test of a select, by the kernel's dry run of the step as `record
+/// stop` generates it: `passed` with each live frame's decisions, or `not_evaluated`
+/// (`lab_ocr_unavailable`) without an OCR model, never passed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SelectSelfTest {
+    pub status: SelfTestStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    pub frames: Vec<SelectFrameDecision>,
+}
+
+/// #463 R1: the decisions of one live frame: the slot the pressed name selects (`None`: it is on
+/// no slot of this frame, a sample only) and the slot the wanted value's default selects (`None`:
+/// the decision is empty, the run would end with the `on_empty` key).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SelectFrameDecision {
+    pub frame_id: String,
+    pub pressed_slot: Option<u32>,
+    pub default_slot: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1173,6 +1320,9 @@ pub struct MarkOutcome {
     /// package again.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub after_stop: bool,
+    /// #463 R1: the step's select with its self-test, on a step that has one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub select: Option<StepSelect>,
 }
 
 /// Workflow #390 LAB-2: a mark the step's page forbids, tested on every live frame of the step:
@@ -1256,6 +1406,9 @@ pub struct StepView {
     pub forbidden: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub anchor: Option<String>,
+    /// #463 R1: the step's select as the recording holds it, on a step that has one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub select: Option<StepSelect>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]

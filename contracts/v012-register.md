@@ -25487,6 +25487,116 @@ module's `gate_455_gr1` goal bytes), `goals_reader_is_strict`'s "another version
 read `GOALS_PACKAGE_REVISION`, so their installer declares [3, 14] and their goals bundle [14, 14]
 (the gate row gains the incident `#463 V1`). No golden changes; no test leaves the gate map.
 
+### 1.381 Slice #463 R1 (0.12.61): a recording marks a select over fixed slots, and `record stop` generates it (Workflow #463; the owner's words of 11-14 on board #463, as the work order quotes them, and the owner's rule that what stands in a list is chosen by what is read, confirmed on a fresh frame and never guessed, are the requirement; the design note `rd-1114/463-l3l5-design.md`, sections C.1, C.2, C.4, D, E "R1 (L3b)" and F, with "The coordinator's rulings on G", read on main `60c28e64`; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-r1-record-select.md`, read on main `60c28e64`)
+
+1.381 is the number the coordinator assigned this section (1.375 to 1.377 and 1.379 are open pull
+requests', 1.380 and 1.382 slices dispatched with this one). The slice ships in 0.12.61.
+
+**What it is.** The recording side of the design's L3 for one screen: a `record mark` request's
+`select` marks a step as "choose in this list by name" ([lab-recording.md](lab-recording.md),
+"Selecting in a list"), and `record stop` generates the select step K1 runs (§1.374;
+[linear-steps.md](linear-steps.md), "Select steps"). A list that scrolls (R3), an ending added after
+the stop (R2) and the wanted value as a variable (V2, V4) are other slices; nothing of them is
+built here.
+
+**Where, by reading.**
+- The mark request is parsed by serde into `MarkRequest` (`crates/lab/src/recording/model.rs`; one
+  parse for `record mark --request`/`--request-json`, the MCP tools, which pass the request object
+  unchanged and describe only its `schema_version`, and L1's one call, `parse_mark_request`), checked
+  in `validate_mark_request` (`recording_api.rs`), applied in `apply_marks` (`recording/steps.rs`)
+  and stored by `save`; `record stop` plans, renders and checks in `generate.rs` and
+  `crosscheck.rs`. L1 changed none of these (its one call calls `mark_session`, the same code); L2
+  added the located-text mark and its follow. A select step's click is an ordinary click of the step
+  (`source: "select"`), so `do --capture --record` and L1's one call press it with no change to their
+  code.
+- The kernel's dry run (`dry_run_select`) needs an admitted `PreparedContainedTask` holding the step,
+  the operation id, the frame, a fact snapshot and instant, the run parameters and an optional policy
+  document; it evaluates the frame against the package's whole page set (exactly the step's page must
+  pass) before it projects and decides. The Lab calls it, copying nothing: at mark time on a probe
+  package rendered by `record stop`'s own `render` (the step alone, its marks, select operation,
+  layout, slot targets and policy, and a destination page that can never pass: two color marks, black
+  and white, on one pixel, within a distance of 1), admitted by `PreparedContainedTask::
+  load_content_entries` with the Lab's provider; the policy with the pressed name is the override
+  document, decoded into the kernel's type by inference. Its budgets are the largest a package
+  declares, since a budget is `record stop`'s check only (as L2 fix 1 holds for OCR budgets).
+- The policy document (`crates/selection-policy/src/schema.rs`): `fields[{name, value_type:
+  {type: "enum_string", allowed}}]`, the gate `{gate_id, predicate: {kind: "string_in", value:
+  {source: "field", field}, allowed}, on_unknown: {kind: "drop_candidate"}}`, `tie_break[{kind:
+  "candidate_id", direction: "lowest_first"}]`, `applies_to.outcome_keys` with all five keys
+  (`selected`, `empty`, `insufficient`, `ambiguous`, `unknown`; identifiers of at most 128 bytes); an
+  `enum_string` holds at most 1024 members, the identity domain's limit, and the identity field's
+  enum must equal the layout's domain. An OCR target's `expected` holds at most 64 distinct values
+  (`MAX_VISION_EXPECTED_VALUES`), so the design's "every alias" cannot hold for a large domain: the
+  slot targets list the names' distinct aliases in order, the first 64. Nothing reads a slot
+  target's own verdict: the layout's identity feature maps the read text over the whole domain
+  (`map_ocr`).
+- A generated package states no `package` revision: `record stop` writes a content directory
+  (control, resources, task, policies, crops) and no `interfaces.json`; the revision of a bundle is the
+  packaging's (`package bundle`, #1719). A package with a select step needs `package` 13
+  (component-interfaces.md row 13); the contract says so, and `record stop`'s output does not name it
+  (a later slice may, once the bundle computes it).
+- The guard: a select step needs one; `guard_target` finds none on a page with only OCR marks, and
+  `record_select_invalid` `guard_missing` refuses it at mark time (in the probe's render) and at stop.
+- K1's `select_on_empty_target` (the `on_empty` page is not the target page) means, for a recording,
+  that a select stands on no last step: on an active recording the last step is the open step and
+  gets its next screen; on a stopped recording the last step is fixed, and a select there is refused
+  at mark time with its own word, `on_final_step`; at stop a last step with a select is the existing
+  `record_final_step_has_click`.
+
+**The request member** `select` (request form only; [lab-recording.md](lab-recording.md)):
+`slots[]` (1 to 16; `rect`, optional `click`, `name`), `read`, `names[]`, `match`, `wanted {name,
+default}`, optional `pressed`, `on_empty_key` (default `<task_id>_not_found`) and `confirm`
+(`candidate_set` or `decision`). Additive: an older build refuses it as an unknown member. The
+`select/` prefix of mark ids is reserved (`record_mark_id_reserved`), the ids of the generated slot
+targets and of the probe's marks.
+
+**Codes and words** (`contracts/outcome-codes/lab.json`, catalog key and vocabulary
+`select_problem`): `record_select_invalid` (error, exit 3, value `select_problem`), words
+`with_follow`, `with_gesture`, `with_click`, `with_retry`, `on_optional_step`, `with_application`,
+`on_final_step`, `slot_outside_frame`, `name_id_invalid`, `name_duplicate`, `default_not_in_names`,
+`pressed_not_in_names`, `wanted_name_taken`, `on_empty_key_invalid`, `on_empty_key_taken`,
+`guard_missing`, `kernel_refused` (the design's nine and, one situation each, eight more). The
+self-test's reasons of `record_mark_rejected` (unregistered, as every reason of that code):
+`select_name_unread`, `select_pressed_absent`, `select_press_mismatch`, and the existing
+`self_test_error` for a dry run that fails; at stop the same reasons inside
+`record_step_self_mismatch`. Without an OCR model a select is `not_evaluated` (`lab_ocr_unavailable`)
+and listed in `marks_not_evaluated` as `select/<page>`; one whose step has no recorded press is
+refused `lab_ocr_unavailable`, as L2's located-text click.
+
+**The wanted value is a constant** (the coordinator's ruling): the one gate `wanted.<name>` keeps
+`allowed: [<default>]` and `control.json` has no `variables` member; `select.wanted {name, default}`
+stays in the recording, so that the slice that reads a variable rewrites that gate and adds the
+declaration. It is changed today by `record mark` with the select declared again (also on a stopped
+recording, then `record stop`, `regenerated`) or by the one line of the policy document.
+
+**`record stop`** generates `candidate_layouts[]`, the slot targets, the operation `step_ii_select`
+(guard, `expect_after`, `post_delay_ms`, no click, no retry), `policies/step_ii_select.json`, the
+mapping of the `on_empty` key after `<task_id>_done`, the step's provenance (declaration, pressed
+name, key, mark-time decisions) and `lab.selects`; the default task timeout adds `S` per select step.
+Self-checks: admission by the kernel; the first decision of a select at step 1 by the dry run on its
+primary frame (a selected slot then the simulated tap inside it, `simulate_contained_task_at`; an
+empty decision `would_end_empty` with the key); item 8, every live frame decided by the dry run on
+the admitted package (the step's page the one page that passes; every name known; on the primary
+frame the pressed name selects the slot the press hit). A recording without a select generates the
+same bytes: every addition is absent without one.
+
+Tests: Lab `gate_463_r1.rs` (exec gate row "#463 R1", twelve tests): accepted, generated and admitted
+with its tap inside the default's slot; each `select_problem` and the reserved prefix; the second
+select's own name and key; `on_final_step`; a sample with the pressed name in the other slot; a press
+outside the selected slot; an unread slot and an absent pressed name; without an OCR model; L1's one
+call; a given `on_empty` key and an empty first decision; a default changed after stop regenerating
+another package; a recording without a select. No existing test changes, no golden changes, no test
+leaves the gate map.
+
+**At deploy.** Nothing installed changes: no recording holds a select before this build, and a
+recording without one is read, written and generated as before. A package generated with a select
+step needs a Runtime of 0.12.61 or later (`package` 13; an earlier Runtime refuses it at admission).
+
+**Rollback** (below 0.12.61). An earlier `actinglab` does not decode a recording that holds a select
+(`lab_recording_unreadable`, the file left as it is) and refuses a request with one
+(`validation_failed`); a generated package with a select step is refused by an earlier Runtime at
+admission.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
