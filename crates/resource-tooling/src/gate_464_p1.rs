@@ -2919,3 +2919,153 @@ fn s35_a_maintenance_entry_by_its_uses_answers_its_pack_not_scheduled_with_its_r
         Some(ReadinessBasis::MaintenanceTier)
     );
 }
+
+// Workflow #463 S3-4, carried from the independent review of its pull request (register §1.411;
+// contracts/standard-pack-authoring.md, "A held decision by two flags"):
+// - a package already held, adopted again with `--replace --held-reason` and no
+//   `--held-reference`: it stays held, its entry's reason the new one and its reference kept, no
+//   rule appears, and nothing else of the repository changes;
+// - a reason longer than 1024 bytes, a reason with a control character and an empty reference are
+//   each refused by the flags as by a document of the same content: `decision_invalid` at the
+//   same pointer, nothing written.
+
+/// The reason a held package is adopted again with.
+const NEW_HELD_REASON: &str = "Waits for its run on a real device.";
+
+#[test]
+fn s34_a_held_package_adopted_again_by_the_held_reason_takes_the_reason_and_keeps_its_reference() {
+    let fixture = Fixture::new();
+    let source = package_dir(
+        &fixture,
+        "package",
+        &package_files(
+            ADOPTED,
+            SERVER,
+            "Not run through",
+            &provenance("partially_evaluated"),
+        ),
+    );
+    standard_pack_adopt(
+        request_with(
+            &fixture,
+            source.clone(),
+            held_by_flags(HELD_REASON, Some(HELD_REFERENCE)),
+            false,
+            FIRST,
+        ),
+        &Committed,
+    )
+    .unwrap_or_else(|error| panic!("the first held adoption: {error}"));
+    let first = json!({"package_id": ADOPTED, "reason": HELD_REASON, "reference": HELD_REFERENCE});
+    assert_eq!(fixture.schedule()["held"], json!([first]));
+    let before = tree(&fixture.repo());
+    let mut expected = fixture.schedule();
+
+    let answer = standard_pack_adopt(
+        request_with(
+            &fixture,
+            source,
+            held_by_flags(NEW_HELD_REASON, None),
+            true,
+            SECOND,
+        ),
+        &Committed,
+    )
+    .unwrap_or_else(|error| panic!("the held package adopted again: {error}"));
+
+    // Still held: the new reason, the reference kept; no rule; nothing else changes.
+    let entry =
+        json!({"package_id": ADOPTED, "reason": NEW_HELD_REASON, "reference": HELD_REFERENCE});
+    expected["held"] = json!([entry]);
+    assert_eq!(fixture.schedule(), expected, "only the held entry changes");
+    assert_eq!(
+        fixture.schedule()["rules"],
+        json!([existing_rule()]),
+        "no rule"
+    );
+    let mut after = tree(&fixture.repo());
+    let mut unchanged = before;
+    after.remove("schedule.json");
+    unchanged.remove("schedule.json");
+    assert_eq!(after, unchanged, "nothing else of the repository changes");
+    assert_eq!(answer.class, AdoptClass::Held);
+    assert!(answer.replaced);
+    assert_eq!(answer.rule, None);
+    assert_eq!(answer.held.as_ref(), Some(&entry));
+    assert_eq!(
+        answer.replaced_entries,
+        [RootEntryChange {
+            file: "schedule.json".to_owned(),
+            json_pointer: "/held/0".to_owned(),
+            before: first,
+            after: Some(entry.clone()),
+        }]
+    );
+    assert!(
+        answer.removed_entries.is_empty(),
+        "{:?}",
+        answer.removed_entries
+    );
+    assert_eq!(answer.written, [ADOPTED_DIRECTORY, "schedule.json"]);
+}
+
+#[test]
+fn s34_held_texts_outside_their_limits_are_refused_alike_by_the_flags_and_by_a_document() {
+    let fixture = Fixture::new();
+    let source = package_dir(
+        &fixture,
+        "package",
+        &package_files(
+            ADOPTED,
+            SERVER,
+            "Not run through",
+            &provenance("partially_evaluated"),
+        ),
+    );
+    let before = tree(&fixture.repo());
+    let long = "r".repeat(1_025);
+    for (index, (reason, reference, pointer)) in [
+        (long.as_str(), None, "/held/reason"),
+        (
+            "A reason\u{7}with a control character",
+            None,
+            "/held/reason",
+        ),
+        (HELD_REASON, Some(""), "/held/reference"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        assert_refused(
+            standard_pack_adopt(
+                request_with(
+                    &fixture,
+                    source.clone(),
+                    held_by_flags(reason, reference),
+                    false,
+                    FIRST,
+                ),
+                &Committed,
+            ),
+            AdoptProblem::DecisionInvalid,
+            &json!({"json_pointer": pointer}),
+            &fixture,
+            &before,
+        );
+        let document = decide(
+            &fixture,
+            &format!("outside-{index}"),
+            &held_document(reason, reference),
+        );
+        assert_refused(
+            standard_pack_adopt(
+                request(&fixture, source.clone(), Some(document), false, FIRST),
+                &Committed,
+            ),
+            AdoptProblem::DecisionInvalid,
+            &json!({"json_pointer": pointer}),
+            &fixture,
+            &before,
+        );
+    }
+}

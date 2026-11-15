@@ -28031,6 +28031,21 @@ no test leaves the gate map.
 **What is not changed.** What adopt checks, writes and refuses; the readiness function
 (`standard_pack_ready.rs`); `standard-pack build`; the placement.
 
+**Carried from the review of S3-4 (§1.411), on this branch, nothing of it changing behaviour.**
+`apps/actinglab-mcp/MANUAL.md` ("Adoption") names `held_reason` and `held_reference`. Adopt's
+messages that named only `--decide` (a pack directory a maintenance role of another root file
+owns, a directory no root file names, two roles, a first adoption without a decision, and the
+advice to run an interrupted adoption again) name `--held-reason` beside it, and so do the matching
+sentences of [standard-pack-authoring.md](standard-pack-authoring.md); its part "A held decision
+by two flags" says that the command line cannot give a text that is the word `true` or begins with
+`--` (the flag parser takes no such word as a value), which goes through a decision document.
+Three tests: `gate_464_p1.rs`
+`s34_a_held_package_adopted_again_by_the_held_reason_takes_the_reason_and_keeps_its_reference` and
+`s34_held_texts_outside_their_limits_are_refused_alike_by_the_flags_and_by_a_document` (gate map
+`exec.toml`), and `apps/actinglab/src/tests/gate_463_s34.rs`
+`s34_the_held_flags_on_the_command_line_reach_the_adoption_with_their_two_texts` (gate map
+`apps.toml`), each under "#463 S3-4".
+
 **At deploy.** Nothing to do.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
