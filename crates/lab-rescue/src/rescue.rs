@@ -1830,10 +1830,14 @@ fn add_next(members: &mut Map<String, Value>, name: &str, form: Value) {
     }
 }
 
-/// `place <bundle.zip> [--sums <file>] [--facts <file>] [--plan]` (`crate::install::place`): the
-/// plan, the hold of the instances bound to the bundle's game, the placement, the checks, the
-/// release, and the schedule read after it; with no Runtime answering (Workflow #453 S6), the
-/// plan and [`place_cold`].
+/// `place <bundle.zip> [--sums <file>] [--facts <file>] [--plan] [--authorization <reference>]
+/// [--enables <package_id>]…` (`crate::install::place`): the plan, the hold of the instances
+/// bound to the bundle's game, the placement, the checks, the release, and the schedule read
+/// after it; with no Runtime answering (Workflow #453 S6), the plan and [`place_cold`]. Workflow
+/// #463 S3-2: a plan that changes something is placed only under the authorization it names
+/// (`place::authorize`), judged once, after the plan and before the choice of the path, so before
+/// the hold, any pause and any write, with a Runtime and without one; `--plan` and a plan that
+/// changes nothing read neither parameter.
 fn place(context: &Context<'_>, params: Params<'_>) -> Exit {
     const PLACE: InstallLocation = InstallLocation::PackPlace;
     let bundle = text(params, "bundle")
@@ -1842,6 +1846,8 @@ fn place(context: &Context<'_>, params: Params<'_>) -> Exit {
     let sums = text(params, "sums").map(PathBuf::from);
     let facts = text(params, "facts").map(PathBuf::from);
     let plan_only = switch(params, "plan");
+    let authorization = params.get("authorization");
+    let enables = params.get("enables");
     let run = || -> Result<Exit, Outcome> {
         let paths = context.paths(PLACE)?;
         let loaded = plan::load(&paths, PLACE)?;
@@ -1887,9 +1893,23 @@ fn place(context: &Context<'_>, params: Params<'_>) -> Exit {
                 .installation_changed(false);
             return Ok(composite_exit(context, steps, done, members));
         }
+        // Workflow #463 S3-2: the authorization and the packages it enables, refused here, before
+        // the path is chosen: nothing below has run yet on either path.
+        let authorized = match place::authorize(&placement, authorization, enables) {
+            Ok(authorized) => authorized,
+            Err(refused) => return Ok(refused),
+        };
         // Workflow #453 S6: with no Runtime answering, the placement without a hold.
         if seen.is_none() {
-            return place_cold(context, &paths, &loaded, &placement, steps, members);
+            return place_cold(
+                context,
+                &paths,
+                &loaded,
+                &placement,
+                &authorized,
+                steps,
+                members,
+            );
         }
         let _lock = WriterLock::take(&paths, loaded.settings.lock_wait_ms, PLACE)?;
         journal::refuse_unfinished(PLACE, &paths)?;
@@ -1933,6 +1953,7 @@ fn place(context: &Context<'_>, params: Params<'_>) -> Exit {
                 catalog_before,
                 initiator: Some(context.initiator),
                 bound: &bound,
+                authorized: &authorized,
             },
         )?;
         let operation_id = operation.id().to_owned();
@@ -1985,12 +2006,14 @@ fn place(context: &Context<'_>, params: Params<'_>) -> Exit {
 /// configured instances only, so with none the configuration binds to the game
 /// (`place::configured_bound`, the journal's `bound`) the hint is
 /// `composition_at_start_once_bound`: the composition is first judged at the first start after an
-/// instance is bound to the game.
+/// instance is bound to the game. Workflow #463 S3-2: `authorized`, judged by [`place`] before
+/// this path was chosen, is journalled as with a Runtime.
 fn place_cold(
     context: &Context<'_>,
     paths: &Paths,
     loaded: &Loaded,
     placement: &place::Placement,
+    authorized: &place::Authorized,
     mut steps: Vec<Value>,
     mut members: Map<String, Value>,
 ) -> Result<Exit, Outcome> {
@@ -2003,6 +2026,7 @@ fn place_cold(
         paths,
         loaded,
         placement,
+        authorized,
         Some(context.initiator),
     )?;
     let operation_id = operation.id().to_owned();

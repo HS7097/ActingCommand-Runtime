@@ -758,7 +758,7 @@ static RECORD_ARCHIVE: LabCommand = LabCommand {
             "copy_to",
             "--copy-to",
             Kind::Text,
-            "--copy-to: an absolute path of a directory that does not exist or is empty; the frames, the step table and the manifest are copied there and checked.",
+            "--copy-to: an absolute path of a directory that does not exist or is empty; the step table, the manifest and the frames the manifest's material names are copied there and checked (every frame only with the Lab's record archive --all-frames or the Lab's MCP server's all_frames).",
         ),
         STATE_DIR,
     ],

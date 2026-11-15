@@ -73,8 +73,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// The member a result that is not a JSON object goes under (actingctl's `RESULT_MEMBER`).
 const RESULT_MEMBER: &str = "result";
-/// `pause`'s drain when none is given (the operation table's default).
-const DEFAULT_DRAIN: Duration = Duration::from_secs(300);
+/// `pause`'s drain when none is given (the operation table's default; #463 S1-7: a recording's
+/// hold waits the same, `scheduling::LAB_PAUSE_DRAIN_TIMEOUT_MS`).
+const DEFAULT_DRAIN: Duration = Duration::from_millis(scheduling::LAB_PAUSE_DRAIN_TIMEOUT_MS);
 /// Workflow #434 LAB-5B1: the rows whose steps other programs call with the parameters alone
 /// ([`stop_target`], [`pack_schedule_rows`], [`run_start_prepared`], [`material_read`]), which read
 /// them through that row's constant.

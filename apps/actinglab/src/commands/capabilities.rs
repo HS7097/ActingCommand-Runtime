@@ -61,6 +61,9 @@ pub(crate) fn command_capabilities() -> Vec<Value> {
         command_cap("standard-pack adopt", ["offline"], "available"),
         // Workflow #464 P3: the readiness of every pack of a game root; reads only.
         command_cap("standard-pack ready", ["offline", "read_only"], "available"),
+        // Workflow #463 S3-10: the plan of a trial on a real application; reads only, sends
+        // nothing in this release.
+        command_cap("standard-pack trial", ["offline", "read_only"], "available"),
         command_cap("package fmt", ["offline"], "available"),
         command_cap("package edit", ["offline"], "available"),
         // Workflow #463 V3: what one package's control declaration declares; reads only.
@@ -112,15 +115,31 @@ pub(crate) fn command_capabilities() -> Vec<Value> {
         command_cap("session recover", ["device"], "available"),
         command_cap("session recover --stale-capture", ["device"], "available"),
         command_cap("session record", ["offline"], "available"),
-        command_cap("session record start", ["offline"], "available"),
+        // #463 S1-7 (0.12.64; `contracts/lab-recording.md`, "A recording holds its instance"):
+        // `record start` pauses the instance's scheduling through the Runtime when one listens,
+        // and `record stop` and `record archive` resume the recording's own pause; with nothing
+        // listening they work offline (`runtime_optional`, as `device_optional` says of a device).
+        command_cap(
+            "session record start",
+            ["offline", "runtime_optional"],
+            "available",
+        ),
         command_cap("session record status", ["offline"], "available"),
-        command_cap("session record stop", ["offline"], "available"),
+        command_cap(
+            "session record stop",
+            ["offline", "runtime_optional"],
+            "available",
+        ),
         command_cap("session record mark", ["offline"], "available"),
         command_cap("session record step", ["offline", "device"], "available"),
         command_cap("session record candidates", ["offline"], "available"),
         command_cap("session record amend", ["offline"], "available"),
         // Workflow #449 REC-ARCH: a recording ended as material only, and reopened later.
-        command_cap("session record archive", ["offline"], "available"),
+        command_cap(
+            "session record archive",
+            ["offline", "runtime_optional"],
+            "available",
+        ),
         command_cap("session record reopen", ["offline"], "available"),
         // #463 S2-13: the stored frames around one step's press; it only reads.
         command_cap(
@@ -129,17 +148,21 @@ pub(crate) fn command_capabilities() -> Vec<Value> {
             "available",
         ),
         command_cap("record", ["offline"], "available"),
-        command_cap("record start", ["offline"], "available"),
+        command_cap("record start", ["offline", "runtime_optional"], "available"),
         command_cap("record status", ["offline"], "available"),
-        command_cap("record stop", ["offline"], "available"),
+        command_cap("record stop", ["offline", "runtime_optional"], "available"),
         command_cap("record mark", ["offline"], "available"),
         command_cap("record step", ["offline", "device"], "available"),
         command_cap("record candidates", ["offline"], "available"),
         command_cap("record amend", ["offline"], "available"),
         // Workflow #434 LAB-5G4c: the binding draft of a `record stop` answer; it changes nothing.
         command_cap("record draft", ["offline", "read_only"], "available"),
-        // Workflow #449 REC-ARCH.
-        command_cap("record archive", ["offline"], "available"),
+        // Workflow #449 REC-ARCH; #463 S1-7: the archive resumes the recording's own pause.
+        command_cap(
+            "record archive",
+            ["offline", "runtime_optional"],
+            "available",
+        ),
         command_cap("record reopen", ["offline"], "available"),
         // #463 S2-13.
         command_cap("record frames", ["offline", "read_only"], "available"),

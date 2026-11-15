@@ -20,11 +20,14 @@ without recording again ("Inserting an optional step after stop"); and #464 P4: 
 the output an earlier stop wrote, refuses a `--lab-dir` inside an installed root and answers the
 skeleton of the adoption ("Writing", "Output"). #463 S1-1: `tap`, `swipe` and `long-tap --record`
 record a press by the command that makes it, with the screen before it and the screen after it, no
-rectangle and no carrier package ("Recording while playing").
+rectangle and no carrier package ("Recording while playing"). #463 S1-7: a recording holds its
+instance: `record start` pauses the instance's scheduling with a reason of its own and the end of
+the recording resumes only that pause ("A recording holds its instance").
 
 The recording state lives in the Lab state directory. Nothing in this document writes to
 the Runtime ledger; the clicks and application operations themselves are executed by the
-Runtime and recorded there as any `do --capture` or `session app` is.
+Runtime and recorded there as any `do --capture` or `session app` is, and (#463 S1-7) a
+recording's hold is a scheduling pause the Runtime sets, lifts and records as every pause.
 
 ## Files
 
@@ -36,7 +39,7 @@ Runtime and recorded there as any `do --capture` or `session app` is.
 <state>/record-artifacts/<record_id>/lab/frames/<sha256>.png frames, content-addressed
 <state>/record-artifacts/<record_id>/lab/crops/<sha256>.png  template crops, content-addressed
 <state>/record-artifacts/<record_id>/lab/out/<package_id>.<zip|json>  the package record stop generated
-<state>/record-artifacts/<record_id>/lab/archive-manifest-<n>.json      actingcommand.lab-recording-archive.v1 (Workflow #449)
+<state>/record-artifacts/<record_id>/lab/archive-manifest-<n>.json      actingcommand.lab-recording-archive.v2 (Workflow #449; #463 S1-5: v1 on disk is read)
 ```
 
 `<instance>` and `<record_id>` use the file-stem rule of the `record` command: ASCII
@@ -128,7 +131,10 @@ command deletes nothing and names the files it already wrote.
   build wrote. #463 S1-2 (since 0.12.64): `after_capture`'s `interval_ms` and `still_ms` are absent
   on a record S1-1's build wrote, which loads as one whose screen after was not tested for
   stillness (`still` `null`); its `unfinished` is absent on every record but one whose after loop a
-  failed capture ended.
+  failed capture ended. #463 S1-5 (since 0.12.64): an application operation's completed receipt
+  keeps `executed_at_unix_ms`, when it was recorded (the Lab's clock, as a click execution's),
+  absent on every operation an earlier build recorded ("Archiving", "The manifest",
+  `at_unix_ms`).
 
 ## Commands
 
@@ -159,6 +165,13 @@ Output adds `lab_recording{status, reason?, path, record_id, defaults}`,
 `record_flag_state_dir` (the state root `--record` commands use: `ACTINGLAB_SESSION_STATE_DIR`
 or the default) and `record_flag_reachable` (whether this state root is that one; when it is
 not, frames can only be added with `record mark --frame`).
+
+#463 S1-7: `record start` holds the instance (its scheduling paused with the recording's own
+reason, or another party's pause it finds), keeps the hold in the session header (`hold`; fix
+round 2: written before the pause is sent, put back when the Runtime refuses the pause) and
+answers `hold{state, reason?, taken_over?, paused?, warnings?, runtime_error?, replaced_header?}`;
+it waits as the pause waits, up to 335 s; a pause the Runtime refuses starts nothing ("A recording
+holds its instance").
 
 ### record mark
 
@@ -434,6 +447,10 @@ Workflow #449 REC-ARCH: for an archived recording (its session header `archived`
 and `lab.status` are both `archived`: the instance has no active recording. The step table, which
 archiving never rewrites, still says `active`; `lab.status` gives the session's state.
 
+#463 S1-7: `hold{state, reason?}`, what the recording holds, read from the session header alone
+(no Runtime is asked): `own`, `foreign` with the other party's reason, `none`, or `kept` ("A
+recording holds its instance").
+
 ### record stop
 
 Without Lab steps `record stop` behaves as before and adds `lab: null`; an empty active Lab
@@ -441,7 +458,9 @@ recording is stopped with the session. With Lab steps it generates, checks and w
 package: see "Package generation". A build without the generator (#336 L3, L3b, L3c) refuses
 with `record_stop_generation_not_implemented` (exit 6) and leaves both states active; the #336
 L4 build refuses a recording with an optional step the same way (`details.reason:
-"optional_steps"`).
+"optional_steps"`). #463 S1-7: a stop that ended the recording (no dry run) then releases the
+recording's own hold and adds `hold` when the recording held one; a refused stop keeps it ("A
+recording holds its instance").
 
 ## Marks and the mark-time self-test
 
@@ -1354,8 +1373,9 @@ recording persistence. The global parser handles the flag at any position.
   declared click. The package still declares the gesture.
 - observe and do need a carrier package: any admissible package of the same game and
   resolution, including an earlier Lab package.
-- Pause the instance's scheduling for the recording (`actingctl pause --instance <alias>`,
-  then `resume`): a scheduled task between two commands would act on another screen.
+- #463 S1-7: `record start` pauses the instance's scheduling for the recording and its end
+  resumes that pause, so that no scheduled task acts on the instance between two commands ("A
+  recording holds its instance"); no separate `pause` and `resume` is needed.
 
 ## One call per step
 
@@ -1501,7 +1521,8 @@ takes the row's parameters (`mark_request`, `mark_request_json`, `next_frame_aft
 A whole recording in the fewest calls: `record start`, the first frame, then one call for each step
 with a press (its next frame the next screen), the final screen's marks, `record stop --dry-run`
 and `record stop`; for n steps with a press, n + 5 calls where three calls a step took 3n + 5.
-Pause the instance's scheduling first.
+`record start` holds the instance and `record stop` releases it (#463 S1-7, "A recording holds its
+instance").
 
 In PowerShell 7.3 or later (the shell of [INSTALL.md](../distribution/windows/INSTALL.md), where a
 program receives a single-quoted argument's double quotes as typed), with the install root
@@ -1564,8 +1585,10 @@ All with the global `--json --instance <i>`. Through the Lab's MCP server (`acti
 `still_max_ms` ([lab-operations.json](lab-operations.json), the rows `tap`, `swipe` and
 `long-tap`); today's server (`actingctl mcp-serve`) has no such tool. A whole business is `record
 start`, its presses each with `--record`, and `record archive` ("Archiving"), which needs no
-device: the last press's screen after it is the business's final screen. Pause the instance's
-scheduling first, as for every recording.
+device: the last press's screen after it is the business's final screen. `record start` holds the
+instance (its scheduling paused with the recording's own reason) and `record archive` releases it;
+each press says in `record.warnings` when the instance is not held (#463 S1-7, "A recording holds
+its instance").
 
 - **The screen before.** Every recorded press is sent on a frame captured immediately before it.
   The recorded point is a pixel of that frame (fix round 2 of #463 S1-1). The command takes one
@@ -1741,6 +1764,175 @@ $lab = 'C:\ActingCommand\tools\actinglab.exe'
 & $lab --json --instance emu-a record archive
 ```
 
+## A recording holds its instance
+
+#463 S1-7 (0.12.64; the owner approved the three-stage blueprint of package making on board #463,
+whose stage one asks nothing of the agent but to start recording, play and end recording; the rules
+here are the coordinator's, fix round 2 included). An agent's presses are separate commands with
+seconds or minutes of thinking between them, and each holds the instance's input lease for its
+press alone. Before this
+slice nothing kept the scheduler from dispatching a scheduled task to the instance between two
+presses: the task's screen became a press's screen after it and opened the next step, and nothing
+warned. A recording now holds its instance itself: nothing else is asked of the agent.
+
+**Taking the hold (`record start`).** After the start's own refusals (`record_session_active`, the
+options), `record start` connects to the Runtime the `--record` commands reach
+(`ACTINGCOMMAND_RUNTIME_STATE_ROOT`, else the default state root; the connection's handshake is
+`Health`, then `BindChannel`) and reads its status once. Nothing is written so far, so nothing
+needs undoing when this fails. Then (fix round 2: the session header knows the hold before the
+Runtime is asked to pause):
+
+- **The instance's scheduling is not paused:** the session header is written first, naming the
+  recording's own hold `{reason, own: true}`, and only then is the instance paused as the Lab's
+  `pause` row pauses it (`PauseScheduling` of the instance, `lab_ops::scheduling`), with that row's
+  drain (300000 ms) and the recording's own reason `lab-record-<ms>`, `<ms>` the recording's start
+  (its session header's `started_at_unix_ms`, which every `--record` answer names as
+  `record_started_at_unix_ms`), as the Lab's rescue module names its holds `lab-<word>-<ms>`. The
+  pause waits by its own rules ([scheduling-pause.md](scheduling-pause.md), "Instance pause: three
+  stages"): a scheduled run in flight is drained, or stopped at its next checkpoint once the drain
+  elapsed (`contained_task_paused`, its task evaluated again), and an active lease is waited for.
+  **So `record start` waits until the instance's running task has ended:** the client waits for the
+  pause's receipt up to the drain (300000 ms), the pause's checkpoint grace
+  (`SCHEDULING_PAUSE_CHECKPOINT_GRACE_MS`, 30000 ms) and its IO timeout (5000 ms), 335 s in all. A
+  caller with a shorter time limit (a tool call, a shell's command timeout) must give it that time.
+- **The instance is already paused** (another party's pause, which a pause would meet as
+  `scheduling_already_paused`): nothing is sent. The recording runs under that pause, holds nothing
+  of its own, remembers its reason as another party's, and never resumes it.
+- **The pause of the recording it replaces** (`record start --force` over an active recording, or
+  a start after an end that kept its hold, below): when the status shows exactly the replaced
+  session header's own reason, that pause is taken over, the new header's own (`taken_over`):
+  never paused twice, never lost.
+- **Nothing listens** (no state root located, no runtime-info that names an address, nothing
+  accepting a connection at that address: no Runtime is running): nothing can dispatch. The
+  recording starts holding nothing (an own pause of the replaced header is carried over: the
+  Runtime restores it at its start), exit 0, and the answer says so: `hold.warnings`
+  `["no_runtime_listening"]` with `hold.runtime_error`, the connection's failure. A press with
+  `--record` needs the Runtime anyway.
+- **Something listens, but the handshake does not complete** (`Health` or `BindChannel` fails, is
+  refused or gets no answer): a Runtime is there and may dispatch, so whether the instance would be
+  held cannot be known. `record start` fails and writes nothing, with the failure as the Lab's
+  commands that need the Runtime answer it (`runtime_slice_cli::map_runtime_error`:
+  `runtime_not_running` when no receipt said otherwise, `device_error` when the Runtime refused
+  with a code that is not one of unavailability). The client's connect reads the runtime-info,
+  opens the connection and shakes hands in one call and does not say which of the two failed; so
+  after a failed connect `record start` opens one plain connection to the address the
+  runtime-info names, within the client's IO timeout, and closes it at once without sending
+  anything: accepted, something listens; refused, nothing does. The Runtime takes a connection
+  closed before its first frame as an ordinary close.
+- **A status the Runtime refuses**, or leaves unanswered once the connection is made: `record
+  start` fails with it as above, its message saying it paused nothing and started nothing, and
+  writes nothing.
+- **A pause the Runtime refuses** (its receipt says no pause was made: denied, or failed as a
+  whole, which lifts the gate it closed): the session header is put back as it was before (when
+  there was none, the new one does not stay), and `record start` fails with the refusal, its
+  message saying it paused nothing and started nothing: no recording.
+- **Any other end of the pause** (the connection lost, the wait for the receipt ended, the process
+  killed or timed out by its caller): the session header stays as written, because a pause with
+  that reason may exist. The failure (`runtime_not_running` when the connection was lost) carries
+  `hold: {reason, own: true}` in its details, and so does every failure after the header names the
+  hold (the Lab recording's start, the state directory's reach). `record stop` (or `record start
+  --force`) then finds the header and releases by its reason; a release that finds no such pause
+  is `already_gone`. (`record archive` of such a header, whose Lab recording never started, is
+  refused as `lab_recording_missing`.)
+- **`--force` over a session header that cannot be read** (fix round 2): the start goes on, which
+  is what `--force` is for, but the hold that header named is not known: a pause the earlier
+  recording took, if any, shows as another party's to this recording and is not released by it.
+  The answer says so: `hold.warnings` gains `replaced_header_unread`, and `hold.replaced_header:
+  {path, error}` names the header's path (as the answer's `path` names it) and why it could not be
+  read.
+
+The session header keeps what the recording holds: `hold: {reason, own}`, `own` `true` for its own
+pause (set or taken over), `false` for another party's. A header that holds nothing has no `hold`
+member, byte for byte as before: every header written before 0.12.64, and one started while
+nothing listened. The recording library keeps these facts and says what they mean; the `record`
+command asks the Runtime and hands them in. The answer adds `hold: {state, reason?, taken_over?,
+paused?, warnings?, runtime_error?, replaced_header?}`: `state` as `record status` shows it,
+`paused` the Runtime's `SchedulingPaused` result. Both warning words are warnings: the start goes
+on and exits 0.
+
+| `hold.warnings` word | Its one cause | Refuses or warns | Exit |
+|---|---|---|---|
+| `no_runtime_listening` | no connection to the installation's Runtime could be opened at all, so the recording holds nothing of its own | warns | 0 |
+| `replaced_header_unread` | `--force` replaced a session header that could not be read, so a pause the earlier recording took, if any, is not released by this one | warns | 0 |
+
+**While it plays.** Each `tap`, `swipe` and `long-tap --record`, each `do --capture --record` and
+each `session app … --record` reads the status once before it, on a connection of its own (fix
+round 2: a press's read no longer shares the press's connection, so a read that fails never leaves
+that connection dead and the press `not_submitted`; `do --capture --record`, the one form today's
+MCP server records a press with, reads it too, by the same function). When the instance's
+scheduling shows not paused (neither its own pause nor the global pause), the press or the
+operation is still made and recorded, and
+`record.warnings` holds `instance_not_held`: the material may be mixed with a scheduled task's
+screens. When the read gets no answer, `instance_hold_unread`: whether it is held is not known. A
+pause of anyone counts as held. A press under the recording's own pause is an operator request, which
+no pause gates ([scheduling-pause.md](scheduling-pause.md), "The dispatch gate": leases, observations
+and Lab operations); an instance outside the multi-Nemu gate, whose device session the pause closed
+(scheduling-pause.md, stage (c)), opens a new one at its next press, as it does after every lease end
+(`keeps_device_session`, `crates/runtime-host/src/host/resource_close.rs`; a closed session is
+started again, `crates/execution-kernel/src/kernel.rs`).
+
+**Ending the recording releases its own hold, and only its own.** `record archive`, once its
+manifest, the session header (`archived`) and the copy (`--copy-to`) are written, and `record stop`,
+once a stop that is no dry run has ended the recording (a refused stop changes nothing: the
+recording stays active and keeps the hold):
+
+- The session header is first written with the hold `kept: true` (another party's pause: none).
+- Another party's pause: nothing is sent; `hold: {reason, own: false, release: "not_own"}`.
+- The own pause: one status read; only the instance's pause that shows exactly the reason is
+  resumed, by the pause the status shows now (`ResumeScheduling` expecting the status's owner epoch
+  and that pause's revision), as the rescue module's `release_own` finds its own: a Runtime restart
+  restores a pause in a new owner epoch at revision 1, so a remembered revision is not enough. The
+  header is then written without the hold; `hold: {reason, own: true, release: "resumed", resumed}`.
+  A pause with another reason, or none, is left alone: `release: "already_gone"`, `shown` the
+  reason the instance showed, or `null`.
+- What the release costs: an instance resume reconnects the device and runs its self-check
+  (scheduling-pause.md, "Resume"), up to 33 s plus the IO timeout. The archive's or the stop's own
+  work is done before it.
+- A release that fails, or a Runtime that does not answer, neither undoes nor fails the end's
+  work: the manifest or the package, the header and the copy stand, and the header keeps `hold:
+  {reason, own: true, kept: true}`. The answer is the one the Lab's rescue module gives for a hold
+  it keeps: the release's failure (`runtime_not_running` when no Runtime answered, else the
+  Runtime's refusal as the Lab maps it, `device_error`), exit 1 on the command line and the class's
+  exit under `--via`; its message names the hold and says the end is done; its details are the
+  end's answer (`record`, `path`, `lab`) with `hold: {reason, own: true, kept: true}` and (fix
+  round 2) `next.release`, the command that tries the release again and can release only the
+  recording's own pause, found by its reason: `["record", "stop", "--instance", "<instance>",
+  "--state-dir", "<dir>"]` for a stopped recording, `["record", "archive", "--record-id", "<id>",
+  "--instance", "<instance>", "--state-dir", "<dir>"]` for an archived one (an archive without
+  `--record-id` finds no active recording and is refused, `record_session_not_active`, retrying
+  nothing). `next` never offers an unconditional `resume` of the instance, which could lift a
+  pause that is not the recording's (a person's). `record status` shows `kept`, and the next
+  `record start` of the instance takes the pause over while the status still shows it.
+- A copy that fails answers its failure as before, with `hold: {reason, own: true, kept: true}` in
+  its details: the release was not tried; `record archive --record-id <id> --copy-to <dir>` tries
+  both again.
+
+`record reopen` (the offline work of stage two) takes no hold; an own pause the session header kept
+stays named in the header it writes, so that the reopened recording's end releases it.
+
+**`record status`** adds `hold: {state, reason?}`, read from the session header alone: `own` (an
+active recording under its own pause), `foreign` with the other party's reason, `none` (no hold,
+or no session header), `kept` (an own pause the recording's end could not release).
+
+**A forgotten recording** keeps its instance's scheduling paused until it ends or a person resumes
+it: a pause has no expiry and comes back after a restart; `status` and the overview show it with
+its reason `lab-record-<ms>`.
+
+**At a deploy.** The deploy's guard `foreign_pauses` (`guards --for stop`,
+`crates/lab-rescue/src/install/guards.rs`) reports a recording's pause as another party's (the
+guard fails on it); the rescue module records that report and goes on without touching the pause
+(its hold takes only the instances not paused, so it neither pauses that instance again nor resumes
+it); and the restarted Runtime restores the pause at its start (in its new owner epoch, at revision
+1, stage `released`). The recording's end then releases it by its reason in the new owner epoch.
+
+**Today's MCP server** (`actingctl mcp-serve`) runs `record start`, `record stop` and `record
+archive` as actinglab children (`apps/actingctl/src/mcp/lab.rs`, `Program::call`): its
+`ac_record_start`, `ac_record_stop` and `ac_record_archive` hold and release as the command line
+does, and (fix round 2, texts only) their descriptions say so: the installed Lab they run holds
+the instance at the start and releases it at the stop or the archive. An author-tier session
+holding and releasing its own recording's instance is intended (the coordinator's ruling); no
+behaviour of that server changes.
+
 ## Application steps
 
 A step's effect may be an application operation instead of a click (R24): `launch`,
@@ -1808,8 +2000,8 @@ the field is `"application": null | {"action": "restart"}`.
   an application step as it follows a click, for example a splash screen captured after a
   restart. `do --capture --record` on a step with an application operation is
   `record_step_effect_exists`.
-- Typical use (restart, then the main interface): pause the instance's scheduling;
-  `session app restart --record` (the entry step, serial 1); `capture --record` of the title
+- Typical use (restart, then the main interface): `record start` (it holds the instance, #463
+  S1-7); `session app restart --record` (the entry step, serial 1); `capture --record` of the title
   screen (serial 2), `record mark` of its marks and `do --capture --record` of its click;
   `capture --record` of the main interface (serial 3) and `record mark --page home` of its
   marks; `record stop --dry-run`, then `record stop`. The recorded package is
@@ -2200,9 +2392,13 @@ it stays active every later `--record` action on the instance, whoever sends it,
 again, so that it can be marked and stopped later.
 
 ```
-record archive [--record-id <id>] [--copy-to <dir>] [--state-dir <dir>]
+record archive [--record-id <id>] [--copy-to <dir> [--all-frames]] [--state-dir <dir>]
 record reopen [--record-id <id>] [--state-dir <dir>]
 ```
+
+#463 S1-5 (0.12.64): `record archive` is how stage one of package making ends: it hands over the
+recorded material of the business ("The manifest" below), asks nothing of the steps, and needs no
+device.
 
 Both are rows of [lab-operations.json](lab-operations.json) (`record archive`, `record reopen`):
 commands of actinglab (also as `session record archive|reopen`), calls of `serve --stdio` and the
@@ -2233,23 +2429,43 @@ started it and whoever added its steps:
   `updated_at_unix_ms`): the session is ended in a state of its own, distinct from `stopped`. The
   instance has no active recording, and `record start` needs no `--force`.
 - It never deletes, moves or rewrites a frame or the step table (the step table still says
-  `active`); it asks the Runtime nothing and reads no frame's pixels: it reads the step table and
-  the session header, and hashes files only to check them.
+  `active`); the archive asks the Runtime nothing and reads no frame's pixels: it reads the step
+  table and the session header, and hashes files only to check them. #463 S1-7: once its manifest,
+  the session header and the copy are written, the recording releases its own hold through the
+  Runtime ("A recording holds its instance"); a release that fails keeps the hold and undoes
+  nothing of the archive.
 
-**The manifest** (`actingcommand.lab-recording-archive.v1`) holds only what the step table and the
-session header hold:
+**The manifest** (#463 S1-5, since 0.12.64: `actingcommand.lab-recording-archive.v2`, the only
+schema written; the rules are the coordinator's, on board #463) holds only what the step table and
+the session header hold, and states the material stage one hands over: each press with the frame it
+happened on and where it was pressed, and the screen the business ended on. A reader without a
+Runtime (stage two, another agent, a person) reconstructs the business from the manifest and the
+files alone.
 
 ```json
-{"schema_version":"actingcommand.lab-recording-archive.v1",
+{"schema_version":"actingcommand.lab-recording-archive.v2",
  "record_id":"…","instance":"…","task_id":"…","application":{"game":null,"server":null},
+ "locale":null,"coordinate_space":{"width":1280,"height":720},"note":null,"archive_note":null,
  "started_at_unix_ms":0,"archived_at_unix_ms":0,"step_count":2,"written_by":"<commit>",
  "step_table":{"file":"recording.json","sha256":"…"},
- "steps":[{"step":1,"kind":"tap",
-   "frames":[{"frame_id":"f0001","role":"primary","file":"frames/<sha256>.png","sha256":"…"}],
-   "before":{"frame_id":"…","sha256":"…"},"after":{"frame_id":"…","sha256":null},
-   "page":"…","package":"…",
-   "tap":{"rect":{"x":8,"y":2,"width":4,"height":4},"point":{"x":10,"y":4}},"swipe":null,
-   "at_unix_ms":0,"request_id":"…"}]}
+ "material":{
+   "clicks":[{"step":1,"kind":"tap",
+     "frame":{"step":1,"frame_id":"f0001","file":"frames/<sha256>.png","sha256":"…"},
+     "derived":false,"sent_on_unstored_capture":false,"entry":false,
+     "point":{"x":962,"y":658},"to":null,"duration_ms":null,"action":null,"outcome":"performed"}],
+   "final_frame":{"step":2,"frame_id":"f0002","file":"frames/<sha256>.png","sha256":"…"}},
+ "copy":null,
+ "steps":[{"step":1,"kind":"tap","dropped":false,"converted_to_transition":false,
+   "frames":[{"frame_id":"f0001","role":"primary","file":"frames/<sha256>.png","sha256":"…",
+              "superseded":false,"recorded_at_unix_ms":0}],
+   "before_frame":"f0001","after_frame":{"step":2,"frame_id":"f0002"},
+   "after_capture":{"after_ms":800,"still_max_ms":0,"still":null,"waited_ms":800,"captures":1,"kept":0},
+   "derived":false,"outcome":"performed",
+   "tap":{"rect":null,"point":{"x":962,"y":658},"source":"point"},
+   "swipe":null,"long_press":null,"application_op":null,
+   "before":null,"after":null,"page":null,"package":null,"note":null,
+   "at_unix_ms":0,"request_id":"…"},
+  {"step":2,"kind":"none","…":"…"}]}
 ```
 
 - The header: `record_id`, `instance`, `task_id` and `started_at_unix_ms` as the session header
@@ -2257,22 +2473,110 @@ session header hold:
   from the header, and every command holds them equal to it; for a recording `record start
   --force` left behind they are what its replaced header held); `application`, the game and server
   the step table names (the session header names
-  no application; `null` where the step table has none); `archived_at_unix_ms`; `step_count`;
+  no application; `null` where the step table has none); `locale` and `coordinate_space` (the size
+  of its frames), the step table's; `note` and `archive_note`, `null` without one;
+  `archived_at_unix_ms`; `step_count`;
   `written_by`, the commit of the program that wrote the manifest; `step_table`, the step table's
-  file and its sha256 when the manifest was written, against which a copy is checked.
-- One row per step of the step table, in its order: `step`, the step's serial number; `kind`:
-  `tap` (a click without a gesture), `swipe` (a drag: a recorded swipe or a declared drag), `none`
-  (no input), or the step table's own word for any other effect (`long_press`,
-  `single_touch_drag_with_vertical_brake_v1`, `single_touch_path_drag_v1`, `application`);
-  `frames`, the step's frames and its page transition's, each `frame_id`, `role`, `file`
-  (`frames/` and the file name of its recorded path) and `sha256` as the step table has them;
-  `before` and `after`, the Runtime frames the input's frame summaries name (`frame_id`,
-  `sha256`), `null` without an input; `page`, the page recognised on the frame before the input,
-  and `package`, the carrier package that recognised it, when the step table has them; `tap`
-  `{rect, point}` for a tap and `swipe` `{from_rect, to_rect, from, to, duration_ms}` for a swipe,
-  `null` otherwise; `at_unix_ms`, when the input was executed, or for a step without one when its
-  first frame was recorded; `request_id`, the input's request id (an application step's), `null`
-  without one.
+  file and its sha256 when the manifest was written, against which a copy is checked; `copy`,
+  `null` in the recording's own directory, which holds every file the manifest lists ("The copy").
+- `material`, what stage one hands over; a reader that wants only that reads `material` and
+  nothing else:
+  - `clicks`: one entry per effective step whose effect is on record (its `outcome` is not
+    `null`), in the order of the steps: `step`; `kind`, the row's; `frame`, the frame the press
+    happened on (the row's `before_frame`) with the step of the row that lists it, its `file` and
+    its `sha256`, `null` when no frame was stored for it (the application entry step, which has no
+    frame); `derived`, the row's (the frame was given by the rule below); `sent_on_unstored_capture`,
+    whether the press was sent on a capture that was not stored (an open step with marks,
+    "Recording while playing"), so that `frame` is the stored frame the step stood on: for a press
+    whose execution names its own frame before (`derived: false`), the step table's own member
+    (`steps[].click.execution.sent_on_unstored_capture`, left out there when `false`), `true` or
+    `false`; `null` ("the step table does not say"; the member is written, never left out) for a
+    press whose frame the manifest derives (`derived: true`: a press of `do --capture --record`, a
+    press recorded the old way) and for an application operation, whose receipt does not record
+    it; the manifest claims nothing the step table does not say; `entry`, the operation opened the
+    application entry step (there was no screen before it); where it was pressed: `point` (a tap's
+    or a long press's point, where a swipe began), `to` (where a swipe ended), `duration_ms` (a
+    swipe's or a long press's), `action` (an application operation's, in place of a point: a force
+    stop is `stop`, the row's `application_op.cli_verb` keeping `force-stop`), each `null` where it
+    does not apply; and `outcome`, the row's.
+  - `final_frame`: the screen the business ended on, the live primary frame of the last effective
+    step (with its step, file and sha256) when that step has no effect and the effective step
+    before it has its effect on record (the step that effect's screen after opened); `null`
+    otherwise: fewer than two effective steps; the effective step before the last has no effect on
+    record (as when no effect is on record at all); or the last effective step has an effect (its
+    screen after could not be taken, its outcome is indeterminate, or the step after it was dropped
+    or became its transition and no frame came after). Then the answer's `lab.warnings` holds
+    `final_frame_missing`; the archive stands either way, since ending a recording asks nothing.
+- One row per step of the step table, in its order, dropped and converted steps included:
+  - `step`, the step's serial number; `kind`: `tap` (a click without a gesture), `swipe` (a drag: a
+    recorded swipe or a declared drag), `none` (no input), or the step table's own word for any
+    other effect (`long_press`, `single_touch_drag_with_vertical_brake_v1`,
+    `single_touch_path_drag_v1`, `application`); `dropped` and `converted_to_transition`, as the
+    step table has them.
+  - `frames`: the step's frames and its page transition's, in the step table's order (its own as
+    they arrived, then its transition's), superseded ones included, each `frame_id`, `role`, `file`
+    (`frames/` and the file name of its recorded path), `sha256`, `superseded` and
+    `recorded_at_unix_ms` as the step table has them.
+  - `before_frame`, `after_frame` (`{step, frame_id}`, `step` the row whose `frames` list it) and
+    `after_capture`: the frame the step's effect was on, the frame the screen became and how that
+    frame was taken, as the step table names them (`steps[].click.execution`,
+    `steps[].application.executed`; "Recording while playing", "In the middle of a business").
+    `after_frame` is the last capture of the effect's own captures after it (#463 S1-2, "The screen
+    after": the first opens the next step, each later one supersedes the one before it), or, when
+    those kept nothing, the first frame that arrived after the effect: it may name a frame that has
+    since been superseded (by the capture before the next press, or a later capture), a frame of a
+    dropped step, or a frame of the step's own transition after `--to-transition`. An `after_frame`
+    with `after_capture` `null` is a frame that arrived after the effect's own screen after could
+    not be taken (the capture before the next press, or a `capture --record`).
+  - `derived`: for an effect on record whose step table names no such frame (a press of `do
+    --capture --record`, an application operation recorded before #463 S1-3, or one without a
+    completed receipt) the row gives the rule's and says `derived: true`: `before_frame` is the
+    step's live primary frame (a step's primary frame cannot change once its effect is on record,
+    `record_step_frame_conflict`); `after_frame` of a click is the first frame of the next
+    effective step by serial number when that frame was recorded at or after the click's
+    `executed_at_unix_ms`, else `null`; of an application operation `null` (such a receipt or
+    attempt carries no time); `after_capture` `null`. No frame id is invented and no stored id is
+    called derived. The application entry step names none of them and is not derived.
+  - `outcome`: a click's execution's (`performed` or `indeterminate`); an application
+    operation's `performed` with its completed receipt (attempts may stand beside it: it was run
+    again) and `indeterminate` with attempts and no completed receipt; `null` without an effect on
+    record.
+  - The effect by its kind, `null` otherwise: `tap` `{rect, point, source}` and `long_press`
+    `{point, duration_ms, rect}`, `rect` `null` for a press declared by its point (`source:
+    "point"`, "Recording while playing"); `swipe` `{from_rect, to_rect, from, to, duration_ms}`;
+    `application_op` `{action, cli_verb, executed}`, `executed` whether its completed receipt is on
+    record.
+  - `before` and `after`, the Runtime frames the input's frame summaries name (`frame_id`,
+    `sha256`), `null` without them (a press of stage one has none); `page`, the page recognised on
+    the frame before the input, and `package`, the carrier package that recognised it, when the
+    step table has them; `note`, `null` without one.
+  - `at_unix_ms`: when the input was executed, a click's `executed_at_unix_ms` and an application
+    operation's completed receipt's (`steps[].application.executed.executed_at_unix_ms`, recorded
+    since 0.12.64; `null` for an operation an earlier build recorded and for one without a completed
+    receipt: none is derived); for a step without an input, when its first frame was recorded;
+    `request_id`, the input's request id (an application step's), `null` without one.
+- **What a reader reconstructs.** What was on the screen at each press: `material.clicks[].frame`
+  (a row's `before_frame`); where it was pressed: its `point`, `to`, `duration_ms` or `action`;
+  what the screen became: a row's `after_frame`; where the business ended: `material.final_frame`.
+  Every frame id names an entry of some row's `frames`, whose `file` lies under `frames/` with its
+  sha256, and `record archive` hashes every file it lists, superseded frames included.
+- **The frames around a press.** The frames before press k are the frames of row k up to and
+  including its `before_frame`. The frames after it are the frames of the row `after_frame.step`
+  names that were recorded at or after press k's `at_unix_ms` (its captures after it, the last of
+  them its `after_frame`, the train of stage one), up to and including the next frame some row
+  names as its `before_frame`, or to the end of that row's frames. A row lists its frames in the
+  order they were recorded, each with `recorded_at_unix_ms` and `superseded`, and its effect is at
+  `at_unix_ms`, so either run can be cut by time as well, however many captures a step holds.
+
+**Manifests written before 0.12.64** (`actingcommand.lab-recording-archive.v1`, Workflow #449
+REC-ARCH: the header without `locale`, `coordinate_space`, `note`, `archive_note`, `material` and
+`copy`; rows of `step`, `kind`, `frames` of `{frame_id, role, file, sha256}`, `before`, `after`,
+`page`, `package`, `tap` `{rect, point}`, `swipe`, `at_unix_ms` and `request_id`) are read and never
+rewritten: named again their files are hashed; copied, the copy holds every file the v1 manifest
+lists and the manifest byte for byte (it names no material, and the answer warns nothing); `record
+reopen` names them; the next `record archive` of their recording writes the next manifest, as v2.
+A manifest is read by the schema it names, exactly these two (`record_state_io_failed` for any
+other); no flag writes v1.
 
 **The copy** (`--copy-to <dir>`):
 
@@ -2287,9 +2591,24 @@ session header hold:
 - The directory must not exist (it is created, with its parents) or must be empty. Anything else
   is refused `record_archive_target_not_empty` (exit 3, `details{path, reason}`, `not_empty` or
   `not_a_directory`) before anything is written: no manifest, the session as it was.
-- Once the manifest is written and the session archived, `recording.json`, the manifest and every
-  frame file the manifest lists are copied under the same relative names; then every copy is hashed
-  against the manifest (the manifest's own copy against the manifest as written).
+- Once the manifest is written and the session archived, `recording.json`, the manifest and (#463
+  S1-5) the frame files the manifest's `material` names are copied under the same relative names;
+  with `--all-frames` (the Lab's MCP server, `actinglab-mcp`: `all_frames`; the first-generation
+  server's `ac_record_archive`, `actingctl mcp-serve`, has no such parameter and copies the
+  material) every frame file the manifest lists, superseded ones included. The copy's manifest is
+  the recording's saying which, `copy: {frames: "material" | "all"}`. The step table and the
+  frames are copied first and each hashed against the manifest; the copy's manifest is written
+  last, once they hold their sha256, and hashed against itself as written (#463 S1-5 fix round
+  2): a copy that fails before it leaves no manifest in the directory, so no manifest there names
+  a file the copy does not hold. A frame a row lists that the copy does not hold is not missing
+  to a reader that reads `copy`: it stays in the recording's own directory, which keeps every
+  file; an archive deletes nothing. The copy of a v1 manifest holds every file it lists and the
+  manifest byte for byte, with or without `--all-frames`. `--all-frames` without `--copy-to` is
+  `validation_failed` (`details{argument: "all_frames", reason: "copy_to_only"}`) before the
+  session is read and before anything is written: exit 1 on actinglab's own command line, as every
+  failure there and every other refusal of a flag given without the flag it needs; exit 2, the
+  usage class, only on a `--via` line (the train of stage one: the code's exit, which its test
+  pins).
 - A file that cannot be copied is `record_state_io_failed` (exit 5, `details{file, path, target,
   reason: "copy_failed", copied}`); a copy that cannot be read or does not hold its sha256 is
   `record_archive_verify_failed` (exit 5, `details{file, path, checked: "copy", reason:
@@ -2299,9 +2618,10 @@ session header hold:
 
 **Named again.** `record archive --record-id <id>` on an archived recording of the instance (the
 session header names it `archived`, or its directory holds a manifest while its step table is
-`active` and names the instance) writes no second manifest: it reads the latest one
+`active` and names the instance) writes no second manifest: it reads the latest one, v2 or v1
 (`record_state_io_failed` when it does not read as that recording's manifest or names a file
-outside the directory) and hashes every file it lists in the recording's directory
+outside the directory) and hashes every file it lists in the recording's directory, superseded
+frames included
 (`record_archive_verify_failed`, `checked: "recording"`, on a file that does not hold its sha256);
 with `--copy-to` it then copies as above. That is the retry after a failed copy.
 
@@ -2328,11 +2648,16 @@ recording writes the next manifest.
 **The answer** is `{status: "archived" | "already_archived", record, path, lab}`: `record` the
 session header when it names the recording, `null` otherwise; `lab` `{status, record_id,
 record_started_at_unix_ms, instance, path (the recording's directory), manifest{file, path, sha256,
-steps, written}, copy?{path, files}, session_header?{record_id, status, changed}}`, `written` false
-for a recording named again, `session_header` present only when the session header does not name
-the recording.
+steps, written}, copy?{path, files}, session_header?{record_id, status, changed}, warnings}`,
+`written` false for a recording named again, `session_header` present only when the session header
+does not name the recording. #463 S1-5: `warnings` is `[]`, or `["final_frame_missing"]` when the
+manifest it names (written now or named again, v2) has `material.final_frame` `null`: a warning
+(exit 0), the archive standing; a v1 manifest warns nothing. #463 S1-7: and `hold{reason, own,
+release, resumed?, shown?}` when the session header names the recording and held a pause ("A
+recording holds its instance").
 
-**Refused, nothing written:** `--copy-to` empty, blank or relative: `validation_failed` (above); no
+**Refused, nothing written:** `--copy-to` empty, blank or relative: `validation_failed` (above);
+`--all-frames` without `--copy-to`: `validation_failed` (above); no
 `--record-id` and no active recording (no session, or a stopped or archived one):
 `record_session_not_active`; a named recording that is neither the instance's active one, nor
 archived, nor one whose step table is `active` while the header names another recording:

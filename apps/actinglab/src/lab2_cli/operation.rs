@@ -115,6 +115,11 @@ pub(super) fn run_contained_lab_do(global: &GlobalOptions, flags: &FlagArgs) -> 
         if let (Some(lock), Some((planned, next_frame_device))) =
             (record_lock.as_ref(), planned_step)
         {
+            // #463 S1-7 fix round 2 (`contracts/lab-recording.md`, "A recording holds its
+            // instance"): whether the instance is held, one status read before the press on a
+            // connection of its own, by the function the point presses use; its word goes into
+            // `record.warnings`.
+            let hold_warning = crate::commands::hold_warning_read(lock.instance());
             let mut runtime = RuntimeStep {
                 global,
                 flags,
@@ -127,7 +132,7 @@ pub(super) fn run_contained_lab_do(global: &GlobalOptions, flags: &FlagArgs) -> 
                 next_frame: None,
             };
             let performed = planned.perform(lock, &mut runtime);
-            return recorded_answer(performed, runtime.answer, runtime.next_frame);
+            return recorded_answer(performed, runtime.answer, runtime.next_frame, hold_warning);
         }
         let verified = session
             .run_contained_lab_operation(&instance, request, frames)
@@ -347,14 +352,19 @@ impl RecordStepPorts for RuntimeStep<'_> {
 /// `record` (with a mark request, `record.mark`, `record mark`'s output) and, with a next frame,
 /// `next_frame`, `capture --record`'s answer with the wait (`after_ms`) and the file (`out`). An
 /// error after the input carries the operation's answer in its details (`operation`), as before.
+/// #463 S1-7 fix round 2: `hold_warning`, the word of the status read before the press
+/// (`instance_not_held`, `instance_hold_unread`), in `record.warnings`, of the answer and of a
+/// failure's details that carry `record`.
 fn recorded_answer(
     performed: CliOutcome<RecordStepOutcome>,
     answer: Option<Value>,
     next_frame: Option<Value>,
+    hold_warning: Option<&'static str>,
 ) -> CliOutcome<Value> {
     let outcome = match performed {
         Ok(outcome) => outcome,
         Err(mut error) => {
+            crate::commands::add_hold_warning_to_failure(&mut error, hold_warning);
             if let Some(answer) = answer {
                 let mut details = error.details.take().unwrap_or_else(|| json!({}));
                 if let Some(object) = details.as_object_mut() {
@@ -372,6 +382,7 @@ fn recorded_answer(
     if let Some(mark) = &outcome.mark {
         record["mark"] = encoded(mark)?;
     }
+    crate::commands::add_hold_warning(&mut record, hold_warning);
     projected["record"] = record;
     if let Some(next) = &outcome.next_frame {
         let mut frame = next_frame.unwrap_or_else(|| json!({}));
