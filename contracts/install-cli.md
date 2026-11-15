@@ -1,13 +1,14 @@
-# Command-line installation (`actingctl install`)
+# Command-line installation (the Lab's rescue module)
 
 Workflow #421 (Alice, #405, 2026-10-24: 「你这边直接开始使用/新增命令行安装的方式就行」). The
-frozen model is INST-M v1.0 (`rd-1024\install-design\model.md`). `actingctl install` installs,
-updates and rolls back a **single-location root** from the command line: verified release
+frozen model is INST-M v1.0 (`rd-1024\install-design\model.md`). The Lab's rescue module
+(`actinglab <row>`, "The Lab's rescue module" below) installs, updates and rolls back a **single-location root** from the command line: verified release
 builds kept under the root, an in-place update with a journal, a gated rollback, the
 configuration candidate, the instances, the standard packs and a fresh root. It is the
 installer of a single-location root ([runtime-watchdog.md](runtime-watchdog.md), "Layout").
+Until Workflow #434 LAB-7 (0.12.62) `actingctl install` ran the same commands; LAB-7 deleted it.
 
-**The A/B layout** (Workflow #429, Alice's rulings 131 and 132 A of 10-31): `actingctl install`
+**The A/B layout** (Workflow #429, Alice's rulings 131 and 132 A of 10-31): the installer
 is also the one writer of the formal A/B layout, frozen by slice R-15b in "The A/B layout" below
 (`install\active.json` install selection v2, two program slots, the commit and recovery
 protocol, the clean) and built by R-15c to R-15e; a production root converts once both sides are
@@ -15,10 +16,9 @@ ready (`convert`, R-15e). Until then a root stays single-location and none of th
 acsetup's own A/B roots of v1 are not converted and not read (no old-version compatibility,
 Alice 10-11).
 
-The family exists in the CLI only, like `start` and `restart`: configuration file edits and
-daemon restarts belong to the person, so no MCP tool drives it. A UI drives these commands as
-child processes and reads their one result line, as acsetup drives `actingctl` today. The
-commands are game-neutral: every alias, game, package and value comes from the configuration
+A UI drives these commands as child processes (`actinglab <row>`) and reads their one result
+line; which rows the Lab's MCP server serves, and how, is [lab-two-entries.md](lab-two-entries.md)
+§5's. The commands are game-neutral: every alias, game, package and value comes from the configuration
 or a bundle; nothing in Tools names one, nor a path of a machine.
 
 Slices (model §12): INST-0 this document and the codes; **INST-1** release verify and stage,
@@ -66,12 +66,18 @@ S4) only creates the empty state-root directory.
 
 ## Common rules
 
-- **Form.** `actingctl install <group> <verb> --root <root> …` (`install adopt`, `install undo`,
-  `install resume`, `install status` and `install leftovers` have no verb). Like `watchdog` and
-  `start`, the family runs before `--state-root` parsing; the state root comes from the root's
-  configuration.
-- **Output.** Exactly one JSON line on stdout, `{…result, "outcome": …}`, through actingctl's
-  result line (#378 A5). A refusal's line carries the members that say why (for example the
+- **Form.** This document names the installer's commands `install <group> <verb>`, as their
+  journals and codes name them (`operation` `install_release_verify`, `install_adopt`, …;
+  `install adopt`, `install undo`, `install resume`, `install status` and `install leftovers` have
+  no verb), with the inputs the installer takes (`--root <root>`, `--plan <id>`, `--preview`,
+  `--accept-ledger-one-way`, `--stop --hold <reason> --start`, `--known-pause`, `--ack-guard`,
+  `--with-config`). A person runs each as the Lab's rescue row that "The Lab's rescue module" maps
+  it to (`actinglab <row>`): the row acts on the root of the `actinglab.exe` that runs it, takes
+  none of those inputs and sets them as that section says (one call plans and applies, a one-way
+  ledger edge is journalled, every pause is known, a failed guard is noted). The state root comes
+  from the root's configuration.
+- **Output.** Exactly one JSON line on stdout, `{…result, "outcome": …}`, through the Lab's
+  result line (`crates/lab-ops`' `cli_line`, #378 A5). A refusal's line carries the members that say why (for example the
   failed `edges` of a plan) beside its outcome. A warning, error or fatal top adds its developer
   line on stderr. The exit code is the top outcome's category: 0 success, info or warning; 1
   error (usage included); 2 fatal. `ACTINGCOMMAND_DETAIL` is honoured. No English prose on the
@@ -101,19 +107,19 @@ S4) only creates the empty state-root directory.
   not_evaluated, values}]`. A `fail` or `not_evaluated` refuses `guard_failed`
   (`install_guards`) unless the person names it with `--ack-guard <id>`; acknowledgments are
   journalled.
-- **Which actingctl runs it.** Any build that carries the family: the root's
-  `runtime\actingctl.exe`, or a kept build's `install\builds\<c>\runtime\actingctl.exe`. The
-  running program is the installer **I** of the interface checks; its ranges are its own
-  declaration (`component-interfaces.json`, the same file its manifest carries). Every root, a
-  scratch copy for a rehearsal included, is just `--root`.
+- **Which program runs it.** The root's `tools\actinglab.exe`, or a kept build's
+  `install\builds\<c>\tools\actinglab.exe` ("A deploy since LAB-7" below). The running program
+  is the installer **I** of the interface checks; its ranges are its own declaration
+  (`component-interfaces.json`, the same file its manifest carries). A scratch copy of a root for
+  a rehearsal is a root of its own, run by its own `tools\actinglab.exe`.
 - **Progress.** The journal is rewritten after every step; `install status --operation <id>`
   answers it.
 
 ## Release verify and stage (INST-1)
 
 ```text
-actingctl install release verify --dir <dir> [--facts <release-facts.json>] [--expect-tag <tag>] [--expect-commit <hex8+>]
-actingctl install release stage  --root <root> --dir <dir> [--facts …] [--expect-tag …] [--expect-commit …] [--local-build]
+actinglab release verify <dir> [--facts <release-facts.json>] [--expect-tag <tag>] [--expect-commit <hex8+>]
+actinglab release stage  <dir> [--facts …] [--expect-tag …] [--expect-commit …] [--local-build]
 ```
 
 `--dir` holds `actingcommand-runtime-<c>.zip`, `actingcommand-tools-<c>.zip` and `SHA256SUMS`
@@ -214,7 +220,7 @@ that holds the other kind of release when a stage resumes ends it interrupted wi
 ## Adopt (INST-1)
 
 ```text
-actingctl install adopt --root <root>
+actinglab adopt
 ```
 
 The first command on a root that scripts installed. It verifies `runtime\` and `tools\` against
@@ -231,14 +237,14 @@ operation (`kind` `adopt`: `copy_build`, `place_build`, `record_state`).
 ## Update and rollback (INST-1)
 
 ```text
-actingctl install update   plan  --root <root> --build <commit> [--preview] [--accept-ledger-one-way]
-actingctl install update   apply --root <root> --build <commit> --plan <id> [--accept-ledger-one-way]
-actingctl install rollback plan  --root <root> --to <commit> [--accept-ledger-one-way]
-actingctl install rollback apply --root <root> --to <commit> --plan <id> [--accept-ledger-one-way]
-actingctl install undo      --root <root> --operation <id>
-actingctl install resume    --root <root> --operation <id>
-actingctl install status    --root <root> [--operation <id>] [--check-rollback]
-actingctl install leftovers --root <root>
+actinglab deploy <commit> --plan                 # install update plan --build <commit> --preview
+actinglab deploy <commit> [--dir <dir>]          # install update apply, with stop, hold and start (below)
+actinglab rollback [--to <commit>] --plan        # install rollback plan
+actinglab rollback [--to <commit>]               # install rollback apply, with stop, hold and start
+actinglab undo <id>                              # install undo --operation <id>
+actinglab op resume <id>                         # install resume --operation <id>
+actinglab op status [<id>] [--check-rollback]    # install status [--operation <id>] [--check-rollback]
+actinglab leftovers                              # install leftovers
 ```
 
 `<commit>` is the full 40-hex commit of a kept build. INST-2 adds `--stop --hold <reason>
@@ -303,8 +309,8 @@ stopped, and until INST-3 it leaves the configuration alone.
 - **Running state.** An `actingcommand-actingd.exe` under the root (`runtime_running`) or a held
   owner lock (`owner_lock_held`) refuses unless `--preview`; a running state that cannot be read
   (the process probe, the state root's owner journal) refuses `processes_unreadable`. Images under the root that would be
-  replaced while running: `actingctl.exe` and, since 0.12.57 (Workflow #434 LAB-5G6), the Lab's
-  MCP server `actinglab-mcp.exe`, in `tools\` or `runtime\`, are renamed aside and keep running
+  replaced while running: the Lab's MCP server `actinglab-mcp.exe` (since 0.12.57, Workflow #434
+  LAB-5G6; since LAB-7, 0.12.62, it alone: `actingctl.exe` is deleted), in `tools\` or `runtime\`, is renamed aside and keeps running
   (listed as `running_renamed`); `adb.exe` is never moved and any other image waits
   (`running_image_blocks`, `path`, `pid`). A `.part` of another operation under
   `runtime\` or `tools\` refuses `foreign_part` (`path`).
@@ -445,11 +451,11 @@ check-config above).
 ## Formal stop, start and the hold (INST-2)
 
 ```text
-actingctl install stop  --root <root> --hold <reason> [--known-pause ALIAS=REASON]... [--ack-guard <id>]...
-actingctl install start --root <root> [--ack-guard <id>]...
-actingctl install release-hold --root <root> --reason <reason>
-actingctl install guards --root <root> --for stop|start [--hold <reason>] [--known-pause ALIAS=REASON]...
-actingctl install update apply --root <root> --build <commit> --plan <id> --stop --hold <reason> [--known-pause ALIAS=REASON]... [--start] [--ack-guard <id>]... [--detach]
+actinglab down [--reason <reason>]         # install stop --hold <reason> (the module's lab-<operation>-<ms> unless named)
+actinglab up                               # install start
+actinglab release-hold <reason>            # install release-hold --reason <reason>
+actinglab guards --for stop|start          # install guards --for stop|start
+actinglab deploy <commit> [--dir <dir>] [--detach]   # install update apply --stop --hold lab-deploy-<ms> --start
 ```
 
 Workflow #421 INST-2 (Runtime v0.12.19; #421 deploy design §4, §8 S2; fix round 1 after review
@@ -460,9 +466,7 @@ every deferred action, switches, and hands the recorded work back; `schedule_nea
 (`kind` `stop`, `start`, `release_hold`; the composite is the update's or rollback's own), every
 step resumable with `install resume`; nothing is killed or deleted. Each operation journals the
 configuration file's SHA-256 when it began (`inputs.config_sha256`), which the check `config`
-judges against. Run `install` from the newest kept build (`install\builds\<commit>\runtime\`):
-after an automatic rollback to a build before INST-2, the root's own `runtime\actingctl.exe`
-does not read the journals of kind `stop` or `start` or with `rollback` (review S2 L9).
+judges against.
 
 - **The hold** (`stop`, and the composite's first steps). Read from the running Runtime before
   anything changes: S0 (the owner epoch; every pause `{global, instances: [{alias, reason,
@@ -714,24 +718,30 @@ when `state.json` records them (it does not yet) and its register is the adopt's
 ## Configuration, instances, packs and a fresh root (INST-3 to INST-6)
 
 ```text
-actingctl install config show|diff     --root <root>
-actingctl install config set           --root <root> KEY=JSON...
-actingctl install config bind          --root <root> --instance <alias> (--maintenance | --startup <id> | --recognition <id> | --resource-package <id>) [--replace]
-actingctl install config policy        --root <root> --section <file> [--catalog-dir <dir> --catalog-name <name>] [--transition replace]
-actingctl install config lab-options   --root <root> [--authoring true|false] [--debugging true|false]
-actingctl install config commit plan|apply --root <root> [--plan <id>] [--while-running]
-actingctl install config discard       --root <root>
-actingctl install config restore       --root <root> --prev <actingd.config.json.prev-<ms>>
-actingctl install instance add    --root <root> --alias <a> --game <g> --server <s> (--mumu-index <n> | --mumu-name <x>) (--like <alias> | --touch-backend <b> --capture-backend <b>) [--application-id <id>] [--start-emulator true|false] [--bind-maintenance] [--commit-plan]
-actingctl install instance remove --root <root> --alias <a> [--commit-plan]
-actingctl install pack plan    --root <root> --zip <bundle.zip> --sums <SHA256SUMS> [--facts <file>] [--hot]
-actingctl install pack place   --root <root> --zip … --sums … [--facts …] --plan <id> [--hot [--known-pause …]] [--accept-restart-needed] [--ack-guard <id>]...
-actingctl install pack remove  plan|apply --root <root> --game <game> [--plan <id>] [--hot]
-actingctl install pack restore --root <root> --operation <id>
+install config show|diff     --root <root>
+install config set           --root <root> KEY=JSON...
+install config bind          --root <root> --instance <alias> (--maintenance | --startup <id> | --recognition <id> | --resource-package <id>) [--replace]
+install config policy        --root <root> --section <file> [--catalog-dir <dir> --catalog-name <name>] [--transition replace]
+install config lab-options   --root <root> [--authoring true|false] [--debugging true|false]
+install config commit plan|apply --root <root> [--plan <id>] [--while-running]
+install config discard       --root <root>
+install config restore       --root <root> --prev <actingd.config.json.prev-<ms>>
+install instance add    --root <root> --alias <a> --game <g> --server <s> (--mumu-index <n> | --mumu-name <x>) (--like <alias> | --touch-backend <b> --capture-backend <b>) [--application-id <id>] [--start-emulator true|false] [--bind-maintenance] [--commit-plan]
+install instance remove --root <root> --alias <a> [--commit-plan]
+install pack plan    --root <root> --zip <bundle.zip> --sums <SHA256SUMS> [--facts <file>] [--hot]
+install pack place   --root <root> --zip … --sums … [--facts …] --plan <id> [--hot [--known-pause …]] [--accept-restart-needed] [--ack-guard <id>]...
+install pack remove  plan|apply --root <root> --game <game> [--plan <id>] [--hot]
+install pack restore --root <root> --operation <id>
 actinglab new <new_root> --build <kept build dir or verified release dir> [--new-state-root <dir>] [--mumu-root <dir>] [--lab-authoring true|false] [--watchdog]
 ```
 
-(The last line is the Lab's rescue row, Workflow #453 S4: `actingctl install` has no `new`.)
+These are the installer's commands as the model names them; the last line is the Lab's rescue
+row `new` (Workflow #453 S4). Of the others the Lab serves `config restore` as `config restore
+<backup> [--sha <sha256>]`, the first slice of `instance add` as below and `pack place` as
+`place <bundle> [--sums <file>] [--facts <file>] [--plan]` ("The Lab's rescue module"); the rest
+are designed and not built, and hold the planned rescue rows `config file show|diff|set|bind|
+policy|lab-options|commit|discard`, `instance remove`, `pack remove` and `pack restore`
+([lab-operations.json](lab-operations.json)).
 
 - **Configuration** (INST-3). Every write goes to the candidate; the first write copies the live
   file and records its SHA-256 in `base.json` (refused `config_base_changed` once the live file
@@ -750,8 +760,8 @@ actinglab new <new_root> --build <kept build dir or verified release dir> [--new
   coordinator's work order of 11-11). Only the Lab's rescue module serves it, as `instance add
   <alias> --game <g> --server <s> --mumu-index <n> --touch-backend <b> --capture-backend <b>
   [--application-id <id>]`, every parameter but the application id required and none with a
-  default; it adds one emulator instance, bound by its index. Not in this slice: `actingctl
-  install instance add` and `instance remove`, INST-3's candidate commands, a handset, and INST-R
+  default; it adds one emulator instance, bound by its index. Not in this slice: the model's
+  `install instance add` and `instance remove`, INST-3's candidate commands, a handset, and INST-R
   (the instance written in one place). It does not wait for INST-3 and INST-R: it composes and
   commits the candidate itself, in one call.
   - **The application id** (Workflow #452, since 0.12.59; register §1.300, "Fix #452"). The
@@ -835,8 +845,7 @@ actinglab new <new_root> --build <kept build dir or verified release dir> [--new
     `instance.added`, a pause reason name ([scheduling-pause.md](scheduling-pause.md):
     `[a-z0-9_.-]`, 1 to 64 bytes), drained as every pause is; the release hands back only the
     hold's own pauses, so it stays paused until a person lifts it (the console's resume,
-    `actingctl resume --state-root <s> --instance <alias>`, or since LAB-6S1b the Lab's
-    `resume <alias>`) when the account is ready. Not
+    or the Lab's `resume <alias>`) when the account is ready. Not
     registered by the started Runtime: from 0.12.59 (Workflow #454) the post-start check
     `bindings`, which judges the new file, fails (`post_check_failed`, `failed_checks`
     `bindings`, the row's `missing` the alias), the hold kept, and the pause is tried as after
@@ -934,7 +943,7 @@ actinglab new <new_root> --build <kept build dir or verified release dir> [--new
   coordinator's rulings on board #453, not the owner's words). Only the Lab's rescue module serves
   it, as the row `new <new_root> --build <dir> [--new-state-root <dir>] [--mumu-root <dir>]
   [--lab-authoring true|false] [--watchdog]`, so that the Lab's command line and its MCP server both
-  have it; `actingctl install` gains nothing (no `install new`). The positional is `new_root` and
+  have it. The positional is `new_root` and
   the state root's option is `--new-state-root` (parameter `new_state_root`), never `--state-root`:
   the module refuses a parameter named `root` or `state_root` on every row (the coordinator
   accepted the name after the review); the row declares every parameter. It is the one rescue
@@ -1063,11 +1072,31 @@ actinglab new <new_root> --build <kept build dir or verified release dir> [--new
 
 [lab-two-entries.md](lab-two-entries.md) §5 to §7; the rows of module `rescue` in
 [lab-operations.json](lab-operations.json); register §1.287, "Slice LAB-3". The installer's code
-moved from `apps/actingctl` to `crates/lab-rescue` and runs with one of two faces. **`actingctl
-install` keeps the face this document describes (`install-cli` 1), every option, output, code and
-exit, until LAB-7 deletes it**; a journal it writes is byte for byte what it wrote before. The
-Lab's rescue module (`actinglab <row>`, `actinglab serve --stdio`) runs the same commands with
-the rescue face:
+moved from `apps/actingctl` to `crates/lab-rescue` (LAB-3). Since LAB-7 (0.12.62) deleted
+`actingctl install`, which kept the face of the command forms above (`install-cli` 1), the Lab's
+rescue module (`actinglab <row>`, `actinglab serve --stdio`) is the one program that runs them,
+with the rescue face. The rows that run the installer's commands:
+
+| The installer's command | The rescue row |
+|---|---|
+| `install release verify` | `release verify <dir> [--facts <file>] [--expect-tag <tag>] [--expect-commit <hex>]` |
+| `install release stage` | `release stage <dir> [--facts <file>] [--expect-tag <tag>] [--expect-commit <hex>] [--local-build]` |
+| `install adopt` | `adopt` |
+| `install update plan --preview` | `deploy <tag\|commit> --plan` |
+| `install update apply --stop --hold --start` (with `release stage` of `--dir`) | `deploy <tag\|commit> [--dir <dir>] [--detach]`, the hold `lab-deploy-<ms>` |
+| `install rollback plan`, `install rollback apply` | `rollback [--to <tag\|commit>] [--plan] [--detach]` |
+| `install undo --operation <id>` | `undo <id>` |
+| `install resume --operation <id>` | `op resume <id>` |
+| `install status [--operation <id>] [--check-rollback]` | `op status [<id>] [--check-rollback] [--state-root-installation]` |
+| `install leftovers` | `leftovers` |
+| `install stop --hold <reason>` | `down [--reason <reason>]` |
+| `install start` | `up` |
+| `install release-hold --reason <reason>` | `release-hold <reason>` |
+| `install guards --for stop\|start` | `guards --for stop\|start` |
+| `install config restore` | `config restore <backup> [--sha <sha256>]` |
+| the composites of the module | `config replace <file> [--sha <sha256>]`, `instance add <alias> …`, `place <bundle> [--sums <file>] [--facts <file>] [--plan]`, `new <new_root> --build <dir> …` |
+
+The rescue face:
 
 - **No root word.** It acts on the root of the `actinglab.exe` that runs it (`<root>\tools\` until
   LAB-7 moves it to `runtime\`); `--root` and `--state-root` are refused as unknown arguments.
@@ -1103,7 +1132,7 @@ the rescue face:
   the root or its operations folder cannot be read) is left out of `next` all the same, and the
   answer says so (fix 3): the note `install_caveat_noted` of `install_release_hold` with
   `install_caveat` `hold_ownership_unconfirmed`, `hold_reason` when the reason parses, the read
-  failure as its cause. `actingctl install release-hold` and `install stop` are unchanged.
+  failure as its cause.
   Workflow #421 INST-5b: a global pause is the module's own only when the pause step of such a
   journal recorded it (`own_pauses.global`, only `instance add`'s does) and it shows the hold's
   reason now; in the owner epoch the step recorded, only at the revision it recorded, in a later
@@ -1115,8 +1144,7 @@ the rescue face:
   that is not installer-held (the installer's and the module's starts, which run the watchdog's
   manual start, the watchdog's own, a reboot's) restores each persisted pause at revision 1 with
   its reason (`crates/runtime-host/src/host/scheduling_pause.rs`, `restore_scheduling_pauses`);
-  only an installer-held start (actingd's `--install-held`, which neither `actingctl install` nor
-  the module passes) keeps the pauses its transition restored. So the module matches the reason
+  only an installer-held start (actingd's `--install-held`, which the module does not pass) keeps the pauses its transition restored. So the module matches the reason
   and the alias across epochs, and resumes by the epoch and revision the running Runtime shows. A
   start of the module whose readiness was never seen (it timed out and was left running) or whose
   status could not be read therefore leaves no dead end.
@@ -1125,7 +1153,7 @@ the rescue face:
   in time) hands its own pauses back at once by the rule above and says so: `hold` `kept: false`
   with the release's `resumed` and `left`; `kept` is false only because nothing of the operation's
   own stays paused. A hand-back that fails keeps the hold (`kept: true`), its failure a note. After
-  a change on disk the hold stays as for `actingctl install` (a failed start or post-check,
+  a change on disk the hold stays (a failed start or post-check,
   `place`'s failed checks), with `kept: true`, `next` naming the ways out below (and `undo` where it
   applies). A `release-hold` that finds no Runtime answering (or cannot read its status) refuses
   `runtime_not_running`, its hold kept: `kept: true`, `next` with `up` when none runs.
@@ -1142,32 +1170,23 @@ the rescue face:
   reason `instance.added` and the revision the Runtime answered: it stays paused as a newly added
   instance and waits for a person's resume. `held_again` is absent when no instance was held
   again, so every other release records and answers as before. No vocabulary word is added.
-  `actingctl install release-hold` (its revision-1 face, whose answer is the step's evidence) is
-  unchanged and still lists such an instance as resumed, while the instance really stays paused
-  with `instance.added`: the safe side.
-- **Ways out of a kept hold** (fix 2). Every answer of the module whose own pauses stay says `hold`
-  `kept: true` and gives in `next` only ways out that work today, none naming another party's
-  hold: `release_hold`, the module's own `release-hold <reason>`; until LAB-7 deletes actingctl,
-  `actingctl_release_hold`, `actingctl install release-hold --root <root> --reason <reason>` (it
-  resumes the instances paused with exactly that reason, the module's own), and `actingctl_resume`,
-  one `actingctl resume --state-root <state root> --instance <alias>` per instance the pause step
-  paused that the running Runtime shows paused with the reason now (none when no status can be
-  read), and (Workflow #421 INST-5b) `actingctl_resume_global`, `actingctl resume --state-root
-  <state root>`, the core global resume, when the running Runtime shows the hold's own global
-  pause (`actingctl install release-hold` leaves a global pause). The core `resume` is named as
-  actingctl runs it until then. Since LAB-6S1b (0.12.58) the Lab's own `resume <instance>` (and
-  `resume` for the global pause), which binds the Lab channel, is a way out too: the Runtime no
-  longer refuses a resume from the Lab's envelope (lab-two-entries.md §2.4); `next` does not name
-  it. **Since LAB-7** (0.12.62) deletes actingctl, `next` drops the `actingctl_*` forms and names
-  the module's own `release_hold` and the Lab's core rows: `resume`, one `resume <alias>` per
-  instance as above, and `resume_global`, `resume`, for the hold's own global pause; `instance
-  add`'s `pause_added` is the Lab's `pause <alias> --reason instance.added`.
+- **Ways out of a kept hold** (fix 2; since LAB-7, 0.12.62). Every answer of the module whose own
+  pauses stay says `hold` `kept: true` and gives in `next` only ways out that work today, none
+  naming another party's hold: `release_hold`, the module's own `release-hold <reason>`;
+  `resume`, one Lab `resume <alias>` per instance the pause step paused that the running Runtime
+  shows paused with the reason now (none when no status can be read); and (Workflow #421 INST-5b)
+  `resume_global`, the Lab's `resume`, the core global resume, when the running Runtime shows the
+  hold's own global pause. The Lab's core rows bind the Lab channel, and since LAB-6S1b (0.12.58)
+  the Runtime no longer refuses a resume from the Lab's envelope (lab-two-entries.md §2.4).
+  `instance add`'s `pause_added` is the Lab's `pause <alias> --reason instance.added`. Before
+  LAB-7, `next` named actingctl's forms instead (`actingctl_release_hold`, `actingctl_resume`,
+  `actingctl_resume_global`).
 - **Its own running image.** The module runs from `<root>\tools\actinglab.exe`, which an update
   replaces: the image of the process that plans (matched by its process id) is renamed aside as
-  `actingctl.exe` is and runs on (`running.renamed_own` in the plan); any other running
+  `actinglab-mcp.exe` is and runs on (`running.renamed_own` in the plan); any other running
   `actinglab.exe` under the root still refuses `running_image_blocks` (an MCP server or another
   CLI run of it: close it first).
-- **Guards report.** Every row of "Guards" below is evaluated as for `actingctl install` and none
+- **Guards report.** Every row of "Guards" below is evaluated and none
   refuses: a row that fails or is not evaluated is noted with the warning `install_caveat_noted`,
   `install_caveat` `guard_failed` and the rows as `install_guards`, and the journal keeps the rows.
   A start waits for memory up to `install.start.memory_wait_ms` as before, then goes on and
@@ -1353,7 +1372,7 @@ the rescue face:
 - **`vision manifest --provider cpu|directml` and `vision check`** (Workflow #453 S7, since
   0.12.60; register §1.355; [vision-model-folders.md](vision-model-folders.md), "The manifest";
   the coordinator's rulings on board #453, not the owner's words). Two read-only rows, `runtime`
-  `offline`, `writes` false; no `actingctl install` command. `vision manifest` runs the live
+  `offline`, `writes` false. `vision manifest` runs the live
   build's `actingd vision manifest --provider <p>` and answers its manifest as `report`
   (`install_command_done`, operation `install_vision_manifest`). `vision check` reads the root's
   configuration as every row does; then (fix 1, in this order), for each game root below the
@@ -1408,7 +1427,7 @@ the rescue face:
 - **`vision place --from <dir>`** (Workflow #453 S9, since 0.12.60; register §1.367;
   [vision-model-folders.md](vision-model-folders.md), "Placing a vision root from a folder"; the
   coordinator's rulings on board #453, not the owner's words). A row of this module only
-  (`writes` true, `runtime` `offline`); `actingctl install` has no such command. It fetches
+  (`writes` true, `runtime` `offline`). It fetches
   nothing and names no address.
   - **Which files, and where.** The live build's `actingd vision check --config <the root's
     configuration> --install-root <root>` (as `vision check` runs it, without `--model`, within its
@@ -1477,7 +1496,7 @@ the rescue face:
 - **`state-root claim [--new-identity]`** (Workflow #453 S12, since 0.12.60; register §1.368;
   [state-root-installation.md](state-root-installation.md), "Handing a state root over"; the
   coordinator's rulings on board #453, not the owner's words). `writes`, `irreversible`, `runtime`
-  `offline`; no `actingctl install` command. It reads the root's configuration as every row does,
+  `offline`. It reads the root's configuration as every row does,
   applies the update path's stopped rule (`owner_lock_held`, `runtime_running` with the image's
   `pid`, `processes_unreadable`), then runs the live build's `actingd claim-state-root --config
   <the root's configuration> --actor <initiator>` (and `--new-identity` when given) within
@@ -1514,8 +1533,7 @@ the rescue face:
   (the stopped rule, the plan's running images), and a background operation's answer tells its
   caller to follow it with `op status`, so a check-config started then could make the operation's
   stop answer `runtime_running` or its plan count one Runtime too many; the answer's own
-  `unfinished` says why the member is not there. Read only; `actingctl install status` is
-  unchanged.
+  `unfinished` says why the member is not there. Read only.
 - **Until LAB-6** a request the module sends to a running Runtime goes on the CLI channel with the
   CLI envelope, as `actingctl install`'s do.
 - **Journals across versions** (the coordinator's ruling of 2026-11-10, LAB-3 fix 1; no
@@ -1593,7 +1611,7 @@ the rows. Until then a root has no U\*, and its plans hold no U\* row.
 
 | Command | Runtime | owner.lock | writer.lock | Other |
 |---|---|---|---|---|
-| `update` / `rollback apply` without `--stop` | stopped: no actingd under the root | unlocked | taken | no unfinished operation; no `.part` of another operation; no running image that would change but `actingctl.exe` and `actinglab-mcp.exe`; a running `adb.exe` never changes |
+| `update` / `rollback apply` without `--stop` | stopped: no actingd under the root | unlocked | taken | no unfinished operation; no `.part` of another operation; no running image that would change but `actinglab-mcp.exe` (and the planning module's own image); a running `adb.exe` never changes |
 | with `--stop` (INST-2) | running (stop is step 3) | — | taken before the hold | as above after the stop |
 | `config commit apply` (INST-3) | stopped, or `--while-running` | — | taken | candidate base = live |
 | `pack place` (INST-4) | any (cold when stopped; `--hot` when running) | — | taken | hot: its guards |
@@ -1607,16 +1625,17 @@ the rows. Until then a root has no U\*, and its plans hold no U\* row.
 
 - `install\writer.lock` is held exclusively from before the first change to after the last one;
   in a composite update from before the hold until after readiness. While it is held the
-  launcher runs nothing, a tick answers `watchdog_installer_busy` (row 7a), and `actingctl start`
-  and `restart` refuse. A free lock is held shared by a tick until the tick ends; the installer
+  launcher runs nothing, a tick answers `watchdog_installer_busy` (row 7a), and the Lab's
+  `restart` (the watchdog's manual start, as `up` is on an A/B root) refuses. A free lock is held shared by a tick until the tick ends; the installer
   waits `install.lock_wait_ms` for it.
-- `<root>\watchdog\run.lock` is held by the installer's start, as by `actingctl start`.
+- `<root>\watchdog\run.lock` is held by the installer's start, as by the watchdog's manual start
+  (the Lab's `restart`).
 - A `request-shutdown` close is a formal close (row 6); the installer's start is a formal start
   for the watchdog.
 - **Row 7a″.** While `install\current.json` names an unfinished update or rollback (or the undo
   of one, which keeps its kind), a tick that would consider a start answers
   `watchdog_installer_unfinished` (warning, `install_operation_id`) and starts nothing, and
-  `actingctl start` and `restart` refuse the same way
+  the Lab's `restart` refuses the same way
   ([runtime-watchdog.md](runtime-watchdog.md), "Decision"). The OS releases the writer lock when
   an installer dies, so without the row the watchdog would start a half-swapped root. An
   unfinished `release stage` or `adopt` changes only `install\` and does not hold a start back
@@ -1631,27 +1650,27 @@ the rows. Until then a root has no U\*, and its plans hold no U\* row.
 
 ### Running images
 
-`actingctl.exe` images (MCP servers, reads) are renamed aside while running and keep running;
+The Lab's MCP server's images are renamed aside while running and keep running (since LAB-7,
+0.12.62, no longer `actingctl.exe` images, which no build carries);
 `adb.exe` is never moved and `adb kill-server` is never used; any other running image under the
 root that would change refuses (`running_image_blocks`); unchanged files are never
 touched; MCP servers left on renamed images are listed so the person reconnects them (an MCP
 entry switches its own child; #411 P49). The Lab's MCP server (Workflow #434 LAB-5G6, 0.12.57;
 the coordinator's ruling 5 on board #434): an `actinglab-mcp.exe` image, in `tools\` or
-`runtime\`, is renamed aside as an `actingctl.exe` image is, by the same rule (the file name), and
-listed with them (`running.renamed` in the plan, `running_renamed` and the caveat
+`runtime\`, is renamed aside by the file name, and
+listed (`running.renamed` in the plan, `running_renamed` and the caveat
 `mcp_clients_on_previous_build` after apply). It serves MCP by its image name, whatever its
 command line: the process probe's one predicate marks `mcp_serve` for an `mcp-serve` command line
 and for an image named `actinglab-mcp.exe`, also once renamed aside (`actinglab-mcp.exe.old-<ms>`),
 so `install status` lists it among `mcp_servers_on_old_images` and the notice's
-`mcp_clients_reconnect` counts it as an `actingctl.exe mcp-serve`; and the second MCP entry,
+`mcp_clients_reconnect` counts it as an MCP server; and the second MCP entry,
 `actingcommand-mcp-entry-g2.exe`, is an entry as the first is, so a server it started asks no
 client to reconnect (the coordinator's ruling of 2026-11-12). The rows keep their members (`pid`,
 `path`, `mcp_serve`): `path` names the program. The Lab's rescue module (LAB-3 fix 1): the image
 of the
 process that plans, matched by its process id (`<root>\tools\actinglab.exe` running the module),
 is renamed aside the same way and listed as `running.renamed_own`; another running
-`actinglab.exe` still refuses. `actingctl install`'s planning is unchanged: its own image is
-`actingctl.exe`.
+`actinglab.exe` still refuses.
 
 ### The rollback gate
 
@@ -1780,7 +1799,7 @@ any other schema (`state_invalid`).
 ```
 
 The Lab's rescue module (LAB-3) adds two members after `installer`, which `actingctl install`
-never writes: `"initiator": "<word>"` (lab-two-entries.md §4.1) and `"one_way": true` (a one-way
+(deleted by LAB-7) never wrote: `"initiator": "<word>"` (lab-two-entries.md §4.1) and `"one_way": true` (a one-way
 ledger edge it applied; absent otherwise); its undo record carries `"initiator"` too. Kinds
 `config_replace` and `pack_place` are the module's, and (Workflow #453 S4) `new`, whose inputs
 record the build, the folder it is copied from, the state root and the options, never the salt;
@@ -1796,8 +1815,8 @@ Lab's rescue module").
 
 Workflow #454 (0.12.59; register §1.348; fix 1): the evidence of a `close` step that is not an
 automatic rollback's carries `first_epoch` and, when they apply, `first_epoch_unread` and
-`first_epoch_guard` ("The post-start checks (INST-2)"), written by the close of `actingctl
-install` and of the rescue module alike; a `start` journal's `inputs` may carry `"first_epoch":
+`first_epoch_guard` ("The post-start checks (INST-2)"), written by the close of the rescue
+module (and of `actingctl install` before LAB-7); a `start` journal's `inputs` may carry `"first_epoch":
 true`, carried from the close of the operation that stopped the Runtime. Both are free-form
 values every version reads: `s0` and every other member keep the shape they have before 0.12.59,
 so an older reader reads such a journal (its `undo`, `resume`, `status` and the S0 a standalone
@@ -1851,8 +1870,8 @@ The section `install` of `actingd.config.json` ([runtime-config.md](runtime-conf
 `install` section"; `actingd-config` revision 17, Runtime v0.12.18; revision 18, Runtime
 v0.12.19, adds INST-2's `start` and `stop` keys and retires `install.guard.blocked_windows`).
 actingd parses and validates it and otherwise
-ignores it; `actingctl` reads it from the root's configuration file through
-`actingcommand-runtime-config`. The deadlines of the installer's children are its `child` keys
+ignores it; the Lab's rescue module (`crates/lab-rescue`) reads it from the root's configuration
+file through `actingcommand-runtime-config`. The deadlines of the installer's children are its `child` keys
 (INST-1b-F fix round 1, "Children and their deadlines" above). Fixed by this contract, not
 tunable: the readiness probe period (500 ms, also the period of the start's memory reads and of
 the hold's busy-instance reads), the 2 s clock slack, the layouts, schema names and
@@ -1862,8 +1881,14 @@ check-config takes `--install-root` (17). The MCP entry's tunables are its `mcp_
 
 ## The MCP entry (Workflow #421 MCP-ENTRY, Runtime v0.12.18)
 
-Every client (Claude Code, Codex, Antigravity, DSH) starts one stable entry instead of
-`actingctl mcp-serve`; the first generation's form is:
+Every client (Claude Code, Codex, Antigravity, DSH) starts one stable entry instead of the MCP
+server itself. Since Workflow #434 LAB-7 (0.12.62) the first generation (`g1`,
+`actingcommand-mcp-entry.exe`, whose child was `actingctl mcp-serve`) is deleted with `actingctl`:
+no build carries it, no row plans for it or prints its registration, and a client still
+registered with it stops working (register §1.287, "Slice LAB-7", "At deploy"); a client
+registers the second generation (its bullet, the last but one). The bullets up to and including
+"Registration" describe the first generation as it was, since the second is described by how it
+differs. The first generation's form was:
 
 `<root>\mcp-entry\g1\actingcommand-mcp-entry.exe --root <root> --client <name> -- mcp-serve --tier …`
 
@@ -1974,13 +1999,13 @@ Every client (Claude Code, Codex, Antigravity, DSH) starts one stable entry inst
     `mcp-entry list` lists both generations' entries side by side.
   - No release or Tools archive carries it before the packaging slice (LAB-5G6), and placing it in
     `g2\` is a manual step until an installer step exists. `actingctl mcp-serve` and
-    `actingctl mcp-entry plan --entry-protocol 1` stay until the slice that removes actingctl,
-    which comes after the owner's registrations have moved to `g2\`.
+    `actingctl mcp-entry plan --entry-protocol 1` went with actingctl (LAB-7, 0.12.62), after the
+    owner's registrations moved to `g2\`.
 - **The rescue module's rows** (Workflow #434 LAB-5G5b, 0.12.57; register §1.287, "Slice
   LAB-5G5b"). Three rows of the operation table, read only, which `actinglab <row>` and `actinglab
   serve --stdio` serve on the root of the `actinglab.exe` that runs them (no `--root`, "The Lab's
-  rescue module"). The first generation's `actingctl mcp-entry plan|list` and `mcp-config` answer
-  as before.
+  rescue module"). The first generation has no row: its plan, list and registration were
+  actingctl's (`mcp-entry plan|list`, `mcp-config --entry`) and went with it (LAB-7).
   - **`mcp plan --entry-protocol 2 [--current-build <commit>]`** is the second generation's plan
     (operation `install_mcp_entry_plan`), and answers exactly what that entry reads: `{switch,
     build {commit, manifest_sha256}, child [server], tunables {poll_ms, settle_ms,
@@ -1998,21 +2023,20 @@ Every client (Claude Code, Codex, Antigravity, DSH) starts one stable entry inst
     `actinglab-mcp.exe` (every build before the packaging slice) refuses
     `install_command_refused` with `install_refusal` `mcp_server_not_in_build` (`commit_sha` the
     build, `path` the last place looked), with `tunables`: never a path that does not exist,
-    never `actingctl.exe`. Another `--entry-protocol` is refused `actingctl_usage_invalid`
-    (`--entry-protocol`, `not_recognised`), as `actingctl mcp-entry plan` refuses one other than
-    its own 1.
+    never `actingctl.exe`. Another `--entry-protocol`, the first generation's 1 included, is refused
+    `actingctl_usage_invalid` (`--entry-protocol`, `not_recognised`).
   - **The sample.** `crates/lab-rescue/tests/fixtures/mcp-plan-entry-protocol-2.json` is one
     answer of `mcp plan`, for a made-up root `C:\ActingCommand` whose build carries the server in
     its Tools member and a current build of another commit. The row's test produces it from such
     a root and compares; the second generation's test reads the same file with the entry's own
     reader and accepts it. The file is the contract between the two programs: a change to what
     the row answers or to what the entry reads changes it, and both tests.
-  - **`mcp entries [--all]`** (operation `install_mcp_entry_list`) lists the entries' status files
-    as `actingctl mcp-entry list` lists them, both generations side by side (the same file, the
+  - **`mcp entries [--all]`** (operation `install_mcp_entry_list`) lists the entries' status files,
+    both generations side by side (the same file, the
     same members), each row with `generation` when its file states one (`entry_generation`).
   - **`mcp config --client claude|codex|antigravity|dsh [--list <module>[,<module>...]]`**
     (operation `install_mcp_config`) prints the second generation's registration snippet, in
-    the shapes `actingctl mcp-config --entry` prints for the first:
+    the shape the first generation's registration had:
     `<root>\mcp-entry\g2\actingcommand-mcp-entry-g2.exe --root <root> --client <client> --`, no
     `--tier` (the server has no tiers), and `--list <modules>` after `--` when `list` is given.
     `list` takes the
@@ -2040,7 +2064,12 @@ R-15c builds the slot material, the slot locks, `install-state` v2, the readers 
 and the fixed entries ([stable-entry.md](stable-entry.md)); R-15d the fresh root, the
 activation, update, rollback, undo, resume, the clean, `install restart` and the read face; R-15e
 the bootstrap and the conversion of a single-location root. Until a root is converted it stays
-single-location and nothing here runs on it.
+single-location and nothing here runs on it. Since Workflow #434 LAB-7 (0.12.62) deleted
+`actingctl`, the installer this frozen design names (its commands, an installer's program in
+`install\installer.json`) is the Lab's rescue module and its `tools\actinglab.exe`: a command form
+below is the installer's, which a person runs as its rescue row (`prepare`, `convert`, `clean`,
+`restart` and the rows of "The Lab's rescue module"; `prepare`, `convert` and `clean` are planned
+rows not served yet).
 
 ### Root, slots and root-fixed items (design §2.1, §2.2)
 
@@ -2193,24 +2222,24 @@ rollback and an undo write the baseline's bytes back and keep its id.
 ### Commands (design §3.1; frozen by R-15b, built by R-15c to R-15e)
 
 ```text
-actingctl install release stage --root <r> --dir <d> [--facts <f>] [...] [--client-ref <t>] [--detach]
-actingctl install prepare   --root <r> [--build <c>] [--ui-build <u>] [--to-selection <sel>] [--client-ref <t>] [--detach]
-actingctl install update   plan  --root <r> --prepared <op> [--preview] [--accept-ledger-one-way] [--hold <reason>]
-actingctl install update   apply --root <r> --prepared <op> --plan <id> [--stop --hold <reason> [--known-pause A=R]... [--start]] [--ack-guard <id>]... [--client-ref <t>] [--detach]
-actingctl install rollback plan  --root <r> --to-selection <sel> [--prepared <op>] [--preview] [--hold <reason>]
-actingctl install rollback apply --root <r> --to-selection <sel> [--prepared <op>] --plan <id> [as update apply]
-actingctl install convert  plan  --root <r> --ui-build <u> [--preview] [--hold <reason>]
-actingctl install convert  apply --root <r> --ui-build <u> --plan <id> --stop --hold <reason> [--known-pause A=R]... [--start] [--ack-guard <id>]... [--client-ref <t>] [--detach]
-actingctl install clean    --root <r> [--ui-confirmed <sel> --via ui|cli] [--client-ref <t>] [--detach]
-actingctl install restart  --root <r> [--hold <reason>] [--known-pause A=R]... [--ack-guard <id>]... [--client-ref <t>] [--detach]
-actingctl install undo     --root <r> --operation <op> [--ack-guard <id>]... [--client-ref <t>] [--detach]
-actingctl install resume   --root <r> --operation <op> [--ack-guard <id>]... [--client-ref <t>] [--detach]
-actingctl install start    --root <r> [--ack-guard <id>]... [--client-ref <t>] [--detach]
-actingctl install stop     --root <r> --hold <reason> [...] [--client-ref <t>] [--detach]
-actingctl install release-hold --root <r> --reason <reason> [--player-hold-verified <alias>=<hold_id>]... [--client-ref <t>] [--detach]
-actingctl install status   --root <r> [--operation <op> | --client-ref <t>] [--hold <reason>] [--check-rollback] [--verify] [--light] [--entry-failures-after <cursor>]
-actingctl install leftovers --root <r>
-actingctl install new      --root <new> --build <dir> --ui-build <dir> [--facts <f>]... [--local-build] [...] [--client-ref <t>] [--detach]
+install release stage --root <r> --dir <d> [--facts <f>] [...] [--client-ref <t>] [--detach]
+install prepare   --root <r> [--build <c>] [--ui-build <u>] [--to-selection <sel>] [--client-ref <t>] [--detach]
+install update   plan  --root <r> --prepared <op> [--preview] [--accept-ledger-one-way] [--hold <reason>]
+install update   apply --root <r> --prepared <op> --plan <id> [--stop --hold <reason> [--known-pause A=R]... [--start]] [--ack-guard <id>]... [--client-ref <t>] [--detach]
+install rollback plan  --root <r> --to-selection <sel> [--prepared <op>] [--preview] [--hold <reason>]
+install rollback apply --root <r> --to-selection <sel> [--prepared <op>] --plan <id> [as update apply]
+install convert  plan  --root <r> --ui-build <u> [--preview] [--hold <reason>]
+install convert  apply --root <r> --ui-build <u> --plan <id> --stop --hold <reason> [--known-pause A=R]... [--start] [--ack-guard <id>]... [--client-ref <t>] [--detach]
+install clean    --root <r> [--ui-confirmed <sel> --via ui|cli] [--client-ref <t>] [--detach]
+install restart  --root <r> [--hold <reason>] [--known-pause A=R]... [--ack-guard <id>]... [--client-ref <t>] [--detach]
+install undo     --root <r> --operation <op> [--ack-guard <id>]... [--client-ref <t>] [--detach]
+install resume   --root <r> --operation <op> [--ack-guard <id>]... [--client-ref <t>] [--detach]
+install start    --root <r> [--ack-guard <id>]... [--client-ref <t>] [--detach]
+install stop     --root <r> --hold <reason> [...] [--client-ref <t>] [--detach]
+install release-hold --root <r> --reason <reason> [--player-hold-verified <alias>=<hold_id>]... [--client-ref <t>] [--detach]
+install status   --root <r> [--operation <op> | --client-ref <t>] [--hold <reason>] [--check-rollback] [--verify] [--light] [--entry-failures-after <cursor>]
+install leftovers --root <r>
+install new      --root <new> --build <dir> --ui-build <dir> [--facts <f>]... [--local-build] [...] [--client-ref <t>] [--detach]
 ```
 
 - `--prepared` names a finished `prepare` whose `.part` is still there and verifies; the plan id
@@ -2463,12 +2492,13 @@ sha256, members, cleaned_by}`: with every build still kept, `next` is `prepare -
 
 ### Player holds (design §3.10, Workflow #429 R-7a, [player-hold.md](player-hold.md))
 
-- Inside `actingctl install …` a bare "hold" is the installer's deployment pause (`--hold`,
+- Inside the installer's commands a bare "hold" is the installer's deployment pause (`--hold`,
   `release-hold`, `release_hold`, `kept_holds`, `install.hold_after_start`,
   `keeps_hold_after_start`); a player hold always carries `player_hold` (the guard
   `player_holds`, S0's `player_holds`, the post-start row `player_holds`, the adb row's
-  `skipped_player_held`, the caveat `player_hold_persistence_off`). R-7a's top-level `actingctl
-  hold`, `hold-release` and MCP's `ac_hold*` are the player hold's; the installer never calls them.
+  `skipped_player_held`, the caveat `player_hold_persistence_off`). R-7a's player-hold commands (`actingctl
+  hold`, `hold-release` and MCP's `ac_hold*`, gone with actingctl in LAB-7) are the player hold's;
+  the installer never calls them.
   R-7a's value keys are used as R-7a named them: `hold_phase`, `alias`, `source_actor`,
   `source_channel`, `source_via`, `ended_by_actor`, `ended_by_channel`, `ended_by_via`.
 - **Guard `player_holds`** (`install_guard`): judged on the R\* of the A/B edge table
@@ -2678,9 +2708,9 @@ An undo in progress is `running` with `progress.attempt.verb` `undo`.
 
 | command | run by | environment |
 |---|---|---|
-| `actingctl install …`, `install status` included | the actingctl the caller picks from `install\installer.json` by its own `install-cli` range | cleared, `--root` named |
-| other commands that change the root: `actingctl watchdog install`, `watchdog uninstall`, `actingd unlock-owner` | the fixed entry `<root>\runtime\<name>.exe` | cleared |
-| read-only commands: `overview`, `packs`, `devices`, `actingctl status`, `mcp-serve`, `mcp-config`, `actingd check-config` | the fixed entry, or a process's own slot program | cleared, or inherited by `pin_child` |
+| the installer's commands (their rescue rows), `op status` included | the `actinglab.exe` the caller picks from `install\installer.json` by its own `install-cli` range | cleared |
+| other commands that change the root: the Lab's `watchdog install`, `watchdog uninstall`, `actingd unlock-owner` | the fixed entry (`<root>\tools\actinglab.exe`, `<root>\runtime\<name>.exe`) | cleared |
+| read-only commands: the Lab's `status`, `packs`, `devices`, `mcp config`, the Lab's MCP server `actinglab-mcp.exe`, `actingd check-config` | the fixed entry, or a process's own slot program | cleared, or inherited by `pin_child` |
 | starting the Runtime | only `install start` or `install restart` (first row), never the slot's actingd directly | as the first row |
 
 - **`install\installer.json`** (`actingcommand.install-installer.v1`, `install-cli` 1):
@@ -2698,16 +2728,16 @@ An undo in progress is `running` with `progress.attempt.verb` `undo`.
   The file is rewritten (`.part`, flush, rename) at every `release stage` and every operation's
   end; a UI reads it and never writes it. `status` answers the same with `installer.running
   {path, commit, install_cli}` and the caveat `installer_not_newest {first, running}` when another
-  than the first runs. A UI never runs install commands from `<root>\runtime\actingctl.exe`: after
+  than the first runs. A UI never runs install commands from `<root>\tools\actinglab.exe`: after
   a rollback it is the older installer.
 - **An entry absent or refusing** (between a running entry's two renames, a conversion's
   `retire_live_files` and `place_entries`, a missing or unreadable pointer, an entry's refusal):
   the graphical entry's dialog offers `recovery_ui` ([stable-entry.md](stable-entry.md)); a UI or
   an outside GUI reads `installer.json`, picks an installer and runs `install status --root <r>`
   with a cleared environment (on a single-location root that never met an installer of R-15c or
-  later, `<root>\runtime\actingctl.exe install status`); failing both it shows
+  later, `<root>\tools\actinglab.exe op status`); failing both it shows
   `installer_unavailable` with the root and the manual way through any
-  `install\builds\<c>\runtime\actingctl.exe`.
+  `install\builds\<c>\tools\actinglab.exe`.
 - **While an operation is unfinished:** the actingd entry refuses a start of an operation off row
   7a″'s pass list, `entry_operation_unfinished`, except the installer's own start, which carries
   `ACTINGCOMMAND_INSTALL_OPERATION=<op>` ([stable-entry.md](stable-entry.md)); `actingd
@@ -2815,7 +2845,7 @@ are below. On a single-location root nothing is deleted ("Kept files").
 
 ### `install restart` and the next step of every state (design §3.15; from R-15d)
 
-`actingctl install restart --root <r> [--hold <reason>] [--known-pause A=R]... [--ack-guard
+`install restart --root <r> [--hold <reason>] [--known-pause A=R]... [--ack-guard
 <id>]... [--client-ref <t>] [--detach]` restarts only the Runtime, under a deployment pause, from
 the active slot (Workflow #429 review v3 block 1, the coordinator's option ②).
 
@@ -2897,14 +2927,14 @@ of `previous_slot_unconfirmed`, `apply_form.unblock`):
 
 **Who writes the Runtime half:** the composite with `--start`, `convert` and `install restart`
 (each judges the S0 of its own close); `install start` when it judges S0. Never the watchdog, the
-start after a planned restart, `actingctl start`, `actingctl restart` or a person starting a
-fixed entry: none of them takes S0 or the installer's post-start checks, and the table then gives
+start after a planned restart, the watchdog's manual start (the Lab's `restart`, and `up` on an
+A/B root) or a person starting a fixed entry: none of them takes S0 or the installer's post-start checks, and the table then gives
 `restart`. **Judged S0:** a start's checks judge S0 when that S0 describes the Runtime the start
 follows: the composite, `convert` and `restart` always (their own close); `install start` takes
 the S0 of the newest operation P that stopped the Runtime, and it counts only when after P's
 `close` step no Runtime became ready: the start logs since then are only P's own attempts that
-ended `exited_during_startup`. Any other start log since (the watchdog's, a restart's, an
-`actingctl start`'s, or P's own start that became ready or timed out) means no S0: the start is
+ended `exited_during_startup`. Any other start log since (the watchdog's, a restart's, a
+manual start's, or P's own start that became ready or timed out) means no S0: the start is
 checked without it, writes no Runtime half and `start_form.s0_from` is `null`. R-15d changes
 `last_stop` to this definition on both layouts (it compares P's end today).
 
