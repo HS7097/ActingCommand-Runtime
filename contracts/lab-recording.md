@@ -116,9 +116,10 @@ command deletes nothing and names the files it already wrote.
   every frame the Lab did not convert. #463 S1-1 (since 0.12.63): a click execution's
   `before_frame`, `after_frame` and `after_capture` are absent on every press but one recorded by
   the command that makes it ("Recording while playing"), so a recording without such a press is
-  byte-identical to one an earlier build wrote. #463 S1-2 (since 0.12.63): `after_capture`'s
+  byte-identical to one an earlier build wrote. #463 S1-2 (since 0.12.64): `after_capture`'s
   `interval_ms` and `still_ms` are absent on a record S1-1's build wrote, which loads as one whose
-  screen after was not tested for stillness (`still` `null`).
+  screen after was not tested for stillness (`still` `null`); its `unfinished` is absent on every
+  record but one whose after loop a failed capture ended.
 
 ## Commands
 
@@ -1573,8 +1574,9 @@ scheduling first, as for every recording.
   `--interval-ms` outside 20..=1000, `--still-ms` outside 0..=5000 and `--still-max-ms` outside
   0..=60000 (`interval_ms`, `still_ms`, `still_max_ms`, `range`; a value that is no whole number
   too), each without `--record` (`record_only`), and a bound of more than 120 intervals,
-  `still_max_ms` above 120 times `interval_ms` (`still_max_ms`, `conflicting`, with `interval_ms`
-  in the details), so that a press never takes more than 121 captures after it. An open step
+  `still_max_ms` above 120 times `interval_ms`, a value out of the range the interval allows
+  (`still_max_ms`, `range`, with `max` 120 × `interval_ms` and `interval_ms` in the details), so
+  that a press never takes more than 121 captures after it. An open step
   that declares a click without an outcome is `record_click_exists`, one whose click has an outcome
   on record `record_click_executed`, one that declares an application operation
   `record_step_effect_exists`: such a step is pressed with `do --capture --record`. A frame of
@@ -1606,15 +1608,20 @@ scheduling first, as for every recording.
     capture every `--interval-ms` (100 without it), counted from the start of one capture to the
     start of the next; when a capture took longer than the interval the next starts at once. No
     wait is shorter than it is asked to be.
-  - *Still* means: the captures of the last `--still-ms` (300 without it), all taken since the
-    first, are at least two and each differs from the newest by at most the Runtime's own
-    frame-change bound (`frame_change_milli` of the whole frame at most `FRAME_CHANGE_MAX_MILLI`,
-    the measure the kernel's still waits use, `contracts/color-digest.md`). With an interval longer
-    than `--still-ms` no two captures fall within it, so the screen is never found still.
+  - *Still* means the screen has not changed for at least `--still-ms` (300 without it), however
+    long a capture takes (fix round 3, the coordinator's ruling): take the newest capture and the
+    unbroken run of captures before it that each differ from the newest by at most the Runtime's
+    own frame-change bound (`frame_change_milli` of the whole frame at most
+    `FRAME_CHANGE_MAX_MILLI`, the measure the kernel's still waits use, `contracts/color-digest.md`);
+    the screen is still when that run holds at least one earlier capture and the newest started at
+    least `--still-ms` after the first capture of the run. A capture outside the bound ends the run,
+    and a screen that comes back after it starts a new one. So with captures every 100 ms and
+    `--still-ms 300` four unchanged captures are needed; with a capture cycle of 400 ms two suffice.
   - *The end.* The loop ends at the first still capture (`still: true`), or when the next capture
-    would start more than `--still-max-ms` (5000 without it) after the first: then the last capture
-    is the screen after, `still: false`, and the answer's `record.warnings` holds `after_not_still`
-    (the press is recorded, exit 0). A press takes at most `1 + still_max_ms / interval_ms` captures
+    would start more than `--still-max-ms` (5000 without it) after the first, or once it has taken
+    `1 + still_max_ms / interval_ms` captures, whatever the caller's clock says: then the last
+    capture is the screen after, `still: false`, and the answer's `record.warnings` holds
+    `after_not_still` (the press is recorded, exit 0). So a press takes at most that many captures
     after it, 121 at most. With `--still-ms 0` the first capture is the screen after, without a
     stillness test (`still: null`).
   - *What is kept.* Every capture of the loop is a frame of the step the first of them opens, in
@@ -1622,29 +1629,42 @@ scheduling first, as for every recording.
     and the press's `after_frame`. A capture whose bytes equal the previous one's is the same file
     (frames are stored by their digest) but still an entry with its own time, so that a reader sees
     how long the screen stood. The frames are written once, when the loop ends.
-  - *The next press.* Its capture before it (see "The screen before") arrives on that step and
-    supersedes the loop's last frame, which stays in the step. So a step's frames, in time order,
-    are the frames of the previous press's after loop, then the frame its own press happened on:
-    what stage two reads when an agent asks for the frames before and after a press.
-  - *A capture that cannot be taken* answers its own code and class, nothing of the loop is stored,
-    and the press and its closed step stand: its details begin with `record` (the press as
+  - *The next press.* On a step without marks its capture before it (see "The screen before")
+    arrives on that step and supersedes the loop's last frame, which stays in the step. So a step's
+    frames, in time order, are the frames of the previous press's after loop, then the frame its own
+    press happened on: what stage two reads when an agent asks for the frames before and after a
+    press. On a step marked before the next press that capture is not stored, and the step's frames
+    end with the loop's last.
+  - *A first capture that cannot be taken* answers its own code and class, nothing of the loop is
+    stored, and the press and its closed step stand: its details begin with `record` (the press as
     recorded) and `after: {after_ms, taken: false}`, then the capture's own members; take the
     screen with `capture --record` (MCP: `ac_lab_observe` with `capture` and `record`), do not press
-    again. A failure after a performed and recorded press that does not undo it (the input lease's
+    again.
+  - *A later capture that cannot be taken* (fix round 3; the owner asked that every capture be
+    kept) ends the loop there, and what it took is kept: the captures taken are the step's frames
+    as above, the last of them the press's `after_frame`, and `after_capture` says how many were
+    taken (`captures`) and that the loop did not finish (`unfinished: true`, `still: null`). The
+    command answers the capture's own code and class, loud: its details begin with `record` (the
+    press as recorded, with that frame after) and `after: {after_ms, taken: true, captures}`, then
+    the capture's own members; the press and its closed step stand, do not press again.
+  - A failure after a performed and recorded press that does not undo it (the input lease's
     release, the receipt's encoding) is answered after the screen after it, `device_error` with
     `record` and `input_outcome` in its details.
 - **In `recording.json`** (every member absent on every other press, so that a recording without
   such a press, one of `do --capture --record` included, is byte-identical to one an earlier build
   wrote): the click's `source` `point`; its execution's `before_frame`, the id of the step's live
   primary frame when the press was committed (what was on the screen); its `after_frame`, written
-  once: the last capture of its own after loop, when the loop ends, or, when the loop stored
-  nothing (its capture could not be taken), the first frame that opens a step after it (a `capture
-  --record`, or the capture before the next press); a later frame never rewrites it; its
-  `after_capture: {after_ms, interval_ms, still_ms, still_max_ms, still, waited_ms, captures,
-  kept}`, how the screen after was taken: the four parameters as the press took them, `still`
-  `true`, `false` or `null` (no stillness test), `waited_ms` from the press to the start of the
+  once: the last capture of its own after loop, when the loop ends (a later capture that failed
+  included), or, when the loop stored nothing (its first capture could not be taken), the first
+  frame that opens a step after it (a `capture --record`, a `record mark --frame`, or the capture
+  before the next press); a later frame never rewrites it; its `after_capture: {after_ms,
+  interval_ms, still_ms, still_max_ms, still, waited_ms, captures, kept}`, how the screen after was
+  taken: the four parameters as the press took them, `still` `true`, `false` or `null` (no
+  stillness test, or a loop that did not finish), `waited_ms` from the press to the start of the
   last capture, `captures` the captures after the press and `kept` those kept beside the last
-  (`captures - 1`); absent when the loop stored nothing. For example, an animation that settles:
+  (`captures - 1`), and `unfinished: true` only when a later capture could not be taken (absent
+  otherwise); `after_capture` is absent when the loop stored nothing. For example, an animation
+  that settles:
   `{"after_ms": 100, "interval_ms": 100, "still_ms": 300, "still_max_ms": 5000, "still": true,
   "waited_ms": 600, "captures": 6, "kept": 5}`. Its `carrier_package`, `before` and `after` are
   `null`: no Runtime Lab operation ran.

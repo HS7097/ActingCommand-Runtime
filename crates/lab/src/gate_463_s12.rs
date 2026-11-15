@@ -6,24 +6,41 @@
 // Runtime (its input answer, its captures and the caller's clock, `RecordFramePorts`): the fake's
 // clock moves only by its waits and by the time a capture is scripted to take, and the tests read
 // no clock. Stillness is the Runtime's one frame-change measure. The defaults: the first capture
-// 100 ms after the press, one every 100 ms, still when the captures of the last 300 ms show one
-// screen, at most 5000 ms.
-// - `s12_an_animation_that_settles_keeps_every_capture_and_the_last_is_the_frame_after`: after the
-//   press two frames of an animation, then the settled screen four times (two of them one pixel
-//   off, still by the measure): six captures 100 ms apart, the sixth the first whose last 300 ms
-//   are still. All six are frames of step 2 in order (f0002 to f0007), the first five superseded,
-//   f0007 live and step 1's `after_frame`; `after_capture {after_ms: 100, interval_ms: 100,
-//   still_ms: 300, still_max_ms: 5000, still: true, waited_ms: 600, captures: 6, kept: 5}`, the
-//   answer's `after` the same, no warning.
+// 100 ms after the press, one every 100 ms, at most 5000 ms. Fix round 3 (the coordinator's
+// ruling): the screen is still when it has not changed for at least `still_ms` (300): the newest
+// capture and the unbroken run of captures before it within the bound of the newest hold at least
+// one earlier capture, and the newest started at least `still_ms` after the run's first, however
+// long a capture takes.
+// - `s12_an_animation_that_settles_keeps_every_capture_and_the_last_is_the_frame_after`: captures
+//   every 100 ms: after the press two frames of an animation, then the settled screen four times
+//   (two of them one pixel off, still by the measure): four unchanged captures are needed, so six
+//   captures, the sixth the first that started 300 ms after the first of its run (three unchanged
+//   do not end the loop). All six are frames of step 2 in order (f0002 to f0007), the first five
+//   superseded, f0007 live and step 1's `after_frame`; `after_capture {after_ms: 100,
+//   interval_ms: 100, still_ms: 300, still_max_ms: 5000, still: true, waited_ms: 600, captures: 6,
+//   kept: 5}`, the answer's `after` the same, no warning.
+// - `s12_captures_of_400_ms_are_still_after_two_unchanged`: every capture takes 400 ms, longer than
+//   `still_ms`: after a changed first capture, two unchanged ones suffice (the second starts 400 ms
+//   after the first of its run): three captures, each at once after the one before, `waited_ms`
+//   900, `still` true.
+// - `s12_a_change_in_the_middle_of_a_run_starts_it_again`: every 100 ms, the settled screen three
+//   times, one other screen, then the settled screen four times: the change breaks the run, and the
+//   settled screen that comes back before it does not count; still at the eighth capture,
+//   `waited_ms` 800.
 // - `s12_a_screen_that_never_settles_is_taken_to_the_bound_and_warned`: for the bound and interval
 //   (0, 100), (250, 100), (300, 100), (1000, 50), (5000, 100) and (12000, 100), screens that never
 //   settle: exactly 1 + bound / interval captures (121 at the last), one wait of the interval
 //   before each but the first, every capture a frame of step 2 and the last the frame after,
 //   `still` false, `waited_ms` 100 + (captures - 1) x interval, `kept` captures - 1, and the
 //   answer's `record.warnings` `["after_not_still"]`.
+// - `s12_a_clock_that_does_not_advance_ends_the_loop_by_count`: a caller's clock that stands still
+//   (its waits and captures move it not at all), bound 1000 ms at 100: the loop ends by count after
+//   exactly 11 captures of one screen (never still: no time passed), `still` false, `waited_ms` 0,
+//   the warning; a twelfth capture would fail the test.
 // - `s12_a_capture_slower_than_the_interval_is_followed_at_once`: the first capture after the press
-//   takes 250 ms: the next starts at once (no wait), the one after it 100 ms later; that third is
-//   still with the second over the last 300 ms: `waited_ms` 450, three captures.
+//   takes 250 ms: the next starts at once (no wait), the ones after it 100 ms apart; the fifth,
+//   at 650, is the first that started 300 ms after the first of its run (at 350): `waited_ms` 650,
+//   five captures.
 // - `s12_identical_captures_are_one_file_and_several_entries`: the same screen four times after the
 //   press: four frames of step 2 (f0002 to f0005) of one sha256 and one path, each its own entry with
 //   its own time, and two files in the frame store (the screen before and this one).
@@ -34,10 +51,20 @@
 //   f0011, its own loop's last, after.
 // - `s12_still_ms_0_takes_one_capture_untested`: `--still-ms 0`: one capture 100 ms after the press
 //   is the frame after, `still` null, no warning.
+// - `s12_a_capture_that_fails_midway_keeps_what_was_taken`: the third capture after the press
+//   fails: the two taken are frames of step 2 (f0002 superseded, f0003 live), step 1's
+//   `after_frame` f0003, `after_capture {100, 100, 300, 5000, still: null, waited_ms: 200,
+//   captures: 2, kept: 1, unfinished: true}`; the answer is the capture's own `device_error`,
+//   its details `record` (the press with that after frame) and `after: {after_ms: 100, taken:
+//   true, captures: 2}`.
+// - `s12_each_parameter_out_of_its_range_is_refused_before_anything`: `interval_ms` 19 and 1001,
+//   `still_ms` 5001, `still_max_ms` 60001: `validation_failed` `details{argument, reason: "range",
+//   value, min, max}`: nothing captured, pressed or written.
 // - `s12_more_than_120_intervals_in_the_bound_are_refused_before_anything`: a bound of more than 120
-//   intervals (12001 ms at 100, 60000 at 499, 2401 at 20) is `validation_failed`
-//   `details{argument: "still_max_ms", reason: "conflicting", interval_ms}`: nothing captured,
-//   pressed or written.
+//   intervals (12001 ms at 100, 60000 at 499, 2401 at 20) is out of the range the interval allows,
+//   `validation_failed` `details{argument: "still_max_ms", reason: "range", value, min: 0, max: 120
+//   x interval_ms, interval_ms}` (fix round 3: the range word): nothing captured, pressed or
+//   written.
 // Frames are synthetic 160x90 screens of one colour; no Runtime, no device; nothing sleeps.
 
 use crate::recording::store::{hex_sha256, lab_dir, old_record_path, recording_path};
@@ -161,33 +188,48 @@ fn reference() -> InputFrameReference {
     }
 }
 
-/// One capture of the fake Runtime: the screen it takes and how long it takes on the fake clock.
+/// One capture of the fake Runtime: the screen it takes (`None`: the capture fails) and how long it
+/// takes on the fake clock.
 #[derive(Clone, Copy, Debug)]
 struct Shot {
-    screen: usize,
+    screen: Option<usize>,
     takes_ms: u64,
 }
 
 // A capture of `screen` that takes no time.
 const fn shot(screen: usize) -> Shot {
+    slow(screen, 0)
+}
+
+// A capture of `screen` that takes `takes_ms` on the fake clock.
+const fn slow(screen: usize, takes_ms: u64) -> Shot {
     Shot {
-        screen,
-        takes_ms: 0,
+        screen: Some(screen),
+        takes_ms,
     }
 }
 
+/// A capture the fake Runtime fails with a device error.
+const FAILED: Shot = Shot {
+    screen: None,
+    takes_ms: 0,
+};
+
 /// The fake Runtime's capture and the caller's clock: the shots its captures take, in order, the
 /// log it shares with the press (`capture`, `press`, `wait <ms>`), and the clock, which moves only
-/// by the waits and by the time each capture takes.
+/// by the waits and by the time each capture takes, or not at all when it is `frozen`.
 struct FakeDevice<'a> {
     shots: VecDeque<Shot>,
     log: &'a RefCell<Vec<String>>,
     now: Duration,
+    frozen: bool,
 }
 
 impl RecordFramePorts for FakeDevice<'_> {
     fn wait(&mut self, duration: Duration) {
-        self.now += duration;
+        if !self.frozen {
+            self.now += duration;
+        }
         self.log
             .borrow_mut()
             .push(format!("wait {}", duration.as_millis()));
@@ -199,9 +241,14 @@ impl RecordFramePorts for FakeDevice<'_> {
             .shots
             .pop_front()
             .expect("a capture the test did not script");
-        self.now += Duration::from_millis(shot.takes_ms);
+        if !self.frozen {
+            self.now += Duration::from_millis(shot.takes_ms);
+        }
+        let screen = shot
+            .screen
+            .ok_or_else(|| LabError::device("the fake Runtime's capture failed"))?;
         Ok(CapturedFrame {
-            frame: captured(shot.screen),
+            frame: captured(screen),
             input_frame: Some(reference()),
         })
     }
@@ -268,12 +315,23 @@ impl Bench {
         request: &RecordPressRequest,
         shots: &[Shot],
     ) -> (LabResult<RecordPressOutcome>, Vec<String>) {
+        self.try_press_on(request, shots, false)
+    }
+
+    // As [`Bench::try_press`], on a clock that stands still when `frozen`.
+    fn try_press_on(
+        &self,
+        request: &RecordPressRequest,
+        shots: &[Shot],
+        frozen: bool,
+    ) -> (LabResult<RecordPressOutcome>, Vec<String>) {
         let log = RefCell::new(Vec::new());
         let result = {
             let mut device = FakeDevice {
                 shots: shots.iter().copied().collect(),
                 log: &log,
                 now: Duration::ZERO,
+                frozen,
             };
             let mut press =
                 |_plan: &ClickPlan, _frame: InputFrameReference| -> LabResult<CommitClickRequest> {
@@ -432,7 +490,8 @@ fn s12_an_animation_that_settles_keeps_every_capture_and_the_last_is_the_frame_a
     let mut shots = vec![shot(BEFORE)];
     shots.extend(after.map(shot));
     let (outcome, log) = bench.press(&default_tap(), &shots);
-    // The captures start 100, 200, ..., 600 ms after the press; at 600 the last 300 ms are still.
+    // The captures start 100, 200, ..., 600 ms after the press. The settled screen's run begins at
+    // 300: at 500 (three unchanged) the newest started 200 ms after it, at 600 (four) 300 ms.
     assert_eq!(log, press_log(6, 100));
 
     let recording = bench.recording();
@@ -476,6 +535,80 @@ fn s12_an_animation_that_settles_keeps_every_capture_and_the_last_is_the_frame_a
         assert_eq!(answered[member], *value, "{member}: {record}");
     }
     assert_eq!(record["warnings"], json!([]), "{record}");
+}
+
+#[test]
+fn s12_captures_of_400_ms_are_still_after_two_unchanged() {
+    let bench = Bench::new();
+    let after = [ANIMATION, SETTLED, SETTLED_AGAIN];
+    let mut shots = vec![slow(BEFORE, 400)];
+    shots.extend(after.map(|screen| slow(screen, 400)));
+    let (outcome, log) = bench.press(&default_tap(), &shots);
+    // The press ends at 400; the captures start at 500, 900 and 1300, each at once after the one
+    // before it. At 1300 the run of the settled screen began at 900, 400 ms earlier: still.
+    assert_eq!(
+        log,
+        [
+            "capture", "press", "wait 100", "capture", "capture", "capture"
+        ]
+    );
+    let recording = bench.recording();
+    assert_eq!(
+        frames_of(&recording, 2),
+        loop_frames(2, &after),
+        "{recording}"
+    );
+    let execution = &step_of(&recording, 1)["click"]["execution"];
+    assert_eq!(execution["after_frame"], "f0004", "{recording}");
+    assert_eq!(
+        execution["after_capture"],
+        json!({
+            "after_ms": 100,
+            "interval_ms": 100,
+            "still_ms": 300,
+            "still_max_ms": 5000,
+            "still": true,
+            "waited_ms": 900,
+            "captures": 3,
+            "kept": 2
+        }),
+        "{recording}"
+    );
+    assert!(outcome.warnings.is_empty(), "{:?}", outcome.warnings);
+}
+
+#[test]
+fn s12_a_change_in_the_middle_of_a_run_starts_it_again() {
+    let bench = Bench::new();
+    let after = [
+        SETTLED,
+        SETTLED_AGAIN,
+        SETTLED,
+        ANIMATION,
+        SETTLED,
+        SETTLED_AGAIN,
+        SETTLED,
+        SETTLED_AGAIN,
+    ];
+    let mut shots = vec![shot(BEFORE)];
+    shots.extend(after.map(shot));
+    let (outcome, log) = bench.press(&default_tap(), &shots);
+    // 100 to 300 the settled screen, 400 another, 500 to 800 the settled screen again: the run of
+    // the newest stops at 400, so the settled screen before it does not count (at 500 it would
+    // reach back to 100); still at 800, 300 ms after 500.
+    assert_eq!(log, press_log(8, 100));
+    let recording = bench.recording();
+    assert_eq!(
+        frames_of(&recording, 2),
+        loop_frames(2, &after),
+        "{recording}"
+    );
+    let execution = &step_of(&recording, 1)["click"]["execution"];
+    assert_eq!(execution["after_frame"], "f0009", "{recording}");
+    assert_eq!(execution["after_capture"]["still"], true, "{recording}");
+    assert_eq!(execution["after_capture"]["waited_ms"], 800, "{recording}");
+    assert_eq!(execution["after_capture"]["captures"], 8, "{recording}");
+    assert!(outcome.warnings.is_empty(), "{:?}", outcome.warnings);
 }
 
 #[test]
@@ -538,30 +671,65 @@ fn s12_a_screen_that_never_settles_is_taken_to_the_bound_and_warned() {
 }
 
 #[test]
+fn s12_a_clock_that_does_not_advance_ends_the_loop_by_count() {
+    let bench = Bench::new();
+    let after = [SETTLED; 11];
+    let mut shots = vec![shot(BEFORE)];
+    shots.extend(after.map(shot));
+    let request = tap_request(AfterCapture {
+        still_max_ms: 1_000,
+        ..AfterCapture::for_press(None)
+    });
+    // The fake's clock stands still: every wait asks for the interval and none passes. A twelfth
+    // capture would find no scripted shot and fail the test instead of holding it.
+    let (result, log) = bench.try_press_on(&request, &shots, true);
+    let outcome = result.expect("the press on a clock that stands still");
+    assert_eq!(log, press_log(11, 100));
+
+    let recording = bench.recording();
+    assert_eq!(
+        frames_of(&recording, 2),
+        loop_frames(2, &after),
+        "{recording}"
+    );
+    assert_eq!(
+        step_of(&recording, 1)["click"]["execution"]["after_capture"],
+        json!({
+            "after_ms": 100,
+            "interval_ms": 100,
+            "still_ms": 300,
+            "still_max_ms": 1000,
+            "still": false,
+            "waited_ms": 0,
+            "captures": 11,
+            "kept": 10
+        }),
+        "{recording}"
+    );
+    assert_eq!(outcome.warnings, ["after_not_still"]);
+}
+
+#[test]
 fn s12_a_capture_slower_than_the_interval_is_followed_at_once() {
     let bench = Bench::new();
-    let shots = [
-        shot(BEFORE),
-        Shot {
-            screen: ANIMATION,
-            takes_ms: 250,
-        },
-        shot(SETTLED),
-        shot(SETTLED_AGAIN),
-    ];
+    let after = [ANIMATION, SETTLED, SETTLED_AGAIN, SETTLED, SETTLED_AGAIN];
+    let mut shots = vec![shot(BEFORE), slow(ANIMATION, 250)];
+    shots.extend(after[1..].iter().copied().map(shot));
     let (outcome, log) = bench.press(&default_tap(), &shots);
     // The first capture after the press starts at 100 ms and ends at 350: the second starts at once,
-    // the third 100 ms after it, at 450, when the last 300 ms hold the two still ones.
+    // the others 100 ms apart, at 450, 550 and 650; the settled screen's run begins at 350, so the
+    // fifth, 300 ms after it, is the first still one.
     assert_eq!(
         log,
         [
-            "capture", "press", "wait 100", "capture", "capture", "wait 100", "capture"
+            "capture", "press", "wait 100", "capture", "capture", "wait 100", "capture",
+            "wait 100", "capture", "wait 100", "capture"
         ]
     );
     let recording = bench.recording();
     assert_eq!(
         frames_of(&recording, 2),
-        loop_frames(2, &[ANIMATION, SETTLED, SETTLED_AGAIN]),
+        loop_frames(2, &after),
         "{recording}"
     );
     let taken = json!({
@@ -570,9 +738,9 @@ fn s12_a_capture_slower_than_the_interval_is_followed_at_once() {
         "still_ms": 300,
         "still_max_ms": 5000,
         "still": true,
-        "waited_ms": 450,
-        "captures": 3,
-        "kept": 2
+        "waited_ms": 650,
+        "captures": 5,
+        "kept": 4
     });
     assert_eq!(
         step_of(&recording, 1)["click"]["execution"]["after_capture"],
@@ -709,6 +877,129 @@ fn s12_still_ms_0_takes_one_capture_untested() {
 }
 
 #[test]
+fn s12_a_capture_that_fails_midway_keeps_what_was_taken() {
+    let bench = Bench::new();
+    let shots = [shot(BEFORE), shot(ANIMATION), shot(SETTLED), FAILED];
+    let (result, log) = bench.try_press(&default_tap(), &shots);
+    assert_eq!(
+        log,
+        [
+            "capture", "press", "wait 100", "capture", "wait 100", "capture", "wait 100", "capture"
+        ]
+    );
+    // The capture's own error, loud, with the count of the captures kept.
+    let error = result.expect_err("the third capture after the press fails");
+    assert_eq!(error.code, LabError::device("").code, "{}", error.message);
+    let details = error.details.clone().unwrap_or(Value::Null);
+    assert_eq!(
+        details["after"],
+        json!({"after_ms": 100, "taken": true, "captures": 2}),
+        "{details}"
+    );
+    assert_eq!(details["record"]["status"], "press_recorded", "{details}");
+    assert_eq!(
+        details["record"]["click"]["execution"]["after_frame"], "f0003",
+        "{details}"
+    );
+    assert_eq!(details["record"]["after"]["frame_id"], "f0003", "{details}");
+    assert_eq!(details["record"]["after"]["unfinished"], true, "{details}");
+
+    // What was taken is kept: the two captures are frames of step 2, the last step 1's after frame.
+    let recording = bench.recording();
+    assert_eq!(
+        frames_of(&recording, 2),
+        loop_frames(2, &[ANIMATION, SETTLED]),
+        "{recording}"
+    );
+    let execution = &step_of(&recording, 1)["click"]["execution"];
+    assert_eq!(execution["effect"], "performed", "{recording}");
+    assert_eq!(execution["after_frame"], "f0003", "{recording}");
+    assert_eq!(
+        execution["after_capture"],
+        json!({
+            "after_ms": 100,
+            "interval_ms": 100,
+            "still_ms": 300,
+            "still_max_ms": 5000,
+            "still": null,
+            "waited_ms": 200,
+            "captures": 2,
+            "kept": 1,
+            "unfinished": true
+        }),
+        "{recording}"
+    );
+}
+
+#[test]
+fn s12_each_parameter_out_of_its_range_is_refused_before_anything() {
+    let bench = Bench::new();
+    bench.capture(BEFORE);
+    let before = bench.files();
+    let press = AfterCapture::for_press(None);
+    for (after, argument, value, min, max) in [
+        (
+            AfterCapture {
+                interval_ms: Some(19),
+                ..press
+            },
+            "interval_ms",
+            19_u64,
+            20_u64,
+            1_000_u64,
+        ),
+        (
+            AfterCapture {
+                interval_ms: Some(1_001),
+                ..press
+            },
+            "interval_ms",
+            1_001,
+            20,
+            1_000,
+        ),
+        (
+            AfterCapture {
+                still_ms: Some(5_001),
+                ..press
+            },
+            "still_ms",
+            5_001,
+            0,
+            5_000,
+        ),
+        (
+            AfterCapture {
+                still_max_ms: 60_001,
+                ..press
+            },
+            "still_max_ms",
+            60_001,
+            0,
+            60_000,
+        ),
+    ] {
+        let case = format!("{argument} {value}");
+        let (result, log) = bench.try_press(&tap_request(after), &[]);
+        assert!(log.is_empty(), "{case}: {log:?}");
+        let error = result.expect_err(&case);
+        assert_eq!(
+            error.code,
+            LabError::usage("").code,
+            "{case}: {}",
+            error.message
+        );
+        let details = error.details.clone().unwrap_or(Value::Null);
+        assert_eq!(details["argument"], argument, "{case}: {details}");
+        assert_eq!(details["reason"], "range", "{case}: {details}");
+        assert_eq!(details["value"], value, "{case}: {details}");
+        assert_eq!(details["min"], min, "{case}: {details}");
+        assert_eq!(details["max"], max, "{case}: {details}");
+        assert_eq!(bench.files(), before, "{case}: a file changed");
+    }
+}
+
+#[test]
 fn s12_more_than_120_intervals_in_the_bound_are_refused_before_anything() {
     let bench = Bench::new();
     bench.capture(BEFORE);
@@ -729,9 +1020,13 @@ fn s12_more_than_120_intervals_in_the_bound_are_refused_before_anything() {
             "{case}: {}",
             error.message
         );
+        // A value out of the range the interval allows: at most 120 intervals.
         let details = error.details.clone().unwrap_or(Value::Null);
         assert_eq!(details["argument"], "still_max_ms", "{case}: {details}");
-        assert_eq!(details["reason"], "conflicting", "{case}: {details}");
+        assert_eq!(details["reason"], "range", "{case}: {details}");
+        assert_eq!(details["value"], still_max_ms, "{case}: {details}");
+        assert_eq!(details["min"], 0, "{case}: {details}");
+        assert_eq!(details["max"], 120 * interval_ms, "{case}: {details}");
         assert_eq!(details["interval_ms"], interval_ms, "{case}: {details}");
         assert_eq!(bench.files(), before, "{case}: a file changed");
     }

@@ -60,7 +60,7 @@ use actingcommand_recognition::color_digest::{
     ColorDigest, FRAME_CHANGE_MAX_MILLI, frame_change_digest, frame_change_milli,
 };
 use serde_json::{Map, Value, json};
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -1976,9 +1976,11 @@ const AFTER_NOT_STILL: &str = "after_not_still";
 
 /// #463 S1-2: how the screen after a press is taken, checked before anything is captured or
 /// pressed: `interval_ms` 20 to 1000, `still_ms` 0 to 5000 and `still_max_ms` 0 to 60000
-/// (`validation_failed`, `details{argument, reason: "range"}`), and at most 120 intervals in the
-/// bound (`still_max_ms` at most 120 times `interval_ms`, else `details{argument: "still_max_ms",
-/// reason: "conflicting"}`), so that a press takes at most 121 captures after it.
+/// (`validation_failed`, `details{argument, reason: "range", value, min, max}`), and at most 120
+/// intervals in the bound: `still_max_ms` at most 120 times `interval_ms`, a range that depends on
+/// the interval (fix round 3: `details{argument: "still_max_ms", reason: "range", value, min: 0,
+/// max: 120 times interval_ms, interval_ms}`), so that a press takes at most 121 captures after
+/// it.
 fn check_after_capture(after: &AfterCapture) -> LabResult<()> {
     let interval_ms = after.interval_ms.unwrap_or(AFTER_INTERVAL_MS);
     for (argument, flag, value, min, max) in [
@@ -2017,20 +2019,22 @@ fn check_after_capture(after: &AfterCapture) -> LabResult<()> {
             })));
         }
     }
-    if after.still_max_ms > AFTER_MAX_INTERVALS * interval_ms {
+    let max = AFTER_MAX_INTERVALS * interval_ms;
+    if after.still_max_ms > max {
         return Err(LabError::usage(format!(
-            "--still-max-ms (MCP still_max_ms) may hold at most {AFTER_MAX_INTERVALS} intervals of \
-             --interval-ms (MCP interval_ms), {interval_ms} ms, and {} ms holds more: the press \
-             would take more than {} captures after it",
-            after.still_max_ms,
-            AFTER_MAX_INTERVALS + 1
+            "--still-max-ms (MCP still_max_ms) must be in 0..={max} at --interval-ms (MCP \
+             interval_ms) {interval_ms}, at most {AFTER_MAX_INTERVALS} intervals, so that a press \
+             takes at most {} captures after it; got {}",
+            AFTER_MAX_INTERVALS + 1,
+            after.still_max_ms
         ))
         .with_details(json!({
             "argument": "still_max_ms",
-            "reason": "conflicting",
-            "still_max_ms": after.still_max_ms,
-            "interval_ms": interval_ms,
-            "max_intervals": AFTER_MAX_INTERVALS
+            "reason": "range",
+            "value": after.still_max_ms,
+            "min": 0,
+            "max": max,
+            "interval_ms": interval_ms
         })));
     }
     Ok(())
@@ -2047,14 +2051,19 @@ fn change_digest(frame: &LoadedFrame, label: &str) -> LabResult<ColorDigest> {
     })
 }
 
-/// #463 S1-2: whether every capture of `window` differs from the newest, its last, by at most the
-/// Runtime's one frame-change bound (`frame_change_milli` at most `FRAME_CHANGE_MAX_MILLI`).
-/// Digests that cannot be compared are `record_frame_unreadable`.
-fn settled(window: &VecDeque<(Duration, ColorDigest)>) -> LabResult<bool> {
-    let Some((_, newest)) = window.back() else {
+/// #463 S1-2 (fix round 3, the coordinator's ruling: "still" does not depend on how long a capture
+/// takes): whether the screen has not changed for at least `still_for`. `taken` holds the start
+/// and digest of each capture, oldest first; its last is the newest. The run is the newest and the
+/// unbroken run of captures before it that each differ from the newest by at most the Runtime's
+/// one frame-change bound (`frame_change_milli` at most `FRAME_CHANGE_MAX_MILLI`); the screen is
+/// still when the run holds at least one earlier capture and the newest started at least
+/// `still_for` after the run's first. Digests that cannot be compared are
+/// `record_frame_unreadable`.
+fn unchanged_for(taken: &[(Duration, ColorDigest)], still_for: Duration) -> LabResult<bool> {
+    let Some(((newest_start, newest), earlier)) = taken.split_last() else {
         return Ok(false);
     };
-    for (_, digest) in window {
+    for (start, digest) in earlier.iter().rev() {
         let milli = frame_change_milli(digest, newest).map_err(|error| {
             invalid(
                 "record_frame_unreadable",
@@ -2064,8 +2073,11 @@ fn settled(window: &VecDeque<(Duration, ColorDigest)>) -> LabResult<bool> {
         if milli > FRAME_CHANGE_MAX_MILLI {
             return Ok(false);
         }
+        if newest_start.saturating_sub(*start) >= still_for {
+            return Ok(true);
+        }
     }
-    Ok(true)
+    Ok(false)
 }
 
 /// #463 S1-2: one capture of the screen after a press, arrived on `session` as a capture of the
@@ -2093,35 +2105,126 @@ fn whole_ms(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
+/// #463 S1-2: the timing of an after loop, its defaults filled in: from the start of one capture
+/// to the start of the next (`interval_ms`), how long the screen must not change (`still_ms`), the
+/// bound after the first capture (`still_max_ms`), and (fix round 3) the most captures the loop
+/// takes, `1 + still_max_ms / interval_ms`, whatever the caller's clock says.
+struct AfterTiming {
+    interval: Duration,
+    still_for: Duration,
+    bound: Duration,
+    most: u32,
+}
+
+/// #463 S1-2: what an after loop has taken so far: when its first capture started, the start,
+/// step and frame of the last, how many, and the start and frame-change digest of each (when the
+/// loop tests stillness), oldest first.
+struct AfterLoop {
+    first_start: Duration,
+    last: (Duration, u32, RecordedFrame),
+    captures: u32,
+    digests: Vec<(Duration, ColorDigest)>,
+}
+
+/// #463 S1-2: the captures after the first, until the screen is still (`true`) or the bound is
+/// reached (`false`): each starts `interval` after the start of the one before it, or at once when
+/// that one took longer; the loop ends when the screen has not changed for `still_for`
+/// ([`unchanged_for`]), when the next capture would start more than `bound` after the first, or
+/// (fix round 3) when `most` were taken, so that a caller's clock that does not advance never holds
+/// it. A capture that cannot be taken or compared answers its error, and `taken` keeps every
+/// capture that arrived before it.
+fn capture_until_still(
+    session: &mut Session,
+    ports: &mut impl RecordFramePorts,
+    timing: &AfterTiming,
+    taken: &mut AfterLoop,
+) -> LabResult<bool> {
+    loop {
+        let now = ports.elapsed();
+        let next = (taken.last.0 + timing.interval).max(now);
+        if taken.captures >= timing.most || next.saturating_sub(taken.first_start) > timing.bound {
+            return Ok(false);
+        }
+        if next > now {
+            ports.wait(next - now);
+        }
+        let start = ports.elapsed();
+        let (arrival, digest) = take_after_capture(session, ports, true)?;
+        taken.captures += 1;
+        taken.last = (start, arrival.step, arrival.frame);
+        taken.digests.extend(digest.map(|digest| (start, digest)));
+        if unchanged_for(&taken.digests, timing.still_for)? {
+            return Ok(true);
+        }
+    }
+}
+
+/// #463 S1-2: what an after loop kept: the answer of its last capture's arrival, how the screen
+/// after was taken, and (fix round 3) the error of a capture after the first that could not be
+/// taken (`stopped_by`): the loop did not finish (`record.unfinished`).
+struct AfterTaken {
+    frame: AttachFrameOutcome,
+    record: AfterCaptureRecord,
+    stopped_by: Option<LabError>,
+}
+
 /// #463 S1-1: the frame after a performed press, under the recording lock. #463 S1-2
-/// (`contracts/lab-recording.md`, "Recording while playing"): the screen is captured until it is
-/// still, on the caller's clock (`RecordFramePorts::elapsed` and `wait`): the first capture starts
-/// `after_ms` after the press, then one every `interval_ms` (default 100), counted from the start
-/// of one capture to the start of the next (one that took longer is followed at once). The screen
-/// is still when the captures of the last `still_ms` (default 300), all taken since the first,
-/// are at least two and each differs from the newest by at most the Runtime's one frame-change
-/// bound. The loop ends at the first still capture (`still` true), or when the next capture would
-/// start more than `still_max_ms` after the first (`still` false; at most `1 + still_max_ms /
-/// interval_ms` captures); with `still_ms` 0 the first capture ends it untested (`still` `None`).
-/// The caller checked the parameters (`check_after_capture`). Before the first capture the
-/// recording must take a device frame, as `capture --record`'s; every capture arrives as one: the
-/// first opens the next step, each later one supersedes the one before it (a capture of the same
-/// bytes is the same file, its own entry), and the last is that step's live primary frame. When
-/// the loop ends, the press's execution names the last as its `after_frame` (the one write,
-/// `name_after_frame`) and keeps `after_capture {after_ms, interval_ms, still_ms, still_max_ms,
-/// still, waited_ms, captures, kept}` (`waited_ms` from the press to the start of the last
-/// capture, `kept` the captures beside it), all written at once. A capture that fails answers its
-/// own error and stores none of them.
+/// (`contracts/lab-recording.md`, "Recording while playing"): the parameters are checked first
+/// (`check_after_capture`; fix round 3: here too, so that the bound holds wherever the loop is
+/// entered), then the screen is captured until it is still, on the caller's clock
+/// (`RecordFramePorts::elapsed` and `wait`): the first capture starts `after_ms` after the press,
+/// then one every `interval_ms` (default 100), counted from the start of one capture to the start
+/// of the next (one that took longer is followed at once). Fix round 3: the screen is still when it
+/// has not changed for at least `still_ms` (default 300), however long a capture takes: the newest
+/// capture and the unbroken run of captures before it that each differ from it by at most the
+/// Runtime's one frame-change bound hold at least one earlier capture, and the newest started at
+/// least `still_ms` after the run's first (`unchanged_for`). The loop ends at the first still
+/// capture (`still` true), or when the next capture would start more than `still_max_ms` after the
+/// first or `1 + still_max_ms / interval_ms` captures were taken (`still` false); with `still_ms`
+/// 0 the first capture ends it untested (`still` `None`). Before the first capture the recording
+/// must take a device frame, as `capture --record`'s; every capture arrives as one: the first opens
+/// the next step, each later one supersedes the one before it (a capture of the same bytes is the
+/// same file, its own entry), and the last is that step's live primary frame. When the loop ends,
+/// the press's execution names the last as its `after_frame` (the one write, `name_after_frame`)
+/// and keeps `after_capture {after_ms, interval_ms, still_ms, still_max_ms, still, waited_ms,
+/// captures, kept}` (`waited_ms` from the press to the start of the last capture, `kept` the
+/// captures beside it), all written at once. A first capture that fails answers its own error and
+/// stores nothing. Fix round 3: a later capture that fails ends the loop unfinished: what it took
+/// is written as above, `after_capture` with `still` `None` and `unfinished` true, and the
+/// capture's own error is answered, its details beginning with `after: {after_ms, taken: true,
+/// captures}` (`after_loop_stopped`).
 pub fn record_after_frame(
     lock: &RecordingLock,
     ports: &mut impl RecordFramePorts,
     after: &AfterCapture,
 ) -> LabResult<(AttachFrameOutcome, AfterCaptureRecord)> {
+    let AfterTaken {
+        frame,
+        record,
+        stopped_by,
+    } = capture_after_press(lock, ports, after)?;
+    match stopped_by {
+        None => Ok((frame, record)),
+        Some(error) => Err(after_loop_stopped(error, &record)),
+    }
+}
+
+/// #463 S1-2: the work of [`record_after_frame`]: what the loop kept, and the error of a capture
+/// after the first that stopped it; `Err` when nothing was kept.
+fn capture_after_press(
+    lock: &RecordingLock,
+    ports: &mut impl RecordFramePorts,
+    after: &AfterCapture,
+) -> LabResult<AfterTaken> {
+    check_after_capture(after)?;
     let interval_ms = after.interval_ms.unwrap_or(AFTER_INTERVAL_MS);
     let still_ms = after.still_ms.unwrap_or(AFTER_STILL_MS);
-    let interval = Duration::from_millis(interval_ms);
-    let still_for = Duration::from_millis(still_ms);
-    let bound = Duration::from_millis(after.still_max_ms);
+    let timing = AfterTiming {
+        interval: Duration::from_millis(interval_ms),
+        still_for: Duration::from_millis(still_ms),
+        bound: Duration::from_millis(after.still_max_ms),
+        most: u32::try_from(1 + after.still_max_ms / interval_ms).unwrap_or(u32::MAX),
+    };
     let pressed_at = ports.elapsed();
     ports.wait(Duration::from_millis(after.after_ms));
     let mut session = open_session(lock)?;
@@ -2139,45 +2242,28 @@ pub fn record_after_frame(
         )
     })?;
     let (opened, closed_step) = (first.opened, first.closed_step);
-    let mut last = (first_start, first.step, first.frame);
-    // The start and digest of each capture of the last `still_ms`, oldest first.
-    let mut window = first_digest
-        .map(|digest| (first_start, digest))
-        .into_iter()
-        .collect::<VecDeque<_>>();
-    let mut captures = 1_u32;
-    let still = if still_ms == 0 {
-        None
+    let mut taken = AfterLoop {
+        first_start,
+        last: (first_start, first.step, first.frame),
+        captures: 1,
+        digests: first_digest
+            .map(|digest| (first_start, digest))
+            .into_iter()
+            .collect(),
+    };
+    let (still, stopped_by) = if still_ms == 0 {
+        (None, None)
     } else {
-        loop {
-            let now = ports.elapsed();
-            let next = (last.0 + interval).max(now);
-            if next.saturating_sub(first_start) > bound {
-                break Some(false);
-            }
-            if next > now {
-                ports.wait(next - now);
-            }
-            let start = ports.elapsed();
-            let (arrival, digest) = take_after_capture(&mut session, ports, true)?;
-            captures += 1;
-            last = (start, arrival.step, arrival.frame);
-            window.extend(digest.map(|digest| (start, digest)));
-            while window
-                .front()
-                .is_some_and(|(at, _)| *at + still_for < start)
-            {
-                window.pop_front();
-            }
-            if start.saturating_sub(first_start) >= still_for
-                && window.len() >= 2
-                && settled(&window)?
-            {
-                break Some(true);
-            }
+        match capture_until_still(&mut session, ports, &timing, &mut taken) {
+            Ok(still) => (Some(still), None),
+            Err(error) => (None, Some(error)),
         }
     };
-    let (last_start, step, frame) = last;
+    let AfterLoop {
+        last: (last_start, step, frame),
+        captures,
+        ..
+    } = taken;
     let record = AfterCaptureRecord {
         after_ms: after.after_ms,
         interval_ms: Some(interval_ms),
@@ -2187,12 +2273,39 @@ pub fn record_after_frame(
         waited_ms: whole_ms(last_start.saturating_sub(pressed_at)),
         captures,
         kept: captures - 1,
+        unfinished: stopped_by.is_some(),
     };
     name_after_frame(&mut session.recording, pressed, &frame.frame_id)?;
     note_after_capture(&mut session.recording, pressed, &record)?;
     save(&mut session)?;
-    let outcome = frame_recorded(&session.recording, opened, closed_step, step, frame);
-    Ok((outcome, record))
+    Ok(AfterTaken {
+        frame: frame_recorded(&session.recording, opened, closed_step, step, frame),
+        record,
+        stopped_by,
+    })
+}
+
+/// #463 S1-2 fix round 3: the error of an after loop that a capture after its first stopped: the
+/// capture's own code and class, its message saying that the captures taken before it are kept,
+/// the last the frame after, its details beginning with `after: {after_ms, taken: true,
+/// captures}`, then the capture's own members.
+fn after_loop_stopped(mut error: LabError, record: &AfterCaptureRecord) -> LabError {
+    error.message = format!(
+        "{}; the {} captures taken after the press before it are kept, the last its frame after, \
+         and the loop did not finish (after_capture.unfinished)",
+        error.message, record.captures
+    );
+    with_leading_details(
+        error,
+        [(
+            "after",
+            json!({
+                "after_ms": record.after_ms,
+                "taken": true,
+                "captures": record.captures
+            }),
+        )],
+    )
 }
 
 /// #463 S1-1 (`contracts/lab-recording.md`, "Recording while playing"): `tap`, `swipe` or
@@ -2212,7 +2325,10 @@ pub fn record_after_frame(
 /// the press and its closed step stand: its details begin with `record` (the press as recorded)
 /// and `after: {after_ms, taken: false}`. #463 S1-2: after the wait's bound, the rest of how the
 /// screen after is taken (`check_after_capture`); a stillness test that reached its bound without
-/// a still screen puts `after_not_still` in the answer's `warnings`.
+/// a still screen puts `after_not_still` in the answer's `warnings`. Fix round 3: a capture after
+/// the first that cannot be taken leaves the captures taken before it kept and recorded (the last
+/// the frame after, `after_capture.unfinished`) and answers its own error, its details beginning
+/// with `record` and `after: {after_ms, taken: true, captures}`.
 pub fn record_press(
     lock: &RecordingLock,
     request: &RecordPressRequest,
@@ -2283,7 +2399,11 @@ pub fn record_press(
     if pressed.has_failure {
         return Err(click_performed_with_failure(plan.step, to_json(&outcome)));
     }
-    let (frame, record) = record_after_frame(lock, ports, &request.after)
+    let AfterTaken {
+        frame,
+        record,
+        stopped_by,
+    } = capture_after_press(lock, ports, &request.after)
         .map_err(|error| after_frame_failed(error, &outcome, after_ms))?;
     // #463 S1-2: a stillness test that reached its bound without a still screen says so.
     if record.still == Some(false) {
@@ -2294,6 +2414,7 @@ pub fn record_press(
         execution.after_frame = Some(frame.frame.frame_id.clone());
         execution.after_capture = Some(record.clone());
     }
+    let stopped = stopped_by.map(|error| after_loop_stopped(error, &record));
     outcome.after = Some(AfterFrame {
         step: frame.step,
         frame_id: frame.frame.frame_id,
@@ -2301,7 +2422,12 @@ pub fn record_press(
         sha256: frame.frame.sha256,
         record,
     });
-    Ok(outcome)
+    // #463 S1-2 fix round 3: a capture after the first that failed is answered, loud, once what
+    // the loop took is kept and recorded.
+    match stopped {
+        None => Ok(outcome),
+        Some(error) => Err(after_loop_stopped_press(error, &outcome)),
+    }
 }
 
 /// #463 S1-1: the input `tap`, `swipe` or `long-tap --record` sends for a planned press, as the
@@ -2350,9 +2476,10 @@ pub fn record_press_input(plan: &ClickPlan) -> LabResult<InputAction> {
     }
 }
 
-/// #463 S1-1: the error of a frame after a press that could not be taken: the capture's own code
-/// and class, its message saying that the press stands, its details beginning with `record` (the
-/// press as recorded) and `after: {after_ms, taken: false}`, then the capture's own members.
+/// #463 S1-1: the error of a frame after a press that could not be taken (#463 S1-2: nothing of
+/// the after loop was kept): the capture's own code and class, its message saying that the press
+/// stands, its details beginning with `record` (the press as recorded) and `after: {after_ms,
+/// taken: false}`, then the capture's own members.
 fn after_frame_failed(
     mut error: LabError,
     outcome: &RecordPressOutcome,
@@ -2371,6 +2498,21 @@ fn after_frame_failed(
             ("after", json!({"after_ms": after_ms, "taken": false})),
         ],
     )
+}
+
+/// #463 S1-2 fix round 3: the error of a press whose after loop a capture after its first stopped
+/// ([`after_loop_stopped`]): its message also saying that the press stands, its details beginning
+/// with `record` (the press as recorded, its after frame the last capture taken, `after_capture`
+/// with `unfinished`), then `after: {after_ms, taken: true, captures}` and the capture's own
+/// members.
+fn after_loop_stopped_press(mut error: LabError, outcome: &RecordPressOutcome) -> LabError {
+    error.message = format!(
+        "{}; the press of step {} was performed and recorded and the step is closed: take a later \
+         screen with capture --record (MCP: ac_lab_observe with capture and record) when one is \
+         needed, do not press again",
+        error.message, outcome.click.step
+    );
+    with_leading_details(error, [("record", to_json(outcome))])
 }
 
 /// Before `session app <verb> --record` sends anything: the step the application operation
