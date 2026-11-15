@@ -97,7 +97,7 @@ v0.12.10 声明的接口：`actingd-config` [5, 9]、`install-selection` [1, 1]�
 
 ![一次运行时请求的完整生命周期](docs/assets/readme/request-lifecycle.zh.png)
 
-1. **组装**（`runtime-client`）：调用方从 79 个类型化 `RuntimeOperation` 变体中选一个（其中升级态与包加载 / 卸载四种、玩家工作台六种里的五种和玩家持有两种，共十一种回答 `not_implemented`），客户端生成 request_id 与 correlation_id，写入 actor、source 与提交时间，构成 `actingcommand.runtime.request.v4` 请求，可选的 `detail`（`codes` 或 `full`）表示客户端要回执结果的多少细节。
+1. **组装**（`runtime-client`）：调用方从 76 个类型化 `RuntimeOperation` 变体中选一个（其中包加载 / 卸载两种、玩家工作台六种里的两种（`RunInstanceTask`、`EditResourceTarget`）和玩家持有两种，共六种回答 `not_implemented`；0.12.63 起治理、安装切换和升级态那五种已删），客户端生成 request_id 与 correlation_id，写入 actor、source 与提交时间，构成 `actingcommand.runtime.request.v4` 请求，可选的 `detail`（`codes` 或 `full`）表示客户端要回执结果的多少细节。
 2. **发现**（`runtime-client`）：客户端读取 `<state_root>/runtime-info.json`，校验其 host 必须是环回地址、pid/port/启动时间非零，连上 TCP 后先发 Health；若 owner epoch 与发现时不一致，会话以 `runtime_owner_epoch_changed` 拒绝。随后客户端为这条连接绑定通道（`cli`、`mcp`、`ui` 或 `lab`；自 v0.12.58 起 `lab` 绑定还可以声明发起者，五个 Lab 词之一）；Runtime 在每个请求上记下通道。自 v0.12.58 起，绑在 `ui` 上的连接发控制台清单以外的请求、或改控制台档位以外的设置，以 `channel_request_refused` 拒；别的都不按通道拒。也是自 v0.12.58 起，请求检查不再按信封拒任何一种请求（信封不在客户端那几种之内的照旧拒；0.12.63 起没有请求再声明身份卡）。
 3. **成帧**（`runtime-client`）：请求以 4 字节大端长度前缀加 JSON 发出，两端默认上限 1 MiB，并按操作类别装载回执读取期限。
 4. **受理**（`runtime-host`）：接受循环为每个连接分配递增的 ConnectionId，并在独立命名线程上服务；连接被 catch_unwind 包裹，退出时按 Disconnect 或 HostShutdown 释放该连接的租约。
@@ -240,7 +240,7 @@ v0.12.10 声明的接口：`actingd-config` [5, 9]、`install-selection` [1, 1]�
 
 **稳定入口（v0.12.18）。** 单一位置安装下，所有客户端（Claude Code、Codex、Antigravity、DSH）不再直接启动 `actingctl mcp-serve`，而是启动 `<root>\mcp-entry\g1\actingcommand-mcp-entry.exe --root <root> --client <名字> -- mcp-serve --tier <档位>`。入口把 JSON-RPC 转给一个 `<root>\runtime\actingctl.exe` 子进程，`--` 之后的参数原样传过去；更新之后，它只在两次调用之间、只对核验完整的安装（`actingctl mcp-entry plan`）切到新的子进程，重放客户端的握手，并发出变更通知（旧协议发 `notifications/tools/list_changed`，2026-07-28 协议在 `subscriptions/listen` 流上发同一通知）。旧子进程还持有未读结果的任务或 Lab 句柄时，切换会一直等；子进程在请求进行中退出时，该请求得到 `mcp_entry_outcome_unknown`（用 `ac_get_run` 或 `ac_overview` 查看），绝不重发。客户端第一次改用入口需要重启一次，之后更新不再需要重启。Claude Code 会自己重新拉工具表；Codex 重新加载该服务，Antigravity 在 MCP 管理器里点 Refresh，DSH 通过插件生命周期重新加载、工具白名单保持不变。`actingctl mcp-config --client claude|codex|antigravity|dsh --entry --root <root> --tier <档位>` 打印各客户端的配置片段；`actingctl mcp-entry list --root <root>` 显示每个入口的状态（`<root>\mcp-entry\state\entry-<pid>.json`）。详见 [contracts/install-cli.md](contracts/install-cli.md) 的 “The MCP entry”。
 
-**档位。** `observer` 总是开、也是默认；`operator` 与 `author` 用 `--tier` 打开。`tools/list` 只列出已开档位的工具，未开档位的工具答 `tier_not_enabled`。下表列的是 v0.12.62 的 46 个工具；标 † 的 24 个是 0.12 系列新增的。`ac_config_set` 属 observer 档，但调用里只要有实例的 `touch_backend` 或 `capture_backend`，就会切换那台设备，要 operator 档（v0.12.39）。工具错误是 `{class, outcome}`，`mcp-serve --detail codes|full` 决定每个 outcome 带多少细节。
+**档位。** `observer` 总是开、也是默认；`operator` 与 `author` 用 `--tier` 打开。`tools/list` 只列出已开档位的工具，未开档位的工具答 `tier_not_enabled`。下表列的是 v0.12.63 的 46 个工具；标 † 的 24 个是 0.12 系列新增的。`ac_config_set` 属 observer 档，但调用里只要有实例的 `touch_backend` 或 `capture_backend`，就会切换那台设备，要 operator 档（v0.12.39）。工具错误是 `{class, outcome}`，`mcp-serve --detail codes|full` 决定每个 outcome 带多少细节。
 
 | 档位 | 工具 |
 | --- | --- |
