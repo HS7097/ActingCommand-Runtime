@@ -812,11 +812,6 @@ fn carries(line: &Value, code: &str, key: &str, value: &Value) -> bool {
     }
 }
 
-/// The root as the installer spells it in its output (`paths.plain`).
-fn plain_root(root: &Path) -> String {
-    super::files::plain(&fs::canonicalize(root).expect("the canonical root"))
-}
-
 // Fix 2, item 2 (`brief-lab3-fix2.md`; install-cli.md, "The Lab's rescue module"): a deploy whose
 // start times out records no new owner epoch. The real Runtime's restore numbers every pause anew
 // (`crates/runtime-host/src/host/scheduling_pause.rs`, revision 1 for a start that is not
@@ -858,17 +853,11 @@ fn rescue_hands_back_its_own_hold_across_a_restart() {
         deployed["next"]["release_hold"],
         json!(["release-hold", reason])
     );
-    assert_eq!(
-        deployed["next"]["actingctl_release_hold"],
-        json!([
-            "actingctl",
-            "install",
-            "release-hold",
-            "--root",
-            plain_root(&root),
-            "--reason",
-            reason
-        ])
+    // Workflow #434 LAB-7 (adapted): no `actingctl_release_hold` any more, the module's own
+    // `release-hold` alone (no Runtime answers, so no `resume`).
+    assert!(
+        deployed["next"]["actingctl_release_hold"].is_null(),
+        "{deployed}"
     );
     assert!(!suggests(&deployed, OTHER_STOP), "{deployed}");
     assert!(!host.runtime.running.get());

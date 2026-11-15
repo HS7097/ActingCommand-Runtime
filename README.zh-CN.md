@@ -18,7 +18,7 @@
 
 # ActingCommand Runtime
 
-ActingCommand Runtime 是一个常驻的 Rust 运行时，用于在安卓模拟器和设备上执行多目标自动化。程序本体（Runtime、Tools 与 MCP 服务）保持中立：不含任何具体目标的逻辑或信息——没有名称、页面、角色、关卡、资源名、数值或规则。代码、合约、默认值与夹具都在 CI 里由守卫测试 `c2_runtime_code_contracts_defaults_and_fixtures_are_project_neutral` 与 `r2f_product_and_authoring_paths_have_no_builtin_game_identity` 扫描。一切目标专属内容（截图素材、识别区域、点击框、任务顺序、数据表）都在声明式资源包里：任务包按目标汇成一个标准包，每个包以其 `package_id` 为身份，装载前做结构准入；支持另一个目标就是换一份包，程序不改。运行时按路径找包（`actingctl task-run --package <路径>`），不收包摘要。GlobalLedger 是唯一事实来源，只有 runtime-host 持有可写句柄；事实先经合约层脱敏成 `actingcommand.event.v3` 才能进入账本。设备访问一律经调度器发放的租约，每次写入都重新校验围栏。Runtime 只监听本机环回地址，本身没有网络代码。所有边界都 Fail Loud：非法配置、非环回绑定、过期证据、不完整导出都以显性错误或非零退出结束，而不是静默降级；拒绝也是一份回执；「未知」从不当作「否」。
+ActingCommand Runtime 是一个常驻的 Rust 运行时，用于在安卓模拟器和设备上执行多目标自动化。程序本体（Runtime、Tools 与 MCP 服务）保持中立：不含任何具体目标的逻辑或信息——没有名称、页面、角色、关卡、资源名、数值或规则。代码、合约、默认值与夹具都在 CI 里由守卫测试 `c2_runtime_code_contracts_defaults_and_fixtures_are_project_neutral` 与 `r2f_product_and_authoring_paths_have_no_builtin_game_identity` 扫描。一切目标专属内容（截图素材、识别区域、点击框、任务顺序、数据表）都在声明式资源包里：任务包按目标汇成一个标准包，每个包以其 `package_id` 为身份，装载前做结构准入；支持另一个目标就是换一份包，程序不改。运行时按路径找包（Lab 的 `run start` 按路径指定包），不收包摘要。GlobalLedger 是唯一事实来源，只有 runtime-host 持有可写句柄；事实先经合约层脱敏成 `actingcommand.event.v3` 才能进入账本。设备访问一律经调度器发放的租约，每次写入都重新校验围栏。Runtime 只监听本机环回地址，本身没有网络代码。所有边界都 Fail Loud：非法配置、非环回绑定、过期证据、不完整导出都以显性错误或非零退出结束，而不是静默降级；拒绝也是一份回执；「未知」从不当作「否」。
 
 [CI 主线状态](https://github.com/HS7097/ActingCommand-Runtime/actions/workflows/ci.yml?query=branch%3Amain)（Windows：fmt / clippy `-D warnings` / 七个模块测试作业） · [精确 SHA 的 Windows 构建](https://github.com/HS7097/ActingCommand-Runtime/actions/workflows/windows-remote-build.yml) · [Releases](https://github.com/HS7097/ActingCommand-Runtime/releases)（按需发版：Actions → release → Run workflow） · 许可 `AGPL-3.0-only` · [伞仓](https://github.com/HS7097/ActingCommand) · [UI 控制台](https://github.com/HS7097/ActingCommand-UI)
 
@@ -68,9 +68,9 @@ v0.12.10 声明的接口：`actingd-config` [5, 9]、`install-selection` [1, 1]�
 
 ## 安装
 
-- **手动安装（0.12 系列）。** 已发布的安装向导都装不了 0.12 的 Runtime（见「搭配」）。0.12 的 Runtime 在一个位置上一次铺开，用空的状态根：从本仓某个 Release 取 `actingcommand-runtime-<sha>.zip`、`actingcommand-tools-<sha>.zip` 与 `SHA256SUMS`，核对后把 Runtime zip 解到 `<root>\runtime\`，把 Tools zip 解到 `<root>\tools\`，再按模板写好私有配置 `<root>\actingd.config.json`。之后按 [INSTALL.md](distribution/windows/INSTALL.md) 操作：私有配置与 `check-config`、[自带 adb](distribution/windows/INSTALL.md#bundled-adb)（没写 `adb_path` 的实例用 `<root>\tools\platform-tools\adb.exe`）、启动 / 查看 / 关闭，以及[升级边界](distribution/windows/INSTALL.md#upgrade-boundary)。`actingctl start --root <root> --config <root>\actingd.config.json` 按看门狗的方式启动这样一个根的 Runtime。
+- **手动安装（0.12 系列）。** 已发布的安装向导都装不了 0.12 的 Runtime（见「搭配」）。0.12 的 Runtime 在一个位置上一次铺开，用空的状态根：从本仓某个 Release 取 `actingcommand-runtime-<sha>.zip`、`actingcommand-tools-<sha>.zip` 与 `SHA256SUMS`，核对后把 Runtime zip 解到 `<root>\runtime\`，把 Tools zip 解到 `<root>\tools\`，再按模板写好私有配置 `<root>\actingd.config.json`。之后按 [INSTALL.md](distribution/windows/INSTALL.md) 操作：私有配置与 `check-config`、[自带 adb](distribution/windows/INSTALL.md#bundled-adb)（没写 `adb_path` 的实例用 `<root>\tools\platform-tools\adb.exe`）、启动 / 查看 / 关闭，以及[升级边界](distribution/windows/INSTALL.md#upgrade-boundary)。`<root>\tools\actinglab.exe up` 按看门狗的方式启动这样一个根的 Runtime（Lab 的救急行；0.12.62 起 actingctl 已删除，Workflow #434 LAB-7）。
 - **安装向导（0.11 系列）。** 伞仓的 [Releases](https://github.com/HS7097/ActingCommand/releases) 页带在线向导 `acsetup.exe`、离线向导 `acsetup-full-<tag>.exe`、一键脚本 `install.ps1` / `install.sh` 与各成员 zip。它的最新版本 v0.11.4 以 A/B 安装装上 Runtime v0.11.4：程序本体（`runtime\`、`ui\`）放进槽 `A\` 或 `B\`，`install\active.json` 选槽，安装根下的固定入口总是启动所选的槽；`tools\`、`vision\`、`packages\`、`state\` 留在安装根、两槽共用。
-- **看门狗。** 不会自动启用。在运行 Runtime 的那个用户的普通（非提权）PowerShell 里运行一次 `<install root>\runtime\actingctl.exe watchdog install --root <install root>`：它注册一个每分钟运行一次 `<install root>\tools\actingwatch.exe` 的计划任务。它看管 A/B 安装或单位置根（没有 `install\active.json`、`runtime\BUILD-MANIFEST.json` 是文件的根）；Runtime 没经正式关闭就不在了（崩溃、关窗、任务管理器结束、重启），或者上一次启动以错误结束时，看门狗把它拉起。它按该次启动的终态结果（启动日志里最后一行 `OUTCOME actingd:`）判断：正式关闭过的从不拉起，以致命结局收场的保持停机并报出，30 分钟内最多拉 3 次。记录写在 `<install root>\watchdog\watchdog.log`，不写账本；它的报告是带 `outcome` 的 `actingcommand.watchdog.report.v2`，`actingctl watchdog` 与 `actingwatch.exe` 按类别以 0、1 或 2 退出。`watchdog status` / `run-once` / `uninstall` 用同一个 `--root`；删除安装前先 `watchdog uninstall`（[详情](distribution/windows/INSTALL.md#runtime-watchdog)、`contracts/runtime-watchdog.md`）。
+- **看门狗。** 不会自动启用。在运行 Runtime 的那个用户的普通（非提权）PowerShell 里运行一次 `<install root>\tools\actinglab.exe watchdog install`（或 `<install root>\tools\actingwatch.exe install`）：它注册一个每分钟运行一次 `<install root>\tools\actingwatch.exe` 的计划任务。它看管 A/B 安装或单位置根（没有 `install\active.json`、`runtime\BUILD-MANIFEST.json` 是文件的根）；Runtime 没经正式关闭就不在了（崩溃、关窗、任务管理器结束、重启），或者上一次启动以错误结束时，看门狗把它拉起。它按该次启动的终态结果（启动日志里最后一行 `OUTCOME actingd:`）判断：正式关闭过的从不拉起，以致命结局收场的保持停机并报出，30 分钟内最多拉 3 次。记录写在 `<install root>\watchdog\watchdog.log`，不写账本；它的报告是带 `outcome` 的 `actingcommand.watchdog.report.v2`，`actingwatch.exe` 按类别以 0、1 或 2 退出。`actingwatch.exe status` 和 `uninstall` 作用于它所在的根；删除安装前先 `watchdog uninstall`（[详情](distribution/windows/INSTALL.md#runtime-watchdog)、`contracts/runtime-watchdog.md`）。
 - **搭配。** Runtime 0.12.x 与最新的 UI v0.11.4 搭配不上：UI 声明的是 `actingd-config` [1, 2]、`ledger` [1, 2]、`runtime-client` [1, 1] 与 `package` [1, 2]。所以它的安装向导会在改动任何东西之前以退出码 6 拒绝 0.12 的 Runtime，它的控制台既连不上 0.12 的 Runtime（请求 v1 到 v3 一律被拒），也读不了它的账本。0.11 的标准包在 0.12 里装载不了，0.12 的标准包未公开。
 
 ## 架构总览
@@ -148,20 +148,18 @@ v0.12.10 声明的接口：`actingd-config` [5, 9]、`install-selection` [1, 1]�
 
 ## Workspace 成员
 
-工作区声明 41 个成员，resolver `3`，工作区声明 edition 2024，全部 `publish = false`。
+工作区声明 39 个成员，resolver `3`，工作区声明 edition 2024，全部 `publish = false`。
 
-### apps（10）
+### apps（8）
 
 | 路径 | 包 | 产物 | 职责 |
 | --- | --- | --- | --- |
 | apps/actingcommand-entry | actingcommand-entry | lib | A/B 安装根固定入口的结果码（`contracts/stable-entry.md`）；两个入口程序加入之前只是放这些码的库 |
-| apps/actingctl | actingcommand-actingctl | bin `actingctl` | 面向 correlation 作用域运行时流程的精简生产命令行，MCP 服务（`mcp-serve`、`mcp-config`）、看门狗的命令（`watchdog …`，取自 `crates/watchdog`），以及安装工具 `install` 连同 `mcp-entry`、`start`、`restart`、`agent-channel`，原样由 `crates/lab-rescue` 回答（Workflow #434 LAB-3） |
 | apps/actingd | actingcommand-actingd | bin `actingcommand-actingd` | 常驻运行时的精简进程适配器 |
 | apps/actinglab | actingcommand-actinglab | bin `actinglab` | 创作与调试侧命令行，46 个顶层分派臂、105 条命令；它的 CLI 模块用操作表的短词回答从 actingctl 来的操作，`actinglab serve --stdio` 每行答一个 `{op, params}`（Workflow #434 LAB-2）；两者还对程序所在的根提供 `crates/lab-rescue` 的 39 行救急操作（Workflow #434 LAB-3；`new` 自 Workflow #453 S4 起；`instance add` 自 Workflow #421 INST-5 起；`state-root claim` 自 Workflow #453 S12 起；`mcp config`、`mcp entries`、`mcp plan` 自 Workflow #434 LAB-5G5b 起；`emulators` 自 Workflow #453 S10 起；`vision manifest`、`vision check` 自 Workflow #453 S7 起；`vision place` 自 Workflow #453 S9 起）；每条命令行都打印 CLI 模块的行，默认给人看，带 `--json` 是一行 JSON，退出码 0、1、2；只有带 `--via` 的命令行（MCP 的 actinglab 子进程）在 LAB-7 之前保留信封（Workflow #434 LAB-2b、LAB-5A） |
 | apps/actinglab-mcp | actingcommand-actinglab-mcp | bin `actinglab-mcp` | Lab 的 MCP 服务器（Workflow #434 LAB-5G；自 v0.12.57 随 Tools 发布）：操作表里每个提供的行一个工具，没有档位；核心行和救急行在它自己的进程里服务，其余的行交给 `actinglab serve --stdio --front mcp` 子进程，自 v0.12.58 起 `deploy` 和 `rollback` 以 `Lab-MCP` 分离运行（Workflow #434 LAB-6S0），提供的行一个都不拒；客户端的主人换注册之前没有东西启动它（`apps/actinglab-mcp/MANUAL.md`） |
 | apps/actingwatch | actingcommand-actingwatch | bin `actingwatch` | 看门狗计划任务从 `<root>\tools\` 运行的无窗口程序：用 `crates/watchdog` 自己跑看门狗的 tick（Workflow #434 LAB-4），并为它所在的根回答 `status`、`install`、`uninstall` |
 | apps/ledger-forensics | actingledger | lib + bin `actingledger` | 账本取证报告、重放与签名目录的只读前端 |
-| apps/mcp-entry | actingcommand-mcp-entry | bin `actingcommand-mcp-entry` | 所有客户端共用的稳定 MCP 入口（随 Tools 发布）：把 JSON-RPC 转给当前的 `actingctl mcp-serve`，并在两次调用之间切到已安装的版本 |
 | apps/mcp-entry-g2 | actingcommand-mcp-entry-g2 | bin `actingcommand-mcp-entry-g2` | MCP 入口的第二代（Workflow #434 LAB-5G5a；自 v0.12.57 随 Tools 发布，要手放进 `<root>\mcp-entry\g2\`）：把 JSON-RPC 转给已安装版本的 `actinglab-mcp.exe`，并照 `actinglab mcp plan --entry-protocol 2` 的计划在两次调用之间切换 |
 | apps/vision-provider-check | actingcommand-vision-provider-check | bin | 列出视觉模型文件夹及其内容身份，并从 Runtime 账本读取提供者启动事实；不加载任何模型 |
 
@@ -225,32 +223,12 @@ v0.12.10 声明的接口：`actingd-config` [5, 9]、`install-selection` [1, 1]�
 
 ## MCP 服务
 
-`actingctl mcp-serve`（v0.11.0 起）是 stdio 上的本地 MCP 服务，供 Claude Code、Codex 等智能体客户端使用。它只有工具（tools-only），不提供 resources / prompts，支持两代协议：客户端要么先发 `initialize`（协议 2025-11-25、2025-06-18 或 2025-03-26），要么每次请求都带无状态 2026-07-28 的 `_meta`。它不判定任何业务规则：什么是一次运行、能否运行、是否完成，都原样来自 Runtime。
-
-**注册。** `actingctl mcp-config` 打印给某个客户端的注册内容，不写任何文件。在 A/B 安装里运行时，它给出安装根下的固定入口 `<install root>\runtime\actingctl.exe`，切槽后仍然有效。
+`actinglab-mcp`（工具半包，v0.12.57 起）是供智能体客户端使用的本地 stdio MCP 服务：操作表（`contracts/lab-operations.json`）里每个提供的行对应一个工具，没有档位；说明书是 [apps/actinglab-mcp/MANUAL.md](apps/actinglab-mcp/MANUAL.md)。客户端经 MCP 入口的第二代启动它（一次性放进 `<root>\mcp-entry\g2\`），入口在两次调用之间把它切到已安装的构建；`actinglab --json mcp config --client <client>` 打印注册内容，不写任何文件。Workflow #434 LAB-7（0.12.62 起）删除了旧服务 `actingctl mcp-serve`、它的档位和第一代入口 `actingcommand-mcp-entry`（`mcp-entry\g1\`）：仍按它们注册的客户端，在根下不再有 `runtime\actingctl.exe` 时就不能用了（部署会把上一版的这个文件留在原处，直到有人删掉它）。
 
 ```powershell
-# Claude Code：打印  claude mcp add --scope user actingcommand -- "<install root>\runtime\actingctl.exe" mcp-serve --tier <档位>
-<install root>\runtime\actingctl.exe mcp-config --client claude --tier observer,operator
-# Codex：打印一段 [mcp_servers.actingcommand]，加进 Codex 的 config.toml
-<install root>\runtime\actingctl.exe mcp-config --client codex --tier observer,operator
-# 列出所有档位的全部工具及说明
-<install root>\runtime\actingctl.exe mcp-serve --list-tools --format markdown
+<install root>\tools\actinglab.exe --json mcp config --client claude
+<install root>\tools\actinglab.exe --json mcp entries
 ```
-
-**稳定入口（v0.12.18）。** 单一位置安装下，所有客户端（Claude Code、Codex、Antigravity、DSH）不再直接启动 `actingctl mcp-serve`，而是启动 `<root>\mcp-entry\g1\actingcommand-mcp-entry.exe --root <root> --client <名字> -- mcp-serve --tier <档位>`。入口把 JSON-RPC 转给一个 `<root>\runtime\actingctl.exe` 子进程，`--` 之后的参数原样传过去；更新之后，它只在两次调用之间、只对核验完整的安装（`actingctl mcp-entry plan`）切到新的子进程，重放客户端的握手，并发出变更通知（旧协议发 `notifications/tools/list_changed`，2026-07-28 协议在 `subscriptions/listen` 流上发同一通知）。旧子进程还持有未读结果的任务或 Lab 句柄时，切换会一直等；子进程在请求进行中退出时，该请求得到 `mcp_entry_outcome_unknown`（用 `ac_get_run` 或 `ac_overview` 查看），绝不重发。客户端第一次改用入口需要重启一次，之后更新不再需要重启。Claude Code 会自己重新拉工具表；Codex 重新加载该服务，Antigravity 在 MCP 管理器里点 Refresh，DSH 通过插件生命周期重新加载、工具白名单保持不变。`actingctl mcp-config --client claude|codex|antigravity|dsh --entry --root <root> --tier <档位>` 打印各客户端的配置片段；`actingctl mcp-entry list --root <root>` 显示每个入口的状态（`<root>\mcp-entry\state\entry-<pid>.json`）。详见 [contracts/install-cli.md](contracts/install-cli.md) 的 “The MCP entry”。
-
-**档位。** `observer` 总是开、也是默认；`operator` 与 `author` 用 `--tier` 打开。`tools/list` 只列出已开档位的工具，未开档位的工具答 `tier_not_enabled`。下表列的是 v0.12.60 的 46 个工具；标 † 的 24 个是 0.12 系列新增的。`ac_config_set` 属 observer 档，但调用里只要有实例的 `touch_backend` 或 `capture_backend`，就会切换那台设备，要 operator 档（v0.12.39）。工具错误是 `{class, outcome}`，`mcp-serve --detail codes|full` 决定每个 outcome 带多少细节。
-
-| 档位 | 工具 |
-| --- | --- |
-| observer（读取、Runtime 运行中可改的设置、性能预设、手机设备绑定、本地能力缺口记录、实例的补救选择与例行健康统计，25 个） | `ac_overview`、`ac_events`、`ac_material`、`ac_observe`†、`ac_get_run`、`ac_diagnose`、`ac_runs`†、`ac_run_evidence`†、`ac_resources_list`、`ac_targets_get`、`ac_config_set`†、`ac_perf_preset`†、`ac_packs`†、`ac_facts`†、`ac_outcome_code`†、`ac_devices`†、`ac_device_bind`†、`ac_device_unbind`†、`ac_capability_gap`†、`ac_remedy_set`†、`ac_remedy_get`†、`ac_schedule`†、`ac_routine_summary`†、`ac_pack_check`、`ac_catalog_check` |
-| operator（设备、应用、调度与证据读取确认，9 个） | `ac_run_pack`、`ac_stop_run`、`ac_pause`、`ac_resume`、`ac_emulator`、`ac_app`†、`ac_ladder_drill`†、`ac_evidence_confirm_read`†、`ac_targets_set` |
-| author（Lab 录制，12 个） | `ac_lab_observe`、`ac_lab_do`、`ac_record_start`、`ac_record_mark`、`ac_record_stop`、`ac_record_status`、`ac_record_candidates`†、`ac_record_amend`†、`ac_record_step`†、`ac_record_archive`†、`ac_record_reopen`†、`ac_binding_draft` |
-
-`ac_observe` 是 `actingctl observe --export` 在 MCP 一侧的对应：对一个实例只读取一帧，完整写进 MCP 导出目录。
-
-**智能体守则。** 从 `ac_overview` 开始。长操作立即返回句柄，用 `ac_get_run`（带 `wait_s`）轮询；运行的句柄是 Runtime 的 request_id，跨重启有效。结果不确定时先 `ac_get_run`，不换参数重发写操作。批准、`actingd` 配置文件改动与守护进程重启归人；Runtime 运行中可改的设置用 `ac_config_set`（或 `actingctl config set|clear`）改，每次改动都入账。智能体操作手册是伞仓里的 skill `skills/actingcommand/`；它按 Runtime v0.11.3 写，用 0.12 的 Runtime 时以 `mcp-serve --list-tools` 打印的说明为准。
 
 ## 构建与运行
 
@@ -263,7 +241,7 @@ Windows 准确 SHA 工件包含两份 Runtime exe、待填写配置模板、默�
 输出与退出码（`ACTINGCOMMAND_DETAIL=codes` 时 outcome 只保留登记过的名称；不设则为完整 outcome）：
 
 - **actingd** 把守护进程行写在 stderr：每个 outcome 一行开发者行 `<INFO|WARN|ERROR|FATAL> actingd: <code> …` 加一行 `OUTCOME actingd: <envelope>`；最后一个就是它的终态结果（启动被拒时就是那条拒绝；否则是 `runtime_stopped`，若是某个条件使它停止，后面再跟那个条件）。它按该结果的类别以 0（成功、信息或警告）、1（错误）或 2（致命）退出。四个子命令各在 stdout 打印一份带 `outcome` 的 JSON 报告：`actingcommand.actingd.check-config.v2`、`actingcommand.ledger-maintenance.v2`、`actingcommand.actingd.unlock-owner.v2` 与 `actingcommand.actingd.suspended.v2`，并按 outcome 的类别退出。
-- **actingctl**：除 `mcp-serve` 与 `mcp-config` 外，每个子命令每次退出都在 stdout 恰好打印一行 JSON，成功为 `{…result, "outcome": …}`，失败为 `{"outcome": …}`；Runtime 拒绝的请求把回执放在 outcome 旁边一并打印。stderr 只有开发者行。`actingctl` 与 `actingwatch` 按同样的类别以 0、1 或 2 退出，被拒或失败的回执至少退出 1。
+- **actinglab**：每一行加 `--json` 时每次退出在 stdout 恰好打印一行 JSON，`{…result, "outcome": …}`，按结果的类别以 0、1 或 2 退出（拒绝至少是 1）；不加 `--json` 时打印给人看的一行。原先打印这一行的 `actingctl` 已删除（Workflow #434 LAB-7）。
 
 ```bash
 # 本地构建与门禁；fmt 与 clippy 与 CI 相同，CI 的测试则按上文七个模块作业分开执行（CI 的发布构建另带 --locked 与显式 MSVC 目标）
@@ -275,55 +253,38 @@ cargo test --workspace --no-fail-fast
 # 启动常驻守护进程；就绪后 stderr 打印 INFO actingd: runtime_ready pid=<pid> host=<host> port=<port> 及其 OUTCOME actingd: 行
 actingcommand-actingd --config runtime.json
 
-# 按看门狗的方式启动或重启一个根的 Runtime（只有命令行；单位置根要给 --config）
-actingctl start --root <root> [--config <file>]
-actingctl restart --root <root> [--config <file>] [--wait-idle <s>]
+# 启动、停止或重启一个根的 Runtime：Lab 的救急行，从该根自己的 tools\actinglab.exe 运行；Lab 从程序所在位置找到根和状态根（没有 --root、没有 --state-root；不在安装根下时由 ACTINGCOMMAND_RUNTIME_STATE_ROOT 指定状态根）
+actinglab up
+actinglab down [--reason <reason>]
+actinglab restart
+actinglab alive [--wait 240s]
 
-# 客户端（子命令必须是第一个参数，之后才是标志；每条命令都需要 --state-root）
-actingctl status --state-root <state-root>
-actingctl status --config --state-root <state-root>     # 只取 config.* 程序事实：subsystems、selection、parameters.<section>
-actingctl overview --state-root <state-root> [--instance <alias|instance_id|ADB port>] [--sections <block>[,<block>...]]     # MCP 对应 ac_overview
-actingctl events --state-root <state-root> [--instance <alias|instance_id|ADB port>] [--view events|observation|changes|errors|health|lab] [--limit 1-256]     # MCP 对应 ac_events
-actingctl runs --state-root <state-root> [--instance <alias|instance_id|ADB port>] [--limit <1-100>]     # MCP 对应 ac_runs
-actingctl run evidence --state-root <state-root> (--request-id <request_id> | --run-id <run_id>) [--detail full|summary]     # MCP 对应 ac_run_evidence
-actingctl schedule --state-root <state-root> [--instance <alias|instance_id|ADB port>]     # 每个候选为什么没跑；MCP 对应 ac_schedule
-actingctl diagnose --state-root <state-root> [--instance <alias|instance_id|ADB port>]     # MCP 对应 ac_diagnose
-actingctl config set <key>=<json> --state-root <state-root>     # 另有 config clear <key>；Runtime 运行中可改的设置，改动入账（MCP 对应 ac_config_set）
-actingctl codes <code>     # 本构建内嵌码目录里的一个结果码；MCP 对应 ac_outcome_code
-actingctl facts --program --state-root <state-root>
-actingctl facts --instance <alias|instance_id|ADB port> --state-root <state-root> [--key-prefix <prefix>]   # 一个实例的事实
-actingctl monitor-status --state-root <state-root>
-actingctl perf-status --state-root <state-root> [--instance <alias|instance_id|ADB port>]     # 性能测量
-actingctl observe --state-root <state-root> --instance <alias>
-actingctl observe --state-root <state-root> --instance <alias|instance_id|ADB port> --export <dir>     # 只读取一帧，读回校验后完整写成 <dir>\<sha256>.png（MCP 对应 ac_observe）
-actingctl reset --state-root <state-root> --instance <alias>
-actingctl stream --state-root <state-root> --instance <alias> --max-frames 8 --interval-ms 250
-actingctl monitor-set --state-root <state-root> --instance <alias> --interval-ms 30000 --expect home --recover
-actingctl monitor-clear --state-root <state-root> --instance <alias>
-actingctl emulator status --state-root <state-root> --instance <alias>
-actingctl emulator start --state-root <state-root> --instance <alias>     # 另有 stop | restart（仅显式请求；按实例围栏；配置了 startup_package 则随后以受控任务排程）
-actingctl emulator discover --state-root <state-root>     # 重新执行 MuMu 实例发现，列出每个实例及其绑定别名；不启动实例，也不绑定、不租约、不打开任何东西
-actingctl devices list --state-root <state-root>     # 另有 devices bind <alias> <handle> | devices unbind <alias>；真机的绑定（MCP 对应 ac_devices、ac_device_bind、ac_device_unbind）
-actingctl pause --state-root <state-root> [--instance <alias>] [--reason <code>] [--drain-timeout-ms <n>]     # 停止策略派发：全局，或单个物理实例（先排空其在途运行）；无过期，熬过重启：下次启动时恢复暂停态（contracts/scheduling-pause.md）
-actingctl resume --state-root <state-root> [--instance <alias>]     # 解除该暂停；status 显示全局与各实例的暂停态
-actingctl selfcheck <alias> --state-root <state-root>     # 立即重连并自检一个物理实例（在专用准备租约下打开 Nemu / ADB，不发输入、不留帧）；按 resume 回执的形状打印自检结果；自检通过前该实例对策略不可用（contracts/runtime-fact-store.md）
-actingctl ladder-drill --state-root <state-root> --instance <alias>     # 演练一个物理实例的卡死恢复阶梯：记录与真阶梯相同、标 drill；不带 --device 时只演练计划、绝不动设备，带 --device 时真的逐级执行（contracts/emulator-control.md，"Drills"）；MCP 对应 ac_ladder_drill
-actingctl task-run --state-root <state-root> --instance <alias> --package <dir | pkg.zip | pkg.json>     # 按路径给包，按路径决定读法，例如 Lab 包（contracts/package-reference.md，"Containers"）；可选：--recovery-package <路径>
-actingctl task-offset <task_id> <offset_milli> --state-root <state-root> [--instance <alias>]     # 手动优先级偏移（±1000000 milli），写成 session.task.<task_id>.priority_offset 事实；不带 --instance 时为任务级，作用于唯一配置的目标（否则 task_offset_scope_ambiguous）
-actingctl remedy get --instance <alias> --state-root <state-root>     # 另有 remedy set (--instance <alias> | --game <id>) --rows <file> | remedy lift --instance <alias>；MCP 对应 ac_remedy_get、ac_remedy_set
-actingctl request-shutdown --state-root <state-root>
-actingctl request-shutdown --state-root <state-root> --wait 60     # 随后等待（1..=3600 秒）直到 owner 记录关闭且进程退出；只读
-actingctl install-transition --state-root <state-root> --action-json '<action-json>'     # 安装向导使用的安装控制（INSTALL.md，"A/B installation inputs and Host control"）
-actingctl agent-publish-facts --state-root <state-root> --record-file <observation.json>     # Agent/Adapter 来源：发布一份有界事实观测
-actingctl agent-apply-resource-targets --state-root <state-root> --policy-file <policy.json>     # Agent/Adapter 来源：应用一份实例资源目标策略（contracts/resource-targets.md）；成功打印 {"applied": ..., "outcome": ...}，被拒时把带字段位置的回执与其 outcome 一并打印并以非零退出
+# 客户端：Lab 的命令行，每种写法对应 contracts/lab-operations.json 的一行（actinglab help 列出全部行；--json 每次退出打印一行 JSON，{...result, "outcome": ...}；一行在 MCP 里的工具名是 ac_ 加上它的词）
+actinglab status [<instance>] [--sections <block>[,<block>...]]
+actinglab events [<instance>]
+actinglab runs [<instance>]
+actinglab run evidence <request_id|run_id>
+actinglab diagnose [<instance>]
+actinglab codes <code>
+actinglab config set <key>=<json>
+actinglab pause [<instance>] [--reason <reason>] [--drain 300s]
+actinglab resume [<instance>]
+actinglab shutdown [--wait 60s]
+
+# 部署（contracts/install-cli.md，"A deploy since LAB-7"）：先暂存下载好的发布，再一次调用完成计划、带保持的停止、替换、启动、确认存活和交还保持
+actinglab release stage <dir>
+actinglab guards --for stop
+actinglab deploy <tag|commit> [--dir <dir>] [--plan] [--detach]
+actinglab op status [<operation_id>]
+actinglab release-hold <reason>
 
 # A/B 安装或单位置根的看门狗（INSTALL.md，"Runtime watchdog"）
-actingctl watchdog install --root <install root>     # 另有 status | run-once | uninstall
+actinglab watchdog install     # 另有 watchdog uninstall；tools\actingwatch.exe status 读它的状态
 
-# MCP 服务（stdio）与客户端注册
-actingctl mcp-serve [--root <install root>] [--state-root <dir>] [--tier observer|operator|author[,...]] [--detail codes|full]
-actingctl mcp-serve --list-tools [--format json|markdown]
-actingctl mcp-config --client claude|codex [--tier observer|operator|author[,...]]
+# MCP：客户端对第二代入口的注册（apps/actinglab-mcp/MANUAL.md 第 11 节）
+actinglab mcp config --client claude|codex|antigravity|dsh [--list <modules>]
+actinglab mcp entries [--all]
+actingcommand-mcp-entry-g2 --root <root> [--client claude|codex|antigravity|dsh] -- [--list <modules>]
 
 # 只读取证（同一状态根）
 actingledger --state-root <state-root> open
@@ -378,7 +339,7 @@ actingcommand-actingd vision check --config runtime.json [--install-root <root>]
 actingcommand-actingd suspended --config runtime.json
 
 # 启动因 owner_resource_unconfirmed 被拒后的离线解锁（只向 owner.lock 追加、从不删除；下次启动自动接管）
-actingcommand-actingd unlock-owner --config runtime.json --actor <name> --confirm-resources-released
+actingcommand-actingd unlock-owner --config runtime.json --actor <name>
 
 # 视觉模型文件夹与提供者启动事实
 actingcommand-vision-provider-check --state-root <state-root> --limit 256

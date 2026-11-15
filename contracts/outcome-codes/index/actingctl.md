@@ -62,7 +62,7 @@ column means. 204 codes.
 | `instance_reset_done` | success | none | 0.12.0 | active | pending | TBD | actingctl reset: the Runtime reset the instance. |
 | `instance_self_check_failed` | error | none | 0.12.0 | active | pending | TBD | actingctl selfcheck: the instance's reconnect or self-check failed; its failure code, when the result gives one, is the caused_by link. |
 | `instance_self_check_reported` | success | none | 0.12.0 | active | pending | TBD | actingctl selfcheck: the instance reconnected and its self-check passed. |
-| `instance_status_reported` | success | none | 0.12.0 | active | pending | TBD | actingctl emulator status: the instance's row of the Runtime status was printed. |
+| `instance_status_reported` | success | none | 0.12.0 | retired | pending | TBD | Retired (Workflow #434 LAB-7, 0.12.62): actingctl emulator status is deleted; the Lab's status carries each instance, so nothing emits this code. |
 | `instances_discovered` | success | none | 0.12.0 | active | settled | written | actingctl emulator discover: the Runtime ran one emulator instance discovery and listed the instances; count is how many. |
 | `job_capacity_exhausted` | error | none | 0.12.0 | active | pending | TBD | The MCP server holds as many jobs as it may. |
 | `job_start_failed` | error | none | 0.12.0 | active | pending | TBD | The MCP server could not start a job thread. |
@@ -82,8 +82,8 @@ column means. 204 codes.
 | `material_unavailable` | error | none | 0.12.0 | active | pending | TBD | The Runtime answered a material read without the material: material_state is the read state and material_limit why it stopped short; the Runtime's typed failure… |
 | `mcp_batch_empty` | error | none | 0.12.0 | active | pending | TBD | JSON-RPC -32600: an MCP batch array was empty. |
 | `mcp_batch_unsupported` | error | none | 0.12.0 | active | pending | TBD | JSON-RPC -32600: a batch array arrived outside a session initialized with protocol 2025-03-26. |
-| `mcp_config_program_unresolved` | error | none | 0.12.0 | active | pending | TBD | actingctl mcp-config cannot name the program a client registers: the executable or the installation selection cannot be read, or a slot's fixed entry is… |
-| `mcp_config_program_unsupported` | error | none | 0.12.0 | active | pending | TBD | actingctl mcp-config cannot write the client configuration for this program path (not Unicode, or a double quote for claude). |
+| `mcp_config_program_unresolved` | error | none | 0.12.0 | retired | pending | TBD | Retired (Workflow #434 LAB-7, 0.12.62): actingctl mcp-config is deleted; the Lab's mcp config prints the second generation's snippet, so nothing emits this… |
+| `mcp_config_program_unsupported` | error | none | 0.12.0 | retired | pending | TBD | Retired (Workflow #434 LAB-7, 0.12.62): actingctl mcp-config is deleted; the Lab's mcp config prints the second generation's snippet, so nothing emits this… |
 | `mcp_file_too_large` | error | none | 0.12.0 | active | pending | TBD | mcp-serve, or actingctl overview reading the build manifest, read a file (a configuration, a manifest, an export) larger than its bound limit_bytes. |
 | `mcp_identity_card_refused` | warning | none | 0.12.0 | active | pending | written | The Runtime refused mcp-serve's governance identity card (governance.allowed_clients); the write went ahead without it and the refusal is the caused_by link. |
 | `mcp_input_failed` | error | none | 0.12.0 | active | pending | TBD | mcp-serve could not read stdin and ended; the OS error is the caused_by link. |
@@ -101,7 +101,7 @@ column means. 204 codes.
 | `mcp_workers_unavailable` | error | none | 0.12.0 | active | pending | TBD | The MCP server has no worker thread for the call. |
 | `monitor_policy_cleared` | success | none | 0.12.0 | active | pending | TBD | actingctl monitor-clear: the Runtime cleared the instance's monitor policy. |
 | `monitor_policy_set` | success | none | 0.12.0 | active | pending | TBD | actingctl monitor-set: the Runtime took the instance's monitor policy. |
-| `monitor_status_reported` | success | none | 0.12.0 | active | pending | TBD | actingctl monitor-status: the Runtime reported its monitor registry. |
+| `monitor_status_reported` | success | none | 0.12.0 | retired | pending | TBD | Retired (Workflow #434 LAB-7, 0.12.62): actingctl monitor-status is deleted; the Lab's status carries the monitors, so nothing emits this code. |
 | `outcome_codes_reported` | success | none | 0.12.0 | active | pending | TBD | actingctl codes: the catalog entry of one outcome code, or one page of the code list, was printed from the outcome catalog this build embeds, as ac_outcome_code… |
 | `output_budget_exceeded` | error | none | 0.12.0 | active | pending | TBD | An MCP tool result takes more bytes as sent than the tool output budget: actual_bytes is the bytes the tools/call result takes as sent in the session's protocol… |
 | `package_binding_unreadable` | warning | none | 0.12.0 | active | pending | written | actingctl packs or ac_packs found a package binding of the selected configuration whose path does not exist or cannot be read (a package folder bound as a… |
@@ -123,16 +123,16 @@ column means. 204 codes.
 | `runtime_config_reported` | success | none | 0.12.0 | active | pending | TBD | actingctl status --config: the config.* records of the runtime fact snapshot were printed. |
 | `runtime_diagnosis_reported` | success | none | 0.12.0 | active | pending | TBD | actingctl diagnose: the diagnosis of the window was printed. |
 | `runtime_events_reported` | success | none | 0.12.0 | active | pending | TBD | actingctl events: one page of ledger events was printed. |
-| `runtime_fact_refresh_reported` | success | none | 0.12.0 | active | pending | TBD | actingctl fact-refresh: what the scheduler's fact refresh waits for (FactRefreshStatus) was printed, as ac_overview answers its fact_refresh block (Workflow… |
+| `runtime_fact_refresh_reported` | success | none | 0.12.0 | retired | pending | TBD | Retired (Workflow #434 LAB-7, 0.12.62): actingctl fact-refresh is deleted; the Lab's status carries the fact refresh block, so nothing emits this code. |
 | `runtime_facts_reported` | success | none | 0.12.0 | active | pending | TBD | actingctl facts --program: the runtime fact snapshot was printed. |
 | `runtime_overview_reported` | success | none | 0.12.0 | active | pending | TBD | actingctl overview: the overview was printed, as ac_overview answers it (Workflow #389 MCP-8). |
-| `runtime_performance_reported` | success | none | 0.12.0 | active | pending | TBD | actingctl perf-status: the shadow measurement's status (PerformanceStatus) was printed, as ac_overview answers its performance block (Workflow #385 P-m). |
+| `runtime_performance_reported` | success | none | 0.12.0 | retired | pending | TBD | Retired (Workflow #434 LAB-7, 0.12.62): actingctl perf-status is deleted; the Lab's status carries the performance block, so nothing emits this code. |
 | `runtime_schedule_reported` | success | none | 0.12.5 | active | pending | written | actingctl schedule: the latest policy evaluation's explanation (ScheduleExplanation) was printed: per instance its not-running row, its selected task and every… |
 | `runtime_scheduling_paused` | success | none | 0.12.0 | active | pending | TBD | actingctl pause: the Runtime paused scheduling (globally or for the instance). |
 | `runtime_scheduling_resumed` | success | none | 0.12.0 | active | pending | TBD | actingctl resume: the Runtime lifted the scheduling pause. |
 | `runtime_shutdown_completed` | success | none | 0.12.0 | active | settled | written | actingctl request-shutdown --wait: the Runtime accepted the shutdown, its owner record closed and its process exited within the wait; the result carries the… |
 | `runtime_shutdown_requested` | success | none | 0.12.0 | active | settled | written | actingctl request-shutdown: the Runtime accepted the shutdown request; the result carries its receipt. |
-| `runtime_status_reported` | success | none | 0.12.0 | active | settled | written | actingctl status: the Runtime answered its status, which the result carries. |
+| `runtime_status_reported` | success | none | 0.12.0 | retired | settled | written | Retired (Workflow #434 LAB-7, 0.12.62): actingctl status is deleted; the Lab's status answers runtime_overview_reported, so nothing emits this code. |
 | `shutdown_wait_journal_unreadable` | error | none | 0.12.0 | active | settled | written | actingctl's shutdown wait could not read the owner journal under the state root: path names the file, line the record that does not decode, and the decoder's or… |
 | `shutdown_wait_timeout` | error | none | 0.12.0 | active | settled | written | actingctl request-shutdown --wait or install-transition --wait: the accepted owner did not close and exit within timeout_ms. |
 | `since_out_of_range` | error | none | 0.12.0 | active | pending | TBD | ac_diagnose: since_unix_ms is further back than the window allows. |
@@ -153,7 +153,7 @@ column means. 204 codes.
 | `task_offset_published` | success | none | 0.12.0 | active | pending | TBD | actingctl task-offset: the Runtime recorded the manual priority offset. |
 | `task_offset_scope_ambiguous` | error | none | 0.12.0 | active | pending | TBD | task-offset without --instance: the registered instances do not name exactly one configured game. |
 | `task_run_reported` | success | none | 0.12.0 | active | pending | TBD | actingctl task-run: the contained run completed. |
-| `tier_not_enabled` | error | none | 0.12.0 | active | pending | TBD | An MCP tool of a tier this server was not started with was called. |
+| `tier_not_enabled` | error | none | 0.12.0 | retired | pending | TBD | Retired (Workflow #434 LAB-7, 0.12.62): the first MCP server (actingctl mcp-serve) and its tiers are deleted; the Lab's MCP server has no tiers, so nothing… |
 | `watchdog_alive` | info | none | 0.12.0 | active | pending | TBD | Watchdog decision: the Runtime owner answers. |
 | `watchdog_budget_exhausted` | error | none | 0.12.0 | active | pending | TBD | Watchdog decision: the restart budget is exhausted. |
 | `watchdog_config_unreadable` | error | none | 0.12.0 | active | pending | TBD | The watchdog cannot read the selected configuration. |

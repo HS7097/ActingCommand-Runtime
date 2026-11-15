@@ -538,8 +538,8 @@ fn translate_next(context: &Context<'_>, members: &mut Map<String, Value>) -> Ve
                 }
             };
             match own_hold(context, &reason) {
-                Ok(Some((paths, hold))) => {
-                    owned.push((paths, reason, hold));
+                Ok(Some(hold)) => {
+                    owned.push((reason, hold));
                     true
                 }
                 Ok(None) => false,
@@ -551,8 +551,8 @@ fn translate_next(context: &Context<'_>, members: &mut Map<String, Value>) -> Ve
         }
         _ => true,
     });
-    for (paths, reason, hold) in &owned {
-        ways_out(context, next, paths, reason, hold);
+    for (reason, hold) in &owned {
+        ways_out(context, next, reason, hold);
     }
     if next.is_empty() {
         members.remove("next");
@@ -561,16 +561,15 @@ fn translate_next(context: &Context<'_>, members: &mut Map<String, Value>) -> Ve
 }
 
 /// Workflow #434 LAB-3 fix 1: the hold `reason` if it is the module's own in the root: one of its
-/// journals recorded it in its pause step (`install::deploy::owned_hold`), with the root's paths
-/// and what the hold paused; `None` when no journal of the module recorded it. Fix 3: a root or an
-/// operations folder that cannot be read is the failure, not "not owned".
+/// journals recorded it in its pause step (`install::deploy::owned_hold`), with what the hold
+/// paused; `None` when no journal of the module recorded it. Fix 3: a root or an operations
+/// folder that cannot be read is the failure, not "not owned".
 fn own_hold(
     context: &Context<'_>,
     reason: &SchedulingPauseReason,
-) -> Result<Option<(Paths, OwnedHold)>, Outcome> {
+) -> Result<Option<OwnedHold>, Outcome> {
     let paths = Paths::resolve(&context.location.root)?;
-    let owned = deploy::owned_hold(context.host, &paths, reason, None)?;
-    Ok(owned.map(|owned| (paths, owned)))
+    deploy::owned_hold(context.host, &paths, reason, None)
 }
 
 /// Workflow #434 LAB-3 fix 3: the note of a `release-hold` left out of `next` because whether the
@@ -590,42 +589,23 @@ fn ownership_unconfirmed(reason: Option<&SchedulingPauseReason>, cause: Outcome)
 }
 
 /// Workflow #434 LAB-3 fix 2 (install-cli.md, "The Lab's rescue module", "Ways out of a kept
-/// hold"): the ways out of the module's own hold `reason` that work today without the module,
-/// added to `next` beside its `release-hold <r>`. Until LAB-7 deletes actingctl:
-/// `actingctl_release_hold`, `actingctl install release-hold --root <root> --reason <r>` (it
-/// resumes the instances paused with exactly that reason, the module's own); and
-/// `actingctl_resume`, for each instance the hold's pause step paused that the running Runtime
-/// shows paused with the reason now, the core `resume` as actingctl runs it (`actingctl resume
-/// --state-root <s> --instance <alias>`, on the CLI channel; since LAB-6S1b the Runtime also takes
-/// the Lab's own `resume <alias>` on the Lab channel, which this list does not name). No form
-/// names another reason or an
-/// instance whose pause shows one; without a status read there is no `actingctl_resume`. Workflow
-/// #421 INST-5b: `actingctl_resume_global`, the core global resume as actingctl runs it
-/// (`actingctl resume --state-root <s>`), when the running Runtime shows the hold's own global
-/// pause ([`hold::own_global`]); `actingctl install release-hold` leaves it.
+/// hold"): the ways out of the module's own hold `reason` beside its `release-hold <r>`. Workflow
+/// #434 LAB-7 (contracts/lab-two-entries.md §7): actingctl's forms are gone with it, and the Lab's
+/// core rows stay: `resume`, for each instance the hold's pause step paused that the running
+/// Runtime shows paused with the reason now, the core `resume <alias>`. No form names another
+/// reason or an instance whose pause shows one; without a status read there is no `resume`.
+/// Workflow #421 INST-5b: `resume_global`, the core global `resume`, when the running Runtime
+/// shows the hold's own global pause ([`hold::own_global`]); the module's `release-hold` hands it
+/// back too.
 fn ways_out(
     context: &Context<'_>,
     next: &mut Map<String, Value>,
-    paths: &Paths,
     reason: &SchedulingPauseReason,
     owned: &OwnedHold,
 ) {
-    next.insert(
-        "actingctl_release_hold".to_owned(),
-        json!([
-            "actingctl",
-            "install",
-            "release-hold",
-            "--root",
-            paths.plain,
-            "--reason",
-            reason
-        ]),
-    );
     let Ok(Some(seen)) = context.host.runtime().status(&context.location.state_root) else {
         return;
     };
-    let state_root = files::plain(&context.location.state_root);
     let resume = seen
         .instances
         .iter()
@@ -636,25 +616,13 @@ fn ways_out(
                     .as_ref()
                     .is_some_and(|pause| &pause.reason == reason)
         })
-        .map(|instance| {
-            json!([
-                "actingctl",
-                "resume",
-                "--state-root",
-                state_root,
-                "--instance",
-                instance.alias
-            ])
-        })
+        .map(|instance| json!(["resume", instance.alias]))
         .collect::<Vec<_>>();
     if !resume.is_empty() {
-        next.insert("actingctl_resume".to_owned(), Value::Array(resume));
+        next.insert("resume".to_owned(), Value::Array(resume));
     }
     if hold::own_global(&seen, reason, owned).is_some() {
-        next.insert(
-            "actingctl_resume_global".to_owned(),
-            json!(["actingctl", "resume", "--state-root", state_root]),
-        );
+        next.insert("resume_global".to_owned(), json!(["resume"]));
     }
 }
 
@@ -1564,7 +1532,7 @@ fn commit(
                     add_next(
                         &mut swapped.members,
                         "pause_added",
-                        pause_form(context, &adding.added.asked.alias),
+                        pause_form(&adding.added.asked.alias),
                     );
                     swapped.outcome = plan::with_notes(swapped.outcome, &[refusal]);
                 }
@@ -1590,7 +1558,7 @@ fn commit(
                     members.insert(member.to_owned(), value.clone());
                 }
             }
-            add_next(&mut members, "pause_added", pause_form(context, alias));
+            add_next(&mut members, "pause_added", pause_form(alias));
             members.insert("added".to_owned(), adding.added.value());
             return Ok(composite_exit(context, steps, refusal, members));
         }
@@ -1804,16 +1772,12 @@ fn pause_added(context: &Context<'_>, loaded: &Loaded, alias: &str) -> PausedAdd
     }
 }
 
-/// Workflow #421 INST-5: a way to pause the added instance by hand: the core `pause` as actingctl
-/// runs it, on the CLI channel, with the instance's own reason (since LAB-6S1b the Runtime also
-/// takes the Lab's own `pause` on the Lab channel, which this form does not name).
-fn pause_form(context: &Context<'_>, alias: &str) -> Value {
+/// Workflow #421 INST-5: a way to pause the added instance by hand, with the instance's own
+/// reason. Workflow #434 LAB-7: the Lab's core `pause <alias> --reason <r>`, where it was the core
+/// `pause` as actingctl ran it.
+fn pause_form(alias: &str) -> Value {
     json!([
-        "actingctl",
         "pause",
-        "--state-root",
-        files::plain(&context.location.state_root),
-        "--instance",
         alias,
         "--reason",
         actingcommand_contract::INSTANCE_ADDED_PAUSE_REASON
@@ -2058,8 +2022,9 @@ fn configuration(
 }
 
 /// `unlock`: actingd's `unlock-owner` for the root's state root, run from the live build, with
-/// the initiator as `--actor` (§5: the caller passes no confirmation; until LAB-7 this module
-/// passes actingd's `--confirm-resources-released` itself). actingd's report is the answer.
+/// the initiator as `--actor` (§5: the caller passes no confirmation; since Workflow #434 LAB-7
+/// actingd's `unlock-owner` takes none either, running it is the confirmation). actingd's report
+/// is the answer.
 fn unlock(context: &Context<'_>) -> Exit {
     const UNLOCK: InstallLocation = InstallLocation::Unlock;
     let run = || -> Result<Exit, Outcome> {
@@ -2079,7 +2044,6 @@ fn unlock(context: &Context<'_>) -> Exit {
                 config.as_str(),
                 "--actor",
                 context.initiator.as_str(),
-                "--confirm-resources-released",
             ],
             Deadline::check_config(&settings),
         )

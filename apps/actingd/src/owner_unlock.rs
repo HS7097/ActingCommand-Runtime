@@ -11,21 +11,18 @@ pub(super) const SCHEMA_VERSION: &str = "actingcommand.actingd.unlock-owner.v2";
 
 /// Offline maintenance for a state root whose last owner exited with device resources
 /// unconfirmed: the operator's confirmation becomes that epoch's close evidence in the
-/// owner journal, `owner.unlock` records it, and the next start takes the epoch over.
+/// owner journal, `owner.unlock` records it, and the next start takes the epoch over. Workflow
+/// #434 LAB-7: running the command is the confirmation; `--confirm-resources-released` is gone
+/// and refused as an unknown option.
 pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<Reported, ActingdError> {
-    if arguments.len() > 6 {
+    if arguments.len() > 5 {
         return Err(ActingdError::config(ActingdCode::UnlockOwnerUsageInvalid));
     }
     let mut config = None;
     let mut actor = None;
-    let mut confirmed = false;
     let mut options = arguments[1..].iter();
     while let Some(option) = options.next() {
         let slot = match option.to_str() {
-            Some("--confirm-resources-released") if !confirmed => {
-                confirmed = true;
-                continue;
-            }
             Some("--config") => &mut config,
             Some("--actor") => &mut actor,
             _ => return Err(ActingdError::config(ActingdCode::UnlockOwnerOptionInvalid)),
@@ -59,7 +56,7 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<Reported, Acting
         Some(root) => host.with_installation_root(root),
         None => host,
     };
-    match RuntimeHost::unlock_owner(host, actor.clone(), confirmed) {
+    match RuntimeHost::unlock_owner(host, actor.clone(), true) {
         Ok(receipt) => Ok(
             Reported::new(Outcome::new(ActingdCode::UnlockOwnerCompleted))
                 .with("owner_epoch", json!(receipt.owner_epoch))

@@ -658,26 +658,13 @@ const CLOCK_IMPORTS: &[&str] = &["sleep", "now"];
 /// Bounded waits; their duration is the last argument and must be `GATE_WAIT`.
 const BOUNDED_WAITS: &[&str] = &["recv_timeout", "wait_timeout"];
 const GATE_WAIT: &str = "GATE_WAIT";
-/// `(file, enclosing function, token)`: each entry allows exactly one finding. The first entry is
-/// the ruling of the #672 acceptance (Workflow #381 comment 6084712633, point 2): this
-/// `Instant::now` only anchors the expected deadline and measures nothing. The second is the
-/// same form for Workflow #382 MCP-T1 (coordinator answer CD-27, D2 (a)): the deadline that
-/// `Job::wait_until` takes and no test reaches. The third is the same form for Workflow #411 A5
-/// (coordinator 10-19 00:2x, the CD-27 D2 (a) form): the 60 s admission budget that
-/// `describe_path` takes and no test reaches. The fourth is the second's form for Workflow #434
-/// LAB-5G3 (the coordinator's ruling of 2026-11-13): the deadline that `Job::wait_until` of the
-/// new MCP server, copied from the second's, takes and no test reaches.
+/// `(file, enclosing function, token)`: each entry allows exactly one finding. The first is the
+/// form of the CD-27 D2 (a) answer (Workflow #382 MCP-T1) for Workflow #411 A5 (coordinator 10-19
+/// 00:2x): the 60 s admission budget that `describe_path` takes and no test reaches. The second
+/// is the same form for Workflow #434 LAB-5G3 (the coordinator's ruling of 2026-11-13): the
+/// deadline that `Job::wait_until` of the Lab's MCP server takes and no test reaches. Workflow
+/// #434 LAB-7 removed the two entries of actingctl's gate files (#672's and MCP-T1's) with them.
 const DETERMINISM_ALLOWLIST: &[(&str, &str, &str)] = &[
-    (
-        "apps/actingctl/src/gate_381a.rs",
-        "gate_the_run_client_carries_one_deadline_from_the_runs_start",
-        "Instant::now",
-    ),
-    (
-        "apps/actingctl/src/mcp/tests/gate_mcpt1.rs",
-        "unreached_deadline",
-        "Instant::now",
-    ),
     (
         "apps/actinglab/src/tests/gate_0121_pkgcheck.rs",
         "runtime_verdict",

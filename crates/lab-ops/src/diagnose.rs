@@ -245,14 +245,6 @@ impl SuspensionReport {
             child::run_captured_ending(command, deadline)
         })))
     }
-
-    /// #422 QR-2b gate: a report that was not started, as `start` answers when it finds no
-    /// configuration (the gate reads the Runtime's sections, not the child's). Workflow #434 LAB-1:
-    /// the gate stays in actingctl, which turns on `test-hooks` for its tests.
-    #[cfg(any(test, feature = "test-hooks"))]
-    pub fn not_started(outcome: Outcome) -> Self {
-        Self(Err(outcome))
-    }
 }
 
 /// The program root, the configuration and the installation of the generation selected now; or

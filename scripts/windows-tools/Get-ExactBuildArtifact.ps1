@@ -471,9 +471,9 @@ try {
         ) {
             throw "Manifest runtime_payload_layout must be exactly 'distribution-v1' for a Runtime artifact."
         }
+        # Workflow #434 LAB-7: actingctl.exe left the Runtime half.
         $expectedFiles = @(
             'actingcommand-actingd.exe',
-            'actingctl.exe',
             'actingd.config.example.json',
             'INSTALL.md',
             'RELEASE-NOTES.md'
@@ -555,24 +555,11 @@ try {
         if ($layout.Value -ceq 'platform-tools-v3') {
             $expectedFiles += 'actingwatch.exe'
         }
-        # Workflow #421 MCP-ENTRY: a v3 artifact built since v0.12.18 also carries the stable MCP
-        # entry actingcommand-mcp-entry.exe; earlier v3 artifacts do not declare it.
-        $declaresMcpEntry = (
-            $manifest.PSObject.Properties.Name -contains 'files' -and
-            @(
-                @($manifest.files) | Where-Object { $null -ne $_ } | ForEach-Object {
-                    $path = $_.PSObject.Properties['path']
-                    if ($null -ne $path) { [string]$path.Value }
-                }
-            ) -ccontains 'actingcommand-mcp-entry.exe'
-        )
-        if ($layout.Value -ceq 'platform-tools-v3' -and $declaresMcpEntry) {
-            $expectedFiles += 'actingcommand-mcp-entry.exe'
-        }
         # Workflow #434 LAB-5G6: a v3 artifact built since 0.12.57 also carries the Lab's MCP
         # server actinglab-mcp.exe and the MCP entry's second generation
         # actingcommand-mcp-entry-g2.exe; earlier v3 artifacts do not declare them. Each one the
-        # manifest declares is required, as the entry above is.
+        # manifest declares is required. Workflow #434 LAB-7: the first entry
+        # actingcommand-mcp-entry.exe is no file of a Tools artifact.
         foreach ($mcpProgram in @('actinglab-mcp.exe', 'actingcommand-mcp-entry-g2.exe')) {
             $declaresMcpProgram = (
                 $manifest.PSObject.Properties.Name -contains 'files' -and

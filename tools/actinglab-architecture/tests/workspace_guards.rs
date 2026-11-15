@@ -635,8 +635,8 @@ fn collect_generic_runtime_files(root: &Path, files: &mut Vec<PathBuf>) {
 fn c3b_client_device_authority_stays_behind_runtime() {
     let root = workspace_root();
     let mut files = Vec::new();
-    collect_rust_files(&root.join("apps/actingctl/src"), &mut files);
-    // Workflow #434 LAB-1: actingctl's read and write modules moved there.
+    // Workflow #434 LAB-1: actingctl's read and write modules moved there (LAB-7 deleted
+    // actingctl).
     collect_rust_files(&root.join("crates/lab-ops/src"), &mut files);
     // Workflow #434 LAB-4: actingctl's watchdog and its launcher moved there.
     collect_rust_files(&root.join("crates/watchdog/src"), &mut files);
@@ -689,7 +689,6 @@ fn c3b_client_device_authority_stays_behind_runtime() {
     let packages = metadata["packages"].as_array().expect("metadata packages");
     for package_name in [
         "actingcommand-runtime-client",
-        "actingcommand-actingctl",
         // Workflow #434 LAB-1: actingctl's read and write modules moved there.
         "actingcommand-lab-ops",
         // Workflow #434 LAB-4: actingctl's watchdog and its launcher moved there.

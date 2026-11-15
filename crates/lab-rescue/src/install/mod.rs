@@ -42,8 +42,8 @@ pub(crate) mod manifest;
 pub(crate) mod new;
 // Workflow #434 LAB-5G5b: the rescue module's `mcp config`, the second generation's snippet.
 pub(crate) mod mcp_config;
-// Workflow #421 MCP-ENTRY: `mcp-entry plan|list`; Workflow #434 LAB-5G5b: and the rescue module's
-// `mcp plan` and `mcp entries`.
+// Workflow #421 MCP-ENTRY, Workflow #434 LAB-5G5b: the rescue module's `mcp plan` and `mcp
+// entries` (LAB-7 deleted the first generation's `mcp-entry plan|list`).
 pub(crate) mod mcp_entry;
 // Workflow #434 LAB-3: the rescue module's `place`.
 pub(crate) mod place;
@@ -251,47 +251,8 @@ pub fn dispatch(arguments: &[OsString], initiator: Initiator) -> Option<Exit> {
     )))
 }
 
-const MCP_ENTRY_USAGE: &str = "usage: actingctl mcp-entry plan --root <root> --entry-protocol 1 [--current-build <commit>] [-- <child arguments>]\nusage: actingctl mcp-entry list --root <root> [--all]";
-
-/// Runs `mcp-entry` (Workflow #421 MCP-ENTRY) when the first argument names it; `None` leaves
-/// every other command to the CLI, unchanged. The caller (actingctl) prints the exit.
-pub fn dispatch_mcp_entry(arguments: &[OsString]) -> Option<Exit> {
-    if arguments.first()?.to_str()? != "mcp-entry" {
-        return None;
-    }
-    if let Err(invalid) = cli_line::detail() {
-        return Some(cli_line::failure(&invalid, None));
-    }
-    let usage = |outcome: Outcome| Answer {
-        members: Map::new(),
-        outcome,
-        text: Some(MCP_ENTRY_USAGE),
-    };
-    let Some(words) = arguments[1..]
-        .iter()
-        .map(|word| word.to_str())
-        .collect::<Option<Vec<_>>>()
-    else {
-        return Some(print(usage(cli_line::usage_invalid(
-            None,
-            ArgumentProblem::NotUtf8,
-        ))));
-    };
-    let result = match words.as_slice() {
-        ["plan", rest @ ..] => mcp_entry::plan(rest),
-        ["list", rest @ ..] => mcp_entry::list(rest),
-        [word, ..] => Err(cli_line::usage_invalid(
-            Some(*word),
-            ArgumentProblem::Unknown,
-        )),
-        [] => Err(Outcome::new(ActingctlCode::ActingctlUsageInvalid)),
-    };
-    Some(print(match result {
-        Ok(answer) => answer,
-        Err(outcome) if outcome.is(ActingctlCode::ActingctlUsageInvalid) => usage(outcome),
-        Err(outcome) => Answer::new(outcome),
-    }))
-}
+// Workflow #434 LAB-7: `mcp-entry plan|list`, the first generation's commands, left with
+// actingctl; `mcp_entry` serves the rescue module's `mcp plan` and `mcp entries`.
 
 /// One command's answer: the result members and the top outcome.
 #[derive(Debug, Clone)]

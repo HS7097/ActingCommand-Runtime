@@ -15,17 +15,17 @@ MuMu/Nemu, model, provider, or Runtime binaries.
 `Windows exact-SHA build` produces these artifacts:
 
 - `actingcommand-runtime-<40-character-commit-sha>`: `actingcommand-actingd.exe`,
-  `actingctl.exe`, `actingd.config.example.json`, `actingd.defaults.json` (from Workflow
+  `actingd.config.example.json`, `actingd.defaults.json` (from Workflow
   #387 D1b on; the downloader accepts a Runtime artifact with or without it),
   `actingd.config.first.json` (from Workflow #453 S4 on, likewise), `INSTALL.md`, and
-  `RELEASE-NOTES.md`;
+  `RELEASE-NOTES.md` (`actingctl.exe` left it with Workflow #434 LAB-7, since 0.12.62);
 - `actingcommand-tools-<40-character-commit-sha>`: `actinglab.exe`,
   `actingledger.exe`,
   `actingcommand-vision-provider-check.exe`,
-  the watchdog launcher `actingwatch.exe` (Workflow #374), the MCP entry
-  `actingcommand-mcp-entry.exe` (Workflow #421 MCP-ENTRY, since v0.12.18), the Lab's MCP server
+  the watchdog launcher `actingwatch.exe` (Workflow #374), the Lab's MCP server
   `actinglab-mcp.exe` and the MCP entry's second generation `actingcommand-mcp-entry-g2.exe`
-  (Workflow #434 LAB-5G6, since 0.12.57), plus the official Android platform-tools 37.0.1 files under `platform-tools/`:
+  (Workflow #434 LAB-5G6, since 0.12.57; the first entry `actingcommand-mcp-entry.exe` left the
+  list with LAB-7, since 0.12.62), plus the official Android platform-tools 37.0.1 files under `platform-tools/`:
   `adb.exe`, `AdbWinApi.dll`, `AdbWinUsbApi.dll`, `NOTICE.txt` and
   `source.properties`. The OCR engine is linked into `actingcommand-actingd.exe`;
   no vision provider DLL is built or staged (Workflow #360). The device-test probe
@@ -52,7 +52,7 @@ successful workflow run, then checks the complete manifest tuple and every paylo
 file before publishing the download directory.
 
 Runtime manifests declare `runtime_payload_layout: "distribution-v1"`, which
-requires exactly the five Runtime payloads listed above. Historical Runtime
+requires exactly the Runtime payloads listed above. Historical Runtime
 manifests without this field still require exactly the two original executables.
 Explicit unknown, empty or non-string layouts fail; an incomplete distribution
 cannot fall back to the two-file layout. Both layouts retain the flat directory,
@@ -61,10 +61,10 @@ exact case/path, complete declared/physical set, size/hash and source checks.
 Tools manifests declare `tools_payload_layout: "platform-tools-v3"`, which requires
 exactly `actinglab.exe`, `actingledger.exe`, `actingcommand-vision-provider-check.exe`,
 `actingwatch.exe` and the five `platform-tools/` files (manifest paths use `/`), plus each of
-the three MCP programs above that the manifest declares, and allows no directory other than
-`platform-tools`. A build since v0.12.18 declares `actingcommand-mcp-entry.exe` (ten payloads),
-and one since 0.12.57 also `actinglab-mcp.exe` and `actingcommand-mcp-entry-g2.exe` (twelve);
-the layout name stays, so an artifact built before either still verifies with nine. A
+the two MCP programs above that the manifest declares, and allows no directory other than
+`platform-tools`. A build since 0.12.62 declares `actinglab-mcp.exe` and
+`actingcommand-mcp-entry-g2.exe` (eleven payloads); the layout name stays, so an artifact built
+without them still verifies with nine. A
 `platform-tools-v3` manifest built before
 Runtime v0.11.6 also declares `actingcommand-device-test.exe`, and the verifier then
 requires those ten payloads. Historical `platform-tools-v2` manifests

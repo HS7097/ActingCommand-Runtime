@@ -303,10 +303,12 @@ fn records_of(reader: &RuntimeClient, event_type: EventType) -> Vec<ProjectedEve
         .expect("records")
 }
 
-/// The records of the host whose state root `root` is, read on a connection of actingctl's front
-/// (a read records nothing).
+/// The records of the host whose state root `root` is, read on a connection with the CLI's
+/// envelope and `Lab-CLI`, as actingctl's front connected until Workflow #434 LAB-7 deleted it (a
+/// read records nothing).
 fn recorded(root: &Path) -> Recorded {
-    let reader = RuntimeClient::connect(front::config(Front::Actingctl, root)).expect("reader");
+    let reader =
+        RuntimeClient::connect(front::cli_envelope(root, Some(Initiator::LabCli))).expect("reader");
     let client = [
         EventType::CliCommand,
         EventType::LabRequest,

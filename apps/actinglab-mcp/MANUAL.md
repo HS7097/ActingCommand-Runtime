@@ -265,10 +265,10 @@ naming this file.
   of this server, bind the Lab channel with `Lab-MCP` and keep the command line's envelope (since
   Workflow #434 LAB-6S2-B1, 0.12.59; on the CLI channel before): none writes a record that names
   a channel, and their answers name the channel `mcp` where they named `cli`.
-- **Production.** Until LAB-7 a production installation deploys and rolls back through
-  `actingctl install` (the coordinator's deploy kit), not through the rescue module and not
-  through this server: the module's `deploy` and `rollback` are not used on the production root
-  (`contracts/install-cli.md`, "Operational rule until LAB-7"). Whether either runs at all is the
+- **Production.** Since Workflow #434 LAB-7 (0.12.62) `actingctl` is deleted, and a production
+  installation deploys and rolls back through the rescue module's own rows (`release stage`,
+  `deploy`, `op status`, `release-hold`, `guards`; `contracts/install-cli.md`, "A deploy since
+  LAB-7"), from `actinglab.exe` or through this server. Whether either runs at all is the
   person's decision (section 10).
 
 ## 10 What belongs to the person
@@ -320,8 +320,12 @@ second generation, `<install root>\mcp-entry\g2\actingcommand-mcp-entry-g2.exe`,
 A registration that named the server program would keep running the replaced program (a deploy
 renames a running one aside) until the client restarted it. Moving a client onto the entry takes
 one restart of the client; after that a deploy needs none. The first generation,
-`<install root>\mcp-entry\g1\actingcommand-mcp-entry.exe`, which starts `actingctl mcp-serve`, is
-today's server's; neither program ever goes into the other's folder.
+`<install root>\mcp-entry\g1\actingcommand-mcp-entry.exe`, which starts `actingctl mcp-serve`, was
+the older server's; Workflow #434 LAB-7 (0.12.62) deletes both from the builds (no deploy writes
+under `mcp-entry\`, so a placed `g1\` stays on disk). A client still registered with it starts
+whatever `<install root>\runtime\actingctl.exe` is left there (the build before's, which a deploy
+lists as `extra` and leaves in place); once that file is gone, every new session's `initialize`
+is answered with the JSON-RPC error `mcp_entry_child_unavailable`.
 
 ### 11.2 Place the entry once
 
@@ -398,11 +402,6 @@ refusal the entry waits and asks again.
 
 ### 11.7 Going back
 
-Today's server, the first generation's entry in `mcp-entry\g1\` and today's registration lines
-stay as they are until a later slice removes them. To go back, put today's lines back in the
-client in place of the new ones and start a new session. With the tiers the client had,
-
-    <install root>\runtime\actingctl.exe mcp-config --client <client> --entry --root <install root> --tier <tiers>
-
-prints them again. Go back before the installation goes back to a build older than 0.12.57, which
-carries no `actinglab-mcp.exe`.
+Since Workflow #434 LAB-7 (0.12.62) there is no older server to go back to: `actingctl` and its
+MCP server are deleted, and nothing prints the first generation's registration lines. A client
+moves onto the second generation before the deploy of that build (section 11.4).

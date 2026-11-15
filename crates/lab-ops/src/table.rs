@@ -191,9 +191,9 @@ pub struct Operation {
     pub requests: Vec<RuntimeOperationKind>,
     /// Kinds it will send that the contract does not have yet.
     pub planned_requests: Option<Vec<String>>,
-    /// The commands, tools, console reads and scripts it replaces.
-    pub source: Vec<String>,
-    /// For an operation no program has today: the board item it comes from.
+    /// For an operation no program has today: the board item it comes from. Workflow #434 LAB-7:
+    /// the rows no longer carry `source`, the programs they replaced (actingctl and the first MCP
+    /// server are deleted).
     pub new: Option<String>,
     /// The slice that builds it.
     pub slice: String,

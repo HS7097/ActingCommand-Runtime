@@ -18,7 +18,7 @@
 
 # ActingCommand Runtime
 
-ActingCommand Runtime is a resident Rust runtime for running multi-target automation on Android emulators and devices. The program core (Runtime, Tools and the MCP server) is neutral: it contains no logic or information about any concrete target — no names, pages, characters, stages, resources, values or rules. Code, contracts, defaults and fixtures are scanned in CI by the guard tests `c2_runtime_code_contracts_defaults_and_fixtures_are_project_neutral` and `r2f_product_and_authoring_paths_have_no_builtin_game_identity`. Everything specific to a target (screenshot material, recognition regions, click boxes, task order, data tables) lives in declarative resource packs: task packs, gathered per target into one standard pack, each named by its `package_id` and admitted structurally before loading; supporting another target means another pack, not another program. The runtime finds a pack by its path (`actingctl task-run --package <path>`) and takes no package digest. The GlobalLedger is the single source of truth, and only runtime-host holds a writable handle to it; a fact must be sanitized by the contract layer into `actingcommand.event.v3` before it may enter the ledger. Device access always goes through a lease granted by the scheduler, and every write revalidates the fence. The Runtime listens only on the local loopback address and contains no network code. Every boundary fails loud: invalid configuration, a non-loopback bind, stale evidence and incomplete exports all end in an explicit error or a nonzero exit rather than a silent downgrade, a refusal is a receipt too, and unknown is never treated as no.
+ActingCommand Runtime is a resident Rust runtime for running multi-target automation on Android emulators and devices. The program core (Runtime, Tools and the MCP server) is neutral: it contains no logic or information about any concrete target — no names, pages, characters, stages, resources, values or rules. Code, contracts, defaults and fixtures are scanned in CI by the guard tests `c2_runtime_code_contracts_defaults_and_fixtures_are_project_neutral` and `r2f_product_and_authoring_paths_have_no_builtin_game_identity`. Everything specific to a target (screenshot material, recognition regions, click boxes, task order, data tables) lives in declarative resource packs: task packs, gathered per target into one standard pack, each named by its `package_id` and admitted structurally before loading; supporting another target means another pack, not another program. The runtime finds a pack by its path (the Lab's `run start` names it by its path) and takes no package digest. The GlobalLedger is the single source of truth, and only runtime-host holds a writable handle to it; a fact must be sanitized by the contract layer into `actingcommand.event.v3` before it may enter the ledger. Device access always goes through a lease granted by the scheduler, and every write revalidates the fence. The Runtime listens only on the local loopback address and contains no network code. Every boundary fails loud: invalid configuration, a non-loopback bind, stale evidence and incomplete exports all end in an explicit error or a nonzero exit rather than a silent downgrade, a refusal is a receipt too, and unknown is never treated as no.
 
 [CI main status](https://github.com/HS7097/ActingCommand-Runtime/actions/workflows/ci.yml?query=branch%3Amain) (Windows: fmt / clippy `-D warnings` / seven module test jobs) · [Exact-SHA Windows build](https://github.com/HS7097/ActingCommand-Runtime/actions/workflows/windows-remote-build.yml) · [Releases](https://github.com/HS7097/ActingCommand-Runtime/releases) (on demand: Actions → release → Run workflow) · License `AGPL-3.0-only` · [Umbrella repository](https://github.com/HS7097/ActingCommand) · [UI console](https://github.com/HS7097/ActingCommand-UI)
 
@@ -68,9 +68,9 @@ v0.12.10 declares the interfaces `actingd-config` [5, 9], `install-selection` [1
 
 ## Install
 
-- **By hand (the 0.12 series).** No released setup wizard installs a 0.12 Runtime (see Compatibility). A 0.12 Runtime is laid out once in a single location with an empty state root: take `actingcommand-runtime-<sha>.zip`, `actingcommand-tools-<sha>.zip` and `SHA256SUMS` from a Release here, verify them, extract the Runtime zip into `<root>\runtime\` and the Tools zip into `<root>\tools\`, and write the private configuration `<root>\actingd.config.json` from the template. Then follow [INSTALL.md](distribution/windows/INSTALL.md): the private configuration and `check-config`, the [bundled adb](distribution/windows/INSTALL.md#bundled-adb) (an instance without `adb_path` uses `<root>\tools\platform-tools\adb.exe`), start / inspect / close, and the [upgrade boundary](distribution/windows/INSTALL.md#upgrade-boundary). `actingctl start --root <root> --config <root>\actingd.config.json` starts the Runtime of such a root the way the watchdog does.
+- **By hand (the 0.12 series).** No released setup wizard installs a 0.12 Runtime (see Compatibility). A 0.12 Runtime is laid out once in a single location with an empty state root: take `actingcommand-runtime-<sha>.zip`, `actingcommand-tools-<sha>.zip` and `SHA256SUMS` from a Release here, verify them, extract the Runtime zip into `<root>\runtime\` and the Tools zip into `<root>\tools\`, and write the private configuration `<root>\actingd.config.json` from the template. Then follow [INSTALL.md](distribution/windows/INSTALL.md): the private configuration and `check-config`, the [bundled adb](distribution/windows/INSTALL.md#bundled-adb) (an instance without `adb_path` uses `<root>\tools\platform-tools\adb.exe`), start / inspect / close, and the [upgrade boundary](distribution/windows/INSTALL.md#upgrade-boundary). `<root>\tools\actinglab.exe up` starts the Runtime of such a root the way the watchdog does (the Lab's rescue row; since 0.12.62 actingctl is deleted, Workflow #434 LAB-7).
 - **Setup wizard (0.11 series).** The umbrella repository's [Releases](https://github.com/HS7097/ActingCommand/releases) page carries the online wizard `acsetup.exe`, the offline wizard `acsetup-full-<tag>.exe`, the one-line scripts `install.ps1` / `install.sh`, and the member zips. Its newest release, v0.11.4, installs Runtime v0.11.4 as an A/B installation: the program core (`runtime\`, `ui\`) goes into slot `A\` or `B\`, `install\active.json` selects the slot, and the fixed entries under the install root always start the selected slot; `tools\`, `vision\`, `packages\` and `state\` stay at the install root and are shared by both slots.
-- **Watchdog.** Nothing enables it for you. Run `<install root>\runtime\actingctl.exe watchdog install --root <install root>` once, from a normal (not elevated) PowerShell of the user the Runtime runs for: it registers a per-minute scheduled task that runs `<install root>\tools\actingwatch.exe`. It watches an A/B installation or a single-location root (a root without `install\active.json` whose `runtime\BUILD-MANIFEST.json` is a file), and starts the Runtime again when it is gone without a formal close (a crash, a closed window, an end in Task Manager, a reboot) or when its last start ended in an error. It judges a start by its terminal outcome, the last `OUTCOME actingd:` line of the start's log: it never starts a Runtime that was closed formally, stays down (and says so) after a fatal one, and starts at most 3 times in 30 minutes. It writes `<install root>\watchdog\watchdog.log`, not the ledger; its reports are `actingcommand.watchdog.report.v2` with an `outcome`, and `actingctl watchdog` and `actingwatch.exe` exit 0, 1 or 2 by category. `watchdog status` / `run-once` / `uninstall` take the same `--root`; run `watchdog uninstall` before removing an installation ([details](distribution/windows/INSTALL.md#runtime-watchdog), `contracts/runtime-watchdog.md`).
+- **Watchdog.** Nothing enables it for you. Run `<install root>\tools\actinglab.exe watchdog install` (or `<install root>\tools\actingwatch.exe install`) once, from a normal (not elevated) PowerShell of the user the Runtime runs for: it registers a per-minute scheduled task that runs `<install root>\tools\actingwatch.exe`. It watches an A/B installation or a single-location root (a root without `install\active.json` whose `runtime\BUILD-MANIFEST.json` is a file), and starts the Runtime again when it is gone without a formal close (a crash, a closed window, an end in Task Manager, a reboot) or when its last start ended in an error. It judges a start by its terminal outcome, the last `OUTCOME actingd:` line of the start's log: it never starts a Runtime that was closed formally, stays down (and says so) after a fatal one, and starts at most 3 times in 30 minutes. It writes `<install root>\watchdog\watchdog.log`, not the ledger; its reports are `actingcommand.watchdog.report.v2` with an `outcome`, and `actingwatch.exe` exits 0, 1 or 2 by category. `actingwatch.exe status` and `uninstall` act on the root it lies in; run `watchdog uninstall` before removing an installation ([details](distribution/windows/INSTALL.md#runtime-watchdog), `contracts/runtime-watchdog.md`).
 - **Compatibility.** Runtime 0.12.x and the newest UI, v0.11.4, do not fit: the UI declares `actingd-config` [1, 2], `ledger` [1, 2], `runtime-client` [1, 1] and `package` [1, 2]. Its setup wizard therefore refuses a 0.12 Runtime with exit code 6 before it changes anything, and its console can neither connect to a 0.12 Runtime (requests v1 to v3 are refused) nor read its ledger. The 0.11 standard packs do not load in 0.12, and no 0.12 standard pack is published.
 
 ## Architecture overview
@@ -148,20 +148,18 @@ There are four workflows in total: three CI workflows and the on-demand `release
 
 ## Workspace members
 
-The workspace declares 41 members, resolver `3`, a workspace-level edition of 2024, all `publish = false`.
+The workspace declares 39 members, resolver `3`, a workspace-level edition of 2024, all `publish = false`.
 
-### apps (10)
+### apps (8)
 
 | Path | Package | Output | Responsibility |
 | --- | --- | --- | --- |
 | apps/actingcommand-entry | actingcommand-entry | lib | The outcome codes of an A/B install root's fixed entries (`contracts/stable-entry.md`); a library of its codes until the two entry programs are added |
-| apps/actingctl | actingcommand-actingctl | bin `actingctl` | Lean production CLI for correlation-scoped runtime flows, the MCP server (`mcp-serve`, `mcp-config`), the watchdog's commands (`watchdog …`, from `crates/watchdog`), and the installer `install` with `mcp-entry`, `start`, `restart` and `agent-channel`, which it answers unchanged from `crates/lab-rescue` (Workflow #434 LAB-3) |
 | apps/actingd | actingcommand-actingd | bin `actingcommand-actingd` | Lean process adapter for the resident runtime |
 | apps/actinglab | actingcommand-actinglab | bin `actinglab` | Authoring and debugging CLI, 46 top-level dispatch arms, 105 commands; its CLI module answers the operations that came from actingctl in the operation table's short words, and `actinglab serve --stdio` one `{op, params}` per line (Workflow #434 LAB-2); both also serve the rescue module's 39 rows from `crates/lab-rescue` on the root the program lies in (Workflow #434 LAB-3; `new` since Workflow #453 S4; `instance add` since Workflow #421 INST-5; `state-root claim` since Workflow #453 S12; `mcp config`, `mcp entries` and `mcp plan` since Workflow #434 LAB-5G5b; `emulators` since Workflow #453 S10; `vision manifest` and `vision check` since Workflow #453 S7; `vision place` since Workflow #453 S9); every command line prints the CLI module's line, for people by default and with `--json` one JSON line, exit 0, 1 or 2, except a line with `--via` (MCP's actinglab child), which keeps the envelope until LAB-7 (Workflow #434 LAB-2b, LAB-5A) |
 | apps/actinglab-mcp | actingcommand-actinglab-mcp | bin `actinglab-mcp` | The Lab's MCP server (Workflow #434 LAB-5G; Tools half since v0.12.57): one tool per offered row of the operation table, no tiers; it serves the core and rescue rows in its own process and every other row through `actinglab serve --stdio --front mcp` children, `deploy` and `rollback` detached as `Lab-MCP` since v0.12.58 (Workflow #434 LAB-6S0), so it refuses no row it offers; no registration starts it until a client's owner moves it (`apps/actinglab-mcp/MANUAL.md`) |
 | apps/actingwatch | actingcommand-actingwatch | bin `actingwatch` | The windowless program the watchdog's scheduled task runs from `<root>\tools\`: it runs the watchdog's tick itself from `crates/watchdog` (Workflow #434 LAB-4) and answers `status`, `install` and `uninstall` for its own root |
 | apps/ledger-forensics | actingledger | lib + bin `actingledger` | Read-only front end for ledger forensic reports, replay and the signature catalog |
-| apps/mcp-entry | actingcommand-mcp-entry | bin `actingcommand-mcp-entry` | The stable MCP entry every client starts (Tools half): pipes JSON-RPC to the current `actingctl mcp-serve` and switches it, between calls, to the installed build |
 | apps/mcp-entry-g2 | actingcommand-mcp-entry-g2 | bin `actingcommand-mcp-entry-g2` | The MCP entry's second generation (Workflow #434 LAB-5G5a; Tools half since v0.12.57, placed by hand in `<root>\mcp-entry\g2\`): pipes JSON-RPC to the installed build's `actinglab-mcp.exe` and switches it, between calls, on the plan of `actinglab mcp plan --entry-protocol 2` |
 | apps/vision-provider-check | actingcommand-vision-provider-check | bin | Lists vision model folders and their content identities, and reads provider startup facts from a Runtime ledger; loads no model |
 
@@ -225,32 +223,12 @@ A pack's coordinates are in the resolution it declares (today's standard packs u
 
 ## MCP server
 
-`actingctl mcp-serve` (since v0.11.0) is a local MCP server on stdio for agent clients such as Claude Code and Codex. It is tools-only (no resources or prompts) and dual-era: a client either sends `initialize` first (protocol 2025-11-25, 2025-06-18 or 2025-03-26) or carries the stateless 2026-07-28 `_meta` on every request. It decides no business rule: what a run is, whether it may run and whether it is done come from the Runtime unchanged.
-
-**Register it.** `actingctl mcp-config` prints the registration for a client and writes no file. Run from an A/B installation, it names the fixed entry `<install root>\runtime\actingctl.exe`, which keeps working after a slot switch.
+`actinglab-mcp` (Tools half, since v0.12.57) is the local MCP server on stdio for agent clients: one tool per offered row of the operation table (`contracts/lab-operations.json`), no tiers; [apps/actinglab-mcp/MANUAL.md](apps/actinglab-mcp/MANUAL.md) is its manual. A client starts it through the MCP entry's second generation, placed once in `<root>\mcp-entry\g2\`, which switches it to the installed build between calls; `actinglab --json mcp config --client <client>` prints the registration and writes no file. Workflow #434 LAB-7 (since 0.12.62) deleted the older server `actingctl mcp-serve`, its tiers and its first entry `actingcommand-mcp-entry` (`mcp-entry\g1\`): a client still registered with them stops working once the root holds no `runtime\actingctl.exe` (a deploy leaves the build before's file in place until a person removes it).
 
 ```powershell
-# Claude Code: prints  claude mcp add --scope user actingcommand -- "<install root>\runtime\actingctl.exe" mcp-serve --tier <tiers>
-<install root>\runtime\actingctl.exe mcp-config --client claude --tier observer,operator
-# Codex: prints a [mcp_servers.actingcommand] section to add to Codex's config.toml
-<install root>\runtime\actingctl.exe mcp-config --client codex --tier observer,operator
-# Every tool of every tier, with descriptions
-<install root>\runtime\actingctl.exe mcp-serve --list-tools --format markdown
+<install root>\tools\actinglab.exe --json mcp config --client claude
+<install root>\tools\actinglab.exe --json mcp entries
 ```
-
-**The stable entry (v0.12.18).** On a single-location root every client (Claude Code, Codex, Antigravity, DSH) starts `<root>\mcp-entry\g1\actingcommand-mcp-entry.exe --root <root> --client <name> -- mcp-serve --tier <tiers>` instead of `actingctl mcp-serve`. The entry pipes JSON-RPC to one `<root>\runtime\actingctl.exe` child with the words after `--` unchanged; after an update it switches, between calls and only to a verified complete install (`actingctl mcp-entry plan`), to a new child, replays the client's handshake and sends the change notice (legacy `notifications/tools/list_changed`, or the same notification on a 2026-07-28 `subscriptions/listen` stream). A switch waits while the old child holds job or Lab handles whose results were not read; a request in flight when its child ends gets `mcp_entry_outcome_unknown` (inspect with `ac_get_run` or `ac_overview`) and is never sent again. Moving a client onto the entry needs one client restart; after that an update needs none. Claude Code fetches the new tools by itself; Codex reloads the server, Antigravity uses Refresh in its MCP manager, and DSH reloads its plugin with its tool whitelist unchanged. `actingctl mcp-config --client claude|codex|antigravity|dsh --entry --root <root> --tier <tiers>` prints each client's snippet; `actingctl mcp-entry list --root <root>` shows each entry's status (`<root>\mcp-entry\state\entry-<pid>.json`). Details: [contracts/install-cli.md](contracts/install-cli.md), "The MCP entry".
-
-**Tiers.** `observer` is always on and is the default; `operator` and `author` are enabled with `--tier`. `tools/list` lists only the tools of the enabled tiers, and a tool outside them answers `tier_not_enabled`. The table lists the 46 tools of v0.12.60; the 24 marked † are new in the 0.12 series. `ac_config_set` is an observer tool, but a call that names an instance's `touch_backend` or `capture_backend` switches that device and needs the operator tier (v0.12.39). A tool error is `{class, outcome}`, and `mcp-serve --detail codes|full` sets how much of each outcome it carries.
-
-| Tier | Tools |
-| --- | --- |
-| observer (reads, settings the Runtime may change while running, performance presets, handset device binding, the local capability-gap log, an instance's remedy choices and the routine health statistics; 25) | `ac_overview`, `ac_events`, `ac_material`, `ac_observe`†, `ac_get_run`, `ac_diagnose`, `ac_runs`†, `ac_run_evidence`†, `ac_resources_list`, `ac_targets_get`, `ac_config_set`†, `ac_perf_preset`†, `ac_packs`†, `ac_facts`†, `ac_outcome_code`†, `ac_devices`†, `ac_device_bind`†, `ac_device_unbind`†, `ac_capability_gap`†, `ac_remedy_set`†, `ac_remedy_get`†, `ac_schedule`†, `ac_routine_summary`†, `ac_pack_check`, `ac_catalog_check` |
-| operator (devices, applications, scheduling and evidence read confirmations, 9) | `ac_run_pack`, `ac_stop_run`, `ac_pause`, `ac_resume`, `ac_emulator`, `ac_app`†, `ac_ladder_drill`†, `ac_evidence_confirm_read`†, `ac_targets_set` |
-| author (Lab recording, 12) | `ac_lab_observe`, `ac_lab_do`, `ac_record_start`, `ac_record_mark`, `ac_record_stop`, `ac_record_status`, `ac_record_candidates`†, `ac_record_amend`†, `ac_record_step`†, `ac_record_archive`†, `ac_record_reopen`†, `ac_binding_draft` |
-
-`ac_observe` is the MCP side of `actingctl observe --export`: one read-only frame of one instance, written whole to the MCP export directory.
-
-**Rules for agents.** Start with `ac_overview`. Long operations return a handle at once; poll `ac_get_run` with `wait_s`. A run's handle is its Runtime request_id and survives restarts. After an uncertain result call `ac_get_run` before anything else, and never resend a write with new arguments. Approvals, `actingd` configuration file edits and daemon restarts belong to a person; a setting the Runtime may change while running is set with `ac_config_set` (or `actingctl config set|clear`), and every change is recorded. The agent manual is the skill `skills/actingcommand/` in the umbrella repository; it was written for Runtime v0.11.3, so for a 0.12 Runtime the descriptions that `mcp-serve --list-tools` prints are the reference.
 
 ## Build and run
 
@@ -263,7 +241,7 @@ A normal `actingd` invocation takes `--config <path>` and may append `--install-
 Output and exit codes (`ACTINGCOMMAND_DETAIL=codes` keeps only an outcome's registered names; unset, outcomes are full):
 
 - **actingd** writes its daemon lines on stderr: for each outcome a developer line `<INFO|WARN|ERROR|FATAL> actingd: <code> …` and an `OUTCOME actingd: <envelope>` line; the last one is its terminal outcome (a start refusal, or `runtime_stopped` followed by the condition that stopped it, if any). It exits 0 (success, info or warning), 1 (error) or 2 (fatal) by that outcome's category. Each of its four subcommands prints one JSON report with an `outcome` on stdout: `actingcommand.actingd.check-config.v2`, `actingcommand.ledger-maintenance.v2`, `actingcommand.actingd.unlock-owner.v2` and `actingcommand.actingd.suspended.v2`, and exits by the outcome's category.
-- **actingctl**: every subcommand except `mcp-serve` and `mcp-config` prints exactly one JSON line on stdout per exit, `{…result, "outcome": …}` on success and `{"outcome": …}` on failure; a refused Runtime request keeps its receipt beside the outcome. stderr carries only developer lines. `actingctl` and `actingwatch` exit 0, 1 or 2 by the same categories, and a denied or failed receipt exits at least 1.
+- **actinglab**: every row prints, with `--json`, exactly one JSON line on stdout per exit, `{…result, "outcome": …}`, and exits 0, 1 or 2 by the outcome's category (a refusal is at least 1); without `--json` a line for people. `actingctl`, whose line this was, is deleted (Workflow #434 LAB-7).
 
 ```bash
 # Local build and gates; fmt and clippy are identical to CI, while CI splits the test run into the seven module jobs described above (CI's release build additionally uses --locked and an explicit MSVC target)
@@ -275,59 +253,38 @@ cargo test --workspace --no-fail-fast
 # Start the resident daemon; once ready, stderr prints INFO actingd: runtime_ready pid=<pid> host=<host> port=<port> and its OUTCOME actingd: line
 actingcommand-actingd --config runtime.json
 
-# Start or restart the Runtime of a root the way the watchdog does (CLI only; --config for a single-location root)
-actingctl start --root <root> [--config <file>]
-actingctl restart --root <root> [--config <file>] [--wait-idle <s>]
+# Start, stop or restart the Runtime of a root: the Lab's rescue rows, run from the root's own tools\actinglab.exe; the Lab finds its root and state root from its place (no --root, no --state-root; ACTINGCOMMAND_RUNTIME_STATE_ROOT names a state root outside an installed root)
+actinglab up
+actinglab down [--reason <reason>]
+actinglab restart
+actinglab alive [--wait 240s]
 
-# Clients (the subcommand must be the first argument, flags come after it; every command needs --state-root)
-actingctl status --state-root <state-root>
-actingctl status --config --state-root <state-root>     # only the config.* program facts: subsystems, selection, parameters.<section>
-actingctl overview --state-root <state-root> [--instance <alias|instance_id|ADB port>] [--sections <block>[,<block>...]]     # MCP ac_overview
-actingctl events --state-root <state-root> [--instance <alias|instance_id|ADB port>] [--view events|observation|changes|errors|health|lab] [--limit 1-256]     # MCP ac_events
-actingctl runs --state-root <state-root> [--instance <alias|instance_id|ADB port>] [--limit <1-100>]     # MCP ac_runs
-actingctl run evidence --state-root <state-root> (--request-id <request_id> | --run-id <run_id>) [--detail full|summary]     # MCP ac_run_evidence
-actingctl schedule --state-root <state-root> [--instance <alias|instance_id|ADB port>]     # why each candidate did not run; MCP ac_schedule
-actingctl diagnose --state-root <state-root> [--instance <alias|instance_id|ADB port>]     # MCP ac_diagnose
-actingctl config set <key>=<json> --state-root <state-root>     # also: config clear <key>; a setting the Runtime may change while running, recorded (MCP ac_config_set)
-actingctl codes <code>     # one outcome code of the catalog this build embeds; MCP ac_outcome_code
-actingctl facts --program --state-root <state-root>
-actingctl facts --instance <alias|instance_id|ADB port> --state-root <state-root> [--key-prefix <prefix>]   # one instance's facts
-actingctl monitor-status --state-root <state-root>
-actingctl perf-status --state-root <state-root> [--instance <alias|instance_id|ADB port>]     # the performance measurement
-actingctl observe --state-root <state-root> --instance <alias>
-actingctl observe --state-root <state-root> --instance <alias|instance_id|ADB port> --export <dir>     # one read-only frame, read back verified and written whole to <dir>\<sha256>.png (MCP ac_observe)
-actingctl reset --state-root <state-root> --instance <alias>
-actingctl stream --state-root <state-root> --instance <alias> --max-frames 8 --interval-ms 250
-actingctl monitor-set --state-root <state-root> --instance <alias> --interval-ms 30000 --expect home --recover
-actingctl monitor-clear --state-root <state-root> --instance <alias>
-actingctl emulator status --state-root <state-root> --instance <alias>
-actingctl emulator start --state-root <state-root> --instance <alias>     # also: stop | restart (explicit request only; fenced per instance; a configured startup_package is scheduled as a contained task afterwards)
-actingctl emulator discover --state-root <state-root>     # re-run the MuMu instance discovery and list every instance with its bound alias; starts no instance, binds, leases and opens nothing
-actingctl devices list --state-root <state-root>     # also: devices bind <alias> <handle> | devices unbind <alias>; a handset's binding (MCP ac_devices, ac_device_bind, ac_device_unbind)
-actingctl pause --state-root <state-root> [--instance <alias>] [--reason <code>] [--drain-timeout-ms <n>]     # stop policy dispatch: globally, or for one physical instance after its in-flight runs drain; no expiry, and it survives a restart: restored at the next start (contracts/scheduling-pause.md)
-actingctl resume --state-root <state-root> [--instance <alias>]     # lift that pause; status shows the global and per-instance pause states
-actingctl selfcheck <alias> --state-root <state-root>     # reconnect and self-check one physical instance now (Nemu / ADB opens under a dedicated preparation lease, no input, no frame kept); prints the self-check in the resume receipt's shape; the instance stays unavailable to the policy until a self-check passes (contracts/runtime-fact-store.md)
-actingctl ladder-drill --state-root <state-root> --instance <alias>     # drill one physical instance's stuck-recovery ladder: recorded like a real ladder and tagged drill; without --device a plan that never acts on the device, with --device it climbs the rungs (contracts/emulator-control.md, "Drills"); MCP ac_ladder_drill
-actingctl task-run --state-root <state-root> --instance <alias> --package <dir | pkg.zip | pkg.json>     # the package by its path, read as the path chooses, such as a Lab package (contracts/package-reference.md, "Containers"); optional: --recovery-package <path>
-actingctl task-offset <task_id> <offset_milli> --state-root <state-root> [--instance <alias>]     # manual priority offset (±1000000 milli) as a session.task.<task_id>.priority_offset fact; without --instance it is task-level for the one configured target (task_offset_scope_ambiguous otherwise)
-actingctl remedy get --instance <alias> --state-root <state-root>     # also: remedy set (--instance <alias> | --game <id>) --rows <file> | remedy lift --instance <alias>; MCP ac_remedy_get, ac_remedy_set
-actingctl request-shutdown --state-root <state-root>
-actingctl request-shutdown --state-root <state-root> --wait 60     # then wait (1..=3600 s) until the owner record is closed and the process has exited; read-only
-actingctl install-transition --state-root <state-root> --action-json '<action-json>'     # installation control used by the setup wizard (INSTALL.md, "A/B installation inputs and Host control")
-actingctl agent-publish-facts --state-root <state-root> --record-file <observation.json>     # Agent/Adapter origin: publish one bounded fact observation
-actingctl agent-apply-resource-targets --state-root <state-root> --policy-file <policy.json>     # Agent/Adapter origin: apply one instance resource target policy (contracts/resource-targets.md); prints {"applied": ..., "outcome": ...}, or the refusing receipt with its field position beside its outcome and a non-zero exit
+# Clients: the Lab's command line, one row of contracts/lab-operations.json per form (actinglab help lists every row; --json prints one JSON line per exit, {...result, "outcome": ...}; MCP's tool for a row is ac_ and its words)
+actinglab status [<instance>] [--sections <block>[,<block>...]]
+actinglab events [<instance>]
+actinglab runs [<instance>]
+actinglab run evidence <request_id|run_id>
+actinglab diagnose [<instance>]
+actinglab codes <code>
+actinglab config set <key>=<json>
+actinglab pause [<instance>] [--reason <reason>] [--drain 300s]
+actinglab resume [<instance>]
+actinglab shutdown [--wait 60s]
+
+# Deploy (contracts/install-cli.md, "A deploy since LAB-7"): stage a downloaded release, then one call plans, stops with a hold, applies, starts, checks alive and releases the hold
+actinglab release stage <dir>
+actinglab guards --for stop
+actinglab deploy <tag|commit> [--dir <dir>] [--plan] [--detach]
+actinglab op status [<operation_id>]
+actinglab release-hold <reason>
 
 # Watchdog of an A/B installation or a single-location root (INSTALL.md, "Runtime watchdog")
-actingctl watchdog install --root <install root>     # also: status | run-once | uninstall
+actinglab watchdog install     # also: watchdog uninstall; tools\actingwatch.exe status reads its state
 
-# MCP server (stdio) and client registration
-actingctl mcp-serve [--root <install root>] [--state-root <dir>] [--tier observer|operator|author[,...]] [--detail codes|full]
-actingctl mcp-serve --list-tools [--format json|markdown]
-actingctl mcp-config --client claude|codex [--tier observer|operator|author[,...]]
-actingctl mcp-config --client claude|codex|antigravity|dsh --entry --root <root> [--tier observer|operator|author[,...]]
-actingctl mcp-entry plan --root <root> --entry-protocol 1 [--current-build <commit>] [-- <child arguments>]
-actingctl mcp-entry list --root <root> [--all]
-actingcommand-mcp-entry --root <root> [--client claude|codex|antigravity|dsh] -- mcp-serve [--tier ...]
+# MCP: the client's registration of the second-generation entry (apps/actinglab-mcp/MANUAL.md, section 11)
+actinglab mcp config --client claude|codex|antigravity|dsh [--list <modules>]
+actinglab mcp entries [--all]
+actingcommand-mcp-entry-g2 --root <root> [--client claude|codex|antigravity|dsh] -- [--list <modules>]
 
 # Read-only forensics (same state root)
 actingledger --state-root <state-root> open
@@ -382,7 +339,7 @@ actingcommand-actingd vision check --config runtime.json [--install-root <root>]
 actingcommand-actingd suspended --config runtime.json
 
 # Offline owner unlock after startup refused owner_resource_unconfirmed (appends to owner.lock, never deletes it; the next start takes over)
-actingcommand-actingd unlock-owner --config runtime.json --actor <name> --confirm-resources-released
+actingcommand-actingd unlock-owner --config runtime.json --actor <name>
 
 # Vision model folders and provider startup facts
 actingcommand-vision-provider-check --state-root <state-root> --limit 256

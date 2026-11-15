@@ -98,7 +98,10 @@ Alice decided M-PKG D10 on 2026-10-12: an unload stops the manual runs of the sa
    (Runtime 0.12.59; [lab-two-entries.md](lab-two-entries.md) §4.2) actingctl binds `lab` with
    `Lab-CLI` and `actingctl mcp-serve` `lab` with `Lab-MCP`, each keeping the envelope it sent on
    0.12.58; the Runtime records and answers their requests on `cli` and `mcp` as before (rule
-   9), so acsetup's receipts still name `cli`.
+   9), so acsetup's receipts still name `cli`. Workflow #434 LAB-7 (Runtime 0.12.62) deletes
+   actingctl and its MCP server: the Lab's programs (actinglab, actinglab-mcp, actingwatch) are
+   the frontends of this repository, and a build of LAB-7 carries no `actingctl.exe` for acsetup
+   to run; its replacement is the console's (on actinglab).
 7. `via` exists only on the Lab channel and only a forwarding counter sets it: MCP's
    option tools start actinglab with `--via mcp`; a future UI Lab frontend that forwards
    to actinglab passes `--via ui`. actinglab puts it into `BindChannel{lab, via}`.

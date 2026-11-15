@@ -27,15 +27,8 @@
 //!   that begins with `--`, alone or in a list, `actingctl_usage_invalid` `not_recognised` as
 //!   `serve` refuses it: each with the argument, `isError` true, and the scripted Runtime receives
 //!   no connection at all.
-//! - `mcp_write_provenance_as_todays_server`: today's server (`actingctl mcp-serve`, the program
-//!   the same build puts beside this one) and this one each pause scheduling once on a scripted
-//!   Runtime of their own: both connections carry the same requests, their issued ids and times
-//!   left out (`Health`, `BindChannel`, the identity card `actingctl-mcp`, the client action of
-//!   `ac_pause` on surface `mcp`, then `PauseScheduling`), each with the envelope (Cli, Cli).
-//!   Workflow #434 LAB-6S2-B1 (adapted): but for the binding, which this server declares as `lab`
-//!   with `Lab-MCP` and no `via`, and today's server as the MCP channel until LAB-6S2-B2.
-//!   Workflow #434 LAB-6S2-B2 (adapted): today's server declares `lab` with `Lab-MCP` and no
-//!   `via` too.
+//! - Workflow #434 LAB-7: `mcp_write_provenance_as_todays_server`, which held this server's write
+//!   to what `actingctl mcp-serve` sent, is retired with that server (`ci/retired-gates.toml`).
 //!
 //! Workflow #434 LAB-5G3 (register §1.287, "Slice LAB-5G3"), each server with a short call budget
 //! (`--call-budget`), so that no test waits for today's 25 s:
@@ -115,14 +108,14 @@
 
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
-    AuditInput, DeclaredInitiator, EventAction, EventActor, EventDraft, EventLinksDraft,
-    EventOrigin, EventPayloadDraft, EventSeverity, EventSource, FactScope, IdentifierIssuer,
-    Initiator, OriginModule, OwnerEpoch, PackSchedulePackage, PackScheduleScopeVersion,
-    PackScheduleSource, PackScheduleView, ProjectedEvent, ProjectionPayload,
-    RuntimeControlPlaneStatus, RuntimeErrorCode, RuntimeErrorProjection, RuntimeEventQueryCursor,
-    RuntimeEventQueryPage, RuntimeInstanceStatus, RuntimeOperation, RuntimePayloadDraft,
-    RuntimeReceipt, RuntimeReceiptState, RuntimeRequest, RuntimeResult, SanitizationError,
-    SecretField, SecretFingerprinter, Sha256Fingerprint, TerminalEvent,
+    AuditInput, EventAction, EventActor, EventDraft, EventLinksDraft, EventOrigin,
+    EventPayloadDraft, EventSeverity, EventSource, FactScope, IdentifierIssuer, Initiator,
+    OriginModule, OwnerEpoch, PackSchedulePackage, PackScheduleScopeVersion, PackScheduleSource,
+    PackScheduleView, ProjectedEvent, ProjectionPayload, RuntimeControlPlaneStatus,
+    RuntimeErrorCode, RuntimeErrorProjection, RuntimeEventQueryCursor, RuntimeEventQueryPage,
+    RuntimeInstanceStatus, RuntimeOperation, RuntimePayloadDraft, RuntimeReceipt,
+    RuntimeReceiptState, RuntimeRequest, RuntimeResult, SanitizationError, SecretField,
+    SecretFingerprinter, Sha256Fingerprint, TerminalEvent,
 };
 use actingcommand_lab_ops::cli_line::{self, Exit};
 use actingcommand_lab_ops::code_lookup;
@@ -131,11 +124,11 @@ use actingcommand_lab_ops::core_ops::{self, Caller, Place};
 use actingcommand_lab_ops::events::CursorBinding;
 use actingcommand_lab_ops::front::{self, Connection, Front};
 use actingcommand_lab_ops::table;
+use actingcommand_runtime_client::RuntimeClient;
 use actingcommand_runtime_client::test_support::{
     ScriptedAnswer, ScriptedConnection, ScriptedConnectionRecord, ScriptedGate, ScriptedRecord,
     ScriptedRuntime,
 };
-use actingcommand_runtime_client::{RuntimeChannel, RuntimeClient};
 use serde_json::{Map, Value, json};
 use std::ffi::OsString;
 use std::fs;
@@ -296,25 +289,6 @@ fn actinglab_mcp(program: &Path, state_root: Option<&Path>, temp: &Path) -> Comm
     } else {
         command.env_remove(STATE_ROOT_VARIABLE);
     }
-    command
-}
-
-/// Today's server, `actingctl mcp-serve`, which the same build puts beside this program.
-fn todays_server(state_root: &Path) -> Command {
-    let program =
-        Path::new(PROGRAM).with_file_name(format!("actingctl{}", std::env::consts::EXE_SUFFIX));
-    assert!(
-        program.is_file(),
-        "today's server is built beside actinglab-mcp: {}",
-        program.display()
-    );
-    let mut command = Command::new(program);
-    command
-        .arg("mcp-serve")
-        .arg("--state-root")
-        .arg(state_root)
-        .args(["--tier", "operator"])
-        .env_remove("ACTINGCOMMAND_DETAIL");
     command
 }
 
@@ -664,123 +638,6 @@ fn mcp_refusals_send_nothing() {
         record.connections.is_empty() && record.unscripted.is_empty(),
         "nothing reached the Runtime: {record:?}"
     );
-}
-
-#[test]
-fn mcp_write_provenance_as_todays_server() {
-    let todays_state = TempDir::new().expect("tempdir");
-    let state = TempDir::new().expect("tempdir");
-    let temp = TempDir::new().expect("tempdir");
-    let todays_runtime = ScriptedRuntime::start(todays_state.path(), |_| vec![write_connection()]);
-    let runtime = ScriptedRuntime::start(state.path(), |_| vec![write_connection()]);
-
-    // Today's server: `ac_pause` with its own arguments for the same pause.
-    let mut todays = Server::start(todays_server(todays_state.path()));
-    todays.initialize();
-    let answer = todays.call_tool(
-        2,
-        "ac_pause",
-        json!({"reason": REASON, "drain_timeout_s": 60}),
-    );
-    assert_eq!(
-        answer["result"]["isError"],
-        json!(true),
-        "refused: {answer}"
-    );
-    let _ = todays.finish();
-
-    // This server: the row's parameters.
-    let mut server = Server::start(actinglab_mcp(
-        Path::new(PROGRAM),
-        Some(state.path()),
-        temp.path(),
-    ));
-    server.initialize();
-    let answer = server.call_tool(2, "ac_pause", json!({"reason": REASON, "drain": "60s"}));
-    assert_eq!(
-        answer["result"]["isError"],
-        json!(true),
-        "refused: {answer}"
-    );
-    let status = server.finish();
-    assert_eq!(status.code(), Some(0), "exit at stdin EOF: {status}");
-
-    let todays_connection = only_connection(todays_runtime.finish());
-    let connection = only_connection(runtime.finish());
-    let todays_sent = todays_connection
-        .requests
-        .iter()
-        .map(sent)
-        .collect::<Vec<_>>();
-    // Workflow #434 LAB-6S2-B1 (adapted: the new server's binding moved): every request but the
-    // binding is today's server's, the envelope (Cli, Cli) included; the binding is `lab` with
-    // `Lab-MCP` and no `via`, where today's server binds `mcp` until LAB-6S2-B2.
-    let without_binding = |requests: &[Value]| {
-        requests
-            .iter()
-            .enumerate()
-            .filter(|(index, _)| *index != 1)
-            .map(|(_, request)| request.clone())
-            .collect::<Vec<_>>()
-    };
-    assert_eq!(
-        without_binding(&connection.requests.iter().map(sent).collect::<Vec<_>>()),
-        without_binding(&todays_sent),
-        "the new server sends what today's server sends for the same write, its binding apart"
-    );
-    assert_eq!(
-        operations(&connection),
-        [
-            "health",
-            "bind_channel",
-            "declare_governance_identity",
-            "record_client_action",
-            "pause_scheduling",
-        ]
-    );
-    let bound = |request: &RuntimeRequest| {
-        let RuntimeOperation::BindChannel {
-            channel,
-            via,
-            initiator,
-        } = request.operation()
-        else {
-            panic!("the second request is no BindChannel");
-        };
-        (
-            *channel,
-            *via,
-            initiator.as_ref().and_then(DeclaredInitiator::initiator),
-        )
-    };
-    assert_eq!(
-        bound(&connection.requests[1]),
-        (RuntimeChannel::Lab, None, Some(Initiator::LabMcp))
-    );
-    // Workflow #434 LAB-6S2-B2 (adapted): today's server's binding moved to this one's.
-    assert_eq!(
-        bound(&todays_connection.requests[1]),
-        (RuntimeChannel::Lab, None, Some(Initiator::LabMcp))
-    );
-    for request in connection.requests.iter().map(sent) {
-        assert_eq!(
-            (&request["actor"], &request["source"]),
-            (&json!(EventActor::Cli), &json!(EventSource::Cli)),
-            "{request}"
-        );
-    }
-    assert_eq!(
-        todays_sent[2]["operation"]["card"]["client"],
-        json!("actingctl-mcp"),
-        "the identity card"
-    );
-    for request in &todays_sent {
-        assert_eq!(
-            (&request["actor"], &request["source"]),
-            (&json!(EventActor::Cli), &json!(EventSource::Cli)),
-            "{request}"
-        );
-    }
 }
 
 // ---- Workflow #434 LAB-5G3: jobs, handles, waits and cursors taken back

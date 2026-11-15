@@ -218,9 +218,17 @@ fn wd1_active_json_appearing_before_the_start_is_a_selection_change() {
 #[test]
 fn wd1_install_on_a_single_location_root_checks_the_launcher_not_the_layout() {
     let single = SingleRoot::new();
-    // The Runtime's fixed entry is deployed; the Tools that carry the launcher are not.
-    fs::write(single.root.join("runtime").join("actingctl.exe"), b"")
-        .expect("write the Runtime's fixed entry");
+    // The Runtime's fixed entry is deployed; the Tools that carry the launcher are not. Workflow
+    // #434 LAB-7 (adapted): the fixed entry is the daemon the watchdog starts, no longer
+    // actingctl.exe.
+    fs::write(
+        single
+            .root
+            .join("runtime")
+            .join("actingcommand-actingd.exe"),
+        b"",
+    )
+    .expect("write the Runtime's fixed entry");
 
     let report = install(&single.root);
 

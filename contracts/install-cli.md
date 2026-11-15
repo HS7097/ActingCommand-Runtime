@@ -841,8 +841,8 @@ actinglab new <new_root> --build <kept build dir or verified release dir> [--new
     `bindings`, which judges the new file, fails (`post_check_failed`, `failed_checks`
     `bindings`, the row's `missing` the alias), the hold kept, and the pause is tried as after
     every stop after the swap (below); its pause refused: `post_check_failed` (`alias`, `count`
-    1), the hold kept, and `next` names `pause_added`, the core pause as actingctl runs it
-    (`actingctl pause --state-root <s> --instance <alias> --reason instance.added`). An
+    1), the hold kept, and `next` names `pause_added`, the Lab's core pause (`pause <alias>
+    --reason instance.added`; until LAB-7 the core pause as actingctl ran it). An
     operation that stops after the swap pauses it the same way while a Runtime answers. A stopped
     Runtime takes no pause of an alias it did not register, so the instance's own pause comes only
     after the new Runtime's readiness; the global pause below holds it until then.
@@ -864,8 +864,8 @@ actinglab new <new_root> --build <kept build dir or verified release dir> [--new
     (`runtime_not_running`; `runtime_stop_failed`, the Runtime's failure as the cause) before
     anything changed on disk, the hold's own pauses handed back. Every failure after it keeps it as
     the hold is kept: when the new instance's pause fails, the command ends `post_check_failed`
-    with both kept and `next` names `pause_added` and `actingctl_resume_global` (the core global
-    resume, "Ways out of a kept hold") beside `release-hold <its reason>`, which hands back the
+    with both kept and `next` names `pause_added` and `resume_global` (the core global resume,
+    "Ways out of a kept hold"; `actingctl_resume_global` until LAB-7) beside `release-hold <its reason>`, which hands back the
     global pause and the hold's instance pauses and nothing else. `config replace`, `config
     restore` and every other composite set no global pause.
   - **Its answer**: `install_command_done` (`install_instance_add`, `install_operation_id`,
@@ -1150,9 +1150,10 @@ the rescue face:
   actingctl runs it until then. Since LAB-6S1b (0.12.58) the Lab's own `resume <instance>` (and
   `resume` for the global pause), which binds the Lab channel, is a way out too: the Runtime no
   longer refuses a resume from the Lab's envelope (lab-two-entries.md §2.4); `next` does not name
-  it. **After LAB-7** deletes actingctl, what stays is the
-  module's own `release-hold <reason>` and the Lab's core `resume <instance>` (on the Lab channel);
-  LAB-7 drops the `actingctl_*` forms.
+  it. **Since LAB-7** (0.12.62) deletes actingctl, `next` drops the `actingctl_*` forms and names
+  the module's own `release_hold` and the Lab's core rows: `resume`, one `resume <alias>` per
+  instance as above, and `resume_global`, `resume`, for the hold's own global pause; `instance
+  add`'s `pause_added` is the Lab's `pause <alias> --reason instance.added`.
 - **Its own running image.** The module runs from `<root>\tools\actinglab.exe`, which an update
   replaces: the image of the process that plans (matched by its process id) is renamed aside as
   `actingctl.exe` is and runs on (`running.renamed_own` in the plan); any other running
@@ -1515,12 +1516,20 @@ the rescue face:
   kinds `config_replace` and `pack_place`; since 0.12.60, Workflow #453 S9, the kind
   `vision_place` and its step `vision_file`, which a build before 0.12.60 does not read either):
   the testing phase keeps no old-version compatibility
-  (Alice, 2026-10-11). `actingctl install` writes its journals byte for byte as before, and this
-  build reads the older ones. **Operational rule until LAB-7:** production keeps deploying through
-  `actingctl install` (the coordinator's deploy kit); the module's `deploy`, `rollback`, `place`,
-  `config replace` and (Workflow #453 S9) `vision place` are not used on the production root, so
-  no journal an older installer cannot read appears there. Workflow #453 S12: nor is its
-  `state-root claim`, until LAB-7.
+  (the owner, 2026-10-11). This build reads the journals `actingctl install` wrote.
+- **A deploy since LAB-7** (Workflow #434 LAB-7, since 0.12.62; register §1.287, "Slice LAB-7";
+  the owner's ruling of 11-15 that nothing is kept compatible with earlier builds). `actingctl`
+  is deleted, and production deploys through the Lab's own rows, run from the root's
+  `tools\actinglab.exe` (or a kept build's `install\builds\<commit>\tools\actinglab.exe`):
+  `release stage <dir>`, then `deploy <commit> [--dir <dir>]` (one call: stage, plan, stop with
+  its hold, apply, start, alive, release), `op status` to follow it, `release-hold <reason>` for a
+  hold it kept, and `guards --for stop|start` beforehand. A Runtime half without `actingctl.exe`
+  plans as any other: a live file the target lacks is listed under `extra` and left in place
+  (`runtime\actingctl.exe` and `tools\actingcommand-mcp-entry.exe` of the build before stay on
+  disk until a person removes them; no deploy deletes them). An interrupted `new` whose
+  configuration is not written yet is the one case no row of the module reaches (every row but
+  `new` locates its root from its configuration): its ways out still name `actingctl install
+  resume|undo --root <root>`, which only an `actingctl.exe` of a build before LAB-7 runs.
 
 ## Interface checks
 

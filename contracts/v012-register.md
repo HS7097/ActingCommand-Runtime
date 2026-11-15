@@ -12303,6 +12303,45 @@ each program is served by that Runtime's own rules (fix 1: the connections count
 
 **LAB-6S2-B2 rollback** (to 0.12.58). Two-way: nothing persisted changes shape or value.
 
+#### Slice LAB-7 (0.12.62): `actingctl` and the first MCP server deleted; production deploys through the Lab
+
+Coordinator work order `rd-1115/brief-434-l7-delete-actingctl.md`, with the plan
+`rd-1115/434-lab-series-refresh.md` (its section 1.2, "L7", section 2, section 6 and the slice
+table's row L7), based on main `d32d4d6c`; board #434 (the command line and MCP are shells around
+the Lab, and actingctl with the MCP server inside it are the older shells) and the owner's ruling
+of 11-15 that nothing is kept compatible with earlier builds. Ships in 0.12.62 or the release after
+it.
+
+| Id | Item | Kind | What it is now |
+|---|---|---|---|
+| L7-1 | `apps/actingctl`, `apps/mcp-entry` | deleted | the programs `actingctl` (its commands, `mcp-serve`, `mcp-config`, `mcp-entry plan|list`, its tests) and the first MCP entry `actingcommand-mcp-entry` (with its fake child) leave the workspace, the lock file and CI's `apps` job |
+| L7-2 | the build | build | the exact-SHA build builds and stages neither; the Runtime half is `actingcommand-actingd.exe` and its files (layout `distribution-v1`), the Tools half loses `actingcommand-mcp-entry.exe` (layout `platform-tools-v3`, actinglab still in `tools\`); the boot smoke reads `actinglab --json status` and stops the Runtime with `actinglab --json shutdown --wait 60s`, the watchdog smoke reads `actingwatch.exe status` and ticks only through the launcher; the artifact downloader and its tests expect the same files |
+| L7-3 | interfaces | declaration | `install-cli` [2, 2] joins `speaks` (component-interfaces.md, the LAB-7 row); `install-control` stays declared and `tools-layout` stays 3, since every installed installer requires the six v1 interfaces and one layout name per half |
+| L7-4 | outcome codes | catalog | `actingctl.json` stays the fragment of `crates/lab-ops` (owner `actingctl` since LAB-1); eight codes only actingctl raised are retired in 0.12.62 (`tier_not_enabled`, `runtime_status_reported`, `monitor_status_reported`, `instance_status_reported`, `runtime_performance_reported`, `runtime_fact_refresh_reported`, `mcp_config_program_unresolved`, `mcp_config_program_unsupported`); the first entry's three codes are retired into `mcp-entry-g2.json`, each `replaced_by` its second-generation code, and the domain `mcp_entry_` is that owner's; the owners `actingctl-app` and `mcp-entry` leave the header; the vocabulary `mcp_tier` keeps its tokens without a source enum |
+| L7-5 | the watchdog | behaviour | `watchdog install` checks the Runtime's fixed entry `runtime\actingcommand-actingd.exe` (and the launcher), no longer `runtime\actingctl.exe`; the task's description names `actingwatch.exe` |
+| L7-6 | the rescue module | answer members | a running `actingctl.exe` is no longer renamed aside by a plan (`RENAMABLE_IMAGES` is `actinglab-mcp.exe` alone); the first generation's plan and list commands are gone (the rows `mcp plan` and `mcp entries` stay); `next` of a kept hold names `release_hold`, `resume` (`resume <alias>`) and `resume_global` (`resume`) in place of `actingctl_release_hold`, `actingctl_resume` and `actingctl_resume_global`, and `instance add`'s `pause_added` is `pause <alias> --reason instance.added`; `unlock` passes no `--confirm-resources-released` |
+| L7-7 | actingd `unlock-owner` | command line | takes `--config` and `--actor` only; running it confirms; `--confirm-resources-released` is refused as an unknown option (`unlock_owner_option_invalid`) |
+| L7-8 | `lab_ops::front` | in-process seam | `Front::Actingctl` is gone; a process that never says which program it is serves as `Front::Actinglab(Lab-CLI)` |
+| L7-9 | the operation table | contract | no row carries `source`; `lab_ops::table::Operation` has no such member; `lab_ops_table_complete` no longer asks for `source` or `new` |
+| L7-10 | kept on purpose | gap | an interrupted `new` whose configuration is not written yet: every rescue row but `new` locates its root from its configuration, so no row of the Lab resumes or undoes it; its answer's ways out still name `actingctl install resume|undo --root <root>` (`install::new`, unchanged), which an `actingctl.exe` of a build before LAB-7 runs |
+
+**At deploy** (what an installation in use meets). The build before this one deploys it as before
+(its `actinglab deploy`, or its kept `actingctl install`): the target's plan lists the live
+`runtime\actingctl.exe` and `tools\actingcommand-mcp-entry.exe` under `extra` and leaves them in
+place. The watchdog's task keeps running `tools\actingwatch.exe`; its first tick on this build
+decides as before, and `watchdog install` of this build checks the daemon. An MCP client still
+registered with the first entry (`mcp-entry\g1\`, which no deploy touches) keeps starting
+`runtime\actingctl.exe`, now the build before's file left in place, until a person removes it;
+then each new session's `initialize` is answered with the JSON-RPC error
+`mcp_entry_child_unavailable`. A console that passes `--confirm-resources-released` to
+`unlock-owner`, or runs `actingctl.exe` children, needs its rebuild (plan §6).
+
+**LAB-7 rollback** (to the build before). Two-way for the data: nothing persisted changes shape or
+value; the build before's installer accepts this build and this build's installer the build before
+(its `actingctl.exe` is the target's file again: the same bytes as a leftover are `same`, another
+file is replaced, and a running image of it blocks the plan with `running_image_blocks`, since
+this build no longer renames it aside).
+
 ### 1.288 Slice SS-2f (0.12.46): the business tier across instances goes to the instance least recently dispatched first (Workflow #428; Alice's answer K2 to question 137 of 2026-11-02 19:4x, recorded on board #428 and in the coordinator's pending list, 「137：K2」, with no reason given; design `rd-1031/design-acm-price-addendum2.1.md` §5.4 and its slice row SS-2f, read on main `eb1e946d`; placed before 116 is lifted by the research channel's `rd-1031/design-c424-redline-1109.md` §4.9, Q13; coordinator work order `rd-1109/brief-ss2f.md`)
 
 [scheduling/README.md](scheduling/README.md) ("Net benefit within a tier", "Turns across

@@ -15,44 +15,44 @@ every code of its fragment, retired ones included, sorted by code, with its cate
 `since`, status (a retired code with the code that replaces it, where it names one), review, text
 (`written` when both texts are written, else `TBD`) and the first sentence of its description, cut
 at a space within 160 characters and then ending in `…`. The index holds codes only: the catalog's
-1764 locations are not in it, and 10 of the header's 41 owners have no fragment file and so no file
+1764 locations are not in it, and 9 of the header's 39 owners have no fragment file and so no file
 here.
 
 ## Codes by status
 
 | Status | Codes |
 |---|---:|
-| active | 3932 |
-| retired | 28 |
+| active | 3921 |
+| retired | 39 |
 | all | 3960 |
 
 ## Active codes by category
 
 | Category | Codes |
 |---|---:|
-| success | 132 |
+| success | 127 |
 | info | 213 |
 | warning | 155 |
-| error | 3415 |
+| error | 3409 |
 | fatal | 17 |
 
 ## Text and review of the active codes
 
 | Active codes | Codes |
 |---|---:|
-| `common_causes` and `handling` both written | 745 |
+| `common_causes` and `handling` both written | 741 |
 | one of the two written, the other `TBD` or empty | 4 |
-| neither written (`TBD` or empty) | 3183 |
-| `settled` | 170 |
-| `pending` | 3762 |
-| all active codes | 3932 |
+| neither written (`TBD` or empty) | 3176 |
+| `settled` | 169 |
+| `pending` | 3752 |
+| all active codes | 3921 |
 
 ## By owner
 
 | Owner | Codes | Active | Text written | Settled |
 |---|---:|---:|---:|---:|
 | [actingcommand-entry](actingcommand-entry.md) | 10 | 10 | 10 | 0 |
-| [actingctl](actingctl.md) | 204 | 203 | 44 | 11 |
+| [actingctl](actingctl.md) | 204 | 195 | 43 | 10 |
 | [actingd](actingd.md) | 155 | 154 | 99 | 86 |
 | [actinglab](actinglab.md) | 43 | 42 | 42 | 0 |
 | [actinglab-mcp](actinglab-mcp.md) | 3 | 3 | 3 | 0 |
@@ -66,8 +66,7 @@ here.
 | [lab](lab.md) | 12 | 12 | 10 | 0 |
 | [ledger](ledger.md) | 293 | 292 | 26 | 0 |
 | [ledger-forensics](ledger-forensics.md) | 52 | 52 | 0 | 0 |
-| [mcp-entry](mcp-entry.md) | 3 | 3 | 3 | 0 |
-| [mcp-entry-g2](mcp-entry-g2.md) | 3 | 3 | 3 | 0 |
+| [mcp-entry-g2](mcp-entry-g2.md) | 6 | 3 | 3 | 0 |
 | [pack-containment](pack-containment.md) | 40 | 40 | 0 | 0 |
 | [page-detector](page-detector.md) | 2 | 2 | 2 | 0 |
 | [policy](policy.md) | 119 | 117 | 56 | 0 |
@@ -82,4 +81,4 @@ here.
 | [scheduler](scheduler.md) | 14 | 14 | 0 | 0 |
 | [selection-policy](selection-policy.md) | 27 | 27 | 0 | 0 |
 | [vision-ffi](vision-ffi.md) | 4 | 4 | 1 | 0 |
-| all | 3960 | 3932 | 745 | 170 |
+| all | 3960 | 3921 | 741 | 169 |

@@ -392,7 +392,7 @@ const LAB_PROGRAM: &str = "actinglab";
 /// The running program's file; one the OS cannot name is the failure to open it.
 fn running_program() -> Result<PathBuf, Outcome> {
     std::env::current_exe()
-        .map_err(|error| super::files::os_failure(Path::new("actingctl.exe"), &error, IoOp::Open))
+        .map_err(|error| super::files::os_failure(Path::new("actinglab.exe"), &error, IoOp::Open))
 }
 
 /// One counter (`read`: the bytes read so far, `ws`: the working set in bytes) of the

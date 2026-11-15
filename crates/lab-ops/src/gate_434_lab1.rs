@@ -30,7 +30,8 @@ fn table_file() -> PathBuf {
 }
 
 // §9.2: names and MCP tool names are unique; every operation has params, output, writes,
-// irreversible, runtime, entries, requests, source or new, slice and status; every kind of
+// irreversible, runtime, entries, requests, slice and status (Workflow #434 LAB-7: no `source`,
+// which named the deleted programs a row replaced); every kind of
 // `RuntimeOperationKind::ALL` is in some operation's requests or once in `not_exposed`, and every
 // kind the file names exists; `entries` follows its rule; a `reserved` row has `opens_with`.
 // Workflow #434 LAB-5A: every parameter's type is one of §9.1's; only a row of the rescue module
@@ -103,9 +104,6 @@ fn lab_ops_table_complete() {
             if let Some(other) = helps.insert(help.as_str(), operation.name.as_str()) {
                 violations.push(format!("{} has the help of {other}", operation.name));
             }
-        }
-        if operation.source.is_empty() && operation.new.is_none() {
-            violations.push(format!("{} has neither a source nor new", operation.name));
         }
         if operation.slice.trim().is_empty() {
             violations.push(format!("{} has no slice", operation.name));

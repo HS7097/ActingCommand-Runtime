@@ -390,9 +390,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           & cargo build --locked --release --target x86_64-pc-windows-msvc `
             --bin actingcommand-actingd `
-            --bin actingctl `
             --bin actingwatch `
-            --bin actingcommand-mcp-entry `
             --bin actingcommand-mcp-entry-g2 `
             --bin actinglab `
             --bin actinglab-mcp `
@@ -448,7 +446,10 @@ jobs:
           $configPath = Join-Path $root 'actingd.config.json'
           $out = Join-Path $root 'actingd.out.log'
           $err = Join-Path $root 'actingd.err.log'
-          $ctl = Join-Path $runtime 'actingctl.exe'
+          # Workflow #434 LAB-7: the Lab's command line reads the status and asks for the shutdown
+          # (its core rows `status` and `shutdown`); outside an installed root it takes the state
+          # root from ACTINGCOMMAND_RUNTIME_STATE_ROOT.
+          $lab = Join-Path $runtime 'actinglab.exe'
           # Workflow #378 A6a: actingd's daemon lines are on stderr, each outcome an
           # `OUTCOME actingd: <envelope>` line after its developer line.
           $outcomePrefix = 'OUTCOME actingd: '
@@ -461,7 +462,7 @@ jobs:
 
           # Returns stdout; a non-zero exit throws with stdout and stderr.
           function Invoke-SmokeChecked([string] $Exe, [string[]] $Arguments) {
-            $stderr = Join-Path $root 'actingctl.err.log'
+            $stderr = Join-Path $root 'actinglab.err.log'
             $text = (& $Exe @Arguments 2> $stderr | Out-String)
             $exit = $LASTEXITCODE
             if ($exit -ne 0) {
@@ -513,9 +514,10 @@ jobs:
 
             # The exact-SHA programs and the example configuration with a fresh root and salt.
             $build = Join-Path $PWD 'target\x86_64-pc-windows-msvc\release'
-            foreach ($name in @('actingcommand-actingd.exe', 'actingctl.exe')) {
+            foreach ($name in @('actingcommand-actingd.exe', 'actinglab.exe')) {
               Copy-Item -LiteralPath (Join-Path $build $name) -Destination $runtime
             }
+            $env:ACTINGCOMMAND_RUNTIME_STATE_ROOT = $state
             $config = Get-Content -LiteralPath 'distribution/windows/actingd.config.example.json' -Raw | ConvertFrom-Json
             if (@($config.instances).Count -ne 0) {
               throw 'boot_smoke_failed: the example configuration declares instances'
@@ -541,12 +543,12 @@ jobs:
             if ($ready.Count -eq 1) {
               Write-Host "boot smoke ready outcome: $($ready[0] | ConvertTo-Json -Compress -Depth 20)"
               try {
-                $status = Invoke-SmokeChecked $ctl @('status', '--state-root', $state)
-                Write-Host "boot smoke actingctl status: exit 0 ($($status.Length) bytes)"
-                $shutdown = (Invoke-SmokeChecked $ctl @('request-shutdown', '--state-root', $state, '--wait', '60')).Trim()
-                Write-Host "boot smoke request-shutdown: $shutdown"
+                $status = Invoke-SmokeChecked $lab @('--json', 'status')
+                Write-Host "boot smoke actinglab status: exit 0 ($($status.Length) bytes)"
+                $shutdown = (Invoke-SmokeChecked $lab @('--json', 'shutdown', '--wait', '60s')).Trim()
+                Write-Host "boot smoke actinglab shutdown: $shutdown"
                 if (($shutdown | ConvertFrom-Json).shutdown.state -cne 'completed') {
-                  throw 'request-shutdown did not report shutdown.state completed'
+                  throw 'actinglab shutdown did not report shutdown.state completed'
                 }
                 if (-not $process.WaitForExit(30000)) {
                   throw 'actingd did not exit within 30 s after the shutdown'
@@ -657,9 +659,10 @@ jobs:
           # Workflow #387 D1b (model v1.2 §5.2): the defaults file ships beside the example
           # configuration. Workflow #453 S4: so does the first configuration's template, which the
           # rescue module's `new` fills.
+          # Workflow #434 LAB-7: actingctl.exe left the Runtime half; the layout name stays, so the
+          # installed installers keep accepting it (they list a live file the target lacks as extra).
           $runtimeFiles = @(
             'actingcommand-actingd.exe',
-            'actingctl.exe',
             'actingd.config.example.json',
             'actingd.config.first.json',
             'actingd.defaults.json',
@@ -667,14 +670,13 @@ jobs:
             'RELEASE-NOTES.md'
           )
           # Workflow #434 LAB-5G6: the Lab's MCP server and the MCP entry's second generation, in
-          # platform-tools-v3 as the first entry is since v0.12.18; New-BuildManifest below lists
-          # every file of $toolFiles.
+          # platform-tools-v3; New-BuildManifest below lists every file of $toolFiles. Workflow #434
+          # LAB-7: the first entry actingcommand-mcp-entry.exe left the list.
           $toolFiles = @(
             'actinglab.exe',
             'actingledger.exe',
             'actingcommand-vision-provider-check.exe',
             'actingwatch.exe',
-            'actingcommand-mcp-entry.exe',
             'actinglab-mcp.exe',
             'actingcommand-mcp-entry-g2.exe'
           )
@@ -711,7 +713,7 @@ jobs:
           if ($interfaces.schema_version -cne 'actingcommand.component-interfaces.v1') {
             throw "component-interfaces.json: schema_version is not actingcommand.component-interfaces.v1: $($interfaces.schema_version)"
           }
-          foreach ($name in @('actingd-config', 'install-selection', 'install-control', 'ledger', 'runtime-client', 'package', 'runtime-outcomes')) {
+          foreach ($name in @('actingd-config', 'install-selection', 'install-control', 'install-cli', 'ledger', 'runtime-client', 'package', 'runtime-outcomes')) {
             $range = @($interfaces.speaks.$name)
             if ($range.Count -ne 2 -or @($range | Where-Object { "$_" -cnotmatch '\A[0-9]+\z' }).Count -ne 0 -or
                 [int64]"$($range[0])" -gt [int64]"$($range[1])") {
@@ -782,7 +784,7 @@ jobs:
             )
           }
 
-          Copy-BuildFiles -Names @('actingcommand-actingd.exe', 'actingctl.exe') -Destination $runtimeDir
+          Copy-BuildFiles -Names @('actingcommand-actingd.exe') -Destination $runtimeDir
           Copy-BuildFiles -Names @(
             'actingd.config.example.json',
             'actingd.config.first.json',
@@ -859,10 +861,11 @@ jobs:
           # Workflow #374: this build's watchdog on an A/B root laid out from the staged
           # artifacts. The fixed entries are this build's Runtime programs themselves (the
           # forwarding entry is a UI program), without BUILD-MANIFEST.json, so they run as
-          # plain programs and actingctl reads install\active.json for the watchdog. No task
+          # plain programs and the watchdog reads install\active.json. No task
           # is registered here, so `status` names watchdog_task_missing in its attention
           # throughout; attention never changes the exit (Workflow #378 A5: report v2, exits
-          # 0/1/2 by the top outcome's category).
+          # 0/1/2 by the top outcome's category). Workflow #434 LAB-7: `actingwatch.exe status`
+          # reads the watchdog's status of the root it lies in, and every tick is the launcher's.
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $false
           $root = Join-Path $env:RUNNER_TEMP 'watchdog-smoke'
@@ -871,9 +874,7 @@ jobs:
           $state = Join-Path $root 'state'
           $generation = Join-Path $root 'install\generations\1'
           New-Item -ItemType Directory -Path $runtime, $tools, $state, $generation, (Join-Path $root 'A') -Force | Out-Null
-          foreach ($name in @('actingcommand-actingd.exe', 'actingctl.exe')) {
-            Copy-Item -LiteralPath (Join-Path $env:RUNTIME_ARTIFACT_DIR $name) -Destination $runtime
-          }
+          Copy-Item -LiteralPath (Join-Path $env:RUNTIME_ARTIFACT_DIR 'actingcommand-actingd.exe') -Destination $runtime
           Copy-Item -Path (Join-Path $env:TOOLS_ARTIFACT_DIR '*') -Destination $tools -Recurse
           $utf8 = [Text.UTF8Encoding]::new($false)
           $members = $utf8.GetBytes('{"smoke":"watchdog"}')
@@ -898,14 +899,13 @@ jobs:
             config = [ordered]@{ path = 'install/generations/1/actingd.config.json'; sha256 = (Get-Sha256Hex $configBytes) }
           }
           [IO.File]::WriteAllText((Join-Path $root 'install\active.json'), ($selection | ConvertTo-Json -Depth 4 -Compress), $utf8)
-          $ctl = Join-Path $runtime 'actingctl.exe'
           $launcher = Join-Path $tools 'actingwatch.exe'
           if (-not (Test-Path -LiteralPath $launcher -PathType Leaf)) {
             throw 'watchdog_smoke_failed: the Tools artifact holds no actingwatch.exe'
           }
 
           function Invoke-Watchdog([string] $Subcommand, [int] $Expected) {
-            $text = (& $ctl watchdog $Subcommand --root $root | Out-String)
+            $text = (& $launcher $Subcommand | Out-String)
             $exit = $LASTEXITCODE
             Write-Host "watchdog $Subcommand exit ${exit}: $($text.Trim())"
             if ($exit -ne $Expected) {
@@ -940,14 +940,16 @@ jobs:
             $deadline = [DateTime]::UtcNow.AddSeconds(120)
             do {
               Start-Sleep -Milliseconds 500
-              $text = (& $ctl watchdog status --root $root | Out-String)
+              $text = (& $launcher status | Out-String)
               $alive = (($text | ConvertFrom-Json).outcome.code -ceq 'watchdog_alive')
             } until ($alive -or $formal.HasExited -or [DateTime]::UtcNow -gt $deadline)
             if (-not $alive) {
               throw "watchdog_smoke_failed: the formal start did not come up (exited=$($formal.HasExited)): $text"
             }
-            # 2. A first tick by hand creates <root>\watchdog and observes the formal start.
-            $null = Invoke-Watchdog 'run-once' 0
+            # 2. A first launcher tick observes the formal start, in <root>\watchdog, which the
+            # watchdog's install makes on a real root.
+            New-Item -ItemType Directory -Path (Join-Path $root 'watchdog') -Force | Out-Null
+            Invoke-Launcher
             # 3. An unexpected end.
             Stop-Process -Id $formal.Id -Force
             $formal.WaitForExit()
@@ -966,12 +968,13 @@ jobs:
             if ($started.Count -ne 1) {
               throw 'watchdog_smoke_failed: no single watchdog_started_runtime line naming its method'
             }
-            # 5. A formal close.
-            $shutdown = (& $ctl request-shutdown --state-root $state --wait 60 | Out-String)
+            # 5. A formal close, by the Lab's command line (its core row `shutdown`).
+            $env:ACTINGCOMMAND_RUNTIME_STATE_ROOT = $state
+            $shutdown = (& (Join-Path $tools 'actinglab.exe') --json shutdown --wait 60s | Out-String)
             if ($LASTEXITCODE -ne 0) {
-              throw "watchdog_smoke_failed: request-shutdown exited ${LASTEXITCODE}: $shutdown"
+              throw "watchdog_smoke_failed: actinglab shutdown exited ${LASTEXITCODE}: $shutdown"
             }
-            Write-Host "request-shutdown: $($shutdown.Trim())"
+            Write-Host "actinglab shutdown: $($shutdown.Trim())"
             # 6. The next launcher tick leaves it down.
             Invoke-Launcher
             $status = Invoke-Watchdog 'status' 0

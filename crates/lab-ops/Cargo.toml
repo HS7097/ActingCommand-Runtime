@@ -10,11 +10,6 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
-[features]
-# The #422 QR-2b gate of actingctl's MCP tests builds a diagnosis whose report never started
-# (`diagnose::SuspensionReport::not_started`); actingctl's dev-dependency turns it on.
-test-hooks = []
-
 [dependencies]
 actingcommand-contract = { workspace = true }
 # Workflow #434 LAB-1b: `process_probe`, moved with the shutdown wait `shutdown --wait` reads,

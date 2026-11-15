@@ -26,10 +26,11 @@
 //!
 //! Workflow #434 LAB-6S2-B2 (`contracts/lab-two-entries.md` §4.2; register §1.287, "Slice
 //! LAB-6S2-B2"; the coordinator's rulings of 2026-11-13 on board #434, not the owner's words):
-//! actingctl's front binds the Lab channel with `Lab-CLI` and keeps (Cli, Cli)
-//! ([`Front::Actingctl`]), and today's MCP server (`actingctl mcp-serve`) says it is the MCP front
-//! ([`Front::Mcp`]); the Runtime records their requests on the CLI and the MCP channel, as on
-//! 0.12.58.
+//! actingctl's front bound the Lab channel with `Lab-CLI` and kept (Cli, Cli).
+//!
+//! Workflow #434 LAB-7 (register §1.287, "Slice LAB-7"): actingctl is deleted, and with it its
+//! front. A process that never says which program it is serves as actinglab's command line
+//! ([`current`]: `Front::Actinglab` with `Lab-CLI`).
 
 use crate::initiator::Initiator;
 use actingcommand_contract::{EventActor, EventSource};
@@ -43,28 +44,22 @@ use std::sync::OnceLock;
 /// The program that runs this crate's commands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Front {
-    /// `actingctl`: the CLI channel, envelope (Cli, Cli). Workflow #434 LAB-6S2-B2: on the Lab
-    /// channel with `Lab-CLI`, where it was the CLI channel, which the Runtime still records.
-    Actingctl,
     /// `actinglab`'s CLI module (LAB-2): the Lab channel, envelope (Lab, Lab). Workflow #434
     /// LAB-6S2-B1: with the word of the process (§4.2): `Lab-CLI`, the `Lab-制包` or `Lab-救急` of
     /// `ACTINGCOMMAND_INITIATOR`, `Lab-MCP` under `serve --stdio --front mcp`.
     Actinglab(Initiator),
-    /// Workflow #434 LAB-5G1b: the Lab's MCP server, with the envelope (Cli, Cli), as
-    /// `actingctl mcp-serve` sends it (`apps/actingctl/src/mcp/runtime.rs`). Workflow #434
-    /// LAB-6S2-B1: on the Lab channel with `Lab-MCP`, where it was the MCP channel. Workflow #434
-    /// LAB-6S2-B2: today's MCP server says it too, so that what reads the program in force (the
-    /// overview's `watchdog` block) declares `Lab-MCP` there.
+    /// Workflow #434 LAB-5G1b: the Lab's MCP server, with the envelope (Cli, Cli) that
+    /// `actingctl mcp-serve` sent. Workflow #434 LAB-6S2-B1: on the Lab channel with `Lab-MCP`,
+    /// where it was the MCP channel, so that what reads the program in force (the overview's
+    /// `watchdog` block) declares `Lab-MCP` there.
     Mcp,
 }
 
 impl Front {
-    /// Workflow #434 LAB-6S2-B1: the word a connection of this front declares: `Lab-CLI` for
-    /// actingctl's (since LAB-6S2-B2; none before), the process's for actinglab's, `Lab-MCP` for
-    /// the MCP servers'.
+    /// Workflow #434 LAB-6S2-B1: the word a connection of this front declares: the process's for
+    /// actinglab's, `Lab-MCP` for the MCP server's.
     pub const fn initiator(self) -> Option<Initiator> {
         match self {
-            Self::Actingctl => Some(Initiator::LabCli),
             Self::Actinglab(initiator) => Some(initiator),
             Self::Mcp => Some(Initiator::LabMcp),
         }
@@ -79,9 +74,13 @@ pub fn set(front: Front) -> Front {
     *FRONT.get_or_init(|| front)
 }
 
-/// The program in force: actingctl unless [`set`] said otherwise.
+/// The program in force: actinglab's command line with `Lab-CLI` unless [`set`] said otherwise
+/// (Workflow #434 LAB-7).
 pub fn current() -> Front {
-    FRONT.get().copied().unwrap_or(Front::Actingctl)
+    FRONT
+        .get()
+        .copied()
+        .unwrap_or(Front::Actinglab(Initiator::LabCli))
 }
 
 /// The configuration of a connection to the Runtime of `state_root` for the program in force.
@@ -100,7 +99,7 @@ pub fn config(front: Front, state_root: impl Into<PathBuf>) -> RuntimeClientConf
             EventSource::Lab,
         )
         .with_initiator(initiator.word()),
-        Front::Actingctl | Front::Mcp => cli_envelope(state_root, front.initiator()),
+        Front::Mcp => cli_envelope(state_root, front.initiator()),
     }
 }
 
@@ -108,10 +107,8 @@ pub fn config(front: Front, state_root: impl Into<PathBuf>) -> RuntimeClientConf
 /// (Cli, Cli) to the Runtime of `state_root`: without a word on the CLI channel, as every such
 /// connection bound on 0.12.58; with `initiator`, one of the five Lab words, on the Lab channel
 /// with it. The Lab's MCP server ([`Front::Mcp`]), the rescue module's own client and the
-/// watchdog's probe connect so with their word; actingctl, whose `install`, `start`, `restart`,
-/// `watchdog` and `overview` run the same code, without one until LAB-6S2-B2 and with `Lab-CLI`
-/// since (Workflow #434 LAB-6S2-B2): since then no program asks this for a connection without a
-/// word.
+/// watchdog's probe connect so with their word; since Workflow #434 LAB-6S2-B2 no program asks
+/// this for a connection without a word.
 pub fn cli_envelope(
     state_root: impl Into<PathBuf>,
     initiator: Option<Initiator>,

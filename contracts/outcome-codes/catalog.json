@@ -5325,11 +5325,7 @@
       }
     },
     "mcp_tier": {
-      "description": "An MCP server tier.",
-      "source": {
-        "file": "apps/actingctl/src/mcp/tools.rs",
-        "enum": "Tier"
-      },
+      "description": "An MCP server tier of the first MCP server (actingctl mcp-serve), which Workflow #434 LAB-7 deleted with its enum; the key that names a tier stays in the table.",
       "tokens": {
         "observer": {
           "description": "Observer."
@@ -11732,7 +11728,7 @@
       "actinglab-mcp"
     ],
     "mcp_entry_": [
-      "mcp-entry"
+      "mcp-entry-g2"
     ],
     "mcp_entry_g2_": [
       "mcp-entry-g2"
@@ -13215,7 +13211,6 @@
   },
   "fragments": {
     "actingctl": "crates/lab-ops",
-    "actingctl-app": "apps/actingctl",
     "actingd": "apps/actingd",
     "actinglab": "apps/actinglab",
     "actinglab-mcp": "apps/actinglab-mcp",
@@ -13249,7 +13244,6 @@
     "actinglab-architecture": "tools/actinglab-architecture",
     "outcome-guard": "tools/outcome-guard",
     "display-adapter": "crates/display-adapter",
-    "mcp-entry": "apps/mcp-entry",
     "mcp-entry-g2": "apps/mcp-entry-g2",
     "actingcommand-entry": "apps/actingcommand-entry",
     "watchdog": "crates/watchdog",

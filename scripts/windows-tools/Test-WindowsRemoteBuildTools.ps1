@@ -214,7 +214,7 @@ function New-ArtifactFixture {
         # Workflow #434 LAB-5G6: the MCP programs a Tools fixture's build carries, one payload its
         # archive holds and its manifest does not list, and one its manifest lists and its archive
         # does not hold.
-        [ValidateSet('actingcommand-mcp-entry.exe', 'actinglab-mcp.exe', 'actingcommand-mcp-entry-g2.exe')][string[]] $McpPrograms = @(),
+        [ValidateSet('actinglab-mcp.exe', 'actingcommand-mcp-entry-g2.exe')][string[]] $McpPrograms = @(),
         [string] $UnlistedPayload,
         [string] $UnwrittenPayload
     )
@@ -223,7 +223,6 @@ function New-ArtifactFixture {
     $payloads = if ($ArtifactKind -ceq 'Runtime') {
         @(
             @{ name = 'actingcommand-actingd.exe'; content = 'synthetic actingd payload' },
-            @{ name = 'actingctl.exe'; content = 'synthetic actingctl payload' },
             @{ name = 'actingd.config.example.json'; content = '{"schema_version":"actingcommand.actingd.config.v1","state_root":"","bind_host":"127.0.0.1","bind_port":0,"secret_fingerprint_salt":"","instances":[]}' },
             # Workflow #453 S4: the first configuration's template ships beside the example.
             @{ name = 'actingd.config.first.json'; content = '{"schema_version":"actingcommand.actingd.config.v1","state_root":"","bind_host":"127.0.0.1","bind_port":0,"secret_fingerprint_salt":"","instances":[]}' },
@@ -293,7 +292,7 @@ function New-ArtifactFixture {
         Remove-Item -LiteralPath (Join-Path $directory $UnwrittenPayload) -ErrorAction Stop
     }
     if ($CorruptPayload) {
-        $corruptName = if ($ArtifactKind -ceq 'Runtime') { 'actingctl.exe' } else { 'actinglab.exe' }
+        $corruptName = if ($ArtifactKind -ceq 'Runtime') { 'actingcommand-actingd.exe' } else { 'actinglab.exe' }
         Add-Content -LiteralPath (Join-Path $directory $corruptName) -Value 'corrupt' -NoNewline
     }
 }
@@ -416,8 +415,8 @@ try {
         Assert-True -Condition $workflowText.Contains($required) -Message "workflow is missing '$required'"
     }
     # Workflow #453 S4: the first configuration's template ships beside the example.
-    $runtimeSplit = '\$runtimeFiles\s*=\s*@\(\s*''actingcommand-actingd\.exe'',\s*''actingctl\.exe'',\s*''actingd\.config\.example\.json'',\s*''actingd\.config\.first\.json'',\s*''actingd\.defaults\.json'',\s*''INSTALL\.md'',\s*''RELEASE-NOTES\.md''\s*\)'
-    $toolsSplit = '\$toolFiles\s*=\s*@\(\s*''actinglab\.exe'',\s*''actingledger\.exe'',\s*''actingcommand-vision-provider-check\.exe'',\s*''actingwatch\.exe'',\s*''actingcommand-mcp-entry\.exe'',\s*''actinglab-mcp\.exe'',\s*''actingcommand-mcp-entry-g2\.exe''\s*\)'
+    $runtimeSplit = '\$runtimeFiles\s*=\s*@\(\s*''actingcommand-actingd\.exe'',\s*''actingd\.config\.example\.json'',\s*''actingd\.config\.first\.json'',\s*''actingd\.defaults\.json'',\s*''INSTALL\.md'',\s*''RELEASE-NOTES\.md''\s*\)'
+    $toolsSplit = '\$toolFiles\s*=\s*@\(\s*''actinglab\.exe'',\s*''actingledger\.exe'',\s*''actingcommand-vision-provider-check\.exe'',\s*''actingwatch\.exe'',\s*''actinglab-mcp\.exe'',\s*''actingcommand-mcp-entry-g2\.exe''\s*\)'
     Assert-True -Condition ([regex]::IsMatch($workflowText, $runtimeSplit)) -Message 'workflow Runtime artifact split is not exact'
     Assert-True -Condition ([regex]::IsMatch($workflowText, $toolsSplit)) -Message 'workflow Tools artifact split is not exact'
     foreach ($retired in @(
@@ -521,9 +520,9 @@ try {
     $positiveJson = & $downloader -Repository $repository -SourceSha $sourceSha -ArtifactKind Runtime -TaskRoot $testRootFull -OutputPath $positiveOutput -GhExecutable $fakeGh
     $positive = $positiveJson | ConvertFrom-Json -Depth 20
     Assert-True -Condition ($positive.status -ceq 'PASS') -Message 'positive artifact verification did not report PASS'
-    foreach ($name in @('actingcommand-actingd.exe', 'actingctl.exe', 'actingd.config.example.json', 'actingd.config.first.json', 'actingd.defaults.json', 'INSTALL.md', 'RELEASE-NOTES.md')) {
+    foreach ($name in @('actingcommand-actingd.exe', 'actingd.config.example.json', 'actingd.config.first.json', 'actingd.defaults.json', 'INSTALL.md', 'RELEASE-NOTES.md')) {
         Assert-True -Condition (
-            @($positive.verified_files).Count -eq 7 -and
+            @($positive.verified_files).Count -eq 6 -and
             (Test-Path -LiteralPath (Join-Path $positiveOutput $name) -PathType Leaf)
         ) -Message "positive Runtime distribution payload was not published: $name"
     }
@@ -554,23 +553,19 @@ try {
     Complete-Case -Name $script:CurrentCase
 
     # Workflow #434 LAB-5G6: a platform-tools-v3 Tools artifact verifies each MCP program its
-    # manifest declares: a build of v0.12.18 to 0.12.56 the MCP entry (ten payloads), a build since
-    # 0.12.57 also the Lab's MCP server and the entry's second generation (twelve). The nine-payload
-    # artifact above, built before either, still passes. A program the archive holds and the
-    # manifest does not list, or one the manifest lists and the archive does not hold, fails.
-    $mcpPrograms = @('actingcommand-mcp-entry.exe', 'actinglab-mcp.exe', 'actingcommand-mcp-entry-g2.exe')
+    # manifest declares: the Lab's MCP server and the entry's second generation (eleven payloads;
+    # Workflow #434 LAB-7: the first entry is no longer one of them). The nine-payload artifact
+    # above, built without them, still passes. A program the archive holds and the manifest does
+    # not list, or one the manifest lists and the archive does not hold, fails.
+    $mcpPrograms = @('actinglab-mcp.exe', 'actingcommand-mcp-entry-g2.exe')
     $script:CurrentCase = 'artifact-tools-v3-mcp-programs'
-    New-ArtifactFixture -Root $fixtureRoot -Mode 'tools-mcp-entry' -ArtifactName $toolsArtifactName -ArtifactKind Tools -Repository $repository -CommitSha $sourceSha -TreeSha $treeSha -CargoLockSha256 $lockSha -CorruptPayload $false -McpPrograms @('actingcommand-mcp-entry.exe')
     New-ArtifactFixture -Root $fixtureRoot -Mode 'tools-mcp' -ArtifactName $toolsArtifactName -ArtifactKind Tools -Repository $repository -CommitSha $sourceSha -TreeSha $treeSha -CargoLockSha256 $lockSha -CorruptPayload $false -McpPrograms $mcpPrograms
     New-ArtifactFixture -Root $fixtureRoot -Mode 'tools-mcp-unlisted' -ArtifactName $toolsArtifactName -ArtifactKind Tools -Repository $repository -CommitSha $sourceSha -TreeSha $treeSha -CargoLockSha256 $lockSha -CorruptPayload $false -McpPrograms $mcpPrograms -UnlistedPayload 'actinglab-mcp.exe'
     New-ArtifactFixture -Root $fixtureRoot -Mode 'tools-mcp-unwritten' -ArtifactName $toolsArtifactName -ArtifactKind Tools -Repository $repository -CommitSha $sourceSha -TreeSha $treeSha -CargoLockSha256 $lockSha -CorruptPayload $false -McpPrograms $mcpPrograms -UnwrittenPayload 'actingcommand-mcp-entry-g2.exe'
-    $env:ACTINGCOMMAND_FAKE_GH_MODE = 'tools-mcp-entry'
-    $toolsEntry = (& $downloader -Repository $repository -SourceSha $sourceSha -ArtifactKind Tools -TaskRoot $testRootFull -OutputPath (Join-Path $testRootFull 'downloads/tools-mcp-entry') -GhExecutable $fakeGh) | ConvertFrom-Json -Depth 20
-    Assert-True -Condition ($toolsEntry.status -ceq 'PASS' -and @($toolsEntry.verified_files).Count -eq 10) -Message 'a platform-tools-v3 Tools artifact with the MCP entry did not verify exactly ten payloads'
     $env:ACTINGCOMMAND_FAKE_GH_MODE = 'tools-mcp'
     $toolsMcpOutput = Join-Path $testRootFull 'downloads/tools-mcp'
     $toolsMcp = (& $downloader -Repository $repository -SourceSha $sourceSha -ArtifactKind Tools -TaskRoot $testRootFull -OutputPath $toolsMcpOutput -GhExecutable $fakeGh) | ConvertFrom-Json -Depth 20
-    Assert-True -Condition ($toolsMcp.status -ceq 'PASS' -and @($toolsMcp.verified_files).Count -eq 12) -Message 'a platform-tools-v3 Tools artifact with the three MCP programs did not verify exactly twelve payloads'
+    Assert-True -Condition ($toolsMcp.status -ceq 'PASS' -and @($toolsMcp.verified_files).Count -eq 11) -Message 'a platform-tools-v3 Tools artifact with the two MCP programs did not verify exactly eleven payloads'
     foreach ($program in $mcpPrograms) {
         Assert-True -Condition ((@($toolsMcp.verified_files) -ccontains $program) -and (Test-Path -LiteralPath (Join-Path $toolsMcpOutput $program) -PathType Leaf)) -Message "the Tools artifact verifier did not verify and publish $program"
     }

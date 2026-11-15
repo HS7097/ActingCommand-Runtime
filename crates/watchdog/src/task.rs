@@ -156,7 +156,7 @@ pub fn definition_xml(root_plain: &Path, user_sid: &str, start_boundary: &str) -
         r#"<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
-    <Description>ActingCommand Runtime watchdog of {root}: every minute tools\actingwatch.exe runs actingctl watchdog run-once (Workflow #374). Remove it with actingctl watchdog uninstall --root {root}.</Description>
+    <Description>ActingCommand Runtime watchdog of {root}: every minute tools\actingwatch.exe runs the watchdog's tick (Workflow #374). Remove it with tools\actingwatch.exe uninstall, or the Lab's watchdog uninstall, in {root}.</Description>
   </RegistrationInfo>
   <Triggers>
     <TimeTrigger>
