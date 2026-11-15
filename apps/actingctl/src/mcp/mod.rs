@@ -630,6 +630,9 @@ mod tests {
     // Workflow #429 R-12: actingctl routine-summary prints the page; ac_routine_summary is an
     // observer read of the same page.
     mod gate_429_r12;
+    // Workflow #469 F1: ac_get_run, ac_runs, the overview's run and the diagnosis's runs show the
+    // values codes mode keeps of a run's terminal outcome beside its code.
+    mod gate_469_f1;
     mod gate_mcp19b;
     mod gate_mcp8;
     // Workflow #421 MCP-ENTRY, test row E-12: `mcp-config --entry` for the four clients.

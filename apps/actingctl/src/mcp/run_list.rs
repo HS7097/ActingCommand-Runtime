@@ -217,5 +217,8 @@ pub(super) fn result() -> Value {
     });
     // The terminal's failure code, a member of the row like final_page.
     result["properties"]["runs"]["items"]["properties"]["failure_code"] = json!({"type": "string"});
+    // Workflow #469 F1: beside it, the values codes mode keeps of the terminal outcome, by key.
+    result["properties"]["runs"]["items"]["properties"]["failure_values"] =
+        json!({"type": "object"});
     result
 }

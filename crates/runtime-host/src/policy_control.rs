@@ -2,7 +2,7 @@
 
 //! Runtime-owned failure, activity-window, and loop-budget state.
 
-use crate::codes::{HostCode, HostLocation};
+use crate::codes::{HostCode, HostLocation, PauseCause};
 use crate::error::spelled;
 use crate::failure_identity::FailureIdentity;
 use crate::suspension_lift::{PausedPackages, SuspensionLiftView};
@@ -27,6 +27,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 const MILLIS_PER_MINUTE: i128 = 60_000;
 const MILLIS_PER_DAY: i128 = 24 * 60 * MILLIS_PER_MINUTE;
+/// Workflow #469 H2: the kernel's code of a linear step on a screen its package never recorded
+/// (Workflow #463 U1), which pauses its pair at the first failure.
+const LINEAR_UNRECORDED_SCREEN: Code =
+    actingcommand_execution_kernel::ExecutionKernelCode::ContainedTaskLinearUnrecordedScreen.code();
 
 /// Workflow #361 M6, review P5: whether a paused failure is the first interrupted settlement
 /// of its pair in a row (`policy_settlement_interrupted`, recorded by the startup
@@ -34,6 +38,43 @@ const MILLIS_PER_DAY: i128 = 24 * 60 * MILLIS_PER_MINUTE;
 /// is rebuilt by replay, so nothing persisted changes.
 pub(crate) fn interruption_lifted_by_restart(failure_code: &CodeStr, consecutive: u16) -> bool {
     *failure_code == SharedCode::PolicySettlementInterrupted.code() && consecutive == 1
+}
+
+/// Workflow #469 H2 (register §1.398; `contracts/policy-suspension.md`, "Why a pair is paused"):
+/// why the settlement that wrote `failure` paused its pair, read from the execution record's own
+/// members in the settlement's own order: a severe original class first, then a sensitive task,
+/// then a streak that reached its threshold (the class the settlement made effective), then
+/// `on_failure` `pause` after the retries. Of a severe failure, the three sources the record names
+/// by its outcome have their own word (the policy's runtime-budget rewrite, an interrupted
+/// settlement, a screen the package never recorded); any other is `severe_failure`. `None` for a
+/// failure that did not pause its pair. The word only describes the pause, which nothing reads to
+/// decide: the live settlement, a replay and `actingd suspended` all take it from here, and it is
+/// never part of a record, a failure identity or a streak's comparison.
+pub(crate) fn pause_cause(failure: &PolicyFailureRecord) -> Option<PauseCause> {
+    if failure.disposition != PolicyFailureDisposition::PausedTask {
+        return None;
+    }
+    let cause = if failure.original_class == PolicyFailureClass::Severe {
+        if failure
+            .outcome
+            .is(actingcommand_contract::POLICY_RUNTIME_BUDGET_EXCEEDED)
+        {
+            PauseCause::RuntimeBudgetExceeded
+        } else if failure.outcome.is(SharedCode::PolicySettlementInterrupted) {
+            PauseCause::InterruptedAgain
+        } else if failure.outcome.is(LINEAR_UNRECORDED_SCREEN) {
+            PauseCause::UnrecordedScreen
+        } else {
+            PauseCause::SevereFailure
+        }
+    } else if failure.sensitive {
+        PauseCause::SensitiveTask
+    } else if failure.effective_class == PolicyFailureClass::Severe {
+        PauseCause::RepeatedFailure
+    } else {
+        PauseCause::RetriesExhausted
+    };
+    Some(cause)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -204,6 +245,31 @@ struct FailureStreak {
     /// PKG-S3: the packages and content hashes its failure identity names (none without one).
     /// Memory only; replay rebuilds it from the execution record alone.
     paused_on: Option<PausedPackages>,
+    /// Workflow #469 H2 (register §1.398): set only while the pair is paused: why its settlement
+    /// paused it ([`pause_cause`] of the execution record), the `pause_cause` of the pause's
+    /// `policy_task_paused`. Memory only: a settlement and a replay set it from the execution
+    /// record, and a streak a value record loaded takes it from its dispatch's execution record
+    /// ([`PolicyControlState::restore_pause_causes`]). Never compared: two failures are the same
+    /// error by their code, identity and class alone.
+    pause_cause: Option<PauseCause>,
+}
+
+impl FailureStreak {
+    /// Workflow #469 H2 (register §1.398): `outcome` (a `policy_task_paused` or
+    /// `policy_retry_backoff_active` of this streak) with the streak's failure code as
+    /// `failure_code` (a registered code; a relayed spelling the catalog does not register is
+    /// left out) and, for a pause, its `pause_cause`. Values only: the detail text and the
+    /// outcome's code, operation and links stay as they were.
+    fn reason_values(&self, outcome: Outcome) -> Outcome {
+        let outcome = match self.failure_code.registered() {
+            Some(code) => outcome.failure_code(code),
+            None => outcome,
+        };
+        match self.pause_cause {
+            Some(cause) => outcome.pause_cause(cause),
+            None => outcome,
+        }
+    }
 }
 
 /// The normal admission that opened a retry round. Rebuilt in ledger order, never from
@@ -567,6 +633,10 @@ impl PolicyControlState {
                                             streak.failure_identity.as_deref(),
                                         )
                                     }),
+                                // Workflow #469 H2: the value record does not keep what the
+                                // cause is read from; `restore_pause_causes` reads it from the
+                                // streak's execution record.
+                                pause_cause: None,
                             },
                         );
                     }
@@ -663,6 +733,37 @@ impl PolicyControlState {
             }
         }
         Ok(())
+    }
+
+    /// Workflow #469 H2 (register §1.398): gives each paused streak that has no pause cause (one
+    /// a value record loaded, [`Self::apply_value_record`]) the cause of its dispatch's execution
+    /// record, which `execution_of` finds by the streak's decision id: the value record keeps the
+    /// streak but not what the cause is read from (whether the task is sensitive, the class the
+    /// settlement made effective). The record must name the streak's failure (its code, identity
+    /// and class); a streak whose record is not found or names another failure keeps none. Only
+    /// the cause changes, which nothing reads to decide.
+    pub(crate) fn restore_pause_causes<'a>(
+        &mut self,
+        execution_of: impl Fn(&str) -> Option<&'a PolicyExecutionEventData>,
+    ) {
+        for streak in self.failure_streaks.values_mut() {
+            if streak.disposition != PolicyFailureDisposition::PausedTask
+                || streak.pause_cause.is_some()
+            {
+                continue;
+            }
+            let Some(PolicyExecutionOutcome::Failed { failure }) =
+                execution_of(&streak.decision_id).map(|execution| &execution.outcome)
+            else {
+                continue;
+            };
+            if scheduled_failure_code_str(&failure.outcome) == streak.failure_code
+                && failure.failure_identity == streak.failure_identity
+                && failure.original_class == streak.class
+            {
+                streak.pause_cause = pause_cause(failure);
+            }
+        }
     }
 
     #[cfg(test)]
@@ -791,11 +892,13 @@ impl PolicyControlState {
                 }
                 // A package the lift check could not measure keeps the pause and is reported
                 // as a note of it (M-PKG D18).
+                // Workflow #469 H2: the pause carries why it paused and the failure's code.
                 return Err(unmeasured.into_iter().fold(
                     request(
                         HostCode::PolicyTaskPaused,
                         HostLocation::ReservePolicyBudget,
-                    ),
+                    )
+                    .with_outcome_values(|outcome| failure.reason_values(outcome)),
                     RuntimeHostError::with_note,
                 ));
             }
@@ -803,10 +906,12 @@ impl PolicyControlState {
                 .retry_at_unix_ms
                 .is_some_and(|retry_at| now_unix_ms < retry_at)
             {
+                // Workflow #469 H2: the backoff carries the code of the failure it follows.
                 return Err(request(
                     HostCode::PolicyRetryBackoffActive,
                     HostLocation::ReservePolicyBudget,
-                ));
+                )
+                .with_outcome_values(|outcome| failure.reason_values(outcome)));
             }
         }
         Ok(())
@@ -1797,6 +1902,9 @@ impl PolicyControlState {
                         retry_at_unix_ms: failure.retry_at_unix_ms,
                         decision_id: data.decision_id.clone(),
                         paused_on,
+                        // Workflow #469 H2: why the settlement paused the pair, from the record
+                        // it wrote, so a replay sets the same word.
+                        pause_cause: pause_cause(failure),
                     },
                 );
             }

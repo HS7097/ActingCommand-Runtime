@@ -19,7 +19,7 @@ column means. 204 codes.
 | `answer_exported` | warning | none | 0.12.0 | active | pending | written | An answer larger than the output budget was written whole to an export file. |
 | `arguments_invalid` | error | none | 0.12.0 | active | pending | TBD | An MCP tool was called with arguments its input schema refuses. |
 | `binding_requires_unavailable` | warning | none | 0.12.0 | active | pending | written | record draft and ac_binding_draft: the answer carries no binding_requires. |
-| `call_budget_exhausted` | error | none | 0.12.0 | active | pending | TBD | An MCP call reached the end of its time budget. |
+| `call_budget_exhausted` | warning | none | 0.12.0 | active | pending | TBD | An MCP call reached the end of its time budget. |
 | `check_config_failed` | error | none | 0.12.0 | active | pending | TBD | actingd check-config could not run or printed no JSON report. |
 | `check_config_unavailable` | warning | none | 0.12.0 | active | pending | written | record draft and ac_binding_draft: actingd check-config gave no report. |
 | `client_action_not_recorded` | warning | none | 0.12.0 | active | pending | written | Recording the call's client.action in the Runtime failed after actinglab answered. |

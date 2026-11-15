@@ -27254,6 +27254,199 @@ declare an ending page declares [15, 15], which an installer of [3, 14] refuses 
 
 **Rollback** (below 0.12.61). Nothing is persisted; an earlier Tools has no `standard-pack build`.
 
+### 1.386 Slice #469 V0 (0.12.62): the reason words of the most mixed codes and their keys, and the registry's small defects that change nothing (Workflow #469; the owner's choice of option A on board #469 on 11-15; the design `rd-1115/status-codes-a-design.md`, Part 2: its three facts, the places 1, 2, 3, 4, 6 and 8 of A-1, A-2 items 1 to 4, A-3 and the rows V0, D1, D2 and D3 of its slice table, accepted by the coordinator; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-469-v0-words-and-registry.md`, read on main `d32d4d6c` (after #1728 and #1731))
+
+The coordinator gave this slice 1.386: main `d32d4d6c` holds the sections up to §1.385, and 1.387
+belongs to a slice dispatched with this one. The slice ships in 0.12.62 (release 0.12.61 is cut
+without it).
+
+**What it is.** The words a reader needs to see why one of the most mixed codes ended something,
+written down, and nothing else: no emitter sets any of them yet. The slices that set them (the
+design's K1, K2, H1, H2, H3) come after this one and each finds its vocabulary here. A word comes
+only from what the program already knows where it raises the code, goes into the outcome's values
+and never into its detail text (the failure identity hashes fragments of that text), and changes
+nothing the program does next: for one code, every word leads to the same next step. Every word is
+a `vocab:` value, which codes mode keeps.
+
+| Vocabulary and key | Words | Enum | Codes that carry it |
+|---|---|---|---|
+| `confirmation_problem` | 21: the design's place 1 (`input_not_taken`, `awaited_page_late`, `other_page_shown`, `loading_page_shown`, `transition_shown`, `interrupt_shown`, `screen_moving`, `unrecorded_screen`, `nothing_recognised`, `screen_still`, `loading_limit`, `error_page`, `deadline_reached`, `check_failed`, `neither_page`, the five `unjudged_*`) and place 2's `error_page_no_exit` | `ConfirmationProblem`, `crates/execution-kernel/src/codes.rs` | `page_confirmation_failed`, `contained_task_step_unconfirmed`, `contained_task_error_page_reached`, `contained_task_linear_unrecorded_screen`, `contained_task_requires_scheduler` |
+| `guard_problem` | 3: `page_mismatch`, `target_not_passed`, `page_moved` | `GuardProblem`, the same file | `contained_task_guard_refused` |
+| `availability_source` | 6: `configured`, `self_check`, `device_link`, `device_state`, `other_publisher`, `facts_missing` | `AvailabilitySource`, `crates/runtime-host/src/codes.rs` | `instance_unavailable` |
+| `pause_cause` | 7: `severe_failure`, `unrecorded_screen`, `runtime_budget_exceeded`, `interrupted_again`, `sensitive_task`, `repeated_failure`, `retries_exhausted` | `PauseCause`, the same file | `policy_task_paused` |
+
+Each vocabulary is `review` `pending` with its `source`; each word's text is the design's line
+for it, the five `unjudged_*` written one by one from the design's shared line. The `pause_cause`
+texts end with how the pause lifts as the program lifts it: when the package changes, with no
+manual lift ([policy-suspension.md](policy-suspension.md), "Lifting (R19)"); the design's
+sentence for all seven also said "or a person resumes the task", which no code does, so it is not
+written.
+
+**Optional values on ten codes** (all optional now; the last slice that sets a word at every site
+makes it required). Before writing, each code was read in its fragment and in every file under
+`released/`: all ten are `pending`, `active`, and in no release file, as the design says.
+
+| Code | Values added |
+|---|---|
+| `page_confirmation_failed`, `contained_task_step_unconfirmed`, `contained_task_error_page_reached`, `contained_task_linear_unrecorded_screen` | `confirmation_problem` |
+| `contained_task_requires_scheduler` | `failure_code` (the existing key), `confirmation_problem` |
+| `contained_task_guard_refused` | `guard_problem`, `failure_code` |
+| `instance_unavailable` | `availability_source`, and the existing `device_link_state` and `device_hold` |
+| `policy_task_paused` | `pause_cause`, `failure_code` |
+| `policy_retry_backoff_active` | `failure_code` |
+| `emulator_control_failed` | the existing `stage` and `device_category` |
+
+Each code's description says what the new value holds when present.
+
+**The always-severe list (D2).** `nemu_app_index_requires_paired_input` leaves
+`severe_policy_failure_codes` (`crates/actingcommand-contract/src/event/payload.rs`). It was
+retired in 0.12.39 (#402 HS-3, §1.271 row HS3-6; `released/0.12.39.json`); nothing raises it: no registry
+variant, no literal outside the list, only two comments in `apps/actingd/src/config.rs` and
+`apps/actingd/src/config/gate_hs1.rs`. No test counts the list: the ledger's tests name one listed
+and one unlisted code, and the outcome guard's bridge names the function, not its entries.
+
+**Two classes (D3).** `recognition_sample_budget_invalid` is `declaration_error` (it was
+`budget_or_permission`): refused at admission from the declarations, without looking at the
+screen. `contained_task_declared_operation_page_mismatch` is `pack_logic_mismatch` (it was `none`):
+the screen differs from the declaration. Both in the registry macro and the fragment (G1). Before
+the second, the path from a Lab declared operation's end to the ladder was read: the operation
+(`run_lab_declared_operation`, `crates/runtime-host/src/host/lab_operation.rs`) holds a
+`LabOperation` claim and notes no ladder source, so `ladder_trigger_for` finds no trigger for it
+and the task stage's `match_trigger` is never called (only a policy run and a direct run note a
+source, `crates/runtime-host/src/host/contained_task.rs`); the kernel's failure goes into the
+operation's terminal artifact and its receipt, and its only ledger record is `command.rejected`,
+whose outcome is `command_rejected`, so the warning count (`count_stability_record`, which counts
+a record by its own outcome's code) never sees the kernel's code. Under the defaults no trigger
+item reads `declaration_error` either.
+
+**Texts (D1).** [runtime-config.md](runtime-config.md) and [emulator-control.md](emulator-control.md)
+name `device_link_lost` in the default of `recovery_ladder.exclude_codes`, as the defaults file has
+since §1.52. runtime-config.md says that `scheduling.feature_lock.codes` and
+`.locked_valid_for_ms` are for SR-5a and SR-5b, which are not built (nothing reads either key, no
+run ends with `contained_task_feature_locked`), and that of `performance.calibration.*` P-m's
+learning view reads `apply`, `learning_max_stage` and `learning_backstop_bp` while P-a, which reads
+the rest, `trouble_codes` among them, is not built. The catalog texts of the codes the design's
+A-2 item 1 leaves as they are say what the program does with them: `display_map_unresolved`,
+`perf_run_yielded` and `perf_hold_expired` (not raised yet), `recognition_pack_text_read_refused`,
+`device_link_lost`, `application_foreground_unknown`, `recovery_readiness_adb_unconfirmed` and
+`preparation_deadline_exceeded` (on the always-severe list), `policy_settlement_interrupted`,
+`contained_task_interrupt_environment_limit_reached`, `standard_pack_package_unclassified`,
+`watchdog_installer_busy`, `watchdog_run_in_progress`, `watchdog_alive`, `lease_busy`,
+`lease_cooldown`, `max_steps_reached`, `consecutive_unchanged_threshold_reached`,
+`recognition_sample_deadline_exceeded`, `candidate_sample_deadline_exceeded`,
+`recognition_sample_geometry_changed`, `detect_failed` and `action_failed`. The other codes of the
+always-severe list keep their texts.
+
+**The rule for new code (A-3).** [runtime-outcomes.md](runtime-outcomes.md), "Deciding from an
+outcome", after "Classes": decide by class or by word, never by name. No guard holds it yet.
+
+**Counts.** The catalog header holds 676 keys (672 before), 250 vocabularies (246) and 1932 words
+(1895). No code is added or retired, so the index's README counts do not change; its
+`execution-kernel.md` shows the two new classes. No README states these totals.
+
+**Tests.** None is added: no behaviour changes. The gates are G1 (registry class = fragment), G7
+(key table and the four enums = catalog) and the index's `--check`. No existing test pins either
+corrected class: `d1_l9` of `crates/runtime-config/src/ladder_tests.rs` asserts that no default
+trigger item matches `recognition_sample_budget_invalid` at any stage, which `declaration_error`
+keeps.
+
+**What is not changed.** Every place that builds or raises an outcome; every detail text; the
+failure identity, the streak, the frame rules, the lists other than the one entry; every class and
+category but D3's two; no interface revision, record shape or configuration key.
+
+**At deploy.** Nothing changes for an installation: no emitter sets a new value, the two class
+changes reach no trigger under the defaults, and the removed list entry names a code no build
+since 0.12.39 raises.
+
+### 1.387 Slice #469 F1 (0.12.62): a run's reads carry the values of its terminal outcome (Workflow #469; the owner's decision of 11-15 on board #469 that the most mixed codes carry a reason word, a value of a closed vocabulary beside the code; the design `rd-1115/status-codes-a-design.md`, Part 2's three facts, place 1's table "How the word reaches a reader" (the rows for `ac_get_run`, the run list, the overview and the diagnosis) and the slice row F1; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-469-f1-run-reads.md`, read on main `d32d4d6c`)
+
+The coordinator gave this slice 1.387: main `d32d4d6c` holds the sections up to §1.385, and 1.386
+belongs to a slice dispatched with this one. The slice ships in 0.12.62 (release 0.12.61 is cut
+without it).
+
+**Why.** A reason word travels in an outcome's values, never in its detail text. The reads a
+person or an agent looks at first showed the terminal's code alone: a run's status
+(`ContainedRunTerminal`, the read of `ac_get_run`, the overview's `run` and the diagnosis's
+`runs`) kept `failure_code` and nothing of the outcome it was read from, and the run list's row
+took that code. Every word the other slices add would have been invisible there.
+
+**What it is.** One optional member of `ContainedRunTerminal`
+(`crates/actingcommand-contract/src/run_summary.rs`), `failure_values`: what codes mode keeps
+of the terminal outcome's own values, `Outcome::codes_only`'s top node (the values whose type is
+a registered name: a code, a location, a word of a vocabulary, and lists of them), as a map by
+key, the shape an outcome envelope's `values` has. An id, a name, a number, a duration, a path
+and every other type is dropped there, and so are the outcome's causes. It is absent when the
+outcome carries none (`skip_serializing_if` on an empty map), so such a terminal serializes byte
+for byte as before. `RunFold` takes it from the `TerminalCommitted` fact it takes `failure_code`
+from: no record is read for it and no query is added. It knows no code and no word.
+
+**Readers** (every reader of `ContainedRunTerminal` and `RunBriefStatus` in this repository, all
+on the same contract crate, none kept for an earlier shape; the owner's ruling of 11-15 that
+nothing is kept compatible with earlier builds):
+- the contract crate: `RunFold::brief` and `RunBriefStatus`, and a `QueryRuns` row's status
+  (`QueryRunsRow`, `QueryRunsPage::validate`, which reads only whether a terminal is there);
+- runtime-client: `ContainedRunStatus.terminal` (`contained_run_status`, `latest_runs`,
+  `list_contained_runs`, `window_run_status`), brief and full, which carry the fold's terminal as
+  it is;
+- lab-ops: `run_show` (MCP `ac_get_run`, actinglab `run show`, the problem report's `run` part),
+  `overview::run_block` (the instance row's `run`) and the diagnosis's `runs`, which put the status
+  into their answer as it is, so they carry the member without a line of their own;
+  `run_list::row` (`actingctl runs`, MCP `ac_runs`, actinglab `run list`), which builds its row and
+  now adds `failure_values` beside `failure_code`; the diagnosis's `runs_grouped`, which keeps
+  grouping by (policy task, failure code, final page) and reads the code alone; the problem
+  report's run row (`report::source::row_of`), which keeps the code as `ended_with` (its `run`
+  part, the run's status, carries the member);
+- the MCP servers: actingctl's `ac_get_run`, `ac_runs`, `ac_overview`, `ac_diagnose` (above) and
+  `ac_stop_run`, which reads the state and the instance only; actinglab-mcp's `ac_run_show`, which
+  reads the line's `state` only; `run evidence`, which reads the status's state and identity only;
+- a runtime-host gate (`gate_411_a34`), which reads the terminal's code.
+
+**Interfaces.** `runtime-client` does not move. Its revisions are of the exchange between the
+console and actingd ([component-interfaces.md](component-interfaces.md)), and no answer of that
+exchange changes: a run's status is the client's projection of `QueryEvents` pages, which keep
+their shape, and `QueryRuns`, whose rows carry `RunBriefStatus`, is carried by no operation yet
+([global-ledger-query.md](global-ledger-query.md), the P32 B-1 note;
+[runtime-interface.md](runtime-interface.md), "New request kinds"). `ledger` does not move: no
+record changes. A console built on an earlier runtime-client folds runs itself from the same
+pages and meets nothing: its terminal has no `failure_values` and refuses nothing. A console that
+decodes a terminal this build serialized (an `ac_get_run`, overview or diagnosis answer) with an
+earlier contract crate's `ContainedRunTerminal` refuses it, since the type denies unknown members;
+it reads the member once it is built on this contract crate.
+
+**Faces.** `ac_get_run` and actinglab `run show`: `terminal {outcome, failure_code,
+failure_values?, final_page?, executed_steps?, cancellation_reason?, sequence, event_id}`; the
+overview's `run` and the diagnosis's `runs` rows: the same terminal of the brief status; the run
+list's row: `failure_values` beside `failure_code`, as `{<key>: <value>}`. `ac_runs`'s result
+schema gains the row member, and the tool texts of `ac_get_run` and `ac_runs` name it; the
+operation table's rows `status`, `runs`, `run show` and `diagnose` note it
+([lab-operations.json](lab-operations.json)).
+
+**Counts.** One member of `ContainedRunTerminal` (eight from seven); one member of a run list row
+and of `ac_runs`'s row schema; `gate_c2.rs` holds 14 tests (13 before); the new gate file
+`gate_469_f1.rs` holds 4; two new gate map rows (`contract.toml`, `apps.toml`).
+
+**Tests.** `crates/runtime-client/src/tests/gate_c2.rs`,
+`f1_a_run_terminal_carries_the_values_codes_mode_keeps_of_its_outcome` (gate map `contract.toml`,
+"#469 F1"), on the ScriptedRuntime ledger of the run-status gates: in brief and in full, a failed
+run whose terminal outcome (`contained_task_deadline_exceeded`) carries `receipt_state` `failed`,
+`lease_id` and `retry_after_ms` has `failure_values` `{receipt_state: failed}` alone, in the
+struct and in the status's JSON; a succeeded run without an outcome and a failed one whose outcome
+carries only an id and a boolean have none, and their terminal's JSON text is the text of the
+members a terminal had before, in their order. `apps/actingctl/src/mcp/tests/gate_469_f1.rs`
+(gate map `apps.toml`, "#469 F1"), on A42's fake Runtime with one such failed run: the
+`ac_get_run` tool's full status, the `ac_runs` tool's row, the overview's run block and the
+diagnosis's `runs` row each show `{receipt_state: failed}` beside the code; `runs_grouped` keeps
+its group by code without the member. No existing test changes, no golden changes, no test leaves
+the gate map.
+
+**What is not changed.** The fold's anomaly rules and what makes a run's state; the ledger's
+records; every code's registration, key and word; the detail texts; the grouped reads; the
+outcome code index (no fragment changes). No code, key, word, configuration key, interface
+revision or record shape is added.
+
+**At deploy.** Nothing to do: the member is computed when a run is read. A run recorded before
+0.12.62 shows the values its terminal outcome recorded.
+
 ### 1.389 Slice #463 U1b (0.12.62): the unrecorded-screen code only during a package's break-in (Workflow #463; the owner's ruling on board #463 that the code and its pause at once hold only within a period after a package is first run, the ordinary failure handling otherwise; the numbers and the scope are the coordinator's proposal the owner agreed to; the rest are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-u1b-break-in.md`, read on main `1a962a54`)
 
 1.389 is the number the coordinator assigned this section; the numbers before it are other slices
@@ -27313,6 +27506,459 @@ inside). Adapted only where a struct gained a member: `gate_422_ln3` names `brea
 the `failure_settlement` unit test `content: None`.
 
 **At deploy.** Nothing to do; a pair that ran before starts its break-in at its first settled run.
+
+### 1.395 Slice #469 K1 (0.12.62): a linear step's end says what was seen (Workflow #469; the owner's choice of option A on board #469 on 11-15; the design `rd-1115/status-codes-a-design.md`, Part 2: its three facts, place 1 of A-1 in its linear parts and the row K1 of its slice table, accepted by the coordinator; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-469-word-slices.md`, read on main `b6fe6ec2` (after V0, §1.386))
+
+The coordinator gave this slice 1.395: main `b6fe6ec2` holds the sections up to §1.386; 1.387 to
+1.394 and 1.396 to 1.399 belong to other slices, K2, H1, H2 and H3 among them. The slice ships in
+0.12.62, as §1.386 does.
+
+**What it is.** V0's vocabulary `confirmation_problem` (§1.386) is set on every end of a
+`linear_steps` step that U1's closing decision classifies (§1.372): the three sites where a failed
+wait ends the run with `page_confirmation_failed` (the last attempt's arrival and the next page
+after a seen intermediate page or skip target; the continued wait after a late gate; a retry
+decision that saw neither page), and `contained_task_linear_unrecorded_screen`, which always
+carries `unrecorded_screen` ([linear-steps.md](linear-steps.md), "What the program saw").
+`linear_closing_decision` returns its verdict, a word, in place of a `bool`; `another_page_on`
+tells a declared page, a declared loading page and an error of its own evaluation apart;
+`linear_closing_pages` names the condition that kept the decision from being made. One function of
+`crates/execution-kernel/src/contained_task/linear.rs`, `closing_end`, turns the verdict into the
+code, as U1 did: `unrecorded_screen` into the dedicated code, every other word into
+`page_confirmation_failed`. The conditions and the control flow of the closing decision are U1's;
+no code is added, and no code, class, detail, timing or other value changes.
+
+| Word | From what the program already decides |
+|---|---|
+| `deadline_reached` | the closing observation's two deadline checks |
+| `input_not_taken`, `awaited_page_late` | a frame on which one of the decision's pages passed: the step's own page, the last of them, or an awaited page |
+| `transition_shown` | the frame's transition row (`judge_frame`, LOAD-4 under `on`) |
+| `interrupt_shown` | the recognising check of the shared interrupt pages |
+| `screen_moving` | at the bound, the first and last frames' or the last two captures' comparison |
+| `loading_page_shown`, `other_page_shown` | `another_page_on`: a page it matched that is a declared loading page, or another page it matched |
+| `check_failed` | an error of `another_page_on`'s evaluation, and every other error of the decision's own capture, recognition or evaluation but a bookkeeping failure |
+| `unrecorded_screen` | every rule held |
+| `loading_limit` | the `LoadingLimit` of the failed wait or of the retry decision, whose values the outcome carries |
+| `neither_page` | a retry decision that saw neither page, with no closing decision after it |
+| `unjudged_layer_run`, `unjudged_restart_segment`, `unjudged_consensus`, `unjudged_application_entry`, `unjudged_time_short` | the conditions of `linear_closing_pages`, in its order |
+
+**Choices of this slice** (the design does not settle them). Where several conditions keep the
+decision from being made, the first in `linear_closing_pages`'s order gives the word, the loading
+allowance's first: the outcome then carries its loading values, which codes mode drops. After a
+retry decision that saw neither page and no closing decision, the word is `neither_page` whatever
+condition held (but the loading allowance's): that is what the program saw there, and the design's
+row for the word is that path's. A declared loading page among the pages `another_page_on` matched
+makes the word `loading_page_shown`, as a loading page holding over a page makes the frame a
+loading frame under LOAD-3.
+
+**Not reached.** `unjudged_application_entry` is set where `linear_closing_pages` finds the step's
+`from` to be an application entry, but no run gets there: admission refuses a click or a select
+step from any screen (`any_requires_application`), and an application step ends with
+`contained_task_linear_application_unconfirmed` before any closing decision. No test reaches it.
+
+**What is not changed.** The catalog: the five codes keep `confirmation_problem` optional (V0's
+texts already name it); making it required waits for K2. Every detail text, so the failure
+identity's key K and the accumulating list; the streak; the frame pins; the wire code; the
+`contained_task_linear_intermediate_unobserved` end, which carries no word; a layer's failure,
+which leaves its gate as its code alone as before; no interface revision, record shape or
+configuration key.
+
+**Tests.** `crates/execution-kernel/src/contained_task/linear/gate_469_k1.rs` (17 tests, declared
+in `linear.rs`), one per word on U1's fixture: each asserts the word and that the code, the detail
+byte for byte, the timing and the other values are those of the same end before. The host's half,
+`crates/runtime-host/src/tests/gate_469_k1.rs` (2 tests): a scheduled run's policy record carries
+the word, and its failure identity is the one of the code, the scope, the step and the detail
+alone; the same swallowed tap again keeps that identity byte for byte and counts 2. No existing test
+is adapted.
+
+**Fix round 2.** A word of V0's vocabulary added here, `returned_to_own_page`, takes the place of
+`input_not_taken` where the program had already seen another page since the input (the
+intermediate page, a skip target, the late gate), so `confirmation_problem` holds 22 words (21
+before) and the catalog 1933 (1932), and the text of `contained_task_linear_unrecorded_screen`
+says its word is always there ([linear-steps.md](linear-steps.md), "What the program saw").
+
+**At deploy.** Nothing to do. A failed linear run's terminal, receipt, policy record and
+`actingd suspended` row show the word from this build on; `ac_get_run`, `ac_runs` and the overview
+show it with F1.
+
+### 1.396 Slice #469 K2 (0.12.62): a page-graph step's end and a guard's refusal say why (Workflow #469; the owner's choice of option A on board #469 on 11-15; the design `rd-1115/status-codes-a-design.md`, Part 2: its three facts, the places 1 ("Page graph"), 2 and 6 of A-1 and the row K2 of its slice table, accepted by the coordinator; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-469-word-slices.md`, read on main `b6fe6ec2` (after #1738, V0))
+
+The coordinator gave this slice 1.396: 1.387 to 1.395 belong to slices dispatched with or before
+this one (K1 is 1.395). The slice ships in 0.12.62, as V0 (§1.386) does.
+
+**What it is.** The kernel sets the words V0 wrote down for the page graph and the guard, each from
+what it already decides where it raises the code, as a value of the outcome and never in its
+detail. Nothing the program does next changes: the code raised, its class, the control flow that
+leads to it, the detail, the pins, the wire code and every value it had are as before.
+
+| Code (where) | Value | Taken from |
+|---|---|---|
+| `page_confirmation_failed` (a page-graph step without a retry policy; a retry's confirmation that matched no page), `contained_task_step_unconfirmed` (an operation that decides Fail; a wait step's away clock) | `confirmation_problem`: `error_page`, `loading_limit`, `screen_still`, `nothing_recognised`, `final_state_unmet`, `input_not_taken`, `returned_to_own_page`, `other_page_shown` | the wait's `PostconditionResolution::Failed`: `hit_error_page`, then `loading_limit`, then `still_limit`, otherwise `last_frame_page` (none; `page_anchor_matches` with one of the step's destinations, a frame its final-state judgement did not take; with the page the step was dispatched from, a wait step's `from`, after the destination had passed, `destination_reached`, or not; or another page); one helper, `confirmation_word` in `crates/execution-kernel/src/contained_task.rs` |
+| `contained_task_step_unconfirmed` (a wait step's `max_ms` on its own page) | `confirmation_problem` `wait_max_reached` | `PostconditionResolution::Held` without `on_timeout` (`wait_step.rs`) |
+| `contained_task_error_page_reached` (an operation that decides Fail; a retry's confirmation; a wait step) | `confirmation_problem` `error_page` | `hit_error_page` of the same `Failed` |
+| `contained_task_error_page_reached` (#411 A45, `candidate_directive` in `contained_task/candidates.rs`) | `confirmation_problem` `error_page_no_exit` | the transition's `run_decision_invalid` on a declared error page |
+| `contained_task_requires_scheduler` | `failure_code`, and `confirmation_problem` | the terminal's `failure_reason` (`RunSuccessorSuggestion`, `RunPause`), until now dropped with `{ .. }`; the word the decision that asked for the recovery was taken with, kept beside `recovery_timing` (none after a guard's refusal) |
+| `contained_task_guard_refused` | `guard_problem` `page_mismatch` | `judged_guard_outcome`'s page check (a later attempt's frame on another page included) |
+| `contained_task_guard_refused` | `guard_problem` `target_not_passed`, with `failure_code` | the evaluated guard target that did not pass; `failure_code` is its registered reason (`TargetEvaluation::failure`, the detail's `cause=` token) when it has one |
+| `contained_task_guard_refused` | `guard_problem` `page_moved` | the trusted-coordinate step's frame after its action gap on another page (DP06) |
+
+**What the design offers and the page graph cannot give.** `loading_page_shown`: the page the
+wait's last frame matched is a page of the package's page set, and only a page that exists solely
+as a loading copy (the package's loading set, `PageDetector::with_loading_pages`) is outside that
+set, so `last_frame_page` never names one. A page of the set that a confirmation adds to its
+loading pages (`loading.add`) or declares as its wait page is matched as any page of the set is
+and, as another page, gives `other_page_shown`, as in K1 (§1.395); under `on` its frames are
+transition frames, and a wait that ends on them ends with `loading_limit`. No moving-or-still word
+for an unrecognised screen (the design's own exclusion): `nothing_recognised` stands for both.
+
+**The design's open point, decided here.** A wait step that meets a declared error page ends, as
+before, with `contained_task_error_page_reached` after the confirmation's own judgement of the
+frame (`PostconditionResolution::Failed` with `hit_error_page`, `wait_step.rs`), as a step's
+confirmation after its input does: it carries `error_page`. `error_page_no_exit` stays the run
+standing on an error page that no operation leaves. A wait step whose `max_ms` runs out on its own
+page (`PostconditionResolution::Held`) carries `wait_max_reached` (fix round 2, below).
+
+**Ends without a word.** Of the four page-graph codes, one end still carries no
+`confirmation_problem`: `contained_task_requires_scheduler` after a refusal before the input (a
+guard's or an input recheck's) that asked for the recovery, whose `failure_code` names that
+refusal ([linear-steps.md](linear-steps.md)). Every end of `page_confirmation_failed`,
+`contained_task_step_unconfirmed` and `contained_task_error_page_reached` carries one.
+
+**Required stays optional.** Every value stays optional in the catalog (the work order, item 5).
+
+**Tests.** `crates/execution-kernel/src/contained_task/gate_469_k2.rs`: one test per word, each
+over the fixtures that reach it, asserting the code and the outcome's values whole (the values the
+code had, with the word): `input_not_taken`, `other_page_shown` (a wait step's away clock
+included), `nothing_recognised` (a retry's confirmation included), `screen_still`,
+`loading_limit`, `error_page` (no retry policy, a decided Fail, a retry's confirmation, a wait
+step), `error_page_no_exit`, `contained_task_requires_scheduler` (after a confirmation, after a
+retry's error page, after a guard's refusal), `page_mismatch`, `target_not_passed` and
+`page_moved`; fix round 2: `final_state_unmet` (no retry policy, a decided Fail, a wait step's
+away clock), `returned_to_own_page` (an observation window's end, no retry policy and a decided
+Fail) and `wait_max_reached`, each also asserting its detail byte for byte; and the design's test
+rule for every fixture (29): the code, the detail byte for byte as before and the values without
+the word as before. `value_test_tests.rs`: a guard whose value test does not hold names
+`value_test_not_met` as `failure_code`. The identity string and the streak count are the host's:
+in `crates/runtime-host/src/tests/gate_390_exec3.rs`, two identical scheduled page-graph failures
+carry `input_not_taken` on their settled outcomes, their identity's key is the one of the code, the
+scope `main`, the step and the native detail's fragments (none of which holds the word), and the
+second keeps the first's identity and counts 2. Adapted: the four tests of `gate_rc2_a15.rs`
+(kernel), which pin the whole values of `contained_task_step_unconfirmed`, take its word (the
+window's end, since fix round 2, `returned_to_own_page`); and `gate_still1.rs`
+`still_limit_off_keeps_todays_wait`, which pinned that a confirmation without a still limit
+carries no values, now pins that it carries no still values, only its word.
+
+**Fix round 2.** Two words added to V0's vocabulary here, `final_state_unmet` and
+`wait_max_reached`, so `confirmation_problem` holds 24 words (22 with K1's
+`returned_to_own_page`, §1.395) and the catalog 1935 (1933). `final_state_unmet` takes the place of
+`other_page_shown` where the last frame is one of the step's destinations, so that word is never
+set on a destination; a destination that is the page the step left gives `final_state_unmet`
+before the own page's word. `PostconditionResolution::Failed` gains `destination_reached`, true
+only where an observation window ran out (`observation_window.rs`), so that end's own page gives
+K1's `returned_to_own_page` in place of `input_not_taken`. The wait step's `max_ms` end, which
+had no word, gets `wait_max_reached`. Only the word changes: code, detail, timing, other values
+and control flow are as they were.
+
+**Texts.** The catalog texts of `page_confirmation_failed`, `contained_task_step_unconfirmed`,
+`contained_task_error_page_reached` and `contained_task_guard_refused` say when each word is set,
+and the catalog's vocabulary describes the two words of fix round 2;
+[linear-steps.md](linear-steps.md) (the page-graph failures and the guard's row) and
+[resource-declarations.md](resource-declarations.md) ("Wait steps and wait pages") say it in the
+contracts.
+
+**At deploy.** Nothing to do: a run that ends so carries the word on its terminal, its receipt and
+its policy record; no record shape, key, interface revision or configuration changes.
+
+### 1.397 Slice #469 H1 (0.12.62): an unavailable application says who withdrew it (Workflow #469; the owner's decision of 11-15 on board #469 that the most mixed codes carry a reason word; the design `rd-1115/status-codes-a-design.md`, Part 2's three facts, place 3 of A-1 and the slice row H1; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-469-word-slices.md`, read on main `a5827228` (after #1738 and #1739))
+
+The coordinator gave this slice 1.397; 1.395, 1.396, 1.398 and 1.399 belong to the slices
+dispatched with it (K1, K2, H2, H3). It ships in 0.12.62.
+
+**What it is.** `instance_unavailable`, the evaluator's placement reason of every decision of an
+instance projected `available = false`, carries `availability_source` (V0's vocabulary, §1.386),
+with `device_link_state` and `device_hold` where the record names them
+([instance-fact-store.md](instance-fact-store.md), "Who withdrew it"). The word is read from the
+active `session.instance.available` record the projection resolves for the instance
+(`project_policy_instances`, `crates/runtime-host/src/host/policy_dispatch.rs`), by its own members
+`source_detector` and `source_snapshot_id` (`HostShared::availability_withdrawal`,
+`crates/runtime-host/src/host/facts.rs`, beside the publishers whose detectors and prefixes it
+reads), and from the instance's configured seed, which the projection's inputs already hold
+(`PolicyInputSnapshot::instance_seeds`; no new read, no new record): a record holding `false`
+over a configured seed `false` `configured`, whichever publisher wrote it; otherwise the
+configured seed `configured`; the backend self-check gate's `backend_selfcheck:` `self_check`,
+which a failed self-check, one not recorded yet or invalidated (`unchecked`, also after a failed
+preparation step) and a resource fence share (the fence's split is the design's later H1b);
+`device_link:<state>` `device_link` with the state; `device_state:<hold>` `device_state` with
+the hold; another publisher's `false` `other_publisher`; no record holding `false`
+`facts_missing`. A state or hold token the vocabulary does not know leaves its detail out.
+
+**Fix round 2 (the review of the pull request).** The first build read the record alone, so an
+instance the backend self-check gates and the configuration marks unavailable read `self_check`:
+its start publishes no configured seed (`seed_policy_instance_facts` skips `available` for a
+device self-checked instance) and the gate withdraws it under `backend_selfcheck:unchecked`, which
+a passing self-check never replaces while the seed is `false`. A reader could not tell "the
+configuration says so" from "the self-check did not pass", which ask for different actions. The
+projection now passes the instance's configured seed beside the record; with the seed `false` the
+word is `configured`. Every other classification is as before, and every deciding step still runs
+before the word is set.
+
+**Where it is set, and the design's one wrong turn.** The design placed the attach after the
+evaluation, beside `attach_missing_instance_fact_reasons`, and expected the word in the schedule
+explanation. The explanation is built inside `PolicyHost::evaluate`
+(`crates/runtime-host/src/policy_host.rs`, "before the host adds its notes to the decisions"), so a
+value set after the evaluation never reaches `ac_schedule`; for the same reason
+`policy_instance_fact_missing` never stood behind `instance_unavailable` there. So the host
+computes the words in its projection, hands them to the evaluation in `PolicyEvaluationContext`
+(`availability_withdrawals`) and sets them (`set_availability_words`) after every step that judges
+the evaluation (signals, eligibility staging, arbitration) and right before the explanation: the
+explanation's rows, the held records built from them, the cycle's decisions and the fact refresh
+recorder's reading see the word; nothing before it does. The policy crate does not change.
+
+**A restart.** The reason row is built from the active record, which the ledger keeps whole
+(`fact.published` carries the record with its detector and snapshot id) and the fact store
+reloads at a start, and from the configured seed, which the configuration gives again; nothing of
+it is in memory. The same record gives the same word after a restart (test 7, on the configured
+seed, which the start does not publish again; test 9, on the gate's withdrawal of a gated instance
+configured unavailable, which its start does not publish again). A gated instance's availability
+is decided again by its start (the withdrawal before its preparation, then its self-check), and
+the word follows the record that leaves.
+
+**What does not change.** The reason's code, its detail text and its other values (none); which
+decisions are blocked, their eligibility, wake and order; the explanation's `since_unix_ms`
+(`same_clock` compares the code) and a held record's start, id and gate code; the clock-slot
+records, read before the words are set; the planning lane's `instance_unavailable`, which carries
+none. A held record's `caused_by` is the row's why whole, so it carries the word. A not-run reason
+has no failure identity or streak.
+
+**Texts.** `instance_unavailable`'s catalog text (`policy.json`) says when each word is set; the
+index is regenerated. [instance-fact-store.md](instance-fact-store.md) gains "Who withdrew it".
+
+**Tests.** `crates/runtime-host/src/tests/gate_469_h1.rs` (gate map `host.toml`, "#469 H1"), the
+fixture instance (no self-check gate) with one task due at 10:00 UTC, the production evaluation
+path on a manual clock: one test per word (1-6), each asserting the task's one
+`instance_unavailable` reason on the cycle's decision has exactly the word's values and the
+evaluator's detail text, and the explanation's candidate row and not-running row carry the same
+why: `configured` (the configuration's seed `false`), `self_check`, `device_link` with
+`device_link_state` `absent` and `device_state` with `device_hold` `thermal` (each through its
+publisher's own function, by three test hooks of `RuntimeHost`), `other_publisher` and
+`facts_missing` (a record of another detector holding `false`, and one holding a string; the
+cycle's decision still carries `policy_instance_fact_missing`); after a restart the same seed
+record and the same word (7); a word that changes from `other_publisher` to `facts_missing` keeps
+the row's `since_unix_ms`, and the one held record written past the 30-minute default has the
+first unavailable evaluation's start, its signal id and `gate_code` `instance_unavailable`, and
+its one `caused_by` link is `instance_unavailable` with `facts_missing` (8); fix round 2: the same
+instance on a bound device endpoint (so the self-check gates it) configured unavailable, whose
+active record is the gate's `backend_selfcheck:unchecked`, reads `configured` at the evaluation
+and, from the same record, after a restart (9). No existing test changes, no golden changes, no
+test leaves the gate map.
+
+**Counts.** One gate file of 9 tests and one gate map row; one member of `PolicyEvaluationContext`;
+one more member of the projection's tuple. No code, key, word, configuration key, record shape or
+interface revision is added.
+
+**At deploy.** Nothing to do: the word is computed at each evaluation from the records an
+installation already holds.
+
+### 1.398 Slice #469 H2 (0.12.62): a paused pair says why it was paused (Workflow #469; the owner's choice of option A on board #469 on 11-15; the design `rd-1115/status-codes-a-design.md`, Part 2: its three facts, place 4 of A-1 and the row H2 of its slice table, accepted by the coordinator; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-469-word-slices.md`, read on main `b6fe6ec2` (after #1738, V0, §1.386))
+
+The coordinator gave this slice 1.398: main `b6fe6ec2` holds the sections up to §1.386, and the
+numbers between belong to the slices dispatched with this one. The slice ships in 0.12.62
+(release 0.12.61 is cut without it).
+
+**What it is.** V0's vocabulary `pause_cause` and the existing key `failure_code`, set where the
+program already knows them, as values of the outcome only
+([policy-suspension.md](policy-suspension.md), "Why a pair is paused"):
+
+| Value | On | From |
+|---|---|---|
+| `pause_cause` | `policy_task_paused` | the execution record the pair's settlement wrote (`PolicyFailureRecord`: its outcome's code for the three severe sources, `original_class`, `sensitive`, `effective_class`, `disposition`), in the settlement's own order (`crates/runtime-host/src/policy_control.rs`, `pause_cause`) |
+| `failure_code` | `policy_task_paused`, `policy_retry_backoff_active` | the pair's failure streak's code, the record's `scheduled_failure_code_str` (a registered code; a relayed spelling the catalog does not register is left out) |
+| `pause_cause` | the `suspended` rows of `actingd suspended` | the same function on the same record |
+
+All seven words the design offers are set; none needed a new observation. `failure_code` was
+already a key of the table; the two codes carried it optional since V0. Nothing reads either
+value to decide: the denial is raised where, when and with the class it was, and its detail text
+(`Runtime control availability: …`) is unchanged.
+
+**Where it is kept.** `FailureStreak` gains `pause_cause`, memory only, like `paused_on`. The
+commit of an execution (the live settlement and every replay pass there) sets it from the record.
+A start that loads the decision memory from its value records (`TaggedStart::Load`) rebuilds the
+streak from the L7 record, which keeps neither `sensitive` nor the effective class, so the
+re-alignment (`refresh_dispatch_tail`, the start's included) gives each paused streak without a
+cause the cause of its dispatch's execution record, which the dispatch journal holds (it keeps a
+pair's latest admitted dispatches, so a paused pair's own), when that record names the streak's
+failure (code, identity, class). No persisted member, record shape or interface revision is added;
+the L7 record is byte for byte what it was. `actingd suspended` v2 gains the member `pause_cause` on
+its `suspended` rows (`null` for none); `actingctl diagnose` and `ac_diagnose` relay the rows as
+they are.
+
+**Deciding by word, not by name (A-3).** The three severe sources of their own word are told apart
+by the record's code (`policy_runtime_budget_exceeded`, `policy_settlement_interrupted`,
+`contained_task_linear_unrecorded_screen`), as the design names them. Choosing a word nothing
+reads is building a value, not a decision point; no code chooses what happens next from the word.
+
+**Tests.** A new gate file, `crates/runtime-host/src/tests/gate_469_h2.rs`, host gate map
+`contracts/test-gates/host.toml`: one test per word, each settling a run through
+`record_policy_dispatch_outcome` on a fresh start of the host, and one with two causes at once (a
+sensitive task's run over its runtime budget, whose record is both sensitive and severe:
+`runtime_budget_exceeded`, the settlement's order): the record keeps the input's failure identity
+byte for byte and the expected counts, the pair's streak in its latest L7 record serializes byte
+for byte as the one built from the record's own members; the pair's `policy_task_paused` at its
+next due evaluation carries the word and the record's code, its detail naming neither (both
+asserted), live, on the root's next start and on the start after it; the closed root's
+`actingd suspended` row carries the word. The start checked last loads: a root's first start writes
+no marker and its second seeds, replaying the history (LN-4), so only a later start loads the streak
+from its value record, as every restart of an installation does, and gives the word back from the
+dispatch journal. Each test asserts the kind of both starts from their `StartReport`
+(`tagged_state`): `load` for the last; for the one before it `seed` after one run (the word a
+replay gives) and `load` after two. One test for the backoff's `failure_code`, its detail not
+naming the code, live, on the root's second start (`seed`) and on its third (`load`). No existing
+test is changed.
+
+**What is not changed.** When a pair is paused, backed off or lifted; the lift and its restart
+rule; the streak's comparison (code, identity, class); the failure identity; every record and its
+fields; every class and category; the detail texts; the catalog's texts (V0 wrote them); the codes
+that read `policy_task_paused` by its code (the clock-slot class, the fact refresh's denial, the
+remedy's persistent gates, the held clock).
+
+**At deploy.** Nothing to do. A pair paused before the deploy shows its word after the first start
+of the new build (its execution record is in the journal); a pair whose execution record the
+journal does not hold shows the pause without the word.
+
+### 1.399 Slice #469 H3 (0.12.62): an emulator control failure says where it failed (Workflow #469; the owner's decision of 11-15 on board #469 that the most mixed codes carry a reason word; the design `rd-1115/status-codes-a-design.md`, Part 2's three facts, place 8 of A-1 and the slice row H3; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-469-word-slices.md`, read on main `a5827228` (after #1738 and #1739))
+
+The coordinator gave this slice 1.399; 1.395 to 1.398 belong to the slices dispatched with it (K1,
+K2, H1, H2). It ships in 0.12.62.
+
+**What it is.** `emulator_control_failed`, every provider control failure that is not a binding
+refusal, an unsupported provider or an expired readiness wait, carries the two values V0 declared
+for it (§1.386): `stage`, the location the failure arose at, and `device_category`, the device
+diagnostic's category (vocabulary `device_category`). Both are what the function that builds the
+failure (`emulator_control_error`, `crates/runtime-host/src/host/emulator_instance.rs`) already
+decided and wrote into the record's primary detail: `stage` is the device diagnostic's stage, or
+without a diagnostic the default `mumu_manager_control`; `device_category` is present when the
+failure carries a device diagnostic and is its category. Without a diagnostic no
+`device_category` is set: the detail's category `child_exit` there is a default, and no child
+process exited. No new vocabulary, no new code; the value stays optional
+([emulator-control.md](emulator-control.md), "Event shape", item 4).
+
+**Where a reader finds them.** The receipt carries both values, and so does a settled timeout's
+`caused_by` link (`emulator_control_timeout_settled` relays the failure's outcome whole). The
+ledger's `runtime.failed` record gains only `device_category`: the host's lifecycle record writes
+its own stage into the `stage` of every failure it records (`host/lifecycle.rs`, unchanged; the
+ledger's failure signatures read it), so the record's `stage` stays
+`runtime_lifecycle_operation_cleanup`. A reader who needs the device stage reads the receipt. The
+cause a failed restart wraps carries neither value: it is a newly built outcome of the failing
+phase's code and operation, and the stage that phase failed at stays in the restart record's
+primary detail.
+
+**What does not change.** The code chosen for each stage, its class, the receipt state, the effect,
+the wire code `backend_operation_failed`, the other values, the primary detail and the native
+detail; the three other codes this function builds carry neither value; the stop-result table;
+a restart's wrapping, which compares the code (the design keeps the values optional until a
+failed restart's record is shown to keep them); the number of records; the burst count, which
+reads class and severity; the lifecycle record's stage. An operator, autostart or rung control is
+no run: no failure identity or streak reads this outcome.
+
+**Texts.** `emulator_control_failed`'s catalog text (`runtime-host.json`) says when each is set and
+where a reader finds them; [emulator-control.md](emulator-control.md) item 4 says it.
+
+**Tests.** `crates/runtime-host/src/tests/gate_469_h3.rs` (gate map `host.toml`, "#469 H3"), one
+discovery-bound instance on the scripted emulator controller (HOST-I1), an operator `start` and
+then a `stop` the controller fails, one test per stage family the controller gives: the vendor
+command exited (`mumu_manager_control_exit`, `child_exit`, exit code 1), the tool could not run
+(`mumu_manager_run`, `backend_launch`, no exit code), the vendor's error envelope
+(`mumu_manager_control_errcode`, `response`, exit code 0): the receipt is
+`emulator_control_failed` with the failure's stage and category as `stage` and `device_category`;
+the control's one `runtime.failed` record is `emulator_control_failed` with the category as
+`device_category` and `runtime_lifecycle_operation_cleanup` as `stage`, keeps `elapsed_ms`,
+`exit_code` and `device_process_present`, and its primary detail is the category, the stage,
+`mumu_manager` and `control_instance` (1-3).
+`crates/runtime-host/src/host/emulator_instance/gate_469_h3.rs` (the same gate row), on the
+building function and a hand-made failure, the family the scripted controller cannot reach (it
+gives every failure a diagnostic): no diagnostic gives `stage` `mumu_manager_control` and no
+`device_category`, the detail `mumu_manager_control` and `child_exit` (4); the expired readiness
+wait, the binding refusal and the unsupported provider carry neither value, their detail
+unchanged (5). No existing test changes, no golden changes, no test leaves the gate map.
+
+**Counts.** Two gate files (3 and 2 tests) and one gate map row. No code, key, word, configuration
+key, record shape or interface revision is added.
+
+**At deploy.** Nothing to do.
+
+### 1.400 Slice #469 D4a (0.12.62): a locked device and an application update stop on purpose; a spent call budget is a warning (Workflow #469; the owner's approval on board #469 on 11-15 of the four corrections that change what the program does, these three of them; the design `rd-1115/status-codes-a-design.md`, Part 2, A-2 item 1, the rows of `device_locked`, `contained_task_application_update_required` and `call_budget_exhausted`, and the slice row D4; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-469-d4-owner-four.md`, read on main `a5827228`)
+
+The coordinator gave this slice 1.400: main `a5827228` holds the sections up to §1.387, and the
+numbers between them and this one belong to slices dispatched with it (1.401 is D4b, the fourth
+correction). The slice ships in 0.12.62.
+
+**What it is.** Three corrections of a registered class, each in the registry macro and its
+fragment (G1). Each changes what the program does where a reader already reads the class; no
+decision point is added and none names a code.
+
+| Code (owner) | Was | Is | What reads the change |
+|---|---|---|---|
+| `device_locked` (device) | warning, `budget_or_permission` | warning, `planned_stop` | the errors view's run-recovery grouping (§1.337): its records are no failure of their run, as those of `device_thermal_hold`, `device_battery_low` and `device_in_use` are not |
+| `contained_task_application_update_required` (runtime-host) | warning, `none` | warning, `planned_stop` | the same: the package declares the update page and the run stops on purpose |
+| `call_budget_exhausted` (actingctl, registered in `crates/lab-ops/src/codes.rs`) | error, `none` | warning, `none` | the `category` of each envelope that carries it (below) |
+
+**What stays as it was.** Under the defaults no trigger item names `budget_or_permission`, `none`
+or `planned_stop` (they name `pack_logic_mismatch`, `stability_warning` and `environment_fault`,
+and `busy.screen.classes` names `pack_logic_mismatch`), so no trigger, burst or screen hold
+changes. A rung whose entry `device_locked` holds is skipped `device_not_ready` by its code
+(`recovery_entry_skip`), as before. A rung run that ends with
+`contained_task_application_update_required` ends the ladder by its code, a scheduled run that
+ends with it is a condition termination by its code (`scheduling.rerun.condition_codes`), and it
+never accumulates (by prefix). The policy's streak and pause read no class. No detail text, failure
+identity or streak changes.
+
+**Where `call_budget_exhausted` is written.** Searched: the code's variant and its spelling in
+every file of `apps/`, `crates/`, `tools/` and `tests/`, tests included, and every program that
+builds an answer from those writers. It is written only in `crates/lab-ops`: the overview
+(`budget_skipped`, `not_running_skipped`, `run_block`: a warning beside the overview), the
+diagnosis (`Unfinished::cut` and the `not_run` read: a warning beside the diagnosis), the run list
+(`RunsAnswer::warnings`: the warning of a page the read budget ended early) and the problem report
+(`RuntimeSource::step`: the cause of `report_part_missing` with `budget_spent`). Those reads are
+served by actingctl's command line and its MCP server (`overview`, `diagnose`, `runs`; `ac_overview`,
+`ac_diagnose`, `ac_runs`), by actinglab's command line (`status`, `diagnose`, `runs`, `report
+export`) and by actinglab-mcp, which serves the same operations and neither registers nor writes the
+code itself. In none is it the top code of an answer, a line or an exit status: each answer's top is
+its success code (`runtime_overview_reported`, `runtime_diagnosis_reported`, `run_list_reported`,
+`report_exported`), and no failure's outcome is built from it. So no exit status and no MCP
+`isError` changes; the `category` of the warning's envelope does (`warning`), in the command
+line's result line, both MCP servers' answers and a report's warnings. The code is registered once
+(that macro and `actingctl.json`).
+
+**Texts.** The three fragments' descriptions say the new class or category; the contracts that
+state the class: [application-lifecycle.md](application-lifecycle.md) ("The handset start
+gate"), [emulator-control.md](emulator-control.md) ("The game's update dialog"),
+[package-reference.md](package-reference.md) (`interrupts.json` `result`) and
+[global-ledger-query.md](global-ledger-query.md) (`run_recovery`: twenty codes of the class, from
+eighteen). The index is regenerated: warning 156 codes (155 before), error 3414 (3415).
+
+**Tests.** `crates/ledger/src/global/tests/gate_429_rg_stop.rs`, `d4a_t1_…` (`device_locked`) and
+`d4a_t2_…` (`contained_task_application_update_required`), gate map `ledger.toml` "#469 D4a": the
+embedded catalog gives the code `warning` and `planned_stop`; a run whose `task.failed` terminal and
+`runtime.failed` carry it has no group, both records stay warnings and rows of the page in the
+Errors view; a warning of the class `none` appended to the run is listed alone (missing relation,
+unknown). `crates/runtime-host/src/host/recovery_ladder/tests.rs`, `d4a_a_locked_device_…`: the
+four holds are `planned_stop` and each is skipped `device_not_ready`; no default trigger item
+matches `device_locked` at any of the seven stages; three of its warnings within the window
+register no burst.
+`crates/runtime-host/src/tests/gate_373_nav6.rs`, `d4a_the_update_dialog_…` (UPD-1 A4's run): the
+rung fails with the code, the ladder ends `exhausted` at Warning with
+`recovery_ladder_interrupted`, no emulator restart, one ladder only (gate map `host.toml`).
+`crates/lab-ops/src/overview.rs`, `d4a_a_spent_call_budget_…` (gate map `apps.toml`): the
+overview's two writers give warnings beside its success line, exit 0, no developer line, envelope
+`warning`. Adapted: `upd1_a9_…` of `gate_373_nav6.rs` asserted the update code's class `none`; it
+asserts `planned_stop`. No golden changes, no test leaves the gate map.
+
+**What is not changed.** Every emitter, every detail text, every other code's class and category,
+every decision that names a code, the configuration, the record shapes and every interface
+revision.
+
+**At deploy.** Nothing to do. The grouping reads the class of a record's code from the catalog
+the build embeds when a page is read, so a run recorded before 0.12.62 that ended with
+`device_locked` or the update code shows no group in the errors view either.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

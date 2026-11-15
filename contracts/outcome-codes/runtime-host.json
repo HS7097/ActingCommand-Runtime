@@ -1683,7 +1683,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The Runtime host reports application foreground unknown.",
+      "description": "The Runtime host reports application foreground unknown. Workflow #469 V0: it is on the policy's always-severe list (is_severe_policy_failure), so a scheduled run that ends with it pauses its task on the application at the first failure, whatever its class says.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -6339,6 +6339,8 @@
         "elapsed_ms": "optional",
         "exit_code": "optional",
         "process_started": "optional",
+        "stage": "optional",
+        "device_category": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
@@ -6348,7 +6350,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The Runtime host reports emulator control failed.",
+      "description": "The Runtime host reports emulator control failed. Workflow #469 V0 (since 0.12.62): stage, when present, is the step of the emulator control the failure arose at, and device_category the device diagnostic's category. Workflow #469 H3 (since 0.12.62): every provider control failure built under this code carries stage, the step its primary detail records (a MuMuManager step: the control command's exit, error envelope or launch error; the tool's run, timeout or path; an info reader stage; without a device diagnostic the default mumu_manager_control), and device_category when the failure carries a device diagnostic. The receipt and a settled timeout's cause carry both; the ledger's runtime.failed record gains only device_category, its stage stays the lifecycle stage runtime_lifecycle_operation_cleanup, so a reader who needs the device stage reads the receipt. The cause a failed restart wraps is a newly built outcome and carries neither.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -13847,6 +13849,7 @@
       "layer": "host",
       "uncertain": false,
       "values": {
+        "failure_code": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
@@ -13856,7 +13859,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The Runtime host reports policy retry backoff active.",
+      "description": "The Runtime host reports policy retry backoff active. Workflow #469 V0 (since 0.12.62): failure_code, when present, is the code of the failure the task's backoff follows.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -14767,6 +14770,8 @@
       "layer": "host",
       "uncertain": false,
       "values": {
+        "pause_cause": "optional",
+        "failure_code": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
@@ -14776,7 +14781,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The Runtime host reports policy task paused.",
+      "description": "The Runtime host reports policy task paused. Workflow #469 V0 (since 0.12.62): pause_cause, when present, says why the failure paused the task, and failure_code is that failure's code.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -16476,7 +16481,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The Runtime host reports recovery readiness adb unconfirmed.",
+      "description": "The Runtime host reports recovery readiness adb unconfirmed. Workflow #469 V0: it is on the policy's always-severe list (is_severe_policy_failure), so a scheduled run that ends with it pauses its task on the application at the first failure, whatever its class says.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -21276,7 +21281,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.28",
-      "description": "A shared interrupt page whose interrupts.json entry declares limit_cause environment was seen once more than its max_per_run (Workflow #411 B43): the standard pack's data says the page keeps coming back because of the game's network or servers, not because the pack no longer matches. The run ends with no further input. A scheduled run's failure is rerun only: it never accumulates toward a pause of its task pair; the ladder configuration decides what follows.",
+      "description": "A shared interrupt page whose interrupts.json entry declares limit_cause environment was seen once more than its max_per_run (Workflow #411 B43): the standard pack's data says the page keeps coming back because of the game's network or servers, not because the pack no longer matches. The run ends with no further input. A scheduled run's failure is rerun only: it never accumulates toward a pause of its task pair; the ladder configuration decides what follows. Workflow #469 V0: by this code's name, the failure identity takes it out of the contained_task_interrupt_ prefix that accumulates (its identity still names the standard pack's data, but it is rerun only, in every scope); no default trigger item reads its class (budget_or_permission).",
       "common_causes": "The game's network or its servers stayed unavailable (for example during a maintenance) while the run was handling the page.",
       "handling": "TBD"
     },
@@ -21899,7 +21904,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "Performance pacing ended a policy run to be rerun: it reached its wall-clock ceiling after pacing lengthened it (yield_cause wall_ceiling) or was preempted while held (preempted). Its cancellation reason is PerformanceYield; the run settles as a condition termination and is owed a rerun (Workflow #385 PERF §7.4). Registered by SH-1; P-k and P-h emit it.",
+      "description": "Performance pacing ended a policy run to be rerun: it reached its wall-clock ceiling after pacing lengthened it (yield_cause wall_ceiling) or was preempted while held (preempted). Its cancellation reason is PerformanceYield; the run settles as a condition termination and is owed a rerun (Workflow #385 PERF §7.4). Registered by SH-1 for P-k and P-h to emit. Workflow #469 V0: not raised yet: no site of this build raises it, since no run's control asks for a performance yield (one that held it would be invalid state, contained_task_cancellation_state_invalid); its category is decided before 0.13.0.",
       "common_causes": "The host stayed slow long enough for a lengthened run to reach its ceiling, or the instance was paused by its share while the run was held.",
       "handling": "Nothing to repair for one occurrence; the run is rerun."
     },
@@ -21922,7 +21927,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A policy run was held at its pace checkpoint longer than the hold limit (timeout_ms) and ended; its cancellation reason is PerformanceYield, it is owed a rerun, and the recovery ladder may start once performance releases the instance (Workflow #385 PERF §7.4, M387 §3.7). Registered by SH-1; P-h emits it.",
+      "description": "A policy run was held at its pace checkpoint longer than the hold limit (timeout_ms) and ended; its cancellation reason is PerformanceYield, it is owed a rerun, and the recovery ladder may start once performance releases the instance (Workflow #385 PERF §7.4, M387 §3.7). Registered by SH-1 for P-h to emit. Workflow #469 V0: not raised yet: no site of this build raises it, since no run's control asks for a performance yield (one that held it would be invalid state, contained_task_cancellation_state_invalid); its category is decided before 0.13.0.",
       "common_causes": "The host stayed in the deepest pacing stage longer than the hold limit.",
       "handling": "Nothing to repair for one occurrence; the run is rerun."
     },
@@ -21964,7 +21969,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A run, or a climbing recovery ladder, ended because the handset's wired device link left device (#398 R1 RD-2, model-398 section 4.4, 4.5): the device failure the run met is its caused_by link and no input follows. The default recovery_ladder.exclude_codes lists it: a cable is not something the ladder can fix.",
+      "description": "A run, or a climbing recovery ladder, ended because the handset's wired device link left device (#398 R1 RD-2, model-398 section 4.4, 4.5): the device failure the run met is its caused_by link and no input follows. The default recovery_ladder.exclude_codes lists it: a cable is not something the ladder can fix. Workflow #469 V0: being excluded, it starts no ladder at any stage and is not counted toward the warning burst, whatever its class (environment_fault); a climbing ladder's rung that ends with it ends the climb interrupted, by this code's name (is_hold_interruption).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -23227,7 +23232,7 @@
     },
     "contained_task_application_update_required": {
       "category": "warning",
-      "ladder_class": "none",
+      "ladder_class": "planned_stop",
       "owner": "runtime-host",
       "layer": "host",
       "uncertain": false,
@@ -23242,7 +23247,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.30",
-      "description": "UPD-1 (contracts/package-reference.md, Shared interrupt pages): a shared interrupt page whose interrupts.json entry declares result application_update_required (page_id) ended the run after its handler (then end_run), or after its handler failed short of fatal (UPD-1 fix round 1: the failure is linked as related): the game says its client must be updated. The run ends with no further input, and before its terminal the Runtime records the instance fact health.application.update_required true, which holds every other task of the instance until a store_update package's run succeeds there. A scheduled run ends by a condition under the default scheduling.rerun.condition_codes (no streak, counts given back, its rerun owed after the update); it never accumulates toward a pause. Its ladder class is none, so no default trigger opens a recovery ladder; a ladder rung's package run that ends with it stops the ladder (recovery_ladder_interrupted). A startup package that ends with it is a runtime.failed warning.",
+      "description": "UPD-1 (contracts/package-reference.md, Shared interrupt pages): a shared interrupt page whose interrupts.json entry declares result application_update_required (page_id) ended the run after its handler (then end_run), or after its handler failed short of fatal (UPD-1 fix round 1: the failure is linked as related): the game says its client must be updated. The run ends with no further input, and before its terminal the Runtime records the instance fact health.application.update_required true, which holds every other task of the instance until a store_update package's run succeeds there. A scheduled run ends by a condition under the default scheduling.rerun.condition_codes (no streak, counts given back, its rerun owed after the update); it never accumulates toward a pause. Its ladder class is planned_stop (#469 D4a, since 0.12.62): the package declares the page and the run stops on purpose, so the errors view's run-recovery grouping counts its record as no failure. No default trigger item matches it, so no default trigger opens a recovery ladder; a ladder rung's package run that ends with it stops the ladder (recovery_ladder_interrupted), by its code. A startup package that ends with it is a runtime.failed warning.",
       "common_causes": "The game released a client version that the installed one may no longer connect with.",
       "handling": "None when the game root's schedule.json has a rule for its store_update package: that rule runs on the fact and its success clears the fact. Otherwise update the client by hand and run the store update package directly (ac_run_pack); its success clears the fact."
     },

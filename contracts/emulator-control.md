@@ -414,7 +414,22 @@ Every request is recorded intent -> result, all linked to the instance:
    operation: control_instance}`, typed tokens only, where `stage` is the typed step
    (`mumu_manager_control_exit`, `_control_errcode`, `_launch_error`, `_wait_timeout`, `_run`,
    `_timeout`, `_path`, an `info` reader stage, `emulator_control_binding`,
-   `emulator_control_support`).
+   `emulator_control_support`). Workflow #469 H3 (since 0.12.62;
+   [v012-register.md](v012-register.md) §1.399): an `emulator_control_failed` outcome also
+   carries that stage as its value `stage` (a location) and, when the failure carries a device
+   diagnostic, that category as its value `device_category` (vocabulary `device_category`); a
+   failure without a device diagnostic carries `stage` at the default `mumu_manager_control` and
+   no `device_category` (its detail keeps the default category `child_exit`, which no device
+   observed). The receipt carries both values, and so does a settled timeout's `caused_by` link
+   (the failure's outcome whole). This record gains only `device_category`: its `stage` stays
+   `runtime_lifecycle_operation_cleanup`, the lifecycle stage the host writes into the `stage` of
+   every `runtime.failed` record. A reader who needs the device stage reads the receipt. The
+   other codes of a provider control failure (`emulator_control_wait_timeout`,
+   `emulator_control_unavailable`, `emulator_control_unsupported`) carry neither. The detail, the
+   stop-result table and a restart's wrapping are unchanged: a failed restart's `caused_by` link
+   is a newly built outcome of the failing phase's code and operation alone (item 5), so it
+   carries neither value; the stage that phase failed at stays in the restart record's primary
+   detail.
 5. A failed restart records one `command.rejected` (action `emulator.instance.restart`, the
    receipt terminal) and one `runtime.failed`, after its Start phase when one ran (coordinator
    answer D2); a failed phase records nothing of its own. For `emulator_restart_stop_failed` and
@@ -605,7 +620,9 @@ of the instance, which fails only that run, #411 A7; with the capture self-check
 `return_home` and `application_restart` rungs are skipped `capture_unavailable`, so the climb
 reaches the emulator restart); exclusions `contained_task_prerequisite_*` and
 `contained_task_return_home_entry_unmatched` (the gate codes of `contracts/linear-steps.md`,
-"Prerequisite packages" and "Return-home fallback").
+"Prerequisite packages" and "Return-home fallback"), and `device_link_lost` (Workflow #398
+RD-2, the coordinator's ruling on model-398 §16 item 5: a cable is not something the ladder can
+fix).
 `contained_task_navigation_entry_unconfirmed` is not excluded (Workflow #373 NAV-5, wave-17
 acceptance ruling 7, in place of M-373 §9.4's proposal): the page list says the run reached its
 entry and the package's own check says it did not, so the Runtime does not know where it is,
@@ -911,9 +928,11 @@ that ends with `contained_task_application_update_required` (a shared interrupt 
 at warning with the same outcome, climbing no further. An old client is cured by no restart, so
 the emulator is not restarted for it; the instance's `health.application.update_required` is
 true and its store update task runs ([scheduling-blackout.md](scheduling-blackout.md), position
-4a). This rule stays in code (as below; no configuration key). The code's ladder class is `none`,
-so no default trigger item opens a ladder for it, and a startup package that ends with it opens
-none either (a startup package never does).
+4a). This rule stays in code (as below; no configuration key): it reads the code, not its class.
+The code's ladder class is `planned_stop` (since 0.12.62, Workflow #469 D4a: the package declares
+the page and the run stops on purpose), which no default trigger item names, so no default
+trigger item opens a ladder for it, and a startup package that ends with it opens none either (a
+startup package never does).
 
 **Busy ends (#411 B37, slice A35-S1; coordinator decisions Q1 to Q3 of 2026-10-21).** A rung's
 package run that completes `success` on a `scheduling_outcome` mapping its package marks `busy`

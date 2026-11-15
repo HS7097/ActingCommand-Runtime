@@ -561,7 +561,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "An immediate try for an instance met a holder, or an eligible waiting entry that nobody may jump (Workflow #369). A Lab operation's refusal names who is in the way, before any frame or input: holder_kind is the holder's kind on a held instance, or the waiting entry's kind on a free one, where queue_position is that entry's position. A client AcquireLease and the Runtime's dedicated leases are refused with this code too. Registered once in the contract (A2a D3); the host and the scheduler emit it.",
+      "description": "An immediate try for an instance met a holder, or an eligible waiting entry that nobody may jump (Workflow #369). A Lab operation's refusal names who is in the way, before any frame or input: holder_kind is the holder's kind on a held instance, or the waiting entry's kind on a free one, where queue_position is that entry's position. A client AcquireLease and the Runtime's dedicated leases are refused with this code too. Registered once in the contract (A2a D3); the host and the scheduler emit it. Workflow #469 V0: a Runtime client reads it, as lease_cooldown, as a transient failure after which another input backend may be tried (is_fallback_eligible).",
       "common_causes": "Another client, a scheduled run, a stuck-recovery ladder or an operator request holds the instance or waits for it.",
       "handling": "Nothing ran. Retry once the instance is free; actingctl status shows lease_active and queued_request_count."
     },
@@ -584,7 +584,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The Runtime's wire error code (receipt projection `code`): lease cooldown.",
+      "description": "The Runtime's wire error code (receipt projection `code`): lease cooldown. Workflow #469 V0: the scheduler refuses a lease or an immediate try while the instance is in its lease cool-down (the projection carries retry_after_ms); nothing ran. A Runtime client reads it, as lease_busy, as a transient failure after which another input backend may be tried (is_fallback_eligible).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -2027,7 +2027,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A code several owners emit with one meaning (contract-owned, A2 train): a contained task's stability termination stopped because the screen stayed unchanged for the declared number of consecutive steps.",
+      "description": "A code several owners emit with one meaning (contract-owned, A2 train): a contained task's stability termination stopped because the screen stayed unchanged for the declared number of consecutive steps. Workflow #469 V0: no run ends with this code: it names the reason of the stability termination, and the run completes (a success).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -16016,7 +16016,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A code several owners emit with one meaning (contract-owned, A2a D3): policy settlement interrupted.",
+      "description": "A code several owners emit with one meaning (contract-owned, A2a D3): policy settlement interrupted. Workflow #469 V0: a scheduled run the Runtime's own end (or its stop before the run started) cut short is settled with this code, severe, so it pauses its task on the application; by this code's name, the restart lifts that pause when it is the first in a row (interruption_lifted_by_restart, contracts/policy-suspension.md), and a second in a row stays paused until the package changes. Its class none says nothing of this.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -16296,7 +16296,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A code several owners emit with one meaning (contract-owned, A2 train): a contained task's stability termination stopped because it reached its declared maximum number of steps.",
+      "description": "A code several owners emit with one meaning (contract-owned, A2 train): a contained task's stability termination stopped because it reached its declared maximum number of steps. Workflow #469 V0: no run ends with this code: it names the reason of the stability termination, and the run fails with contained_task_step_budget_exhausted (the run's step budget, max_steps).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -17397,7 +17397,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.13",
-      "description": "A package of a standard-pack game root's bundle is neither maintenance-role by the root files, named by a rule of the root's schedule.json, nor held (ROUT-L RL-1a, contracts/standard-pack-schedule.md). It is not scheduled; the rest of the game is. The policy composer finds it; check-config, the Runtime and actinglab standard-pack check report it once per game, package and schedule.json.",
+      "description": "A package of a standard-pack game root's bundle is neither maintenance-role by the root files, named by a rule of the root's schedule.json, nor held (ROUT-L RL-1a, contracts/standard-pack-schedule.md). It is not scheduled; the rest of the game is. The policy composer finds it; check-config, the Runtime and actinglab standard-pack check report it once per game, package and schedule.json. Workflow #469 V0: although a warning, actinglab standard-pack adopt refuses an adoption whose package comes out with it (adopt_refused, adopt_problem rule_refused).",
       "common_causes": "A package was added to the bundle without a rule or a held entry, or its rule was removed.",
       "handling": "Add a rule that names the package, or a held entry with its reason, to the game root's schedule.json."
     },

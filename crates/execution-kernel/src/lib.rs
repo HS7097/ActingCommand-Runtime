@@ -27,7 +27,10 @@ mod run;
 mod session;
 
 pub use bundle::*;
-pub use codes::{ExecutionKernelCode, ExecutionKernelLocation, LoadingEventKind, ProgramProblem};
+pub use codes::{
+    ConfirmationProblem, ExecutionKernelCode, ExecutionKernelLocation, GuardProblem,
+    LoadingEventKind, ProgramProblem,
+};
 pub use contained_task::*;
 pub use drive::*;
 pub use environment::*;

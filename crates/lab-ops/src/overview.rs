@@ -2436,4 +2436,54 @@ mod tests {
             assert_eq!(row.get("not_running"), None, "{unread}");
         }
     }
+
+    // Workflow #469 D4a (0.12.62; register §1.400; the owner's approval on board #469):
+    // `call_budget_exhausted` is a warning. Where the overview writes it (a block, and the
+    // not-running rows, whose read the call budget left no time to start), it stands beside the
+    // overview's successful line: the line keeps `runtime_overview_reported`, exits 0 and has no
+    // developer line, so the Lab's MCP answers it with `isError` false, and each warning's envelope
+    // says `warning`.
+    #[test]
+    fn d4a_a_spent_call_budget_is_a_warning_beside_a_successful_answer() {
+        let spent = ActingctlCode::CallBudgetExhausted;
+        let warning_word = Category::Warning.as_str();
+        let mut result = Map::new();
+        let mut warnings = Vec::new();
+        budget_skipped(&mut result, Section::Performance, &mut warnings);
+        let mut rows = json!([{"alias": "neutral"}]);
+        not_running_skipped(&mut rows, &mut warnings);
+        let written = outcomes(&warnings);
+        assert_eq!(written.len(), 2, "{written:?}");
+        for warning in &written {
+            assert!(warning.is(spent), "{warning:?}");
+            assert_eq!(warning.category(), Category::Warning, "{warning:?}");
+        }
+        result.insert(
+            "warnings".to_owned(),
+            Value::Array(
+                written
+                    .iter()
+                    .map(|warning| cli_line::warning_value(warning, Detail::Full))
+                    .collect(),
+            ),
+        );
+        let exit = cli_line::success(
+            result,
+            &Outcome::new(ActingctlCode::RuntimeOverviewReported),
+        );
+        assert_eq!(exit.code, 0);
+        assert!(exit.developer.is_none(), "a success has no developer line");
+        let line = exit.line.expect("the line encodes");
+        assert_eq!(
+            line["outcome"]["code"],
+            ActingctlCode::RuntimeOverviewReported.as_str()
+        );
+        assert_eq!(line["performance_incomplete"], json!(true), "{line}");
+        let shown = line["warnings"].as_array().expect("the warnings");
+        assert_eq!(shown.len(), 2, "{line}");
+        for warning in shown {
+            assert_eq!(warning["outcome"]["code"], spent.as_str(), "{line}");
+            assert_eq!(warning["outcome"]["category"], warning_word, "{line}");
+        }
+    }
 }
