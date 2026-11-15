@@ -76,13 +76,10 @@ actingcommand_contract::outcome_codes! {
         /// status fact (Workflow #381 A R3′). A restart may succeed: the watchdog considers a
         /// start (R5′).
         InstallStartupStopped => "install_startup_stopped": error / none,
-        /// Info (Workflow #378 A7-R). A held start ended because a shutdown request for its owner
-        /// was accepted before it was released. Operation `install_transition`. A requested
-        /// stop: actingd ends with `runtime_stopped`, and the watchdog takes the close as formal
-        /// and never restarts it (Workflow #381 A, #672 review M1).
-        InstallStartupShutDown => "install_startup_shut_down": info / none,
         // Workflow #434 LAB-6S4a: `held_timeout` and `release_timeout` are retired in 0.12.62 with
-        // the five request kinds of LAB-6S4a, which were their only emitters.
+        // the five request kinds of LAB-6S4a, which were their only emitters, and so is
+        // `install_startup_shut_down`: a shutdown request is answered busy while a start prepares,
+        // so the accepted shutdown of a held start was its only cause.
         /// Info. A start found a scheduled run whose dispatch has no outcome and whose lease
         /// has no run-linked `lease.released` (cut between its task terminal and its release,
         /// mid-run, or before its first task event; its lease not transferred, expired or
@@ -2719,7 +2716,6 @@ pub(crate) mod test_spellings {
             FailRefusedCloseRecordForTest => "fail_refused_close_record_for_test",
             // #411 A51: a test latches a condition in the Runtime's fatal state.
             MarkRuntimeFatalForTest => "mark_runtime_fatal_for_test",
-            ObserveShutdownSettleForTest => "observe_shutdown_settle_for_test",
             ObserveTestPerformanceControl => "observe_test_performance_control",
             PersistContainedTaskStabilityComparison => "persist_contained_task_stability_comparison",
             // #385 P-k: a test pins the pacing factor an instance's runs are handed.

@@ -866,8 +866,9 @@ within `host_claims.renewal_slack_ms` of a step's bound is not renewed:
   the window; each attempt writes its own `instance_preparation_finished`, makes the ladder's
   holding check and renews the key to the window's end. The instance admission guard is held
   across Stop, Start and the first attempt, and released while waiting. The waits stop at the
-  next poll on shutdown (`recovery_ladder_shutdown_requested`), an install drain
-  (`recovery_ladder_drain_requested`), a scheduling pause or a capacity refusal
+  next poll on shutdown (`recovery_ladder_shutdown_requested`; a shutdown accepted while the
+  holding check runs, `recovery_ladder_drain_requested`, which an install drain raised until
+  0.12.61), a scheduling pause or a capacity refusal
   (`recovery_admission_denied`) or a lost key (`recovery_ladder_key_lost`). Not ready within the
   window fails the rung `recovery_environment_not_ready`, or `recovery_android_not_booted` when
   the boot check never passed and so no preparation ran. The ladder runs on its instance's
@@ -1079,9 +1080,9 @@ own at error. Once a ladder holds the key (Workflow #369 H-3, ruling Q8), every 
 every control step, every readiness poll, every busy-hold poll (#411 B37) and the settle gate's
 probe (#411 A35) checks that it
 still holds the key and that no
-scheduling pause or capacity refusal (`recovery_admission_denied`), install drain
-(`recovery_ladder_drain_requested`) or shutdown (`recovery_ladder_shutdown_requested`)
-intervenes; a key it no longer holds is `recovery_ladder_key_lost` (its continuation is
+scheduling pause or capacity refusal (`recovery_admission_denied`) or shutdown
+(`recovery_ladder_shutdown_requested`; one accepted while the check runs is
+`recovery_ladder_drain_requested`, which an install drain raised until 0.12.61) intervenes; a key it no longer holds is `recovery_ladder_key_lost` (its continuation is
 cancelled). Such an interruption fails the current rung (`recovery_ladder_interrupted`, caused
 by that reason) and ends the ladder `exhausted` at warning, followed by its one release. A
 superseded preparation trigger records `preparation_superseded`; these two reasons use

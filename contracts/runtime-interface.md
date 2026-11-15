@@ -1420,9 +1420,6 @@ them.
 | `upgrade_state_released` | success | runtime-host (`upgrade_state_`) | `leave`: the new Runtime is released | `transition_id` | U-4 |
 | `upgrade_state_requester_disconnected` | warning | runtime-host (`upgrade_state_`) | the `enter` connection closed before the close was accepted; Aborted's `failure_code`, never a reply | `transition_id` | U-4 |
 | `upgrade_state_aborted` | error | runtime-host (`upgrade_state_`) | `enter`'s reply when a `cancel` withdrew it during the drain | `transition_id` | U-4 |
-
-Workflow #434 LAB-6S4a (0.12.62) retires the five `upgrade_state_` codes, never emitted (U-4 was not built).
-
 | `pack_registry_loaded` | success | runtime-host (`pack_registry_`) | load succeeded | `package_id` | U-3 |
 | `pack_registry_unloaded` | success | runtime-host (`pack_registry_`) | unload completed (runs stopped first, dispatches withdrawn, runs still stopping marked) | `package_id` | U-3 |
 | `pack_registry_entry_unknown` | error | runtime-host (`pack_registry_`) | the package is in neither the table nor the configuration | `package_id` | U-3 |
@@ -1435,6 +1432,8 @@ Workflow #434 LAB-6S4a (0.12.62) retires the five `upgrade_state_` codes, never 
 | `mcp_tier_retired` | warning | actingctl (`mcp_tier_`) | mcp-serve got the retired `--tier`; it starts as usual | `operation` | U-3 |
 | `lab_command_option_disabled` | error | actinglab (`lab_command_`) | an actinglab offline package tool without option one | `operation`, `lab_option` | U-3 |
 
+- Workflow #434 LAB-6S4a (0.12.62) retires the five `upgrade_state_` codes, never emitted (U-4
+  was not built).
 - `pack_registry_loaded` carries `package_id` only (M-PKG). Its result is
   `PackLoaded{key, named_by_catalog?}` (U-1).
 - U-0 registers the keys `channel` and `lab_option` and their vocabularies of the

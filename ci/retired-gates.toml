@@ -1079,6 +1079,9 @@ ruling = "Workflow #456 (contracts/read-session-resource-close.md; the coordinat
 reason = "Renamed: the test pinned that a keyless observation's close under a client lease that lapsed during the observation, refused lease_expired, halts the Runtime (the observation's failure fatal, the latched fatal that refusal, no instance fenced, the host's close failed), as the contract then kept it. #456 makes that refusal fence only the instance, so the halt it pinned no longer exists; the same shape is kept and asserts the new truth."
 covered_by = "actingcommand-runtime-host::lib::tests::gate_411_a52::a52_t2_a_close_under_a_lapsed_lease_fences_only_its_instance, in the same host.toml row (key 172): the same lapsed lease reused by the same failing observation; the observation fails capture_failed, not fatal, the instance alone is fenced with lease_expired, and the session is closed once the sweep ends the lapsed lease."
 
+# Workflow #434 LAB-6S4a (0.12.62; register §1.287, "Slice LAB-6S4a"): the 39 entries below retire
+# 31 tests and 8 row keys (contract R4; host 7, 8, 9, 10, 49 and 73; apps 17).
+
 # contract.toml, the row of the install-control inputs (Workflow #434 LAB-6S4a).
 [[retired]]
 fragment = "contract"

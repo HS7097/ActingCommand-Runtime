@@ -70,44 +70,6 @@ impl PayloadDetail for GovernanceIdentityDeclaredPayload {
     }
 }
 
-pub(super) struct GovernanceIdentityDeclaredDraft {
-    card: GovernanceIdentityCard,
-    peer: GovernancePeer,
-    verdict: GovernanceIdentityVerdict,
-    audit: AuditInput,
-}
-
-impl ClientPayloadDraft {
-    /// One declared governance identity card with the Runtime's verdict.
-    pub fn governance_identity_declared(
-        card: GovernanceIdentityCard,
-        peer: GovernancePeer,
-        verdict: GovernanceIdentityVerdict,
-        audit: AuditInput,
-    ) -> Self {
-        Self(ClientDraftKind::GovernanceIdentityDeclared(
-            GovernanceIdentityDeclaredDraft {
-                card,
-                peer,
-                verdict,
-                audit,
-            },
-        ))
-    }
-}
-
-impl GovernanceIdentityDeclaredDraft {
-    pub(super) fn sanitize(
-        self,
-        fingerprinter: &dyn SecretFingerprinter,
-    ) -> Result<GovernanceIdentityDeclaredPayload, SanitizationError> {
-        let payload = GovernanceIdentityDeclaredPayload {
-            card: self.card,
-            peer: self.peer,
-            verdict: self.verdict,
-            audit: self.audit.sanitize(fingerprinter)?,
-        };
-        payload.validate()?;
-        Ok(payload)
-    }
-}
+// Workflow #434 LAB-6S4a (0.12.62): no card is declared any more, so nothing writes this record;
+// its draft and constructor went, and the records a ledger already holds decode and validate as
+// before.

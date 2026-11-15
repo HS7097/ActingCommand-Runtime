@@ -482,21 +482,10 @@ fn run_daemon(arguments: Vec<std::ffi::OsString>) -> Category {
         Err(error) => return start_refused(&ActingdError::config(error.code()), None),
     };
     let install_root = installation.map(actingcommand_contract::InstalledProcess::root);
+    // Workflow #434 LAB-6S4a (0.12.62): a starting Runtime answers a shutdown request busy, so no
+    // start ends as a requested stop any more (`install_startup_shut_down`, retired).
     let (host, policy) = match start_daemon(arguments) {
         Ok(started) => started,
-        // An accepted shutdown of a starting Runtime is a requested stop, which the watchdog never
-        // restarts (`contracts/runtime-watchdog.md`, rows 5 and 6): its terminal outcome is
-        // `runtime_stopped`, with the shutdown as its link.
-        Err(error)
-            if error
-                .code
-                .is(actingcommand_runtime_host::HostCode::InstallStartupShutDown) =>
-        {
-            let stopped = Outcome::new(ActingdCode::RuntimeStopped)
-                .joined(CauseRelation::CausedBy, error.outcome());
-            write_stderr(&daemon_lines(&stopped, Some(&error.to_string())));
-            return stopped.category();
-        }
         Err(error) => return start_refused(&error, install_root),
     };
     // Workflow #369 S6c: the configured emulator starts' reports, also the ones written while

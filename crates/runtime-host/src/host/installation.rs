@@ -32,10 +32,6 @@ pub(super) struct LifecycleAdmission {
     stopping: bool,
     preparing: bool,
     active: std::collections::HashMap<thread::ThreadId, usize>,
-    /// Test only: called each time a shutdown request starts to wait for lifecycle work in
-    /// flight on other threads (`settle_for_shutdown`), with the admission held.
-    #[cfg(test)]
-    settle_observer: Option<Box<dyn Fn() + Send>>,
 }
 
 impl LifecycleAdmission {
@@ -46,8 +42,6 @@ impl LifecycleAdmission {
             stopping: false,
             preparing: true,
             active: std::collections::HashMap::new(),
-            #[cfg(test)]
-            settle_observer: None,
         }
     }
 }
@@ -335,33 +329,12 @@ impl HostShared {
             if remaining.is_zero() {
                 return Ok(admission);
             }
-            #[cfg(test)]
-            {
-                if let Some(observer) = &admission.settle_observer {
-                    observer();
-                }
-            }
             admission = self
                 .lifecycle_settled
                 .wait_timeout(admission, remaining)
                 .map_err(|_| lock_poison_error(ContractLocation::RequestRuntimeShutdown))?
                 .0;
         }
-    }
-
-    /// Test only: `observer` is called each time a shutdown request starts to wait for lifecycle
-    /// work in flight on other threads.
-    #[cfg(test)]
-    pub(super) fn observe_shutdown_settle_for_test(
-        &self,
-        observer: Box<dyn Fn() + Send>,
-    ) -> RuntimeHostResult<()> {
-        lock(
-            &self.lifecycle_admission,
-            crate::codes::test_spellings::TestLocation::ObserveShutdownSettleForTest,
-        )?
-        .settle_observer = Some(observer);
-        Ok(())
     }
 
     pub(super) fn request_shutdown(
@@ -460,31 +433,22 @@ impl HostShared {
         Ok(())
     }
 
-    /// The error that stops a start, if anything stops it. A latched failure ends it as
+    /// The error that stops a start, if anything stops it: a latched failure ends it as
     /// `install_startup_stopped` with that condition named (Workflow #381 A R3′), a halt a
-    /// restart may fix. An accepted shutdown (`stopping`, or the shutdown flag) ends it as
-    /// `install_startup_shut_down` (info), a requested stop: actingd ends `runtime_stopped` with
-    /// it as the link, and the watchdog never restarts it (#672 review M1; #378 A6a, A7-R).
-    fn install_start_stopped(&self, stopping: bool) -> RuntimeHostResult<Option<RuntimeHostError>> {
-        if let Some(cause) = self.fatal.current()? {
-            return Ok(Some(
-                install_error(HostCode::InstallStartupStopped).with_latched_cause(&cause),
-            ));
-        }
-        if stopping || self.fatal.is_shutdown_requested() {
-            return Ok(Some(install_error(HostCode::InstallStartupShutDown)));
-        }
-        Ok(None)
+    /// restart may fix. Workflow #434 LAB-6S4a (0.12.62): a shutdown request is answered busy
+    /// while the start prepares (`shutdown_under_gate`), so no accepted shutdown can stop it, and
+    /// `install_startup_shut_down`, which that stop of a held start raised, is retired.
+    fn install_start_stopped(&self) -> RuntimeHostResult<Option<RuntimeHostError>> {
+        Ok(self
+            .fatal
+            .current()?
+            .map(|cause| install_error(HostCode::InstallStartupStopped).with_latched_cause(&cause)))
     }
 
-    /// A boundary of the start's preparation: the start goes on unless a latched failure or an
-    /// accepted shutdown stops it.
+    /// A boundary of the start's preparation: the start goes on unless a latched failure stops
+    /// it.
     pub(super) fn check_install_preparation(&self) -> RuntimeHostResult<()> {
-        let admission = lock(
-            &self.lifecycle_admission,
-            HostLocation::CheckInstallPreparation,
-        )?;
-        if let Some(stopped) = self.install_start_stopped(admission.stopping)? {
+        if let Some(stopped) = self.install_start_stopped()? {
             return Err(stopped);
         }
         Ok(())
@@ -496,7 +460,7 @@ impl HostShared {
             &self.lifecycle_admission,
             HostLocation::FinishInstallPreparation,
         )?;
-        if let Some(stopped) = self.install_start_stopped(admission.stopping)? {
+        if let Some(stopped) = self.install_start_stopped()? {
             return Err(stopped);
         }
         admission.closed = false;

@@ -1158,7 +1158,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The Runtime refused a governance identity card: governance client not allowed.",
+      "description": "Kept for records written before 0.12.62, and raised by nothing since (Workflow #434 LAB-6S4a: DeclareGovernanceIdentity went): the verdict of a governance.identity_declared record that such a build wrote may carry it. The Runtime refused a governance identity card: governance client not allowed.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -1178,7 +1178,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The Runtime refused a governance identity card: governance instance unknown.",
+      "description": "Kept for records written before 0.12.62, and raised by nothing since (Workflow #434 LAB-6S4a: DeclareGovernanceIdentity went): the verdict of a governance.identity_declared record that such a build wrote may carry it. The Runtime refused a governance identity card: governance instance unknown.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -1198,7 +1198,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The Runtime refused a governance identity card: governance identity already declared.",
+      "description": "Kept for records written before 0.12.62, and raised by nothing since (Workflow #434 LAB-6S4a: DeclareGovernanceIdentity went): the verdict of a governance.identity_declared record that such a build wrote may carry it. The Runtime refused a governance identity card: governance identity already declared.",
       "common_causes": "TBD",
       "handling": "TBD"
     },

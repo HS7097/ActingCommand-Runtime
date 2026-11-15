@@ -125,9 +125,9 @@ column means. 918 codes.
 | `frame_memory_owner_missing_or_mismatched` | error | none | 0.12.0 | active | pending | TBD | A code several owners emit with one meaning (contract-owned, A2a D3): frame memory owner missing or mismatched. |
 | `frame_workspace_unavailable` | error | none | 0.12.0 | active | pending | TBD | A code several owners emit with one meaning (contract-owned, A2a D3): frame workspace unavailable. |
 | `gesture_not_projectable` | error | none | 0.12.3 | active | pending | written | A page-projection element whose click is a gesture the projection cannot describe as a tap or a plain drag (a segmented drag); the element is listed but not… |
-| `governance_client_not_allowed` | error | none | 0.12.0 | active | pending | TBD | The Runtime refused a governance identity card: governance client not allowed. |
-| `governance_identity_already_declared` | error | none | 0.12.0 | active | pending | TBD | The Runtime refused a governance identity card: governance identity already declared. |
-| `governance_instance_unknown` | error | none | 0.12.0 | active | pending | TBD | The Runtime refused a governance identity card: governance instance unknown. |
+| `governance_client_not_allowed` | error | none | 0.12.0 | active | pending | TBD | Kept for records written before 0.12.62, and raised by nothing since (Workflow #434 LAB-6S4a: DeclareGovernanceIdentity went): the verdict of a… |
+| `governance_identity_already_declared` | error | none | 0.12.0 | active | pending | TBD | Kept for records written before 0.12.62, and raised by nothing since (Workflow #434 LAB-6S4a: DeclareGovernanceIdentity went): the verdict of a… |
+| `governance_instance_unknown` | error | none | 0.12.0 | active | pending | TBD | Kept for records written before 0.12.62, and raised by nothing since (Workflow #434 LAB-6S4a: DeclareGovernanceIdentity went): the verdict of a… |
 | `holder_mismatch` | error | none | 0.12.0 | active | pending | TBD | The Runtime's wire error code (receipt projection `code`): holder mismatch. |
 | `identifier_clock_invalid` | error | none | 0.12.0 | active | pending | TBD | Identifier issuance failed: identifier clock invalid. |
 | `identifier_contract_invalid` | error | none | 0.12.0 | active | pending | TBD | Identifier issuance failed: identifier contract invalid. |

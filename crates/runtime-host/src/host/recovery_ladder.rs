@@ -144,7 +144,8 @@ pub(super) enum LadderInvariant {
     Shutdown,
     /// A4: the ladder no longer holds its instance's key.
     KeyLost,
-    /// A3: an install drains business.
+    /// A3: the host's admission is stopping. Workflow #434 LAB-6S4a (0.12.62): with the install
+    /// drain gone, only a shutdown accepted after the holding check read the shutdown request.
     Drain,
     /// A6: a scheduling pause holds the instance (a person's input comes first).
     Paused,
@@ -2681,7 +2682,8 @@ impl HostShared {
     /// Workflow #369 H-3 (ruling Q8): the holding check, by the rules that stay in code (§2.2b):
     /// with shutdown requested the reason is `recovery_ladder_shutdown_requested`; a ladder that
     /// no longer holds its key (in practice only shutdown) has lost it
-    /// (`recovery_ladder_key_lost`; review L3); while holding, an install drain is
+    /// (`recovery_ladder_key_lost`; review L3); while holding, an admission that is stopping (a
+    /// shutdown accepted after the first read; the install drain until Workflow #434 LAB-6S4a) is
     /// `recovery_ladder_drain_requested`, and a scheduling pause or a capacity refusal (the two
     /// parts of `recovery_gate_open`) is `recovery_admission_denied`.
     fn ladder_hold_interrupted(

@@ -184,10 +184,10 @@ scheduling pauses (`host.scheduling_pause`); a ledger written by 0.12.61 or earl
 may still hold the transition's facts `host.install_transition` and
 `host.install_transition.pauses`, which a start invalidates and nothing reads. A
 start that stops before it finished preparing because a Runtime failure latched
-meanwhile ends as `install_startup_stopped`, an error the watchdog restarts; a start
-whose shutdown was accepted before it was ready ends as `runtime_stopped` with
-`install_startup_shut_down` (info) as its link, and actingd exits 0: a requested
-stop, which the watchdog takes as a formal close and never restarts.
+meanwhile ends as `install_startup_stopped`, an error the watchdog restarts. A
+`RequestShutdown` sent while a start prepares is refused `runtime_shutdown_denied`
+(`runtime_busy`), so no start ends as a requested stop: `install_startup_shut_down`,
+which the accepted shutdown of a held start raised, is retired in 0.12.62.
 
 ### Standalone configuration
 

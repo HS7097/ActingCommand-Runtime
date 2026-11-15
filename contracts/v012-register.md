@@ -12402,9 +12402,11 @@ the release files keep the released ones): contract `request_install_transition_
 runtime-client `install_transition_receipt_unconfirmed`; actingd `install_held_input_invalid`;
 actingctl `install_transition_reported`, `install_transition_failed`, `install_transition_aborted`
 and `mcp_identity_card_refused`; actinglab-mcp `mcp_identity_declaration_refused`; runtime-host the
-42 codes only those paths emitted: `drain_timeout`, `held_timeout`, `release_timeout`,
-`governance_authority_required`, `governance_connection_state_conflict`,
-`approval_replay_conflict`, `approval_replay_payload_mismatch`, `install_abort_state_invalid`,
+43 codes only those paths emitted (60 codes in all): `drain_timeout`, `held_timeout`,
+`release_timeout`, `install_startup_shut_down` (the accepted shutdown of a held start: a starting
+Runtime answers a shutdown request busy, so no start ends as a requested stop, and actingd's
+branch for that end went with it), `governance_authority_required`,
+`governance_connection_state_conflict`, `approval_replay_conflict`, `approval_replay_payload_mismatch`, `install_abort_state_invalid`,
 `install_fact_clock_overflow`, `install_fact_field_invalid`, `install_identity_encode_failed`,
 `install_identity_required`, `install_not_drained`, `install_owner_mismatch`,
 `install_owner_stopping`, `install_pause_scope_mismatch`,
@@ -12421,15 +12423,26 @@ and `mcp_identity_card_refused`; actinglab-mcp `mcp_identity_declaration_refused
 five `upgrade_state_*` codes, which nothing ever emitted. The closed Global list loses
 `approval_replay_conflict`, `approval_replay_payload_mismatch`, `install_abort_state_invalid` and
 `install_release_state_invalid` (146 codes to 142; [runtime-outcomes.md](runtime-outcomes.md)).
-No code is added. Kept: `install_startup_stopped` and `install_startup_shut_down` (a cold start's
-two ends), every location, and the registry `GovernanceIdentityRefusal` (a record shape).
+No code is added. Kept: `install_startup_stopped` (a start whose preparation a latched failure
+stops), every location, the registry `GovernanceIdentityRefusal` (a record shape; nothing raises
+its three codes since this build, and their catalog texts say so) and
+`recovery_ladder_drain_requested`, which with the install drain gone only a shutdown accepted
+while a ladder's holding check runs raises (its catalog text says so). What only the deleted
+paths used went too: the lease sweep's cancellation of the waiting entries during an install
+drain, which no stop could reach; the contract's draft of a `governance.identity_declared` record
+(the record still decodes and validates); and the architecture tool's two inspectors of the
+retired governance guard (`inspect_function_origin_terms`, `inspect_field_accesses`).
 
-**Tests.** New: host row "#434 LAB-6S4a", `gate_434_lab6s4a`: the contract decodes none of the
-five tags, and on the test host a request of each, after a `Health` its connection answered,
-gets no receipt, its connection dropped, one `runtime_protocol_invalid` record at
-`runtime_request_decode_failed` each; the Runtime latches nothing and a new connection's `Health`
-completes; no clock is read. **Retired** with their rows (`ci/retired-gates.toml`, 39 entries,
-each with what covers its risk): contract key R4 and its three tests, the two install-control
+**Tests.** New: host row "#434 LAB-6S4a", `gate_434_lab6s4a`: each of the five in the complete
+shape 0.12.61 decoded (`install_transition` with the Runtime's target and the query action,
+`declare_governance_identity` with a card, `record_approval_decision` with a decision,
+`upgrade_state` with the target and `enter`, `upgrade_state_status` with a transition id), so
+that the contract refuses it for its unknown variant alone; on the test host a request of each,
+after a `Health` its connection answered, gets no receipt, its connection dropped, one
+`runtime_protocol_invalid` record at `runtime_request_decode_failed` each and no record that
+names the request; the Runtime latches nothing and does not stop, and a new connection's `Status`
+completes; no clock is read. **Retired** with their rows (`ci/retired-gates.toml`, 39 entries:
+31 tests and 8 row keys, each with what covers its risk): contract key R4 and its three tests, the two install-control
 tests of the transition's status and timeout, and the architecture guard's governance test of
 row A3; host keys 7, 8, 9, 10, 49 and 73 with their tests, the two install-drain tests of the
 ladder wait (H-4), the approvals' governance test and LAB-6S1b's test of the host's own checks;

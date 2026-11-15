@@ -213,7 +213,9 @@ crate::outcome_codes! {
 
 crate::outcome_codes! {
     /// Why the Runtime refused a governance identity card (Workflow #318 cfg4): the
-    /// `governance.identity_declared` verdict and the Denied receipt's host code carry it.
+    /// `governance.identity_declared` verdict carries it. Workflow #434 LAB-6S4a (0.12.62): no
+    /// card is declared any more, so nothing raises these; they stay for the records written
+    /// before.
     #[derive(serde::Serialize, serde::Deserialize)]
     pub enum GovernanceIdentityRefusal {
         #[serde(rename = "governance_client_not_allowed")]

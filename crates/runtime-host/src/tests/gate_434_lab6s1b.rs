@@ -13,7 +13,6 @@ use actingcommand_contract::{
     InstancePauseStage, RuntimeChannel, SchedulingPauseReason, SchedulingPauseScope,
 };
 
-const ALIAS: &str = "node.a";
 const REASON: &str = "lab6s1b_check";
 
 // A request of `client`'s connection with the envelope `(actor, source)`.

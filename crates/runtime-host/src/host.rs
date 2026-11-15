@@ -3130,14 +3130,6 @@ impl RuntimeHost {
             .is_shutdown_requested())
     }
 
-    /// Workflow #376: whether an install drain holds root admission (`draining`/`drained`) or
-    /// the host is stopping. An in-process reader only; the daemon's policy monitor waits while
-    /// this is true instead of sending a subscription the drain would refuse.
-    pub fn is_lifecycle_draining(&self) -> RuntimeHostResult<bool> {
-        self.shared_ref(HostLocation::ReadLifecycleDraining)?
-            .lifecycle_draining()
-    }
-
     /// Workflow #383 AO-7: the host's business notifications for the daemon's policy monitor.
     /// Opening them is the monitor's starting point; the wakes raised before are dropped.
     pub fn open_policy_wakes(&self) -> RuntimeHostResult<PolicyWakes> {
@@ -4387,17 +4379,6 @@ impl RuntimeHost {
             snapshot_reached,
             resume,
         })
-    }
-
-    /// SHUT-FU (Workflow #378), test only: `observer` is called each time a shutdown request or
-    /// an install CommitShutdown starts to wait for lifecycle work in flight on other threads.
-    #[cfg(test)]
-    pub(crate) fn observe_shutdown_settle_for_test(
-        &self,
-        observer: Box<dyn Fn() + Send>,
-    ) -> RuntimeHostResult<()> {
-        self.shared_ref(crate::codes::test_spellings::TestLocation::ObserveShutdownSettleForTest)?
-            .observe_shutdown_settle_for_test(observer)
     }
 
     #[cfg(test)]
@@ -7094,22 +7075,9 @@ fn lease_sweep_loop(shared: Arc<HostShared>) -> RuntimeHostResult<()> {
         let Some(_work) = work else {
             continue;
         };
-        let draining = match shared.lifecycle_draining() {
-            Ok(draining) => draining,
-            Err(error) => {
-                shared.fatal.mark(error.clone().into_fatal())?;
-                return Err(error);
-            }
-        };
-        // Workflow #369 §5.2: while an install drains, every waiting entry except a holding
-        // ladder's continuation is cancelled; holders finish or stop at their next check.
-        if draining
-            && !shared.fatal.is_shutdown_requested()
-            && let Err(error) = shared.cancel_queues_for_drain()
-        {
-            shared.fatal.mark(error.clone().into_fatal())?;
-            return Err(error);
-        }
+        // Workflow #434 LAB-6S4a (0.12.62): the install drain's cancellation of the waiting
+        // entries (Workflow #369 §5.2) went with the install transition; a stop cancels them at
+        // the close (`cancel_all_queues_for_shutdown`).
         // Workflow #403: every new resource fence goes to a recovery ladder or a person before
         // the sweep's pump grants anything.
         if let Err(error) = shared.hand_resource_fences_to_ladders() {
