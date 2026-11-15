@@ -8643,6 +8643,12 @@ impl HostShared {
             .with_dispatch_schedule(dispatched.schedule, dispatched.admitted_at_unix_ms),
             None => prepared.default_run_values(),
         };
+        // Workflow #463 V2 fix round 1, test only: what the run's snapshots are overlaid with.
+        #[cfg(test)]
+        self.run_parameters_for_test
+            .lock()
+            .expect("the run parameters of the gate tests")
+            .push(run_parameters.clone());
         // Workflow #373 NAV-6: the steps the run's own layers can execute.
         let planned_steps = prerequisites
             .iter()

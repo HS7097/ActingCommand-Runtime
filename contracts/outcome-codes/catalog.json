@@ -2714,8 +2714,8 @@
       "description": "A variable a package's control.json declares, the last segment of the key session.dispatch.parameter.<name> a run reads it under (Workflow #463 V2, since 0.12.61)."
     },
     "value_json": {
-      "type": "name",
-      "description": "The value a run reads of a variable, as compact JSON: an option value in quotes, a whole number, true or false, or a list of option values; at most 256 bytes (Workflow #463 V2, since 0.12.61)."
+      "type": "json",
+      "description": "The value a run reads of a variable, as compact JSON: an option value in quotes, a whole number, true or false, or a list of option values; at most 1024 bytes, the longest value text the goal store keeps for an entry (Workflow #463 V2, since 0.12.61; a json key since its fix round 1)."
     },
     "variable_source": {
       "type": "vocab:variable_source",
@@ -2731,7 +2731,7 @@
     },
     "variable_problem": {
       "type": "vocab:variable_problem",
-      "description": "Why the value set on an application for a variable was not handed to a run, which reads the package's default (Workflow #463 V2, since 0.12.61)."
+      "description": "Why the value set on an application for a variable was not handed to a run, which reads the package's default; or keys_left_out, an ordered value handed to the run in part (Workflow #463 V2, since 0.12.61)."
     },
     "variable_values": {
       "type": "records",
@@ -2743,7 +2743,7 @@
         "set_channel": "optional",
         "variable_problem": "optional"
       },
-      "description": "The values a policy dispatch hands its run for the variables its package declares, one record each in declaration order: the name, where the value comes from, the value (absent only for a default longer than 256 bytes, which the run reads from its package), when and through which channel the application's value was set when it holds one, and why that value was not applied when it was not (Workflow #463 V2, since 0.12.61)."
+      "description": "The values a policy dispatch hands its run for the variables its package declares, one record each in declaration order: the name, where the value comes from, the value (absent only for a default longer than 1024 bytes, which the run reads from its package), when and through which channel the application's value was set when it holds one and both can be read, and why that value was not applied when it was not, or keys_left_out when it was applied in part (Workflow #463 V2, since 0.12.61)."
     },
     "declaration_sha256": {
       "type": "hash",
@@ -9519,7 +9519,7 @@
       }
     },
     "variable_problem": {
-      "description": "Why the value set on an application for a package's variable was not handed to a run, which reads the default instead: the value variable_problem of goal_value_not_applied and of a variable_values record (Workflow #463 V2, contracts/package-variables.md \"The run\", since 0.12.61).",
+      "description": "Why the value set on an application for a package's variable was not handed to a run, which reads the default instead: the value variable_problem of goal_value_not_applied and of a variable_values record; and keys_left_out, an ordered value handed to the run in part, on its record only (Workflow #463 V2, contracts/package-variables.md \"The run\", since 0.12.61).",
       "review": "pending",
       "source": {
         "file": "crates/actingcommand-contract/src/package_variables.rs",
@@ -9547,11 +9547,20 @@
         "key_repeated": {
           "description": "An ordered value that names one key twice."
         },
-        "value_too_long": {
-          "description": "A value whose compact JSON is longer than the 256 bytes a dispatch's reason carries."
+        "keys_left_out": {
+          "description": "An ordered value naming keys the declaration no longer offers, whose offered keys are enough: the run reads those in their order, the source stays set, and no warning is written, since the value was applied in part."
+        },
+        "entry_unreadable": {
+          "description": "The application's entry row of the name holds a value, but who set it (its set_unix_ms or its channel) could not be read: the value is not applied."
         },
         "irreversible_by_root": {
-          "description": "A package of the game root that declares the variable counts as able to do something irreversible by the whole root (the root check's variable_irreversible_by_root)."
+          "description": "A package of the game root that declares the variable counts as able to do something irreversible by the whole root (the root check's variable_irreversible_by_root): it provides, or its remedies list, a capability a package of the root marks irreversible."
+        },
+        "package_unreadable": {
+          "description": "A package of the game root could not be read, so the root check counts every package of the root as able to do something irreversible (its variable_irreversible_by_root, the safe side), while no package that declares the variable provides or lists a capability marked irreversible."
+        },
+        "goals_unreadable": {
+          "description": "The game root's goals.json could not be read (an I/O failure other than its absence), so which names it takes is not known."
         },
         "declaration_conflict": {
           "description": "Packages of the game root declare the name differently (the root check's variable_conflict at a declaration)."
@@ -9566,7 +9575,7 @@
           "description": "A package reads the variable as a designated effect's cap and it is no integer from 0 to 1000 (the root check's variable_cap_range)."
         },
         "root_unchecked": {
-          "description": "No root check judged the variable for the application's game: the Runtime's table of the bound packages was built before an instance of that game was known."
+          "description": "No root check judged the variable for the application's game: without a composed standard pack, the Runtime's table of the bound packages was built before an instance of that game was known."
         }
       }
     }

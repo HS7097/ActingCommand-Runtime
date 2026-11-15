@@ -69,8 +69,10 @@ pub const MAX_VARIABLE_CAP: i64 = MAX_DESIGNATED_EFFECT_REPEATS as i64;
 /// effect's cap reads.
 pub const VARIABLE_FACT_KEY_PREFIX: &str = "session.dispatch.parameter.";
 /// Workflow #463 V2: the longest text of a value a dispatch's reason carries
-/// (`variable_values[].value_json`, a `name` of the key table).
-pub const MAX_VARIABLE_VALUE_JSON_BYTES: usize = 256;
+/// (`variable_values[].value_json`). Fix round 1: a `json` key of the key table, which holds the
+/// longest value text the goal store keeps for an entry, so every value a run is to read of a set
+/// value fits; only a declared default may be longer.
+pub const MAX_VARIABLE_VALUE_JSON_BYTES: usize = crate::outcome::JSON_MAX_BYTES;
 /// Workflow #463 V2: the key column of the rows an `ordered` variable is overlaid with.
 pub const ORDERED_VARIABLE_KEY_COLUMN: &str = "key";
 /// Workflow #463 V2: the column of the rows an `ordered` variable is overlaid with that holds each
@@ -92,6 +94,7 @@ crate::outcome_vocabulary! {
 crate::outcome_vocabulary! {
     /// Workflow #463 V2 (vocabulary `variable_problem`): why a value set on an application was
     /// not handed to a run, which reads the package's default instead; one word per situation.
+    /// Fix round 1: and `keys_left_out`, an `ordered` value handed to the run in part.
     pub enum VariableProblem: "variable_problem" {
         /// A `choice` value that is none of the declaration's options.
         NotAnOption => "not_an_option",
@@ -108,12 +111,25 @@ crate::outcome_vocabulary! {
         CountOutOfRange => "count_out_of_range",
         /// An `ordered` value that names one key twice.
         KeyRepeated => "key_repeated",
-        /// A value whose text is longer than a dispatch's reason carries
-        /// ([`MAX_VARIABLE_VALUE_JSON_BYTES`]).
-        ValueTooLong => "value_too_long",
+        /// Fix round 1: an `ordered` value naming keys the declaration no longer offers, whose
+        /// offered keys are enough: the run reads those, in their order (the source stays
+        /// `set`), and no warning is written, since the value was applied.
+        KeysLeftOut => "keys_left_out",
+        /// Fix round 1: the application's entry row of the name holds a value but who set it
+        /// (its `set_unix_ms` or its `channel`) could not be read.
+        EntryUnreadable => "entry_unreadable",
         /// A package that declares the variable counts as able to do something irreversible by
-        /// the root (`variable_irreversible_by_root`).
+        /// the root (`variable_irreversible_by_root`) because it provides, or its remedies list,
+        /// a capability a package of the root marks irreversible.
         IrreversibleByRoot => "irreversible_by_root",
+        /// Fix round 1: a package of the game root could not be read, so the root check counts
+        /// every package of the root as able to do something irreversible (its
+        /// `variable_irreversible_by_root`, the safe side): no package that declares the variable
+        /// provides, or lists, a capability marked irreversible.
+        PackageUnreadable => "package_unreadable",
+        /// Fix round 1: the game root's `goals.json` could not be read, so which names it takes
+        /// is not known.
+        GoalsUnreadable => "goals_unreadable",
         /// The root's declarations of the name are not byte-identical (`variable_conflict`).
         DeclarationConflict => "declaration_conflict",
         /// An entry of the root's `goals.json` uses the name for anything but its placement
@@ -124,8 +140,9 @@ crate::outcome_vocabulary! {
         /// A package reads the variable as a designated effect's cap and it is no `integer` from
         /// 0 to 1000 (`variable_cap_range`).
         CapRange => "cap_range",
-        /// No root check judged the variable for the application's game: the Runtime's table
-        /// was built before an instance of that game was known.
+        /// No root check judged the variable for the application's game: without a composed
+        /// standard pack, the Runtime's table was built before an instance of that game was
+        /// known.
         RootUnchecked => "root_unchecked",
     }
 }
@@ -291,7 +308,9 @@ impl PackageVariable {
     ///   fewer than `min_count` left is `keys_removed` when a key was left out and
     ///   `count_out_of_range` when none was, more than `max_count` is `count_out_of_range`.
     ///
-    /// The stored value is never rewritten: this only says what one run reads.
+    /// The stored value is never rewritten: this only says what one run reads. Fix round 1: what
+    /// a run reads of an `ordered` value whose keys some were left out of says so
+    /// ([`Self::leaves_keys_out`]).
     pub fn judge(&self, value: &Value) -> Result<Value, VariableProblem> {
         match &self.kind {
             VariableKind::Choice { options, .. } => {
@@ -362,6 +381,15 @@ impl PackageVariable {
                 ))
             }
         }
+    }
+
+    /// Workflow #463 V2 fix round 1 (`contracts/package-variables.md`, "A set value that no longer
+    /// fits"): whether `read`, what [`Self::judge`] let through of the set value `set`, leaves keys
+    /// of it out: an `ordered` variable whose declaration no longer offers some keys of the set
+    /// list. The run reads `read`; the record says `keys_left_out`. Never for another kind, whose
+    /// judgement lets a value through whole or not at all.
+    pub fn leaves_keys_out(&self, set: &Value, read: &Value) -> bool {
+        matches!(self.kind, VariableKind::Ordered { .. }) && set != read
     }
 
     /// Workflow #463 V2 (`contracts/package-variables.md`, "The run"): the value of the overlay
@@ -1044,9 +1072,18 @@ pub fn check_root_variables(
 /// `variable_irreversible_by_root` `irreversible_by_root` and `variable_cap_range` `cap_range`.
 /// The check reports one problem per name, so a name has one word. It reads the check's answer
 /// only: the rules stay [`check_root_variables`]'s.
+///
+/// Fix round 1 (one word, one cause): `variable_irreversible_by_root` arises in two situations
+/// that `irreversible` (the one the check was given) tells apart. A declaring package that
+/// provides, or whose remedies list, a capability a package of the root marks irreversible
+/// ([`IrreversiblePackages::package`] `Some(true)`) is `irreversible_by_root`; otherwise the check
+/// counted the packages irreversible because a package of the root could not be read
+/// ([`IrreversiblePackages::unreadable`]), or because a declaring package is none it was told of:
+/// `package_unreadable`.
 pub fn variables_not_applying(
     packages: &[RootPackageVariables],
     checked: &RootVariables,
+    irreversible: &IrreversiblePackages,
 ) -> BTreeMap<String, VariableProblem> {
     let mut not_applying = BTreeMap::new();
     for issue in &checked.issues {
@@ -1082,12 +1119,23 @@ pub fn variables_not_applying(
             }
             (StandardPackProblem::VariableConflict, _) => VariableProblem::DeclarationConflict,
             (StandardPackProblem::VariableIrreversibleByRoot, _) => {
-                VariableProblem::IrreversibleByRoot
+                if irreversible.package(&issue.package_id) == Some(true) {
+                    VariableProblem::IrreversibleByRoot
+                } else {
+                    VariableProblem::PackageUnreadable
+                }
             }
             (StandardPackProblem::VariableCapRange, _) => VariableProblem::CapRange,
             _ => continue,
         };
-        not_applying.entry(variable.name.clone()).or_insert(word);
+        // Fix round 1: one declaring package that can do something irreversible by itself is
+        // the name's cause, whatever an unreadable package adds.
+        let kept = not_applying.entry(variable.name.clone()).or_insert(word);
+        if *kept == VariableProblem::PackageUnreadable
+            && word == VariableProblem::IrreversibleByRoot
+        {
+            *kept = word;
+        }
     }
     not_applying
 }

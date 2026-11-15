@@ -777,10 +777,12 @@ A select step of a contained task (see [the selection graph](selection-graph.md)
   The evaluator still reads no clock and no ledger.
 - The snapshot also holds the run's read-only parameters (Workflow #411 B15,
   [remedies.md](remedies.md), section 4; written ahead of slice R5): one record
-  `session.dispatch.parameter.<name>` = `<value>` (a string, instance scope) per parameter and,
-  Workflow #463 L4 (slice V2, 0.12.61), per variable the package declares, the value its policy
-  dispatch carries in `policy_dispatch_parameters`, or the declared default for a run without a
-  dispatch. The records are an overlay, never stored. A document reads a parameter or a `choice`
+  `session.dispatch.parameter.<name>` = `<value>` (instance scope) per parameter, its value a
+  string, and, Workflow #463 L4 (slice V2, 0.12.61), per variable the package declares, the value
+  its policy dispatch carries in `policy_dispatch_parameters`, or the declared default for a run
+  without a dispatch, its value of the variable's kind's type: a `choice` a string, a `switch` a
+  boolean, an `integer` an integer, an `ordered` variable a record list of rows `{key, rank}`.
+  The records are an overlay, never stored. A document reads a parameter or a `choice`
   variable as an `enum_string` fact with the declared options, a `switch` as `boolean`, an
   `integer` as `integer`, and an `ordered` variable as a record list (key column `key`, column
   `rank`, an integer from 1 in the list's order) through `keyed_fact`

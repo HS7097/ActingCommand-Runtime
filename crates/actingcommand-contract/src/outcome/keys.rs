@@ -813,7 +813,8 @@ outcome_keys! {
     // ---- Workflow #463 V2 (a run reads its package's variables, contracts/package-variables.md
     // "The run"): begin ----
     variable_name: token,
-    value_json: name,
+    // Fix round 1: a `json` key, which holds what the goal store keeps (1024 bytes).
+    value_json: json,
     variable_source: vocab(variable_source),
     set_unix_ms: unix_ms,
     set_channel: vocab(channel),

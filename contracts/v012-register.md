@@ -25516,7 +25516,9 @@ evaluations"), [instance-fact-store.md](instance-fact-store.md) ("Run parameters
   package once in catalog order, no `goals.json`, a task whose package location is unreadable
   counting as an unreadable package of its game) and keeps, per game, each name that does not
   apply with its word (`variables_not_applying`); such a variable is handed its default whatever
-  is set. No second copy of a rule.
+  is set. No second copy of a rule. Fix round 1 (below): with a composed standard pack the
+  scheduler workbench judges each game root whole instead, `goals.json` included; the remedy
+  table's judgement is what a configured catalog reads.
 - *The overlay* (the kernel's `RunParameters`, which gains typed variable values): each variable as
   `session.dispatch.parameter.<name>`, a `choice` a string, a `switch` a boolean, an `integer` an
   integer, an `ordered` variable a record list of rows `{key, rank}` from 1
@@ -25536,11 +25538,12 @@ evaluations"), [instance-fact-store.md](instance-fact-store.md) ("Run parameters
 
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|
-| V2-1 | `policy_dispatch_parameters`'s optional value `variable_values` (records) and the keys `variable_name`, `value_json`, `variable_source`, `set_unix_ms`, `set_channel`, `variable_problem` | outcome values of an existing info code (persisted in the dispatch's reason chain) | V2 | the policy crate | absent for a package without variables; `value_json` at most 256 bytes (a `name`), absent only for a longer default |
-| V2-2 | `goal_value_not_applied` (warning / none; `instance_id`, `task_id`, `package_id`, `variable_name`, `declaration_sha256`, `variable_problem`, all required) and the key `declaration_sha256`; the domain `goal_value_` (runtime-host) | new code in an existing record form (`runtime.failed`, Warning) | V2 | the host's policy cycle | once per (application, name, declaration) per start; nothing refused |
-| V2-3 | the vocabularies `variable_source` (`set`, `default`) and `variable_problem` (`not_an_option`, `out_of_range`, `off_step`, `type_changed`, `keys_removed`, `count_out_of_range`, `key_repeated`, `value_too_long`, `irreversible_by_root`, `declaration_conflict`, `goal_name_conflict`, `name_out_of_limits`, `cap_range`, `root_unchecked`) | vocabularies (2 + 14 words) | V2 | the contract crate | one word per situation; `goal_name_conflict` arises only where a `goals.json` is read |
+| V2-1 | `policy_dispatch_parameters`'s optional value `variable_values` (records) and the keys `variable_name`, `value_json`, `variable_source`, `set_unix_ms`, `set_channel`, `variable_problem` | outcome values of an existing info code (persisted in the dispatch's reason chain) | V2 | the policy crate | absent for a package without variables; fix round 1: `value_json` a `json` key (V2-6), at most 1024 bytes, absent only for a longer default |
+| V2-2 | `goal_value_not_applied` (warning / none; `instance_id`, `task_id`, `package_id`, `variable_name`, `declaration_sha256`, `variable_problem`, all required) and the key `declaration_sha256`; the domain `goal_value_` (runtime-host) | new code in an existing record form (`runtime.failed`, Warning) | V2 | the host's policy cycle | once per (application, name, declaration, and since fix round 1 the stored value's sha256) per start; nothing refused |
+| V2-3 | the vocabularies `variable_source` (`set`, `default`) and `variable_problem` (fix round 1: `not_an_option`, `out_of_range`, `off_step`, `type_changed`, `keys_removed`, `count_out_of_range`, `key_repeated`, `keys_left_out`, `entry_unreadable`, `irreversible_by_root`, `package_unreadable`, `goals_unreadable`, `declaration_conflict`, `goal_name_conflict`, `name_out_of_limits`, `cap_range`, `root_unchecked`; `value_too_long` removed) | vocabularies (2 + 17 words) | V2 | the contract crate | one word per situation; `goal_name_conflict` and `goals_unreadable` arise only where a `goals.json` is read (with a composed standard pack, since fix round 1); `keys_left_out` marks a value applied in part and is never warned |
 | V2-4 | the overlay `session.dispatch.parameter.<name>` of a variable, typed | run overlay (never stored) | V2 | the host, the offline replay, the Lab | a package without variables overlays exactly its parameters |
 | V2-5 | `actinglab replay --variable <name>=<json>` (the row `replay` of `lab-operations.json` gains `variable`) | Lab option | V2 | the Lab | refusals as `--parameter`'s |
+| V2-6 | (fix round 1) the key type `json` of the key table: the compact JSON text of a value, at most 1024 bytes, no control character (`KeyKind::Json`; the outcome guard's scalar types) | key table type | V2 fix round 1 | the contract crate | one key, `value_json`; on the wire a string as before |
 
 **What earlier readers do with such a reason.** No persisted shape changes, as SS-6 (§1.218) added
 values to the same reason: the ledger of 0.12.60 decodes a `policy_dispatch_parameters` with
@@ -25559,14 +25562,15 @@ so no dispatch carries `variable_values`, no overlay changes and no warning is w
 declares variables runs on its defaults until an entry of a variable's name is written with
 `targets set` and `entries`; the next dispatch reads it.
 
-**Limits.** The Runtime judges the root over the packages its catalog binds, grouped by the
-instances' games; a package of the root no catalog task binds is not read (`standard-pack check`
-reads the whole root), and the Runtime reads no `goals.json`. The table is the remedy table's, so
-a package changed in place without a new catalog or manifest is judged by its earlier declaration
-until the table is built again; the kernel then judges the dispatched value under the package as
-prepared and reads the default for a value it no longer takes, while the record says what was
-dispatched. A default longer than 256 bytes is recorded without `value_json`, and a set value
-longer than that is `value_too_long`.
+**Limits.** (V2 as first written; fix round 1 below replaces this for a composed standard pack.)
+The Runtime judges the root over the packages its catalog binds, grouped by the instances' games;
+a package of the root no catalog task binds is not read (`standard-pack check` reads the whole
+root), and the Runtime reads no `goals.json`. The table is the remedy table's, so a package
+changed in place without a new catalog or manifest is judged by its earlier declaration until the
+table is built again; the kernel then judges the dispatched value under the package as prepared
+and reads the default for a value it no longer takes, while the record says what was dispatched.
+A default longer than 256 bytes is recorded without `value_json`, and a set value longer than
+that is `value_too_long` (fix round 1: 1024 bytes, and the word is gone).
 
 Tests (policy, exec, host and apps gate rows "#463 V2"): the policy crate's
 `gate_463_v2::v2_a_set_value_beats_the_default_and_rides_the_selected_dispatch_with_remedies_off`,
@@ -25582,6 +25586,69 @@ Tests (policy, exec, host and apps gate rows "#463 V2"): the policy crate's
 the host's `gate_463_v2::v2_host_a_dispatch_hands_its_run_the_set_value_and_a_start_reads_it_again`;
 actinglab's `gate_463_v2_replay::v2_replay_refuses_an_undeclared_or_unfit_variable_and_takes_a_fit_one`.
 No existing test is adapted, no golden changes and no test leaves the gate map.
+
+**Fix round 1** (after the independent review; coordinator brief `rd-1115/brief-1728-fix1.md`).
+
+- *The record's capacity no longer decides what a run reads.* `value_json` is a key of the new
+  type `json` (V2-6), whose bound is the goal store's, 1024 bytes (`JSON_MAX_BYTES`,
+  `MAX_VARIABLE_VALUE_JSON_BYTES`); `value_too_long` is gone, since every value a run is to read of
+  a set value fits. An earlier reader is not refused: an outcome's values travel and are stored
+  untyped, every 0.12 reader keeps them as a map, and a build before 0.12.61 does not know the key
+  `value_json` at all, whatever its type (its codes-only projection drops a key its table lacks).
+- *The judgement of "does not apply" is the root check's, over the whole root* (the
+  coordinator's ruling). With a composed standard pack the scheduler workbench runs
+  `check_root_variables` and `variables_not_applying` where it already reads every package of a
+  game root's registry (`read_declarations`), held packages included, against the names the root's
+  `goals.json` takes, read with the contract crate's reader (`RootGoals`, kept in what
+  `read_declarations` answers); `goals.json` is marked with the root files, so it, `schedule.json`,
+  `bundle.json` and a package's declaration files changing are read again at the next check (at
+  most once per `standard_packs.check_interval_ms`). The workbench keeps each game's judgement
+  (`RootVariableJudgement`) and the table built from them (`VariableTable::of_roots`); the policy
+  cycle reads it from memory right after the check (`standard_pack_variables`,
+  `PolicyEvaluationContext::standard_pack_variables`). A refused `goals.json` is recorded once per
+  sha256 (`standard_pack_root_invalid`, its first problem), one that cannot be read once until it
+  reads again (`standard_pack_root_unreadable`) and keeps every name of the root from applying
+  (`goals_unreadable`). Without a composed standard pack the remedy table's judgement stays what a
+  dispatch reads, as V2 built it.
+- *One word, one cause.* `variable_irreversible_by_root` that only an unreadable package of the
+  root causes is `package_unreadable`; `irreversible_by_root` names a declaring package that
+  provides, or lists, a capability marked irreversible (`variables_not_applying` takes the rule's
+  `IrreversiblePackages`).
+- *Also.* The warning's "once" counts the stored value's sha256 too (`WarnedVariableValue`,
+  memory only). A stored row whose setter cannot be read is not applied (`entry_unreadable`). An
+  `ordered` value applied in part is marked `keys_left_out`, source `set`, and not warned. Each
+  declaration's sha256 is computed when the table is built. Known limit: a package replaced
+  between a dispatch and its run's start may read the default while the dispatch's record says
+  `set`. The scan replay's two given lists travel as a named value (`GivenValues`).
+
+**Rollback below 0.12.61.** A build of 0.12.60 reads a `session.resource_targets` v3 record that
+holds entry rows for variables as G-R2a made it read one: its targets as before, the entry rows
+kept and read by nothing (a build before 0.12.60 reads a v3 record as unreadable,
+`unsupported_schema_version`, and runs that instance on base scheduling,
+[resource-targets.md](resource-targets.md), "An older Runtime"); a forward deploy reads the entries
+again. It refuses a package that declares `variables` at every admission path
+(`resource_declaration_invalid`, `UnknownField` at `/variables`, before the kernel's reader,
+[package-variables.md](package-variables.md), "Interface"), so such a package does not run; its
+installer refuses a bundle that declares `package` [14, 14] at its `package` edge. Its ledger
+readers decode a `policy_dispatch_parameters` that carries
+`variable_values`, and a `goal_value_not_applied` record, as received outcomes: values kept as a
+map without a key or catalog check, codes-only projections dropping the keys they do not know, the
+code an unknown spelling; its start reads a dispatch's `run_parameters` and schedule values from
+such a reason and ignores `variable_values`. Nothing is refused and nothing is rewritten.
+
+Fix round 1 tests: the policy crate's
+`gate_463_v2::v2_fix1_a_value_longer_than_256_bytes_is_applied_and_recorded_whole` and
+`v2_fix1_a_stored_row_whose_setter_cannot_be_read_is_not_applied_with_its_word`; the host's
+`gate_463_v2::v2_fix1_the_whole_root_keeps_a_variable_from_applying` and
+`v2_fix1_a_package_replaced_in_place_is_judged_with_its_new_declaration`. The slice's own tests
+are adapted where the round changes what they pin: `value_too_long` leaves the policy test of the
+invalid values, whose ordered value applied in part is now `keys_left_out` and which checks the
+stored value's sha256; the test of what does not apply says `package_unreadable` for an unreadable
+package and keeps `irreversible_by_root` beside one; the host's first test asserts what the run's
+snapshots are overlaid with (the gate seam `run_parameters_for_test`) and that another value not
+applied is warned again; actinglab's test asserts the given value replaces the default in what
+the scan replay overlays (`scan_replay_parameters`). No test of main changes; no golden; no test
+leaves the gate map.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
