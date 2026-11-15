@@ -413,8 +413,9 @@ of that call and gives the steps below, each of which a later call accepts:
     whole, its directory included; nothing more is run.
   - To run it again: move the root `.part` files out of the checkout; put `packs/<package_id>`
     back as it was, or commit it (then with a `--state-dir` on the checkout's volume, above); then
-    run adopt with `--replace` and the decision that call was given (none when it was given none),
-    which writes the package's one role from the root files as they are.
+    run adopt with `--replace` and the decision that call was given (by `--decide`, or by
+    `--held-reason` and its `--held-reference`; none when it was given none), which writes the
+    package's one role from the root files as they are.
   - To undo it: move the root `.part` files out, put `packs/<package_id>` back as it was, and
     restore with the version control the root file that call renamed (to its last commit: a change
     not committed before that call is not in it).
@@ -426,13 +427,14 @@ of that call and gives the steps below, each of which a later call accepts:
   checks accept. `git status -- packs/<package_id>` tells whether the directory is committed (a
   change there was left by an interrupted adoption or by hand); when it shows a change, put the
   directory back as it was. Then, with it absent, adopt runs without `--replace` (a first
-  adoption, with `--decide`); with it committed, adopt runs with `--replace` and `--decide`, which
-  moves the committed directory to its kept place and so needs a `--state-dir` on the checkout's
-  volume (above).
+  adoption, with `--decide` or `--held-reason`); with it committed, adopt runs with `--replace`
+  and `--decide` or `--held-reason`, which moves the committed directory to its kept place and so
+  needs a `--state-dir` on the checkout's volume (above).
   - A root file adopt does not write gives the package a maintenance role (`pages.json`,
     `navigation.json` or `interrupts.json`, which the message names): the directory belongs to
     the pack by that file, whether or not an adoption was interrupted. The call accepts such a
-    package with a decision of the class `held` (its hold beside that role) or
+    package with a decision of the class `held` (its hold beside that role, by `--held-reason` or
+    `--decide`) or
     `maintenance` (a rule by its trigger, or a `maintenance.json` entry by its `uses`), never
     `business`, which is refused at `/class` beside that role ("One role").
   - No root file names it: that call was interrupted before it wrote the root files, or the

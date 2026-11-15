@@ -1247,8 +1247,9 @@ fn interrupted(repo: &Path, leftovers: &[String]) -> String {
     said.push(finish);
     said.push(format!(
         "to run that adoption again instead: move the root .part files out of the checkout; {}; \
-         then run adopt with --replace and the --decide that call was given, if any, which writes \
-         the package's one role from the root files as they are; to undo it: move the root .part \
+         then run adopt with --replace and the decision that call was given (--decide, or \
+         --held-reason with its --held-reference), if any, which writes the package's one role \
+         from the root files as they are; to undo it: move the root .part \
          files out, put packs/<package_id> back as it was, and restore with the version control \
          a root file that call renamed (to its last commit: a change not committed before that \
          call is not in it)",
@@ -1793,9 +1794,11 @@ impl Existing {
                     "{pack} is there and {file} gives {package_id} a maintenance role, while \
                      schedule.json holds no rule or held entry of it and maintenance.json no \
                      entry of it for its server: the directory belongs to the pack by {file}. \
-                     Adopt takes such a package with --decide of the class held (its hold beside \
-                     that role) or maintenance (a rule by its trigger, or a maintenance.json \
-                     entry by its uses), never business, which is refused beside that role. \
+                     Adopt takes such a package with a decision of the class held (its hold \
+                     beside that role: --held-reason <text> [--held-reference <text>], or \
+                     --decide) or maintenance (--decide: a rule by its trigger, or a \
+                     maintenance.json entry by its uses), never business, which is refused beside \
+                     that role. \
                      {committed}; then, with it absent, run adopt without --replace, or, with it \
                      committed, run adopt with --replace; {replace}; nothing was written"
                 ),
@@ -1806,8 +1809,9 @@ impl Existing {
                      adoption of it was interrupted after it put that directory in place and \
                      before it wrote the root files, or the directory was put there by hand. \
                      {committed}; then, with it absent, run adopt without --replace with \
-                     --decide, as a first adoption, or, with it committed, run adopt with \
-                     --replace and --decide; {replace}; nothing was written"
+                     --decide or --held-reason, as a first adoption, or, with it committed, run \
+                     adopt with --replace and --decide or --held-reason; {replace}; nothing was \
+                     written"
                 ),
             };
         }
@@ -1888,7 +1892,8 @@ impl Existing {
                  directory with changes, and moves a committed one only to a state directory on \
                  the checkout's volume), so nothing comes before: to finish that adoption, run \
                  adopt again with --replace, this --state-dir and the decision that call was given \
-                 (--decide), which writes one role. To undo it: put {pack} back as it was before \
+                 (--decide, or --held-reason with its --held-reference), which writes one role. To \
+                 undo it: put {pack} back as it was before \
                  that call (absent, or as its earlier commit) and restore schedule.json and \
                  maintenance.json with the version control. Nothing was written"
             ),
@@ -2430,7 +2435,9 @@ impl Plan {
             let decision = inputs.decision.ok_or_else(|| {
                 refused(
                     adopt(AdoptProblem::DecisionInvalid).json_pointer(""),
-                    "a first adoption needs --decide <decision.json>".to_owned(),
+                    "a first adoption needs --decide <decision.json>, or --held-reason <text> \
+                     to adopt the package as held"
+                        .to_owned(),
                 )
             })?;
             let rule_id = decision
@@ -4300,8 +4307,8 @@ fn unchanged(
         format!(
             "written or moved before: {listed:?}; nothing is removed: compare with the version \
              control; move the root .part files this call wrote out of the checkout; {}; then run \
-             adopt again with --replace and this call's --decide, if any, which reads the root \
-             files as they are now",
+             adopt again with --replace and this call's decision (--decide, or --held-reason with \
+             its --held-reference), if any, which reads the root files as they are now",
             new_directory_step(pack, "this call")
         )
     };
