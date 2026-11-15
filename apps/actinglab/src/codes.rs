@@ -154,6 +154,13 @@ actingcommand_contract::outcome_codes! {
         /// `resource verify`'s own do (`standard_pack_` is the contract's and the host's).
         ResourceBuildWriteFailed => "resource_build_write_failed": error / none,
         // ---- end of #464 P2
+        // ---- Workflow #463 S3-7 fix round 2 (pending): `standard-pack build` answers the
+        // readiness of its installed root (contracts/resource-verify.md, "`standard-pack build`").
+        /// Warning. The product is written and the readiness function refused the installed root
+        /// the steps laid out: the answer has no readiness, its `readiness_refused` is the
+        /// refusal, and the build succeeded (keys `path`; the cause the refusal's own code).
+        ResourceBuildReadinessRefused => "resource_build_readiness_refused": warning / none,
+        // ---- end of #463 S3-7
         // ---- Workflow #411 B34 (slice E4, pending): `package check` warns on a click box of one
         // point.
         /// Warning. `package check` admitted the package, and an operation's click declares a

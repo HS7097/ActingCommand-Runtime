@@ -28246,7 +28246,7 @@ adapted: what it pinned stays pinned. No golden changes, no test leaves the gate
 
 **At deploy.** Nothing to do: a run recorded before 0.12.63 keeps the code it ended with.
 
-### 1.414 Slice #463 S3-7 (0.12.63): `standard-pack build` answers its packs' readiness and names the placement's plan as the next command (Workflow #463; the owner's approval on 11-15 of the three-stage blueprint of package making as a whole, board #463; the design `rd-1115/pack-stage3-design.md`, §4.2 "S3-7", with §1.1 rows W6, W7, W10 and §1.2 H10, H13; the coordinator's rulings in the work order, not the owner's words, its ruling 1 changing the design; coordinator work order `rd-1115/brief-463-s37-build-readiness.md`, read on main `44cbab53`; main `326ae285` (#1744, LAB-6S4a) merged before the push)
+### 1.414 Slice #463 S3-7 (0.12.63): `standard-pack build` answers its packs' readiness and names the placement's plan as the next command (Workflow #463; the owner's approval on 11-15 of the three-stage blueprint of package making as a whole, board #463; the design `rd-1115/pack-stage3-design.md`, §4.2 "S3-7", with §1.1 rows W6, W7, W10 and §1.2 H10, H13; the coordinator's rulings in the work order, not the owner's words, its ruling 1 changing the design; coordinator work order `rd-1115/brief-463-s37-build-readiness.md`, read on main `44cbab53`; main `326ae285` (#1744, LAB-6S4a) merged before the push; fix round 2 after the independent review, coordinator work order `rd-1115/brief-463-s37-fix2.md`, main `b7c47129` (#1750, #469 D4b, §1.401) merged first)
 
 The coordinator gave this slice 1.414: main `44cbab53` holds the sections up to §1.400, and the
 numbers between them and this one belong to slices dispatched with it. The slice ships in 0.12.63.
@@ -28262,7 +28262,9 @@ design's H10), and to plan a placement two more into `place` (H13). The answer n
   installation, no declared range): that row's answer for that root, `installation` `not_read`, the
   five installation items `not_judged`, each pack `waiting` with every reason, `ready_to_place` or
   `not_scheduled`;
-- `next.place`, `actinglab place "<zip>" --sums "<SHA256SUMS>" --plan`, the paths of `files`.
+- (fix round 2) `warnings`, beside a readiness the function refused: `resource_build_readiness_refused`;
+- `next.place`, the words of the Lab's command line after the program's name (fix round 2),
+  `["place", "<zip>", "--sums", "<SHA256SUMS>", "--plan"]`, the paths of `files`.
 
 **What the code showed** (the design's §6 and the work order's rulings 2 and 3).
 
@@ -28290,16 +28292,35 @@ The contract says that the answer carries the readiness and the next command and
 **When the readiness cannot be computed.** The function refuses with its own codes
 (`validation_failed` for a root that is no directory or cannot be read, `standard_pack_root_invalid`
 for a root file the structure check refuses, `package_invalid`). The answer then has no
-`readiness` and has `readiness_refused`, that refusal as `standard-pack ready --root` answers it
-(`code`, `message`, `blocked_by`, `details`), with the developer line `WARN actinglab:
-standard-pack build readiness: <code>: <message>` on stderr; the build still exits 0, its product
-written. No readiness is answered that was not computed. No code and no word is added.
+`readiness` and has `readiness_refused`, that refusal in the envelope's error form (`code`,
+`message`, `blocked_by`, `details`); the build still exits 0, its product written. No readiness is
+answered that was not computed. Fix round 2 (the review: a reader of the answer's outcome and
+warnings did not see it): the answer's `warnings` then holds exactly one `{outcome}`, the form the
+Lab's answers carry a warning in (`lab_ops::cli_line::warning`; the build's answer had no
+`warnings` before), `resource_build_readiness_refused` (warning, `path` the root) caused by the
+refusal's own code, relayed; its developer line is the program's form (`cli_line::developer_text`),
+`WARN actinglab: resource_build_readiness_refused path=<root> [caused_by: <code>] <message>`. The
+precedent needs a code of its own (the Lab's warnings are the answering program's warning codes,
+the cause a link: `preflight_failed`, `client_action_not_recorded`; a developer line's level is its
+outcome's category, and the function's codes are errors), so one is added: a code of the build's
+own prefix with this one cause.
+
+| Code | The one situation | Refuses or warns | Exit |
+|---|---|---|---|
+| `resource_build_readiness_refused` (actinglab, warning, `none`, pending, since 0.12.63; `path` required; the cause the refusal's code) | the product is written and the readiness function refused the installed root | warns | 0 |
 
 **The next command.** The plan only (ruling 4): a placement is an act under the owner's
-authorization, and no answer hands out the line that places. Each path is in double quotes; the
-`actinglab` is the one of the installation the bundle is to be placed into (`place` acts on the
-root of the `actinglab.exe` that runs it, [install-cli.md](install-cli.md), "The Lab's rescue
-module").
+authorization, and no answer hands out the line that places. Fix round 2: its words are those of
+the Lab's command line after the program's name, as every `next` of the Lab holds a command
+(the rescue module's `{status: ["op", "status"]}`; [install-cli.md](install-cli.md), "Who runs an
+argv"), so no reader parses a shell line; the paths are the ones the build wrote, unquoted. The
+`actinglab` that runs them is the one of the installation the bundle is to be placed into
+(`place` acts on the root of the `actinglab.exe` that runs it, [install-cli.md](install-cli.md),
+"The Lab's rescue module").
+
+**The answer's size** (fix round 2). The readiness of a real game makes the answer large: through
+the Lab's MCP server an answer above its budget is exported whole to a file by that server's
+overflow rule ([lab-two-entries.md](lab-two-entries.md) §9.3) and never cut; the contract says so.
 
 **Tests.** `apps/actinglab/src/tests/gate_463_s37.rs`, gate map `apps.toml` "#463 S3-7", on P2's
 neutral fixture repository with a `schedule.json` of one valued pool: a commit whose pack A is held
@@ -28307,18 +28328,29 @@ neutral fixture repository with a `schedule.json` of one valued pool: a commit w
 S2 failing `held`, and B `ready_to_place`, the readiness equal to the answer of `standard-pack
 ready --root` for the kept root, and `build.json` the answer's `build`, v1, its eleven members; a
 commit whose two packs both have such a rule answers both `ready_to_place`, their installation
-items `not_judged` `installation_not_read`; `next` is the plan's line of the zip and `SHA256SUMS`
-written. The tests assert only members of the readiness that exist on main `44cbab53` (ruling 5).
-No test is adapted, no golden changes, no test leaves the gate map.
+items `not_judged` `installation_not_read`; `next` is the plan's five words of the zip and
+`SHA256SUMS` written. Fix round 2: `s37_a_refused_readiness_is_a_warning_of_the_answer`. No fixture
+makes the function refuse the installed root after the `bundle` step passed (the step lays the root
+out and checks it with `standard-pack check`, whose structure check the function runs, and nothing
+of the build runs between), so it drives the function that builds the answer's readiness members
+(`resource_verify::build::readiness_members`, reached by the gate through a re-export compiled for
+tests only) on a root that is not there and on an empty one: no `readiness`, `readiness_refused`
+with the function's own code (`validation_failed`, `standard_pack_root_invalid`), and in `warnings`
+exactly one `{outcome}`, `resource_build_readiness_refused`, a warning, `path` the root, caused by
+that code. The tests assert only members of the readiness that exist on main `44cbab53` (ruling
+5). Adapted in fix round 2: `s37_next_place_is_the_plan_line_of_the_files_written` pinned the one
+line with quoted paths, which the requirement changes; it asserts the five words. No golden
+changes, no test leaves the gate map.
 
 **What is not changed.** What the build writes (the zip, `SHA256SUMS`, `build.json`, the work
-tree), its steps and their refusals, the readiness function, adopt and the placement. Texts of
-other slices that name `build.json` as a later caller of the readiness are left as they are, this
-slice's work order naming no other file: [standard-pack-schedule.md](standard-pack-schedule.md),
-"Readiness", the doc of `crates/resource-tooling/src/standard_pack_ready.rs`, the notes of the row
-`standard-pack ready` and [package-reference.md](package-reference.md), "The built standard pack".
+tree), its steps and their refusals, the readiness function, adopt and the placement. Fix round 2
+corrects, with the review's words, the texts of other slices that named `build.json` as a later
+caller of the readiness: [standard-pack-schedule.md](standard-pack-schedule.md), "Readiness", the
+notes of the row `standard-pack ready` and [package-reference.md](package-reference.md), "The built
+standard pack"; the doc of `crates/resource-tooling/src/standard_pack_ready.rs` is another fix
+round's.
 
-**At deploy.** Nothing to do: the answer gains two members, and nothing on disk changes.
+**At deploy.** Nothing to do: the answer gains its members, and nothing on disk changes.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

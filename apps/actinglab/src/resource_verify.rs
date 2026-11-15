@@ -27,6 +27,10 @@ pub(crate) mod revision;
 mod steps;
 
 pub(crate) use build::{BUILD_SCHEMA, build_options, run_standard_pack_build};
+// Workflow #463 S3-7 fix round 2: the gate's test reads what the answer says of a root the
+// readiness function refuses, which no build whose steps passed can lay out.
+#[cfg(test)]
+pub(crate) use build::readiness_members;
 
 use crate::codes::{ActinglabCode, VerifyStep};
 use crate::{CliError, CliOutcome, ErrorKind, FlagArgs, GlobalOptions};

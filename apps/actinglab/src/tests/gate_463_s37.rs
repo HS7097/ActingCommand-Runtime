@@ -5,8 +5,8 @@
 // order rd-1115/brief-463-s37-build-readiness.md): besides what it answered, `standard-pack build`
 // answers `readiness`, the readiness of the installed root its steps laid out and kept,
 // `<out>/work/installed/<game>/`, as `standard-pack ready --root` answers it for that root, and
-// `next.place`, the command line of the placement's plan of the files it wrote; `build.json` does
-// not change. The repositories are neutral fixtures as `gate_464_p2`'s (game `neutral`, server
+// `next.place`, the words of the command line of the placement's plan of the files it wrote;
+// `build.json` does not change. The repositories are neutral fixtures as `gate_464_p2`'s (game `neutral`, server
 // `test`, two packs built from the TOOL-1 content directory) with a `schedule.json` whose one pool
 // has a valuation and whose rules are written as `gate_464_p3` writes a rule with a complete
 // value, made with git in a temporary directory, every git call with no system configuration and
@@ -18,7 +18,10 @@
 // - `s37_a_commit_whose_packs_are_all_valued_answers_ready_to_place`: both packs ruled with a
 //   value: both `ready_to_place`, their installation items `not_judged` `installation_not_read`;
 // - `s37_next_place_is_the_plan_line_of_the_files_written`: `next` is the plan's line of the zip
-//   and `SHA256SUMS` written, with `--plan`.
+//   and `SHA256SUMS` written, with `--plan`; fix round 2: its five words after the program's name;
+// - `s37_a_refused_readiness_is_a_warning_of_the_answer` (fix round 2): what the answer says of a
+//   root the readiness function refuses: no `readiness`, the refusal in `readiness_refused`, and in
+//   `warnings` one `resource_build_readiness_refused` caused by the refusal's code.
 
 use super::*;
 use crate::package_tool::gate_390_tool1::neutral_package;
@@ -434,7 +437,9 @@ fn s37_a_commit_whose_packs_are_all_valued_answers_ready_to_place() {
 
 // The work order's third test, with the coordinator's ruling 4: `next` is `{place}` alone, the
 // command line of the placement's plan of the zip and `SHA256SUMS` the build wrote into `--out`,
-// the two paths those of `files`, each in double quotes, and `--plan`: never the line that places.
+// the two paths those of `files`, and `--plan`: never the line that places. Fix round 2: the line
+// is the five words of the Lab's command line after the program's name, as every `next` of the
+// Lab holds a command, each path as the build wrote it, unquoted.
 #[test]
 fn s37_next_place_is_the_plan_line_of_the_files_written() {
     let (fixture, head) = Fixture::committed(&schedule(&[rule(PACK_A), rule(PACK_B)], &[]));
@@ -447,10 +452,57 @@ fn s37_next_place_is_the_plan_line_of_the_files_written() {
     assert!(sums.is_file(), "{answer}");
     assert_eq!(answer["files"]["zip"], zip.display().to_string());
     assert_eq!(answer["files"]["sums"], sums.display().to_string());
-    let line = format!(
-        "actinglab place \"{}\" --sums \"{}\" --plan",
-        zip.display(),
-        sums.display()
+    assert_eq!(
+        answer["next"],
+        json!({"place": [
+            "place",
+            zip.display().to_string(),
+            "--sums",
+            sums.display().to_string(),
+            "--plan"
+        ]})
     );
-    assert_eq!(answer["next"], json!({"place": line}));
+}
+
+// Fix round 2 (the review's point C): when the readiness function refuses the installed root, the
+// answer says so in its warnings too. No fixture makes the function refuse the root after the
+// `bundle` step passed: the step lays the root out and checks it with `standard-pack check`, whose
+// structure check the function runs, and nothing of the build runs between the step and the
+// judgement. So the function that builds the answer's readiness members is driven directly, on two
+// roots the readiness function itself refuses: one that is not there (`validation_failed`) and an
+// empty one, which holds no `bundle.json` (`standard_pack_root_invalid`). Each answers no
+// `readiness`, the refusal with the function's own code in `readiness_refused`, and in `warnings`
+// exactly one `{outcome}`: `resource_build_readiness_refused`, a warning, `path` the root, caused
+// by the refusal's code.
+#[test]
+fn s37_a_refused_readiness_is_a_warning_of_the_answer() {
+    let _guard = env_lock();
+    let temp = TempDir::new().unwrap();
+    let gone = temp.path().join("gone").join("neutral");
+    let empty = temp.path().join("empty").join("neutral");
+    fs::create_dir_all(&empty).unwrap();
+    for (root, code) in [
+        (gone, "validation_failed"),
+        (empty, "standard_pack_root_invalid"),
+    ] {
+        let members =
+            serde_json::to_value(crate::resource_verify::readiness_members(root.clone())).unwrap();
+        assert!(members.get("readiness").is_none(), "{members}");
+        assert_eq!(members["readiness_refused"]["code"], code, "{members}");
+        let warnings = members["warnings"].as_array().unwrap();
+        assert_eq!(warnings.len(), 1, "{members}");
+        let warning = &warnings[0]["outcome"];
+        assert_eq!(
+            warning["code"], "resource_build_readiness_refused",
+            "{warning}"
+        );
+        assert_eq!(warning["category"], "warning", "{warning}");
+        assert_eq!(
+            warning["values"]["path"],
+            root.to_string_lossy().into_owned(),
+            "{warning}"
+        );
+        assert_eq!(warning["causes"][0]["code"], code, "{warning}");
+        assert_eq!(warning["causes"][0]["relation"], "caused_by", "{warning}");
+    }
 }
