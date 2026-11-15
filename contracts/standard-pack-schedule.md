@@ -1025,15 +1025,33 @@ well. The function itself reads none of them: its caller hands them in.
 **The row.** `actinglab standard-pack ready --root <game root>` (operation table row `standard-pack
 ready`, module `core`, offline; MCP `ac_standard_pack_ready`) answers the function for the game root
 alone: `{root, game, installation: "not_read", dispatchable, ready_to_place, waiting,
-not_scheduled, warnings, packs: [{package_id, server, readiness, roles?, items: [{id, item, state,
-basis?, models?, outcome?}]}]}`, the packs in the registry's order, beside
+not_scheduled, warnings, packs: [{package_id, server, readiness, roles?, held?, warnings?, items:
+[{id, item, state, basis?, models?, outcome?}]}]}`, the packs in the registry's order, beside
 `lab_operation_completed`. It reads no installation (the status read tells an instance's game but
 not its server; the configuration's instances, check-config's subsystems, `actingd suspended` and
 the vision root's models are read where the placement plan reads them), so its five installation
 items are `not_judged`, `installation_not_read`, and its packs `ready_to_place` (or
 `not_scheduled`) at best. It starts no child process: a child `actingd` under an installation root
 could be taken for a running Runtime by the update path. Under `--dry-run` it answers the same (no
-effect).
+effect). A pack whose S2 fails `held` answers `held` (Workflow #463 S3-6, since 0.12.63),
+`{reason, reference?}` as its `held` entry writes them, the shape of the entry and of adoption's
+decision: text for a reader that nothing evaluates; `reference` is absent where the entry writes
+none, and `held` is absent from every other pack's row. S2's own outcome stays
+`package_dispatch_waiting` with `readiness_problem` `held`.
+
+**A pack's own warnings** (Workflow #463 S3-6, register §1.413, since 0.12.63). Each pack's
+`warnings` lists the warnings of `standard-pack check` that name it, in the check's order: a
+warning names a pack by its `package_id` value, else by a `path` value that is the pack's
+directory as the registry names it (fix round 2, as the check's refusals are carried) or lies in
+the pack's directory (the root check of the variables names the declaring pack's `control.json`,
+"A variable that does not apply" in [package-variables.md](package-variables.md), and no package
+id). A warning that names no pack (a rule's hint by its `task_id`, a refused `goals.json`) is on
+no pack's row. The answer's `warnings` lists every warning as before, so a pack's warning appears
+in both places. A pack no warning names answers no `warnings` member, as a pack without `roles`
+answers none. Every caller of the function answers both members as they are:
+`actinglab standard-pack ready`, the operation table's row `standard-pack ready` (actinglab's own
+command) and its MCP tool `ac_standard_pack_ready` (through a `serve` child) serialize the whole
+answer.
 
 ## What does not change
 

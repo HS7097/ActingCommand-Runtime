@@ -2668,7 +2668,7 @@
         {"name": "root", "form": "option", "type": "dir", "required": true, "note": "a game root, installed or a bundle laid out as one, its directory named as its game; not the installation's"}
       ],
       "help": "Judges every pack of a game root by its thirteen readiness items: waiting with every reason, ready_to_place, dispatchable or not_scheduled.",
-      "output": "root, game, installation (not_read: no installation is read), the counts dispatchable, ready_to_place, waiting and not_scheduled, warnings (standard-pack check's), and packs, each {package_id, server, readiness, roles?, items}: the thirteen items S1 to S7 and I1 to I6, each {id, item, state, basis?, models?, outcome?}",
+      "output": "root, game, installation (not_read: no installation is read), the counts dispatchable, ready_to_place, waiting and not_scheduled, warnings (standard-pack check's), and packs, each {package_id, server, readiness, roles?, held?, warnings?, items}: held (#463 S3-6) {reason, reference?} as the schedule's held entry writes them, only on a pack whose S2 fails held; warnings (#463 S3-6) the check's warnings that name the pack; the thirteen items S1 to S7 and I1 to I6, each {id, item, state, basis?, models?, outcome?}",
       "writes": false,
       "irreversible": false,
       "runtime": "offline",
