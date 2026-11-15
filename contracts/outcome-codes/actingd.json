@@ -1010,7 +1010,7 @@
       "since": "0.12.0",
       "description": "Provider startup found no discovered emulator instance for an instance's binding key: alias names the configured instance and instance_index or instance_name its declared key. The start fails.",
       "common_causes": "An instance index or name that does not exist in MuMu, or an instance renamed or deleted in MuMu.",
-      "handling": "Correct the instance's instance_index or instance_name to a discovered instance (actingctl emulator discover lists them). Fix the configuration and commit it again with acsetup --commit-config; run actingd check-config to confirm before restarting the daemon."
+      "handling": "Correct the instance's instance_index or instance_name to a discovered instance (actinglab discover lists them). Fix the configuration and commit it again with acsetup --commit-config; run actingd check-config to confirm before restarting the daemon."
     },
     "instance_discovery_ambiguous": {
       "category": "error",
@@ -1590,7 +1590,7 @@
       "since": "0.12.35",
       "description": "actingd unlock-owner refused: the install root holds an unfinished installer operation (install\\current.json, install_operation_id when it names one), whose undo and rollback gate judge whether a Runtime started since by the owner record (Workflow #429 R-15b frozen, R-15c builds it; contracts/install-cli.md).",
       "common_causes": "An installer operation interrupted mid-way.",
-      "handling": "Finish or undo the installer operation (actingctl install resume or undo), then unlock."
+      "handling": "Finish or undo the installer operation (actinglab op resume or undo), then unlock."
     },
     "suspended_usage_invalid": {
       "category": "error",

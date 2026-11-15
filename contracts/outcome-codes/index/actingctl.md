@@ -6,16 +6,16 @@ column means. 204 codes.
 
 | Code | Category | Ladder class | Since | Status | Review | Text | Description |
 |---|---|---|---|---|---|---|---|
-| `actingctl_capability_gap_recorded` | success | none | 0.12.0 | active | pending | TBD | actingctl capability-gap: one capability gap (capability, why) was appended as one line to this user's local log… |
-| `actingctl_capability_gap_write_failed` | error | none | 0.12.0 | active | pending | TBD | actingctl capability-gap or ac_capability_gap could not append the gap to the user's local log (path); the failure is linked. |
-| `actingctl_fact_record_invalid` | error | none | 0.12.0 | active | pending | TBD | actingctl could not read a bounded fact observation file, or it is invalid. |
-| `actingctl_output_failed` | error | none | 0.12.0 | active | settled | written | actingctl could not write its JSON output line: serialising the result failed or stdout could not be written. |
-| `actingctl_package_resolution_failed` | error | none | 0.12.0 | active | pending | TBD | actingctl could not resolve the contained task package of task-run. |
-| `actingctl_usage_invalid` | error | none | 0.12.0 | active | settled | written | actingctl was given arguments its usage does not allow: an unknown command or option, a missing or repeated value, or a value out of range. |
-| `agent_channel_failed` | error | none | 0.12.37 | active | pending | TBD | actingctl agent-channel did not do its work: the registry or a record could not be read or written, a channel was refused, or a registered session's hook or… |
-| `agent_channel_reported` | success | none | 0.12.37 | active | pending | TBD | actingctl agent-channel did its work on the channel registry or a session's live record: a channel added, removed or listed, or a running session registered;… |
-| `agent_facts_published` | success | none | 0.12.0 | active | pending | TBD | actingctl agent-publish-facts: the Runtime recorded the fact observation. |
-| `agent_wake_test_queued` | success | none | 0.12.37 | active | pending | written | actingctl agent-wake-test: the test wake is queued for the worker; the line carries {wake_id, channel, quiet?} and, with --wait-s, the wake's row (Workflow #432… |
+| `actingctl_capability_gap_recorded` | success | none | 0.12.0 | active | pending | TBD | actinglab gap: one capability gap (capability, why) was appended as one line to this user's local log… |
+| `actingctl_capability_gap_write_failed` | error | none | 0.12.0 | active | pending | TBD | actinglab gap or ac_capability_gap could not append the gap to the user's local log (path); the failure is linked. |
+| `actingctl_fact_record_invalid` | error | none | 0.12.0 | active | pending | TBD | actinglab could not read a bounded fact observation file, or it is invalid. |
+| `actingctl_output_failed` | error | none | 0.12.0 | active | settled | written | The program (actinglab, actingwatch) could not write its JSON output line: serialising the result failed or stdout could not be written. |
+| `actingctl_package_resolution_failed` | error | none | 0.12.0 | active | pending | TBD | actinglab could not resolve the contained task package of run start. |
+| `actingctl_usage_invalid` | error | none | 0.12.0 | active | settled | written | actinglab (actingctl until Workflow #434 LAB-7) was given arguments its usage does not allow: an unknown command or option, a missing or repeated value, or a… |
+| `agent_channel_failed` | error | none | 0.12.37 | active | pending | TBD | The Lab's agent rows did not do their work: the registry or a record could not be read or written, a channel was refused, or a registered session's hook or… |
+| `agent_channel_reported` | success | none | 0.12.37 | active | pending | TBD | The Lab's agent rows did their work on the channel registry or a session's live record: a channel added, removed or listed, or a running session registered; the… |
+| `agent_facts_published` | success | none | 0.12.0 | active | pending | TBD | actinglab facts publish: the Runtime recorded the fact observation. |
+| `agent_wake_test_queued` | success | none | 0.12.37 | active | pending | written | actinglab wake-test: the test wake is queued for the worker; the line carries {wake_id, channel, quiet?} and, with --wait-s, the wake's row (Workflow #432… |
 | `answer_exported` | warning | none | 0.12.0 | active | pending | written | An answer larger than the output budget was written whole to an export file. |
 | `arguments_invalid` | error | none | 0.12.0 | active | pending | TBD | An MCP tool was called with arguments its input schema refuses. |
 | `binding_requires_unavailable` | warning | none | 0.12.0 | active | pending | written | record draft and ac_binding_draft: the answer carries no binding_requires. |
@@ -26,44 +26,44 @@ column means. 204 codes.
 | `client_action_without_req_id` | warning | none | 0.12.0 | active | pending | written | actinglab's answer carried no req_id for the call's client.action. |
 | `clock_unavailable` | error | none | 0.12.0 | active | pending | TBD | The system clock is before the Unix epoch or out of range. |
 | `config_facts_missing` | error | none | 0.12.0 | active | pending | TBD | status --config: the runtime fact snapshot holds no config.subsystems or config.parameters record. |
-| `config_generation_mismatch` | warning | none | 0.12.0 | active | pending | written | actingctl overview or ac_overview found that the configuration generation actingd runs is not the one the installation selects now, or that the selected… |
-| `config_settings_changed` | success | none | 0.12.0 | active | pending | TBD | actingctl config set\|clear: the Runtime applied every change. |
+| `config_generation_mismatch` | warning | none | 0.12.0 | active | pending | written | actinglab status or ac_overview found that the configuration generation actingd runs is not the one the installation selects now, or that the selected… |
+| `config_settings_changed` | success | none | 0.12.0 | active | pending | TBD | actinglab config set\|clear: the Runtime applied every change. |
 | `cursor_encode_failed` | error | none | 0.12.0 | active | pending | TBD | The MCP server could not encode a cursor. |
 | `cursor_invalid` | error | none | 0.12.0 | active | pending | TBD | An MCP cursor belongs to another query, Runtime connection or server process. |
-| `device_binding_changed` | success | none | 0.12.0 | active | pending | TBD | actingctl devices bind or unbind: the state root's private binding file now binds the device of the handle to the handset alias, or no longer binds one to it;… |
-| `device_bindings_invalid` | error | none | 0.12.0 | active | pending | TBD | actingctl devices or an ac_device tool found the state root's private binding file (path) breaking its rules, or a binding would break them, as… |
-| `device_bindings_write_failed` | error | none | 0.12.0 | active | pending | TBD | actingctl devices bind or unbind could not write the state root's private binding file (path); the failure is linked (Workflow #398 RD-1c). |
-| `device_handle_unknown` | error | none | 0.12.0 | active | pending | TBD | actingctl devices bind or ac_device_bind: adb does not list a device with this handle now; handles are the adb server's session numbers and change when a device… |
-| `device_kind_unsupported` | error | none | 0.12.0 | active | pending | TBD | actingctl devices bind or ac_device_bind: the alias is an instance of the selected configuration that is not a handset (device.kind handset); only a handset is… |
-| `device_list_failed` | error | none | 0.12.0 | active | pending | TBD | actingctl devices or an ac_device tool could not read adb's device list: the install's adb (adb_path) did not start or ended with a failure, linked as… |
-| `device_list_reported` | success | none | 0.12.0 | active | pending | TBD | actingctl devices list: the devices the install's adb lists now were printed, one row each with its handle, transport, state, model, the alias the state root's… |
+| `device_binding_changed` | success | none | 0.12.0 | active | pending | TBD | actinglab devices bind or unbind: the state root's private binding file now binds the device of the handle to the handset alias, or no longer binds one to it;… |
+| `device_bindings_invalid` | error | none | 0.12.0 | active | pending | TBD | actinglab devices or an ac_device tool found the state root's private binding file (path) breaking its rules, or a binding would break them, as… |
+| `device_bindings_write_failed` | error | none | 0.12.0 | active | pending | TBD | actinglab devices bind or unbind could not write the state root's private binding file (path); the failure is linked (Workflow #398 RD-1c). |
+| `device_handle_unknown` | error | none | 0.12.0 | active | pending | TBD | actinglab devices bind or ac_device_bind: adb does not list a device with this handle now; handles are the adb server's session numbers and change when a device… |
+| `device_kind_unsupported` | error | none | 0.12.0 | active | pending | TBD | actinglab devices bind or ac_device_bind: the alias is an instance of the selected configuration that is not a handset (device.kind handset); only a handset is… |
+| `device_list_failed` | error | none | 0.12.0 | active | pending | TBD | actinglab devices or an ac_device tool could not read adb's device list: the install's adb (adb_path) did not start or ended with a failure, linked as… |
+| `device_list_reported` | success | none | 0.12.0 | active | pending | TBD | actinglab devices: the devices the install's adb lists now were printed, one row each with its handle, transport, state, model, the alias the state root's… |
 | `entry_missing` | error | none | 0.12.0 | active | pending | TBD | The watchdog's start found no Runtime entry program. |
 | `errors_query_invalid` | error | none | 0.12.0 | active | pending | TBD | ac_diagnose could not form its errors view query. |
 | `exited_during_startup` | error | none | 0.12.0 | active | pending | TBD | The Runtime the watchdog started exited before it answered. |
 | `handle_unknown` | error | none | 0.12.0 | active | pending | TBD | No job of this MCP server process has the handle. |
-| `install_build_manifest_unreadable` | warning | none | 0.12.0 | active | pending | written | actingctl overview or ac_overview could not read the install's build manifest. |
-| `install_caveat_noted` | warning | none | 0.12.12 | active | pending | written | An actingctl install command did its work, but install_caveat names something left unchecked, pending or on the previous build; operation names the command. |
-| `install_command_done` | success | none | 0.12.12 | active | pending | written | An actingctl install command did what was asked (contracts/install-cli.md); operation names the command. |
-| `install_command_refused` | error | none | 0.12.12 | active | pending | written | An actingctl install command refused, or failed without leaving an unfinished operation; operation names the command and install_refusal says why, with that… |
+| `install_build_manifest_unreadable` | warning | none | 0.12.0 | active | pending | written | actinglab status or ac_overview could not read the install's build manifest. |
+| `install_caveat_noted` | warning | none | 0.12.12 | active | pending | written | An installer command (a rescue row of the Lab) did its work, but install_caveat names something left unchecked, pending or on the previous build; operation… |
+| `install_command_done` | success | none | 0.12.12 | active | pending | written | An installer command (a rescue row of the Lab) did what was asked (contracts/install-cli.md); operation names the command. |
+| `install_command_refused` | error | none | 0.12.12 | active | pending | written | An installer command (a rescue row of the Lab) refused, or failed without leaving an unfinished operation; operation names the command and install_refusal says… |
 | `install_operation_interrupted` | fatal | none | 0.12.12 | active | pending | written | A step of the installer operation install_operation_id failed after it had changed the disk, or the operation could not end (its end journalled,… |
 | `install_process_root_mismatch` | error | none | 0.12.0 | active | pending | TBD | mcp-serve --root names another install root than the process runs from. |
 | `install_process_state_root_mismatch` | error | none | 0.12.0 | active | pending | TBD | mcp-serve --state-root names another state root than the install's configuration. |
-| `install_root_unresolved` | error | none | 0.12.0 | active | pending | TBD | actingctl does not run from an install root and mcp-serve got no --root. |
+| `install_root_unresolved` | error | none | 0.12.0 | active | pending | TBD | actinglab does not run from an install root. |
 | `install_state_root_unresolved` | error | none | 0.12.0 | active | pending | TBD | The MCP server cannot tell the Runtime state root. |
 | `install_transition_aborted` | error | none | 0.12.0 | active | settled | written | actingctl install-transition: the Runtime reports the transition in phase aborted: the drain ended and admission reopened on the old owner. |
 | `install_transition_failed` | error | none | 0.12.0 | active | settled | written | actingctl install-transition: the Runtime reports the transition in phase failed, with admission closed. |
 | `install_transition_reported` | success | none | 0.12.0 | active | settled | written | actingctl install-transition: the Runtime answered the transition action. |
 | `instance_ambiguous` | error | none | 0.12.0 | active | pending | TBD | An instance selector names more than one configured instance. |
-| `instance_emulator_controlled` | success | none | 0.12.0 | active | pending | TBD | actingctl emulator start\|stop\|restart: the Runtime completed the emulator control. |
-| `instance_facts_reported` | success | none | 0.12.0 | active | pending | TBD | actingctl facts --instance: one instance's facts (InstanceFactSnapshot) were printed, as ac_facts with scope instance answers them (Workflow #389 MCP-4). |
-| `instance_frame_exported` | success | none | 0.12.0 | active | pending | TBD | actingctl observe --export: the observed frame was read back verified and written to the export folder. |
-| `instance_frames_captured` | success | none | 0.12.0 | active | pending | TBD | actingctl stream: the Runtime captured the frame sequence. |
-| `instance_observed` | success | none | 0.12.0 | active | pending | TBD | actingctl observe: the Runtime took one read-only frame of the instance. |
-| `instance_reset_done` | success | none | 0.12.0 | active | pending | TBD | actingctl reset: the Runtime reset the instance. |
-| `instance_self_check_failed` | error | none | 0.12.0 | active | pending | TBD | actingctl selfcheck: the instance's reconnect or self-check failed; its failure code, when the result gives one, is the caused_by link. |
-| `instance_self_check_reported` | success | none | 0.12.0 | active | pending | TBD | actingctl selfcheck: the instance reconnected and its self-check passed. |
+| `instance_emulator_controlled` | success | none | 0.12.0 | active | pending | TBD | actinglab emu start\|stop\|restart: the Runtime completed the emulator control. |
+| `instance_facts_reported` | success | none | 0.12.0 | active | pending | TBD | actinglab facts: one instance's facts (InstanceFactSnapshot) were printed, as ac_facts with scope instance answers them (Workflow #389 MCP-4). |
+| `instance_frame_exported` | success | none | 0.12.0 | active | pending | TBD | actinglab frame with an export folder: the observed frame was read back verified and written to the export folder. |
+| `instance_frames_captured` | success | none | 0.12.0 | active | pending | TBD | actinglab frames: the Runtime captured the frame sequence. |
+| `instance_observed` | success | none | 0.12.0 | active | pending | TBD | actinglab frame: the Runtime took one read-only frame of the instance. |
+| `instance_reset_done` | success | none | 0.12.0 | active | pending | TBD | actinglab reset: the Runtime reset the instance. |
+| `instance_self_check_failed` | error | none | 0.12.0 | active | pending | TBD | actinglab emu selfcheck: the instance's reconnect or self-check failed; its failure code, when the result gives one, is the caused_by link. |
+| `instance_self_check_reported` | success | none | 0.12.0 | active | pending | TBD | actinglab emu selfcheck: the instance reconnected and its self-check passed. |
 | `instance_status_reported` | success | none | 0.12.0 | retired | pending | TBD | Retired (Workflow #434 LAB-7, 0.12.62): actingctl emulator status is deleted; the Lab's status carries each instance, so nothing emits this code. |
-| `instances_discovered` | success | none | 0.12.0 | active | settled | written | actingctl emulator discover: the Runtime ran one emulator instance discovery and listed the instances; count is how many. |
+| `instances_discovered` | success | none | 0.12.0 | active | settled | written | actinglab discover: the Runtime ran one emulator instance discovery and listed the instances; count is how many. |
 | `job_capacity_exhausted` | error | none | 0.12.0 | active | pending | TBD | The MCP server holds as many jobs as it may. |
 | `job_start_failed` | error | none | 0.12.0 | active | pending | TBD | The MCP server could not start a job thread. |
 | `lab_operation_completed` | success | none | 0.12.47 | active | pending | written | Workflow #434 LAB-2: an operation of actinglab's CLI module (or of actinglab serve --stdio) whose source has no success code of its own ran to its end: an… |
@@ -84,7 +84,7 @@ column means. 204 codes.
 | `mcp_batch_unsupported` | error | none | 0.12.0 | active | pending | TBD | JSON-RPC -32600: a batch array arrived outside a session initialized with protocol 2025-03-26. |
 | `mcp_config_program_unresolved` | error | none | 0.12.0 | retired | pending | TBD | Retired (Workflow #434 LAB-7, 0.12.62): actingctl mcp-config is deleted; the Lab's mcp config prints the second generation's snippet, so nothing emits this… |
 | `mcp_config_program_unsupported` | error | none | 0.12.0 | retired | pending | TBD | Retired (Workflow #434 LAB-7, 0.12.62): actingctl mcp-config is deleted; the Lab's mcp config prints the second generation's snippet, so nothing emits this… |
-| `mcp_file_too_large` | error | none | 0.12.0 | active | pending | TBD | mcp-serve, or actingctl overview reading the build manifest, read a file (a configuration, a manifest, an export) larger than its bound limit_bytes. |
+| `mcp_file_too_large` | error | none | 0.12.0 | active | pending | TBD | mcp-serve, or actinglab status reading the build manifest, read a file (a configuration, a manifest, an export) larger than its bound limit_bytes. |
 | `mcp_identity_card_refused` | warning | none | 0.12.0 | active | pending | written | The Runtime refused mcp-serve's governance identity card (governance.allowed_clients); the write went ahead without it and the refusal is the caused_by link. |
 | `mcp_input_failed` | error | none | 0.12.0 | active | pending | TBD | mcp-serve could not read stdin and ended; the OS error is the caused_by link. |
 | `mcp_message_malformed` | error | none | 0.12.0 | active | pending | TBD | JSON-RPC -32700: an MCP message line is not JSON; the parser's error is the caused_by link. |
@@ -99,50 +99,50 @@ column means. 204 codes.
 | `mcp_tier_retired` | warning | none | 0.12.0 | active | pending | written | mcp-serve was started with the retired --tier argument. |
 | `mcp_tool_panicked` | error | none | 0.12.0 | active | pending | TBD | An MCP tool call panicked; the server goes on. |
 | `mcp_workers_unavailable` | error | none | 0.12.0 | active | pending | TBD | The MCP server has no worker thread for the call. |
-| `monitor_policy_cleared` | success | none | 0.12.0 | active | pending | TBD | actingctl monitor-clear: the Runtime cleared the instance's monitor policy. |
-| `monitor_policy_set` | success | none | 0.12.0 | active | pending | TBD | actingctl monitor-set: the Runtime took the instance's monitor policy. |
+| `monitor_policy_cleared` | success | none | 0.12.0 | active | pending | TBD | actinglab monitor clear: the Runtime cleared the instance's monitor policy. |
+| `monitor_policy_set` | success | none | 0.12.0 | active | pending | TBD | actinglab monitor set: the Runtime took the instance's monitor policy. |
 | `monitor_status_reported` | success | none | 0.12.0 | retired | pending | TBD | Retired (Workflow #434 LAB-7, 0.12.62): actingctl monitor-status is deleted; the Lab's status carries the monitors, so nothing emits this code. |
-| `outcome_codes_reported` | success | none | 0.12.0 | active | pending | TBD | actingctl codes: the catalog entry of one outcome code, or one page of the code list, was printed from the outcome catalog this build embeds, as ac_outcome_code… |
+| `outcome_codes_reported` | success | none | 0.12.0 | active | pending | TBD | actinglab codes: the catalog entry of one outcome code, or one page of the code list, was printed from the outcome catalog this build embeds, as ac_outcome_code… |
 | `output_budget_exceeded` | error | none | 0.12.0 | active | pending | TBD | An MCP tool result takes more bytes as sent than the tool output budget: actual_bytes is the bytes the tools/call result takes as sent in the session's protocol… |
-| `package_binding_unreadable` | warning | none | 0.12.0 | active | pending | written | actingctl packs or ac_packs found a package binding of the selected configuration whose path does not exist or cannot be read (a package folder bound as a… |
-| `package_bindings_reported` | success | none | 0.12.0 | active | pending | TBD | actingctl packs: the bound packages of the selected configuration were printed. |
+| `package_binding_unreadable` | warning | none | 0.12.0 | active | pending | written | actinglab packs or ac_packs found a package binding of the selected configuration whose path does not exist or cannot be read (a package folder bound as a… |
+| `package_bindings_reported` | success | none | 0.12.0 | active | pending | TBD | actinglab packs: the bound packages of the selected configuration were printed. |
 | `preflight_failed` | warning | none | 0.12.0 | active | pending | written | record draft and ac_binding_draft: actinglab package preflight did not pass the recorded package. |
 | `process_probe_failed` | error | none | 0.12.0 | active | pending | TBD | The watchdog's process probe failed. |
-| `recovery_ladder_drill_queued` | success | none | 0.12.0 | active | pending | TBD | actingctl ladder-drill: the Runtime admitted a drill of the instance's stuck-recovery ladder and queued its claim; the line carries the drill {instance_alias,… |
+| `recovery_ladder_drill_queued` | success | none | 0.12.0 | active | pending | TBD | actinglab drill: the Runtime admitted a drill of the instance's stuck-recovery ladder and queued its claim; the line carries the drill {instance_alias, mode,… |
 | `report_exported` | success | none | 0.12.61 | active | pending | written | Workflow #467 RPT-1: report export wrote one problem report archive of the errors view (the newest failed and unfinished runs of the window with their steps,… |
 | `report_output_refused` | error | none | 0.12.61 | active | pending | written | Workflow #467 RPT-1: report export refused its output directory path because it lies inside the installation root or the Runtime's state root, junctions and… |
 | `report_part_missing` | warning | none | 0.12.61 | active | pending | written | Workflow #467 RPT-1: a part of the problem report could not be read, or not to its end, and is missing from the archive or incomplete in it: report_part names… |
 | `report_trimmed` | warning | none | 0.12.61 | active | pending | written | Workflow #467 RPT-1: the problem report's size bound limit_bytes, measured on the archive's packed bytes, left count parts out, in order: frames of the older… |
 | `report_write_failed` | error | none | 0.12.61 | active | pending | written | Workflow #467 RPT-1: report export could not write its archive; report_write_step says at which step: pack (the archive packed in memory; path the output… |
-| `resource_targets_applied` | success | none | 0.12.0 | active | pending | TBD | actingctl agent-apply-resource-targets: the Runtime applied the resource target policy. |
+| `resource_targets_applied` | success | none | 0.12.0 | active | pending | TBD | actinglab targets set: the Runtime applied the resource target policy. |
 | `resource_targets_document_too_large` | error | none | 0.12.0 | active | pending | TBD | ac_targets_set: the policy document is larger than its bound. |
 | `resource_targets_file_invalid` | error | none | 0.12.0 | active | pending | TBD | agent-apply-resource-targets: the policy file is unreadable, empty, too large or not UTF-8. |
-| `run_evidence_reported` | success | none | 0.12.0 | active | pending | TBD | actingctl run evidence: one page of a contained run's steps (page, recognised targets, input, frame refs), its final page and frame and its overlay ref was… |
-| `run_list_reported` | success | none | 0.12.0 | active | pending | TBD | actingctl runs: one page of the run list was printed. |
-| `run_unknown` | error | none | 0.12.0 | active | pending | TBD | ac_stop_run: no run of this server has the handle; actingctl run evidence and ac_run_evidence: no contained run has the request_id (request_id) or the run_id… |
-| `runtime_config_reported` | success | none | 0.12.0 | active | pending | TBD | actingctl status --config: the config.* records of the runtime fact snapshot were printed. |
-| `runtime_diagnosis_reported` | success | none | 0.12.0 | active | pending | TBD | actingctl diagnose: the diagnosis of the window was printed. |
-| `runtime_events_reported` | success | none | 0.12.0 | active | pending | TBD | actingctl events: one page of ledger events was printed. |
+| `run_evidence_reported` | success | none | 0.12.0 | active | pending | TBD | actinglab run evidence: one page of a contained run's steps (page, recognised targets, input, frame refs), its final page and frame and its overlay ref was… |
+| `run_list_reported` | success | none | 0.12.0 | active | pending | TBD | actinglab runs: one page of the run list was printed. |
+| `run_unknown` | error | none | 0.12.0 | active | pending | TBD | ac_stop_run: no run of this server has the handle; actinglab run evidence and ac_run_evidence: no contained run has the request_id (request_id) or the run_id… |
+| `runtime_config_reported` | success | none | 0.12.0 | active | pending | TBD | actinglab config: the config.* records of the runtime fact snapshot were printed. |
+| `runtime_diagnosis_reported` | success | none | 0.12.0 | active | pending | TBD | actinglab diagnose: the diagnosis of the window was printed. |
+| `runtime_events_reported` | success | none | 0.12.0 | active | pending | TBD | actinglab events: one page of ledger events was printed. |
 | `runtime_fact_refresh_reported` | success | none | 0.12.0 | retired | pending | TBD | Retired (Workflow #434 LAB-7, 0.12.62): actingctl fact-refresh is deleted; the Lab's status carries the fact refresh block, so nothing emits this code. |
-| `runtime_facts_reported` | success | none | 0.12.0 | active | pending | TBD | actingctl facts --program: the runtime fact snapshot was printed. |
-| `runtime_overview_reported` | success | none | 0.12.0 | active | pending | TBD | actingctl overview: the overview was printed, as ac_overview answers it (Workflow #389 MCP-8). |
+| `runtime_facts_reported` | success | none | 0.12.0 | active | pending | TBD | actinglab facts --program: the runtime fact snapshot was printed. |
+| `runtime_overview_reported` | success | none | 0.12.0 | active | pending | TBD | actinglab status: the overview was printed, as ac_overview answers it (Workflow #389 MCP-8). |
 | `runtime_performance_reported` | success | none | 0.12.0 | retired | pending | TBD | Retired (Workflow #434 LAB-7, 0.12.62): actingctl perf-status is deleted; the Lab's status carries the performance block, so nothing emits this code. |
-| `runtime_schedule_reported` | success | none | 0.12.5 | active | pending | written | actingctl schedule: the latest policy evaluation's explanation (ScheduleExplanation) was printed: per instance its not-running row, its selected task and every… |
-| `runtime_scheduling_paused` | success | none | 0.12.0 | active | pending | TBD | actingctl pause: the Runtime paused scheduling (globally or for the instance). |
-| `runtime_scheduling_resumed` | success | none | 0.12.0 | active | pending | TBD | actingctl resume: the Runtime lifted the scheduling pause. |
-| `runtime_shutdown_completed` | success | none | 0.12.0 | active | settled | written | actingctl request-shutdown --wait: the Runtime accepted the shutdown, its owner record closed and its process exited within the wait; the result carries the… |
-| `runtime_shutdown_requested` | success | none | 0.12.0 | active | settled | written | actingctl request-shutdown: the Runtime accepted the shutdown request; the result carries its receipt. |
+| `runtime_schedule_reported` | success | none | 0.12.5 | active | pending | written | actinglab schedule: the latest policy evaluation's explanation (ScheduleExplanation) was printed: per instance its not-running row, its selected task and every… |
+| `runtime_scheduling_paused` | success | none | 0.12.0 | active | pending | TBD | actinglab pause: the Runtime paused scheduling (globally or for the instance). |
+| `runtime_scheduling_resumed` | success | none | 0.12.0 | active | pending | TBD | actinglab resume: the Runtime lifted the scheduling pause. |
+| `runtime_shutdown_completed` | success | none | 0.12.0 | active | settled | written | actinglab shutdown --wait: the Runtime accepted the shutdown, its owner record closed and its process exited within the wait; the result carries the receipt and… |
+| `runtime_shutdown_requested` | success | none | 0.12.0 | active | settled | written | actinglab shutdown: the Runtime accepted the shutdown request; the result carries its receipt. |
 | `runtime_status_reported` | success | none | 0.12.0 | retired | settled | written | Retired (Workflow #434 LAB-7, 0.12.62): actingctl status is deleted; the Lab's status answers runtime_overview_reported, so nothing emits this code. |
-| `shutdown_wait_journal_unreadable` | error | none | 0.12.0 | active | settled | written | actingctl's shutdown wait could not read the owner journal under the state root: path names the file, line the record that does not decode, and the decoder's or… |
-| `shutdown_wait_timeout` | error | none | 0.12.0 | active | settled | written | actingctl request-shutdown --wait or install-transition --wait: the accepted owner did not close and exit within timeout_ms. |
+| `shutdown_wait_journal_unreadable` | error | none | 0.12.0 | active | settled | written | The Lab's shutdown wait could not read the owner journal under the state root: path names the file, line the record that does not decode, and the decoder's or… |
+| `shutdown_wait_timeout` | error | none | 0.12.0 | active | settled | written | actinglab shutdown --wait or install-transition --wait: the accepted owner did not close and exit within timeout_ms. |
 | `since_out_of_range` | error | none | 0.12.0 | active | pending | TBD | ac_diagnose: since_unix_ms is further back than the window allows. |
 | `spawn_failed` | error | none | 0.12.0 | active | pending | TBD | The watchdog's start could not spawn the Runtime. |
-| `start_runtime_already_running` | error | none | 0.12.0 | active | pending | TBD | actingctl start or restart: a live process holds the owner lock of the state root (path), so nothing was started and nothing was changed. |
-| `start_runtime_refused` | error | none | 0.12.0 | active | pending | TBD | actingctl start or restart refused to start the Runtime; the watchdog condition that refused it (installer busy, a tick in progress) is the caused_by link. |
-| `start_runtime_restarted` | success | none | 0.12.0 | active | pending | TBD | actingctl restart: the Runtime was stopped and started again and its owner answers; log is the start's log file. |
-| `start_runtime_started` | success | none | 0.12.0 | active | pending | TBD | actingctl start: the Runtime was started and its owner answers; log is the start's log file. |
+| `start_runtime_already_running` | error | none | 0.12.0 | active | pending | TBD | actinglab up or restart: a live process holds the owner lock of the state root (path), so nothing was started and nothing was changed. |
+| `start_runtime_refused` | error | none | 0.12.0 | active | pending | TBD | actinglab up or restart refused to start the Runtime; the watchdog condition that refused it (installer busy, a tick in progress) is the caused_by link. |
+| `start_runtime_restarted` | success | none | 0.12.0 | active | pending | TBD | actinglab restart: the Runtime was stopped and started again and its owner answers; log is the start's log file. |
+| `start_runtime_started` | success | none | 0.12.0 | active | pending | TBD | actinglab up: the Runtime was started and its owner answers; log is the start's log file. |
 | `start_timeout` | error | none | 0.12.0 | active | pending | TBD | The Runtime the watchdog started did not answer in time. |
-| `start_wait_idle_expired` | error | none | 0.12.0 | active | pending | TBD | actingctl restart: after --wait-idle (timeout_ms) the instances named in aliases still held a lease or queued requests, so nothing was stopped. |
+| `start_wait_idle_expired` | error | none | 0.12.0 | active | pending | TBD | actinglab restart (which waits 0 ms for idle; actingctl restart --wait-idle waited longer until Workflow #434 LAB-7): after the wait (timeout_ms) the instances… |
 | `suspended_report_failed` | error | none | 0.12.0 | active | pending | TBD | actingd suspended exited with its own failure report; that report's outcome is the caused_by link and its stderr tail a related foreign_other_error link. |
 | `suspended_report_io_failed` | error | none | 0.12.0 | active | pending | TBD | Reading actingd suspended's output failed. |
 | `suspended_report_reader_panicked` | error | none | 0.12.0 | active | pending | TBD | The reader of actingd's suspended report panicked. |
@@ -150,9 +150,9 @@ column means. 204 codes.
 | `suspended_report_state_root_mismatch` | error | none | 0.12.0 | active | pending | TBD | actingd suspended read another state root than this server. |
 | `suspended_report_timeout` | error | none | 0.12.0 | active | pending | TBD | actingd suspended was still running at the end of the call budget. |
 | `suspended_report_unreadable` | error | none | 0.12.0 | active | pending | TBD | actingd suspended printed no JSON report. |
-| `task_offset_published` | success | none | 0.12.0 | active | pending | TBD | actingctl task-offset: the Runtime recorded the manual priority offset. |
+| `task_offset_published` | success | none | 0.12.0 | active | pending | TBD | actinglab offset: the Runtime recorded the manual priority offset. |
 | `task_offset_scope_ambiguous` | error | none | 0.12.0 | active | pending | TBD | task-offset without --instance: the registered instances do not name exactly one configured game. |
-| `task_run_reported` | success | none | 0.12.0 | active | pending | TBD | actingctl task-run: the contained run completed. |
+| `task_run_reported` | success | none | 0.12.0 | active | pending | TBD | actinglab run start: the contained run completed. |
 | `tier_not_enabled` | error | none | 0.12.0 | retired | pending | TBD | Retired (Workflow #434 LAB-7, 0.12.62): the first MCP server (actingctl mcp-serve) and its tiers are deleted; the Lab's MCP server has no tiers, so nothing… |
 | `watchdog_alive` | info | none | 0.12.0 | active | pending | TBD | Watchdog decision: the Runtime owner answers. |
 | `watchdog_budget_exhausted` | error | none | 0.12.0 | active | pending | TBD | Watchdog decision: the restart budget is exhausted. |
@@ -163,7 +163,7 @@ column means. 204 codes.
 | `watchdog_formal_close_unlogged` | warning | none | 0.12.0 | active | pending | written | Watchdog status attention: no Runtime log covers the formally closed owner epoch, so a fatal stop of an unlogged start may be hidden. |
 | `watchdog_formal_start_observed` | info | none | 0.12.0 | active | pending | TBD | The watchdog observed a formal start of the Runtime. |
 | `watchdog_grace` | info | none | 0.12.0 | active | pending | TBD | Watchdog decision: a start waits out the grace after a gap. |
-| `watchdog_install_refused` | error | none | 0.12.0 | active | pending | TBD | actingctl watchdog install refused; the condition that refused it (installer busy, a tick in progress) is the caused_by link. |
+| `watchdog_install_refused` | error | none | 0.12.0 | active | pending | TBD | actinglab watchdog install refused; the condition that refused it (installer busy, a tick in progress) is the caused_by link. |
 | `watchdog_installed` | success | none | 0.12.0 | active | pending | TBD | The watchdog task was registered. |
 | `watchdog_installer_busy` | info | none | 0.12.0 | active | pending | TBD | Watchdog decision: the installer holds the writer lock. |
 | `watchdog_installer_unfinished` | warning | none | 0.12.12 | active | pending | written | Watchdog decision (row 7a''): a start would be considered, but install\current.json names the unfinished installer update or rollback (or its undo)… |

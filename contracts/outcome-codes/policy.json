@@ -872,7 +872,7 @@
       "since": "0.12.0",
       "description": "Scheduling decision reason: a resource target record that the formal entry did not write is ignored.",
       "common_causes": "A session.resource_targets record of server or game scope covers the instance. Only the formal entry writes a policy, scoped to one instance; such a record, which an ordinary fact publication of an older build wrote, is never a policy.",
-      "handling": "The record has no effect on scheduling. Apply the instance's targets through the formal entry (ac_targets_set, or actingctl agent-apply-resource-targets) if they should apply."
+      "handling": "The record has no effect on scheduling. Apply the instance's targets through the formal entry (ac_targets_set, or actinglab targets set) if they should apply."
     },
     "resource_target_policy_unreadable": {
       "category": "warning",
@@ -892,7 +892,7 @@
       "since": "0.12.0",
       "description": "Scheduling decision reason: the instance's stored resource target policy cannot be read, and the instance runs base scheduling.",
       "common_causes": "The instance's own session.resource_targets record cannot be decoded, or holds targets without an expiry; the reason's detail names the decode code.",
-      "handling": "The instance runs base scheduling, without its targets, until a readable policy replaces the record: apply its policy again through ac_targets_set or actingctl agent-apply-resource-targets."
+      "handling": "The instance runs base scheduling, without its targets, until a readable policy replaces the record: apply its policy again through ac_targets_set or actinglab targets set."
     },
     "resource_target_policy_expired": {
       "category": "info",
@@ -932,7 +932,7 @@
       "since": "0.12.0",
       "description": "Scheduling decision reason: some tasks the resource target policy names cannot be evaluated.",
       "common_causes": "Under the instance's active policy some targets cannot be weighed against the active catalog: a named task the catalog does not know, that lies out of the instance's scope or is disabled; a target without tasks whose resource the catalog does not know, cannot observe or scopes elsewhere; or a target whose resource no task of the instance produces (no_producing_task). The reason's detail lists them as target/task:why or target@resource:why.",
-      "handling": "The other targets still apply, and a disabled named task keeps its coverage. Apply a policy that names only what the active catalog resolves (ac_targets_set or actingctl agent-apply-resource-targets) when the listed targets should count."
+      "handling": "The other targets still apply, and a disabled named task keeps its coverage. Apply a policy that names only what the active catalog resolves (ac_targets_set or actinglab targets set) when the listed targets should count."
     },
     "resource_targets_parser_code_unexpected": {
       "category": "error",
@@ -1889,7 +1889,7 @@
       "since": "0.12.3",
       "description": "Workflow #411 B15 (contracts/remedies.md): a blocked task stopped and waits for a person: no source allows a usable remedy for its need (remedy_problem no_choice: no target record, configuration row or package default names it; choice_none: the deciding source says none; choice_invalid: the choice names a capability the remedy does not list or leaves nothing allowed; parameter_invalid: a chosen parameter value is not one of the provider's declared options). remedy_source names the deciding source and capability the capability concerned, when there is one. Written once per round as a goal_missed planning signal (signal:remedy:stopped:); the task stays deferred at position 8a, across windows and restarts, until remedy_inputs_digest changes or a person lifts it. Never the recovery ladder.",
       "common_causes": "No target record and no configuration row for the need and no package default; a target record written for older packages.",
-      "handling": "Write the need's choice (actingctl remedy set, ac_remedy_set) or the configuration rows (scheduling.remedy.choices); or fix the game by hand and lift (actingctl remedy lift). Any change of the choices lifts the stop."
+      "handling": "Write the need's choice (actinglab remedy set, ac_remedy_set) or the configuration rows (scheduling.remedy.choices); or fix the game by hand and lift (actinglab remedy lift). Any change of the choices lifts the stop."
     },
     "policy_remedy_unavailable": {
       "category": "error",
@@ -1950,7 +1950,7 @@
       "since": "0.12.3",
       "description": "Workflow #411 B15 (contracts/remedies.md): a blocked task stopped and waits for a person: its remedies ran as often as the round allows (remedy_problem round_limit: count reached limit_count, scheduling.remedy.max_per_round, in one layer) or the chain reached three layers (depth_limit: a provider at remedy_depth 3 ended blocked again), and the block remained. Written once per round as a goal_missed planning signal (signal:remedy:stopped:); the task stays deferred at position 8a until remedy_inputs_digest changes or a person lifts it. Never the recovery ladder.",
       "common_causes": "The remedy does not free enough; a provider is itself blocked by another need at the third layer.",
-      "handling": "Look at the instance; change the choice or the packages, or fix it by hand and lift (actingctl remedy lift)."
+      "handling": "Look at the instance; change the choice or the packages, or fix it by hand and lift (actinglab remedy lift)."
     },
     "policy_remedy_lifted": {
       "category": "info",

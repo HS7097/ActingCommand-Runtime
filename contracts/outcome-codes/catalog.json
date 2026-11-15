@@ -5361,10 +5361,10 @@
           "description": "actingd check-config."
         },
         "emulator_discover": {
-          "description": "actingctl emulator discover."
+          "description": "actinglab discover."
         },
         "status": {
-          "description": "actingctl status."
+          "description": "actinglab status."
         },
         "install_transition": {
           "description": "actingctl install-transition."
@@ -6436,10 +6436,10 @@
       },
       "tokens": {
         "cli": {
-          "description": "actingctl, and the installer and scripts that run it."
+          "description": "The CLI channel: actingctl and what ran it until Workflow #434 LAB-7 (0.12.62); since then no program of this repository binds it."
         },
         "mcp": {
-          "description": "actingctl mcp-serve."
+          "description": "The MCP channel: actingctl mcp-serve until Workflow #434 LAB-7 (0.12.62); since then no program of this repository binds it."
         },
         "ui": {
           "description": "The console."
@@ -7935,10 +7935,10 @@
           "description": "The root is no single-location root: runtime\\BUILD-MANIFEST.json is not a file."
         },
         "layout_ab_unsupported": {
-          "description": "The root holds install\\active.json (path): an A/B installation, which acsetup installs, not actingctl install."
+          "description": "The root holds install\\active.json (path): an A/B installation, which acsetup installs, not the installer of a single-location root."
         },
         "not_adopted": {
-          "description": "install\\state.json is missing: run actingctl install adopt first."
+          "description": "install\\state.json is missing: run the Lab's adopt first."
         },
         "state_invalid": {
           "description": "install\\state.json, install\\current.json or an operation journal is not what this build writes (path)."
@@ -8168,7 +8168,7 @@
           "description": "A release folder was checked without a release-facts file: the files match SHA256SUMS and their manifests, but the tag and the published asset digests were not checked."
         },
         "mcp_clients_on_previous_build": {
-          "description": "An update or rollback renamed running actingctl images aside (MCP servers, reads) that keep running on the previous build (count); their clients reconnect to use the new build."
+          "description": "An update or rollback renamed running images of the Lab's MCP server aside that keep running on the previous build (count); their clients reconnect to use the new build."
         },
         "pack_declaration_unknown": {
           "description": "A placed game root's package interface is not known (adopted roots keep no interfaces.json), so the package edge could not be checked for it (game)."
@@ -8267,7 +8267,7 @@
           "description": "Design 5.3: the MCP entry g1 follows a conversion once and no later switch; clients move to g2. (R-15b, since 0.12.35)"
         },
         "guard_failed": {
-          "description": "In the Lab's rescue module a guard failed or was not evaluated and the operation went on (contracts/lab-two-entries.md section 6: guards report, never refuse); install_guards names the guards, and the answer and the journal keep their rows. actingctl install refuses the same rows with install_refusal guard_failed instead. (Workflow #434 LAB-3, since 0.12.48)"
+          "description": "In the Lab's rescue module a guard failed or was not evaluated and the operation went on (contracts/lab-two-entries.md section 6: guards report, never refuse); install_guards names the guards, and the answer and the journal keep their rows. (Workflow #434 LAB-3, since 0.12.48)"
         },
         "hold_ownership_unconfirmed": {
           "description": "The Lab's rescue module could not read whether a hold is its own (contracts/lab-two-entries.md section 5): the reason does not parse, or the root or its operations folder cannot be read. The answer's next leaves that release-hold out, as for a hold the module does not own, and this note says why; operation is install_release_hold, hold_reason names the reason when it parses, and the read failure is the caused_by link. Nothing is paused or resumed. (Workflow #434 LAB-3 fix 3, since 0.12.48)"
@@ -8726,7 +8726,7 @@
           "description": "A UI program."
         },
         "mcp_serve": {
-          "description": "An actingctl mcp-serve."
+          "description": "An MCP server (actinglab-mcp.exe; actingctl mcp-serve until Workflow #434 LAB-7)."
         },
         "tool": {
           "description": "Another program of the slot's Tools."

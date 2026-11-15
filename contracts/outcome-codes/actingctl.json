@@ -17,9 +17,9 @@
       "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl was given arguments its usage does not allow: an unknown command or option, a missing or repeated value, or a value out of range. argument and argument_problem name the argument and the rule when one argument is at fault, range_min and range_max the allowed range, and variable an invalid ACTINGCOMMAND_DETAIL or (Workflow #434 LAB-2, actinglab) an ACTINGCOMMAND_INITIATOR other than Lab-制包 or Lab-救急. actinglab's CLI module and serve --stdio answer it for their own words and options too. Exit 1.",
+      "description": "actinglab (actingctl until Workflow #434 LAB-7) was given arguments its usage does not allow: an unknown command or option, a missing or repeated value, or a value out of range. argument and argument_problem name the argument and the rule when one argument is at fault, range_min and range_max the allowed range, and variable an invalid ACTINGCOMMAND_DETAIL or (Workflow #434 LAB-2, actinglab) an ACTINGCOMMAND_INITIATOR other than Lab-制包 or Lab-救急. actinglab's CLI module and serve --stdio answer it for their own words and options too. Exit 1.",
       "common_causes": "A misspelt command or option, or a caller written for another release.",
-      "handling": "Correct the command line; actingctl without arguments prints its usage."
+      "handling": "Correct the command line; actinglab help prints the rows and their words."
     },
     "actingctl_package_resolution_failed": {
       "category": "error",
@@ -33,7 +33,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl could not resolve the contained task package of task-run.",
+      "description": "actinglab could not resolve the contained task package of run start.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -50,7 +50,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl could not read a bounded fact observation file, or it is invalid.",
+      "description": "actinglab could not read a bounded fact observation file, or it is invalid.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -64,9 +64,9 @@
       "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl could not write its JSON output line: serialising the result failed or stdout could not be written. Exit 1.",
+      "description": "The program (actinglab, actingwatch) could not write its JSON output line: serialising the result failed or stdout could not be written. Exit 1.",
       "common_causes": "stdout closed early by the caller (a broken pipe), or a defect in the result's serialisation.",
-      "handling": "Keep the reader of actingctl's stdout open until it exits; report it when it repeats."
+      "handling": "Keep the reader of the program's stdout open until it exits; report it when it repeats."
     },
     "resource_targets_file_invalid": {
       "category": "error",
@@ -144,9 +144,9 @@
       "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl request-shutdown --wait or install-transition --wait: the accepted owner did not close and exit within timeout_ms. pid and owner_epoch name the owner; owner_closed and process_alive are what the wait last saw, and a failed process probe is the caused_by link. Exit 1.",
+      "description": "actinglab shutdown --wait or install-transition --wait: the accepted owner did not close and exit within timeout_ms. pid and owner_epoch name the owner; owner_closed and process_alive are what the wait last saw, and a failed process probe is the caused_by link. Exit 1.",
       "common_causes": "Work in flight that takes longer than the wait to drain, a Runtime that hangs while closing, or a wait set too short.",
-      "handling": "Run actingctl status to see whether the Runtime still answers; wait longer, or check the Runtime's log for what holds it."
+      "handling": "Run actinglab status to see whether the Runtime still answers; wait longer, or check the Runtime's log for what holds it."
     },
     "shutdown_wait_journal_unreadable": {
       "category": "error",
@@ -162,9 +162,9 @@
       "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl's shutdown wait could not read the owner journal under the state root: path names the file, line the record that does not decode, and the decoder's or the OS error is the caused_by link. Exit 1.",
+      "description": "The Lab's shutdown wait could not read the owner journal under the state root: path names the file, line the record that does not decode, and the decoder's or the OS error is the caused_by link. Exit 1.",
       "common_causes": "A journal written by another release, a damaged journal file, or a state root the process may not read.",
-      "handling": "Check the state root the configuration names and its owner journal; run actingctl status to see the Runtime's state."
+      "handling": "Check the state root the configuration names and its owner journal; run actinglab status to see the Runtime's state."
     },
     "arguments_invalid": {
       "category": "error",
@@ -370,7 +370,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl overview or ac_overview could not read the install's build manifest.",
+      "description": "actinglab status or ac_overview could not read the install's build manifest.",
       "common_causes": "<root>\\runtime\\BUILD-MANIFEST.json exists, but it could not be read within its size bound or is not JSON; the caused_by link says which.",
       "handling": "The overview leaves build (commit_sha, source_artifact_name) out of its install block and reads the rest as usual. Check the file at path, which belongs to the deployed runtime folder."
     },
@@ -439,7 +439,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl does not run from an install root and mcp-serve got no --root.",
+      "description": "actinglab does not run from an install root.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -553,7 +553,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "ac_stop_run: no run of this server has the handle; actingctl run evidence and ac_run_evidence: no contained run has the request_id (request_id) or the run_id given (run_state not_found).",
+      "description": "ac_stop_run: no run of this server has the handle; actinglab run evidence and ac_run_evidence: no contained run has the request_id (request_id) or the run_id given (run_state not_found).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -638,7 +638,7 @@
       "status": "active",
       "since": "0.12.0",
       "description": "An answer larger than the output budget was written whole to an export file.",
-      "common_causes": "An answer of actingctl mcp-serve (a read such as ac_facts, ac_packs or ac_events, or a Lab job's result) did not fit the call's output budget, so the server wrote it whole as <sha256>.json to its export directory and answered its header with export. A caller without a budget, such as the CLI, gets the whole answer instead.",
+      "common_causes": "An answer of the Lab's MCP server (a read such as ac_facts, ac_packs or ac_events, or a Lab job's result) did not fit the call's output budget, so the server wrote it whole as <sha256>.json to its export directory and answered its header with export. A caller without a budget, such as the CLI, gets the whole answer instead.",
       "handling": "Nothing is lost: read the whole answer from the file the value path names (actual_sha256 and actual_bytes describe it where given; count is the number of warnings an exported packs answer holds)."
     },
     "client_action_without_req_id": {
@@ -1100,7 +1100,7 @@
       "since": "0.12.0",
       "description": "Watchdog decision: the Runtime's last start ended fatally; it is held until an external fix.",
       "common_causes": "The newest actingd log written since the owner journal's last record (or, behind a close that no log covers, the newest log of an earlier owner) ends in a terminal outcome of category fatal, its last OUTCOME actingd: or OUTCOME acforward: line. The watchdog reads only that outcome's category.",
-      "handling": "Read the terminal outcome (the hold's caused_by link, the report's terminal member) and the log the value log names, and fix its cause. The watchdog starts nothing while it holds: start the Runtime formally afterwards (for example actingctl start --root <root>)."
+      "handling": "Read the terminal outcome (the hold's caused_by link, the report's terminal member) and the log the value log names, and fix its cause. The watchdog starts nothing while it holds: start the Runtime formally afterwards (for example actinglab up)."
     },
     "watchdog_formal_start_observed": {
       "category": "info",
@@ -1257,9 +1257,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The root is neither an A/B installation nor a single-location root with runtime\\BUILD-MANIFEST.json: it has no install selection (the process's own or install\\active.json) and no file runtime\\BUILD-MANIFEST.json. path names the root. The watchdog's status and run-once answer watchdog_misconfigured caused by it, watchdog install refuses with it; actingctl start and restart without --config refuse with it for every root without a selection, a single-location root among them. Exit 1.",
-      "common_causes": "--root names a directory that is not an installation root (a slot directory, the state root, a mistyped path); a single-location root whose runtime directory was not deployed or is being replaced; actingctl start or restart without --config on a single-location root.",
-      "handling": "Pass the installation root itself; deploy the Runtime into <root>\\runtime of a single-location root, or install the root with acsetup; for actingctl start or restart on a single-location root, pass --config <root>\\actingd.config.json."
+      "description": "The root is neither an A/B installation nor a single-location root with runtime\\BUILD-MANIFEST.json: it has no install selection (the process's own or install\\active.json) and no file runtime\\BUILD-MANIFEST.json. path names the root. The watchdog's status and run-once answer watchdog_misconfigured caused by it, watchdog install refuses with it; the manual start (the Lab's restart, and up on an A/B root) refuses with it when it is given no configuration on a root without a selection (the Lab's restart gives a single-location root's own). Exit 1.",
+      "common_causes": "--root names a directory that is not an installation root (a slot directory, the state root, a mistyped path); a single-location root whose runtime directory was not deployed or is being replaced; a manual start without a configuration on a single-location root.",
+      "handling": "Pass the installation root itself; deploy the Runtime into <root>\\runtime of a single-location root, or install the root with acsetup; for actinglab up or restart on a single-location root, pass --config <root>\\actingd.config.json."
     },
     "watchdog_log_directory_unreadable": {
       "category": "error",
@@ -1670,7 +1670,7 @@
       "since": "0.12.0",
       "description": "mcp-serve was started with the retired --tier argument. MCP has no tiers from #389 U-3 on: the server starts as usual with every general tool and the tools of the installed Lab options, and reports this once on stderr and in the tools/list warnings.",
       "common_causes": "A harness configuration written before #389 U-3.",
-      "handling": "Remove --tier from the harness configuration; actingctl mcp-config prints the current form."
+      "handling": "Remove --tier from the harness configuration; the Lab's mcp config prints the current form."
     },
     "package_binding_unreadable": {
       "category": "warning",
@@ -1686,7 +1686,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl packs or ac_packs found a package binding of the selected configuration whose path does not exist or cannot be read (a package folder bound as a startup package also needs a control.json naming its package_id); the row says readable false and the rest of the answer is read as usual. alias names the instance of a per-instance binding. Workflow #429 R-11 (since 0.12.36): also a composed package's control.json that cannot be read, is larger than 1 MiB or does not decode (path the control file; the row has no irreversible), and a game root's ui.json that exists but cannot be read (path the file; the root is listed as without it), each with the failure beneath it as its cause where there is one.",
+      "description": "actinglab packs or ac_packs found a package binding of the selected configuration whose path does not exist or cannot be read (a package folder bound as a startup package also needs a control.json naming its package_id); the row says readable false and the rest of the answer is read as usual. alias names the instance of a per-instance binding. Workflow #429 R-11 (since 0.12.36): also a composed package's control.json that cannot be read, is larger than 1 MiB or does not decode (path the control file; the row has no irreversible), and a game root's ui.json that exists but cannot be read (path the file; the root is listed as without it), each with the failure beneath it as its cause where there is one.",
       "common_causes": "A path the selected configuration binds does not exist or cannot be read: an instance's startup or resource package (alias names the instance), a procedure's scheduled package_path, a composed procedure's folder or the standard-pack root; or a startup package folder has no control.json that names its package_id. Also a bound package's control.json that cannot be read, is larger than 1 MiB or does not decode, and a file of a game root (its bundle, pages, interrupts, navigation, display layout or ui.json) that exists but cannot be read.",
       "handling": "Correct the path in actingd.config.json, or restore the package or file at path; the caused_by link, where there is one, gives the read failure. The row reads readable false and the rest of the answer is read as usual."
     },
@@ -1702,9 +1702,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl overview or ac_overview found that the configuration generation actingd runs is not the one the installation selects now, or that the selected configuration file's sha256 is not the one actingd read at its start (also on an installation without generations); path is the selected configuration, which takes effect only when actingd is restarted. The rest of the overview is read as usual.",
+      "description": "actinglab status or ac_overview found that the configuration generation actingd runs is not the one the installation selects now, or that the selected configuration file's sha256 is not the one actingd read at its start (also on an installation without generations); path is the selected configuration, which takes effect only when actingd is restarted. The rest of the overview is read as usual.",
       "common_causes": "The selected configuration changed after actingd started: the installation now selects another configuration generation than the one actingd runs, or actingd.config.json was edited, so its sha256 is not the config_sha256 actingd recorded in config.selection at its start.",
-      "handling": "The running Runtime keeps what it read at its start. Restart it (for example actingctl restart --root <root>) when the selected configuration (path) should take effect, or undo the edit if it was not meant."
+      "handling": "The running Runtime keeps what it read at its start. Restart it (for example actinglab restart) when the selected configuration (path) should take effect, or undo the edit if it was not meant."
     },
     "outcome_codes_reported": {
       "category": "success",
@@ -1716,7 +1716,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl codes: the catalog entry of one outcome code, or one page of the code list, was printed from the outcome catalog this build embeds, as ac_outcome_code answers it (Workflow #389 MCP-14).",
+      "description": "actinglab codes: the catalog entry of one outcome code, or one page of the code list, was printed from the outcome catalog this build embeds, as ac_outcome_code answers it (Workflow #389 MCP-14).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -1730,7 +1730,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl run evidence: one page of a contained run's steps (page, recognised targets, input, frame refs), its final page and frame and its overlay ref was printed, read from the run's ledger events, as ac_run_evidence answers it (Workflow #389 MCP-6).",
+      "description": "actinglab run evidence: one page of a contained run's steps (page, recognised targets, input, frame refs), its final page and frame and its overlay ref was printed, read from the run's ledger events, as ac_run_evidence answers it (Workflow #389 MCP-6).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -1744,7 +1744,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl devices list: the devices the install's adb lists now were printed, one row each with its handle, transport, state, model, the alias the state root's private binding file binds it to and a loopback endpoint, never a device serial, as ac_devices answers them (Workflow #398 RD-1c).",
+      "description": "actinglab devices: the devices the install's adb lists now were printed, one row each with its handle, transport, state, model, the alias the state root's private binding file binds it to and a loopback endpoint, never a device serial, as ac_devices answers them (Workflow #398 RD-1c).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -1758,7 +1758,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl devices bind or unbind: the state root's private binding file now binds the device of the handle to the handset alias, or no longer binds one to it; the change takes effect at the next start (Workflow #398 RD-1c).",
+      "description": "actinglab devices bind or unbind: the state root's private binding file now binds the device of the handle to the handset alias, or no longer binds one to it; the change takes effect at the next start (Workflow #398 RD-1c).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -1774,7 +1774,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl devices bind or ac_device_bind: adb does not list a device with this handle now; handles are the adb server's session numbers and change when a device is replugged or the server restarts (Workflow #398 RD-1c).",
+      "description": "actinglab devices bind or ac_device_bind: adb does not list a device with this handle now; handles are the adb server's session numbers and change when a device is replugged or the server restarts (Workflow #398 RD-1c).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -1790,7 +1790,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl devices or an ac_device tool could not read adb's device list: the install's adb (adb_path) did not start or ended with a failure, linked as foreign_os_error or foreign_adb_error with adb's text, bound device serials replaced by their labels (Workflow #398 RD-1c).",
+      "description": "actinglab devices or an ac_device tool could not read adb's device list: the install's adb (adb_path) did not start or ended with a failure, linked as foreign_os_error or foreign_adb_error with adb's text, bound device serials replaced by their labels (Workflow #398 RD-1c).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -1806,7 +1806,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl devices bind or ac_device_bind: the alias is an instance of the selected configuration that is not a handset (device.kind handset); only a handset is bound to a device. actingd reports the same condition of a configuration as device_config_invalid (Workflow #398 RD-1c).",
+      "description": "actinglab devices bind or ac_device_bind: the alias is an instance of the selected configuration that is not a handset (device.kind handset); only a handset is bound to a device. actingd reports the same condition of a configuration as device_config_invalid (Workflow #398 RD-1c).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -1823,7 +1823,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl devices or an ac_device tool found the state root's private binding file (path) breaking its rules, or a binding would break them, as device_binding_problem says: for example the device is already bound to another alias. Nothing was written (Workflow #398 RD-1c).",
+      "description": "actinglab devices or an ac_device tool found the state root's private binding file (path) breaking its rules, or a binding would break them, as device_binding_problem says: for example the device is already bound to another alias. Nothing was written (Workflow #398 RD-1c).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -1839,7 +1839,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl devices bind or unbind could not write the state root's private binding file (path); the failure is linked (Workflow #398 RD-1c).",
+      "description": "actinglab devices bind or unbind could not write the state root's private binding file (path); the failure is linked (Workflow #398 RD-1c).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -1857,7 +1857,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl start or restart: a live process holds the owner lock of the state root (path), so nothing was started and nothing was changed.",
+      "description": "actinglab up or restart: a live process holds the owner lock of the state root (path), so nothing was started and nothing was changed.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -1874,7 +1874,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl restart: after --wait-idle (timeout_ms) the instances named in aliases still held a lease or queued requests, so nothing was stopped.",
+      "description": "actinglab restart (which waits 0 ms for idle; actingctl restart --wait-idle waited longer until Workflow #434 LAB-7): after the wait (timeout_ms) the instances named in aliases still held a lease or queued requests, so nothing was stopped.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -1888,7 +1888,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl agent-publish-facts: the Runtime recorded the fact observation.",
+      "description": "actinglab facts publish: the Runtime recorded the fact observation.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -1902,7 +1902,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl agent-apply-resource-targets: the Runtime applied the resource target policy.",
+      "description": "actinglab targets set: the Runtime applied the resource target policy.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -1916,7 +1916,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl task-offset: the Runtime recorded the manual priority offset.",
+      "description": "actinglab offset: the Runtime recorded the manual priority offset.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -1930,7 +1930,7 @@
       "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl request-shutdown: the Runtime accepted the shutdown request; the result carries its receipt. Exit 0. Without --wait, actingctl does not wait for the process to end.",
+      "description": "actinglab shutdown: the Runtime accepted the shutdown request; the result carries its receipt. Exit 0. Without --wait, actinglab does not wait for the process to end.",
       "common_causes": "A shutdown request to a running Runtime.",
       "handling": "None; pass --wait to wait for the owner to close and the process to exit."
     },
@@ -1944,7 +1944,7 @@
       "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl request-shutdown --wait: the Runtime accepted the shutdown, its owner record closed and its process exited within the wait; the result carries the receipt and the shutdown observation. Exit 0.",
+      "description": "actinglab shutdown --wait: the Runtime accepted the shutdown, its owner record closed and its process exited within the wait; the result carries the receipt and the shutdown observation. Exit 0.",
       "common_causes": "A shutdown of a running Runtime that finished in time.",
       "handling": "None."
     },
@@ -2009,7 +2009,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl reset: the Runtime reset the instance.",
+      "description": "actinglab reset: the Runtime reset the instance.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -2023,7 +2023,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl observe: the Runtime took one read-only frame of the instance.",
+      "description": "actinglab frame: the Runtime took one read-only frame of the instance.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -2052,7 +2052,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl status --config: the config.* records of the runtime fact snapshot were printed.",
+      "description": "actinglab config: the config.* records of the runtime fact snapshot were printed.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -2066,7 +2066,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl config set|clear: the Runtime applied every change.",
+      "description": "actinglab config set|clear: the Runtime applied every change.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -2080,7 +2080,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl facts --program: the runtime fact snapshot was printed.",
+      "description": "actinglab facts --program: the runtime fact snapshot was printed.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -2109,7 +2109,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl monitor-set: the Runtime took the instance's monitor policy.",
+      "description": "actinglab monitor set: the Runtime took the instance's monitor policy.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -2123,7 +2123,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl monitor-clear: the Runtime cleared the instance's monitor policy.",
+      "description": "actinglab monitor clear: the Runtime cleared the instance's monitor policy.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -2152,7 +2152,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl emulator start|stop|restart: the Runtime completed the emulator control.",
+      "description": "actinglab emu start|stop|restart: the Runtime completed the emulator control.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -2168,7 +2168,7 @@
       "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl emulator discover: the Runtime ran one emulator instance discovery and listed the instances; count is how many. Exit 0.",
+      "description": "actinglab discover: the Runtime ran one emulator instance discovery and listed the instances; count is how many. Exit 0.",
       "common_causes": "A discovery of a running Runtime with an emulator provider.",
       "handling": "None."
     },
@@ -2182,7 +2182,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl pause: the Runtime paused scheduling (globally or for the instance).",
+      "description": "actinglab pause: the Runtime paused scheduling (globally or for the instance).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -2196,7 +2196,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl resume: the Runtime lifted the scheduling pause.",
+      "description": "actinglab resume: the Runtime lifted the scheduling pause.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -2210,7 +2210,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl selfcheck: the instance reconnected and its self-check passed.",
+      "description": "actinglab emu selfcheck: the instance reconnected and its self-check passed.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -2224,7 +2224,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl selfcheck: the instance's reconnect or self-check failed; its failure code, when the result gives one, is the caused_by link.",
+      "description": "actinglab emu selfcheck: the instance's reconnect or self-check failed; its failure code, when the result gives one, is the caused_by link.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -2238,7 +2238,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl stream: the Runtime captured the frame sequence.",
+      "description": "actinglab frames: the Runtime captured the frame sequence.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -2252,7 +2252,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl task-run: the contained run completed.",
+      "description": "actinglab run start: the contained run completed.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -2266,7 +2266,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl events: one page of ledger events was printed.",
+      "description": "actinglab events: one page of ledger events was printed.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -2280,7 +2280,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl observe --export: the observed frame was read back verified and written to the export folder.",
+      "description": "actinglab frame with an export folder: the observed frame was read back verified and written to the export folder.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -2294,7 +2294,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl runs: one page of the run list was printed.",
+      "description": "actinglab runs: one page of the run list was printed.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -2308,7 +2308,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl facts --instance: one instance's facts (InstanceFactSnapshot) were printed, as ac_facts with scope instance answers them (Workflow #389 MCP-4).",
+      "description": "actinglab facts: one instance's facts (InstanceFactSnapshot) were printed, as ac_facts with scope instance answers them (Workflow #389 MCP-4).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -2322,7 +2322,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl diagnose: the diagnosis of the window was printed.",
+      "description": "actinglab diagnose: the diagnosis of the window was printed.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -2336,7 +2336,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl overview: the overview was printed, as ac_overview answers it (Workflow #389 MCP-8).",
+      "description": "actinglab status: the overview was printed, as ac_overview answers it (Workflow #389 MCP-8).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -2350,7 +2350,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl packs: the bound packages of the selected configuration were printed.",
+      "description": "actinglab packs: the bound packages of the selected configuration were printed.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -2368,7 +2368,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl start: the Runtime was started and its owner answers; log is the start's log file.",
+      "description": "actinglab up: the Runtime was started and its owner answers; log is the start's log file.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -2386,7 +2386,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl restart: the Runtime was stopped and started again and its owner answers; log is the start's log file.",
+      "description": "actinglab restart: the Runtime was stopped and started again and its owner answers; log is the start's log file.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -2400,7 +2400,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl start or restart refused to start the Runtime; the watchdog condition that refused it (installer busy, a tick in progress) is the caused_by link.",
+      "description": "actinglab up or restart refused to start the Runtime; the watchdog condition that refused it (installer busy, a tick in progress) is the caused_by link.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -2640,7 +2640,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "mcp-serve, or actingctl overview reading the build manifest, read a file (a configuration, a manifest, an export) larger than its bound limit_bytes.",
+      "description": "mcp-serve, or actinglab status reading the build manifest, read a file (a configuration, a manifest, an export) larger than its bound limit_bytes.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -2754,7 +2754,7 @@
       "since": "0.12.0",
       "description": "Watchdog status attention: no Runtime log covers the formally closed owner epoch, so a fatal stop of an unlogged start may be hidden.",
       "common_causes": "The watchdog's status decided a formal close, but no candidate actingd-*.log (in the root, in <root>\\watchdog or in %LOCALAPPDATA%\\ActingCommand\\logs) was modified between the closed epoch's start and its close plus 2 s: the Runtime was started by hand in a terminal or by another starter that writes no such log.",
-      "handling": "Nothing restarts the Runtime, as is right for a formal close, but a fatal stop of that run would not show. Start the Runtime through a starter that writes an actingd-*.log (for example actingctl start) so that its end is visible."
+      "handling": "Nothing restarts the Runtime, as is right for a formal close, but a fatal stop of that run would not show. Start the Runtime through a starter that writes an actingd-*.log (for example actinglab up) so that its end is visible."
     },
     "watchdog_last_start_failed": {
       "category": "warning",
@@ -2802,7 +2802,7 @@
       "since": "0.12.0",
       "description": "Watchdog status attention: no watchdog task (name) is registered for this root.",
       "common_causes": "The watchdog's status found no Task Scheduler task registered for this root (name, ActingCommand Runtime watchdog <fp12>): watchdog install was never run for this root, or the task was removed.",
-      "handling": "If the Runtime of this root should be supervised, run actingctl watchdog install --root <root> (or <root>\\tools\\actingwatch.exe install); without the task nothing starts the Runtime again after it goes away."
+      "handling": "If the Runtime of this root should be supervised, run actinglab watchdog install (or <root>\\tools\\actingwatch.exe install); without the task nothing starts the Runtime again after it goes away."
     },
     "watchdog_install_refused": {
       "category": "error",
@@ -2814,7 +2814,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl watchdog install refused; the condition that refused it (installer busy, a tick in progress) is the caused_by link.",
+      "description": "actinglab watchdog install refused; the condition that refused it (installer busy, a tick in progress) is the caused_by link.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -2900,7 +2900,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl ladder-drill: the Runtime admitted a drill of the instance's stuck-recovery ladder and queued its claim; the line carries the drill {instance_alias, mode, ladder_request_id}, as ac_ladder_drill answers it (Workflow #390 DRILL-1).",
+      "description": "actinglab drill: the Runtime admitted a drill of the instance's stuck-recovery ladder and queued its claim; the line carries the drill {instance_alias, mode, ladder_request_id}, as ac_ladder_drill answers it (Workflow #390 DRILL-1).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -2914,7 +2914,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.37",
-      "description": "actingctl agent-wake-test: the test wake is queued for the worker; the line carries {wake_id, channel, quiet?} and, with --wait-s, the wake's row (Workflow #432 AGT-1b).",
+      "description": "actinglab wake-test: the test wake is queued for the worker; the line carries {wake_id, channel, quiet?} and, with --wait-s, the wake's row (Workflow #432 AGT-1b).",
       "common_causes": "The request succeeded.",
       "handling": "Read the row in host.agent_wake: delivered, or deferred with its reason. A build with no transport answers deferred."
     },
@@ -2943,7 +2943,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.5",
-      "description": "actingctl schedule: the latest policy evaluation's explanation (ScheduleExplanation) was printed: per instance its not-running row, its selected task and every candidate that did not run with its why, its reason codes and its next wake, as ac_schedule answers it (Workflow #386 SR-6b, MCP-19).",
+      "description": "actinglab schedule: the latest policy evaluation's explanation (ScheduleExplanation) was printed: per instance its not-running row, its selected task and every candidate that did not run with its why, its reason codes and its next wake, as ac_schedule answers it (Workflow #386 SR-6b, MCP-19).",
       "common_causes": "The command succeeded.",
       "handling": "Nothing to do."
     },
@@ -2957,7 +2957,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl capability-gap: one capability gap (capability, why) was appended as one line to this user's local log %LOCALAPPDATA%\\ActingCommand\\actingctl\\capability-gaps.jsonl, as ac_capability_gap records it; the line and the log's path were printed. Nothing is sent anywhere and nothing goes to the Runtime or its ledger (Workflow #410 item 6).",
+      "description": "actinglab gap: one capability gap (capability, why) was appended as one line to this user's local log %LOCALAPPDATA%\\ActingCommand\\actingctl\\capability-gaps.jsonl, as ac_capability_gap records it; the line and the log's path were printed. Nothing is sent anywhere and nothing goes to the Runtime or its ledger (Workflow #410 item 6).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -2971,7 +2971,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.37",
-      "description": "actingctl agent-channel did its work on the channel registry or a session's live record: a channel added, removed or listed, or a running session registered; the result line holds what changed or the channels. Nothing goes to the Runtime or its ledger (Workflow #432 AGT-T1; contracts/agent-forward.md).",
+      "description": "The Lab's agent rows did their work on the channel registry or a session's live record: a channel added, removed or listed, or a running session registered; the result line holds what changed or the channels. Nothing goes to the Runtime or its ledger (Workflow #432 AGT-T1; contracts/agent-forward.md).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -2985,7 +2985,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.37",
-      "description": "actingctl agent-channel did not do its work: the registry or a record could not be read or written, a channel was refused, or a registered session's hook or registration lacked what it needs. The developer line says which, and never holds a credential. A registered session's failed hook prints only that line and exits 2 (Workflow #432 AGT-T1; contracts/agent-forward.md).",
+      "description": "The Lab's agent rows did not do their work: the registry or a record could not be read or written, a channel was refused, or a registered session's hook or registration lacked what it needs. The developer line says which, and never holds a credential. A registered session's failed hook prints only that line and exits 2 (Workflow #432 AGT-T1; contracts/agent-forward.md).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -3001,7 +3001,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl capability-gap or ac_capability_gap could not append the gap to the user's local log (path); the failure is linked. Without path, neither LOCALAPPDATA nor APPDATA names a folder for the log (Workflow #410 item 6).",
+      "description": "actinglab gap or ac_capability_gap could not append the gap to the user's local log (path); the failure is linked. Without path, neither LOCALAPPDATA nor APPDATA names a folder for the log (Workflow #410 item 6).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -3029,7 +3029,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.12",
-      "description": "An actingctl install command did what was asked (contracts/install-cli.md); operation names the command. A mutating command sets installation_changed: false when there was nothing to do (a build already kept and verified, a root already adopted, a live build already equal to the target; the result's unchanged is true), true when it changed the root, with install_operation_id naming its journal. By command: commit_sha (and tag) of the build verified, staged, adopted, planned or applied; plan_id of a plan; count of the instances a release-hold resumed or of the kept leftovers; game of a pack command; alias of an instance command; path of the configuration candidate; pid, owner_epoch and log of a start. resume answers it with the resumed operation's own result as its related link. A caveat of the work is an install_caveat_noted note link. Read-only commands (release verify, every plan, status, guards, config show and diff, leftovers) write nothing. Exit 0.",
+      "description": "An installer command (a rescue row of the Lab) did what was asked (contracts/install-cli.md); operation names the command. A mutating command sets installation_changed: false when there was nothing to do (a build already kept and verified, a root already adopted, a live build already equal to the target; the result's unchanged is true), true when it changed the root, with install_operation_id naming its journal. By command: commit_sha (and tag) of the build verified, staged, adopted, planned or applied; plan_id of a plan; count of the instances a release-hold resumed or of the kept leftovers; game of a pack command; alias of an instance command; path of the configuration candidate; pid, owner_epoch and log of a start. resume answers it with the resumed operation's own result as its related link. A caveat of the work is an install_caveat_noted note link. Read-only commands (release verify, every plan, status, guards, config show and diff, leftovers) write nothing. Exit 0.",
       "common_causes": "The command succeeded.",
       "handling": "None. A plan's plan_id is what its apply takes; an operation's install_operation_id is what install status --operation, resume and undo take."
     },
@@ -3054,7 +3054,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.12",
-      "description": "An actingctl install command did its work, but install_caveat names something left unchecked, pending or on the previous build; operation names the command. As a note link under install_command_done it qualifies a success: mcp_clients_on_previous_build (count) after an update or rollback, pack_declaration_unknown (game) in a plan, restart_required after a configuration commit while the Runtime runs, post_check_mismatch (count) after a start, config_overridden_by_instruction (config_key), pack_restart_needed (package_id), pack_full_check_skipped (path), open_time_from_other_build (commit_sha, path) when the rollback gate judged another build's ledger open, check_config_without_install_root (commit_sha, path) when the target build's check-config ran without --install-root, and (Workflow #434 LAB-3, since 0.12.48) guard_failed (install_guards) when the Lab's rescue module went on past guards that failed or were not evaluated, which actingctl install refuses, and (Workflow #434 LAB-3 fix 3) hold_ownership_unconfirmed (operation install_release_hold, hold_reason when the reason parses, the read failure as its cause) when the rescue module left a release-hold out of next because it could not read whether the hold is its own. As the top it is the command's own result and carries install_command_done's values: release verify without a release-facts file (release_unconfirmed, commit_sha), and (Workflow #453 S7, since 0.12.60) the rescue module's vision check of a vision root that does not hold what it must (vision_incomplete, count the manifest files that are not ok and the models of the manifest and of the installed packs, each pair of model_ref and model_sha256 once, whose folder is missing or of another identity). Exit 0.",
+      "description": "An installer command (a rescue row of the Lab) did its work, but install_caveat names something left unchecked, pending or on the previous build; operation names the command. As a note link under install_command_done it qualifies a success: mcp_clients_on_previous_build (count) after an update or rollback, pack_declaration_unknown (game) in a plan, restart_required after a configuration commit while the Runtime runs, post_check_mismatch (count) after a start, config_overridden_by_instruction (config_key), pack_restart_needed (package_id), pack_full_check_skipped (path), open_time_from_other_build (commit_sha, path) when the rollback gate judged another build's ledger open, check_config_without_install_root (commit_sha, path) when the target build's check-config ran without --install-root, and (Workflow #434 LAB-3, since 0.12.48) guard_failed (install_guards) when the Lab's rescue module went on past guards that failed or were not evaluated, and (Workflow #434 LAB-3 fix 3) hold_ownership_unconfirmed (operation install_release_hold, hold_reason when the reason parses, the read failure as its cause) when the rescue module left a release-hold out of next because it could not read whether the hold is its own. As the top it is the command's own result and carries install_command_done's values: release verify without a release-facts file (release_unconfirmed, commit_sha), and (Workflow #453 S7, since 0.12.60) the rescue module's vision check of a vision root that does not hold what it must (vision_incomplete, count the manifest files that are not ok and the models of the manifest and of the installed packs, each pair of model_ref and model_sha256 once, whose folder is missing or of another identity). Exit 0.",
       "common_causes": "MCP servers running during an update; an adopted root whose packs declare no interfaces; a release folder checked without its facts; a configuration committed while the Runtime runs; a post-check after a start that did not match.",
       "handling": "Act on install_caveat when it matters: reconnect the MCP clients, check the release against its published facts, restart the Runtime when the person chooses, or read the post-check. The command itself needs nothing more."
     },
@@ -3070,9 +3070,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.12",
-      "description": "Watchdog decision (row 7a''): a start would be considered, but install\\current.json names the unfinished installer update or rollback (or its undo) install_operation_id. The watchdog starts nothing; actingctl start and restart refuse the same way. An unfinished release stage or adopt changes only install\\ and is not this decision. A current.json that cannot be read or names no operation is this decision too, without install_operation_id: the watchdog never starts a root whose installer state it cannot read.",
+      "description": "Watchdog decision (row 7a''): a start would be considered, but install\\current.json names the unfinished installer update or rollback (or its undo) install_operation_id. The watchdog starts nothing; actinglab up and restart refuse the same way. An unfinished release stage or adopt changes only install\\ and is not this decision. A current.json that cannot be read or names no operation is this decision too, without install_operation_id: the watchdog never starts a root whose installer state it cannot read.",
       "common_causes": "An installer died or failed in the middle of an operation; its writer lock was released by the OS.",
-      "handling": "Run actingctl install resume or install undo with the operation id."
+      "handling": "Run actinglab op resume or install undo with the operation id."
     },
     "install_command_refused": {
       "category": "error",
@@ -3108,7 +3108,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.12",
-      "description": "An actingctl install command refused, or failed without leaving an unfinished operation; operation names the command and install_refusal says why, with that reason's values: release_checks (release_check_failed: every failed check; the result's failures name each with its file and digests), rollback_gate_parts and ledger_sequence (rollback_gate_failed: the failed parts, and the first sequence the target's reader refused, as precisely as the reader allows), install_guards (guard_failed), plan_id (plan_changed), install_operation_id (operation_unfinished), count and files (live_build_modified), path and pid (running_image_blocks; path also for foreign_part, layout_ab_unsupported and the file a reason concerns), commit_sha (a build), game, package_id, alias, aliases and config_key (the configuration, pack and instance reasons), and (Workflow #434 LAB-3 fix 1, since 0.12.48) hold_reason with count and aliases (hold_not_owned, which only the Lab's rescue module answers), and (Workflow #421 INST-5, since 0.12.52) server and instance_index (instance_invalid of the rescue module's instance add: a server no pack of the game's bundle names, an emulator index an instance of the configuration binds). The cause is the caused_by link: check-config's outcome, the start path's code, a child process's failure, an OS error. A child still running at its install.child.* deadline is left running and is no cause: pid names it and config_key the key (check_config_unanswered, ledger_head_unreadable, rollback_gate_failed, ledger_verify_failed). The one child ended at its bound instead (Workflow #453 S10 fix 1, since 0.12.59) is the read-only actingd discover of the rescue module's emulators: emulator_discovery_failed with timeout_ms the bound and no cause. So are (Workflow #453 S7, since 0.12.60) the read-only children of the rescue module's vision manifest and vision check: actingd vision (vision_report_unanswered with timeout_ms the bound) and each game root's Tools standard-pack check (pack_invalid with game, path the game root and timeout_ms); vision check also has a limit in all (fix 1: 160 s plus 300 s per game root, at most 900 s), and a child it ends or does not start because that ran out has timeout_ms 900000. So is (Workflow #453 S9, since 0.12.60) the actingd vision check the rescue module's vision place runs before anything is written (vision_report_unanswered with timeout_ms 160000); its vision_source_invalid names the file with path. Nothing was changed but what the reason says: instances_not_idle keeps the instances paused, and runtime_start_failed after a timeout leaves the process running. A journalled operation whose own checks refuse (a staged release's extracted files, an adopt's copy) is finished with this refusal and keeps its part folder as .abandoned-<ms>. Exit 1.",
+      "description": "An installer command (a rescue row of the Lab) refused, or failed without leaving an unfinished operation; operation names the command and install_refusal says why, with that reason's values: release_checks (release_check_failed: every failed check; the result's failures name each with its file and digests), rollback_gate_parts and ledger_sequence (rollback_gate_failed: the failed parts, and the first sequence the target's reader refused, as precisely as the reader allows), install_guards (guard_failed), plan_id (plan_changed), install_operation_id (operation_unfinished), count and files (live_build_modified), path and pid (running_image_blocks; path also for foreign_part, layout_ab_unsupported and the file a reason concerns), commit_sha (a build), game, package_id, alias, aliases and config_key (the configuration, pack and instance reasons), and (Workflow #434 LAB-3 fix 1, since 0.12.48) hold_reason with count and aliases (hold_not_owned, which only the Lab's rescue module answers), and (Workflow #421 INST-5, since 0.12.52) server and instance_index (instance_invalid of the rescue module's instance add: a server no pack of the game's bundle names, an emulator index an instance of the configuration binds). The cause is the caused_by link: check-config's outcome, the start path's code, a child process's failure, an OS error. A child still running at its install.child.* deadline is left running and is no cause: pid names it and config_key the key (check_config_unanswered, ledger_head_unreadable, rollback_gate_failed, ledger_verify_failed). The one child ended at its bound instead (Workflow #453 S10 fix 1, since 0.12.59) is the read-only actingd discover of the rescue module's emulators: emulator_discovery_failed with timeout_ms the bound and no cause. So are (Workflow #453 S7, since 0.12.60) the read-only children of the rescue module's vision manifest and vision check: actingd vision (vision_report_unanswered with timeout_ms the bound) and each game root's Tools standard-pack check (pack_invalid with game, path the game root and timeout_ms); vision check also has a limit in all (fix 1: 160 s plus 300 s per game root, at most 900 s), and a child it ends or does not start because that ran out has timeout_ms 900000. So is (Workflow #453 S9, since 0.12.60) the actingd vision check the rescue module's vision place runs before anything is written (vision_report_unanswered with timeout_ms 160000); its vision_source_invalid names the file with path. Nothing was changed but what the reason says: instances_not_idle keeps the instances paused, and runtime_start_failed after a timeout leaves the process running. A journalled operation whose own checks refuse (a staged release's extracted files, an adopt's copy) is finished with this refusal and keeps its part folder as .abandoned-<ms>. Exit 1.",
       "common_causes": "A release folder that does not verify; a root that is not adopted, not single-location or an A/B installation; another installer operation unfinished; a running Runtime or image; a changed live file; a configuration the target build refuses; a failed rollback gate or guard; a plan that changed since it was made.",
       "handling": "Read install_refusal and its values, fix the cause and run the command again. For operation_unfinished run install resume or install undo first; after rollback_gate_failed only a forward fix remains."
     },
@@ -3127,7 +3127,7 @@
       "since": "0.12.12",
       "description": "A step of the installer operation install_operation_id failed after it had changed the disk, or the operation could not end (its end journalled, install\\current.json not renamed), or its ledger verification was still running at its deadline (ledger_verify_failed with pid and config_key, nothing swapped yet); operation names the journalled command (release stage, adopt, update, rollback and the like). The journal names the step; until install resume or install undo runs, the root cannot run normally (a half-swapped program tree), and for an update or rollback the watchdog stands aside (watchdog_installer_unfinished). The step's own failure is the caused_by link. Exit 2.",
       "common_causes": "A file system error, a full disk, a process holding a file, or the installer killed in the middle of an operation.",
-      "handling": "Fix the cause, then run actingctl install resume --operation <id> to finish the operation or install undo --operation <id> to reverse it."
+      "handling": "Fix the cause, then run actinglab op resume <id> to finish the operation or install undo --operation <id> to reverse it."
     },
     "lab_operation_completed": {
       "category": "success",
@@ -3243,7 +3243,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.12",
-      "description": "The operation of the command actingctl install release verify (Workflow #421 INST-1; contracts/install-cli.md)."
+      "description": "The operation of the installer's command install release verify (Workflow #421 INST-1; contracts/install-cli.md)."
     },
     "install_release_stage": {
       "owner": "actingctl",
@@ -3251,7 +3251,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.12",
-      "description": "The operation of the command actingctl install release stage (Workflow #421 INST-1; contracts/install-cli.md)."
+      "description": "The operation of the installer's command install release stage (Workflow #421 INST-1; contracts/install-cli.md)."
     },
     "install_adopt": {
       "owner": "actingctl",
@@ -3259,7 +3259,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.12",
-      "description": "The operation of the command actingctl install adopt (Workflow #421 INST-1; contracts/install-cli.md)."
+      "description": "The operation of the installer's command install adopt (Workflow #421 INST-1; contracts/install-cli.md)."
     },
     "install_update_plan": {
       "owner": "actingctl",
@@ -3267,7 +3267,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.12",
-      "description": "The operation of the command actingctl install update plan (Workflow #421 INST-1; contracts/install-cli.md)."
+      "description": "The operation of the installer's command install update plan (Workflow #421 INST-1; contracts/install-cli.md)."
     },
     "install_update_apply": {
       "owner": "actingctl",
@@ -3275,7 +3275,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.12",
-      "description": "The operation of the command actingctl install update apply (Workflow #421 INST-1; contracts/install-cli.md)."
+      "description": "The operation of the installer's command install update apply (Workflow #421 INST-1; contracts/install-cli.md)."
     },
     "install_rollback_plan": {
       "owner": "actingctl",
@@ -3283,7 +3283,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.12",
-      "description": "The operation of the command actingctl install rollback plan (Workflow #421 INST-1; contracts/install-cli.md)."
+      "description": "The operation of the installer's command install rollback plan (Workflow #421 INST-1; contracts/install-cli.md)."
     },
     "install_rollback_apply": {
       "owner": "actingctl",
@@ -3291,7 +3291,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.12",
-      "description": "The operation of the command actingctl install rollback apply (Workflow #421 INST-1; contracts/install-cli.md)."
+      "description": "The operation of the installer's command install rollback apply (Workflow #421 INST-1; contracts/install-cli.md)."
     },
     "install_undo": {
       "owner": "actingctl",
@@ -3299,7 +3299,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.12",
-      "description": "The operation of the command actingctl install undo (Workflow #421 INST-1; contracts/install-cli.md)."
+      "description": "The operation of the command actinglab undo (Workflow #421 INST-1; contracts/install-cli.md)."
     },
     "install_resume": {
       "owner": "actingctl",
@@ -3307,7 +3307,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.12",
-      "description": "The operation of the command actingctl install resume (Workflow #421 INST-1; contracts/install-cli.md)."
+      "description": "The operation of the command actinglab op resume (Workflow #421 INST-1; contracts/install-cli.md)."
     },
     "install_status": {
       "owner": "actingctl",
@@ -3315,7 +3315,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.12",
-      "description": "The operation of the command actingctl install status (Workflow #421 INST-1; contracts/install-cli.md)."
+      "description": "The operation of the command actinglab op status (Workflow #421 INST-1; contracts/install-cli.md)."
     },
     "install_leftovers": {
       "owner": "actingctl",
@@ -3323,7 +3323,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.12",
-      "description": "The operation of the command actingctl install leftovers (Workflow #421 INST-1; contracts/install-cli.md)."
+      "description": "The operation of the command actinglab leftovers (Workflow #421 INST-1; contracts/install-cli.md)."
     },
     "install_mcp_entry_plan": {
       "owner": "actingctl",
@@ -3331,7 +3331,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.18",
-      "description": "The operation of the command actingctl mcp-entry plan, which tells the MCP entry which build to run (Workflow #421 MCP-ENTRY; contracts/install-cli.md)."
+      "description": "The operation of the MCP entry's plan, the rescue row mcp plan (actingctl mcp-entry plan until Workflow #434 LAB-7), which tells the MCP entry which build to run (Workflow #421 MCP-ENTRY; contracts/install-cli.md)."
     },
     "install_mcp_entry_list": {
       "owner": "actingctl",
@@ -3339,7 +3339,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.18",
-      "description": "The operation of the command actingctl mcp-entry list, which lists the MCP entries' status files (Workflow #421 MCP-ENTRY; contracts/install-cli.md)."
+      "description": "The operation of the MCP entries' list, the rescue row mcp entries (actingctl mcp-entry list until Workflow #434 LAB-7), which lists the MCP entries' status files (Workflow #421 MCP-ENTRY; contracts/install-cli.md)."
     },
     "install_stop": {
       "owner": "actingctl",
@@ -3347,7 +3347,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.12",
-      "description": "The operation of the command actingctl install stop (Workflow #421 INST-2; contracts/install-cli.md)."
+      "description": "The operation of the command actinglab down (Workflow #421 INST-2; contracts/install-cli.md)."
     },
     "install_start": {
       "owner": "actingctl",
@@ -3355,7 +3355,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.12",
-      "description": "The operation of the command actingctl install start (Workflow #421 INST-2; contracts/install-cli.md)."
+      "description": "The operation of the command actinglab up (Workflow #421 INST-2; contracts/install-cli.md)."
     },
     "install_release_hold": {
       "owner": "actingctl",
@@ -3363,7 +3363,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.12",
-      "description": "The operation of the command actingctl install release-hold (Workflow #421 INST-2; contracts/install-cli.md)."
+      "description": "The operation of the command actinglab release-hold (Workflow #421 INST-2; contracts/install-cli.md)."
     },
     "install_guards_report": {
       "owner": "actingctl",
@@ -3371,7 +3371,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.12",
-      "description": "The operation of the command actingctl install guards (Workflow #421 INST-2; contracts/install-cli.md)."
+      "description": "The operation of the command actinglab guards (Workflow #421 INST-2; contracts/install-cli.md)."
     },
     "install_config_show": {
       "owner": "actingctl",
@@ -3379,7 +3379,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.12",
-      "description": "The operation of the command actingctl install config show (Workflow #421 INST-3; contracts/install-cli.md)."
+      "description": "The operation of the installer's command install config show (Workflow #421 INST-3; contracts/install-cli.md)."
     },
     "install_config_diff": {
       "owner": "actingctl",
@@ -3387,7 +3387,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.12",
-      "description": "The operation of the command actingctl install config diff (Workflow #421 INST-3; contracts/install-cli.md)."
+      "description": "The operation of the installer's command install config diff (Workflow #421 INST-3; contracts/install-cli.md)."
     },
     "install_config_set": {
       "owner": "actingctl",
@@ -3395,7 +3395,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.12",
-      "description": "The operation of the command actingctl install config set (Workflow #421 INST-3; contracts/install-cli.md)."
+      "description": "The operation of the installer's command install config set (Workflow #421 INST-3; contracts/install-cli.md)."
     },
     "install_config_bind": {
       "owner": "actingctl",
@@ -3403,7 +3403,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.12",
-      "description": "The operation of the command actingctl install config bind (Workflow #421 INST-3; contracts/install-cli.md)."
+      "description": "The operation of the installer's command install config bind (Workflow #421 INST-3; contracts/install-cli.md)."
     },
     "install_config_policy": {
       "owner": "actingctl",
@@ -3411,7 +3411,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.12",
-      "description": "The operation of the command actingctl install config policy (Workflow #421 INST-3; contracts/install-cli.md)."
+      "description": "The operation of the installer's command install config policy (Workflow #421 INST-3; contracts/install-cli.md)."
     },
     "install_config_lab_options": {
       "owner": "actingctl",
@@ -3419,7 +3419,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.12",
-      "description": "The operation of the command actingctl install config lab-options (Workflow #421 INST-3; contracts/install-cli.md)."
+      "description": "The operation of the installer's command install config lab-options (Workflow #421 INST-3; contracts/install-cli.md)."
     },
     "install_config_commit_plan": {
       "owner": "actingctl",
@@ -3427,7 +3427,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.12",
-      "description": "The operation of the command actingctl install config commit plan (Workflow #421 INST-3; contracts/install-cli.md)."
+      "description": "The operation of the installer's command install config commit plan (Workflow #421 INST-3; contracts/install-cli.md)."
     },
     "install_config_commit_apply": {
       "owner": "actingctl",
@@ -3435,7 +3435,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.12",
-      "description": "The operation of the command actingctl install config commit apply (Workflow #421 INST-3; contracts/install-cli.md)."
+      "description": "The operation of the installer's command install config commit apply (Workflow #421 INST-3; contracts/install-cli.md)."
     },
     "install_config_discard": {
       "owner": "actingctl",
@@ -3443,7 +3443,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.12",
-      "description": "The operation of the command actingctl install config discard (Workflow #421 INST-3; contracts/install-cli.md)."
+      "description": "The operation of the installer's command install config discard (Workflow #421 INST-3; contracts/install-cli.md)."
     },
     "install_config_restore": {
       "owner": "actingctl",
@@ -3451,7 +3451,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.12",
-      "description": "The operation of the command actingctl install config restore (Workflow #421 INST-3; contracts/install-cli.md)."
+      "description": "The operation of the installer's command install config restore (Workflow #421 INST-3; contracts/install-cli.md)."
     },
     "install_instance_add": {
       "owner": "actingctl",
@@ -3459,7 +3459,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.12",
-      "description": "The operation of the command actingctl install instance add (Workflow #421 INST-5; contracts/install-cli.md)."
+      "description": "The operation of the installer's command install instance add (Workflow #421 INST-5; contracts/install-cli.md)."
     },
     "install_instance_remove": {
       "owner": "actingctl",
@@ -3467,7 +3467,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.12",
-      "description": "The operation of the command actingctl install instance remove (Workflow #421 INST-5; contracts/install-cli.md)."
+      "description": "The operation of the installer's command install instance remove (Workflow #421 INST-5; contracts/install-cli.md)."
     },
     "install_pack_plan": {
       "owner": "actingctl",
@@ -3475,7 +3475,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.12",
-      "description": "The operation of the command actingctl install pack plan (Workflow #421 INST-4; contracts/install-cli.md)."
+      "description": "The operation of the installer's command install pack plan (Workflow #421 INST-4; contracts/install-cli.md)."
     },
     "install_pack_place": {
       "owner": "actingctl",
@@ -3483,7 +3483,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.12",
-      "description": "The operation of the command actingctl install pack place (Workflow #421 INST-4; contracts/install-cli.md)."
+      "description": "The operation of the installer's command install pack place (Workflow #421 INST-4; contracts/install-cli.md)."
     },
     "install_pack_remove_plan": {
       "owner": "actingctl",
@@ -3491,7 +3491,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.12",
-      "description": "The operation of the command actingctl install pack remove plan (Workflow #421 INST-4; contracts/install-cli.md)."
+      "description": "The operation of the installer's command install pack remove plan (Workflow #421 INST-4; contracts/install-cli.md)."
     },
     "install_pack_remove_apply": {
       "owner": "actingctl",
@@ -3499,7 +3499,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.12",
-      "description": "The operation of the command actingctl install pack remove apply (Workflow #421 INST-4; contracts/install-cli.md)."
+      "description": "The operation of the installer's command install pack remove apply (Workflow #421 INST-4; contracts/install-cli.md)."
     },
     "install_pack_restore": {
       "owner": "actingctl",
@@ -3507,7 +3507,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.12",
-      "description": "The operation of the command actingctl install pack restore (Workflow #421 INST-4; contracts/install-cli.md)."
+      "description": "The operation of the installer's command install pack restore (Workflow #421 INST-4; contracts/install-cli.md)."
     },
     "install_new": {
       "owner": "actingctl",
@@ -3515,7 +3515,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.12",
-      "description": "The operation of the Lab's rescue module's new (Workflow #453 S4, since 0.12.60; contracts/install-cli.md, Fresh root), a fresh installation root built from a verified release or kept build with its first configuration; the command actingctl install new that INST-6 planned is not built, and actingctl install gains nothing."
+      "description": "The operation of the Lab's rescue module's new (Workflow #453 S4, since 0.12.60; contracts/install-cli.md, Fresh root), a fresh installation root built from a verified release or kept build with its first configuration."
     },
     "install_prepare": {
       "owner": "actingctl",
@@ -3523,7 +3523,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.35",
-      "description": "The operation of the command actingctl install prepare (Workflow #429 R-15b frozen, R-15c builds it; contracts/install-cli.md)."
+      "description": "The operation of the installer's command install prepare (Workflow #429 R-15b frozen, R-15c builds it; contracts/install-cli.md)."
     },
     "install_convert_plan": {
       "owner": "actingctl",
@@ -3531,7 +3531,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.35",
-      "description": "The operation of the command actingctl install convert plan (Workflow #429 R-15b frozen, R-15e builds it; contracts/install-cli.md)."
+      "description": "The operation of the installer's command install convert plan (Workflow #429 R-15b frozen, R-15e builds it; contracts/install-cli.md)."
     },
     "install_convert_apply": {
       "owner": "actingctl",
@@ -3539,7 +3539,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.35",
-      "description": "The operation of the command actingctl install convert apply (Workflow #429 R-15b frozen, R-15e builds it; contracts/install-cli.md)."
+      "description": "The operation of the installer's command install convert apply (Workflow #429 R-15b frozen, R-15e builds it; contracts/install-cli.md)."
     },
     "install_clean": {
       "owner": "actingctl",
@@ -3547,7 +3547,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.35",
-      "description": "The operation of the command actingctl install clean (Workflow #429 R-15b frozen, R-15d builds it; contracts/install-cli.md)."
+      "description": "The operation of the installer's command install clean (Workflow #429 R-15b frozen, R-15d builds it; contracts/install-cli.md)."
     },
     "install_restart": {
       "owner": "actingctl",
@@ -3555,7 +3555,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.35",
-      "description": "The operation of the command actingctl install restart (Workflow #429 R-15b frozen, R-15d builds it; contracts/install-cli.md)."
+      "description": "The operation of the installer's command install restart (Workflow #429 R-15b frozen, R-15d builds it; contracts/install-cli.md)."
     },
     "install_deploy": {
       "owner": "actingctl",

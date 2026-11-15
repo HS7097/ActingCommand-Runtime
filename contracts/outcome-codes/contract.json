@@ -285,7 +285,7 @@
       "since": "0.12.0",
       "description": "The watchdog's restart budget ran out and every start in its window ended in runtime_restart_required (Workflow #378 A6a, model sections 2.4 and 7.5): neither the Runtime nor the person operating it recovered it. The last start's terminal outcome is the caused_by link, with its panic_caught links. Only the watchdog decides it; at_unix_ms is when the budget ran out and limit_count the budget.",
       "common_causes": "Only the watchdog's run-once decides it: its restart budget ran out (3 starts within 30 minutes and since the last formal start) and the log of every start in that window ends in runtime_restart_required, which an instance worker gives when it panics again before it finishes a payload after an earlier panic.",
-      "handling": "The watchdog starts nothing more until a formal start. Report it as a Runtime defect with the start logs under <root>\\watchdog and the panic_caught records of those starts; start the Runtime formally (actingctl start --root <root>) once the cause is known."
+      "handling": "The watchdog starts nothing more until a formal start. Report it as a Runtime defect with the start logs under <root>\\watchdog and the panic_caught records of those starts; start the Runtime formally (actinglab up) once the cause is known."
     },
     "runtime_restart_required": {
       "category": "error",
@@ -563,7 +563,7 @@
       "since": "0.12.0",
       "description": "An immediate try for an instance met a holder, or an eligible waiting entry that nobody may jump (Workflow #369). A Lab operation's refusal names who is in the way, before any frame or input: holder_kind is the holder's kind on a held instance, or the waiting entry's kind on a free one, where queue_position is that entry's position. A client AcquireLease and the Runtime's dedicated leases are refused with this code too. Registered once in the contract (A2a D3); the host and the scheduler emit it. Workflow #469 V0: a Runtime client reads it, as lease_cooldown, as a transient failure after which another input backend may be tried (is_fallback_eligible).",
       "common_causes": "Another client, a scheduled run, a stuck-recovery ladder or an operator request holds the instance or waits for it.",
-      "handling": "Nothing ran. Retry once the instance is free; actingctl status shows lease_active and queued_request_count."
+      "handling": "Nothing ran. Retry once the instance is free; actinglab status shows lease_active and queued_request_count."
     },
     "lease_cooldown": {
       "category": "error",
@@ -1346,7 +1346,7 @@
       "since": "0.12.0",
       "description": "The diagnostic code the Runtime gives most runtime.failed records and every failed, cancelled or refused task terminal, beside an outcome that is the failure itself; only a record written without such an outcome carries this code as its outcome too.",
       "common_causes": "It names no cause of its own; the outcome beside it is the failure. It is the outcome itself only on a record written before the failure's code, such as the command.rejected of a request refused because its instance's emulator is stopped, its input was refused, or its discovery, emulator control or monitor change failed, a refused monitor probe's monitor.probe_failed, or the task.failed of a Lab run the Lab reported failed.",
-      "handling": "Read the record's outcome and look that code up (actingctl codes <code>). When the outcome is runtime_diagnostic itself, read the records of the same request (actingctl events --request-id <request_id> --detail summary): the runtime.failed record written with it carries the failure's code (for a Lab run, the Lab's own answer does); nothing needs doing about runtime_diagnostic itself."
+      "handling": "Read the record's outcome and look that code up (actinglab codes <code>). When the outcome is runtime_diagnostic itself, read the records of the same request (actinglab events --request <request_id> --detail summary): the runtime.failed record written with it carries the failure's code (for a Lab run, the Lab's own answer does); nothing needs doing about runtime_diagnostic itself."
     },
     "lease_fencing_denied": {
       "category": "error",
@@ -1507,7 +1507,7 @@
       "since": "0.12.0",
       "description": "The diagnostic code of a command.rejected record: a request the Runtime refused, or a Lab operation that failed. On the record of a failed Lab observe, do, ensure or wait, failure_code names the code the Lab failed with (LAB-OBS-1, since 0.12.33).",
       "common_causes": "It classifies the record and is no reason of its own: a refused configuration change, stop of an instance's run, recovery ladder drill or agent wake test carries the refusal itself as the record's outcome. It is the outcome itself for a failed Lab operation, one the Lab reports (with the Lab's code as failure_code) or a do the Runtime ran for the Lab, and for a refused package debug request.",
-      "handling": "Read the record's outcome (actingctl events --event-type command.rejected --detail summary): a specific code is the reason, and on command_rejected its failure_code, when present, is; look it up with actingctl codes <code>. Without a failure_code the reason is in the request's answer: a Lab do's terminal record (an artifact of the request, with its failure's code and stage), or for a package debug only the receipt."
+      "handling": "Read the record's outcome (actinglab events --event-type command.rejected --detail summary): a specific code is the reason, and on command_rejected its failure_code, when present, is; look it up with actinglab codes <code>. Without a failure_code the reason is in the request's answer: a Lab do's terminal record (an artifact of the request, with its failure's code and stage), or for a package debug only the receipt."
     },
     "policy_rejected": {
       "category": "error",
@@ -1986,7 +1986,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A code several owners emit with one meaning (contract-owned, #389 MCP-11 ruling Q6, from actingd): the configuration file does not decode as actingd's configuration. actingd refuses to start on it; actingctl packs and ac_packs refuse to read the selected configuration.",
+      "description": "A code several owners emit with one meaning (contract-owned, #389 MCP-11 ruling Q6, from actingd): the configuration file does not decode as actingd's configuration. actingd refuses to start on it; actinglab packs and ac_packs refuse to read the selected configuration.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -2007,7 +2007,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A code several owners emit with one meaning (contract-owned, #389 MCP-11 ruling Q6, from actingd): reading the configuration file failed. actingd refuses to start on it; actingctl packs and ac_packs refuse to read the selected configuration.",
+      "description": "A code several owners emit with one meaning (contract-owned, #389 MCP-11 ruling Q6, from actingd): reading the configuration file failed. actingd refuses to start on it; actinglab packs and ac_packs refuse to read the selected configuration.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -2068,7 +2068,7 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A run whose required entry page was not on the screen named a recovery package of its own, and that package declares what a home recovery package may not run with; it is refused before it runs.",
-      "common_causes": "The recovery package given with the run (ac_run_pack's recovery_package, or the recovery package of actingctl task-run) declares a prerequisite package, a stability termination, post-admission OCR or fields, resource readings or adjustments, list readings, a select on_empty, stage end_pages, a keyed on_max_runs or on_guard_refused, or a designated operation in its scheduling_outcome.",
+      "common_causes": "The recovery package given with the run (ac_run_pack's recovery_package, or the recovery package of actinglab run start) declares a prerequisite package, a stability termination, post-admission OCR or fields, resource readings or adjustments, list readings, a select on_empty, stage end_pages, a keyed on_max_runs or on_guard_refused, or a designated operation in its scheduling_outcome.",
       "handling": "Run without that recovery package, so that the run takes the return-home package the standard pack registry names for its game and server, or name a package without those declarations; changing the package is its author's. Nothing ran on the device after the entry check."
     },
     "contained_task_post_admission_ocr_failed": {
@@ -2109,7 +2109,7 @@
       "since": "0.12.0",
       "description": "A recognition evaluation of a contained task ended in an error that is not the vision provider's: a page evaluation of its frame, or the evaluation of a when, select, scan or expected identity target.",
       "common_causes": "An evaluation returned an error rather than a match or no match: an OCR region that does not resolve on the frame, a text read that refuses to conclude, a target kind the pack cannot evaluate, or no vision provider for it. A failure of the provider itself is contained_task_vision_provider_failed instead.",
-      "handling": "Read the failing target and its cause in the run's task diagnostic records (the overlay of actingctl run evidence --run-id <run_id>, read with ac_material); the target's declaration is the pack author's to fix. A scheduled run's failure starts the default recovery ladder (trigger pack_logic) for the instance."
+      "handling": "Read the failing target and its cause in the run's task diagnostic records (the overlay of actinglab run evidence <run_id>, read with ac_material); the target's declaration is the pack author's to fix. A scheduled run's failure starts the default recovery ladder (trigger pack_logic) for the instance."
     },
     "current_page_unknown": {
       "category": "error",
@@ -2329,7 +2329,7 @@
       "since": "0.12.0",
       "description": "An input action on an instance's open input backend session failed.",
       "common_causes": "The input backend returned an error while it executed a tap, swipe, key or text: its command did not succeed or the device stopped answering, as when the emulator stopped, restarted or lost its adb link during the step. The failure keeps the backend's message and, when adb was recovered first, that recovery's report.",
-      "handling": "Read the backend's message, which the failure's runtime.failed record keeps as raw_text, and check the instance with actingctl selfcheck <alias>: it is the device's or the emulator's condition, not the pack's. In a scheduled run it never pauses the task by repetition, unless the failure poisoned the run."
+      "handling": "Read the backend's message, which the failure's runtime.failed record keeps as raw_text, and check the instance with actinglab emu selfcheck <alias>: it is the device's or the emulator's condition, not the pack's. In a scheduled run it never pauses the task by repetition, unless the failure poisoned the run."
     },
     "install_selection_unavailable": {
       "category": "error",
@@ -2347,7 +2347,7 @@
       "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "install\\active.json cannot be opened for a reason other than its absence, or a program that needs a selection finds none: a program started from an installed slot (A or B) whose root has no install\\active.json, or actingctl and its MCP tools, which read the root's current selection at each call, when the root no longer has one. The program that reads it refuses; a Runtime already running keeps the selection it started with.",
+      "description": "install\\active.json cannot be opened for a reason other than its absence, or a program that needs a selection finds none: a program started from an installed slot (A or B) whose root has no install\\active.json. The program that reads it refuses; a Runtime already running keeps the selection it started with.",
       "common_causes": "install\\active.json deleted or moved by hand, by a cleanup tool or by antivirus; access to the install folder denied; a slot folder copied without the rest of the installation.",
       "handling": "Reinstall or repair the installation with acsetup, which writes install\\active.json; when the file is present, check the install folder's permissions; then start the program again."
     },
@@ -2693,7 +2693,7 @@
       "since": "0.12.0",
       "description": "An operator request waited its cap in its instance's one queue without a grant, and its entry was removed (Workflow #369). The waiting requests are a direct task run (CLI, console, MCP ac_run_pack; cap min(60 s, the run's remaining deadline minus a 30 s run budget)), a safe reset or an application lifecycle command (3 s), a self-check or the reconnect of an instance resume (3 s; a resume is refused before its gate is lifted), and since 0.12.0 an emulator control (CLI, console, MCP ac_emulator; 5 s, once for a restart; nothing is driven). timeout_ms is the cap; holder_kind names the instance's holder when it has one; queue_position is the entry's position when it was removed. Its ledger record is the instance-linked scheduler.denied lease_queue_expired at warning. A client QueueLease whose wait ended is refused with this code too. Registered once in the contract (A2a D3); the host and the scheduler emit it.",
       "common_causes": "Another client, a scheduled run, a stuck-recovery ladder or another operator request held the instance for longer than the cap; a takeover cooldown after an unclean restart; business capacity refused the grant for the whole cap.",
-      "handling": "Nothing ran. Retry once the holder named by holder_kind has released the instance; actingctl status shows lease_active and queued_request_count meanwhile."
+      "handling": "Nothing ran. Retry once the holder named by holder_kind has released the instance; actinglab status shows lease_active and queued_request_count meanwhile."
     },
     "ledger_migration_required": {
       "category": "error",
@@ -4019,7 +4019,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A command's --wait (actingctl emulator start, stop, restart and task-run; actinglab after U-3) ended before its request did: the command stopped waiting after waited_ms and the request (operation, request_id when the command knows it) goes on in the Runtime (Workflow #389 MCP-21).",
+      "description": "A command's --wait (actinglab emu start, stop, restart and task-run; actinglab after U-3) ended before its request did: the command stopped waiting after waited_ms and the request (operation, request_id when the command knows it) goes on in the Runtime (Workflow #389 MCP-21).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -15576,7 +15576,7 @@
       "since": "0.12.0",
       "description": "No frame of a contained task's wait for a page of its package matched one of its pages. STILL-1: held_ms and limit_ms are present when a page wait ended early on execution.capture.still_limit_ms: how long its frames had stayed unchanged, and the limit in effect. LOAD-3 (since 0.12.37): loading_page_id, loading_ms and loading_limit_ms are present when a page wait ended on a transition frame after the package's loading allowance was spent under execution.loading.mode on.",
       "common_causes": "The wait ran out (at the run's start, before an input, on the fresh frame before it, or after an operation that names no destination page) without a frame of a declared page: the screen shows a page or a dialog the package does not declare, a declared page whose targets no longer match it, or a loading screen (loading_ms) or an unchanged one (held_ms) past its limit. Frames of shared interrupt pages are handled while it waits.",
-      "handling": "Look at the run's last frames and the overlay's target scores (actingctl run evidence --run-id <run_id>, or ac_run_evidence, then ac_material): a page the package lacks needs declaring and a declared page that no longer matches needs its targets fixed, both the pack author's; loading_ms or held_ms at its limit means the application stayed on that screen. A scheduled run's failure starts the default recovery ladder (trigger pack_logic) for the instance."
+      "handling": "Look at the run's last frames and the overlay's target scores (actinglab run evidence <run_id>, or ac_run_evidence, then ac_material): a page the package lacks needs declaring and a declared page that no longer matches needs its targets fixed, both the pack author's; loading_ms or held_ms at its limit means the application stayed on that screen. A scheduled run's failure starts the default recovery ladder (trigger pack_logic) for the instance."
     },
     "contained_task_prerequisite_incompatible": {
       "category": "error",
@@ -17509,7 +17509,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.60",
-      "description": "The declaration of a package a standard-pack game root's bundle.json registers (package_id) could not be read when the root was composed, so whether its capabilities are irreversible is unknown, and with it every package's of the root (Workflow #455 G-R2s, register section 1.369; contracts/standard-pack-schedule.md \"The irreversible mark\"). On the safe side every composed task of the game carries the composer's mark irreversible_reach until the package reads: a resource goal weighs none of them, each weighed as on an instance without a target record. The policy composer finds it, once per unreadable package, after the composition's other warnings; the Runtime's workbench records it once while the package stays unreadable, with the reader's refusal as its cause when the reader refused it; check-config notes it with the same cause (its standard_pack_schedule preview's problems); actinglab standard-pack check and compose and package bundle --schedule list it with the same cause; actingctl packs reads the package's control.json itself and gives package_binding_unreadable instead.",
+      "description": "The declaration of a package a standard-pack game root's bundle.json registers (package_id) could not be read when the root was composed, so whether its capabilities are irreversible is unknown, and with it every package's of the root (Workflow #455 G-R2s, register section 1.369; contracts/standard-pack-schedule.md \"The irreversible mark\"). On the safe side every composed task of the game carries the composer's mark irreversible_reach until the package reads: a resource goal weighs none of them, each weighed as on an instance without a target record. The policy composer finds it, once per unreadable package, after the composition's other warnings; the Runtime's workbench records it once while the package stays unreadable, with the reader's refusal as its cause when the reader refused it; check-config notes it with the same cause (its standard_pack_schedule preview's problems); actinglab standard-pack check and compose and package bundle --schedule list it with the same cause; actinglab packs reads the package's control.json itself and gives package_binding_unreadable instead.",
       "common_causes": "The package's directory is missing, unreadable or incomplete (a held package left half made, a package registered but not placed yet), its control.json or another file the package reader opens breaks its rules (a capability marked irreversible without its parameters), or one of its files was locked for a moment while it was replaced.",
       "handling": "Fix or place the package again; the next workbench check that sees one of its declaration files change reads the root again and the marks follow the declarations."
     },
@@ -17539,7 +17539,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A standard-pack root file (bundle.json, pages.json, interrupts.json, navigation.json or, Workflow #392 DA-4, display-layout.json of one game root) breaks its shape, a limit or a reference (Workflow #373 NAV-6). The Runtime records it at startup and refuses, in preparation, a run that needs the root; check-config lists it; the resource tools share the same check. A broken root never stops the Runtime. Workflow #429 R-11 (since 0.12.36): a game root's optional ui.json, which only actingctl packs and ac_packs read, is checked by the same contract crate; each violation of a refused ui.json is one such warning there, at its json_pointer, and never breaks the root or changes a row. Workflow #407 LOAD-1 (since 0.12.37): a game's loading.json and a pack's loading copy are checked by the same contract crate; actinglab package loading, package bundle --loading and actinglab standard-pack check refuse with it, one issue per violation in details.issues, and with package_id when the issue is a pack's (a pack's coordinate space, a page or target id it declares itself, a stale copy). Workflow #407 LOAD-2 (since 0.12.37): no Runtime component reads loading.json; the pack loader compiles a pack's copy and refuses one that breaks a rule against its pack with this code, with game and package_id from the pack's control, path the file inside the pack (resources/loading.json, or a stray file below resources/loading/) and json_pointer in the copy; Lab and the contained-task admission carry it as the refusal's code. Workflow #444 NOTICES-1 (since 0.12.58): the rules of a bundle's notices directory are stated once by the contract crate (standard_pack_notices); a refusal by them is this code with path the member it names (notices/<path>, the directory notices for its count or its total, bundle.json with package_id for a pack named like it), json_pointer empty, standard_pack_problem one of the notice_ words and, where the rule has a bound, limit_count and count or limit_bytes and actual_bytes. No program checks the directory before NOTICES-2 (the installer's place) and NOTICES-3 (package bundle --notices, standard-pack check, resource verify).",
+      "description": "A standard-pack root file (bundle.json, pages.json, interrupts.json, navigation.json or, Workflow #392 DA-4, display-layout.json of one game root) breaks its shape, a limit or a reference (Workflow #373 NAV-6). The Runtime records it at startup and refuses, in preparation, a run that needs the root; check-config lists it; the resource tools share the same check. A broken root never stops the Runtime. Workflow #429 R-11 (since 0.12.36): a game root's optional ui.json, which only actinglab packs and ac_packs read, is checked by the same contract crate; each violation of a refused ui.json is one such warning there, at its json_pointer, and never breaks the root or changes a row. Workflow #407 LOAD-1 (since 0.12.37): a game's loading.json and a pack's loading copy are checked by the same contract crate; actinglab package loading, package bundle --loading and actinglab standard-pack check refuse with it, one issue per violation in details.issues, and with package_id when the issue is a pack's (a pack's coordinate space, a page or target id it declares itself, a stale copy). Workflow #407 LOAD-2 (since 0.12.37): no Runtime component reads loading.json; the pack loader compiles a pack's copy and refuses one that breaks a rule against its pack with this code, with game and package_id from the pack's control, path the file inside the pack (resources/loading.json, or a stray file below resources/loading/) and json_pointer in the copy; Lab and the contained-task admission carry it as the refusal's code. Workflow #444 NOTICES-1 (since 0.12.58): the rules of a bundle's notices directory are stated once by the contract crate (standard_pack_notices); a refusal by them is this code with path the member it names (notices/<path>, the directory notices for its count or its total, bundle.json with package_id for a pack named like it), json_pointer empty, standard_pack_problem one of the notice_ words and, where the rule has a bound, limit_count and count or limit_bytes and actual_bytes. No program checks the directory before NOTICES-2 (the installer's place) and NOTICES-3 (package bundle --notices, standard-pack check, resource verify).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -17564,7 +17564,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.12",
-      "description": "A table file of a standard-pack game root's tables directory (actingcommand.table.v1) breaks its shape or a limit, or is the root's 65th table or later by file name (Workflow #357 DB-1, M-357a v1.1). The Runtime records it at startup, check-config and actingctl packs list it with the table, and actinglab resource validate shares the same check. A refused table never breaks its game root or stops the Runtime. Workflow #357 DB-2 (since 0.12.37): a run that reads the table is refused in its preparation, before any lease and any task record, and a layer package's table ends the run that admits it; nothing else is affected.",
+      "description": "A table file of a standard-pack game root's tables directory (actingcommand.table.v1) breaks its shape or a limit, or is the root's 65th table or later by file name (Workflow #357 DB-1, M-357a v1.1). The Runtime records it at startup, check-config and actinglab packs list it with the table, and actinglab resource validate shares the same check. A refused table never breaks its game root or stops the Runtime. Workflow #357 DB-2 (since 0.12.37): a run that reads the table is refused in its preparation, before any lease and any task record, and a layer package's table ends the run that admits it; nothing else is affected.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -17587,7 +17587,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.12",
-      "description": "A table file of a standard-pack game root's tables directory, or that directory itself, could not be read; the OS error is the cause (Workflow #357 DB-1, M-357a v1.1). The Runtime records it at startup, check-config and actingctl packs report it. Shared because actingctl packs reports it beside the Runtime. Workflow #357 DB-2 (since 0.12.37): a run that reads the table is refused in its preparation, before any lease and any task record.",
+      "description": "A table file of a standard-pack game root's tables directory, or that directory itself, could not be read; the OS error is the cause (Workflow #357 DB-1, M-357a v1.1). The Runtime records it at startup, check-config and actinglab packs report it. Shared because actinglab packs reports it beside the Runtime. Workflow #357 DB-2 (since 0.12.37): a run that reads the table is refused in its preparation, before any lease and any task record.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -17903,7 +17903,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A code several owners emit with one meaning (contract-owned, A2a D3; moved from actingctl by #378 A8b): actingctl codes, ac_outcome_code or actingledger codes --code was asked for a code that the outcome catalog this build embeds does not list (code_name in actingctl's outcome, unless it is no word a name may hold).",
+      "description": "A code several owners emit with one meaning (contract-owned, A2a D3; moved from actingctl by #378 A8b): actinglab codes, ac_outcome_code or actingledger codes --code was asked for a code that the outcome catalog this build embeds does not list (code_name in the outcome, unless it is no word a name may hold).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -17917,7 +17917,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A code several owners emit with one meaning (contract-owned, A2a D3; moved from actingctl by #378 A8b): actingctl codes, ac_outcome_code or actingledger codes could not read the outcome catalog this build embeds: it does not parse, has no codes table, or an entry lacks a member the answer reads (a build defect). The decoder's failure is its cause when there is one.",
+      "description": "A code several owners emit with one meaning (contract-owned, A2a D3; moved from actingctl by #378 A8b): actinglab codes, ac_outcome_code or actingledger codes could not read the outcome catalog this build embeds: it does not parse, has no codes table, or an entry lacks a member the answer reads (a build defect). The decoder's failure is its cause when there is one.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -18258,7 +18258,7 @@
       "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "The operation of an emulator instance discovery request (actingctl emulator discover, the console's discovery)."
+      "description": "The operation of an emulator instance discovery request (actinglab discover, the console's discovery)."
     },
     "export_evidence": {
       "owner": "contract",
@@ -18522,7 +18522,7 @@
       "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "The operation of a Runtime shutdown request (actingctl request-shutdown, the console, the installer)."
+      "description": "The operation of a Runtime shutdown request (actinglab shutdown, the console, the installer)."
     },
     "resume_agent_session": {
       "owner": "contract",
