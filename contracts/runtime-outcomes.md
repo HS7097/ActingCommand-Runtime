@@ -71,9 +71,9 @@ A fatal link requires a fatal top. A process exits by its top outcome's category
 | Class | Channel | Default |
 |---|---|---|
 | (a) full-function client | IPC with `source: ui` | `codes` |
-| (b) CLI and agents | IPC from `cli`, `adapter`, `lab`; actingctl stdout; MCP; actingd subcommand reports | `full` |
+| (b) CLI and agents | IPC from `cli`, `adapter`, `lab`; the Lab's stdout (actingctl's until Workflow #434 LAB-7); MCP; actingd subcommand reports | `full` |
 
-A request's `detail` (`codes` or `full`), actingctl's `--detail` or `ACTINGCOMMAND_DETAIL`, and
+A request's `detail` (`codes` or `full`), `ACTINGCOMMAND_DETAIL` (and actingctl's `--detail` until LAB-7), and
 the MCP server option override the default. Daemon `OUTCOME` lines and logs are always full.
 Between Runtime modules outcomes always travel full.
 
@@ -95,7 +95,7 @@ that lists codes is such a comparison and needs the same question.
 |---|---|---|
 | actingd lifecycle | `OUTCOME actingd: <envelope>` on stderr, written in the same `write_all` as its developer line `<INFO\|WARN\|ERROR\|FATAL> actingd: <code> <text>` | A6a |
 | start refusal before the ledger opens | the same two lines; also appended to `%LOCALAPPDATA%\ActingCommand\logs\actingd-<ms>.log` when stderr is not a file or a pipe, with `install_root` once known | A6a |
-| actingctl | exactly one stdout JSON line per exit, `{…result, "outcome": …}` or `{"outcome": …}`, before any stderr text; `mcp-serve` and `mcp-config` print none | A5 |
+| actinglab (actingctl until Workflow #434 LAB-7) | with `--json`, exactly one stdout JSON line per exit, `{…result, "outcome": …}` or `{"outcome": …}`, before any stderr text; the Lab's MCP server prints none | A5 |
 | check-config | `actingcommand.actingd.check-config.v2`, `{schema_version, outcome, report?}` | A6a |
 | watchdog | `actingcommand.watchdog.report.v2`, `{outcome, attention: [outcome…], …}` | A5 |
 | IPC | request v4 `detail`; receipt v2 `outcome` on every receipt | A4 |
@@ -201,10 +201,10 @@ prints for the same fragments), the content half
 of the catalog's version; the Runtime release is the other half and lives only in the release
 tag, so no binary prints it. A code the catalog does not list is `outcome_code_unknown`, and a
 catalog that does not parse, has no codes table or holds an entry without one of the row's text
-members is `outcome_catalog_unreadable` (both at `read_outcome_catalog`, the codes `actingctl
-codes` answers with too); a usage error is `invalid_arguments` at `parse_arguments`. Each prints
+members is `outcome_catalog_unreadable` (both at `read_outcome_catalog`, the codes the Lab's
+`codes` answers with too); a usage error is `invalid_arguments` at `parse_arguments`. Each prints
 `actingledger: <code> during <location>: <text>` on stderr and exits 1, like every
-actingledger failure. `actingctl codes` and `ac_outcome_code` (#389 MCP-14) read the same
+actingledger failure. The Lab's `codes` (MCP `ac_codes`; #389 MCP-14) reads the same
 catalog as pages for agents.
 
 ### The index (Workflow #439 CODES-IX)
@@ -223,7 +223,7 @@ fragment regenerates it (`py -3 -I -B ci/outcome_codes_index.py` from the worksp
 `rust` check runs the script with `--check`, which fails naming the first file of the committed
 index that differs; two such pull requests meet in `README.md`, so the later one regenerates the
 index after it merges `main`. The index lists codes, not locations, and is no interface:
-`actingledger codes`, `actingctl codes` and `ac_outcome_code` stay the lookups of one code.
+`actingledger codes` and the Lab's `codes` (MCP `ac_codes`) stay the lookups of one code.
 
 ## Drift guard `tools/outcome-guard`
 

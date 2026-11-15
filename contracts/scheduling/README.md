@@ -452,7 +452,7 @@ carries a fallback and the amount is never Unknown.
     carry no source (ruling 6). So a dispatched candidate with no pool reason shows its amount's
     source only through the tools' list and the fact itself (`ac_facts`), which the coordinator
     accepts for the first build and may revisit after the trial.
-  - *The status read.* `ScheduleExplanation` shows them (`actingctl schedule`, `ac_schedule`,
+  - *The status read.* `ScheduleExplanation` shows them (the Lab's `schedule`, MCP `ac_schedule`,
     `ac_overview`'s `not_running`, `ac_diagnose`'s `not_run`): a row's `why` is the full outcome
     of its last reason, values included, and its `reasons` list the codes, the warning among them.
     A dispatched candidate's reasons travel in its dispatch events' reason chain as every reason
@@ -744,7 +744,7 @@ In the Runtime (Workflow #308 slice 4a-2) manual offsets are instance facts
 `session.task.<task_id>.priority_offset` (integer milli; instance scope for one
 instance, server or game scope for a task-level offset) in the instance fact
 store, published through `PublishFacts` by an agent (`agent`/`adapter`) or by a
-person: the console (`user`/`ui`) or `actingctl task-offset` (`cli`/`cli`).
+person: the console (`user`/`ui`) or the Lab's `offset` (`lab`; `actingctl task-offset`, `cli`/`cli`, until Workflow #434 LAB-7).
 Every evaluation projects the active records at its input ledger position into
 `priority_offsets` (origin `user` for a person, `agent` otherwise), drops those
 whose TTL has elapsed at the evaluation instant, and reports an offset naming a
@@ -908,8 +908,8 @@ read it, and the candidate waits.
 - **Status read.** `FactRefreshStatus` answers what the recorder holds after the
   latest cycle: `{cycle_seq, transition_seq, instances: [{instance_alias,
   demands: [{fact_key, outcome, package_id?, since_unix_ms, overdue}]}]}`, from
-  memory, appending nothing; `actingctl fact-refresh` prints it and `ac_overview`
-  answers it as its block `fact_refresh`
+  memory, appending nothing; the Lab's `status` answers it as its block `fact_refresh`,
+  on the command line and through MCP
   ([runtime-interface.md](../runtime-interface.md)).
 
 ## Remedies (Workflow #411 B15)
@@ -1430,7 +1430,7 @@ package included (register §1.215 UPD-16), meets the game's "client out of date
   [policy-suspension.md](../policy-suspension.md)); the rest follow their own triggers. The path
   makes no startup claim. A failed store update run leaves the fact true and the instance held;
   its task fails as any task does.
-- **Explanation.** `actingctl schedule` and `ac_schedule` show `application_update_pending` as a
+- **Explanation.** The Lab's `schedule` (MCP `ac_schedule`) shows `application_update_pending` as a
   held candidate's `why`; `ac_facts --instance` shows the fact and the run that wrote it. The idle
   plan counts a held decision neither due nor as a wake, so it does not wake the instance for it.
   The gate only sees candidates, so (fix round 1) the idle plan reads the waiting instances and
@@ -1718,7 +1718,7 @@ of it); a deferred cycle or a failed evaluation leaves it as it was, and a start
 so a run counts from the first evaluation after the start. Nothing of it is written to the ledger
 and no decision reads it. The general read `ScheduleExplanation`
 ([`runtime-interface.md`](../runtime-interface.md), "New request kinds") answers it; its outputs
-are MCP-19b's: `actingctl schedule`, MCP `ac_schedule`, the `not_running` row of `ac_overview` and
+are MCP-19b's: the Lab's `schedule` (MCP `ac_schedule`), the `not_running` row of `ac_overview` and
 the `not_run` rows of `ac_diagnose`.
 
 (Workflow #438 HELD-1, since 0.12.56) A row that keeps one `why` code of the held set past a
@@ -1859,7 +1859,7 @@ projects carries what earlier runs of that task on that instance settled:
     An immediate retry round keeps the declared duration it opened under, which a later catalog's
     task must still declare.
   - **Not-run explanation**: every candidate row of `ScheduleExplanation` (`ac_schedule`,
-    `actingctl schedule`) carries `expected_runtime_ms`, the duration the pair's dispatch would
+    the Lab's `schedule`) carries `expected_runtime_ms`, the duration the pair's dispatch would
     reserve in that evaluation, and `expected_runtime_source`, `declared` or `runs:<n>`.
   - With `scheduling.expected_runtime.enabled` false for an instance nothing is written for it and
     nothing is projected: its evaluations, intents and records are those without samples. This is
@@ -2280,7 +2280,7 @@ that hold ended.
   the row's `since_unix_ms`. HELD-1 adds `held` to `actingd suspended` (the held records still open
   or ended within 48 h of the ledger's latest event, newest first, at most 200, each with its end
   when recorded), the instance's `held` rows to `ac_diagnose`, and `held_reported` on a `not_run`
-  row whose task and `since_unix_ms` an open held record names (actingctl joins them; no wire shape
+  row whose task and `since_unix_ms` an open held record names (the Lab's `diagnose` joins them; no wire shape
   changes). A mark on `ScheduleExplanation`'s own row is a later slice's (`runtime-client`).
 - **Two tasks that wait for each other.** Not detected here; a later detector
   reads a held head's basis keys from its link and a follower's `held_since_unix_ms` and
@@ -2427,7 +2427,7 @@ SCHED-C1c (register §1.299, since 0.12.53) adds a third member in the same two 
   (`compile_warnings`, its code and its pointer in that file; no record for a file that did not
   change), and holds the active generation's warnings, every game's, in the program fact
   `config.catalog_warnings`, which
-  `actingctl overview` and `ac_overview` show in their `catalog` block (`compile_warnings`)
+  the Lab's `status` (MCP `ac_status`) shows in its `catalog` block (`compile_warnings`)
   ([standard-pack-schedule.md](../standard-pack-schedule.md), "The scheduler workbench").
 - **Capability.** A Runtime that reads the members reports the always-on subsystem `pool_lines` in
   `config.subsystems` ([`actingd-check-config.md`](../actingd-check-config.md)). A
@@ -2525,7 +2525,7 @@ Alice's words. "The trigger line" and "A pool its lines cannot spend" are built 
   `pool_capacity`, `stop_line`, `hard_line`, `least_consumption` the least `⌈C/1000⌉` among them;
   SCHED-C1e, since 0.12.54: `lines_source`).
   The status read shows it, as the not-run explanation every scheduling read answers
-  (`ScheduleExplanation`: `actingctl schedule`, `ac_schedule`, `ac_overview`'s `not_running`,
+  (`ScheduleExplanation`: the Lab's `schedule`, the `not_running` row of its `status`,
   `ac_diagnose`'s `not_run`), and the idle plan counts it neither due nor as a wake of its own, as
   it counts `pool_line_held`. Where the compiler can tell (constant lines against a constant
   capacity, or a hard line that references the capacity's own fact, whose `cap − H` is minus its
@@ -2691,11 +2691,11 @@ without a valuation is untouched.
 - **What a person sees.** A resumed episode's decisions carry its kept `capped_episode` and
   `capped_round` (`capped_spend`, `pool_line_held`), and the next episode of its pair counts on
   from its number; a waiting one's consumers carry `pool_line_held` `capped_cap_unknown`, which
-  every scheduling read shows as the not-run explanation (`ScheduleExplanation`: `actingctl
-  schedule`, `ac_schedule`, `ac_overview`'s `not_running`, `ac_diagnose`'s `not_run`), as any
-  `pool_line_held`. The rows of `host.capped_episodes` are read with `actingctl facts --program`
+  every scheduling read shows as the not-run explanation (`ScheduleExplanation`: the Lab's
+  `schedule`, the `not_running` row of its `status`, its `diagnose`'s `not_run`), as any
+  `pool_line_held`. The rows of `host.capped_episodes` are read with the Lab's `facts --program`
   and `ac_facts`; each `capped_state_failed` is a Warning `runtime.failed` in the ledger
-  (`actingctl events`, `ac_events`) and a `WARN actingd:` line.
+  (the Lab's `events`, MCP `ac_events`) and a `WARN actingd:` line.
 - **Old triggers on a capped pool** (SCHED-C1c, since 0.12.53, in the composer; the coordinator's
   point 12, after point 9 of the ten points of #428 comment 6735960127). A consumer whose trigger
   requires, through `all`, a reading of the pool of at least its capacity less a margin (a

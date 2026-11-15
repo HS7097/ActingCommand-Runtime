@@ -190,7 +190,7 @@ neither places nor removes a file. The Lab's rescue rows `vision manifest` and
 Workflow #453 S9 (since 0.12.60; register §1.367). The Lab's rescue row `vision place --from
 <dir>` ([install-cli.md](install-cli.md), "The Lab's rescue module") places what the configured
 vision root lacks or holds wrong, from a folder a person gives; it fetches nothing and names no
-address, and `actingctl install` has no such command.
+address.
 
 - **Which files.** Those of the manifest of the configured provider, as `actingd vision check`
   (above) resolves the vision root and the provider and states each file: every file whose state

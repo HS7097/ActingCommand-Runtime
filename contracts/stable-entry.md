@@ -18,7 +18,7 @@ An A/B root ([install-cli.md](install-cli.md), "The A/B layout") keeps, outside 
 fixed program names that never move:
 
 - `<root>\runtime\<name>.exe`: a copy of the **console entry** `actingcommand-entry.exe`, one per
-  program the Runtime member's manifest lists (`actingcommand-actingd.exe`, `actingctl.exe`, …);
+  program the Runtime member's manifest lists (`actingcommand-actingd.exe`, …);
 - `<root>\ui\<name>.exe`: a copy of the **graphical entry** `actingcommand-entry-gui.exe`, one per
   program the UI member's manifest lists, and after a conversion one per name the old `ui\`
   programs had (design §5.5).
@@ -78,7 +78,7 @@ copied). Shortcuts point at `<root>\ui\<name>.exe` and are never tracked by the 
 | subsystem | console | windows (no console window) |
 | waits | for the child to end; stdin, stdout and stderr pass through; exits with the child's exit code. The watchdog, the installer and the MCP entry rely on this | at most 10 seconds after the spawn (a fixed value of this contract): a child that exits non-zero within them is `entry_child_failed_early` (`child_pid`, `child_exit_code`); a child still running, or one that exited 0, is `entry_launched` (`child_pid`, `child_state`, `child_exit_code`) |
 | exit code | the child's, on success; its own code's category on its own failure (0 success or info, 1 error, 2 fatal) | its code's category: `entry_launched` 0; a refusal that started nothing (`entry_selection_unavailable`, `entry_selection_inherited_stale`, `entry_target_not_in_member`, `entry_target_modified`, `entry_operation_unfinished`, `entry_layout_unknown`) 1; `entry_spawn_failed` and `entry_child_failed_early` 2 |
-| stdout | the child's; the entry writes nothing on success (`mcp-serve` speaks on it) | the child's stdio is null; the entry writes **one line** of JSON, on success and on failure, `{"outcome": {"code", "values"}}` (the `outcome` member of actingctl's result line); without a stdout the line is dropped, the exit code stays |
+| stdout | the child's; the entry writes nothing on success (`mcp-serve` speaks on it) | the child's stdio is null; the entry writes **one line** of JSON, on success and on failure, `{"outcome": {"code", "values"}}` (the `outcome` member of the Lab's result line); without a stdout the line is dropped, the exit code stays |
 | its own failure | one stderr line `OUTCOME actingcommand-entry: <code> <values>` | the dialog below |
 | `ACTINGCOMMAND_ENTRY_NO_DIALOG=1` | — | no dialog and no Notepad: only the exit code, the stdout line and the fixed log. The entry removes the variable from the child's environment (the contract crate's `ENTRY_NO_DIALOG_ENV`) |
 | icon | none | the application icon, built in with `winresource` from an image in `distribution/windows/` |

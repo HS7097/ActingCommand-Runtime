@@ -269,19 +269,19 @@ dirty. `RuntimeHost::runtime_fact_snapshot` and
 whose reply receipt would exceed the host's `maximum_frame_bytes` is refused
 with the request error `runtime_fact_snapshot_too_large_for_frame` (receipt
 state `denied`, not fatal) instead of failing the frame write. There is no
-paged read yet (`actingctl facts --program` reads the whole store); a paged
+paged read yet (the Lab's `facts --program` reads the whole store); a paged
 read is the follow-up. The offline read below has no frame bound.
 
-`actingctl facts --program --state-root <state-root> [--key-prefix <prefix>]`
-prints the snapshot (Workflow #389 MCP-4, the `ac_facts` answer of scope
+The Lab's `facts --program [--prefix <prefix>]`
+prints the snapshot (Workflow #389 MCP-4; MCP `ac_facts` with
 `program`) as `{scope, read_at_unix_ms, snapshot, records_total, records_kept}`:
-`read_at_unix_ms` is the snapshot's `taken_at_unix_ms`, and `--key-prefix` keeps
+`read_at_unix_ms` is the snapshot's `taken_at_unix_ms`, and `--prefix` keeps
 only the records whose key starts with it (`records_total` counts the records
-read, `records_kept` those printed). `facts --instance <selector>` reads one
+read, `records_kept` those printed). `facts <instance>` reads one
 instance's facts instead ([instance-fact-store.md](instance-fact-store.md),
-"Reading the seeds"); `--program` and `--instance` together are a usage error.
+"Reading the seeds"); `--program` with an instance is a usage error.
 
-`actingctl status --config --state-root <state-root>` runs the same
+The Lab's `config` runs the same
 `runtime_fact_snapshot` read (no new operation) and prints only the `config.*`
 records: `config.subsystems`, `config.selection` when recorded, and every
 `config.parameters.<section>` in key order (Workflow #387 D1b), as a JSON array
@@ -534,7 +534,7 @@ the backend self-check facts (source `device-proxy` or `capture`).
   bounded reading; `instance-fact-store.md`, "Backend self-check
   availability"). The connection preparation phase below writes them at
   startup, after emulator `start` / `restart`, on an instance resume and on
-  `SelfCheckInstance`. `actingctl facts --program` lists them.
+  `SelfCheckInstance`. The Lab's `facts --program` lists them.
 - `config.subsystems` and `config.parameters.<section>` (Workflow #318,
   slice 1; one parameters fact per section since Workflow #387 D1b) —
   runtime scope, `record_list`, no lifetime: the in-memory runtime
@@ -616,7 +616,7 @@ the backend self-check facts (source `device-proxy` or `capture`).
   configuration manifest (a host built without one), leaves the last row in place, which then
   names another epoch than the running one; a reader compares the row's `owner_epoch` with the
   epoch it judges. Re-observed like every `config.` fact
-  (`ledger_observer.tag.reobserve_prefixes`), never tagged. `actingctl install` reads it before a
+  (`ledger_observer.tag.reobserve_prefixes`), never tagged. The installer (the Lab's rescue module) reads it before a
   stop and compares its epoch with S0's ([install-cli.md](install-cli.md), "The post-start checks
   (INST-2)"); a reader built before it ignores it, as every reader of the snapshot reads only the
   keys it knows.
@@ -757,8 +757,8 @@ the backend self-check facts (source `device-proxy` or `capture`).
   does. A build before it never reads or writes it.
 
 `contracts/actingd-check-config.md` lists the subsystems and parameters
-`actingd` reports; `actingctl facts --program` returns both records as part of
-the snapshot and `actingctl status --config` returns just the two (see "Read
+`actingd` reports; the Lab's `facts --program` returns both records as part of
+the snapshot and its `config` returns just the two (see "Read
 operation").
 
 ## Connection preparation phase
@@ -841,7 +841,7 @@ is returned as an error; every other failure leaves the instance unavailable.
   preparation phase on its reconnect claim's key, granted before the gate is
   lifted (`scheduling-pause.md`, "Resume").
 - **`SelfCheckInstance { instance_alias }`** — the operator's manual reconnect
-  and self-check of one physical instance (`actingctl selfcheck <alias>`, the
+  and self-check of one physical instance (the Lab's `emu selfcheck <alias>`, the
   Lab's `emu selfcheck`; until Workflow #434 LAB-6S1b origin gate User+Ui or
   Cli+Cli, `invalid_emulator_control_origin` otherwise, since then none),
   on its own `SelfCheck` claim's key (a claim not granted within 3 s refuses it

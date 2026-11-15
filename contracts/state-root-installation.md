@@ -357,7 +357,7 @@ marker, `.old-`, `.rolledback-`, `.abandoned-`, `.prev-`, `.finished-`, `.part`)
 tree comparisons; none refuses an unknown file and none needed a change. An identity file
 `actingd claim-state-root --new-identity` set aside, `install\identity.json.old-<ms>`, carries the
 kept marker, so `install leftovers` lists it as the kept file it is; no installer command removes
-it. No new `actingctl` command comes with S11 or S12; S12's rescue row `state-root claim` runs
+it. No new installer command comes with S11 or S12; S12's rescue row `state-root claim` runs
 actingd's command, and, as every compound operation of the rescue module until LAB-7, it is not
 used on a production root.
 
@@ -424,7 +424,7 @@ optional member, `previous_claimed_at_unix_ms`, a value of an existing record ty
 checks (a `record_list` row of scalars); the owner journal and both files keep their shapes; the
 rescue row, its location and its two words are catalog additions; the rescue module's `op status`
 gains a switch, `state_root_installation`, and with it a read-only member `state_root`, its
-answer without the switch unchanged (`actingctl install status` is unchanged).
+answer without the switch unchanged.
 
 **At deploy.** The first start of this release on an installation mints `install\identity.json`,
 writes the state root's `installation.json`, records one fact and writes one daemon line; nothing

@@ -165,7 +165,7 @@ rule A7): to let a ladder climb at some time, change the blackout table.
 
 **Client runs are let through.** Runs and operations a client asks for are instructions and are
 not held by blackouts or by quieting, and the safety net does not stop them: requester kinds
-`direct_task_run` and `lab_operation`. Today these are `actingctl task-run`, MCP `ac_run_pack`
+`direct_task_run` and `lab_operation`. Today these are the Lab's `run start` (on the command line and through MCP)
 and actinglab `lab run` with the Lab observe and do operations; after Workflow #389 they are the
 Lab channel's option two (actinglab `run start`, `lab run`, and MCP `ac_run_pack` forwarded to
 it; `contracts/runtime-interface.md`). The probes record them as usual. A ladder that such a run's
@@ -371,7 +371,7 @@ Ladders and startup packages do not pass through this evaluation; their own entr
 the table of "Complete silence". Recognition-reading demands (Workflow #384) are collected only
 from candidates that passed positions 1 to 7: an instance a blackout covers as the cycle starts
 is held for the fact refresh as positions 1-2 hold one (SR-4a2), so its candidates carry
-`blackout_active` and raise no reading demand. `actingctl schedule` and MCP `ac_schedule`
+`blackout_active` and raise no reading demand. The Lab's `schedule` (MCP `ac_schedule`)
 (ScheduleExplanation) show `blackout_active`, `blackout_approaching` and
 `policy_day_boundary_approaching` as a candidate's `why`, with their values, and the wake as its
 `next_wake_unix_ms`. For the clock-slot planning records of Workflow

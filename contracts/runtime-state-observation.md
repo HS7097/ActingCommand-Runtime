@@ -166,7 +166,7 @@ the `packs` rows of `actingd suspended` whose `instances` name the instance (eve
 one), verbatim; under its output budget they are cut after `suspended` and before the report's
 warnings (Workflow #386 SR-3, `policy-suspension.md`, "Task package suspension").
 
-`actingctl diagnose` and `ac_diagnose` (Workflow #389 MCP-7) take the instance as optional:
+The Lab's `diagnose` (MCP `ac_diagnose`; Workflow #389 MCP-7) takes the instance as optional:
 without it they diagnose every instance. Both add `runs_grouped`, the window's failed and open
 runs grouped by (policy task id `catalog_task_id`, failure code, final page), and
 `failures_grouped`, the window's `runtime.failed`, `command.rejected` and the
@@ -209,7 +209,7 @@ each page ending at the client's own socket timeout: the listing, the first page
 listing type it has not read yet (at most four); or one run's status read, its Runtime
 restart pages (up to four) and its lease pages (up to two).
 
-`list_contained_runs` (Workflow #389 MCP-3) pages the same listing for `actingctl runs`
+`list_contained_runs` (Workflow #389 MCP-3) pages the same listing for the Lab's `runs`
 and MCP `ac_runs`: the runs first recorded in a window, on one instance or all, newest
 first by their first listing fact, each read in brief mode and kept by its dispatch and
 state, at most 100 a page. A row takes from the run's terminal its `task_result`,
