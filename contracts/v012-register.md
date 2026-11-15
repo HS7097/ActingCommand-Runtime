@@ -27900,6 +27900,92 @@ revision.
 the build embeds when a page is read, so a run recorded before 0.12.62 that ended with
 `device_locked` or the update code shows no group in the errors view either.
 
+### 1.417 Slice #463 S3-10 (0.12.63): `standard-pack trial`: its plan, its refusals and its record (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, whose stage three puts a trial on a real application under the owner's explicit authorization; the design `rd-1115/pack-stage3-design.md`, §2.4 and §4.2 "S3-10"; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s310-trial-plan.md`, read on main `44cbab53`)
+
+The coordinator gave this slice 1.417; the numbers between §1.400 and this one belong to slices
+dispatched with it. The slice ships in 0.12.63.
+
+**What it is.** A new authoring row, `standard-pack trial` (slice `PACK-TRIAL`; actinglab's own
+command `standard-pack trial`, MCP's `ac_standard_pack_trial` through a `serve` child), the half of
+the trial tool that shows and refuses and keeps the record
+([standard-pack-trial.md](standard-pack-trial.md)). **It sends nothing**: in this release the row
+answers only with `--plan`, and without it the line is refused before anything is read,
+`validation_failed` naming `--plan` `required` (the coordinator's ruling 1); S3-11 builds the run on
+this slice's branch and lifts that refusal. The offline part is one module of the resource tooling,
+`standard_pack_trial`: `plan_standard_pack_trial` (the plan and its refusals),
+`check_trial_state_dir`, `write_trial_record`, `trial_records` and `latest_trial_record`.
+
+**The plan** (ruling 5): the package id; `content_hash_prefix`, the first 12 hex digits of the
+containment crate's own `measure_content_hash` of the directory given, the digits the failure
+identity keeps and the break-in of #1737 takes of the same function's hash (#1737 is not on main;
+nothing of it is used); the instance as given, never contacted; the declared ends, each
+`scheduling_outcome` mapping of the entry task with its key, its kind (`target`, `on_empty`,
+`ending`) and its pages; each declared variable with the value `--variable` gives (parsed as the
+scan replay's, judged offline by the contract crate's `PackageVariable::judge`, the rule a dispatch
+resolves a value by, taken only as given) or its default; the irreversible mark; the authorization
+reference; `--expect`; and `record_directory`. It reads the package directory, `--root` and whether
+the state directory's path holds the markers below: no Runtime, no device, no installation, and it
+writes nothing (ruling 7).
+
+**The refusals.**
+
+| Code (resource-tooling) | The one situation | Refuses / warns | Exit |
+|---|---|---|---|
+| `trial_authorization_missing` | `--authorization` absent or blank (ruling 2) | refuses | 1 (envelope 2) |
+| `trial_package_not_directory` | `--package` names a file: a container is never tried, since adoption rewrites the JSON (ruling 4) | refuses | 1 (envelope 2) |
+| `trial_irreversible_unacknowledged` | over `--root`, `IrreversiblePackages` (called, not copied) counts the package as marked and `--irreversible` is not given (ruling 3) | refuses | 1 (envelope 2) |
+| `trial_expectation_unknown` | `--expect` names no key the package declares (ruling 5) | refuses | 1 (envelope 2) |
+| `trial_state_dir_refused` (word `trial_state_place`: `repository`, `installed_root`) | the state directory is, or lies inside, a repository or an installed root (ruling 6) | refuses | 1 (envelope 2) |
+| `trial_record_write_failed` | a record could not be written, or one of its name is there | refuses | 1 (envelope 2) |
+| `trial_record_unreadable` | a file of a record's name is not that record | refuses | 1 (envelope 2) |
+
+An `--authorization` of more than 1024 bytes or with a control character, and a `--variable` the
+scan replay would refuse or the declaration does not take, are `validation_failed` naming the flag
+(the details carry `variable_name` and the judgement's `variable_problem`). One new key and its
+vocabulary, `trial_state_place`, and the domain `trial_` of the resource tooling's fragment. No
+decision point reads a code: each refusal is built where its situation is known.
+
+**Without `--root`** the mark cannot be judged: the plan answers `irreversible` `not_judged` and
+`trial_irreversible_unacknowledged` cannot happen. The row's notes and the contract say so; S3-11
+decides whether the run requires `--root` (ruling 3).
+
+**The record** `actingcommand.pack-trial.v1` (ruling 6): `schema_version`, `at_unix_ms`, `plan`,
+`request_id`, `run_id`, `end` (`outcome`, `outcome_key`, `final_page`, `failure_code`,
+`failure_values`) and `matched`, under `<state>/trials/<package_id>/<content12>-<ms>.json`. The
+writer writes it once (a `.part`, then a rename; never replacing), the reader answers every record
+of a package and the latest of one content and refuses a file of a record's name that is not the
+record its name says. Nothing writes one outside the tests in this release.
+
+**The state directory's place.** The work order asked to refuse a state directory inside a
+repository or an installed root "by the test the Lab already has for that". Main has none for a
+directory: the Lab's location (`lab_ops::locate`, `executable_install_root`) finds the installed
+root of a running program by its place (§1.376 says the same of `standard-pack build`'s `--out`),
+and pull request #1736 adds one that recognises an installed root by its `install\` folder. So the
+module asks main's markers of the state directory's path: `runtime\BUILD-MANIFEST.json` and
+`install\active.json` (`INSTALL_SELECTION_PATH`) for an installed root, and `.git` for a
+repository, along the path made absolute and again with its nearest existing part's links resolved.
+
+**Where the row is wired.** Beside the module and actinglab's `standard_pack_cli.rs`: the row in
+`lab-operations.json`; `engine::COMMANDS` (68), the strict rows (33) with the command's flag lists
+`TRIAL_FLAGS` and `TRIAL_SWITCHES`, the census's group (a) (66), `BUILT_SLICES` and the MCP
+server's `ACTINGLAB_SLICES` (`PACK-TRIAL`), the capability (`offline`, `read_only`), the help's
+options, the dry-run declaration (`no_effect`, [actinglab-dry-run.md](actinglab-dry-run.md)) and
+the command inventory (106 commands). The resource tooling reads the root by the contract crate's
+`read_standard_pack_root` and judges it by `root_irreversibility`, the directory tried read in
+place of the registered one of its id.
+
+**Tests.** `crates/resource-tooling/src/gate_463_s310.rs` (nine) and
+`apps/actinglab/src/tests/gate_463_s310.rs` (two), gate map `exec.toml` "#463 S3-10": the plan of a
+`linear_steps` package with two ending pages lists three keys; a plan writes nothing; each refusal
+of the table above but the write and read failures through the plan, those two through the writer
+and the reader; the command line without `--plan` and with it. No golden changes, no test leaves
+the gate map, no test is adapted.
+
+**What is not changed.** `run start` and the run path of `crates/lab-ops`, the Runtime, `adopt.rs`,
+readiness, the placement, every interface revision and record shape.
+
+**At deploy.** Nothing to do: the row only reads, and nothing writes a trial record yet.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

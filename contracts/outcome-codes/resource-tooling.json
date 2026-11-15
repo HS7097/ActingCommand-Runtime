@@ -1294,6 +1294,118 @@
       "description": "Workflow #464 P3 (contracts/standard-pack-schedule.md, Readiness): a readiness item of a pack that was not judged from what the readiness was given, readiness_unjudged saying why (installation_not_read: no installation was read; part_not_read; not_admitted; composition_refused; no_rule; server_not_told; package_undeclared; check_stopped), never guessed and never passed; or, item unrecorded_screen_code (I3) only, the information line no_revision_tells, which never makes a pack wait (the coordinator's ruling 3 on board #464). An item not judged never counts as holding: a pack whose root items all hold and none of whose items fails, with an installation item not judged, answers ready_to_place, not dispatchable (fix round 1).",
       "common_causes": "The readiness ran without an installation (actinglab standard-pack ready reads none), or a part of the installation was not read.",
       "handling": "Act on the item it depends on where there is one. An installation item is judged only where an installation's readings are handed to the function; today no caller hands them (actinglab standard-pack ready reads none, and the placement plan does not call the readiness yet, a follow-up), so judge it by hand: the configuration's instances (I1), the installer's package range (I2), check-config's subsystems (I4), actingd suspended (I5), vision check (I6)."
+    },
+    "trial_authorization_missing": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "resource-tooling",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.63",
+      "description": "Workflow #463 S3-10 (contracts/standard-pack-trial.md, \"The refusals\"): actinglab standard-pack trial names no authorization: --authorization is absent or blank. A trial on a real application is an act under the owner's explicit authorization, so the tool requires its reference before it reads anything; it records the reference and never interprets it. Nothing was read, written or sent.",
+      "common_causes": "The command line or the MCP call left out --authorization, or gave an empty or blank value.",
+      "handling": "Give --authorization <reference>, the reference of the owner's word (for example the board comment that holds it), and ask again."
+    },
+    "trial_package_not_directory": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "resource-tooling",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "path": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.63",
+      "description": "Workflow #463 S3-10 (contracts/standard-pack-trial.md, \"The package\"): the --package of actinglab standard-pack trial names a file (path), a .zip or .json container or any other, not a package directory. Adoption rewrites a package's JSON into the canonical form, so a container and the directory adopted from it may hash differently, and what is tried must be what is adopted: a trial runs a pack directory, packs/<id> of a checkout or a placed pack. Nothing was written or sent.",
+      "common_causes": "The container record stop wrote was given before it was adopted.",
+      "handling": "Adopt the package (actinglab standard-pack adopt) and give its directory packs/<id>, or the placed pack's directory."
+    },
+    "trial_irreversible_unacknowledged": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "resource-tooling",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "package_id": "required",
+        "path": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.63",
+      "description": "Workflow #463 S3-10 (contracts/standard-pack-trial.md, \"The irreversible mark\"): the game root given as --root (path) counts the package (package_id) as able to do something irreversible, by the contract crate's IrreversiblePackages over every package the root registers (a package the root does not register, and every package while one of the root cannot be read, counts so), and --irreversible is not given. Without --root the mark is not judged and this refusal cannot happen. Nothing was written or sent.",
+      "common_causes": "The package provides a capability a package of the root marks irreversible, or a remedy of its mappings lists one; or the root does not register the package, or holds a package that cannot be read.",
+      "handling": "Make sure the owner's authorization covers an irreversible trial of this package, then ask again with --irreversible as well."
+    },
+    "trial_expectation_unknown": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "resource-tooling",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "package_id": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.63",
+      "description": "Workflow #463 S3-10 (contracts/standard-pack-trial.md, \"The plan\"): the --expect of actinglab standard-pack trial names no outcome key the package (package_id) declares in its entry task's scheduling_outcome mappings; the details carry the key given (expected) and the declared keys (declared_outcome_keys). Nothing was written or sent.",
+      "common_causes": "A key misspelt, or one of another package; a package that declares no mapping.",
+      "handling": "Give one of the declared keys, or leave --expect out."
+    },
+    "trial_state_dir_refused": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "resource-tooling",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "path": "required",
+        "trial_state_place": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.63",
+      "description": "Workflow #463 S3-10 (contracts/standard-pack-trial.md, \"The record\"): the state directory (path) where actinglab standard-pack trial keeps its records is, or lies inside, a repository or an installed root (trial_state_place says which: a directory along its path holds .git, or the Lab's markers of an installed root, runtime\\BUILD-MANIFEST.json or install\\active.json). Trial records are Lab authoring state, kept beside the recordings. The plan and the record's writer both refuse it; nothing was written or sent.",
+      "common_causes": "--state-dir points into a resource repository's checkout or into the installation root.",
+      "handling": "Give a --state-dir outside every repository and installation, or leave it out for actinglab's own."
+    },
+    "trial_record_write_failed": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "resource-tooling",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "path": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.63",
+      "description": "Workflow #463 S3-10 (contracts/standard-pack-trial.md, \"The record\"): a trial record could not be written at path, or a record of its name, or the .part of one, is there already and is never replaced; the operating system's refusal (or AlreadyExists) is its cause. Nothing is removed: a .part a failed write left stays where it is.",
+      "common_causes": "A full disk or a folder without the right to write; two trials of one content recorded in the same millisecond; a .part left by an interrupted write.",
+      "handling": "Read the cause, free the place (move a left .part away by hand), and write the record again."
+    },
+    "trial_record_unreadable": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "resource-tooling",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "path": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.63",
+      "description": "Workflow #463 S3-10 (contracts/standard-pack-trial.md, \"The record\"): a file of a trial record's name (<content12>-<ms>.json) under <state>/trials/<package_id>/, or that directory, could not be read (the operating system's refusal as its cause), is larger than 1 MiB, does not decode as actingcommand.pack-trial.v1 (the decoder's refusal as its cause), or is not the record of the package, the content and the time its name says. The reader answers no record of that package rather than pass over one.",
+      "common_causes": "A record edited or copied by hand, or a file of another program under the trials directory.",
+      "handling": "Look at the file the path names; restore or move it away, then read again."
     }
   }
 }

@@ -152,6 +152,41 @@ actingcommand_contract::outcome_codes! {
         /// readiness was given, or (item `unrecorded_screen_code`) an information line that never
         /// stops a pack (keys `package_id`, `readiness_item`, `readiness_unjudged`).
         PackageReadinessUnjudged => "package_readiness_unjudged": info / none,
+        // Workflow #463 S3-10: `actinglab standard-pack trial`, its plan and its record
+        // (`standard_pack_trial`, contracts/standard-pack-trial.md).
+        /// Workflow #463 S3-10: the trial names no authorization: `--authorization` absent or
+        /// blank. Nothing was read.
+        TrialAuthorizationMissing => "trial_authorization_missing": error / none,
+        /// Workflow #463 S3-10: `--package` names a file, not a package directory (key `path`):
+        /// a trial runs the form adoption writes, never a container.
+        TrialPackageNotDirectory => "trial_package_not_directory": error / none,
+        /// Workflow #463 S3-10: the game root counts the package as able to do something
+        /// irreversible and `--irreversible` is not given (keys `package_id`, `path` the root).
+        TrialIrreversibleUnacknowledged => "trial_irreversible_unacknowledged": error / none,
+        /// Workflow #463 S3-10: `--expect` names no outcome key the package declares (key
+        /// `package_id`; the declared keys in the details).
+        TrialExpectationUnknown => "trial_expectation_unknown": error / none,
+        /// Workflow #463 S3-10: the state directory is, or lies inside, a repository or an
+        /// installed root (keys `path`, `trial_state_place`).
+        TrialStateDirRefused => "trial_state_dir_refused": error / none,
+        /// Workflow #463 S3-10: a trial record could not be written, or one of its name is there
+        /// already (key `path`; the operating system's refusal as its cause).
+        TrialRecordWriteFailed => "trial_record_write_failed": error / none,
+        /// Workflow #463 S3-10: a file of a trial record's name does not read as that record (key
+        /// `path`; the refusal of the read or of the decoder as its cause).
+        TrialRecordUnreadable => "trial_record_unreadable": error / none,
+    }
+}
+
+actingcommand_contract::outcome_vocabulary! {
+    /// Workflow #463 S3-10: where a state directory refused for trial records lies (vocabulary
+    /// `trial_state_place`, the value `trial_state_place` of `trial_state_dir_refused`).
+    pub enum TrialStatePlace: "trial_state_place" {
+        /// It is, or lies inside, a Git work tree: a directory along its path holds `.git`.
+        Repository => "repository",
+        /// It is, or lies inside, an installed root: a directory along its path holds
+        /// `runtime\BUILD-MANIFEST.json` or `install\active.json`.
+        InstalledRoot => "installed_root",
     }
 }
 

@@ -2847,6 +2847,10 @@
     "pause_cause": {
       "type": "vocab:pause_cause",
       "description": "Why a failure paused its task on the application, in the settlement's own order (Workflow #469 V0, since 0.12.62)."
+    },
+    "trial_state_place": {
+      "type": "vocab:trial_state_place",
+      "description": "Where a state directory refused for trial records lies: a repository or an installed root (Workflow #463 S3-10, since 0.12.63)."
     }
   },
   "vocabularies": {
@@ -10468,6 +10472,22 @@
           "description": "The task used up its retries and is set to pause on failure. The pause lifts when the package changes; there is no manual lift."
         }
       }
+    },
+    "trial_state_place": {
+      "description": "Where a state directory refused for trial records lies, the value trial_state_place of trial_state_dir_refused (Workflow #463 S3-10, contracts/standard-pack-trial.md \"The record\", since 0.12.63).",
+      "review": "pending",
+      "source": {
+        "file": "crates/resource-tooling/src/codes.rs",
+        "enum": "TrialStatePlace"
+      },
+      "tokens": {
+        "repository": {
+          "description": "It is, or lies inside, a Git work tree: a directory along its path holds .git."
+        },
+        "installed_root": {
+          "description": "It is, or lies inside, an installed root: a directory along its path holds runtime\\BUILD-MANIFEST.json or install\\active.json, the markers by which the Lab's location finds one."
+        }
+      }
     }
   },
   "domains": {
@@ -13387,6 +13407,9 @@
     ],
     "display_": [
       "display-adapter"
+    ],
+    "trial_": [
+      "resource-tooling"
     ]
   },
   "fragments": {

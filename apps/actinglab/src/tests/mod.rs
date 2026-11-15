@@ -190,6 +190,10 @@ mod gate_464_p2;
 // those words is gone.
 #[path = "gate_467_rpt1.rs"]
 mod gate_467_rpt1;
+// Workflow #463 S3-10: `standard-pack trial` answers only with `--plan`, the plan of a trial, and
+// sends nothing.
+#[path = "gate_463_s310.rs"]
+mod gate_463_s310;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
 use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{
