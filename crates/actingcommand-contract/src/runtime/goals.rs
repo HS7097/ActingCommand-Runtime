@@ -86,12 +86,28 @@ crate::outcome_vocabulary! {
         /// The edited record would hold more targets (16) or entries (96) than a record keeps
         /// (`range_max`).
         RecordOutOfLimits => "record_out_of_limits",
-        /// Fix round 1: what the page is judged by is not in the Runtime's memory yet (the
-        /// scheduler workbench has not checked the game root since the start, or no evaluation
-        /// has read the bound packages for the active catalog and procedure manifest), so nothing
-        /// is known of the name; the page answers `not_checked_yet` meanwhile. Nothing is stored:
-        /// send the same request again after the Runtime's next check.
+        /// Fix round 1: what the page is judged by is not in the Runtime's memory yet: the
+        /// scheduler workbench has not checked the game root since the start (or since the game
+        /// came into use), or no evaluation has read the bound packages for the active catalog and
+        /// procedure manifest. Nothing is known of the name and nothing is stored; the page
+        /// answers `not_checked_yet` meanwhile. Fix round 2: only this situation, which passes by
+        /// itself: send the same request again after the Runtime's next check.
         NotCheckedYet => "not_checked_yet",
+        /// Fix round 2: the scheduler workbench checks the application's game root, and no check
+        /// since the start could read it (its root files' metadata or their read fails; the page
+        /// answers `root_failing` with the failure). Asking again does not help: the root must be
+        /// repaired. No name can be set or cleared meanwhile, a resource goal that needs no
+        /// declaration (`{resource, at_least}`) neither: while its root fails the game is
+        /// uncomposed, so no goal of the application is in effect, and nothing is stored.
+        RootFailing => "root_failing",
+        /// Fix round 2: the application's game has no standard pack root with `schedule.json`
+        /// (the standard-pack root holds no game root for it, or its game root holds no
+        /// `schedule.json`), so there is nothing to check: the composed catalog holds no rule and
+        /// no pool of the game, no run reads a goal of it, and the page answers `no_schedule`. No
+        /// name can be set or cleared, a resource goal that needs no declaration neither (no pool
+        /// of the game is one the application can target), and nothing is stored; asking again
+        /// does not help until the game root holds `schedule.json`.
+        NoSchedule => "no_schedule",
     }
 }
 
@@ -153,7 +169,12 @@ pub struct GoalView {
 }
 
 /// What the workbench holds of the game's `goals.json`: whether it read one, its sha256, and, for
-/// a refused file, its first problem (`standard_pack_problem` and its pointer).
+/// a refused file, its first problem (`standard_pack_problem` and its pointer). Fix round 2: for
+/// a game root that fails its checks (`root_failing`), why it fails, as the record the workbench's
+/// last check wrote of it names it: the file it failed on (`path`), and the reader's first problem
+/// with its pointer when the reader refused that file (`standard_pack_root_invalid`), or the
+/// operating system's failure kind (`io_kind`) when the file could not be read or stat'ed
+/// (`standard_pack_root_unreadable`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GoalDeclarationState {
@@ -164,6 +185,10 @@ pub struct GoalDeclarationState {
     pub standard_pack_problem: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub json_pointer: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub io_kind: Option<String>,
 }
 
 /// Whether the game's `goals.json` is in effect, as the scheduler workbench's last check of the
@@ -174,7 +199,12 @@ pub struct GoalDeclarationState {
 /// Fix round 1: `not_checked_yet` when what the page is judged by is not in memory yet (the
 /// workbench has not checked the game root since the start, or no evaluation has read the bound
 /// packages for the active catalog and procedure manifest): the page then lists nothing, every
-/// `EditGoal` is refused `not_checked_yet`, and the caller asks again after the next check.
+/// `EditGoal` is refused `not_checked_yet`, and the caller asks again after the next check. Fix
+/// round 2: one word per cause, each also the word every `EditGoal` is refused with while the
+/// page lists nothing: `not_checked_yet` only for that, which passes by itself; `root_failing`
+/// when the workbench checks the game root and no check since the start could read it (the
+/// state names why: the root must be repaired); `no_schedule` when the game has no standard pack
+/// root with `schedule.json`, so there is nothing to check.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GoalDeclarationRead {
@@ -184,6 +214,8 @@ pub enum GoalDeclarationRead {
     Unreadable,
     NotRead,
     NotCheckedYet,
+    RootFailing,
+    NoSchedule,
 }
 
 /// The type of an entry of the page: the five types of `goals.json` version 2, a variable no

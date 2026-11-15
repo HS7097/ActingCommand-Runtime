@@ -959,9 +959,12 @@ fn goals_view(params: Params<'_>, client: &RuntimeClient) -> Result<Exit, Exit> 
 }
 
 /// Workflow #463 V3: `goals get <inst> <name>`, `GoalView`: the page's one entry of that name (or
-/// the stored value of that name no entry offers any more, as `orphan`), with the page's version,
-/// beside the read's success code. A name the page does not hold is refused as `<name>`
-/// `not_recognised`; a refusal of the read is the client's failure.
+/// the stored value of that name no entry offers any more, as `orphan`), with the page's version
+/// and (fix round 2) its declaration state, beside the read's success code. A name the page does
+/// not hold is refused as `<name>` `not_recognised`; a refusal of the read is the client's
+/// failure. Fix round 2 (#1731, item 4): a page that lists nothing because it is not checked
+/// (`not_checked_yet`, `root_failing`, `no_schedule`) answers its state with its word, as `goals`
+/// does, and no entry: nothing is known of the name, so it is not refused as not recognised.
 fn goals_get(params: Params<'_>, client: &RuntimeClient) -> Result<Exit, Exit> {
     let alias = alias_of(client, required_text(params, "instance")?)?;
     let name = required_text(params, "name")?;
@@ -974,6 +977,20 @@ fn goals_get(params: Params<'_>, client: &RuntimeClient) -> Result<Exit, Exit> {
         Value::from(view.instance_alias.clone()),
     );
     members.insert("version".to_owned(), Value::from(view.version));
+    let declaration =
+        serde_json::to_value(&view.declaration).map_err(|error| output_failed(&error))?;
+    members.insert("declaration".to_owned(), declaration);
+    if matches!(
+        view.declaration.state,
+        actingcommand_contract::GoalDeclarationRead::NotCheckedYet
+            | actingcommand_contract::GoalDeclarationRead::RootFailing
+            | actingcommand_contract::GoalDeclarationRead::NoSchedule
+    ) {
+        return Ok(cli_line::success(
+            members,
+            &Outcome::new(ReceiptCode::GoalViewCompleted),
+        ));
+    }
     let found = match view.entries.iter().find(|entry| entry.name == name) {
         Some(entry) => serde_json::to_value(entry).map(|entry| ("entry", entry)),
         None => match view.orphans.iter().find(|orphan| orphan.name == name) {

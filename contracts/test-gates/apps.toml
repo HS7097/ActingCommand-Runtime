@@ -2294,7 +2294,7 @@ tests = [
 ]
 incident = ["#463 V3"]
 
-# Workflow #463 V3 fix round 1 (0.12.61; register §1.383; brief rd-1115/brief-1731-fix1.md, item 9), the MCP server on a scripted Runtime that takes every goal request (a made-up page with the variable pick; an edit taken as version 1 in one event): ac_goals, ac_goals_get, ac_goals_set and ac_goals_clear answer the line and the exit 0 the command line's code answers for goals, goals get, goals set and goals clear, on eight connections and none beyond; ac_package_variables of a made-up package the metadata reader reads (the variable pick and one remedy parameter), through a serve child of the real actinglab, answers the line actinglab --json package variables prints, no error
+# Workflow #463 V3 fix round 1 (0.12.61; register §1.383; brief rd-1115/brief-1731-fix1.md, item 9), the MCP server on a scripted Runtime that takes every goal request (a made-up page with the variable pick; an edit taken as version 1 in one event): ac_goals, ac_goals_get, ac_goals_set and ac_goals_clear answer the line and the exit 0 the command line's code answers for goals, goals get, goals set and goals clear, on seven connections (the kept one, one per write, one per command line) and none beyond; ac_package_variables of a made-up package the metadata reader reads (the variable pick and one remedy parameter), through a serve child of the real actinglab, answers the line actinglab --json package variables prints, no error
 [[gate]]
 coverage = "Y"
 tests = [

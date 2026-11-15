@@ -277,7 +277,8 @@ for that game, and a reader of the declaration says why.
   `not_offered`), and checks a name set by it against them. A refused file is named with its
   sha256 and first problem and lists no entry, as an unreadable or absent one; until the
   workbench has checked the root after a start the page answers `not_checked_yet` and an edit is
-  refused with that word.
+  refused with that word (fix round 2 of #1731: `root_failing` for a root no check since the start
+  could read, `no_schedule` for a game without `schedule.json`).
 
 ## Interface
 

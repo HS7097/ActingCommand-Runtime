@@ -2828,10 +2828,10 @@ fn mcp_goals_rows_are_the_command_lines() {
     let record = runtime.finish();
     assert!(
         record.unscripted.is_empty(),
-        "a connection beyond the eight"
+        "a connection beyond the seven"
     );
     let [kept, first_write, second_write, ..] = record.connections.as_slice() else {
-        panic!("{} connections, not eight", record.connections.len());
+        panic!("{} connections, not seven", record.connections.len());
     };
     assert_eq!(
         operations(kept),
@@ -3156,9 +3156,10 @@ fn mcp_goals_rows_accepted_are_the_command_lines() {
     let record = runtime.finish();
     assert!(
         record.unscripted.is_empty(),
-        "a connection beyond the eight"
+        "a connection beyond the seven"
     );
-    assert_eq!(record.connections.len(), 8, "eight connections");
+    // Fix round 2: the kept connection, the two writes' and the command line's four.
+    assert_eq!(record.connections.len(), 7, "seven connections");
 
     let package = neutral_package(temp.path());
     let actinglab = std::env::var_os(ACTINGLAB_VARIABLE)

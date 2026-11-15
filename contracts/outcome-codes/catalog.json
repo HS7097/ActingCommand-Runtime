@@ -10140,9 +10140,9 @@
         },
         "state_root": {
           "description": "The Runtime's state root (state_root)."
-          }
         }
-      },
+      }
+    },
     "goal_problem": {
       "description": "Why an EditGoal was refused under the fact write gate, after the version comparison, the value goal_problem of goal_value_invalid, one word per situation a reader can tell apart (Workflow #463 V3, contracts/runtime-interface.md \"Goal request kinds\", since 0.12.61).",
       "review": "pending",
@@ -10212,7 +10212,13 @@
           "description": "The edited record would hold more targets (16) or entries (96) than a record keeps (range_max)."
         },
         "not_checked_yet": {
-          "description": "Fix round 1: what the page is judged by is not in the Runtime's memory yet (the scheduler workbench has not checked the game root since the start, or no evaluation has read the bound packages for the active catalog and procedure manifest), so nothing is known of the name; the page answers not_checked_yet meanwhile. Nothing is stored: send the same request again after the Runtime's next check."
+          "description": "Fix round 1: what the page is judged by is not in the Runtime's memory yet: the scheduler workbench has not checked the game root since the start (or since the game came into use), or no evaluation has read the bound packages for the active catalog and procedure manifest. Nothing is known of the name and nothing is stored; the page answers not_checked_yet meanwhile. Fix round 2: only this situation, which passes by itself: send the same request again after the Runtime's next check."
+        },
+        "root_failing": {
+          "description": "Fix round 2: the scheduler workbench checks the application's game root, and no check since the start could read it (its root files' metadata or their read fails; the page answers root_failing with the failure: the file, and the reader's first problem or the operating system's failure kind). Asking again does not help: the root must be repaired. No name can be set or cleared meanwhile, a resource goal that needs no declaration ({resource, at_least}) neither: while its root fails the game is uncomposed, so no goal of the application is in effect, and nothing is stored."
+        },
+        "no_schedule": {
+          "description": "Fix round 2: the application's game has no standard pack root with schedule.json (the standard-pack root holds no game root for it, or its game root holds no schedule.json), so there is nothing to check: the composed catalog holds no rule and no pool of the game, no run reads a goal of it, and the page answers no_schedule. No name can be set or cleared, a resource goal that needs no declaration neither (no pool of the game is one the application can target), and nothing is stored; asking again does not help until the game root holds schedule.json."
         }
       }
     }
@@ -10252,6 +10258,9 @@
       "runtime-host"
     ],
     "goal_value_": [
+      "runtime-host"
+    ],
+    "goal_": [
       "runtime-host"
     ],
     "release_": [

@@ -7,7 +7,8 @@
 //!
 //! - **The page** ([`GoalPage`]): the application's game, whether what the page is judged by is
 //!   in memory (fix round 1: until it is, every edit is `not_checked_yet` and the view lists
-//!   nothing), what the scheduler workbench holds of its `goals.json` (an accepted file only; a
+//!   nothing; fix round 2: or `root_failing` or `no_schedule`, one word per cause), what the
+//!   scheduler workbench holds of its `goals.json` (an accepted file only; a
 //!   refused file applies no entry), the packages the active catalog binds on the application (a
 //!   catalog task whose scope covers it, and the package the dispatch's table or the remedy table
 //!   holds for that task) with their variables and remedy parameters, the pools it can target
@@ -69,9 +70,12 @@ pub(crate) struct GoalPage {
     /// Fix round 1: whether what the page is judged by is in the Runtime's memory (with a
     /// composed standard pack the scheduler workbench's check of the game root, and the remedy
     /// table the last evaluation built for the active catalog and procedure manifest). When it is
-    /// not, the page holds nothing else, the view lists nothing and every edit is refused
-    /// `not_checked_yet`.
-    pub(crate) checked: bool,
+    /// not, the page holds nothing else, the view lists nothing and every edit is refused. Fix
+    /// round 2: `None` when it is; else the one word of the cause every edit is refused with:
+    /// `not_checked_yet` (not in memory yet, which passes by itself), `root_failing` (the
+    /// workbench checks the game root and no check since the start could read it) or
+    /// `no_schedule` (the game has no standard pack root with `schedule.json`).
+    pub(crate) unchecked: Option<GoalProblem>,
     /// The game's `goals.json` when the workbench holds it accepted.
     pub(crate) declaration: Option<StandardPackGoals>,
     /// The bound packages, each once, in the order of the catalog task that first runs it.
@@ -90,11 +94,12 @@ pub(crate) struct GoalPage {
 }
 
 impl GoalPage {
-    /// Fix round 1: the page of `game_id` while what it is judged by is not in memory yet.
-    pub(crate) fn not_checked(game_id: String) -> Self {
+    /// Fix round 1: the page of `game_id` while what it is judged by is not in memory yet. Fix
+    /// round 2: for the cause `word` (`not_checked_yet`, `root_failing` or `no_schedule`).
+    pub(crate) fn not_checked(game_id: String, word: GoalProblem) -> Self {
         Self {
             game_id,
-            checked: false,
+            unchecked: Some(word),
             declaration: None,
             packages: Vec::new(),
             targetable: Vec::new(),
@@ -231,8 +236,9 @@ pub(crate) enum EditRequest<'a> {
 /// set by `set_by`, or why it is refused. The host runs it under the fact write gate, after it
 /// compared the version, on the record it is about to change. A name outside an entry name's form
 /// is `name_unknown`, a `set` whose value is no JSON `value_not_json`; then (fix round 1) a page
-/// not in memory yet refuses every request `not_checked_yet`. A `set` is judged by [`check_set`],
-/// a `clear` by [`check_clear`].
+/// not in memory yet refuses every request `not_checked_yet` (fix round 2: or, for a game root
+/// that fails its checks or a game without `schedule.json`, `root_failing` or `no_schedule`). A
+/// `set` is judged by [`check_set`], a `clear` by [`check_clear`].
 pub(crate) fn check_edit(
     page: &GoalPage,
     stored: &StoredGoalRecord,
@@ -252,8 +258,8 @@ pub(crate) fn check_edit(
         ),
         EditRequest::Clear { .. } => None,
     };
-    if !page.checked {
-        return Err(GoalRefusal::new(GoalProblem::NotCheckedYet));
+    if let Some(word) = page.unchecked {
+        return Err(GoalRefusal::new(word));
     }
     let declared = page
         .declaration

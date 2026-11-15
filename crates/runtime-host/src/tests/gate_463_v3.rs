@@ -155,7 +155,7 @@ fn page(declaration: Option<StandardPackGoals>) -> GoalPage {
     };
     GoalPage {
         game_id: GAME.to_owned(),
-        checked: true,
+        unchecked: None,
         declaration,
         packages: vec![
             BoundPackage {
@@ -508,24 +508,32 @@ fn v3_host_each_situation_of_the_checks_is_its_own_word() {
     );
 
     // Fix round 1: a page not in memory yet refuses every request with a word of its own, after
-    // the name's form and the value's JSON.
-    let unchecked = GoalPage::not_checked(GAME.to_owned());
-    assert_eq!(
-        refused(&unchecked, &stored, set("pick", "\"item_a\"")).0,
-        P::NotCheckedYet
-    );
-    assert_eq!(
-        refused(&unchecked, &stored, EditRequest::Clear { name: "stray" }).0,
-        P::NotCheckedYet
-    );
-    assert_eq!(
-        refused(&unchecked, &stored, set("Not A Name", "1")).0,
-        P::NameUnknown
-    );
-    assert_eq!(
-        refused(&unchecked, &stored, set("pick", "{")).0,
-        P::ValueNotJson
-    );
+    // the name's form and the value's JSON. Fix round 2: one word per cause, the same way: not
+    // checked yet, a root that fails its checks, a game without `schedule.json`; an other target,
+    // which needs no declaration, included.
+    for word in [P::NotCheckedYet, P::RootFailing, P::NoSchedule] {
+        let unchecked = GoalPage::not_checked(GAME.to_owned(), word);
+        assert_eq!(
+            refused(&unchecked, &stored, set("pick", "\"item_a\"")).0,
+            word
+        );
+        assert_eq!(
+            refused(&unchecked, &stored, set("spare", &spare_other)).0,
+            word
+        );
+        assert_eq!(
+            refused(&unchecked, &stored, EditRequest::Clear { name: "stray" }).0,
+            word
+        );
+        assert_eq!(
+            refused(&unchecked, &stored, set("Not A Name", "1")).0,
+            P::NameUnknown
+        );
+        assert_eq!(
+            refused(&unchecked, &stored, set("pick", "{")).0,
+            P::ValueNotJson
+        );
+    }
 }
 
 fn page_without_file() -> GoalPage {
@@ -1027,13 +1035,12 @@ impl Scene {
         .expect("capacity sample");
     }
 
-    /// Evaluates at `at`, admits the dispatch of the rule, runs it (`home`, one tap, `result`)
-    /// and settles it: the reason chain the dispatch carried and its run's context.
-    fn evaluate_and_run(&self, at: u64, seed: u64) -> (DecisionReasonChain, Box<PolicyRunContext>) {
+    /// Fix round 2: one policy cycle at `at`, the Runtime clock moved there first (the
+    /// workbench's check of the game root runs in it); its full evaluation, when it made one.
+    fn cycle(&self, at: u64, seed: u64) -> Option<actingcommand_policy::PolicyEvaluation> {
         advance_manual_clock_to(&self.clock, at);
         self.sample_capacity();
-        let evaluation = self
-            .host
+        self.host
             .evaluate_policy_cycle_with_test_inputs(
                 &facts(),
                 &resources(&[POOL_A]),
@@ -1046,7 +1053,12 @@ impl Scene {
             )
             .unwrap_or_else(|error| panic!("evaluate the policy at {at}: {error}"))
             .evaluation
-            .expect("a full evaluation");
+    }
+
+    /// Evaluates at `at`, admits the dispatch of the rule, runs it (`home`, one tap, `result`)
+    /// and settles it: the reason chain the dispatch carried and its run's context.
+    fn evaluate_and_run(&self, at: u64, seed: u64) -> (DecisionReasonChain, Box<PolicyRunContext>) {
+        let evaluation = self.cycle(at, seed).expect("a full evaluation");
         let intent = evaluation
             .dispatch_intents
             .iter()
@@ -1867,5 +1879,101 @@ fn v3_fix1_a_variable_the_root_keeps_from_applying_is_listed_with_its_cause_and_
                "value_json": "\"item_b\""})
     );
     assert_eq!(run_values(&context), [("pick".to_owned(), json!("item_b"))]);
+    scene.close();
+}
+
+// ---- Fix round 2 (coordinator brief rd-1115/brief-1731-fix2.md, item 3).
+
+/// The gate tests' seam that makes the metadata of a file fail as a file the process may not stat
+/// (`DECLARATION_METADATA_FAILS_FOR_TEST`); each test names files below its own root.
+fn metadata_seam() -> std::sync::MutexGuard<'static, BTreeSet<std::path::PathBuf>> {
+    crate::host::DECLARATION_METADATA_FAILS_FOR_TEST
+        .lock()
+        .expect("the metadata seam")
+}
+
+// Fix round 2, item 3: a game root no check since the start could read answers a word of its own,
+// which asking again does not change, and why. The root composes once; the host starts again while
+// the metadata of the root's `schedule.json` cannot be read (the seam), so the workbench's checks
+// of this start fail the root and keep nothing of it: the page answers `root_failing` with the file
+// the check failed on and the operating system's failure kind, and lists nothing, also after
+// another check that fails; a `set` of the variable, a `set` of an other target (which needs no
+// declaration) and a `clear` are each refused `root_failing`, nothing written. Once the file reads
+// again, the next check reads the root and the page lists `pick` again.
+#[test]
+fn v3_fix2_a_root_no_check_since_the_start_read_answers_root_failing() {
+    let scene = Scene::new(&pick_only());
+    let (_, context) = scene.evaluate_and_run(POLICY_NOW_UNIX_MS, 6);
+    let schedule = scene.packs.path().join(GAME_A).join("schedule.json");
+    let restart_at = next_eligible(&context).max(POLICY_NOW_UNIX_MS + CHECK_INTERVAL_MS);
+    metadata_seam().insert(schedule.clone());
+    let scene = scene.restart(restart_at);
+    scene.cycle(restart_at, 7);
+    let failing = scene.view();
+    let words = [
+        set_op("pick", &json!("item_a")),
+        set_op("stock", &json!({"resource": POOL_A, "at_least": 5})),
+        clear_op("pick"),
+    ]
+    .into_iter()
+    .map(|op| {
+        denied(&scene.edit(op, None, restart_at), INVALID)
+            .value("goal_problem")
+            .cloned()
+    })
+    .collect::<Vec<_>>();
+    scene.cycle(restart_at + CHECK_INTERVAL_MS, 8);
+    let again = scene.view();
+    metadata_seam().remove(&schedule);
+
+    for view in [&failing, &again] {
+        assert_eq!(
+            view.declaration.state,
+            GoalDeclarationRead::RootFailing,
+            "{view:?}"
+        );
+        assert!(
+            view.declaration
+                .path
+                .as_deref()
+                .is_some_and(|path| path.ends_with("schedule.json")),
+            "the file the check failed on: {:?}",
+            view.declaration
+        );
+        assert_eq!(
+            view.declaration.io_kind.as_deref(),
+            Some("permission_denied"),
+            "{:?}",
+            view.declaration
+        );
+        assert!(
+            view.entries.is_empty() && view.orphans.is_empty(),
+            "{view:?}"
+        );
+    }
+    let root_failing = json!(GoalProblem::RootFailing.as_str());
+    assert!(
+        words.len() == 3
+            && words
+                .iter()
+                .all(|word| word.as_ref() == Some(&root_failing)),
+        "the variable, an other target and a clear: {words:?}"
+    );
+    assert_eq!(scene.view().version, 0, "nothing was written");
+
+    scene.cycle(restart_at + 2 * CHECK_INTERVAL_MS, 9);
+    let read = scene.view();
+    assert_eq!(
+        read.declaration.state,
+        GoalDeclarationRead::Absent,
+        "{read:?}"
+    );
+    assert_eq!(
+        read.entries
+            .iter()
+            .map(|entry| entry.name.as_str())
+            .collect::<Vec<_>>(),
+        ["pick"]
+    );
     scene.close();
 }

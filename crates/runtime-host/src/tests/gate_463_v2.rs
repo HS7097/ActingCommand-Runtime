@@ -1011,12 +1011,26 @@ fn v2_fix3_a_reason_past_the_record_bound_is_whole_for_the_run_and_shortened_in_
     scene.close();
 }
 
+// Fix round 2 of #1731 (item 5): rewrites a package's control declaration one byte longer (its
+// `timeout_ms` 8000 becomes 80000, which nothing these tests read depends on), so the length the
+// check's marks read changes for certain and the next check reads the root again; a rewrite with
+// the same bytes could leave the marks as they were (a coarse file clock) and pass by doing nothing.
+fn one_byte_longer(control: &mut Value) {
+    assert_eq!(
+        control["timeout_ms"],
+        json!(8_000),
+        "setup: the fixture's timeout"
+    );
+    control["timeout_ms"] = json!(80_000);
+}
+
 // Item 11: `standard_pack_goals_not_applied`, once for each `goals_failure`, with its cause, and
 // once per content. The reader refuses the root's `goals.json` (version 1): one record, `refused`,
 // naming the game, caused by the reader's refusal (`standard_pack_root_invalid` with its first
-// problem); the root read again with the same file (another declaration file rewritten) adds none;
-// another refused file adds one. A `goals.json` that cannot be read (a directory in its place): one
-// record, `unreadable`, caused by the operating system's failure, and none more at the next read.
+// problem); the root read again with the same file (another declaration file rewritten one byte
+// longer, fix round 2) adds none; another refused file adds one. A `goals.json` that cannot be read
+// (a directory in its place): one record, `unreadable`, caused by the operating system's failure,
+// and none more at the next read (the declaration rewritten one byte longer too).
 #[test]
 fn v2_fix3_a_goals_json_not_applied_is_recorded_once_per_content_with_its_cause() {
     let goals_path = |packs: &Path| packs.join(GAME_A).join("goals.json");
@@ -1051,8 +1065,9 @@ fn v2_fix3_a_goals_json_not_applied_is_recorded_once_per_content_with_its_cause(
         "{cause}"
     );
 
-    // The root read again (a package's declaration rewritten), the same file: no second record.
-    patch_control(&scene.packs.path().join(GAME_A).join(TASK), |_| {});
+    // The root read again (a package's declaration rewritten one byte longer, so the check finds
+    // its marks changed whatever the file times say), the same file: no second record.
+    patch_control(&scene.packs.path().join(GAME_A).join(TASK), one_byte_longer);
     let again_at = POLICY_NOW_UNIX_MS + CHECK_INTERVAL_MS;
     scene.evaluate(again_at, 8);
     assert_eq!(scene.goals_not_applied().len(), 1, "once per content");
@@ -1070,7 +1085,7 @@ fn v2_fix3_a_goals_json_not_applied_is_recorded_once_per_content_with_its_cause(
         fs::create_dir_all(goals_path(packs)).expect("a directory in the file's place");
     });
     scene.evaluate(POLICY_NOW_UNIX_MS, 7);
-    patch_control(&scene.packs.path().join(GAME_A).join(TASK), |_| {});
+    patch_control(&scene.packs.path().join(GAME_A).join(TASK), one_byte_longer);
     scene.evaluate(POLICY_NOW_UNIX_MS + CHECK_INTERVAL_MS, 8);
     let unreadable = scene.goals_not_applied();
     assert_eq!(

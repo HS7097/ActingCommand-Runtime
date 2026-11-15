@@ -26932,7 +26932,7 @@ value's canonical text holds at most 1024 bytes; no 256-byte bound is added.
 (required), `goal_name`, `json_pointer`, `range_min`, `range_max`, `pool_id`, `variable_problem`.
 `request_goal_view_completed` and `request_edit_goal_completed` (success, contract). Keys
 `goal_name` (token) and `goal_problem`. The closed vocabulary `goal_problem`, one word per
-situation, 21 words: `name_unknown` (no entry of the accepted file, no variable of a bound package,
+situation, 23 words (21 until fix round 2): `name_unknown` (no entry of the accepted file, no variable of a bound package,
 no remedy parameter, no stored value or target of the name, no variable of the game root, or a
 name outside the form; `entry_unknown` was the same situation and is not a word), `holds_no_value`
 (a heading or a note), `tier_not_built`, `remedy_parameter` (read-only: never written, an
@@ -26945,8 +26945,10 @@ goal by name does not carry), `deadline_unsupported` (`by_unix_ms`, a later slic
 `value_not_set` (a clear of a known name that holds nothing), `record_unreadable` (a v1 policy or
 rows no reader reads), `record_out_of_limits` (a 17th target, a 97th entry), `not_checked_yet`
 (fix round 1: what the page is judged by is not in memory yet; send the request again after the
-next check). The view's own states (no outcome words): the declaration's `not_checked_yet` and the
-entry state `not_offered`, named as the two refusals are.
+next check), `root_failing` and `no_schedule` (fix round 2: a game root no check since the start
+could read; a game without a standard pack root with `schedule.json`). The view's own states (no
+outcome words): the declaration's `not_checked_yet`, `root_failing` and `no_schedule` (fix round 2)
+and the entry state `not_offered`, named as the refusals are.
 
 **The Lab.** Rows `goals` (option `package`), `goals get`, `goals set`, `goals clear` (core,
 served in the process, `lab_ops::core_ops`) and `package variables` (core, actinglab's own
@@ -26966,7 +26968,8 @@ what the next dispatch hands its run; fix round 1: the root's `goals.json` accep
 refused, with the page not checked yet before the first check and the remedy parameter; a
 variable the root keeps from applying, listed with its cause and refused); the MCP server's
 `mcp_goals_rows_are_the_command_lines` (the four rows and `package variables` answer the command
-line's lines, a refused and, fix round 1, an accepted call of each). Adapted, as the work order
+line's lines, each call refused) and, fix round 1, `mcp_goals_rows_accepted_are_the_command_lines`
+(the same, each call taken, on seven connections). Adapted, as the work order
 allows: the console list of `gate_434_lab6s3` (two kinds more), `gate_434_lab5a`'s core rows (one
 more), the interface table's expected rows, the interface pins (`runtime-client` [3, 9], fix round
 1: `gate_429_r0b_pairing` too). No golden; no test leaves the gate map.
@@ -26991,10 +26994,33 @@ fix round 2 `0eb82c5a`).
   runtime-interface.md and in the catalog's text of `goal_value_invalid`); package-variables.md
   says V3 is built and that giving values to a run without a dispatch is the next slice.
 
+**Fix round 2** (after the review; coordinator brief `rd-1115/brief-1731-fix2.md`).
+
+- *The build*: the two reads of the instance fact store in `host/goals.rs` bind the store's lock
+  in a block of their own and pass it as `&store`, held only for the read (the edit's publication
+  takes the lock again); the location `goal_view` gets its prefix's domain, `goal_` (runtime-host),
+  which CI's G8 asked for.
+- *A count*: `mcp_goals_rows_accepted_are_the_command_lines` asserts seven connections, the
+  script's.
+- *One word per cause* (item 3): `not_checked_yet` only while what the page is judged by is not in
+  memory yet; `root_failing` (the workbench's checks since the start could not read the game root;
+  the declaration names the file, the reader's first problem and pointer or the `io_kind`) and
+  `no_schedule` (no standard pack root with `schedule.json`), in the declaration state and in the
+  refusal of `set` and `clear`, a resource goal that needs no declaration included. The workbench
+  keeps, from its last check that read the roots, why it keeps nothing of a game in use
+  (`StandardPackGoalRoots::unread`, `RootUnread`): memory only, as the rest of the page.
+- *`goals get`* answers the page's `declaration` beside the entry; a page not checked answers
+  its state with its word and no entry, on both faces, never `not_recognised`.
+- *Small*: the catalog's indentation after `report_output_root`; the test of a `goals.json` not
+  applied once per content rewrites the control declaration one byte longer, so the root is read
+  again for certain.
+- *Tests*: host `gate_463_v3`'s pure checks hold the three words; `v3_fix2_a_root_no_check_since_the_start_read_answers_root_failing`.
+
 **At deploy.** Nothing to do beyond the build: no configuration key, no store shape change. A
 console that sends either kind needs a Runtime of `runtime-client` 9; an older Runtime drops the
 connection. After a start the goal page answers `not_checked_yet` until the workbench's first
-check and the first evaluation; a caller asks again.
+check and the first evaluation; a caller asks again. Fix round 2: a page answering `root_failing` or
+`no_schedule` waits for the game root to be repaired or given its `schedule.json`.
 
 **Rollback below 0.12.61.** A build before 0.12.61 cannot decode either kind and drops the
 connection; the record an edit writes is a v3 record G-R2a's builds read.

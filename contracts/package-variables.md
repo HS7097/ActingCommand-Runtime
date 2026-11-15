@@ -478,7 +478,10 @@ record ([resource-targets.md](resource-targets.md), "One value by name").
   game root from one check to the next ("What the next slice reads" above) and the remedy table the
   last evaluation built for the active catalog and procedure manifest; it reads no package and no
   file. Until both are there (after a start, before the first check) it answers the declaration
-  `not_checked_yet` and lists nothing. Then it lists the entries of the root's accepted
+  `not_checked_yet` and lists nothing; fix round 2 of #1731: one word per cause, `root_failing`
+  when the workbench checks the root and no check since the start could read it (with the file
+  and why, the root to be repaired), `no_schedule` when the game has no standard pack root with
+  `schedule.json` (nothing to check). Then it lists the entries of the root's accepted
   `goals.json` in their order and each variable of the packages the active catalog binds on the
   application once (a variable two packages declare once, with both), at its place when
   `goals.json` places it, else after the entries in the order the packages declare them: its
@@ -499,7 +502,9 @@ record ([resource-targets.md](resource-targets.md), "One value by name").
 - **`EditGoal`** sets or clears one value. Its checks read the record they are about to change,
   so they run under the fact write gate, after the version comparison: a request of another
   version is `fact_observation_version_conflict` whatever its value. A page not in memory yet is
-  `not_checked_yet` (send it again after the next check); a variable that does not apply is refused
+  `not_checked_yet` (send it again after the next check), a root no check since the start could
+  read `root_failing`, a game without `schedule.json` `no_schedule` (asking again does not help;
+  every name, a resource goal that needs no declaration included); a variable that does not apply is refused
   `variable_not_applying` with its `variable_problem`; a name the root declares that no bound
   package declares (a placement, or a variable of an unbound package) is `not_offered`; a value is
   judged by the dispatch's own function (`resolve_variable`), so `set` takes exactly what a

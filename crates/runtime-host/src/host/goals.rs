@@ -17,7 +17,11 @@
 //!   next dispatch of each bound package hands its run, through the run's own resolution
 //!   (`plan_variable_values`), and the page (`crate::goals::view_entries`). Until the workbench has
 //!   checked the game root and an evaluation has built that table, the page answers
-//!   `not_checked_yet` and lists nothing. It records nothing.
+//!   `not_checked_yet` and lists nothing. Fix round 2: one word per cause of a page that lists
+//!   nothing, which is also the word every `EditGoal` is refused with: `not_checked_yet` (not in
+//!   memory yet, which passes by itself), `root_failing` (the workbench checks the game root and
+//!   no check since the start could read it; the state names why) or `no_schedule` (the game has
+//!   no standard pack root with `schedule.json`: nothing to check). It records nothing.
 //! - **`EditGoal`** reads the same page first, then, in one hold of the fact write gate, reads the
 //!   record, compares its version with `expected_version` (absent compares nothing; the version is
 //!   the sequence of the `fact.published` that holds the record, `0` without one; another is
@@ -40,7 +44,7 @@ use crate::goals::{
 };
 use crate::remedy::{BuiltTable, covers};
 use actingcommand_contract::{
-    FactObservation, GoalDeclarationRead, GoalDeclarationState, GoalEdit, GoalEdited,
+    FactObservation, GoalDeclarationRead, GoalDeclarationState, GoalEdit, GoalEdited, GoalProblem,
     GoalRemedyParameter, GoalView, RESOURCE_TARGETS_FACT_KEY, ResourceTargetView,
     StandardPackGoals,
 };
@@ -245,7 +249,11 @@ impl HostShared {
         let written: RuntimeHostResult<(FactPublication, Option<String>)> = (|| {
             let _gate = lock(&self.fact_write_gate, EDIT_OPERATION)?;
             self.synchronize_fact_store_under_gate()?;
-            let record = StoredRecord::of(&lock(&self.facts, EDIT_OPERATION)?, &scope);
+            // Fix round 2: the store's lock only for the read; the publication below takes it.
+            let record = {
+                let store = lock(&self.facts, EDIT_OPERATION)?;
+                StoredRecord::of(&store, &scope)
+            };
             if let Some(expected) = expected_version
                 && expected != record.version
             {
@@ -388,7 +396,11 @@ impl HostShared {
                 time,
                 operation.into(),
             )?;
-            let record = StoredRecord::of(&lock(&self.facts, operation)?, &scope);
+            // Fix round 2: the store's lock only for the read.
+            let record = {
+                let store = lock(&self.facts, operation)?;
+                StoredRecord::of(&store, &scope)
+            };
             (
                 facts,
                 policy.active_loaded(),
@@ -434,10 +446,17 @@ impl HostShared {
             }),
             _ => None,
         };
+        // Fix round 2: one word per cause of a page that lists nothing. A root the workbench's
+        // last check keeps nothing of answers why (asking again would not change it); else what
+        // the page is judged by is not in memory yet.
+        let unread = goal_roots
+            .as_ref()
+            .and_then(|roots| roots.unread.get(&game_id));
         let (Some(sources), Some(table)) = (sources, table) else {
+            let (word, declaration) = unchecked_state(unread);
             return Ok(PageRead {
-                page: GoalPage::not_checked(game_id),
-                declaration: declaration_state(GoalDeclarationRead::NotCheckedYet),
+                page: GoalPage::not_checked(game_id, word),
+                declaration,
                 facts,
                 sources: None,
                 target_view,
@@ -486,7 +505,7 @@ impl HostShared {
             .unwrap_or_default();
         let page = GoalPage {
             game_id,
-            checked: true,
+            unchecked: None,
             declaration: accepted,
             packages,
             targetable: target_view.targetable.clone(),
@@ -513,6 +532,47 @@ fn declaration_state(state: GoalDeclarationRead) -> GoalDeclarationState {
         sha256: None,
         standard_pack_problem: None,
         json_pointer: None,
+        path: None,
+        io_kind: None,
+    }
+}
+
+/// Fix round 2 (#1731, item 3): the word every edit of a page that lists nothing is refused
+/// with, and the page's declaration state, by what the workbench's last check keeps of the game
+/// root (`unread`): `root_failing` for a root that failed at that check and that no check since
+/// the start read, with why as the check recorded it (the file, and the reader's first problem
+/// with its pointer or the operating system's failure kind); `no_schedule` for a game without a
+/// standard pack root with `schedule.json`; else `not_checked_yet`.
+fn unchecked_state(unread: Option<&RootUnread>) -> (GoalProblem, GoalDeclarationState) {
+    match unread {
+        Some(RootUnread::Failing(failure)) => {
+            let text = |outcome: &actingcommand_contract::outcome::Outcome, key: &str| {
+                outcome
+                    .value(key)
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+            };
+            let os_failure = failure.causes().first().map(|link| link.outcome());
+            (
+                GoalProblem::RootFailing,
+                GoalDeclarationState {
+                    state: GoalDeclarationRead::RootFailing,
+                    sha256: None,
+                    standard_pack_problem: text(failure, "standard_pack_problem"),
+                    json_pointer: text(failure, "json_pointer"),
+                    path: text(failure, "path"),
+                    io_kind: os_failure.and_then(|cause| text(cause, "io_kind")),
+                },
+            )
+        }
+        Some(RootUnread::NoSchedule) => (
+            GoalProblem::NoSchedule,
+            declaration_state(GoalDeclarationRead::NoSchedule),
+        ),
+        None => (
+            GoalProblem::NotCheckedYet,
+            declaration_state(GoalDeclarationRead::NotCheckedYet),
+        ),
     }
 }
 
@@ -538,6 +598,8 @@ fn goal_declaration(
                     sha256: Some(sha256.clone()),
                     standard_pack_problem: first.map(|issue| issue.problem.as_str().to_owned()),
                     json_pointer: first.map(|issue| issue.pointer.clone()),
+                    path: None,
+                    io_kind: None,
                 },
                 None,
             )

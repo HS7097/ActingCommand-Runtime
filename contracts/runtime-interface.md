@@ -570,7 +570,7 @@ application's goals, read and set by name. Shapes: `crates/actingcommand-contrac
 
 | Kind | Block | Class | Shape | Answer |
 |---|---|---|---|---|
-| `GoalView` | general | read (memory only, records nothing) | `{instance_alias}` | `GoalViewed {view}`: `instance_alias`, `game_id`, `version` (the sequence of the `fact.published` that holds the application's `session.resource_targets` record, `0` without one: the next `expected_version`), `declaration` (`absent`, `accepted`, `refused` with its sha256 and first `standard_pack_problem` and pointer, `unreadable`, `not_read` without a composed standard pack, or `not_checked_yet`), `entries`, `orphans`, `remedy_parameters`, `other_targets`, `targets` (the resource target view) |
+| `GoalView` | general | read (memory only, records nothing) | `{instance_alias}` | `GoalViewed {view}`: `instance_alias`, `game_id`, `version` (the sequence of the `fact.published` that holds the application's `session.resource_targets` record, `0` without one: the next `expected_version`), `declaration` (`absent`, `accepted`, `refused` with its sha256 and first `standard_pack_problem` and pointer, `unreadable`, `not_read` without a composed standard pack, or, for a page that lists nothing, `not_checked_yet`, `root_failing` with the failed file's `path` and the reader's first problem and pointer or the operating system's `io_kind`, or `no_schedule`), `entries`, `orphans`, `remedy_parameters`, `other_targets`, `targets` (the resource target view) |
 | `EditGoal` | general | instruction | `{instance_alias, expected_version?, op}`, `op` `{kind: set, name, value_json}` or `{kind: clear, name}` | `GoalEdited {version, event_id, replayed, replaced_target_id?}` |
 
 **The view** reads memory only: what the scheduler workbench keeps of the game root from one
@@ -580,7 +580,18 @@ remedy table the last evaluation built (only when it is the one of the active ca
 procedure manifest in place, as the next evaluation keeps it), the projection and the record; it
 reads no package and no file. Until all of it is in memory (after a start, before the workbench's
 first check of the root and the first evaluation) the declaration is `not_checked_yet` and nothing
-is listed. The entries, in order: each entry of the game's accepted `goals.json`, as its reader
+is listed. Fix round 2 of #1731: one word per cause of a page that lists nothing, each also the
+word every `EditGoal` is refused with: `not_checked_yet` only while what the page is judged by is
+not in memory yet, which passes by itself (ask again after the next check); `root_failing` when the
+workbench checks the game root and no check since the start could read it (the declaration names
+the file its last check failed on with the reader's first problem and pointer, or the operating
+system's `io_kind`, as the check's `standard_pack_root_invalid` or `standard_pack_root_unreadable`
+record does): asking again does not help, the root must be repaired, and since the game is
+uncomposed while its root fails no goal of the application is in effect, so no name is set or
+cleared, a resource goal that needs no declaration (`{resource, at_least}`) neither; `no_schedule`
+when the game has no standard pack root with `schedule.json`: there is nothing to check, the
+composed catalog holds no rule and no pool of the game, and no name is set or cleared, a resource
+goal that needs no declaration neither (no pool of the game is targetable). The entries, in order: each entry of the game's accepted `goals.json`, as its reader
 read it (a heading and a note as they are; a resource entry with the target on its pool, the
 pool's reading and the target's gap; a tier `not_built` with its default; a placement with its
 variable, or `not_offered` when no package the active catalog binds on the application declares
@@ -607,7 +618,8 @@ and value): a name outside the entry name's form, or that no entry, variable, re
 stored value, stored target or variable of the game root has, is `goal_value_invalid` with
 `goal_problem` `name_unknown`; a `set` whose value is no JSON `value_not_json`; a page not in
 memory yet `not_checked_yet` (nothing is known of the name: send the request again after the next
-check); for a `set`, a heading or a note `holds_no_value`; a tier `tier_not_built`; a remedy
+check; fix round 2: a root no check since the start could read `root_failing`, a game without
+`schedule.json` `no_schedule`, for every name); for a `set`, a heading or a note `holds_no_value`; a tier `tier_not_built`; a remedy
 parameter `remedy_parameter` (never written here); a variable that does not apply
 `variable_not_applying` with its `variable_problem`; a name the root declares that no bound
 package declares (a placement, or a variable of a package the catalog does not bind there)

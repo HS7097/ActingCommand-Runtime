@@ -232,6 +232,24 @@ pub struct StandardPackGoalRoot {
 pub struct StandardPackGoalRoots {
     pub roots: BTreeMap<String, StandardPackGoalRoot>,
     pub table: Arc<VariableTable>,
+    /// Workflow #463 V3 fix round 2 (#1731): why the workbench's last check that read the roots
+    /// keeps nothing of a game it used, by game ([`RootUnread`]); a game in use that is neither
+    /// here nor in `roots` has not been checked since the start.
+    pub unread: BTreeMap<String, RootUnread>,
+}
+
+/// Workflow #463 V3 fix round 2 (#1731): why the workbench's last check that read the roots
+/// keeps nothing of a game in use (no [`StandardPackGoalRoot`]): what a goal page answers instead
+/// of `not_checked_yet`, which asking again would not change.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RootUnread {
+    /// The game's own root failed at that check (the metadata of its root files, or their
+    /// read), and no check since the start read it: the failure the check recorded
+    /// (`standard_pack_root_invalid` or `standard_pack_root_unreadable`, with its values).
+    Failing(Outcome),
+    /// The check found no game root with `schedule.json` for the game (no root directory, no
+    /// game root, or a game root without `schedule.json`): nothing of it is checked.
+    NoSchedule,
 }
 
 /// G-R2s fix round 1, for the gate tests: the declaration files whose metadata reads fail as a
@@ -347,6 +365,9 @@ struct WorkbenchState {
     /// meanwhile, so each of its variables reads its default: fix round 2, the table marks its
     /// game unjudged). Fix round 2: with the root's `goals.json` as read.
     roots: BTreeMap<String, StandardPackGoalRoot>,
+    /// Workflow #463 V3 fix round 2 (#1731): each game in use of the last check that read the
+    /// roots of which [`Self::roots`] keeps nothing, and why ([`RootUnread`]).
+    unread_roots: BTreeMap<String, RootUnread>,
     /// Workflow #463 V2 fix round 1: the variable table of those judgements, which the policy
     /// cycle reads from memory after the check ([`HostShared::standard_pack_variables`]). Fix
     /// round 2: built at the end of each check, with the games of [`Self::uncomposed`] unjudged.
@@ -1054,6 +1075,9 @@ impl HostShared {
         // its read. Each is recorded and left out of this check's reading; the others are marked,
         // read and composed as ever.
         let mut failed_roots = BTreeSet::new();
+        // Workflow #463 V3 fix round 2 (#1731): and the failure each recorded, which the goal
+        // page of a game no check since the start read names.
+        let mut root_failures = BTreeMap::new();
         if let Some(root) = &root {
             for game in &games {
                 let directory = root.join(game);
@@ -1094,12 +1118,9 @@ impl HostShared {
                     Err(failure) => {
                         // Recorded once until the game's root composes again (G-R2s fix round
                         // 3: then the key is cleared, so a later failure is recorded too).
-                        self.report_once(
-                            state,
-                            game,
-                            ROOT_METADATA_KEY,
-                            failure.outcome(Some(game.as_str())),
-                        )?;
+                        let outcome = failure.outcome(Some(game.as_str()));
+                        root_failures.insert(game.clone(), outcome.clone());
+                        self.report_once(state, game, ROOT_METADATA_KEY, outcome)?;
                         // G-R2s fix round 3: this game's root failed; the check goes on for the
                         // games after it, which are marked as ever. The failed game is not read
                         // below and keeps the active generation's rules.
@@ -1134,7 +1155,9 @@ impl HostShared {
                         // A broken game root keeps the active generation as it is until it is
                         // fixed: its registry is what every rule of the game is placed by.
                         let key = format!("root:{:?}", marks.get(game));
-                        self.report_once(state, game, &key, failure.outcome(Some(game.as_str())))?;
+                        let outcome = failure.outcome(Some(game.as_str()));
+                        root_failures.insert(game.clone(), outcome.clone());
+                        self.report_once(state, game, &key, outcome)?;
                         // G-R2s fix round 3: as at a metadata failure, the check goes on for the
                         // other games.
                         failed_roots.insert(game.clone());
@@ -1144,7 +1167,7 @@ impl HostShared {
         }
         // Workflow #463 V2 fix round 1: the variables of every root this check read, judged over
         // the whole root, for the policy cycle; before any composition, which may not succeed.
-        self.keep_root_variables(state, &games, &failed_roots, &read, root.as_deref())?;
+        self.keep_root_variables(state, &games, &root_failures, &read, root.as_deref())?;
         let mut schedules = read
             .iter()
             .filter_map(|(game, files)| {
@@ -1518,6 +1541,7 @@ impl HostShared {
         Ok(Some(StandardPackGoalRoots {
             roots: state.roots.clone(),
             table: Arc::clone(&state.variable_table),
+            unread: state.unread_roots.clone(),
         }))
     }
 
@@ -1529,17 +1553,19 @@ impl HostShared {
     /// could not be read, is not applied while the root runs: one `standard_pack_goals_not_applied`
     /// ([`goals_not_applied`]) says which, recorded once per sha256 of a refused file and once
     /// until an unreadable one reads again; its variables are judged as [`read_declarations`]
-    /// says.
+    /// says. Workflow #463 V3 fix round 2 (#1731): `failed` holds each failed root's recorded
+    /// failure, and every game in use it then keeps nothing of is kept with why
+    /// ([`RootUnread`]): its root failed, or it holds no `schedule.json`.
     fn keep_root_variables(
         &self,
         state: &mut WorkbenchState,
         games: &BTreeSet<String>,
-        failed: &BTreeSet<String>,
+        failed: &BTreeMap<String, Outcome>,
         read: &BTreeMap<String, ScheduleGame>,
         root: Option<&Path>,
     ) -> RuntimeHostResult<()> {
         state.roots.retain(|game, _| {
-            games.contains(game) && (read.contains_key(game) || failed.contains(game))
+            games.contains(game) && (read.contains_key(game) || failed.contains_key(game))
         });
         for (game, files) in read {
             let Some(declarations) = &files.declarations else {
@@ -1590,6 +1616,18 @@ impl HostShared {
                 },
             );
         }
+        let unread = games
+            .iter()
+            .filter(|game| !state.roots.contains_key(game.as_str()))
+            .map(|game| {
+                let why = match failed.get(game) {
+                    Some(failure) => RootUnread::Failing(failure.clone()),
+                    None => RootUnread::NoSchedule,
+                };
+                (game.clone(), why)
+            })
+            .collect();
+        state.unread_roots = unread;
         Ok(())
     }
 

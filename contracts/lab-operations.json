@@ -1139,7 +1139,7 @@
         {"name": "name", "form": "positional", "type": "string", "required": true, "note": "an entry's name: a goals.json entry, a variable, or a stored value no entry offers any more"}
       ],
       "help": "Reads one entry of an application's goal page by its name: its value, its default, who set it and whether it is in effect.",
-      "output": "instance_alias, version and the entry (or, for a stored value no entry offers any more, orphan)",
+      "output": "instance_alias, version, declaration (the page's declaration state) and the entry (or, for a stored value no entry offers any more, orphan); a page not checked (declaration not_checked_yet, root_failing or no_schedule) answers no entry",
       "writes": false,
       "irreversible": false,
       "runtime": "required",
@@ -1149,7 +1149,7 @@
       "new": "#463 V3, #455 G-R2b (GoalView)",
       "slice": "463-V3",
       "status": "planned",
-      "notes": "Workflow #463 V3: a name the page does not hold is refused as <name> not_recognised"
+      "notes": "Workflow #463 V3: a name the page does not hold is refused as <name> not_recognised; fix round 2: a page not checked answers its state with its word, as goals does, never not_recognised"
     },
     {
       "name": "goals set",
