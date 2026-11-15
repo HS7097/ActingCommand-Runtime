@@ -228,3 +228,262 @@ fn unreadable_journal(path: &Path) -> Outcome {
 fn decode(error: &impl std::fmt::Display) -> Outcome {
     crate::foreign_data_error(error)
 }
+
+// Workflow #382 A-1 G11 (test plan v2.2 §3.7; Workflow 191-batch4-models.md s1), with an injected
+// poller and clock: every 250 ms the wait reads the owner journal; it is done when the target
+// owner epoch's last record is inactive and the target process is not alive, giving `{state,
+// closed_at_unix_ms, elapsed_ms}`; past its time it is `shutdown_wait_timeout` with the last state
+// it saw; another epoch's close never counts. Workflow #434 LAB-7: moved here from actingctl's
+// `gate_382_a1`, which left with actingctl; the Lab's `shutdown --wait` runs this wait.
+#[cfg(test)]
+mod g11_tests {
+    use super::{Poller, wait_with};
+    use actingcommand_contract::outcome::Outcome;
+    use actingcommand_contract::{
+        IdentifierIssuer, OWNER_JOURNAL_SCHEMA, OwnerEpoch, RuntimeShutdownTarget,
+    };
+    use actingcommand_ledger::owner_journal::RuntimeOwnerRecord;
+    use serde_json::{Value, json};
+    use std::collections::VecDeque;
+    use std::fs::OpenOptions;
+    use std::io::Write;
+    use std::path::{Path, PathBuf};
+    use std::time::Duration;
+    use tempfile::TempDir;
+
+    /// The s1 model's poll interval.
+    const POLL: Duration = Duration::from_millis(250);
+
+    /// One owner guard record of the journal (`contracts/owner-journal.md`): active, or closed at
+    /// `closed_at_unix_ms`.
+    fn record(
+        revision: u64,
+        owner_epoch: OwnerEpoch,
+        pid: u32,
+        closed_at_unix_ms: Option<u64>,
+    ) -> RuntimeOwnerRecord {
+        RuntimeOwnerRecord {
+            schema_version: OWNER_JOURNAL_SCHEMA.to_owned(),
+            revision,
+            owner_epoch,
+            pid,
+            started_at_unix_ms: 1_800_000_000_000,
+            active: closed_at_unix_ms.is_none(),
+            active_instances: Vec::new(),
+            closed_at_unix_ms,
+            resource_disposition: None,
+            closed_by: None,
+        }
+    }
+
+    /// Appends `records` to the owner journal as the owner guard does, one JSON line each.
+    fn append(journal: &Path, records: &[RuntimeOwnerRecord]) {
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(journal)
+            .expect("open the owner journal");
+        for record in records {
+            let line = serde_json::to_string(record).expect("record JSON");
+            writeln!(file, "{line}").expect("append the record");
+        }
+    }
+
+    /// The injected poller and clock: virtual time moves only by the waits the loop asks for; at
+    /// each wait the journal gets the records the Runtime appended meanwhile; the liveness answers
+    /// come in order and the last one repeats.
+    struct ScriptedPoller {
+        journal: PathBuf,
+        elapsed: Duration,
+        waits: Vec<Duration>,
+        appended: VecDeque<Vec<RuntimeOwnerRecord>>,
+        alive: VecDeque<bool>,
+        probed: Vec<u32>,
+    }
+
+    impl ScriptedPoller {
+        fn new(journal: &Path, appended: Vec<Vec<RuntimeOwnerRecord>>, alive: &[bool]) -> Self {
+            Self {
+                journal: journal.to_path_buf(),
+                elapsed: Duration::ZERO,
+                waits: Vec::new(),
+                appended: appended.into(),
+                alive: alive.iter().copied().collect(),
+                probed: Vec::new(),
+            }
+        }
+    }
+
+    impl Poller for ScriptedPoller {
+        fn elapsed(&self) -> Duration {
+            self.elapsed
+        }
+
+        fn wait(&mut self, duration: Duration) {
+            self.waits.push(duration);
+            self.elapsed += duration;
+            if let Some(records) = self.appended.pop_front() {
+                append(&self.journal, &records);
+            }
+        }
+
+        fn pid_alive(&mut self, pid: u32) -> Result<bool, Outcome> {
+            self.probed.push(pid);
+            let alive = if self.alive.len() > 1 {
+                self.alive.pop_front()
+            } else {
+                self.alive.front().copied()
+            };
+            Ok(alive.expect("a scripted liveness answer"))
+        }
+    }
+
+    /// The accepted shutdown's target and the epoch of another owner of the same root.
+    fn owners() -> (RuntimeShutdownTarget, OwnerEpoch) {
+        let issuer = IdentifierIssuer::new().expect("identifier issuer");
+        let target = RuntimeShutdownTarget {
+            owner_epoch: *issuer.mint_owner_epoch().expect("owner epoch").transport(),
+            pid: 4_242,
+            started_at_unix_ms: 1_800_000_000_000,
+        };
+        let other = *issuer.mint_owner_epoch().expect("owner epoch").transport();
+        (target, other)
+    }
+
+    /// The target epoch's record closes at the second wait and its process is still alive at the
+    /// first probe after it; the wait completes at the next poll with the record's close time. An
+    /// earlier owner's close, already in the journal, never completes it.
+    #[test]
+    fn gate_the_wait_completes_when_the_target_epoch_closed_and_its_process_exited() {
+        let root = TempDir::new().expect("tempdir");
+        let journal = root.path().join("owner.lock");
+        let (target, earlier) = owners();
+        append(
+            &journal,
+            &[
+                record(1, earlier, 1_111, None),
+                record(2, earlier, 1_111, Some(1_800_000_000_500)),
+                record(3, target.owner_epoch, target.pid, None),
+            ],
+        );
+        let mut poller = ScriptedPoller::new(
+            &journal,
+            vec![
+                Vec::new(),
+                vec![record(
+                    4,
+                    target.owner_epoch,
+                    target.pid,
+                    Some(1_800_000_009_000),
+                )],
+            ],
+            &[true, false],
+        );
+
+        let done = wait_with(root.path(), &target, Duration::from_secs(60), &mut poller)
+            .expect("the wait completes");
+
+        assert_eq!(
+            done,
+            json!({
+                "state": "completed",
+                "closed_at_unix_ms": 1_800_000_009_000_u64,
+                "elapsed_ms": 750_u64,
+            })
+        );
+        // The process is probed only once the target's record closed, until it is gone.
+        assert_eq!(poller.probed, [target.pid, target.pid]);
+        assert_eq!(poller.waits, [POLL; 3]);
+    }
+
+    /// The target owner stops without closing its record, and a later owner whose process got
+    /// the same pid starts and closes meanwhile. That close is another epoch's: the wait runs to
+    /// its end and times out with what it last saw of the target (record open, process gone).
+    #[test]
+    fn gate_another_epochs_close_does_not_end_the_wait_which_times_out_with_the_last_state() {
+        let root = TempDir::new().expect("tempdir");
+        let journal = root.path().join("owner.lock");
+        let (target, later) = owners();
+        append(&journal, &[record(1, target.owner_epoch, target.pid, None)]);
+        let mut poller = ScriptedPoller::new(
+            &journal,
+            vec![
+                Vec::new(),
+                vec![
+                    record(2, later, target.pid, None),
+                    record(3, later, target.pid, Some(1_800_000_009_000)),
+                ],
+            ],
+            &[false],
+        );
+        let wait = Duration::from_secs(1);
+
+        let outcome =
+            wait_with(root.path(), &target, wait, &mut poller).expect_err("the wait times out");
+
+        assert_eq!(outcome.code().as_str(), "shutdown_wait_timeout");
+        assert_eq!(
+            outcome.value("owner_closed"),
+            Some(&json!(false)),
+            "{outcome}"
+        );
+        assert_eq!(
+            outcome.value("process_alive"),
+            Some(&json!(false)),
+            "{outcome}"
+        );
+        assert_eq!(outcome.value("pid"), Some(&json!(target.pid)), "{outcome}");
+        let epoch: Value = serde_json::to_value(target.owner_epoch).expect("epoch JSON");
+        assert_eq!(outcome.value("owner_epoch"), Some(&epoch), "{outcome}");
+        assert_eq!(
+            outcome.value("timeout_ms"),
+            Some(&json!(1_000_u64)),
+            "{outcome}"
+        );
+        // It polled every 250 ms to its end and probed the process once, for the timeout's state.
+        assert_eq!(poller.waits, [POLL; 4]);
+        assert_eq!(poller.elapsed, wait);
+        assert_eq!(poller.probed, [target.pid]);
+    }
+
+    /// The target epoch's record closes, but its process outlives the wait: not done; the timeout
+    /// carries the last state (record closed, process alive).
+    #[test]
+    fn gate_a_closed_epoch_whose_process_outlives_the_wait_times_out_with_the_last_state() {
+        let root = TempDir::new().expect("tempdir");
+        let journal = root.path().join("owner.lock");
+        let (target, _) = owners();
+        append(&journal, &[record(1, target.owner_epoch, target.pid, None)]);
+        let mut poller = ScriptedPoller::new(
+            &journal,
+            vec![vec![record(
+                2,
+                target.owner_epoch,
+                target.pid,
+                Some(1_800_000_009_000),
+            )]],
+            &[true],
+        );
+
+        let outcome = wait_with(
+            root.path(),
+            &target,
+            Duration::from_millis(500),
+            &mut poller,
+        )
+        .expect_err("the wait times out");
+
+        assert_eq!(outcome.code().as_str(), "shutdown_wait_timeout");
+        assert_eq!(
+            outcome.value("owner_closed"),
+            Some(&json!(true)),
+            "{outcome}"
+        );
+        assert_eq!(
+            outcome.value("process_alive"),
+            Some(&json!(true)),
+            "{outcome}"
+        );
+        assert_eq!(poller.waits, [POLL; 2]);
+    }
+}

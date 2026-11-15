@@ -29,7 +29,7 @@ use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-const USAGE: &str = "usage: actingctl runs --state-root <path> [--instance <alias|instance_id|ADB port>] [--since-unix-ms <ms>] [--until-unix-ms <ms>] [--task-prefix <text>] [--dispatch manual|scheduled] [--state open|succeeded|failed|cancelled|interrupted_unterminated] [--limit <1-100>] [--cursor <next_cursor>]";
+const USAGE: &str = "usage: actinglab runs [<instance>] [--since <duration> | --since-unix-ms <ms>] [--until-unix-ms <ms>] [--task-prefix <text>] [--dispatch manual|scheduled] [--state open|succeeded|failed|cancelled|interrupted_unterminated] [--limit <1-100>] [--cursor <next_cursor>]";
 pub const DEFAULT_LIMIT: u64 = 20;
 pub const MAX_LIMIT: u64 = 100;
 const DAY_MS: u64 = 24 * 60 * 60 * 1000;

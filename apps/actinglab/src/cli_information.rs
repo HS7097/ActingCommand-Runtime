@@ -140,13 +140,13 @@ pub(super) fn help_data() -> Value {
             ],
             "recognition-regression": [
                 "--state-root <the Runtime state root whose ledger kept the run's frames>",
-                "--evidence <the saved answer of actingctl run evidence or ac_run_evidence; repeatable, one per page of the same run>",
+                "--evidence <the saved answer of actinglab run evidence or ac_run_evidence; repeatable, one per page of the same run>",
                 "--package <directory | .zip | .json container> | --zip <published .zip package>: the new package or version"
             ],
             "replay": [
                 "--package <directory | .zip | .json container>",
                 "--frames <directory of PNG frames, replayed in file-name order>",
-                "--facts <the instance answer of actingctl facts --instance or ac_facts, read without a key prefix>",
+                "--facts <the instance answer of actinglab facts <instance> or ac_facts, read without a key prefix>",
                 "--select <operation id of a select step: replays its scan over the frames, with --scan>",
                 "--scan <the step's scan declaration, a JSON file, with --select>",
                 "--parameter <name>=<value> (with --select; repeatable, once per parameter the package declares; replaces that parameter's declared default)",

@@ -1927,8 +1927,7 @@ fn rpt1_the_tables_row_report_export() {
         Some(vec!["cli".to_owned(), "serve".to_owned()])
     );
     assert_eq!(param(row, "no_frames").form, ParamForm::Switch);
-    // One sentence of its own; the core module serves it; its tool. Workflow #434 LAB-7: the rows
-    // name no `source` any more (the placeholder it replaced stays in its notes).
+    // One sentence of its own; the core module serves it; its tool; the placeholder it replaces.
     let help = row.help.as_deref().unwrap_or_default();
     assert!(
         !help.is_empty() && help.len() <= MAX_HELP_BYTES && help.is_ascii(),
@@ -1937,6 +1936,7 @@ fn rpt1_the_tables_row_report_export() {
     assert!(!help.contains("ac_"), "{help}");
     assert!(core_ops::serves(row));
     assert_eq!(row.mcp_tool(), "ac_report_export");
+    assert_eq!(row.source, ["actinglab report export --last-error"]);
 }
 
 #[test]

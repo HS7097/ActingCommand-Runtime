@@ -102,7 +102,7 @@ pub const MAX_WAIT_S: u64 = 20;
 pub const MAX_INTEGER: u64 = i64::MAX.unsigned_abs();
 /// An empty first page is read again this often while the wait lasts.
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
-const CLI_USAGE: &str = "usage: actingctl events --state-root <dir> [--instance <alias|instance_id|ADB port>] [--view events|observation|changes|errors|health|lab] [--since-unix-ms <ms>] [--until-unix-ms <ms>] [--after-sequence <seq> | --cursor <cursor>] [--through-sequence <seq>] [--event-type <type> | --event-types <type,...>] [--exclude-event-types <type,...>] [--fact-key <key>] [--min-severity <severity>] [--max-severity <severity>] [--origin-module <module>] [--task-id <id>] [--run-id <id>] [--request-id <id>] [--correlation-id <id>] [--detail brief|summary|payload] [--limit 1-256] [--wait-s 0-20]\nwith none of --after-sequence, --cursor, --through-sequence, --since-unix-ms, --until-unix-ms, --run-id, --request-id and --correlation-id the page is the newest records, oldest first: read the records before them with --through-sequence <first_sequence - 1>\npage on with --after-sequence <last_sequence>: the next_cursor one call prints answers cursor_invalid in any later call";
+const CLI_USAGE: &str = "usage: actinglab events [<instance>] [--view events|observation|changes|errors|health|lab] [--since <duration> | --since-unix-ms <ms>] [--until-unix-ms <ms>] [--after <seq>] [--through-sequence <seq>] [--event-type <type> | --type <type,...>] [--exclude-event-types <type,...>] [--fact-key <key>] [--min-severity <severity>] [--max-severity <severity>] [--origin-module <module>] [--task-id <id>] [--run <id>] [--request <id>] [--correlation-id <id>] [--detail brief|summary|payload] [--limit 1-256] [--wait-s 0-20]\nwith none of --after, --through-sequence, --since, --since-unix-ms, --until-unix-ms, --run, --request and --correlation-id the page is the newest records, oldest first: read the records before them with --through-sequence <first_sequence - 1>\npage on with --after <last_sequence>: the next_cursor one call prints answers cursor_invalid in any later call";
 
 /// Workflow #434 CLI-EV (ruling 3; register §1.306): the windows of a read that names no position
 /// and no window, in sequences, each ending at the ledger's head: the first, the factor of each of
@@ -224,7 +224,7 @@ impl std::fmt::Display for ArgumentProblem {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::UnknownArgument => formatter.write_str("is not an argument of this tool"),
-            Self::UnknownFlag => formatter.write_str("is not a flag of actingctl events"),
+            Self::UnknownFlag => formatter.write_str("is not a flag of actinglab events"),
             Self::NotUtf8 => formatter.write_str("is not UTF-8"),
             Self::ValueMissing => formatter.write_str("needs a value"),
             Self::GivenTwice => formatter.write_str("is given twice"),

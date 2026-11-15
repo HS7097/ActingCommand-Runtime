@@ -709,7 +709,8 @@ LAB-5 the MCP tools, and LAB-1's test `lab_ops_table_complete` reads the file it
 | `entries` | `["lab"]`, or `["lab", "ui"]` for a `core` operation whose every request kind is on the UI list (not counting the transitional one) |
 | `requests` | the request kinds it sends, as read from its source; the slice that moves it corrects the row from the code it moves and says so |
 | `planned_requests` | kinds it will send that the contract does not have yet |
-| `new` | for an operation no program had before the Lab: the board item it comes from. Workflow #434 LAB-7 (since 0.12.62) removed the member `source` (the commands, tools, console reads and scripts a row replaced: `actingctl …`, `MCP ac_…` and the rest) with actingctl and its MCP server; the table holds no such member any more |
+| `source` | optional (since LAB-7, 0.12.62; absent is none): the commands, console reads and scripts it replaces (`actinglab …`, `actingd …`, `acui: …`, `acsetup: …`, `script <coordinator workspace path>`). Its `actinglab …` entries (the words up to a note in parentheses) are not only history: they say which of actinglab's own commands are the row's, which the authoring module's listing leaves out with the row (section 8.3) and help's `replaces` names (section 9.3). Since LAB-7 no entry names `actingctl …`, a first MCP server's tool (`MCP ac_…`) or a read through an actingctl child: those programs are deleted, and a row whose only sources were theirs has none |
+| `new` | for an operation no program has today: the board item it comes from |
 | `slice` | the slice that builds it |
 | `status` | `planned` (built by `slice`) or `reserved` (a position only: it opens with `opens_with`) |
 | `notes` | anything else the row must say |
@@ -734,7 +735,7 @@ once is `repeat`.
 
 Names and MCP tool names are unique; every operation has `params`, `output`, `writes`,
 `irreversible`, `runtime`, `entries`, `requests`, `slice` and `status` (until LAB-7 also `source`
-or `new`); every
+or `new`: since LAB-7 a row whose only sources were actingctl's has neither); every
 kind of `RuntimeOperationKind::ALL` is in some operation's `requests` or once in `not_exposed`, and
 every kind the file names exists; `entries` follows its rule; a `reserved` row has `opens_with`.
 Since LAB-5A also: every parameter's type is one of section 9.1's (reading the file refuses

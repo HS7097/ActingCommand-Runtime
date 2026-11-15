@@ -26,7 +26,7 @@ use sha2::{Digest, Sha256};
 use std::ffi::OsString;
 
 const COMMAND: &str = "codes";
-const USAGE: &str = "usage: actingctl codes <code> | actingctl codes [--prefix <text>] [--owner <owner>] [--limit <1-100>] [--cursor <next_cursor>]";
+const USAGE: &str = "usage: actinglab codes <code> | actinglab codes [--prefix <text>] [--owner <owner>] [--limit <1-100>]";
 pub const DEFAULT_LIMIT: u64 = 20;
 pub const MAX_LIMIT: u64 = 100;
 /// `c1.<last code of the page>.<filters>`.

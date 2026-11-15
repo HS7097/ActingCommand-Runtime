@@ -91,6 +91,7 @@
       "runtime": "optional",
       "entries": ["lab", "ui"],
       "requests": ["Status", "MonitorStatus", "QueryEvents", "PerformanceStatus", "FactRefreshStatus", "ScheduleExplanation", "RuntimeFactSnapshot", "StartReport"],
+      "source": ["actinglab status", "actinglab session status", "actinglab lab status", "acui: workbench status and start report reads (crates/acui-source/src/workbench.rs)"],
       "slice": "LAB-1",
       "status": "planned"
     },
@@ -110,6 +111,7 @@
       "runtime": "required",
       "entries": ["lab", "ui"],
       "requests": ["RuntimeFactSnapshot", "InstanceFactSnapshot", "Status"],
+      "source": ["actinglab session instance registry (its backend column)"],
       "slice": "LAB-1",
       "status": "planned"
     },
@@ -126,6 +128,7 @@
       "runtime": "required",
       "entries": ["lab", "ui"],
       "requests": ["ScheduleExplanation", "Status"],
+      "source": ["acui: workbench schedule read (crates/acui-source/src/workbench.rs)"],
       "slice": "LAB-1",
       "status": "planned",
       "notes": "LAB-1b moved its remaining read into lab-ops: `schedule::explanation` (actingctl schedule and MCP ac_schedule); requests add Status, which resolves <inst>"
@@ -182,6 +185,7 @@
       "runtime": "required",
       "entries": ["lab", "ui"],
       "requests": ["QueryEvents", "Status"],
+      "source": ["acui: ledger window, online reads (crates/acui-source/src/lib.rs)"],
       "slice": "LAB-1",
       "status": "planned"
     },
@@ -206,6 +210,7 @@
       "runtime": "required",
       "entries": ["lab", "ui"],
       "requests": ["QueryEvents", "Status"],
+      "source": ["actinglab run list"],
       "slice": "LAB-1",
       "status": "planned"
     },
@@ -222,6 +227,7 @@
       "runtime": "required",
       "entries": ["lab", "ui"],
       "requests": ["QueryEvents"],
+      "source": ["actinglab lab receipt"],
       "slice": "LAB-1b",
       "status": "planned",
       "notes": "LAB-1b moved its code into lab-ops: `run_show` (the run a handle or run_id names, the full read and the answer of MCP ac_get_run); waiting on the run and the jobs of the MCP process stay with MCP; LAB-2 dropped from_step: the read answers the run whole and holds no steps (run evidence --from-step pages them)"
@@ -242,6 +248,7 @@
       "runtime": "required",
       "entries": ["lab", "ui"],
       "requests": ["QueryEvents"],
+      "source": ["actinglab lab evidence"],
       "slice": "LAB-1",
       "status": "planned"
     },
@@ -261,6 +268,7 @@
       "runtime": "required",
       "entries": ["lab", "ui"],
       "requests": ["ReadMaterial", "QueryEvents"],
+      "source": ["acui: material read (crates/acui-source/src/lib.rs)"],
       "slice": "LAB-1b",
       "status": "planned",
       "notes": "LAB-1b moved its code into lab-ops: `material` (the ref, the QueryEvents page that finds the material again, the text read and the whole read MCP ac_material and ac_observe share); the export directory and the call budget stay with MCP; requests add QueryEvents, the page that resolves the ref"
@@ -304,6 +312,7 @@
       "runtime": "required",
       "entries": ["lab", "ui"],
       "requests": ["Status", "QueryEvents", "ReadMaterial"],
+      "source": ["actinglab report export --last-error"],
       "new": "#467 RPT-1 (contracts/problem-report.md)",
       "slice": "RPT-1",
       "status": "planned",
@@ -434,6 +443,7 @@
       "runtime": "required",
       "entries": ["lab", "ui"],
       "requests": ["ObserveReadonly", "ReadMaterial", "Status"],
+      "source": ["actinglab capture", "actinglab runtime observe", "acui: preview refresh (crates/acui-source/src/workbench/preview.rs)"],
       "slice": "LAB-1",
       "status": "planned",
       "notes": "LAB-1b moved its observation into lab-ops: `observe_export::observe` (actingctl observe, observe --export and MCP ac_observe)"
@@ -453,6 +463,7 @@
       "runtime": "required",
       "entries": ["lab", "ui"],
       "requests": ["CaptureSequence", "Status"],
+      "source": ["actinglab stream", "actinglab session stream"],
       "slice": "LAB-1b",
       "status": "planned",
       "notes": "LAB-1b moved its code into lab-ops: `frames` (the capture of actingctl stream and its defaults); LAB-2: requests add Status, the read that resolves <inst>"
@@ -468,6 +479,7 @@
       "runtime": "required",
       "entries": ["lab", "ui"],
       "requests": ["DiscoverInstances"],
+      "source": ["acui: instance discovery (crates/acui-source/src/lib.rs)"],
       "slice": "LAB-1b",
       "status": "planned",
       "notes": "LAB-1b moved its code into lab-ops: `emulators::discover` (actingctl emulator discover)"
@@ -487,6 +499,7 @@
       "runtime": "required",
       "entries": ["lab", "ui"],
       "requests": ["PauseScheduling", "Status"],
+      "source": ["acui: global pause (crates/acui-source/src/workbench.rs)"],
       "slice": "LAB-1b",
       "status": "planned",
       "notes": "LAB-1b moved its code into lab-ops: `scheduling` (the scope, the defaults of both front ends, the request and MCP's answer); requests add Status, with which MCP resolves <inst>"
@@ -505,6 +518,7 @@
       "runtime": "required",
       "entries": ["lab", "ui"],
       "requests": ["ResumeScheduling", "Status"],
+      "source": ["acui: conditional resume (crates/acui-source/src/lib.rs)"],
       "slice": "LAB-1b",
       "status": "planned",
       "notes": "LAB-1b moved its code into lab-ops: `scheduling` (the scope, the request, MCP's resume of the pause it read and its answer); requests add Status, with which MCP resolves <inst>"
@@ -520,6 +534,7 @@
       "runtime": "required",
       "entries": ["lab", "ui"],
       "requests": ["RuntimeFactSnapshot"],
+      "source": ["acui: settings page read (crates/acui-source/src/workbench.rs)"],
       "slice": "LAB-1",
       "status": "planned",
       "notes": "LAB-2 corrected its params from the code that serves it (`facts::read`, actingctl status --config): the configuration read has no instance and no prefix"
@@ -538,6 +553,7 @@
       "runtime": "required",
       "entries": ["lab", "ui"],
       "requests": ["ConfigureSettings"],
+      "source": ["actinglab session backend", "acui: settings and rules (crates/acui-source/src/workbench.rs, workbench/rules.rs)"],
       "slice": "LAB-1b",
       "status": "planned",
       "notes": "LAB-1b moved its code into lab-ops: `configure` (the changes of actingctl config set and of MCP ac_config_set, the request and its answer)"
@@ -587,6 +603,7 @@
       "runtime": "required",
       "entries": ["lab", "ui"],
       "requests": ["RuntimeFactSnapshot", "ConfigureSettings"],
+      "source": ["acui: top bar preset, through ConfigureSettings"],
       "slice": "LAB-1",
       "status": "planned"
     },
@@ -606,6 +623,7 @@
       "runtime": "required",
       "entries": ["lab"],
       "requests": ["ConfigureMonitor", "Status"],
+      "source": ["actinglab session monitor-policy"],
       "slice": "LAB-1b",
       "status": "planned",
       "notes": "LAB-1b moved its code into lab-ops: `configure` (the policy of actingctl monitor-set, its defaults and the request); LAB-2: requests add Status, the read that resolves <inst>"
@@ -695,6 +713,7 @@
       "runtime": "required",
       "entries": ["lab", "ui"],
       "requests": ["ControlEmulatorInstance", "Status"],
+      "source": ["acui: rescue bar (crates/acui-source/src/workbench/device.rs)"],
       "slice": "LAB-1b",
       "status": "planned",
       "notes": "LAB-1b moved its code into lab-ops: `emulators` (the action words, the control, the wait of actingctl emulator start and MCP ac_emulator's answer); requests add Status, with which MCP resolves <inst>"
@@ -714,6 +733,7 @@
       "runtime": "required",
       "entries": ["lab", "ui"],
       "requests": ["ControlEmulatorInstance", "Status"],
+      "source": ["acui: rescue bar (crates/acui-source/src/workbench/device.rs)"],
       "slice": "LAB-1b",
       "status": "planned",
       "notes": "LAB-1b moved its code into lab-ops: `emulators` (the action words, the control, the wait of actingctl emulator stop and MCP ac_emulator's answer); requests add Status, with which MCP resolves <inst>"
@@ -733,6 +753,7 @@
       "runtime": "required",
       "entries": ["lab", "ui"],
       "requests": ["ControlEmulatorInstance", "Status"],
+      "source": ["acui: rescue bar (crates/acui-source/src/workbench/device.rs)"],
       "slice": "LAB-1b",
       "status": "planned",
       "notes": "LAB-1b moved its code into lab-ops: `emulators` (the action words, the control, the wait of actingctl emulator restart and MCP ac_emulator's answer); requests add Status, with which MCP resolves <inst>"
@@ -750,6 +771,7 @@
       "runtime": "required",
       "entries": ["lab", "ui"],
       "requests": ["SelfCheckInstance", "Status"],
+      "source": ["acui: rescue bar reconnect and check (crates/acui-source/src/workbench/device.rs)"],
       "slice": "LAB-1b",
       "status": "planned",
       "notes": "MCP gains it; LAB-1b moved its code into lab-ops: `emulators::self_check` and the failure of a check that did not pass (actingctl selfcheck); LAB-2 dropped wait: the self-check answers when it ends, and no source bounds it; LAB-2: requests add Status, the read that resolves <inst>"
@@ -767,6 +789,7 @@
       "runtime": "required",
       "entries": ["lab", "ui"],
       "requests": ["ApplicationLifecycle"],
+      "source": ["actinglab session app launch", "actinglab session instance app launch", "acui: rescue bar game start and restart (crates/acui-source/src/workbench/device.rs)"],
       "slice": "LAB-1b",
       "status": "planned",
       "notes": "LAB-1b moved its code into lab-ops: `apps::run`, the operation MCP ac_app runs (its actions and actinglab's session app command line, `apps::App`), with `lab_child`, which starts that actinglab child and reads its envelope into the answer; MCP keeps its arguments, its job and its tool error; the session command itself is actinglab's (LAB-2); LAB-2: actinglab's CLI module serves it with its own session app, in process; wait dropped, since session app bounds its request itself"
@@ -785,6 +808,7 @@
       "runtime": "required",
       "entries": ["lab", "ui"],
       "requests": ["ApplicationLifecycle"],
+      "source": ["actinglab session app restart", "actinglab session instance app restart", "acui: rescue bar game start and restart (crates/acui-source/src/workbench/device.rs)"],
       "slice": "LAB-1b",
       "status": "planned",
       "notes": "LAB-1b moved its code into lab-ops: `apps::run`, the operation MCP ac_app runs (its actions and actinglab's session app command line, `apps::App`), with `lab_child`, which starts that actinglab child and reads its envelope into the answer; MCP keeps its arguments, its job and its tool error; the session command itself is actinglab's (LAB-2); LAB-2: actinglab's CLI module serves it with its own session app, in process; wait dropped, since session app bounds its request itself"
@@ -803,6 +827,7 @@
       "runtime": "required",
       "entries": ["lab", "ui"],
       "requests": ["ApplicationLifecycle"],
+      "source": ["actinglab session app stop", "actinglab session instance app stop", "actinglab session app force-stop", "actinglab session instance app force-stop"],
       "slice": "LAB-1b",
       "status": "planned",
       "notes": "LAB-1b moved its code into lab-ops: `apps::run`, the operation MCP ac_app runs (its actions and actinglab's session app command line, `apps::App`), with `lab_child`, which starts that actinglab child and reads its envelope into the answer; MCP keeps its arguments, its job and its tool error; the session command itself is actinglab's (LAB-2); LAB-2: actinglab's CLI module serves it with its own session app, in process; wait dropped, since session app bounds its request itself"
@@ -820,6 +845,7 @@
       "runtime": "required",
       "entries": ["lab", "ui"],
       "requests": ["RequestShutdown"],
+      "source": ["acui: launcher stop (crates/acui-source/src/lib.rs)"],
       "slice": "LAB-1b",
       "status": "planned",
       "notes": "MCP gains it; LAB-1b moved its code into lab-ops: `shutdown` (actingctl request-shutdown and its wait, with the shutdown wait and the process probe moved from actingctl)"
@@ -870,6 +896,7 @@
       "runtime": "offline",
       "entries": ["lab"],
       "requests": [],
+      "source": ["actinglab devices (retired)"],
       "slice": "LAB-1",
       "status": "planned"
     },
@@ -941,6 +968,7 @@
       "runtime": "offline",
       "entries": ["lab"],
       "requests": [],
+      "source": ["actinglab explain", "acui: embedded code table"],
       "slice": "LAB-1",
       "status": "planned"
     },
@@ -1174,6 +1202,7 @@
       "runtime": "required",
       "entries": ["lab"],
       "requests": ["RunContainedTask", "QueryEvents", "Status"],
+      "source": ["actinglab lab run"],
       "slice": "LAB-2",
       "status": "planned",
       "notes": "frames pinned Lab and kept (lab-two-entries.md section 2.4); LAB-2: requests add Status, the read that resolves <inst>"
@@ -1192,6 +1221,7 @@
       "runtime": "required",
       "entries": ["lab"],
       "requests": ["CancelContainedTask", "SafeReset", "QueryEvents", "Status"],
+      "source": ["actinglab run stop (runtime-interface.md)"],
       "slice": "LAB-2",
       "status": "planned",
       "notes": "LAB-2: requests add QueryEvents and Status, the run's read and the status read that names its instance for the reset"
@@ -1209,6 +1239,7 @@
       "runtime": "required",
       "entries": ["lab"],
       "requests": ["SafeReset", "Status"],
+      "source": ["actinglab runtime reset"],
       "slice": "LAB-2",
       "status": "planned",
       "notes": "LAB-2: requests add Status, the read that resolves <inst>"
@@ -1228,6 +1259,7 @@
       "runtime": "required",
       "entries": ["lab"],
       "requests": ["AcquireLease", "QueueLease", "PollQueuedLease", "CancelQueuedLease", "RenewLease", "ReleaseLease", "Input"],
+      "source": ["actinglab tap"],
       "slice": "LAB-2",
       "status": "planned"
     },
@@ -1249,6 +1281,7 @@
       "runtime": "required",
       "entries": ["lab"],
       "requests": ["AcquireLease", "QueueLease", "PollQueuedLease", "CancelQueuedLease", "RenewLease", "ReleaseLease", "Input"],
+      "source": ["actinglab swipe"],
       "slice": "LAB-2",
       "status": "planned"
     },
@@ -1268,6 +1301,7 @@
       "runtime": "required",
       "entries": ["lab"],
       "requests": ["AcquireLease", "QueueLease", "PollQueuedLease", "CancelQueuedLease", "RenewLease", "ReleaseLease", "Input"],
+      "source": ["actinglab long-tap"],
       "slice": "LAB-2",
       "status": "planned"
     },
@@ -1285,6 +1319,7 @@
       "runtime": "required",
       "entries": ["lab"],
       "requests": ["AcquireLease", "QueueLease", "PollQueuedLease", "CancelQueuedLease", "RenewLease", "ReleaseLease", "Input"],
+      "source": ["actinglab key"],
       "slice": "LAB-2",
       "status": "planned"
     },
@@ -1302,6 +1337,7 @@
       "runtime": "required",
       "entries": ["lab"],
       "requests": ["AcquireLease", "QueueLease", "PollQueuedLease", "CancelQueuedLease", "RenewLease", "ReleaseLease", "Input"],
+      "source": ["actinglab text"],
       "slice": "LAB-2",
       "status": "planned"
     },
@@ -1318,6 +1354,7 @@
       "runtime": "required",
       "entries": ["lab"],
       "requests": ["AcquireLease", "QueueLease", "PollQueuedLease", "CancelQueuedLease", "RenewLease", "ReleaseLease", "Input"],
+      "source": ["actinglab touch-probe"],
       "slice": "LAB-2",
       "status": "planned"
     },
@@ -1357,6 +1394,7 @@
       "runtime": "required",
       "entries": ["lab"],
       "requests": ["AcquireLease", "QueueLease", "PollQueuedLease", "CancelQueuedLease", "RenewLease", "ReleaseLease", "Input"],
+      "source": ["actinglab session recover", "actinglab session recover --stale-capture"],
       "slice": "LAB-2",
       "status": "planned",
       "notes": "LAB-5A: on the command line the further flags and words of its command still go on to it (it ignores a flag it does not read); serve --stdio refuses them. A debt: a later slice makes the command strict"
@@ -1402,6 +1440,7 @@
       "runtime": "optional",
       "entries": ["lab"],
       "requests": ["RunContainedLabOperation", "CaptureSequence"],
+      "source": ["actinglab do"],
       "slice": "LAB-2",
       "status": "planned",
       "notes": "offline replay works without the Runtime (today's capability table). #463 L1 (contracts/lab-recording.md, One call per step): mark_request, mark_request_json, next_frame_after_ms and next_frame_out are read with record only; the next frame is one more capture through the Runtime, the CaptureSequence capture --record sends, not the operation's after frame; no request kind is new to the Runtime"
@@ -1435,6 +1474,7 @@
       "runtime": "optional",
       "entries": ["lab"],
       "requests": ["RunContainedLabOperation"],
+      "source": ["actinglab ensure"],
       "slice": "LAB-2",
       "status": "planned"
     },
@@ -1464,6 +1504,7 @@
       "runtime": "optional",
       "entries": ["lab"],
       "requests": ["ObserveReadonly"],
+      "source": ["actinglab wait"],
       "slice": "LAB-2",
       "status": "planned"
     },
@@ -1489,6 +1530,7 @@
       "runtime": "required",
       "entries": ["lab"],
       "requests": ["ObserveReadonly", "AcquireLease", "QueueLease", "PollQueuedLease", "CancelQueuedLease", "RenewLease", "ReleaseLease", "Input"],
+      "source": ["actinglab tap-target"],
       "slice": "LAB-2",
       "status": "planned"
     },
@@ -1516,6 +1558,7 @@
       "runtime": "required",
       "entries": ["lab"],
       "requests": ["ObserveReadonly", "AcquireLease", "QueueLease", "PollQueuedLease", "CancelQueuedLease", "RenewLease", "ReleaseLease", "Input"],
+      "source": ["actinglab navigate"],
       "slice": "LAB-2",
       "status": "planned"
     },
@@ -1571,6 +1614,7 @@
       "runtime": "required",
       "entries": ["lab"],
       "requests": ["SubscribeEvents"],
+      "source": ["actinglab lab watch"],
       "slice": "LAB-2",
       "status": "planned"
     },
@@ -1600,6 +1644,7 @@
       "runtime": "required",
       "entries": ["lab"],
       "requests": ["RegisterDiagnosticSignature"],
+      "source": ["actinglab lab signatures register"],
       "slice": "LAB-2",
       "status": "planned"
     },
@@ -1620,6 +1665,7 @@
       "runtime": "required",
       "entries": ["lab"],
       "requests": ["MatchDiagnosticSignatures"],
+      "source": ["actinglab lab signatures match"],
       "slice": "LAB-2",
       "status": "planned"
     },
@@ -1639,6 +1685,7 @@
       "runtime": "required",
       "entries": ["lab"],
       "requests": ["RetireDiagnosticSignature"],
+      "source": ["actinglab lab signatures retire"],
       "slice": "LAB-2",
       "status": "planned"
     },
@@ -1657,6 +1704,7 @@
       "runtime": "required",
       "entries": ["lab"],
       "requests": ["ReleaseLabPin"],
+      "source": ["actinglab lab unpin"],
       "slice": "LAB-2",
       "status": "planned"
     },
@@ -1674,6 +1722,7 @@
       "runtime": "required",
       "entries": ["lab"],
       "requests": ["DebugPackage"],
+      "source": ["actinglab lab debug-package"],
       "slice": "LAB-2",
       "status": "planned",
       "notes": "LAB-5A: on the command line the further flags and words of its command still go on to it (it ignores a flag it does not read); serve --stdio refuses them. A debt: a later slice makes the command strict"
@@ -1694,6 +1743,7 @@
       "runtime": "required",
       "entries": ["lab"],
       "requests": ["ExportEvidence"],
+      "source": ["actinglab lab export-evidence"],
       "slice": "LAB-2",
       "status": "planned",
       "notes": "LAB-5A: on the command line the further flags and words of its command still go on to it (it ignores a flag it does not read); serve --stdio refuses them. A debt: a later slice makes the command strict"
@@ -1711,6 +1761,7 @@
       "runtime": "required",
       "entries": ["lab"],
       "requests": ["RecognizeArtifact"],
+      "source": ["actinglab recognize-artifact"],
       "slice": "LAB-2",
       "status": "planned"
     },
@@ -1727,6 +1778,7 @@
       "runtime": "offline",
       "entries": ["lab"],
       "requests": [],
+      "source": ["actinglab config get"],
       "slice": "LAB-2",
       "status": "planned",
       "notes": "open point 7 (the coordinator's ruling): actinglab's config get, renamed so that it takes no word of the config operations; what it does is unchanged"
@@ -1745,6 +1797,7 @@
       "runtime": "offline",
       "entries": ["lab"],
       "requests": [],
+      "source": ["actinglab config set"],
       "slice": "LAB-2",
       "status": "planned",
       "notes": "open point 7 (the coordinator's ruling): actinglab's config set, renamed so that it takes no word of the config operations; what it does is unchanged"
@@ -1846,6 +1899,7 @@
       "runtime": "optional",
       "entries": ["lab"],
       "requests": ["ObserveContainedPage"],
+      "source": ["actinglab observe"],
       "slice": "LAB-2",
       "status": "planned"
     },
@@ -1874,6 +1928,7 @@
       "runtime": "offline",
       "entries": ["lab"],
       "requests": [],
+      "source": ["actinglab record start", "actinglab session record start"],
       "slice": "LAB-2",
       "status": "planned"
     },
@@ -1932,6 +1987,7 @@
       "runtime": "offline",
       "entries": ["lab"],
       "requests": [],
+      "source": ["actinglab record mark", "actinglab session record mark"],
       "slice": "LAB-2",
       "status": "planned"
     },
@@ -1949,6 +2005,7 @@
       "runtime": "offline",
       "entries": ["lab"],
       "requests": [],
+      "source": ["actinglab record status", "actinglab session record status"],
       "slice": "LAB-2",
       "status": "planned"
     },
@@ -1976,6 +2033,7 @@
       "runtime": "offline",
       "entries": ["lab"],
       "requests": [],
+      "source": ["actinglab record stop", "actinglab session record stop"],
       "slice": "LAB-2",
       "status": "planned"
     },
@@ -1994,6 +2052,7 @@
       "runtime": "offline",
       "entries": ["lab"],
       "requests": [],
+      "source": ["actinglab record candidates", "actinglab session record candidates"],
       "slice": "LAB-2",
       "status": "planned",
       "notes": "#463 L1: MCP ac_record_candidates (author tier) runs this command, its arguments the command's flags"
@@ -2030,6 +2089,7 @@
       "runtime": "offline",
       "entries": ["lab"],
       "requests": [],
+      "source": ["actinglab record amend", "actinglab session record amend"],
       "slice": "LAB-2",
       "status": "planned",
       "notes": "#463 L1: MCP ac_record_amend (author tier) runs this command, its arguments the command's flags"
@@ -2073,6 +2133,7 @@
       "runtime": "optional",
       "entries": ["lab"],
       "requests": ["RunContainedLabOperation"],
+      "source": ["actinglab record step", "actinglab session record step"],
       "slice": "LAB-2",
       "status": "planned",
       "notes": "#463 L1: MCP ac_record_step (author tier) runs this command, its arguments the command's flags; the tool records no client.action of its own"
@@ -2091,6 +2152,7 @@
       "runtime": "offline",
       "entries": ["lab"],
       "requests": [],
+      "source": ["actinglab record draft"],
       "slice": "LAB-5",
       "status": "planned",
       "notes": "LAB-2 moved it to LAB-5: its source is MCP's ac_binding_draft (package preflight and an actingd check-config child), no command of actinglab; LAB-5 builds it with MCP from the table. LAB-5A: writes false: its only code, MCP ac_binding_draft, changes nothing (readOnlyHint true): it reads the record stop answer, runs package preflight and actingd check-config, which only read, and exports check-config's report as a read exports its answer. LAB-5G4c: a command of actinglab since then, actinglab record draft, on the command line and in serve --stdio (the coordinator's ruling 3 of 6775192250 on board #434), MCP's ac_binding_draft ported and kept until LAB-7; its first step, package preflight, runs in actinglab's own process, and check-config stays the installation's actingd child; the new MCP server refuses its call until its serve children (LAB-5G4b)"
@@ -2111,6 +2173,7 @@
       "runtime": "offline",
       "entries": ["lab"],
       "requests": [],
+      "source": ["actinglab record archive", "actinglab session record archive"],
       "new": "#449",
       "slice": "REC-ARCH",
       "status": "planned",
@@ -2131,6 +2194,7 @@
       "runtime": "offline",
       "entries": ["lab"],
       "requests": [],
+      "source": ["actinglab record reopen", "actinglab session record reopen"],
       "new": "#449",
       "slice": "REC-ARCH",
       "status": "planned",
@@ -2149,6 +2213,7 @@
       "runtime": "offline",
       "entries": ["lab"],
       "requests": [],
+      "source": ["actinglab package check"],
       "slice": "LAB-2",
       "status": "planned"
     },
@@ -2166,6 +2231,7 @@
       "runtime": "offline",
       "entries": ["lab"],
       "requests": [],
+      "source": ["actinglab package preflight"],
       "slice": "LAB-2",
       "status": "planned"
     },
@@ -2182,6 +2248,7 @@
       "runtime": "offline",
       "entries": ["lab"],
       "requests": [],
+      "source": ["actinglab package validate"],
       "slice": "LAB-2",
       "status": "planned"
     },
@@ -2198,6 +2265,7 @@
       "runtime": "offline",
       "entries": ["lab"],
       "requests": [],
+      "source": ["actinglab package inspect"],
       "slice": "LAB-2",
       "status": "planned"
     },
@@ -2227,6 +2295,7 @@
       "runtime": "offline",
       "entries": ["lab"],
       "requests": [],
+      "source": ["actinglab package bundle"],
       "slice": "LAB-2",
       "status": "planned"
     },
@@ -2246,6 +2315,7 @@
       "runtime": "offline",
       "entries": ["lab"],
       "requests": [],
+      "source": ["actinglab package loading"],
       "slice": "LAB-2",
       "status": "planned"
     },
@@ -2263,6 +2333,7 @@
       "runtime": "offline",
       "entries": ["lab"],
       "requests": [],
+      "source": ["actinglab package fmt"],
       "slice": "LAB-2",
       "status": "planned"
     },
@@ -2284,6 +2355,7 @@
       "runtime": "offline",
       "entries": ["lab"],
       "requests": [],
+      "source": ["actinglab package edit"],
       "slice": "LAB-2",
       "status": "planned"
     },
@@ -2358,6 +2430,7 @@
       "runtime": "offline",
       "entries": ["lab"],
       "requests": [],
+      "source": ["actinglab resource catalog"],
       "slice": "LAB-2",
       "status": "planned"
     },
@@ -2376,6 +2449,7 @@
       "runtime": "offline",
       "entries": ["lab"],
       "requests": [],
+      "source": ["actinglab resource validate"],
       "slice": "LAB-2",
       "status": "planned"
     },
@@ -2397,6 +2471,7 @@
       "runtime": "offline",
       "entries": ["lab"],
       "requests": [],
+      "source": ["actinglab resource verify"],
       "slice": "LAB-2",
       "status": "planned"
     },
@@ -2416,6 +2491,7 @@
       "runtime": "offline",
       "entries": ["lab"],
       "requests": [],
+      "source": ["actinglab standard-pack build"],
       "new": "#464",
       "slice": "PACK-BUILD",
       "status": "planned",
@@ -2443,6 +2519,7 @@
       "runtime": "offline",
       "entries": ["lab"],
       "requests": [],
+      "source": ["actinglab resource restore"],
       "slice": "LAB-2",
       "status": "planned"
     },
@@ -2462,6 +2539,7 @@
       "runtime": "offline",
       "entries": ["lab"],
       "requests": [],
+      "source": ["actinglab resource compile-maa"],
       "slice": "LAB-2",
       "status": "planned"
     },
@@ -2493,6 +2571,7 @@
       "runtime": "offline",
       "entries": ["lab"],
       "requests": [],
+      "source": ["actinglab standard-pack check"],
       "slice": "LAB-2",
       "status": "planned"
     },
@@ -2511,6 +2590,7 @@
       "runtime": "offline",
       "entries": ["lab"],
       "requests": [],
+      "source": ["actinglab standard-pack compose"],
       "slice": "LAB-2",
       "status": "planned"
     },
@@ -2533,6 +2613,7 @@
       "runtime": "offline",
       "entries": ["lab"],
       "requests": [],
+      "source": ["actinglab standard-pack adopt"],
       "new": "#464",
       "slice": "SP-ADOPT",
       "status": "planned",
@@ -2551,6 +2632,7 @@
       "runtime": "offline",
       "entries": ["lab"],
       "requests": [],
+      "source": ["actinglab standard-pack ready"],
       "new": "#464 P3 (whether a pack goes straight into scheduling, and what it waits for)",
       "slice": "464-P3",
       "status": "planned",
@@ -2573,6 +2655,7 @@
       "runtime": "offline",
       "entries": ["lab"],
       "requests": [],
+      "source": ["actinglab scheduling compile"],
       "slice": "LAB-2",
       "status": "planned"
     },
@@ -2599,6 +2682,7 @@
       "runtime": "offline",
       "entries": ["lab"],
       "requests": [],
+      "source": ["actinglab scheduling timeline"],
       "slice": "LAB-2",
       "status": "planned"
     },
@@ -2616,6 +2700,7 @@
       "runtime": "offline",
       "entries": ["lab"],
       "requests": [],
+      "source": ["actinglab operation validate"],
       "slice": "LAB-2",
       "status": "planned"
     },
@@ -2632,6 +2717,7 @@
       "runtime": "offline",
       "entries": ["lab"],
       "requests": [],
+      "source": ["actinglab operation inspect"],
       "slice": "LAB-2",
       "status": "planned"
     },
@@ -2648,6 +2734,7 @@
       "runtime": "offline",
       "entries": ["lab"],
       "requests": [],
+      "source": ["actinglab operation explain"],
       "slice": "LAB-2",
       "status": "planned"
     },
@@ -2667,6 +2754,7 @@
       "runtime": "offline",
       "entries": ["lab"],
       "requests": [],
+      "source": ["actinglab recognition-regression"],
       "slice": "LAB-2",
       "status": "planned"
     },
@@ -2691,6 +2779,7 @@
       "runtime": "offline",
       "entries": ["lab"],
       "requests": [],
+      "source": ["actinglab replay"],
       "slice": "LAB-2",
       "status": "planned"
     },
@@ -2712,6 +2801,7 @@
       "runtime": "optional",
       "entries": ["lab"],
       "requests": ["ObserveReadonly"],
+      "source": ["actinglab recognize"],
       "slice": "LAB-2",
       "status": "planned",
       "notes": "offline on a saved frame; a device read takes its frame through the Runtime"
@@ -2734,6 +2824,7 @@
       "runtime": "optional",
       "entries": ["lab"],
       "requests": ["ObserveReadonly"],
+      "source": ["actinglab detect-page"],
       "slice": "LAB-2",
       "status": "planned",
       "notes": "offline on a saved frame; a device read takes its frame through the Runtime"
@@ -2755,6 +2846,7 @@
       "runtime": "optional",
       "entries": ["lab"],
       "requests": ["ObserveReadonly"],
+      "source": ["actinglab current-page"],
       "slice": "LAB-2",
       "status": "planned",
       "notes": "offline on a saved frame; a device read takes its frame through the Runtime"
@@ -2777,6 +2869,7 @@
       "runtime": "optional",
       "entries": ["lab"],
       "requests": ["ObserveReadonly"],
+      "source": ["actinglab is-visible"],
       "slice": "LAB-2",
       "status": "planned",
       "notes": "offline on a saved frame; a device read takes its frame through the Runtime"
@@ -2800,6 +2893,7 @@
       "runtime": "optional",
       "entries": ["lab"],
       "requests": ["ObserveReadonly"],
+      "source": ["actinglab locate"],
       "slice": "LAB-2",
       "status": "planned",
       "notes": "offline on a saved frame; a device read takes its frame through the Runtime"
@@ -2834,6 +2928,7 @@
       "runtime": "offline",
       "entries": ["lab"],
       "requests": ["Status", "StartReport"],
+      "source": ["acui: launcher start, actingd --config (crates/acui-app/src/launcher.rs)"],
       "slice": "LAB-3",
       "status": "planned",
       "notes": "LAB-3: install start on a single-location root (journalled with the initiator, its post-start checks; the memory guard waits, then reports), actingctl start on an A/B root"
@@ -2883,6 +2978,7 @@
       "runtime": "offline",
       "entries": ["lab"],
       "requests": [],
+      "source": ["script rd-1108/dml_switch.ps1 (its wait for watchdog_alive)"],
       "slice": "LAB-3",
       "status": "planned",
       "notes": "links crates/watchdog from LAB-4. LAB-3: crates/watchdog's status of the root; --wait reads it again every 500 ms and refuses runtime_not_running when the Runtime is not alive at its end"
@@ -2903,9 +2999,10 @@
       "runtime": "optional",
       "entries": ["lab"],
       "requests": ["Status", "RuntimeFactSnapshot", "PauseScheduling", "RequestShutdown", "ScheduleExplanation", "StartReport", "ResumeScheduling"],
+      "source": ["script rd-1031/deploy-v01244/deploy.ps1"],
       "slice": "LAB-3",
       "status": "planned",
-      "notes": "always detached through MCP (it replaces the programs MCP runs). LAB-6S0: served by actinglab-mcp on Windows; the front gives detach true, the answer is at once (detached, the run's pid and log, next op status) and the detached run journals Lab-MCP (the marker of lab-two-entries.md section 4.2); until LAB-7 production deploys through actingctl install. LAB-3: --dir's release-facts.json is passed when present; without --dir the target names a kept build (a commit prefix of 8 hex digits or more, or a recorded tag); without a running Runtime only stage, plan and the files; the hold's reason is lab-deploy-<ms> (LAB-3 fix 1: no --reason, as section 7's form; the release hands back only what its own pause step paused)"
+      "notes": "always detached through MCP (it replaces the programs MCP runs). LAB-6S0: served by actinglab-mcp on Windows; the front gives detach true, the answer is at once (detached, the run's pid and log, next op status) and the detached run journals Lab-MCP (the marker of lab-two-entries.md section 4.2); since LAB-7 (0.12.62), which deleted actingctl, production deploys through this row (contracts/install-cli.md, A deploy since LAB-7). LAB-3: --dir's release-facts.json is passed when present; without --dir the target names a kept build (a commit prefix of 8 hex digits or more, or a recorded tag); without a running Runtime only stage, plan and the files; the hold's reason is lab-deploy-<ms> (LAB-3 fix 1: no --reason, as section 7's form; the release hands back only what its own pause step paused)"
     },
     {
       "name": "rollback",
@@ -2924,7 +3021,7 @@
       "requests": ["Status", "RuntimeFactSnapshot", "PauseScheduling", "RequestShutdown", "ScheduleExplanation", "StartReport", "ResumeScheduling"],
       "slice": "LAB-3",
       "status": "planned",
-      "notes": "always detached through MCP. LAB-6S0: served by actinglab-mcp on Windows; the front gives detach true, the answer is at once (detached, the run's pid and log, next op status) and the detached run journals Lab-MCP (the marker of lab-two-entries.md section 4.2); until LAB-7 production rolls back through actingctl install. LAB-3: without --to the build the live one replaced; without a running Runtime only the plan and the files"
+      "notes": "always detached through MCP. LAB-6S0: served by actinglab-mcp on Windows; the front gives detach true, the answer is at once (detached, the run's pid and log, next op status) and the detached run journals Lab-MCP (the marker of lab-two-entries.md section 4.2); since LAB-7 (0.12.62), which deleted actingctl, production rolls back through this row. LAB-3: without --to the build the live one replaced; without a running Runtime only the plan and the files"
     },
     {
       "name": "convert",
@@ -3079,6 +3176,7 @@
       "runtime": "offline",
       "entries": ["lab"],
       "requests": [],
+      "source": ["acsetup: first-install wizard"],
       "slice": "S4",
       "status": "planned",
       "notes": "#453 S4 (0.12.60; contracts/install-cli.md, Fresh root): the module's own command; actingctl install new is not built and actingctl install gains nothing. The one rescue row served without a located root: it acts on the root it names, so the release's own program and the Lab's MCP server run it before any root exists. Refused before anything is written: a new root or a state root that exists and is not empty (root_not_empty, state_root_not_empty), a build that does not verify (release_check_failed with the release reader's failures, or build_invalid, also for a build whose Runtime member has no actingd.config.first.json), an empty actingd-config edge between the running installer and the build (interface_edge). One journal of kind new (off the watchdog's pass list): copy_build, verify_tree, place_build, stage_file and swap_file for each file of the build into runtime and tools, verify_tree, write_config (the template filled with state_root, a 32-byte salt from the operating system's generator, lab_module_authoring and mumu_root when given, checked by the new live build's check-config with --install-root before it is renamed into place; a refusal ends the operation refused with the part kept), create_state_root (the folder, empty), create_vision_root (fix round 1: the default vision root <new_root>\\vision, empty, when the template names no vision root of its own), record_state; a refusal after the release was unpacked names its work folder (work_dir); no installation identity and no state-root record (the first start's, #453 S11); with watchdog, watchdog install last; resume and undo by install resume and install undo of the root (undo sets aside, deletes nothing)"
@@ -3168,6 +3266,7 @@
       "runtime": "optional",
       "entries": ["lab"],
       "requests": ["Status", "RuntimeFactSnapshot", "PauseScheduling", "RequestShutdown", "ScheduleExplanation", "StartReport", "ResumeScheduling"],
+      "source": ["script rd-1108/dml_switch.ps1"],
       "slice": "LAB-3",
       "status": "planned",
       "notes": "guards, stop with hold, backup kept, swap, check-config, start, alive, release. LAB-3: check-config of the file before anything changes, the replaced file kept as actingd.config.json.prev-<ms>; journal kind config_replace; without a running Runtime only the swap. Workflow #453 S3: without one, the swap only after the update path's stopped rule under the writer lock (an actingd under the root runtime_running, the state root's owner lock held owner_lock_held, a probe that cannot decide processes_unreadable), so a starting Runtime's file is not swapped (before, one status read decided); undo and op resume of such an operation take the writer lock and the same stopped rule first"
@@ -3186,6 +3285,7 @@
       "runtime": "optional",
       "entries": ["lab"],
       "requests": ["Status", "RuntimeFactSnapshot", "PauseScheduling", "RequestShutdown", "ScheduleExplanation", "StartReport", "ResumeScheduling"],
+      "source": ["script rd-1108/dml_switch.ps1 restore"],
       "slice": "LAB-3",
       "status": "planned",
       "notes": "LAB-3: config replace with the kept file (operation install_config_restore); actingctl install config restore (INST-3) is not built. LAB-5B1c: declares sha as config replace does: config replace's path read it for this row since LAB-3 (the table follows the code). Workflow #453 S3: without a running Runtime, as config replace, the swap only after the update path's stopped rule under the writer lock: an actingd under the root runtime_running, the state root's owner lock held owner_lock_held, a probe that cannot decide processes_unreadable; undo and op resume of such an operation take the writer lock and the same stopped rule first"
@@ -3369,6 +3469,7 @@
       "runtime": "optional",
       "entries": ["lab"],
       "requests": ["Status", "RuntimeFactSnapshot", "PauseScheduling", "ResumeScheduling", "ScheduleExplanation"],
+      "source": ["script rd-1027/hotplace-r10/hotplace.ps1 (steps S4 to S8b)"],
       "slice": "LAB-3",
       "status": "planned",
       "notes": "the games come from the bundle; no game is named in code. LAB-3: journal kind pack_place with a pack_item step per item; the instances bound to the bundle's game are held; idle within install.hot.idle_wait_ms; the composition waited for within standard_packs.check_interval_ms plus install.hot.idle_wait_ms; actingctl install pack plan|place (INST-4) is not built. LAB-3 fix 1: an instance of the game already paused by another party is kept, not held; not idle in time hands the operation's own pauses back at once; the release resumes only what its pause step paused. #444 NOTICES-2: the package edge is checked before the layout; the notices directory is one item, kind notices, placed first and set aside (retire) when a later bundle carries none. #451 LOAD-P (0.12.59): the loading templates directory loading/ is taken exactly for the templates the zip's own loading.json declares (an undeclared or deeper member, or one without loading.json, pack_invalid naming it; a declared template missing, loading_template_invalid; a pack named loading beside it, loading_pack_name; all before the hold) and is one item, kind loading, placed after the packs and before the root files and set aside (retire) when a later bundle carries none; no package revision moves. #453 S5 (0.12.59): the instances the running Runtime binds to the bundle's game are journalled as the input bound; the composition is waited for only when schedule.json changes and bound is not empty, with none bound it passes at its first read expecting the catalog unchanged; a journal without bound keeps the wait. #453 S6 (0.12.59): runtime optional: with no Runtime answering, under the writer lock and the stopped rule the update applies after its close and install start before it spawns (owner_lock_held, runtime_running, processes_unreadable), the same plan and plan id placed without a hold (the input cold; pack_item steps, none waiting, and post_check; no pause, no release_hold, no schedule read): the checks rerun, standard_pack_check, check_config (the live build's check-config of the live configuration) and composition not_evaluated; a failed check post_check_failed with the items placed and next naming undo. #453 S6 fix 1 (0.12.59): the cold journal also records bound, the instances the configuration's policy.facts.instances binds to the game; check_config also fails on a note of check-config that names the placed game (game_notes), and with bound empty says composition not_previewed; the composition is judged at the next start (next composition_at_start, up); a failed check closes its post_check step done with game, checks and failed, with a Runtime or without one; undo and op resume of a cold operation take the writer lock and the same stopped rule first. #453 S6 fix 2 (0.12.59): check_config judges the game from check-config's report, which the outcome's bounds do not cut, and fails on the game's root or tables (game_root), a composition problem naming the game (composition_problems), one naming no game (composition_refused, every placement) and a rule_id_conflict recorded on another game (collisions, collision_cause not_told); an outcome cut (notes cut, causes_total) whose entry of the game lists no table fails with game_tables not_judged; with bound empty next names composition_at_start_once_bound (up), the composition first judged at the first start after an instance is bound to the game"
@@ -3418,6 +3519,7 @@
       "runtime": "offline",
       "entries": ["lab"],
       "requests": [],
+      "source": ["actingd unlock-owner", "acui: launcher unlock, actingd unlock-owner (crates/acui-app/src/launcher.rs)"],
       "slice": "LAB-3",
       "status": "planned",
       "notes": "the caller passes no confirmation; the initiator is recorded (lab-two-entries.md section 5). LAB-3: the live build's actingd unlock-owner with the initiator as --actor. LAB-7: actingd's --confirm-resources-released is gone; running unlock-owner is the confirmation"
@@ -3435,6 +3537,7 @@
       "runtime": "offline",
       "entries": ["lab"],
       "requests": [],
+      "source": ["actingd claim-state-root"],
       "new": "#453 S12 (a state root another installation claimed, handed over to this one by a command instead of by hand)",
       "slice": "S12",
       "status": "planned",
@@ -3453,6 +3556,7 @@
       "runtime": "offline",
       "entries": ["lab"],
       "requests": [],
+      "source": ["actingd check-config", "acsetup: check-config child"],
       "slice": "LAB-3",
       "status": "planned",
       "notes": "LAB-3: the live build's check-config with --install-root <root>"
@@ -3468,6 +3572,7 @@
       "runtime": "offline",
       "entries": ["lab"],
       "requests": [],
+      "source": ["actingd ledger-maintenance verify", "acsetup: ledger-maintenance verify child"],
       "slice": "LAB-3",
       "status": "planned",
       "notes": "LAB-3: the live build's ledger-maintenance verify of the root's configuration"
@@ -3483,6 +3588,7 @@
       "runtime": "offline",
       "entries": ["lab"],
       "requests": [],
+      "source": ["actingd discover"],
       "new": "#453 S10 (the emulator instances of a fresh root, listed while no Runtime runs)",
       "slice": "S10",
       "status": "planned",
@@ -3501,6 +3607,7 @@
       "runtime": "offline",
       "entries": ["lab"],
       "requests": [],
+      "source": ["actingd vision manifest"],
       "new": "#453 S7 (what a fresh root's vision root must hold, for an installer that places it)",
       "slice": "S7",
       "status": "planned",
@@ -3517,6 +3624,7 @@
       "runtime": "offline",
       "entries": ["lab"],
       "requests": [],
+      "source": ["actingd vision check", "actinglab standard-pack check"],
       "new": "#453 S7 (whether a fresh root's vision root holds what it must, before the Runtime first runs)",
       "slice": "S7",
       "status": "planned",
@@ -3535,6 +3643,7 @@
       "runtime": "offline",
       "entries": ["lab"],
       "requests": [],
+      "source": ["actingd vision check"],
       "new": "#453 S9 (a fresh root's vision files placed from a folder a person gives, verified against the installed build's manifest, without a download)",
       "slice": "S9",
       "status": "planned",

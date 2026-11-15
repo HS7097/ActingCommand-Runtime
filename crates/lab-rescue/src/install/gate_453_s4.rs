@@ -485,7 +485,11 @@ fn s4_new_a_first_configuration_check_config_refuses_ends_refused_with_its_part_
         line["outcome"]["values"]["install_refusal"],
         "config_refused_by_target"
     );
-    assert!(line["next"]["actingctl_undo"].is_array(), "{line}");
+    // Workflow #434 LAB-7: the configuration is not written, so no row of the Lab finds the root
+    // and the answer names no command: the folder to move aside, and why.
+    assert!(line["next"].is_null(), "{line}");
+    assert!(line["move_aside"]["folder"].is_string(), "{line}");
+    assert!(line["move_aside"]["note"].is_string(), "{line}");
     let root = &setup.root;
     let files = tree(root);
     let part = one_key(&files, "actingd.config.json.new-");
@@ -560,7 +564,7 @@ fn s4_new_a_crash_after_each_step_resumes_to_the_same_tree() {
     assert_eq!(exit, 0, "{line}");
     let expected = normalized(&reference.root);
     let operation_id = line["operation_id"].as_str().expect("the operation id");
-    let steps = read_value(
+    let kinds = read_value(
         &reference
             .root
             .join("install")
@@ -569,7 +573,17 @@ fn s4_new_a_crash_after_each_step_resumes_to_the_same_tree() {
     )["steps"]
         .as_array()
         .expect("the steps")
-        .len();
+        .iter()
+        .map(|step| step["kind"].as_str().expect("a kind").to_owned())
+        .collect::<Vec<_>>();
+    let steps = kinds.len();
+    // Workflow #434 LAB-7: the 1-based place of `write_config`; from it on the configuration is in
+    // place.
+    let write_config = kinds
+        .iter()
+        .position(|kind| kind == "write_config")
+        .map(|index| index + 1)
+        .expect("write_config is planned");
     for step in 1..=steps {
         let setup = setup(&build_spec());
         setup.host.crash_after.set(Some(step));
@@ -579,11 +593,40 @@ fn s4_new_a_crash_after_each_step_resumes_to_the_same_tree() {
             line["outcome"]["code"], "install_operation_interrupted",
             "step {step}: {line}"
         );
-        assert!(line["next"]["actingctl_resume"].is_array(), "{line}");
         let operation_id = line["outcome"]["values"]["install_operation_id"]
             .as_str()
             .expect("the operation id")
             .to_owned();
+        // Workflow #434 LAB-7: with the configuration in place, the new root's own program resumes
+        // or undoes the operation (`op resume <id>`, `undo <id>`); before it, no command, the
+        // folder to move aside.
+        if step >= write_config {
+            let lab = |member: &str| {
+                let words = line["next"][member]
+                    .as_array()
+                    .unwrap_or_else(|| panic!("step {step}: next.{member}: {line}"));
+                let program = words[0].as_str().expect("the program");
+                assert!(program.ends_with("actinglab.exe"), "step {step}: {line}");
+                words[1..].to_vec()
+            };
+            assert_eq!(
+                lab("resume"),
+                [json!("op"), json!("resume"), json!(operation_id)],
+                "step {step}"
+            );
+            assert_eq!(
+                lab("undo"),
+                [json!("undo"), json!(operation_id)],
+                "step {step}"
+            );
+            assert!(line["move_aside"].is_null(), "step {step}: {line}");
+        } else {
+            assert!(line["next"].is_null(), "step {step}: {line}");
+            assert!(
+                line["move_aside"]["folder"].is_string(),
+                "step {step}: {line}"
+            );
+        }
         let resumed = fixture::run(
             &setup.host,
             &[

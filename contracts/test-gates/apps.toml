@@ -241,6 +241,17 @@ tests = [
 ]
 incident = ["#422 LN-VERIFY"]
 
+# request-shutdown --wait waits for the exact owner epoch's close and its process's exit; another epoch's close never counts, and past its time it is shutdown_wait_timeout with the last state seen (Workflow #382 A-1 G11, injected poller and clock). Workflow #434 LAB-7: the wait is lab-ops' `shutdown_wait`, which the Lab's `shutdown --wait` runs; its three tests moved there from actingctl
+[[gate]]
+key = "18"
+coverage = "Y"
+tests = [
+    "actingcommand-lab-ops::lib::shutdown_wait::g11_tests::gate_the_wait_completes_when_the_target_epoch_closed_and_its_process_exited",
+    "actingcommand-lab-ops::lib::shutdown_wait::g11_tests::gate_another_epochs_close_does_not_end_the_wait_which_times_out_with_the_last_state",
+    "actingcommand-lab-ops::lib::shutdown_wait::g11_tests::gate_a_closed_epoch_whose_process_outlives_the_wait_times_out_with_the_last_state",
+]
+incident = ["#382 A-1 G11"]
+
 # actingwatch: while acsetup holds the writer lock it exits 0 and runs nothing; a misplaced program, a root without its watchdog directory, a lock it cannot probe and a fixed entry it cannot run each exit 1, the last one logged with its code (Workflow #382 A-1 G13)
 [[gate]]
 key = "27"
@@ -407,6 +418,15 @@ tests = [
     "actingcommand-lab-ops::lib::capability_gap::tests::gaplog_a_blank_multiline_or_overlong_text_is_refused",
 ]
 incident = ["#410"]
+
+# Workflow #372 K4 (K372 addendum of 2026-10-15, K4.4 and row K4-T7, the ac_diagnose half; register §1.79): ac_diagnose keeps at most 10 of the instance's clock_slots rows, refused and superseded rows first, then deferred and expired rows, then owed rows, newest first in each, with clock_slots_total when fewer are kept. Workflow #434 LAB-7: the test moved from actingctl's MCP tests into lab-ops, whose diagnose row both front ends answer
+[[gate]]
+key = "68"
+coverage = "Y"
+tests = [
+    "actingcommand-lab-ops::lib::diagnose::k4_tests::k4_t7_clock_slot_rows_keep_refused_and_superseded_first_then_deferred_and_expired_then_owed",
+]
+incident = ["#372 K4"]
 
 # Policy cycle (#369, #372; test plan v2.2 A-4 G5 rows 2-3 and G6a, wave-17 ruling 11; m369 W-1; #191 A1): a failed scheduled run skips its instance for the rest of the cycle while the other instance's intent in the same cycle still runs; failed_runs makes the driver evaluate again at once, and that evaluation defers the instance its ladder holds with dispatch_instance_held; a cycle past its budget attempts its first intent and reports the rest as policy_cycle_yielded attempted=<i> remaining=<N> with no ledger fact for them. Partial: G5 row 1 cannot occur (the evaluator selects at most one intent per instance per round) and G6b, a held or contended refusal at admission inside the cycle, is not written in 0.12 (no admission hook is defined)
 [[gate]]
@@ -598,6 +618,14 @@ incident = ["#427-A"]
 coverage = "Y"
 tests = [
     "actingcommand-actingd::bin:actingcommand-actingd::config::gate_427b::gate_427b_the_assembly_hands_the_limits_and_the_max_key_over_in_every_pacing_mode",
+]
+incident = ["#427-B"]
+
+# Workflow #427-B follow-up (brief rd-1028/brief-427b-followup.md; review rd-1028/review-427b.md L1): ac_diagnose's not_run lists, beside the deferred rows, a row whose state is blocked and whose why is a shared run limit (heavy_scene_budget_exhausted at placement), with used, limit_count, admitted_count and round_selected_count; a row blocked by its own trigger stays out. Workflow #434 LAB-7: the test moved from actingctl's MCP tests into lab-ops, whose diagnose row both front ends answer
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-lab-ops::lib::schedule::k427b_tests::gate_427b_diagnose_lists_a_row_the_shared_run_limits_blocked_with_its_numbers",
 ]
 incident = ["#427-B"]
 

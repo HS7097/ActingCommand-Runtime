@@ -1654,9 +1654,10 @@ yet, so no device is touched. A restored backend that does not open leaves its i
 check passed is an internal invariant: the start fails, as for a registration it refuses from the
 file.
 
-**Channels.** `actingctl config set instance.<id>.touch_backend=… instance.<id>.capture_backend=…`
-and `config clear` (the CLI); MCP `ac_config_set`, which needs the operator tier for a change of a
-backend key (`tier_not_enabled` otherwise; every other change stays observer); the console's
+**Channels.** The Lab's `config set instance.<id>.touch_backend=… instance.<id>.capture_backend=…`
+and `config clear` (the command line); MCP `ac_config_set` (the Lab's MCP server has no tiers; the
+first MCP server's operator tier for a backend key and its refusal `tier_not_enabled` are retired
+with it since 0.12.62, Workflow #434 LAB-7); the console's
 settings page ("The console's device backends group" below); the Lab's `session backend` (HS-L,
 below). There is one state per instance: no backend holds for a Lab session only.
 
@@ -1678,8 +1679,8 @@ for `config_value_invalid`, `config_key_unknown` and `config_key_not_settable`, 
 `details` `{instance, outcome, config_key?, config_value_problem?, backend_switch_problem?,
 receipt_state, runtime_outcome}` (`runtime_outcome` the whole outcome with its causes); a failure
 without a receipt is reported as every Runtime-backed Lab command reports it (`runtime_not_running`,
-`device_error`). `--dry-run` refuses it (`dry_run_unsupported`) before any connection. `tier_not_enabled`
-does not apply: no MCP tool forwards it. The Lab's instance listing, `session instance list` and
+`device_error`). `--dry-run` refuses it (`dry_run_unsupported`) before any connection. No MCP tool
+forwards it. The Lab's instance listing, `session instance list` and
 `session instance registry`, gains the column `runtime_backends`, read from the Runtime (`Status` and
 `RuntimeFactSnapshot`'s `config.parameters.instance`), never from the Lab's file: per listed
 instance whose id is a registered alias `{registered: true, instance_id, touch_backend,
@@ -2104,7 +2105,9 @@ the one new code and the words above.
   | `backend_switch_refused`, `open_failed` | 新后端没打开，已保留原来的, with the cause: `input_backend_open_failed`, `capture_backend_open_failed`, `paired_backend_open_failed` (the last two with `capture_open_cause`: `display_missing`, the application is not running; `connection_failed`; `other`; the paired one's own cause may be `nemu_app_index_missing` with `nemu_app_index_problem`: `package_not_installed`, `application_not_running`, `info_unavailable`, `info_malformed`; since 0.12.40 a paired open reports neither `display_missing` nor `application_not_running`, #402 HS-5, [device-binding.md](device-binding.md), "Backends") |
   | `backend_switch_refused`, `restore_failed` | 新的没打开，原来的也没恢复，这台暂时不可用, with both failures; suggest a self-check |
   | `host_config_overrides_persist_failed` | 没写进记录，已回退 |
-  | `tier_not_enabled` | MCP only: the operator tier is not enabled |
+
+  (`tier_not_enabled`, the first MCP server's refusal, is retired since 0.12.62 with that server,
+  Workflow #434 LAB-7: no request meets it.)
 
 - **A wait that ran out** (#402 HS-2b). `runtime_receipt_timeout` on such a request is an
   unconfirmed result, never a refusal and never "not applied": the group re-reads the settings'

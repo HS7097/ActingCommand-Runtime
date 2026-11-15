@@ -53,7 +53,8 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const COMMAND: &str = "packs";
-const USAGE: &str = "usage: actingctl packs [--root <install root>] [--instance <alias|instance_id|adb port>] [--role procedure|startup|resource_package]";
+const USAGE: &str =
+    "usage: actinglab packs [<instance>] [--role procedure|startup|resource_package]";
 /// The configuration of an install root without slots, as mcp-serve finds it.
 pub const ROOT_CONFIG_FILE: &str = "actingd.config.json";
 /// The file of a package that names its `package_id`.

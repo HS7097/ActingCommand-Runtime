@@ -682,10 +682,12 @@ fn actingctl_install_answers_the_deploy_kit_as_before() {
         &["update", "apply", "--root", word(&root), "--build", C2],
     );
     assert_eq!(code(&usage), "actingctl_usage_invalid");
+    // Workflow #434 LAB-7 (adapted): the usage names the rescue module's rows, which run these
+    // commands now that actingctl is deleted.
     assert!(
         usage
             .text
-            .is_some_and(|text| text.starts_with("usage: actingctl install")),
+            .is_some_and(|text| text.starts_with("usage: actinglab ")),
         "{usage:?}"
     );
     assert_eq!(super::print(usage).code, 1);

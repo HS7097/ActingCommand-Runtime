@@ -96,6 +96,13 @@ const SALT_BYTES: usize = 32;
 const CONFIG_INTERFACE: &str = "actingd-config";
 /// The Lab's program in a root's Tools member, which runs the rows that follow on the new root.
 const LAB_PROGRAM: &str = "actinglab.exe";
+/// Workflow #434 LAB-7: the answer's member, in place of `next`, of an operation that stopped
+/// before its configuration was written ([`move_aside`]), and what it says.
+const MOVE_ASIDE: &str = "move_aside";
+const MOVE_ASIDE_NOTE: &str = "no row resumes or undoes this operation: the state root is created \
+                               only after the configuration is written, and everything written \
+                               so far is inside this folder; move the folder aside and run new \
+                               again";
 
 /// What the operation needs to run, resume and undo its steps, as its journal keeps it. Never the
 /// salt.
@@ -315,7 +322,8 @@ pub(crate) fn row(
                 .and_then(Value::as_str)
                 .unwrap_or_default()
                 .to_owned();
-            Answer::new(outcome).with("next", ways_on(&paths.plain, &operation_id))?
+            let (member, ways) = ways_on(&paths.root, &operation_id);
+            Answer::new(outcome).with(member, ways)?
         }
         Err(outcome) => return Err(outcome),
     };
@@ -332,7 +340,7 @@ pub(crate) fn row(
 
 /// The refusal `refusal` of a folder that exists and is not empty, `None` for an absent or empty
 /// one. A root that holds an unfinished operation of this row also names it and how to continue
-/// or undo it.
+/// or undo it, or what is left to a person before its configuration is written ([`ways_on`]).
 fn refuse_filled(root: &Path, refusal: InstallRefusal) -> Result<Option<Answer>, Outcome> {
     match fill_of(root) {
         Ok(Fill::Absent | Fill::Empty) => Ok(None),
@@ -342,10 +350,9 @@ fn refuse_filled(root: &Path, refusal: InstallRefusal) -> Result<Option<Answer>,
             match files::read_json::<Current>(&current) {
                 Ok(current) if current.kind == OperationKind::New => {
                     let id = current.operation_id;
-                    let plain = files::plain(root);
+                    let (member, ways) = ways_on(root, &id);
                     Ok(Some(
-                        Answer::new(refused.install_operation_id(id.clone()))
-                            .with("next", ways_on(&plain, &id))?,
+                        Answer::new(refused.install_operation_id(id)).with(member, ways)?,
                     ))
                 }
                 _ => Ok(Some(Answer::new(refused))),
@@ -357,15 +364,31 @@ fn refuse_filled(root: &Path, refusal: InstallRefusal) -> Result<Option<Answer>,
     }
 }
 
-/// The ways to continue or undo an unfinished operation of this row on the root `root`: until
-/// LAB-7 deletes actingctl, its `install resume` and `install undo`, which any build of this
-/// release or later runs; the module's own `op resume` and `undo` from the new root's own
-/// program once its configuration is in place.
-fn ways_on(root: &str, operation_id: &str) -> Value {
-    json!({
-        "actingctl_resume": ["actingctl", "install", "resume", "--root", root, "--operation", operation_id],
-        "actingctl_undo": ["actingctl", "install", "undo", "--root", root, "--operation", operation_id],
-    })
+/// The ways to continue or undo an unfinished operation of this row on the root `root`, as the
+/// answer's member that carries them. Workflow #434 LAB-7: once the configuration is in place,
+/// `next` names the module's own `op resume <id>` and `undo <id>`, run by the new root's own
+/// program (`tools\actinglab.exe`), which finds its root through that configuration; before it no
+/// row of the Lab finds the root, and a second `new` into the folder is refused
+/// (`root_not_empty`), so the answer names no command ([`move_aside`]).
+fn ways_on(root: &Path, operation_id: &str) -> (&'static str, Value) {
+    if !root.join(state::CONFIG_FILE).is_file() {
+        return (MOVE_ASIDE, move_aside(root));
+    }
+    let lab = files::plain(&root.join(Half::Tools.dir()).join(LAB_PROGRAM));
+    (
+        "next",
+        json!({
+            "resume": [lab, "op", "resume", operation_id],
+            "undo": [lab, "undo", operation_id],
+        }),
+    )
+}
+
+/// Workflow #434 LAB-7: what an operation of this row that stopped before its configuration was
+/// written leaves a person to do, in place of a command: the new root's folder to move aside, and
+/// why.
+fn move_aside(root: &Path) -> Value {
+    json!({"folder": files::plain(root), "note": MOVE_ASIDE_NOTE})
 }
 
 /// The `install` section's values the operation runs with: the running installer's defaults (a
@@ -1003,7 +1026,7 @@ fn run(
                             .with("operation_id", &operation_id)?
                             .with("part", files::plain(&part))?
                             .with("check_config", summary)?
-                            .with("next", ways_back(&paths.plain, &operation_id));
+                            .with(MOVE_ASIDE, move_aside(&paths.root));
                     }
                     files::rename(&part, &config).map_err(|cause| operation.interrupted(cause))?;
                     check_config = summary.clone();
@@ -1114,14 +1137,6 @@ fn run(
         )?
         .with("check_config", check_config)?
         .with("next", next)
-}
-
-/// The way back from an operation of this row that ended refused: its undo, which sets aside
-/// everything it wrote (until LAB-7 deletes actingctl, `actingctl install undo`).
-fn ways_back(root: &str, operation_id: &str) -> Value {
-    json!({
-        "actingctl_undo": ["actingctl", "install", "undo", "--root", root, "--operation", operation_id],
-    })
 }
 
 /// `--watchdog`: the watchdog's task registered for the new root (the rescue row `watchdog

@@ -17,9 +17,10 @@
 //! are renamed aside and kept.
 //!
 //! Workflow #434 LAB-3 (`contracts/lab-two-entries.md` §5 to §7): this module moved from
-//! `apps/actingctl` unchanged; [`dispatch`] answers `actingctl install` with the `install-cli`
-//! revision-1 face ([`Face::Install`]) until LAB-7, and builds the line that actingctl prints. The
-//! Lab's rescue module runs the same commands with [`Face::Rescue`] (`crate::rescue`).
+//! `apps/actingctl` unchanged. The Lab's rescue module runs the same commands with
+//! [`Face::Rescue`] (`crate::rescue`). Workflow #434 LAB-7: `actingctl install`, which answered
+//! with the `install-cli` revision-1 face ([`Face::Install`]), is deleted with its `dispatch`; that
+//! face stays for an operation whose journal records no initiator.
 
 // Workflow #434 LAB-3: the modules are the crate's, so that the rescue module (`crate::rescue`)
 // runs their commands and steps; nothing outside the crate reads them.
@@ -176,7 +177,7 @@ mod gate_453_s4;
 #[cfg(test)]
 mod gate_453_s9;
 
-pub(crate) use host::{Host, SystemHost};
+pub(crate) use host::Host;
 // Workflow #421 INST-1, watchdog row 7a″: what the watchdog and `actingctl start` read.
 pub(crate) use state::unfinished_operation;
 
@@ -192,7 +193,6 @@ use serde::Serialize;
 use serde_json::{Map, Value};
 use state::{CurrentState, OperationKind, Paths};
 use std::collections::{BTreeMap, BTreeSet};
-use std::ffi::OsString;
 use std::path::Path;
 
 /// Workflow #434 LAB-3: which face a command answers with.
@@ -230,29 +230,13 @@ impl Face {
     }
 }
 
-const USAGE: &str = "usage: actingctl install release verify --dir <dir> [--facts <release-facts.json>] [--expect-tag <tag>] [--expect-commit <hex8+>]\nusage: actingctl install release stage --root <root> --dir <dir> [--facts <release-facts.json>] [--expect-tag <tag>] [--expect-commit <hex8+>] [--local-build]\nusage: actingctl install adopt --root <root>\nusage: actingctl install update plan --root <root> --build <commit> [--preview] [--accept-ledger-one-way]\nusage: actingctl install update apply --root <root> --build <commit> --plan <id> [--accept-ledger-one-way] [--stop --hold <reason> [--known-pause ALIAS=REASON]... [--start] [--ack-guard <id>]... [--detach]]\nusage: actingctl install rollback plan|apply --root <root> --to <commit> [--plan <id>] [--accept-ledger-one-way] [--stop --hold <reason> [--known-pause ALIAS=REASON]... [--start] [--ack-guard <id>]... [--detach]]\nusage: actingctl install undo|resume --root <root> --operation <id>\nusage: actingctl install status --root <root> [--operation <id>] [--check-rollback]\nusage: actingctl install leftovers --root <root>\nusage: actingctl install stop --root <root> --hold <reason> [--known-pause ALIAS=REASON]... [--ack-guard <id>]...\nusage: actingctl install start --root <root> [--ack-guard <id>]...\nusage: actingctl install release-hold --root <root> --reason <reason>\nusage: actingctl install guards --root <root> --for stop|start [--hold <reason>] [--known-pause ALIAS=REASON]...";
+/// The usage of the commands, as the rescue module's rows that run them name them (Workflow #434
+/// LAB-7: each run by the root's own `tools\actinglab.exe`, where `actingctl install` ran them).
+const USAGE: &str = "usage: actinglab release verify <dir> [--facts <release-facts.json>] [--expect-tag <tag>] [--expect-commit <hex8+>]\nusage: actinglab release stage <dir> [--facts <release-facts.json>] [--expect-tag <tag>] [--expect-commit <hex8+>] [--local-build]\nusage: actinglab adopt\nusage: actinglab deploy <tag-or-commit> [--dir <dir>] [--plan] [--detach]\nusage: actinglab rollback [--to <tag-or-commit>] [--plan] [--detach]\nusage: actinglab op resume <op>\nusage: actinglab undo <op>\nusage: actinglab op status [<op>] [--check-rollback]\nusage: actinglab leftovers\nusage: actinglab down [--reason <reason>]\nusage: actinglab up\nusage: actinglab release-hold <reason>\nusage: actinglab guards --for stop|start";
 
-/// Runs `install` when the first argument names it, with the revision-1 face; `None` leaves every
-/// other command to the CLI, unchanged. The caller (actingctl) prints the exit. Workflow #434
-/// LAB-6S2-B2: every connection to a running Runtime declares `initiator`, the caller's word
-/// (actingctl's `Lab-CLI`), and keeps the CLI's envelope; the journals of this face still record
-/// no initiator ([`Face::Install`]).
-pub fn dispatch(arguments: &[OsString], initiator: Initiator) -> Option<Exit> {
-    if arguments.first()?.to_str()? != "install" {
-        return None;
-    }
-    if let Err(invalid) = cli_line::detail() {
-        return Some(cli_line::failure(&invalid, None));
-    }
-    // Workflow #434 LAB-6S2-B2: the caller's word, where LAB-6S2-B1 declared none.
-    Some(print(execute(
-        &arguments[1..],
-        &SystemHost::of(Some(initiator)),
-    )))
-}
-
-// Workflow #434 LAB-7: `mcp-entry plan|list`, the first generation's commands, left with
-// actingctl; `mcp_entry` serves the rescue module's `mcp plan` and `mcp entries`.
+// Workflow #434 LAB-7: `actingctl install` (its `dispatch`) and `mcp-entry plan|list`, the first
+// generation's commands, left with actingctl; `mcp_entry` serves the rescue module's `mcp plan`
+// and `mcp entries`.
 
 /// One command's answer: the result members and the top outcome.
 #[derive(Debug, Clone)]
@@ -292,19 +276,6 @@ pub(crate) fn print(answer: Answer) -> Exit {
     } else {
         cli_line::success(answer.members, &answer.outcome)
     }
-}
-
-/// Runs one `install` command (the words after `install`) against `host`, with the revision-1
-/// face of `actingctl install`.
-pub(crate) fn execute(arguments: &[OsString], host: &dyn Host) -> Answer {
-    let Some(words) = arguments
-        .iter()
-        .map(|word| word.to_str())
-        .collect::<Option<Vec<_>>>()
-    else {
-        return usage(cli_line::usage_invalid(None, ArgumentProblem::NotUtf8));
-    };
-    execute_as(&words, host, Face::Install)
 }
 
 /// Runs one `install` command (the words after `install`) against `host` with `face` (Workflow

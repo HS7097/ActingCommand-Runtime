@@ -1087,7 +1087,7 @@ fragment = "host"
 test = "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_hs2::hs2_mcp_backend_key_needs_operator_tier"
 ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
 reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: #402 HS-2 (0.12.39; brief rd-1031/backend-switch/brief-hs-2.md; register §1.270; contracts/runtime-config.md, \"Switching an instance's backe)."
-covered_by = "actingcommand-runtime-host::lib::tests::gate_hs2::hs2_switch_free_instance_commits_and_records, left in the same host.toml row."
+covered_by = "None: the property went with the program. The operator tier a backend key needed was the first MCP server's; the Lab's MCP server has no tiers, and tier_not_enabled is retired."
 
 [[retired]]
 fragment = "host"
@@ -1157,14 +1157,14 @@ fragment = "apps"
 test = "actingcommand-actingctl::c4_process::process_replay_cannot_duplicate_or_conflict_a_contained_task_terminal"
 ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
 reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: The Runtime survives a killed client; a replay cannot duplicate a terminal)."
-covered_by = "The Lab's command line on the same c4 fake Runtime child (tests/support/c4_runtime.rs): apps/actinglab/tests/c4_runtime_process.rs and session_closeout.rs; the replay and terminal rules are the host's own host.toml gates."
+covered_by = "The Runtime's own rules, on the host: actingcommand-runtime-host::lib::tests::task_replay::contained_task_replay_without_connection_cache_reuses_runtime_terminal (a replayed run answers its first terminal, one input, one admission, one terminal), contained_task_terminal_is_absorbing_across_request_ids_and_rejections_are_audited (a second, conflicting terminal is denied and recorded as rejected) and inactive_incomplete_contained_task_replay_recovers_terminal_after_lease_expiry (a run whose client is gone is closed once, recovered after its lease expired); the client's side is the Lab's command line on the same c4 fake Runtime child (tests/support/c4_runtime.rs), apps/actinglab/tests/c4_runtime_process.rs."
 
 [[retired]]
 fragment = "apps"
 test = "actingcommand-actingctl::c4_process::runtime_finishes_and_rebuilds_contained_task_after_client_is_killed"
 ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
 reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: The Runtime survives a killed client; a replay cannot duplicate a terminal)."
-covered_by = "The Lab's command line on the same c4 fake Runtime child (tests/support/c4_runtime.rs): apps/actinglab/tests/c4_runtime_process.rs and session_closeout.rs; the replay and terminal rules are the host's own host.toml gates."
+covered_by = "The Runtime's own rules, on the host: actingcommand-runtime-host::lib::tests::task_replay::contained_task_replay_without_connection_cache_reuses_runtime_terminal (a replayed run answers its first terminal, one input, one admission, one terminal), contained_task_terminal_is_absorbing_across_request_ids_and_rejections_are_audited (a second, conflicting terminal is denied and recorded as rejected) and inactive_incomplete_contained_task_replay_recovers_terminal_after_lease_expiry (a run whose client is gone is closed once, recovered after its lease expired); the client's side is the Lab's command line on the same c4 fake Runtime child (tests/support/c4_runtime.rs), apps/actinglab/tests/c4_runtime_process.rs."
 
 [[retired]]
 fragment = "apps"
@@ -1234,7 +1234,7 @@ fragment = "apps"
 test = "actingcommand-actingctl::gate::mcp_shell::gate_malformed_messages_unknown_methods_and_malformed_calls_get_their_json_rpc_codes"
 ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
 reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: Era classification and JSON-RPC errors)."
-covered_by = "actingcommand-actinglab-mcp::server_stdio::mcp_loop_initialize_list_batch_and_cancel and mcp_calls_refused_unsupported_and_an_unknown_tool (the #434 LAB-5G2a row)."
+covered_by = "actingcommand-actinglab-mcp::server_stdio::mcp_loop_initialize_list_batch_and_cancel, which since LAB-7 also asserts the Lab's MCP server answers a line that is no JSON -32700 (mcp_message_malformed) and an unknown method -32601 (mcp_method_unknown), and mcp_calls_refused_unsupported_and_an_unknown_tool for a malformed call (-32602) (the #434 LAB-5G2a row)."
 
 [[retired]]
 fragment = "apps"
@@ -1598,7 +1598,7 @@ fragment = "apps"
 test = "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_387_d1b::rk1_an_unknown_key_refuses_ac_config_set_whole_with_a_declared_receipt_top"
 ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
 reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: actingctl, MCP and the watchdog speak outcomes: one result line per exit with its exit code by category, MCP errors {class, outcome}, watchd)."
-covered_by = "actingcommand-lab-ops::lib::cli_line::tests::a_result_line_is_the_result_members_and_one_outcome_envelope, left in the same apps.toml row."
+covered_by = "Two halves: actingcommand-runtime-host::lib::tests::gate_387_d1b::d1_m5_a_key_read_only_at_start_and_an_unknown_key_are_refused (the Runtime denies a change of an unknown key whole, its receipt's top config_key_unknown, and changes nothing) and actingcommand-actinglab-mcp::serve_calls::mcp_stdio_one_row_per_kind (a write the Runtime refuses is the Lab's MCP tool's answer as the command line's line, the receipt's top its outcome)."
 
 [[retired]]
 fragment = "apps"
@@ -1709,29 +1709,22 @@ covered_by = "actingcommand-lab-ops::lib::cli_line::tests::the_exit_code_follows
 fragment = "apps"
 test = "actingcommand-actingctl::bin:actingctl::gate_382_a1::gate_the_wait_completes_when_the_target_epoch_closed_and_its_process_exited"
 ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
-reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: request-shutdown --wait waits for the exact owner epoch's close and its process's exit; another epoch's close never counts, and past its tim)."
-covered_by = "The Lab's shutdown row runs the same lab-ops shutdown_wait (moved from actingctl by Workflow #434 LAB-1b); no unit test pins the epoch rules any more, and the exact-SHA build's boot smoke and watchdog smoke run actinglab shutdown --wait."
+reason = "A test of apps/actingctl, which is deleted: the wait it held is lab-ops' shutdown_wait since Workflow #434 LAB-1b, and the test moved there (row: request-shutdown --wait waits for the exact owner epoch's close and its process's exit; another epoch's close never counts, and past its tim)."
+covered_by = "actingcommand-lab-ops::lib::shutdown_wait::g11_tests::gate_the_wait_completes_when_the_target_epoch_closed_and_its_process_exited, the same journal, poller and assertions on the wait the Lab's shutdown --wait runs; the same apps.toml row (key 18) holds it."
 
 [[retired]]
 fragment = "apps"
 test = "actingcommand-actingctl::bin:actingctl::gate_382_a1::gate_another_epochs_close_does_not_end_the_wait_which_times_out_with_the_last_state"
 ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
-reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: request-shutdown --wait waits for the exact owner epoch's close and its process's exit; another epoch's close never counts, and past its tim)."
-covered_by = "The Lab's shutdown row runs the same lab-ops shutdown_wait (moved from actingctl by Workflow #434 LAB-1b); no unit test pins the epoch rules any more, and the exact-SHA build's boot smoke and watchdog smoke run actinglab shutdown --wait."
+reason = "A test of apps/actingctl, which is deleted: the wait it held is lab-ops' shutdown_wait since Workflow #434 LAB-1b, and the test moved there (row: request-shutdown --wait waits for the exact owner epoch's close and its process's exit; another epoch's close never counts, and past its tim)."
+covered_by = "actingcommand-lab-ops::lib::shutdown_wait::g11_tests::gate_another_epochs_close_does_not_end_the_wait_which_times_out_with_the_last_state, the same journal, poller and assertions on the wait the Lab's shutdown --wait runs; the same apps.toml row (key 18) holds it."
 
 [[retired]]
 fragment = "apps"
 test = "actingcommand-actingctl::bin:actingctl::gate_382_a1::gate_a_closed_epoch_whose_process_outlives_the_wait_times_out_with_the_last_state"
 ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
-reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: request-shutdown --wait waits for the exact owner epoch's close and its process's exit; another epoch's close never counts, and past its tim)."
-covered_by = "The Lab's shutdown row runs the same lab-ops shutdown_wait (moved from actingctl by Workflow #434 LAB-1b); no unit test pins the epoch rules any more, and the exact-SHA build's boot smoke and watchdog smoke run actinglab shutdown --wait."
-
-[[retired]]
-fragment = "apps"
-key = "18"
-ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
-reason = "Every test of the row was a test of apps/actingctl or the first MCP entry, which are deleted (row: request-shutdown --wait waits for the exact owner epoch's close and its process's exit; another epoch's close never counts, and past its tim)."
-covered_by = "The Lab's shutdown row runs the same lab-ops shutdown_wait (moved from actingctl by Workflow #434 LAB-1b); no unit test pins the epoch rules any more, and the exact-SHA build's boot smoke and watchdog smoke run actinglab shutdown --wait."
+reason = "A test of apps/actingctl, which is deleted: the wait it held is lab-ops' shutdown_wait since Workflow #434 LAB-1b, and the test moved there (row: request-shutdown --wait waits for the exact owner epoch's close and its process's exit; another epoch's close never counts, and past its tim)."
+covered_by = "actingcommand-lab-ops::lib::shutdown_wait::g11_tests::gate_a_closed_epoch_whose_process_outlives_the_wait_times_out_with_the_last_state, the same journal, poller and assertions on the wait the Lab's shutdown --wait runs; the same apps.toml row (key 18) holds it."
 
 [[retired]]
 fragment = "apps"
@@ -1870,15 +1863,8 @@ covered_by = "actingcommand-actinglab-mcp::serve_calls::mcp_lab_overflow_rule an
 fragment = "apps"
 test = "actingcommand-actingctl::bin:actingctl::mcp::tests::clock_slots::ac_diagnose_keeps_refused_and_superseded_rows_first_then_deferred_and_expired_then_owed"
 ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
-reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: Workflow #372 K4 (K372 addendum of 2026-10-15, K4.4 and row K4-T7, the ac_diagnose half; register §1.79): ac_diagnose keeps at most 10 of th)."
-covered_by = "The Lab's diagnose row is lab-ops diagnose for the command line and MCP alike; the #372 K4 host.toml rows keep the clock slots."
-
-[[retired]]
-fragment = "apps"
-key = "68"
-ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
-reason = "Every test of the row was a test of apps/actingctl or the first MCP entry, which are deleted (row: Workflow #372 K4 (K372 addendum of 2026-10-15, K4.4 and row K4-T7, the ac_diagnose half; register §1.79): ac_diagnose keeps at most 10 of th)."
-covered_by = "The Lab's diagnose row is lab-ops diagnose for the command line and MCP alike; the #372 K4 host.toml rows keep the clock slots."
+reason = "A test of apps/actingctl, which is deleted: its clock-slot order moved with the function it read (row: Workflow #372 K4 (K372 addendum of 2026-10-15, K4.4 and row K4-T7, the ac_diagnose half; register §1.79): ac_diagnose keeps at most 10 of th)."
+covered_by = "actingcommand-lab-ops::lib::diagnose::k4_tests::k4_t7_clock_slot_rows_keep_refused_and_superseded_first_then_deferred_and_expired_then_owed, the same rows and order on lab_ops::diagnose::clock_slot_rows, which the Lab's diagnose row answers on both front ends; the same apps.toml row (key 68) holds it."
 
 [[retired]]
 fragment = "apps"
@@ -2452,7 +2438,7 @@ fragment = "apps"
 test = "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_427b::gate_427b_ac_diagnose_lists_a_row_the_shared_run_limits_blocked_with_its_numbers"
 ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
 reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: Workflow #427-B follow-up (brief rd-1028/brief-427b-followup.md; review rd-1028/review-427b.md L1): ac_diagnose's not_run lists, beside the)."
-covered_by = "The Lab's diagnose row is lab-ops diagnose for both front ends; actingcommand-actingd::bin:actingcommand-actingd::config::gate_427b::gate_427b_the_assembly_hands_the_limits_and_the_max_key_over_in_every_pacing_mode keeps the limits."
+covered_by = "actingcommand-lab-ops::lib::schedule::k427b_tests::gate_427b_diagnose_lists_a_row_the_shared_run_limits_blocked_with_its_numbers, the same explanation and assertions on lab_ops::schedule's not_run rows, which the Lab's diagnose row lists on both front ends; the same apps.toml row holds it."
 
 [[retired]]
 fragment = "apps"

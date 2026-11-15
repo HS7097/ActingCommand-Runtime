@@ -46,7 +46,7 @@ pub const COMMAND: &str = "remedy";
 pub const SET: &str = "set";
 pub const GET: &str = "get";
 pub const LIFT: &str = "lift";
-const USAGE: &str = "usage: actingctl remedy set (--instance <alias|instance_id|ADB port> | --game <id>) --rows <file> --state-root <path>\nusage: actingctl remedy get|lift --instance <alias|instance_id|ADB port> --state-root <path>";
+const USAGE: &str = "usage: actinglab remedy set (--instance <instance> | --game <id>) (<rows file> | --rows <json>)\nusage: actinglab remedy [<instance>]\nusage: actinglab remedy lift <instance>";
 /// `source_detector` of the records the CLI writes.
 const CLI_DETECTOR: &str = "actingctl.remedy";
 /// `source_detector` of the records MCP writes (actingctl's `mcp` feature reads it).

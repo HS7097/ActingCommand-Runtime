@@ -974,10 +974,17 @@ actinglab new <new_root> --build <kept build dir or verified release dir> [--new
     `record_state` (`state.json` v1: the live build
     installed by this operation, the kept build with `origin` `release` or `local_build` and its
     tag, `packs: []`, the configuration's `config_sha256`). After the first write a failed step
-    ends `install_operation_interrupted`, the journal and `current.json` kept, `next` naming
-    `actingctl install resume|undo --root <new_root> --operation <id>` (until LAB-7; any build of
-    this release or later runs them, and once the configuration is in place the new root's own
-    module answers `op resume` and `undo`). `resume` continues each step by its postcondition;
+    ends `install_operation_interrupted`, the journal and `current.json` kept. Since LAB-7
+    (0.12.62): once the configuration is in place, `next` names `resume` and `undo`, the new root's
+    own `<new_root>\tools\actinglab.exe op resume <id>` and `… undo <id>`; before it no row of the
+    Lab finds the root (every row but `new` locates it from its configuration) and a second `new`
+    into the folder is refused `root_not_empty`, so the answer names no command and carries
+    `move_aside` in place of `next`: `folder` (the new root) and `note`, which says that the state
+    root is created only after the configuration is written, that everything written so far is
+    inside that folder, and to move it aside and run `new` again (the coordinator's decision: no
+    Lab row is built for it, since nothing of an installation exists yet). A `root_not_empty`
+    refusal of a root that holds such an unfinished operation answers the same way. `resume`
+    continues each step by its postcondition;
     `undo` (the unfinished operation, or the last finished one, under the writer lock and the
     stopped rule: `owner_lock_held`, `runtime_running`, `processes_unreadable`) sets each written
     item aside from the last, `state.json.rolledback-<ms2>`, the vision root's folder as
@@ -1003,7 +1010,8 @@ actinglab new <new_root> --build <kept build dir or verified release dir> [--new
     is checked as it is, its salt kept), runs the new live build's check-config with
     `--install-root <new_root>` and renames it `actingd.config.json`; a refusal ends the operation
     refused, `config_refused_by_target` (`path` the part, check-config's outcome as the cause),
-    the part kept, `next` naming its undo; a check-config that does not answer is
+    the part kept, and (since LAB-7, the configuration not being written) `move_aside` in place
+    of `next`, as above; a check-config that does not answer is
     `install_operation_interrupted` with `check_config_unanswered`.
   - **Not this command's** (Workflow #453 S11, [state-root-installation.md](state-root-installation.md)):
     `new` mints no installation identity (`install\identity.json`) and writes no state-root record
@@ -1528,8 +1536,9 @@ the rescue face:
   (`runtime\actingctl.exe` and `tools\actingcommand-mcp-entry.exe` of the build before stay on
   disk until a person removes them; no deploy deletes them). An interrupted `new` whose
   configuration is not written yet is the one case no row of the module reaches (every row but
-  `new` locates its root from its configuration): its ways out still name `actingctl install
-  resume|undo --root <root>`, which only an `actingctl.exe` of a build before LAB-7 runs.
+  `new` locates its root from its configuration, and a second `new` into the folder is refused
+  `root_not_empty`): its answer names no command, only `move_aside` (the new root's folder and
+  why), since nothing of an installation exists yet (see "Fresh root").
 
 ## Interface checks
 
@@ -1907,8 +1916,10 @@ Every client (Claude Code, Codex, Antigravity, DSH) starts one stable entry inst
   `_meta`, then `tools/list`; a different protocol version, an error or no answer within
   `install.mcp_entry.verify_timeout_ms` refuses it, and the current child keeps serving; the
   same install is tried once more after `settle_ms`, then not again until it changes. A
-  request in flight when its child ends is answered `mcp_entry_outcome_unknown` (inspect with
-  `ac_get_run` or `ac_overview`) and never sent again; the next request goes to a fresh child.
+  request in flight when its child ends is answered `mcp_entry_outcome_unknown` (since Workflow
+  #434 LAB-7, 0.12.62, the first entry is deleted and that code retired; the second generation's
+  is `mcp_entry_g2_outcome_unknown`; inspect with `ac_get_run` or `ac_overview`) and never sent
+  again; the next request goes to a fresh child.
   When the first plan after a fresh child names a build other than its predecessor's, the client
   gets the change notice below.
 - **The notice.** Legacy clients get `notifications/tools/list_changed` (the entry answers their

@@ -383,12 +383,13 @@ installation for its duration, as before, through the selection it reads.
 
 ## Task
 
-`install` registers a per-user task through `schtasks.exe` (actingctl has no COM
-access: unsafe code is forbidden there).
+`install` registers a per-user task through `schtasks.exe` (the watchdog's crate has no
+COM access: unsafe code is forbidden there).
 
 - **Preconditions**, each refused with exit 1: an A/B installation or a
-  single-location root (`watchdog_layout_unknown`); `<root>\runtime\actingctl.exe` and
-  `<root>\tools\actingwatch.exe` exist
+  single-location root (`watchdog_layout_unknown`); the Runtime's daemon
+  `<root>\runtime\actingcommand-actingd.exe` (since Workflow #434 LAB-7, 0.12.62; before it
+  `<root>\runtime\actingctl.exe`, which LAB-7 deleted) and `<root>\tools\actingwatch.exe` exist
   (`watchdog_launcher_missing`: deploy the Runtime and Tools that carry the watchdog
   first); the config's state root resolves; acsetup's writer lock is free
   at that moment (`watchdog_install_refused` caused by `watchdog_installer_busy`).

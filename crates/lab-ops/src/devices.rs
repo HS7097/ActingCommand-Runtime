@@ -45,7 +45,7 @@ pub const COMMAND: &str = "devices";
 pub const LIST: &str = "list";
 pub const BIND: &str = "bind";
 pub const UNBIND: &str = "unbind";
-const USAGE: &str = "usage: actingctl devices list --state-root <dir> [--root <install root>]\n       actingctl devices bind <alias> <handle> --state-root <dir> [--root <install root>]\n       actingctl devices unbind <alias> --state-root <dir>";
+const USAGE: &str = "usage: actinglab devices\n       actinglab devices bind <instance> <handle>\n       actinglab devices unbind <instance>";
 
 /// One run of `adb devices -l`: what it printed, or why it printed nothing.
 pub enum AdbRun {
