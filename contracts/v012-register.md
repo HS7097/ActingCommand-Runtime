@@ -26646,14 +26646,16 @@ self-check item 9. Nothing of the kernel changes.
 - The pinned frame is the device's capture (the capture store's persisted frame; recognition maps a
   copy, [display-adapter.md](display-adapter.md) section 8), so on an instance of another resolution
   than the recording's it has another size, and the mark refuses it `record_frame_size_mismatch`;
-  the contract says to scale it first or take it at the recording's size.
+  the contract said to scale it first or take it at the recording's size (fix round 1, below: the
+  Lab converts a pure scale itself).
 - K2's admission rules (`ending_page`, `terminal_page`, `terminal_page_duplicate`,
   `store_update_endings`) cannot refuse a generated ending: its page has a name of its own
   (`ending_kk`), is in one mapping, off the path, no transition, loading or wait page, and the
   generated control declares no `store_update`. `linear_endings` binds a later use of the package as
   a prerequisite or return-home package; `binding_requires` says so. The keys the declaration or the
   host would refuse later (the `_done` key, a select's `on_empty` key, another ending's) are refused
-  at the mark with their words, and again at stop (a select may be declared after the ending).
+  at the mark with their words, and again at stop (a select may be declared after the ending; fix
+  round 1: such a select is refused at its own mark).
 - R1 (§1.381) made a select markable after stop on every step but the last (`on_final_step`); an
   ending is no step and stands after the last press, so the two do not meet. Item 9 runs before
   item 8, so that an ending page passing on a select step's frames before the last press is the
@@ -26695,7 +26697,7 @@ when it has one), `usual`, `other_ending`; the usual page on the ending's frames
 existing rule ([policy-suspension.md](policy-suspension.md)); nothing is built for it, and a test
 shows the content hash differs.
 
-Tests: Lab `gate_463_r2.rs` (exec gate row "#463 R2", nine tests), actinglab's
+Tests: Lab `gate_463_r2.rs` (exec gate row "#463 R2", nine tests; fifteen since fix round 1), actinglab's
 `r2_the_ending_flags_declare_the_request_forms_ending` and actingctl's
 `r2_ac_record_mark_hands_an_ending_request_to_actinglab_unchanged`: an ending taken from a PNG,
 regenerated (another content hash) and admitted; a run of that package through the kernel's
@@ -26705,6 +26707,52 @@ the warning; `remove_ending` giving back the package generated before but for it
 a recording without an ending; `clear_select` without a select; the flag form equal to the request
 form; the MCP tool handing both requests on unchanged. No existing test's expectation changes, no
 golden changes, no test leaves the gate map.
+
+**Fix round 1** (coordinator work order `rd-1115/brief-1734-fix1.md`, after the slice's review and
+its first CI run; main `0fe2e8e7d2` merged, §1.385 kept after this section). (1) The gate test's
+kernel run took its clock from `Instant::now` in the gate file, which the architecture guard
+`gate_tests_are_deterministic` refuses: its device's clock is now the Lab's scripted clock, a
+support module that is no gate file (`crates/lab/src/scripted_clock.rs`, as the kernel's gate
+tests take its `tests/scripted.rs`), which moves only by the run's pauses; the guard is unchanged.
+(2) The catalog's `handling` of `contained_task_linear_unrecorded_screen` (a text; nothing its
+released snapshot of 0.12.60 fixes) writes the whole way from the failure: `artifact_id` is no
+material ref by itself; `actinglab run evidence <request_id>` and the ref whose last part is that
+`artifact_id`; `actinglab material <ref> --out <dir>`; `record mark --ending --frame <png>
+--outcome-key <key>` on the stopped recording, then `record stop`; the retention of the pinned
+frame; which other answers are a new recording. The row `record mark` of
+[lab-operations.json](lab-operations.json) says the same in its `ending` note. (3) The coordinator's
+ruling: the Lab scales an ending's frame itself, with the Runtime's own conversion. The Lab crate
+may call it (the architecture guards bound which packages depend on the Lab, not what the Lab
+depends on; it gains a dependency on `actingcommand-display-adapter`, a pure crate of the contract
+alone), and it needs
+nothing the mark lacks: a frame read from a file carries no producer geometry and shows itself,
+and the map is built without a display declaration, as the Lab's dry runs map. The kernel's
+frame gate (`Resolution::validate_frame`) is private to the kernel, which this slice does not
+touch, so the mark calls the two functions it composes: `DisplayMap::build` and, for a pure scale
+(neither cropped nor turned), `resample_pixels` (REC-5, area average) to the map's scale frame
+(`crates/lab/src/recording/frames.rs`, `scaled_to_recording`). The converted frame is the ending's
+frame; its entry keeps `scaled_from: {width, height}` (absent on every other frame); any other size
+is refused `record_frame_size_mismatch` as before. (4) A select declared after an ending with the
+ending's key as its `on_empty` key is refused where it is declared: `record_select_invalid` with the
+new word `on_empty_key_of_ending`. (5) An ending whose page rests on OCR marks alone, which item 9
+cannot check without an OCR model, is refused by `record stop`: `record_ending_invalid` with the
+new word `ocr_alone_unchecked`; an ending with a mark of another family keeps the warning
+`ending_ambiguity_not_evaluated`. (6) Six new tests (below). (7) Texts: item 9 runs after the
+cross-check (items 4 to 7) and before item 8, as the code runs it; the warning's message no longer
+says that OCR is never evaluated in the Lab (it is, with a model); `previous`'s consequence is the
+run ending before the result of that press showed (the step's page or its page transition's
+frames); the contract's "Endings" names the retention of a pinned frame. Words: `ending_problem`
+has ten (`ocr_alone_unchecked` new), `select_problem` twenty-one (`on_empty_key_of_ending` new);
+the three `against` values are unchanged (the description of `previous` made exact as above).
+Tests: the existing
+`r2_a_select_steps_on_empty_key_is_no_endings_key` adapted (the select declared after the ending is
+refused at its mark, where it was refused at `record stop`); new
+`r2_an_endings_frame_of_a_pure_scale_is_converted_to_the_recordings_size`,
+`r2_an_ending_that_rests_on_ocr_alone_is_refused_without_a_model`,
+`r2_an_ending_with_a_mark_of_another_family_keeps_the_not_evaluated_warning`,
+`r2_previous_covers_the_step_before_a_run_of_optional_steps_and_its_members`,
+`r2_previous_on_a_step_with_a_page_transition_takes_its_transition_frames`,
+`r2_an_archived_recording_takes_no_ending_and_a_reopened_one_is_active`, in the same gate row.
 
 **At deploy.** Nothing installed changes for a recording without an ending but one: `clear_select`
 on a step without a select is now refused (`no_select`), where it answered as if it had taken a

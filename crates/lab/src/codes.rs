@@ -152,6 +152,8 @@ actingcommand_contract::outcome_vocabulary! {
         /// #463 R2: `clear_select` names a step that has no select, so there is nothing to take
         /// off.
         NoSelect => "no_select",
+        /// #463 R2 fix 1: the `on_empty` key is the outcome key of an ending of the recording.
+        OnEmptyKeyOfEnding => "on_empty_key_of_ending",
     }
 }
 
@@ -178,6 +180,10 @@ actingcommand_contract::outcome_vocabulary! {
         PageExists => "page_exists",
         /// The ending adds and reuses no mark, so its page would recognize nothing.
         NoMarks => "no_marks",
+        /// Fix 1: `record stop`'s self-check item 9 could not check the ending: its page rests on
+        /// OCR marks alone and the Lab had no OCR model, so whether it passes on a screen the run
+        /// may show instead is unknown.
+        OcrAloneUnchecked => "ocr_alone_unchecked",
     }
 }
 
@@ -185,8 +191,8 @@ actingcommand_contract::outcome_vocabulary! {
 actingcommand_contract::outcome_vocabulary! {
     /// The screen an ending's page must not pass on (`against`).
     pub enum EndingAgainst: "ending_against" {
-        /// The frames of a step after whose press the run awaits the endings: the press may not
-        /// have taken effect yet.
+        /// The frames of a step after whose press the run awaits the endings (its page, or its page
+        /// transition's frames when it has one): the result of that press has not shown yet.
         Previous => "previous",
         /// The frames of the last step, the usual ending: the ending would always win there.
         Usual => "usual",

@@ -5,9 +5,11 @@
 
 use super::model::{RecordRect, RecordSize, RecordedFrame};
 use super::store::{blocked, hex_sha256, invalid, read_verified, with_details};
-use actingcommand_contract::LabResult;
+use actingcommand_contract::{CaptureExtent, DisplayMapKind, LabResult};
 use actingcommand_device::{CaptureBackendName, Frame, PixelFormat};
+use actingcommand_display_adapter::{DisplayMap, DisplayObservation};
 use actingcommand_recognition::Scene;
+use actingcommand_recognition::resample::resample_pixels;
 use serde_json::json;
 use std::path::{Path, PathBuf};
 
@@ -116,6 +118,77 @@ pub(crate) fn check_frame_size(
         )),
         _ => Ok(()),
     }
+}
+
+/// #463 R2 fix 1 (`contracts/lab-recording.md`, "Endings"; the coordinator's ruling: the Lab
+/// scales an ending's frame itself, with the Runtime's own conversion): a frame of another size
+/// than the recording (`expected`) that the display adapter maps onto the recording's size as a
+/// pure scale, neither cropped nor turned, is converted as the Runtime converts every frame before
+/// it recognises anything (`contracts/display-adapter.md` section 8): the adapter's map
+/// (`DisplayMap::build`, with no display declaration, as the Lab's dry runs map) and one resample to
+/// the map's scale frame with the REC-5 primitive (`resample_pixels`, area average), the two calls
+/// the kernel's frame gate makes. Returns the frame to admit and, when it was converted, the size
+/// it was given at. A frame of the recording's size, a recording without one and a frame of any
+/// other map are returned as they are, so that [`check_frame_size`] refuses the last as before.
+pub(crate) fn scaled_to_recording(
+    expected: Option<RecordSize>,
+    loaded: LoadedFrame,
+    label: &str,
+) -> LabResult<(LoadedFrame, Option<RecordSize>)> {
+    let given = loaded.size();
+    let Some(expected) = expected.filter(|size| *size != given) else {
+        return Ok((loaded, None));
+    };
+    let (Some(base), Some(delivered)) = (
+        CaptureExtent::new(expected.width, expected.height),
+        CaptureExtent::new(given.width, given.height),
+    ) else {
+        return Ok((loaded, None));
+    };
+    let observation = DisplayObservation::of_frame(delivered, &loaded.frame.geometry);
+    // A map the adapter refuses (another ratio, a frame smaller than the recording) is no pure
+    // scale: the frame stays as given and its size is refused.
+    let map = match DisplayMap::build(base, observation, None) {
+        Ok(map)
+            if map.kind() == DisplayMapKind::Scale
+                && map.turn().is_none()
+                && map.crop().is_none() =>
+        {
+            map
+        }
+        _ => return Ok((loaded, None)),
+    };
+    let target = map.scale_frame_extent();
+    let channels = match loaded.frame.pixel_format {
+        PixelFormat::Rgb8 => 3,
+        PixelFormat::Rgba8 => 4,
+    };
+    let scaled = |error: String| {
+        invalid(
+            "record_frame_unreadable",
+            format!(
+                "failed to scale {label} from {}x{} to the recording's {}x{}: {error}",
+                given.width, given.height, expected.width, expected.height
+            ),
+        )
+    };
+    let pixels = resample_pixels(
+        &loaded.frame.pixels,
+        (given.width, given.height),
+        channels,
+        (target.width(), target.height()),
+    )
+    .map_err(|error| scaled(error.to_string()))?;
+    let png = Frame::from_pixels(
+        target.width(),
+        target.height(),
+        pixels,
+        loaded.frame.pixel_format,
+        CaptureBackendName::AdbScreencap,
+    )
+    .and_then(|frame| frame.encode_png_fast())
+    .map_err(|error| scaled(error.to_string()))?;
+    Ok((decode_frame(png, label)?, Some(given)))
 }
 
 /// `region` lies inside the frame and has a positive size.

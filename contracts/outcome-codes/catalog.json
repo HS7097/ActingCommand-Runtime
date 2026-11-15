@@ -5086,6 +5086,9 @@
         },
         "no_select": {
           "description": "clear_select names a step that has no select, so there is nothing to take off (#463 R2)."
+        },
+        "on_empty_key_of_ending": {
+          "description": "The on_empty key is the outcome key of an ending of the recording (#463 R2 fix 1)."
         }
       }
     },
@@ -5122,6 +5125,9 @@
         },
         "no_marks": {
           "description": "The ending adds and reuses no mark, so its page would recognize nothing."
+        },
+        "ocr_alone_unchecked": {
+          "description": "record stop's self-check item 9 could not check the ending: its page rests on OCR marks alone and the Lab had no OCR model, so whether it passes on a screen the run may show instead is unknown (fix 1)."
         }
       }
     },
@@ -5133,7 +5139,7 @@
       },
       "tokens": {
         "previous": {
-          "description": "The frames of a step after whose press the run awaits the endings: the press may not have taken effect yet."
+          "description": "The frames of a step after whose press the run awaits the endings (its page, or its page transition's frames when it has one): the result of that press has not shown yet."
         },
         "usual": {
           "description": "The frames of the last step, the usual ending: the ending would always win there."

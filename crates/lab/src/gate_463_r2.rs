@@ -13,17 +13,20 @@
 // `state/list` (2, 50, 4, 4) recognizes it and guards its click (8, 8, 32, 32). The next screen
 // (step 2, the usual ending) carries a noise patch at (40, 46, 12, 12), its template `ui/next`. An
 // ending's screen carries a square of gray 180 at (60, 50, 4, 4), its color mark `ending/short`,
-// which no step's screen has. There is no OCR model and no device. The tests sleep nowhere; the
-// kernel run's clock is the fake device's own, which reads the wall clock once, as its anchor only.
-// Every expected value comes from the brief's and the design's lines and the values above.
+// which no step's screen has. There is no OCR model and no device. The tests sleep nowhere and
+// read no clock; the kernel run's clock is the scripted clock of `scripted_clock.rs`, which moves
+// only by the run's pauses. Every expected value comes from the brief's and the design's lines and
+// the values above.
 
 use crate::codes::{EndingAgainst, EndingProblem, LabCode, SelectProblem};
 use crate::recording::crosscheck::admit;
 use crate::recording::store::{hex_sha256, old_record_path, recording_path};
+use crate::scripted_clock::ScriptedClock;
 use crate::{
     ClickEffect, CommitClickRequest, LAB_RECORD_MARK_SCHEMA, LabOcr, MarkOutcome, MarkRequest,
-    PlanClickRequest, RecordRect, RecordStartOptions, RecordStopOptions, RecordingLock,
-    record_commit_click, record_mark, record_plan_click, record_start, record_stop,
+    PlanClickRequest, RecordArchiveOptions, RecordRect, RecordReopenOptions, RecordStartOptions,
+    RecordStopOptions, RecordingLock, record_archive, record_commit_click, record_mark,
+    record_plan_click, record_reopen, record_start, record_stop,
 };
 use actingcommand_contract::{InputAction, LabError, TaskOutcome};
 use actingcommand_device::{CaptureBackendName, Frame, PixelFormat};
@@ -53,6 +56,12 @@ const SHORT_MARK: &str = "ending/short";
 const SHORT_GRAY: u8 = 180;
 const SPARE_KEY: &str = "neutral_task_spare";
 const SPARE_GRAY: u8 = 200;
+// Fix 1: the gray of an optional pop-up's square and of a page transition's square; the made-up
+// OCR model of an OCR mark, which no test loads; the commit an archive's manifest names.
+const POPUP_GRAY: u8 = 120;
+const LOADING_GRAY: u8 = 140;
+const MODEL_SHA256: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const WRITTEN_BY: &str = "0123456789abcdef0123456789abcdef01234567";
 
 const fn rect(x: i32, y: i32, width: i32, height: i32) -> RecordRect {
     RecordRect {
@@ -70,6 +79,12 @@ const CLICK: RecordRect = rect(8, 8, 32, 32);
 const PATCH: RecordRect = rect(40, 46, 12, 12);
 const SHORT_AREA: RecordRect = rect(60, 50, 4, 4);
 const SPARE_AREA: RecordRect = rect(70, 50, 4, 4);
+// Fix 1: an optional pop-up's square and its close click, a page transition's square, and the
+// region of an ending's OCR mark.
+const POPUP_AREA: RecordRect = rect(20, 50, 4, 4);
+const POPUP_CLICK: RecordRect = rect(16, 20, 24, 16);
+const LOADING_AREA: RecordRect = rect(30, 50, 4, 4);
+const TEXT_AREA: RecordRect = rect(56, 40, 32, 16);
 
 // A deterministic generator of neutral gray noise.
 struct Noise(u64);
@@ -142,6 +157,38 @@ fn color(id: &str, area: RecordRect) -> Value {
 
 fn template(id: &str, area: RecordRect) -> Value {
     json!({"id": id, "family": "template", "region": area, "search": area})
+}
+
+// Fix 1: an OCR mark of a made-up model; without an OCR model it is never evaluated.
+fn ocr(id: &str, area: RecordRect) -> Value {
+    json!({"id": id, "family": "ocr", "region": area, "languages": ["en"], "timeout_ms": 1000,
+           "match_mode": "exact", "expected": ["SHORT"], "case_sensitive": false,
+           "minimum_confidence": 0.8, "model_ref": "neutral-ocr", "model_sha256": MODEL_SHA256})
+}
+
+// Fix 1: the PNG of the screen `bytes` shows at twice its size, each pixel four times, as an
+// instance of twice the recording's resolution captures it.
+fn doubled(bytes: &[u8]) -> Vec<u8> {
+    let frame = Frame::from_png(bytes.to_vec(), CaptureBackendName::FixtureSimulation)
+        .expect("fixture PNG");
+    let (width, height) = (frame.width as usize, frame.height as usize);
+    let mut pixels = Vec::with_capacity(width * height * 16);
+    for row in 0..2 * height {
+        for column in 0..2 * width {
+            let at = ((row / 2) * width + column / 2) * 4;
+            pixels.extend_from_slice(&frame.pixels[at..at + 4]);
+        }
+    }
+    Frame::from_pixels(
+        2 * frame.width,
+        2 * frame.height,
+        pixels,
+        PixelFormat::Rgba8,
+        CaptureBackendName::FixtureSimulation,
+    )
+    .expect("doubled frame")
+    .encode_png_fast()
+    .expect("doubled PNG")
 }
 
 fn request(mut value: Value) -> MarkRequest {
@@ -262,17 +309,28 @@ impl Recording {
     // that the stopped recording takes `record mark` ("Marking after stop").
     fn stopped_path(&self, pressed: bool) -> Value {
         self.record_path(pressed);
+        self.stopped_as_recorded()
+    }
+
+    // Fix 1: `record stop` of the path recorded so far, generated, and the session file stopped as
+    // the command leaves it.
+    fn stopped_as_recorded(&self) -> Value {
         let lab = self
             .stop()
             .unwrap_or_else(|error| panic!("record stop: {} {:?}", error.code, error.details));
         assert_eq!(lab["lab_status"], "generated", "{lab}");
+        self.session_status("stopped");
+        lab
+    }
+
+    // The session file's status as the `record` command writes it (stop, archive, reopen).
+    fn session_status(&self, status: &str) {
         let path = old_record_path(&self.temp.path().join("state"), INSTANCE);
         let mut session: Value =
             serde_json::from_slice(&fs::read(&path).expect("session file")).expect("session");
-        session["status"] = json!("stopped");
+        session["status"] = json!(status);
         fs::write(&path, serde_json::to_vec(&session).expect("session JSON"))
             .expect("session file");
-        lab
     }
 
     // The request of an ending from the frame file `name` holding `bytes`.
@@ -368,14 +426,14 @@ fn ambiguity(error: LabError) -> Value {
 
 // A device for the kernel's interpreter (`PreparedContainedTask::run`): each capture shows the
 // next of `screens`, the last one again once they are spent; each input is kept and performs
-// nothing. Its clock is its own: an anchor read once, an hour ahead (as the kernel's scripted
-// runtime starts), advanced by every pause, so that the run never sleeps.
+// nothing. Its clock is the scripted clock of the Lab's support module (as the kernel's gate tests
+// take the kernel's scripted runtime's): it moves only by the run's pauses, so that the run never
+// sleeps, and this file reads no clock.
 struct Device {
     screens: Vec<Vec<u8>>,
     shown: usize,
     inputs: Vec<InputAction>,
-    anchor: Instant,
-    elapsed: Duration,
+    clock: ScriptedClock,
 }
 
 impl Device {
@@ -384,8 +442,7 @@ impl Device {
             screens,
             shown: 0,
             inputs: Vec::new(),
-            anchor: Instant::now() + Duration::from_secs(3_600),
-            elapsed: Duration::ZERO,
+            clock: ScriptedClock::started(),
         }
     }
 }
@@ -416,11 +473,11 @@ impl ContainedTaskRuntime for Device {
     }
 
     fn monotonic_now(&mut self) -> Instant {
-        self.anchor + self.elapsed
+        self.clock.now()
     }
 
     fn pause(&mut self, duration: Duration) {
-        self.elapsed += duration;
+        self.clock.pause(duration);
     }
 }
 
@@ -699,9 +756,11 @@ fn r2_each_ending_problem_is_refused_with_its_word() {
 
 // Item 5 of the brief, `key_of_select`: on a stopped recording whose step 1 (its press recorded)
 // chooses in a list, an ending with the select's `on_empty` key (`<task_id>_not_found` by default)
-// is refused at the mark; an ending whose key a select declared afterwards takes as its `on_empty`
-// key is refused at record stop, which writes nothing. Without an OCR model the select's self-test
-// is not evaluated, which a select over a recorded press admits.
+// is refused at the mark. Fix 1, item 4 (adapted: the requirement moved the refusal of a select
+// declared after the ending from record stop to the select's own mark): a select declared
+// afterwards with an ending's key as its `on_empty` key is refused where it is declared,
+// `record_select_invalid` with `on_empty_key_of_ending`, and nothing is written. Without an OCR
+// model the select's self-test is not evaluated, which a select over a recorded press admits.
 #[test]
 fn r2_a_select_steps_on_empty_key_is_no_endings_key() {
     let recording = Recording::new();
@@ -748,14 +807,26 @@ fn r2_a_select_steps_on_empty_key_is_no_endings_key() {
             json!([color(SHORT_MARK, SHORT_AREA)]),
         ))
         .unwrap_or_else(|error| panic!("record mark: {} {:?}", error.code, error.details));
-    recording
-        .mark(select(Some(SPARE_KEY)))
-        .unwrap_or_else(|error| panic!("record mark: {} {:?}", error.code, error.details));
     let marked = recording.recording_bytes();
     let error = recording
-        .stop()
-        .expect_err("the ending's key is the select's on_empty key");
-    assert_eq!(ending_problem(error), EndingProblem::KeyOfSelect.as_str());
+        .mark(select(Some(SPARE_KEY)))
+        .expect_err("the select's on_empty key is the ending's key");
+    assert_eq!(
+        error.code,
+        LabCode::RecordSelectInvalid.as_str(),
+        "{}",
+        error.message
+    );
+    let details = error.details.expect("details");
+    assert_eq!(
+        details["select_problem"],
+        SelectProblem::OnEmptyKeyOfEnding.as_str(),
+        "{details}"
+    );
+    assert_eq!(
+        details["outcome"]["values"]["select_problem"], details["select_problem"],
+        "{details}"
+    );
     assert_eq!(recording.recording_bytes(), marked, "nothing written");
 }
 
@@ -968,6 +1039,325 @@ fn r2_clear_select_on_a_step_without_a_select_is_refused() {
     assert_eq!(
         details["outcome"]["values"]["select_problem"], details["select_problem"],
         "{details}"
+    );
+    assert_eq!(recording.recording_bytes(), before, "nothing written");
+}
+
+// Fix 1, item 3 (the coordinator's ruling: the Lab scales an ending's frame itself, with the
+// Runtime's own conversion): a frame of another ratio than the recording is refused
+// `record_frame_size_mismatch` as before, nothing written; a frame twice the recording's size, a
+// pure scale, is converted to the recording's 96x64 as the Runtime converts every frame (each
+// output pixel the area average of the four it covers, so the screen as recorded here), kept as
+// the ending's frame with `scaled_from` 192x128, its mark self-tested on the converted frame, and
+// record stop regenerates the package.
+#[test]
+fn r2_an_endings_frame_of_a_pure_scale_is_converted_to_the_recordings_size() {
+    let recording = Recording::new();
+    recording.stopped();
+    let before = recording.recording_bytes();
+    let other_ratio = Frame::from_pixels(
+        100,
+        64,
+        vec![BACKGROUND; 100 * 64 * 3],
+        PixelFormat::Rgb8,
+        CaptureBackendName::FixtureSimulation,
+    )
+    .expect("fixture frame")
+    .encode_png_fast()
+    .expect("fixture PNG");
+    let error = recording
+        .mark(recording.ending(
+            "wide",
+            &other_ratio,
+            SHORT_KEY,
+            None,
+            json!([color(SHORT_MARK, SHORT_AREA)]),
+        ))
+        .expect_err("a frame of another ratio");
+    assert_eq!(
+        error.code, "record_frame_size_mismatch",
+        "{}",
+        error.message
+    );
+    assert_eq!(recording.recording_bytes(), before, "nothing written");
+
+    let marked = recording
+        .mark(recording.ending(
+            "doubled",
+            &doubled(&short()),
+            SHORT_KEY,
+            None,
+            json!([color(SHORT_MARK, SHORT_AREA)]),
+        ))
+        .unwrap_or_else(|error| panic!("record mark: {} {:?}", error.code, error.details));
+
+    let frame = serde_json::to_value(&marked.frame).expect("frame JSON");
+    assert_eq!(frame["width"], WIDTH, "{frame}");
+    assert_eq!(frame["height"], HEIGHT, "{frame}");
+    assert_eq!(
+        frame["scaled_from"],
+        json!({"width": 2 * WIDTH, "height": 2 * HEIGHT}),
+        "{frame}"
+    );
+    let stored = recording.recording();
+    assert_eq!(stored["endings"][0]["frames"][0], frame, "{stored}");
+    assert_eq!(
+        stored["endings"][0]["marks"][0]["self_test"]["status"], "passed",
+        "{stored}"
+    );
+    let kept = Frame::from_png(
+        fs::read(frame["path"].as_str().expect("frame path")).expect("stored frame"),
+        CaptureBackendName::AdbScreencap,
+    )
+    .expect("stored PNG");
+    let recorded = Frame::from_png(short(), CaptureBackendName::AdbScreencap).expect("fixture PNG");
+    assert_eq!((kept.width, kept.height), (WIDTH, HEIGHT));
+    assert_eq!(
+        kept.pixels, recorded.pixels,
+        "the converted frame is the screen as recorded"
+    );
+    let lab = recording
+        .stop()
+        .unwrap_or_else(|error| panic!("record stop: {} {:?}", error.code, error.details));
+    assert_eq!(lab["lab_status"], "regenerated", "{lab}");
+}
+
+// Fix 1, item 5: an ending whose page rests on OCR marks alone, which no OCR model can check, is
+// refused by record stop's item 9 at the first screen it could not be checked on, the step before
+// the last: `record_ending_invalid` with `ocr_alone_unchecked`, naming the screen and its frames;
+// nothing is written.
+#[test]
+fn r2_an_ending_that_rests_on_ocr_alone_is_refused_without_a_model() {
+    let recording = Recording::new();
+    recording.stopped();
+    recording
+        .mark(recording.ending(
+            "short",
+            &short(),
+            SHORT_KEY,
+            None,
+            json!([ocr("ending/text", TEXT_AREA)]),
+        ))
+        .unwrap_or_else(|error| panic!("record mark: {} {:?}", error.code, error.details));
+    let marked = recording.recording_bytes();
+
+    let error = recording
+        .stop()
+        .expect_err("no OCR model checks the ending");
+
+    let details = error.details.clone().expect("details");
+    assert_eq!(
+        ending_problem(error),
+        EndingProblem::OcrAloneUnchecked.as_str()
+    );
+    assert_eq!(details["outcome_key"], SHORT_KEY, "{details}");
+    assert_eq!(details["page"], "ending_01", "{details}");
+    assert_eq!(
+        details["against"],
+        EndingAgainst::Previous.as_str(),
+        "{details}"
+    );
+    assert_eq!(details["step"], 1, "{details}");
+    assert_eq!(details["frames"], json!(["f0001"]), "{details}");
+    assert_eq!(recording.recording_bytes(), marked, "nothing written");
+}
+
+// Fix 1, items 5 and 6: an ending with an OCR mark beside a mark of another family (a color the
+// screens share) is no refusal without an OCR model: record stop regenerates, with the warning
+// `ending_ambiguity_not_evaluated` for each screen the color passes on and the OCR mark could not
+// decide (the step before the last, f0001; the last step, f0002), the ending's own frame
+// undetermined and the cross-check partially evaluated.
+#[test]
+fn r2_an_ending_with_a_mark_of_another_family_keeps_the_not_evaluated_warning() {
+    let recording = Recording::new();
+    recording.stopped();
+    recording
+        .mark(recording.ending(
+            "short",
+            &short(),
+            SHORT_KEY,
+            None,
+            json!([
+                color("ending/background", LIST_AREA),
+                ocr("ending/text", TEXT_AREA)
+            ]),
+        ))
+        .unwrap_or_else(|error| panic!("record mark: {} {:?}", error.code, error.details));
+
+    let lab = recording
+        .stop()
+        .unwrap_or_else(|error| panic!("record stop: {} {:?}", error.code, error.details));
+
+    assert_eq!(lab["lab_status"], "regenerated", "{lab}");
+    let warnings = lab["warnings"]
+        .as_array()
+        .map(|warnings| {
+            warnings
+                .iter()
+                .filter(|warning| warning["code"] == "ending_ambiguity_not_evaluated")
+                .cloned()
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    assert_eq!(warnings.len(), 2, "{lab}");
+    for (warning, (against, step, frame)) in warnings.iter().zip([
+        (EndingAgainst::Previous, 1, "f0001"),
+        (EndingAgainst::Usual, 2, "f0002"),
+    ]) {
+        assert_eq!(
+            warning["check"],
+            LabCode::RecordEndingAmbiguous.as_str(),
+            "{warning}"
+        );
+        assert_eq!(warning["outcome_key"], SHORT_KEY, "{warning}");
+        assert_eq!(warning["page"], "ending_01", "{warning}");
+        assert_eq!(warning["against"], against.as_str(), "{warning}");
+        assert_eq!(warning["step"], step, "{warning}");
+        assert_eq!(warning["frames"], json!([frame]), "{warning}");
+    }
+    assert_eq!(lab["cross_check"]["status"], "partially_evaluated", "{lab}");
+    assert_eq!(
+        lab["endings"][0]["frames"],
+        json!([{"frame_id": "f0003", "result": "undetermined"}]),
+        "{lab}"
+    );
+    assert_eq!(lab["endings"][0]["usual"], "distinct", "{lab}");
+}
+
+// Fix 1, item 6: `previous` through a run of optional steps. The path is the list (step 1), an
+// optional pop-up with its square and close click (step 2, the step before the last) and the next
+// screen (step 3); the run awaits the endings after step 1's press too, before the pop-up. An
+// ending page that passes on step 1's frame (a color of the background, which the pop-up's frame
+// shows too) is refused naming step 1, the step before the run; one that passes on the pop-up's
+// frame only (the pop-up's square) is refused naming step 2.
+#[test]
+fn r2_previous_covers_the_step_before_a_run_of_optional_steps_and_its_members() {
+    let cases = [
+        (short(), color("ending/background", LIST_AREA), 1, "f0001"),
+        (
+            screen(false, &[(SHORT_AREA, SHORT_GRAY), (POPUP_AREA, POPUP_GRAY)]),
+            color("ending/popup", POPUP_AREA),
+            2,
+            "f0002",
+        ),
+    ];
+    for (bytes, mark, step, frame) in cases {
+        let recording = Recording::new();
+        for request in [
+            json!({"frame": recording.frame("list", &list()),
+                   "add": [color("state/list", LIST_AREA)], "click": {"region": CLICK}}),
+            json!({"frame": recording.frame("popup", &screen(false, &[(POPUP_AREA, POPUP_GRAY)])),
+                   "add": [color("state/popup", POPUP_AREA)], "click": {"region": POPUP_CLICK},
+                   "optional": true}),
+            json!({"frame": recording.frame("next", &next()),
+                   "add": [template("ui/next", PATCH)]}),
+        ] {
+            recording
+                .mark(request)
+                .unwrap_or_else(|error| panic!("record mark: {} {:?}", error.code, error.details));
+        }
+        recording.stopped_as_recorded();
+        recording
+            .mark(recording.ending("short", &bytes, SHORT_KEY, None, json!([mark])))
+            .unwrap_or_else(|error| panic!("record mark: {} {:?}", error.code, error.details));
+        let marked = recording.recording_bytes();
+
+        let details = ambiguity(recording.stop().expect_err("the ending is ambiguous"));
+
+        assert_eq!(
+            details["against"],
+            EndingAgainst::Previous.as_str(),
+            "{details}"
+        );
+        assert_eq!(details["step"], step, "{details}");
+        assert_eq!(details["frames"], json!([frame]), "{details}");
+        assert_eq!(recording.recording_bytes(), marked, "nothing written");
+    }
+}
+
+// Fix 1, item 6: `previous` on a step with a page transition takes the transition's frames, the
+// screen left after its press: an ending page that passes on the transition's frame (its square)
+// and not on the list is refused naming step 1 and the transition's frame f0003.
+#[test]
+fn r2_previous_on_a_step_with_a_page_transition_takes_its_transition_frames() {
+    let recording = Recording::new();
+    recording.stopped();
+    let loading = screen(false, &[(LOADING_AREA, LOADING_GRAY)]);
+    recording
+        .mark(json!({"step": 1, "transition": {"kind": "page",
+                     "frame": recording.frame("loading", &loading),
+                     "add": [color("loading/state", LOADING_AREA)]}}))
+        .unwrap_or_else(|error| panic!("record mark: {} {:?}", error.code, error.details));
+    recording
+        .mark(recording.ending(
+            "short",
+            &screen(
+                false,
+                &[(SHORT_AREA, SHORT_GRAY), (LOADING_AREA, LOADING_GRAY)],
+            ),
+            SHORT_KEY,
+            None,
+            json!([color("ending/loading", LOADING_AREA)]),
+        ))
+        .unwrap_or_else(|error| panic!("record mark: {} {:?}", error.code, error.details));
+    let marked = recording.recording_bytes();
+
+    let details = ambiguity(
+        recording
+            .stop()
+            .expect_err("the ending passes on the transition"),
+    );
+
+    assert_eq!(
+        details["against"],
+        EndingAgainst::Previous.as_str(),
+        "{details}"
+    );
+    assert_eq!(details["step"], 1, "{details}");
+    assert_eq!(details["frames"], json!(["f0003"]), "{details}");
+    assert_eq!(recording.recording_bytes(), marked, "nothing written");
+}
+
+// Fix 1, item 6: an archived recording takes no ending (`record_session_not_active`, as every
+// record mark of a session that is not active); reopened, it is active, and an ending is
+// `recording_active` until record stop. Nothing is written either time.
+#[test]
+fn r2_an_archived_recording_takes_no_ending_and_a_reopened_one_is_active() {
+    let recording = Recording::new();
+    recording.record_path(false);
+    record_archive(
+        &recording.lock,
+        &RecordArchiveOptions {
+            written_by: WRITTEN_BY.to_owned(),
+            ..RecordArchiveOptions::default()
+        },
+    )
+    .unwrap_or_else(|error| panic!("record archive: {} {:?}", error.code, error.details));
+    recording.session_status("archived");
+    let ending = || {
+        recording.ending(
+            "short",
+            &short(),
+            SHORT_KEY,
+            None,
+            json!([color(SHORT_MARK, SHORT_AREA)]),
+        )
+    };
+    let before = recording.recording_bytes();
+
+    let error = recording.mark(ending()).expect_err("an archived recording");
+    assert_eq!(error.code, "record_session_not_active", "{}", error.message);
+    assert_eq!(recording.recording_bytes(), before, "nothing written");
+
+    record_reopen(&recording.lock, &RecordReopenOptions { record_id: None })
+        .unwrap_or_else(|error| panic!("record reopen: {} {:?}", error.code, error.details));
+    recording.session_status("active");
+    let error = recording
+        .mark(ending())
+        .expect_err("a reopened recording is active");
+    assert_eq!(
+        ending_problem(error),
+        EndingProblem::RecordingActive.as_str()
     );
     assert_eq!(recording.recording_bytes(), before, "nothing written");
 }

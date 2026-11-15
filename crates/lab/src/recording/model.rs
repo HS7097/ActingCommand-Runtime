@@ -339,6 +339,12 @@ pub struct RecordedFrame {
     pub freshness: Option<OpaqueJson>,
     pub recorded_at_unix_ms: u64,
     pub superseded: bool,
+    /// #463 R2 fix 1: the size an ending's frame was given at, when the Lab converted it to the
+    /// recording's size as the Runtime converts a frame of a pure scale (`frames.rs`,
+    /// `scaled_to_recording`); absent on every other frame, so that a recording without one is
+    /// byte-identical to one an earlier build wrote.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scaled_from: Option<RecordSize>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]

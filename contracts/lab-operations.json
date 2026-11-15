@@ -1926,7 +1926,7 @@
         {"name": "long_press", "form": "option", "type": "string", "required": false, "note": "x,y,w,h"},
         {"name": "duration_ms", "form": "option", "type": "integer", "required": false},
         {"name": "brake_corner", "form": "option", "type": "string", "required": false, "note": "x,y,w,h"},
-        {"name": "ending", "form": "switch", "type": "boolean", "required": false, "note": "#463 R2: on a stopped recording, an ending after the last press: --frame, --sample, --page, --template, --color and --reuse are the ending's, with --outcome-key"},
+        {"name": "ending", "form": "switch", "type": "boolean", "required": false, "note": "#463 R2: on a stopped recording, an ending after the last press: --frame, --sample, --page, --template, --color and --reuse are the ending's, with --outcome-key. From a run that ended contained_task_linear_unrecorded_screen: its artifact_id is no material ref by itself; run evidence <request_id> lists the run's frames, and the ref whose last part is that artifact_id is the pinned frame; material <ref> --out <dir> writes it as a PNG, the file --frame takes (a pure scale of the recording's size is converted by the Lab); then record stop regenerates the package. A pop-up after which the path goes on is still a new recording"},
         {"name": "outcome_key", "form": "option", "type": "string", "required": false, "note": "the ending's key; only with --ending"},
         {"name": "remove_ending", "form": "option", "type": "string", "required": false, "note": "the key of an ending the stopped recording gives up"}
       ],

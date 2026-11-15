@@ -78,6 +78,10 @@ mod readonly_api;
 mod recording;
 mod recording_api;
 mod scheduling;
+// #463 R2 fix 1: the scripted clock of a gate test that runs the kernel's interpreter on a device
+// of its own; no gate file reads a clock.
+#[cfg(test)]
+mod scripted_clock;
 mod state;
 // Workflow #406 T4: the touch keys of the Lab's root configuration.
 mod touch;

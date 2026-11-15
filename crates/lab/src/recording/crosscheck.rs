@@ -7,6 +7,7 @@
 //! the first step under an overall darkening). Every refusal is
 //! `record_artifact_admission_failed` or `record_step_self_mismatch`; warnings never refuse.
 
+use super::ending::ending_invalid;
 use super::follow::followed_evaluation_box;
 use super::frames::LoadedFrame;
 use super::generate::{Plan, PlanEnding, PlanStep, follows_located_text, select_policy_document};
@@ -19,7 +20,7 @@ use super::select::{
 };
 use super::store::{blocked, invalid, with_details};
 use crate::LabOcr;
-use crate::codes::{EndingAgainst, LabCode};
+use crate::codes::{EndingAgainst, EndingProblem, LabCode};
 use actingcommand_contract::outcome::{Detail, Outcome};
 use actingcommand_contract::{
     InputAction, LabError, LabResult, SEGMENTED_SWIPE_BRAKE_DISTANCE_PX,
@@ -1755,7 +1756,9 @@ pub(crate) fn cross_check(
 
 /// #463 R2: the warning that the usual ending's page passes on an ending's frames.
 pub(crate) const ENDING_USUAL_INSENSITIVE: &str = "ending_usual_insensitive";
-/// #463 R2: the warning that a check of item 9 could not be evaluated on some frames (OCR).
+/// #463 R2: the warning that a check of item 9 could not be evaluated on some frames: a mark it
+/// needs reads OCR and the Lab has no OCR model (fix 1: an ending page that rests on OCR alone is
+/// refused instead, `ocr_alone_unchecked`).
 pub(crate) const ENDING_NOT_EVALUATED: &str = "ending_ambiguity_not_evaluated";
 
 const ENDING_USUAL_MESSAGE: &str = "The usual ending's page passes on this ending's frames too. The \
@@ -1763,9 +1766,11 @@ const ENDING_USUAL_MESSAGE: &str = "The usual ending's page passes on this endin
     should; but on a run whose screen shows the usual ending under this ending's message, the two \
     are told apart by this ending's marks alone. Give the usual ending's page a mark that does not \
     hold on this ending's screen if the two can look alike.";
-const ENDING_NOT_EVALUATED_MESSAGE: &str = "Not evaluated: OCR is not evaluated in Lab, so whether \
-    this page passes on these frames is unknown. Give the ending a mark that is not OCR, such as a \
-    template of its message, and check with record stop --dry-run.";
+const ENDING_NOT_EVALUATED_MESSAGE: &str = "Not evaluated: a mark this check needs reads OCR and \
+    the Lab has no OCR model, so whether the page the check names passes on these frames is \
+    unknown. Check again with record stop --dry-run where the Lab has its OCR model, or give that \
+    page a mark that is not OCR and does not hold on these frames, such as a template of the \
+    ending's message.";
 
 /// #463 R2: what self-check item 9 leaves when it refuses nothing: one entry per ending (its page
 /// on its own frames and the usual ending's page on them), its warnings, and whether a check was
@@ -1811,12 +1816,14 @@ fn ending_self_mismatch(
     )
 }
 
-/// #463 R2: `record_ending_ambiguous`: the ending's page passes on `frames` of `screen`.
-fn ending_ambiguous(ending: &PlanEnding, screen: &EndingScreen<'_>, frames: &[String]) -> LabError {
-    let (what, consequence) = match screen.against {
+/// #463 R2: what names the recorded screen `against` in a message, and what would happen if the
+/// ending's page passed on it.
+const fn ending_screen_words(against: EndingAgainst) -> (&'static str, &'static str) {
+    match against {
         EndingAgainst::Previous => (
-            "a step after whose press the run awaits the endings",
-            "the run would end on the ending before the press took effect",
+            "a step after whose press the run awaits the endings (its page, or its page \
+             transition's frames when it has one)",
+            "the run would end on the ending before the result of that press showed",
         ),
         EndingAgainst::Usual => (
             "the last step, the usual ending",
@@ -1827,7 +1834,44 @@ fn ending_ambiguous(ending: &PlanEnding, screen: &EndingScreen<'_>, frames: &[St
             "another ending",
             "the run could not tell the two endings apart",
         ),
-    };
+    }
+}
+
+/// #463 R2 fix 1: `record_ending_invalid` with `ocr_alone_unchecked`: the ending's page rests on
+/// OCR marks alone and, without an OCR model, item 9 could not check it on `frames` of `screen`.
+fn ending_unchecked(ending: &PlanEnding, screen: &EndingScreen<'_>, frames: &[String]) -> LabError {
+    let key = ending.ending.outcome_key.as_str();
+    let (what, consequence) = ending_screen_words(screen.against);
+    let mut extra = json!({
+        "page": ending.page,
+        "against": screen.against.as_str(),
+        "frames": frames
+    });
+    if let (Some(object), Some(names)) = (extra.as_object_mut(), screen.names.as_object()) {
+        for (name, value) in names {
+            object.insert(name.clone(), value.clone());
+        }
+    }
+    ending_invalid(
+        EndingProblem::OcrAloneUnchecked,
+        Some(key),
+        format!(
+            "page {} of the ending '{key}' rests on OCR marks alone and the Lab has no OCR \
+             model, so whether it passes on frames {} of {what} could not be checked; if it \
+             did, {consequence}, a failure taken for a success. Run record stop where the Lab \
+             has its OCR model, or give up the ending with record mark --remove-ending {key} \
+             and take it again with a mark that is not OCR, such as a template of its message; \
+             nothing was written",
+            ending.page,
+            frames.join(", ")
+        ),
+        extra,
+    )
+}
+
+/// #463 R2: `record_ending_ambiguous`: the ending's page passes on `frames` of `screen`.
+fn ending_ambiguous(ending: &PlanEnding, screen: &EndingScreen<'_>, frames: &[String]) -> LabError {
+    let (what, consequence) = ending_screen_words(screen.against);
     let mut details = json!({
         "outcome_key": ending.ending.outcome_key,
         "page": ending.page,
@@ -1866,10 +1910,12 @@ fn ending_ambiguous(ending: &PlanEnding, screen: &EndingScreen<'_>, frames: &[St
 /// on no frame of a screen the run may show instead of it (`record_ending_ambiguous`, in this
 /// order): `previous`, each step after whose press the run awaits the endings (its page
 /// transition's frames when it has one, the screen left after its press); `usual`, the last step;
-/// `other_ending`, every other ending. Every refusal comes before every warning. The usual
-/// ending's page passing on an ending's frames is the warning `ending_usual_insensitive`; an
-/// undetermined evaluation (OCR without a model) the warning `ending_ambiguity_not_evaluated`,
-/// and the cross-check is then `partially_evaluated`.
+/// `other_ending`, every other ending. Fix 1: an ending page that rests on OCR marks alone, which
+/// no OCR model checked against such a screen, is `record_ending_invalid` with
+/// `ocr_alone_unchecked`. Every refusal comes before every warning. The usual ending's page passing
+/// on an ending's frames is the warning `ending_usual_insensitive`; any other undetermined
+/// evaluation (OCR without a model) the warning `ending_ambiguity_not_evaluated`, and the
+/// cross-check is then `partially_evaluated`.
 pub(crate) fn ending_checks(
     plan: &Plan,
     evaluator: &RecognitionEvaluator,
@@ -1897,6 +1943,7 @@ pub(crate) fn ending_checks(
     let awaiting = plan.ending_awaiting_steps();
     for ending in &plan.endings {
         let key = ending.ending.outcome_key.as_str();
+        let ocr_alone = !evaluation.ocr_available && plan.rests_on_ocr(&ending.required)?;
         let own_frames = ending.live_frames();
         let mut own = Vec::new();
         for frame in &own_frames {
@@ -1944,6 +1991,12 @@ pub(crate) fn ending_checks(
                 page_on_frames(&evaluation, cache, &ending.required, &[], &screen.frames)?;
             if !matched.is_empty() {
                 return Err(ending_ambiguous(ending, screen, &matched));
+            }
+            // Fix 1: an ending only OCR marks tell apart, which no model checked, could turn a
+            // failure into a silent success: refused; one with a mark of another family is the
+            // warning below.
+            if !undetermined.is_empty() && ocr_alone {
+                return Err(ending_unchecked(ending, screen, &undetermined));
             }
             if !undetermined.is_empty() {
                 checks.partial = true;

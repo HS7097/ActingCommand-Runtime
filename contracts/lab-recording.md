@@ -86,7 +86,9 @@ command deletes nothing and names the files it already wrote.
   `local_png`, `lab_capture` (`capture --record`), `runtime_observation`
   (`observe --capture --record`, with the Runtime frame reference in `runtime_artifact`).
 - All frames of a recording have one size; it becomes the package coordinate space and
-  resolution (`record_frame_size_mismatch`).
+  resolution (`record_frame_size_mismatch`). #463 R2 fix 1: an ending's frame given at a pure
+  scale of that size is converted to it, and its frame entry keeps `scaled_from: {width,
+  height}`, the size it was given at ("Endings").
 - Fields added later use `serde(default, skip_serializing_if)`: `application` (see
   "Application steps") and `optional` (see "Optional steps") are absent on steps without
   one; so are a click's `follow`, a template mark's `scales`, `mask` and `unique`, and a
@@ -108,7 +110,8 @@ command deletes nothing and names the files it already wrote.
   the unknown member), `lab_recording_unreadable` as above. #463 R2 (since 0.12.61): the
   recording's `endings` is absent on a recording without one ("Endings"), so such a recording is
   byte-identical to one an earlier build wrote; a build before 0.12.61 does not decode a recording
-  that holds one, `lab_recording_unreadable` as above.
+  that holds one, `lab_recording_unreadable` as above. Fix 1: a frame's `scaled_from` is absent on
+  every frame the Lab did not convert.
 
 ## Commands
 
@@ -781,6 +784,7 @@ stop` generates the package:
 | `guard_missing` | the step's page gives no guard |
 | `kernel_refused` | the kernel's admission refuses the select step as `record stop` generates it (`details.loader_code`, the kernel's code, and `details.detail`): a bound of the read only the kernel checks ("What the Lab reads, and what only the kernel admits") |
 | `no_select` | #463 R2: `clear_select` names a step that has no select |
+| `on_empty_key_of_ending` | #463 R2 fix 1: the `on_empty` key is the outcome key of an ending of the recording, a select declared after the ending ("Endings"); at `record stop` the ending's own check refuses the pair (`record_ending_invalid`, `key_of_select`) |
 
 **The mark-time self-test**, on every live frame of the step, is the kernel's own dry run of the
 select step (`dry_run_select`, called, never copied) on a probe package: the step alone as `record
@@ -919,9 +923,10 @@ place.
   frame, mark or click of a step, no step operation (`with_other_change`, `details.members` naming
   them); nothing of it is cut away.
 - **Its frames** are stored as a step's are, content-addressed in the recording's `frames/` with the
-  next `frame_id`, and must have the recording's size (`record_frame_size_mismatch`). The caller's
-  path is written nowhere: `recording.json` names the stored copy, the package and its provenance
-  the frame's sha256.
+  next `frame_id`, and have the recording's size: fix 1, a frame given at a pure scale of it is
+  converted to it first ("Where the frame comes from", below), and any other size is
+  `record_frame_size_mismatch`. The caller's path is written nowhere: `recording.json` names the
+  stored copy, the package and its provenance the frame's sha256.
 - **Its marks** are self-tested on its frames, the primary one and the samples, as any mark is
   (`record_mark_rejected` when one fails, nothing written). Its own marks share the recording's ids
   and asset names (`record_mark_id_conflict`, `record_asset_name_conflict`); a step's mark it reuses
@@ -942,7 +947,7 @@ place.
 
 `record_ending_invalid` (exit 3, `details{outcome_key, ending_problem, outcome}`) refuses the
 command and nothing is written; the key rules are checked again when `record stop` generates the
-package:
+package, and `ocr_alone_unchecked` is `record stop`'s alone:
 
 | `ending_problem` | when |
 |---|---|
@@ -950,11 +955,12 @@ package:
 | `with_other_change` | the request names a member of a step beside `ending` or `remove_ending`, or both of these (`details.members`) |
 | `key_invalid` | the outcome key breaks `^[a-z0-9][a-z0-9_]{0,127}$` |
 | `key_reserved` | the outcome key is `<task_id>_done`, the key of the run's usual end |
-| `key_of_select` | the outcome key is a select step's `on_empty` key; at `record stop` also of a select declared after the ending |
+| `key_of_select` | the outcome key is a select step's `on_empty` key (fix 1: a select declared after the ending with its key is refused where it is declared, `record_select_invalid` with `on_empty_key_of_ending`; `record stop` checks the key again) |
 | `key_exists` | another ending of the recording has the outcome key |
 | `key_unknown` | `remove_ending` names a key no ending has (`details.endings`, the keys there are) |
 | `page_exists` | another ending of the recording has the page name |
 | `no_marks` | the ending adds and reuses no mark |
+| `ocr_alone_unchecked` | fix 1, `record stop`'s self-check item 9: the ending's page rests on OCR marks alone (every mark it requires is an OCR mark or a value test, or a check whose members all are) and the Lab has no OCR model, so whether it passes on a screen the run may show instead could not be checked (`details{page, against, frames, step \| other_outcome_key}`, the first such screen); an ending that passed there would turn a failure into a silent success |
 
 **Where the frame comes from.** A run that met a screen its package never recorded ends with
 `contained_task_linear_unrecorded_screen` ([linear-steps.md](linear-steps.md), "A screen the
@@ -964,11 +970,26 @@ actingctl, MCP `ac_run_evidence`) lists the run's frames as material refs
 `<seq>:<event_id>:<artifact_id>`, the run's last one as `final.frame_ref`, and the ref whose last
 part is the failure's `artifact_id` is the frame; `material <ref> --out <dir>` (actinglab) writes
 it whole as `<dir>/<sha256>.png`, the file `--frame` takes (MCP `ac_material` with `mode: export`
-writes the same file into the server's materials folder). The
-pinned frame is the device's own capture: on an instance whose resolution differs from the one the
-recording was made at (a pure scale of the display adapter) it has another size, and the mark
-refuses it (`record_frame_size_mismatch`, `details{expected, actual}`): scale it to the recording's
-size first, outside the Lab, or take the frame on an instance of the recording's size.
+writes the same file into the server's materials folder). Take it in time: a pinned frame nobody
+confirmed as read is removed once `frame_retention_evidence_max_age_days` (a top-level key, 15 by
+default) have passed since its ingestion, and one confirmed as read (`evidence confirm-read`) at
+the next pass ([ledger-store.md](ledger-store.md), the evidence-frame rule of the frame cleaner).
+
+The pinned frame is the device's own capture: on an instance whose resolution differs from the one
+the recording was made at, it has another size. Fix 1 (the coordinator's ruling): the Lab converts
+it itself, as the Runtime converts every frame before it recognises anything
+([display-adapter.md](display-adapter.md), section 8). When the display adapter's map of the frame
+onto the recording's size is a pure scale (the recording's ratio, larger, neither cropped nor
+turned; the map built without a display declaration, as the Lab's dry runs map), the frame is
+resampled once to the recording's size with the REC-5 primitive (area average): the two calls the
+kernel's frame gate makes (`DisplayMap::build`, `resample_pixels`), called, never copied. The
+converted frame is the ending's frame, stored, hashed and self-tested as such; its entry in
+`recording.json` and in the answer keeps `scaled_from: {width, height}`, the size it was given at.
+The marks' regions are in the recording's pixels, on the converted frame the answer's `frame.path`
+names. Any other size is refused as before (`record_frame_size_mismatch`, `details{expected,
+actual}`): take the frame on an instance whose resolution is the recording's or a pure scale of
+it. Give the file `material` wrote as it is: a frame scaled by another program cannot be told from
+a pinned one, and a run would compare it with a frame the Runtime scaled its own way.
 
 **What the kernel's admission asks of an ending** ([linear-steps.md](linear-steps.md), "Endings"):
 none of its rules can refuse a generated ending page, which is a page of its own name, in one
@@ -985,7 +1006,9 @@ before the last press whose tap reaches the ending's screen ends the run on it
 ([linear-steps.md](linear-steps.md), "Endings"). An ending page that passes on the frames of the
 step before the last press is item 9's `previous`, a select step's or not; one that passes on the
 frames of an earlier select step is item 8's refusal (the run's select would not know its page
-there).
+there). Fix 1: a select declared after an ending whose `on_empty` key is the ending's key is
+refused where it is declared, `record_select_invalid` with `on_empty_key_of_ending` ("Selecting in
+a list").
 
 **An archived recording** takes no ending: `record mark` on it is `record_session_not_active`, as
 every `record mark` of a session that is not active ("Other commands on an archived recording");
@@ -2302,8 +2325,9 @@ guard execution still requires the corresponding frames, provider and Runtime ev
    result is the cross-check's `selects` (as `lab.selects`, each frame's decisions by their kind),
    present only with a select step; without an OCR model nothing is called, each frame is
    `undetermined`, the status `partially_evaluated` and `selects_not_evaluated` lists the steps.
-9. **Endings** (#463 R2, "Endings"; checked right after item 4 and before item 8, so that an ending
-   page that passes on the frames of a select step before the last press is the ending's refusal).
+9. **Endings** (#463 R2, "Endings"; checked after the cross-check, items 4 to 7, and before item 8,
+   so that an ending page that passes on the frames of a select step before the last press is the
+   ending's refusal; fix 1: the order the code has).
    On live frames with the evaluator of item 4, in the order the recording took the endings: every
    ending's page matches its own frames (`record_step_self_mismatch`, `details{outcome_key, page,
    frame_id, failed}`), and passes on no frame of a screen the run may show instead of it, since the
@@ -2313,7 +2337,7 @@ guard execution still requires the corresponding frames, provider and Runtime ev
    - `previous`: the frames of a step after whose press the run awaits the endings: the step before
      the last, and, when it is an optional step, the step before its run and the run's members (a
      step's page transition's frames when it has one, the screen left after its press). The run
-     would end on the ending before the press took effect;
+     would end on the ending before the result of that press showed;
    - `usual`: the frames of the last step, the usual ending: the ending would win wherever the
      usual ending shows;
    - `other_ending`: the frames of another ending: the two could not be told apart.
@@ -2321,10 +2345,17 @@ guard execution still requires the corresponding frames, provider and Runtime ev
    Give up such an ending (`--remove-ending`) and take it again with a mark of its own screen, such
    as a template of its message. The usual ending's page passing on an ending's frames is no
    refusal (the ending wins there, as it should), but the warning `ending_usual_insensitive`
-   (`outcome_key`, `page`, `usual_page`, `frames`). An undetermined evaluation (OCR without a model)
-   is the warning `ending_ambiguity_not_evaluated` (`check`: `record_ending_ambiguous` or
-   `ending_usual_insensitive`, with that check's details) and makes the cross-check
-   `partially_evaluated`. Every refusal comes before every warning. The result is the
+   (`outcome_key`, `page`, `usual_page`, `frames`). Fix 1: an ending page that rests on OCR marks
+   alone (every mark it requires reads OCR: an OCR mark or a value test, or a check whose members
+   all do) cannot be checked against those screens without an OCR model, and an ending that passed
+   there would turn a failure into a silent success: `record_ending_invalid` with
+   `ocr_alone_unchecked` at the first screen it could not be checked on (`details{page, against,
+   frames, step | other_outcome_key}`), nothing written; run `record stop` where the Lab has its OCR
+   model, or take the ending again with a mark of another family. Any other undetermined
+   evaluation (an ending with a mark of another family beside its OCR marks, or the usual page's
+   OCR marks on an ending's frames) is the warning `ending_ambiguity_not_evaluated` (`check`:
+   `record_ending_ambiguous` or `ending_usual_insensitive`, with that check's details) and makes
+   the cross-check `partially_evaluated`. Every refusal comes before every warning. The result is the
    cross-check's `endings[{ending, outcome_key, page, frames[{frame_id, result}], usual}]` (`usual`:
    `distinct`, `passes` or `not_evaluated`), as `lab.endings`, present only with an ending.
 

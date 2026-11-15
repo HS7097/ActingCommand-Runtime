@@ -11,7 +11,7 @@ use super::follow::{
 };
 use super::frames::{
     LoadedFrame, check_frame_size, crop_store_path, frame_store_path, read_frame_file,
-    read_stored_frame, rect_inside,
+    read_stored_frame, rect_inside, scaled_to_recording,
 };
 use super::generate::{page_required, required_ids};
 use super::marks::{
@@ -404,6 +404,7 @@ fn admit_frame(
         freshness: meta.freshness.clone(),
         recorded_at_unix_ms: now_unix_ms(),
         superseded: false,
+        scaled_from: None,
     };
     session
         .pending
@@ -1765,7 +1766,8 @@ pub(crate) struct EndingApplied {
 
 /// #463 R2 (`contracts/lab-recording.md`, "Endings"): a stopped recording takes the ending
 /// `spec`: its frame and samples, files on the caller's machine, are admitted as a step's are (one
-/// size, content-addressed in the recording's `frames/`, never named by the caller's path), its
+/// size, content-addressed in the recording's `frames/`, never named by the caller's path; fix 1: a
+/// frame of a pure scale of the recording is converted to its size first, `scaled_from`), its
 /// marks are made from its frame and self-tested with its reused marks on its frames as any mark is
 /// (`record_mark_rejected` when one fails), and the ending joins `endings[]`. An active recording
 /// takes none (`recording_active`); its key and page name are its own ([`check_new_ending`]).
@@ -1776,13 +1778,26 @@ pub(crate) fn apply_ending(
 ) -> LabResult<EndingApplied> {
     check_new_ending(session, &spec.outcome_key, spec.page.as_deref())?;
     let local = FrameMeta::local();
-    let loaded = read_frame_file(&spec.frame)?;
+    // Fix 1 (the coordinator's ruling): a frame of a pure scale of the recording is converted to
+    // the recording's size as the Runtime converts it, and keeps the size it was given at.
+    let (loaded, scaled_from) = scaled_to_recording(
+        session.recording.coordinate_space,
+        read_frame_file(&spec.frame)?,
+        &spec.frame,
+    )?;
     let primary_sha = loaded.sha256.clone();
-    let frame = admit_frame(session, loaded, "primary", &local, &spec.frame)?;
+    let mut frame = admit_frame(session, loaded, "primary", &local, &spec.frame)?;
+    frame.scaled_from = scaled_from;
     let mut samples = Vec::new();
     for path in &spec.samples {
-        let loaded = read_frame_file(path)?;
-        samples.push(admit_frame(session, loaded, "sample", &local, path)?);
+        let (loaded, scaled_from) = scaled_to_recording(
+            session.recording.coordinate_space,
+            read_frame_file(path)?,
+            path,
+        )?;
+        let mut sample = admit_frame(session, loaded, "sample", &local, path)?;
+        sample.scaled_from = scaled_from;
+        samples.push(sample);
     }
     let mut batch = MarkBatch {
         own: Vec::new(),

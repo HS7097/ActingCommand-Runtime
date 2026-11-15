@@ -571,11 +571,11 @@ pub(crate) struct SelectProbe {
 
 /// The self-test of the select of `probe.step` on its live `frames`: the rules that need the
 /// recording (`slot_outside_frame`, `on_final_step`, `on_empty_key_reserved`,
-/// `on_empty_key_taken`, `wanted_name_taken`), then the probe package admitted by the kernel
-/// (`guard_missing`, `kernel_refused`), then, with an OCR model, the kernel's dry run on every
-/// frame, each frame's decisions reported by their kind. `fresh` says the step had no press to
-/// keep a click box from (see [`declare_select`]); without an OCR model such a select is refused
-/// `lab_ocr_unavailable`, every other one is `not_evaluated`.
+/// `on_empty_key_taken`, `wanted_name_taken`, #463 R2 fix 1: `on_empty_key_of_ending`), then the
+/// probe package admitted by the kernel (`guard_missing`, `kernel_refused`), then, with an OCR
+/// model, the kernel's dry run on every frame, each frame's decisions reported by their kind.
+/// `fresh` says the step had no press to keep a click box from (see [`declare_select`]); without an
+/// OCR model such a select is refused `lab_ocr_unavailable`, every other one is `not_evaluated`.
 pub(crate) fn check_step_select(
     recording: &LabRecording,
     stopped: bool,
@@ -660,6 +660,21 @@ pub(crate) fn check_step_select(
                 ),
             );
         }
+    }
+    // #463 R2 fix 1: the key is no ending's, also for a select declared after the ending; the
+    // ending's own check at record stop (`key_of_select`) would refuse it there otherwise.
+    if recording
+        .endings
+        .iter()
+        .any(|ending| ending.outcome_key == key)
+    {
+        return refuse(
+            SelectProblem::OnEmptyKeyOfEnding,
+            format!(
+                "the on_empty key '{key}' is the outcome key of an ending of the recording; give \
+                 the select an on_empty_key of its own"
+            ),
+        );
     }
 
     // The probe package: the step as `record stop` generates it, admitted by the kernel.

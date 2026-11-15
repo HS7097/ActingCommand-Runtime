@@ -398,6 +398,31 @@ impl Plan {
         Ok(false)
     }
 
+    /// #463 R2 fix 1: whether a page whose rule requires the marks `required` rests on OCR alone:
+    /// it requires a mark, and every mark it requires reads OCR (an OCR mark or a value test, or a
+    /// check whose members all do), so that without an OCR model none of them decides anything.
+    pub(crate) fn rests_on_ocr(&self, required: &[String]) -> LabResult<bool> {
+        let reads_ocr =
+            |family: MarkFamily| matches!(family, MarkFamily::Ocr | MarkFamily::ValueTest);
+        for id in required {
+            let mark = self.mark(id)?;
+            let alone = if mark.family == MarkFamily::Check {
+                let members = mark.check_members();
+                let mut all = !members.is_empty();
+                for member in members {
+                    all &= reads_ocr(self.mark(member)?.family);
+                }
+                all
+            } else {
+                reads_ocr(mark.family)
+            };
+            if !alone {
+                return Ok(false);
+            }
+        }
+        Ok(!required.is_empty())
+    }
+
     /// The template marks whose crops the package carries, as `(mark id, asset path)`.
     pub(crate) fn template_assets(&self) -> Vec<(String, String)> {
         self.emitted
