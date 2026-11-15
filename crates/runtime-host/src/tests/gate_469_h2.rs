@@ -394,7 +394,9 @@ fn h2_a_severe_failure_pauses_with_severe_failure() {
 }
 
 // A linear step on a screen its package never recorded (Workflow #463 U1, class severe) pauses the
-// pair at its first occurrence: `unrecorded_screen`.
+// pair at its first occurrence: `unrecorded_screen`. The failure carries the values the kernel
+// always gives the code and its catalog entry requires: the step's operation, the pages its wait
+// awaited with the step's own page last, and the attempts, as the U1 host fixture's run ends.
 #[test]
 fn h2_an_unrecorded_screen_pauses_with_unrecorded_screen() {
     let code: Code =
@@ -406,11 +408,14 @@ fn h2_an_unrecorded_screen_pauses_with_unrecorded_screen() {
         word: PauseCause::UnrecordedScreen,
         sources: &sources,
         runs: &[(
-            failed(
-                code,
-                Some(failure_identity.clone()),
-                PolicyFailureClass::Severe,
-            ),
+            PolicyExecutionInput::Failed {
+                outcome: Outcome::new(code)
+                    .pack_operation_id("open")
+                    .page_ids(["neutral/list", "neutral/home"])
+                    .attempts(1_u32),
+                failure_identity: Some(failure_identity.clone()),
+                class: PolicyFailureClass::Severe,
+            },
             RUN_MS,
         )],
         failure_code: code,
