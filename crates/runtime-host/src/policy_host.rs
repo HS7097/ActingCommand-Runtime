@@ -6275,6 +6275,14 @@ impl PolicyHost {
         self.dispatch_order = journal.order;
         self.pruned_pairs = journal.pruned;
         self.control = control;
+        // Workflow #469 H2 (register §1.398): a paused streak the value records loaded takes its
+        // pause cause from its dispatch's execution record, which the journal holds (it keeps a
+        // pair's latest admitted dispatches, the paused one among them).
+        let seen = &self.seen_dispatches;
+        self.control.restore_pause_causes(|decision_id| {
+            seen.get(decision_id)
+                .and_then(|dispatch| dispatch.execution.as_ref())
+        });
         Ok(())
     }
 

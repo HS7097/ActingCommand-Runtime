@@ -27608,6 +27608,72 @@ contracts.
 **At deploy.** Nothing to do: a run that ends so carries the word on its terminal, its receipt and
 its policy record; no record shape, key, interface revision or configuration changes.
 
+### 1.398 Slice #469 H2 (0.12.62): a paused pair says why it was paused (Workflow #469; the owner's choice of option A on board #469 on 11-15; the design `rd-1115/status-codes-a-design.md`, Part 2: its three facts, place 4 of A-1 and the row H2 of its slice table, accepted by the coordinator; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-469-word-slices.md`, read on main `b6fe6ec2` (after #1738, V0, §1.386))
+
+The coordinator gave this slice 1.398: main `b6fe6ec2` holds the sections up to §1.386, and the
+numbers between belong to the slices dispatched with this one. The slice ships in 0.12.62
+(release 0.12.61 is cut without it).
+
+**What it is.** V0's vocabulary `pause_cause` and the existing key `failure_code`, set where the
+program already knows them, as values of the outcome only
+([policy-suspension.md](policy-suspension.md), "Why a pair is paused"):
+
+| Value | On | From |
+|---|---|---|
+| `pause_cause` | `policy_task_paused` | the execution record the pair's settlement wrote (`PolicyFailureRecord`: its outcome's code for the three severe sources, `original_class`, `sensitive`, `effective_class`, `disposition`), in the settlement's own order (`crates/runtime-host/src/policy_control.rs`, `pause_cause`) |
+| `failure_code` | `policy_task_paused`, `policy_retry_backoff_active` | the pair's failure streak's code, the record's `scheduled_failure_code_str` (a registered code; a relayed spelling the catalog does not register is left out) |
+| `pause_cause` | the `suspended` rows of `actingd suspended` | the same function on the same record |
+
+All seven words the design offers are set; none needed a new observation. `failure_code` was
+already a key of the table; the two codes carried it optional since V0. Nothing reads either
+value to decide: the denial is raised where, when and with the class it was, and its detail text
+(`Runtime control availability: …`) is unchanged.
+
+**Where it is kept.** `FailureStreak` gains `pause_cause`, memory only, like `paused_on`. The
+commit of an execution (the live settlement and every replay pass there) sets it from the record.
+A start that loads the decision memory from its value records (`TaggedStart::Load`) rebuilds the
+streak from the L7 record, which keeps neither `sensitive` nor the effective class, so the
+re-alignment (`refresh_dispatch_tail`, the start's included) gives each paused streak without a
+cause the cause of its dispatch's execution record, which the dispatch journal holds (it keeps a
+pair's latest admitted dispatches, so a paused pair's own), when that record names the streak's
+failure (code, identity, class). No persisted member, record shape or interface revision is added;
+the L7 record is byte for byte what it was. `actingd suspended` v2 gains the member `pause_cause` on
+its `suspended` rows (`null` for none); `actingctl diagnose` and `ac_diagnose` relay the rows as
+they are.
+
+**Deciding by word, not by name (A-3).** The three severe sources of their own word are told apart
+by the record's code (`policy_runtime_budget_exceeded`, `policy_settlement_interrupted`,
+`contained_task_linear_unrecorded_screen`), as the design names them. Choosing a word nothing
+reads is building a value, not a decision point; no code chooses what happens next from the word.
+
+**Tests.** A new gate file, `crates/runtime-host/src/tests/gate_469_h2.rs`, host gate map
+`contracts/test-gates/host.toml`: one test per word, each settling a run through
+`record_policy_dispatch_outcome` on a fresh start of the host, and one with two causes at once (a
+sensitive task's run over its runtime budget, whose record is both sensitive and severe:
+`runtime_budget_exceeded`, the settlement's order): the record keeps the input's failure identity
+byte for byte and the expected counts, the pair's streak in its latest L7 record serializes byte
+for byte as the one built from the record's own members; the pair's `policy_task_paused` at its
+next due evaluation carries the word and the record's code, its detail naming neither (both
+asserted), live, on the root's next start and on the start after it; the closed root's
+`actingd suspended` row carries the word. The start checked last loads: a root's first start writes
+no marker and its second seeds, replaying the history (LN-4), so only a later start loads the streak
+from its value record, as every restart of an installation does, and gives the word back from the
+dispatch journal. Each test asserts the kind of both starts from their `StartReport`
+(`tagged_state`): `load` for the last; for the one before it `seed` after one run (the word a
+replay gives) and `load` after two. One test for the backoff's `failure_code`, its detail not
+naming the code, live, on the root's second start (`seed`) and on its third (`load`). No existing
+test is changed.
+
+**What is not changed.** When a pair is paused, backed off or lifted; the lift and its restart
+rule; the streak's comparison (code, identity, class); the failure identity; every record and its
+fields; every class and category; the detail texts; the catalog's texts (V0 wrote them); the codes
+that read `policy_task_paused` by its code (the clock-slot class, the fact refresh's denial, the
+remedy's persistent gates, the held clock).
+
+**At deploy.** Nothing to do. A pair paused before the deploy shows its word after the first start
+of the new build (its execution record is in the journal); a pair whose execution record the
+journal does not hold shows the pause without the word.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
