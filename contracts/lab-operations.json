@@ -90,7 +90,7 @@
       "source": ["actingctl overview", "actingctl status", "actingctl monitor-status", "actingctl emulator status", "actingctl perf-status", "actingctl fact-refresh", "MCP ac_overview", "actinglab status", "actinglab session status", "actinglab lab status", "acui: workbench status and start report reads (crates/acui-source/src/workbench.rs)"],
       "slice": "LAB-1",
       "status": "planned",
-      "notes": "#469 F1 (0.12.62): an instance row's run, a brief run status, carries failure_values in its terminal beside failure_code, absent when there are none"
+      "notes": "#469 F1 (0.12.62): an instance row's run, a brief run status, carries failure_values in its terminal beside failure_code, absent when there are none; #463 S3-3 (0.12.63): that terminal also carries outcome_key, the key of the package's mapping the run completed on, absent when the terminal has no scheduling disposition"
     },
     {
       "name": "facts",
@@ -229,7 +229,7 @@
       "source": ["MCP ac_get_run", "actinglab lab receipt"],
       "slice": "LAB-1b",
       "status": "planned",
-      "notes": "LAB-1b moved its code into lab-ops: `run_show` (the run a handle or run_id names, the full read and the answer of MCP ac_get_run); waiting on the run and the jobs of the MCP process stay with MCP; LAB-2 dropped from_step: the read answers the run whole and holds no steps (run evidence --from-step pages them); #469 F1 (0.12.62): the run's terminal carries failure_values beside failure_code, the values codes mode keeps of the terminal outcome, absent when there are none"
+      "notes": "LAB-1b moved its code into lab-ops: `run_show` (the run a handle or run_id names, the full read and the answer of MCP ac_get_run); waiting on the run and the jobs of the MCP process stay with MCP; LAB-2 dropped from_step: the read answers the run whole and holds no steps (run evidence --from-step pages them); #469 F1 (0.12.62): the run's terminal carries failure_values beside failure_code, the values codes mode keeps of the terminal outcome, absent when there are none; #463 S3-3 (0.12.63): the run's terminal carries outcome_key, the business end it finished on (the key of the package's mapping whose target or ending page it completed on, as the host wrote it on the terminal), absent for a failed or cancelled run and a package without mappings"
     },
     {
       "name": "run evidence",
@@ -1980,7 +1980,7 @@
       "module": "authoring",
       "params": [
         {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: actinglab's default instance; on the command line only --instance <x> (actinglab's own command reads no positional instance)"},
-        {"name": "request", "form": "option", "type": "file", "required": false, "note": "an actingcommand.lab-record-mark.v1 request file; only a request declares a located-text mark (an OCR mark with locate), which a click may then follow, and (#463 R1) a select, the step's choice in a list of fixed slots by the name read in each, and clear_select, which takes it off again; (#463 R2) its ending and remove_ending are what --ending and --remove-ending give"},
+        {"name": "request", "form": "option", "type": "file", "required": false, "note": "an actingcommand.lab-record-mark.v1 request file; only a request declares a located-text mark (an OCR mark with locate), which a click may then follow, and (#463 R1) a select, the step's choice in a list of fixed slots by the name read in each, and clear_select, which takes it off again; (#463 R2) its ending and remove_ending are what --ending and --remove-ending give, and (#463 R4) its optional_after and remove_inserted what --optional-after and --remove-inserted give"},
         {"name": "request_json", "form": "option", "type": "string", "required": false, "note": "the same request as JSON text"},
         {"name": "state_dir", "form": "option", "type": "dir", "required": false, "note": "the recording session directory; default actinglab's"},
         {"name": "dry_run", "form": "switch", "type": "boolean", "required": false, "note": "actinglab's global --dry-run"},
@@ -2019,9 +2019,11 @@
         {"name": "long_press", "form": "option", "type": "string", "required": false, "note": "x,y,w,h"},
         {"name": "duration_ms", "form": "option", "type": "integer", "required": false},
         {"name": "brake_corner", "form": "option", "type": "string", "required": false, "note": "x,y,w,h"},
-        {"name": "ending", "form": "switch", "type": "boolean", "required": false, "note": "#463 R2: on a stopped recording, an ending after the last press: --frame, --sample, --page, --template, --color and --reuse are the ending's, with --outcome-key. From a run that ended contained_task_linear_unrecorded_screen: its artifact_id is no material ref by itself; run evidence <request_id> lists the run's frames, and the ref whose last part is that artifact_id is the pinned frame; material <ref> --out <dir> writes it as a PNG, the file --frame takes (a pure scale of the recording's size is converted by the Lab); then record stop regenerates the package. A pop-up after which the path goes on is still a new recording"},
+        {"name": "ending", "form": "switch", "type": "boolean", "required": false, "note": "#463 R2: on a stopped recording, an ending after the last press: --frame, --sample, --page, --template, --color and --reuse are the ending's, with --outcome-key. From a run that ended contained_task_linear_unrecorded_screen: its artifact_id is no material ref by itself; run evidence <request_id> lists the run's frames, and the ref whose last part is that artifact_id is the pinned frame; material <ref> --out <dir> writes it as a PNG, the file --frame takes (a pure scale of the recording's size is converted by the Lab); then record stop regenerates the package. A pop-up after which the path goes on is an optional step: --optional-after"},
         {"name": "outcome_key", "form": "option", "type": "string", "required": false, "note": "the ending's key; only with --ending"},
-        {"name": "remove_ending", "form": "option", "type": "string", "required": false, "note": "the key of an ending the stopped recording gives up"}
+        {"name": "remove_ending", "form": "option", "type": "string", "required": false, "note": "the key of an ending the stopped recording gives up"},
+        {"name": "optional_after", "form": "option", "type": "integer", "required": false, "note": "#463 R4: on a stopped recording, an optional step inserted after the effect of step k (a pop-up after which the path goes on): --frame, --sample, --page, --template, --color, --reuse, the click and --settle-ms are the inserted step's. k is the step's serial number, not the number inside the package that a run's pack_operation_id carries (step_<nn>_click or step_<nn>_select): in record status, find the row whose artifact_step is the number nn (02 is 2) and take its index. Its frame is taken from the run's pinned frame as for --ending (run evidence, then material <ref> --out <dir>; a pure scale is converted by the Lab); then record stop regenerates the package, which checks it as every optional step"},
+        {"name": "remove_inserted", "form": "option", "type": "integer", "required": false, "note": "#463 R4: the serial number of an inserted optional step the stopped recording gives up"}
       ],
       "help": "Adds marks, a click, samples or a transition to a recorded step and self-tests every mark on its frames; a click may follow a template or a name it finds.",
       "output": "as today's command",
@@ -2531,7 +2533,7 @@
         {"name": "commit", "form": "option", "type": "string", "required": false, "note": "40 hex, must be HEAD"}
       ],
       "help": "Builds a game's whole standard pack from one clean commit of its working root: the zip, SHA256SUMS and build.json, ready to be placed.",
-      "output": "build: the build.json document (schema actingcommand.standard-pack-build.v1); out; files: the zip, SHA256SUMS, build.json and the work directory; steps: resource verify's steps",
+      "output": "build: the build.json document (schema actingcommand.standard-pack-build.v1); out; files: the zip, SHA256SUMS, build.json and the work directory; steps: resource verify's steps; readiness: the readiness of work/installed/<game> as standard-pack ready --root judges it (instead, when the readiness function refused the root, readiness_refused, the refusal in the envelope's error form, and in warnings resource_build_readiness_refused); next: place, the words after the program's name of the placement's plan of the files written",
       "writes": true,
       "irreversible": false,
       "runtime": "offline",
@@ -2541,7 +2543,7 @@
       "new": "#464",
       "slice": "PACK-BUILD",
       "status": "planned",
-      "notes": "Workflow #464 P2 (0.12.61; contracts/resource-verify.md, standard-pack build; contracts/package-reference.md, The built standard pack): it runs resource verify's steps on their one function, its work under out/work, and writes the product into out only when every step passed, each file under its .part name first and build.json renamed last; out is made only once the checkout precondition passed; the zip carries the repository's tables/ and ui.json, each checked by its reader; build.json names the source repository, the commit, the tree and the Tools, and, read from the zip, the package range, the root files, the packs and the zip; the package revision is computed from the content, row by row of component-interfaces.md's package table; nothing is written into repo and nothing is deleted. Fix round 1: its slice is its own, PACK-BUILD, in actinglab's built slices and the MCP server's, so that the command line and the MCP server offer it as they offer resource verify"
+      "notes": "Workflow #464 P2 (0.12.61; contracts/resource-verify.md, standard-pack build; contracts/package-reference.md, The built standard pack): it runs resource verify's steps on their one function, its work under out/work, and writes the product into out only when every step passed, each file under its .part name first and build.json renamed last; out is made only once the checkout precondition passed; the zip carries the repository's tables/ and ui.json, each checked by its reader; build.json names the source repository, the commit, the tree and the Tools, and, read from the zip, the package range, the root files, the packs and the zip; the package revision is computed from the content, row by row of component-interfaces.md's package table; nothing is written into repo and nothing is deleted. Fix round 1: its slice is its own, PACK-BUILD, in actinglab's built slices and the MCP server's, so that the command line and the MCP server offer it as they offer resource verify. #463 S3-7 (0.12.63; register §1.414): once the product is written, the answer carries the readiness of the installed root the steps laid out and kept, judged by judge_standard_pack_readiness, called as standard-pack ready --root calls it (no installation, no declared range), a refusal of it no failure of the build: readiness_refused, the refusal in the envelope's error form, and (fix round 2) in warnings resource_build_readiness_refused (path the root, caused by the refusal's own code), with its developer line; and next.place, the plan's line as the words after the program's name (fix round 2), [\"place\", \"<zip>\", \"--sums\", \"<SHA256SUMS>\", \"--plan\"], the paths as the build wrote them, the plan only, never the line that places; build.json, its schema and the capability's build_schema do not change"
     },
     {
       "name": "resource restore",
@@ -2648,13 +2650,15 @@
         {"name": "repo", "form": "option", "type": "dir", "required": true, "note": "the game's working root in a resource repository's checkout: applications.json, maintenance.json, packs/ and the root files"},
         {"name": "record_id", "form": "option", "type": "string", "required": false, "note": "a stopped recording of the state directory, its package the one its last record stop generated; not with package"},
         {"name": "package", "form": "option", "type": "path", "required": false, "note": "directory, .zip or .json container; not with record_id"},
-        {"name": "decide", "form": "option", "type": "file", "required": false, "note": "the decision document actingcommand.pack-decision.v1; required on a first adoption"},
+        {"name": "decide", "form": "option", "type": "file", "required": false, "note": "the decision document actingcommand.pack-decision.v1; a first adoption needs it or held_reason; not with held_reason or held_reference"},
+        {"name": "held_reason", "form": "option", "type": "string", "required": false, "note": "the decision of the class held without a document: exactly {schema_version, class: held, held: {reason}}, read as a document given by decide is; a non-blank text of at most 1024 bytes without a control character; not with decide"},
+        {"name": "held_reference", "form": "option", "type": "string", "required": false, "note": "with held_reason only: that decision's held.reference, a non-blank text of at most 1024 bytes without a control character"},
         {"name": "replace", "form": "switch", "type": "boolean", "required": false, "note": "adopt a package adopted before again: its directory is replaced and moved to the state directory, its rule kept but for what the decision names"},
         {"name": "dry_run", "form": "switch", "type": "boolean", "required": false, "note": "actinglab's global --dry-run"},
         {"name": "state_dir", "form": "option", "type": "dir", "required": false, "note": "the recording session directory; default actinglab's"}
       ],
       "help": "Makes a recorded package a member of its game's standard pack in a resource repository's checkout, with a rule the Runtime's composer accepts.",
-      "output": "the adoption: the package, its class, the rule, held entry or maintenance entry as written, the entries removed or replaced so that the package has one role, the members given and derived (each with where it came from), whether the task waits for its value, every warning of the check, what was written and where the replaced directory was kept",
+      "output": "the adoption: the package, its class, the rule, held entry or maintenance entry as written, the entries removed or replaced so that the package has one role, the members given and derived (each with where it came from), whether the task waits for its value, every warning of the check, what was written and where the replaced directory was kept, and the adopted pack's readiness row of the check tree's game root (as standard-pack ready answers it there), or why it was not judged",
       "writes": true,
       "irreversible": false,
       "runtime": "offline",
@@ -2664,7 +2668,7 @@
       "new": "#464",
       "slice": "SP-ADOPT",
       "status": "planned",
-      "notes": "Workflow #464 P1 (0.12.61; contracts/standard-pack-authoring.md): it writes only inside repo and under the state directory, every check before the first write (refusals adopt_refused, adopt_problem naming the check), nothing deleted; the readiness of the package is another slice's"
+      "notes": "Workflow #464 P1 (0.12.61; contracts/standard-pack-authoring.md): it writes only inside repo and under the state directory, every check before the first write (refusals adopt_refused, adopt_problem naming the check), nothing deleted. Workflow #463 S3-4 (0.12.63; register §1.411; A held decision by two flags): held_reason and held_reference are the decision of the class held without a document, built as that document and read by the document's reader, so every check and every byte written is the document's; decide beside either is refused validation_failed naming the held parameter, argument_problem conflicting, and held_reference without held_reason the same, before anything is read; they only hold, nothing here lifts a hold. Workflow #463 S3-5 (0.12.63; register §1.412; The answer): readiness is the adopted pack's row of judge_standard_pack_readiness on the check tree's installed/<game>/, called with no installation (ready_to_place at best), judged after every check passed and the same under dry_run; when that function refuses the root or answers no row of the pack, readiness_not_judged (outcome, text) instead, and the adoption is not changed by it; readiness on an installation stays another slice's"
     },
     {
       "name": "standard-pack ready",
@@ -2673,7 +2677,7 @@
         {"name": "root", "form": "option", "type": "dir", "required": true, "note": "a game root, installed or a bundle laid out as one, its directory named as its game; not the installation's"}
       ],
       "help": "Judges every pack of a game root by its thirteen readiness items: waiting with every reason, ready_to_place, dispatchable or not_scheduled.",
-      "output": "root, game, installation (not_read: no installation is read), the counts dispatchable, ready_to_place, waiting and not_scheduled, warnings (standard-pack check's), and packs, each {package_id, server, readiness, roles?, items}: the thirteen items S1 to S7 and I1 to I6, each {id, item, state, basis?, models?, outcome?}",
+      "output": "root, game, installation (not_read: no installation is read), the counts dispatchable, ready_to_place, waiting and not_scheduled, warnings (standard-pack check's), and packs, each {package_id, server, readiness, roles?, held?, warnings?, items}: held (#463 S3-6) {reason, reference?} as the schedule's held entry writes them, only on a pack whose S2 fails held; warnings (#463 S3-6) the check's warnings that name the pack; the thirteen items S1 to S7 and I1 to I6, each {id, item, state, basis?, models?, outcome?}",
       "writes": false,
       "irreversible": false,
       "runtime": "offline",
@@ -2683,7 +2687,7 @@
       "new": "#464 P3 (whether a pack goes straight into scheduling, and what it waits for)",
       "slice": "464-P3",
       "status": "planned",
-      "notes": "#464 P3 (contracts/standard-pack-schedule.md, Readiness): the resource tooling's one function judge_standard_pack_readiness, which adopt's answer, build.json and the placement plan are to call with what each holds; this row gives it the game root only, so the five installation items I1, I2, I4, I5 and I6 are not_judged (installation_not_read) and I3 is information, and a pack answers ready_to_place (or not_scheduled) at best; fix round 1: it runs standard-pack check on the root first, each refusal carried under S1, S4 or S7; it writes nothing, starts nothing (no child process) and reads no installation, no secret and no Runtime"
+      "notes": "#464 P3 (contracts/standard-pack-schedule.md, Readiness): the resource tooling's one function judge_standard_pack_readiness, which two answers call as this row does: standard-pack adopt's on the game root its check tree laid out (#463 S3-5, 0.12.63) and standard-pack build's on the installed root its steps laid out (#463 S3-7, 0.12.63; build.json does not carry it); the placement plan does not call it yet; this row gives it the game root only, so the five installation items I1, I2, I4, I5 and I6 are not_judged (installation_not_read) and I3 is information, and a pack answers ready_to_place (or not_scheduled) at best; fix round 1: it runs standard-pack check on the root first, each refusal carried under S1, S4 or S7; it writes nothing, starts nothing (no child process) and reads no installation, no secret and no Runtime"
     },
     {
       "name": "scheduling compile",

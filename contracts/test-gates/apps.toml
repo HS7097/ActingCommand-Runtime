@@ -2319,3 +2319,30 @@ tests = [
     "actingcommand-lab-ops::lib::overview::tests::d4a_a_spent_call_budget_is_a_warning_beside_a_successful_answer",
 ]
 incident = ["#469 D4a"]
+
+# Workflow #463 S3-4 (0.12.63; register §1.411; brief rd-1115/brief-463-s34-adopt-held.md, ruling 3; contracts/standard-pack-authoring.md, "A held decision by two flags"), actinglab's command line with no Runtime and paths that do not exist: standard-pack adopt with --decide and --held-reason, in either order and with --held-reference too, is validation_failed, exit 2, no data, details argument --held-reason and argument_problem conflicting; --decide with --held-reference alone, and --held-reference without --held-reason, the same naming --held-reference; each before anything is read (a call that read the checkout, the package or the document would be adopt_refused), and none of the checkout, the package, the document, the state directory or the Runtime state root is made
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::tests::gate_463_s34::s34_the_held_flags_beside_decide_or_the_reference_alone_are_refused_before_anything_is_read",
+]
+incident = ["#463 S3-4"]
+
+# Workflow #463 S3-4, carried from the independent review of its pull request (0.12.63; register §1.411 and §1.412; contracts/standard-pack-authoring.md, "A held decision by two flags"), actinglab's command line with no Runtime, on P1's made-up checkout in an isolated directory: standard-pack adopt --package with a valid --held-reason and --held-reference reaches the adoption with those two texts (the line that builds the decision from the flags), exit 0, status adopted, class held, the answer's held entry {package_id, reason, reference} exactly the two texts, no rule in the answer, schedule.json's held entry the same and its one rule kept, and the Runtime state root not made
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::tests::gate_463_s34::s34_the_held_flags_on_the_command_line_reach_the_adoption_with_their_two_texts",
+]
+incident = ["#463 S3-4"]
+
+# #463 S3-7 (0.12.63; register §1.414; brief rd-1115/brief-463-s37-build-readiness.md; contracts/resource-verify.md, "standard-pack build", the answer; the design rd-1115/pack-stage3-design.md §4.2 S3-7 with the coordinator's rulings): on a neutral fixture repository made with git (P2's files, two packs) with a schedule.json whose one pool has a valuation, standard-pack build of a commit whose pack A is held (a held entry, no rule) and whose pack B has a rule with a complete value answers readiness: A waiting, its S2 classified failing package_dispatch_waiting with readiness_item classified and readiness_problem held, B ready_to_place, the counts 0 dispatchable, 1 ready_to_place, 1 waiting, 0 not_scheduled, installation not_read, no readiness_refused, its root <files.work>/installed/neutral, which still exists, and the whole readiness equal to the answer of standard-pack ready --root for that root; build.json is the answer's build, schema actingcommand.standard-pack-build.v1 with its eleven members and no readiness; a commit whose two packs both have such a rule answers both ready_to_place (2, none waiting, dispatchable or not_scheduled), the items I1, I2, I4, I5 and I6 of each not_judged with installation_not_read, equal to standard-pack ready --root for that root; next is {place: [place, <zip>, --sums, <SHA256SUMS>, --plan]} (fix round 2: the words of the Lab's command line after the program's name), the paths of the zip and SHA256SUMS written into --out, unquoted, which files.zip and files.sums name; fix round 2: the function that builds the answer's readiness members, driven on a root that is not there and on an empty one (no fixture makes the readiness function refuse the root after the bundle step passed), answers no readiness, readiness_refused with the function's own code (validation_failed, standard_pack_root_invalid) and in warnings exactly one {outcome}, resource_build_readiness_refused, category warning, path the root, caused_by that code
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::tests::gate_463_s37::s37_a_held_pack_in_the_commit_answers_waiting_held",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_463_s37::s37_a_commit_whose_packs_are_all_valued_answers_ready_to_place",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_463_s37::s37_next_place_is_the_plan_line_of_the_files_written",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_463_s37::s37_a_refused_readiness_is_a_warning_of_the_answer",
+]
+incident = ["#463 S3-7"]

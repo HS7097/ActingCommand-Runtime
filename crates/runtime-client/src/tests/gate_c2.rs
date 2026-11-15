@@ -1262,6 +1262,111 @@ fn f1_a_run_terminal_carries_the_values_codes_mode_keeps_of_its_outcome() {
     }
 }
 
+// Workflow #463 S3-3 (register §1.410): the terminal of a run's status, brief and full, names the
+// business end the run finished on as `outcome_key`, the key of the package's mapping the host
+// wrote on the terminal fact (`scheduling_disposition`): a run completed on its target page has
+// the target mapping's key, one completed on an ending page the ending's key. A failed or
+// cancelled run, and a completed run of a package without mappings, carry no disposition: their
+// terminal has no such member, never an empty text.
+#[test]
+fn s3_3_a_run_terminal_names_the_outcome_key_of_the_end_it_finished_on() {
+    let running = || RunLedger::new().cli_command().admitted().step_started();
+    // A completed run the host keyed by the mapping of the page it finished on.
+    let keyed = |final_page: &str, outcome_key: &str| {
+        let disposition = actingcommand_contract::SchedulingDisposition::new(
+            outcome_key,
+            actingcommand_contract::SchedulingEffectEvidence::NoDesignatedEffect,
+        )
+        .expect("scheduling disposition");
+        running().fact(TaskSemanticFact::TerminalCommitted {
+            task_result: TaskOutcome::Success,
+            final_page: Some(final_page.to_owned()),
+            executed_steps: Some(1),
+            outcome: None,
+            failure_severe: false,
+            scheduling_disposition: Some(disposition),
+            task_timing: None,
+        })
+    };
+    for (row, final_page, outcome_key) in [
+        ("the target page", "neutral/target", "task_done"),
+        ("an ending page", "neutral/ending", "task_short"),
+    ] {
+        for mode in [RunStatusMode::Brief, RunStatusMode::Full] {
+            let status = keyed(final_page, outcome_key).by_request(mode);
+            assert_eq!(
+                status.state,
+                ContainedRunState::Succeeded,
+                "{row}, {mode:?}"
+            );
+            let terminal = status
+                .terminal
+                .as_ref()
+                .unwrap_or_else(|| panic!("{row}, {mode:?}: the run's terminal"));
+            assert_eq!(
+                terminal.final_page.as_deref(),
+                Some(final_page),
+                "{row}, {mode:?}"
+            );
+            assert_eq!(
+                terminal.outcome_key.as_deref(),
+                Some(outcome_key),
+                "{row}, {mode:?}"
+            );
+            let value = serde_json::to_value(&status).expect("run status JSON");
+            assert_eq!(
+                value["terminal"]["outcome_key"],
+                serde_json::json!(outcome_key),
+                "{row}, {mode:?}"
+            );
+        }
+    }
+
+    let failure = SharedCode::ContainedTaskHomeEntryNotMatched.code();
+    let cancelled = RuntimeErrorCode::ContainedTaskCancelled.code();
+    for (row, task_result, outcome, state) in [
+        (
+            "failed",
+            TaskOutcome::Failure,
+            Some(Outcome::new(failure)),
+            ContainedRunState::Failed,
+        ),
+        (
+            "cancelled",
+            TaskOutcome::Cancelled,
+            Some(Outcome::new(cancelled)),
+            ContainedRunState::Cancelled,
+        ),
+        (
+            "completed, a package without mappings",
+            TaskOutcome::Success,
+            None,
+            ContainedRunState::Succeeded,
+        ),
+    ] {
+        for mode in [RunStatusMode::Brief, RunStatusMode::Full] {
+            let status = running()
+                .terminal(task_result, outcome.clone())
+                .by_request(mode);
+            assert_eq!(status.state, state, "{row}, {mode:?}");
+            let terminal = status
+                .terminal
+                .as_ref()
+                .unwrap_or_else(|| panic!("{row}, {mode:?}: the run's terminal"));
+            assert!(
+                terminal.outcome_key.is_none(),
+                "{row}, {mode:?}: {:?}",
+                terminal.outcome_key
+            );
+            let value = serde_json::to_value(&status).expect("run status JSON");
+            assert!(
+                value["terminal"].get("outcome_key").is_none(),
+                "{row}, {mode:?}: {value}"
+            );
+        }
+    }
+}
+
 // G9 (R7): Workflow #338 R1. A run without a terminal whose admission a later Runtime start
 // or takeover follows is `interrupted_unterminated` (the two targeted queries the model names
 // find it: neither event links a request); a terminal recorded after the restart decides the

@@ -164,6 +164,29 @@ pub struct EndingSpec {
     pub reuse: Vec<String>,
 }
 
+/// #463 R4: the `optional_after` of a `record mark` request on a stopped recording: an optional
+/// step inserted after the effect of the step `step`, a pop-up a run of the package met there. Its
+/// frame and samples (files on the caller's machine, copied into the recording), its page's name,
+/// its marks, its click (declared, never executed) and its settle.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OptionalAfterSpec {
+    pub step: u32,
+    pub frame: String,
+    #[serde(default)]
+    pub samples: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page: Option<String>,
+    #[serde(default)]
+    pub add: Vec<MarkSpec>,
+    #[serde(default)]
+    pub reuse: Vec<String>,
+    #[serde(default)]
+    pub click: Option<ClickSpec>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settle_ms: Option<u64>,
+}
+
 /// Written by `record stop` (#336 L4): the package generated from the recording. Workflow #336
 /// PKG-S5 (option 丙): the package is named by its `package_id`; no digest of it is kept.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -255,6 +278,12 @@ pub struct RecordingStep {
     /// step.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub select: Option<StepSelect>,
+    /// #463 R4: the recorded step after whose effect a stopped recording inserted this optional
+    /// step (`record mark --optional-after`): it runs after that step and after the steps inserted
+    /// there before it. Absent on every other step, so that a recording without one is
+    /// byte-identical to one an earlier build wrote; an earlier build refuses one that holds it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inserted_after: Option<u32>,
     pub transition: Option<StepTransition>,
     pub closed: bool,
     pub closed_by: Option<String>,
@@ -1024,6 +1053,14 @@ pub struct MarkRequest {
     /// --remove-ending <k>`); alone in the request.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remove_ending: Option<String>,
+    /// #463 R4: an optional step the stopped recording inserts after the effect of one of its
+    /// steps (`record mark --optional-after <k>`); alone in the request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub optional_after: Option<OptionalAfterSpec>,
+    /// #463 R4: the serial number of an inserted optional step the stopped recording gives up
+    /// (`record mark --remove-inserted <n>`); alone in the request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remove_inserted: Option<u32>,
 }
 
 /// #463 R1 (`contracts/lab-recording.md`, "Selecting in a list"): a select over fixed slots, the
@@ -1424,6 +1461,9 @@ pub struct StepStateView {
     pub forbidden: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub anchor: Option<String>,
+    /// #463 R4: the recorded step an inserted optional step runs after, on such a step only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inserted_after: Option<u32>,
 }
 
 /// `optional` of `step_state` and `record status` steps: `null` or `{settle_ms}`.
@@ -1568,6 +1608,9 @@ pub struct StepView {
     /// #463 R1: the step's select as the recording holds it, on a step that has one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub select: Option<StepSelect>,
+    /// #463 R4: the recorded step an inserted optional step runs after, on such a step only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inserted_after: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]

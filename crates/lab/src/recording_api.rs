@@ -21,6 +21,7 @@ use crate::recording::generate::{
     application_steps_summary, optional_steps_summary, plan as generate_plan, render,
     transitions_summary, validate_timeout_option,
 };
+use crate::recording::inserted::validate_optional_after_request;
 use crate::recording::marks::{declares_mark, match_metric};
 use crate::recording::model::{
     AfterCapture, AfterCaptureRecord, AfterFrame, ApplicationPlan, AttachFrameOutcome,
@@ -38,11 +39,11 @@ use crate::recording::model::{
 use crate::recording::select::{not_evaluated_id, validate_select_request};
 use crate::recording::steps::{
     ArrivalMode, FrameMeta, Session, application_action, application_with_click, apply_ending,
-    apply_marks, apply_step_action, apply_transition, arrive, check_device_arrival,
-    commit_application, commit_click, default_recording_defaults, effective_indices, has_marks,
-    live_primary, new_recording, not_active, note_after_capture, open_session,
-    open_session_for_marks, open_step, plan_application, plan_click, plan_press, save, step_ref,
-    stopped_change, to_json,
+    apply_marks, apply_optional_after, apply_step_action, apply_transition, arrive,
+    check_device_arrival, commit_application, commit_click, default_recording_defaults,
+    effective_indices, has_marks, live_primary, new_recording, not_active, note_after_capture,
+    open_session, open_session_for_marks, open_step, path_order, plan_application, plan_click,
+    plan_press, remove_inserted, save, step_ref, stopped_change, to_json,
 };
 use crate::recording::store::{
     LabFile, OldRecordView, blocked, create_recording, invalid, lab_dir, load_lab, now_unix_ms,
@@ -142,9 +143,10 @@ pub fn record_status(state_dir: &Path, instance: &str) -> LabResult<Option<LabSt
         LabFile::Unavailable(reason) => Ok(unavailable(reason)),
         LabFile::Ready(recording) => {
             let numbers = effective_indices(&recording);
-            let steps = recording
-                .steps
-                .iter()
+            // #463 R4: the steps in the order they run, a step inserted after the stop in its
+            // place.
+            let steps = path_order(&recording)
+                .into_iter()
                 .map(|step| step_view(step, &numbers))
                 .collect();
             // Workflow #449 REC-ARCH: an archived recording's session is ended; its step table,
@@ -223,7 +225,7 @@ pub fn record_stop(
                 let settings = regeneration_settings(artifact, options);
                 generate_and_write(state_dir, &old, &recording, &settings, options, ocr, true)
             }
-            Some(artifact) => stop_already_generated(&recording, artifact, options),
+            Some(artifact) => stop_already_generated(state_dir, &recording, artifact, options),
             None => Ok(none),
         };
     }
@@ -397,6 +399,8 @@ fn generate_and_write(
         .map(|dir| preflight_lab_dir(Path::new(dir), &file_name))
         .transpose()?;
     let mut written = Vec::new();
+    // #464 P4: the outputs an earlier stop wrote, set aside and kept.
+    let mut kept = Vec::new();
     let lab_dir_status = if options.dry_run {
         None
     } else {
@@ -405,12 +409,13 @@ fn generate_and_write(
                 state_io(format!("failed to create {}: {error}", parent.display()))
             })?;
         }
-        replace_in_place(&copy_path, &bytes, &mut written)?;
+        replace_in_place(&copy_path, &bytes, &mut written, &mut kept)?;
         match &lab_dir_plan {
             Some(dir_plan) => Some(written_status(write_lab_dir(
                 dir_plan,
                 &bytes,
                 &mut written,
+                &mut kept,
             )?)),
             None => None,
         }
@@ -509,6 +514,9 @@ fn generate_and_write(
             ),
         );
         lab.insert("written_files".to_string(), json!(written));
+        if !kept.is_empty() {
+            lab.insert("kept".to_string(), json!(kept));
+        }
     }
     lab.insert("byte_count".to_string(), json!(bytes.len()));
     lab.insert(
@@ -593,6 +601,10 @@ fn generate_and_write(
         plan.requires.as_deref(),
         &package_path,
         registry_entry_example(&plan.package_id, &plan.game, &plan.server, &plan.task_id),
+    );
+    lab.insert(
+        "adoption_example".to_string(),
+        adoption_example(&recording.record_id, state_dir),
     );
     lab.insert(
         "binding_requires".to_string(),
@@ -721,6 +733,29 @@ fn insert_binding(
             "escalation_threshold": 2
         }),
     );
+}
+
+/// #464 P4 (`contracts/lab-recording.md`, "Output"; `contracts/standard-pack-authoring.md`, "The
+/// decision document"): how the package becomes a member of its game's standard pack: the
+/// `standard-pack adopt` line for this recording (its record id and its state directory, what the
+/// recording knows; the checkout and the decision file are the caller's) and the skeleton of the
+/// decision it takes. Fix round 2 (the owner's rule: a package not yet run through on a real device
+/// is registered and stays held): a decision of the class `held` whose `held.reason` is left
+/// blank, and nothing else; adopt accepts it once the caller fills in the reason, and refuses a
+/// blank one.
+fn adoption_example(record_id: &str, state_dir: &Path) -> Value {
+    json!({
+        "command": format!(
+            "actinglab standard-pack adopt --repo <checkout> --record-id {record_id} --state-dir \
+             \"{}\" --decide <decision.json>",
+            absolute_display(state_dir)
+        ),
+        "decision": {
+            "schema_version": "actingcommand.pack-decision.v1",
+            "class": "held",
+            "held": {"reason": ""}
+        }
+    })
 }
 
 /// What a binding of the package also needs (section 4.8 with a15, a20 and R24).
@@ -890,6 +925,7 @@ fn refuse_option_conflict(
 /// `record stop` on a stopped recording with a package: with `--lab-dir` the package is copied
 /// there again (section 4.7 steps 2 and 4); nothing is generated.
 fn stop_already_generated(
+    state_dir: &Path,
     recording: &LabRecording,
     artifact: &RecordingArtifact,
     options: &RecordStopOptions,
@@ -926,6 +962,7 @@ fn stop_already_generated(
         .map(|dir| preflight_lab_dir(Path::new(dir), &file_name))
         .transpose()?;
     let mut written = Vec::new();
+    let mut kept = Vec::new();
     let lab_dir_status = match &lab_dir_plan {
         None => None,
         Some(dir_plan) if options.dry_run => Some(if dir_plan.replaces {
@@ -937,6 +974,7 @@ fn stop_already_generated(
             dir_plan,
             &bytes,
             &mut written,
+            &mut kept,
         )?)),
     };
     let package_path = lab_dir_plan.as_ref().map_or_else(
@@ -969,6 +1007,9 @@ fn stop_already_generated(
         ),
     );
     lab.insert("written_files".to_string(), json!(written));
+    if !kept.is_empty() {
+        lab.insert("kept".to_string(), json!(kept));
+    }
     lab.insert("byte_count".to_string(), json!(artifact.byte_count));
     lab.insert(
         "generated_at_unix_ms".to_string(),
@@ -986,6 +1027,10 @@ fn stop_already_generated(
             artifact.server.as_deref().unwrap_or("<server>"),
             &recording.task_id,
         ),
+    );
+    lab.insert(
+        "adoption_example".to_string(),
+        adoption_example(&recording.record_id, state_dir),
     );
     Ok(RecordStopOutcome {
         lab_status: Some("already_generated".to_string()),
@@ -1022,6 +1067,10 @@ fn validate_mark_request(request: &MarkRequest) -> LabResult<()> {
     // #463 R2: an ending, or the key of one to give up, stands alone in its request.
     if request.ending.is_some() || request.remove_ending.is_some() {
         return validate_ending_request(request);
+    }
+    // #463 R4: so does an optional step inserted after the stop, or one to give up.
+    if request.optional_after.is_some() || request.remove_inserted.is_some() {
+        return validate_optional_after_request(request);
     }
     if let Some(page) = &request.page
         && !page_name_valid(page)
@@ -1256,6 +1305,24 @@ fn mark_session(
         let (status, step) = apply_step_action(session, action)?;
         outcome.status = status.to_string();
         step
+    } else if let Some(spec) = &request.optional_after {
+        // #463 R4: an optional step inserted after a step of the stopped recording, from a frame;
+        // its step state names the recorded step it runs after.
+        let applied = apply_optional_after(session, spec, ocr)?;
+        if !dry_run {
+            outcome.status = "optional_step_inserted".to_string();
+        }
+        outcome.frame = applied.frame;
+        outcome.samples = applied.samples;
+        outcome.marks = applied.added;
+        outcome.reused = applied.reused;
+        applied.step
+    } else if let Some(index) = request.remove_inserted {
+        remove_inserted(session, index)?;
+        if !dry_run {
+            outcome.status = "optional_step_removed".to_string();
+        }
+        index
     } else if let Some(spec) = &request.transition {
         let applied = apply_transition(session, request, spec, ocr)?;
         outcome.marks = applied.marks;
@@ -2374,6 +2441,7 @@ fn step_state(step: &RecordingStep) -> StepStateView {
         optional: optional_view(step),
         forbidden: step.forbidden.clone(),
         anchor: step.anchor.clone(),
+        inserted_after: step.inserted_after,
     }
 }
 
@@ -2439,5 +2507,6 @@ fn step_view(step: &RecordingStep, effective: &[u32]) -> StepView {
         anchor: step.anchor.clone(),
         // #463 R1: where an agent reads the select it declares again to change its default.
         select: step.select.clone(),
+        inserted_after: step.inserted_after,
     }
 }

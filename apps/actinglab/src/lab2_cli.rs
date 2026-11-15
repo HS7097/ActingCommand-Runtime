@@ -2685,6 +2685,8 @@ fn lab2_command_contracts() -> Vec<Lab2CommandContract> {
                 "--ending",
                 "--outcome-key <key>",
                 "--remove-ending <key>",
+                "--optional-after <k>",
+                "--remove-inserted <n>",
                 "--dry-run",
                 "--state-dir <dir>",
             ],

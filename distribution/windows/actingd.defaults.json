@@ -349,7 +349,9 @@
       "expected_duration_ms": 60000
     },
     "suspension": {
-      "lift_check_min_interval_ms": 60000
+      "lift_check_min_interval_ms": 60000,
+      "break_in_runs": 20,
+      "break_in_ms": 604800000
     },
     "pack_admission": {
       "check_in_check_config": true,

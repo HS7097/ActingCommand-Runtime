@@ -9,14 +9,16 @@ the Runtime's composer accepts and its evaluator dispatches
 ([standard-pack-schedule.md](standard-pack-schedule.md)). It writes only inside the checkout it is
 given and under the Lab's own state directory, runs every check before its first write, deletes
 nothing in the checkout, and answers every member it derives with where the value came from. Its
-answer never says more than is true, and a call that cannot finish fails before it writes. Whether
-a package is ready to be scheduled on an installation is another slice's.
+answer never says more than is true, and a call that cannot finish fails before it writes. Its
+answer says how far the game root it lays out makes the package ready ("The answer", Workflow #463
+S3-5); whether the package is ready to be scheduled on an installation is another slice's.
 
 ## The operation
 
 ```text
 actinglab standard-pack adopt --repo <checkout> (--record-id <id> | --package <path>)
-    [--decide <decision.json>] [--replace] [--state-dir <dir>]
+    [--decide <decision.json> | --held-reason <text> [--held-reference <text>]] [--replace]
+    [--state-dir <dir>]
 ```
 
 The row `standard-pack adopt` of the operation table ([lab-operations.json](lab-operations.json),
@@ -29,7 +31,9 @@ check and writes nothing in the checkout ("`--dry-run`" below).
 | `--repo` | The game's working root in the source layout: `applications.json` (its game and servers), `maintenance.json` (a list, `[]` when none), `packs/` (one directory per package) and the root files the repository holds (`schedule.json`, `pages.json`, `navigation.json`, `interrupts.json`, `display-layout.json`, `loading.json`, `goals.json`, `notices/`). |
 | `--record-id` | A stopped recording of the state directory, `<state>/record-artifacts/<record>/lab/`: its `recording.json` and the package its last stop generated, `out/<package_id>.<zip or json>`. |
 | `--package` | Any package instead: a content directory, a `.zip` or a `.json` container. |
-| `--decide` | The decision document ("The decision document" below); required on a first adoption. |
+| `--decide` | The decision document ("The decision document" below); a first adoption needs it or `--held-reason`. |
+| `--held-reason` | The decision of the class `held` without a document: its reason ("A held decision by two flags" below). Not with `--decide`. |
+| `--held-reference` | With `--held-reason` only: that decision's reference. |
 | `--replace` | Adopt a package adopted before again ("Repeating" below). |
 | `--state-dir` | The Lab's state directory, as the recording commands take it (default actinglab's session directory): it holds the recordings, the kept copies (`adopt/`) and the check trees (`adopt-check/`). With `--replace` it must lie on the checkout's volume, since the replaced directory is moved into it. |
 
@@ -91,6 +95,45 @@ given, "A pending value"):
   "value": "pending"
 }
 ```
+
+### A held decision by two flags
+
+(Workflow #463 S3-4, Runtime 0.12.63; [v012-register.md](v012-register.md) §1.411.) A package
+that has not run through on a real device is registered with its rules and stays held, and
+packages are opened one by one as each is run through. So the first decision a recorded package
+takes is the class `held` with a reason in words, and it needs no file:
+
+```text
+--held-reason <text> [--held-reference <text>]
+```
+
+is exactly the decision
+
+```json
+{
+  "schema_version": "actingcommand.pack-decision.v1",
+  "class": "held",
+  "held": {"reason": "<text>", "reference": "<text>"}
+}
+```
+
+(`reference` only when `--held-reference` is given). Adopt builds that document from the two texts
+as given and hands it to the reader of a document given by `--decide`, at the same place among the
+checks, so every check and every byte written is the one that document gives: its held entry, and
+a rule the package already has kept and not composed while the hold lasts ("One role"). The texts
+take what the document's `held` takes, a non-blank text of at most 1024 bytes without a control
+character: a reason outside that is refused `decision_invalid` at `/held/reason` (a reference at
+`/held/reference`), as the document's is, the outcome naming no `path`, since no file was read.
+The command line cannot give a text that is the word `true` or that begins with `--`: its flag
+parser takes no such word as a flag's value (a value `true` reads as no value, and a word that
+begins with `--` as the next flag), so such a call is refused `validation_failed` before anything
+is read, the flag missing its value or the word refused as a flag of its own; such a text is given
+in a decision document by `--decide`. Before anything is read or written, `--decide` beside either
+flag is refused `validation_failed`
+naming the held flag (`--held-reason` when it is given), `argument_problem` `conflicting`, and
+`--held-reference` without `--held-reason` the same, naming `--held-reference`. The flags only
+hold: nothing here lifts a hold, which a decision of another class given by `--decide` does
+("Repeating").
 
 ## The value's origin
 
@@ -210,7 +253,7 @@ the repository and keeps no copy.
 | No `packs/<package_id>.part` is left ("If a call was interrupted"); not adopted before (its directory, its rule, its held entry, its `maintenance.json` entry), or `--replace`; the kept copy's place free | `pack_exists` | `entry` the directory or its `.part`, or `json_pointer` of the entry; `path` of a taken place; without `--replace` the message names what the root files hold of the package, and when `schedule.json` and `maintenance.json` hold nothing of it beside its directory, either names the root file adopt does not write that gives it a role and what the call accepts for it, or says that an adoption was interrupted before it wrote the root files ("If a call was interrupted") |
 | With `--replace`, no change below `packs/<package_id>` the version control does not hold (`git status --porcelain=v1 -z --untracked-files=all`, which writes nothing) | `pack_dirty` | `entry`, `count`; or the version control's failure as the cause |
 | With `--replace`, the kept copy's place lies on the checkout's volume (the volume of the nearest existing part of each path, links resolved: the drive or network share on Windows, the device elsewhere; a volume mounted on a folder of another is not told apart on Windows), so that the replaced directory can be moved there | `replace_across_volumes` | `entry` the directory, `path` the kept place; the message says to give a `--state-dir` on the checkout's volume and, for a recording of the default state directory, its package by `--package <state>/record-artifacts/<record>/lab/out/<package_id>.<ext>` instead of `--record-id` |
-| The decision document | `decision_invalid` | `path`, `json_pointer` (`""` for a first adoption without one) |
+| The decision document | `decision_invalid` | `path`, `json_pointer` (`""` for a first adoption without one); no `path` for the decision of `--held-reason` ("A held decision by two flags") |
 | Its value's origin ("The value's origin") | `value_origin_model` | `path`, `json_pointer` `/value/origin` |
 | A class `business` beside a maintenance role a root file adopt does not write gives the package ("One role") | `decision_invalid` | `path`, `json_pointer` `/class` |
 | A class `maintenance` by its `uses` alone beside the package's business rule, a rule the composer judges by its value ("One role") | `business_rule_in_the_way` | `entry` `schedule.json`, `json_pointer` `/rules/<i>`, `package_id`; the message names the rule's id |
@@ -375,8 +418,9 @@ of that call and gives the steps below, each of which a later call accepts:
     whole, its directory included; nothing more is run.
   - To run it again: move the root `.part` files out of the checkout; put `packs/<package_id>`
     back as it was, or commit it (then with a `--state-dir` on the checkout's volume, above); then
-    run adopt with `--replace` and the decision that call was given (none when it was given none),
-    which writes the package's one role from the root files as they are.
+    run adopt with `--replace` and the decision that call was given (by `--decide`, or by
+    `--held-reason` and its `--held-reference`; none when it was given none), which writes the
+    package's one role from the root files as they are.
   - To undo it: move the root `.part` files out, put `packs/<package_id>` back as it was, and
     restore with the version control the root file that call renamed (to its last commit: a change
     not committed before that call is not in it).
@@ -388,13 +432,14 @@ of that call and gives the steps below, each of which a later call accepts:
   checks accept. `git status -- packs/<package_id>` tells whether the directory is committed (a
   change there was left by an interrupted adoption or by hand); when it shows a change, put the
   directory back as it was. Then, with it absent, adopt runs without `--replace` (a first
-  adoption, with `--decide`); with it committed, adopt runs with `--replace` and `--decide`, which
-  moves the committed directory to its kept place and so needs a `--state-dir` on the checkout's
-  volume (above).
+  adoption, with `--decide` or `--held-reason`); with it committed, adopt runs with `--replace`
+  and `--decide` or `--held-reason`, which moves the committed directory to its kept place and so
+  needs a `--state-dir` on the checkout's volume (above).
   - A root file adopt does not write gives the package a maintenance role (`pages.json`,
     `navigation.json` or `interrupts.json`, which the message names): the directory belongs to
     the pack by that file, whether or not an adoption was interrupted. The call accepts such a
-    package with a decision of the class `held` (its hold beside that role) or
+    package with a decision of the class `held` (its hold beside that role, by `--held-reason` or
+    `--decide`) or
     `maintenance` (a rule by its trigger, or a `maintenance.json` entry by its `uses`), never
     `business`, which is refused at `/class` beside that role ("One role").
   - No root file names it: that call was interrupted before it wrote the root files, or the
@@ -430,8 +475,9 @@ with the written and the derived value, and never written.
 ## `--dry-run`
 
 Every check runs, the check tree under `<state>/adopt-check/` included; the answer is `validated`
-with `written` empty and `would_write` what an adoption would write; nothing is written in the
-repository and no copy is kept ([actinglab-dry-run.md](actinglab-dry-run.md)).
+with `written` empty and `would_write` what an adoption would write, and its `readiness` judged as
+an adoption's is ("The answer"); nothing is written in the repository and no copy is kept
+([actinglab-dry-run.md](actinglab-dry-run.md)).
 
 ## The answer
 
@@ -444,7 +490,31 @@ repository and no copy is kept ([actinglab-dry-run.md](actinglab-dry-run.md)).
 `undeclared` or `follower`, as the composer counts the file's judged rules), `waits_for_value` and
 `value_not_judged` (`because` `follower` or `manual_request`, and `text`; "A pending value"),
 `warnings` (every warning of the check, the game's included, each once), `written` (in the order
-it was renamed into place), `would_write`, `kept`, `check_tree` and `next`.
+it was renamed into place), `would_write`, `kept`, `check_tree`, `readiness` or
+`readiness_not_judged` (below) and `next`.
+
+**The adopted pack's readiness** (Workflow #463 S3-5, Runtime 0.12.63;
+[v012-register.md](v012-register.md) §1.412). `readiness` is the adopted pack's row of the
+readiness of the game root the check tree laid out,
+`<state>/adopt-check/<checkout>/installed/<game>/`
+([standard-pack-schedule.md](standard-pack-schedule.md), "Readiness"): the row `standard-pack ready
+--root` answers for that pack on that directory, member for member. It is the answer of that one
+function, called as it is, on the tree as adopt composed it, after every check passed, and by the
+same path under `--dry-run`; a
+refused adoption answers none. No installation is handed to it, so the five items an installation
+tells are `not_judged` (`installation_not_read`), I3 is information, and the pack answers
+`ready_to_place` at best, never `dispatchable`. So a package adopted as held answers `waiting` with
+S2 `classified` failing `held`; a business rule with `"pending"` alone, `waiting` with S3 `valued`
+failing `value_undeclared` (the composer counts a rule with no fixed value and no `produces` or
+`consumes` entry undeclared; readiness's `value_pending` is a rule that reads an entry or a pool
+with the pending marker, "A pending value"); a business rule with its value, `ready_to_place` when the other items of the game
+root hold too; a package adopted as maintenance by its `uses` alone, no rule naming it,
+`not_scheduled` with that role in `roles`. When the function refuses that root, or answers no row
+of the pack, the answer carries `readiness_not_judged` instead: `outcome`, the function's refusal
+with its code as the function answered it, or, when the function answered and the pack's row is
+not in its answer, adoption's own `package_invalid` (the pack is no package of the bundle); and
+`text`, the same in words. Nothing else of the answer changes by it, and the call does not fail by
+it.
 
 ## The canonical form
 

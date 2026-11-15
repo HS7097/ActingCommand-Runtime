@@ -1029,7 +1029,8 @@ dispatched from. A `fresh_frame` recheck's refusal is the guard's own and carrie
 | The first step's page does not pass within `step_timeout_ms`, or (LOAD-4) the entry wait ended on its loading allowance, with the loading values ("Loading pages") | `contained_task_linear_entry_unmatched` | `page_recognition` / `entry_recognition` |
 | The intermediate page is not seen within its timeout, with no attempt left | `contained_task_linear_intermediate_unobserved` | `postcondition` / `postcondition` |
 | The next step's page does not pass in its budget (with no attempt left), the retry decision sees neither page, the next step's page does not follow a seen intermediate page, or no candidate passes within `S + T` after a seen skip target, each after the closing decision ("Retries") except where it finds a screen the package never recorded (the next row); or (LOAD-4) one of these waits, or the intermediate page's, ended on the attempt's loading allowance, with the loading values ("Loading pages") | `page_confirmation_failed`, detail `transition=none\|page\|window ...` (`intermediate_seen=true` after a seen intermediate page); Workflow #469 K1 (since 0.12.62): value `confirmation_problem`, what the program saw ("What the program saw", below) | `postcondition` / `postcondition`, `limit_ms` the spent budget |
-| Workflow #463 U1 (since 0.12.60): in a task's own run, outside a restart segment, the closing decision after one of the ends of the row above finds a screen the package never recorded (below) | `contained_task_linear_unrecorded_screen`, the detail `page_confirmation_failed` gives that end, values `pack_operation_id`, `page_ids`, `attempts`, (Workflow #469 K1, since 0.12.62) `confirmation_problem` `unrecorded_screen`, always, and (from the host) `artifact_id` | `postcondition` / `postcondition`, the timing `page_confirmation_failed` gives that end (after a retry decision `limit_ms` the step timeout) |
+| Workflow #463 U1 (since 0.12.60): in a task's own run, outside a restart segment, the closing decision after one of the ends of the row above finds a screen the package never recorded (below); Workflow #463 U1b (since 0.12.63): in a direct run, a Lab run, and a scheduled run whose pair is in the break-in of its package's content | `contained_task_linear_unrecorded_screen`, the detail `page_confirmation_failed` gives that end, values `pack_operation_id`, `page_ids`, `attempts`, (Workflow #469 K1, since 0.12.62) `confirmation_problem` `unrecorded_screen`, always, and (from the host) `artifact_id` | `postcondition` / `postcondition`, the timing `page_confirmation_failed` gives that end (after a retry decision `limit_ms` the step timeout) |
+| Workflow #463 U1b (since 0.12.63): the same verdict in a scheduled run whose pair is past that break-in (below) | `page_confirmation_failed` as the first row gives that end, its detail and timing, value `confirmation_problem` `unrecorded_screen` (Workflow #469 K1), and (from the host) `artifact_id` | as the first row |
 | After an application step, the intermediate page is not seen, the next step's page does not pass in its budget, or it does not follow a seen intermediate page; or (LOAD-4) its wait ended on its loading allowance, with the loading values | `contained_task_linear_application_unconfirmed`, detail `operation=<id> application=<action> attempts=1 transition=none\|page\|window ... intermediate_seen=<bool>` | `postcondition` / `postcondition`, `limit_ms` the spent budget |
 | An instance without an assigned application, including the offline simulation | `application_effect_requires_assigned_application` (`invalid_request`, denied), before any capture | none |
 | The adb command of an application effect fails | `application_backend_operation_failed` | none |
@@ -1101,7 +1102,21 @@ root's `kept` folder of that error, under the code's name, until a person delete
 the stuck-recovery ladder through `pack_logic`, as `page_confirmation_failed` does. A scheduled
 run that ends with it pauses its pair (catalog task, instance) at once
 ([policy-suspension.md](policy-suspension.md), "A failure that pauses at its first occurrence"); a
-direct run pauses nothing. Page-graph packages are unchanged. Every other end keeps its code: an
+direct run pauses nothing. Page-graph packages are unchanged.
+
+**Only during a package's break-in** (Workflow #463 U1b, since 0.12.63). The runtime tells the run
+at its start which code this verdict ends with. A scheduled run whose pair is past the break-in of
+the content of its package (`scheduling.suspension.break_in_runs` runs of that content settled as
+a success or a failure and `scheduling.suspension.break_in_ms` passed since the first of them;
+[policy-suspension.md](policy-suspension.md), "A failure that pauses at its first occurrence")
+ends instead with `page_confirmation_failed`, exactly as the failed wait's end gives it (the detail
+above, the timing), with the word `confirmation_problem` `unrecorded_screen` ("What the program
+saw", below) and without the dedicated code's `pack_operation_id`, `page_ids` and `attempts`, and
+the host names the same frame of the run's `Failure` pin as `artifact_id`: the frame is named by
+the closing decision's verdict, not by the code. That failure is settled as every
+`page_confirmation_failed` is: no pause at its first occurrence. Every other run raises this code as above: a scheduled run in its break-in, a direct
+run and a Lab run. The closing decision, its conditions and its observation are the same in every
+run; only the code it ends with differs. Every other end keeps its code: an
 application step, the entry, a guard refusal, an input recheck and every gate code.
 
 Known limits. A static screen that lasts longer than the failed wait and the closing decision's
@@ -1138,7 +1153,7 @@ whichever word it carries. Where the closing decision ("Retries") is made, the w
 | at its bound, on its still last frame, a declared loading page passes, alone or beside another page | `loading_page_shown` |
 | at its bound, on its still last frame, another page of the package passes | `other_page_shown` |
 | its own capture, recognition or evaluation failed, the evaluation of the package's other pages on its last frame included | `check_failed` |
-| every rule above held: a screen the package never recorded | `unrecorded_screen`, the run ending with `contained_task_linear_unrecorded_screen`, which always carries this word |
+| every rule above held: a screen the package never recorded | `unrecorded_screen`, the run ending with `contained_task_linear_unrecorded_screen`, which always carries this word (Workflow #463 U1b, since 0.12.63: a scheduled run past its package's break-in ends with `page_confirmation_failed` and the same word, "Only during a package's break-in" above) |
 
 What tells `input_not_taken` and `returned_to_own_page` apart is what the program had already
 recorded at that end, never a further look at the screen: the failed wait passed the step's
@@ -1285,8 +1300,9 @@ optional steps. They cannot cover:
   popup-sensitive skip target, the run fails loudly; a screen never recorded that stays still and
   shows nothing the package declares for the whole closing decision after the failed wait ends
   the run with `contained_task_linear_unrecorded_screen` and pauses its task at once (Workflow
-  #463 U1, "A screen the package never recorded" under "Failure codes"), and the frame it names
-  is where the missing ending is recorded from;
+  #463 U1, "A screen the package never recorded" under "Failure codes"; Workflow #463 U1b: in a
+  scheduled run during its package's break-in only, after it with `page_confirmation_failed`),
+  and the frame it names is where the missing ending is recorded from;
 - a popup already on the screen before the preceding step's click: it is cleared by a
   prerequisite package, or the path starts earlier;
 - a detour that confirms and returns to the same page (`A -> start -> [prompt?] -> confirm ->

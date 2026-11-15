@@ -14,16 +14,18 @@ use super::frames::{
     read_stored_frame, rect_inside, scaled_to_recording,
 };
 use super::generate::{page_required, required_ids};
+use super::inserted::{optional_after_invalid, recording_active as inserted_recording_active};
 use super::marks::{
     EvalFrame, MarkRejection, derive_check, evaluate_mark, prepare_mark, validate_mark_id,
 };
 use super::model::{
     ApplicationAttempt, ClickExecution, ClickFollow, ClickFollowForm, ClickGesture, ClickSpec,
-    EndingSpec, ForbiddenMarkView, LAB_RECORDING_DEFAULT_COLOR_MAX_DISTANCE,
-    LAB_RECORDING_DEFAULT_MATCH_METRIC, LAB_RECORDING_DEFAULT_SETTLE_MS,
-    LAB_RECORDING_DEFAULT_TEMPLATE_THRESHOLD, LAB_RECORDING_MAX_GESTURE_MS, LAB_RECORDING_SCHEMA,
-    LabRecording, MarkFamily, MarkSpec, OpaqueJson, RecordPoint, RecordRect, RecordSize,
-    RecordedFrame, RecordedMark, RecordingDefaults, RecordingEnding, RecordingStep, SelfTestStatus,
+    EndingSpec, ForbiddenMarkView, LAB_RECORD_MARK_SCHEMA,
+    LAB_RECORDING_DEFAULT_COLOR_MAX_DISTANCE, LAB_RECORDING_DEFAULT_MATCH_METRIC,
+    LAB_RECORDING_DEFAULT_SETTLE_MS, LAB_RECORDING_DEFAULT_TEMPLATE_THRESHOLD,
+    LAB_RECORDING_MAX_GESTURE_MS, LAB_RECORDING_SCHEMA, LabRecording, MarkFamily, MarkRequest,
+    MarkSpec, OpaqueJson, OptionalAfterSpec, RecordPoint, RecordRect, RecordSize, RecordedFrame,
+    RecordedMark, RecordingDefaults, RecordingEnding, RecordingStep, SelfTestStatus,
     StepApplication, StepClick, StepOptional, StepTransition, ValueTestRight, value_test_side_id,
 };
 use super::select::{
@@ -37,7 +39,7 @@ use super::store::{
     write_content_addressed,
 };
 use crate::LabOcr;
-use crate::codes::{LabCode, SelectProblem};
+use crate::codes::{LabCode, OptionalAfterProblem, SelectProblem};
 use actingcommand_contract::{
     InputSamplingEvidence, LabError, LabResult, SEGMENTED_SWIPE_BRAKE_DISTANCE_PX,
 };
@@ -270,15 +272,48 @@ fn attach_written(mut error: LabError, written: &[String]) -> LabError {
     error.with_details(details)
 }
 
-pub(crate) fn effective_indices(recording: &LabRecording) -> Vec<u32> {
-    let mut indices = recording
+/// #463 R4: the steps in the order a run meets them: the steps recorded on the path by their serial
+/// numbers, each followed by the steps a stopped recording inserted after it (`inserted_after`), by
+/// theirs. A recording without an inserted step is in serial order. An inserted step whose
+/// recorded step is not there comes last.
+pub(crate) fn path_order(recording: &LabRecording) -> Vec<&RecordingStep> {
+    let mut recorded = recording
         .steps
         .iter()
+        .filter(|step| step.inserted_after.is_none())
+        .collect::<Vec<_>>();
+    recorded.sort_by_key(|step| step.index);
+    let mut inserted = recording
+        .steps
+        .iter()
+        .filter(|step| step.inserted_after.is_some())
+        .collect::<Vec<_>>();
+    inserted.sort_by_key(|step| step.index);
+    let mut ordered = Vec::with_capacity(recording.steps.len());
+    for step in recorded {
+        ordered.push(step);
+        ordered.extend(
+            inserted
+                .iter()
+                .copied()
+                .filter(|other| other.inserted_after == Some(step.index)),
+        );
+    }
+    for step in inserted {
+        if !ordered.iter().any(|placed| placed.index == step.index) {
+            ordered.push(step);
+        }
+    }
+    ordered
+}
+
+/// The effective steps' serial numbers in the order a run meets them (#463 R4, [`path_order`]).
+pub(crate) fn effective_indices(recording: &LabRecording) -> Vec<u32> {
+    path_order(recording)
+        .into_iter()
         .filter(|step| step.is_effective())
         .map(|step| step.index)
-        .collect::<Vec<_>>();
-    indices.sort_unstable();
-    indices
+        .collect()
 }
 
 pub(crate) fn last_effective(recording: &LabRecording) -> Option<u32> {
@@ -642,6 +677,7 @@ fn new_step(index: u32, frames: Vec<RecordedFrame>) -> RecordingStep {
         forbidden: Vec::new(),
         anchor: None,
         select: None,
+        inserted_after: None,
         transition: None,
         closed: false,
         closed_by: None,
@@ -1899,6 +1935,191 @@ pub(crate) fn apply_ending(
     })
 }
 
+/// #463 R4 (`contracts/lab-recording.md`, "Inserting an optional step after stop"): a stopped
+/// recording takes a pop-up a run met after the effect of step `spec.step` as an optional step,
+/// without recording again. Its frame and samples, files on the caller's machine, are admitted as an
+/// ending's are ([`apply_ending`]: one size, a pure scale converted with `scaled_from`,
+/// content-addressed in the recording); the step takes the next serial number and
+/// `inserted_after`, the recorded step it runs after (the step named, or the recorded step an
+/// inserted step named runs after, whose run it joins), and is closed as `--close-step` closes a
+/// step whose click was declared and never executed. Its page, marks, click and settle then go
+/// through the marks flow of `record mark --step <n>` ([`apply_marks`]), so every mark is
+/// self-tested on its frames and every rule of a click and an optional step holds. An active
+/// recording takes none (`recording_active`); the named step is a step of the recording
+/// (`step_unknown`), not its last step (`step_last`) and no application step (`step_application`).
+/// Returns the marks flow's result on the new step, its frame and samples as admitted.
+pub(crate) fn apply_optional_after(
+    session: &mut Session,
+    spec: &OptionalAfterSpec,
+    ocr: &LabOcr,
+) -> LabResult<MarkApplied> {
+    let named = spec.step;
+    if !session.stopped {
+        return Err(inserted_recording_active(named));
+    }
+    let Some(step) = step_ref(&session.recording, named).filter(|step| step.is_effective()) else {
+        return Err(optional_after_invalid(
+            OptionalAfterProblem::StepUnknown,
+            Some(named),
+            format!(
+                "step {named} is no step of the recording (none, or a dropped or converted one); \
+                 record status lists the steps in the order they run; nothing was written"
+            ),
+            json!({}),
+        ));
+    };
+    let after = step.inserted_after.unwrap_or(named);
+    let application = step
+        .application
+        .as_ref()
+        .map(|application| application.action.clone());
+    if last_effective(&session.recording) == Some(named) {
+        return Err(optional_after_invalid(
+            OptionalAfterProblem::StepLast,
+            Some(named),
+            format!(
+                "step {named} is the last step: every run ends on its page and presses nothing \
+                 after it; a screen after the last press is an ending (record mark --ending); \
+                 nothing was written"
+            ),
+            json!({}),
+        ));
+    }
+    if let Some(action) = application {
+        return Err(optional_after_invalid(
+            OptionalAfterProblem::StepApplication,
+            Some(named),
+            format!(
+                "step {named} is an application step ({action}); an optional step is inserted \
+                 after a press; nothing was written"
+            ),
+            json!({"application": action}),
+        ));
+    }
+    let local = FrameMeta::local();
+    let (loaded, scaled_from) = scaled_to_recording(
+        session.recording.coordinate_space,
+        read_frame_file(&spec.frame)?,
+        &spec.frame,
+    )?;
+    let mut frame = admit_frame(session, loaded, "primary", &local, &spec.frame)?;
+    frame.scaled_from = scaled_from;
+    let mut samples = Vec::new();
+    for path in &spec.samples {
+        let (loaded, scaled_from) = scaled_to_recording(
+            session.recording.coordinate_space,
+            read_frame_file(path)?,
+            path,
+        )?;
+        let mut sample = admit_frame(session, loaded, "sample", &local, path)?;
+        sample.scaled_from = scaled_from;
+        samples.push(sample);
+    }
+    let index = next_step_index(&session.recording)?;
+    let mut inserted = new_step(
+        index,
+        std::iter::once(frame.clone())
+            .chain(samples.iter().cloned())
+            .collect(),
+    );
+    inserted.inserted_after = Some(after);
+    inserted.closed = true;
+    inserted.closed_by = Some("author".to_string());
+    session.recording.steps.push(inserted);
+    let request = MarkRequest {
+        schema_version: LAB_RECORD_MARK_SCHEMA.to_string(),
+        step: Some(index),
+        page: spec.page.clone(),
+        add: spec.add.clone(),
+        reuse: spec.reuse.clone(),
+        click: spec.click.clone(),
+        optional: Some(true),
+        optional_settle_ms: spec.settle_ms,
+        ..MarkRequest::default()
+    };
+    let mut applied = apply_marks(session, &request, ocr)?;
+    applied.frame = Some(frame);
+    applied.samples = samples;
+    Ok(applied)
+}
+
+/// #463 R4: `record mark --remove-inserted <n>`: the stopped recording gives up its inserted
+/// optional step `n`, dropped as `--drop-step` drops a step: it stays in the file with its frames,
+/// its marks free their ids, and the next `record stop` generates the package without it. A step
+/// that is no inserted step, or one given up already, is `not_inserted`; a mark of it another step
+/// or an ending reuses, or another page forbids, is `record_mark_in_use`, as for `--drop-step`.
+pub(crate) fn remove_inserted(session: &mut Session, index: u32) -> LabResult<()> {
+    if !session.stopped {
+        return Err(inserted_recording_active(index));
+    }
+    let recording = &session.recording;
+    let Some(step) = step_ref(recording, index)
+        .filter(|step| step.is_effective() && step.inserted_after.is_some())
+    else {
+        return Err(not_inserted(recording, index));
+    };
+    let ids = step
+        .marks
+        .iter()
+        .map(|mark| mark.id.clone())
+        .collect::<BTreeSet<_>>();
+    let used_by_others = recording
+        .steps
+        .iter()
+        .filter(|other| other.is_effective() && other.index != index)
+        .flat_map(|other| {
+            let transition_reused = match &other.transition {
+                Some(StepTransition::Page { reused, .. }) => reused.as_slice(),
+                _ => &[][..],
+            };
+            other
+                .reused
+                .iter()
+                .chain(transition_reused)
+                .chain(&other.forbidden)
+        })
+        .chain(
+            recording
+                .endings
+                .iter()
+                .flat_map(|ending| ending.reused.iter()),
+        )
+        .filter(|id| ids.contains(*id))
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    if !used_by_others.is_empty() {
+        return Err(with_details(
+            blocked(
+                "record_mark_in_use",
+                format!("marks of step {index} are reused by other steps; nothing was written"),
+            ),
+            json!({"step": index, "marks": used_by_others}),
+        ));
+    }
+    step_mut(&mut session.recording, index)?.dropped = true;
+    Ok(())
+}
+
+/// #463 R4: `remove_inserted` naming no inserted step that is not given up yet: `not_inserted`,
+/// with the inserted steps there are.
+fn not_inserted(recording: &LabRecording, index: u32) -> LabError {
+    let inserted = recording
+        .steps
+        .iter()
+        .filter(|step| step.is_effective() && step.inserted_after.is_some())
+        .map(|step| step.index)
+        .collect::<Vec<_>>();
+    optional_after_invalid(
+        OptionalAfterProblem::NotInserted,
+        Some(index),
+        format!(
+            "step {index} is no inserted optional step of the recording, or it was given up \
+             already; nothing was written"
+        ),
+        json!({"inserted": inserted}),
+    )
+}
+
 /// #463 R1: the step a select's self-test probes, as this command leaves it: its target, the
 /// batch with its new crops, its own and reused marks after their self-tests, the marks its page
 /// forbids and its anchor.
@@ -3027,6 +3248,22 @@ pub(crate) fn apply_optional(
 ) -> LabResult<()> {
     let first = effective_indices(recording).first() == Some(&target);
     let step = step_mut(recording, target)?;
+    // #463 R4: a step a stopped recording inserted was never recorded on the path; it stays
+    // optional, since a required step would make every run need its pop-up.
+    if request.optional == Some(false)
+        && let Some(after) = step.inserted_after
+    {
+        return Err(optional_after_invalid(
+            OptionalAfterProblem::ClearsOptional,
+            Some(target),
+            format!(
+                "step {target} was inserted after step {after} as an optional step and is never \
+                 recorded on the path, so it stays optional; give it up with record mark \
+                 --remove-inserted {target}; nothing was written"
+            ),
+            json!({"inserted_after": after}),
+        ));
+    }
     match request.optional {
         None => {}
         Some(false) => step.optional = None,

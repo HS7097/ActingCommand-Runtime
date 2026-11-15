@@ -14,6 +14,7 @@ use super::model::{
     SelfTest, SelfTestMargin, SelfTestStatus, StepClick, StepOptional, StepSelect, StepTransition,
 };
 use super::select::{on_empty_key, select_invalid};
+use super::steps::path_order;
 use super::store::{blocked, invalid, with_details};
 use crate::codes::{ClickFollowProblem, SelectProblem};
 use actingcommand_contract::{
@@ -442,15 +443,13 @@ impl Plan {
     }
 }
 
-/// The effective steps (neither dropped nor converted), by serial number.
+/// The effective steps (neither dropped nor converted), by serial number; #463 R4: each step a
+/// stopped recording inserted after the step it runs after (`path_order`).
 pub(crate) fn effective_steps(recording: &LabRecording) -> Vec<&RecordingStep> {
-    let mut steps = recording
-        .steps
-        .iter()
+    path_order(recording)
+        .into_iter()
         .filter(|step| step.is_effective())
-        .collect::<Vec<_>>();
-    steps.sort_by_key(|step| step.index);
-    steps
+        .collect()
 }
 
 fn stop_blocked(code: &str, message: String, details: Value) -> LabError {
@@ -1653,6 +1652,10 @@ fn step_provenance(plan: &Plan, step: &PlanStep) -> LabResult<Value> {
     if let Some(optional) = &step.step.optional {
         entry.insert("optional".into(), optional_provenance(optional));
     }
+    // #463 R4: only a step a stopped recording inserted records the recorded step it runs after.
+    if let Some(after) = step.step.inserted_after {
+        entry.insert("inserted_after".into(), json!(after));
+    }
     match &step.step.transition {
         None => {}
         Some(StepTransition::Window { min_ms, max_ms }) => {
@@ -2230,6 +2233,7 @@ pub(crate) fn select_probe_plan(
         forbidden: Vec::new(),
         anchor: None,
         select: None,
+        inserted_after: None,
         transition: None,
         closed: true,
         closed_by: None,

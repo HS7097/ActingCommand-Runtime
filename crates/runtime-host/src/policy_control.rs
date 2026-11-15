@@ -11,8 +11,8 @@ use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::{Code, CodeStr, Location, Outcome};
 use actingcommand_contract::{
     MAX_POLICY_CONTROL_STATE_DAYS, PerformanceContext, PolicyActivitySample,
-    PolicyActivityStateRecord, PolicyAdmissionRecord, PolicyBudgetDenial, PolicyBudgetDimension,
-    PolicyBudgetReceipt, PolicyConditionReruns, PolicyConditionSettlement,
+    PolicyActivityStateRecord, PolicyAdmissionRecord, PolicyBreakInRecord, PolicyBudgetDenial,
+    PolicyBudgetDimension, PolicyBudgetReceipt, PolicyConditionReruns, PolicyConditionSettlement,
     PolicyControlStateRecord, PolicyDailyCount, PolicyDispatchClockRecord,
     PolicyExecutionEventData, PolicyExecutionOutcome, PolicyFailureClass, PolicyFailureDisposition,
     PolicyFailureRecord, PolicyFailureStreakRecord, PolicyJournalDispatchRecord,
@@ -319,6 +319,35 @@ pub(crate) struct PolicyControlState {
     /// from the execution record's `condition`, so a replay rebuilds it; any other settlement of
     /// the pair removes it. At most one per pair.
     condition_reruns: BTreeMap<(String, String), PolicyConditionReruns>,
+    /// Workflow #463 U1b (register §1.389): per (task, instance), the pair's break-in for the
+    /// content of its `linear_steps` package: that content, its runs settled as a success or a
+    /// failure, and when the first of them settled. Set only by a live settlement that knows the
+    /// content its run was prepared with ([`Self::note_break_in_run`]); kept in the pair's value
+    /// record, so a loading start loads it and a replay of dispatch events keeps it as loaded. No
+    /// dispatch record holds it (a success does not name the content it ran), so a replay that
+    /// rebuilds the decision memory from the dispatch records alone (a seeding start) takes it
+    /// from the pairs' latest value records ([`Self::restore_break_ins`]).
+    break_ins: BTreeMap<(String, String), PolicyBreakInRecord>,
+}
+
+/// Workflow #463 U1b: whether a pair whose break-in is `break_in` and whose present run was
+/// prepared with `content` (`None`: not measured) is past its break-in at `now_unix_ms`: the same
+/// content, at least `runs` runs of it settled and at least `ms` passed since the first of them.
+/// Anything else (no break-in yet, another content, an unmeasured content) is inside.
+pub(crate) fn break_in_over(
+    break_in: Option<&PolicyBreakInRecord>,
+    content: Option<&str>,
+    (runs, ms): (u32, u64),
+    now_unix_ms: u64,
+) -> bool {
+    match (break_in, content) {
+        (Some(break_in), Some(content)) => {
+            break_in.content_hash == content
+                && break_in.runs >= runs
+                && now_unix_ms.saturating_sub(break_in.first_settled_at_unix_ms) >= ms
+        }
+        _ => false,
+    }
 }
 
 /// Workflow #422 LN-3: one value record of the decision memory, with its key's complete state
@@ -398,6 +427,11 @@ impl PolicyControlState {
             .chain(dispatches.keys().map(|(task, instance)| (task, instance)))
             .chain(
                 self.condition_reruns
+                    .keys()
+                    .map(|(task, instance)| (task, instance)),
+            )
+            .chain(
+                self.break_ins
                     .keys()
                     .map(|(task, instance)| (task, instance)),
             )
@@ -501,7 +535,60 @@ impl PolicyControlState {
             condition_reruns: self.condition_reruns.get(&pair).cloned(),
             failure_settled: self.failure_settled.get(&pair).copied(),
             dispatches: Vec::new(),
+            break_in: self.break_ins.get(&pair).cloned(),
         }
+    }
+
+    /// Workflow #463 U1b: the pair's break-in, if one of its runs of a measured `linear_steps`
+    /// package has settled.
+    pub(crate) fn break_in(
+        &self,
+        task_id: &str,
+        instance_id: &str,
+    ) -> Option<&PolicyBreakInRecord> {
+        self.break_ins
+            .get(&(task_id.to_owned(), instance_id.to_owned()))
+    }
+
+    /// Workflow #463 U1b (`contracts/policy-suspension.md`, "A failure that pauses at its first
+    /// occurrence"): a run of the pair prepared with the package content `content` settled, as a
+    /// success or a failure (never a stop or a condition end; the caller decides), at
+    /// `settled_at_unix_ms`. The same content counts one more run; another content starts a new
+    /// break-in with this run as its first.
+    pub(crate) fn note_break_in_run(
+        &mut self,
+        task_id: &str,
+        instance_id: &str,
+        content: &str,
+        settled_at_unix_ms: u64,
+    ) {
+        let pair = (task_id.to_owned(), instance_id.to_owned());
+        match self.break_ins.get_mut(&pair) {
+            Some(break_in) if break_in.content_hash == content => {
+                break_in.runs = break_in.runs.saturating_add(1);
+            }
+            _ => {
+                self.break_ins.insert(
+                    pair,
+                    PolicyBreakInRecord {
+                        content_hash: content.to_owned(),
+                        runs: 1,
+                        first_settled_at_unix_ms: settled_at_unix_ms,
+                    },
+                );
+            }
+        }
+    }
+
+    /// Workflow #463 U1b fix round 2 (`contracts/ledger-observer.md` §11.5, "Without the
+    /// marker"): the pairs' break-ins as their latest value records hold them (`recorded`, by
+    /// (task, instance)), for a decision memory rebuilt from the dispatch records alone, which
+    /// hold none. Nothing else of the state changes.
+    pub(crate) fn restore_break_ins(
+        &mut self,
+        recorded: BTreeMap<(String, String), PolicyBreakInRecord>,
+    ) {
+        self.break_ins = recorded;
     }
 
     /// Workflow #422 LN-3 (register L7, L14): applies one value record; the record replaces its
@@ -587,6 +674,15 @@ impl PolicyControlState {
                     }
                     None => {
                         self.condition_reruns.remove(&pair);
+                    }
+                }
+                // Workflow #463 U1b: the pair's break-in as its latest settlement wrote it.
+                match &state.break_in {
+                    Some(break_in) => {
+                        self.break_ins.insert(pair.clone(), break_in.clone());
+                    }
+                    None => {
+                        self.break_ins.remove(&pair);
                     }
                 }
                 match &state.retry_round {

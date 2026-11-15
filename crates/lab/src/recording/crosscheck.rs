@@ -1232,8 +1232,11 @@ fn optional_ambiguous(
                 step.step.index
             ),
         ),
+        // #463 R4 fix round 2: `step` is the package's number of the optional step, `record_index`
+        // its serial number, which `record mark --step` takes.
         json!({
             "step": step.number,
+            "record_index": step.step.index,
             "page": page,
             "against": against.as_str(),
             "frames": frames
@@ -1267,9 +1270,14 @@ fn skip_target_insensitive(
                 skip.step.index
             ),
         ),
+        // #463 R4 fix round 2: `step` and `optional_step` are the package's numbers of the skip
+        // target and of the optional step, `record_index` and `optional_record_index` their serial
+        // numbers, which `record mark --step` takes.
         json!({
             "step": skip.number,
+            "record_index": skip.step.index,
             "optional_step": optional.number,
+            "optional_record_index": optional.step.index,
             "frames": frames
         }),
     )
