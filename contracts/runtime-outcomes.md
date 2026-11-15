@@ -77,6 +77,18 @@ A request's `detail` (`codes` or `full`), actingctl's `--detail` or `ACTINGCOMMA
 the MCP server option override the default. Daemon `OUTCOME` lines and logs are always full.
 Between Runtime modules outcomes always travel full.
 
+## Deciding from an outcome (Workflow #469 A-3, the owner's option A on board #469; for new code)
+
+**Decide by class or by word, never by name.** A new decision point (code that chooses what
+happens next from an outcome) reads the code's `category`, its `ladder_class`, or a value of a
+closed vocabulary that the outcome carries, and names no code one by one: no `==`, `.is(…)`,
+`matches!`, list, table or prefix of codes. Building, relaying, recording or printing a code is
+not a decision. Where neither the class nor a carried word separates the cases, the implementer
+stops and asks the coordinator, with the list of codes it wanted to write and what each would
+get; the answer is a new word, a new code with its own class, or a written exception that names
+the slice removing it. Existing comparisons stay until a slice moves them; a configuration key
+that lists codes is such a comparison and needs the same question.
+
 ## Surfaces and line formats
 
 | Surface | Form | Slice |

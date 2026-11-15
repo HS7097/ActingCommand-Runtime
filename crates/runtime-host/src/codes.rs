@@ -3462,3 +3462,49 @@ actingcommand_contract::outcome_vocabulary! {
     }
 }
 // ---- Workflow #438 HELD-1: end ----
+
+// ---- Workflow #469 V0 (register §1.386; the design's places 3 and 4): begin ----
+actingcommand_contract::outcome_vocabulary! {
+    /// Who withdrew an application's availability, from the source of the active
+    /// `session.instance.available` record that withdrew it (vocabulary `availability_source`,
+    /// since 0.12.62): the value of `instance_unavailable`. The host slice sets it.
+    pub enum AvailabilitySource: "availability_source" {
+        /// The configured seed: the configuration marks the application unavailable.
+        Configured => "configured",
+        /// The backend self-check gate: a self-check not passed or not yet recorded, a resource
+        /// fence, or a gated instance configured unavailable (they share the record's source).
+        SelfCheck => "self_check",
+        /// The handset's wired device link is not `device` (with `device_link_state`).
+        DeviceLink => "device_link",
+        /// The handset is held (with `device_hold`).
+        DeviceState => "device_state",
+        /// A publisher other than these four.
+        OtherPublisher => "other_publisher",
+        /// The instance's facts are missing or unreadable.
+        FactsMissing => "facts_missing",
+    }
+}
+
+actingcommand_contract::outcome_vocabulary! {
+    /// Why a failure paused its task on the application, in the settlement's own order: a
+    /// severe failure first, then a sensitive task, then the streak, then `on_failure`
+    /// (vocabulary `pause_cause`, since 0.12.62): the value of `policy_task_paused`. The host
+    /// slice sets it.
+    pub enum PauseCause: "pause_cause" {
+        /// A failure that pauses its task at the first occurrence.
+        SevereFailure => "severe_failure",
+        /// The package met a screen it never recorded.
+        UnrecordedScreen => "unrecorded_screen",
+        /// The run took longer than its runtime budget.
+        RuntimeBudgetExceeded => "runtime_budget_exceeded",
+        /// The run was cut short by the Runtime's own end twice in a row.
+        InterruptedAgain => "interrupted_again",
+        /// A task marked sensitive failed.
+        SensitiveTask => "sensitive_task",
+        /// The same failure repeated up to the task's threshold.
+        RepeatedFailure => "repeated_failure",
+        /// The task used up its retries and is set to pause on failure.
+        RetriesExhausted => "retries_exhausted",
+    }
+}
+// ---- Workflow #469 V0: end ----
