@@ -2579,3 +2579,31 @@ test = "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_463_l1::l1
 ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
 reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: Workflow #463 L1 (0.12.60; register §1.370; brief rd-1114/brief-463-l1-record-one-call.md; contracts/lab-recording.md, \"One call per step\";)."
 covered_by = "actingcommand-lab::lib::gate_463_l1::l1_one_call_records_the_step_the_three_calls_record, left in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_469_f1::f1_ac_get_run_shows_the_terminal_values_in_full"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl that Workflow #469 F1 added on main after LAB-7's base, merged into LAB-7, which deletes the program: it ran on actingctl's own fake Runtime (A42's) and MCP tools, both gone (row: Workflow #469 F1 (0.12.62; register §1.387): the run reads show failure_values beside the code)."
+covered_by = "actingcommand-runtime-client::lib::tests::gate_c2::f1_a_run_terminal_carries_the_values_codes_mode_keeps_of_its_outcome (the full status's terminal carries failure_values, in the struct and in its JSON), which lab_ops::run_show answers verbatim to the Lab's run show and ac_run_show."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_469_f1::f1_ac_runs_shows_the_values_beside_the_failure_code"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl that Workflow #469 F1 added on main after LAB-7's base, merged into LAB-7, which deletes the program: it ran on actingctl's own fake Runtime (A42's) and MCP tools, both gone (row: Workflow #469 F1 (0.12.62; register §1.387): the run reads show failure_values beside the code)."
+covered_by = "None since LAB-7: the runs row copies failure_values beside failure_code in lab_ops::run_list::row, and no test holds that copy; the status it copies from is actingcommand-runtime-client::lib::tests::gate_c2::f1_a_run_terminal_carries_the_values_codes_mode_keeps_of_its_outcome."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_469_f1::f1_the_overview_run_shows_the_terminal_values"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl that Workflow #469 F1 added on main after LAB-7's base, merged into LAB-7, which deletes the program: it ran on actingctl's own fake Runtime (A42's) and MCP tools, both gone (row: Workflow #469 F1 (0.12.62; register §1.387): the run reads show failure_values beside the code)."
+covered_by = "actingcommand-runtime-client::lib::tests::gate_c2::f1_a_run_terminal_carries_the_values_codes_mode_keeps_of_its_outcome (the brief status's terminal carries failure_values), which the overview's run block holds verbatim; no test holds the block itself since LAB-7."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_469_f1::f1_the_diagnosis_runs_show_the_terminal_values_and_the_groups_keep_the_code"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl that Workflow #469 F1 added on main after LAB-7's base, merged into LAB-7, which deletes the program: it ran on actingctl's own fake Runtime (A42's) and MCP tools, both gone (row: Workflow #469 F1 (0.12.62; register §1.387): the run reads show failure_values beside the code)."
+covered_by = "actingcommand-runtime-client::lib::tests::gate_c2::f1_a_run_terminal_carries_the_values_codes_mode_keeps_of_its_outcome (the brief status's terminal carries failure_values), which the diagnosis's runs rows hold verbatim; no test holds that runs_grouped keeps grouping by the code alone since LAB-7."
