@@ -124,7 +124,12 @@ a rule the package already has kept and not composed while the hold lasts ("One 
 take what the document's `held` takes, a non-blank text of at most 1024 bytes without a control
 character: a reason outside that is refused `decision_invalid` at `/held/reason` (a reference at
 `/held/reference`), as the document's is, the outcome naming no `path`, since no file was read.
-Before anything is read or written, `--decide` beside either flag is refused `validation_failed`
+The command line cannot give a text that is the word `true` or that begins with `--`: its flag
+parser takes no such word as a flag's value (a value `true` reads as no value, and a word that
+begins with `--` as the next flag), so such a call is refused `validation_failed` before anything
+is read, the flag missing its value or the word refused as a flag of its own; such a text is given
+in a decision document by `--decide`. Before anything is read or written, `--decide` beside either
+flag is refused `validation_failed`
 naming the held flag (`--held-reason` when it is given), `argument_problem` `conflicting`, and
 `--held-reference` without `--held-reason` the same, naming `--held-reference`. The flags only
 hold: nothing here lifts a hold, which a decision of another class given by `--decide` does
