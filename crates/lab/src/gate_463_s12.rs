@@ -1,43 +1,53 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// #463 S1-2 (contracts/lab-recording.md, "Fresh before, still after"; register §1.403): a press
-// recorded by the command that makes it is recorded with a fresh screen before it and a still
-// screen after it. `record_press` runs under the recording lock with a fake Runtime (its input
-// answer, its captures and the caller's clock, `RecordFramePorts`); stillness is the Runtime's one
-// frame-change measure.
-// - `s12_an_animated_screen_after_is_kept_between_and_the_still_one_is_the_frame_after`: after the
-//   wait of 800 ms the captures are an animation, the settled screen and the settled screen again
-//   (one pixel differs): a capture every 300 ms until the third is still with the second. The
-//   animation is kept as a superseded frame of step 2 (f0002), the third capture is the frame after
-//   (f0003, live) and step 1's `after_frame`, the second is stored nowhere; `after_capture {800,
-//   5000, true, 1400, 3, 1}`, no warning.
-// - `s12_a_screen_never_still_is_taken_to_the_bound_and_warned`: for the bounds 0, 100, 300, 1000
-//   and 5000 ms, captures that are never still with the one before: the waits are 800, then 300
-//   each, the last only the rest of the bound; the captures are exactly ceil(bound / 300) + 2 with
-//   the frame before (never more); the frame after is the last capture, at most three frames
-//   between are kept superseded, `still` false, `waited_ms` 800 + the bound, and the answer's
-//   `record.warnings` holds `after_not_still`.
-// - `s12_an_old_frame_before_is_taken_again_and_stored_only_when_it_changed`: an open step's frame
-//   recorded long ago: one capture before the press; still with it (one pixel differs), nothing is
-//   stored and the press names the old frame (`refreshed` false); changed, it is stored, the old
-//   frame superseded, and the press names the new one (`refreshed` true). A frame recorded at a time
-//   the clock has not reached is young: no capture before the press.
-// - `s12_a_step_with_marks_keeps_its_frame_before`: an open step with a mark (the older flow) and an
-//   old frame: no capture before the press, which names the step's frame.
-// Frames are synthetic 160x90 screens of one colour; no Runtime, no device; the tests read no clock
-// (the age of a frame is written into the step table as a fixed time) and never sleep.
+// #463 S1-2 (contracts/lab-recording.md, "Recording while playing", "The screen after"; register
+// §1.403): after a press recorded by the command that makes it, the screen is captured until it is
+// still and every capture is kept. `record_press` runs under the recording lock with a fake
+// Runtime (its input answer, its captures and the caller's clock, `RecordFramePorts`): the fake's
+// clock moves only by its waits and by the time a capture is scripted to take, and the tests read
+// no clock. Stillness is the Runtime's one frame-change measure. The defaults: the first capture
+// 100 ms after the press, one every 100 ms, still when the captures of the last 300 ms show one
+// screen, at most 5000 ms.
+// - `s12_an_animation_that_settles_keeps_every_capture_and_the_last_is_the_frame_after`: after the
+//   press two frames of an animation, then the settled screen four times (two of them one pixel
+//   off, still by the measure): six captures 100 ms apart, the sixth the first whose last 300 ms
+//   are still. All six are frames of step 2 in order (f0002 to f0007), the first five superseded,
+//   f0007 live and step 1's `after_frame`; `after_capture {after_ms: 100, interval_ms: 100,
+//   still_ms: 300, still_max_ms: 5000, still: true, waited_ms: 600, captures: 6, kept: 5}`, the
+//   answer's `after` the same, no warning.
+// - `s12_a_screen_that_never_settles_is_taken_to_the_bound_and_warned`: for the bound and interval
+//   (0, 100), (250, 100), (300, 100), (1000, 50), (5000, 100) and (12000, 100), screens that never
+//   settle: exactly 1 + bound / interval captures (121 at the last), one wait of the interval
+//   before each but the first, every capture a frame of step 2 and the last the frame after,
+//   `still` false, `waited_ms` 100 + (captures - 1) x interval, `kept` captures - 1, and the
+//   answer's `record.warnings` `["after_not_still"]`.
+// - `s12_a_capture_slower_than_the_interval_is_followed_at_once`: the first capture after the press
+//   takes 250 ms: the next starts at once (no wait), the one after it 100 ms later; that third is
+//   still with the second over the last 300 ms: `waited_ms` 450, three captures.
+// - `s12_identical_captures_are_one_file_and_several_entries`: the same screen four times after the
+//   press: four frames of step 2 (f0002 to f0005) of one sha256 and one path, each its own entry with
+//   its own time, and two files in the frame store (the screen before and this one).
+// - `s12_two_presses_keep_the_after_loop_then_the_press_frame_in_order`: two taps in a row: step 2
+//   holds, in time order, the five captures of the first tap's after loop (superseded), then the
+//   capture the second tap was sent on (f0007, live); step 1's `after_frame` stays f0006, the loop's
+//   last, which the second tap's capture does not rewrite; step 2's press names f0007 before and
+//   f0011, its own loop's last, after.
+// - `s12_still_ms_0_takes_one_capture_untested`: `--still-ms 0`: one capture 100 ms after the press
+//   is the frame after, `still` null, no warning.
+// - `s12_more_than_120_intervals_in_the_bound_are_refused_before_anything`: a bound of more than 120
+//   intervals (12001 ms at 100, 60000 at 499, 2401 at 20) is `validation_failed`
+//   `details{argument: "still_max_ms", reason: "conflicting", interval_ms}`: nothing captured,
+//   pressed or written.
+// Frames are synthetic 160x90 screens of one colour; no Runtime, no device; nothing sleeps.
 
-use crate::recording::store::{
-    hex_sha256, lab_dir, old_record_path, recording_path, save_recording,
-};
+use crate::recording::store::{hex_sha256, lab_dir, old_record_path, recording_path};
 use crate::{
-    AfterCapture, AttachFrameRequest, ClickEffect, ClickPlan, CommitClickRequest,
-    LAB_RECORD_MARK_SCHEMA, LabOcr, LabRecording, MarkFamily, MarkRequest, MarkSpec, OpaqueJson,
-    PlanClickRequest, PointPress, RecordFramePorts, RecordPoint, RecordPressOutcome,
-    RecordPressRequest, RecordRect, RecordStartOptions, RecordingLock, record_attach_frame,
-    record_mark, record_press, record_start,
+    AfterCapture, AttachFrameRequest, CapturedFrame, ClickEffect, ClickPlan, CommitClickRequest,
+    OpaqueJson, PlanClickRequest, PointPress, RecordFramePorts, RecordPoint, RecordPressOutcome,
+    RecordPressRequest, RecordStartOptions, RecordingLock, record_attach_frame, record_press,
+    record_start,
 };
-use actingcommand_contract::LabResult;
+use actingcommand_contract::{InputFrameReference, LabError, LabResult};
 use actingcommand_device::{CaptureBackendName, Frame, PixelFormat};
 use serde_json::{Value, json};
 use std::cell::RefCell;
@@ -53,35 +63,31 @@ const TASK_ID: &str = "neutral_task";
 const STARTED_AT: u64 = 1_700_000_000_000;
 const WIDTH: u32 = 160;
 const HEIGHT: u32 = 90;
-/// A time long before any run of these tests: a frame recorded then is old.
-const LONG_AGO_UNIX_MS: u64 = STARTED_AT;
-/// A time the clock has not reached (2100-01-01): a frame recorded then is younger than any bound.
-const UNREACHED_UNIX_MS: u64 = 4_102_444_800_000;
 
 /// The screens: the colour over the whole frame, and the colour of its top left pixel when it
-/// differs. Screens of one colour are still with each other by the frame-change measure (one
-/// pixel changes no cell of its digest) and differ in their bytes; screens of different colours
-/// are not still.
+/// differs. Screens of one colour are still with each other by the frame-change measure (one pixel
+/// changes no cell of its digest) and differ in their bytes; screens of different colours are not
+/// still.
 const SCREENS: [([u8; 3], Option<[u8; 3]>); 6] = [
     ([40, 40, 200], None),
-    ([40, 40, 200], Some([255, 255, 255])),
     ([200, 40, 40], None),
+    ([200, 200, 40], None),
     ([40, 200, 40], None),
     ([40, 200, 40], Some([255, 255, 255])),
-    ([200, 200, 40], None),
+    ([200, 40, 200], None),
 ];
 /// The screen a press is made on.
 const BEFORE: usize = 0;
-/// The same screen, taken again: still with [`BEFORE`].
-const BEFORE_AGAIN: usize = 1;
-/// A screen of an animation after the press.
-const ANIMATION: usize = 2;
+/// A frame of an animation after the press.
+const ANIMATION: usize = 1;
+/// A later frame of that animation.
+const ANIMATION_LATER: usize = 2;
 /// The screen the press led to.
 const SETTLED: usize = 3;
-/// The same screen, taken again: still with [`SETTLED`].
+/// The same screen with one pixel off: other bytes, still with [`SETTLED`].
 const SETTLED_AGAIN: usize = 4;
-/// What the screen before became while the agent looked: not still with [`BEFORE`].
-const CHANGED: usize = 5;
+/// The screen the next press led to.
+const NEXT: usize = 5;
 
 // The PNG of screen `index`.
 fn screen(index: usize) -> Vec<u8> {
@@ -146,27 +152,62 @@ fn receipt() -> CommitClickRequest {
     }
 }
 
-/// The fake Runtime's capture and the caller's clock: the screens its captures take, in order,
-/// and what it was asked, in the log it shares with the press.
+// The reference of the frame the fake Runtime committed for a capture, of the screens' size.
+fn reference() -> InputFrameReference {
+    InputFrameReference {
+        frame_id: serde_json::from_value(json!(format!("frame_{:032x}", 1))).expect("a frame id"),
+        width: WIDTH,
+        height: HEIGHT,
+    }
+}
+
+/// One capture of the fake Runtime: the screen it takes and how long it takes on the fake clock.
+#[derive(Clone, Copy, Debug)]
+struct Shot {
+    screen: usize,
+    takes_ms: u64,
+}
+
+// A capture of `screen` that takes no time.
+const fn shot(screen: usize) -> Shot {
+    Shot {
+        screen,
+        takes_ms: 0,
+    }
+}
+
+/// The fake Runtime's capture and the caller's clock: the shots its captures take, in order, the
+/// log it shares with the press (`capture`, `press`, `wait <ms>`), and the clock, which moves only
+/// by the waits and by the time each capture takes.
 struct FakeDevice<'a> {
-    screens: VecDeque<usize>,
+    shots: VecDeque<Shot>,
     log: &'a RefCell<Vec<String>>,
+    now: Duration,
 }
 
 impl RecordFramePorts for FakeDevice<'_> {
     fn wait(&mut self, duration: Duration) {
+        self.now += duration;
         self.log
             .borrow_mut()
             .push(format!("wait {}", duration.as_millis()));
     }
 
-    fn capture(&mut self) -> LabResult<AttachFrameRequest> {
+    fn capture(&mut self) -> LabResult<CapturedFrame> {
         self.log.borrow_mut().push("capture".to_owned());
-        let index = self
-            .screens
+        let shot = self
+            .shots
             .pop_front()
             .expect("a capture the test did not script");
-        Ok(captured(index))
+        self.now += Duration::from_millis(shot.takes_ms);
+        Ok(CapturedFrame {
+            frame: captured(shot.screen),
+            input_frame: Some(reference()),
+        })
+    }
+
+    fn elapsed(&mut self) -> Duration {
+        self.now
     }
 }
 
@@ -175,7 +216,6 @@ impl RecordFramePorts for FakeDevice<'_> {
 // directory.
 struct Bench {
     lock: RecordingLock,
-    ocr: LabOcr,
     temp: TempDir,
 }
 
@@ -198,7 +238,6 @@ impl Bench {
         .expect("session file");
         let lock = RecordingLock::acquire(&state, INSTANCE, "gate_463_s12", "Lab-CLI")
             .expect("recording lock");
-        let ocr = LabOcr::from_vision_root(&temp.path().join("no-vision"));
         record_start(
             &lock,
             &RecordStartOptions {
@@ -209,7 +248,7 @@ impl Bench {
             },
         )
         .expect("record start");
-        Self { lock, ocr, temp }
+        Self { lock, temp }
     }
 
     fn state(&self) -> PathBuf {
@@ -222,76 +261,44 @@ impl Bench {
             .unwrap_or_else(|error| panic!("frame {index}: {}: {}", error.code, error.message));
     }
 
-    // The live primary frame of step `step` as recorded at `at_unix_ms`, written as the recording
-    // writes its step table: whether a press takes it again then depends on no clock.
-    fn recorded_at(&self, step: u32, at_unix_ms: u64) {
-        let state = self.state();
-        let path = recording_path(&state, RECORD_ID);
-        let mut recording: LabRecording =
-            serde_json::from_slice(&fs::read(&path).expect("step table")).expect("step table JSON");
-        let frame = recording
-            .steps
-            .iter_mut()
-            .find(|item| item.index == step)
-            .and_then(|item| {
-                item.frames
-                    .iter_mut()
-                    .rev()
-                    .find(|frame| frame.role == "primary" && !frame.superseded)
-            })
-            .expect("the step's live primary frame");
-        frame.recorded_at_unix_ms = at_unix_ms;
-        save_recording(&state, &recording)
-            .unwrap_or_else(|error| panic!("step table: {}: {}", error.code, error.message));
-    }
-
-    // `record mark --step <step> --color square=0,0,8,8`.
-    fn mark(&self, step: u32) {
-        let request = MarkRequest {
-            schema_version: LAB_RECORD_MARK_SCHEMA.to_owned(),
-            step: Some(step),
-            add: vec![MarkSpec::region_only(
-                "state/square".to_owned(),
-                MarkFamily::Color,
-                RecordRect {
-                    x: 0,
-                    y: 0,
-                    width: 8,
-                    height: 8,
-                },
-            )],
-            ..MarkRequest::default()
-        };
-        record_mark(&self.lock, &request, false, &self.ocr)
-            .unwrap_or_else(|error| panic!("mark {step}: {}: {:?}", error.code, error.details));
-    }
-
     // `record_press` of `request`, the fake Runtime performing the input and its captures taking
-    // `screens`: the answer and the log of the fake (`capture`, `press`, `wait <ms>`).
-    fn press(
+    // `shots`: the result and the log of the fake.
+    fn try_press(
         &self,
         request: &RecordPressRequest,
-        screens: &[usize],
-    ) -> (RecordPressOutcome, Vec<String>) {
+        shots: &[Shot],
+    ) -> (LabResult<RecordPressOutcome>, Vec<String>) {
         let log = RefCell::new(Vec::new());
         let result = {
             let mut device = FakeDevice {
-                screens: screens.iter().copied().collect(),
+                shots: shots.iter().copied().collect(),
                 log: &log,
+                now: Duration::ZERO,
             };
-            let mut press = |_plan: &ClickPlan| -> LabResult<CommitClickRequest> {
-                log.borrow_mut().push("press".to_owned());
-                Ok(receipt())
-            };
+            let mut press =
+                |_plan: &ClickPlan, _frame: InputFrameReference| -> LabResult<CommitClickRequest> {
+                    log.borrow_mut().push("press".to_owned());
+                    Ok(receipt())
+                };
             record_press(&self.lock, request, &mut press, &mut device)
         };
-        let outcome = result.unwrap_or_else(|error| {
+        (result, log.into_inner())
+    }
+
+    // As [`Bench::try_press`], the press performed and recorded, or the test's panic.
+    fn press(
+        &self,
+        request: &RecordPressRequest,
+        shots: &[Shot],
+    ) -> (RecordPressOutcome, Vec<String>) {
+        let (result, log) = self.try_press(request, shots);
+        let outcome = result.unwrap_or_else(|error: LabError| {
             panic!(
                 "the press: {}: {} {:?}",
                 error.code, error.message, error.details
             )
         });
-        (outcome, log.into_inner())
+        (outcome, log)
     }
 
     fn recording(&self) -> Value {
@@ -301,38 +308,78 @@ impl Bench {
         .expect("step table JSON")
     }
 
-    // Whether the recording's frame store holds a file of sha256 `sha256`.
-    fn stores(&self, sha256: &str) -> bool {
-        lab_dir(&self.state(), RECORD_ID)
-            .join("frames")
-            .join(format!("{sha256}.png"))
-            .exists()
+    // Every file of the recording's directory, by its `/`-separated path relative to it, with its
+    // bytes, in name order.
+    fn files(&self) -> Vec<(String, Vec<u8>)> {
+        let mut files = Vec::new();
+        let mut pending = vec![(lab_dir(&self.state(), RECORD_ID), String::new())];
+        while let Some((path, prefix)) = pending.pop() {
+            for entry in fs::read_dir(&path).expect("directory") {
+                let entry = entry.expect("entry");
+                let name = format!("{prefix}{}", entry.file_name().to_string_lossy());
+                if entry.file_type().expect("file type").is_dir() {
+                    pending.push((entry.path(), format!("{name}/")));
+                } else {
+                    files.push((name, fs::read(entry.path()).expect("file")));
+                }
+            }
+        }
+        files.sort();
+        files
+    }
+
+    // The names of the files of the recording's frame store.
+    fn frame_files(&self) -> Vec<String> {
+        let dir = lab_dir(&self.state(), RECORD_ID).join("frames");
+        let mut names = fs::read_dir(dir)
+            .expect("the frame store")
+            .map(|entry| {
+                entry
+                    .expect("entry")
+                    .file_name()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect::<Vec<_>>();
+        names.sort();
+        names
     }
 }
 
-// `tap 40 30 --record`, the bound of the stillness test `still_max_ms` after the wait of 800 ms.
-fn tap_request(still_max_ms: u64) -> RecordPressRequest {
+// `tap 40 30 --record`, the screen after it taken as `after` says.
+fn tap_request(after: AfterCapture) -> RecordPressRequest {
     RecordPressRequest {
         click: PlanClickRequest::default(),
         point_press: Some(PointPress::Tap {
             point: RecordPoint { x: 40, y: 30 },
         }),
-        after: AfterCapture {
-            still_max_ms,
-            ..AfterCapture::for_press(None)
-        },
+        after,
     }
+}
+
+// The defaults: `tap 40 30 --record`.
+fn default_tap() -> RecordPressRequest {
+    tap_request(AfterCapture::for_press(None))
+}
+
+// The log of a press on an open or new recording whose after loop takes `captures` captures with
+// no capture taking time: the capture before, the press, the wait of 100 ms, the first capture,
+// then a wait of `interval_ms` before each other one.
+fn press_log(captures: u64, interval_ms: u64) -> Vec<String> {
+    let mut log = ["capture", "press", "wait 100", "capture"]
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    for _ in 1..captures {
+        log.push(format!("wait {interval_ms}"));
+        log.push("capture".to_owned());
+    }
+    log
 }
 
 // The frames of step `step` as (frame id, sha256, superseded).
 fn frames_of(recording: &Value, step: u32) -> Vec<(String, String, bool)> {
-    let found = recording["steps"]
-        .as_array()
-        .expect("steps")
-        .iter()
-        .find(|item| item["index"] == step)
-        .unwrap_or_else(|| panic!("step {step}: {recording}"));
-    found["frames"]
+    step_of(recording, step)["frames"]
         .as_array()
         .expect("frames")
         .iter()
@@ -346,263 +393,346 @@ fn frames_of(recording: &Value, step: u32) -> Vec<(String, String, bool)> {
         .collect()
 }
 
-fn entry(frame_id: &str, sha256: String, superseded: bool) -> (String, String, bool) {
-    (frame_id.to_owned(), sha256, superseded)
+fn step_of(recording: &Value, step: u32) -> &Value {
+    recording["steps"]
+        .as_array()
+        .expect("steps")
+        .iter()
+        .find(|item| item["index"] == step)
+        .unwrap_or_else(|| panic!("step {step}: {recording}"))
+}
+
+// The frames of an after loop: frame ids from `first_id` on, one per screen, every one superseded
+// but the last.
+fn loop_frames(first_id: u32, screens: &[usize]) -> Vec<(String, String, bool)> {
+    screens
+        .iter()
+        .enumerate()
+        .map(|(index, screen)| {
+            (
+                format!("f{:04}", first_id + index as u32),
+                sha(*screen),
+                index + 1 < screens.len(),
+            )
+        })
+        .collect()
 }
 
 #[test]
-fn s12_an_animated_screen_after_is_kept_between_and_the_still_one_is_the_frame_after() {
+fn s12_an_animation_that_settles_keeps_every_capture_and_the_last_is_the_frame_after() {
     let bench = Bench::new();
-    let (outcome, log) = bench.press(
-        &tap_request(5_000),
-        &[BEFORE, ANIMATION, SETTLED, SETTLED_AGAIN],
-    );
-    assert_eq!(
-        log,
-        [
-            "capture", "press", "wait 800", "capture", "wait 300", "capture", "wait 300", "capture"
-        ]
-    );
+    let after = [
+        ANIMATION,
+        ANIMATION_LATER,
+        SETTLED,
+        SETTLED_AGAIN,
+        SETTLED,
+        SETTLED_AGAIN,
+    ];
+    let mut shots = vec![shot(BEFORE)];
+    shots.extend(after.map(shot));
+    let (outcome, log) = bench.press(&default_tap(), &shots);
+    // The captures start 100, 200, ..., 600 ms after the press; at 600 the last 300 ms are still.
+    assert_eq!(log, press_log(6, 100));
 
     let recording = bench.recording();
     assert_eq!(
         frames_of(&recording, 1),
-        [entry("f0001", sha(BEFORE), false)],
+        [("f0001".to_owned(), sha(BEFORE), false)],
         "{recording}"
     );
-    // The animation is a superseded frame of step 2; the third capture is its live frame.
+    // Every capture is kept, in order; all but the last superseded.
     assert_eq!(
         frames_of(&recording, 2),
-        [
-            entry("f0002", sha(ANIMATION), true),
-            entry("f0003", sha(SETTLED_AGAIN), false)
-        ],
+        loop_frames(2, &after),
         "{recording}"
     );
-    // The second capture, still with the third, is stored nowhere.
-    assert!(
-        !recording.to_string().contains(&sha(SETTLED)),
-        "{recording}"
-    );
-    assert!(!bench.stores(&sha(SETTLED)));
-    let execution = &recording["steps"][0]["click"]["execution"];
+    let execution = &step_of(&recording, 1)["click"]["execution"];
     assert_eq!(execution["before_frame"], "f0001", "{recording}");
-    assert_eq!(execution["after_frame"], "f0003", "{recording}");
+    assert_eq!(execution["after_frame"], "f0007", "{recording}");
     let taken = json!({
-        "after_ms": 800,
+        "after_ms": 100,
+        "interval_ms": 100,
+        "still_ms": 300,
         "still_max_ms": 5000,
         "still": true,
-        "waited_ms": 1400,
-        "captures": 3,
-        "kept": 1
+        "waited_ms": 600,
+        "captures": 6,
+        "kept": 5
     });
     assert_eq!(execution["after_capture"], taken, "{recording}");
 
     let record = serde_json::to_value(&outcome).expect("the record");
     assert_eq!(record["status"], "press_recorded", "{record}");
     assert_eq!(
-        record["click"]["execution"]["after_frame"], "f0003",
+        record["click"]["execution"]["after_frame"], "f0007",
         "{record}"
     );
-    let after = &record["after"];
-    assert_eq!(after["step"], 2, "{record}");
-    assert_eq!(after["frame_id"], "f0003", "{record}");
-    assert_eq!(after["sha256"], sha(SETTLED_AGAIN), "{record}");
+    let answered = &record["after"];
+    assert_eq!(answered["step"], 2, "{record}");
+    assert_eq!(answered["frame_id"], "f0007", "{record}");
+    assert_eq!(answered["sha256"], sha(SETTLED_AGAIN), "{record}");
     for (member, value) in taken.as_object().expect("the record of the frame after") {
-        assert_eq!(after[member], *value, "{member}: {record}");
+        assert_eq!(answered[member], *value, "{member}: {record}");
     }
     assert_eq!(record["warnings"], json!([]), "{record}");
 }
 
 #[test]
-fn s12_a_screen_never_still_is_taken_to_the_bound_and_warned() {
-    for bound in [0_u64, 100, 300, 1_000, 5_000] {
+fn s12_a_screen_that_never_settles_is_taken_to_the_bound_and_warned() {
+    for (still_max_ms, interval_ms) in [
+        (0_u64, 100_u64),
+        (250, 100),
+        (300, 100),
+        (1_000, 50),
+        (5_000, 100),
+        (12_000, 100),
+    ] {
+        let case = format!("still_max_ms {still_max_ms}, interval_ms {interval_ms}");
         let bench = Bench::new();
-        // The captures after the press: one after the wait, then one per pause of the bound.
-        let after_captures = 1 + bound.div_ceil(300);
-        let mut screens = vec![BEFORE];
-        screens.extend((0..after_captures).map(
-            |index| {
-                if index % 2 == 0 { ANIMATION } else { SETTLED }
-            },
-        ));
-        let (outcome, log) = bench.press(&tap_request(bound), &screens);
-
-        let mut pauses = vec![300_u64; (bound / 300) as usize];
-        if bound % 300 > 0 {
-            pauses.push(bound % 300);
-        }
-        let mut expected = vec!["capture".to_owned(), "press".to_owned()];
-        expected.extend(["wait 800".to_owned(), "capture".to_owned()]);
-        for pause in &pauses {
-            expected.extend([format!("wait {pause}"), "capture".to_owned()]);
-        }
-        assert_eq!(log, expected, "bound {bound}");
-        // The frame before and the captures after: the bound of the design, ceil(bound / 300) + 2,
-        // reached and never passed.
-        let captures = log.iter().filter(|line| *line == "capture").count() as u64;
-        assert_eq!(captures, bound.div_ceil(300) + 2, "bound {bound}");
-
-        // The frames between kept (at most three, the first ones) and the last capture, live.
-        let kept = (after_captures - 1).min(3);
-        let last = screens[screens.len() - 1];
-        let recording = bench.recording();
-        let mut between = (0..kept)
-            .map(|index| {
-                let id = format!("f{:04}", 2 + index);
-                entry(&id, sha(screens[1 + index as usize]), true)
-            })
+        let captures = 1 + still_max_ms / interval_ms;
+        let after = (0..captures)
+            .map(|index| if index % 2 == 0 { ANIMATION } else { SETTLED })
             .collect::<Vec<_>>();
-        let after_id = format!("f{:04}", 2 + kept);
-        between.push(entry(&after_id, sha(last), false));
+        let mut shots = vec![shot(BEFORE)];
+        shots.extend(after.iter().copied().map(shot));
+        let request = tap_request(AfterCapture {
+            interval_ms: Some(interval_ms),
+            still_max_ms,
+            ..AfterCapture::for_press(None)
+        });
+        let (outcome, log) = bench.press(&request, &shots);
+        // Exactly 1 + bound / interval captures after the press, the bound reached and never passed.
+        assert_eq!(log, press_log(captures, interval_ms), "{case}");
+
+        let recording = bench.recording();
         assert_eq!(
             frames_of(&recording, 2),
-            between,
-            "bound {bound}: {recording}"
+            loop_frames(2, &after),
+            "{case}: {recording}"
         );
-        let execution = &recording["steps"][0]["click"]["execution"];
-        assert_eq!(
-            execution["after_frame"], after_id,
-            "bound {bound}: {recording}"
-        );
+        let after_id = format!("f{:04}", 1 + captures);
+        let execution = &step_of(&recording, 1)["click"]["execution"];
+        assert_eq!(execution["after_frame"], after_id, "{case}: {recording}");
         let taken = json!({
-            "after_ms": 800,
-            "still_max_ms": bound,
+            "after_ms": 100,
+            "interval_ms": interval_ms,
+            "still_ms": 300,
+            "still_max_ms": still_max_ms,
             "still": false,
-            "waited_ms": 800 + bound,
-            "captures": after_captures,
-            "kept": kept
+            "waited_ms": 100 + (captures - 1) * interval_ms,
+            "captures": captures,
+            "kept": captures - 1
         });
-        assert_eq!(
-            execution["after_capture"], taken,
-            "bound {bound}: {recording}"
-        );
+        assert_eq!(execution["after_capture"], taken, "{case}: {recording}");
 
         let record = serde_json::to_value(&outcome).expect("the record");
-        assert_eq!(
-            record["after"]["frame_id"], after_id,
-            "bound {bound}: {record}"
-        );
-        assert_eq!(
-            record["after"]["sha256"],
-            sha(last),
-            "bound {bound}: {record}"
-        );
-        assert_eq!(record["after"]["still"], false, "bound {bound}: {record}");
+        assert_eq!(record["after"]["frame_id"], after_id, "{case}: {record}");
+        assert_eq!(record["after"]["still"], false, "{case}: {record}");
         assert_eq!(
             record["warnings"],
             json!(["after_not_still"]),
-            "bound {bound}: {record}"
+            "{case}: {record}"
         );
     }
 }
 
 #[test]
-fn s12_an_old_frame_before_is_taken_again_and_stored_only_when_it_changed() {
-    // Still with the old frame: nothing stored, the press names the old frame.
-    {
-        let bench = Bench::new();
-        bench.capture(BEFORE);
-        bench.recorded_at(1, LONG_AGO_UNIX_MS);
-        let (outcome, log) = bench.press(&tap_request(5_000), &[BEFORE_AGAIN, SETTLED, SETTLED]);
-        assert_eq!(
-            log,
-            [
-                "capture", "press", "wait 800", "capture", "wait 300", "capture"
-            ]
-        );
-        let recording = bench.recording();
-        assert_eq!(
-            frames_of(&recording, 1),
-            [entry("f0001", sha(BEFORE), false)],
-            "{recording}"
-        );
-        assert!(
-            !recording.to_string().contains(&sha(BEFORE_AGAIN)),
-            "{recording}"
-        );
-        assert!(!bench.stores(&sha(BEFORE_AGAIN)));
-        let execution = &recording["steps"][0]["click"]["execution"];
-        assert_eq!(execution["before_frame"], "f0001", "{recording}");
-        assert_eq!(execution["after_frame"], "f0002", "{recording}");
-        assert_eq!(outcome.before.frame_id, "f0001");
-        assert_eq!(outcome.before.sha256, sha(BEFORE));
-        assert!(!outcome.before.refreshed);
-    }
-
-    // Changed: the new frame is the step's live frame, the old one superseded, and the press
-    // names the new one.
-    {
-        let bench = Bench::new();
-        bench.capture(BEFORE);
-        bench.recorded_at(1, LONG_AGO_UNIX_MS);
-        let (outcome, log) = bench.press(&tap_request(5_000), &[CHANGED, SETTLED, SETTLED]);
-        assert_eq!(
-            log,
-            [
-                "capture", "press", "wait 800", "capture", "wait 300", "capture"
-            ]
-        );
-        let recording = bench.recording();
-        assert_eq!(
-            frames_of(&recording, 1),
-            [
-                entry("f0001", sha(BEFORE), true),
-                entry("f0002", sha(CHANGED), false)
-            ],
-            "{recording}"
-        );
-        let execution = &recording["steps"][0]["click"]["execution"];
-        assert_eq!(execution["before_frame"], "f0002", "{recording}");
-        assert_eq!(execution["after_frame"], "f0003", "{recording}");
-        assert_eq!(outcome.before.frame_id, "f0002");
-        assert_eq!(outcome.before.sha256, sha(CHANGED));
-        assert!(outcome.before.refreshed);
-    }
-
-    // Young: nothing is taken before the press.
-    {
-        let bench = Bench::new();
-        bench.capture(BEFORE);
-        bench.recorded_at(1, UNREACHED_UNIX_MS);
-        let (outcome, log) = bench.press(&tap_request(5_000), &[SETTLED, SETTLED]);
-        assert_eq!(log, ["press", "wait 800", "capture", "wait 300", "capture"]);
-        let recording = bench.recording();
-        assert_eq!(
-            frames_of(&recording, 1),
-            [entry("f0001", sha(BEFORE), false)],
-            "{recording}"
-        );
-        assert_eq!(outcome.before.frame_id, "f0001");
-        assert!(!outcome.before.refreshed);
-    }
-}
-
-#[test]
-fn s12_a_step_with_marks_keeps_its_frame_before() {
+fn s12_a_capture_slower_than_the_interval_is_followed_at_once() {
     let bench = Bench::new();
-    bench.capture(BEFORE);
-    bench.mark(1);
-    bench.recorded_at(1, LONG_AGO_UNIX_MS);
-    let (outcome, log) = bench.press(&tap_request(5_000), &[SETTLED, SETTLED]);
-    // No capture before the press.
-    assert_eq!(log, ["press", "wait 800", "capture", "wait 300", "capture"]);
-    assert_eq!(outcome.click.status, "press_recorded");
-    assert_eq!(outcome.before.frame_id, "f0001");
-    assert!(!outcome.before.refreshed);
+    let shots = [
+        shot(BEFORE),
+        Shot {
+            screen: ANIMATION,
+            takes_ms: 250,
+        },
+        shot(SETTLED),
+        shot(SETTLED_AGAIN),
+    ];
+    let (outcome, log) = bench.press(&default_tap(), &shots);
+    // The first capture after the press starts at 100 ms and ends at 350: the second starts at once,
+    // the third 100 ms after it, at 450, when the last 300 ms hold the two still ones.
+    assert_eq!(
+        log,
+        [
+            "capture", "press", "wait 100", "capture", "capture", "wait 100", "capture"
+        ]
+    );
     let recording = bench.recording();
     assert_eq!(
-        frames_of(&recording, 1),
-        [entry("f0001", sha(BEFORE), false)],
+        frames_of(&recording, 2),
+        loop_frames(2, &[ANIMATION, SETTLED, SETTLED_AGAIN]),
         "{recording}"
     );
-    let step = &recording["steps"][0];
-    assert!(
-        !step["marks"].as_array().expect("marks").is_empty(),
-        "{step}"
+    let taken = json!({
+        "after_ms": 100,
+        "interval_ms": 100,
+        "still_ms": 300,
+        "still_max_ms": 5000,
+        "still": true,
+        "waited_ms": 450,
+        "captures": 3,
+        "kept": 2
+    });
+    assert_eq!(
+        step_of(&recording, 1)["click"]["execution"]["after_capture"],
+        taken,
+        "{recording}"
+    );
+    assert!(outcome.warnings.is_empty(), "{:?}", outcome.warnings);
+}
+
+#[test]
+fn s12_identical_captures_are_one_file_and_several_entries() {
+    let bench = Bench::new();
+    let after = [SETTLED; 4];
+    let mut shots = vec![shot(BEFORE)];
+    shots.extend(after.map(shot));
+    let (_, log) = bench.press(&default_tap(), &shots);
+    assert_eq!(log, press_log(4, 100));
+
+    let recording = bench.recording();
+    assert_eq!(
+        frames_of(&recording, 2),
+        loop_frames(2, &after),
+        "{recording}"
+    );
+    // One file: every entry names the same path; each entry is its own, with its own time.
+    let frames = step_of(&recording, 2)["frames"]
+        .as_array()
+        .expect("frames")
+        .clone();
+    assert_eq!(frames.len(), 4, "{recording}");
+    for frame in &frames {
+        assert_eq!(frame["path"], frames[0]["path"], "{recording}");
+        assert!(frame["recorded_at_unix_ms"].is_u64(), "{recording}");
+    }
+    assert_eq!(
+        bench.frame_files(),
+        {
+            let mut names = [sha(BEFORE), sha(SETTLED)].map(|digest| format!("{digest}.png"));
+            names.sort();
+            names
+        },
+        "{recording}"
     );
     assert_eq!(
-        step["click"]["execution"]["before_frame"], "f0001",
-        "{step}"
+        step_of(&recording, 1)["click"]["execution"]["after_capture"]["captures"],
+        4,
+        "{recording}"
     );
+}
+
+#[test]
+fn s12_two_presses_keep_the_after_loop_then_the_press_frame_in_order() {
+    let bench = Bench::new();
+    let first_after = [ANIMATION, SETTLED, SETTLED, SETTLED, SETTLED];
+    let mut first_shots = vec![shot(BEFORE)];
+    first_shots.extend(first_after.map(shot));
+    let (_, first_log) = bench.press(&default_tap(), &first_shots);
+    assert_eq!(first_log, press_log(5, 100));
+    let second_after = [NEXT; 4];
+    let mut second_shots = vec![shot(SETTLED_AGAIN)];
+    second_shots.extend(second_after.map(shot));
+    let (second, second_log) = bench.press(&default_tap(), &second_shots);
+    assert_eq!(second_log, press_log(4, 100));
+
+    let recording = bench.recording();
+    // Step 2's frames in time order: the first press's after loop, then the frame the second press
+    // happened on, which superseded the loop's last.
+    let mut step_two = loop_frames(2, &first_after);
+    if let Some(last) = step_two.last_mut() {
+        last.2 = true;
+    }
+    step_two.push(("f0007".to_owned(), sha(SETTLED_AGAIN), false));
+    assert_eq!(frames_of(&recording, 2), step_two, "{recording}");
+    // Step 1's after frame is its own loop's last; the second press's capture did not rewrite it.
+    let first_execution = &step_of(&recording, 1)["click"]["execution"];
+    assert_eq!(first_execution["after_frame"], "f0006", "{recording}");
+    assert_eq!(
+        first_execution["after_capture"]["captures"], 5,
+        "{recording}"
+    );
+    let second_execution = &step_of(&recording, 2)["click"]["execution"];
+    assert_eq!(second_execution["before_frame"], "f0007", "{recording}");
+    assert_eq!(second_execution["after_frame"], "f0011", "{recording}");
+    assert_eq!(
+        frames_of(&recording, 3),
+        loop_frames(8, &second_after),
+        "{recording}"
+    );
+
+    assert_eq!(second.click.step, 2);
+    assert_eq!(second.before.frame_id, "f0007");
+    assert!(second.before.refreshed);
+    assert_eq!(
+        second
+            .after
+            .as_ref()
+            .map(|after| (after.step, after.frame_id.as_str())),
+        Some((3, "f0011"))
+    );
+}
+
+#[test]
+fn s12_still_ms_0_takes_one_capture_untested() {
+    let bench = Bench::new();
+    let request = tap_request(AfterCapture {
+        still_ms: Some(0),
+        ..AfterCapture::for_press(None)
+    });
+    let (outcome, log) = bench.press(&request, &[shot(BEFORE), shot(ANIMATION)]);
+    assert_eq!(log, press_log(1, 100));
+    let recording = bench.recording();
+    assert_eq!(
+        frames_of(&recording, 2),
+        loop_frames(2, &[ANIMATION]),
+        "{recording}"
+    );
+    let execution = &step_of(&recording, 1)["click"]["execution"];
+    assert_eq!(execution["after_frame"], "f0002", "{recording}");
+    assert_eq!(
+        execution["after_capture"],
+        json!({
+            "after_ms": 100,
+            "interval_ms": 100,
+            "still_ms": 0,
+            "still_max_ms": 5000,
+            "still": null,
+            "waited_ms": 100,
+            "captures": 1,
+            "kept": 0
+        }),
+        "{recording}"
+    );
+    assert!(outcome.warnings.is_empty(), "{:?}", outcome.warnings);
+}
+
+#[test]
+fn s12_more_than_120_intervals_in_the_bound_are_refused_before_anything() {
+    let bench = Bench::new();
+    bench.capture(BEFORE);
+    let before = bench.files();
+    for (still_max_ms, interval_ms) in [(12_001_u64, 100_u64), (60_000, 499), (2_401, 20)] {
+        let case = format!("still_max_ms {still_max_ms}, interval_ms {interval_ms}");
+        let request = tap_request(AfterCapture {
+            interval_ms: Some(interval_ms),
+            still_max_ms,
+            ..AfterCapture::for_press(None)
+        });
+        let (result, log) = bench.try_press(&request, &[]);
+        assert!(log.is_empty(), "{case}: {log:?}");
+        let error = result.expect_err(&case);
+        assert_eq!(
+            error.code,
+            LabError::usage("").code,
+            "{case}: {}",
+            error.message
+        );
+        let details = error.details.clone().unwrap_or(Value::Null);
+        assert_eq!(details["argument"], "still_max_ms", "{case}: {details}");
+        assert_eq!(details["reason"], "conflicting", "{case}: {details}");
+        assert_eq!(details["interval_ms"], interval_ms, "{case}: {details}");
+        assert_eq!(bench.files(), before, "{case}: a file changed");
+    }
 }

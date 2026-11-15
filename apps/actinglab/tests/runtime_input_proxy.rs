@@ -4074,7 +4074,7 @@ fn s11_recorded(local: &Path) -> Value {
 /// one, `nemu_input_frame_required`): on the wire, in the Runtime's ledger, a capture, then the
 /// input naming the frame of that capture (its intent's `before_frame_id`), then the capture after
 /// it, of another frame; one tap, two captures; the answer's `record` names f0001 before and f0002
-/// after.
+/// after. #463 S1-2: with `--still-ms 0`, one capture after the press, no stillness test.
 #[test]
 fn s11_tap_record_sends_its_input_on_the_frame_captured_before_it() {
     let root = TempDir::new().expect("tempdir");
@@ -4114,6 +4114,9 @@ fn s11_tap_record_sends_its_input_on_the_frame_captured_before_it() {
             "0",
             "--record",
             "--after-ms",
+            "0",
+            // #463 S1-2: one capture after the press, no stillness test.
+            "--still-ms",
             "0",
         ],
     );

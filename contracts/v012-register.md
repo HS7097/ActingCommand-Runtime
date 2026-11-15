@@ -28383,6 +28383,109 @@ coordinator work order `rd-1115/brief-463-s11-fix2.md`, on the branch's head `61
   on a step with a mark (its capture is not stored, so every file still keeps its bytes); the
   refusals before the press add a swipe's two. No test leaves the gate map.
 
+### 1.403 Slice #463 S1-2 (0.12.63): after a recorded press the screen is captured until it is still, and every capture is kept (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, and the owner's words on board #463 on the evening of 11-15 on what stage one hands over and on the captures after a press; the coordinator's rulings in the work orders, not the owner's words; coordinator work orders `rd-1115/brief-463-s12-still-after.md` and `rd-1115/brief-463-s12-fix2.md`, which replaces its rulings where they differ; built on S1-1's branch at `24e48b47cd4b` (§1.402))
+
+The coordinator gave this slice 1.403, after S1-1 (§1.402), on whose code it stands. The slice
+ships in 0.12.63.
+
+**Why.** The owner (board #463, 11-15 evening): what stage one hands over of a recording is, for
+each press, the frame it happened on and the last result frame; stage two must be able to give an
+agent that asks the several, or several dozen, frames before and after a press; and since the
+screen may change quickly after a press, the captures after it must be closer together. S1-1 took
+one capture a fixed time after a press. Now the screen after a press is captured until it is still
+and every capture is kept ([lab-recording.md](lab-recording.md), "Recording while playing", "The
+screen after").
+
+**Established by reading.**
+- *The measure* (the first work order's ruling 1). The Runtime's one frame-change measure is
+  `frame_change_digest` and `frame_change_milli`, still at most `FRAME_CHANGE_MAX_MILLI`, in
+  `actingcommand-recognition` (`crates/recognition/src/color_digest.rs`), which the kernel's still
+  waits use; the Lab crate already depends on it. The recording API calls it on the whole frame;
+  nothing is copied and no dependency is added.
+- *The frame before.* S1-1's fix round 2 captures a frame immediately before every press and stores
+  it by its own rule (§1.402). This slice's first round, which re-captured an old frame and stored
+  it only when it had changed, is gone; `record_before_frame` is S1-1's as S1-1 wrote it.
+- *The clock.* A capture starts `interval_ms` after the start of the one before it, or at once when
+  that one took longer, so the loop reads the time a capture took: `RecordFramePorts` gains
+  `elapsed`, the caller's clock (actinglab: a monotonic clock from the command's start; a gate: a
+  fake clock moved by its waits and its scripted captures). No gate reads a clock.
+- *`after_frame` in one place* (the coordinator's ruling 3; a change in `steps.rs`). S1-1's
+  `note_after_frame` named the first frame that opens a step after a press. It is split into
+  `awaiting_after_frame` (the press such a frame follows) and `name_after_frame`, the one write.
+  `arrive` names the frame that opens the step as before; `arrive_after_press`, the arrival of the
+  loop's captures, names none, and the loop names its last capture once it ends. So a frame that
+  arrives later (a `capture --record`, the next press's capture before it) never rewrites it, and
+  when the loop stored nothing (its capture failed) the first frame that opens a step after the
+  press is named, as in S1-1.
+- *Memory.* The loop's frames are written once, when it ends; each capture's decoded pixels leave
+  the session's cache as soon as it arrived, its PNG staying in the pending writes (at most 121).
+- *`--interval-ms` is taken by other commands* (`stream`, the session monitor, `session` lines):
+  `record_flag_gate` refuses it without `--record` on `tap`, `swipe` and `long-tap` only
+  (`PRESS_COMMANDS`, `apps/actinglab/src/main.rs`).
+- *Interface revisions.* None moves: `after_capture` gains two optional members, absent on a record
+  S1-1's build wrote, which loads as one whose screen after was not tested (`still` `null`); no
+  request kind, configuration key or outcome code is added, and each capture is the
+  `ObserveReadonly` read the rows name.
+
+**What it builds.**
+
+| Part | Where |
+|---|---|
+| The model | `AfterCapture` gains `interval_ms` and `still_ms` (`None` for the recording API's defaults); `AfterCaptureRecord` gains `interval_ms` and `still_ms`, each `serde(default, skip_serializing_if)`; `LAB_RECORDING_PRESS_AFTER_MS` is 100 (`crates/lab/src/recording/model.rs`) |
+| The steps | `awaiting_after_frame`, `name_after_frame` (the one write of `after_frame`), `arrive` through `arrive_naming`, `arrive_after_press` (`crates/lab/src/recording/steps.rs`) |
+| The recording API | `RecordFramePorts::elapsed`; `check_after_capture` (the ranges and the bound of 120 intervals, called by `record_press` after the wait's bound); `record_after_frame`: the wait, the device-arrival check, then the captures (`take_after_capture`), the stillness test (`settled`, `change_digest`), the end, one write of the frames, `after_frame` and `after_capture`; `record_press` adds `after_not_still`; `record_attach_frame` without S1-1's `after` branch (`DeviceFrame`, `frame_recorded`) (`crates/lab/src/recording_api.rs`) |
+| The command | `tap`, `swipe` and `long-tap` take `--interval-ms`, `--still-ms` and `--still-max-ms` (`DIRECT_TOUCH_FLAGS`, `after_capture_ms`); `PressFrames::elapsed` (`apps/actinglab/src/commands/device_commands.rs`); `record_flag_gate` refuses the three without `--record` (`PRESS_RECORD_ONLY_FLAGS`, `PRESS_COMMANDS`, `apps/actinglab/src/main.rs`) |
+| The table | the rows `tap`, `swipe`, `long-tap`: `interval_ms`, `still_ms`, `still_max_ms` (integers), `after_ms`'s default 100, their notes; `help` unchanged |
+| Texts | [lab-recording.md](lab-recording.md): in "Recording while playing" the synopsis, the MCP parameters, the refusals, "The screen after", the members of `recording.json` and the answer; the members' paragraph of `recording.json`; the `validation_failed` row of "`--record` on device commands" |
+
+**Choices the work orders left.** The captures of the last `still_ms` count only once the loop has
+watched that long (the window lies after the first capture), so a screen is never still sooner than
+`still_ms` after the first capture; the loop ends when the next capture would start more than
+`still_max_ms` after the first; `waited_ms` runs from the press to the start of the last capture;
+`kept` is `captures - 1`; the four parameters are recorded as the press took them, with
+`--still-ms 0` too; the defaults (100, 300) are constants of the recording API, as S1-1's are
+(`--still-max-ms` 5000), not configuration keys; a capture that fails stores nothing of the loop,
+so that S1-1's rule for an after frame that could not be taken stands; the reason word of a bound
+of more than 120 intervals is `conflicting`, the word the vocabulary `argument_problem` gives a
+value that another excludes; an `--interval-ms` longer than `--still-ms` is not refused, and its
+screen is never found still.
+
+**Codes and words.** No outcome code is added and no fragment changes. Words, each in the answer or
+the details, never in a text:
+
+| word | the one situation | refuses or warns | exit |
+|---|---|---|---|
+| `after_not_still` (`record.warnings`) | the loop reached `--still-max-ms` without a still screen; the last capture is the frame after | warns | 0 |
+| `validation_failed` `details{argument, reason: "range"}`, `argument` `interval_ms`, `still_ms` or `still_max_ms` | the value is outside its range (20..=1000, 0..=5000, 0..=60000) or no whole number | refuses | 2 |
+| `validation_failed` `details{argument, reason: "record_only"}`, the same three | the flag without `--record` | refuses | 2 |
+| `validation_failed` `details{argument: "still_max_ms", reason: "conflicting", interval_ms}` | `still_max_ms` above 120 times `interval_ms` | refuses | 2 |
+
+No decision reads a code.
+
+**Tests.** `crates/lab/src/gate_463_s12.rs` (exec gate map "#463 S1-2"; fake Runtime and clock,
+synthetic 160x90 screens of one colour): an animation that settles (six captures, all kept in
+order, the last the frame after, `after_capture {100, 100, 300, 5000, true, 600, 6, 5}`); a screen
+that never settles for six bounds and intervals (exactly `1 + still_max_ms / interval_ms`
+captures, 121 at the last, `still` false, `after_not_still`); a capture slower than the interval
+(the next at once); the same screen four times (four entries, one file); two taps (step 2's frames
+in time order: the first tap's loop, then the frame the second tap was sent on; step 1's
+`after_frame` not rewritten); `still_ms 0` (one capture, `still` null); a bound of more than 120
+intervals (refused, nothing captured, pressed or written). `apps/actinglab/src/tests/gate_463_s12.rs`:
+the three flags without `--record` on the three commands. **Adapted**, because this slice
+deliberately changes what they pin: the tests of `crates/lab/src/gate_463_s11.rs` (S1-1) that take
+the frame after a press ask for one capture with no stillness test (`--after-ms 800 --still-ms 0`)
+and pin `after_capture` with `interval_ms` and `still_ms`, their fake gains its clock;
+`apps/actinglab/tests/runtime_input_proxy.rs`'s `tap --record --after-ms 0` gains `--still-ms 0`.
+No golden changes; no test leaves the gate map (the first round's tests never reached main).
+
+**What is not changed.** `record_before_frame` and the press (S1-1's), `archive.rs`,
+`session_management.rs`, the kernel, the Runtime; `do --capture --record`; `capture --record`,
+whose one frame arrives as before; every recording without a press of the three commands, byte for
+byte.
+
+**At deploy.** Nothing to configure. Recordings already on disk load as before; a press S1-1's build
+recorded keeps `after_capture` without `interval_ms` and `still_ms` and reads as not tested.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

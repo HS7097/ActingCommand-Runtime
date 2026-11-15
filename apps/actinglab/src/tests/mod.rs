@@ -186,6 +186,9 @@ mod gate_463_l1;
 // `--record`.
 #[path = "gate_463_s11.rs"]
 mod gate_463_s11;
+// #463 S1-2: the flags of the captures after a recorded press need `--record`.
+#[path = "gate_463_s12.rs"]
+mod gate_463_s12;
 // Workflow #464 P2: `standard-pack build` builds a game's standard pack from one commit on the
 // steps of `resource verify`, whose report is as before.
 #[path = "gate_464_p2.rs"]

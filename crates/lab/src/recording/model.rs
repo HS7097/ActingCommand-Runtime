@@ -769,7 +769,8 @@ pub struct ClickExecution {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub before_frame: Option<String>,
     /// #463 S1-1: on such a press, the id of the first frame that arrived after it: what the
-    /// screen became.
+    /// screen became. #463 S1-2: the last capture of the press's own after loop, written once when
+    /// the loop ends; the first frame that arrives after it only when the loop stored nothing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub after_frame: Option<String>,
     /// #463 S1-1: on such a press, how the frame after it was taken.
@@ -783,11 +784,18 @@ pub struct ClickExecution {
 /// screen was found still (`still`, `None` when no test ran), how long the press's command waited
 /// in all before the frame (`waited_ms`), how many captures it took (`captures`) and how many of
 /// them it kept beside the after frame (`kept`). Slice S1-1 waits `after_ms` and captures once:
-/// `still_max_ms` 0, `still` `None`, `waited_ms` the wait, one capture, none kept.
+/// `still_max_ms` 0, `still` `None`, `waited_ms` the wait, one capture, none kept. #463 S1-2: the
+/// captures repeat until the screen is still; `interval_ms` and `still_ms` are the time from the
+/// start of one capture to the start of the next and how long the captures must show one screen
+/// (`still_ms` 0: no stillness test, `still` `None`), both absent on a record S1-1's build wrote.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AfterCaptureRecord {
     pub after_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interval_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub still_ms: Option<u64>,
     pub still_max_ms: u64,
     pub still: Option<bool>,
     pub waited_ms: u64,
@@ -1727,8 +1735,9 @@ pub struct RecordStepOutcome {
     pub next_frame: Option<NextFrameOutcome>,
 }
 
-/// #463 S1-1: the wait before the frame after a press (`--after-ms`) when none is given.
-pub const LAB_RECORDING_PRESS_AFTER_MS: u64 = 800;
+/// #463 S1-1: the wait before the frame after a press (`--after-ms`) when none is given; #463 S1-2:
+/// 100, the first of the captures that repeat until the screen is still.
+pub const LAB_RECORDING_PRESS_AFTER_MS: u64 = 100;
 /// #463 S1-1: the bound of the stillness test after a press (`--still-max-ms`, slice S1-2) when
 /// none is given.
 pub const LAB_RECORDING_PRESS_STILL_MAX_MS: u64 = 5_000;
@@ -1753,11 +1762,15 @@ pub enum PointPress {
 }
 
 /// #463 S1-1: how the frame after an effect is taken: the wait before it, in milliseconds (0 to
-/// [`LAB_RECORDING_MAX_NEXT_FRAME_MS`]), and the bound of the stillness test after it (slice S1-2
-/// runs it; S1-1 takes one frame after the wait).
+/// [`LAB_RECORDING_MAX_NEXT_FRAME_MS`]), and the bound of the stillness test after it. #463 S1-2
+/// runs the test: `interval_ms`, the time from the start of one capture to the start of the next,
+/// and `still_ms`, how long the captures must show one screen (0: no test), each `None` for the
+/// recording API's default (`record_after_frame`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AfterCapture {
     pub after_ms: u64,
+    pub interval_ms: Option<u64>,
+    pub still_ms: Option<u64>,
     pub still_max_ms: u64,
 }
 
@@ -1767,6 +1780,8 @@ impl AfterCapture {
     pub fn for_press(after_ms: Option<u64>) -> Self {
         Self {
             after_ms: after_ms.unwrap_or(LAB_RECORDING_PRESS_AFTER_MS),
+            interval_ms: None,
+            still_ms: None,
             still_max_ms: LAB_RECORDING_PRESS_STILL_MAX_MS,
         }
     }
@@ -1777,6 +1792,8 @@ impl AfterCapture {
     pub fn for_application(after_ms: Option<u64>) -> Self {
         Self {
             after_ms: after_ms.unwrap_or(LAB_RECORDING_APPLICATION_AFTER_MS),
+            interval_ms: None,
+            still_ms: None,
             still_max_ms: LAB_RECORDING_APPLICATION_STILL_MAX_MS,
         }
     }
