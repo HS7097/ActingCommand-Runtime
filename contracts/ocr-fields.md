@@ -553,8 +553,10 @@ Its input is taken by a `target` or `offset` click: the click box is the found c
 corner. A text guard never takes `target_center`. A click box outside the frame fails with
 `contained_task_input_out_of_bounds`. A locate target that does not pass refuses the guard
 (`contained_task_guard_refused`, its reason as the `cause=` token of the detail); an
-evaluation error fails the guard evaluation (`contained_task_guard_evaluation_failed`). In
-both cases no input is sent.
+evaluation error fails the guard evaluation (`contained_task_guard_evaluation_failed`), and a
+failure of the vision provider, which fails or answers invalidly, fails it with
+`contained_task_vision_provider_failed` and the same detail (#469 D4b, since 0.12.63). In every
+case no input is sent.
 
 A locate target is refused as an OCR field or reading `target_id`, an OCR relative anchor,
 a candidate layout slot target or feature, and with `target_consensus`. Every locate

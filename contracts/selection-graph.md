@@ -1030,7 +1030,10 @@ the timeout fail, and a `choice_of` step that chose nothing in this run fails. E
 with `identity_state` `different`, `unknown` or `no_choice`, `expected_identity` (absent for
 `no_choice`) and `observed_identity` (for `different`); the step's `StepFinished` precedes it.
 It comes after the tap, so it appears only in the task's terminal outcome; the decision record
-is unchanged. There is no retry and no fallback.
+is unchanged. There is no retry and no fallback. A target whose evaluation fails ends the run with
+`contained_task_recognition_failed`, or, when the vision provider failed or answered invalidly,
+with `contained_task_vision_provider_failed` (#469 D4b, since 0.12.63), the evaluation's error as
+the detail in both; so on the template path below.
 
 Workflow #308 SEL-L4b-T: the template path reads the identity where the destination shows it as
 an image. The neutral example below is not a value:
