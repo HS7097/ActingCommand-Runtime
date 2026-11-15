@@ -246,6 +246,16 @@ naming this file.
   `record archive` with `record_id`), never an unconditional resume. A press with `record` on an
   instance that is not held is made and recorded with `record.warnings` `instance_not_held`
   (`instance_hold_unread` when the status read got no answer); `ac_record_status` shows the hold.
+  #463 S2-5 (0.12.64; `contracts/lab-recording.md`, "Drawing a box"): stage two marks a draft with
+  boxes: `ac_record_mark` with `box` (`recognize=x1,y1:x2,y2` or `press=x1,y1:x2,y2`, two opposite
+  corners in the frame's pixels; or `boxes` in `request_json`) on any step. A recognize box is a
+  template mark of its own (`box/<nn>/<x>_<y>_<w>_<h>`), whose base images are the step's frames
+  and the captures stage one took of it before its press that reach the threshold; the answer's
+  `boxes[].frames` says of each frame `own`, `added`, `not_added` (with `because`) or `elsewhere`.
+  A press box is the step's click region; on a tap or a long press recorded with `record` it must
+  hold the point pressed (`record_click_outside_step_rect` with `recorded_point_outside_box`
+  otherwise) and the press stays as recorded; `ac_record_stop` then writes the package of the
+  boxes.
 - **Adoption** (Workflow #464 P1, 0.12.61; `contracts/standard-pack-authoring.md`).
   `ac_standard_pack_adopt` (`repo`, `record_id` or `package`, `decide`, or `held_reason` with an
   optional `held_reference`, `replace`, `state_dir`) makes a stopped recording's package, or any

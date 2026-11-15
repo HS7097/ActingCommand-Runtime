@@ -78,6 +78,12 @@ mod gate_463_s12;
 // `record status` shows them.
 #[cfg(test)]
 mod gate_463_s17;
+// #463 S2-5: boxes drawn on a recording step, a region to recognize by and a region to press.
+#[cfg(test)]
+mod gate_463_s25_boxes;
+// #463 S2-5: boxes on a draft stage one recorded, its captures before a press as base images.
+#[cfg(test)]
+mod gate_463_s25_draft;
 mod lab_run;
 mod lab_run_api;
 mod ledger_port;

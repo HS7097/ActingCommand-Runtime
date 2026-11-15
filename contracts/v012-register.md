@@ -30291,6 +30291,101 @@ owner's words).
   `s17_train_do_capture_record_on_an_instance_that_is_not_held_says_so` (`instance_not_held` in
   `record.warnings` of `do --capture --record`).
 
+### 1.427 Slice #463 S2-5 (0.12.64): boxes on a draft: the recognition region and the press region of any recorded step (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making, whose stage two hands the agent the frame and where the press went and lets the agent set the recognition region and the press region; the owner's words of 11-15 on the design of board #471: a box is drawn on one state of one screen, its base images are the frames of the action whose similarity reaches 0.95, a picture with boxes is only a preview; the design `rd-1115/471-box-design.md`, its English part, and its first implementation, slices B1 to B3, paused before stage one and ported here by hand; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s25-record-boxes.md`, stacked on the stage-one train #1757 at `32f71ea6291c`)
+
+The coordinator gave this slice 1.427. It ships in 0.12.64, after the stage-one train (§1.402 to
+§1.406, §1.424).
+
+**Why.** A press recorded while playing is an executed click of one pixel, and until now the only
+way to give a step another click region was to reopen it, which works for the last step alone; a
+package that presses one exact pixel is what the kernel then ran. Boxes make the region the agent
+draws the way to say both things, the page's recognition and the press's region, on any step of a
+draft ([lab-recording.md](lab-recording.md), "Drawing a box").
+
+**Ported, and what differs from the earlier work.**
+- *B1* (boxes in the mark request) and *B3* (`--box` on the command line, the row's `box`) are
+  ported whole, labelled #463 S2-5; the request form, the generated ids
+  `box/<nn>/<x>_<y>_<w>_<h>`, `box_flat` with `instead: "color"`, the static rules and the repeat
+  rule are as built. Not ported: everything under `apps/actingctl` (today's MCP server hands the
+  request form on unchanged, no code).
+- *B2* (base images) is ported with the change the work order made: the frames of the action are
+  the request's own samples, treated as B2 built them, and on a draft the captures stage one stored
+  for the step before its press. The answer's words for a frame are the design's: `own`, `added`,
+  `not_added` with `because`, `elsewhere` (B2 as built answered `drawn_on`, `kept`, `added`,
+  `left_out`, and listed no frame of another step).
+- *New*: a press box on a tap or a long press recorded by its point (`source: "point"`) becomes
+  that click's `rect` when it holds the recorded point; a recorded swipe refuses it; a second box
+  needs `--replace-click`. `optional_after` and `remove_inserted` (#463 R4, on main since the earlier
+  work) refuse boxes beside them (`with_other_change`), as an ending does.
+
+**Established by reading.**
+- *Which captures are stage one's.* Every capture stage one stores is `source: "lab_capture"`, as a
+  `capture --record` by hand is, and every frame that replaces an open step's frame supersedes it
+  alike (`arrive_naming`, `ArrivalPlan::Replace`); the step table has no member that tells a capture
+  before the press from a frame an agent replaced by hand, or the first capture of a press sent twice
+  (`before.captured_twice` is in the answer only). What it does record: the press or application
+  operation that opened the step names the last capture of its own after loop as `after_frame`, with
+  `after_capture.captures`, and the loop's captures arrive in one command under the recording lock,
+  so they stand together in the step's frames, ending at that one. Those, superseded now, are the
+  captures taken (`boxes.rs`, `stage_one_captures`); no other superseded frame is.
+- *A press box on an executed click* reached `record_click_executed` in `apply_click`, the one place
+  a click's rectangle is declared; the press box now takes a branch of its own there
+  (`box_on_recorded_press`), so the execution is never touched and nothing is pressed.
+- *The whole-page check of a capture* is the mark-time self-test block (`evaluate_batch`,
+  `follow_frames`, `anchor_rejection`, `evaluate_forbidden`, `select_frames`,
+  `other_pages_on_select_frames`), run on the step's live frames and the capture
+  (`page_refusals`); `apply_marks` keeps its own block as it was. A check's `any_of` is decided over
+  every frame at once (`derive_check`), so captures that hold one by one may not hold together; then
+  they are taken one after the other while the page holds, and no capture is ever a refusal.
+- *The archive's manifest* names a point click's rectangle as absent (`archive.rs`, `row_of`,
+  `source != "point"`): a boxed point click keeps `source: "point"`, so the manifest of a later
+  archive still shows the press by its point and not its box. This slice does not change the
+  manifest.
+
+**What it builds.**
+
+| Part | Where |
+|---|---|
+| The request and the answer | `MarkRequest.boxes` (`BoxSpec {use, corners}`, `BoxUse`); `MarkOutcome.boxes` (`BoxView {use, corners, rect, mark?, threshold?, metric?, frames?}`, `BoxFrameView {frame_id?, sample?, superseded?, step?, score, matched_rect?, taken, because?}`, `BoxFrameTaken`, `BoxBecause {reason, mark, box?}`) (`crates/lab/src/recording/model.rs`) |
+| The boxes | `box_rect`, `box_mark_id`, `press_rect`, `validate_boxes`, `with_press_click`, `expanded_request`, `expanded_add`, `flat_boxes`, `made_box_marks`, `call_frame`, `below_because`, `stage_one_captures`, `box_views` (`crates/lab/src/recording/boxes.rs`) |
+| `record mark` | `apply_marks`: the expansion after the target step is known, `box_flat` before the marks are made, the request's samples scored (`not_added` not stored), the captures scored and admitted before the self-test (`admit_captures`, `page_refusals`, `recorded_sample`), the answer's frames (`scored_frames`, `elsewhere_frames`); `apply_click`: `box_on_recorded_press` (`steps.rs`); `validate_mark_request` and the repeat rule (`recording_api.rs`); `boxes` among the members beside an ending (`ending.rs`) and an inserted step (`inserted.rs`) |
+| The command line | `--box` in `RECORD_MARK_SHORTCUT_FLAGS`, `parse_record_mark_box`, `parse_record_mark_corner` (`apps/actinglab/src/commands/session_record.rs`); the help's flag list (`lab2_cli.rs`) |
+| The table and texts | the row `record mark` gains `box` (option, repeat; its help unchanged, 154 bytes) ([lab-operations.json](lab-operations.json)); [lab-recording.md](lab-recording.md): "Drawing a box" (new), the synopsis, the `--sample` rule, the output, "Recording while playing" (`record stop`), "Marking after stop", the error codes; `apps/actinglab-mcp/MANUAL.md`, "Recordings" |
+
+**Codes and words.** No outcome code is added and no fragment changes (the index is not
+regenerated). Inside existing codes:
+
+| Word | The one situation | Refuses or warns | Exit |
+|---|---|---|---|
+| mark reason `box_flat` of `record_mark_rejected`, with `box`, `rect`, `instead: "color"` | a recognize box whose crop on the primary frame holds one gray value | refuses | 3 |
+| `details.reason` `recorded_point_outside_box` of `record_click_outside_step_rect`, with `step`, `point`, `box` | a press box that does not hold the point a tap or long press recorded by its point pressed | refuses | 3 |
+| `boxes[].frames[].taken` `own` | a frame the step held before the call, or a capture whose bytes are those of a live frame | — | 0 |
+| `taken` `added` | a frame of the action admitted as a sample by this call | — | 0 |
+| `taken` `not_added` with `because.reason` `below_threshold` (or the mark reason the page meets there) | a frame of the action not admitted: a recognize box below its threshold there (or the step's page does not hold there) | — | 0 |
+| `taken` `elsewhere` | a live frame of another step on which the box reaches its threshold | — | 0 |
+
+Existing codes with no new word: `validation_failed` with `argument: "boxes"` and
+`argument_problem` `repeated` or `conflicting` (exit 2); `record_click_rect_conflict` for a press
+box on a recorded swipe, `record_click_exists` for a second box without `--replace-click`,
+`record_click_executed` for a click executed on a declared rectangle (exit 3);
+`record_ending_invalid` and `record_optional_after_invalid` `with_other_change` naming `boxes`
+(exit 3). No decision reads a code: the press box's branch reads the click's `source`.
+
+**Tests.** `crates/lab/src/gate_463_s25_boxes.rs` (B1 and B2 ported, ten), `gate_463_s25_draft.rs`
+(four, on recordings `record_press` made: the whole of stage two to the package, a press box on a
+tap, a swipe and a long press, the captures of an animation and of the settled screen, a press box
+after the stop) and actinglab's `s25_the_box_flag_declares_the_request_forms_boxes`
+(`session_record.rs`, `lab2_tests`), all in the exec gate map ("#463 S2-5"). No existing test
+changes, no golden changes, no test leaves the gate map.
+
+**What is not changed.** `generate.rs`, `crosscheck.rs`, `select.rs`, `archive.rs`, the kernel and
+the recognition crates; `recording.json`'s schema (a box mark is a template mark, an admitted
+capture a sample with `source: "recording_frame"`, a press box a click's `rect`); the press path of
+stage one; `apps/actingctl`. Nothing proposes a box and nothing draws on a frame.
+
+**At deploy.** Nothing to configure: no key, no ledger record, no package revision. Recordings on
+disk load as before; a request without boxes is byte for byte what it was.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
