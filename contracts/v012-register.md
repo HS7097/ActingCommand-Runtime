@@ -25131,12 +25131,16 @@ an existing code; no record, member, code or configuration key is added, and `le
 `runtime-client`, `actingd-config` and `runtime-outcomes` do not move.
 
 **Nobody checks the 13** (closing round). That 13 is written by the resource repository's
-packaging (the bundle's `interfaces.json`); no component checks it: `place` holds a bundle's
+packaging (the bundle's `interfaces.json`) and, since #464 P2 (§1.376, the train 0.12.61b), by the
+Lab's own `standard-pack build` for a bundle it builds, whose revision table counts a select step of
+a `linear_steps` pack as 13 ([resource-verify.md](resource-verify.md), "The `package` revision");
+nothing checks it when a bundle is placed or a package is admitted: `place` holds a bundle's
 maximum to its own range and asks 10 only of a bundle with the notices directory and 14 only of
 one with `goals.json` or one whose packs declare `variables`
 (`crates/lab-rescue/src/install/place.rs`, `check_notices`, `check_goals_declared` and
-`check_variables_declared`), never 13 of a select step, and the Runtime does not check a package's
-declared range at admission (as for revision 11, §1.343). So an earlier installer places a bundle
+`check_variables_declared`), never 13 of a select step (`standard-pack ready`'s item I2, #464 P3,
+§1.375, asks what `place` asks), and the Runtime does not check a package's declared range at
+admission (as for revision 11, §1.343). So an earlier installer places a bundle
 whose packs declare a select step and that declares less than 13, and an earlier Runtime then
 refuses that package at every run (`contained_task_linear_invalid`, `reason=operation_effect`).
 
