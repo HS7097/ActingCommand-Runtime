@@ -40,7 +40,7 @@ names a game, a need, a capability, a remedy or an order of remedies.
    declare. The Runtime compares them for equality and never interprets them. It has no built-in
    pairing of needs with capabilities and no order between capabilities, and it never chooses on
    its own between remedies (sections 3.3 and 6).
-4. **Scope.** Policy runs only. A direct run (`actingctl task-run`, MCP `ac_run_pack`) or a Lab run
+4. **Scope.** Policy runs only. A direct run (the Lab's `run start`, on the command line or through MCP) or a Lab run
    that ends on a remedy key ends as today: nothing is held or requested.
 5. **Switch.** With `scheduling.remedy.enabled` `false` every remedy key is a plain named outcome
    again (no hold, no request); the package checks still run.
@@ -436,7 +436,7 @@ when:
    lifts it. Writing a choice, changing the configuration, loading a package whose declarations
    changed or activating another catalog therefore lifts it at the next evaluation, without a
    restart. The digest hashes declarations and versions, never a package's content;
-2. **a person lifts it:** `actingctl remedy lift --instance <selector>` or `ac_remedy_set` with
+2. **a person lifts it:** the Lab's `remedy lift <selector>` or `remedy set` with
    `lift: true` republishes the instance's record (the same rows, or an empty list when there is
    none, with a new observation), which changes the digest. A person who fixed the game by hand
    lifts and the task runs once.

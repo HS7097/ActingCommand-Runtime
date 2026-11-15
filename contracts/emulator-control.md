@@ -156,7 +156,7 @@ before). After `stop` nothing reopens it; it opens on its next use.
 
 ## Restart (Workflow #381 B)
 
-An operator `restart` (`actingctl emulator restart`, MCP `ac_emulator restart`) is a Stop phase
+An operator `restart` (the Lab's `emu restart`, MCP `ac_emu_restart`) is a Stop phase
 and then a Start phase under one instance admission guard, each through the same drive path as
 `stop` and `start` (fence, close before the action, provider control, rebinding, self-check
 invalidation, ADB baseline after the Start), as the ladder's emulator-restart rung does. Each
@@ -227,7 +227,7 @@ A configured instance that discovery reports stopped is bound PENDING at startup
 refused (`contracts/provider-startup.md`): the registry entry carries the discovered facts and
 the host the binding will be completed with, but no port; the startup `runtime.instance_bound`
 event carries `binding_source: discovered` with the discovered index, name and provider version
-and with `adb_host` and `adb_port` omitted; `actingctl emulator status` reports `adb_port: null`
+and with `adb_host` and `adb_port` omitted; the Lab's `status <instance>` reports `adb_port: null`
 for it. Nothing is ever bound with a guessed port. A stopped instance elsewhere in the inventory
 does not break discovery either.
 
@@ -441,7 +441,7 @@ and `emulator_control_unsupported` (`invalid_request`, denied), `emulator_contro
 0.12.0); `emulator_stop_process_unverified` is the stop's Warning record. Device-facing requests on a pending instance are denied with `instance_not_running`
 (`invalid_request`), see "Cold start". The receipt carries the host code on top of its
 `outcome`, with its operation as the `operation` value (receipt v2, Workflow #378 A4), so
-`actingctl` shows, for example, `host code emulator_control_busy during control_emulator_instance`.
+the Lab shows, for example, `host code emulator_control_busy during control_emulator_instance`.
 
 ## The `device.connected` program fact
 
@@ -483,7 +483,7 @@ the package and the resume never ran it (#411 A71).
 
 An instance may declare `startup_package { "package": <locator> }` in its `actingd`
 configuration (`contracts/actingd-check-config.md`), the same locator semantics as
-`actingctl task-run --package` (Workflow #336 PKG-S4: no digest). Nothing is opened or
+the package of the Lab's `run start` (Workflow #336 PKG-S4: no digest). Nothing is opened or
 hashed at startup. The full contract lives in `contracts/application-lifecycle.md`; the part
 that belongs to emulator control:
 
@@ -621,7 +621,7 @@ scheduled run also pauses its pair ([policy-suspension.md](policy-suspension.md)
   for `outcome_relay_unregistered`, `scheduled_failure_code_str`) an item matches at `task` starts a
   ladder for the instance, unless the instance's `stuck_recovery` is `false`. Fixture-simulated
   instances, startup package runs and the ladder's own rung runs never trigger one. A direct
-  task run (`actingctl task-run`, the console's task run, MCP `ac_run_pack`) starts none while
+  task run (the Lab's `run start` on the command line and through MCP, the console's task run) starts none while
   `rules.direct_runs` is `exempt` (the default; Workflow #369-3, coordinator rulings Q1 and P1:
   the ladder exists for the routine; whoever ran it has the receipt and decides); under
   `trigger` its failed end queues the ladder its item admits once its key is released. The
@@ -652,7 +652,7 @@ scheduled run also pauses its pair ([policy-suspension.md](policy-suspension.md)
   ladder the cool-down suppresses, a failure no item matches) first cancels the instance's
   queued startup claim, then releases the key ("Startup package hook"; Workflow #369 S6c
   review low (b)). A connection preparation is the one after emulator `start` / `restart` (including
-  the `actingctl emulator start` of a logon script), an instance resume or `SelfCheckInstance`;
+  the Lab's `emu start` of a logon script), an instance resume or `SelfCheckInstance`;
   its failure keeps starting a ladder (Workflow #369-3, coordinator ruling P1). Successful
   fallback, invalid input parameters/configuration, admission/budget denial, owner/ledger
   failure and unconfirmed resource disposal do not enter this path. An ordinary failure is a
@@ -758,8 +758,8 @@ scheduled run also pauses its pair ([policy-suspension.md](policy-suspension.md)
   the instance waits, the lease sweep runs its self-check periodically (the recheck): every
   `recovery_ladder.fence_recheck.interval_ms` after the wait began, then after each failed
   recheck ended, at most `recovery_ladder.fence_recheck.max_attempts` per wait (`0`: none), on a
-  self-check claim of the instance's queue (it waits for the key as a person's `actingctl
-  selfcheck` does). The recheck is the preparation and self-check `actingctl selfcheck` makes (no
+  self-check claim of the instance's queue (it waits for the key as a person's
+  `emu selfcheck` does). The recheck is the preparation and self-check the Lab's `emu selfcheck` makes (no
   game input, no application launch, no emulator start), recorded as the Runtime's own recovery
   preparation (`instance_preparation_finished` stage `recovery_preparation`): it starts no
   ladder, and direction ① counts none of its records. A passing recheck lifts the fence as a
@@ -1091,8 +1091,8 @@ superseded preparation trigger records `preparation_superseded`; these two reaso
 
 Forced compromise T-08 (the recovery route could not be tried by hand) and coordinator ruling 9
 of wave 13: a person may ask for a drill of one physical instance's ladder,
-`DrillRecoveryLadder { instance_alias, mode }`, an option-two operation (`actingctl
-ladder-drill --instance <selector> [--device]`, MCP `ac_ladder_drill` with `instance` and
+`DrillRecoveryLadder { instance_alias, mode }`, an option-two operation (the Lab's
+`drill <selector> [--device]`, MCP `ac_drill` with `instance` and
 `device`; [runtime-interface.md](runtime-interface.md)). Until Workflow #434 LAB-6S1b only an
 explicit User+Ui or Cli+Cli request could issue it (the emulator control origin gate: a drill may
 restart the emulator); since then every client envelope may, the Lab's `drill` included. It is
@@ -1282,7 +1282,7 @@ configuration does not carry it (a host started without actingd's manifest).
   next daemon start, the watch's first poll and the next idle check behave as before; the daemon
   start does not run again at the resume, so an emulator a paused daemon start left stopped is
   started by the watch (R3, while `emulator_control.watch_enabled`) or by a person. An explicit
-  emulator control (`actingctl emulator`, `ac_emulator`, Lab) never asks it and runs under a pause
+  emulator control (the Lab's `emu start|stop|restart`, on the command line and through MCP) never asks it and runs under a pause
   as before. No configuration key.
 - **Order.** The claims holding their keys take a start turn one at a time, the first in
   configuration order first, so their Starts follow one another in that order; a claim that
@@ -1359,7 +1359,7 @@ the configured starts; the watch ends with the host.
   0.12.34); once they are used up, `emulator_watch_restart_exhausted` (warning; `alias`, `attempts`,
   `limit_count`, `retry_after_ms`) is recorded once, and the instance is not started again until
   the oldest of those restarts leaves the window or a person's emulator control of the instance
-  (`actingctl emulator`, `ac_emulator`) clears the count. Nothing else starts it meanwhile: the
+  (the Lab's `emu start|stop|restart`) clears the count. Nothing else starts it meanwhile: the
   stuck-recovery ladder's direction ① counts no record committed while an autostart claim holds
   the instance's key ("Stuck-recovery ladder", "Triggers"), so the watch's failed Starts never
   admit a ladder whose emulator-restart rung would start the emulator beyond the bound.
@@ -1515,11 +1515,13 @@ explicit receipt wait (`emulator_control_response_timeout(action)`) and returns 
   at most `emulator_control.restart_exit_wait_ms`, whose largest value is 300 s. MCP `ac_emulator` states both figures.
 
 ```
-actingctl emulator status  --state-root <state-root> --instance <alias>
-actingctl emulator start   --state-root <state-root> --instance <alias>
-actingctl emulator stop    --state-root <state-root> --instance <alias>
-actingctl emulator restart --state-root <state-root> --instance <alias>
+actinglab status <alias>
+actinglab emu start   <alias> [--wait <duration>]
+actinglab emu stop    <alias> [--wait <duration>]
+actinglab emu restart <alias> [--wait <duration>]
 ```
+
+(The Lab's core rows; until Workflow #434 LAB-7 `actingctl emulator status|start|stop|restart`.)
 
 `status` is the existing `Status` read filtered to the alias (that instance's
 `RuntimeInstanceStatus`, or `instance_unknown`); `start` / `stop` / `restart` print the result
@@ -1544,8 +1546,8 @@ record, no fact, no poll) and replaces it only where the Runtime already reads t
   `on` or `off` as reported, one it no longer lists is `unknown`.
 
 An instance that is not discovery-bound (an explicit HOST:PORT or serial entry, a handset, a
-fixture) is never read and stays `unknown`; nothing defaults to `off`. `actingctl status`,
-`actingctl emulator status` and each `ac_overview` instance row show it. `emulator_state` is the
+fixture) is never read and stays `unknown`; nothing defaults to `off`. The Lab's `status` (each instance row,
+on the command line and through MCP) shows it. `emulator_state` is the
 emulator's running state only, never its health: the capture and input health is each overview
 row's `backend_selfcheck`, read from the self-check facts `backend.selfcheck.<entry>.*` of the
 instance's last recorded opens (#411 A7, register §1.98 A7-1).
@@ -1616,10 +1618,10 @@ operation: discover_instances}` is a controlled template of typed tokens. Host o
 25 s for the receipt: two vendor commands (`version`, `info -v all`) of at most 10 s each, plus
 the IO margin.
 
-`actingctl emulator discover --state-root <state-root>` (no `--instance`) prints the
+The Lab's `discover` (no instance) prints the
 `RuntimeInstanceDiscovery` above as one JSON line with its `outcome` (`instances_discovered`,
 `count`) and exits 0; a refusal prints `{"outcome": …}` and the developer line
-`<LEVEL> actingctl: <code> …` on stderr, and exits non-zero (Workflow #378 A5).
+`<LEVEL> actinglab: <code> …` on stderr, and exits non-zero (Workflow #378 A5).
 
 ## Offline instance discovery (`actingd discover`, Workflow #453 S10, since 0.12.59)
 

@@ -13,7 +13,7 @@ question (additions-v012 question 5).
 
 ## Input
 
-- `--evidence` is the run's evidence: the answer of `actingctl run evidence` or MCP
+- `--evidence` is the run's evidence: the answer of the Lab's `run evidence` or MCP
   `ac_run_evidence` (Workflow #389 MCP-6), saved unchanged. Several pages of one run may be given,
   one `--evidence` each; pages of different runs are refused.
 - Only these members are read: `request_id`, and each step's `step_index` and `frames[].ref`.
