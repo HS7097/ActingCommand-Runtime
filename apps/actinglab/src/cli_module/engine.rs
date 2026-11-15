@@ -35,7 +35,7 @@ pub(crate) enum Line {
 
 /// The command of every row actinglab's own command serves: the row's name, the command's words
 /// and how the row's command line reaches it.
-pub(crate) const COMMANDS: [(&str, &[&str], Line); 67] = [
+pub(crate) const COMMANDS: [(&str, &[&str], Line); 68] = [
     ("app launch", &["session", "app", "launch"], Line::Declared),
     (
         "app restart",
@@ -172,6 +172,12 @@ pub(crate) const COMMANDS: [(&str, &[&str], Line); 67] = [
     (
         "standard-pack ready",
         &["standard-pack", "ready"],
+        Line::AsWritten,
+    ),
+    // Workflow #463 S3-10: the plan of a trial on a real application; it sends nothing yet.
+    (
+        "standard-pack trial",
+        &["standard-pack", "trial"],
         Line::AsWritten,
     ),
     (

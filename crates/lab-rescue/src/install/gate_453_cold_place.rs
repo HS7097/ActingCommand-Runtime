@@ -71,8 +71,9 @@
 //   `composition_at_start_once_bound` with no instance bound to the game, `composition_at_start`
 //   with one.
 // The machine is the fake host of `fixture.rs` with its fake Runtime and fake clock: no device, no
-// sleep; every root is a temporary folder with neutral files (a schedule here is placeholder
-// bytes: `place` reads no rule of it, and the fixture's root carries no `standard-pack check`).
+// sleep; every root is a temporary folder with neutral files (a schedule here has no rule and no
+// hold, and the fixture's root carries no `standard-pack check`). Workflow #463 S3-2: each
+// placement names its authorization (`fixture::authorized`), and the journal's inputs carry it.
 
 use super::fixture::{
     BuildSpec, C1, FakeHost, STALLED_PID, code, live_root, run, speaks, tree, word, write_json,
@@ -101,9 +102,12 @@ const TABLE: &str = "neutral_scores";
 const INSTALLER_PACKAGE: [u64; 2] = [3, 10];
 /// The `package` range every bundle here declares: [`speaks`]'s.
 const BUNDLE_PACKAGE: [u64; 2] = [3, 5];
-/// The pack's `control.json` and the game's `schedule.json` a bundle carries (placeholder bytes).
+/// The pack's `control.json` (placeholder bytes) and the game's `schedule.json` a bundle carries:
+/// (Workflow #463 S3-2) a schedule without rules or holds, which the reader and the composer's
+/// reference check take, so the plan reads the zip's side and nothing enters; a `schedule.json`
+/// either refuses leaves that side unread, and its placement is `place_enables_unknown`.
 const CONTROL: &[u8] = br#"{"neutral": 1}"#;
-const SCHEDULE: &[u8] = br#"{"neutral": "schedule"}"#;
+const SCHEDULE: &[u8] = br#"{"schema_version": "actingcommand.schedule.v1"}"#;
 /// Two catalogs the fake Runtime's latest evaluation ran under.
 const CATALOG_A: &str = "neutral-catalog-a";
 const CATALOG_B: &str = "neutral-catalog-b";
@@ -234,9 +238,11 @@ fn rescue_line(host: &FakeHost, root: &Path, name: &str, params: Value) -> (Valu
     }
 }
 
-/// `place` of the bundle `zip` on `root`.
+/// `place` of the bundle `zip` on `root`; (Workflow #463 S3-2) with the authorization it names
+/// (`fixture::authorized`).
 fn place(host: &FakeHost, root: &Path, zip: &Path) -> (Value, u8) {
-    rescue_line(host, root, "place", json!({"bundle": word(zip)}))
+    let params = super::fixture::authorized(host, root, zip, json!({"bundle": word(zip)}));
+    rescue_line(host, root, "place", params)
 }
 
 fn top_code(line: &Value) -> &str {
@@ -401,7 +407,14 @@ fn s5_unbound_composition_passes_at_once() {
     let (placed, exit) = place(&host, &root, &zip);
     assert_eq!(exit, 0, "{placed}");
     assert_eq!(top_code(&placed), "install_command_done", "{placed}");
-    assert_eq!(placed["plan"]["schedule_changes"], json!(true), "{placed}");
+    // Workflow #463 S3-1: the plan's `schedule_changes` lists packages now; the file's change is
+    // its item.
+    assert!(
+        placed["plan"]["items"].as_array().is_some_and(|items| items
+            .iter()
+            .any(|item| item["item"] == "schedule.json" && item["state"] == "new")),
+        "{placed}"
+    );
     assert_eq!(placed["instances"], json!([]), "{placed}");
     let (_, journal) = new_journal(&root, &before);
     assert_eq!(journal["inputs"]["bound"], json!([]), "{journal}");
@@ -592,12 +605,15 @@ fn s5_a_hot_placement_with_a_bound_instance_answers_as_before() {
             "release_hold"
         ]
     );
+    // Workflow #463 S3-2: and the authorization the placement names, with what it enables.
     assert_eq!(
         keys(&journal["inputs"]),
         [
+            "authorization",
             "bound",
             "commit",
             "config_sha256",
+            "enabled",
             "game",
             "hold",
             "instances",
@@ -702,13 +718,16 @@ fn s6_cold_place_places_the_items_and_keeps_the_replaced_ones() {
     assert_eq!(journal["plan_id"], placed["plan"]["plan_id"]);
     assert_eq!(journal["s0"], Value::Null, "{journal}");
     // Fix 1: and `bound`, the instances the configuration binds to the game (none here).
+    // Workflow #463 S3-2: and the authorization the placement names, with what it enables.
     assert_eq!(
         keys(&journal["inputs"]),
         [
+            "authorization",
             "bound",
             "cold",
             "commit",
             "config_sha256",
+            "enabled",
             "game",
             "zip",
             "zip_sha256"

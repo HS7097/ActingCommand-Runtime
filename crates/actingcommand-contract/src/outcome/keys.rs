@@ -872,4 +872,9 @@ outcome_keys! {
     // ---- Workflow #463 U1b fix round 3 (register §1.389): what of a scheduled run's break-in
     // could not be established (`policy_break_in_unread`); kept in codes mode. ----
     break_in_problem: vocab(break_in_problem),
+    // ---- Workflow #463 S3-10 (`actinglab standard-pack trial`, contracts/standard-pack-trial.md):
+    // where a state directory refused for trial records lies, and (fix round 2) why a file of a
+    // trial record's name is not read as that record; kept in codes mode. ----
+    trial_state_place: vocab(trial_state_place),
+    trial_record_problem: vocab(trial_record_problem),
 }

@@ -61,6 +61,9 @@ pub(crate) fn command_capabilities() -> Vec<Value> {
         command_cap("standard-pack adopt", ["offline"], "available"),
         // Workflow #464 P3: the readiness of every pack of a game root; reads only.
         command_cap("standard-pack ready", ["offline", "read_only"], "available"),
+        // Workflow #463 S3-10: the plan of a trial on a real application; reads only, sends
+        // nothing in this release.
+        command_cap("standard-pack trial", ["offline", "read_only"], "available"),
         command_cap("package fmt", ["offline"], "available"),
         command_cap("package edit", ["offline"], "available"),
         // Workflow #463 V3: what one package's control declaration declares; reads only.
