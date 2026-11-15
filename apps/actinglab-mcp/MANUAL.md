@@ -252,10 +252,14 @@ naming this file.
   template mark of its own (`box/<nn>/<x>_<y>_<w>_<h>`), whose base images are the step's frames
   and the captures stage one took of it before its press that reach the threshold; the answer's
   `boxes[].frames` says of each frame `own`, `added`, `not_added` (with `because`) or `elsewhere`.
+  A capture whose whole frame changed from the step's live frame (the previous screen, the middle
+  of a transition) is another state of the screen and never a base image (`not_added`, `because`
+  `frame_changed` with `frame_change_milli`). Give the recognize boxes of a step in one request:
+  a later box is tested on the samples the earlier ones admitted.
   A press box is the step's click region; on a tap or a long press recorded with `record` it must
   hold the point pressed (`record_click_outside_step_rect` with `recorded_point_outside_box`
   otherwise) and the press stays as recorded; `ac_record_stop` then writes the package of the
-  boxes.
+  boxes, and a later `record archive` lists the box as the press's `rect`.
 - **Adoption** (Workflow #464 P1, 0.12.61; `contracts/standard-pack-authoring.md`).
   `ac_standard_pack_adopt` (`repo`, `record_id` or `package`, `decide`, or `held_reason` with an
   optional `held_reference`, `replace`, `state_dir`) makes a stopped recording's package, or any

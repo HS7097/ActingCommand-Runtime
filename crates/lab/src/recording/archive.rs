@@ -275,7 +275,8 @@ pub(crate) struct ArchiveInputFrame {
     pub(crate) sha256: Option<Value>,
 }
 
-/// A tap; #463 S1-5: `rect` `None` for a tap declared by its point (`source` `point`).
+/// A tap; #463 S1-5: `rect` `None` for a tap declared by its point (`source` `point`); #463 S2-5
+/// fix round 2: but the press box's rectangle once one was given to it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ArchiveTap {
@@ -294,7 +295,8 @@ pub(crate) struct ArchiveSwipe {
     pub(crate) duration_ms: u64,
 }
 
-/// #463 S1-5: a long press; `rect` `None` for one declared by its point.
+/// #463 S1-5: a long press; `rect` `None` for one declared by its point (#463 S2-5 fix round 2:
+/// until a press box gives it one).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ArchiveLongPress {
@@ -1264,9 +1266,12 @@ fn row_of(recording: &LabRecording, step: &RecordingStep, index: &FrameIndex<'_>
     let after = execution.and_then(|execution| execution.after.as_ref());
     let kind = step_kind(step);
     let point = execution.map(|execution| execution.point);
-    // #463 S1-5: a tap or a long press declared by its point has no rectangle of its own.
+    // #463 S1-5: a tap or a long press declared by its point has no rectangle of its own. #463 S2-5
+    // fix round 2: unless a press box gave it one, so that its rectangle is no longer one pixel.
     let rect = click
-        .filter(|click| click.source != POINT_SOURCE)
+        .filter(|click| {
+            click.source != POINT_SOURCE || click.rect.width != 1 || click.rect.height != 1
+        })
         .map(|click| click.rect);
     let tap = click.filter(|_| kind == "tap").map(|click| ArchiveTap {
         rect,

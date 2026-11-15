@@ -5,13 +5,13 @@
 
 use super::RecordingLock;
 use super::boxes::{
-    BoxMark, RECORDING_FRAME_SOURCE, ScoredFrame, below_because, box_views, call_frame,
-    expanded_request, flat_boxes, made_box_marks, press_rect, stage_one_captures,
+    BoxMark, FRAME_CHANGED, RECORDING_FRAME_SOURCE, ScoredFrame, below_because, box_views,
+    call_frame, expanded_request, flat_boxes, made_box_marks, press_rect, stage_one_captures,
 };
 use super::ending::{ENDING_MARK_STEP, check_new_ending};
 use super::follow::{
-    FollowFrames, check_follow_declaration, check_follow_frames, check_located_follow_frames,
-    followed_template,
+    FollowFrames, LocatedClick, check_follow_declaration, check_follow_frames,
+    check_located_follow_frames, followed_template,
 };
 use super::frames::{
     LoadedFrame, check_frame_size, crop_store_path, frame_store_path, read_frame_file,
@@ -30,8 +30,8 @@ use super::model::{
     LAB_RECORDING_DEFAULT_TEMPLATE_THRESHOLD, LAB_RECORDING_MAX_GESTURE_MS, LAB_RECORDING_SCHEMA,
     LabRecording, MarkFamily, MarkRequest, MarkSpec, OpaqueJson, OptionalAfterSpec, RecordPoint,
     RecordRect, RecordSize, RecordedFrame, RecordedMark, RecordingDefaults, RecordingEnding,
-    RecordingStep, SelfTestStatus, StepApplication, StepClick, StepOptional, StepTransition,
-    ValueTestRight, value_test_side_id,
+    RecordingStep, SelfTestStatus, StepApplication, StepClick, StepOptional, StepSelect,
+    StepTransition, ValueTestRight, value_test_side_id,
 };
 use super::select::{
     OTHER_PAGE_PASSES, SELECT_REJECTION_ID, SELF_TEST_ERROR, SelectChecked, SelectFrame,
@@ -45,14 +45,17 @@ use super::store::{
 };
 use crate::LabOcr;
 use crate::codes::{LabCode, OptionalAfterProblem, SelectProblem};
+use crate::recording_api::{change_digest, unchanged_for};
 use actingcommand_contract::{
     InputSamplingEvidence, LabError, LabResult, SEGMENTED_SWIPE_BRAKE_DISTANCE_PX,
 };
 use actingcommand_execution_kernel::{DriveDraw, path_drag_bounds_hold, sampling_algorithm_name};
+use actingcommand_recognition::color_digest::{ColorDigest, frame_change_milli};
 use actingcommand_recognition_pack::PackRect;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
+use std::time::Duration;
 
 pub(crate) const MAX_TRANSITION_MS: u64 = 1_800_000;
 
@@ -1889,80 +1892,37 @@ pub(crate) fn apply_marks(
     // #463 R1: a select step keeps its rules whatever this command changed.
     check_select_rules(effective_step(&session.recording, target)?)?;
 
+    // #463 S2-5: the step's page as this command leaves it, which the self-test below and the
+    // check of each capture stage one stored (fix round 2: one function, `page_check`) test.
+    let page = PageInputs {
+        target,
+        batch: &batch,
+        forbidden: &forbidden,
+        anchor: anchor.as_ref(),
+        select_fresh,
+    };
     // #463 S2-5: beside recognize boxes, the captures stage one stored for this step before its
-    // press are frames of the action too: one on which every box reaches its threshold and the
-    // step's whole page holds becomes a sample; any other is listed and is no refusal.
+    // press are frames of the action too: one whose whole frame has not changed from the step's
+    // live frame (fix round 2), on which every box reaches its threshold and on which the step's
+    // whole page holds becomes a sample; any other is listed and is no refusal.
     if !box_marks.is_empty() && rejections.is_empty() {
-        let page = PageInputs {
-            target,
-            batch: &batch,
-            forbidden: &forbidden,
-            anchor: anchor.as_ref(),
-            select_fresh,
-        };
-        let (admitted, scored) = admit_captures(session, &box_marks, &page, &live, ocr)?;
+        let (admitted, scored) =
+            admit_captures(session, &box_marks, &page, &primary_sha, &live, ocr)?;
         box_frames.extend(scored);
         live.extend(admitted.iter().cloned());
         samples.extend(admitted);
     }
 
-    // self-test
+    // self-test: the step's page on every live frame (`page_check`), the select's dry run only once
+    // nothing else was refused.
     let has_select = effective_step(&session.recording, target)?.select.is_some();
     let total = batch.own.len()
         + batch.reused.len()
         + forbidden.len()
         + usize::from(has_select)
         + flat_count;
-    let result = evaluate_batch(session, &batch, &live, ocr)?;
-    // Workflow #396 REC-4: a click that follows a template holds on every live frame; #463 L2: so
-    // does one that follows a located-text mark, which gives the click its box.
-    let followed = follow_frames(session, &batch, &result, target, &live, ocr)?;
-    // Workflow #390 LAB-2: the anchor is a required own template mark, and no forbidden mark
-    // passes on a live frame of the step.
-    let anchor_problem = anchor_rejection(anchor.as_ref(), &result.own, &result.reused);
-    let (forbidden_views, forbidden_rejections) =
-        evaluate_forbidden(session, &forbidden, &live, ocr)?;
-    rejections.extend(result.rejections);
-    rejections.extend(followed.rejection);
-    rejections.extend(anchor_problem);
-    rejections.extend(forbidden_rejections);
-    // #463 R1: a select step's self-test, once every mark of its page holds: the kernel's dry run
-    // of the step as `record stop` generates it, on every live frame.
-    let mut select_update = None;
-    if rejections.is_empty()
-        && let Some(checked) = select_frames(
-            session,
-            SelectInputs {
-                target,
-                batch: &batch,
-                own: &result.own,
-                reused: &result.reused,
-                forbidden: &forbidden,
-                anchor: anchor.as_ref(),
-            },
-            &live,
-            select_fresh,
-            ocr,
-        )?
-    {
-        let SelectChecked {
-            select,
-            click_rect,
-            rejections: refused,
-        } = checked;
-        rejections.extend(refused);
-        select_update = Some((select, click_rect));
-    }
-    // #463 R1 fix 1: the pages of the other steps this mark knows must not pass on the select's
-    // frames, as the run's select needs its page to be the one that passes there; the pages of
-    // steps recorded later are `record stop`'s (self-check item 8).
-    if rejections.is_empty()
-        && select_update
-            .as_ref()
-            .is_some_and(|(select, _)| select.self_test.status == SelfTestStatus::Passed)
-    {
-        rejections.extend(other_pages_on_select_frames(session, target, &live, ocr)?);
-    }
+    let checked = page_check(session, &page, &live, !rejections.is_empty(), ocr)?;
+    rejections.extend(checked.refusals);
     if !rejections.is_empty() {
         return Err(rejected(&rejections, total));
     }
@@ -1990,21 +1950,21 @@ pub(crate) fn apply_marks(
         )
     };
     queue_crops(session, &batch);
-    let added = result
+    let added = checked
         .own
         .iter()
         .filter(|mark| batch.added_ids.contains(&mark.id))
         .cloned()
         .collect::<Vec<_>>();
     let step = step_mut(&mut session.recording, target)?;
-    step.marks = result.own;
+    step.marks = checked.own;
     step.reused = batch.reused;
     step.frames.extend(samples.iter().cloned());
     step.forbidden = forbidden;
     step.anchor = anchor;
     // #463 L2: a click that follows a located-text mark is the box the primary frame gives it;
     // fix 1: and it says whether its names were changed after its press.
-    if let (Some(located), Some(click)) = (followed.located, step.click.as_mut()) {
+    if let (Some(located), Some(click)) = (checked.located, step.click.as_mut()) {
         click.rect = located.rect;
         if let Some(follow) = click.follow.as_mut() {
             follow.offset = located.offset;
@@ -2013,7 +1973,7 @@ pub(crate) fn apply_marks(
     }
     // #463 R1: the select with its self-test, and its click the slot the pressed name selects on
     // the primary frame (kept as it was without an OCR model).
-    if let Some((select, click_rect)) = select_update {
+    if let Some((select, click_rect)) = checked.select {
         step.select = Some(select);
         if let (Some(rect), Some(click)) = (click_rect, step.click.as_mut()) {
             click.rect = rect;
@@ -2027,9 +1987,9 @@ pub(crate) fn apply_marks(
         frame: new_frame,
         samples,
         added,
-        reused: result.reused,
+        reused: checked.reused,
         removed,
-        forbidden: forbidden_views,
+        forbidden: checked.forbidden,
         boxes,
     })
 }
@@ -2045,33 +2005,60 @@ struct PageInputs<'a> {
     select_fresh: bool,
 }
 
-/// #463 S2-5: what the mark-time self-test refuses on `frames`, the step's page as this command
-/// leaves it: every own and reused mark, a followed click, the anchor, the forbidden marks and a
-/// select with the pages of the other steps on its frames, each as `apply_marks` runs it. Empty
-/// when the whole page holds on every frame.
-fn page_refusals(
+/// #463 S2-5 fix round 2: what the step's page, as this command leaves it, gives on `frames`: its
+/// own and reused marks with their self-tests, the click a followed located-text mark gives it,
+/// the forbidden marks' views, the select with its self-test and the click box it gives, and every
+/// refusal in the self-test's order.
+struct PageCheck {
+    own: Vec<RecordedMark>,
+    reused: Vec<RecordedMark>,
+    located: Option<LocatedClick>,
+    forbidden: Vec<ForbiddenMarkView>,
+    select: Option<(StepSelect, Option<RecordRect>)>,
+    refusals: Vec<MarkRejection>,
+}
+
+/// The mark-time self-test of the step's page `page` on `frames`, the one function that decides
+/// whether a page holds on frames (#463 S2-5 fix round 2: `apply_marks` runs it on the step's live
+/// frames, and the check of a capture stage one stored on those and the capture): every own and
+/// reused mark (`evaluate_batch`); Workflow #396 REC-4 and #463 L2: a click that follows a template
+/// or a located-text mark holds on every frame (`follow_frames`); Workflow #390 LAB-2: the anchor
+/// is a required own template mark and no forbidden mark passes (`anchor_rejection`,
+/// `evaluate_forbidden`); #463 R1: once nothing is refused, `refused_before` included (refusals the
+/// command met before its self-test), a select's dry run of the step as `record stop` generates it
+/// (`select_frames`), and #463 R1 fix 1, once that passed, the pages of the other steps this mark
+/// knows, which must not pass on the select's frames (`other_pages_on_select_frames`; the pages of
+/// steps recorded later are `record stop`'s, self-check item 8). The refusals are in that order;
+/// none when the whole page holds on every frame.
+fn page_check(
     session: &Session,
     page: &PageInputs<'_>,
     frames: &[RecordedFrame],
+    refused_before: bool,
     ocr: &LabOcr,
-) -> LabResult<Vec<MarkRejection>> {
+) -> LabResult<PageCheck> {
     let result = evaluate_batch(session, page.batch, frames, ocr)?;
     let followed = follow_frames(session, page.batch, &result, page.target, frames, ocr)?;
     let anchor = anchor_rejection(page.anchor, &result.own, &result.reused);
-    let (_, forbidden) = evaluate_forbidden(session, page.forbidden, frames, ocr)?;
-    let mut select = Vec::new();
-    let holds = result.rejections.is_empty()
-        && followed.rejection.is_none()
-        && anchor.is_none()
-        && forbidden.is_empty();
-    if holds
+    let (forbidden, forbidden_refusals) = evaluate_forbidden(session, page.forbidden, frames, ocr)?;
+    let BatchResult {
+        own,
+        reused,
+        rejections: mut refusals,
+    } = result;
+    refusals.extend(followed.rejection);
+    refusals.extend(anchor);
+    refusals.extend(forbidden_refusals);
+    let mut select = None;
+    if !refused_before
+        && refusals.is_empty()
         && let Some(checked) = select_frames(
             session,
             SelectInputs {
                 target: page.target,
                 batch: page.batch,
-                own: &result.own,
-                reused: &result.reused,
+                own: &own,
+                reused: &reused,
                 forbidden: page.forbidden,
                 anchor: page.anchor,
             },
@@ -2080,39 +2067,90 @@ fn page_refusals(
             ocr,
         )?
     {
-        let passed = checked.select.self_test.status == SelfTestStatus::Passed;
-        select = checked.rejections;
-        if select.is_empty() && passed {
-            select = other_pages_on_select_frames(session, page.target, frames, ocr)?;
-        }
+        let SelectChecked {
+            select: checked_select,
+            click_rect,
+            rejections: refused,
+        } = checked;
+        refusals.extend(refused);
+        select = Some((checked_select, click_rect));
     }
-    let mut refusals = result.rejections;
-    refusals.extend(followed.rejection);
-    refusals.extend(anchor);
-    refusals.extend(forbidden);
-    refusals.extend(select);
-    Ok(refusals)
+    if !refused_before
+        && refusals.is_empty()
+        && select
+            .as_ref()
+            .is_some_and(|(made, _)| made.self_test.status == SelfTestStatus::Passed)
+    {
+        refusals.extend(other_pages_on_select_frames(
+            session,
+            page.target,
+            frames,
+            ocr,
+        )?);
+    }
+    Ok(PageCheck {
+        own,
+        reused,
+        located: followed.located,
+        forbidden,
+        select,
+        refusals,
+    })
+}
+
+/// #463 S2-5 fix round 2 (the coordinator's ruling: a base image is a frame of the same state of
+/// the screen): whether the capture whose frame-change digest is `capture` shows the state of the
+/// step's live frame (`live`), and the measure's value. Stage one calls two captures unchanged when
+/// the newer differs from the older by at most the Runtime's one frame-change bound
+/// (`frame_change_milli` of the whole frame at most `FRAME_CHANGE_MAX_MILLI`); its after loop asks
+/// [`unchanged_for`], which, given the two at one instant and no time to stand, decides exactly
+/// that, so it is asked here, the capture the older and the live frame the newer. Digests that
+/// cannot be compared are `record_frame_unreadable`, as there.
+fn frame_unchanged(capture: &ColorDigest, live: &ColorDigest) -> LabResult<(bool, u32)> {
+    let milli = frame_change_milli(capture, live).map_err(|error| {
+        invalid(
+            "record_frame_unreadable",
+            format!("failed to compare two frames by the frame-change measure: {error}"),
+        )
+    })?;
+    let unchanged = unchanged_for(
+        &[
+            (Duration::ZERO, capture.clone()),
+            (Duration::ZERO, live.clone()),
+        ],
+        Duration::ZERO,
+    )?;
+    Ok((unchanged, milli))
 }
 
 /// #463 S2-5: the captures stage one stored for step `page.target` before its press
 /// ([`stage_one_captures`]), each scored by the recognize boxes `marks`: one whose bytes are those
-/// of a live frame is that frame already (`own`); one on which a box is below its threshold is
-/// another state of the screen (`not_added`, `below_threshold`); one on which every box reaches it
-/// becomes a sample when the step's whole page holds on the live frames `live` and it
-/// ([`page_refusals`]), and otherwise is `not_added` with the first refusal. A capture whose bytes
-/// are those of an earlier capture of the list is what that one became: `own` when it was added,
-/// else as it. Should two of them hold one by one and not together (a check whose `any_of` members
-/// pass on different frames), they are taken one after the other, as long as the page holds.
-/// Nothing here is a refusal of the command but a score that cannot be computed. A sample is the
-/// stored frame itself (same file, sha256 and provenance, `source: "recording_frame"`), with a
-/// frame id of its own; a capture that is not taken leaves the session's cache again.
+/// of a live frame is that frame already (`own`). Fix round 2: of the others, first, one whose
+/// whole frame changed from the step's live primary frame (`primary_sha`) as stage one judges two
+/// captures changed ([`frame_unchanged`]) shows another state of the screen (`not_added`,
+/// `frame_changed` with the measure's value), whatever its scores; then one on which a box is below
+/// its threshold is another state of the screen (`not_added`, `below_threshold`); one on which
+/// every box reaches it becomes a sample when the step's whole page holds on the live frames `live`
+/// and it ([`page_check`]), and otherwise is `not_added` with the first refusal. A capture whose
+/// bytes are those of an earlier capture of the list is what that one became: `own` when it was
+/// added, else as it. Should two of them hold one by one and not together (a check whose `any_of`
+/// members pass on different frames), they are taken one after the other, as long as the page
+/// holds. Nothing here is a refusal of the command but a score that cannot be computed. A sample
+/// is the stored frame itself (same file, sha256 and provenance, `source: "recording_frame"`),
+/// with a frame id of its own; a capture that is not taken leaves the session's cache again.
 fn admit_captures(
     session: &mut Session,
     marks: &[BoxMark],
     page: &PageInputs<'_>,
+    primary_sha: &str,
     live: &[RecordedFrame],
     ocr: &LabOcr,
 ) -> LabResult<(Vec<RecordedFrame>, Vec<ScoredFrame>)> {
+    let captures = stage_one_captures(&session.recording, page.target);
+    if captures.is_empty() {
+        return Ok((Vec::new(), Vec::new()));
+    }
+    let live_digest = cached_digest(session, primary_sha, "the step's live frame")?;
     let mut scored = Vec::new();
     // The captures that hold, as the probes they were tested as, with their place in `scored`.
     let mut chosen: Vec<(usize, RecordedFrame)> = Vec::new();
@@ -2121,7 +2159,7 @@ fn admit_captures(
     let mut first_of: BTreeMap<String, usize> = BTreeMap::new();
     let mut copies: Vec<(usize, usize)> = Vec::new();
     let mut loaded_here = Vec::new();
-    for capture in stage_one_captures(&session.recording, page.target) {
+    for capture in captures {
         if !session.cache.contains_key(&capture.sha256) {
             let loaded = read_stored_frame(&capture)?;
             session.cache.insert(capture.sha256.clone(), loaded);
@@ -2154,25 +2192,35 @@ fn admit_captures(
         } else if let Some(origin) = earlier {
             copies.push((scored.len(), origin));
             (BoxFrameTaken::NotAdded, None)
-        } else if scores.below.is_some() {
-            (BoxFrameTaken::NotAdded, below_because(marks, &scores))
         } else {
-            let probe = RecordedFrame {
-                role: "sample".to_string(),
-                superseded: false,
-                ..capture.clone()
-            };
-            let frames = live
-                .iter()
-                .cloned()
-                .chain(std::iter::once(probe.clone()))
-                .collect::<Vec<_>>();
-            match page_refusals(session, page, &frames, ocr)?.first() {
-                None => {
-                    chosen.push((scored.len(), probe));
-                    (BoxFrameTaken::Added, None)
+            let label = format!("capture {}", capture.frame_id);
+            let digest = cached_digest(session, &capture.sha256, &label)?;
+            let (unchanged, milli) = frame_unchanged(&digest, &live_digest)?;
+            if !unchanged {
+                (BoxFrameTaken::NotAdded, Some(changed_because(milli)))
+            } else if scores.below.is_some() {
+                (BoxFrameTaken::NotAdded, below_because(marks, &scores))
+            } else {
+                let probe = RecordedFrame {
+                    role: "sample".to_string(),
+                    superseded: false,
+                    ..capture.clone()
+                };
+                let frames = live
+                    .iter()
+                    .cloned()
+                    .chain(std::iter::once(probe.clone()))
+                    .collect::<Vec<_>>();
+                match page_check(session, page, &frames, false, ocr)?
+                    .refusals
+                    .first()
+                {
+                    None => {
+                        chosen.push((scored.len(), probe));
+                        (BoxFrameTaken::Added, None)
+                    }
+                    Some(refusal) => (BoxFrameTaken::NotAdded, Some(page_because(refusal))),
                 }
-                Some(refusal) => (BoxFrameTaken::NotAdded, Some(page_because(refusal))),
             }
         };
         scored.push(ScoredFrame {
@@ -2191,7 +2239,10 @@ fn admit_captures(
             .cloned()
             .chain(chosen.iter().map(|(_, probe)| probe.clone()))
             .collect::<Vec<_>>();
-        if !page_refusals(session, page, &together, ocr)?.is_empty() {
+        if !page_check(session, page, &together, false, ocr)?
+            .refusals
+            .is_empty()
+        {
             let mut kept: Vec<(usize, RecordedFrame)> = Vec::new();
             for (place, probe) in chosen {
                 let frames = live
@@ -2200,7 +2251,10 @@ fn admit_captures(
                     .chain(kept.iter().map(|(_, held)| held.clone()))
                     .chain(std::iter::once(probe.clone()))
                     .collect::<Vec<_>>();
-                match page_refusals(session, page, &frames, ocr)?.first() {
+                match page_check(session, page, &frames, false, ocr)?
+                    .refusals
+                    .first()
+                {
                     None => kept.push((place, probe)),
                     Some(refusal) => {
                         if let Some(entry) = scored.get_mut(place) {
@@ -2250,9 +2304,31 @@ fn admit_captures(
 fn page_because(refusal: &MarkRejection) -> BoxBecause {
     BoxBecause {
         reason: refusal.reason.clone(),
-        mark: refusal.id.clone(),
+        mark: Some(refusal.id.clone()),
         index: None,
+        frame_change_milli: None,
     }
+}
+
+/// #463 S2-5 fix round 2: why a capture was not added because its whole frame changed from the
+/// step's live frame: `frame_changed`, with the measure's value; no mark is involved.
+fn changed_because(milli: u32) -> BoxBecause {
+    BoxBecause {
+        reason: FRAME_CHANGED.to_owned(),
+        mark: None,
+        index: None,
+        frame_change_milli: Some(milli),
+    }
+}
+
+/// #463 S2-5 fix round 2: the frame-change digest ([`change_digest`], stage one's) of the frame
+/// `sha256` the session holds decoded, named `label`.
+fn cached_digest(session: &Session, sha256: &str, label: &str) -> LabResult<ColorDigest> {
+    let loaded = session
+        .cache
+        .get(sha256)
+        .ok_or_else(|| invalid("validation_failed", format!("{label} was not loaded")))?;
+    change_digest(loaded, label)
 }
 
 /// #463 S2-5: a capture of the step admitted as its sample: the stored frame itself (its file,

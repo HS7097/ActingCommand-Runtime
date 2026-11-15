@@ -1642,13 +1642,18 @@ pub struct BoxFrameView {
 
 /// #463 S2-5: why a frame of the action was not added: `below_threshold` with the first recognize
 /// box below its threshold there (`box`, its index in `boxes`, and its `mark`), or the refusal the
-/// step's page meets on it (its mark's own reason and the mark it names).
+/// step's page meets on it (its mark's own reason and the mark it names). Fix round 2: or, first of
+/// all, a capture of the step whose whole frame changed from the step's live frame
+/// (`frame_changed`, with the measure's value `frame_change_milli` and no mark).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct BoxBecause {
     pub reason: String,
-    pub mark: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mark: Option<String>,
     #[serde(rename = "box", skip_serializing_if = "Option::is_none")]
     pub index: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frame_change_milli: Option<u32>,
 }
 
 /// Workflow #390 LAB-2: a mark the step's page forbids, tested on every live frame of the step:

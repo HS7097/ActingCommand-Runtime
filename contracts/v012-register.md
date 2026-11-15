@@ -30331,24 +30331,31 @@ draft ([lab-recording.md](lab-recording.md), "Drawing a box").
 - *A press box on an executed click* reached `record_click_executed` in `apply_click`, the one place
   a click's rectangle is declared; the press box now takes a branch of its own there
   (`box_on_recorded_press`), so the execution is never touched and nothing is pressed.
-- *The whole-page check of a capture* is the mark-time self-test block (`evaluate_batch`,
+- *The whole-page check of a capture* is the mark-time self-test (`evaluate_batch`,
   `follow_frames`, `anchor_rejection`, `evaluate_forbidden`, `select_frames`,
-  `other_pages_on_select_frames`), run on the step's live frames and the capture
-  (`page_refusals`); `apply_marks` keeps its own block as it was. A check's `any_of` is decided over
-  every frame at once (`derive_check`), so captures that hold one by one may not hold together; then
-  they are taken one after the other while the page holds, and no capture is ever a refusal.
-- *The archive's manifest* names a point click's rectangle as absent (`archive.rs`, `row_of`,
-  `source != "point"`): a boxed point click keeps `source: "point"`, so the manifest of a later
-  archive still shows the press by its point and not its box. This slice does not change the
-  manifest.
+  `other_pages_on_select_frames`), run on the step's live frames and the capture; fix round 2: one
+  function, `page_check`, which `apply_marks`' own self-test calls too. A check's `any_of` is
+  decided over every frame at once (`derive_check`), so captures that hold one by one may not hold
+  together; then they are taken one after the other while the page holds, and no capture is ever a
+  refusal.
+- *The archive's manifest* named a point click's rectangle as absent (`archive.rs`, `row_of`,
+  `source != "point"`), and a boxed point click keeps `source: "point"`; fix round 2: a point
+  click whose rectangle is no longer one pixel is written with it.
+- *Stage one's "unchanged"* (fix round 2): the after loop decides "still" with `unchanged_for`
+  (`recording_api.rs`), the run of captures each within the Runtime's one frame-change bound of
+  the newest (`frame_change_milli` of the whole frame, `change_digest`, at most
+  `FRAME_CHANGE_MAX_MILLI`, 1500); given two digests at one instant and no time to stand, it
+  decides exactly whether the two are unchanged, so `record mark` calls it (both made `pub(crate)`,
+  nothing copied).
 
 **What it builds.**
 
 | Part | Where |
 |---|---|
-| The request and the answer | `MarkRequest.boxes` (`BoxSpec {use, corners}`, `BoxUse`); `MarkOutcome.boxes` (`BoxView {use, corners, rect, mark?, threshold?, metric?, frames?}`, `BoxFrameView {frame_id?, sample?, superseded?, step?, score, matched_rect?, taken, because?}`, `BoxFrameTaken`, `BoxBecause {reason, mark, box?}`) (`crates/lab/src/recording/model.rs`) |
-| The boxes | `box_rect`, `box_mark_id`, `press_rect`, `validate_boxes`, `with_press_click`, `expanded_request`, `expanded_add`, `flat_boxes`, `made_box_marks`, `call_frame`, `below_because`, `stage_one_captures`, `box_views` (`crates/lab/src/recording/boxes.rs`) |
-| `record mark` | `apply_marks`: the expansion after the target step is known, `box_flat` before the marks are made, the request's samples scored (`not_added` not stored), the captures scored and admitted before the self-test (`admit_captures`, `page_refusals`, `recorded_sample`), the answer's frames (`scored_frames`, `elsewhere_frames`); `apply_click`: `box_on_recorded_press` (`steps.rs`); `validate_mark_request` and the repeat rule (`recording_api.rs`); `boxes` among the members beside an ending (`ending.rs`) and an inserted step (`inserted.rs`) |
+| The request and the answer | `MarkRequest.boxes` (`BoxSpec {use, corners}`, `BoxUse`); `MarkOutcome.boxes` (`BoxView {use, corners, rect, mark?, threshold?, metric?, frames?}`, `BoxFrameView {frame_id?, sample?, superseded?, step?, score, matched_rect?, taken, because?}`, `BoxFrameTaken`, `BoxBecause {reason, mark?, box?, frame_change_milli?}`) (`crates/lab/src/recording/model.rs`) |
+| The boxes | `box_rect`, `box_mark_id`, `press_rect`, `validate_boxes`, `with_press_click`, `expanded_request`, `expanded_add`, `flat_boxes`, `made_box_marks`, `call_frame`, `below_because`, `stage_one_captures`, `box_views`, `FRAME_CHANGED` (`crates/lab/src/recording/boxes.rs`) |
+| `record mark` | `apply_marks`: the expansion after the target step is known, `box_flat` before the marks are made, the request's samples scored (`not_added` not stored), the captures scored and admitted before the self-test (`admit_captures`, `frame_unchanged`, `cached_digest`, `changed_because`, `page_check`, `recorded_sample`), the self-test (`page_check`, `PageCheck`), the answer's frames (`scored_frames`, `elsewhere_frames`); `apply_click`: `box_on_recorded_press` (`steps.rs`); `validate_mark_request` and the repeat rule, and `change_digest` and `unchanged_for` made `pub(crate)` (`recording_api.rs`); `boxes` among the members beside an ending (`ending.rs`) and an inserted step (`inserted.rs`) |
+| The archive's manifest | `row_of`: a point click's `rect` written once a press box made it more than one pixel (`crates/lab/src/recording/archive.rs`) |
 | The command line | `--box` in `RECORD_MARK_SHORTCUT_FLAGS`, `parse_record_mark_box`, `parse_record_mark_corner` (`apps/actinglab/src/commands/session_record.rs`); the help's flag list (`lab2_cli.rs`) |
 | The table and texts | the row `record mark` gains `box` (option, repeat; its help unchanged, 154 bytes) ([lab-operations.json](lab-operations.json)); [lab-recording.md](lab-recording.md): "Drawing a box" (new), the synopsis, the `--sample` rule, the output, "Recording while playing" (`record stop`), "Marking after stop", the error codes; `apps/actinglab-mcp/MANUAL.md`, "Recordings" |
 
@@ -30362,6 +30369,7 @@ regenerated). Inside existing codes:
 | `boxes[].frames[].taken` `own` | a frame the step held before the call, or a capture whose bytes are those of a live frame | — | 0 |
 | `taken` `added` | a frame of the action admitted as a sample by this call | — | 0 |
 | `taken` `not_added` with `because.reason` `below_threshold` (or the mark reason the page meets there) | a frame of the action not admitted: a recognize box below its threshold there (or the step's page does not hold there) | — | 0 |
+| `taken` `not_added` with `because.reason` `frame_changed`, with `frame_change_milli` (fix round 2) | a capture stage one stored whose whole frame changed from the step's live frame beyond the frame-change bound: it shows another state of the screen; given before any other reason | — | 0 |
 | `taken` `elsewhere` | a live frame of another step on which the box reaches its threshold | — | 0 |
 
 Existing codes with no new word: `validation_failed` with `argument: "boxes"` and
@@ -30378,10 +30386,37 @@ after the stop) and actinglab's `s25_the_box_flag_declares_the_request_forms_box
 (`session_record.rs`, `lab2_tests`), all in the exec gate map ("#463 S2-5"). No existing test
 changes, no golden changes, no test leaves the gate map.
 
-**What is not changed.** `generate.rs`, `crosscheck.rs`, `select.rs`, `archive.rs`, the kernel and
-the recognition crates; `recording.json`'s schema (a box mark is a template mark, an admitted
-capture a sample with `source: "recording_frame"`, a press box a click's `rect`); the press path of
-stage one; `apps/actingctl`. Nothing proposes a box and nothing draws on a frame.
+**What is not changed.** `generate.rs`, `crosscheck.rs`, `select.rs`, the kernel and the
+recognition crates; `recording.json`'s schema (a box mark is a template mark, an admitted capture a
+sample with `source: "recording_frame"`, a press box a click's `rect`); the press path of stage one
+and its after loop; `apps/actingctl`. Nothing proposes a box and nothing draws on a frame.
+
+**Fix round 2** (coordinator work order `rd-1115/brief-463-s25-fix2.md`, after the independent
+review of `8379a03b89af`; nothing merged).
+- *The gate map parses*: the gate's `tests` array is closed.
+- *A base image is a frame of the same state of the screen* (the coordinator's ruling on the
+  review's point d, after the owner's words of board #471): a capture stage one stored is taken
+  only when its whole frame has not changed from the step's live primary frame, by stage one's own
+  "unchanged" (`unchanged_for`, the frame-change bound 1500 milli); one that changed is `not_added`
+  with `frame_changed` and `frame_change_milli`, before any other reason, and nothing is refused
+  ([lab-recording.md](lab-recording.md), "Drawing a box", which says why).
+- *One function decides whether a page holds on frames*: `page_check`, for the self-test and the
+  captures alike; for every request that is not a box request it runs the same checks in the same
+  order, with the select's dry run and the other pages' check gated on no refusal before them, as
+  the self-test's own block was.
+- *The archive's manifest* writes a boxed point click's rectangle (`row_of`).
+- *Texts*: the recognize boxes of a step are best given in one request (a later box is tested on
+  the samples the earlier ones admitted), in the contract and the MCP manual.
+- *Tests* (`gate_463_s25_draft.rs`, six more): the previous screen's last capture, on which the
+  box's region matches, is `frame_changed` and the settled captures are added; another step's
+  frame is `elsewhere` and never taken, and a capture of the live frame's bytes is `own`; a capture
+  on which the box passes and the page does not is `not_added` with the page's reason; a point on
+  the press box's bottom-right pixel is inside it and one pixel further is
+  `recorded_point_outside_box`; a recording with `recording_frame` samples archives and reopens; a
+  press box set after a reopen is in the next manifest. The animation test asserts what it did:
+  its two moments change the button's square alone, so they stay within the frame-change bound and
+  are `below_threshold` as before (a comment says so); the helper that paints its frames now paints
+  on any gray, the same bytes as before.
 
 **At deploy.** Nothing to configure: no key, no ledger record, no package revision. Recordings on
 disk load as before; a request without boxes is byte for byte what it was.

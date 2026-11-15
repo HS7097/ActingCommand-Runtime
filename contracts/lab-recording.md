@@ -1287,13 +1287,26 @@ screenshot: a region the step's page is recognized by, or the region its click p
     tell a frame an agent replaced by hand (`capture --record` or `record mark --frame` on the open
     step) or the first capture of a press sent twice ("When the frame is gone before the press")
     from a capture before the press, so only the frames the record of an after loop names are
-    taken. Each one on which every recognize box reaches its threshold **and** the step's whole
-    page, as the request leaves it, holds (every own and reused mark passes, no forbidden mark
-    passes, a followed click and a select hold, with the step's live frames) becomes a sample of the
-    step: the stored frame itself, the same file, sha256 and provenance, with its own frame id,
-    role `sample` and `source: "recording_frame"`; nothing new is written to the frame store. Any
-    other is listed in the answer with its scores, and is neither taken nor a reason to refuse:
-    another state of the screen, the middle of an animation. One whose bytes are those of a live
+    taken. **A base image is a frame of the same state of the screen** (fix round 2, the
+    coordinator's ruling on the owner's words above): a capture is taken only when its whole frame
+    has not changed from the step's live primary frame, judged by the very measure and bound stage
+    one uses to call two captures unchanged ("The screen after": `frame_change_milli` of the whole
+    frame at most `FRAME_CHANGE_MAX_MILLI`, 1500, `contracts/color-digest.md`; the Lab asks the same
+    function its after loop asks). Why: a capture of the previous screen, or of the middle of the
+    transition to this one, can hold a box whose region happens to look alike there, and pass the
+    page too; it is another state of the screen all the same, and taken as a sample it would stay
+    one for ever (no operation takes a sample off), so that a later mark that tells the two screens
+    apart would be refused on it. One that changed is `not_added` with `because{reason:
+    "frame_changed", frame_change_milli}` (the measure's value), whatever its scores, and is no
+    refusal. Of the others, each one on which every recognize box reaches its threshold **and** the
+    step's whole page, as the request leaves it, holds (every own and reused mark passes, no
+    forbidden mark passes, a followed click and a select hold, with the step's live frames: the
+    mark-time self-test's own function) becomes a sample of the step: the stored frame itself, the
+    same file, sha256 and provenance, with its own frame id, role `sample` and `source:
+    "recording_frame"`; nothing new is written to the frame store. Any other is listed in the answer
+    with its scores, and is neither taken nor a reason to refuse: another state of the screen, the
+    middle of an animation. When several reasons apply, the one given is the first of: the frame
+    changed, a box below its threshold, the page's refusal. One whose bytes are those of a live
     frame of the step (or of a capture added before it) is that frame already, and is not added
     again. Should two captures hold one by one and not together (a check whose `any_of` members pass
     on different frames), they are taken one after the other while the page holds;
@@ -1305,7 +1318,9 @@ screenshot: a region the step's page is recognized by, or the region its click p
     frame of another effective step, the answer lists that frame (`elsewhere`): the box does not
     tell this screen from that one. Nothing is refused for it.
   The work is bounded by the frames the recording holds: one template match per recognize box and
-  frame scored, and one page check per capture scored at the threshold; nothing waits on a device.
+  frame scored, one frame-change comparison per capture, and one page check per capture scored at
+  the threshold; nothing waits on a device. The recognize boxes of a step are best given in one
+  request: a later box is tested on the samples the earlier ones admitted.
 - The answer's `boxes` lists each box as the step took it, `{use, corners, rect, mark?,
   threshold?, metric?, frames?}` (`mark` the id of a recognize box's template mark); it is absent
   without boxes. A recognize box gives the `threshold` and `metric` it is scored at and `frames`,
@@ -1314,10 +1329,12 @@ screenshot: a region the step's page is recognized by, or the region its click p
   superseded?, step?, score, matched_rect?, taken, because?}`. `taken` is `own` (a frame the step
   held before the call; also a capture whose bytes are a live frame's, `frame_id` that frame),
   `added` (admitted as a sample by this call, `frame_id` its new id), `not_added` (no `frame_id`;
-  `because{reason, mark, box?}`: `reason` `below_threshold` with the first recognize box below its
-  threshold there, `box` its index in `boxes` and `mark` its mark, or the mark reason the step's page
-  meets on that frame, such as `self_test_failed` or `forbidden_mark_passes`, with the mark it names)
-  or `elsewhere` (`step` the other step). `sample` is the index of a request's sample in `samples`,
+  `because{reason, mark?, box?, frame_change_milli?}`: `reason` `frame_changed` for a capture whose
+  whole frame changed from the step's live frame, with `frame_change_milli` and no mark; or
+  `below_threshold` with the first recognize box below its threshold there, `box` its index in
+  `boxes` and `mark` its mark; or the mark reason the step's page meets on that frame, such as
+  `self_test_failed` or `forbidden_mark_passes`, with the mark it names) or `elsewhere` (`step` the
+  other step). `sample` is the index of a request's sample in `samples`,
   `superseded` the frame id of a capture stage one stored. A press box has no frames. `--dry-run`
   answers the same and writes nothing.
 - Refused, nothing written:
@@ -2649,7 +2666,10 @@ files alone.
     record.
   - The effect by its kind, `null` otherwise: `tap` `{rect, point, source}` and `long_press`
     `{point, duration_ms, rect}`, `rect` `null` for a press declared by its point (`source:
-    "point"`, "Recording while playing"); `swipe` `{from_rect, to_rect, from, to, duration_ms}`;
+    "point"`, "Recording while playing") while its rectangle is the one pixel at its point; #463
+    S2-5 fix round 2: once a press box gave it a rectangle ("Drawing a box"), so that the rectangle
+    is no longer one pixel, `rect` is that box (`source` still `point`, `point` as recorded), and a
+    later archive's manifest carries it; `swipe` `{from_rect, to_rect, from, to, duration_ms}`;
     `application_op` `{action, cli_verb, executed}`, `executed` whether its completed receipt is on
     record.
   - `before` and `after`, the Runtime frames the input's frame summaries name (`frame_id`,

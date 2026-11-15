@@ -24,6 +24,15 @@
 // - `s25_after_the_stop_a_press_box_is_taken_and_record_stop_regenerates`: a stopped recording's
 //   point click of one pixel becomes the press box, and the next `record stop` regenerates the
 //   package with it.
+// Fix round 2 (a base image is a frame of the same state of the screen; the review's suggestions):
+// - `s25_fix2_the_previous_screens_capture_is_not_taken_and_the_settled_captures_are`: the capture
+//   of the screen before, on which the box's region matches, is `frame_changed` with the measure's
+//   value; the settled captures are added.
+// - `s25_fix2_another_steps_frame_is_elsewhere_and_a_capture_of_the_live_bytes_is_own`.
+// - `s25_fix2_a_capture_where_the_page_does_not_hold_is_not_added_with_its_reason`.
+// - `s25_fix2_a_press_box_holds_a_point_on_its_bottom_right_pixel_and_not_one_pixel_further`.
+// - `s25_fix2_a_recording_with_recording_frame_samples_archives_and_reopens`.
+// - `s25_fix2_a_press_box_set_after_a_reopen_is_in_the_next_manifest`: its manifest has the box.
 // Frames are synthetic 160x90 screens of flat gray with squares of gray noise; no Runtime, no
 // device; the tests read no clock and never sleep.
 
@@ -42,6 +51,7 @@ use actingcommand_device::{CaptureBackendName, Frame, PixelFormat};
 use actingcommand_pack_containment::{
     ContainmentLimits, ContentContainer, expand_content_container,
 };
+use actingcommand_recognition::color_digest::FRAME_CHANGE_MAX_MILLI;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, VecDeque};
 use std::fs;
@@ -78,6 +88,14 @@ const SEEDS: [u64; 4] = [0x0463_2511, 0x0463_2512, 0x0463_2513, 0x0463_2514];
 const ANIMATION_SEEDS: [u64; 2] = [0x0463_2521, 0x0463_2522];
 // The point pressed on each of the first three screens, inside its button.
 const POINTS: [(i32, i32); 3] = [(28, 28), (78, 48), (128, 28)];
+// The bottom-right pixel of a screen, by its index row after row.
+const LAST_PIXEL: usize = (WIDTH * HEIGHT) as usize - 1;
+// Fix round 2: the gray of the screen before the second one, which shows the second screen's
+// button alike on another background: a frame that changed, on which a box of that button holds.
+const OTHER_BACKGROUND: u8 = 140;
+// Fix round 2: a badge of the second screen, and two moments of an animation of it.
+const BADGE: RecordRect = rect(120, 60, 16, 16);
+const BADGE_SEEDS: [u64; 2] = [0x0463_2531, 0x0463_2532];
 
 // A deterministic generator of neutral gray noise.
 struct Noise(u64);
@@ -95,16 +113,25 @@ impl Noise {
 // The PNG of a flat gray screen with the square `area` of noise of `seed`, and, when `dot`, its
 // bottom-right pixel white: other bytes, the same state of the screen for every box here.
 fn painted(area: RecordRect, seed: u64, dot: bool) -> Vec<u8> {
+    let dots: &[usize] = if dot { &[LAST_PIXEL] } else { &[] };
+    backdrop(BACKGROUND, &[(area, seed)], dots)
+}
+
+// The PNG of a flat screen of gray `background` with each square of `squares` noise of its own
+// seed, and the pixels `dots` (by their index, row after row) white.
+fn backdrop(background: u8, squares: &[(RecordRect, u64)], dots: &[usize]) -> Vec<u8> {
     let width = WIDTH as usize;
-    let mut values = vec![BACKGROUND; width * HEIGHT as usize];
-    let mut noise = Noise(seed);
-    for row in area.y..area.y + area.height {
-        for column in area.x..area.x + area.width {
-            values[row as usize * width + column as usize] = noise.between(1, 255);
+    let mut values = vec![background; width * HEIGHT as usize];
+    for (area, seed) in squares {
+        let mut noise = Noise(*seed);
+        for row in area.y..area.y + area.height {
+            for column in area.x..area.x + area.width {
+                values[row as usize * width + column as usize] = noise.between(1, 255);
+            }
         }
     }
-    if dot {
-        values[width * HEIGHT as usize - 1] = 255;
+    for dot in dots {
+        values[*dot] = 255;
     }
     let pixels = values
         .iter()
@@ -629,6 +656,8 @@ fn s25_a_press_box_on_a_recorded_press_holds_its_point() {
 // button on that step: the settled capture is added as a sample, the stored frame itself (`source:
 // "recording_frame"`, the same file and sha256, a frame id of its own); the two moments of the
 // animation are listed `not_added`, below the threshold, with their scores; nothing is refused.
+// (Fix round 2: the animation changes the button's square alone, so their whole frames stay within
+// the frame-change bound of the live frame, and their reason is still the box's.)
 #[test]
 fn s25_a_recognize_box_takes_the_settled_capture_and_lists_the_animation() {
     let bench = Bench::new();
@@ -752,4 +781,341 @@ fn s25_after_the_stop_a_press_box_is_taken_and_record_stop_regenerates() {
         task_of(&package(&regenerated))["operations"][0]["click"],
         rect_click(0)
     );
+}
+
+// Fix round 2: the screen before the second one, the second screen's button on another gray.
+fn previous_screen() -> Vec<u8> {
+    backdrop(OTHER_BACKGROUND, &[(BUTTONS[1], SEEDS[1])], &[])
+}
+
+// The screen after a press as `count` captures, one every 100 ms from 100 ms after it, the bound
+// reached at the last.
+fn captures_after(count: u64) -> AfterCapture {
+    AfterCapture {
+        after_ms: 100,
+        interval_ms: Some(100),
+        still_ms: None,
+        still_max_ms: 100 * (count - 1),
+    }
+}
+
+// Every frame the answer lists for the request's first box, in its order.
+fn box_frames(marked: &MarkOutcome) -> Vec<Value> {
+    let views = serde_json::to_value(&marked.boxes).expect("boxes JSON");
+    views[0]["frames"].as_array().expect("frames").clone()
+}
+
+// The frames the answer lists for the request's first box but those of other steps.
+fn step_frames(marked: &MarkOutcome) -> Vec<Value> {
+    box_frames(marked)
+        .into_iter()
+        .filter(|frame| frame["taken"] != "elsewhere")
+        .collect()
+}
+
+// What each of `frames` is to the box.
+fn taken_of(frames: &[Value]) -> Vec<Value> {
+    frames.iter().map(|frame| frame["taken"].clone()).collect()
+}
+
+// `record archive` of the active recording, then the header the `record` command writes: the
+// manifest it wrote.
+fn archived_manifest(bench: &Bench) -> Value {
+    let archived = record_archive(
+        &bench.lock,
+        &RecordArchiveOptions {
+            record_id: None,
+            copy_to: None,
+            written_by: "gate_463_s25".to_owned(),
+        },
+    )
+    .unwrap_or_else(|error| panic!("record archive: {}: {:?}", error.code, error.details));
+    assert_eq!(archived.status, "archived");
+    bench.header("archived");
+    serde_json::from_slice(&fs::read(&archived.manifest.path).expect("manifest"))
+        .expect("manifest JSON")
+}
+
+// `record reopen` of the archived recording, then the header the `record` command writes.
+fn reopened(bench: &Bench) {
+    let reopened = record_reopen(&bench.lock, &RecordReopenOptions::default())
+        .unwrap_or_else(|error| panic!("record reopen: {}: {:?}", error.code, error.details));
+    assert_eq!(reopened.status, "reopened");
+    bench.header("active");
+}
+
+// The manifest's row of step `step`.
+fn row_of(manifest: &Value, step: u32) -> &Value {
+    manifest["steps"]
+        .as_array()
+        .expect("rows")
+        .iter()
+        .find(|row| row["step"] == step)
+        .unwrap_or_else(|| panic!("row {step}: {manifest}"))
+}
+
+// Fix round 2, the coordinator's ruling on the review's point d (a box is drawn on one state of one
+// screen, and its base images are frames of that state): the tap on the screen before the second
+// takes four captures after it, one every 100 ms: that screen as it still stands (its last
+// capture), then the second screen settled three times, twice with one pixel off and once as it
+// stays; the second tap's capture before it is the second screen, the step's live frame. A
+// recognize box over the second screen's button on step 2: on the capture of the screen before,
+// the box's region matches (score at the threshold or above), but its whole frame changed from the
+// live frame beyond the frame-change bound, so it is not added, `frame_changed` with the measure's
+// value and no mark; the two settled captures of other bytes are added as samples (`source:
+// "recording_frame"`); the last capture, of the live frame's bytes, is that frame (`own`).
+#[test]
+fn s25_fix2_the_previous_screens_capture_is_not_taken_and_the_settled_captures_are() {
+    let bench = Bench::new();
+    let previous = previous_screen();
+    let settled = [
+        backdrop(BACKGROUND, &[(BUTTONS[1], SEEDS[1])], &[0]),
+        backdrop(BACKGROUND, &[(BUTTONS[1], SEEDS[1])], &[LAST_PIXEL]),
+    ];
+    bench.press(
+        &tap_at(POINTS[0], captures_after(4)),
+        vec![
+            previous.clone(),
+            previous,
+            settled[0].clone(),
+            settled[1].clone(),
+            screen(1),
+        ],
+    );
+    bench.press(
+        &tap_at(POINTS[1], one_capture_after()),
+        vec![screen(1), screen(2)],
+    );
+    let recorded = bench.recording();
+    let execution = &step_of(&recorded, 1)["click"]["execution"];
+    assert_eq!(execution["after_frame"], "f0005", "{recorded}");
+    assert_eq!(execution["after_capture"]["captures"], 4, "{recorded}");
+
+    let marked = bench.marked(json!({"step": 2, "page": "second",
+                                     "boxes": [button_box("recognize", 1)]}));
+    let frames = step_frames(&marked);
+    assert_eq!(
+        taken_of(&frames),
+        ["own", "not_added", "added", "added", "own"],
+        "{frames:?}"
+    );
+    assert_eq!(frames[0]["frame_id"], "f0006", "{frames:?}");
+    let changed = &frames[1];
+    assert_eq!(changed["superseded"], "f0002", "{changed}");
+    assert!(changed.get("frame_id").is_none(), "{changed}");
+    assert!(score(changed) >= 0.95, "{changed}");
+    assert_eq!(changed["because"]["reason"], "frame_changed", "{changed}");
+    assert!(changed["because"].get("mark").is_none(), "{changed}");
+    let milli = changed["because"]["frame_change_milli"]
+        .as_u64()
+        .unwrap_or_else(|| panic!("no frame_change_milli in {changed}"));
+    assert!(milli > u64::from(FRAME_CHANGE_MAX_MILLI), "{changed}");
+    for (frame, (capture, sample)) in frames[2..4]
+        .iter()
+        .zip([("f0003", "f0008"), ("f0004", "f0009")])
+    {
+        assert_eq!(frame["superseded"], capture, "{frame}");
+        assert_eq!(frame["frame_id"], sample, "{frame}");
+        assert!(frame.get("because").is_none(), "{frame}");
+    }
+    assert_eq!(frames[4]["superseded"], "f0005", "{frames:?}");
+    assert_eq!(frames[4]["frame_id"], "f0006", "{frames:?}");
+
+    let taken = marked
+        .samples
+        .iter()
+        .map(|sample| (sample.sha256.clone(), sample.source.clone()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        taken,
+        [
+            (hex_sha256(&settled[0]), "recording_frame".to_owned()),
+            (hex_sha256(&settled[1]), "recording_frame".to_owned())
+        ]
+    );
+}
+
+// The review's suggestions (5): the screen before the second shows the second screen's button
+// alike, so a recognize box over that button on step 2 reaches its threshold on step 1's live
+// frame: listed `elsewhere` with step 1, and never taken (no sample; step 2's frames as they were).
+// Step 2's capture after the first tap has the bytes of its live frame (the capture before the
+// second tap): `own`, that frame.
+#[test]
+fn s25_fix2_another_steps_frame_is_elsewhere_and_a_capture_of_the_live_bytes_is_own() {
+    let bench = Bench::new();
+    bench.press(
+        &tap_at(POINTS[0], one_capture_after()),
+        vec![previous_screen(), screen(1)],
+    );
+    bench.press(
+        &tap_at(POINTS[1], one_capture_after()),
+        vec![screen(1), screen(2)],
+    );
+    let recorded = bench.recording();
+
+    let marked = bench.marked(json!({"step": 2, "page": "second",
+                                     "boxes": [button_box("recognize", 1)]}));
+    let frames = box_frames(&marked);
+    assert_eq!(taken_of(&frames), ["own", "own", "elsewhere"], "{frames:?}");
+    assert_eq!(frames[0]["frame_id"], "f0003", "{frames:?}");
+    assert!(frames[0].get("superseded").is_none(), "{frames:?}");
+    assert_eq!(frames[1]["superseded"], "f0002", "{frames:?}");
+    assert_eq!(frames[1]["frame_id"], "f0003", "{frames:?}");
+    assert_eq!(frames[2]["step"], 1, "{frames:?}");
+    assert_eq!(frames[2]["frame_id"], "f0001", "{frames:?}");
+    assert!(score(&frames[2]) >= 0.95, "{frames:?}");
+    assert!(marked.samples.is_empty(), "{:?}", marked.samples);
+    let stored = bench.recording();
+    assert_eq!(
+        step_of(&stored, 2)["frames"],
+        step_of(&recorded, 2)["frames"],
+        "{stored}"
+    );
+}
+
+// The review's suggestions (5): the second screen has a badge, and the first tap's first capture
+// shows a moment of its animation; the second is the screen settled, the bytes of the live frame.
+// A request with a recognize box over the button and a template mark over the badge: on the
+// animation's capture the box reaches its threshold and the whole frame stays within the bound,
+// but the step's page does not hold there (the badge's mark fails): `not_added` with the page's
+// reason and the mark it names; nothing is refused.
+#[test]
+fn s25_fix2_a_capture_where_the_page_does_not_hold_is_not_added_with_its_reason() {
+    let bench = Bench::new();
+    let badged = |seed: u64| backdrop(BACKGROUND, &[(BUTTONS[1], SEEDS[1]), (BADGE, seed)], &[]);
+    bench.press(
+        &tap_at(POINTS[0], captures_after(2)),
+        vec![screen(0), badged(BADGE_SEEDS[1]), badged(BADGE_SEEDS[0])],
+    );
+    bench.press(
+        &tap_at(POINTS[1], one_capture_after()),
+        vec![badged(BADGE_SEEDS[0]), screen(2)],
+    );
+
+    let marked = bench.marked(json!({
+        "step": 2,
+        "page": "second",
+        "add": [{"id": "ui/badge", "family": "template", "region": BADGE}],
+        "boxes": [button_box("recognize", 1)]
+    }));
+    let frames = step_frames(&marked);
+    assert_eq!(taken_of(&frames), ["own", "not_added", "own"], "{frames:?}");
+    let refused = &frames[1];
+    assert_eq!(refused["superseded"], "f0002", "{refused}");
+    assert!(score(refused) >= 0.95, "{refused}");
+    assert_eq!(
+        refused["because"],
+        json!({"reason": "self_test_failed", "mark": "ui/badge"}),
+        "{refused}"
+    );
+    assert_eq!(frames[2]["superseded"], "f0003", "{frames:?}");
+    assert!(marked.samples.is_empty(), "{:?}", marked.samples);
+}
+
+// The review's suggestions (5): a tap recorded at (78, 48) on a middle step. A press box whose
+// bottom-right pixel is that point holds it (both corner pixels are inside a box) and is taken;
+// one whose right or bottom edge ends one pixel before it is `record_click_outside_step_rect` with
+// `recorded_point_outside_box`, and nothing is written.
+#[test]
+fn s25_fix2_a_press_box_holds_a_point_on_its_bottom_right_pixel_and_not_one_pixel_further() {
+    let bench = Bench::new();
+    for (index, point) in POINTS.into_iter().enumerate() {
+        bench.press(
+            &tap_at(point, one_capture_after()),
+            vec![screen(index), screen(index + 1)],
+        );
+    }
+    let before = bench.files();
+    for (corner, short) in [
+        ((77, 48), rect(70, 40, 8, 9)),
+        ((78, 47), rect(70, 40, 9, 8)),
+    ] {
+        let error = bench
+            .mark(json!({"step": 2, "boxes": [boxed("press", (70, 40), corner)]}))
+            .expect_err("a press box that ends one pixel before the point");
+        assert_eq!(
+            error.code, "record_click_outside_step_rect",
+            "{}",
+            error.message
+        );
+        let details = error.details.expect("details");
+        assert_eq!(details["reason"], "recorded_point_outside_box", "{details}");
+        assert_eq!(details["point"], json!({"x": 78, "y": 48}), "{details}");
+        assert_eq!(details["box"], json!(short), "{details}");
+        assert_eq!(bench.files(), before, "a file changed");
+    }
+    let taken = bench.marked(json!({"step": 2, "boxes": [boxed("press", (70, 40), (78, 48))]}));
+    assert_eq!(
+        taken.click.as_ref().map(|click| click.rect),
+        Some(rect(70, 40, 9, 9))
+    );
+}
+
+// The review's suggestions (5): a recording whose step holds a sample a capture became (`source:
+// "recording_frame"`, the capture's own file) archives, its manifest listing the sample with that
+// file, and reopens with the sample in its step.
+#[test]
+fn s25_fix2_a_recording_with_recording_frame_samples_archives_and_reopens() {
+    let bench = Bench::new();
+    let settled = backdrop(BACKGROUND, &[(BUTTONS[1], SEEDS[1])], &[0]);
+    bench.press(
+        &tap_at(POINTS[0], captures_after(2)),
+        vec![screen(0), settled.clone(), screen(1)],
+    );
+    bench.press(
+        &tap_at(POINTS[1], one_capture_after()),
+        vec![screen(1), screen(2)],
+    );
+    let marked = bench.marked(json!({"step": 2, "page": "second",
+                                     "boxes": [button_box("recognize", 1)]}));
+    assert_eq!(marked.samples.len(), 1, "{:?}", marked.samples);
+    assert_eq!(marked.samples[0].frame_id, "f0006");
+    assert_eq!(marked.samples[0].source, "recording_frame");
+
+    let manifest = archived_manifest(&bench);
+    let frames = row_of(&manifest, 2)["frames"].as_array().expect("frames");
+    let capture = frames
+        .iter()
+        .find(|frame| frame["frame_id"] == "f0002")
+        .unwrap_or_else(|| panic!("the capture: {manifest}"));
+    let sample = frames
+        .iter()
+        .find(|frame| frame["frame_id"] == "f0006")
+        .unwrap_or_else(|| panic!("the sample: {manifest}"));
+    assert_eq!(sample["role"], "sample", "{manifest}");
+    assert_eq!(sample["file"], capture["file"], "{manifest}");
+    assert_eq!(sample["sha256"], hex_sha256(&settled), "{manifest}");
+
+    reopened(&bench);
+    let stored = bench.recording();
+    let kept = step_of(&stored, 2)["frames"]
+        .as_array()
+        .expect("frames")
+        .iter()
+        .find(|frame| frame["frame_id"] == "f0006")
+        .cloned()
+        .unwrap_or_else(|| panic!("the sample after the reopen: {stored}"));
+    assert_eq!(kept["source"], "recording_frame", "{stored}");
+}
+
+// The review's suggestions (4): `record archive`, `record reopen`, a press box on the tap recorded
+// by its point, `record archive` again: the first manifest's row says the tap has no rectangle of
+// its own (`rect` null); the second carries the box, the tap's point and source as recorded.
+#[test]
+fn s25_fix2_a_press_box_set_after_a_reopen_is_in_the_next_manifest() {
+    let bench = Bench::new();
+    bench.press(
+        &tap_at(POINTS[0], one_capture_after()),
+        vec![screen(0), screen(1)],
+    );
+    let first = archived_manifest(&bench);
+    assert_eq!(row_of(&first, 1)["tap"]["rect"], Value::Null, "{first}");
+
+    reopened(&bench);
+    bench.marked(json!({"step": 1, "boxes": [button_box("press", 0)]}));
+    let second = archived_manifest(&bench);
+    let tap = &row_of(&second, 1)["tap"];
+    assert_eq!(tap["rect"], json!(BUTTONS[0]), "{second}");
+    assert_eq!(tap["point"], json!({"x": 28, "y": 28}), "{second}");
+    assert_eq!(tap["source"], "point", "{second}");
 }

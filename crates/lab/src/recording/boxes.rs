@@ -14,7 +14,10 @@
 //! and its base images are the frames of the action that drew it whose similarity reaches 0.95):
 //! the frames of the action are the request's own samples and, on a draft, the captures stage one
 //! stored for the step on the way to its screen ([`stage_one_captures`]). Each is scored with the
-//! self-test's own function on that frame alone ([`call_frame`]).
+//! self-test's own function on that frame alone ([`call_frame`]). Fix round 2 (the coordinator's
+//! ruling on the review's point d): a capture is a frame of the same state of the screen only when
+//! its whole frame has not changed from the step's live frame, as stage one judges two captures
+//! unchanged (`steps.rs`, `frame_unchanged`); one that changed is not added ([`FRAME_CHANGED`]).
 
 use super::frames::{LoadedFrame, crop_png, rect_inside};
 use super::marks::{EvalFrame, MarkRejection, evaluate_mark};
@@ -34,6 +37,11 @@ use std::collections::BTreeMap;
 /// #463 S2-5: the word of a frame of the action on which a recognize box of the request scores
 /// below its threshold (`because.reason`): another state of the screen, not added.
 pub(crate) const BELOW_THRESHOLD: &str = "below_threshold";
+
+/// #463 S2-5 fix round 2: the word of a capture of the step whose whole frame changed from the
+/// step's live frame by the measure stage one calls two captures unchanged by (`because.reason`,
+/// with `frame_change_milli`): the frame shows another state of the screen, not added.
+pub(crate) const FRAME_CHANGED: &str = "frame_changed";
 
 /// #463 S2-5: the `source` of a sample a capture of the step became.
 pub(crate) const RECORDING_FRAME_SOURCE: &str = "recording_frame";
@@ -332,8 +340,9 @@ pub(crate) fn below_because(marks: &[BoxMark], scores: &CallFrame) -> Option<Box
     let made = marks.iter().find(|made| made.index == index)?;
     Some(BoxBecause {
         reason: BELOW_THRESHOLD.to_owned(),
-        mark: made.mark.id.clone(),
+        mark: Some(made.mark.id.clone()),
         index: Some(index),
+        frame_change_milli: None,
     })
 }
 

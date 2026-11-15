@@ -2161,8 +2161,9 @@ pub fn record_after_warnings(record: &AfterCaptureRecord) -> Vec<String> {
 }
 
 /// #463 S1-2: the frame-change digest of a whole frame (`frame_change_digest`, called as the
-/// kernel's still waits call it); a frame it cannot digest is `record_frame_unreadable`.
-fn change_digest(frame: &LoadedFrame, label: &str) -> LabResult<ColorDigest> {
+/// kernel's still waits call it); a frame it cannot digest is `record_frame_unreadable`. #463 S2-5:
+/// `record mark` digests a step's live frame and its captures with it too (`steps.rs`).
+pub(crate) fn change_digest(frame: &LoadedFrame, label: &str) -> LabResult<ColorDigest> {
     frame_change_digest(&frame.scene, None).map_err(|error| {
         invalid(
             "record_frame_unreadable",
@@ -2178,8 +2179,12 @@ fn change_digest(frame: &LoadedFrame, label: &str) -> LabResult<ColorDigest> {
 /// one frame-change bound (`frame_change_milli` at most `FRAME_CHANGE_MAX_MILLI`); the screen is
 /// still when the run holds at least one earlier capture and the newest started at least
 /// `still_for` after the run's first. Digests that cannot be compared are
-/// `record_frame_unreadable`.
-fn unchanged_for(taken: &[(Duration, ColorDigest)], still_for: Duration) -> LabResult<bool> {
+/// `record_frame_unreadable`. #463 S2-5: `record mark` asks it whether a capture of a step shows
+/// the state of its live frame (`steps.rs`, `frame_unchanged`).
+pub(crate) fn unchanged_for(
+    taken: &[(Duration, ColorDigest)],
+    still_for: Duration,
+) -> LabResult<bool> {
     let Some(((newest_start, newest), earlier)) = taken.split_last() else {
         return Ok(false);
     };
