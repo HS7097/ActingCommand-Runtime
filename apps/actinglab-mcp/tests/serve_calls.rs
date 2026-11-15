@@ -2757,24 +2757,33 @@ fn goal_request_denied(
 
 // Workflow #463 V3: the rows `goals`, `goals get`, `goals set` and `goals clear` through the
 // server answer the line the command line's code answers, each refused by the Runtime: the two
-// reads on the kept connection, each write on a connection of its own after today's provenance,
-// the instance resolved by one status read each time. `package variables` of a package that is not
-// there, served by a `serve` child of the real actinglab, answers the line actinglab's command line
-// prints with `--json`.
+// reads on the kept connection, the instance resolved by one status read each time; each write's
+// instance resolved first by one status read on the kept connection, for its client action, then
+// the write on a connection of its own after today's provenance, where the serving code resolves
+// it again (fix round 4: the order every write that names an instance takes, `ac_run_start`'s in
+// `mcp_jobs_handles_entry_status`). `package variables` of a package that is not there, served by
+// a `serve` child of the real actinglab, answers the line actinglab's command line prints with
+// `--json`.
 #[test]
 fn mcp_goals_rows_are_the_command_lines() {
     let state = TempDir::new().expect("tempdir");
     let temp = TempDir::new().expect("tempdir");
     let runtime = ScriptedRuntime::start(state.path(), |owner_epoch| {
         vec![
-            // The server's kept connection: `goals`, then `goals get`.
+            // The server's kept connection: `goals`, then `goals get`, then the instance of
+            // `goals set`'s client action and that of `goals clear`'s.
             ScriptedConnection::new()
                 .request(status_listing(owner_epoch, &[INSTANCE]))
                 .request(goal_request_denied("goal_view"))
                 .request(healthy(owner_epoch))
                 .request(status_listing(owner_epoch, &[INSTANCE]))
-                .request(goal_request_denied("goal_view")),
-            // `goals set` and `goals clear`, each on its own connection.
+                .request(goal_request_denied("goal_view"))
+                .request(healthy(owner_epoch))
+                .request(status_listing(owner_epoch, &[INSTANCE]))
+                .request(healthy(owner_epoch))
+                .request(status_listing(owner_epoch, &[INSTANCE])),
+            // `goals set` and `goals clear`, each on its own connection: today's provenance, the
+            // instance again, the edit.
             provenance()
                 .request(status_listing(owner_epoch, &[INSTANCE]))
                 .request(goal_request_denied("edit_goal")),
@@ -2842,9 +2851,13 @@ fn mcp_goals_rows_are_the_command_lines() {
             "goal_view",
             "health",
             "status",
-            "goal_view"
+            "goal_view",
+            "health",
+            "status",
+            "health",
+            "status"
         ],
-        "the reads: on the kept connection, no provenance"
+        "the reads and the writes' instances: on the kept connection, no provenance"
     );
     for written in [first_write, second_write] {
         assert_eq!(
@@ -3079,7 +3092,8 @@ fn neutral_package(temp: &Path) -> std::path::PathBuf {
 // Workflow #463 V3 fix round 1 (item 9): the rows `goals`, `goals get`, `goals set` and `goals
 // clear` through the server answer the line the command line's code answers when the Runtime
 // takes each call (the page, its entry `pick`, and the edit's version and event), on the same
-// connections as a refused call; `package variables` of a package the reader reads, through a
+// connections as a refused call (fix round 4: the kept one also resolving each write's instance
+// first); `package variables` of a package the reader reads, through a
 // `serve` child of the real actinglab, answers the line actinglab's command line prints with
 // `--json`, no error.
 #[test]
@@ -3093,14 +3107,20 @@ fn mcp_goals_rows_accepted_are_the_command_lines() {
         .transport();
     let runtime = ScriptedRuntime::start(state.path(), move |owner_epoch| {
         vec![
-            // The server's kept connection: `goals`, then `goals get`.
+            // The server's kept connection: `goals`, then `goals get`, then (fix round 4) the
+            // instance of `goals set`'s client action and that of `goals clear`'s.
             ScriptedConnection::new()
                 .request(status_listing(owner_epoch, &[INSTANCE]))
                 .request(goal_view_answered)
                 .request(healthy(owner_epoch))
                 .request(status_listing(owner_epoch, &[INSTANCE]))
-                .request(goal_view_answered),
-            // `goals set` and `goals clear`, each on its own connection.
+                .request(goal_view_answered)
+                .request(healthy(owner_epoch))
+                .request(status_listing(owner_epoch, &[INSTANCE]))
+                .request(healthy(owner_epoch))
+                .request(status_listing(owner_epoch, &[INSTANCE])),
+            // `goals set` and `goals clear`, each on its own connection: today's provenance, the
+            // instance again, the edit.
             provenance()
                 .request(status_listing(owner_epoch, &[INSTANCE]))
                 .request(goal_edit_taken(event_id)),
