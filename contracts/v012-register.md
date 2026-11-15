@@ -30403,6 +30403,21 @@ table names none, unlike the manifest's `material` (S1-5). `record ready` takes 
 no Runtime connection, so it neither pauses nor releases the instance (S1-7); `record start`,
 `record stop` and `record archive` do, and its tests call the Lab's functions, not those commands.
 
+**Fix round 2** (CI's `light` job and the review of #1766). The two architecture guards: the
+gate's bench pressed through a method named `tap`, which `lab_input_face_is_semantic_input_executor`
+reads as a call of `LabInputPort::tap`; it is `press` now and goes through `record_press` as the
+parent's gates do. `RecordReadyOutcome::warnings` was `serde_json::Value`
+(`lab_source_obeys_dependency_law`); it is `ReadyWarningItem`, `press_point_only` as a struct
+(`PressPointOnly`) or a warning of the generator or of a self-check as `record stop` prints it
+(`OpaqueJson`, a dozen shapes), the JSON unchanged; no other public member of the slice was a
+`Value`. The review's three: a check of `--package-id` or `--requires` met after a failed
+pre-check no longer ends the survey (`Lacks::or_refusal`), so `missing_total` counts every one;
+an item carries `details` (`ReadyDetails`, `ReadyMark`), what its refusal's details say beside its
+own members, and `ending_mark_missing` the ending's outcome key (`Lack::outcome_key`); an item's
+`frame_id` on a step whose press `--reopen-step` moved aside is the click's last attempt's. Three
+tests added (exec gate map "#463 S2-1"); the first and third tests adapted (their identity items
+now show `details.missing`). No code, word or key added.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

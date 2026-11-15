@@ -9,14 +9,76 @@
 //! state: `material`, `draft`, `ready` or `packaged`. Here the answer is put together from what the
 //! generator found; the reading itself is `recording_api::record_ready`, offline, under no lock,
 //! writing nothing.
+//!
+//! Fix round 2: an item carries what its refusal's details say ([`ReadyDetails`]), and the
+//! warnings are typed ([`ReadyWarningItem`]), with the JSON they had.
 
 use super::generate::{Lack, effective_steps};
-use super::model::{LabRecording, RecordingStep};
+use super::model::{LabRecording, OpaqueJson, RecordingStep};
 use super::steps::{POINT_SOURCE, SWIPE_SOURCE};
+use super::store::invalid;
 use crate::codes::{ReadyCheck, ReadyMissing, ReadyWarning};
-use actingcommand_contract::LabError;
-use serde::Serialize;
-use serde_json::{Value, json};
+use actingcommand_contract::{LabError, LabResult};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+/// #463 S2-1 fix round 2: what the refusal of a failed pre-check says of its item beside the
+/// item's own members (its `step` and `artifact_step` are the item's; its `select_problem`,
+/// `ending_problem`, `transition` and `outcome` say again the item's word and code), so that two
+/// items of one word are told apart: the marks it names, an ending's outcome key and page name,
+/// the step after a stop, the pages after the last launch or restart, the parts of the package's
+/// identity that are not known, and the counts of a recording with too few or too many steps.
+/// Read from the refusal's `details`; for `ending_mark_missing`, whose refusal names the mark
+/// alone, `outcome_key` is the ending's. Empty for a self-check's refusal.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ReadyDetails {
+    /// The marks the refusal names (`reused_mark_missing`, `forbidden_mark_missing`,
+    /// `anchor_not_own_template`, `ending_mark_missing`).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub marks: Vec<ReadyMark>,
+    /// The ending's outcome key (the ending words).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub outcome_key: Option<String>,
+    /// The ending's page name (`ending_page_taken`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub page: Option<String>,
+    /// The serial number of the step after a stop (`effect_after_stop`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_step: Option<u32>,
+    /// The pages after the last launch or restart (`application_without_home`), none among them
+    /// the main interface.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub later_pages: Option<Vec<String>>,
+    /// The parts of the package's identity that are not known (`game`, `server`, `locale`).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub missing: Vec<String>,
+    /// How many effective steps the recording has (`too_few_steps`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effective_steps: Option<usize>,
+    /// How many steps have an effect, and how many a package holds (`too_many_effects`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effect_steps: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max: Option<usize>,
+}
+
+impl ReadyDetails {
+    /// Whether the refusal says nothing beside the item's own members.
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// #463 S2-1 fix round 2: a mark a refusal names: its id, why it is refused (`reuse_source_missing`,
+/// `forbidden_source_missing`, `anchor_invalid`) and, for an anchor, what is wrong with it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReadyMark {
+    pub id: String,
+    pub reason: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub problem: Option<String>,
+}
 
 /// One thing a recording still lacks: a pre-check of `record stop` it fails, or the refusal of a
 /// self-check (`what` the check's name).
@@ -29,7 +91,8 @@ pub struct ReadyItem {
     pub step: Option<u32>,
     /// The step's number in the package; `None` with `step`.
     pub artifact_step: Option<u32>,
-    /// The frame the step's press happened on, as stage one recorded it (`before_frame`); `None`
+    /// The frame the step's press happened on, as stage one recorded it (`before_frame`; fix round
+    /// 2: on a step whose press `--reopen-step` moved aside, its click's last attempt's); `None`
     /// when the step has none.
     pub frame_id: Option<String>,
     /// A word of `ready_missing`, or for a self-check's refusal a word of `ready_check`.
@@ -39,6 +102,33 @@ pub struct ReadyItem {
     /// The one command that settles it, where there is one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hint: Option<String>,
+    /// Fix round 2: what its refusal says beside these members; absent when nothing.
+    #[serde(skip_serializing_if = "ReadyDetails::is_empty")]
+    pub details: ReadyDetails,
+}
+
+/// #463 S2-1 fix round 2: `press_point_only` for one step (`{step, artifact_step, frame_id,
+/// what}`, as before).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PressPointOnly {
+    /// The step's serial number, as `record mark --step` takes it.
+    pub step: u32,
+    /// The step's number in the package.
+    pub artifact_step: u32,
+    /// The frame the step's press happened on ([`ReadyItem::frame_id`]).
+    pub frame_id: Option<String>,
+    /// `press_point_only`.
+    pub what: String,
+}
+
+/// #463 S2-1 fix round 2: one warning of `record ready` (it never blocks), with the JSON it had: a
+/// step's `press_point_only`, or a warning of the generator or of a self-check as `record stop`
+/// prints it (its word in `code`, its other members its own; a dozen shapes, carried as they are).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(untagged)]
+pub enum ReadyWarningItem {
+    PressPointOnly(PressPointOnly),
+    Generator(OpaqueJson),
 }
 
 /// The answer of `record ready`.
@@ -55,7 +145,7 @@ pub struct RecordReadyOutcome {
     pub missing_total: usize,
     /// `press_point_only` for each step whose press is a recorded point without a press region,
     /// then the generator's own warnings as `record stop` prints them.
-    pub warnings: Vec<Value>,
+    pub warnings: Vec<ReadyWarningItem>,
     /// The self-checks that did not run, in the order they run; empty when every one ran.
     pub checks_after: Vec<String>,
 }
@@ -117,11 +207,13 @@ fn stage_two_written(recording: &LabRecording) -> bool {
 }
 
 /// The frame the press of `step` happened on, as stage one recorded it: its click's or its
-/// application operation's `before_frame`.
+/// application operation's `before_frame`. Fix round 2: a click without an execution, whose press
+/// `--reopen-step` moved aside, names its last attempt's (an application operation moved aside
+/// keeps no frame).
 fn press_frame(step: &RecordingStep) -> Option<String> {
     step.click
         .as_ref()
-        .and_then(|click| click.execution.as_ref())
+        .and_then(|click| click.execution.as_ref().or_else(|| click.attempts.last()))
         .and_then(|execution| execution.before_frame.clone())
         .or_else(|| {
             step.application
@@ -160,9 +252,33 @@ fn hint(what: ReadyMissing, step: Option<u32>) -> Option<String> {
     }
 }
 
+/// Fix round 2: the [`ReadyDetails`] of the failed pre-check `lack`, read from its refusal's
+/// details, with the ending it is about where the refusal does not name it. Details that do not
+/// read so are the generator's own fault, `validation_failed`.
+fn lack_details(lack: &Lack) -> LabResult<ReadyDetails> {
+    let mut details = match &lack.error.details {
+        Some(refused) => {
+            serde_json::from_value::<ReadyDetails>(refused.clone()).map_err(|problem| {
+                invalid(
+                    "validation_failed",
+                    format!(
+                        "the details of the refusal {} do not read as an item's: {problem}",
+                        lack.error.code
+                    ),
+                )
+            })?
+        }
+        None => ReadyDetails::default(),
+    };
+    if details.outcome_key.is_none() {
+        details.outcome_key.clone_from(&lack.outcome_key);
+    }
+    Ok(details)
+}
+
 /// The items of the failed pre-checks `lacks` (in the order the generator met them): the
 /// recording's own first, then by the step's serial number, each step's in the generator's order.
-pub(crate) fn lack_items(recording: &LabRecording, lacks: &[Lack]) -> Vec<ReadyItem> {
+pub(crate) fn lack_items(recording: &LabRecording, lacks: &[Lack]) -> LabResult<Vec<ReadyItem>> {
     let mut ordered = lacks.iter().collect::<Vec<_>>();
     ordered.sort_by_key(|lack| lack.step.map(|(serial, _)| serial));
     ordered
@@ -170,7 +286,7 @@ pub(crate) fn lack_items(recording: &LabRecording, lacks: &[Lack]) -> Vec<ReadyI
         .enumerate()
         .map(|(position, lack)| {
             let step = lack.step.map(|(serial, _)| serial);
-            ReadyItem {
+            Ok(ReadyItem {
                 order: position + 1,
                 step,
                 artifact_step: lack.step.map(|(_, number)| number),
@@ -178,7 +294,8 @@ pub(crate) fn lack_items(recording: &LabRecording, lacks: &[Lack]) -> Vec<ReadyI
                 what: lack.what.as_str().to_string(),
                 code: lack.error.code.clone(),
                 hint: hint(lack.what, step),
-            }
+                details: lack_details(lack)?,
+            })
         })
         .collect()
 }
@@ -207,6 +324,7 @@ pub(crate) fn check_item(
         what: check.as_str().to_string(),
         code: error.code.clone(),
         hint: None,
+        details: ReadyDetails::default(),
     }
 }
 
@@ -214,7 +332,7 @@ pub(crate) fn check_item(
 /// single recorded point (a tap or a long press `tap`, `long-tap --record` declared by its point,
 /// a box of one pixel) with no press region set and no mark it follows: the package would press
 /// that exact pixel.
-pub(crate) fn point_press_warnings(recording: &LabRecording) -> Vec<Value> {
+pub(crate) fn point_press_warnings(recording: &LabRecording) -> Vec<ReadyWarningItem> {
     effective_steps(recording)
         .into_iter()
         .enumerate()
@@ -227,13 +345,21 @@ pub(crate) fn point_press_warnings(recording: &LabRecording) -> Vec<Value> {
             })
         })
         .map(|(position, step)| {
-            json!({
-                "step": step.index,
-                "artifact_step": position + 1,
-                "frame_id": press_frame(step),
-                "what": ReadyWarning::PressPointOnly.as_str()
+            ReadyWarningItem::PressPointOnly(PressPointOnly {
+                step: step.index,
+                artifact_step: u32::try_from(position + 1).unwrap_or(u32::MAX),
+                frame_id: press_frame(step),
+                what: ReadyWarning::PressPointOnly.as_str().to_string(),
             })
         })
+        .collect()
+}
+
+/// Fix round 2: the generator's and the self-checks' `warnings`, each as `record stop` prints it.
+pub(crate) fn generator_warnings(warnings: &[Value]) -> LabResult<Vec<ReadyWarningItem>> {
+    warnings
+        .iter()
+        .map(|warning| OpaqueJson::from_serializable(warning).map(ReadyWarningItem::Generator))
         .collect()
 }
 
@@ -244,7 +370,7 @@ pub(crate) fn ready_outcome(
     recording: &LabRecording,
     session: String,
     missing: Vec<ReadyItem>,
-    warnings: Vec<Value>,
+    warnings: Vec<ReadyWarningItem>,
     checks_after: &[ReadyCheck],
 ) -> RecordReadyOutcome {
     let state = if packaged(recording) {

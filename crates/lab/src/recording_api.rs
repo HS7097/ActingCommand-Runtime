@@ -37,7 +37,8 @@ use crate::recording::model::{
     TransitionSpec, TransitionView,
 };
 use crate::recording::ready::{
-    RecordReadyOutcome, check_item, lack_items, packaged, point_press_warnings, ready_outcome,
+    RecordReadyOutcome, check_item, generator_warnings, lack_items, packaged, point_press_warnings,
+    ready_outcome,
 };
 use crate::recording::select::{not_evaluated_id, validate_select_request};
 use crate::recording::steps::{
@@ -346,10 +347,10 @@ pub fn record_ready(
         _ => stop_settings(&recording, options),
     };
     let (missing, checks_after) = match survey(&recording, &settings)? {
-        Survey::Lacking(lacks) => (lack_items(&recording, &lacks), ReadyCheck::ALL.to_vec()),
+        Survey::Lacking(lacks) => (lack_items(&recording, &lacks)?, ReadyCheck::ALL.to_vec()),
         Survey::Planned(plan) => match self_checks(&plan, ocr) {
             Ok(checked) => {
-                warnings.extend(checked.warnings);
+                warnings.extend(generator_warnings(&checked.warnings)?);
                 (Vec::new(), Vec::new())
             }
             // The state could not be read: no check refused, and the command answers it.
@@ -357,7 +358,7 @@ pub fn record_ready(
                 return Err(failure.error);
             }
             Err(failure) => {
-                warnings.extend(plan.warnings.iter().cloned());
+                warnings.extend(generator_warnings(&plan.warnings)?);
                 let after = ReadyCheck::ALL
                     .iter()
                     .copied()

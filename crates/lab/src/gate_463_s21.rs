@@ -27,6 +27,20 @@
 //   region: step 1's alone.
 // - `s21_the_read_writes_nothing_and_takes_no_lock`: while the recording's lock is held, the read
 //   answers (its self-checks ran) and every file of the recording keeps its bytes.
+// Fix round 2 (the review of pull request #1766): an item carries what its refusal's details say
+// beside its own members (the first and third tests: `missing` of the identity parts not known):
+// - `s21_an_option_out_of_its_form_after_a_missing_item_does_not_stop_the_count`: step 2 without a
+//   mark, step 1 forbidding a mark no step has (written into the step table), `record stop` with
+//   `--package-id` and `--requires` out of their form: it answers step 2's
+//   `record_step_without_recognition` with `missing_total` 2; `record ready` lists both, step 1's
+//   `forbidden_mark_missing` with its mark.
+// - `s21_two_items_of_one_word_on_one_step_differ_by_their_details`: step 2 reusing two marks no
+//   step has: two `reused_mark_missing` of step 2, each with its own mark.
+// - `s21_a_reopened_last_step_names_the_frame_of_its_last_attempt`: the indeterminate press of the
+//   last step moved aside by `--reopen-step`: its items and its `press_point_only` name f0003, the
+//   frame of the click's last attempt.
+// The bench's press is `press` (it was `tap`, a name the architecture guard reads as an input
+// port's method); it goes through `record_press` as the parent's gates send theirs.
 // Frames are synthetic 1280x720 (a square of one colour at the top left on gray); no Runtime, no
 // device; the tests read no clock and never sleep.
 
@@ -225,7 +239,9 @@ impl Bench {
 
     // `tap <x> <y> --record`, the fake Runtime answering `effect` to the input and its captures
     // taking `screens`; the frame after it one capture 800 ms after the press (no stillness test).
-    fn tap(
+    // Fix round 2: the press goes through `record_press` as the parent's gates send it, and the
+    // bench's method is no longer named as an input port's method is.
+    fn press(
         &self,
         x: i32,
         y: i32,
@@ -255,8 +271,20 @@ impl Bench {
 
     // A performed tap at (100, 200): step 1 its screen 0, step 2 the screen 1 after it.
     fn performed_tap(&self) {
-        self.tap(100, 200, ClickEffect::Performed, &[0, 1])
+        self.press(100, 200, ClickEffect::Performed, &[0, 1])
             .unwrap_or_else(|error| panic!("the tap: {}: {:?}", error.code, error.details));
+    }
+
+    // Fix round 2: the step table as `edit` leaves it, written in place, as a stage-two write
+    // that dropped the steps whose marks it names would leave it.
+    fn edit_recording(&self, edit: impl FnOnce(&mut Value)) {
+        let mut recording = self.recording();
+        edit(&mut recording);
+        fs::write(
+            recording_path(&self.state(), RECORD_ID),
+            serde_json::to_vec(&recording).expect("step table JSON"),
+        )
+        .expect("step table");
     }
 
     fn mark_with(&self, request: MarkRequest) {
@@ -376,9 +404,11 @@ fn s21_three_things_missing_are_listed_in_order_and_record_stop_answers_the_firs
         ready["missing"],
         json!([
             {"order": 1, "step": null, "artifact_step": null, "frame_id": null, "what": "server",
-             "code": "record_locale_missing", "hint": "record stop --server <s>"},
+             "code": "record_locale_missing", "hint": "record stop --server <s>",
+             "details": {"missing": ["server", "locale"]}},
             {"order": 2, "step": null, "artifact_step": null, "frame_id": null, "what": "locale",
-             "code": "record_locale_missing", "hint": "record stop --locale <l>"},
+             "code": "record_locale_missing", "hint": "record stop --locale <l>",
+             "details": {"missing": ["server", "locale"]}},
             {"order": 3, "step": 2, "artifact_step": 2, "frame_id": null,
              "what": "page_recognition", "code": "record_step_without_recognition",
              "hint": "record mark --step 2 --template <id>=x,y,w,h"}
@@ -460,7 +490,8 @@ fn s21_a_recording_that_lacks_something_names_the_self_checks_and_runs_none() {
         ready["missing"],
         json!([
             {"order": 1, "step": null, "artifact_step": null, "frame_id": null, "what": "locale",
-             "code": "record_locale_missing", "hint": "record stop --locale <l>"}
+             "code": "record_locale_missing", "hint": "record stop --locale <l>",
+             "details": {"missing": ["locale"]}}
         ]),
         "{ready}"
     );
@@ -560,7 +591,7 @@ fn s21_press_point_only_until_a_press_region_is_set() {
     bench.performed_tap();
     // A second tap on step 2 whose outcome is not known: the step stays open with its click.
     let error = bench
-        .tap(300, 400, ClickEffect::Indeterminate, &[2])
+        .press(300, 400, ClickEffect::Indeterminate, &[2])
         .expect_err("an indeterminate press");
     assert_eq!(
         error.code, "record_click_indeterminate",
@@ -620,4 +651,127 @@ fn s21_the_read_writes_nothing_and_takes_no_lock() {
     assert_eq!(ready["status"], "ready", "{ready}");
     assert_eq!(ready["checks_after"], json!([]), "{ready}");
     assert_eq!(bench.files(), before, "a file of the recording changed");
+}
+
+#[test]
+fn s21_an_option_out_of_its_form_after_a_missing_item_does_not_stop_the_count() {
+    let bench = Bench::known();
+    bench.performed_tap();
+    bench.mark(1, "first_square");
+    // Step 1 forbids a mark no effective step has: a pre-check the generator makes after it
+    // checks the options' form.
+    bench.edit_recording(|recording| {
+        recording["steps"][0]["forbidden"] = json!(["gone_mark"]);
+    });
+
+    // `--package-id` and `--requires` out of their form, met after step 2's missing mark: that
+    // mark is the answer, as before, and the generator goes on past both options.
+    let error = refused(bench.stop(&RecordStopOptions {
+        package_id: Some("not/one/segment".to_owned()),
+        requires: Some(String::new()),
+        ..RecordStopOptions::default()
+    }));
+    assert_eq!(
+        error.code, "record_step_without_recognition",
+        "{}",
+        error.message
+    );
+    let details = error.details.clone().expect("details");
+    assert_eq!(details["step"], 2, "{details}");
+    assert_eq!(details["missing_total"], 2, "{details}");
+    assert_eq!(details["hint"], "record ready", "{details}");
+
+    // `record ready` lists the same two.
+    let ready = bench.ready();
+    assert_eq!(
+        ready["missing"],
+        json!([
+            {"order": 1, "step": 1, "artifact_step": 1, "frame_id": "f0001",
+             "what": "forbidden_mark_missing", "code": "record_mark_rejected",
+             "details": {"marks": [{"id": "gone_mark", "reason": "forbidden_source_missing"}]}},
+            {"order": 2, "step": 2, "artifact_step": 2, "frame_id": null,
+             "what": "page_recognition", "code": "record_step_without_recognition",
+             "hint": "record mark --step 2 --template <id>=x,y,w,h"}
+        ]),
+        "{ready}"
+    );
+    assert_eq!(ready["missing_total"], 2, "{ready}");
+}
+
+#[test]
+fn s21_two_items_of_one_word_on_one_step_differ_by_their_details() {
+    let bench = Bench::known();
+    bench.performed_tap();
+    bench.mark(1, "first_square");
+    bench.mark(2, "last_square");
+    // Step 2's page reuses two marks no effective step has.
+    bench.edit_recording(|recording| {
+        recording["steps"][1]["reused"] = json!(["gone_first", "gone_second"]);
+    });
+
+    let ready = bench.ready();
+    assert_eq!(
+        ready["missing"],
+        json!([
+            {"order": 1, "step": 2, "artifact_step": 2, "frame_id": null,
+             "what": "reused_mark_missing", "code": "record_mark_rejected",
+             "details": {"marks": [{"id": "gone_first", "reason": "reuse_source_missing"}]}},
+            {"order": 2, "step": 2, "artifact_step": 2, "frame_id": null,
+             "what": "reused_mark_missing", "code": "record_mark_rejected",
+             "details": {"marks": [{"id": "gone_second", "reason": "reuse_source_missing"}]}}
+        ]),
+        "{ready}"
+    );
+    assert_ne!(ready["missing"][0], ready["missing"][1], "{ready}");
+    assert_eq!(ready["missing_total"], 2, "{ready}");
+}
+
+#[test]
+fn s21_a_reopened_last_step_names_the_frame_of_its_last_attempt() {
+    let bench = Bench::known();
+    bench.performed_tap();
+    let error = bench
+        .press(300, 400, ClickEffect::Indeterminate, &[2])
+        .expect_err("an indeterminate press");
+    assert_eq!(
+        error.code, "record_click_indeterminate",
+        "{}",
+        error.message
+    );
+    // The last step reopened: its press, sent on f0003, is moved aside as its click's last attempt.
+    bench.mark_with(MarkRequest {
+        schema_version: LAB_RECORD_MARK_SCHEMA.to_owned(),
+        step_action: Some(StepAction {
+            kind: StepActionKind::ReopenStep,
+            step: Some(2),
+        }),
+        ..MarkRequest::default()
+    });
+    let recording = bench.recording();
+    assert_eq!(
+        recording["steps"][1]["click"]["execution"],
+        Value::Null,
+        "{recording}"
+    );
+
+    let ready = bench.ready();
+    assert_eq!(
+        ready["missing"],
+        json!([
+            {"order": 1, "step": 1, "artifact_step": 1, "frame_id": "f0001",
+             "what": "page_recognition", "code": "record_step_without_recognition",
+             "hint": "record mark --step 1 --template <id>=x,y,w,h"},
+            {"order": 2, "step": 2, "artifact_step": 2, "frame_id": "f0003",
+             "what": "final_has_effect", "code": "record_final_step_has_click"},
+            {"order": 3, "step": 2, "artifact_step": 2, "frame_id": "f0003",
+             "what": "page_recognition", "code": "record_step_without_recognition",
+             "hint": "record mark --step 2 --template <id>=x,y,w,h"}
+        ]),
+        "{ready}"
+    );
+    assert_eq!(
+        ready["warnings"],
+        json!([point_only(1, "f0001"), point_only(2, "f0003")]),
+        "{ready}"
+    );
 }

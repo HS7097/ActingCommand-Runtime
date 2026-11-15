@@ -462,12 +462,14 @@ const READY_HINT: &str = "record ready";
 /// #463 S2-1 (`contracts/lab-recording.md`, "What a recording still lacks: `record ready`"): one
 /// pre-check of `record stop` that the recording fails: its word, the step it names (its serial
 /// number and its number in the package; `None` for an item of the whole recording) and the refusal
-/// `record stop` answers for it.
+/// `record stop` answers for it. Fix round 2: `outcome_key`, the ending a failed pre-check of an
+/// ending is about where its refusal does not name it (`ending_mark_missing`).
 #[derive(Debug, Clone)]
 pub(crate) struct Lack {
     pub(crate) what: ReadyMissing,
     pub(crate) step: Option<(u32, u32)>,
     pub(crate) error: LabError,
+    pub(crate) outcome_key: Option<String>,
 }
 
 /// #463 S2-1: what the pre-checks found: the plan when the recording passes every one, otherwise
@@ -483,18 +485,35 @@ struct Lacks(Vec<Lack>);
 
 impl Lacks {
     fn push(&mut self, what: ReadyMissing, step: Option<(u32, u32)>, error: LabError) {
-        self.0.push(Lack { what, step, error });
+        self.0.push(Lack {
+            what,
+            step,
+            error,
+            outcome_key: None,
+        });
+    }
+
+    /// Fix round 2: a failed pre-check of the ending `outcome_key` whose refusal does not name it.
+    fn push_ending(&mut self, what: ReadyMissing, outcome_key: &str, error: LabError) {
+        self.0.push(Lack {
+            what,
+            step: None,
+            error,
+            outcome_key: Some(outcome_key.to_string()),
+        });
     }
 
     /// A refusal that is no pre-check of the recording (an option of `record stop` out of its
     /// form): the answer when the recording failed no pre-check before it, which is where the
     /// generator meets it; otherwise the failed pre-checks are the answer, the first of them the
-    /// refusal the generator met first.
-    fn or_refusal(self, error: LabError) -> LabResult<Survey> {
+    /// refusal the generator met first. Fix round 2: in that case the option is passed over and
+    /// the generator goes on, so that every pre-check the recording fails is collected
+    /// (`missing_total` counted only those before the option).
+    fn or_refusal(&self, error: LabError) -> LabResult<()> {
         if self.0.is_empty() {
             Err(error)
         } else {
-            Ok(Survey::Lacking(self.0))
+            Ok(())
         }
     }
 }
@@ -781,7 +800,8 @@ fn first_lack(lacks: Vec<Lack>) -> LabError {
 /// fails. A check that needs what a failed one did not give waits for it: the package's id and the
 /// main-interface rules need the game (and the id the server), and nothing after the pre-checks
 /// runs once one failed. A refusal that is no pre-check of the recording (a `record stop` option
-/// out of its form) ends the survey where the generator meets it (`Lacks::or_refusal`).
+/// out of its form) ends the survey where the generator meets it when no pre-check failed before
+/// it, and is passed over when one did (`Lacks::or_refusal`, fix round 2).
 pub(crate) fn survey(recording: &LabRecording, settings: &StopSettings) -> LabResult<Survey> {
     validate_timeout_option("--timeout-ms", settings.timeout_ms)?;
     let effective = effective_steps(recording);
@@ -937,14 +957,14 @@ pub(crate) fn survey(recording: &LabRecording, settings: &StopSettings) -> LabRe
             if !prerequisite_package_id_valid(&package_id)
                 || !package_id_names_one_path_segment(&package_id)
             {
-                return lacks.or_refusal(with_details(
+                lacks.or_refusal(with_details(
                     invalid(
                         "validation_failed",
                         "--package-id must be non-empty, at most 256 bytes, without control \
                          characters and usable as a file name (one path segment)",
                     ),
                     json!({"package_id": package_id}),
-                ));
+                ))?;
             }
             Some(package_id)
         }
@@ -953,33 +973,33 @@ pub(crate) fn survey(recording: &LabRecording, settings: &StopSettings) -> LabRe
     let mut warnings = Vec::new();
     if let Some(requires) = &settings.requires {
         if !prerequisite_package_id_valid(requires) {
-            return lacks.or_refusal(requires_invalid(
+            lacks.or_refusal(requires_invalid(
                 requires,
                 "prerequisite_id_invalid",
                 "--requires must be non-empty, at most 256 bytes and without control characters"
                     .to_string(),
-            ));
+            ))?;
         }
         if let Some(package_id) = &package_id
             && requires == package_id
         {
-            return lacks.or_refusal(requires_invalid(
+            lacks.or_refusal(requires_invalid(
                 requires,
                 "prerequisite_self",
                 format!("--requires names this package itself ({package_id})"),
-            ));
+            ))?;
         }
         if effective
             .first()
             .is_some_and(|step| step.is_application_entry())
         {
-            return lacks.or_refusal(requires_invalid(
+            lacks.or_refusal(requires_invalid(
                 requires,
                 "application_entry",
                 "the first step is an application entry step: it recognizes nothing before its \
                  operation, so there is no first step a prerequisite package could lead to"
                     .to_string(),
-            ));
+            ))?;
         }
         if let (Some(game), Some(server)) = (game, settings.server.as_deref()) {
             let prefix = format!("{game}.{server}.");
@@ -1204,9 +1224,9 @@ pub(crate) fn survey(recording: &LabRecording, settings: &StopSettings) -> LabRe
     for (position, ending) in recording.endings.iter().enumerate() {
         let required = required_ids(&ending.marks, &ending.reused, &marks);
         if let Some(id) = required.iter().find(|id| !marks.contains_key(*id)) {
-            lacks.push(
+            lacks.push_ending(
                 ReadyMissing::EndingMarkMissing,
-                None,
+                &ending.outcome_key,
                 with_details(
                     blocked(
                         "record_mark_rejected",

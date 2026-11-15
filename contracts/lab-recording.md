@@ -2696,7 +2696,8 @@ once. Through the Lab's MCP server (`actinglab-mcp`) it is `ac_record_ready` (`r
   arrival timeouts; for a stopped recording marked again, those its package was generated with
   ("Marking after stop"). Such an option out of its form (an earlier stop's `--package-id` or
   `--requires`) is no pre-check of the recording: it is the command's own refusal, as `record stop`
-  answers it.
+  answers it, when the recording fails no pre-check the generator makes before it; when it fails
+  one, the option is passed over and every pre-check is listed (fix round 2).
 
 The answer:
 
@@ -2725,12 +2726,25 @@ The answer:
   while playing", "Application steps"; on a press sent on a capture that was not stored,
   `sent_on_unstored_capture`, the stored frame its marks were made on, as the step table names it),
   `null` when the step has none (no frame is derived for a press recorded without it, unlike the
-  archive manifest's `material`); `what`, its word; `code`, the
-  code `record stop` answers for it; and `hint` where one command settles it (`record stop --game
-  <g>`, `--server <s>`, `--locale <l>`; `record mark --step k --template <id>=x,y,w,h` for a step
-  without a mark; `record mark --step k --not-optional` for an optional step in a place it cannot
-  be), absent otherwise. No item carries a suggestion, a candidate box or a ready-made request:
-  what recognizes the page and where the press may land are the agent's to set.
+  archive manifest's `material`); on a step whose press `record mark --reopen-step` moved aside
+  (its click has no execution), the frame of its click's last attempt, the press so moved (fix
+  round 2; an application operation moved aside keeps no frame, so `null`); `what`, its word;
+  `code`, the code `record stop` answers for it; `hint` where one command settles it (`record
+  stop --game <g>`, `--server <s>`, `--locale <l>`; `record mark --step k --template
+  <id>=x,y,w,h` for a step without a mark; `record mark --step k --not-optional` for an optional
+  step in a place it cannot be), absent otherwise; and `details` (fix round 2), what the
+  refusal's `details` say beside the item's own members, so that two items of one word are told
+  apart, absent when they say nothing more: `marks` (`[{id, reason, problem?}]`, the marks of
+  `reused_mark_missing`, `forbidden_mark_missing`, `anchor_not_own_template` and
+  `ending_mark_missing`), `outcome_key` (the ending words; for `ending_mark_missing`, whose refusal
+  names the mark alone, the ending's), `page` (`ending_page_taken`), `next_step`
+  (`effect_after_stop`), `later_pages` (`application_without_home`), `missing` (`game`, `server`,
+  `locale`: every part not known), `effective_steps` (`too_few_steps`), `effect_steps` and `max`
+  (`too_many_effects`). The refusal's `step` and `artifact_step` are the item's, and its
+  `select_problem`, `ending_problem`, `transition` and `outcome` say again its word and its code.
+  A self-check's item has no `details`. No item carries a suggestion, a candidate box or a
+  ready-made request: what recognizes the page and where the press may land are the agent's to
+  set.
 - **Order**: the recording's own items first (in the order the generator checks them), then by the
   step's serial number, each step's in the order the generator checks them.
 - **The words** (`what`, the closed vocabulary `ready_missing` of the outcome catalog, one word per
@@ -2914,7 +2928,9 @@ A `--requires` that does not start with `<game>.<server>.` adds the warning
 (the code and details above, as before), its `details` adding `missing_total`, how many
 pre-checks of the recording it fails, and `hint: "record ready"`, the read that lists every one at
 once with its word ("What a recording still lacks: `record ready`"). The checks of an option's form
-(`--package-id`, `--requires`, the timeouts) answer as before, without these two.
+(`--package-id`, `--requires`, the timeouts) answer as before, without these two. Fix round 2: a
+check of `--package-id` or `--requires` met after a failed pre-check no longer ends the count: the
+generator goes on, and `missing_total` counts every pre-check the recording fails.
 
 ### Pages and documents
 
