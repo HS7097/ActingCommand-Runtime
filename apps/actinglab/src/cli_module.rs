@@ -105,7 +105,9 @@ pub(crate) mod engine;
 pub(crate) mod own_flags;
 // Workflow #434 LAB-2b: the line actinglab's own commands print.
 pub(crate) mod own_line;
-mod place;
+// #463 S1-8: actinglab's own commands take the state root of the installation it runs from here
+// too (`crate::state_roots::runtime_state_root`).
+pub(crate) mod place;
 pub(crate) mod serve;
 pub(crate) mod words;
 

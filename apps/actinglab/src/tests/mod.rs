@@ -197,6 +197,10 @@ mod gate_463_s13;
 // its own, and the end of the recording resumes only that pause.
 #[path = "gate_463_s17.rs"]
 mod gate_463_s17;
+// #463 S1-8: without the variable, an installed actinglab reaches its installation's state root,
+// and `record start` holds its instance there.
+#[path = "gate_463_s18.rs"]
+mod gate_463_s18;
 // #463 S2-13: `record frames` refuses on its command line a number it cannot read, and makes no
 // session directory.
 #[path = "gate_463_s213.rs"]
