@@ -1791,10 +1791,9 @@ fn with_catalog_approval_ref(mut sources: CatalogSources, approval_id: &str) -> 
 }
 
 /// Workflow #399: a person approves the catalog generation `intent` was evaluated under,
-/// through each approval id that catalog names.
+/// through each approval id that catalog names (Workflow #434 LAB-6S4a: through the host's
+/// transcription, the approval request being gone).
 fn approve_intent_catalog(case: &str, host: &RuntimeHost, intent: &DispatchIntent) {
-    let mut client = TestClient::connect(host);
-    client.declare_governance_identity();
     for approval_id in &intent.approval_refs {
         let decision = ApprovalDecisionRecord::new(
             approval_id.as_str(),
@@ -1807,14 +1806,13 @@ fn approve_intent_catalog(case: &str, host: &RuntimeHost, intent: &DispatchInten
                 .expect("approval reason"),
         )
         .expect("catalog approval decision");
-        let request =
-            client.governance_request(RuntimeOperation::RecordApprovalDecision { decision });
-        assert_eq!(
-            client.send(&request).state(),
-            RuntimeReceiptState::Completed,
-            "{case}: approve catalog version {} through {approval_id}",
-            intent.catalog_version
-        );
+        host.transcribe_configured_approval(&decision)
+            .unwrap_or_else(|error| {
+                panic!(
+                    "{case}: approve catalog version {} through {approval_id}: {error:?}",
+                    intent.catalog_version
+                )
+            });
     }
 }
 

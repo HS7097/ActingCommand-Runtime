@@ -3,15 +3,16 @@
 //! `ac_remedy_set` and `ac_remedy_get` (Workflow #411 B15 R6; model-b15 §5.1, §7.6), the MCP
 //! sides of `actingctl remedy set|lift` and `remedy get` (`crate::remedy`). Both are general
 //! tools (observer until U-3, always on: an agent writes the instance's target record). The
-//! write goes the provenance way on its own (Agent, Adapter) connection, the origin the
-//! Runtime records on the `fact.published` event; what the rows may name is the Runtime's
+//! write goes on its own (Agent, Adapter) connection, the origin the Runtime records on the
+//! `fact.published` event (since Workflow #434 LAB-6S4a, 0.12.63, with no `client.action` before
+//! it, the coordinator's ruling N8); what the rows may name is the Runtime's
 //! answer, passed on unchanged (`session_remedy_choices_invalid` on top of a refusal). The scope
 //! is an instance or a game; `server` is no argument (`arguments_invalid`, `unknown`), since a
 //! server id is not game-qualified. The answers are the CLI's, without its outcome; a `get`
 //! answer larger than the output budget is exported, as `ac_facts` does (Workflow #434 LAB-5D:
 //! by `remedy::within_budget`, with this server's budget).
 
-use super::operator::record_provenance;
+use super::operator::write_interaction;
 use super::runtime::client_error;
 use super::tools::{
     self, Arguments, ToolContext, ToolError, ToolOutcome, ToolSuccess, invalid_argument,
@@ -58,19 +59,14 @@ pub(super) fn set(context: &ToolContext<'_>, arguments: &Map<String, Value>) -> 
         return Err(invalid_argument("lift", ArgumentProblem::Conflicting));
     }
     let connection = context.runtime.connect_fresh(AGENT.0, AGENT.1)?;
-    let write = record_provenance(connection, "ac_remedy_set", None, AGENT, None)?;
+    let client = write_interaction(&connection)?;
     let answer = match (rows, &target) {
-        (Some(rows), _) => remedy::set(&write.client, &target, rows, remedy::MCP_DETECTOR),
-        (None, Target::Instance(selector)) => {
-            remedy::lift(&write.client, selector, remedy::MCP_DETECTOR)
-        }
+        (Some(rows), _) => remedy::set(&client, &target, rows, remedy::MCP_DETECTOR),
+        (None, Target::Instance(selector)) => remedy::lift(&client, selector, remedy::MCP_DETECTOR),
         (None, _) => return Err(invalid_argument("lift", ArgumentProblem::Conflicting)),
     }
     .map_err(|failure| tool_error(&failure))?;
-    Ok(ToolSuccess {
-        result: answer,
-        warnings: write.warnings,
-    })
+    Ok(ToolSuccess::new(answer))
 }
 
 /// `ac_remedy_get {instance}`.

@@ -162,69 +162,32 @@ parent directory as their base. The launcher only resolves the root config alias
 an explicit candidate path is preserved. Running processes use `Running` and
 require the configuration selected by their pinned snapshot.
 
-Installation control uses the ordinary Runtime connection, with `(Cli, Cli)` or
-`(User, Ui)` origin and the exact owner target. Every action but `query` needs an
-accepted governance identity; the read-only `query` needs none, and while the new
-owner is `preparing` and before its deadline it reads Host memory only and appends
-nothing to the ledger (Workflow #381 A R2). The CLI declares `client: actingctl`
-before every action but `query`; a configured governance allowlist must permit
-that identity. The client method is `RuntimeClient::install_transition`. The
-corresponding CLI entry is:
+Installation control is the cold protocol only since Runtime 0.12.63 (Workflow
+#434 LAB-6S4a; `contracts/v012-register.md` §1.287, "Slice LAB-6S4a"): the Runtime
+declares `install-control` [0, 0], so an installer that speaks [0, 1] takes revision
+0 with it. The Host installation transition (`InstallTransition`, its actions
+`begin_drain`, `query`, `abort`, `commit_shutdown` and `release`, and the client's
+`RuntimeClient::install_transition`), `actingctl install-transition` and actingd's
+held start `--install-held` are gone: `actingctl install-transition` is refused as a
+word no subcommand is (`actingctl_usage_invalid`, exit 1, before any connection), a
+start that names `--install-held` is refused `usage_invalid` (exit 1), and a request
+of the deleted kind does not decode (the Runtime drops the connection without a
+receipt and records `runtime_protocol_invalid` once).
 
-```powershell
-actingctl install-transition --state-root <state-root> --action-json '<action-json>'
-```
-
-The JSON action is `begin_drain` (transition_id and optional timeout_ms), `query`
-(transition_id), `abort` (ticket), `commit_shutdown` (ticket), or `release`
-(ticket and optional timeout_ms). Each run has one deadline for all its exchanges,
-counted from its start (Workflow #381 A R1′): 60 seconds for `begin_drain`,
-`query`, `abort` and `release`, 10 seconds for `commit_shutdown`, whose `--wait`
-follows, so that every run fits an installer's 75-second limit. Save the complete
-returned ticket. A drain
-closes new root admission while admitted calls, leases, queued work and their
-cleanup finish. Wait for `drained`, then submit that ticket's `commit_shutdown`;
-`--wait 60` on this action observes the accepted owner's actual close and process
-exit through the existing shutdown waiter. The resident daemon's policy monitor
-waits through a drain, resumes after an abort or a drain timeout, and ends with
-the accepted `commit_shutdown` (Workflow #376). A completed control receipt describes
-the action; only `released` describes completed new-owner preparation.
-
-Start the selected daemon in held mode with:
-
-```powershell
-actingcommand-actingd --config <selected-config> --install-held '<held-json>'
-```
-
-The held input contains transition_id, request_id, optional timeout_ms and an
-optional previous drained ticket. The Host opens its owner and ledger, answers
-installation control and necessary ledger reads, and waits before constructing
-the Provider. Verify its new exact owner/ticket and send `release`. It keeps root
-admission closed through Provider/basic preparation and restores user pauses only
-from the supplied predecessor's matching drained and accepted-shutdown ledger
-facts. Ordinary startup invalidates those old installation facts.
-
-Drain, held and release deadlines default to 60 seconds and are bounded at
-600 seconds; supply a shorter duration when the authorized window is shorter.
-A drain timeout removes only this transaction's barrier. A held timeout stays
-closed before Provider assembly; release failure or timeout stays closed and
-preserves native preparation/cleanup failures. A held or release timeout also ends
-the start, as `held_timeout` or `release_timeout` during `install_transition`, even
-when nobody polls; the watchdog restarts such a start (Workflow #381 A R5′). A start
-that stops before it finished preparing because a Runtime failure latched meanwhile
-ends as `install_startup_stopped` during `install_transition`, an error. A held start
-whose shutdown was accepted ends as `runtime_stopped` with `install_startup_shut_down`
-(info, Workflow #378 A7-R) as its link, and actingd exits 0: a requested stop, which
-the watchdog takes as a formal close and never restarts. The latched failure is named
-as `cause=<code> cause_operation=<operation>` on the developer line
-`ERROR actingd: install_startup_stopped …`, as the `caused_by` link of the
-`OUTCOME actingd:` line and of the lifecycle failure's outcome in the ledger
-(Workflow #378 A6a), and in the failed transition's status fact, which also records
-`failure_code` (Workflow #381 A R3′). A missing client receipt is unknown: reconnect
-and query the original transition. The client never retries an
-installation action automatically. Installation status and original pauses are the
-Host-owned ledger facts `host.install_transition` and
-`host.install_transition.pauses`.
+An installer stops a running Runtime on the ordinary Runtime connection: it pauses
+scheduling (`PauseScheduling` of each instance), sends `RequestShutdown` for the
+exact owner, waits for the owner's close and process exit (`actingctl
+request-shutdown --wait <seconds>`, or `actingctl install`'s own wait), starts the
+selected daemon plainly with `actingcommand-actingd --config <selected-config>`, and
+after its readiness resumes the pauses it made. A start restores the persisted
+scheduling pauses (`host.scheduling_pause`); a ledger written by 0.12.62 or earlier
+may still hold the transition's facts `host.install_transition` and
+`host.install_transition.pauses`, which a start invalidates and nothing reads. A
+start that stops before it finished preparing because a Runtime failure latched
+meanwhile ends as `install_startup_stopped`, an error the watchdog restarts. A
+`RequestShutdown` sent while a start prepares is refused `runtime_shutdown_denied`
+(`runtime_busy`), so no start ends as a requested stop: `install_startup_shut_down`,
+which the accepted shutdown of a held start raised, is retired in 0.12.63.
 
 ### Standalone configuration
 
@@ -462,11 +425,12 @@ without a formal close (a
 crash, a closed console window, an end in Task Manager, a reboot), or when its last
 start ended in an error. The start's terminal outcome is the last `OUTCOME actingd:`
 or `OUTCOME acforward:` line of its `actingd-*.log`, and only its category counts
-(Workflow #378 A6a): an error, such as a held start that stopped with
-`install_startup_stopped`, `held_timeout` or `release_timeout` (also behind a later
-formal close that no log covers; Workflow #381 A R5′, R5b), is started again. It
-never starts a Runtime that was closed formally (`request-shutdown`, an acsetup
-transition, an accepted shutdown of a held start: each ends in `runtime_stopped`),
+(Workflow #378 A6a): an error, such as a start that stopped with
+`install_startup_stopped` (and, in the log of a Runtime before 0.12.63, a held start's
+`held_timeout` or `release_timeout`; also behind a later formal close that no log
+covers; Workflow #381 A R5′, R5b), is started again. It never starts a Runtime that was
+closed formally (`request-shutdown`, before 0.12.63 an acsetup transition, an accepted
+shutdown of a start that had not finished: each ends in `runtime_stopped`),
 that is alive, while acsetup holds `install\writer.lock`, or whose terminal outcome
 is fatal; that last case stays down loudly (`watchdog_fatal_hold`). At most 3 starts
 in 30 minutes; then it stays down until a formal start (`watchdog_budget_exhausted`,
