@@ -11,6 +11,8 @@
 pub(crate) mod archive;
 // #463 S2-13: the stored frames just before and just after one step's press, read on request.
 pub(crate) mod around;
+// #463 S2-5: boxes drawn on a step's primary frame, a region to recognize by or a region to press.
+pub(crate) mod boxes;
 pub(crate) mod container;
 pub(crate) mod crosscheck;
 // #463 R2: a screen that ends the business another way after the last press, taken by a stopped

@@ -4,10 +4,14 @@
 //! operations. Everything is computed in memory and written once, atomically.
 
 use super::RecordingLock;
+use super::boxes::{
+    BoxMark, FRAME_CHANGED, RECORDING_FRAME_SOURCE, ScoredFrame, below_because, box_views,
+    call_frame, expanded_request, flat_boxes, made_box_marks, press_rect, stage_one_captures,
+};
 use super::ending::{ENDING_MARK_STEP, check_new_ending};
 use super::follow::{
-    FollowFrames, check_follow_declaration, check_follow_frames, check_located_follow_frames,
-    followed_template,
+    FollowFrames, LocatedClick, check_follow_declaration, check_follow_frames,
+    check_located_follow_frames, followed_template,
 };
 use super::frames::{
     LoadedFrame, check_frame_size, crop_store_path, frame_store_path, read_frame_file,
@@ -19,14 +23,15 @@ use super::marks::{
     EvalFrame, MarkRejection, derive_check, evaluate_mark, prepare_mark, validate_mark_id,
 };
 use super::model::{
-    ApplicationAttempt, ClickExecution, ClickFollow, ClickFollowForm, ClickGesture, ClickSpec,
-    EndingSpec, ForbiddenMarkView, LAB_RECORD_MARK_SCHEMA,
-    LAB_RECORDING_DEFAULT_COLOR_MAX_DISTANCE, LAB_RECORDING_DEFAULT_MATCH_METRIC,
-    LAB_RECORDING_DEFAULT_SETTLE_MS, LAB_RECORDING_DEFAULT_TEMPLATE_THRESHOLD,
-    LAB_RECORDING_MAX_GESTURE_MS, LAB_RECORDING_SCHEMA, LabRecording, MarkFamily, MarkRequest,
-    MarkSpec, OpaqueJson, OptionalAfterSpec, RecordPoint, RecordRect, RecordSize, RecordedFrame,
-    RecordedMark, RecordingDefaults, RecordingEnding, RecordingStep, SelfTestStatus,
-    StepApplication, StepClick, StepOptional, StepTransition, ValueTestRight, value_test_side_id,
+    ApplicationAttempt, BoxBecause, BoxFrameTaken, BoxView, ClickExecution, ClickFollow,
+    ClickFollowForm, ClickGesture, ClickSpec, EndingSpec, ForbiddenMarkView,
+    LAB_RECORD_MARK_SCHEMA, LAB_RECORDING_DEFAULT_COLOR_MAX_DISTANCE,
+    LAB_RECORDING_DEFAULT_MATCH_METRIC, LAB_RECORDING_DEFAULT_SETTLE_MS,
+    LAB_RECORDING_DEFAULT_TEMPLATE_THRESHOLD, LAB_RECORDING_MAX_GESTURE_MS, LAB_RECORDING_SCHEMA,
+    LabRecording, MarkFamily, MarkRequest, MarkSpec, OpaqueJson, OptionalAfterSpec, RecordPoint,
+    RecordRect, RecordSize, RecordedFrame, RecordedMark, RecordingDefaults, RecordingEnding,
+    RecordingStep, SelfTestStatus, StepApplication, StepClick, StepOptional, StepSelect,
+    StepTransition, ValueTestRight, value_test_side_id,
 };
 use super::select::{
     OTHER_PAGE_PASSES, SELECT_REJECTION_ID, SELF_TEST_ERROR, SelectChecked, SelectFrame,
@@ -40,14 +45,17 @@ use super::store::{
 };
 use crate::LabOcr;
 use crate::codes::{LabCode, OptionalAfterProblem, SelectProblem};
+use crate::recording_api::{change_digest, unchanged_for};
 use actingcommand_contract::{
     InputSamplingEvidence, LabError, LabResult, SEGMENTED_SWIPE_BRAKE_DISTANCE_PX,
 };
 use actingcommand_execution_kernel::{DriveDraw, path_drag_bounds_hold, sampling_algorithm_name};
+use actingcommand_recognition::color_digest::{ColorDigest, frame_change_milli};
 use actingcommand_recognition_pack::PackRect;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
+use std::time::Duration;
 
 pub(crate) const MAX_TRANSITION_MS: u64 = 1_800_000;
 
@@ -1295,6 +1303,8 @@ pub(crate) struct MarkApplied {
     pub(crate) removed: Vec<String>,
     /// Workflow #390 LAB-2: the marks the step's page forbids, tested on its live frames.
     pub(crate) forbidden: Vec<ForbiddenMarkView>,
+    /// #463 S2-5: the request's boxes as the step took them.
+    pub(crate) boxes: Vec<BoxView>,
 }
 
 /// Workflow #390 LAB-2: the marks the step's page forbids after this command: the step's list
@@ -1591,6 +1601,11 @@ pub(crate) fn apply_marks(
             })?,
         },
     };
+    // #463 S2-5: the request's boxes as the members they stand for on the target step: each
+    // recognize box a template mark of its own id after the request's `add`, the press box the
+    // click's rectangle. Everything below is the request's own code for those members.
+    let expanded = expanded_request(request, target);
+    let request: &MarkRequest = &expanded;
     // The application entry step has no frame: only its effect can be declared on it.
     let frameless = step_ref(&session.recording, target)
         .filter(|step| live_primary_sha(step).is_none())
@@ -1627,6 +1642,7 @@ pub(crate) fn apply_marks(
             || !request.forbid.is_empty()
             || request.anchor.is_some()
             || request.clear_anchor
+            || !request.boxes.is_empty()
             || (request.application.is_none() && request.optional.is_none());
         if needs_frame {
             return Err(with_details(
@@ -1652,6 +1668,7 @@ pub(crate) fn apply_marks(
             reused: Vec::new(),
             removed: Vec::new(),
             forbidden: Vec::new(),
+            boxes: Vec::new(),
         });
     }
     if let Some(page) = &request.page {
@@ -1767,10 +1784,25 @@ pub(crate) fn apply_marks(
         .collect::<Vec<_>>();
     ensure_loaded(session, &live_existing)?;
     let released = removed.iter().cloned().collect::<BTreeSet<_>>();
+    // #463 S2-5: a recognize box of one gray value is refused before its mark is made
+    // (`box_flat`), so that it has that one reason.
+    let primary = session
+        .cache
+        .get(&primary_sha)
+        .ok_or_else(|| invalid("validation_failed", "primary frame was not loaded"))?;
+    let flat = flat_boxes(primary, &request.boxes, target)?;
+    let specs = request
+        .add
+        .iter()
+        .filter(|spec| !flat.iter().any(|rejection| rejection.id == spec.id))
+        .cloned()
+        .collect::<Vec<_>>();
+    let flat_count = flat.len();
+    rejections.extend(flat);
     add_marks(
         session,
         &mut batch,
-        &request.add,
+        &specs,
         &primary_sha,
         target,
         None,
@@ -1791,13 +1823,59 @@ pub(crate) fn apply_marks(
         &batch,
     )?;
 
-    // samples
+    // samples; #463 S2-5: beside recognize boxes, a sample of the request on which one of them is
+    // below its threshold is another state of the screen: not added, nothing of it stored, and
+    // listed in the answer. One on which every one reaches it is a sample as before.
+    let box_marks = made_box_marks(&request.boxes, target, &batch.own, &batch.new_crops);
     let mut samples = Vec::new();
-    for path in &request.samples {
+    let mut box_frames = Vec::new();
+    for (index, path) in request.samples.iter().enumerate() {
         let loaded = read_frame_file(path)?;
-        samples.push(admit_frame(session, loaded, "sample", &local, path)?);
+        let scores = if box_marks.is_empty() {
+            None
+        } else {
+            check_frame_size(session.recording.coordinate_space, &loaded, path)?;
+            let label = format!("sample {index}");
+            let frame = EvalFrame {
+                id: label.as_str(),
+                frame: &loaded,
+            };
+            match call_frame(&box_marks, &frame, &session.recording.defaults, ocr)? {
+                Ok(scores) => Some(scores),
+                Err(rejection) => {
+                    rejections.push(rejection);
+                    continue;
+                }
+            }
+        };
+        match scores {
+            Some(scores) if scores.below.is_some() => box_frames.push(ScoredFrame {
+                frame_id: None,
+                sample: Some(index),
+                superseded: None,
+                step: None,
+                taken: BoxFrameTaken::NotAdded,
+                because: below_because(&box_marks, &scores),
+                scores,
+            }),
+            scores => {
+                let admitted = admit_frame(session, loaded, "sample", &local, path)?;
+                if let Some(scores) = scores {
+                    box_frames.push(ScoredFrame {
+                        frame_id: Some(admitted.frame_id.clone()),
+                        sample: Some(index),
+                        superseded: None,
+                        step: None,
+                        taken: BoxFrameTaken::Added,
+                        because: None,
+                        scores,
+                    });
+                }
+                samples.push(admitted);
+            }
+        }
     }
-    let mut live = live_existing;
+    let mut live = live_existing.clone();
     live.extend(samples.iter().cloned());
 
     // effect: a click or an application operation; #463 R1: or a select, which declares the click
@@ -1817,78 +1895,79 @@ pub(crate) fn apply_marks(
     // #463 R1: a select step keeps its rules whatever this command changed.
     check_select_rules(effective_step(&session.recording, target)?)?;
 
-    // self-test
+    // #463 S2-5: the step's page as this command leaves it, which the self-test below and the
+    // check of each capture stage one stored (fix round 2: one function, `page_check`) test.
+    let page = PageInputs {
+        target,
+        batch: &batch,
+        forbidden: &forbidden,
+        anchor: anchor.as_ref(),
+        select_fresh,
+    };
+    // #463 S2-5: beside recognize boxes, the captures stage one stored for this step before its
+    // press are frames of the action too: one whose whole frame has not changed from the step's
+    // live frame (fix round 2), on which every box reaches its threshold and on which the step's
+    // whole page holds becomes a sample; any other is listed and is no refusal.
+    if !box_marks.is_empty() && rejections.is_empty() {
+        let (admitted, scored) =
+            admit_captures(session, &box_marks, &page, &primary_sha, &live, ocr)?;
+        box_frames.extend(scored);
+        live.extend(admitted.iter().cloned());
+        samples.extend(admitted);
+    }
+
+    // self-test: the step's page on every live frame (`page_check`), the select's dry run only once
+    // nothing else was refused.
     let has_select = effective_step(&session.recording, target)?.select.is_some();
-    let total = batch.own.len() + batch.reused.len() + forbidden.len() + usize::from(has_select);
-    let result = evaluate_batch(session, &batch, &live, ocr)?;
-    // Workflow #396 REC-4: a click that follows a template holds on every live frame; #463 L2: so
-    // does one that follows a located-text mark, which gives the click its box.
-    let followed = follow_frames(session, &batch, &result, target, &live, ocr)?;
-    // Workflow #390 LAB-2: the anchor is a required own template mark, and no forbidden mark
-    // passes on a live frame of the step.
-    let anchor_problem = anchor_rejection(anchor.as_ref(), &result.own, &result.reused);
-    let (forbidden_views, forbidden_rejections) =
-        evaluate_forbidden(session, &forbidden, &live, ocr)?;
-    rejections.extend(result.rejections);
-    rejections.extend(followed.rejection);
-    rejections.extend(anchor_problem);
-    rejections.extend(forbidden_rejections);
-    // #463 R1: a select step's self-test, once every mark of its page holds: the kernel's dry run
-    // of the step as `record stop` generates it, on every live frame.
-    let mut select_update = None;
-    if rejections.is_empty()
-        && let Some(checked) = select_frames(
-            session,
-            SelectInputs {
-                target,
-                batch: &batch,
-                own: &result.own,
-                reused: &result.reused,
-                forbidden: &forbidden,
-                anchor: anchor.as_ref(),
-            },
-            &live,
-            select_fresh,
-            ocr,
-        )?
-    {
-        let SelectChecked {
-            select,
-            click_rect,
-            rejections: refused,
-        } = checked;
-        rejections.extend(refused);
-        select_update = Some((select, click_rect));
-    }
-    // #463 R1 fix 1: the pages of the other steps this mark knows must not pass on the select's
-    // frames, as the run's select needs its page to be the one that passes there; the pages of
-    // steps recorded later are `record stop`'s (self-check item 8).
-    if rejections.is_empty()
-        && select_update
-            .as_ref()
-            .is_some_and(|(select, _)| select.self_test.status == SelfTestStatus::Passed)
-    {
-        rejections.extend(other_pages_on_select_frames(session, target, &live, ocr)?);
-    }
+    let total = batch.own.len()
+        + batch.reused.len()
+        + forbidden.len()
+        + usize::from(has_select)
+        + flat_count;
+    let checked = page_check(session, &page, &live, !rejections.is_empty(), ocr)?;
+    rejections.extend(checked.refusals);
     if !rejections.is_empty() {
         return Err(rejected(&rejections, total));
     }
+    // #463 S2-5: each recognize box's score on every frame the step held before this command, then
+    // on the frames of the action, then on the live frames of the other steps where it reaches its
+    // threshold.
+    let boxes = if box_marks.is_empty() {
+        box_views(
+            &request.boxes,
+            target,
+            &[],
+            &[],
+            &session.recording.defaults,
+        )
+    } else {
+        let mut scored = scored_frames(session, &box_marks, &live_existing, ocr)?;
+        scored.extend(box_frames);
+        scored.extend(elsewhere_frames(session, &box_marks, target, ocr)?);
+        box_views(
+            &request.boxes,
+            target,
+            &box_marks,
+            &scored,
+            &session.recording.defaults,
+        )
+    };
     queue_crops(session, &batch);
-    let added = result
+    let added = checked
         .own
         .iter()
         .filter(|mark| batch.added_ids.contains(&mark.id))
         .cloned()
         .collect::<Vec<_>>();
     let step = step_mut(&mut session.recording, target)?;
-    step.marks = result.own;
+    step.marks = checked.own;
     step.reused = batch.reused;
     step.frames.extend(samples.iter().cloned());
     step.forbidden = forbidden;
     step.anchor = anchor;
     // #463 L2: a click that follows a located-text mark is the box the primary frame gives it;
     // fix 1: and it says whether its names were changed after its press.
-    if let (Some(located), Some(click)) = (followed.located, step.click.as_mut()) {
+    if let (Some(located), Some(click)) = (checked.located, step.click.as_mut()) {
         click.rect = located.rect;
         if let Some(follow) = click.follow.as_mut() {
             follow.offset = located.offset;
@@ -1897,7 +1976,7 @@ pub(crate) fn apply_marks(
     }
     // #463 R1: the select with its self-test, and its click the slot the pressed name selects on
     // the primary frame (kept as it was without an OCR model).
-    if let Some((select, click_rect)) = select_update {
+    if let Some((select, click_rect)) = checked.select {
         step.select = Some(select);
         if let (Some(rect), Some(click)) = (click_rect, step.click.as_mut()) {
             click.rect = rect;
@@ -1911,10 +1990,454 @@ pub(crate) fn apply_marks(
         frame: new_frame,
         samples,
         added,
-        reused: result.reused,
+        reused: checked.reused,
         removed,
-        forbidden: forbidden_views,
+        forbidden: checked.forbidden,
+        boxes,
     })
+}
+
+/// #463 S2-5: what the step's page is, as this command leaves it, for the check of a frame of the
+/// action: its target step, the batch with its new crops, the marks its page forbids, its anchor,
+/// and whether its select is declared by this command.
+struct PageInputs<'a> {
+    target: u32,
+    batch: &'a MarkBatch,
+    forbidden: &'a [String],
+    anchor: Option<&'a String>,
+    select_fresh: bool,
+}
+
+/// #463 S2-5 fix round 2: what the step's page, as this command leaves it, gives on `frames`: its
+/// own and reused marks with their self-tests, the click a followed located-text mark gives it,
+/// the forbidden marks' views, the select with its self-test and the click box it gives, and every
+/// refusal in the self-test's order.
+struct PageCheck {
+    own: Vec<RecordedMark>,
+    reused: Vec<RecordedMark>,
+    located: Option<LocatedClick>,
+    forbidden: Vec<ForbiddenMarkView>,
+    select: Option<(StepSelect, Option<RecordRect>)>,
+    refusals: Vec<MarkRejection>,
+}
+
+/// The mark-time self-test of the step's page `page` on `frames`, the one function that decides
+/// whether a page holds on frames (#463 S2-5 fix round 2: `apply_marks` runs it on the step's live
+/// frames, and the check of a capture stage one stored on those and the capture): every own and
+/// reused mark (`evaluate_batch`); Workflow #396 REC-4 and #463 L2: a click that follows a template
+/// or a located-text mark holds on every frame (`follow_frames`); Workflow #390 LAB-2: the anchor
+/// is a required own template mark and no forbidden mark passes (`anchor_rejection`,
+/// `evaluate_forbidden`); #463 R1: once nothing is refused, `refused_before` included (refusals the
+/// command met before its self-test), a select's dry run of the step as `record stop` generates it
+/// (`select_frames`), and #463 R1 fix 1, once that passed, the pages of the other steps this mark
+/// knows, which must not pass on the select's frames (`other_pages_on_select_frames`; the pages of
+/// steps recorded later are `record stop`'s, self-check item 8). The refusals are in that order;
+/// none when the whole page holds on every frame.
+fn page_check(
+    session: &Session,
+    page: &PageInputs<'_>,
+    frames: &[RecordedFrame],
+    refused_before: bool,
+    ocr: &LabOcr,
+) -> LabResult<PageCheck> {
+    let result = evaluate_batch(session, page.batch, frames, ocr)?;
+    let followed = follow_frames(session, page.batch, &result, page.target, frames, ocr)?;
+    let anchor = anchor_rejection(page.anchor, &result.own, &result.reused);
+    let (forbidden, forbidden_refusals) = evaluate_forbidden(session, page.forbidden, frames, ocr)?;
+    let BatchResult {
+        own,
+        reused,
+        rejections: mut refusals,
+    } = result;
+    refusals.extend(followed.rejection);
+    refusals.extend(anchor);
+    refusals.extend(forbidden_refusals);
+    let mut select = None;
+    if !refused_before
+        && refusals.is_empty()
+        && let Some(checked) = select_frames(
+            session,
+            SelectInputs {
+                target: page.target,
+                batch: page.batch,
+                own: &own,
+                reused: &reused,
+                forbidden: page.forbidden,
+                anchor: page.anchor,
+            },
+            frames,
+            page.select_fresh,
+            ocr,
+        )?
+    {
+        let SelectChecked {
+            select: checked_select,
+            click_rect,
+            rejections: refused,
+        } = checked;
+        refusals.extend(refused);
+        select = Some((checked_select, click_rect));
+    }
+    if !refused_before
+        && refusals.is_empty()
+        && select
+            .as_ref()
+            .is_some_and(|(made, _)| made.self_test.status == SelfTestStatus::Passed)
+    {
+        refusals.extend(other_pages_on_select_frames(
+            session,
+            page.target,
+            frames,
+            ocr,
+        )?);
+    }
+    Ok(PageCheck {
+        own,
+        reused,
+        located: followed.located,
+        forbidden,
+        select,
+        refusals,
+    })
+}
+
+/// #463 S2-5 fix round 2 (the coordinator's ruling: a base image is a frame of the same state of
+/// the screen): whether the capture whose frame-change digest is `capture` shows the state of the
+/// step's live frame (`live`), and the measure's value. Stage one calls two captures unchanged when
+/// the newer differs from the older by at most the Runtime's one frame-change bound
+/// (`frame_change_milli` of the whole frame at most `FRAME_CHANGE_MAX_MILLI`); its after loop asks
+/// [`unchanged_for`], which, given the two at one instant and no time to stand, decides exactly
+/// that, so it is asked here, the capture the older and the live frame the newer. Digests that
+/// cannot be compared are `record_frame_unreadable`, as there.
+fn frame_unchanged(capture: &ColorDigest, live: &ColorDigest) -> LabResult<(bool, u32)> {
+    let milli = frame_change_milli(capture, live).map_err(|error| {
+        invalid(
+            "record_frame_unreadable",
+            format!("failed to compare two frames by the frame-change measure: {error}"),
+        )
+    })?;
+    let unchanged = unchanged_for(
+        &[
+            (Duration::ZERO, capture.clone()),
+            (Duration::ZERO, live.clone()),
+        ],
+        Duration::ZERO,
+    )?;
+    Ok((unchanged, milli))
+}
+
+/// #463 S2-5: the captures stage one stored for step `page.target` before its press
+/// ([`stage_one_captures`]), each scored by the recognize boxes `marks`: one whose bytes are those
+/// of a live frame is that frame already (`own`). Fix round 2: of the others, first, one whose
+/// whole frame changed from the step's live primary frame (`primary_sha`) as stage one judges two
+/// captures changed ([`frame_unchanged`]) shows another state of the screen (`not_added`,
+/// `frame_changed` with the measure's value), whatever its scores; then one on which a box is below
+/// its threshold is another state of the screen (`not_added`, `below_threshold`); one on which
+/// every box reaches it becomes a sample when the step's whole page holds on the live frames `live`
+/// and it ([`page_check`]), and otherwise is `not_added` with the first refusal. A capture whose
+/// bytes are those of an earlier capture of the list is what that one became: `own` when it was
+/// added, else as it. Should two of them hold one by one and not together (a check whose `any_of`
+/// members pass on different frames), they are taken one after the other, as long as the page
+/// holds. Nothing here is a refusal of the command but a score that cannot be computed. A sample
+/// is the stored frame itself (same file, sha256 and provenance, `source: "recording_frame"`),
+/// with a frame id of its own; a capture that is not taken leaves the session's cache again.
+fn admit_captures(
+    session: &mut Session,
+    marks: &[BoxMark],
+    page: &PageInputs<'_>,
+    primary_sha: &str,
+    live: &[RecordedFrame],
+    ocr: &LabOcr,
+) -> LabResult<(Vec<RecordedFrame>, Vec<ScoredFrame>)> {
+    let captures = stage_one_captures(&session.recording, page.target);
+    if captures.is_empty() {
+        return Ok((Vec::new(), Vec::new()));
+    }
+    let live_digest = cached_digest(session, primary_sha, "the step's live frame")?;
+    let mut scored = Vec::new();
+    // The captures that hold, as the probes they were tested as, with their place in `scored`.
+    let mut chosen: Vec<(usize, RecordedFrame)> = Vec::new();
+    // The place in `scored` of the first capture of each sha256 that is no live frame, and the
+    // places of the later captures of the same bytes with the place of that first one.
+    let mut first_of: BTreeMap<String, usize> = BTreeMap::new();
+    let mut copies: Vec<(usize, usize)> = Vec::new();
+    let mut loaded_here = Vec::new();
+    for capture in captures {
+        if !session.cache.contains_key(&capture.sha256) {
+            let loaded = read_stored_frame(&capture)?;
+            session.cache.insert(capture.sha256.clone(), loaded);
+            loaded_here.push(capture.sha256.clone());
+        }
+        let scores = {
+            let loaded = session
+                .cache
+                .get(&capture.sha256)
+                .ok_or_else(|| invalid("validation_failed", "frame was not loaded"))?;
+            let frame = EvalFrame {
+                id: capture.frame_id.as_str(),
+                frame: loaded,
+            };
+            match call_frame(marks, &frame, &session.recording.defaults, ocr)? {
+                Ok(scores) => scores,
+                Err(rejection) => return Err(rejected(&[rejection], marks.len())),
+            }
+        };
+        let same = live
+            .iter()
+            .find(|frame| frame.sha256 == capture.sha256)
+            .map(|frame| frame.frame_id.clone());
+        let earlier = first_of.get(&capture.sha256).copied();
+        if same.is_none() && earlier.is_none() {
+            first_of.insert(capture.sha256.clone(), scored.len());
+        }
+        let (taken, because) = if same.is_some() {
+            (BoxFrameTaken::Own, None)
+        } else if let Some(origin) = earlier {
+            copies.push((scored.len(), origin));
+            (BoxFrameTaken::NotAdded, None)
+        } else {
+            let label = format!("capture {}", capture.frame_id);
+            let digest = cached_digest(session, &capture.sha256, &label)?;
+            let (unchanged, milli) = frame_unchanged(&digest, &live_digest)?;
+            if !unchanged {
+                (BoxFrameTaken::NotAdded, Some(changed_because(milli)))
+            } else if scores.below.is_some() {
+                (BoxFrameTaken::NotAdded, below_because(marks, &scores))
+            } else {
+                let probe = RecordedFrame {
+                    role: "sample".to_string(),
+                    superseded: false,
+                    ..capture.clone()
+                };
+                let frames = live
+                    .iter()
+                    .cloned()
+                    .chain(std::iter::once(probe.clone()))
+                    .collect::<Vec<_>>();
+                match page_check(session, page, &frames, false, ocr)?
+                    .refusals
+                    .first()
+                {
+                    None => {
+                        chosen.push((scored.len(), probe));
+                        (BoxFrameTaken::Added, None)
+                    }
+                    Some(refusal) => (BoxFrameTaken::NotAdded, Some(page_because(refusal))),
+                }
+            }
+        };
+        scored.push(ScoredFrame {
+            frame_id: same,
+            sample: None,
+            superseded: Some(capture.frame_id),
+            step: None,
+            taken,
+            because,
+            scores,
+        });
+    }
+    if chosen.len() > 1 {
+        let together = live
+            .iter()
+            .cloned()
+            .chain(chosen.iter().map(|(_, probe)| probe.clone()))
+            .collect::<Vec<_>>();
+        if !page_check(session, page, &together, false, ocr)?
+            .refusals
+            .is_empty()
+        {
+            let mut kept: Vec<(usize, RecordedFrame)> = Vec::new();
+            for (place, probe) in chosen {
+                let frames = live
+                    .iter()
+                    .cloned()
+                    .chain(kept.iter().map(|(_, held)| held.clone()))
+                    .chain(std::iter::once(probe.clone()))
+                    .collect::<Vec<_>>();
+                match page_check(session, page, &frames, false, ocr)?
+                    .refusals
+                    .first()
+                {
+                    None => kept.push((place, probe)),
+                    Some(refusal) => {
+                        if let Some(entry) = scored.get_mut(place) {
+                            entry.taken = BoxFrameTaken::NotAdded;
+                            entry.because = Some(page_because(refusal));
+                        }
+                    }
+                }
+            }
+            chosen = kept;
+        }
+    }
+    let mut admitted = Vec::new();
+    for (place, probe) in chosen {
+        let sample = recorded_sample(session, &probe)?;
+        if let Some(entry) = scored.get_mut(place) {
+            entry.frame_id = Some(sample.frame_id.clone());
+        }
+        admitted.push(sample);
+    }
+    // A capture of the same bytes as an earlier one is what that one became: the sample it was
+    // added as, a live frame now (`own`), or not added for the same reason.
+    for (place, origin) in copies {
+        let Some(first) = scored.get(origin) else {
+            continue;
+        };
+        let (taken, because, frame_id) = match first.taken {
+            BoxFrameTaken::Added => (BoxFrameTaken::Own, None, first.frame_id.clone()),
+            taken => (taken, first.because.clone(), None),
+        };
+        if let Some(entry) = scored.get_mut(place) {
+            entry.taken = taken;
+            entry.because = because;
+            entry.frame_id = frame_id;
+        }
+    }
+    for sha256 in loaded_here {
+        if !admitted.iter().any(|frame| frame.sha256 == sha256) {
+            session.cache.remove(&sha256);
+        }
+    }
+    Ok((admitted, scored))
+}
+
+/// #463 S2-5: why a frame of the action was not added because the step's page does not hold on
+/// it: the refusal's own reason and the mark it names.
+fn page_because(refusal: &MarkRejection) -> BoxBecause {
+    BoxBecause {
+        reason: refusal.reason.clone(),
+        mark: Some(refusal.id.clone()),
+        index: None,
+        frame_change_milli: None,
+    }
+}
+
+/// #463 S2-5 fix round 2: why a capture was not added because its whole frame changed from the
+/// step's live frame: `frame_changed`, with the measure's value; no mark is involved.
+fn changed_because(milli: u32) -> BoxBecause {
+    BoxBecause {
+        reason: FRAME_CHANGED.to_owned(),
+        mark: None,
+        index: None,
+        frame_change_milli: Some(milli),
+    }
+}
+
+/// #463 S2-5 fix round 2: the frame-change digest ([`change_digest`], stage one's) of the frame
+/// `sha256` the session holds decoded, named `label`.
+fn cached_digest(session: &Session, sha256: &str, label: &str) -> LabResult<ColorDigest> {
+    let loaded = session
+        .cache
+        .get(sha256)
+        .ok_or_else(|| invalid("validation_failed", format!("{label} was not loaded")))?;
+    change_digest(loaded, label)
+}
+
+/// #463 S2-5: a capture of the step admitted as its sample: the stored frame itself (its file,
+/// sha256, size and provenance), role `sample`, `source: "recording_frame"`, a frame id of its own
+/// and the time it was admitted. Its file is already in the recording's frame store, so nothing
+/// is written for it.
+fn recorded_sample(session: &mut Session, capture: &RecordedFrame) -> LabResult<RecordedFrame> {
+    let frame_id = format!("f{:04}", session.next_frame);
+    session.next_frame = session
+        .next_frame
+        .checked_add(1)
+        .ok_or_else(|| invalid("validation_failed", "frame id overflow"))?;
+    Ok(RecordedFrame {
+        frame_id,
+        role: "sample".to_string(),
+        source: RECORDING_FRAME_SOURCE.to_string(),
+        recorded_at_unix_ms: now_unix_ms(),
+        superseded: false,
+        ..capture.clone()
+    })
+}
+
+/// #463 S2-5: every recognize box's score on each frame the step held before this command (its
+/// own). The self-test passed on them, so a score that cannot be computed there is refused as it
+/// is.
+fn scored_frames(
+    session: &Session,
+    marks: &[BoxMark],
+    frames: &[RecordedFrame],
+    ocr: &LabOcr,
+) -> LabResult<Vec<ScoredFrame>> {
+    let mut scored = Vec::new();
+    for entry in frames {
+        let loaded = session
+            .cache
+            .get(&entry.sha256)
+            .ok_or_else(|| invalid("validation_failed", "frame was not loaded"))?;
+        let frame = EvalFrame {
+            id: entry.frame_id.as_str(),
+            frame: loaded,
+        };
+        let scores = match call_frame(marks, &frame, &session.recording.defaults, ocr)? {
+            Ok(scores) => scores,
+            Err(rejection) => return Err(rejected(&[rejection], marks.len())),
+        };
+        scored.push(ScoredFrame {
+            frame_id: Some(entry.frame_id.clone()),
+            sample: None,
+            superseded: None,
+            step: None,
+            taken: BoxFrameTaken::Own,
+            because: None,
+            scores,
+        });
+    }
+    Ok(scored)
+}
+
+/// #463 S2-5: the live frames of the other effective steps on which a recognize box of the
+/// request reaches its threshold (`elsewhere`): the box does not tell this step's screen from
+/// those. They are never samples of this step and are read from the frame store without being
+/// kept.
+fn elsewhere_frames(
+    session: &Session,
+    marks: &[BoxMark],
+    target: u32,
+    ocr: &LabOcr,
+) -> LabResult<Vec<ScoredFrame>> {
+    let mut scored = Vec::new();
+    for step in session
+        .recording
+        .steps
+        .iter()
+        .filter(|step| step.is_effective() && step.index != target)
+    {
+        for entry in step.frames.iter().filter(|frame| !frame.superseded) {
+            let read;
+            let loaded = match session.cache.get(&entry.sha256) {
+                Some(loaded) => loaded,
+                None => {
+                    read = read_stored_frame(entry)?;
+                    &read
+                }
+            };
+            let frame = EvalFrame {
+                id: entry.frame_id.as_str(),
+                frame: loaded,
+            };
+            let scores = match call_frame(marks, &frame, &session.recording.defaults, ocr)? {
+                Ok(scores) => scores,
+                Err(rejection) => return Err(rejected(&[rejection], marks.len())),
+            };
+            if scores.scores.iter().any(|score| score.reaches) {
+                scored.push(ScoredFrame {
+                    frame_id: Some(entry.frame_id.clone()),
+                    sample: None,
+                    superseded: None,
+                    step: Some(step.index),
+                    taken: BoxFrameTaken::Elsewhere,
+                    because: None,
+                    scores,
+                });
+            }
+        }
+    }
+    Ok(scored)
 }
 
 /// #463 R2: what `record mark --ending` took: the ending as the recording now holds it, its frames
@@ -2827,7 +3350,22 @@ fn apply_click(
             ));
         }
     }
-    if let Some((rect, source, from, follow, gesture)) = declared {
+    // #463 S2-5: a press box on a step whose click has an outcome on record does not declare a
+    // click: it gives a press recorded by the command that made it its rectangle
+    // ([`box_on_recorded_press`]).
+    let recorded_box = match (&declared, &step.click) {
+        (Some((rect, ..)), Some(click)) if press_rect(&request.boxes).is_some() => click
+            .execution
+            .as_ref()
+            .map(|execution| (*rect, execution.point)),
+        _ => None,
+    };
+    if let (Some(boxed), Some(click)) = (recorded_box, step.click.as_mut()) {
+        box_on_recorded_press(target, click, boxed, request.replace_click)?;
+        if let Some(retry) = &request.retry {
+            click.retry = Some(retry.clone());
+        }
+    } else if let Some((rect, source, from, follow, gesture)) = declared {
         step.application = None;
         let attempts = match &step.click {
             Some(existing) if existing.execution.is_some() => {
@@ -2935,6 +3473,95 @@ fn apply_click(
     }
     Ok(())
 }
+
+/// #463 S2-5 (`contracts/lab-recording.md`, "Drawing a box"): the press box `rect` on step
+/// `index`, whose click `click` has an outcome on record. A tap or a long press recorded by the
+/// command that made it (`source: "point"`, a box of one pixel at its point) takes the press box as
+/// its rectangle when the box holds the point it pressed; its source, gesture, execution (the
+/// point, the frames, the outcome) and every other member stay as recorded, and nothing is pressed
+/// again. A box that does not hold the point is `record_click_outside_step_rect` with
+/// `details{reason: "recorded_point_outside_box", step, point, box}`: the recorded press would not
+/// have been inside the region. A click whose rectangle is a box already (a box given before) takes
+/// another only with `--replace-click` (`record_click_exists`), as a declared click does. A
+/// recorded swipe keeps its ends: `record_click_rect_conflict`, as a press box beside a drag. Any
+/// other click with an outcome (a click `do --capture --record` executed on a declared rectangle,
+/// a select's) is today's `record_click_executed`. Nothing is written on a refusal.
+fn box_on_recorded_press(
+    index: u32,
+    click: &mut StepClick,
+    (rect, point): (RecordRect, RecordPoint),
+    replace: bool,
+) -> LabResult<()> {
+    if click.source == SWIPE_SOURCE {
+        return Err(with_details(
+            blocked(
+                "record_click_rect_conflict",
+                format!(
+                    "step {index} recorded a swipe, whose ends stay as recorded; a press box \
+                     declares a tap region and cannot be given to it; nothing was written"
+                ),
+            ),
+            json!({"step": index, "gesture": click.gesture, "box": rect}),
+        ));
+    }
+    if click.source != POINT_SOURCE {
+        return Err(with_details(
+            blocked(
+                "record_click_executed",
+                format!(
+                    "step {index} already has a click with an outcome on record; run `record \
+                     mark --reopen-step {index}` first"
+                ),
+            ),
+            json!({"step": index}),
+        ));
+    }
+    if !point_inside(point, rect) {
+        return Err(with_details(
+            blocked(
+                "record_click_outside_step_rect",
+                format!(
+                    "the press box {},{},{},{} does not hold the point {},{} step {index} \
+                     recorded, so the recorded press would not have been inside it; draw the box \
+                     around the point; nothing was written",
+                    rect.x, rect.y, rect.width, rect.height, point.x, point.y
+                ),
+            ),
+            json!({
+                "step": index,
+                "reason": RECORDED_POINT_OUTSIDE_BOX,
+                "point": point,
+                "box": rect
+            }),
+        ));
+    }
+    let unboxed = click.rect
+        == RecordRect {
+            x: point.x,
+            y: point.y,
+            width: 1,
+            height: 1,
+        };
+    if !unboxed && !replace {
+        return Err(with_details(
+            blocked(
+                "record_click_exists",
+                format!(
+                    "step {index}'s recorded press already has the press box {},{},{},{}; add \
+                     --replace-click (replace_click) to give it another",
+                    click.rect.x, click.rect.y, click.rect.width, click.rect.height
+                ),
+            ),
+            json!({"step": index, "rect": click.rect}),
+        ));
+    }
+    click.rect = rect;
+    Ok(())
+}
+
+/// #463 S2-5: the word of a press box that does not hold the point a recorded press pressed
+/// (`record_click_outside_step_rect`, `details.reason`).
+const RECORDED_POINT_OUTSIDE_BOX: &str = "recorded_point_outside_box";
 
 /// Workflow #396 REC-4: the rejection of a step whose click follows a template that does not
 /// hold on one of its live frames. #463 L2: for a click that follows a located-text mark, the

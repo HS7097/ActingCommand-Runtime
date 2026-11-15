@@ -1094,6 +1094,30 @@ pub struct MarkRequest {
     /// (`record mark --remove-inserted <n>`); alone in the request.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remove_inserted: Option<u32>,
+    /// #463 S2-5 (`contracts/lab-recording.md`, "Drawing a box"): boxes drawn on the step's primary
+    /// frame, each a region the step's page is recognized by or the region its click presses;
+    /// absent on a request without one, which is then byte for byte what it was.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub boxes: Vec<BoxSpec>,
+}
+
+/// #463 S2-5: what a box drawn on the step's primary frame is for: a region the step's page is
+/// recognized by (a template mark), or the region its click presses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BoxUse {
+    Recognize,
+    Press,
+}
+
+/// #463 S2-5: a box drawn as a person draws one on a screenshot: two opposite corners, in any
+/// order, in the pixels of the step's primary frame, both inside the box.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BoxSpec {
+    #[serde(rename = "use")]
+    pub usage: BoxUse,
+    pub corners: [RecordPoint; 2],
 }
 
 /// #463 R1 (`contracts/lab-recording.md`, "Selecting in a list"): a select over fixed slots, the
@@ -1555,6 +1579,81 @@ pub struct MarkOutcome {
     /// #463 R2: the ending the command gave up, as the recording held it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub removed_ending: Option<RecordingEnding>,
+    /// #463 S2-5: each box of the request, as the step took it; absent without one.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub boxes: Vec<BoxView>,
+}
+
+/// #463 S2-5: a box of the request as the step took it: its rectangle and, for a recognize box,
+/// the template mark it became, with the threshold and metric it is scored at and its score on
+/// each frame of the action that drew it and on each live frame of another step where it holds.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct BoxView {
+    #[serde(rename = "use")]
+    pub usage: BoxUse,
+    pub corners: [RecordPoint; 2],
+    pub rect: RecordRect,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mark: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub threshold: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metric: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub frames: Vec<BoxFrameView>,
+}
+
+/// #463 S2-5: what a frame is to the recognize boxes of a request: a live frame of the step
+/// (`own`; also a capture of the step whose bytes are those of a live frame); a frame of the
+/// action that drew the boxes admitted as a sample of the step (`added`); one that was not
+/// (`not_added`, with `because`); a live frame of another step on which the box reaches its
+/// threshold (`elsewhere`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BoxFrameTaken {
+    Own,
+    Added,
+    NotAdded,
+    Elsewhere,
+}
+
+/// #463 S2-5: a recognize box's template score on one frame, computed as the self-test computes
+/// it on that frame alone. `frame_id` names the frame as the recording holds it (none for a frame
+/// not added); `sample` is a sample of the request by its index in `samples`; `superseded` is a
+/// capture stage one stored for the step before its press, by its frame id; `step` is the other
+/// step of a frame `elsewhere`.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct BoxFrameView {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frame_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sample: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub superseded: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub step: Option<u32>,
+    pub score: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub matched_rect: Option<RecordRect>,
+    pub taken: BoxFrameTaken,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub because: Option<BoxBecause>,
+}
+
+/// #463 S2-5: why a frame of the action was not added: `below_threshold` with the first recognize
+/// box below its threshold there (`box`, its index in `boxes`, and its `mark`), or the refusal the
+/// step's page meets on it (its mark's own reason and the mark it names). Fix round 2: or, first of
+/// all, a capture of the step whose whole frame changed from the step's live frame
+/// (`frame_changed`, with the measure's value `frame_change_milli` and no mark).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct BoxBecause {
+    pub reason: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mark: Option<String>,
+    #[serde(rename = "box", skip_serializing_if = "Option::is_none")]
+    pub index: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frame_change_milli: Option<u32>,
 }
 
 /// Workflow #390 LAB-2: a mark the step's page forbids, tested on every live frame of the step:

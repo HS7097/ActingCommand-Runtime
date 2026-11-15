@@ -7,6 +7,7 @@
 use crate::LabOcr;
 use crate::codes::{LabCode, ReadyCheck};
 use crate::recording::archive::{ARCHIVED, latest_manifest, read_recording};
+use crate::recording::boxes::{expanded_add, validate_boxes, with_press_click};
 use crate::recording::container::{
     container_kind, encode, extension, file_name, preflight_lab_dir, replace_in_place,
     write_lab_dir,
@@ -1274,6 +1275,9 @@ fn validate_mark_request(request: &MarkRequest) -> LabResult<()> {
     if request.optional_after.is_some() || request.remove_inserted.is_some() {
         return validate_optional_after_request(request);
     }
+    // #463 S2-5: boxes are members of a step: never beside a step operation or a transition, one
+    // press box beside no click, each recognize box once.
+    validate_boxes(request)?;
     if let Some(page) = &request.page
         && !page_name_valid(page)
     {
@@ -1370,11 +1374,13 @@ fn validate_mark_request(request: &MarkRequest) -> LabResult<()> {
         }
     }
     // #463 R1: a select is the step's one effect, beside no click, retry, optional step or
-    // application operation, and keeps its shape.
-    validate_select_request(request)?;
+    // application operation, and keeps its shape. #463 S2-5: a press box is the step's click for
+    // these rules.
+    let pressed = with_press_click(request);
+    validate_select_request(&pressed)?;
     if let Some(application) = &request.application {
         application_action(&application.action)?;
-        if request.click.is_some() || request.click_guard.is_some() || request.retry.is_some() {
+        if pressed.click.is_some() || request.click_guard.is_some() || request.retry.is_some() {
             return Err(application_with_click(request.step));
         }
     }
@@ -1480,6 +1486,7 @@ fn mark_session(
         select: None,
         ending: None,
         removed_ending: None,
+        boxes: Vec::new(),
     };
     // #463 R2: an ending of the stopped recording, taken from its frame or given up; it is no
     // step, so the answer names none.
@@ -1540,6 +1547,7 @@ fn mark_session(
         outcome.reused = applied.reused;
         outcome.removed = applied.removed;
         outcome.forbidden = applied.forbidden;
+        outcome.boxes = applied.boxes;
         applied.step
     };
     outcome.step = Some(step);
@@ -2019,9 +2027,10 @@ fn repeat_without_mark(
         && match error.code.as_str() {
             "record_click_exists" => step.declares_click,
             "record_mark_id_conflict" => {
-                !request.add.is_empty()
-                    && request
-                        .add
+                // #463 S2-5: a recognize box is the template mark it stands for on the open step.
+                let add = expanded_add(request, step.index);
+                !add.is_empty()
+                    && add
                         .iter()
                         .all(|spec| step.marks.iter().any(|mark| declares_mark(spec, mark)))
             }
@@ -2341,8 +2350,9 @@ pub fn record_after_warnings(record: &AfterCaptureRecord) -> Vec<String> {
 }
 
 /// #463 S1-2: the frame-change digest of a whole frame (`frame_change_digest`, called as the
-/// kernel's still waits call it); a frame it cannot digest is `record_frame_unreadable`.
-fn change_digest(frame: &LoadedFrame, label: &str) -> LabResult<ColorDigest> {
+/// kernel's still waits call it); a frame it cannot digest is `record_frame_unreadable`. #463 S2-5:
+/// `record mark` digests a step's live frame and its captures with it too (`steps.rs`).
+pub(crate) fn change_digest(frame: &LoadedFrame, label: &str) -> LabResult<ColorDigest> {
     frame_change_digest(&frame.scene, None).map_err(|error| {
         invalid(
             "record_frame_unreadable",
@@ -2358,8 +2368,12 @@ fn change_digest(frame: &LoadedFrame, label: &str) -> LabResult<ColorDigest> {
 /// one frame-change bound (`frame_change_milli` at most `FRAME_CHANGE_MAX_MILLI`); the screen is
 /// still when the run holds at least one earlier capture and the newest started at least
 /// `still_for` after the run's first. Digests that cannot be compared are
-/// `record_frame_unreadable`.
-fn unchanged_for(taken: &[(Duration, ColorDigest)], still_for: Duration) -> LabResult<bool> {
+/// `record_frame_unreadable`. #463 S2-5: `record mark` asks it whether a capture of a step shows
+/// the state of its live frame (`steps.rs`, `frame_unchanged`).
+pub(crate) fn unchanged_for(
+    taken: &[(Duration, ColorDigest)],
+    still_for: Duration,
+) -> LabResult<bool> {
     let Some(((newest_start, newest), earlier)) = taken.split_last() else {
         return Ok(false);
     };

@@ -13,14 +13,14 @@ use crate::{
 };
 use actingcommand_device::{CaptureBackendName, Frame, PixelFormat};
 use actingcommand_lab::{
-    ApplicationSpec, ArchiveCopyFrames, ClickRetry, ClickSpec, EndingSpec, LAB_RECORD_MARK_SCHEMA,
-    MarkFamily, MarkRequest, MarkSpec, OptionalAfterSpec, RecordArchiveOptions,
-    RecordFramesRequest, RecordRect, RecordReopenOptions, RecordStartOptions, RecordStopOptions,
-    RecordingHold, RecordingLock, StepAction, StepActionKind, TemplateScalesSpec, TransitionSpec,
-    parse_mark_request, record_archive, record_archive_copy, record_archive_warnings,
-    record_frames, record_hold_status, record_instance_check, record_mark, record_ready,
-    record_reopen, record_start, record_start_defaults, record_status, record_stop,
-    record_stop_close,
+    ApplicationSpec, ArchiveCopyFrames, BoxSpec, BoxUse, ClickRetry, ClickSpec, EndingSpec,
+    LAB_RECORD_MARK_SCHEMA, MarkFamily, MarkRequest, MarkSpec, OptionalAfterSpec,
+    RecordArchiveOptions, RecordFramesRequest, RecordPoint, RecordRect, RecordReopenOptions,
+    RecordStartOptions, RecordStopOptions, RecordingHold, RecordingLock, StepAction,
+    StepActionKind, TemplateScalesSpec, TransitionSpec, parse_mark_request, record_archive,
+    record_archive_copy, record_archive_warnings, record_frames, record_hold_status,
+    record_instance_check, record_mark, record_ready, record_reopen, record_start,
+    record_start_defaults, record_status, record_stop, record_stop_close,
 };
 use actingcommand_recognition::{MatchMetric, Rect as RecognitionRect};
 use actingcommand_resource_tooling::canonical_locale;
@@ -3045,6 +3045,8 @@ pub(crate) const RECORD_MARK_SHORTCUT_FLAGS: &[&str] = &[
     // #463 R4: an optional step a stopped recording inserts after a step, and one to give up.
     "--optional-after",
     "--remove-inserted",
+    // #463 S2-5: a box drawn on the step's primary frame by two opposite corners.
+    "--box",
 ];
 
 /// Workflow #434 LAB-5B2: the other flags `record mark` takes besides its shortcut flags: the
@@ -3514,6 +3516,14 @@ fn record_mark_request_from_flags(flags: &FlagArgs) -> CliOutcome<MarkRequest> {
         remove_ending: record_flag_value(flags, "--remove-ending")?,
         optional_after: None,
         remove_inserted: number("--remove-inserted")?,
+        // #463 S2-5: `--box <use>=x1,y1:x2,y2`, the request form's `boxes`; beside `--ending`,
+        // `--optional-after` or `--transition` they stay in the request, which the Lab refuses:
+        // nothing is dropped.
+        boxes: flags
+            .values("--box")
+            .iter()
+            .map(|value| parse_record_mark_box(value.as_str()))
+            .collect::<CliOutcome<Vec<_>>>()?,
     };
     // #463 R2: `--ending` makes `--frame`, `--sample`, `--page`, the marks (`--template`,
     // `--color`) and `--reuse` the ending's, with `--outcome-key`, as the request form's `ending`
@@ -3653,6 +3663,61 @@ fn parse_record_mark_scales(value: &str) -> CliOutcome<TemplateScalesSpec> {
         })
         .collect::<CliOutcome<Vec<_>>>()?;
     Ok(TemplateScalesSpec { factors_milli })
+}
+
+/// #463 S2-5: `--box <use>=x1,y1:x2,y2`: what the box is for (`recognize` or `press`) and two
+/// opposite corners with the colon between them, as the request form's `boxes` holds them. The
+/// four numbers `x,y,w,h` of every other rectangle flag are refused, so that a rectangle is never
+/// read as two corners.
+fn parse_record_mark_box(value: &str) -> CliOutcome<BoxSpec> {
+    let (word, corners) = value.split_once('=').ok_or_else(|| {
+        CliError::usage(format!(
+            "--box must be <recognize|press>=x1,y1:x2,y2, got {value}"
+        ))
+    })?;
+    let usage = match word.trim() {
+        "recognize" => BoxUse::Recognize,
+        "press" => BoxUse::Press,
+        other => {
+            return Err(CliError::usage(format!(
+                "--box is recognize=x1,y1:x2,y2 or press=x1,y1:x2,y2, got {other}"
+            )));
+        }
+    };
+    let Some((first, second)) = corners.split_once(':') else {
+        return Err(CliError::usage(format!(
+            "--box takes two opposite corners x1,y1:x2,y2 with a colon between them, not a \
+             rectangle x,y,w,h; got {corners}"
+        )));
+    };
+    Ok(BoxSpec {
+        usage,
+        corners: [
+            parse_record_mark_corner(first, value)?,
+            parse_record_mark_corner(second, value)?,
+        ],
+    })
+}
+
+/// #463 S2-5: one corner `x,y` of `--box`'s `value`, with integer fields.
+fn parse_record_mark_corner(text: &str, value: &str) -> CliOutcome<RecordPoint> {
+    let parts = text.split(',').map(str::trim).collect::<Vec<_>>();
+    let [x, y] = parts.as_slice() else {
+        return Err(CliError::usage(format!(
+            "--box corner must be x,y, got {text} in {value}"
+        )));
+    };
+    let field = |number: &str, name: &str| {
+        number.parse::<i32>().map_err(|error| {
+            CliError::usage(format!(
+                "--box corner {name} '{number}' in {value}: {error}"
+            ))
+        })
+    };
+    Ok(RecordPoint {
+        x: field(x, "x")?,
+        y: field(y, "y")?,
+    })
 }
 
 /// `x,y,w,h` with integer fields.
@@ -3984,5 +4049,62 @@ mod lab2_tests {
         .expect("request");
         assert!(beside.optional_after.is_some());
         assert_eq!(beside.step, Some(2), "the step stays in the request");
+    }
+
+    // #463 S2-5 (contracts/lab-recording.md, "Drawing a box"): `record mark --box
+    // <use>=x1,y1:x2,y2`, repeated, gives the request form's `boxes` in the order given, so the
+    // command line and the MCP tools (which hand the request form on unchanged) give the Lab the
+    // same request. The four numbers `x,y,w,h` of every other rectangle flag, a use that is neither
+    // `recognize` nor `press`, a value without `=` and a corner that is not `x,y` are refused, and
+    // `--box` beside `--request-json` is refused as every shortcut flag is.
+    #[test]
+    fn s25_the_box_flag_declares_the_request_forms_boxes() {
+        let shortcut = record_mark_request_from_flags(&flags(&[
+            "--page",
+            "title",
+            "--box",
+            "recognize=1180,664:1252,688",
+            "--box",
+            "press=1252,688:1180,664",
+        ]))
+        .expect("request");
+        let request: MarkRequest = serde_json::from_value(json!({
+            "schema_version": LAB_RECORD_MARK_SCHEMA,
+            "page": "title",
+            "boxes": [
+                {"use": "recognize", "corners": [{"x": 1180, "y": 664}, {"x": 1252, "y": 688}]},
+                {"use": "press", "corners": [{"x": 1252, "y": 688}, {"x": 1180, "y": 664}]}
+            ]
+        }))
+        .expect("the request form");
+        assert_eq!(shortcut, request);
+
+        for value in [
+            "recognize=1180,664,73,25",
+            "hover=1180,664:1252,688",
+            "recognize1180,664:1252,688",
+            "press=1180,664:1252",
+            "press=1180,top:1252,688",
+        ] {
+            let error = record_mark_request_from_flags(&flags(&["--box", value])).expect_err(value);
+            assert_eq!(
+                error.code, "validation_failed",
+                "{value}: {}",
+                error.message
+            );
+        }
+
+        let temp = tempfile::TempDir::new().expect("temporary directory");
+        let lock =
+            RecordingLock::acquire(temp.path(), "neutral.instance", "record mark", "Lab-CLI")
+                .expect("recording lock");
+        let error = run_record_mark(
+            &GlobalOptions::default(),
+            &flags(&["--request-json", "{}", "--box", "press=1,1:2,2"]),
+            &lock,
+        )
+        .expect_err("--box beside --request-json");
+        assert_eq!(error.code, "validation_failed", "{}", error.message);
+        assert!(error.message.contains("--box"), "{}", error.message);
     }
 }
