@@ -74,6 +74,9 @@ mod gate_463_s11;
 // #463 S1-2: a press is recorded with a fresh screen before it and a still screen after it.
 #[cfg(test)]
 mod gate_463_s12;
+// #463 S2-13: `record frames` lists the stored frames just before and just after one step's press.
+#[cfg(test)]
+mod gate_463_s213;
 mod lab_run;
 mod lab_run_api;
 mod ledger_port;

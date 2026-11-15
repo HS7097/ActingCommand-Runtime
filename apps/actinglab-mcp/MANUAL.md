@@ -222,7 +222,11 @@ naming this file.
   transition, another step or a frame file, is `validation_failed`: send it with `ac_record_mark`),
   and `next_frame_after_ms` (0 to 60000) takes the next frame after
   a press performed without a failure, as `capture --record` takes it, opening the next step
-  (`next_frame_out` writes its PNG); `dry_run` with `record` is refused by the command.
+  (`next_frame_out` writes its PNG); `dry_run` with `record` is refused by the command. #463 S2-13
+  (0.12.64; `contracts/lab-recording.md`, "The frames around a press"): `ac_record_frames` (`step`,
+  `before` 0 to 100, default 3, `after` 0 to 100, default 10, `record_id`) lists the stored frames
+  captured just before the frame a step's press was sent on and just after the press, with their
+  paths, capture times and offsets from the press; it reads only and takes no lock.
 - **Adoption** (Workflow #464 P1, 0.12.61; `contracts/standard-pack-authoring.md`).
   `ac_standard_pack_adopt` (`repo`, `record_id` or `package`, `decide`, or `held_reason` with an
   optional `held_reference`, `replace`, `state_dir`) makes a stopped recording's package, or any

@@ -3470,3 +3470,18 @@ tests = [
     "actingcommand-actinglab::bin:actinglab::tests::gate_463_s13::s13_a_press_after_an_operation_replaces_the_frame_its_screen_after_opened_the_step_with",
 ]
 incident = ["#463 S1-3"]
+
+# #463 S2-13 (0.12.64; register §1.426; brief rd-1115/brief-463-s213-record-frames.md; contracts/lab-recording.md, "The frames around a press: `record frames`"): record frames lists the stored frames just before and just after one recorded step's press, read from the step table without the recording lock and writing nothing. A step table written as stage one writes it (three presses, each sent on a frame captured before it, three or four captures after each) and made-up frame files that are never decoded; no Runtime, no device, no clock read by the tests.
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-lab::lib::gate_463_s213::s213_step_2_answers_its_press_frame_and_the_frames_on_each_side",
+    "actingcommand-lab::lib::gate_463_s213::s213_before_0_and_after_0_answer_only_the_press",
+    "actingcommand-lab::lib::gate_463_s213::s213_a_number_above_100_is_refused",
+    "actingcommand-lab::lib::gate_463_s213::s213_a_step_without_a_press_answers_what_it_has",
+    "actingcommand-lab::lib::gate_463_s213::s213_a_dropped_step_or_one_that_does_not_exist_is_refused",
+    "actingcommand-lab::lib::gate_463_s213::s213_a_missing_frame_file_is_listed_without_a_path_and_warned",
+    "actingcommand-lab::lib::gate_463_s213::s213_an_archived_and_a_stopped_recording_answer_as_the_active_one_did",
+    "actingcommand-lab::lib::gate_463_s213::s213_the_read_writes_nothing_and_answers_while_the_lock_is_held",
+]
+incident = ["#463 S2-13"]

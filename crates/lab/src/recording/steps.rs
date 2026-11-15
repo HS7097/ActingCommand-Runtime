@@ -347,7 +347,10 @@ fn step_not_found(index: u32) -> LabError {
     )
 }
 
-fn effective_step(recording: &LabRecording, index: u32) -> LabResult<&RecordingStep> {
+/// The step `index` while it is effective; `record_step_not_found` for a step that does not exist,
+/// is dropped or was converted into a transition. #463 S2-13: `record frames --step` addresses its
+/// step so too.
+pub(crate) fn effective_step(recording: &LabRecording, index: u32) -> LabResult<&RecordingStep> {
     step_ref(recording, index)
         .filter(|step| step.is_effective())
         .ok_or_else(|| step_not_found(index))
