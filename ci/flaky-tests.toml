@@ -45,8 +45,21 @@
 # PR #1757 does not touch the ledger, and the same code passed that job in run 43729591421. Its
 # cause is not located.
 #
-# FLK-08, FLK-10 and FLK-14 are the three entries. With an empty table every module job's
-# `CI_SKIP` is `''` and the `flaky` job's `FLAKY_TESTS` is `''`: that job runs nothing and passes.
+# FLK-15 (`runtime_executes_neutral_contained_task_without_lab_ownership`, the host's
+# `contained_tasks`, host-lab) entered after one red on PR #1767 (run 43734767227, job
+# 132874826558, 2026-11-16 JST): the test client did not get its receipt within its read timeout,
+# the class of FLK-08. PR #1767 changes nothing under `crates/runtime-host` and does not cause it.
+# Its cause is not located.
+#
+# FLK-16 (`n6_13_without_interrupts_a_run_records_what_it_records_without_a_root`, the host's
+# `gate_373_nav6`, host-lab) entered after the same red on PR #1767 (run 43734767227, job
+# 132874826558, 2026-11-16 JST): the run ended as a failure with `contained_task_page_unknown`
+# after a second geometry observation. PR #1767 changes nothing under `crates/runtime-host` and
+# does not cause it. Its cause is not located.
+#
+# FLK-08, FLK-10, FLK-14, FLK-15 and FLK-16 are the five entries. With an empty table every module
+# job's `CI_SKIP` is `''` and the `flaky` job's `FLAKY_TESTS` is `''`: that job runs nothing and
+# passes.
 #
 # Every module job of `.github/workflows/ci.yml` passes `--skip <libtest path>` for its entries
 # (its `CI_SKIP` line), and the non-gating `flaky` job runs exactly these tests, once per
@@ -94,3 +107,21 @@ job = "ledger"
 features = [""]
 register = "https://github.com/HS7097/ActingCommand-Workflow/issues/71#issuecomment-6897201176"
 status = "cause not located (a writer reply that did not arrive within its wait on a loaded runner, writer_response_timeout in append_event): first failed in run 43729027791 (PR #1757, ledger, 2026-11-16 JST), the same code passed in run 43729591421; skipped until it is"
+
+[[test]]
+id = "FLK-15"
+name = "actingcommand-runtime-host::lib::tests::contained_tasks::runtime_executes_neutral_contained_task_without_lab_ownership"
+crate = "actingcommand-runtime-host"
+job = "host-lab"
+features = ["actingcommand-runtime-host/fixture-backends"]
+register = "https://github.com/HS7097/ActingCommand-Workflow/issues/71#issuecomment-6897955389"
+status = "cause not located (the test client's receipt did not arrive within its read timeout, the class of FLK-08): first failed in run 43734767227 (PR #1767, host-lab, 2026-11-16 JST); skipped until it is"
+
+[[test]]
+id = "FLK-16"
+name = "actingcommand-runtime-host::lib::tests::gate_373_nav6::n6_13_without_interrupts_a_run_records_what_it_records_without_a_root"
+crate = "actingcommand-runtime-host"
+job = "host-lab"
+features = ["actingcommand-runtime-host/fixture-backends"]
+register = "https://github.com/HS7097/ActingCommand-Workflow/issues/71#issuecomment-6897955389"
+status = "cause not located (the run ended as a failure with contained_task_page_unknown after a second geometry observation): first failed in run 43734767227 (PR #1767, host-lab, 2026-11-16 JST); skipped until it is"
