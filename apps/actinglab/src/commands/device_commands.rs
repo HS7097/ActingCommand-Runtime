@@ -901,23 +901,36 @@ fn run_recorded_touch(
     Ok(data)
 }
 
+/// The fix round after the train's review: the word of a flag of the screen after a recorded
+/// effect whose value is no whole number, the word the Lab's other flags answer for it
+/// (`argument_problem` `wrong_type`); `range` stays the word of a value outside its bounds, which
+/// the recording checks (`record_after_capture_check`).
+const NOT_A_WHOLE_NUMBER: &str = "wrong_type";
+
 /// #463 S1-1: `--after-ms <ms>`, a whole number of milliseconds (the recording checks its bound,
-/// 0 to 60000); anything else is `validation_failed` with `details{argument: "after_ms", reason:
-/// "range"}`. The train of stage one: `session app <verb> --record` reads its `--after-ms` so too.
+/// 0 to 60000, `range`); anything else is `validation_failed` with `details{argument: "after_ms",
+/// reason: "wrong_type", value}` (the fix round after the train's review: the word and the keys of
+/// the other three flags). The train of stage one: `session app <verb> --record` reads its
+/// `--after-ms` so too.
 pub(crate) fn parse_after_ms(value: &str) -> CliOutcome<u64> {
     value.parse::<u64>().map_err(|_| {
         CliError::usage(format!(
             "--after-ms takes a whole number of milliseconds from 0 to \
              {LAB_RECORDING_MAX_NEXT_FRAME_MS}, got {value}"
         ))
-        .with_details(json!({"argument": "after_ms", "reason": "range", "after_ms": value}))
+        .with_details(json!({
+            "argument": "after_ms",
+            "reason": NOT_A_WHOLE_NUMBER,
+            "value": value
+        }))
     })
 }
 
 /// #463 S1-2: `flag` (`--interval-ms`, `--still-ms` or `--still-max-ms`) when it is given, a whole
-/// number of milliseconds (the recording checks its range and the bound of the captures it allows);
-/// anything else is `validation_failed` with `details{argument, reason: "range"}`. The train of
-/// stage one: `session app <verb> --record` reads the three so too.
+/// number of milliseconds (the recording checks its range and the bound of the captures it allows,
+/// `range`); anything else is `validation_failed` with `details{argument, reason: "wrong_type",
+/// value}` (the fix round after the train's review). The train of stage one: `session app <verb>
+/// --record` reads the three so too.
 pub(crate) fn after_capture_ms(
     flags: &FlagArgs,
     flag: &str,
@@ -930,7 +943,11 @@ pub(crate) fn after_capture_ms(
                 CliError::usage(format!(
                     "{flag} takes a whole number of milliseconds, got {value}"
                 ))
-                .with_details(json!({"argument": argument, "reason": "range", "value": value}))
+                .with_details(json!({
+                    "argument": argument,
+                    "reason": NOT_A_WHOLE_NUMBER,
+                    "value": value
+                }))
             })
         })
         .transpose()
@@ -1148,22 +1165,32 @@ impl RecordFramePorts for PressFrames<'_> {
     }
 
     fn capture(&mut self) -> CliOutcome<CapturedFrame> {
-        let captured = capture_observation_for_command(self.endpoint)?;
-        let png = captured
-            .frame
-            .png_for_artifact()
-            .map_err(|err| CliError::device(err.to_string()))?;
-        Ok(CapturedFrame {
-            frame: AttachFrameRequest {
-                png,
-                source: "lab_capture".to_string(),
-                runtime_artifact: None,
-                capture_backend: Some(captured.frame.backend_name.as_str().to_string()),
-                freshness: Some(OpaqueJson::from_serializable(&captured.freshness)?),
-            },
-            input_frame: captured.input_frame,
-        })
+        runtime_captured_frame(self.endpoint)
     }
+}
+
+/// #463 S1-1: one frame through the Runtime's capture endpoint `endpoint` as `capture --record`
+/// takes it (the `ObserveReadonly` read, no local device configuration), with the reference of the
+/// frame the Runtime committed for its observation. A recorded press takes its frames so
+/// (`PressFrames`); the fix round after the train's review: `session app <verb> --record` too.
+pub(crate) fn runtime_captured_frame(
+    endpoint: &runtime_capture_backend::RuntimeCaptureEndpoint,
+) -> CliOutcome<CapturedFrame> {
+    let captured = capture_observation_for_command(endpoint)?;
+    let png = captured
+        .frame
+        .png_for_artifact()
+        .map_err(|err| CliError::device(err.to_string()))?;
+    Ok(CapturedFrame {
+        frame: AttachFrameRequest {
+            png,
+            source: "lab_capture".to_string(),
+            runtime_artifact: None,
+            capture_backend: Some(captured.frame.backend_name.as_str().to_string()),
+            freshness: Some(OpaqueJson::from_serializable(&captured.freshness)?),
+        },
+        input_frame: captured.input_frame,
+    })
 }
 
 pub(crate) fn run_direct_input(

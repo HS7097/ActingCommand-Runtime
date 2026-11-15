@@ -1100,7 +1100,8 @@ Both console connections bind `ui`; from U-6 both send `(User, Ui)`.
 | new: `pack load`, `pack unload` | LoadPack, UnloadPack | option two; `pack unload --wait-s` (0–25) |
 | new: `clear-kept` (planned) | ClearKeptFolder | option two, with #375 R5e |
 | `package check` (#411 A5); new: `record binding-draft` | offline (`record binding-draft` a composite) | option one |
-| record (with `record binding-draft`), resource catalog, package, resource, scheduling and operation offline commands | none (no Runtime connection) | option one (package tools); judged by actinglab itself; the per-command list is U-3's |
+| `record start`, `record stop`, `record archive` (#463 S1-7: the recording holds its instance); the status read before each `--record` press and `session app … --record` | `record start`: Status, then PauseScheduling of the instance; the end: Status, then ResumeScheduling of the recording's own pause; a press or an operation: Status, on a connection of its own | general read; general instruction (as `pause` and `resume`) |
+| record (with `record binding-draft`) but for the requests of the row above, resource catalog, package, resource, scheduling and operation offline commands | none (no Runtime connection) | option one (package tools); judged by actinglab itself; the per-command list is U-3's |
 | help, version, paths, capabilities, doctor, schema, config, explain | none | actinglab's own upkeep; not judged |
 | `resource restore` cold read | none | unchanged |
 

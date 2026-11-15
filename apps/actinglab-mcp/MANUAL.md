@@ -243,7 +243,8 @@ naming this file.
   with the recording's own reason `lab-record-<ms>` (an instance already paused by another party is
   held by that pause, which the recording never resumes; with nothing listening where the Runtime
   would, it starts holding nothing, `hold.warnings` `no_runtime_listening`; a Runtime that listens
-  but does not complete the handshake fails the start). **`ac_record_start` waits until the
+  but does not complete the handshake fails the start, and so do a state root that cannot be
+  resolved and a connection that times out). **`ac_record_start` waits until the
   instance's running task has ended**: up to the pause's drain (300 s), its checkpoint grace (30 s)
   and the IO timeout (5 s), 335 s in all; a caller with a shorter time limit must give it that time.
   Should the start end before the pause answers,

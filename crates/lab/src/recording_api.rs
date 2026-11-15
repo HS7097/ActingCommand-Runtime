@@ -2203,10 +2203,13 @@ pub fn record_before_frame(
         (stores, recording.coordinate_space)
     };
     let captured = ports.capture()?;
+    // The fix round after the train's review: this frame is taken before a press or (#463 S1-3) an
+    // application operation, and the texts name both.
     let input_frame = captured.input_frame.ok_or_else(|| {
         LabError::device(
-            "the Runtime's capture before the press carries no frame id, so no press can name \
-             the frame it is planned on; nothing was pressed or recorded",
+            "the Runtime's capture before the press or application operation carries no frame \
+             id, so nothing can name the frame it is planned on; nothing was pressed, sent or \
+             recorded",
         )
     })?;
     if stores {
@@ -2216,7 +2219,7 @@ pub fn record_before_frame(
             arrived: Some(arrived),
         });
     }
-    let label = "the frame before the press";
+    let label = "the frame before the press or application operation";
     check_frame_size(
         coordinate_space,
         &decode_frame(captured.frame.png, label)?,
@@ -2248,16 +2251,27 @@ const AFTER_MAX_INTERVALS: u64 = 120;
 /// bound without a still screen.
 const AFTER_NOT_STILL: &str = "after_not_still";
 
-/// #463 S1-2: how the screen after a press is taken, checked before anything is captured or
-/// pressed: `interval_ms` 20 to 1000, `still_ms` 0 to 5000 and `still_max_ms` 0 to 60000
-/// (`validation_failed`, `details{argument, reason: "range", value, min, max}`), and at most 120
-/// intervals in the bound: `still_max_ms` at most 120 times `interval_ms`, a range that depends on
-/// the interval (fix round 3: `details{argument: "still_max_ms", reason: "range", value, min: 0,
-/// max: 120 times interval_ms, interval_ms}`), so that a press takes at most 121 captures after
-/// it.
-fn check_after_capture(after: &AfterCapture) -> LabResult<()> {
+/// #463 S1-2 and #463 S1-3 (the train of stage one, which joins S1-2's captures after a press with
+/// S1-3's application operations): how the screen after an effect is to be taken, checked before
+/// anything is captured, pressed or sent: the wait `after_ms` 0 to 60000, `interval_ms` 20 to 1000,
+/// `still_ms` 0 to 5000 and `still_max_ms` 0 to 60000 (`validation_failed`, `details{argument,
+/// reason: "range", value, min, max}`), and at most 120 intervals in the bound: `still_max_ms` at
+/// most 120 times `interval_ms`, a range that depends on the interval (fix round 3:
+/// `details{argument: "still_max_ms", reason: "range", value, min: 0, max: 120 times interval_ms,
+/// interval_ms}`), so that an effect takes at most 121 captures after it. The fix round after the
+/// train's review: one function checks the four, `after_ms` with the keys of the other three.
+/// [`record_press`] checks a press's so, [`record_after_frame`] the screen after it is handed, and
+/// `session app <verb> --record` its operation's before it sends the operation.
+pub fn record_after_capture_check(after: &AfterCapture) -> LabResult<()> {
     let interval_ms = after.interval_ms.unwrap_or(AFTER_INTERVAL_MS);
     for (argument, flag, value, min, max) in [
+        (
+            "after_ms",
+            "--after-ms",
+            after.after_ms,
+            0,
+            LAB_RECORDING_MAX_NEXT_FRAME_MS,
+        ),
         (
             "interval_ms",
             "--interval-ms",
@@ -2298,7 +2312,7 @@ fn check_after_capture(after: &AfterCapture) -> LabResult<()> {
         return Err(LabError::usage(format!(
             "--still-max-ms (MCP still_max_ms) must be in 0..={max} at --interval-ms (MCP \
              interval_ms) {interval_ms}, at most {AFTER_MAX_INTERVALS} intervals, so that a press \
-             takes at most {} captures after it; got {}",
+             or an application operation takes at most {} captures after it; got {}",
             AFTER_MAX_INTERVALS + 1,
             after.still_max_ms
         ))
@@ -2312,29 +2326,6 @@ fn check_after_capture(after: &AfterCapture) -> LabResult<()> {
         })));
     }
     Ok(())
-}
-
-/// #463 S1-3 (the train of stage one, which joins S1-2's captures after a press with S1-3's
-/// application operations): how the screen after an effect is to be taken, checked before anything
-/// is captured, pressed or sent: the wait `after_ms` 0 to 60000 (`validation_failed`,
-/// `details{argument: "after_ms", reason: "range", after_ms, max_after_ms}`, S1-1's words), then the
-/// ranges and the bound of 120 intervals (`check_after_capture`). [`record_press`] checks a press's
-/// so, and `session app <verb> --record` its operation's before it sends the operation.
-pub fn record_after_capture_check(after: &AfterCapture) -> LabResult<()> {
-    let after_ms = after.after_ms;
-    if after_ms > LAB_RECORDING_MAX_NEXT_FRAME_MS {
-        return Err(LabError::usage(format!(
-            "--after-ms (MCP after_ms) must be in 0..={LAB_RECORDING_MAX_NEXT_FRAME_MS}, got \
-             {after_ms}"
-        ))
-        .with_details(json!({
-            "argument": "after_ms",
-            "reason": "range",
-            "after_ms": after_ms,
-            "max_after_ms": LAB_RECORDING_MAX_NEXT_FRAME_MS
-        })));
-    }
-    check_after_capture(after)
 }
 
 /// #463 S1-2: the words an answer's `record.warnings` holds for how the screen after its effect was
@@ -2470,17 +2461,59 @@ fn capture_until_still(
 
 /// #463 S1-2: what an after loop kept: the answer of its last capture's arrival, how the screen
 /// after was taken, and (fix round 3) the error of a capture after the first that could not be
-/// taken (`stopped_by`): the loop did not finish (`record.unfinished`).
-struct AfterTaken {
-    frame: AttachFrameOutcome,
-    record: AfterCaptureRecord,
-    stopped_by: Option<LabError>,
+/// taken (`stopped_by`): the loop did not finish (`record.unfinished`). The fix round after the
+/// train's review: public, the typed result [`record_after_frame`] answers, so that `session app
+/// <verb> --record` builds the operation as recorded from it as [`record_press`] builds a press;
+/// `stopped_by` is the capture's own error as `after_loop_stopped` words it (the captures after
+/// the effect stopped, what was kept, its details beginning with `after: {after_ms, taken: true,
+/// captures}`), to be answered once what the loop kept is recorded.
+#[derive(Debug)]
+pub struct AfterTaken {
+    pub frame: AttachFrameOutcome,
+    pub record: AfterCaptureRecord,
+    pub stopped_by: Option<LabError>,
+}
+
+/// The fix round after the train's review: what the screen after is taken after, the noun the
+/// texts of [`capture_after`] name it by.
+#[derive(Debug, Clone, Copy)]
+enum AfterEffect {
+    /// A press, `tap`, `swipe` or `long-tap --record` ([`record_press`]).
+    Press,
+    /// #463 S1-3: an application operation, `session app <verb> --record`
+    /// ([`record_after_frame`]).
+    Application,
+}
+
+impl AfterEffect {
+    const fn noun(self) -> &'static str {
+        match self {
+            Self::Press => "press",
+            Self::Application => "application operation",
+        }
+    }
+}
+
+/// #463 S1-3 (the train of stage one): the screen after a performed application operation, under
+/// the recording lock, the after loop of a press (`capture_after`; [`record_press`] runs it for a
+/// press itself). The fix round after the train's review: it answers the loop's typed result,
+/// [`AfterTaken`], whatever the loop kept, its `stopped_by` the error of a capture after the first
+/// that stopped it (worded for an application operation); `Err` when nothing was kept: the four
+/// parameters out of their ranges (checked first, [`record_after_capture_check`]) or a first
+/// capture that could not be taken.
+pub fn record_after_frame(
+    lock: &RecordingLock,
+    ports: &mut impl RecordFramePorts,
+    after: &AfterCapture,
+) -> LabResult<AfterTaken> {
+    capture_after(lock, ports, after, AfterEffect::Application)
 }
 
 /// #463 S1-1: the frame after a performed press, under the recording lock. #463 S1-2
 /// (`contracts/lab-recording.md`, "Recording while playing"): the parameters are checked first
-/// (`check_after_capture`; fix round 3: here too, so that the bound holds wherever the loop is
-/// entered), then the screen is captured until it is still, on the caller's clock
+/// (fix round 3: here too, so that the bound holds wherever the loop is entered; the fix round
+/// after the train's review: the four, [`record_after_capture_check`]), then the screen is captured
+/// until it is still, on the caller's clock
 /// (`RecordFramePorts::elapsed` and `wait`): the first capture starts `after_ms` after the press,
 /// then one every `interval_ms` (default 100), counted from the start of one capture to the start
 /// of the next (one that took longer is followed at once). Fix round 3: the screen is still when it
@@ -2500,32 +2533,16 @@ struct AfterTaken {
 /// captures beside it), all written at once. A first capture that fails answers its own error and
 /// stores nothing. Fix round 3: a later capture that fails ends the loop unfinished: what it took
 /// is written as above, `after_capture` with `still` `None` and `unfinished` true, and the
-/// capture's own error is answered, its details beginning with `after: {after_ms, taken: true,
-/// captures}` (`after_loop_stopped`).
-pub fn record_after_frame(
+/// capture's own error is kept for the caller to answer, its details beginning with `after:
+/// {after_ms, taken: true, captures}` ([`after_loop_stopped`], naming `effect`). What the loop
+/// kept, and that error (`AfterTaken::stopped_by`); `Err` when nothing was kept.
+fn capture_after(
     lock: &RecordingLock,
     ports: &mut impl RecordFramePorts,
     after: &AfterCapture,
-) -> LabResult<(AttachFrameOutcome, AfterCaptureRecord)> {
-    let AfterTaken {
-        frame,
-        record,
-        stopped_by,
-    } = capture_after_press(lock, ports, after)?;
-    match stopped_by {
-        None => Ok((frame, record)),
-        Some(error) => Err(after_loop_stopped(error, &record)),
-    }
-}
-
-/// #463 S1-2: the work of [`record_after_frame`]: what the loop kept, and the error of a capture
-/// after the first that stopped it; `Err` when nothing was kept.
-fn capture_after_press(
-    lock: &RecordingLock,
-    ports: &mut impl RecordFramePorts,
-    after: &AfterCapture,
+    effect: AfterEffect,
 ) -> LabResult<AfterTaken> {
-    check_after_capture(after)?;
+    record_after_capture_check(after)?;
     let interval_ms = after.interval_ms.unwrap_or(AFTER_INTERVAL_MS);
     let still_ms = after.still_ms.unwrap_or(AFTER_STILL_MS);
     let timing = AfterTiming {
@@ -2544,8 +2561,9 @@ fn capture_after_press(
         blocked(
             "record_step_not_found",
             format!(
-                "the frame after the press opened step {} but is the after frame of no press \
-                 recorded by its command",
+                "the frame after the {} opened step {} but is the after frame of no press or \
+                 application operation recorded by its command",
+                effect.noun(),
                 first.step
             ),
         )
@@ -2587,6 +2605,7 @@ fn capture_after_press(
     name_after_frame(&mut session.recording, pressed, &frame.frame_id)?;
     note_after_capture(&mut session.recording, pressed, &record)?;
     save(&mut session)?;
+    let stopped_by = stopped_by.map(|error| after_loop_stopped(error, &record, effect));
     Ok(AfterTaken {
         frame: frame_recorded(&session.recording, opened, closed_step, step, frame),
         record,
@@ -2595,14 +2614,21 @@ fn capture_after_press(
 }
 
 /// #463 S1-2 fix round 3: the error of an after loop that a capture after its first stopped: the
-/// capture's own code and class, its message saying that the captures taken before it are kept,
-/// the last the frame after, its details beginning with `after: {after_ms, taken: true,
-/// captures}`, then the capture's own members.
-fn after_loop_stopped(mut error: LabError, record: &AfterCaptureRecord) -> LabError {
+/// capture's own code and class, its message saying that the captures after the effect (the fix
+/// round after the train's review: the press or the application operation, `effect`) stopped
+/// there and that the captures taken before it are kept, the last the frame after, its details
+/// beginning with `after: {after_ms, taken: true, captures}`, then the capture's own members.
+fn after_loop_stopped(
+    mut error: LabError,
+    record: &AfterCaptureRecord,
+    effect: AfterEffect,
+) -> LabError {
     error.message = format!(
-        "{}; the {} captures taken after the press before it are kept, the last its frame after, \
-         and the loop did not finish (after_capture.unfinished)",
-        error.message, record.captures
+        "{}; the captures after the {} stopped there: the {} taken before it are kept, the last \
+         its frame after, and the loop did not finish (after_capture.unfinished)",
+        error.message,
+        effect.noun(),
+        record.captures
     );
     with_leading_details(
         error,
@@ -2634,16 +2660,16 @@ fn after_loop_stopped(mut error: LabError, record: &AfterCaptureRecord) -> LabEr
 /// `before.captured_twice`, and a second `Err` of any kind answered as it is, unmarked; its outcome
 /// recorded, the execution naming the frame before (and `sent_on_unstored_capture` when that
 /// capture was not stored); then, only after a press performed without a failure, the frame after
-/// ([`record_after_frame`]). An indeterminate press is `record_click_indeterminate` and a press
+/// (`capture_after`). An indeterminate press is `record_click_indeterminate` and a press
 /// performed with a failure `record_click_performed_with_failure`, each with the press as recorded
 /// in `record` and no frame after. A frame after that cannot be taken answers its own error and
 /// the press and its closed step stand: its details begin with `record` (the press as recorded)
-/// and `after: {after_ms, taken: false}`. #463 S1-2: after the wait's bound, the rest of how the
-/// screen after is taken (`check_after_capture`); a stillness test that reached its bound without
-/// a still screen puts `after_not_still` in the answer's `warnings`. Fix round 3: a capture after
-/// the first that cannot be taken leaves the captures taken before it kept and recorded (the last
-/// the frame after, `after_capture.unfinished`) and answers its own error, its details beginning
-/// with `record` and `after: {after_ms, taken: true, captures}`.
+/// and `after: {after_ms, taken: false}`. #463 S1-2: with the wait's bound, the rest of how the
+/// screen after is taken ([`record_after_capture_check`]); a stillness test that reached its bound
+/// without a still screen puts `after_not_still` in the answer's `warnings`. Fix round 3: a capture
+/// after the first that cannot be taken leaves the captures taken before it kept and recorded (the
+/// last the frame after, `after_capture.unfinished`) and answers its own error, its details
+/// beginning with `record` and `after: {after_ms, taken: true, captures}`.
 pub fn record_press(
     lock: &RecordingLock,
     request: &RecordPressRequest,
@@ -2652,7 +2678,8 @@ pub fn record_press(
 ) -> LabResult<RecordPressOutcome> {
     let after_ms = request.after.after_ms;
     // The train of stage one: S1-1's check of the wait and S1-2's of the rest, in that order, in
-    // the one function `session app <verb> --record` calls too.
+    // the one function `session app <verb> --record` calls too (the fix round after the train's
+    // review: one check of the four).
     record_after_capture_check(&request.after)?;
     {
         let session = open_session(lock)?;
@@ -2691,7 +2718,7 @@ pub fn record_press(
         frame,
         record,
         stopped_by,
-    } = capture_after_press(lock, ports, &request.after)
+    } = capture_after(lock, ports, &request.after, AfterEffect::Press)
         .map_err(|error| after_frame_failed(error, &outcome, after_ms))?;
     // #463 S1-2: a stillness test that reached its bound without a still screen says so.
     outcome.warnings.extend(record_after_warnings(&record));
@@ -2700,7 +2727,6 @@ pub fn record_press(
         execution.after_frame = Some(frame.frame.frame_id.clone());
         execution.after_capture = Some(record.clone());
     }
-    let stopped = stopped_by.map(|error| after_loop_stopped(error, &record));
     outcome.after = Some(AfterFrame {
         step: frame.step,
         frame_id: frame.frame.frame_id,
@@ -2710,7 +2736,7 @@ pub fn record_press(
     });
     // #463 S1-2 fix round 3: a capture after the first that failed is answered, loud, once what
     // the loop took is kept and recorded.
-    match stopped {
+    match stopped_by {
         None => Ok(outcome),
         Some(error) => Err(after_loop_stopped_press(error, &outcome)),
     }

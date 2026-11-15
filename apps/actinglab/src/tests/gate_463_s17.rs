@@ -64,10 +64,28 @@
 //   session header that is no JSON goes on, exit 0, its `hold.warnings` ending with
 //   `replaced_header_unread` and `hold.replaced_header {path, error}`, `path` the header's as the
 //   answer's own `path` names it.
+// The fix round after the train's review (rd-1115/brief-463-train-s1-fix.md; the coordinator's
+// ruling: a recording never starts unheld because the Lab could not tell):
+// - `s17_fix_an_unresolved_state_root_starts_nothing`: the state root's variable is white space:
+//   `record start` fails `validation_failed`, as the Lab's other commands answer it, and writes no
+//   session header and no recording directory.
+// - `s17_fix_a_probe_that_times_out_fails_the_start_as_a_failed_handshake`: after the client's
+//   failed connect, a plain connection that timed out is "something may listen", as one that was
+//   accepted (whose handshake failed): the same failure, `runtime_not_running`; only a refused one
+//   is "nothing listens".
+// - `s17_fix_a_handshake_that_fails_starts_nothing`: the Runtime drops the `BindChannel` and the
+//   client's one reconnect meets another owner epoch: `record start` fails `runtime_not_running`,
+//   writes no session header and no recording directory; the wire: the handshake, `health` on the
+//   reconnect, and one plain connection that sends nothing.
+// - `s17_fix_a_stop_whose_release_fails_names_the_retry`: `record stop` of a recording that holds
+//   its own pause, the resume denied: the stop stands (the header stopped, its hold kept), the
+//   failure's details carry `hold {kept: true}` and `next.release`, `record stop` with the instance
+//   and the state directory.
 // No device, no clock, no sleep; made-up aliases.
 
 use super::gate_434_lab5b4::{Isolated, printed};
 use super::*;
+use crate::commands::{Probed, not_reached};
 use actingcommand_contract::{
     InstancePauseStage, InstancePauseState, OwnerEpoch, RUNTIME_INFO_FILE,
     RuntimeControlPlaneStatus, RuntimeErrorCode, RuntimeErrorProjection, RuntimeInstanceStatus,
@@ -75,9 +93,11 @@ use actingcommand_contract::{
     SchedulingPauseExpectation, SchedulingPauseReason, SchedulingPauseScope,
     SchedulingResumeCaptureCheck, SchedulingResumeSelfCheck, SchedulingResumeTouchCheck,
 };
+use actingcommand_runtime_client::RuntimeClient;
 use actingcommand_runtime_client::test_support::{
     ScriptedAnswer, ScriptedConnection, ScriptedConnectionRecord, ScriptedRuntime,
 };
+use std::io;
 
 /// The made-up instance the recordings are of, and another one beside it.
 const INSTANCE: &str = "neutral.a";
@@ -1089,4 +1109,160 @@ fn s17_train_force_over_a_header_that_cannot_be_read_says_so() {
     assert_eq!(header["record_id"], RECORD_ID, "{header}");
     assert_eq!(header["status"], "active", "{header}");
     assert!(header.get("hold").is_none(), "{header}");
+}
+
+#[test]
+fn s17_fix_an_unresolved_state_root_starts_nothing() {
+    let _guard = env_lock();
+    let place = Place::new();
+    // The variable names no state root: the caller's mistake, not "no Runtime".
+    let _blank = use_runtime_state_root(Path::new(" "));
+    let (code, refused) = place.start(RECORD_ID, &[]);
+
+    assert_eq!(code, 1, "{refused}");
+    assert_eq!(refused["outcome"]["code"], "validation_failed", "{refused}");
+    assert!(
+        refused["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("started nothing")),
+        "{refused}"
+    );
+    assert!(!place.header_path().exists(), "no session header");
+    assert!(
+        !place.recording_dir(RECORD_ID).exists(),
+        "no recording directory"
+    );
+}
+
+#[test]
+fn s17_fix_a_probe_that_times_out_fails_the_start_as_a_failed_handshake() {
+    let _guard = env_lock();
+    let place = Place::new();
+    // A failed connect of the client, as `record start` meets one (its state root holds no
+    // runtime-info here; the error is all that matters).
+    let Err(error) = RuntimeClient::connect(crate::lab_client_config(place.runtime())) else {
+        panic!("a connect to a state root without a runtime-info succeeded");
+    };
+    let timed_out = Probed::of_connection(Err(io::Error::from(io::ErrorKind::TimedOut)));
+    let accepted = Probed::of_connection(Ok(()));
+    let refused = Probed::of_connection(Err(io::Error::from(io::ErrorKind::ConnectionRefused)));
+    assert_eq!(timed_out, Probed::MayListen);
+    assert_eq!(accepted, Probed::MayListen);
+    assert_eq!(refused, Probed::NothingListens);
+
+    // A timed-out connection fails the start as one whose handshake failed: one path, one code.
+    let Err(after_timeout) = not_reached(error.clone(), timed_out) else {
+        panic!("a timed-out connection was taken for nothing listening");
+    };
+    let Err(after_handshake) = not_reached(error.clone(), accepted) else {
+        panic!("an accepted connection was taken for nothing listening");
+    };
+    assert_eq!(after_timeout.code, "runtime_not_running", "{after_timeout}");
+    assert_eq!(after_timeout.code, after_handshake.code);
+    assert_eq!(after_timeout.class, after_handshake.class);
+    // Only a refused connection is nothing listening, with the connect's own failure as its text.
+    assert_eq!(
+        not_reached(error.clone(), refused).ok(),
+        Some(error.to_string())
+    );
+}
+
+#[test]
+fn s17_fix_a_handshake_that_fails_starts_nothing() {
+    let _guard = env_lock();
+    let place = Place::new();
+    let other = *IdentifierIssuer::new()
+        .expect("identifier issuer")
+        .mint_owner_epoch()
+        .expect("an owner epoch")
+        .transport();
+    // The Runtime drops the `BindChannel`; the client's one reconnect meets another owner epoch.
+    let runtime = ScriptedRuntime::start(&place.runtime(), |_| {
+        vec![
+            ScriptedConnection::dropping_bind(),
+            ScriptedConnection::in_other_epoch(other),
+        ]
+    });
+    let (code, failed) = place.start(RECORD_ID, &[]);
+    let record = runtime.finish();
+
+    assert_eq!(code, 1, "{failed}");
+    assert_eq!(failed["outcome"]["code"], "runtime_not_running", "{failed}");
+    assert!(
+        failed["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("started nothing")),
+        "{failed}"
+    );
+    assert!(!place.header_path().exists(), "no session header");
+    assert!(
+        !place.recording_dir(RECORD_ID).exists(),
+        "no recording directory"
+    );
+    // The handshake, then `health` on the reconnect, and nothing more on either.
+    assert_eq!(record.connections.len(), 2);
+    assert_eq!(operations(&record.connections[0]), wire(&[]));
+    assert_eq!(operations(&record.connections[1]), ["health"]);
+    // The plain connection that tells whether anything listens: accepted, nothing sent on it.
+    assert_eq!(record.unscripted.len(), 1, "{:?}", record.unscripted);
+    assert!(
+        record.unscripted[0].requests.is_empty(),
+        "{:?}",
+        record.unscripted
+    );
+}
+
+#[test]
+fn s17_fix_a_stop_whose_release_fails_names_the_retry() {
+    let _guard = env_lock();
+    let place = Place::new();
+    let own = start_held(&place);
+    let runtime = ScriptedRuntime::start(&place.runtime(), |owner_epoch| {
+        vec![
+            ScriptedConnection::new()
+                .request(status(
+                    owner_epoch,
+                    vec![instance(INSTANCE, Some((own.as_str(), 1)))],
+                ))
+                .request(|request| denied(request, RuntimeErrorCode::LeaseBusy)),
+        ]
+    });
+    let (code, kept) = place.record("stop", &[]);
+    let record = runtime.finish();
+
+    assert_eq!(code, 1, "{kept}");
+    assert!(record.unscripted.is_empty(), "a connection beyond the one");
+    assert_eq!(record.connections.len(), 1);
+    assert_eq!(
+        operations(&record.connections[0]),
+        wire(&["status", "resume_scheduling"])
+    );
+    assert_eq!(kept["outcome"]["code"], "device_error", "{kept}");
+    let details = &kept["details"];
+    // The stop stands; its hold is kept, and the retry is `record stop`, never an unconditional
+    // resume.
+    assert_eq!(details["status"], "stopped", "{kept}");
+    assert_eq!(
+        details["hold"],
+        json!({"reason": own, "own": true, "kept": true})
+    );
+    let session = place.session();
+    let release = json!([
+        "record",
+        "stop",
+        "--instance",
+        INSTANCE,
+        "--state-dir",
+        session
+    ]);
+    assert_eq!(details["next"], json!({"release": release}), "{kept}");
+    let header = place.header();
+    assert_eq!(header["status"], "stopped", "{header}");
+    assert_eq!(
+        header["hold"],
+        json!({"reason": own, "own": true, "kept": true})
+    );
+    let (code, shown) = place.record("status", &[]);
+    assert_eq!(code, 0, "{shown}");
+    assert_eq!(shown["hold"], json!({"state": "kept", "reason": own}));
 }

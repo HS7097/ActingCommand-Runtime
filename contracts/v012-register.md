@@ -29655,6 +29655,18 @@ item and the coordinator's ruling on one retry; coordinator work order
   application when the test asks). Adapted: the step with marks asserts the execution's
   `sent_on_unstored_capture`, the two presses in a row its absence. No test leaves the gate map.
 
+**Fix round after the train's review** (0.12.64; coordinator work order
+`rd-1115/brief-463-train-s1-fix.md`, items 4, 5 and 7, after the two independent reviews of the
+whole train of stage one; the coordinator's rulings, not the owner's words). The wait `after_ms`
+is checked where the other three parameters of the screen after are, in one function
+(`record_after_capture_check`), and its refusal carries their keys, `value`, `min` and `max` (it
+carried `after_ms` and `max_after_ms`); `--after-ms` that is no whole number answers `wrong_type`
+with `value` (`parse_after_ms`), the word the Lab's other flags answer for it, and `range` is
+left to a value outside the bounds. The texts of `record_before_frame`, which takes the frame
+before a press and before an application operation, name both. The answer's `record.warnings`
+is listed whole in the contract, `after_not_still`, then `instance_not_held` or
+`instance_hold_unread`. No code or word is added; `wrong_type` is the Lab's own.
+
 ### 1.403 Slice #463 S1-2 (0.12.64): after a recorded press the screen is captured until it is still, and every capture is kept (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, and the owner's words on board #463 on the evening of 11-15 on what stage one hands over and on the captures after a press; the coordinator's rulings in the work orders, not the owner's words; coordinator work orders `rd-1115/brief-463-s12-still-after.md`, `rd-1115/brief-463-s12-fix2.md`, which replaces its rulings where they differ, and `rd-1115/brief-463-s12-fix3.md`, fix round 3 after the independent review; built on S1-1's branch at `24e48b47cdac` (§1.402))
 
 The coordinator gave this slice 1.403, after S1-1 (§1.402), on whose code it stands. The slice
@@ -29784,6 +29796,23 @@ byte.
 
 **At deploy.** Nothing to configure. Recordings already on disk load as before; a press S1-1's build
 recorded keeps `after_capture` without `interval_ms` and `still_ms` and reads as not tested.
+
+**Fix round after the train's review** (0.12.64; coordinator work order
+`rd-1115/brief-463-train-s1-fix.md`, items 1, 3, 4 and 5; the coordinator's rulings, not the
+owner's words). One function checks the four parameters of the screen after
+(`record_after_capture_check`, `check_after_capture` is gone): `after_ms`, then the three of this
+slice, then the bound of 120 intervals, each refusal `range` with `value`, `min` and `max`; the
+after loop checks them wherever it is entered. A value of `--interval-ms`, `--still-ms` or
+`--still-max-ms` that is no whole number is `wrong_type` with `value` (`after_capture_ms`; it was
+`range`), the word the Lab's other flags answer for it. The loop's typed result is public,
+`AfterTaken {frame, record, stopped_by}`: `record_after_frame` (the screen after an application
+operation) answers it whatever the loop kept, its `stopped_by` worded for the effect (the
+captures after the press or the application operation stopped there, how many were kept), and
+`Err` only when nothing was kept; `record_press` runs the same loop for a press. Tests: new,
+`s12_fix_record_after_frame_refuses_a_bound_out_of_range_before_anything` (a direct call, nothing
+waited for or captured); adapted, actinglab's
+`s12_the_flags_of_the_captures_after_a_press_take_whole_numbers` now pins `wrong_type`, as the
+requirement changes the word. No test leaves the gate map.
 
 ### 1.404 Slice #463 S1-3 (0.12.64): an application operation in the middle of a business is a step like a press, with the screens before and after it (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, whose stage one starts recording, plays the business normally and ends recording; the design `rd-1115/pack-stage12-design.md`, the row S1-3 of A6, A4's row of the rule "an application operation needs a marked open step", A1's parts on application operations and A2.1's row of `steps[].application.executed`, read on main `44cbab53`; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s13-app-steps.md`, built on the branch of #463 S1-1 at `486f5ce7`)
 
@@ -29952,6 +29981,28 @@ independent review of S1-2; the coordinator's rulings, not the owner's words).
   takes one capture before it and four after it, an operation one before it and three after it).
   The waits test adds the loop's flags and a bound of more than 120 intervals. No test switches the
   loop off, and none leaves the gate map.
+
+**Fix round after the train's review** (0.12.64; coordinator work order
+`rd-1115/brief-463-train-s1-fix.md`, items 1, 3, 5, 6 and 7; the review of the train's first half
+asked for item 1 before merging; the coordinator's rulings, not the owner's words). An application
+operation whose after loop a capture after its first stops says what was recorded:
+`record_application_operation` takes the loop's typed result (`AfterTaken`), names the last
+capture as the execution's `after_frame` with `after_capture.unfinished`, and answers the
+capture's own error with `record` (the operation as recorded, with `after` and `warnings`), the
+loop's `after: {after_ms, taken: true, captures}` built from that result and `operation`; its
+message says the captures after the operation stopped and how many were kept, and asks for no
+screen after it (`after_loop_stopped`; the error of a first capture that cannot be taken is as
+before). The captures take their frames through the Runtime's capture endpoint of the instance, as
+a recorded press does (`runtime_captured_frame`, which `PressFrames` uses too): `session app <verb>
+--record` reads no local device configuration (no ADB path); the operation itself was the
+Runtime's already. The refusals of the four flags are a press's (`range` outside the bounds,
+`wrong_type` for a value that is no whole number, `after_ms` with `value`, `min` and `max`). The
+contract's answer names `warnings` in both places. Tests: new
+`s13_fix_a_capture_after_an_operation_that_fails_midway_keeps_what_was_taken`,
+`s13_fix_a_screen_that_never_settles_after_an_operation_is_warned` and
+`s13_fix_the_waits_without_record_name_the_command_that_takes_them` (the first join's point 7);
+adapted, the waits test (`wrong_type`, and `value`, `min`, `max` of `after_ms`) and its fake, which
+can fail a capture. No test leaves the gate map.
 
 ### 1.406 Slice #463 S1-5 (0.12.64): the archive's manifest names each step's screens, the presses of the material and the final screen (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, whose stage one hands over the recorded material of a business, and the owner's words of the 11-15 evening that stage one hands over, for each press, the frame the click happened on with where it was pressed, and the last result frame; the design `rd-1115/pack-stage12-design.md`, A2.2, the row S1-5 of A6, A3 and A5's row `final_frame_missing`, read on main `44cbab53`; the coordinator's rulings in the work order and in its dispatch, not the owner's words; coordinator work order `rd-1115/brief-463-s15-manifest-v2.md`, built on the branch of #463 S1-3 at `d5b0825e`)
 
@@ -30131,6 +30182,13 @@ branch of S1-1, S1-2 and S1-3 on main `3581a8af`; the coordinator's rulings, not
   (`false` on a stored capture, `true` on a marked step whose capture was not stored, `null` for a
   `do` press), in this slice's gate entry.
 
+**Fix round after the train's review** (0.12.64; coordinator work order
+`rd-1115/brief-463-train-s1-fix.md`, item 7; text only). The contract's section on the copy says
+that the exit codes it gives (2 for an absolute path refused, 3 for a target that is not empty, 5
+for a copy that fails) are those of a `--via` line's envelope, and that actinglab's own command
+line exits 1 on every failure, as its refusal of `--all-frames` without `--copy-to` already said.
+No code, test or behaviour changes.
+
 ### 1.424 Slice #463 S1-7 (0.12.64): a recording holds its instance (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, whose stage one asks nothing of the agent but to start recording, play and end recording; the read-only investigation `rd-1115/record-hold-investigation.md`; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s17-record-hold.md`, stacked on #463 S1-1, §1.402, cut from its head `24e48b47cd` on main `b7c47129`, its fix round 3 `124e2b4de2` merged; fix round 2 by the coordinator's work order `rd-1115/brief-463-s17-fix2.md` after the independent review `rd-1115/review-1762.md`)
 
 The coordinator gave this slice 1.424. It ships in 0.12.64 (release 0.12.63 was cut without it), after S1-1.
@@ -30290,6 +30348,32 @@ owner's words).
   header's path), and on the fake Runtime host
   `s17_train_do_capture_record_on_an_instance_that_is_not_held_says_so` (`instance_not_held` in
   `record.warnings` of `do --capture --record`).
+
+**Fix round after the train's review** (0.12.64; coordinator work order
+`rd-1115/brief-463-train-s1-fix.md`, items 2, 3 and 7; the review of the train's second half
+suggested item 2 and the coordinator made it a must: a recording never starts unheld because the
+Lab could not tell; the coordinator's rulings, not the owner's words). `record start`
+(`record_hold::reach`) fails before anything is written when the installation's state root cannot
+be resolved (an empty or white-space `ACTINGCOMMAND_RUNTIME_STATE_ROOT`, neither `LOCALAPPDATA`
+nor `APPDATA`), with `validation_failed`, as the Lab's other commands answer it; and when, after
+the client's failed connect, the plain connection to the runtime-info's address times out, fails
+otherwise than by a refusal, or the runtime-info cannot be read or names no address, as a
+handshake that does not complete fails it (`not_reached`, one path and one code,
+`runtime_not_running` when no receipt said otherwise). `no_runtime_listening` is left with one
+cause, no Runtime listening at the state root: the address the runtime-info names refuses the
+connection, or (kept as built, the question put to the coordinator) no runtime-info is there,
+which a Runtime writes when it starts and removes when it stops. The decision reads the plain
+connection's IO error kind (`Probed`), no outcome code. The contract, the Lab's MCP manual, the
+first-generation MCP server's module text (`apps/actingctl/src/mcp/lab.rs`) and the actinglab
+table of `runtime-interface.md` no longer say that the recording commands open no Runtime
+connection; the press and application answers list `warnings` whole. Tests, in this slice's gate
+entry: `s17_fix_an_unresolved_state_root_starts_nothing`,
+`s17_fix_a_probe_that_times_out_fails_the_start_as_a_failed_handshake`,
+`s17_fix_a_handshake_that_fails_starts_nothing` (the scripted Runtime drops the `BindChannel`, the
+reconnect meets another owner epoch), `s17_fix_a_stop_whose_release_fails_names_the_retry`
+(`next.release` is `record stop`), and on the fake Runtime host behind a relay that closes the
+status read `s17_fix_a_press_whose_hold_read_fails_is_made_and_says_so` (`instance_hold_unread`).
+No code or word is added; no test leaves the gate map.
 
 ### 1.425 Slice #463 S2-1 (0.12.64): `record ready` lists everything a recording still lacks before `record stop` can make its package (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, whose stage two turns the recorded material into a package offline; the design `rd-1115/pack-stage12-design.md`, B2.1, B2.2 and the row S2-1 of B5, read on main `44cbab53`; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s21-record-ready.md`, built on the branch of the stage-one train (#1757) at `5706d568`)
 

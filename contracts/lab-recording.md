@@ -1629,14 +1629,18 @@ its instance").
   comes before anything is captured; on a new recording the frame the command took first stays.
   `validation_failed` with `details{argument, reason}`: a point outside the frame (`point`,
   `outside_frame`; a swipe's either point too), a long press or a swipe outside 1..=60000 ms
-  (`duration_ms`, `duration_range`), a wait outside 0..=60000 ms (`after_ms`, `range`; a value that
-  is no whole number too), `--after-ms` without `--record` (`after_ms`, `record_only`). #463 S1-2:
+  (`duration_ms`, `duration_range`), a wait outside 0..=60000 ms (`after_ms`, `range`),
+  `--after-ms` without `--record` (`after_ms`, `record_only`). #463 S1-2:
   `--interval-ms` outside 20..=1000, `--still-ms` outside 0..=5000 and `--still-max-ms` outside
-  0..=60000 (`interval_ms`, `still_ms`, `still_max_ms`, `range`; a value that is no whole number
-  too), each without `--record` (`record_only`), and a bound of more than 120 intervals,
+  0..=60000 (`interval_ms`, `still_ms`, `still_max_ms`, `range`), each without `--record`
+  (`record_only`), and a bound of more than 120 intervals,
   `still_max_ms` above 120 times `interval_ms`, a value out of the range the interval allows
   (`still_max_ms`, `range`, with `max` 120 × `interval_ms` and `interval_ms` in the details), so
-  that a press never takes more than 121 captures after it. An open step
+  that a press never takes more than 121 captures after it. The fix round after the train's
+  review: one check holds the four, before anything is captured or pressed, and every `range`
+  refusal of the four carries `value`, `min` and `max` (`after_ms` too); `range` is a value
+  outside its bounds only, and a value of the four flags that is no whole number is `wrong_type`
+  with `value`, the word the Lab's other flags answer for it. An open step
   that declares a click without an outcome is `record_click_exists`, one whose click has an outcome
   on record `record_click_executed`, one that declares an application operation
   `record_step_effect_exists`: such a step is pressed with `do --capture --record`. A frame of
@@ -1736,8 +1740,10 @@ its instance").
   `record: {status: "press_recorded", record_id, record_started_at_unix_ms, step, step_closed, click,
   before: {frame_id, path, sha256, refreshed, sent_on_unstored_capture, captured_twice}, after:
   {step, frame_id, path, sha256, after_ms, interval_ms, still_ms, still_max_ms, still, waited_ms,
-  captures, kept} | null, warnings: [] | ["after_not_still"]}`. `path` is the stored frame: the
-  agent reads the next screen there. `refreshed` says the command captured the frame `frame_id`
+  captures, kept} | null, warnings}`, `warnings` holding `after_not_still` when the screen after
+  was not found still, then `instance_not_held` or `instance_hold_unread` from the status read
+  before the press ("A recording holds its instance"), `[]` when none. `path` is the stored
+  frame: the agent reads the next screen there. `refreshed` says the command captured the frame `frame_id`
   names; `sent_on_unstored_capture` says the press was sent on a frame the command captured and did
   not store (an open step with marks), so that `frame_id` names the stored frame the marks were
   made on; `captured_twice` says the frame was captured twice because the Runtime no longer held
@@ -1804,12 +1810,19 @@ Runtime is asked to pause):
   a start after an end that kept its hold, below): when the status shows exactly the replaced
   session header's own reason, that pause is taken over, the new header's own (`taken_over`):
   never paused twice, never lost.
-- **Nothing listens** (no state root located, no runtime-info that names an address, nothing
-  accepting a connection at that address: no Runtime is running): nothing can dispatch. The
-  recording starts holding nothing (an own pause of the replaced header is carried over: the
-  Runtime restores it at its start), exit 0, and the answer says so: `hold.warnings`
-  `["no_runtime_listening"]` with `hold.runtime_error`, the connection's failure. A press with
-  `--record` needs the Runtime anyway.
+- **Nothing listens** (the state root holds no runtime-info, which a Runtime writes when it
+  starts and removes when it stops, or the address the runtime-info names refuses the
+  connection: no Runtime is running): nothing can dispatch. The recording starts holding nothing
+  (an own pause of the replaced header is carried over: the Runtime restores it at its start),
+  exit 0, and the answer says so: `hold.warnings` `["no_runtime_listening"]` with
+  `hold.runtime_error`, the connection's failure. A press with `--record` needs the Runtime
+  anyway.
+- **A state root that cannot be resolved** (the fix round after the train's review; the
+  coordinator's ruling: a recording never starts unheld because the Lab could not tell): the
+  variable `ACTINGCOMMAND_RUNTIME_STATE_ROOT` empty or white space, or neither `LOCALAPPDATA` nor
+  `APPDATA` set. That is the caller's mistake or a broken installation, not "no Runtime":
+  `record start` fails and writes nothing, `validation_failed`, as the Lab's other commands
+  answer such an installation, its message saying it paused nothing and started nothing.
 - **Something listens, but the handshake does not complete** (`Health` or `BindChannel` fails, is
   refused or gets no answer): a Runtime is there and may dispatch, so whether the instance would be
   held cannot be known. `record start` fails and writes nothing, with the failure as the Lab's
@@ -1819,8 +1832,11 @@ Runtime is asked to pause):
   opens the connection and shakes hands in one call and does not say which of the two failed; so
   after a failed connect `record start` opens one plain connection to the address the
   runtime-info names, within the client's IO timeout, and closes it at once without sending
-  anything: accepted, something listens; refused, nothing does. The Runtime takes a connection
-  closed before its first frame as an ordinary close.
+  anything: refused, nothing listens; anything else, something may. The fix round after the
+  train's review: a plain connection that times out (something may be there and busy), and a
+  runtime-info that cannot be read or names no address, fail the start the same way, with the
+  same failure, as a handshake that does not complete. The Runtime takes a connection closed
+  before its first frame as an ordinary close.
 - **A status the Runtime refuses**, or leaves unanswered once the connection is made: `record
   start` fails with it as above, its message saying it paused nothing and started nothing, and
   writes nothing.
@@ -1854,7 +1870,7 @@ on and exits 0.
 
 | `hold.warnings` word | Its one cause | Refuses or warns | Exit |
 |---|---|---|---|
-| `no_runtime_listening` | no connection to the installation's Runtime could be opened at all, so the recording holds nothing of its own | warns | 0 |
+| `no_runtime_listening` | no Runtime listens at the installation's state root (it holds no runtime-info, or the address it names refuses the connection), so the recording holds nothing of its own | warns | 0 |
 | `replaced_header_unread` | `--force` replaced a session header that could not be read, so a pause the earlier recording took, if any, is not released by this one | warns | 0 |
 
 **While it plays.** Each `tap`, `swipe` and `long-tap --record`, each `do --capture --record` and
@@ -2034,8 +2050,8 @@ the field is `"application": null | {"action": "restart"}`.
   decides:
   - a completed receipt: recorded, the step closed, then (when it names its `before_frame`: not
     on the entry step) the screen after it; the output is the `session app` output plus `record{status:"application_recorded",
-    record_id, step, step_opened, step_closed, application, after}` ("In the middle of a
-    business");
+    record_id, step, step_opened, step_closed, application, after, warnings}` ("In the middle
+    of a business"; `warnings` as a press's answer holds them);
   - a denied receipt (for example `fixture_execution_scope_forbidden` on a fixture instance,
     or a busy lease): the operation did not run; nothing is recorded and the error is
     returned as `session app` returns it;
@@ -2053,7 +2069,8 @@ the field is `"application": null | {"action": "restart"}`.
   for two things: the screen before, when the command took it, stays recorded; and an error
   whose details carry `after: {after_ms, taken: false}` is a screen after that was not taken
   (the train of stage one: `taken: true` with `captures`, a screen after whose loop a later
-  capture stopped, what it took kept), the operation having run and been recorded. Several of
+  capture stopped, what it took kept and recorded, its `record` the operation as recorded with
+  that screen after), the operation having run and been recorded. Several of
   these errors exit with 4 (also the Runtime refusals mapped to `device_error`): tell them
   apart by the error code.
 - The v0.9.0 ActingLab ignores `--record` on `session app` and runs the operation without
@@ -2118,16 +2135,26 @@ only: nothing here presses a launcher icon or reads the home screen but for the 
   and class, and the operation and its closed step stand: its details begin with `record` (the
   operation as recorded), `after: {after_ms, taken: false}` and `operation` (the `session app`
   output), then the capture's own members; take the screen with `capture --record`, do not run
-  the operation again. A later capture that cannot be taken keeps what the loop took
-  (`after_capture.unfinished`), and `after` in that place is the loop's `{after_ms, taken: true,
-  captures}`.
+  the operation again. A later capture that cannot be taken (the fix round after the train's
+  review, as after a press) keeps what the loop took and records it: the captures taken are the
+  step's frames, the last of them the operation's `after_frame`, its `after_capture` with
+  `unfinished: true` and `still: null`; the command answers the capture's own code and class,
+  its message saying that the captures after the operation stopped and how many were kept, its
+  details beginning with `record` (the operation as recorded, with that screen after as `after`
+  and `warnings`), the loop's `after: {after_ms, taken: true, captures}` and `operation`, then
+  the capture's own members; the operation and its closed step stand: do not run it again, and
+  take a later screen with `capture --record` only when one is needed. The captures take their
+  frames through the Runtime only, as a recorded press does (the fix round after the train's
+  review): the command reads no local device configuration (no ADB path) for them.
 - **Refused before anything is sent** (exit 2): `validation_failed` with `details{argument,
   reason}`, the same refusals as a press's (the train of stage one: the flags are read and checked
-  as a press's are): `--after-ms` outside 0..=60000 or no whole number (`after_ms`, `range`, the
-  value as `after_ms`), `--interval-ms` outside 20..=1000, `--still-ms` outside 0..=5000 and
-  `--still-max-ms` outside 0..=60000 (`interval_ms`, `still_ms`, `still_max_ms`, `range`; a value
-  that is no whole number too), and a bound of more than 120 intervals, `still_max_ms` above 120
-  times `interval_ms` (`still_max_ms`, `range`, with `max` and `interval_ms` in the details), all
+  as a press's are): `--after-ms` outside
+  0..=60000, `--interval-ms` outside 20..=1000, `--still-ms` outside 0..=5000 and
+  `--still-max-ms` outside 0..=60000 (`after_ms`, `interval_ms`, `still_ms`, `still_max_ms`,
+  `range`, with `value`, `min` and `max`), a value of the four that is no whole number
+  (`wrong_type`, with `value`: the fix round after the train's review; it was `range`), and a
+  bound of more than 120 intervals, `still_max_ms` above 120 times `interval_ms`
+  (`still_max_ms`, `range`, with `max` and `interval_ms` in the details), all
   before the recording lock is taken; each of the four without `--record` (`record_only`, by the
   gate of "`--record` on device commands", whose text names `session app`, and by `session app`
   itself). `--dry-run` stays `record_flag_unsupported`.
@@ -2142,8 +2169,9 @@ only: nothing here presses a launcher icon or reads the home screen but for the 
 - **The answer.** The `session app` output with `record: {status: "application_recorded",
   record_id, record_started_at_unix_ms, step, step_opened, step_closed, application, after: {step,
   frame_id, path, sha256, after_ms, interval_ms, still_ms, still_max_ms, still, waited_ms,
-  captures, kept} | null, warnings: [] | ["after_not_still"]}` (`after` `null` on the entry step).
-  `path` is the stored frame: the agent reads the next screen there.
+  captures, kept} | null, warnings}` (`after` `null` on the entry step), `warnings` as a press's
+  answer holds them: `after_not_still`, then `instance_not_held` or `instance_hold_unread`, `[]`
+  when none. `path` is the stored frame: the agent reads the next screen there.
 - **`record stop`** still requires a recognition mark on every effective step but the entry step
   (`record_step_without_recognition`, "Pre-checks"): the steps are marked afterwards with `record
   mark --step k`, as a press's are.
@@ -2539,10 +2567,12 @@ reopen` names them; the next `record archive` of their recording writes the next
 A manifest is read by the schema it names, exactly these two (`record_state_io_failed` for any
 other); no flag writes v1.
 
-**The copy** (`--copy-to <dir>`):
+**The copy** (`--copy-to <dir>`). The exit codes below are those of a `--via` line's envelope
+(the class's exit); actinglab's own command line exits 1 on every failure, these included (the
+fix round after the train's review, as the refusal of `--all-frames` below says):
 
 - Fix 1: `<dir>` is an absolute path. An empty value, a value of only white space and a relative
-  path are refused `validation_failed` (exit 2, `details{path, reason}`, `empty` or
+  path are refused `validation_failed` (`--via` exit 2, `details{path, reason}`, `empty` or
   `not_absolute`), as the module refuses its other parameters, before the session is read and
   before anything is written: no manifest, no copy, the session as it was. A relative path would
   name a place under the current directory of whichever process serves the command (an empty one
@@ -2550,7 +2580,7 @@ other); no flag writes v1.
   Lab's MCP server refuses such a path itself before it sends anything (`arguments_invalid`,
   `not_absolute`), as it refuses every path parameter.
 - The directory must not exist (it is created, with its parents) or must be empty. Anything else
-  is refused `record_archive_target_not_empty` (exit 3, `details{path, reason}`, `not_empty` or
+  is refused `record_archive_target_not_empty` (`--via` exit 3, `details{path, reason}`, `not_empty` or
   `not_a_directory`) before anything is written: no manifest, the session as it was.
 - Once the manifest is written and the session archived, `recording.json`, the manifest and (#463
   S1-5) the frame files the manifest's `material` names are copied under the same relative names;
@@ -2570,9 +2600,9 @@ other); no flag writes v1.
   failure there and every other refusal of a flag given without the flag it needs; exit 2, the
   usage class, only on a `--via` line (the train of stage one: the code's exit, which its test
   pins).
-- A file that cannot be copied is `record_state_io_failed` (exit 5, `details{file, path, target,
-  reason: "copy_failed", copied}`); a copy that cannot be read or does not hold its sha256 is
-  `record_archive_verify_failed` (exit 5, `details{file, path, checked: "copy", reason:
+- A file that cannot be copied is `record_state_io_failed` (`--via` exit 5, `details{file, path,
+  target, reason: "copy_failed", copied}`); a copy that cannot be read or does not hold its sha256
+  is `record_archive_verify_failed` (`--via` exit 5, `details{file, path, checked: "copy", reason:
   "sha256_mismatch" | "unreadable", failures, copied}`). Both name the file and the reason and add
   `record_id`, `archived: true` and `manifest`: what was copied stays where it is, nothing is
   deleted, and the recording stays archived.

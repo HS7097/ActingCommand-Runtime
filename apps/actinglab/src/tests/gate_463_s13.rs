@@ -23,7 +23,8 @@
 //   an open step without marks declares the operation (the rule that asked for marks is removed).
 // - `s13_the_waits_handed_to_the_screen_after_are_the_flags_or_the_defaults`: `--after-ms` and
 //   `--still-max-ms` as given, `AfterCapture::for_application`'s 2000 and 30000 without them, and
-//   `validation_failed` (`range`) outside 0..=60000 or for a value that is no whole number.
+//   `validation_failed` (`range`) outside 0..=60000; the fix round after the train's review: for a
+//   value that is no whole number `wrong_type`, and `after_ms` with `value`, `min` and `max`.
 // Round 2 (the parent's fix round: every press is sent on a frame captured immediately before it;
 // an application operation's screen before follows the same rule):
 // - `s13_an_operation_on_a_marked_step_keeps_the_stored_frame`: on an open step with a mark the
@@ -56,9 +57,27 @@
 //   after it;
 // - a press after an operation: a tap (one and four), the restart (one and three), the tap (one
 //   and four).
+// The fix round after the train's review (rd-1115/brief-463-train-s1-fix.md):
+// - `s13_fix_a_capture_after_an_operation_that_fails_midway_keeps_what_was_taken`: a tap, then
+//   `restart --record` whose third capture after it fails: the two taken are step 3's frames
+//   (f0007 superseded, f0008 live), the operation's `after_frame` f0008 and `after_capture {2000,
+//   1000, 2000, 30000, null, 3000, 2, 1, unfinished}`; the answer is the capture's own
+//   `device_error`, its details `record` (the operation as recorded, the same as the step table's,
+//   its `after` that frame), `after {2000, taken: true, captures: 2}` and `operation`; its message
+//   names the operation and asks for no screen after it.
+// - `s13_fix_a_screen_that_never_settles_after_an_operation_is_warned`: `restart --record` with
+//   `--still-ms 5000 --still-max-ms 2000`: three captures after it (the bound), `still` false, and
+//   the answer's `record.warnings` `["after_not_still"]`.
+// - `s13_fix_the_waits_without_record_name_the_command_that_takes_them`: actinglab's command line,
+//   each of the four flags without `--record` on `session app restart` and `session instance app
+//   restart` is `validation_failed` `record_only`, its text naming `session app
+//   <launch|restart|stop|force-stop> --record`; on `tap` it names `tap, swipe or long-tap`; nothing
+//   reaches the Runtime's state root.
 // Frames are synthetic 1280x720 (a square of one colour at the top left on gray); no Runtime, no
 // device; the tests read no clock and never sleep.
 
+use super::env_lock;
+use super::gate_434_lab5b4::{Isolated, printed};
 use crate::FlagArgs;
 use crate::flag_args::reads;
 use crate::session_management::{
@@ -178,10 +197,12 @@ fn completed() -> ApplicationExecution {
 /// last one again once they run out, and what it was asked, in the log it shares with the
 /// operation. The train of stage one: the clock (`now`) moves only by the waits, so that the after
 /// loop of #463 S1-2 ends when the repeated screen has stood for `still_ms`; a capture takes no
-/// time.
+/// time. The fix round after the train's review: the capture numbered `fails` (0 the first of the
+/// command) fails with a device error.
 struct FakeDevice<'a> {
     screens: Vec<usize>,
     taken: usize,
+    fails: Option<usize>,
     log: &'a RefCell<Vec<String>>,
     now: Duration,
 }
@@ -200,6 +221,10 @@ impl RecordFramePorts for FakeDevice<'_> {
 
     fn capture(&mut self) -> LabResult<CapturedFrame> {
         self.log.borrow_mut().push("capture".to_owned());
+        if self.fails == Some(self.taken) {
+            self.taken += 1;
+            return Err(LabError::device("the fake Runtime's capture failed"));
+        }
         let last = self.screens.len().saturating_sub(1);
         let Some(&index) = self.screens.get(self.taken.min(last)) else {
             panic!("a capture the test did not script");
@@ -275,6 +300,7 @@ impl Bench {
         let mut device = FakeDevice {
             screens: screens.to_vec(),
             taken: 0,
+            fails: None,
             log: &log,
             now: Duration::ZERO,
         };
@@ -302,6 +328,17 @@ impl Bench {
         after: &AfterCapture,
         screens: [usize; N],
     ) -> (LabResult<Value>, Vec<String>) {
+        self.application_failing(verb, after, screens, None)
+    }
+
+    // As [`Bench::application`], the fake's capture numbered `fails` (0 the first) failing.
+    fn application_failing<const N: usize>(
+        &self,
+        verb: &str,
+        after: &AfterCapture,
+        screens: [usize; N],
+        fails: Option<usize>,
+    ) -> (LabResult<Value>, Vec<String>) {
         let log = RefCell::new(Vec::new());
         let result = record_application_operation(
             &self.lock,
@@ -314,6 +351,7 @@ impl Bench {
                 Ok(FakeDevice {
                     screens: screens.to_vec(),
                     taken: 0,
+                    fails,
                     log: &log,
                     now: Duration::ZERO,
                 })
@@ -696,13 +734,35 @@ fn s13_the_waits_handed_to_the_screen_after_are_the_flags_or_the_defaults() {
             still_max_ms: 30_000
         }
     );
-    for (words, argument) in [
-        (["--record", "--after-ms", "60001"], "after_ms"),
-        (["--record", "--still-max-ms", "60001"], "still_max_ms"),
-        (["--record", "--after-ms", "soon"], "after_ms"),
+    for (words, argument, reason, value) in [
+        (
+            ["--record", "--after-ms", "60001"],
+            "after_ms",
+            "range",
+            json!(60_001),
+        ),
+        (
+            ["--record", "--still-max-ms", "60001"],
+            "still_max_ms",
+            "range",
+            json!(60_001),
+        ),
+        // The fix round after the train's review: a value that is no whole number is `wrong_type`,
+        // the word the Lab's other flags answer for it; `range` is a value outside the bounds only.
+        (
+            ["--record", "--after-ms", "soon"],
+            "after_ms",
+            "wrong_type",
+            json!("soon"),
+        ),
         // The train of stage one: 30000 ms at 100 ms is more than 120 intervals, refused before
         // the operation is sent, as a press's bound is.
-        (["--record", "--interval-ms", "100"], "still_max_ms"),
+        (
+            ["--record", "--interval-ms", "100"],
+            "still_max_ms",
+            "range",
+            json!(30_000),
+        ),
     ] {
         let error = parsed(&words).expect_err("a wait outside its range");
         assert_eq!(
@@ -713,8 +773,16 @@ fn s13_the_waits_handed_to_the_screen_after_are_the_flags_or_the_defaults() {
         );
         let details = error.details.clone().unwrap_or(Value::Null);
         assert_eq!(details["argument"], argument, "{words:?}: {details}");
-        assert_eq!(details["reason"], "range", "{words:?}: {details}");
+        assert_eq!(details["reason"], reason, "{words:?}: {details}");
+        // The fix round after the train's review: `after_ms` names its value as the other three do.
+        assert_eq!(details["value"], value, "{words:?}: {details}");
     }
+    // The fix round after the train's review: `after_ms` outside its bounds carries the keys of the
+    // other three, `min` and `max`.
+    let error = parsed(&["--record", "--after-ms", "60001"]).expect_err("a wait over 60000 ms");
+    let details = error.details.clone().unwrap_or(Value::Null);
+    assert_eq!(details["min"], 0, "{details}");
+    assert_eq!(details["max"], 60_000, "{details}");
 }
 
 // The step's frame `frame_id`, or null.
@@ -899,5 +967,232 @@ fn s13_a_press_after_an_operation_replaces_the_frame_its_screen_after_opened_the
         pressed["click"]["execution"]["after_frame"],
         live_primary(&steps[3])["frame_id"],
         "{recording}"
+    );
+}
+
+// The fix round after the train's review: what the operation's after loop leaves when a capture
+// after its first fails, as a press's does (`record_press`).
+#[test]
+fn s13_fix_a_capture_after_an_operation_that_fails_midway_keeps_what_was_taken() {
+    let bench = Bench::new();
+    // A tap: screen 0 opens step 1, its after loop f0002 to f0005 in step 2, which has no mark.
+    bench.tap(100, 200, [0, 1]);
+    // `session app restart --record`: the capture before it (the fake's capture 0, f0006), then
+    // the after loop's: the first (capture 1, f0007) opens step 3, the second (capture 2, f0008)
+    // is not still yet, and the third (capture 3) fails.
+    let (result, log) = bench.application_failing(
+        "restart",
+        &AfterCapture::for_application(None),
+        [2, 0],
+        Some(3),
+    );
+    assert_eq!(
+        log,
+        [
+            "frames",
+            "capture",
+            "operate 2",
+            "wait 2000",
+            "capture",
+            "wait 1000",
+            "capture",
+            "wait 1000",
+            "capture"
+        ],
+        "{log:?}"
+    );
+    // The capture's own error, loud: the captures after the operation stopped, the two taken kept;
+    // it asks for no screen after the operation, which was taken.
+    let error = result.expect_err("the third capture after the operation fails");
+    assert_eq!(error.code, LabError::device("").code, "{}", error.message);
+    assert!(
+        error
+            .message
+            .contains("the captures after the application operation stopped there"),
+        "{}",
+        error.message
+    );
+    assert!(
+        error.message.contains("the 2 taken before it are kept"),
+        "{}",
+        error.message
+    );
+    assert!(
+        !error.message.contains("take the screen after it"),
+        "{}",
+        error.message
+    );
+    let details = error.details.clone().unwrap_or(Value::Null);
+    assert_eq!(
+        details["after"],
+        json!({"after_ms": 2_000, "taken": true, "captures": 2}),
+        "{details}"
+    );
+    assert_eq!(
+        details["operation"],
+        json!({"status": "completed", "action": "restart"}),
+        "{details}"
+    );
+    // The operation as recorded: its screen after the last capture taken, the loop unfinished.
+    let record = &details["record"];
+    assert_eq!(record["status"], "application_recorded", "{record}");
+    assert_eq!(record["step"], 2, "{record}");
+    assert_eq!(record["step_closed"], true, "{record}");
+    let after_capture = json!({
+        "after_ms": 2_000,
+        "interval_ms": 1_000,
+        "still_ms": 2_000,
+        "still_max_ms": 30_000,
+        "still": null,
+        "waited_ms": 3_000,
+        "captures": 2,
+        "kept": 1,
+        "unfinished": true
+    });
+    assert_eq!(
+        record["application"]["executed"]["after_frame"], "f0008",
+        "{record}"
+    );
+    assert_eq!(
+        record["application"]["executed"]["after_capture"], after_capture,
+        "{record}"
+    );
+    assert_eq!(record["after"]["step"], 3, "{record}");
+    assert_eq!(record["after"]["frame_id"], "f0008", "{record}");
+    assert_eq!(record["after"]["unfinished"], true, "{record}");
+    assert_eq!(record["warnings"], json!([]), "{record}");
+
+    // The step table says what the answer says: the two captures are step 3's frames, the last its
+    // live primary frame and the operation's `after_frame`.
+    let recording = bench.recording();
+    let steps = recording["steps"].as_array().expect("steps");
+    assert_eq!(steps.len(), 3, "{recording}");
+    assert_eq!(
+        steps[1]["application"], record["application"],
+        "{recording}"
+    );
+    assert_eq!(
+        steps[1]["application"]["executed"]["after_capture"], after_capture,
+        "{recording}"
+    );
+    let next = &steps[2];
+    assert_eq!(next["index"], 3, "{next}");
+    assert_eq!(
+        next["frames"]
+            .as_array()
+            .expect("step 3's frames")
+            .iter()
+            .map(|frame| (frame["frame_id"].clone(), frame["superseded"].clone()))
+            .collect::<Vec<_>>(),
+        [
+            (json!("f0007"), json!(true)),
+            (json!("f0008"), json!(false))
+        ],
+        "{next}"
+    );
+    let last = live_primary(next);
+    assert_eq!(record["after"]["path"], last["path"], "{record}");
+    assert_eq!(record["after"]["sha256"], last["sha256"], "{record}");
+}
+
+// The fix round after the train's review: `after_not_still` in an application operation's answer.
+#[test]
+fn s13_fix_a_screen_that_never_settles_after_an_operation_is_warned() {
+    let bench = Bench::new();
+    bench.tap(100, 200, [0, 1]);
+    // Still after 5000 ms unchanged, at most 2000 ms after the first capture, every 1000 ms: the
+    // bound ends the loop at its third capture, before the screen can be still.
+    let after = AfterCapture {
+        still_ms: Some(5_000),
+        still_max_ms: 2_000,
+        ..AfterCapture::for_application(None)
+    };
+    let (result, log) = bench.application("restart", &after, [2, 0]);
+    let data = the_answer(result);
+    assert_eq!(
+        log,
+        [
+            "frames",
+            "capture",
+            "operate 2",
+            "wait 2000",
+            "capture",
+            "wait 1000",
+            "capture",
+            "wait 1000",
+            "capture"
+        ],
+        "{log:?}"
+    );
+    let record = &data["record"];
+    assert_eq!(record["status"], "application_recorded", "{record}");
+    assert_eq!(record["warnings"], json!(["after_not_still"]), "{record}");
+    assert_eq!(record["after"]["still"], false, "{record}");
+    assert_eq!(record["after"]["captures"], 3, "{record}");
+    let recording = bench.recording();
+    let executed = &recording["steps"][1]["application"]["executed"];
+    assert_eq!(executed["after_capture"]["still"], false, "{recording}");
+    assert_eq!(executed["after_capture"]["captures"], 3, "{recording}");
+    assert_eq!(
+        executed["after_frame"], record["after"]["frame_id"],
+        "{recording}"
+    );
+}
+
+// The fix round after the train's review (the first join's point 7): the refusal of a flag of the
+// screen after without `--record` names the command that takes it.
+#[test]
+fn s13_fix_the_waits_without_record_name_the_command_that_takes_them() {
+    let _guard = env_lock();
+    let isolated = Isolated::new();
+    let shown = |line: &[&str]| -> Value {
+        printed(line)
+            .line
+            .unwrap_or_else(|text| panic!("{line:?} printed no line: {text}"))
+    };
+    for (command, names) in [
+        (
+            &["session", "app", "restart"][..],
+            "session app <launch|restart|stop|force-stop> --record",
+        ),
+        (
+            &["session", "instance", "app", "restart"][..],
+            "session app <launch|restart|stop|force-stop> --record",
+        ),
+        (&["tap", "1", "2"][..], "tap, swipe or long-tap --record"),
+    ] {
+        for (flag, argument) in [
+            ("--after-ms", "after_ms"),
+            ("--interval-ms", "interval_ms"),
+            ("--still-ms", "still_ms"),
+            ("--still-max-ms", "still_max_ms"),
+        ] {
+            let mut line = vec!["--json"];
+            line.extend_from_slice(command);
+            line.extend([flag, "500"]);
+            let answered = shown(&line);
+            assert_eq!(
+                answered["outcome"]["code"], "validation_failed",
+                "{line:?}: {answered}"
+            );
+            assert_eq!(
+                answered["details"]["argument"], argument,
+                "{line:?}: {answered}"
+            );
+            assert_eq!(
+                answered["details"]["reason"], "record_only",
+                "{line:?}: {answered}"
+            );
+            assert!(
+                answered["message"]
+                    .as_str()
+                    .is_some_and(|message| message.contains(names)),
+                "{line:?}: {answered}"
+            );
+        }
+    }
+    assert!(
+        !isolated.runtime.exists(),
+        "a refusal reached the Runtime's state root"
     );
 }

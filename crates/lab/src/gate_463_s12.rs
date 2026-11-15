@@ -65,14 +65,20 @@
 //   `validation_failed` `details{argument: "still_max_ms", reason: "range", value, min: 0, max: 120
 //   x interval_ms, interval_ms}` (fix round 3: the range word): nothing captured, pressed or
 //   written.
+// The fix round after the train's review (rd-1115/brief-463-train-s1-fix.md):
+// - `s12_fix_record_after_frame_refuses_a_bound_out_of_range_before_anything`: `record_after_frame`
+//   called directly with an application operation's parameters but `after_ms` 60001, `still_max_ms`
+//   60001, or `interval_ms` 100 (30000 ms is more than 120 intervals): `validation_failed`
+//   `details{argument, reason: "range", value, min: 0, max}` (`after_ms` with the keys of the other
+//   three), nothing waited for or captured, every file as it was.
 // Frames are synthetic 160x90 screens of one colour; no Runtime, no device; nothing sleeps.
 
 use crate::recording::store::{hex_sha256, lab_dir, old_record_path, recording_path};
 use crate::{
     AfterCapture, AttachFrameRequest, CapturedFrame, ClickEffect, ClickPlan, CommitClickRequest,
     OpaqueJson, PlanClickRequest, PointPress, RecordFramePorts, RecordPoint, RecordPressOutcome,
-    RecordPressRequest, RecordStartOptions, RecordingLock, record_attach_frame, record_press,
-    record_start,
+    RecordPressRequest, RecordStartOptions, RecordingLock, record_after_frame, record_attach_frame,
+    record_press, record_start,
 };
 use actingcommand_contract::{InputFrameReference, LabError, LabResult};
 use actingcommand_device::{CaptureBackendName, Frame, PixelFormat};
@@ -1028,6 +1034,69 @@ fn s12_more_than_120_intervals_in_the_bound_are_refused_before_anything() {
         assert_eq!(details["min"], 0, "{case}: {details}");
         assert_eq!(details["max"], 120 * interval_ms, "{case}: {details}");
         assert_eq!(details["interval_ms"], interval_ms, "{case}: {details}");
+        assert_eq!(bench.files(), before, "{case}: a file changed");
+    }
+}
+
+#[test]
+fn s12_fix_record_after_frame_refuses_a_bound_out_of_range_before_anything() {
+    let bench = Bench::new();
+    bench.capture(BEFORE);
+    let before = bench.files();
+    let application = AfterCapture::for_application(None);
+    for (after, argument, value, max) in [
+        (
+            AfterCapture {
+                after_ms: 60_001,
+                ..application
+            },
+            "after_ms",
+            60_001_u64,
+            60_000_u64,
+        ),
+        (
+            AfterCapture {
+                still_max_ms: 60_001,
+                ..application
+            },
+            "still_max_ms",
+            60_001,
+            60_000,
+        ),
+        // 30000 ms at 100 ms is more than 120 intervals: a value out of the range the interval
+        // allows.
+        (
+            AfterCapture {
+                interval_ms: Some(100),
+                ..application
+            },
+            "still_max_ms",
+            30_000,
+            12_000,
+        ),
+    ] {
+        let case = format!("{argument} {value}");
+        let log = RefCell::new(Vec::new());
+        let mut device = FakeDevice {
+            shots: VecDeque::new(),
+            log: &log,
+            now: Duration::ZERO,
+            frozen: false,
+        };
+        let error = record_after_frame(&bench.lock, &mut device, &after).expect_err(&case);
+        assert!(log.borrow().is_empty(), "{case}: {:?}", log.borrow());
+        assert_eq!(
+            error.code,
+            LabError::usage("").code,
+            "{case}: {}",
+            error.message
+        );
+        let details = error.details.clone().unwrap_or(Value::Null);
+        assert_eq!(details["argument"], argument, "{case}: {details}");
+        assert_eq!(details["reason"], "range", "{case}: {details}");
+        assert_eq!(details["value"], value, "{case}: {details}");
+        assert_eq!(details["min"], 0, "{case}: {details}");
+        assert_eq!(details["max"], max, "{case}: {details}");
         assert_eq!(bench.files(), before, "{case}: a file changed");
     }
 }

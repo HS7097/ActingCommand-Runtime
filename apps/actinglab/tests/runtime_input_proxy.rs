@@ -5584,3 +5584,86 @@ fn s17_train_do_capture_record_on_an_instance_that_is_not_held_says_so() {
     );
     assert_eq!(state.taps.load(Ordering::Acquire), 1);
 }
+
+/// The fix round after the train's review (#463 S1-7): a loopback relay in front of the fake host
+/// of `runtime_root`. The state root's runtime-info is rewritten to name the relay, which closes
+/// its `dropped`th accepted connection (0 the first) at once, before anything is read on it, and
+/// relays every other one to the host, both ways, until either side closes it.
+fn s17_relay_dropping(runtime_root: &Path, dropped: usize) {
+    let info_path = runtime_root.join("runtime-info.json");
+    let mut info: Value =
+        serde_json::from_slice(&fs::read(&info_path).expect("the host's runtime-info"))
+            .expect("the host's runtime-info JSON");
+    let host = format!(
+        "{}:{}",
+        info["host"].as_str().expect("the host's address"),
+        info["port"].as_u64().expect("the host's port")
+    );
+    let relay = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("the relay's listener");
+    info["port"] = json!(relay.local_addr().expect("the relay's address").port());
+    fs::write(
+        &info_path,
+        serde_json::to_vec(&info).expect("the relay's runtime-info JSON"),
+    )
+    .expect("the relay's runtime-info");
+    thread::spawn(move || {
+        for (index, accepted) in relay.incoming().enumerate() {
+            let Ok(client) = accepted else {
+                return;
+            };
+            if index == dropped {
+                drop(client);
+                continue;
+            }
+            let Ok(upstream) = std::net::TcpStream::connect(&host) else {
+                return;
+            };
+            let (Ok(client_reader), Ok(upstream_reader)) =
+                (client.try_clone(), upstream.try_clone())
+            else {
+                return;
+            };
+            thread::spawn(move || s17_relay_pipe(client_reader, upstream));
+            thread::spawn(move || s17_relay_pipe(upstream_reader, client));
+        }
+    });
+}
+
+/// One direction of the relay: what `from` sends, to `to`, until `from` closes or the copy fails;
+/// either way `to`'s writing half is then shut, so that its reader sees the end and closes too.
+fn s17_relay_pipe(mut from: std::net::TcpStream, mut to: std::net::TcpStream) {
+    std::io::copy(&mut from, &mut to).ok();
+    to.shutdown(std::net::Shutdown::Write).ok();
+}
+
+/// The fix round after the train's review (#463 S1-7): a recording started while nothing listened
+/// holds nothing; once the fake Runtime host runs, a `tap --record` whose status read before the
+/// press gets no answer (the relay in front of the host closes that connection, the second of the
+/// command, after the capture before the press, at once) is pressed and recorded all the same, its
+/// `record.warnings` `["instance_hold_unread"]`.
+#[test]
+fn s17_fix_a_press_whose_hold_read_fails_is_made_and_says_so() {
+    let root = TempDir::new().expect("tempdir");
+    let runtime_root = root.path().join("runtime");
+    let local = root.path().join("local");
+    let config = root.path().join("actinglab.json");
+    fs::write(&config, "{}").expect("write config");
+    let started = s17_record_start(&config, &runtime_root, &local);
+    assert_eq!(started["hold"]["state"], "none", "{started}");
+    let state = Arc::new(FakeState::default());
+    let host = l3_host(&runtime_root, &state, b"lab-fix-s17-hold-unread");
+    // The command's connections: the capture before the press (0), the status read (1), the
+    // press, the captures after it.
+    s17_relay_dropping(&runtime_root, 1);
+
+    let pressed = s17_tap_record(&config, &runtime_root, &local);
+    host.close().expect("close host");
+
+    assert_eq!(pressed["record"]["status"], "press_recorded", "{pressed}");
+    assert_eq!(
+        pressed["record"]["warnings"],
+        json!(["instance_hold_unread"]),
+        "{pressed}"
+    );
+    assert_eq!(state.taps.load(Ordering::Acquire), 1);
+}
