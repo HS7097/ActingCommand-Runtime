@@ -341,10 +341,10 @@ ready to be dispatched is judged by another slice's function, which a later slic
 [component-interfaces.md](component-interfaces.md): "A bundle writes `package`: its `max` is the
 revision its packs need. Give `min` the same value." The build declares `[r, r]`, `r` the highest
 revision any entry of its zip needs, 3 (the bundle formats of Runtime v0.12.0) when none needs a
-later one. The table holds what each `package` row of that document names, but row 15 (the
-ending pages of a `linear_steps` task, Workflow #463 K2, register §1.380), which has no row here
-yet, so the build does not compute 15; and, fix round 1, what the register sections it cites and
-the B train's sections put into a revision (their members joined revision 6, "which BT-PK6
+later one. The table holds what each `package` row of that document names (row 15, the ending
+pages of a `linear_steps` task, Workflow #463 K2, register §1.380, since Workflow #464 P2b,
+register §1.385, so the build computes 15 for a bundle it builds); and, fix round 1, what the
+register sections it cites and the B train's sections put into a revision (their members joined revision 6, "which BT-PK6
 declares", and DB-2 declared 6 in 0.12.37), each in the file it stands in and under its condition. The files of a pack: `control.json`; a task file
 `resources/operations/<task>/task.json`; a selection-policy document
 `resources/operations/<task>/policies/<name>.json`; the navigation projection below
@@ -391,12 +391,21 @@ as an element of its array.
 | 13 | task | `select` under `operations` when it holds an object (a select step), in a pack whose `control.json` `execution_mode` is `linear_steps` only (a page-graph select step keeps its revision): where the kernel's admission finds it (`TaskOperation.select`; `TaskProgram::validate_linear`, `LinearEffect::Select`), a reader private to the kernel crate, which actinglab does not depend on, so the table reads the same member | K1, §1.374; [linear-steps.md](linear-steps.md), "Select steps" |
 | 14 | control | `variables` of the document, whatever it holds, as the installer's `place` reads it (`variable_undeclared` below 14) | V1, §1.378; [package-variables.md](package-variables.md) |
 | 14 | root | `goals.json`, by its presence at the zip's root, as `place` reads it (`goal_undeclared` below 14), whatever version it holds | G-R1, §1.356 (12, version 1); V1 fix round 3, §1.378 (14, version 2) |
+| 15 | control and its entry task | an ending page, in a pack whose `control.json` `execution_mode` is `linear_steps` only: a page of a `terminal_pages` under `mappings` of the `scheduling_outcome` of the task file of the control's `entry_task_id` (`resources/operations/<entry_task_id>/task.json`, the package's program; no other task file of the pack) that is none of that task's `target_page` (one page or a set) and none of the `from` of its `operations` whose `select` holds an `on_empty` (absent or `null`, none), each page compared with the prefix `<game>/`, the control's `game`, taken off where it is written. That is the kernel's own test of an admitted package (`PreparedContainedTask::declares_linear_endings`, `canonical_page_anchor`), a reader private to the kernel crate, which actinglab does not depend on, so the table reads the same members | K2, §1.380; [linear-steps.md](linear-steps.md), "Endings"; P2b, §1.385 |
 
 Revisions 13 and 14 (after the train 0.12.61a; register §1.376): no content needs 12 any more.
 Revision 12 brought version 1 of `goals.json`, which this build reads no more; revision 14 brought
 version 2, so a zip that carries the file declares 14. A version 1 file is not told apart here: it
 is refused by the check, `goal_version_retired` at `/schema_version` (`package bundle --goals`
 refuses it, so the build fails at its `bundle` step and writes no product), not by the revision.
+
+Revision 15 (after the train 0.12.61c; register §1.385): the row reads two files of a pack
+together, its `control.json` and its entry task file, as revision 7's layout row reads the task
+files of a pack together. Like the kernel's test, it counts a terminal page on the path (a page an
+operation leaves or reaches) too; every build refuses such a package at admission
+(`contained_task_linear_invalid`, `reason=terminal_page`), so that raises the revision of a package
+nothing admits. A terminal page in a task file that is not the entry task's needs nothing: no
+admission reads it as the package's program.
 
 Nothing else needs a revision: a game root's `tables/` (row 6: no member of a pack reads them),
 `ui.json` (§1.240: no revision), the other root files and every other file of a pack need 3. A

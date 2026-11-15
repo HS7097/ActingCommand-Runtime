@@ -1152,8 +1152,11 @@ target page or an `on_empty` page, before `PackageAdmitted` (`contained_task_lin
 `reason=terminal_page`); a bundle whose packs declare one declares `package` [15, 15], which the
 `package` edge of an earlier installer (its range ending below 15) refuses before it places
 anything ([component-interfaces.md](component-interfaces.md), the `package` row 15). That 15 too is
-written by the resource repository's packaging, but not by `standard-pack build`, whose revision
-table has no row for 15 yet, and checked by no component.
+written by the resource repository's packaging and, since Workflow #464 P2b, computed by
+`standard-pack build` for a bundle it builds (its revision table counts an ending page of a
+`linear_steps` package as 15, [resource-verify.md](resource-verify.md), "The `package` revision"),
+and checked by nothing when a bundle is placed or a package is admitted, so an earlier installer
+places such a bundle that declares less, and an earlier Runtime refuses its package at every run.
 
 ## Tools
 

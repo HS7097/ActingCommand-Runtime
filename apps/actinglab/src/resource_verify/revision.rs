@@ -31,6 +31,11 @@
 //!   Revisions 13 and 14 (Workflow #463 K1 and V1, after the train 0.12.61a): an operation's
 //!   `select` in a `linear_steps` pack, 13, read where the kernel's admission reads it; a pack's
 //!   `control.json` `variables`, 14, read as `place` reads it.
+//! - **A `linear_steps` package's ending page**, 15 (Workflow #463 K2, after the train 0.12.61c;
+//!   Workflow #464 P2b): a terminal page of the `scheduling_outcome` of the pack's entry task that
+//!   is none of its target pages and none of its `on_empty` pages, read from the pack's
+//!   `control.json` and its entry task file together, as the kernel's `declares_linear_endings`
+//!   reads the admitted package ([`declares_linear_ending`]).
 //!
 //! Any other file needs nothing here, and so does a JSON file that does not read (the format step
 //! refuses it). A feature that adds a `package` revision adds its row here, in its own slice.
@@ -79,6 +84,21 @@ const ANCHOR_MASK_MEMBERS: [&str; 3] = ["mask", "maskRange", "scales"];
 /// `page/<id>` (pack-containment's `anchor_target_id`), a `verify_templates[]` entry `<id>`.
 const TEMPLATE_LISTS: [(&str, &str); 2] = [("anchors", "page/"), ("verify_templates", "")];
 const BYTE_ORDER_MARK: &[u8] = b"\xEF\xBB\xBF";
+/// Revision 15: a `linear_steps` package's ending page (Workflow #463 K2).
+const LINEAR_ENDINGS_REVISION: u64 = 15;
+/// The members revision 15 reads: of `control.json`, the game and the entry task; of the entry
+/// task file, its target page, its operations with the `from` page and the `select` with its
+/// `on_empty`, and its scheduling outcome's mappings with their terminal pages.
+const GAME: &str = "game";
+const ENTRY_TASK_ID: &str = "entry_task_id";
+const TARGET_PAGE: &str = "target_page";
+const OPERATIONS: &str = "operations";
+const FROM: &str = "from";
+const SELECT: &str = "select";
+const ON_EMPTY: &str = "on_empty";
+const SCHEDULING_OUTCOME: &str = "scheduling_outcome";
+const MAPPINGS: &str = "mappings";
+const TERMINAL_PAGES: &str = "terminal_pages";
 
 /// The file a row's member stands in.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -422,14 +442,20 @@ impl Row {
 }
 
 /// The `package` revision the zip's `entries` (its `interfaces.json` aside) need: the highest any
-/// entry needs, [`PACKAGE_REVISION`] when none needs a later one.
+/// entry needs, [`LINEAR_ENDINGS_REVISION`] when a pack declares an ending page
+/// ([`declares_linear_ending`]), [`PACKAGE_REVISION`] when nothing needs a later one.
 pub(crate) fn content_revision(entries: &BTreeMap<String, Vec<u8>>) -> u64 {
     let linear = linear_packs(entries);
     let masked = masked_templates(entries);
-    entries
+    let revision = entries
         .iter()
         .map(|(name, bytes)| entry_revision(name, bytes, &linear, &masked))
-        .fold(PACKAGE_REVISION, u64::max)
+        .fold(PACKAGE_REVISION, u64::max);
+    if declares_linear_ending(entries) {
+        revision.max(LINEAR_ENDINGS_REVISION)
+    } else {
+        revision
+    }
 }
 
 /// Fix round 2: for each pack of `entries`, the ids of its template targets that declare a mask
@@ -605,4 +631,110 @@ fn layout_anchor_masked(task: &Value, masked: &BTreeSet<String>) -> bool {
         .filter(|layout| layout.get("kind").and_then(Value::as_str) == Some("repeated_anchor"))
         .filter_map(|layout| layout.get("anchor").and_then(Value::as_str))
         .any(|anchor| masked.contains(anchor))
+}
+
+/// Revision 15 (Workflow #463 K2, register §1.380; contracts/linear-steps.md, "Endings"): whether
+/// a pack of `entries` declares an ending page, a terminal page of its entry task's
+/// `scheduling_outcome` that names neither a target page of that task nor the page of one of its
+/// select steps that declares `on_empty`. This is the kernel's own test of an admitted package,
+/// `PreparedContainedTask::declares_linear_endings` in
+/// `crates/execution-kernel/src/contained_task/linear.rs`, whose reader is private to the kernel
+/// crate, which actinglab does not depend on; so it reads the same members, member by member:
+///
+/// - `self.control.execution_mode`: the pack's `control.json` names the execution mode
+///   `linear_steps` (as [`linear_packs`] reads it);
+/// - `self.program`, the package's program: the task file of the control's `entry_task_id`,
+///   `resources/operations/<entry_task_id>/task.json`, the one task pack-containment's source
+///   assembly takes from the pack (`source_pack::compile`, `canonical_task`), never another task
+///   file of the pack ([`pack_declares_ending`]);
+/// - `self.scheduling_outcome`, `mappings()`, `terminal_pages()`: every page of every mapping's
+///   `terminal_pages`; an absent or `null` `scheduling_outcome` declares none;
+/// - `self.terminal_page_anchors()`: the task's `target_page`, one page or a set of pages;
+/// - `operation.on_empty_key().is_some()`, `operation.from`: the `from` of every element of the
+///   task's `operations` whose `select` holds an `on_empty` (an absent member or `null` declares
+///   none, as for the kernel's `Option`s);
+/// - `crate::canonical_page_anchor(game, page)`, `game` the control's `game`: each page compared
+///   with the prefix `<game>/` taken off where it is written ([`page_anchor`]).
+///
+/// A control without `game` or `entry_task_id`, and an entry task file that is absent or does not
+/// read, declare none: the kernel admits no such package.
+fn declares_linear_ending(entries: &BTreeMap<String, Vec<u8>>) -> bool {
+    entries.iter().any(|(name, bytes)| {
+        pack_entry(name).is_some_and(|(pack, within)| {
+            within == CONTROL_FILE && pack_declares_ending(entries, pack, bytes)
+        })
+    })
+}
+
+/// Revision 15: whether the pack `pack` of `entries`, whose `control.json` holds `control`, is a
+/// `linear_steps` pack whose entry task file declares an ending page ([`declares_linear_ending`]).
+fn pack_declares_ending(entries: &BTreeMap<String, Vec<u8>>, pack: &str, control: &[u8]) -> bool {
+    let Some(control) = read_json(control) else {
+        return false;
+    };
+    if control.get(EXECUTION_MODE).and_then(Value::as_str) != Some(LINEAR_STEPS) {
+        return false;
+    }
+    let (Some(game), Some(entry_task)) = (
+        control.get(GAME).and_then(Value::as_str),
+        control.get(ENTRY_TASK_ID).and_then(Value::as_str),
+    ) else {
+        return false;
+    };
+    let task_file = format!("{PACKS_PREFIX}{pack}/{OPERATIONS_PREFIX}{entry_task}/{TASK_FILE}");
+    entries
+        .get(&task_file)
+        .map(Vec::as_slice)
+        .and_then(read_json)
+        .is_some_and(|task| task_declares_ending(&task, game))
+}
+
+/// Revision 15: whether the task document `task` of a pack of the game `game` maps a terminal page
+/// that, compared by [`page_anchor`], is none of its target pages and none of its `on_empty` pages
+/// ([`declares_linear_ending`]).
+fn task_declares_ending(task: &Value, game: &str) -> bool {
+    let Some(mappings) = task
+        .get(SCHEDULING_OUTCOME)
+        .and_then(|outcome| outcome.get(MAPPINGS))
+        .and_then(Value::as_array)
+    else {
+        return false;
+    };
+    let mut usual = match task.get(TARGET_PAGE) {
+        Some(Value::String(page)) => vec![page_anchor(game, page)],
+        Some(Value::Array(pages)) => pages
+            .iter()
+            .filter_map(Value::as_str)
+            .map(|page| page_anchor(game, page))
+            .collect(),
+        _ => Vec::new(),
+    };
+    usual.extend(
+        task.get(OPERATIONS)
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter(|operation| {
+                operation
+                    .get(SELECT)
+                    .and_then(|select| select.get(ON_EMPTY))
+                    .is_some_and(|on_empty| !on_empty.is_null())
+            })
+            .filter_map(|operation| operation.get(FROM).and_then(Value::as_str))
+            .map(|page| page_anchor(game, page)),
+    );
+    mappings
+        .iter()
+        .filter_map(|mapping| mapping.get(TERMINAL_PAGES).and_then(Value::as_array))
+        .flatten()
+        .filter_map(Value::as_str)
+        .any(|page| !usual.contains(&page_anchor(game, page)))
+}
+
+/// Revision 15: `page` with the prefix `<game>/` taken off where it is written, as the kernel's
+/// `canonical_page_anchor` gives it.
+fn page_anchor<'a>(game: &str, page: &'a str) -> &'a str {
+    page.strip_prefix(game)
+        .and_then(|rest| rest.strip_prefix('/'))
+        .unwrap_or(page)
 }
