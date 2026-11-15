@@ -9,6 +9,214 @@ Cargo.lock hash, Rust toolchain, target, build profile, Actions run/attempt and
 file identities are recorded in the accompanying `BUILD-MANIFEST.json`; the zip
 and artifact names bind the complete source SHA.
 
+## v0.12.63
+
+本版是 v0.12.62 之后的 3 次合并、9 张 PR：#1744（#434 LAB-6S4a）、#1750（#469 D4b）直接合并，其余七张由并车 #1756 带着合（S3-5 #1756 自己、S3-4 #1752、
+R4 + P4 #1736、U1b #1737、S3-3 #1751、S3-6 #1753、S3-7 #1755；车上除了各张的头和合并，只有一个改提示文字、手册折行和契约说法的小修提交，和一个改登记里索引总数的提交）。
+内容是：删掉五种旧请求、身份卡和带保持的启动（#434）；守卫、条件、认身份时识别服务失败，按识别服务失败算（#469 批准的四处改动里的第四处）；录出来的包的磨合期（#463）；
+制包第三阶段最前面的几片工具（#463、#464）。
+**生产上跑的是 v0.12.62（2026-11-15 起，第一次经 Lab 救急模块部署）**：一台实例在跑调度的例行任务，其余实例暂停着、模拟器关着。从 v0.12.62 装本版：**Lab 救急模块的
+`deploy` 和 `actingctl install` 两面都能装，不用任何标志，没有 `ledger_verify`，`defaults_diff` 两行（两个新键），没有新文件**。接口动了两个：`install-control` [0, 1] → [0, 0]、
+`actingd-config` [5, 32] → [5, 33]。结果码加 3 个、`retired` 60 个。**退回 v0.12.62 只在第一条带 `break_in` 的值记录写下之前开着**（见下面「升级与退回」）。
+
+- **在用的安装在部署时和第一周碰到的**（逐条核过代码）：
+  - **还在跑的旧 MCP 服务进程**：v0.12.62 的两个 MCP 服务器在写之前先发身份卡（`DeclareGovernanceIdentity`），本版删了这一种请求。部署把运行中的 `runtime\actingctl.exe`
+    （今天的 MCP 服务器 `actingctl mcp-serve`）和 `tools\actinglab-mcp.exe` 改名放到一边（`<文件>.old-<毫秒>`，`crates/lab-rescue/src/install/plan.rs` 33–37、960–973），
+    进程照旧跑旧映像：它对本版的每一次写都在身份卡那一步被断开、什么都没写，直到这个进程换掉；读不受影响。哪些写、怎么看、怎么办见下面「LAB-6S4a」。
+  - **磨合期从头算**：在用的安装里没有哪一对（目录任务、实例）有磨合期记录，所以每一对调度的线性包（`linear_steps`，录出来的包）从它在本版上第一次算数的运行起进入磨合期；
+    至少 20 次、至少 7 天之内，碰到没录过的画面仍是专用码 `contained_task_linear_unrecorded_screen` 加立刻暂停，和 v0.12.62 一样。页图包不受影响。
+  - 别的都没变：第一次启动多写的只有程序事实 `config.parameters.scheduling` 里两个新键的两行（默认值，来源 default；`contracts/component-interfaces.md` 133）和
+    `config.selection` 里新的默认值哈希；启动日志不多一行（只在安装排空时才打印的 `actingd policy_monitor waiting install_transition` / `resumed` 跟着排空一起删了）。
+
+- **新的读法和工具**：
+  - **运行停在哪个结局**（S3-3，登记 §1.410）：运行状态的终结多 `outcome_key`，是这次运行完成时所在那一页的映射的名字（目标页、补的结局页、挑选的 `on_empty` 页等），
+    宿主早就写在终结记录上，读的时候取出来（`crates/actingcommand-contract/src/run_summary.rs` 106、584）；失败、取消、包没声明映射的没有这个成员。`actinglab run show`、
+    `status`、两边的 `ac_get_run`、总览里每台实例的 `run` 都带；运行列表的行不带。
+  - **从跑挂的那一帧补一个可选步**（R4，§1.388）：停下的录制用 `record mark --optional-after <k>`（加 `--frame`、标记和关掉它的点击）在第 k 步后面插一个可选步
+    （跑的时候冒出来、关掉以后原路照走的弹窗），`record stop` 照常自检并重新生成包；`--remove-inserted <n>` 撤掉，包回到原样。k 是录制里的序号，不是包里 `step_<nn>_click`
+    的编号：在 `record status` 里找 `artifact_step` 等于 nn 的那一行，取它的 `index`。拒绝是新码 `record_optional_after_invalid`（退出 3），带 `optional_after_problem` 九个词之一。
+  - **`record stop` 留下什么**（P4，§1.388）：不再覆盖上一次的输出，旧的留成 `<名字>.old-<毫秒>`，回答的 `lab.kept` 说留了什么；`--lab-dir` 落在一个安装根里
+    （某一级目录里有 `install\state.json`）时拒，`record_lab_dir_invalid` 带 `inside_installed_root`（`crates/lab/src/recording/container.rs` 126–159、239–277）；
+    回答多 `adoption_example`：收编那条命令和一份「按住」决定的骨架，理由留空，要自己填。
+  - **收编**（S3-4、S3-5，§1.411、§1.412）：`standard-pack adopt --held-reason <文字> [--held-reference <文字>]` 就是一份「按住」的决定文件，交给读决定文件的同一个函数，
+    写出的字节一样；和 `--decide` 同给、只给 `--held-reference` 都在读任何东西之前拒。收编的回答（`--dry-run` 下也是）带这个包的就绪那一行 `readiness`，算不出来时给
+    `readiness_not_judged`，收编本身不受影响。Lab 的 MCP 工具 `ac_standard_pack_adopt` 多 `held_reason`、`held_reference`。
+  - **就绪说出理由**（S3-6，§1.413）：`standard-pack ready` 里被按住的包那一行多 `held: {reason, reference?}`（排程文件里那两段文字原样），每个包那一行多 `warnings`
+    （检查里点名这个包的警告）；没有的就不出现（`crates/resource-tooling/src/standard_pack_ready.rs` 231–260）。
+  - **构建的回答**（S3-7，§1.414）：`standard-pack build` 的回答多 `readiness`（就绪函数对构建铺出来的安装根的回答）和 `next.place`（放置预看那一行的词：`place`、压缩包、
+    `--sums`、校验文件、`--plan`；只给预看，不给真放置那一行）；就绪算不出来时给 `readiness_refused` 和一条警告 `resource_build_readiness_refused`，退出码照旧 0
+    （`apps/actinglab/src/resource_verify/build.rs` 421–456）。
+  - **磨合期看得到**（U1b，§1.389）：`actingd suspended` 多一张 `break_ins` 表，每对一行：内容、`runs` / `runs_needed`、第一次结算的时间、`since_first_ms` / `ms_needed`、
+    `in_break_in`（`crates/runtime-host/src/suspension_report.rs` 1276–1341）。两个新配置键 `scheduling.suspension.break_in_runs`（默认 20）和
+    `scheduling.suspension.break_in_ms`（默认 604800000，7 天），运行中可以改，从下一次运行起算。
+
+- **变了做法的三处**：
+  - **LAB-6S4a（#1744，登记 §1.287「Slice LAB-6S4a」）**：请求种类 `DeclareGovernanceIdentity`、`RecordApprovalDecision`、`InstallTransition`、`UpgradeState`、
+    `UpgradeStateStatus` 删了，连同结果、校验、宿主的处理、客户端的方法和操作表 `not_exposed` 里的四行；发它们的地方也删了：`actingctl install-transition`（现在是
+    `actingctl_usage_invalid`，不连接）、actingd 的 `--install-held` 启动（`usage_invalid`）、两个 MCP 服务器在写之前记的身份卡和 `client.action`（写的发起者改由绑定时的
+    `Lab-MCP` 说明；Lab 调用截图以后补记的客户端动作留着，前面不再发身份卡）、`evidence read` 的身份卡。
+    - **收到已删的请求**：解不出来，Runtime 断开这条连接、不发回执，记一条 `runtime_protocol_invalid`，自己照常往下跑（`crates/runtime-host/src/host/requests.rs` 1413–1423）。
+    - **v0.12.62 里谁发、什么时候**（核的是 v0.12.62 的源码）：`actingctl mcp-serve` 在 Cli 来源的每次写之前（`ac_run_pack`、`ac_stop_run`、`ac_pause`、`ac_resume`、
+      `ac_emulator`、`ac_ladder_drill`、`ac_targets_set`、`ac_perf_preset`、`ac_config_set`；`apps/actingctl/src/mcp/operator.rs` 53–92）：对本版这次写失败（连接在回执之前
+      断开，客户端报 `runtime_receipt_header_failed`），什么都没写；Lab 工具调用以后补记客户端动作也先发身份卡，失败只是一条 `client_action_not_recorded` 警告，Lab 那一下
+      已经做了（`apps/actingctl/src/mcp/lab.rs` 1236–1245）；`ac_remedy_set`（Agent 来源）不发。`actinglab-mcp.exe` 在它记录的每次写之前都发
+      （`apps/actinglab-mcp/src/runtime.rs` 263–296），同样失败、什么都没写。`ac_evidence_confirm_read` 在确认之前发（`crates/lab-ops/src/evidence_read.rs` 379）。
+      每一次这样的失败，账本多一条 `runtime_protocol_invalid`。`RecordApprovalDecision` 和升级态的两种，v0.12.62 的程序里没有谁发。v0.12.62 的救急模块、看门狗一处都
+      不发这五种（`crates/lab-rescue`、`crates/watchdog` 里没有），救急模块起新版只带 `--config`。
+    - **部署以后要做的**：`actinglab op status`（不带操作号：安装状态）的 `mcp_servers_on_old_images` 列出还跑在改名放到一边的旧映像上的 MCP 服务进程
+      （`crates/lab-rescue/src/install/status.rs` 304–319）；列出的每一个，让它的客户端重开会话。MCP 入口的子进程由入口在两次调用之间自己换
+      （`contracts/install-cli.md` 614–618），换过就不在这张表上。
+    - **留着的**：每种记录的形状（旧账本里的身份卡记录和审批记录照旧读得出）；`governance.allowed_clients` 照旧读、照旧报，什么都不决定，所以 `actingd-config` 不为它升；
+      旧账本里两条安装切换的事实（`host.install_transition` 和它的 `.pauses`）在启动时作废，和 v0.12.62 的启动一样。
+  - **D4b（#1750，§1.401）**：给一步的守卫、一个操作的 `when`、一个期望身份求值时，如果是识别服务自己失败或答得不对，运行以 `contained_task_vision_provider_failed`
+    （error，阶梯类 `environment_fault`）结束，带那一处原来的说明、不带值，和认页时（#387 D1c-G 起）一样；真正的求值错误照旧是 `contained_task_guard_evaluation_failed`（守卫）
+    或 `contained_task_recognition_failed`（`when`、身份），说明逐字节不变（一处读法：`crates/execution-kernel/src/contained_task.rs` 12743–12776）。
+    - **跟着变的四处**（都是认页那条路今天的做法）：没有冷却窗（默认配置任务阶段的 `pack_logic` 只点名 `pack_logic_mismatch`，`distribution/windows/actingd.defaults.json`
+      17–21，所以不立刻起阶梯，也就不开窗）；守卫的这种失败不再钉 `GuardRejection` 帧；`when`、身份的这种失败以后不做任务几何复查；回主页入口层和前置层的这种失败走
+      「不是识别失败」那一支，层的错误只带码。由 `stability_burst` 计数（同一实例 600000 毫秒内第三次登记一次突发，从回主页那一级起阶梯；同一文件 23–28）。
+      请求恢复的重试轮照旧以 `contained_task_requires_scheduler` 结束，它的 `failure_code` 现在是识别服务的码。
+    - **什么能让一直这样失败的包停下**：这种失败不累计，计数永远是 1，所以 `on_failure` 只在 `retry_limit` 为 0 或 `escalation_threshold` 为 1 时暂停它；别的情形每次
+      退避以后重跑，拦住连续失败的是突发计数。认页那条路本来就是这样。
+  - **U1b（#1737，§1.389）：磨合期**。调度派的线性包，只在这一对（目录任务、实例）对它的包内容（主包内容哈希的前 12 位）的磨合期内，碰到没录过的画面才用专用码
+    `contained_task_linear_unrecorded_screen` 结束、立刻暂停这一对（v0.12.60 起就是这样）；出了磨合期，同样的情形以 `page_confirmation_failed` 结束，带同一个词
+    `confirmation_problem` `unrecorded_screen` 和 `artifact_id`（那次运行钉住的失败帧），照普通失败走 `on_failure`、重试和恢复阶梯（`pack_logic`），不立刻暂停
+    （`crates/execution-kernel/src/contained_task/linear.rs` 728–768）。直跑和 Lab 跑永远用专用码。
+    - **算一次的**：开始跑了包（记下了 `PackageAdmitted`）、并以成功或不因条件结束的失败结算的运行；被停下的、因条件结束的、重放的、启动时补结算的、切换应用失败的、
+      入口门拒掉的、前置包那一层失败的，都不算（`crates/runtime-host/src/host/policy_outcome.rs` 2222–2237）。满 `break_in_runs` 次**并且**从第一次起满 `break_in_ms`
+      才出磨合期；换了内容（比如补了一个结局）就从头算（`crates/runtime-host/src/policy_control.rs` 337–351、558–580）。
+    - **没有记录的一对**（在用安装里的每一对）：从它在本版上第一次算数的运行起进入磨合期，至少 20 次、7 天之内对它来说什么都没变。
+    - **读不到、量不出的时候**：磨合期自己的记账绝不让一次运行失败：记一条警告 `policy_break_in_unread`（警告级 `runtime.failed`，带运行的链接和
+      `break_in_problem`：包的内容没量出来是 `content_unmeasured`，读不到这一对的记录、两个键或时钟是 `record_unread`；背后的失败作 `caused_by`），这次运行照跑、
+      按磨合期外处理，同时交给 actingd 的日志（`crates/runtime-host/src/host/failure_settlement.rs` 359–375、446–537）。宿主自己运行状态的锁坏了、这条警告写不进账本，
+      照旧往上抛。
+    - **落盘的**：这一对的值记录 `policy.control_state_recorded` 多一个可选成员 `break_in`（`{content_hash, runs, first_settled_at_unix_ms}`，
+      `crates/actingcommand-contract/src/event/payload/observer.rs` 473–519），由算数的那次结算写下；装载的启动读它，播种的启动从各对最新的值记录取回。`ledger` 修订没升。
+      **v0.12.62 读不了这个成员**，见「升级与退回」。
+
+- **部署和退路**：照 v0.12.62 那次的做法，用在线 v0.12.62 留下的那份 `actinglab` 跑 `release stage`、`deploy <提交> --plan` 预看、`deploy <提交> --detach` 实做，
+  再用 `op status` 看结果；Lab 这一面总带 `accept_ledger_one_way`（`crates/lab-rescue/src/install/update.rs` 93），本版 `ledger` 修订不动，这一项不起作用。
+  部署的组合步骤（停旧版、按住调度、带 `--config` 起新版、启动后检查、交回调度）发的请求种类本版都留着，一步不变。
+  - **退路**：组合步骤里的自动退回发生在交回调度之前，那时本版还没跑过调度的运行，退得回去。部署做完以后，回到 v0.12.62 用留着的 v0.12.62 那份 `actingctl install`
+    （`install undo`、`install resume`、`install release-hold`）或救急模块的退回：**只在本版还没写下第一条带 `break_in` 的值记录时放行**；那以后回退门拒，手工放回 v0.12.62
+    它也起不来（见「升级与退回」）。要看写没写过：`actingd suspended` 的 `break_ins` 为空，就是还没有。
+
+- **已知的限度**（各片验收记录列的，逐条核过代码）：
+  - **内容哈希走缓存**：同一个包位置在 `scheduling.suspension.lift_check_min_interval_ms`（默认 60000）里最多量一次（`failure_settlement.rs` 359–375 经解除暂停检查的缓存）；
+    包在这段时间里被换掉，这段时间的运行按旧内容判、记在旧内容上，新内容的磨合期从换过以后第一次量到它起算。
+  - **构建和收编回答里的就绪不读安装**：两处都以 `installation: None` 调用就绪函数（`adopt.rs` `adopted_readiness`；`build.rs` 421–424），五项安装项都是 `not_judged`
+    （`installation_not_read`），一个包最多答到 `ready_to_place`。
+  - **`standard-pack build` 的 `build.json` 一个字没动**：格式仍是 `actingcommand.standard-pack-build.v1`、十一个成员；就绪只在命令的回答里。
+  - **今天的 MCP 服务器的工具说明没跟上新成员**：`ac_get_run` 的说明写了 `failure_values`、没写 `outcome_key`（`apps/actingctl/src/mcp/tools.rs` 464），成员照样在回答里。
+
+配置：按代码、`distribution/windows/component-interfaces.json` 和 `contracts/component-interfaces.md` 核过，动了两个：
+
+- `install-control` [0, 1] → [0, 0]（`component-interfaces.json` 6；`contracts/component-interfaces.md` 136–137）：修订 1（安装切换）随 `InstallTransition` 删了；
+  说 [0, 1] 的安装工具和 [0, 0] 相交，取修订 0（冷的做法：`actingctl request-shutdown --wait`、不带 `--install-held` 的启动）。
+- `actingd-config` [5, 32] → [5, 33]（`component-interfaces.json` 4；`contracts/component-interfaces.md` 133）：修订 32 加上 `scheduling` 段 `suspension` 的两个成员。
+  没写这两个键的文件保持原来的修订，所以本版照收修订 5 到 32 的文件。两行键表 `since` 0.12.63、可设（`crates/runtime-config/src/scheduling.rs` 578–592、944–964）。
+- 别的都没动：`install-selection` [1, 1]、`ledger` [3, 8]、`runtime-client` [3, 9]、`package` [3, 15]、`runtime-outcomes` [1, 1]（`component-interfaces.json` 5、7–10）。
+  删这五种不动 `runtime-client`（`contracts/component-interfaces.md` 292 的计划表写明）。`ledger` 没升，但值记录多了一个 v0.12.62 拒收的成员（见「升级与退回」）。
+- 配置键：加两个，`scheduling.suspension.break_in_runs`（整数 `1..=4294967295`，默认 `20`）和 `scheduling.suspension.break_in_ms`（毫秒，默认 `604800000`），运行中可设，
+  每次调度的运行执行之前读，没有按实例的写法；没有去掉的键。`actingd.defaults.json` 只多这两个键（351–354：`suspension` 里 `lift_check_min_interval_ms` 后面），
+  sha256 `9ee26e8fc203fef21234b072d5c0f02d0c33b6fbef1b6c3f1613d5b55a99666d` → `e14b0ced7040a6d05046edddd9b0c8ee95a53de4b65d69fcc7d9dae17a433343`；两个配置模板和
+  `apps/actingd/src/config/manifest.rs` 没改，没有新的子系统名。`governance.allowed_clients` 照旧收，不再决定任何事。
+- 结果码：3960 → 3963 个码（在用 3932 → 3875，`retired` 28 → 88），1764 个位置、31 个分片不变；键 676 → 678，词表 250 → 252，词 1935 → 1946；审阅定稿的仍是 172 个
+  （在用的 170 → 154：定稿的有 16 个随这次 `retired`）；在用码按类别 success 132 → 125、info 213 → 212、warning 156 → 154、error 3414 → 3367、fatal 17。
+  - **新码 3 个**：`policy_break_in_unread`（runtime-host，warning，阶梯类 `none`，必带 `break_in_problem`、`task_id`、`instance_id`；只记录、不拒、不结束进程）；
+    `record_optional_after_invalid`（lab，error，`none`，必带 `optional_after_problem`；拒，退出 3，什么都不写）；`resource_build_readiness_refused`（actinglab，warning，`none`，
+    必带 `path`；只警告，退出 0）。
+  - **`retired` 60 个**，都是 LAB-6S4a 的（contract 10、runtime-client 1、actingd 1、actingctl 4、actinglab-mcp 1、runtime-host 43），`retired_in` 0.12.63，发它们的代码都没了，
+    留在目录里，旧记录照样读得出；封闭的 Global 表少 4 个（146 → 142，`contracts/runtime-outcomes.md`）。
+  - **加的词表**：`optional_after_problem`（9 个词）、`break_in_problem`（2 个词：`content_unmeasured`、`record_unread`），各配一个同名的键。**已有码加的可选值**只有一个：
+    `page_confirmation_failed` 的 `artifact_id`。没有码改类别或阶梯类。
+  - 说明改了的在用码 9 个：D4b 的三个（`contained_task_vision_provider_failed`、`contained_task_guard_evaluation_failed`、`contained_task_recognition_failed`）、
+    U1b 的两个（`contained_task_linear_unrecorded_screen` 连它的 `handling`、`page_confirmation_failed`）、LAB-6S4a 以后没人再发的四个（`governance_client_not_allowed`、
+    `governance_identity_already_declared`、`governance_instance_unknown`、`recovery_ladder_drain_requested`）；`retired` 的 60 个说明都改了，其中 16 个连 `handling` 也改了。
+  - 本版的发布文件 `contracts/outcome-codes/released/0.12.63.json` 按合入全部 9 张 PR 以后的树生成：60 个码（就是这 60 个 `retired` 的签名）、0 个位置；索引照旧由脚本生成，
+    仍是 32 个文件，核过是最新的。
+- Lab 的操作表：187 行不变（13 行 `reserved`），`not_exposed` 20 → 16（删掉的四种）；七行改了：`record mark` 多 `optional_after`、`remove_inserted`，`standard-pack adopt`
+  多 `held_reason`、`held_reference`，`standard-pack ready`、`standard-pack build` 的 `output` 和说明，`status`、`run show` 的说明（`outcome_key`），`evidence read` 的
+  `requests` 去掉 `DeclareGovernanceIdentity`。所以 Lab 的 MCP 服务器工具数不变，`ac_record_mark` 和 `ac_standard_pack_adopt` 多了参数。命令清单
+  （`ratchet/actinglab_commands.json`，46 个顶层分派臂、105 条命令）没改；`actingctl` 少了 `install-transition` 这条命令。今天的 MCP 服务器仍是 46 个工具，只有 `ac_record_mark`
+  的说明写上了 `optional_after`、`remove_inserted`；README 两种语言的工具表标题改成 v0.12.63，`RuntimeOperation` 的个数改成 76（其中回答 `not_implemented` 的 6 种）。
+- 两个压缩包的文件表不变（`.github/workflows/windows-remote-build.yml` 660–680 没改）：没有新文件、没有去掉的文件；改了内容的是各个程序、`actingd.defaults.json`、`INSTALL.md`
+  （去掉了带保持的启动）和本文件。不稳定表照旧是 FLK-08 和 FLK-10，`ci/` 只多了 `ci/retired-gates.toml` 的条目。
+
+升级与退回（`crates/lab-rescue` 自 v0.12.61 一行没改，下面的行号对 v0.12.62 和本版都对；`actinglab deploy` 和 `actingctl install` 走的都是它）：
+
+- **v0.12.62 的安装工具装本版：两面都能装，不用任何标志。** 计划的边（`install/plan.rs`）：`ledger` 两边 [3, 8]，`previous_max_in_next` 过、`one_way` 不触发（298–310），
+  `ledger_verify` 为 false（924）；`runtime-outcomes` 过（311–323）；`install-control` 安装工具自己的 [0, 1] 和 Rp [0, 1]、R\* [0, 0] 都相交（324–340，`meet` 是有交集），
+  `runtime-client` 处处 [3, 9]；`package` 的 `bundle_max_in_next`（341–364）比安装登记里每个根的范围，登记里一律没有，每个游戏一条 `pack_declaration_unknown` 警告，不挡；
+  `installer_knows_keys`（368–385）过，配置文件没写这两个新键；`runtime_equals_tools`（765–772）过；`next_check_config`（911–923）是本版的 `check-config --install-root`
+  读在用的配置文件，修订 32 以内的文件照收。`defaults_diff`（583–607）恰好两行：两个新键，`live` 为空、`target` 是 20 和 604800000，来源 `default`。文件计划里没有 `new`。
+  救急模块发给旧版和新版的请求、启动后检查读的 `Status`、`RuntimeFactSnapshot`、`StartReport` 形状都没变。
+- **本版第一次启动多写的**：见上面「在用的安装碰到的」；从第一次算数的结算起，那一对的值记录带 `break_in`。别的记录、事实、键都和 v0.12.62 写的一样。
+- **配置文件和已装的包**：v0.12.62 的配置文件照收；准入没改（`crates/pack-containment`、`crates/policy`、`crates/ledger` 都没改），本版的 `standard-pack check` 对今天的根
+  答法和 v0.12.62 相同，不出新的警告码。
+- **退回 v0.12.62**：回退门（`install/update.rs` 390–447）只放行这次部署替换掉的 v0.12.62；第 1 部分的边都过（`install-control` [0, 1] 和 [0, 0]、[0, 1] 都相交）；
+  第 2 部分用 v0.12.62 自己的 `actingledger events` 读部署以来的每一页（`install/programs.rs` 733–773），读到它拒收的记录就拒，`rollback_gate_failed` 带
+  `ledger_sequence`（第一条拒收的序号，`update.rs` 154–176）；本版启动过以后的 `install undo` 也走这道门（`install/undo.rs` 189–202、410–443）。本版可能写下的东西，
+  v0.12.62 怎么办（行号是 v0.12.62 的）：
+  - **带 `break_in` 的值记录：拒收**。v0.12.62 的 `PolicyControlStateRecord` 拒未知成员（`crates/actingcommand-contract/src/event/payload/observer.rs` 470–472），
+    账本按类型解每条记录的载荷（`crates/ledger/src/fact.rs` 247），读到这一条就是 `corrupt_ledger_record`（`crates/ledger/src/global/sqlite.rs` 4141–4147、5574–5580）。
+    所以回退门第 2 部分拒；就算手工把 v0.12.62 放回去，它的启动装载决策记忆时读到这一条，以账本失败结束（`crates/runtime-host/src/policy_host.rs` 2172–2203、
+    `tagged_state.rs` 58–78）。**这一条从一对调度的线性包（主包的内容量到了）第一次开始跑包、并以成功或不因条件结束的失败结算时写下，以后这一对每条值记录都带它。
+    从那一刻起退回 v0.12.62 是单程的。**页图包、被按住的包、停下的或因条件结束的运行都不写它；`actingd suspended` 的 `break_ins` 为空，就是还没写过。
+  - 带 `policy_break_in_unread` 和 `break_in_problem` 的 `runtime.failed` 警告：照收。码是不核目录的字符串（`crates/actingcommand-contract/src/outcome.rs` 738–742），
+    `values` 是不带类型的映射（1709–1725），只留码模式丢掉它不认识的键（1786–1795）；这几处自 v0.12.62 没改。
+  - `page_confirmation_failed` 带 `artifact_id` 的结局：照收，`artifact_id` 是 v0.12.62 认识的键（`outcome/keys.rs` 112）。
+  - 插过可选步的录制：v0.12.62 的 Lab 读不了这份 `recording.json`（`RecordingStep` 拒未知成员 `inserted_after`，`crates/lab/src/recording/model.rs` 229–231），答
+    `lab_recording_unreadable`（`recording/store.rs` 243–244）；从它生成的包照常装、照常跑（任务的 `provenance` 只要求是对象，`crates/pack-containment/src/source/declarations.rs`
+    4856–4858，自 v0.12.62 没改）。`<名字>.old-<毫秒>` 留下的副本是没人读的普通文件。
+  - 标准包工具写下的：`--held-reason` 写的排程文件条目和「按住」决定文件写的逐字节相同，v0.12.62 的收编和编排照读；就绪、构建的回答不落盘，`build.json` 没变；没有新的日志。
+  - 运行中改过两个新键的设定：v0.12.62 启动时丢掉，记 `config_override_dropped`（`crates/runtime-config/src/effective.rs` 1299–1304）。
+  - 删掉的五种请求不落盘，退回以后 v0.12.62 的程序又能发；`outcome_key` 和就绪都是读的时候算的，不落盘。
+
+配对：
+
+- **控制台 UI**（最新发版 UI v0.12.20，就是 UI 提交 `40c6d4be`，钉 Runtime v0.12.61 `5c629e3b`；UI main `06d8b548` 钉 v0.12.62 `44cbab53`：两处都在 `Cargo.toml` 41–46）：
+  声明的范围两处相同（`crates/acui-setup/component-interfaces.json` 3–11，这个 crate 已不在工作区里，只有构建读这份声明）：`actingd-config` [5, 32]、`install-control` [0, 1]、
+  `ledger` [3, 8]、`runtime-client` [3, 9]、`runtime-outcomes` [1, 1]。
+  - **安装向导**（`crates/acui-wizard`）和 Runtime 只核四条边：`runtime-client`、`actingd-config` 要有交集，`ledger`、`runtime-outcomes` 要 Runtime 的最高修订在它的范围里
+    （`crates/acui-wizard/src/manifest.rs` 200–213、239–286，两处相同）；[5, 32] 和 [5, 33] 有交集，`install-control` 不是这两方之间的边，所以什么都不拒。它停 Runtime 用
+    `actingctl request-shutdown --wait 60`，起用 Lab 的 `up`，核配置用 `actingd check-config --install-root`（`crates/acui-wizard/src/runtime.rs` 14–25、263–270），
+    控制台自己起 actingd 只带 `--config`（`crates/acui-app/src/launcher.rs` 859–873）：本版都留着。删掉的那几种请求只在已不编译的 `crates/acui-setup` 里用过。
+  - **控制台**：设置页的哪些键显示、在哪一组，取钉住的 Runtime 库的档位（`crates/acui-app/src/workbench/settings.rs` 6–10），两个新键在那里是 `hidden`
+    （Runtime `crates/runtime-config/src/ui_tier.rs` 102–105；本版也没给它们档位），不显示。账本页离线读用钉住的 v0.12.62 账本库（`crates/acui-source/src/lib.rs` 252–265），
+    读到带 `break_in` 的值记录的那一页会拒，和上面 v0.12.62 自己的读者一样；在线读拿的是 Runtime 给 UI 的公开投影（Runtime `crates/ledger/src/global/projection.rs`
+    452–455），值记录的内容不在里面，不受影响。
+  - **下一次钉**：`Cargo.toml` 41–46 的六个 `rev`（和锁文件）换成本版的提交，离线读就认 `break_in`；范围不用改，`actingd-config` 要等控制台编辑这两个键时才升到 33，
+    `install-control` 可以跟着改成 [0, 0]（控制台已经没有用修订 1 的地方）。
+- **部署工具包**（这次走 Lab 的行）：两个构建清单的 `interfaces` 都照 `component-interfaces.json` 写（`.github/workflows/windows-remote-build.yml` 709–721、775、838–845），
+  `speaks` 是 `actingd-config` [5, 33]、`install-selection` [1, 1]、`install-control` [0, 0]、`ledger` [3, 8]、`runtime-client` [3, 9]、`package` [3, 15]、
+  `runtime-outcomes` [1, 1]；默认值文件的哈希换成上面那一个；`git diff --stat v0.12.62 <提交> -- apps/actingd/src/config/manifest.rs distribution/windows/actingd.defaults.json`
+  只打印 `actingd.defaults.json | 4 +++-`（3 行加、1 行减）；不过的边没有，警告照旧是每个游戏一条 `package` 的 `bundle_max_in_next`（`pack_declaration_unknown`）；
+  没有新文件、没有去掉的文件；运行中的 `actingctl.exe`（MCP 服务）和 `actinglab-mcp.exe` 改名放到一边，做计划的那个 `actinglab` 也改名放到一边，别的跑着的程序文件挡住；
+  本版的 `standard-pack check` 不出新的警告码；启动日志不多一行（`policy_break_in_unread` 出现时作为警告进 actingd 的日志，不在启动时）。
+- **热放置工具包**：重钉要换的比上一次多：构建记录里的 `actingd_config` 从 5,32 改成 5,33，`defaults_sha256` 换成上面的新值，两个构建清单和 `actinglab`、`actingledger`
+  的哈希照例换成本版的，接受的 `validated_with` 加上本版的提交；`package` [3, 15] 和 `ledger` [3, 8] 留着。它不用删掉的那几种请求和命令。
+- **两个 MCP 服务器**：工具一个没增减；读运行的工具（`ac_get_run`、`ac_overview`，Lab 那边的 `ac_run_show`）多 `outcome_key`；`ac_record_mark` 多 `optional_after`、
+  `remove_inserted`，Lab 的 `ac_standard_pack_adopt` 多 `held_reason`、`held_reference`；写之前都不再发身份卡。
+
+运行上的变化：
+
+- 从 v0.12.62 部署，经 Lab 的 `release stage`、`deploy`、`op status`：不用标志，没有 `ledger_verify`，`defaults_diff` 两行，没有新文件。
+- 部署以后看 `op status` 的 `mcp_servers_on_old_images`，列出的 MCP 服务进程让它的客户端重开会话；不重开的，写一次失败一次、账本多一条 `runtime_protocol_invalid`。
+- 守卫、`when`、认身份时识别服务失败：不立刻起恢复阶梯，由突发计数拦。
+- 录出来的包：每一对头 20 次、7 天照旧碰到没录过的画面就停；过了以后按普通失败处理，`actingd suspended` 的 `break_ins` 看进度。
+- 退回 v0.12.62 只在还没写过带 `break_in` 的值记录时可行；写过以后只能往前。
+- 制包工具：`record mark --optional-after`、`standard-pack adopt --held-reason`、就绪说出按住的理由、构建直接给就绪和放置预看那一行。
+
+本版合并的 PR：
+
+- #1744 LAB-6S4a（登记 §1.287）：主机门行 `#434 LAB-6S4a`；`ci/retired-gates.toml` 加 39 条（31 个测试、8 个行键，各写明风险现在由什么盖着）；按现在的线上样子改了 MCP、`actingctl` 的几组测试。
+- #1750 D4b（§1.401）：内核和主机的门行 `#469 D4b`；没有改旧测试。
+- #1736 R4 + P4（§1.388）：门行 `#463 R4`；改了 `gate_336_pkgs5` 一条（`--lab-dir` 里同名的包现在留成 `.old-<毫秒>`）和 `serve_calls` 的 `mcp_lab_overflow_rule`
+  （截短时保留 `adoption_example`）。
+- #1737 U1b（§1.389）：门行 `#463 U1b`（11 条）；只在结构体多了成员的地方改了 `gate_422_ln3` 和 `failure_settlement` 的单元测试；架构钉 `actingd-config` [5, 33]。
+- #1751 S3-3（§1.410）、#1753 S3-6（§1.413）、#1755 S3-7（§1.414）：各自的门行；没有改旧测试。
+- #1752 S3-4（§1.411）和 #1756 S3-5（§1.412，同时是这一趟并车）：门行 `#463 S3-4`、`#463 S3-5`；只改了 `gate_464_p1` 的辅助函数 `request` 交出路径的方式，断言没变。
+
 ## v0.12.62
 
 本版是 v0.12.61 之后同一张单子（#469「状态码，A 档」）的 8 张 PR：V0 #1738、F1 #1739 直接合并，其余六张由并车 #1745 带着合（K2 #1745 自己、K1 #1743、H2 #1742、D4a #1746、
