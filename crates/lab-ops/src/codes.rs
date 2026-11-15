@@ -19,7 +19,8 @@ actingcommand_contract::outcome_codes! {
         ShutdownWaitTimeout => "shutdown_wait_timeout": error / none,
         ShutdownWaitJournalUnreadable => "shutdown_wait_journal_unreadable": error / none,
         ArgumentsInvalid => "arguments_invalid": error / none,
-        TierNotEnabled => "tier_not_enabled": error / none,
+        // `tier_not_enabled` is retired in 0.12.64 (Workflow #434 LAB-7): the first MCP server's
+        // tiers left with it.
         OutputBudgetExceeded => "output_budget_exceeded": error / none,
         JobCapacityExhausted => "job_capacity_exhausted": error / none,
         JobStartFailed => "job_start_failed": error / none,
@@ -163,14 +164,14 @@ actingcommand_contract::outcome_codes! {
         // `install_transition_aborted` are retired in 0.12.63 with `actingctl install-transition`.
         InstanceResetDone => "instance_reset_done": success / none,
         InstanceObserved => "instance_observed": success / none,
-        RuntimeStatusReported => "runtime_status_reported": success / none,
+        // `runtime_status_reported`, `monitor_status_reported` and `instance_status_reported` are
+        // retired in 0.12.64 (Workflow #434 LAB-7): actingctl's `status`, `monitor-status` and
+        // `emulator status` left with it (the Lab's `status` answers `runtime_overview_reported`).
         RuntimeConfigReported => "runtime_config_reported": success / none,
         ConfigSettingsChanged => "config_settings_changed": success / none,
         RuntimeFactsReported => "runtime_facts_reported": success / none,
-        MonitorStatusReported => "monitor_status_reported": success / none,
         MonitorPolicySet => "monitor_policy_set": success / none,
         MonitorPolicyCleared => "monitor_policy_cleared": success / none,
-        InstanceStatusReported => "instance_status_reported": success / none,
         InstanceEmulatorControlled => "instance_emulator_controlled": success / none,
         InstancesDiscovered => "instances_discovered": success / none,
         RuntimeSchedulingPaused => "runtime_scheduling_paused": success / none,
@@ -191,10 +192,9 @@ actingcommand_contract::outcome_codes! {
         RecoveryLadderDrillQueued => "recovery_ladder_drill_queued": success / none,
         // Workflow #432 AGT-1b: `agent-wake-test`, a test wake queued for the worker.
         AgentWakeTestQueued => "agent_wake_test_queued": success / none,
-        // Workflow #385 P-m: `perf-status`.
-        RuntimePerformanceReported => "runtime_performance_reported": success / none,
-        // Workflow #384 D2-S5: `fact-refresh`.
-        RuntimeFactRefreshReported => "runtime_fact_refresh_reported": success / none,
+        // `runtime_performance_reported` (Workflow #385 P-m: `perf-status`) and
+        // `runtime_fact_refresh_reported` (Workflow #384 D2-S5: `fact-refresh`) are retired in
+        // 0.12.64 (Workflow #434 LAB-7): the two actingctl commands left with it.
         // Workflow #386 SR-6b, MCP-19 (registered by MCP-19a, emitted from MCP-19b on):
         // `schedule`.
         RuntimeScheduleReported => "runtime_schedule_reported": success / none,
@@ -218,8 +218,8 @@ actingcommand_contract::outcome_codes! {
         McpServerStartFailed => "mcp_server_start_failed": error / none,
         McpInputFailed => "mcp_input_failed": error / none,
         McpFileTooLarge => "mcp_file_too_large": error / none,
-        McpConfigProgramUnresolved => "mcp_config_program_unresolved": error / none,
-        McpConfigProgramUnsupported => "mcp_config_program_unsupported": error / none,
+        // `mcp_config_program_unresolved` and `mcp_config_program_unsupported` are retired in
+        // 0.12.64 (Workflow #434 LAB-7): actingctl's `mcp-config` left with it.
         // Workflow #434 LAB-6S4a: `mcp_identity_card_refused` is retired in 0.12.63 with the
         // identity card MCP declared before a write.
         WatchdogStartDue => "watchdog_start_due": info / none,

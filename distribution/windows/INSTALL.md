@@ -45,10 +45,11 @@ Ambiguous or unsuccessful runs, missing/extra files and failed verification stop
 the download. Keep the manifest and original source/run identity with the files.
 
 The Runtime manifest declares `runtime_payload_layout: "distribution-v1"`.
-The artifact root contains exactly these eight files:
+The artifact root contains exactly these seven files (Workflow #434 LAB-7, from
+v0.12.64: `actingctl.exe` is no file of it; the Tools artifact's `actinglab.exe`
+does its work):
 
 - `actingcommand-actingd.exe`
-- `actingctl.exe`
 - `actingd.config.example.json`
 - `actingd.config.first.json` (Workflow #453 S4, from v0.12.60: the first
   configuration's template, which the Lab's rescue row `new` fills)
@@ -68,11 +69,13 @@ Tools use their separate artifact (`-ArtifactKind Tools`,
 `actingcommand-tools-<sha>`). Its manifest declares
 `tools_payload_layout: "platform-tools-v3"`: the root holds `actinglab.exe`,
 `actingledger.exe`, `actingcommand-vision-provider-check.exe`, the watchdog
-launcher `actingwatch.exe` (see "Runtime watchdog") and `BUILD-MANIFEST.json`,
-and the one subdirectory
+launcher `actingwatch.exe` (see "Runtime watchdog"), the Lab's MCP server
+`actinglab-mcp.exe`, the MCP entry `actingcommand-mcp-entry-g2.exe` and
+`BUILD-MANIFEST.json`, and the one subdirectory
 `platform-tools` holds the official Android platform-tools 37.0.1 files `adb.exe`,
 `AdbWinApi.dll`, `AdbWinUsbApi.dll`, `NOTICE.txt` and `source.properties`. The
-manifest binds all nine payload files (paths use `/`). The OCR engine is linked
+manifest binds all eleven payload files (paths use `/`); the first MCP entry
+`actingcommand-mcp-entry.exe` is no file of it from v0.12.64 (Workflow #434 LAB-7). The OCR engine is linked
 into `actingcommand-actingd.exe`, so no vision provider DLL ships (Workflow #360).
 The device-test probe `actingcommand-device-test.exe` was retired in Runtime
 v0.11.6; `platform-tools-v3` Tools artifacts built before that release also hold
@@ -136,11 +139,10 @@ the handle or terminating its process releases the OS occupancy.
 
 All six Runtime/Tools binary entrypoints take process-lifetime read occupancy,
 including direct slot entry. The watchdog launcher `actingwatch.exe` is the one
-exception: it takes no process-lifetime occupancy. Since Workflow #434 LAB-4 it no
-longer runs the fixed entry `<root>\runtime\actingctl.exe`: it runs the watchdog's
-tick itself, reads the selection `install\active.json` and the configuration it
-names itself, and on an A/B root holds the selected slot's shared occupancy for the
-tick only, as actingctl's tick did. An `InstalledProcess` clone retains shared occupancy
+exception: it takes no process-lifetime occupancy. It runs the watchdog's tick
+itself (Workflow #434 LAB-4), reads the selection `install\active.json` and the
+configuration it names itself, and on an A/B root holds the selected slot's shared
+occupancy for the tick only. An `InstalledProcess` clone retains shared occupancy
 with its immutable inputs. MCP children receive the same snapshot and acquire
 their own occupancy for their full process lifetimes, including after MCP exits.
 UI and stable forwarding consumers use this same contract. acsetup must also
@@ -168,16 +170,16 @@ declares `install-control` [0, 0], so an installer that speaks [0, 1] takes revi
 0 with it. The Host installation transition (`InstallTransition`, its actions
 `begin_drain`, `query`, `abort`, `commit_shutdown` and `release`, and the client's
 `RuntimeClient::install_transition`), `actingctl install-transition` and actingd's
-held start `--install-held` are gone: `actingctl install-transition` is refused as a
-word no subcommand is (`actingctl_usage_invalid`, exit 1, before any connection), a
-start that names `--install-held` is refused `usage_invalid` (exit 1), and a request
-of the deleted kind does not decode (the Runtime drops the connection without a
-receipt and records `runtime_protocol_invalid` once).
+held start `--install-held` are gone: a start that names `--install-held` is refused
+`usage_invalid` (exit 1), and a request of the deleted kind does not decode (the
+Runtime drops the connection without a receipt and records `runtime_protocol_invalid`
+once). Since Workflow #434 LAB-7 no program of this package has a command for it:
+`actingctl` is deleted.
 
 An installer stops a running Runtime on the ordinary Runtime connection: it pauses
 scheduling (`PauseScheduling` of each instance), sends `RequestShutdown` for the
-exact owner, waits for the owner's close and process exit (`actingctl
-request-shutdown --wait <seconds>`, or `actingctl install`'s own wait), starts the
+exact owner, waits for the owner's close and process exit (the Lab's `shutdown
+--wait <duration>`, or the rescue rows' own wait in `down` and `deploy`), starts the
 selected daemon plainly with `actingcommand-actingd --config <selected-config>`, and
 after its readiness resumes the pauses it made. A start restores the persisted
 scheduling pauses (`host.scheduling_pause`); a ledger written by 0.12.62 or earlier
@@ -243,11 +245,10 @@ Fill the copy according to `apps/actingd/src/config.rs` at the manifest commit:
   without running discovery; see `contracts/provider-startup.md`. A configured
   instance that is stopped when the daemon starts is bound pending (no port,
   `status` shows `adb_port: null`, device requests are denied with
-  `instance_not_running`) and is started with
-  `.\actingctl.exe emulator start --state-root <private-state-root> --instance <alias>`;
-  declare no `port` for such an instance. `actingctl` reports that denial as
-  `host code instance_not_running during require_bound_adb_endpoint`, from
-  optional receipt fields an `actingctl` older than this daemon cannot decode.
+  `instance_not_running`) and is started with the Lab's
+  `<install root>\tools\actinglab.exe emu start <alias>`; declare no `port` for
+  such an instance. The Lab reports that denial as
+  `host code instance_not_running during require_bound_adb_endpoint`.
 
 The parser rejects unknown fields and configuration files larger than 1 MiB.
 The blank state root and salt must be filled before startup. Packages with OCR
@@ -389,23 +390,28 @@ a developer line `<INFO|WARN|ERROR|FATAL> actingd: <code> <text>` and the line
 `OUTCOME actingd: <envelope>` (Workflow #378 A6a). Its normal startup line is
 `INFO actingd: runtime_ready pid=<pid> host=<host> port=<port>`. With `"instances": []`
 the daemon starts control-plane-only: it records `runtime.started` and no
-instance binding, `actingctl status` reports no instances, and instances are
+instance binding, the Lab's `status` reports no instances, and instances are
 added by editing the configuration and restarting the daemon. From a second
-terminal, use the same private state root for the existing control commands:
+terminal, read the status and ask for the shutdown with the Tools artifact's
+`actinglab.exe` (Workflow #434 LAB-7: its rows `status` and `shutdown`, where
+`actingctl status` and `request-shutdown` were). Run from an install root's
+`tools\` it finds the state root through the root's configuration; elsewhere it
+takes the same private state root from `ACTINGCOMMAND_RUNTIME_STATE_ROOT`:
 
 ```powershell
-.\actingctl.exe status --state-root <private-state-root>
-.\actingctl.exe request-shutdown --state-root <private-state-root>
+$env:ACTINGCOMMAND_RUNTIME_STATE_ROOT = '<private-state-root>'
+.\actinglab.exe status
+.\actinglab.exe shutdown --wait 60s
 ```
 
 These are manual commands; the artifact registers no service or startup task by
-itself. `actingctl watchdog install` registers the Runtime watchdog's per-user task
-on request (see "Runtime watchdog").
+itself. `<root>\tools\actinglab.exe watchdog install` registers the Runtime
+watchdog's per-user task on request (see "Runtime watchdog").
 Wait for normal daemon exit and the existing shutdown/closure facts. A request
 receipt alone does not establish that every resource has been released.
 
 GlobalLedger is the Runtime's source of operational and diagnostic facts.
-`actingctl` returns the official response or error for its request. The separate
+`actinglab` returns the official response or error for its request. The separate
 Tools artifact supplies `actingledger.exe` for the existing read-only ledger
 commands. Preserve errors and the associated ledger facts; when startup or the
 ledger itself is unavailable, retain the daemon's last `OUTCOME actingd:` line (its
@@ -419,7 +425,7 @@ Do not treat a startup line as proof of device execution.
 
 ## Runtime watchdog
 
-`actingctl watchdog` (`contracts/runtime-watchdog.md`, Workflow #374) starts the
+The Runtime watchdog (`contracts/runtime-watchdog.md`, Workflow #374) starts the
 Runtime of an A/B installation, or of a single-location root, again when it is gone
 without a formal close (a
 crash, a closed console window, an end in Task Manager, a reboot), or when its last
@@ -446,16 +452,24 @@ with neither is `watchdog_layout_unknown` (`status` and `run-once` answer
 `watchdog_misconfigured` caused by it, `watchdog install` refuses with it). A script
 that replaces `runtime\` or `tools\` of a single-location root holds
 `install\writer.lock` exclusively while it does, or disables the task first.
-`actingctl start` and `restart` still take `--config` for such a root.
+The Lab's `up` and `restart`, run by `<root>\tools\actinglab.exe`, start such a
+root with `<root>\actingd.config.json`.
+
+From v0.12.64 (Workflow #434 LAB-7) the Lab's rows of the root's own
+`tools\actinglab.exe` do what `actingctl watchdog` did, for the root they lie in:
 
 ```powershell
-<root>\runtime\actingctl.exe watchdog install --root <root>
-<root>\runtime\actingctl.exe watchdog status --root <root>
-<root>\runtime\actingctl.exe watchdog run-once --root <root>
-<root>\runtime\actingctl.exe watchdog uninstall --root <root>
+<root>\tools\actinglab.exe watchdog install
+<root>\tools\actinglab.exe alive
+<root>\tools\actinglab.exe watchdog uninstall
 ```
 
-`install`, from a normal (not elevated) PowerShell of the user the Runtime runs
+`alive` reads the watchdog's status (as `<root>\tools\actingwatch.exe status`
+does). `watchdog run-once` has no row: `<root>\tools\actingwatch.exe` without
+arguments is one tick, as the task runs it (it prints nothing and writes
+`watchdog.log`).
+
+`watchdog install`, from a normal (not elevated) PowerShell of the user the Runtime runs
 for, registers the task `ActingCommand Runtime watchdog <12 hex digits>` in Task
 Scheduler's root folder: every minute, the user's interactive session, least
 privilege, no second instance while one runs, at most five minutes, no battery
@@ -470,16 +484,15 @@ category: 0 success, info or warning, 1 error, 2 fatal (Workflow #378 A5). `stat
 is read-only; its top is the decision a tick would take now, and its `attention`
 lists what else needs a look (the task missing, disabled or different, an owner lock
 held 10 minutes without an answering owner, a failed last start, repeated restarts,
-a formal close no log covers), without changing the exit. `run-once` is one tick;
-run by hand it starts the Runtime through WMI with a hidden window. The task runs
+a formal close no log covers), without changing the exit. A tick starts the Runtime
+through WMI with a hidden window. The task runs
 `<root>\tools\actingwatch.exe` every minute, a GUI-subsystem program that opens no
-window and, since Workflow #434 LAB-4, runs the tick itself (`run-once --root <root>
---from-task`, in its own process; it no longer starts `<root>\runtime\actingctl.exe`).
+window and, since Workflow #434 LAB-4, runs the tick itself, in its own process.
 It exits 1 with its own code when it is not at `<root>\tools\actingwatch.exe`, when
 `<root>\watchdog\` is missing and when the writer lock cannot be probed; otherwise it
 returns the tick's code. `<root>\tools\actingwatch.exe status|install|uninstall`
-answers as `actingctl watchdog <word> --root <root>` for its own root; started from a
-console it prints there, but the console does not wait for it: use `start /wait ""
+answers for its own root as the Lab's `alive`, `watchdog install` and `watchdog
+uninstall` do; started from a console it prints there, but the console does not wait for it: use `start /wait ""
 <root>\tools\actingwatch.exe status` in cmd and read `%ERRORLEVEL%`. While acsetup
 holds the writer lock the task's tick does nothing. The
 other way round, the launcher holds that lock shared for its tick (about a second;
@@ -502,11 +515,9 @@ and only that, to that directory (above), naming its `install_root` once it reso
 its installation, so that a refusal of one root does not count for another root's
 watchdog. A Runtime started without a log shows only as the attention
 `watchdog_formal_close_unlogged` in `status` after it stops.
-Switching back to a slot whose `actingctl.exe` predates the watchdog makes every
-tick fail with that program's usage error until a newer slot is selected; run
-`watchdog uninstall` first, or disable the task
-(`schtasks /Change /TN "<task name>" /DISABLE`). Before removing an installation,
-run `watchdog uninstall`: without the product the task fails every minute.
+Before removing an installation, run `<root>\tools\actinglab.exe watchdog uninstall`
+(or disable the task, `schtasks /Change /TN "<task name>" /DISABLE`): without the
+product the task fails every minute.
 
 ## Upgrade boundary
 

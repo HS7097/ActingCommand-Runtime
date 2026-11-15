@@ -19,7 +19,7 @@ arrive with their slices (D1c `recovery_ladder` and `host_claims`, AO-1, P-c, SR
 | Layer | What | Who changes it | Takes effect |
 |---|---|---|---|
 | File | `actingd.defaults.json` ⊕ the committed `actingd.config.json` | the person, through `acsetup --commit-config` | at the next start |
-| Instruction | `host.config_overrides` | the three counters (`actingctl config set\|clear`, MCP `ac_config_set`, the console) through `ConfigureSettings` | at once, for a settable key |
+| Instruction | `host.config_overrides` | the three counters (the Lab's `config set\|clear` on the command line and through MCP `ac_config_set`, the console) through `ConfigureSettings` | at once, for a settable key |
 
 - **Defaults file.** `distribution/windows/actingd.defaults.json`, compiled into the program and
   shipped in the Runtime artifact beside the example configuration; the exact-SHA build checks
@@ -94,8 +94,9 @@ the daemon acts on it from S6c on. Workflow
 #389 U-2's rows: the top-level `lab_module_authoring` and `lab_module_debugging` (boolean, default
 `file`, `false` in `actingd.defaults.json`, not settable, read once at assembly), the Lab's two
 options ([runtime-interface.md](runtime-interface.md), "Lab options"); a file names one
-only when it is `true`, and only `actingctl install` writes them (`install new`, `install config
-lab-options`; acsetup's Lab transaction through it, Workflow #429 R-0). Until U-6 they are
+only when it is `true`, and only the installer writes them (the Lab's `new --lab-authoring`; the
+model's `install config lab-options`, the planned row `config file lab-options`; Workflow #429
+R-0). Until U-6 they are
 read and reported only: nothing is refused by them. Workflow #390 DISC-1's rows: the
 `startup_discovery` section below (default `file`, not settable, read once at assembly).
 Workflow #406 T12's rows: the `touch` section below (default `file`, settable). PERF-B1's rows:
@@ -377,8 +378,8 @@ configuration nor any installer writes a performance key.
 
 **Presets (Workflow #429 R-2, design `429-A-runtime.md` A.1 契约 2, Alice's rulings 98 and 99;
 since 0.12.31).** `performance.presets` is the table of presets a person switches between; the
-Runtime defines it and the three counters share it (CLI `actingctl perf-preset set <name>|get`,
-MCP `ac_perf_preset`, the console's top bar). It is an object, preset name → `{mode,
+Runtime defines it and the three counters share it (the Lab's `preset set <name>` and `preset`,
+MCP `ac_preset_set` and `ac_preset`, the console's top bar). It is an object, preset name → `{mode,
 max_concurrent_runs?, heavy_dispatch_limit_normal, parallel_enabled}`; its default is in
 `actingd.defaults.json`, it is read once at assembly and is not settable. The mapping table, in
 `runtime-config` (`performance::presets::MEMBERS`), names the key each member sets, in this order:
@@ -439,8 +440,8 @@ in [policy-suspension.md](policy-suspension.md) (`recognition`, `rerun`),
 (`blackout`); `feature_lock.*` (how long a recorded locked feature stays valid, and the codes
 that end a run on one) is for slices SR-5a and SR-5b, which are not built: nothing reads either
 key, and no run ends with `contained_task_feature_locked` (Workflow #469 V0); `not_run.diagnose_rows` (the most rows
-`ac_diagnose` lists under `not_run` per instance) by MCP-19b (Workflow #386 SR-6b: actingctl and
-MCP read it from the program fact `config.parameters.scheduling` at every diagnosis). Workflow #384 D2-S2 reads
+`ac_diagnose` lists under `not_run` per instance) by MCP-19b (Workflow #386 SR-6b: the Lab's `diagnose`
+reads it, on the command line and through MCP, from the program fact `config.parameters.scheduling` at every diagnosis). Workflow #384 D2-S2 reads
 `fact_refresh.recognition_join_timeout_ms` when a successful run joins the readings it handed
 to recognition ([resource-readings.md](resource-readings.md), "Kernel reading"); Workflow #384
 D2-S4 reads `fact_refresh.enabled`, `min_interval_ms`, `daily_limit`, `failure_backoff_ms` and
@@ -670,7 +671,7 @@ an admitted scheduled run: `false`, on its own thread, one run after another, as
 `true`, on the run's instance worker (`actingd-instance-<alias>`), so a long run on one instance
 holds neither the round nor another instance ([scheduling/README.md](scheduling/README.md),
 "Per-Instance Lanes"). actingd reads it at the start of every policy round, the initial round
-included, so an instruction (`ac_config_set`, `actingctl config set`) takes effect at the next
+included, so an instruction (`ac_config_set`, the Lab's `config set`) takes effect at the next
 round; a run already handed to a worker finishes and is settled there. Accessor
 `EffectiveConfig::scheduling_parallel_enabled`.
 
@@ -995,23 +996,23 @@ keys; a file that names none of them keeps its revision.
 ## The `watchdog` section (#411 A66)
 
 #411 A66 ([runtime-watchdog.md](runtime-watchdog.md), "Start window"; coordinator ruling 10-24):
-how long a start may take before the watchdog, or `actingctl start` and `restart` without
-`--ready-timeout-s`, calls it `start_timeout`. The same window bounds which open watchdog start an
+how long a start may take before the watchdog, or the manual start of the Lab's `restart` (and
+`up` on an A/B root), calls it `start_timeout`. The same window bounds which open watchdog start an
 answering owner belongs to, and a waiter for the watchdog's `run.lock` waits it plus 20 s. actingd
 parses and checks the section with the rest of the file (its row is that of
-`config.parameters.watchdog`) but never uses it. The watchdog and `actingctl` read it from the
-configuration file they already read for the state root, at every tick or command, through this
+`config.parameters.watchdog`) but never uses it. The watchdog and the Lab's rescue module read it from
+the configuration file they already read for the state root, at every tick or command, through this
 crate (`watchdog::start_window_ms`), never from the configuration in effect, so it is not settable.
 `actingd-config` revision 11 ([component-interfaces.md](component-interfaces.md)) adds the section;
 a file that does not name it keeps its revision.
 
 | Key | Type | Default (`actingd.defaults.json`) | Settable |
 |---|---|---|---|
-| `watchdog.start_window_ms` | milliseconds `60000..=3600000`, the longest a start may take | `900000` | no (read from the file by the watchdog and `actingctl`) |
+| `watchdog.start_window_ms` | milliseconds `60000..=3600000`, the longest a start may take | `900000` | no (read from the file by the watchdog and the Lab's rescue module) |
 
 A value outside its range is `config_value_invalid` (`out_of_range`, with `range_min` and
-`range_max`) at actingd's start, in `check-config`, and on every watchdog tick or `actingctl start`
-or `restart` (the tick's `watchdog_misconfigured`); a value that is no integer is `wrong_type`.
+`range_max`) at actingd's start, in `check-config`, and on every watchdog tick or manual start
+(the Lab's `restart`, `up`; the tick's `watchdog_misconfigured`); a value that is no integer is `wrong_type`.
 
 ## The `execution` section (PERF-B1, Workflow #407 B1)
 
@@ -1112,10 +1113,10 @@ for the release); a file that names neither keeps its revision.
 
 ## The `install` section (Workflow #421 INST-1)
 
-Workflow #421 ([install-cli.md](install-cli.md)): the tunables of `actingctl install`, the
-installer of a single-location root (Alice 10-09: 「绝不硬编码」). actingd parses and checks the
+Workflow #421 ([install-cli.md](install-cli.md)): the tunables of the installer (the Lab's
+rescue module), the installer of a single-location root (Alice 10-09: 「绝不硬编码」). actingd parses and checks the
 section with the rest of the file (its rows are those of `config.parameters.install`) but never
-uses it. `actingctl install` reads it from the root's configuration file at every command,
+uses it. The installer reads it from the root's configuration file at every command,
 through this crate (`install::settings`), never from the configuration in effect, so no key is
 settable. `actingd-config` revision 17 ([component-interfaces.md](component-interfaces.md), Runtime
 v0.12.18) adds the section; a file that does not name it keeps its revision. Revision 18 (Runtime
@@ -1134,12 +1135,12 @@ v0.12.19, Workflow #421 INST-2) adds the keys marked "revision 18" below and ret
 | `install.rollback.open_margin_ms` | milliseconds `0..=600000` | `20000` | the rollback gate's open-time part |
 | `install.guard.min_available_memory_mb` | integer `0..=1048576` | `10000` | guard `memory` (INST-2) |
 | `install.guard.before_next_start_ms` | milliseconds `0..=86400000` | `900000` | guard `schedule_near`, informational: what is due within it is listed, never refused (INST-2; Alice's decision 75 of 10-27) |
-| `install.guard.blocked_windows` | list | `[]` | **retired in revision 18** (since v0.12.19, Alice's decision 75 of 10-27): accepted when it is a list, no effect; every `actingctl install` command notes it (below) |
+| `install.guard.blocked_windows` | list | `[]` | **retired in revision 18** (since v0.12.19, Alice's decision 75 of 10-27): accepted when it is a list, no effect; every installer command notes it (below) |
 | `install.guard.adb_timeout_ms` | milliseconds `1000..=60000` | `15000` | guard `adb` (INST-2) |
 | `install.child.check_config_timeout_ms` | milliseconds `10000..=3600000` | `900000` | each `actingd check-config` the installer runs (INST-1b-F fix round 1) |
 | `install.child.ledger_read_timeout_ms` | milliseconds `10000..=3600000` | `300000` | each `actingledger` read: S0, each page of the rollback gate's reader part (INST-1b-F fix round 1) |
 | `install.child.ledger_verify_timeout_ms` | milliseconds `60000..=86400000` | `1800000` | the `actingd ledger-maintenance verify` of an update or rollback (INST-1b-F fix round 1) |
-| `install.mcp_entry.poll_ms` | milliseconds `100..=60000` | `2000` | how often the MCP entry looks at the install (MCP-ENTRY, through `actingctl mcp-entry plan`) |
+| `install.mcp_entry.poll_ms` | milliseconds `100..=60000` | `2000` | how often the MCP entry looks at the install (MCP-ENTRY, through the rescue row `mcp plan`) |
 | `install.mcp_entry.settle_ms` | milliseconds `0..=600000` | `10000` | how long a change must stay put before the entry asks for a plan (MCP-ENTRY) |
 | `install.mcp_entry.verify_timeout_ms` | milliseconds `1000..=600000` | `60000` | a candidate child's verification, the plan and a handle count (MCP-ENTRY) |
 | `install.mcp_entry.drain_max_ms` | milliseconds `0..=86400000` | `600000` | how long a switch waits for outstanding handles before its status says so; it keeps waiting (MCP-ENTRY) |
@@ -1157,15 +1158,15 @@ stall rule), and reported with its `pid` and the key ([install-cli.md](install-c
 `install.guard.blocked_windows` is retired in `actingd-config` revision 18 (Runtime v0.12.19,
 Alice's decision 75 of 10-27: there is no allowed or blocked deploy time span; the hold records
 and hands back the deferred work instead). A file may still name it: a list is accepted and
-has no effect, its windows are not judged, and every `actingctl install` command that reads
+has no effect, its windows are not judged, and every installer command that reads
 the section notes it as `install_caveat_noted` (`install_caveat` `config_key_retired`,
 `config_key` the key); a value that is not a list is `config_value_invalid` (`wrong_type`). The
 defaults file keeps `[]`, which is not noted. The Mon/Thu restart is no longer data in this key.
 
 A value outside its type or range is `config_value_invalid` (`out_of_range` with `range_min` and
-`range_max`, or `wrong_type`) at actingd's start, in `check-config` and for every `actingctl
-install` command that reads the section; an unknown member of the section or of one of its
-objects for `actingctl install` is `config_value_invalid` (`section_check`) for its key. actingd refuses an unknown member of the section as it refuses any
+`range_max`, or `wrong_type`) at actingd's start, in `check-config` and for every installer
+command that reads the section; an unknown member of the section or of one of its
+objects for the installer is `config_value_invalid` (`section_check`) for its key. actingd refuses an unknown member of the section as it refuses any
 unknown member of the file (`config_decode_failed`).
 
 ## The `idle` section (IDLE-1)
@@ -1257,7 +1258,7 @@ that restores a closed application under `auto` does not wake it at once. A star
 what the action left treats an `auto` instance as closed after the highest tier it can take. An
 instance whose application is closed is not raised to a stopped emulator by a later, longer gap
 (this release; its wake only moves earlier). What a person sees while an instance rests: in
-`actingctl status` and the overview, the instance's key held by the Runtime's claim and the
+the Lab's `status`, the instance's key held by the Runtime's claim and the
 return-home package's run, as for a startup package's run; then the instance free with its
 application open, no closed row and no wake.
 
@@ -1654,9 +1655,10 @@ yet, so no device is touched. A restored backend that does not open leaves its i
 check passed is an internal invariant: the start fails, as for a registration it refuses from the
 file.
 
-**Channels.** `actingctl config set instance.<id>.touch_backend=… instance.<id>.capture_backend=…`
-and `config clear` (the CLI); MCP `ac_config_set`, which needs the operator tier for a change of a
-backend key (`tier_not_enabled` otherwise; every other change stays observer); the console's
+**Channels.** The Lab's `config set instance.<id>.touch_backend=… instance.<id>.capture_backend=…`
+and `config clear` (the command line); MCP `ac_config_set` (the Lab's MCP server has no tiers; the
+first MCP server's operator tier for a backend key and its refusal `tier_not_enabled` are retired
+with it since 0.12.64, Workflow #434 LAB-7); the console's
 settings page ("The console's device backends group" below); the Lab's `session backend` (HS-L,
 below). There is one state per instance: no backend holds for a Lab session only.
 
@@ -1678,8 +1680,8 @@ for `config_value_invalid`, `config_key_unknown` and `config_key_not_settable`, 
 `details` `{instance, outcome, config_key?, config_value_problem?, backend_switch_problem?,
 receipt_state, runtime_outcome}` (`runtime_outcome` the whole outcome with its causes); a failure
 without a receipt is reported as every Runtime-backed Lab command reports it (`runtime_not_running`,
-`device_error`). `--dry-run` refuses it (`dry_run_unsupported`) before any connection. `tier_not_enabled`
-does not apply: no MCP tool forwards it. The Lab's instance listing, `session instance list` and
+`device_error`). `--dry-run` refuses it (`dry_run_unsupported`) before any connection. No MCP tool
+forwards it. The Lab's instance listing, `session instance list` and
 `session instance registry`, gains the column `runtime_backends`, read from the Runtime (`Status` and
 `RuntimeFactSnapshot`'s `config.parameters.instance`), never from the Lab's file: per listed
 instance whose id is a registered alias `{registered: true, instance_id, touch_backend,
@@ -1735,7 +1737,7 @@ place R-7b extends with the player hold; [emulator-control.md](emulator-control.
 **Restore.** As every instance key ("Restore at start" below), re-checked against this start's
 instances.
 
-**Channels.** `actingctl config set instance.<id>.start_emulator=true|false` and `config clear`;
+**Channels.** The Lab's `config set instance.<id>.start_emulator=true|false` and `config clear`;
 MCP `ac_config_set` (observer tier, as every key but the backends); the console. Tier `daily`
 ("Console tiers" below). No `actingd-config` step: the entry's member is unchanged, and an
 instruction row is no file shape.
@@ -1851,7 +1853,7 @@ is held again.
 | `config.parameters.<section>` | one per key of the section, in manifest order: `key`, `value`, `source` (`explicit`, `default`, `discovered`, `instruction`), `settable`; the section is the key's first segment, `top_level` for a key without a dot; at most 256 rows each | at start, each section; again when an instruction changes a key of it; a section an earlier start recorded and this one has not is recorded empty |
 | `host.config_overrides` | one per instruction value: `config_key`, `value_json`, `base_json`, `base_source` (`explicit` or `default`), `set_unix_ms`, `set_in_owner_epoch`, `request_id`; `channel` from U-2 on | at every `ConfigureSettings`, and at start when it held rows (tagged, `tag.workbench_patterns`) |
 
-`actingctl status --config` returns `config.subsystems`, `config.selection` when recorded and
+The Lab's `config` returns `config.subsystems`, `config.selection` when recorded and
 every `config.parameters.<section>` in key order, and (Workflow #429 R-4, since 0.12.36) the
 settings' version `config_version` read with them. `check-config` reads only the files: its
 report carries `config_selection` and names `instruction_values` in `not_checked`.
@@ -1920,9 +1922,9 @@ rules 2, 3 and 7; [v012-register.md](v012-register.md) §1.239; since 0.12.36).
   after the change, the next `expected_version`. The current version is read from
   `RuntimeFactSnapshot`'s `config_version` (beside the snapshot, read with it under the same
   gate, so the snapshot's `config.*` records are those of that version), which
-  `actingctl status --config` and MCP `ac_facts` (scope `config`) answer beside their records;
-  `actingctl config set|clear` prints the receipt's beside `settings` and `ac_config_set`
-  answers it. There is no `actingctl config get`: `status --config` is the CLI's read point.
+  the Lab's `config` and `facts --config` (MCP `ac_config`, `ac_facts`) answer beside their
+  records; the Lab's `config set|clear` prints the receipt's beside `settings`, and
+  `ac_config_set` answers it. There is no `config get`: `config` is the read point.
 - **Failure and an uncertain result** (rule 3). A refusal changes nothing; a
   `host.config_overrides` the ledger refuses changes nothing (`host_config_overrides_persist_failed`,
   Failed). A client whose receipt was lost reads the current `config_version` and the values in
@@ -2056,8 +2058,8 @@ changes nothing ([lab-two-entries.md](lab-two-entries.md) §2.3 step 5).
 | `frame_retention_evidence_max_age_days` | advanced | yes | the age of unconfirmed evidence frames |
 | `host.process_memory_priority` | advanced | no (applied before the ledger opens) | the file changes it at the next start |
 | `host.process_io_priority` | advanced | no (applied before the ledger opens) | the file changes it at the next start |
-| `lab_module_authoring` | advanced | no | shown read-only; `actingctl install` changes it |
-| `lab_module_debugging` | advanced | no | shown read-only; `actingctl install` changes it |
+| `lab_module_authoring` | advanced | no | shown read-only; the installer changes it |
+| `lab_module_debugging` | advanced | no | shown read-only; the installer changes it |
 | `instance.<instance id>.touch_backend` | advanced | yes (#402 HS-2: a change switches the device) | the instance's touch backend (#402 HS-1, since 0.12.39) |
 | `instance.<instance id>.capture_backend` | advanced | yes (#402 HS-2: a change switches the device) | the instance's capture backend (#402 HS-1, since 0.12.39) |
 
@@ -2104,7 +2106,9 @@ the one new code and the words above.
   | `backend_switch_refused`, `open_failed` | 新后端没打开，已保留原来的, with the cause: `input_backend_open_failed`, `capture_backend_open_failed`, `paired_backend_open_failed` (the last two with `capture_open_cause`: `display_missing`, the application is not running; `connection_failed`; `other`; the paired one's own cause may be `nemu_app_index_missing` with `nemu_app_index_problem`: `package_not_installed`, `application_not_running`, `info_unavailable`, `info_malformed`; since 0.12.40 a paired open reports neither `display_missing` nor `application_not_running`, #402 HS-5, [device-binding.md](device-binding.md), "Backends") |
   | `backend_switch_refused`, `restore_failed` | 新的没打开，原来的也没恢复，这台暂时不可用, with both failures; suggest a self-check |
   | `host_config_overrides_persist_failed` | 没写进记录，已回退 |
-  | `tier_not_enabled` | MCP only: the operator tier is not enabled |
+
+  (`tier_not_enabled`, the first MCP server's refusal, is retired since 0.12.64 with that server,
+  Workflow #434 LAB-7: no request meets it.)
 
 - **A wait that ran out** (#402 HS-2b). `runtime_receipt_timeout` on such a request is an
   unconfirmed result, never a refusal and never "not applied": the group re-reads the settings'

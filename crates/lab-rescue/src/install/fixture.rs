@@ -9,7 +9,7 @@ use super::runtime::{
     Closed, ConfigSeen, Drained, InstanceSeen, PauseSeen, PlanSeen, Resumed, RuntimeLink,
     RuntimeSeen,
 };
-use super::{Answer, execute};
+use super::{Answer, Face, execute_as};
 use crate::codes::ActingctlCode;
 use crate::watchdog::decide::LiveOwner;
 use crate::watchdog::start::{StartedProcess, StartedState, Target};
@@ -1473,10 +1473,10 @@ impl RuntimeLink for FakeRuntime {
     }
 }
 
-/// Runs `actingctl install <words>` on `host`.
+/// Runs the installer's command `<words>` on `host` with the face of an operation whose journal
+/// records no initiator, as `actingctl install` ran it until Workflow #434 LAB-7 deleted it.
 pub(super) fn run(host: &dyn Host, words: &[&str]) -> Answer {
-    let arguments = words.iter().map(OsString::from).collect::<Vec<_>>();
-    execute(&arguments, host)
+    execute_as(words, host, Face::Install)
 }
 
 /// A path as a command-line word.

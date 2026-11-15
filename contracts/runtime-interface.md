@@ -14,6 +14,16 @@ content digest). Where the model's body and §14.2 differ, this document follows
 Alice decided M-PKG D10 on 2026-10-12: an unload stops the manual runs of the same
 `package_id`.
 
+**Since Workflow #434** ([lab-two-entries.md](lab-two-entries.md) §11, "What this replaces, and
+from when"): the three counters, `via`, the Lab options' gate and the origin gates are replaced
+by [lab-two-entries.md](lab-two-entries.md) sections 2 and 3 (LAB-6), and the plans U-3 to U-6
+and the upgrade state are not built. The clean mapping's counters of actingctl and of its MCP
+server ("actingctl (counter `cli`; a record up to LAB-7)", "MCP (counter `mcp`; a record up to
+LAB-7)" below) record what those programs
+sent: Workflow #434 LAB-7 (0.12.64) deleted both, and the Lab's rows
+([lab-operations.json](lab-operations.json), each with the requests it sends) serve their
+commands and tools on the command line and through the Lab's MCP server.
+
 | Slice | Release | What it brings |
 |---|---|---|
 | U-1 | v0.12.0 | the classification `RuntimeOperation::interface_class()` and `fact_key_family()`; the `LabOption` enum; the wire shapes of the new request kinds; the owner-journal reader accepts the upgrade-state marker (`owner-journal.md`). No behaviour changes |
@@ -27,8 +37,9 @@ Alice decided M-PKG D10 on 2026-10-12: an unload stops the manual runs of the sa
 
 - **Door**: actingd's request entry (`crates/runtime-host/src/host/requests.rs`), one
   loopback TCP pipe for every client.
-- **Counter**: one of the three entries of the general interface: `cli` (actingctl,
-  and acsetup and scripts through it), `mcp` (`actingctl mcp-serve`), `ui` (acui).
+- **Counter**: one of the three entries of the general interface: `cli`, `mcp` and `ui`
+  (acui). Since Workflow #434 LAB-7 (0.12.64) no program of this repository binds `cli` or
+  `mcp`: actingctl and `actingctl mcp-serve`, which did, are deleted.
 - **Lab channel**: the channel `lab`, bound by actinglab and by whatever forwards to it.
 - **Channel** (`RuntimeChannel`): the identity a connection binds once: `cli`, `mcp`,
   `ui` or `lab`.
@@ -92,13 +103,15 @@ Alice decided M-PKG D10 on 2026-10-12: an unload stops the manual runs of the sa
 4. A second `BindChannel` on one connection is refused with `channel_binding_exists`.
 5. From U-6, a connection that has not bound is refused everything but the handshake
    with `channel_binding_missing`, in the receipt only, never in the ledger.
-6. Each frontend hard-codes its channel, and its user cannot change it: actingctl `cli`;
-   `actingctl mcp-serve` `mcp`; acui `ui`; actinglab `lab`. acsetup reaches the Runtime
-   only through actingctl child processes, so it is `cli`. From Workflow #434 LAB-6S2-B2
-   (Runtime 0.12.59; [lab-two-entries.md](lab-two-entries.md) §4.2) actingctl binds `lab` with
-   `Lab-CLI` and `actingctl mcp-serve` `lab` with `Lab-MCP`, each keeping the envelope it sent on
-   0.12.58; the Runtime records and answers their requests on `cli` and `mcp` as before (rule
-   9), so acsetup's receipts still name `cli`.
+6. Each frontend hard-codes its channel, and its user cannot change it: acui `ui`; the Lab's
+   programs (actinglab, actinglab-mcp, actingwatch, the frontends of this repository) `lab`,
+   each with its word ([lab-two-entries.md](lab-two-entries.md) §4.2). Until Workflow #434 LAB-7
+   (Runtime 0.12.64) actingctl bound `cli` and `actingctl mcp-serve` `mcp` (from LAB-6S2-B2,
+   0.12.59, both `lab` with `Lab-CLI` and `Lab-MCP`, keeping the envelope each sent on 0.12.58,
+   recorded and answered on `cli` and `mcp` by rule 9), and acsetup reached the Runtime through
+   actingctl child processes. LAB-7 deleted actingctl and its MCP server: a build of LAB-7
+   carries no `actingctl.exe` for acsetup to run; its replacement is the console's (on
+   actinglab).
 7. `via` exists only on the Lab channel and only a forwarding counter sets it: MCP's
    option tools start actinglab with `--via mcp`; a future UI Lab frontend that forwards
    to actinglab passes `--via ui`. actinglab puts it into `BindChannel{lab, via}`.
@@ -302,8 +315,8 @@ subscription.
 | Kind | Block | Class | Sent by | G14 |
 |---|---|---|---|---|
 | ApplicationLifecycle | general (Workflow #429 R-0; option two before) | instruction (the assigned application's start and stop) | ui (the workbench's "restart the game"); the senders of today (actinglab `session app`, mcp `ac_app`) keep sending it | yes |
-| ControlEmulatorInstance | general (Workflow #429 R-0; option two before) | instruction (emulator start, stop, restart) | ui (the workbench); the senders of today (actingctl's emulator subcommands, mcp `ac_emulator`, actinglab) keep sending it. Its origin gate (User+Ui, Cli+Cli) stayed until Workflow #434 LAB-6S1b deleted it | yes |
-| SelfCheckInstance | general (Workflow #429 R-0; option two before) | instruction (self-check) | ui (the workbench's check); the senders of today (`actingctl selfcheck`, actinglab) keep sending it. Its origin gate (User+Ui, Cli+Cli) stayed until Workflow #434 LAB-6S1b deleted it | yes |
+| ControlEmulatorInstance | general (Workflow #429 R-0; option two before) | instruction (emulator start, stop, restart) | ui (the workbench); the senders of today (the Lab's `emu start`, `emu stop` and `emu restart`, on the command line and through MCP, and actinglab's own commands) keep sending it. Its origin gate (User+Ui, Cli+Cli) stayed until Workflow #434 LAB-6S1b deleted it | yes |
+| SelfCheckInstance | general (Workflow #429 R-0; option two before) | instruction (self-check) | ui (the workbench's check); the senders of today (the Lab's `emu selfcheck`, actinglab's own commands) keep sending it. Its origin gate (User+Ui, Cli+Cli) stayed until Workflow #434 LAB-6S1b deleted it | yes |
 | PauseScheduling, ResumeScheduling | general | instruction | cli `pause`, `resume`; mcp `ac_pause`, `ac_resume`; ui later | yes |
 | ConfigureMonitor, ClearMonitor | general | instruction (monitor settings, `recovery_enabled` included) | cli `monitor-set`, `monitor-clear`; mcp `ac_monitor_set`, `ac_monitor_clear` (new). actinglab `session monitor-policy` retires | yes |
 | RequestShutdown | general | instruction (the Runtime closes itself) | cli `request-shutdown` (stays); ui "request shutdown", sent directly as today; mcp `ac_request_shutdown` (new) | yes |
@@ -418,7 +431,7 @@ ran or may run (Alice's ruling 100). Shapes: `crates/actingcommand-contract`,
 | `ConfigureSettings.expected_version?` | (the kind's) | | the settings' version: the `config_version` of `SettingsConfigured` or `RuntimeFactSnapshot` | as today | R-4, since 0.12.36 (register §1.239): the changes apply only at that version, compared under the settings' gate; another is Denied `fact_observation_version_conflict` (`fact_key` `host.config_overrides`, `current_version`, kept in codes mode), recorded as `command.rejected` only, nothing changed; without it the last writer wins ([runtime-config.md](runtime-config.md), "`ConfigureSettings`"); before 0.12.36 a request that named it was refused `not_implemented` (`operation` `configure_settings`) | (the kind's) |
 | `ApplyResourceTargets.expected_version?` | (the kind's) | | the table's version: `ResourceTargetView`'s `active.version`, or `0` when the view has no `active` | as today | Workflow #455 T1-R, since 0.12.60 (register §1.351), R-13c's check of this member: the document is checked first as without it; then, in the hold of the fact write gate that writes the record, the instance's version (the sequence of the `fact.published` that holds its `session.resource_targets` record, `0` without one and, since Workflow #455 G-R2a (register §1.361), the version the view answers in every state: `0` whenever it shows no `active`, a withdrawal and a v3 record of entries alone included; before G-R2a a withdrawal compared with its own sequence) is compared with it; another is Denied `fact_observation_version_conflict` (`fact_key` `session.resource_targets`, `current_version`, kept in codes mode), nothing appended; the equal version applies, or answers an equal active policy's replay, as without the member; without it nothing is compared ([resource-targets.md](resource-targets.md), "Entry and receipts"). The same release puts the kind on the UI list ([lab-two-entries.md](lab-two-entries.md) §3). Before 0.12.60 a request that named it was refused `not_implemented` (`operation` `apply_resource_targets`) | (the kind's) |
 | `SettingsConfigured.config_version?` | (`ConfigureSettings`') | | the settings' version after the change | the answer's member | R-4: every completed answer carries it from 0.12.36 (register §1.239); absent in every answer before | — |
-| `RuntimeFactSnapshot.config_version?` (the result, beside `snapshot`) | (`RuntimeFactSnapshot`'s) | | the settings' version now, read with the snapshot under the settings' gate, so the snapshot's `config.*` records are that version's; beside the snapshot, never in the persisted `RuntimeFactSnapshot` | the answer's member | R-4: every answer carries it from 0.12.36 (register §1.239), and `actingctl status --config` and `ac_facts` (scope `config`) answer it beside their records; absent in every answer before | — |
+| `RuntimeFactSnapshot.config_version?` (the result, beside `snapshot`) | (`RuntimeFactSnapshot`'s) | | the settings' version now, read with the snapshot under the settings' gate, so the snapshot's `config.*` records are that version's; beside the snapshot, never in the persisted `RuntimeFactSnapshot` | the answer's member | R-4: every answer carries it from 0.12.36 (register §1.239), and the Lab's `config` and `facts --config` answer it beside their records; absent in every answer before | — |
 | `ResourceTargetView`: `active.rows?` | (`ResourceTargetView`'s) | | #429 A.5's read model, one row per target in document order: `{id, kind: maintain \| gain, resource, goal, baseline?, current?, remaining, progress_milli, state, reading: {observed_at_unix_ms?, fresh_until_unix_ms?, pending_reason?}, completed_at_unix_ms?, updated_at_unix_ms}`; `state` is `active`, `met`, `completed`, `paused`, `awaiting_baseline`, `unknown` or `unmapped`; `pending_reason` as `ResourceTargetObservation.pending`. The table's version is `active.version` | the answer's member | R-13e; absent in every answer of 0.12.30, and of every release since: Workflow #455 G-R2a's v3 record (register §1.361) is shown in `active.targets` and fills none of it | — |
 | `ResourceTargetView.stale_schema?` (top level, beside `active`) | (`ResourceTargetView`'s) | | a boolean, #429 A.5: `true` when the instance's stored policy is an `actingcommand.resource-targets.v1` or `v2` record, which the v3 reader reads as no table (no `active`, so `expected_version` `0`) instead of refusing the view | the answer's member | R-13a; absent in every answer of 0.12.30, and of every release since: Workflow #455 G-R2a's v3 reader (register §1.361) reads v1 and v2 records exactly as before, so nothing is marked stale | — |
 | `RuntimeInstanceStatus.activity?` | — | — | `{kind, request_id?, package_id?, since_unix_ms}`; `kind` is `policy_run`, `direct_run`, `host_run`, `reconnect`, `selfcheck`, `emulator_control` or `ladder`; kept in memory, never read from the ledger | absent while the instance does none of these; while it does several at once, the one "What an instance does now" below names | R-0b fills all kinds (0.12.36, register §1.238; Workflow #429 R-0c, §1.216 R0C-4), `policy_run` and `direct_run` always with `request_id` and `package_id`, and the same release raises `runtime-client` `min` to 3 ([3, 4]); absent in every answer of 0.12.30 to 0.12.35 | — |
@@ -529,9 +542,10 @@ The kinds `ControlEmulatorInstance`, `SelfCheckInstance` and `ApplicationLifecyc
 to the general instructions in the same slice: each acts only on what is bound to the
 instance, so the workbench sends them without the Lab. The move changes no behaviour
 before U-6 (the gate marks and never refuses; the origin gates of `validate()` stayed until
-Workflow #434 LAB-6S1b deleted them). They stay on the counters: the clean mapping below neither moves them to actinglab
-nor retires actingctl's emulator and self-check subcommands, and where any wording still
-read so, this section would supersede it.
+Workflow #434 LAB-6S1b deleted them). They stay general: the clean mapping below did not move them to actinglab, and since
+Workflow #434 LAB-7 (0.12.64) the Lab's core rows `emu start|stop|restart` and `emu selfcheck`,
+which replaced actingctl's emulator and self-check subcommands, send them; where any wording
+still read otherwise, this section would supersede it.
 `RunContainedTask` (a package by its path), `CancelContainedTask` with the client's own
 `SafeReset`, `Input`, the leases, `RunContainedLabOperation`, `LoadPack`, `UnloadPack`,
 the signatures and `ReleaseLabPin` stay in option two.
@@ -686,8 +700,8 @@ of five families:
   `fact_origin_mixed`; until Workflow #434 LAB-6S1b a family with the origin exception
   (offsets, remedy choices) was taken from `(agent, adapter)`, `(user, ui)` and `(cli, cli)`
   only, and since then from every client envelope; its `fact.published` event keeps the
-  writer's origin. Its writers are actingctl `remedy set|get|lift` and the MCP
-  general tools `ac_remedy_set` and `ac_remedy_get`. A record is written at instance or game
+  writer's origin. Its writers are the Lab's `remedy set` and `remedy lift` (read
+  with `remedy`), on the command line and through the Lab's MCP server. A record is written at instance or game
   scope only: the store's `server` scope names a server without its game, so a server record
   would apply to every game whose instances share that server id. `remedy set` takes
   `--instance` or `--game` (`--server` is `actingctl_usage_invalid`, `unknown`),
@@ -710,20 +724,21 @@ of five families:
 - A file names them only when `true`; a configuration that ticks neither does not name
   them and keeps its revision. A file that names one needs `actingd-config` revision 5,
   the one revision v0.12.0 raises (`component-interfaces.md`).
-- One writer (Workflow #429 R-0, which settles the earlier wording): `actingctl install`
-  is the only writer of the two keys, by `install new` and `install config lab-options`
-  ([install-cli.md](install-cli.md), "Lab options"); acsetup's Lab page and Lab
+- One writer (Workflow #429 R-0, which settles the earlier wording): the installer (the Lab's
+  rescue module) is the only writer of the two keys, by `new --lab-authoring` and the model's
+  `install config lab-options`, the planned row `config file lab-options`
+  ([install-cli.md](install-cli.md)); acsetup's Lab page and Lab
   transaction write them through it. `acsetup --commit-config` refuses a proposal that
   changes either key (`setup_lab_options_locked`). They are not in #387 D1's editable set:
   `config.parameters` reports their effective value and source, and no setting, MCP
-  tool or `actingctl config` command changes them; only `actingctl install` does (above).
+  tool or `config set` changes them; only the installer does (above).
 - actingd reads them once at start; they do not change during an epoch. They are
-  reported as configuration facts (`config.*`), which `actingctl status --config` and
-  MCP read. They are not part of `Status`.
+  reported as configuration facts (`config.*`), which the Lab's `config` and `facts
+  --config` read. They are not part of `Status`.
 - Only the configuration counts, never `tools\actinglab.exe` on disk: the Runtime never
   runs actinglab, a file cannot tell two options apart, and copying the file back must
   not reinstall the Lab. When the file and the configuration disagree,
-  `actingctl status --config` and acsetup report it from the local machine; the
+  the Lab's `config` and acsetup report it from the local machine; the
   Runtime does not.
 - Editing a configuration generation by hand, past acsetup, is not prevented: the gate
   prevents misuse, not malice (section Strength of the identity).
@@ -835,7 +850,11 @@ handles it, and `via` keeps what the ledger already shows today (the `client.act
 
 ## Clean mapping
 
-### Rules
+### Rules (a record up to LAB-7)
+
+The rules of the clean mapping as they stood until Workflow #434 LAB-7 (0.12.64) deleted
+actingctl and its MCP server; the operation table ([lab-operations.json](lab-operations.json))
+and [lab-two-entries.md](lab-two-entries.md) section 9 are the mapping now.
 
 1. The CLI command set is the original of the general interface. A general command is
    a name, a parameter structure, the request it sends and its outcome codes.
@@ -866,9 +885,14 @@ handles it, and `via` keeps what the ledger already shows today (the `client.act
 8. The Lab commands of actingctl move without forwarding shells (U-3): each new home
    first passes its end-to-end test, then the old command retires.
 
-### actingctl (counter `cli`)
+### actingctl (counter `cli`; a record up to LAB-7)
 
-| Command | Request | Block | New home |
+The record of what actingctl sent until Workflow #434 LAB-7 (0.12.64) deleted it; the Lab's core
+and rescue rows serve these commands now ([lab-operations.json](lab-operations.json); the
+opening of this document). The last column says where each command was to live while actingctl
+stood.
+
+| Command | Request | Block | Home until LAB-7 |
 |---|---|---|---|
 | `status` | Status | general read | stays; `ac_overview` covers it; #390 九处-1 (board #390 comment 6095942731 item 1, corrected wave-18 ruling 4): each instance carries `emulator_state`, whether its emulator runs as the Runtime last read it, `{state: on \| off, observed_at_unix_ms}`, or `{state: unknown}` while the Runtime holds no reading (never `off` by default); the readings are `MuMuManager info` at the start's discovery (a discovery-bound instance bound to its port is `on`, bound pending `off`), a confirmed emulator start (`on`) or stop (`off`), the state read after a failed control (`unknown` when that read settled nothing after the vendor command ran) and an on-demand `DiscoverInstances` (an instance it no longer lists is `unknown`); no poll is added; an instance that is not discovery-bound is always `unknown`; #411 A35-S5 (register §1.170): an instance whose recovery ladder holds instead of climbing carries `ladder_busy_hold {kind, held_ms, limit_ms}` while the hold waits (`kind` `busy_outcome` or `screen_changing`, `held_ms` since the climb's first hold of that kind, `limit_ms` that kind's configured `max_wait_ms`), the ladder's state in memory, absent otherwise ([emulator-control.md](emulator-control.md), "Busy ends") |
 | `status --config`, `facts --program` | RuntimeFactSnapshot | general read | stays; reports the two Lab options from `config.*` and checks `<root>\tools\actinglab.exe` locally, reporting a mismatch; `ac_facts` (new); #389 MCP-4: both answer `{scope, read_at_unix_ms, snapshot \| records, records_total, records_kept}`, `facts --program` also takes `--key-prefix`; Workflow #429 R-4 (since 0.12.36): `status --config` also answers `config_version`, the settings' version the snapshot answered with its records |
@@ -881,7 +905,7 @@ handles it, and `via` keeps what the ledger already shows today (the `client.act
 | `monitor-set`, `monitor-clear` | ConfigureMonitor, ClearMonitor | general instruction | stay; `ac_monitor_set`, `ac_monitor_clear` (new) |
 | `task-offset` | PublishFacts (offset) | general instruction | stays; `ac_task_offset` (new) |
 | `request-shutdown` | RequestShutdown | general instruction | stays; `ac_request_shutdown` (new) |
-| new: `config set`, `config clear` (#387 D1b) | ConfigureSettings | general instruction | actingctl; `ac_config_set` (observer until U-3); the console's settings page in the next UI release ([runtime-config.md](runtime-config.md)); Workflow #429 R-4 (since 0.12.36): both answer the receipt's `config_version` beside `settings` and send no `expected_version` (the last writer wins); #402 HS-2 (since 0.12.39, register §1.270): a change of an instance's `touch_backend` or `capture_backend` (only that instance's backend keys in the request) switches the device before it answers, on a free instance only, and the client waits `BACKEND_SWITCH_WAIT_MS` plus its IO margin for that receipt (#402 HS-2b, register §1.274: the switch's worst case, 133 s: the claim, two session closes, two preparations and the commit's ledger write); a client whose wait ran out (`runtime_receipt_timeout`) holds an unconfirmed result, never "not applied", and re-reads the settings' `config_version` (RuntimeFactSnapshot) and the instance's `activity` in Status before it sends the change again ([runtime-config.md](runtime-config.md), "A lost receipt"); `ac_config_set` then needs the operator tier (`tier_not_enabled` naming `operator` otherwise, before anything is sent); refusals `backend_switch_refused` with `backend_switch_problem` ([runtime-config.md](runtime-config.md), "Switching an instance's backends") |
+| new: `config set`, `config clear` (#387 D1b) | ConfigureSettings | general instruction | actingctl; `ac_config_set` (observer until U-3); the console's settings page in the next UI release ([runtime-config.md](runtime-config.md)); Workflow #429 R-4 (since 0.12.36): both answer the receipt's `config_version` beside `settings` and send no `expected_version` (the last writer wins); #402 HS-2 (since 0.12.39, register §1.270): a change of an instance's `touch_backend` or `capture_backend` (only that instance's backend keys in the request) switches the device before it answers, on a free instance only, and the client waits `BACKEND_SWITCH_WAIT_MS` plus its IO margin for that receipt (#402 HS-2b, register §1.274: the switch's worst case, 133 s: the claim, two session closes, two preparations and the commit's ledger write); a client whose wait ran out (`runtime_receipt_timeout`) holds an unconfirmed result, never "not applied", and re-reads the settings' `config_version` (RuntimeFactSnapshot) and the instance's `activity` in Status before it sends the change again ([runtime-config.md](runtime-config.md), "A lost receipt"); the first MCP server's `ac_config_set` then needed the operator tier (`tier_not_enabled` naming `operator` otherwise; retired in 0.12.64 with that server, Workflow #434 LAB-7: the Lab's MCP server has no tiers); refusals `backend_switch_refused` with `backend_switch_problem` ([runtime-config.md](runtime-config.md), "Switching an instance's backends") |
 | new: `perf-preset get`, `perf-preset set <preset>` (Workflow #429 R-2, since 0.12.31) | `get`: RuntimeFactSnapshot (records nothing); `set`: RuntimeFactSnapshot, then one ConfigureSettings of the preset's members | general read; general instruction | actingctl; `ac_perf_preset` (observer until U-3); the console's top bar. Both read `performance.presets` and the members' values in effect from `config.parameters.performance` and `config.parameters.scheduling` and judge them with `runtime-config`'s `performance::presets::current_preset` ([runtime-config.md](runtime-config.md), "Presets"). `get` answers `{preset, members: [{key, value, source}]}` (`preset` a name or `custom`; `value` `null` and `source` `default` for a key without a value), success `request_runtime_fact_snapshot_completed`; `set` answers `{preset, settings}` (the receipt's settings), success `request_configure_settings_completed`, every member at once or none, a member the preset leaves unwritten sent as a change without a value; a name the table does not have is `actingctl_usage_invalid` (`not_recognised`) and nothing is written; a snapshot without the records or the table's row `config_facts_missing`, a row that does not read back `invalid_fact_snapshot_record`; a refused ConfigureSettings prints its receipt, exit 1 |
 | new: `routine-summary (--hour \| --day) [--instance <alias\|instance_id\|ADB port>] [--since <revision>]` (Workflow #429 R-12, since 0.12.38; register §1.264) | RoutineSummary (records nothing); a given `--instance` is resolved with one Status read | general read | actingctl; `ac_routine_summary` (observer until U-3) answers the same page; the line is the page's members `{owner_epoch, granularity, revision, instances}` with the completed receipt's code `request_routine_summary_completed`, as `perf-preset` prints its own; `--since` is a page's `revision` of the same `owner_epoch`; refusals `actingctl_usage_invalid` naming the flag (no width: `--hour\|--day` `required`; both: `conflicting`; one twice: `repeated`; `--since` not a whole number: `wrong_type`), `instance_unknown`, the Runtime's refusal with its receipt; actingd absent: the client's failure, exit 1 |
 | `agent-publish-facts` | PublishFacts | general instruction (§14.2) | stays |
@@ -896,8 +920,8 @@ handles it, and `via` keeps what the ledger already shows today (the `client.act
 | new: `upgrade-state enter`, `cancel`, `leave`, `status` | UpgradeState, UpgradeStateStatus | general | actingctl only; not mapped to MCP or the console; never built, the kinds deleted by Workflow #434 LAB-6S4a (0.12.63) |
 | new: `overview`, `events`, `run get`, `material`, `diagnose`, `targets list`, `targets get` | as their MCP tools | general read | added so that every general MCP read has a CLI original |
 | new: `overview [--instance <alias\|instance_id\|ADB port>] [--sections <block>[,<block>…]] [--root <install root>]` (#389 MCP-8, before U-3) | Status + MonitorStatus + QueryEvents (none records anything); #385 P-m: + PerformanceStatus for the block `performance`; #384 D2-S5: + FactRefreshStatus for the block `fact_refresh`; #386 SR-6b, MCP-19b: + ScheduleExplanation with `candidates: false` for each instance row's `not_running`; #411 A42, #422 IDLE-OV: each row's newest run is read from a forward listing of the run window (QueryEvents on the instance with `from_timestamp_unix_ms`, each first page normally starting at the window's first record): its main admissions and terminals over the window, then its entry facts only from the first listing fact of its newest run found (or from the window's start when none was), so a busy instance does not read the entry facts of its whole window; runs on one instance do not overlap (one lease per instance). A first page whose window lookup the read budget cut (the budget was spent waiting for the shared connection) starts at the query's first sequence instead, sequence 1 without `from_sequence`, and pages through the history before the window, its rows still filtered to it. A row whose read finished without a run carries `run_none_in_window {since_unix_ms, until_unix_ms}`; #429 R-0b2 (register §1.243, since 0.12.36): each row's `activity` is the one Status read's member, with no further request | general read | actingctl; `ac_overview`; the answer is `ac_overview`'s, with every block whole; success `runtime_overview_reported` |
-| new: `perf-status [--instance <alias\|instance_id\|ADB port>]` (#385 P-m) | PerformanceStatus (records nothing); a given `--instance` is resolved with one Status read | general read | actingctl; `ac_overview` answers the same object as its block `performance`; the status' `instances` narrowed to the one instance; actingd absent: the client's failure, exit 1; success `runtime_performance_reported` |
-| new: `fact-refresh [--instance <alias\|instance_id\|ADB port>]` (#384 D2-S5) | FactRefreshStatus (records nothing); a given `--instance` is resolved with one Status read | general read | actingctl; `ac_overview` answers the same object as its block `fact_refresh`; the status' `instances` narrowed to the one instance; actingd absent: the client's failure, exit 1; success `runtime_fact_refresh_reported` |
+| new: `perf-status [--instance <alias\|instance_id\|ADB port>]` (#385 P-m) | PerformanceStatus (records nothing); a given `--instance` is resolved with one Status read | general read | actingctl; `ac_overview` answers the same object as its block `performance`; the status' `instances` narrowed to the one instance; actingd absent: the client's failure, exit 1; success `runtime_performance_reported` (retired in 0.12.64 with the command, Workflow #434 LAB-7: the Lab's `status` answers the block) |
+| new: `fact-refresh [--instance <alias\|instance_id\|ADB port>]` (#384 D2-S5) | FactRefreshStatus (records nothing); a given `--instance` is resolved with one Status read | general read | actingctl; `ac_overview` answers the same object as its block `fact_refresh`; the status' `instances` narrowed to the one instance; actingd absent: the client's failure, exit 1; success `runtime_fact_refresh_reported` (retired in 0.12.64 with the command, Workflow #434 LAB-7: the Lab's `status` answers the block) |
 | new: `schedule [--instance <alias\|instance_id\|ADB port>]` (#386 SR-6b, MCP-19b; register §1.144) | ScheduleExplanation with `candidates: true` (records nothing); a given `--instance` is resolved with one Status read | general read | actingctl; `ac_schedule` answers the same object; the answer verbatim, narrowed to the one instance's entry; actingd absent: the client's failure, exit 1; success `runtime_schedule_reported` |
 | new: `packs` (#389 MCP-11, before U-3) | not a request: reads the selected configuration generation (`install\active.json` → its configuration file); from U-3 also the loaded-pack table through RuntimeFactSnapshot; Workflow #357 DB-1 (`v012-register.md` §1.65 TB4): with `standard_packs.root` set, also `standard_packs {root, games [{game, tables}]}`, the tables of each sound game root as check-config lists them; ROUT-L RL-1c (#411): in composer mode (no `policy.catalog`) the installation rows are the procedures the scheduler workbench composes from the bound games' `schedule.json` ([standard-pack-schedule.md](standard-pack-schedule.md), "The readers of composer mode"); Workflow #429 R-11 (`v012-register.md` §1.240, since 0.12.36, offline, no revision): each game of `standard_packs` also carries `ui` (its `ui.json` as written, when it keeps its rules) and `display` (that file's `display`), and each composed installation row `task_ids` (the composed tasks that run its package, in id order, until SS-7's schedule view), `irreversible` (derived as the Runtime derives it: an entry of the package's `control.json` `provides` declares `irreversible: true`, [remedies.md](remedies.md) §2.2; absent with `package_binding_unreadable` when the control file cannot be read) and, from its game's valid `ui.json`, `ui` (the file's entry for the package) and `display`; without `ui.json` a row is as before plus `task_ids` and `irreversible`, and a client shows the `package_id`; a refused `ui.json` adds its `standard_pack_root_invalid` warnings and changes no row ([package-reference.md](package-reference.md), "Standard package root", `ui.json`); a catalog-mode binding carries none of the four | general read (offline, no `--state-root`) | actingctl; `ac_packs` (new) |
 | new: `codes <code>`, `codes [--prefix <text>] [--owner <owner>] [--limit <1-100>] [--cursor <next_cursor>]` (#389 MCP-14, before U-3) | not a request: reads the outcome catalog the build embeds | general read (offline, no `--state-root`) | actingctl; `ac_outcome_code` (new); one code answers its catalog entry as the catalog holds it with its `code`, the list `{codes: [{code, category, ladder_class, status}], next_cursor?}` in name order; success `outcome_codes_reported`; refusals `outcome_code_unknown`, `cursor_invalid`, `outcome_catalog_unreadable` |
@@ -909,7 +933,11 @@ handles it, and `via` keeps what the ledger already shows today (the `client.act
 | planned: `clear-kept` (#375 R5e) | ClearKeptFolder | option two | actinglab `clear-kept` instead |
 | `watchdog *`, `mcp-config` | not requests | — | stay; `mcp-config`'s example drops `--tier` |
 
-### MCP (counter `mcp`)
+### MCP (counter `mcp`; a record up to LAB-7)
+
+The record of the tools of `actingctl mcp-serve` until Workflow #434 LAB-7 (0.12.64) deleted it;
+the Lab's MCP server serves the operation table's rows as its tools now
+([lab-two-entries.md](lab-two-entries.md) section 9.3; the opening of this document).
 
 Today 22 tools; U-3 adds 8 general tools, for 30: 18 general, 8 option one, 4 option
 two. #410 item 6 adds one general tool, `ac_capability_gap` (observer until U-3): the build's
@@ -930,7 +958,7 @@ family's rows that had none (`ac_record_candidates`, `ac_record_amend`, `ac_reco
 `ac_record_archive`, `ac_record_reopen`, author until U-3): the build's author tier goes from 7 to
 12 tools, and U-3's option one gains five.
 
-| Tool | Class | Maps to | Parameters | Block |
+| Tool | Class | Mapped to until LAB-7 | Parameters | Block |
 |---|---|---|---|---|
 | `ac_overview` | read | `actingctl overview` | `instance` ↔ `--instance`; `sections` ↔ `--sections` (#389 MCP-8: a list of block names, `global_pause`, `instances`, `run_window`, `lab_tool`, `install`, #385 P-m's `performance`, and #389 MCP-9a's `catalog`, `config_generation`, `watchdog`, default all; `daemon` and `incomplete` are always answered; another name is `arguments_invalid`); each instance row carries `foreground {package, observed_at_unix_ms}` from the instance program fact `application.foreground` when it has one: the package last seen before a pointer input, read with RuntimeFactSnapshot, no wire change (#389 MCP-5b, D10); each instance row carries `emulator_state`, the status' reading of whether the instance's emulator runs (`on`, `off` or `unknown`, with `observed_at_unix_ms` for `on` and `off`), as `actingctl status` shows it (#390 九处-1), never cut; each instance row carries `backend_selfcheck {<entry>: {status, checked_at_unix_ms}}`, the last self-check of each backend entry (`input`, `capture`, `nemu`) the instance's program facts hold, `status` verbatim from `backend.selfcheck.<entry>.status` (`passed`, `failed`, `unknown`) and the time from `.checked_at_unix_ms`, read with RuntimeFactSnapshot, no wire change; an entry whose facts are absent or invalidated is omitted, `{}` while none was checked, and the member is absent only when the snapshot could not be read (a warning and `incomplete`); never cut (#411 A7, register §1.98 A7-1); each instance row whose instance the latest policy evaluation decided for carries `not_running`, that instance's not-running row as `ac_schedule` answers it, from one ScheduleExplanation read with `candidates: false` (a failed read is a warning and `incomplete`, and no row has the member), never cut (#386 SR-6b, MCP-19b, register §1.144 M19B-3); each instance row whose recovery ladder's hold waits carries `ladder_busy_hold {kind, held_ms, limit_ms}`, the status member verbatim (#411 A35-S5, register §1.170); each instance row that does something now carries `activity {kind, request_id?, package_id?, since_unix_ms}`, the status member verbatim ("What an instance does now"), read with the one Status read, with no further request and nothing read from the ledger, absent while the instance has none, never cut (#429 R-0b2, register §1.243, since 0.12.36); `catalog` is the program fact `config.catalog` (register A5) read back, null while no generation is active, and, while the active composed generation has compile warnings, its member `compile_warnings {count, codes, items}` read from the program fact `config.catalog_warnings`: how many warnings, their codes, and each warning's place `{warning, game?, pointer}` in its game's `schedule.json`, read with the same RuntimeFactSnapshot, no wire change, and, when the fact's 256 rows left some out (fix 1), `items_omitted` and `counts_omitted`, how many place rows and count rows are missing (a warning whose count row is missing is in neither `count` nor `codes`); absent without warnings, so the block is unchanged (#428 CW-1, register §1.290, since 0.12.47); and, while the active composed generation holds fixed values or declared valuations, its member `benefit_provenance {fixed_value {pack, model}, valuation {pack, model}, items}` read from the program fact `config.catalog_provenance` ([standard-pack-schedule.md](standard-pack-schedule.md), "Provenance"): how many judged rules run on a fixed value and how many pools on a declared valuation block, over every game, as the pack wrote them (`pack`) and as the model's export marked them (`model`), and each one `{game, kind, origin, id}` (`kind` `fixed_value` or `valuation`, `id` the rule's or pool's id in its game's `schedule.json`), in the fact's order, read with the same RuntimeFactSnapshot, no wire change, and, when the fact's 256 rows left some out, `items_omitted` and `counts_omitted`, how many id rows and count rows are missing (a value whose count row is missing is in no count); absent without the fact (a state root an earlier build wrote) or with nothing in it, so the block is unchanged (#428 SCHED-C1b, register §1.299, since 0.12.53); `config_generation {running?, selected?}` is the generation of `config.selection` beside the one `install\active.json` selects now, with the warning `config_generation_mismatch` (`path`, the selected configuration) when they differ, or when the selected configuration file's sha256 is not the `config_sha256` of `config.selection` (an edit actingd has not loaded; so also on an install without generations, #422 OV-24K), and one `package_binding_unreadable` per binding of the selected configuration whose path is missing or unreadable (MCP-11's read); `watchdog {decision, attention, starts_24h?, last_tick?}` is `actingctl watchdog status` read locally, null without an install root (#389 MCP-9a); the server's location stands for `--root`; output as the CLI's; only MCP cuts an answer past the output budget, in the order below (presentation) | general |
 | `ac_events` | read | `actingctl events` | `instance`, `view`, `since_unix_ms`, `until_unix_ms`, `after_sequence`, `through_sequence`, `event_type`, `event_types`, `exclude_event_types`, `fact_key`, `min_severity`, `max_severity`, `origin_module`, `task_id`, `run_id`, `request_id`, `correlation_id`, `detail`, `limit`, `cursor`, `wait_s` ↔ same flags (#389 MCP-1; `event_types` and `fact_key` #389 MCP-2, a list comma-separated on the CLI). `detail` is `brief` (the default), `summary` (each row adds the outcome its record carries, none on a state change; the MCP-1 follow-up) or `payload`. Workflow #434 CLI-EV ([v012-register.md](v012-register.md) §1.306): without a position or a window (`after_sequence`, `cursor`, `through_sequence`, `since_unix_ms`, `until_unix_ms`, `run_id`, `request_id`, `correlation_id`) the page is the newest `limit` records the other filters match, oldest first, searched in windows of 256, 4 096 and 65 536 sequences that end at the ledger's head, with `first_sequence` (the records before it: `through_sequence` `first_sequence - 1`) and, when fewer than `limit` were found and older records were not searched, `searched_from_sequence`, the lowest sequence searched; with a position or a window the page starts there, oldest first, as before. Paging: MCP with `next_cursor`; the CLI with `--after-sequence <last_sequence>`, because a cursor is bound to the process and connection that issued it, so the `next_cursor` one CLI call prints always answers `cursor_invalid` in the next (by design). #411 B27: an `event_type`, or an element of `event_types` or `exclude_event_types`, that names no event type is `arguments_invalid` (`not_recognised`) with `argument_value`, the value given | general |
@@ -945,7 +973,7 @@ family's rows that had none (`ac_record_candidates`, `ac_record_amend`, `ac_reco
 | `ac_run_evidence` (new, #389 MCP-6; observer before U-3) | read | `actingctl run evidence` | `handle` ↔ `--request-id` (as for `ac_get_run`), `run_id`, `from_step`, `limit`, `detail` ↔ same flags (`limit` 1–100, default 20, 100 with `detail` `summary`, on both sides); exactly one of `handle` and `run_id`; output as the CLI's; only MCP cuts a page to the output budget, from its last step (`truncated`, presentation), and `next_step` continues after the last step answered; #411 A42: a page whose first step alone is over the budget answers that step with its `frames`, then its `targets` too, left out (`omitted`, `frames_total`, `targets_total`, `ledger_range {after_sequence, through_sequence}`) | general |
 | `ac_schedule` (new, #386 SR-6b, MCP-19b; observer before U-3) | read | `actingctl schedule` | `instance` ↔ `--instance` (alias, `instance_id` or ADB port; without it every instance); output as the CLI's; only MCP cuts candidate rows to the output budget, in the rule below (presentation) | general |
 | `ac_perf_preset` (new, Workflow #429 R-2; observer before U-3) | read; instruction (one ConfigureSettings) | `actingctl perf-preset get`, `perf-preset set` | `action` (`get` or `set`) ↔ the action word; `preset` ↔ the preset word (`set` only: required there, `conflicting` with `get`); a `set` writes on its own (Cli, Cli) connection, as `ac_config_set`; output as the CLI's; a name the table does not have is `arguments_invalid` (`preset`, `not_recognised`); the Runtime's refusal is passed on | general |
-| `ac_config_set` (#387 D1b; observer before U-3; #402 HS-2, since 0.12.39: operator for a call that names a backend key) | instruction (one ConfigureSettings) | `actingctl config set`, `config clear` | `changes` (1 to 64 `{key, value?}`) ↔ the `key=<json>` list (a change without `value` ↔ `config clear <key>`); output as the CLI's (`{settings, config_version?}`); #402 HS-2: a call whose changes name an instance's `touch_backend` or `capture_backend` switches that device and needs the operator tier: without it `tier_not_enabled` (`required_tier` `operator`, `mcp_blocker` `server_tier`) before anything is sent; every other call stays observer; the Runtime's refusal (`backend_switch_refused` among them) is passed on | general |
+| `ac_config_set` (#387 D1b; observer before U-3; #402 HS-2, since 0.12.39: operator for a call that names a backend key) | instruction (one ConfigureSettings) | `actingctl config set`, `config clear` | `changes` (1 to 64 `{key, value?}`) ↔ the `key=<json>` list (a change without `value` ↔ `config clear <key>`); output as the CLI's (`{settings, config_version?}`); #402 HS-2: a call whose changes name an instance's `touch_backend` or `capture_backend` switches that device and needed the first MCP server's operator tier: without it `tier_not_enabled` (`required_tier` `operator`, `mcp_blocker` `server_tier`) before anything was sent; every other call stayed observer (Workflow #434 LAB-7, 0.12.64: that server and its tiers are deleted and the code is retired; the Lab's MCP server has no tiers); the Runtime's refusal (`backend_switch_refused` among them) is passed on | general |
 | `ac_routine_summary` (new, Workflow #429 R-12, since 0.12.38; observer before U-3) | read | `actingctl routine-summary` | `granularity` (`hour` or `day`, required) ↔ `--hour \| --day`; `instance` ↔ `--instance` (alias, `instance_id` or ADB port; without it every instance); `since` ↔ `--since` (a page's `revision`); output as the CLI's; an answer past the output budget is exported (`{owner_epoch, granularity, revision, export}` with `answer_exported`, presentation); a width it does not know is `arguments_invalid` (`granularity`, `not_recognised`); the Runtime's refusal is passed on | general |
 | `ac_pause` | instruction | `actingctl pause` | `drain_timeout_ms` in milliseconds, its range a contract constant; default reason `operator` for both (the counter is recorded by the channel); the CLI's `--instance` takes all three selector forms | general |
 | `ac_resume` | instruction | `actingctl resume` | the CLI gains the optional expected-pause parameter `ac_resume` has; selector as above | general |
@@ -1068,12 +1096,12 @@ family's rows that had none (`ac_record_candidates`, `ac_record_amend`, `ac_reco
 
 | Action | Request | Block | Maps to |
 |---|---|---|---|
-| browse and follow the ledger | QueryEvents; cold file reads | general read | `actingctl events`; a cold read is not a request |
-| follow polling | RuntimeFactSnapshot | general read | `actingctl facts --program` |
-| read material | ReadMaterial | general read | `actingctl material` |
-| status | Status | general read | `actingctl status` |
-| instance discovery | DiscoverInstances | general read | `actingctl emulator discover` |
-| request shutdown | RequestShutdown | general instruction | `actingctl request-shutdown`; sent directly as today, with or without the Lab |
+| browse and follow the ledger | QueryEvents; cold file reads | general read | the Lab's `events`; a cold read is not a request |
+| follow polling | RuntimeFactSnapshot | general read | the Lab's `facts --program` |
+| read material | ReadMaterial | general read | the Lab's `material` |
+| status | Status | general read | the Lab's `status` |
+| instance discovery | DiscoverInstances | general read | the Lab's `discover` |
+| request shutdown | RequestShutdown | general instruction | the Lab's `shutdown`; sent directly, with or without the Lab's other modules |
 | button trace | RecordClientAction | general instruction | none: it records actions outside the Runtime only. The trace before a request retires at U-6; G14's `ui` replaces it |
 | start the daemon, save instance settings, unlock the owner | not requests | — | unchanged; a configuration change takes effect by request shutdown and a new daemon start, as today |
 
@@ -1093,8 +1121,8 @@ Both console connections bind `ui`; from U-6 both send `(User, Ui)`.
 | `lab signatures match`, `lab debug-package`, `lab export-evidence`, `recognize-artifact` | package-tool reads | option one |
 | the resource-authoring session | RecordAuthoringEvent | option one |
 | `lab signatures register`, `retire`, `lab unpin`, the debug session's events | signatures, pin release, RecordDebugEvent | option two |
-| `session monitor-policy set`, `clear` | ConfigureMonitor, ClearMonitor | retires → `actingctl monitor-set`, `monitor-clear` |
-| new: `run start` | RunContainedTask | option two: `--instance` (three selector forms), `--package`, `--recovery-package`, `--deadline-s` (60–1800, default 1800), `--request-id`, `--correlation-id` (minted when absent), `--out` (only when given, a zip projection); output shaped as today's `actingctl task-run` (`receipt.result.outcome`, `final_page`, `executed_steps`) |
+| `session monitor-policy set`, `clear` | ConfigureMonitor, ClearMonitor | retires → the Lab's core rows `monitor set`, `monitor clear` |
+| new: `run start` | RunContainedTask | option two: `--instance` (three selector forms), `--package`, `--recovery-package`, `--deadline-s` (60–1800, default 1800), `--request-id`, `--correlation-id` (minted when absent), `--out` (only when given, a zip projection); output shaped as `actingctl task-run`'s was (`receipt.result.outcome`, `final_page`, `executed_steps`) |
 | new: `run stop` | CancelContainedTask (and SafeReset) | option two: `--request-id`, `--wait-s`, `--cancel-only` |
 | new: `emulator start`, `stop`, `restart`, `selfcheck` | ControlEmulatorInstance, SelfCheckInstance | general (Workflow #429 R-0; option two before) |
 | new: `pack load`, `pack unload` | LoadPack, UnloadPack | option two; `pack unload --wait-s` (0–25) |
@@ -1114,10 +1142,12 @@ Both console connections bind `ui`; from U-6 both send `(User, Ui)`.
   touched).
 - A refused actinglab command prints one JSON line and exits 1.
 
-Scripts that call `actingctl task-run` move to `actinglab run start` with the same
-parameters and the same output shape, in the same deployment as U-3. Scripts that stop
-the Runtime keep `actingctl request-shutdown`: the upgrade state is for upgrades only,
-and a script that does not hold `install\writer.lock` would race the watchdog.
+Scripts that called `actingctl task-run` call `actinglab run start <instance> <package>
+[--recovery <path>] [--deadline <duration>] [--wait <duration>]` (the operation table's row):
+there is no `--state-root` (the Lab finds its state root from its place), `--recovery-package`
+is `--recovery`, and `--wait` takes a duration where it took seconds; the output keeps its
+shape. Scripts that stop the Runtime call the Lab's `shutdown` (`actingctl request-shutdown`
+until LAB-7); a script that does not hold `install\writer.lock` would race the watchdog.
 
 ## Upgrade state
 
@@ -1476,7 +1506,7 @@ hold yet are registered as retired then):
 | `governance_authority_required` | retired with `RecordApprovalDecision` by LAB-6S4a (`retired_in` 0.12.63) | none |
 | `install_identity_required` | retired with `InstallTransition` by LAB-6S4a (`retired_in` 0.12.63; U-4 planned it) | none |
 | `runtime_debug_origin_invalid`, `runtime_authoring_origin_invalid` | U-6 | `client_channel_refused` |
-| `tier_not_enabled` | U-3 | `lab_tool_option_disabled` |
+| `tier_not_enabled` | retired by Workflow #434 LAB-7 (`retired_in` 0.12.64; U-3 planned it) with the first MCP server and its tiers | none: the Lab's MCP server has no tiers (U-3 planned `lab_tool_option_disabled`) |
 | `invalid_governance_identity_card` and the identity card's refusals | U-6 | none |
 
 Kept: `invalid_client_origin` (the envelope's own check), `fact_origin_mixed` (a content
@@ -1595,8 +1625,7 @@ its number in the step bar are settled with the UI channel.
   root tools are never deleted); write the ticked keys (only `true`) into the new
   configuration generation, only when the target Runtime speaks `actingd-config` 5;
   restart through the upgrade state. Failure rolls back as today. acsetup writes the two
-  keys through `actingctl install config lab-options`, their only writer (Workflow #429
-  R-0; section Lab options).
+  keys through the installer, their only writer (Workflow #429 R-0; section Lab options).
 - **Lab options only** (a new maintenance path, like "resource-only update"): page 0 →
   the Lab page → apply; close and start through the lifecycle (the upgrade state for a
   Runtime speaking install-control 2), holding the writer lock from before the close to
@@ -1624,7 +1653,7 @@ its number in the step bar are settled with the UI channel.
   prevents misuse (a script sending taps through the CLI, an MCP read connection sending
   a debug operation), not malice.
 - The two Lab options are enforced by the Runtime, not by the frontends: a copied-back
-  `actinglab.exe` is still refused. Only `actingctl install` changes them (acsetup's Lab
+  `actinglab.exe` is still refused. Only the installer changes them (acsetup's Lab
   transaction through it); editing a configuration generation by hand is not prevented.
 - The installer page is a threshold, not authentication: its labels say "I/the agent",
   and whoever ticks counts.

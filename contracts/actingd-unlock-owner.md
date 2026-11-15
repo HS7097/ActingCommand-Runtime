@@ -22,7 +22,7 @@ and `started_at_unix_ms` (Workflow #315 B2c-2):
   exited), or the running one was created more than 2 s after
   `started_at_unix_ms` (a reused pid, which can only have been created after
   the recorded start). Startup takes the epoch over with the
-  owner semantics of `--confirm-resources-released`: it appends only its own new
+  owner semantics of an unlock: it appends only its own new
   active record (no `confirmed_closed` record is written for the old epoch),
   takes over the old epoch's active instances as after a crash, appends one
   `runtime.lifecycle_observed` fact with phase
@@ -56,18 +56,19 @@ cases this command remains required.
 ## Invocation
 
 ```text
-actingd unlock-owner --config <path> --actor <name> --confirm-resources-released
+actingd unlock-owner --config <path> --actor <name>
 ```
 
 Options may appear in any order. `--config` names the daemon configuration; only
 `state_root` and `secret_fingerprint_salt` are used, as for
 `ledger-maintenance`. `--actor` names the operator and must be a path-safe
 string: 1 to 256 bytes, no `/`, `\`, `:`, `..` or control character, not `.`
-and not an absolute path. `--confirm-resources-released` is the operator's
-statement that the device resources of the retained epoch are released.
+and not an absolute path. Running the command is the operator's statement that the device
+resources of the retained epoch are released (Workflow #434 LAB-7, since 0.12.64: the flag
+`--confirm-resources-released` that said it is gone, and is refused as an unknown option).
 Argument errors print the report with their outcome alone (no `stage`, no
 `journal_appended`; see "Result"): `unlock_owner_usage_invalid` (more than
-five arguments after the subcommand), `unlock_owner_option_invalid` (an unknown
+four arguments after the subcommand), `unlock_owner_option_invalid` (an unknown
 or repeated option, a dangling flag or an empty value),
 `unlock_owner_config_missing`, `unlock_owner_actor_missing` and
 `unlock_owner_actor_invalid`, each with its developer line
@@ -98,9 +99,9 @@ of the kind step 2 describes are not writes of this command.
    (`contracts/owner-journal.md`, "Side file"). Unless the last record is a v2
    record with disposition `in_use` or `unconfirmed`, the result is
    `owner_unlock_not_required`.
-3. Without `--confirm-resources-released` the result is
-   `owner_unlock_confirmation_missing`. This check follows the first two so the
-   operator learns whether an unlock is needed at all.
+3. The command confirms (since Workflow #434 LAB-7). `owner_unlock_confirmation_missing`, the
+   host's answer to an unlock it is asked for without the confirmation, stays registered and is
+   no longer reached through this command.
 4. One record is appended to the same epoch: the last record with its revision
    plus one and disposition `confirmed_closed`. Epoch, pid, `started_at_unix_ms`
    and active instances are kept; the record stays active and has no
@@ -118,8 +119,8 @@ No new owner epoch is acquired. The confirmed epoch stays the last journal
 record, so the next ordinary start takes it over automatically: it records
 `runtime.takeover`, imports the epoch's close evidence and closes its
 remaining scopes exactly as after a crash whose resources were confirmed
-closed. No `actingctl` subcommand exists; a UI or operator spawns this command
-directly.
+closed. A UI or operator spawns this command directly, or the Lab's rescue row `unlock`, which
+runs the live build's command with its initiator as `--actor`.
 
 ## Result
 

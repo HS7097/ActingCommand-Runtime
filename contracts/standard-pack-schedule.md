@@ -396,8 +396,8 @@ replace.
   pool, within the fact's 256 rows and cut as `config.catalog_warnings` is (the id rows first, the
   last row saying how many of each are missing). It is recorded after each composition whose rules
   digest the active generation has (so also when only an origin changed, which changes no digest),
-  only when it changed, and never while absent with nothing to hold. `actingctl overview` and
-  `ac_overview` show it in their `catalog` block as `benefit_provenance {fixed_value {pack, model},
+  only when it changed, and never while absent with nothing to hold. The Lab's `status`
+  (MCP `ac_status`) shows it in its `catalog` block as `benefit_provenance {fixed_value {pack, model},
   valuation {pack, model}}` (counts), with the ids in `items` ([runtime-interface.md](runtime-interface.md),
   with the code).
 - An origin changes no decision and no catalog: two files that differ only in it compose the same
@@ -606,7 +606,7 @@ can do something irreversible").
   preview lists one `standard_pack_package_unreadable` per such package of a composed game in its
   `problems`, with the reader's refusal as its cause, and each is one of check-config's notes, so a
   game whose goals are all void is visible before the Runtime starts.
-- **The offline pack rows** (`actingctl packs`, and `ac_packs`, which answers the same rows;
+- **The offline pack rows** (the Lab's `packs`, on the command line and through MCP `ac_packs`;
   the coordinator's ruling 2 of 11-14) compose with their own reading of each registered package's
   `control.json` (the reading their `irreversible` row member uses, giving each provided capability
   with its mark), through the same rule; lab-ops does not reach the Runtime's package reader (the
@@ -622,7 +622,7 @@ can do something irreversible").
   package for its remedies (one more case of the limit above). The rows' own `irreversible` member
   keeps its meaning: the package's own declaration.
 - **Three scopes of one word.** `irreversible` means today: the package's own declaration (the
-  `actingctl packs` row member), the whole root's (a capability any package of the root marks:
+  the Lab's `packs` row member), the whole root's (a capability any package of the root marks:
   the goal check and this mark), and the providers bound on an instance (the remedy layer's
   request flag, [remedies.md](remedies.md) §2.3). This mark uses the whole root's.
 - **The workbench reads the declarations again** when a package's declaration files change (the
@@ -804,7 +804,7 @@ nothing.
   `{counts_omitted, places_omitted}` says how many of each are missing. The fact is recorded only
   when it changes and never while it is absent and the composition has no warning, so a Runtime
   whose compositions never had one records nothing new; once the active generation has none, it
-  is recorded empty. `actingctl overview` and `ac_overview` show it in their `catalog` block as
+  is recorded empty. The Lab's `status` (MCP `ac_status`) shows it in its `catalog` block as
   `compile_warnings {count, codes, items}`, with `items_omitted` and `counts_omitted` when the
   fact was cut ([runtime-interface.md](runtime-interface.md)). A warning the composer cannot place in a game's
   file (none so far) has no game, keeps its pointer in the composed document and is held in the
@@ -849,7 +849,7 @@ other games are composed.
 - **`actingd suspended`** (and so `ac_diagnose`'s `suspended`, `packs`, `remedies`, `lift`,
   `repeating` and `clock_slots`) is judged against the composition's catalog and bindings
   ([policy-suspension.md](policy-suspension.md)).
-- **`actingctl packs` / `ac_packs`** decode the configuration as actingd does and list one
+- **The Lab's `packs` / `ac_packs`** decode the configuration as actingd does and list one
   installation row per composed procedure (`package_id`, its place below the game root as
   `path` with `readable`, `procedure_ref` `package.<package_id>`, `operation_id`
   `operation.package.run`, `scheduled` true). They read the files as the workbench does (the

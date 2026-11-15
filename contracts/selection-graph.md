@@ -1078,7 +1078,7 @@ SEL-L6a) replays the whole package over a saved frame sequence, the PNG files of
 in file-name order, with the production interpreter. Every capture takes the next frame: a
 select step's confirmation frame is the frame after the one it was evaluated on, and every
 sample of a multi-frame consensus is a frame of its own. A select step evaluates the snapshot of
-`--facts`, the instance answer of `actingctl facts --instance` or MCP `ac_facts` read without a
+`--facts`, the instance answer of the Lab's `facts <instance>` or MCP `ac_facts` read without a
 key prefix (`replay_facts_invalid` otherwise), at that answer's `read_at_unix_ms`; without
 `--facts` it evaluates the empty offline snapshot at the instant the replay started. The replay
 reports each step's decision record, its inputs, which perform nothing, and the page it reached;

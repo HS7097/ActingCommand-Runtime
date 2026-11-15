@@ -191,7 +191,11 @@ pub struct Operation {
     pub requests: Vec<RuntimeOperationKind>,
     /// Kinds it will send that the contract does not have yet.
     pub planned_requests: Option<Vec<String>>,
-    /// The commands, tools, console reads and scripts it replaces.
+    /// The commands, console reads and scripts it replaces; absent is none. Its `actinglab …`
+    /// entries say which of actinglab's own commands are the row's (the authoring module's
+    /// listing, help's `replaces`). Workflow #434 LAB-7: the entries that named actingctl, the
+    /// first MCP server's tools or an actingctl child are gone with those programs.
+    #[serde(default)]
     pub source: Vec<String>,
     /// For an operation no program has today: the board item it comes from.
     pub new: Option<String>,

@@ -31,17 +31,8 @@ pub enum Answer {
     Hook { outcome: Outcome, text: String },
 }
 
-/// Runs `agent-channel` when the first argument names it; `None` leaves every other command to
-/// the CLI.
-pub fn dispatch(arguments: &[OsString]) -> Option<Answer> {
-    let (command, words) = arguments.split_first()?;
-    if command.to_str() != Some(cli::COMMAND) {
-        return None;
-    }
-    Some(run(words))
-}
-
-/// The words after `agent-channel`, run.
+/// The words after `agent-channel`, run (the rescue module's `agent …` rows hand them on; Workflow
+/// #434 LAB-7: actingctl's `agent-channel`, its `dispatch`, is deleted with actingctl).
 pub fn run(words: &[OsString]) -> Answer {
     match cli::run(words) {
         Ok(CliAnswer::Members(members)) => Answer::Line(cli_line::success(

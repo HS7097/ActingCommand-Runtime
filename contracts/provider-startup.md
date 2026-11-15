@@ -119,7 +119,7 @@ that adb was hashed before the ledger opened, see
 endpoint) is registered with a PENDING binding instead of being refused: the
 discovered facts plus the host the binding will be completed with (the reported
 `adb_host_ip` if any, else the declared `host`, else `127.0.0.1`), but no port;
-it is never bound with a guessed port, and `actingctl emulator start` resolves
+it is never bound with a guessed port, and the Lab's `emu start` resolves
 the port (`emulator-control.md`, "Cold start"). Startup discovery succeeds at
 most once per startup and startup re-probes nothing later. A later explicit instance
 discovery query (`RuntimeOperation::DiscoverInstances`) re-runs the same

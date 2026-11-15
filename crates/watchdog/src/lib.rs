@@ -87,7 +87,7 @@ use std::path::{Path, PathBuf};
 use std::process::{ExitCode, ExitStatus};
 use std::time::{Duration, SystemTime};
 
-pub(crate) const USAGE: &str = "usage: actingctl watchdog <status|run-once [--from-task]|install|uninstall> --root <install root>";
+pub(crate) const USAGE: &str = "usage: actingwatch [status|install|uninstall] (without a word: one tick of the watchdog's task)";
 /// The report's schema (model §7.5).
 pub(crate) const REPORT_SCHEMA: &str = "actingcommand.watchdog.report.v2";
 const RUN_LOCK: &str = "run.lock";
@@ -1312,7 +1312,9 @@ fn install(root: &Path) -> Report {
     };
     let root_plain = installation.root_plain.clone();
     let launcher = task::launcher(&root_plain);
-    let entry = root_plain.join("runtime").join("actingctl.exe");
+    // Workflow #434 LAB-7: the Runtime's fixed entry is the daemon the watchdog starts (row 7f),
+    // no longer `runtime\actingctl.exe`, which LAB-7 deleted.
+    let entry = root_plain.join("runtime").join(observe::RUNTIME_IMAGE);
     for program in [&entry, &launcher] {
         // Deploy the Runtime and Tools that carry the watchdog first.
         if !program.is_file() {

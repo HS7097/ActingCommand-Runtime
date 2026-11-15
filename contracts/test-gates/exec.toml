@@ -1132,7 +1132,6 @@ tests = [
     "actingcommand-lab::lib::gate_396_rec4::rec4_a_scaled_template_mark_needs_every_factor_on_some_frame",
     "actingcommand-lab::lib::gate_396_rec4::rec4_a_masked_template_mark_is_self_tested_with_its_mask_and_can_be_followed",
     "actingcommand-lab::lib::gate_396_rec4::rec4_a_unique_template_mark_with_a_second_place_in_its_margin_is_refused_with_it",
-    "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_rec4::gate_ac_record_mark_hands_a_click_follow_request_to_actinglab_unchanged",
 ]
 incident = ["#396"]
 # Workflow #336 PKG-S4 (option 丙; forced compromise T-01): actinglab package dry-run reads its package by its path, so a content directory is simulated like a package file and the result names the package by package_id, with no digest; actinglab refuses a retired package digest flag by name; package validate takes no hash and reports none (M-PKG v1.1 §4.5)
@@ -1169,7 +1168,6 @@ tests = [
 ]
 incident = ["#373 NAV-3a"]
 
-
 # Workflow #390 EXEC-3 (FCM E-02; register §1.70): in a run the host starts itself (a startup package, a recovery ladder rung), a page-graph package whose entry_page is any and whose first operation is a from-any application effect begins with that effect before any capture, as a linear_steps application entry does (R24): a page already shown, the terminal page included, does not skip it, and such a rung needs neither capture nor input before it; every other run takes its initial frame first and an already terminal page ends it without the effect (#316-B3)
 [[gate]]
 key = "68"
@@ -1180,7 +1178,6 @@ tests = [
     "actingcommand-execution-kernel::lib::contained_task::gate_390_exec3::exec3_a_rung_needs_no_capture_before_a_page_graph_application_entry",
 ]
 incident = ["#390"]
-
 
 # Workflow #308 SEL-L6b (FCM row SEL-L6b; compromise T-01): actinglab replay --frames --select <operation> --scan <file> replays one select step's scan through the kernel's scan path (dry_run_scan) over a recorded forward run, the step's dispatched frame first; the scan's policy evaluates the given fact snapshot at the instant it was read, or the empty offline snapshot, so a fresh fact keeps every card a member and a stale or missing one drops every card as unknown while the list is still covered; a recording that needs a frame it does not hold fails selection_scan_replay_frame_missing, never passes; a scan that does not cover its list exits non-zero with replay_scan_refused and its end's outcome; without an OCR model the scan replay is refused with lab_ocr_unavailable before any frame is evaluated; a scan whose evaluator aborts in a viewport replays as aborted, coverage incomplete with its start, no member and the evaluator's unknown decision, never covered (wave-14 rulings SEL-L6b item 2; TEST-FU; partial: actinglab's non-zero exit for an aborted scan is not reached in CI, since a scan's identity reads an OCR target and actinglab without an OCR model refuses such a package before any frame)
 [[gate]]
@@ -1194,7 +1191,6 @@ tests = [
     "actingcommand-execution-kernel::lib::contained_task::gate_308_l6b::gate_l6b_a_scan_the_evaluator_aborts_in_a_viewport_replays_aborted_never_covered",
 ]
 incident = ["#308"]
-
 
 # Workflow #331 RSU-1 (additions-v012 row RSU-1; compromise T-01): actinglab recognition-regression replays the frames a run's ledger kept, named by MCP-6's per-step frame references, with a new package or version, offline from the state root; per target of each frame's original record (the run's last recognition fact on the frame) it gives whether the package finds it now, its score and whether that agrees, and per target the counts and the error rate against the original record (disagreements per mille of the frames compared); a target the package lacks is absent and not compared, and a frame whose material is gone or that has no original record is listed and not compared; the package that ran agrees with its own record, and a version that changed a page's colour loses that page on every frame
 [[gate]]
@@ -3285,7 +3281,6 @@ tests = [
     "actingcommand-lab::lib::gate_463_r2::r2_previous_on_a_step_with_a_page_transition_takes_its_transition_frames",
     "actingcommand-lab::lib::gate_463_r2::r2_an_archived_recording_takes_no_ending_and_a_reopened_one_is_active",
     "actingcommand-actinglab::bin:actinglab::commands::session_record::lab2_tests::r2_the_ending_flags_declare_the_request_forms_ending",
-    "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_463_r2::r2_ac_record_mark_hands_an_ending_request_to_actinglab_unchanged",
 ]
 incident = ["#463 R2"]
 

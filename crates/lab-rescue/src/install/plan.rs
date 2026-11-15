@@ -31,10 +31,11 @@ pub(crate) const PLAN_SCHEMA: &str = "actingcommand.install-plan.v1";
 pub(crate) const STATE_ROOT_MEMBER: &str = "state_root";
 const DEFAULTS_FILE: &str = "actingd.defaults.json";
 /// The images that may be renamed aside while they run, by file name, in `tools\` and `runtime\`
-/// alike: `actingctl.exe` and, Workflow #434 LAB-5G6 (the coordinator's ruling 5 on board #434),
-/// the Lab's MCP server `actinglab-mcp.exe`, which its client keeps running as it keeps
-/// `actingctl.exe mcp-serve`. `actinglab.exe` is not one of them.
-const RENAMABLE_IMAGES: [&str; 2] = ["actingctl.exe", "actinglab-mcp.exe"];
+/// alike: Workflow #434 LAB-5G6 (the coordinator's ruling 5 on board #434), the Lab's MCP server
+/// `actinglab-mcp.exe`, which its client keeps running. `actinglab.exe` is not one of them.
+/// Workflow #434 LAB-7: `actingctl.exe`, which `actingctl mcp-serve` kept running, left the list
+/// with the program; no build after it carries one to replace.
+const RENAMABLE_IMAGES: [&str; 1] = ["actinglab-mcp.exe"];
 /// #411 P49 (MCP-ENTRY review L9): the MCP entries' images (`<root>\mcp-entry\g<N>\`), one
 /// program per generation: `actingcommand-mcp-entry.exe` (`g1`) and, Workflow #434 LAB-5G6 (the
 /// coordinator's ruling of 2026-11-12 on board #434), `actingcommand-mcp-entry-g2.exe` (`g2`).
@@ -132,7 +133,7 @@ pub(crate) struct Running {
     /// `actingcommand-actingd.exe` under the root.
     pub(crate) runtime: Vec<RunningImage>,
     pub(crate) owner_lock_held: bool,
-    /// Running `actingctl.exe` and `actinglab-mcp.exe` images (`RENAMABLE_IMAGES`) that are
+    /// Running `actinglab-mcp.exe` images (`RENAMABLE_IMAGES`) that are
     /// renamed aside and keep running.
     pub(crate) renamed: Vec<RunningImage>,
     /// Workflow #434 LAB-3 fix 1: the image of the process that plans, when it would change and

@@ -31,7 +31,7 @@ use std::ffi::{OsStr, OsString};
 use std::path::{self, PathBuf};
 use std::time::{Duration, Instant};
 
-const USAGE: &str = "usage: actingctl observe --state-root <path> --instance <alias|instance_id|ADB port> --export <directory>";
+const USAGE: &str = "usage: actinglab frame <instance> --out <directory>";
 /// How long the CLI reads the frame back; every exchange is also bounded by the client's own
 /// I/O timeout. Workflow #434 LAB-5C: actinglab's `material --out` reads a material back within
 /// it too.

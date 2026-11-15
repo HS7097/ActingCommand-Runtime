@@ -87,29 +87,6 @@ tests = [
 ]
 incident = ["#375 R375-3 v1.2", "#382 A-4"]
 
-# Request shaping
-[[gate]]
-key = "14"
-coverage = "Y"
-tests = [
-    "actingcommand-actingctl::bin:actingctl::tests::task_run_request_uses_maximum_bounded_response_deadline",
-    "actingcommand-actingctl::bin:actingctl::tests::task_run_request_preserves_the_typed_recovery_identity",
-]
-incident = []
-
-# The Runtime survives a killed client; a replay cannot duplicate a terminal
-[[gate]]
-key = "16"
-coverage = "Y"
-tests = [
-    "actingcommand-actingctl::c4_process::actingctl_observe_and_reset_leave_runtime_alive_and_share_projection_shape",
-    "actingcommand-actingctl::c4_process::actingctl_status_monitor_and_stream_are_runtime_backed",
-    "actingcommand-actingctl::c4_process::actingctl_runs_neutral_contained_task_without_lab_and_runtime_survives_client_exit",
-    "actingcommand-actingctl::c4_process::process_replay_cannot_duplicate_or_conflict_a_contained_task_terminal",
-    "actingcommand-actingctl::c4_process::runtime_finishes_and_rebuilds_contained_task_after_client_is_killed",
-]
-incident = []
-
 # The watchdog decision table
 [[gate]]
 key = "20"
@@ -165,7 +142,6 @@ tests = [
     "actingcommand-watchdog::lib::task::tests::definition_is_utf16_xml_with_every_setting_escaped",
     "actingcommand-watchdog::lib::task::tests::the_task_query_answers_in_json",
     "actingcommand-watchdog::lib::task::tests::names_csv_and_console_output_are_read_as_windows_prints_them",
-    "actingcommand-actingctl::watchdog_process::watchdog_install_registers_the_task_and_uninstall_removes_it",
 ]
 incident = []
 
@@ -188,66 +164,6 @@ tests = [
 ]
 incident = ["#421 INV-1119"]
 
-# Era classification and JSON-RPC errors
-[[gate]]
-key = "28"
-coverage = "Y"
-tests = [
-    "actingcommand-actingctl::gate::mcp_shell::gate_initialize_answers_the_requested_legacy_version_and_2025_11_25_for_any_other",
-    "actingcommand-actingctl::gate::mcp_shell::gate_a_modern_request_is_served_without_initialize_and_every_modern_result_is_marked",
-    "actingcommand-actingctl::gate::mcp_shell::gate_a_legacy_or_unknown_meta_version_is_32022_and_a_request_of_no_era_is_32602",
-    "actingcommand-actingctl::gate::mcp_shell::gate_malformed_messages_unknown_methods_and_malformed_calls_get_their_json_rpc_codes",
-    "actingcommand-actingctl::gate::mcp_shell::gate_tool_definitions_and_call_results_take_the_shape_of_the_negotiated_version",
-    "actingcommand-actingctl::gate::mcp_shell::gate_a_batch_is_answered_as_one_array_under_2025_03_26_and_refused_after_later_versions",
-    "actingcommand-actingctl::gate::mcp_shell::gate_a_legacy_ping_is_answered_before_initialize_and_a_modern_ping_is_32601",
-]
-incident = ["#382 MCP-T1"]
-
-# The result envelope and output budget; an overflow goes to the export, never to silent truncation
-[[gate]]
-key = "30"
-coverage = "Y"
-tests = [
-    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_mcpt1::gate_a_result_over_the_budget_is_output_budget_exceeded_and_one_inside_is_unchanged",
-    "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_mcpt1::gate_a_lab_answer_over_the_budget_is_exported_whole_and_one_inside_comes_back_unchanged",
-    "actingcommand-actingctl::gate::mcp_shell::gate_an_events_page_over_the_budget_is_truncated_and_its_cursor_resumes_after_its_last_row",
-]
-incident = ["#382 MCP-T1"]
-
-# Jobs: at most 8, handle lookup, and a wait that stops on cancel
-[[gate]]
-key = "31"
-coverage = "Y"
-tests = [
-    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_mcpt1::gate_eight_jobs_run_a_ninth_is_refused_unrun_and_a_start_succeeds_once_one_ended",
-    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_mcpt1::gate_find_returns_a_started_job_by_its_handle_and_none_for_one_never_started",
-    "actingcommand-actingctl::gate::mcp_shell::gate_get_run_answers_handle_unknown_for_job_handles_this_process_never_held",
-    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_mcpt1::gate_a_cancelled_wait_returns_false_and_leaves_the_job_running",
-]
-incident = ["#382 MCP-T1"]
-
-# Cursors round-trip; after a reconnect an old cursor answers cursor_invalid
-[[gate]]
-key = "34"
-coverage = "Y"
-tests = [
-    "actingcommand-actingctl::gate::mcp_shell::gate_events_pages_follow_next_cursor_without_gap_or_repeat_up_to_the_first_snapshot",
-    "actingcommand-actingctl::gate::mcp_shell::gate_an_events_cursor_sent_with_other_filters_answers_cursor_invalid",
-    "actingcommand-actingctl::gate::mcp_shell::gate_an_events_cursor_from_before_a_runtime_restart_answers_cursor_invalid",
-    "actingcommand-actingctl::gate::mcp_shell::gate_an_events_cursor_of_another_server_process_answers_cursor_invalid",
-]
-incident = ["#382 MCP-T1"]
-
-# At stdin EOF the server answers in-flight requests within 2 s and exits 0
-[[gate]]
-key = "35"
-coverage = "Y"
-tests = [
-    "actingcommand-actingctl::gate::mcp_shell::gate_at_stdin_eof_the_requests_already_read_are_answered_and_the_server_exits_0",
-    "actingcommand-actingctl::gate::mcp_shell::gate_a_call_still_running_at_stdin_eof_does_not_hold_the_exit",
-]
-incident = ["#382 MCP-T1"]
-
 # vision-provider-check never runs a model
 [[gate]]
 key = "40"
@@ -257,61 +173,6 @@ tests = [
 ]
 incident = []
 
-# CLI and MCP give the same answer for the same parameters: one parity test per slice on the real binaries (MCP-0 command table v1.1 §2.3; Workflow #389 MCP-1, MCP-5a, MCP-3, MCP-7, MCP-11, MCP-4, MCP-8, MCP-14, MCP-6, MCP-13a, MCP-21; Workflow #385 P-m; Workflow #384 D2-S5; Workflow #410 item 1; Workflow #410 item 6)
-[[gate]]
-key = "41"
-coverage = "Y"
-tests = [
-    "actingcommand-actingctl::gate::mcp_events_parity::gate_actingctl_events_prints_the_ac_events_result_of_the_same_parameters",
-    "actingcommand-actingctl::gate::mcp_observe_parity::gate_observe_export_and_ac_observe_answer_the_same_frame_for_the_same_instance_argument",
-    "actingcommand-actingctl::gate::mcp_runs_parity::gate_actingctl_runs_and_ac_runs_answer_the_same_run_list_for_the_same_arguments",
-    "actingcommand-actingctl::gate::mcp_diagnose_parity::gate_actingctl_diagnose_and_ac_diagnose_answer_the_same_diagnosis_with_its_groups",
-    "actingcommand-actingctl::gate::mcp_packs::gate_packs_and_ac_packs_answer_the_same_bindings_of_the_selected_configuration",
-    "actingcommand-actingctl::gate::mcp_facts_parity::gate_actingctl_facts_and_ac_facts_answer_the_same_facts_for_the_same_arguments",
-    "actingcommand-actingctl::gate::mcp_overview_parity::gate_actingctl_overview_and_ac_overview_answer_the_same_overview_for_the_same_arguments",
-    "actingcommand-actingctl::gate::mcp_codes_parity::gate_actingctl_codes_and_ac_outcome_code_answer_the_same_entry_and_list_for_the_same_arguments",
-    "actingcommand-actingctl::gate::mcp_run_evidence_parity::gate_actingctl_run_evidence_and_ac_run_evidence_answer_the_same_steps_for_the_same_arguments",
-    "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_mcp13a::gate_ac_app_runs_actinglab_session_app_with_the_same_action_and_instance",
-    "actingcommand-actingctl::gate::emulator_wait::gate_an_emulator_control_that_ends_within_its_wait_answers_what_emulator_and_ac_emulator_answer",
-    "actingcommand-actingctl::gate::mcp_ladder_drill_parity::gate_actingctl_ladder_drill_and_ac_ladder_drill_send_the_same_drill_and_answer_the_same_object",
-    "actingcommand-actingctl::gate::mcp_events_parity::gate_actingctl_events_and_ac_events_answer_the_same_page_for_a_type_union_and_a_fact_key",
-    "actingcommand-actingctl::gate::mcp_events_parity::gate_actingctl_events_and_ac_events_answer_the_same_summary_page_with_each_record_s_outcome",
-    "actingcommand-actingctl::gate::mcp_overview_parity::gate_actingctl_overview_and_ac_overview_answer_the_same_foreground_the_instance_last_reported",
-    "actingcommand-actingctl::gate::mcp_devices_parity::gate_actingctl_devices_and_the_ac_device_tools_answer_the_same_for_the_same_arguments",
-    "actingcommand-actingctl::gate::mcp_performance_parity::gate_actingctl_perf_status_and_ac_overview_answer_the_same_performance_status",
-    "actingcommand-actingctl::gate::mcp_fact_refresh_parity::gate_actingctl_fact_refresh_and_ac_overview_answer_the_same_fact_refresh_status",
-    "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_labobs::gate_labobs_ac_lab_observe_and_ac_lab_do_pass_preview_to_actinglab_as_the_cli_takes_it",
-    "actingcommand-actingctl::gate::mcp_capability_gap_parity::gate_actingctl_capability_gap_and_ac_capability_gap_record_the_same_gap_locally",
-    "actingcommand-actingctl::gate::mcp_events_parity::gate_actingctl_events_and_ac_events_answer_the_same_newest_page_without_a_position",
-]
-incident = ["#389", "#385 P-m", "#384 D2-S5", "#410", "#434 CLI-EV"]
-
-# actingctl config set|clear and MCP ac_config_set send the same changes, from an observer session (Workflow #387 D1b, D1-M8)
-[[gate]]
-key = "42"
-coverage = "Y"
-tests = [
-    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_387_d1b::d1_m8_cli_and_mcp_changes_leave_the_same_values_in_effect_from_an_observer_session",
-]
-incident = ["#387"]
-
-# Workflow #429 R-4 (0.12.36; brief rd-1031/brief-r4.md; register §1.239; contracts/runtime-config.md, "ConfigureSettings"; contracts/runtime-interface.md, the command and tool tables), test 7, the counters' read points: on an in-process Runtime with a fixed clock, ac_config_set and then actingctl config set each answer the settings' version after their change, another each time, and MCP ac_facts scope config and actingctl status --config each answer that same config_version beside their records
-[[gate]]
-coverage = "Y"
-tests = [
-    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_429_r4::r4_t7_each_read_point_answers_the_version_the_last_receipt_carried",
-]
-incident = ["#429 R-4"]
-
-# Workflow #429 R-12 (0.12.38; brief rd-1031/agt/brief-r12.md; register §1.264; contracts/runtime-interface.md, the command and tool tables): on an in-process Runtime with a fixed clock, actingctl routine-summary --hour and --day, with and without --since, print the page the Runtime answers to the same read as the line's members beside request_routine_summary_completed; no width, both widths, a width twice, a cursor that is no number and an unknown flag are actingctl_usage_invalid naming the flag, and a selector no instance has is instance_unknown. ac_routine_summary is in the tool table on the observer tier, read-only, not destructive, idempotent, granularity required; it answers the same page (since as the cursor) as the CLI prints; an unknown or missing granularity is arguments_invalid and an unknown instance instance_unknown
-[[gate]]
-coverage = "Y"
-tests = [
-    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_429_r12::actingctl_summary_prints_the_page",
-    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_429_r12::mcp_routine_summary_is_an_observer_read",
-]
-incident = ["#429 R-12"]
-
 # actingctl, MCP and the watchdog speak outcomes: one result line per exit with its exit code by category, MCP errors {class, outcome}, watchdog report v2 and state.json v2 (Workflow #378 A5)
 [[gate]]
 key = "43"
@@ -319,27 +180,12 @@ coverage = "Y"
 tests = [
     "actingcommand-lab-ops::lib::cli_line::tests::a_result_line_is_the_result_members_and_one_outcome_envelope",
     "actingcommand-lab-ops::lib::cli_line::tests::the_exit_code_follows_the_category_and_a_refusal_is_never_zero",
-    "actingcommand-actingctl::bin:actingctl::tests::every_command_has_its_success_code_and_every_failure_its_code",
     "actingcommand-lab-ops::lib::events::tests::each_argument_problem_of_events_is_the_usage_outcome_with_its_argument_values",
-    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_mcpt1::gate_a_tool_error_is_exactly_class_and_outcome_and_tier_not_enabled_names_its_blocker",
-    "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_mcpt1::gate_interpret_answers_each_actinglab_exit_by_its_class_with_actinglab_s_code_as_the_cause",
     "actingcommand-watchdog::lib::decide::tests::every_decision_has_its_code_category_and_exit",
     "actingcommand-watchdog::lib::tests::report_v2_of_a_live_owner_has_its_schema_outcome_and_attention",
     "actingcommand-watchdog::lib::state::tests::state_v2_round_trips_results_and_sets_a_v1_document_aside",
-    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_387_d1b::rk1_an_unknown_key_refuses_ac_config_set_whole_with_a_declared_receipt_top",
 ]
 incident = ["#378 A5", "#378 RK-1"]
-
-# actingctl refuses a flag a subcommand does not take, a flag given twice and a stray word, naming it (Workflow #382 A1-FLAG)
-[[gate]]
-key = "44"
-coverage = "Y"
-tests = [
-    "actingcommand-actingctl::gate::flag_refusals::gate_every_subcommand_refuses_a_flag_it_does_not_take_naming_it",
-    "actingcommand-actingctl::gate::flag_refusals::gate_every_subcommand_refuses_a_flag_given_twice_naming_it",
-    "actingcommand-actingctl::gate::flag_refusals::gate_every_subcommand_refuses_a_stray_word_naming_it",
-]
-incident = ["#382 A1-FLAG"]
 
 # A configuration naming a retired failed-run (K/T) key is refused as unknown at load, by a start and by check-config, and the key table has no row for it (Workflow #382 L-5b)
 [[gate]]
@@ -349,17 +195,6 @@ tests = [
     "actingcommand-actingd::bin:actingcommand-actingd::config::tests::l5b_a_configuration_naming_a_retired_failed_run_key_is_refused_as_unknown",
 ]
 incident = ["#382 L-5b"]
-
-# ac_overview cuts an answer over the output budget one block at a time in the order of the MCP-0 command table §4.9, marks each cut block and never cuts the daemon, the pauses, a row's identity, lease or queue, or incomplete; actingctl overview and ac_overview refuse a section name §4.9 does not have (Workflow #389 MCP-8)
-[[gate]]
-key = "47"
-coverage = "Y"
-tests = [
-    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_mcp8::gate_ac_overview_cuts_every_block_in_the_order_of_4_9_and_never_the_identity_or_pauses",
-    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_mcp8::gate_ac_overview_stops_cutting_as_soon_as_the_answer_fits",
-    "actingcommand-actingctl::gate::mcp_overview_parity::gate_overview_and_ac_overview_refuse_an_unknown_section_naming_it",
-]
-incident = ["#389 MCP-8"]
 
 # actingd speaks outcomes: each daemon outcome is a developer line and one `OUTCOME actingd:` line, at the level and the exit code of its category; a start refusal is appended to the fallback log only when nobody keeps stderr, with install_root; every subcommand exit is one report line with its outcome; the watchdog decides by the terminal outcome's category, ignores another root's fallback-log line, and escalates a run-out budget to panic_unrecovered only when every start ended in runtime_restart_required (Workflow #378 A6a); an idle actingd accepts the first shutdown request right after runtime_ready, exits 0 and ends with runtime_stopped (train 11, SHUT-FU)
 [[gate]]
@@ -382,7 +217,6 @@ key = "49"
 coverage = "Y"
 tests = [
     "actingcommand-lab-ops::lib::code_lookup::tests::each_refusal_of_a_code_lookup_carries_its_registered_code",
-    "actingcommand-actingctl::bin:actingctl::mcp::code_lookup::tests::a_list_over_the_output_budget_is_cut_with_truncated_and_read_on_from_its_cursor",
 ]
 incident = ["#389 MCP-14"]
 
@@ -406,34 +240,14 @@ tests = [
 ]
 incident = ["#422 LN-VERIFY"]
 
-# actingctl's closed grammar: the documented forms of pause/resume, emulator, selfcheck and monitor-set parse to their commands (install-transition's left with the subcommand, Workflow #434 LAB-6S4a), and a usage error is actingctl_usage_invalid with exit 1 before any connection (Workflow #382 A-1 G10)
-[[gate]]
-key = "13"
-coverage = "Y"
-tests = [
-    "actingcommand-actingctl::bin:actingctl::gate_382_a1::gate_the_documented_forms_parse_to_their_commands",
-    "actingcommand-actingctl::gate::cli_grammar::gate_a_usage_error_of_these_subcommands_is_reported_before_any_connection",
-    "actingcommand-actingctl::gate::cli_grammar::gate_an_empty_instance_alias_is_a_usage_error_not_a_global_scope",
-]
-incident = ["#382 A-1 G10"]
-
-# A request the Runtime refuses exits 1 with the refused receipt's outcome as the one result line (Workflow #382 A-1 G10)
-[[gate]]
-key = "15"
-coverage = "Y"
-tests = [
-    "actingcommand-actingctl::gate::cli_grammar::gate_a_refused_request_of_these_subcommands_exits_1_with_the_receipts_outcome",
-]
-incident = ["#382 A-1 G10"]
-
-# request-shutdown --wait waits for the exact owner epoch's close and its process's exit; another epoch's close never counts, and past its time it is shutdown_wait_timeout with the last state seen (Workflow #382 A-1 G11, injected poller and clock)
+# request-shutdown --wait waits for the exact owner epoch's close and its process's exit; another epoch's close never counts, and past its time it is shutdown_wait_timeout with the last state seen (Workflow #382 A-1 G11, injected poller and clock). Workflow #434 LAB-7: the wait is lab-ops' `shutdown_wait`, which the Lab's `shutdown --wait` runs; its three tests moved there from actingctl
 [[gate]]
 key = "18"
 coverage = "Y"
 tests = [
-    "actingcommand-actingctl::bin:actingctl::gate_382_a1::gate_the_wait_completes_when_the_target_epoch_closed_and_its_process_exited",
-    "actingcommand-actingctl::bin:actingctl::gate_382_a1::gate_another_epochs_close_does_not_end_the_wait_which_times_out_with_the_last_state",
-    "actingcommand-actingctl::bin:actingctl::gate_382_a1::gate_a_closed_epoch_whose_process_outlives_the_wait_times_out_with_the_last_state",
+    "actingcommand-lab-ops::lib::shutdown_wait::g11_tests::gate_the_wait_completes_when_the_target_epoch_closed_and_its_process_exited",
+    "actingcommand-lab-ops::lib::shutdown_wait::g11_tests::gate_another_epochs_close_does_not_end_the_wait_which_times_out_with_the_last_state",
+    "actingcommand-lab-ops::lib::shutdown_wait::g11_tests::gate_a_closed_epoch_whose_process_outlives_the_wait_times_out_with_the_last_state",
 ]
 incident = ["#382 A-1 G11"]
 
@@ -464,7 +278,6 @@ coverage = "Y"
 tests = [
     "actingcommand-actinglab::bin:actinglab::tests::gate_389_u2::u2_via_names_the_counter_that_forwarded_the_work",
     "actingcommand-actinglab::bin:actinglab::tests::gate_389_u2::u2_an_actinglab_connection_binds_the_lab_channel_with_a_lab_envelope_and_its_via",
-    "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_389_u2::u2_an_option_tool_starts_actinglab_naming_mcp_as_its_forwarding_counter",
     "actingcommand-actingd::bin:actingcommand-actingd::config::tests::u2_the_two_lab_options_are_read_and_reported_and_never_settable",
 ]
 incident = ["#389 U-2"]
@@ -475,28 +288,8 @@ key = "51"
 coverage = "Y"
 tests = [
     "actingcommand-lab-ops::lib::run_evidence::tests::each_refusal_of_run_evidence_carries_its_registered_code",
-    "actingcommand-actingctl::bin:actingctl::mcp::run_evidence::tests::a_page_over_the_output_budget_is_cut_to_whole_steps_with_truncated_and_next_step",
 ]
 incident = ["#389 MCP-6"]
-
-# ac_app is an operator tool before U-3: a server without the operator tier neither lists it nor runs it (tier_not_enabled, mcp_blocker server_tier); with it, ac_app is listed destructive and not read-only, refuses an action actinglab session app does not have and a call without its instance (arguments_invalid), and answers lab_tool_unavailable (mcp_blocker install_root) when it knows no installation (Workflow #389 MCP-13a)
-[[gate]]
-key = "52"
-coverage = "Y"
-tests = [
-    "actingcommand-actingctl::gate::mcp_app::gate_ac_app_is_an_operator_tool_that_refuses_what_session_app_does_not_take",
-]
-incident = ["#389 MCP-13a"]
-
-# actingctl emulator start|stop|restart and task-run take --wait <s> (1-3600); a wait that ends before its request prints {request_id?, correlation_id, state: in_progress} with command_wait_expired (operation, request_id when known, waited_ms) and exits 1, while the Runtime goes on with the request after the CLI has gone (Workflow #389 MCP-21)
-[[gate]]
-key = "53"
-coverage = "Y"
-tests = [
-    "actingcommand-actingctl::bin:actingctl::tests::mcp21_wait_bounds_an_emulator_control_or_a_task_run_and_its_expiry_names_the_request",
-    "actingcommand-actingctl::gate::emulator_wait::gate_an_emulator_wait_that_ends_first_exits_1_with_command_wait_expired_and_the_control_goes_on",
-]
-incident = ["#389 MCP-21"]
 
 # A MuMu resolution reason, as provider startup records it and check-config notes it, carries the context its resolving step recorded as values: what was counted, how many and whether exactly, the resolver rung, and how the adb, the MuMu folder and the capture DLL were configured (Workflow #378 A7; key after the wave 12 reservations apps 50 to 53)
 [[gate]]
@@ -516,15 +309,6 @@ tests = [
 ]
 incident = ["#369", "#361"]
 
-# actingctl ladder-drill --instance <selector> [--device] and MCP ac_ladder_drill (instance, device) send the same DrillRecoveryLadder (a plan without --device or with device false, alias or instance_id resolved with one status read) and answer the same drill {instance_alias, mode, ladder_request_id}, the CLI beside recovery_ladder_drill_queued; a device that is not a boolean is arguments_invalid, and an observer server neither lists nor runs the operator tool (Workflow #390 DRILL-1)
-[[gate]]
-key = "63"
-coverage = "Y"
-tests = [
-    "actingcommand-actingctl::gate::mcp_ladder_drill_parity::gate_actingctl_ladder_drill_and_ac_ladder_drill_send_the_same_drill_and_answer_the_same_object",
-]
-incident = ["#390 DRILL-1"]
-
 # actingctl events and ac_events take event_types (any of at most 32 types, each once, not with event_type, none excluded) and fact_key (an instance or a runtime fact key); a query that breaks either rule is refused before any read with the Runtime's invalid_event_query_event_type_filter or invalid_event_query_fact_key_filter, and one that keeps it reaches the query as given (Workflow #389 MCP-2)
 [[gate]]
 key = "58"
@@ -542,15 +326,6 @@ tests = [
     "actingcommand-lab-ops::lib::events::tests::mcp1_follow_up_detail_takes_summary_beside_brief_and_payload",
 ]
 incident = ["#389 MCP-1"]
-
-# ac_overview cuts each instance row's foreground (the package last seen in the foreground, MCP-5b) after every row's monitor and before install.build, marking it foreground_truncated, and never cuts a row's identity, pause, lease_active or queued (Workflow #389 MCP-5b; MCP-0 command table v1.1 §4.6, §4.9)
-[[gate]]
-key = "60"
-coverage = "Y"
-tests = [
-    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_mcp8::gate_mcp5b_ac_overview_cuts_each_row_s_foreground_after_the_monitors_and_before_the_build",
-]
-incident = ["#389 MCP-5b"]
 
 # actingctl overview and ac_overview answer the active policy catalog generation as the program fact config.catalog names it (null while none is active, invalid_fact_snapshot_record for a record that does not read back), the configuration generation actingd runs beside the one the install root selects with config_generation_mismatch when they differ, and one package_binding_unreadable per binding of the selected configuration whose path is missing (Workflow #389 MCP-9a; MCP-0 command table v1.1 §4.10; register A5)
 [[gate]]
@@ -591,19 +366,6 @@ tests = [
 ]
 incident = ["#336 PKG-S1", "#382 A-4"]
 
-# emulator restart reports the failure and the final state: actingctl emulator restart and MCP
-# ac_emulator run the Runtime's Stop then Start, never the vendor's restart; a Start whose wait
-# expires fails the restart at its start phase and leaves the instance pending, with no stale
-# device.connected (Workflow #381 B; Workflow #382 A-4, test plan v2.2 A-4 G4)
-[[gate]]
-key = "19"
-coverage = "Y"
-tests = [
-    "actingcommand-actingctl::gate::emulator_restart::gate_emulator_restart_whose_start_times_out_exits_non_zero_and_leaves_no_stale_connection",
-    "actingcommand-actingctl::gate::emulator_restart::gate_ac_emulator_restart_whose_start_times_out_answers_its_failure_and_never_dispatches_the_vendor_restart",
-]
-incident = ["#381 B", "#382 A-4"]
-
 # Tick orchestration on the APPS-I3 seams: a start that answers is started, one whose process exits
 # first is start_failed exited_during_startup, one that never answers is start_timeout after its
 # start window (#411 A66: watchdog.start_window_ms, 900 s by default; it was 180 s),
@@ -626,19 +388,8 @@ key = "55"
 coverage = "Y"
 tests = [
     "actingcommand-actingd::process::s4_t1_a_package_digest_key_refuses_the_configuration_and_the_path_shape_checks",
-    "actingcommand-actingctl::bin:actingctl::tests::s4_t3_task_run_refuses_a_package_digest_flag",
-    "actingcommand-actingctl::c4_process::actingctl_runs_neutral_contained_task_without_lab_and_runtime_survives_client_exit",
-    "actingcommand-actingctl::gate::mcp_pkgs4::s4_t4_ac_run_pack_and_ac_pack_check_take_no_package_digest",
 ]
 incident = ["#336 PKG-S4"]
-# actingctl perf-status prints the shadow measurement's status (PerformanceStatus) with runtime_performance_reported, and without actingd it reports the Runtime's absence (runtime_info_unavailable) and exits 1; the overview's performance block is that status (Workflow #385 P-m, PERF §4.6, test row Tm-12)
-[[gate]]
-key = "57"
-coverage = "Y"
-tests = [
-    "actingcommand-actingctl::gate::mcp_performance_parity::gate_perf_status_without_actingd_exits_1_with_the_runtime_s_absence",
-]
-incident = ["#385 P-m"]
 # Workflow #336 PKG-S5 (option 丙): actinglab package digest is retired, an unknown package command (validation_failed, exit 2) (M-PKG v1.1 §4.6 S5-T4)
 [[gate]]
 key = "64"
@@ -648,7 +399,6 @@ tests = [
 ]
 incident = ["#336 PKG-S5"]
 
-
 # Workflow #384 D2-S5 (D2 model v1.4.2 §5.2, §8 T37): each fact refresh transition is one actingd developer line at its category's level naming its code, every value the model requires of it, its cycle and its number, written together with one OUTCOME actingd line carrying the same outcome (A6a's writer); a write that fails is counted and never stops the driver
 [[gate]]
 key = "65"
@@ -657,15 +407,6 @@ tests = [
     "actingcommand-actingd::bin:actingcommand-actingd::gate_384_d2s5::d2s5_t37_each_transition_is_one_developer_line_and_one_outcome_line",
 ]
 incident = ["#384"]
-
-# Workflow #410 item 1 (board #410, approved by Alice 2026-10-15): ac_lab_observe and ac_lab_do keep A5's shapes and budgets: an answer over the output budget is still exported whole, and it still states its frame inline: frame_coordinates, frame_path, preview and after_attachment stay in the answer, verbatim, each while the answer stays within the budget
-[[gate]]
-key = "66"
-coverage = "Y"
-tests = [
-    "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_labobs::gate_labobs_an_exported_answer_still_states_its_frame_inline_within_the_budget",
-]
-incident = ["#410"]
 
 # Workflow #410 item 6 (board #410, approved by Alice 2026-10-15): the local capability-gap log: actingctl capability-gap and ac_capability_gap append one JSON line {schema_version, recorded_at_unix_ms, via, capability, why} per gap to the user's local log and answer its path and the line; a capability or why that is blank, holds a line break or is over its bound (120, 500 characters) is refused before anything is written
 [[gate]]
@@ -677,12 +418,12 @@ tests = [
 ]
 incident = ["#410"]
 
-# Workflow #372 K4 (K372 addendum of 2026-10-15, K4.4 and row K4-T7, the ac_diagnose half; register §1.79): ac_diagnose keeps at most 10 of the instance's clock_slots rows, refused and superseded rows first, then deferred and expired rows, then owed rows, newest first in each, with clock_slots_total when fewer are kept
+# Workflow #372 K4 (K372 addendum of 2026-10-15, K4.4 and row K4-T7, the ac_diagnose half; register §1.79): ac_diagnose keeps at most 10 of the instance's clock_slots rows, refused and superseded rows first, then deferred and expired rows, then owed rows, newest first in each, with clock_slots_total when fewer are kept. Workflow #434 LAB-7: the test moved from actingctl's MCP tests into lab-ops, whose diagnose row both front ends answer
 [[gate]]
 key = "68"
 coverage = "Y"
 tests = [
-    "actingcommand-actingctl::bin:actingctl::mcp::tests::clock_slots::ac_diagnose_keeps_refused_and_superseded_rows_first_then_deferred_and_expired_then_owed",
+    "actingcommand-lab-ops::lib::diagnose::k4_tests::k4_t7_clock_slot_rows_keep_refused_and_superseded_first_then_deferred_and_expired_then_owed",
 ]
 incident = ["#372 K4"]
 
@@ -704,8 +445,6 @@ key = "69"
 coverage = "Y"
 tests = [
     "actingcommand-lab-ops::lib::overview::tests::nine1_each_overview_row_shows_its_emulator_as_last_read_with_the_time",
-    "actingcommand-actingctl::bin:actingctl::tests::nine1_status_shows_each_emulator_as_last_read_with_the_time",
-    "actingcommand-actingctl::gate::mcp_overview_parity::nine1_status_and_overview_show_unknown_while_the_runtime_holds_no_reading",
 ]
 incident = ["#390"]
 
@@ -732,7 +471,6 @@ key = "71"
 coverage = "Y"
 tests = [
     "actingcommand-actinglab::bin:actinglab::package_cli::gate_0121_pkgcheck::package_check_gives_the_runtime_admission_verdict_for_every_package_form",
-    "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_0121_pkgcheck::ac_pack_check_runs_actinglab_package_check_and_answers_its_data_verbatim",
 ]
 incident = ["#411 A5"]
 
@@ -743,7 +481,6 @@ coverage = "Y"
 tests = [
     "actingcommand-lab-ops::lib::overview::tests::a7_the_overview_row_shows_a_failed_capture_self_check_with_its_time",
     "actingcommand-lab-ops::lib::overview::tests::a7_a_passing_self_check_after_it_shows_passed",
-    "actingcommand-actingctl::gate::mcp_overview_parity::a7_cli_and_mcp_rows_carry_the_same_backend_selfcheck",
 ]
 incident = ["#411 A7"]
 
@@ -752,83 +489,8 @@ incident = ["#411 A7"]
 coverage = "Y"
 tests = [
     "actingcommand-lab-ops::lib::overview::tests::r0b2_an_overview_row_shows_the_status_activity_and_an_idle_row_has_no_member",
-    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_mcp8::r0b2_ac_overview_never_cuts_a_row_s_activity",
-    "actingcommand-actingctl::gate::mcp_overview_parity::r0b2_cli_and_mcp_rows_carry_the_same_activity_from_one_status_read",
 ]
 incident = ["#429 R-0b2"]
-
-# #411 A8, A14 (v0.12.1-rc.2; register §1.100 A8-1, A14-1; related keys 41, 43): MCP ac_lab_do and ac_lab_observe with capture, without dry_run and with neither package nor zip answer arguments_invalid {argument: package, argument_problem: required} (class usage) before the install is located and before any actinglab child runs; with package or zip, without capture, or with dry_run the package check lets the call through; ac_lab_do with target tap and tap answers arguments_invalid {argument: tap, argument_problem: conflicting} (class usage), equally before any child; #411 A27 (0.12.28 LAB-SMALL P58): that refusal carries a req_id this server issued in actinglab's form (req-<16 hex digits>-<n>), shown in the answer
-[[gate]]
-key = "73"
-coverage = "Y"
-tests = [
-    "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_rc2_a8::a8_ac_lab_do_with_capture_and_no_package_is_arguments_invalid_naming_package",
-    "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_rc2_a8::a8_ac_lab_observe_with_capture_and_no_package_is_refused_the_same",
-    "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_rc2_a8::a8_a_locator_no_capture_or_dry_run_passes_the_package_check",
-    "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_rc2_a8::a14_ac_lab_do_with_target_tap_and_tap_is_arguments_invalid_naming_tap",
-    "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_rc2_a8::p58_ac_lab_do_target_tap_with_coordinates_is_refused_with_a_req_id",
-]
-incident = ["#411 A8", "#411 A14", "#411 A27"]
-
-# #411 Lab L1 (v0.12.x; register §1.118, no persisted ledger shape; G7; related: exec 96, apps 73): MCP ac_lab_do no longer takes priority, lease_id, no_wait, recovery_timeout_ms or recovery_poll_ms, nor ac_lab_observe require_fresh, so a call naming one answers arguments_invalid {argument, argument_problem: unknown} (class usage) before the install is located and before any actinglab child runs; ac_lab_do with capture true and dry_run not true setting destructive or allow_destructive answers arguments_invalid {argument, argument_problem: conflicting} equally before any child; offline (scene), with dry_run, or with both guard arguments false the call passes MCP's own checks
-[[gate]]
-key = "76"
-coverage = "Y"
-tests = [
-    "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_lab_l1::l1_ac_lab_do_and_ac_lab_observe_refuse_the_removed_arguments_as_unknown",
-    "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_lab_l1::l1_ac_lab_do_with_capture_refuses_the_destructive_guard_as_conflicting",
-    "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_lab_l1::l1_the_destructive_guard_passes_offline_and_with_dry_run",
-    "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_lab_l1::l1_the_tool_schemas_drop_the_removed_arguments",
-]
-incident = ["#411 Lab L1"]
-
-# Workflow #411 B15 R6 (v0.12.3; register §1.116 B15W-4, B15W-5; no persisted ledger shape; model-b15 §5.1, §7.6; key assigned by the coordinator): actingctl remedy set writes a scope's whole list (instance or game; --server is refused as actingctl_usage_invalid unknown and ac_remedy_set's server as arguments_invalid unknown, a server id not being game-qualified) as a new version, remedy get answers the records that apply with the one in effect, remedy lift republishes the instance's record unchanged or an empty one as a new observation naming the record it replaced, and a refused write prints its denied receipt and exits non-zero; MCP ac_remedy_set (rows or lift) and ac_remedy_get, general tools, write and read the same record and answer what the CLI answers
-[[gate]]
-key = "74"
-coverage = "Y"
-tests = [
-    "actingcommand-actingctl::gate::remedy_choices::b15w_remedy_set_get_and_lift_round_trip",
-    "actingcommand-actingctl::gate::remedy_choices::b15w_ac_remedy_set_and_get_write_and_read_the_same_record",
-    "actingcommand-actingctl::gate::remedy_choices::b15w_remedy_set_and_ac_remedy_set_refuse_a_server_scope",
-]
-incident = ["#411 B15"]
-
-# Workflow #411 B15 R7 (v0.12.3; register §1.117 B15W2-2; no persisted ledger shape; contracts/policy-suspension.md `remedies`; key assigned by the coordinator; the report half is host 116): MCP ac_diagnose (and actingctl diagnose) carries the remedies rows of actingd suspended whose instance_id is the diagnosed instance's alias or id (every row without an instance; an unparsed row names no instance), verbatim, cut for the output budget after packs and before report_warnings, and its description names the list
-[[gate]]
-key = "75"
-coverage = "Y"
-tests = [
-    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_411_b15w2::b15w2_ac_diagnose_shows_the_instances_stopped_remedies",
-]
-incident = ["#411 B15"]
-
-# #411 Lab B-2 (v0.12.x; register §1.131 B2-5, no persisted ledger shape; G8 offline; coordinator decision Q1 of 2026-10-19; related: apps 73, 76): MCP ac_lab_observe and ac_lab_do take sample_scenes, a list of 1 to 4 strings none flag-like (the schema says so), the earlier frames of scene's set, and pass them to actinglab as --scene options before scene's, oldest first; sample_scenes without scene answers arguments_invalid {argument: sample_scenes, argument_problem: conflicting} (class usage), an empty or five-item list out_of_range and a flag-like item not_recognised, each before the install is located and before any actinglab child runs
-[[gate]]
-key = "78"
-coverage = "Y"
-tests = [
-    "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_lab_b2::b2_ac_lab_observe_and_do_pass_sample_scenes_before_scene",
-]
-incident = ["#411 Lab B-2"]
-
-# Workflow #406 T4 (0.12.x; register §1.138 T4-9; no persisted ledger shape: an MCP argument and actinglab's answer relayed; plan-405-406 Q20): MCP ac_lab_do takes an optional seed, a non-negative integer up to the largest unsigned 64-bit value, and passes it to actinglab as --seed among the valued flags in the tool's flag order; its answer within the budget is actinglab's data unchanged, the offline actual_click.seed and actual_click.sampling included; its description names the seed, --seed and the sampling
-[[gate]]
-key = "79"
-coverage = "Y"
-tests = [
-    "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_406_t4::t4_ac_lab_do_passes_the_seed_and_answers_the_sampling",
-]
-incident = ["#406"]
-
-# Workflow #386 SR-6b, MCP-19b (brief-MCP19b requirements 1 and 2; register §1.144 M19B-1, M19B-2; no persisted ledger shape; plan-mcp19 §2, decisions Q4, Q9; key assigned by the coordinator): actingctl schedule [--instance <alias|instance_id|ADB port>] prints the latest policy evaluation's ScheduleExplanation with every candidate verbatim (a given --instance resolved to its alias with one status read) with runtime_schedule_reported and exit 0, and MCP ac_schedule {instance?} (observer, read-only) answers the same object without outcome; to fit the output budget ac_schedule cuts candidate rows only, from the last row of the last entry backwards, marking each entry that lost rows candidates_truncated: true, never evaluated_at_unix_ms, catalog_hash or an entry's instance_alias, next_wake_unix_ms, selected, not_running or candidates_total, and an answer whose uncut part is still over the budget is output_budget_exceeded
-[[gate]]
-key = "80"
-coverage = "Y"
-tests = [
-    "actingcommand-actingctl::gate::mcp_schedule_parity::gate_actingctl_schedule_and_ac_schedule_answer_the_same_explanation",
-    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_mcp19b::mcp19b_ac_schedule_cuts_candidate_rows_from_the_end",
-]
-incident = ["#386 SR-6b", "MCP-19"]
 
 # Workflow #386 SR-6b, MCP-19b (brief-MCP19b requirements 3 and 4; register §1.144 M19B-3, M19B-4; no persisted ledger shape; plan-mcp19 §2, decisions Q4, Q8, Q9; key assigned by the coordinator): ac_overview and actingctl overview give each instance row whose alias has an entry in one ScheduleExplanation read without candidates that entry's not_running row verbatim (no member without an entry; a failed read is one warning, incomplete, and no row has the member; never cut); ac_diagnose and actingctl diagnose list under not_run, per entry in the answer's order, the candidate rows whose state is deferred, at most the value of scheduling.not_run.diagnose_rows in the config.parameters.scheduling record of the RuntimeFactSnapshot per instance, each with its instance_alias, with not_run_total when one was left out (0 gives an empty list); a failed read or a missing row is a warning, incomplete and no not_run; MCP cuts not_run after clock_slots and before errors_page
 [[gate]]
@@ -836,18 +498,8 @@ key = "81"
 coverage = "Y"
 tests = [
     "actingcommand-lab-ops::lib::overview::tests::mcp19b_each_overview_row_shows_its_not_running_row",
-    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_mcp19b::mcp19b_diagnose_lists_deferred_rows_up_to_the_configured_bound",
 ]
 incident = ["#386 SR-6b", "MCP-19"]
-
-# Workflow #411 B27 (slice E4, 0.12.x; register §1.156 E4-1, E4-5; no persisted ledger shape; B-train plan §6, Q15): ac_events given an event_type, or an element of event_types or exclude_event_types, that names no event type is refused as before, arguments_invalid (class usage) with the argument and argument_problem not_recognised, before any Runtime read, and names the value it received as argument_value
-[[gate]]
-key = "87"
-coverage = "Y"
-tests = [
-    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_411_e4::e4_t1_ac_events_names_the_event_type_it_does_not_know",
-]
-incident = ["#411 B27"]
 
 # Workflow #411 B34 (slice E4, 0.12.x; register §1.156 E4-3, E4-5; no persisted ledger shape; B-train plan §6, Q15): actinglab package check answers warnings, one package_check_click_box_single_point warning per operation click whose declared box is one point (a point click, a rect box of 1x1), naming the operation (pack_operation_id) and the box (box_x, box_y, box_width, box_height), and none for a larger box; the package still passes (exit 0, status admitted)
 [[gate]]
@@ -855,15 +507,6 @@ key = "88"
 coverage = "Y"
 tests = [
     "actingcommand-actinglab::bin:actinglab::package_cli::gate_411_e4::e4_t3_a_click_box_of_one_point_is_a_warning_and_the_package_still_passes",
-]
-incident = ["#411 B34"]
-
-# Workflow #411 E4 tail (B34 follow-up; wave-3 row 13; register §1.172 unused; text only, the result's bytes do not change): the declared ac_pack_check result schema names the warnings member the result carries (actinglab package check's warnings, each an outcome with its code and values), and its description names it
-[[gate]]
-key = "97"
-coverage = "Y"
-tests = [
-    "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_411_e4_tail::e4_tail_t1_ac_pack_check_result_schema_names_its_warnings",
 ]
 incident = ["#411 B34"]
 
@@ -885,63 +528,6 @@ tests = [
     "actingcommand-actinglab::bin:actinglab::lab2_cli::operation::gate_412_b3_s2_exit::b3_s2_t2_6_do_operation_exits_by_the_design_table",
 ]
 incident = ["#412 B-3"]
-
-# #412 Lab B-3 S2 (register §1.162 B3S2-6; design §1.3, §5 S2 T2-7): ac_lab_do passes operation to actinglab as --operation (with seed); operation with target, tap, swipe, after_page, after_timeout_ms, record, tap_rect, projection_sequence, projection_hash, scene, sample_scenes or dry_run, or without capture, is refused arguments_invalid {argument, argument_problem: conflicting}, class usage, before the install is located and before any child runs
-[[gate]]
-key = "92"
-coverage = "Y"
-tests = [
-    "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_412_b3_s2::b3_s2_t2_7_ac_lab_do_passes_operation_and_refuses_its_conflicts_before_the_child",
-]
-incident = ["#412 B-3"]
-
-# #422 LN-7c C (v0.12.16; rd-1026/ln7c/final-query.md §4 and §7 row C; Alice's ruling 70): MCP ac_evidence_confirm_read records one client.action with the agent's origin (agent, adapter) and actingctl evidence confirm-read one with the command line's (cli, cli) (since Workflow #434 LAB-6S4a, 0.12.63, with no identity card before it: the ledger holds no governance.identity_declared record), for a frame (control evidence_read_frame) and for a run (evidence_read_run), each with its frame index row ('artifact' or 'run', id, 'read_confirmed') at the record's sequence; an artifact or a run the ledger does not hold is refused on both sides with client_action_invalid and nothing is recorded; reading evidence through ac_run_evidence and ac_observe records no confirmation
-[[gate]]
-coverage = "Y"
-tests = [
-    "actingcommand-actingctl::gate::evidence_confirm_read::ln7c_c_mcp_and_the_cli_each_record_one_client_action_with_its_frame_index_row",
-    "actingcommand-actingctl::gate::evidence_confirm_read::ln7c_c_an_unknown_artifact_or_run_is_refused_and_nothing_is_recorded",
-    "actingcommand-actingctl::gate::evidence_confirm_read::ln7c_c_ac_run_evidence_and_ac_observe_record_no_confirmation",
-]
-incident = ["#422 LN-7c C"]
-
-# Workflow #421 MCP-ENTRY (v0.12.18; rd-1027/brief-mcp-entry.md, Alice 10-27 14:24 and 14:37): the stable MCP entry pipes JSON-RPC both ways with ids kept (E-1); replays the client's handshake to a candidate and refuses one that negotiates another protocol version (E-2); switches only between calls (E-3); keeps the old child and reports a failed candidate (E-4); answers a request in flight when its child dies with mcp_entry_outcome_unknown, never resends it, and starts a fresh child for the next (E-5); waits while the child holds process-local handles, past drain_max_ms too, and switches at 0 (E-6); counts a child without actingcommand/entryStatus as 0 (E-7); asks no plan while an install operation is under way (E-8); sends the legacy notice and records the refetch (E-9); sends the 2026-07-28 notice through subscriptions/listen (E-10); writes the status file (E-11); actingctl mcp-config --entry renders the four clients' snippets (E-12); the real entry binary pipes a session and switches once with a fake child (process)
-[[gate]]
-coverage = "Y"
-tests = [
-    "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e1_the_entry_pipes_both_ways_and_keeps_ids",
-    "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e2_the_handshake_is_replayed_and_a_changed_protocol_version_is_refused",
-    "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e3_a_switch_happens_only_between_calls",
-    "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e4_a_failed_candidate_keeps_the_old_child_and_is_reported",
-    "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e5_a_child_that_dies_mid_call_gives_outcome_unknown_and_is_never_resent",
-    "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e6_outstanding_handles_defer_the_switch_until_they_reach_zero",
-    "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e7_a_child_without_entry_status_counts_as_zero",
-    "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e8_no_plan_while_an_install_operation_is_under_way",
-    "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e9_the_legacy_notice_is_sent_and_the_refetch_recorded",
-    "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e10_the_2026_07_28_notice_goes_through_subscriptions_listen",
-    "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e11_the_status_file_says_what_the_entry_runs",
-    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_mcp_entry::e12_mcp_config_entry_renders_each_clients_snippet",
-    "actingcommand-mcp-entry::entry_process::mcp_entry_process_pipes_a_session_and_switches_once",
-]
-incident = ["#421 MCP-ENTRY"]
-
-# Workflow #421 MCP-ENTRY fix round 1 (v0.12.18; rd-1027/brief-mcp-entry-fix1.md, review rd-1027/mcp-entry/review.md): a first plan asked after the install changed under the child is a switch, never the child's build (E-13, H1); install\current.json alone does not hold the entry back, a held writer lock does (E-14, M1); a finished job whose handle went out only in a cancelled call's answer holds no switch back, one whose handle went out counts until read (E-15, M2); the status names the outstanding handles (E-16, M2); a run job counts while it submits (E-17, M3); consecutive plan refusals double the wait up to install.mcp_entry.refused_retry_max_ms and their tunables are taken (E-18, M4); a stopped child is ended only past its grace (E-19, L1); a refused candidate is tried once more after settle_ms (E-20, L2); a fresh child of another build sends the change notice (E-21, L3); the status drops an answered call at once (E-22, L5); a 0 answered after another call reached the child does not count (E-23, L7)
-[[gate]]
-coverage = "Y"
-tests = [
-    "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e13_an_initial_plan_after_the_install_changed_under_the_child_is_a_switch",
-    "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e14_an_unfinished_operation_file_alone_does_not_hold_the_entry_back",
-    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_mcp_entry::e15_a_cancelled_call_leaves_no_uncollectable_handle",
-    "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e16_the_status_names_the_outstanding_handles",
-    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_mcp_entry::e17_a_run_pack_job_counts_while_it_submits",
-    "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e18_consecutive_refusals_back_off_and_carry_the_tunables",
-    "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e19_a_stopped_child_is_ended_only_past_its_grace",
-    "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e20_a_rejected_candidate_is_tried_once_more_after_settle",
-    "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e21_a_fresh_child_of_another_build_sends_the_notice",
-    "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e22_the_status_drops_an_answered_call_at_once",
-    "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e23_a_zero_count_is_ignored_after_a_call_reached_the_child",
-]
-incident = ["#421 MCP-ENTRY"]
 
 # ROUT-L RL-1c (#411; work order rd-1027/brief-rl1c.md C-1, C-2, C-3, C-4 and C-6; board #411 6432236193, 6435964241): the readers of a composer-mode configuration (a policy without catalog and procedure_manifest). actingctl packs decodes it and lists one installation row per procedure the composer makes from the bound games' schedule.json (package, place below the game root, operation.package.run, scheduled), a refused schedule.json being standard_pack_root_invalid and the instances' path checks running again (C-1); actingd check-config notes fact_reader_missing exactly where catalog mode notes it for the same rules (C-3), and admits the composed packages (pack_admission_suspended) and checks the remedy choice rows against the composition (policy_remedy_declaration_unusable) (C-4); actingd suspended composes the rules and goes on to its ledger instead of answering suspended_policy_unconfigured (C-2); a catalog-mode configuration lists its procedure_manifest bindings and reads its configured catalog as before (C-6)
 [[gate]]
@@ -965,7 +551,6 @@ tests = [
     "actingcommand-lab-ops::lib::packs::tests::r11_t3_without_ui_json_the_rows_are_as_before_with_irreversible_and_task_ids",
     "actingcommand-lab-ops::lib::packs::tests::r11_t4_irreversible_is_derived_from_the_package_s_provides",
     "actingcommand-lab-ops::lib::packs::tests::r11_t5_task_ids_are_the_composed_tasks_of_each_package",
-    "actingcommand-actingctl::gate::mcp_packs::gate_r11_packs_and_ac_packs_answer_the_same_ui_irreversible_and_task_ids",
 ]
 incident = ["#429 R-11"]
 
@@ -985,29 +570,6 @@ tests = [
 ]
 incident = ["#411 RL-1c"]
 
-# #422 OV-24K (v0.12.20; rd-1027/brief-ov24k.md, audit rd-1027/ac-audit-420-6442672243.md 二.3 and 二.1): five instances with full runs and performance answer ac_overview within the 24 KiB output budget with every block, the budget counted on the bytes sent in every protocol version (O-1); the performance block writes each distinct dwell once and loses nothing (O-2); a spent call budget skips performance and fact_refresh with <block>_incomplete and call_budget_exhausted and asks the Runtime for neither (O-3); over the budget the cut keeps fact_refresh past every less urgent block and names what it cut (truncated, each marker, the warning output_budget_exceeded) (O-4); a configuration file whose sha256 is not the one actingd read warns config_generation_mismatch on an install without generations (O-5); the text content repeats the envelope only within the budget, else it is the summary beside structuredContent, and 2025-03-26 carries the envelope as text (O-6)
-[[gate]]
-coverage = "Y"
-tests = [
-    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_422_ov24k::ov24k_o1_five_full_runs_and_performance_fit_the_budget_with_every_block",
-    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_422_ov24k::ov24k_o2_the_performance_block_writes_each_dwell_once",
-    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_422_ov24k::ov24k_o3_a_spent_budget_skips_performance_and_fact_refresh_and_asks_the_runtime_for_neither",
-    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_422_ov24k::ov24k_o4_over_the_budget_the_cut_keeps_fact_refresh_and_names_what_it_cut",
-    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_422_ov24k::ov24k_o5_a_configuration_file_actingd_has_not_loaded_warns_on_an_install_without_generations",
-    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_422_ov24k::ov24k_o6_text_and_structured_content_follow_the_negotiated_version",
-]
-incident = ["#422 OV-24K"]
-
-# #422 OV-24K fix round 1 (rd-1027/brief-ov24k-fix1.md, review rd-1027/v01220-review/ov24k.md M1, L1, L3): a client that reads only the text content of an overview sent once beside the summary still sees every warning, the cut list and how to narrow the call (instance or sections), and as many warnings as fit with warnings_omitted for the rest (M1); the overview is fitted to the protocol version the session negotiated, not cut to the 2025-03-26 size (L1); a spent call budget skips the not-running read with not_running_incomplete on each row and call_budget_exhausted naming not_running (L3)
-[[gate]]
-coverage = "Y"
-tests = [
-    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_422_ov24k::ov24k_fix1_m1_a_text_only_client_sees_every_warning_what_was_cut_and_how_to_narrow",
-    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_422_ov24k::ov24k_fix1_l1_the_overview_is_fitted_to_the_version_the_session_negotiated",
-    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_422_ov24k::ov24k_fix1_l3_a_spent_budget_skips_the_not_running_read",
-]
-incident = ["#422 OV-24K"]
-
 # #421 S2-IF (v0.12.21; brief rd-1028/brief-s2-instr-fix.md; production 10-28 10:11: S2 rolled a good update back on the instructions check, on the new start and again on the rollback start): on the fake host, the composite update's instructions check passes an instruction the new start kept over a changed default and names it in base_changed, and the composite is done (T-1); it fails on a key the start dropped (T-2) or superseded, a kept one beside it not masking it (T-3), and the composite rolls back; the rollback start that kept the instruction over the default changed back passes it and releases the hold (T-4)
 [[gate]]
 coverage = "Y"
@@ -1018,26 +580,6 @@ tests = [
     "actingcommand-lab-rescue::lib::install::gate_inst2_deploy::s2if_t4_the_rollback_start_with_the_default_changed_back_passes_the_check",
 ]
 incident = ["#421 S2-IF"]
-
-# #422 QR-2 (v0.12.23; brief rd-1028/brief-qr2-overview-pages.md, investigation rd-1028/qr2-investigation.md §4 R4): on A42's fake Runtime, the overview's run block, the run listing (ac_runs) and a run's status (ac_get_run, by its request and by its run) ask for every QueryEvents page without run recovery, and answer as before: the window's newest run, complete; the window's runs newest first, each succeeded; the same status by request and by run (T3)
-[[gate]]
-coverage = "Y"
-tests = [
-    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_422_qr2::qr2_t3_the_run_block_listing_and_status_ask_for_no_run_recovery_and_answer_as_before",
-]
-incident = ["#422 QR-2"]
-
-# #422 QR-2b (brief rd-1028/brief-qr2b-diagnose.md, investigation rd-1028/qr2-investigation.md §3): on A42's fake Runtime, which logs every QueryEvents page, a diagnosis with and without an instance lists the window's runs once, one first page per listing type (T1); reads the status of no run the listing shows succeeded or cancelled, and of each failed or open run a section needs once (T2); asks for every page without run recovery: errors view, failure records, listing, status, dispatch intent, relayed terminal (T3); on a clock that passes the deadline once a chosen page was served, a section the deadline passes in answers <section>_incomplete with call_budget_exhausted naming it, and the other sections answer as without the deadline: cut in runs_grouped, and cut in the listing (T4); without a slow section, runs are the failed and open runs among the 10 most recent the earlier reads found (list_contained_runs on the instance; recent_runs until its retirement in 0.12.25, W1-9), runs_grouped and failures_grouped the window's groups (T5)
-[[gate]]
-coverage = "Y"
-tests = [
-    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_422_qr2b::qr2b_t1_one_call_lists_once_with_and_without_an_instance",
-    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_422_qr2b::qr2b_t2_settled_runs_are_not_status_read",
-    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_422_qr2b::qr2b_t3_every_page_asks_for_no_run_recovery",
-    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_422_qr2b::qr2b_t4_a_section_past_the_deadline_answers_incomplete_and_the_rest_answers",
-    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_422_qr2b::qr2b_t5_an_answer_without_a_slow_section_is_as_before",
-]
-incident = ["#422 QR-2b"]
 
 # Workflow #427-A (brief rd-1028/brief-427a-lanes.md; plan r2 comment 6460013989, C1-C5): the per-instance lanes of the policy round behind scheduling.parallel.enabled, on the APPS-I7 cycle harness. A long run on one instance holds neither the round nor another instance; frozen after the terminal and before settlement there is no second dispatch, the reconciliation skips the run and its settlement and wake happen once; a failed run leaves the other instance running; a settlement between the sample and the validation is sampled again (C1), past the limit the round is given up and deferred; a shutdown refuses a run not taken and finishes a run taken; a worker panic drops the run and keeps its instance occupied for the reconciliation; the switch off in the file (the default before 0.12.31; on since, Workflow #429 R-2) is turned on by an instruction at the next round
 [[gate]]
@@ -1075,15 +617,14 @@ incident = ["#427-A"]
 coverage = "Y"
 tests = [
     "actingcommand-actingd::bin:actingcommand-actingd::config::gate_427b::gate_427b_the_assembly_hands_the_limits_and_the_max_key_over_in_every_pacing_mode",
-    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_427b::gate_427b_ac_schedule_answers_the_shared_run_limits_with_their_numbers",
 ]
 incident = ["#427-B"]
 
-# Workflow #427-B follow-up (brief rd-1028/brief-427b-followup.md; review rd-1028/review-427b.md L1): ac_diagnose's not_run lists, beside the deferred rows, a row whose state is blocked and whose why is a shared run limit (heavy_scene_budget_exhausted at placement), with used, limit_count, admitted_count and round_selected_count; a row blocked by its own trigger stays out
+# Workflow #427-B follow-up (brief rd-1028/brief-427b-followup.md; review rd-1028/review-427b.md L1): ac_diagnose's not_run lists, beside the deferred rows, a row whose state is blocked and whose why is a shared run limit (heavy_scene_budget_exhausted at placement), with used, limit_count, admitted_count and round_selected_count; a row blocked by its own trigger stays out. Workflow #434 LAB-7: the test moved from actingctl's MCP tests into lab-ops, whose diagnose row both front ends answer
 [[gate]]
 coverage = "Y"
 tests = [
-    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_427b::gate_427b_ac_diagnose_lists_a_row_the_shared_run_limits_blocked_with_its_numbers",
+    "actingcommand-lab-ops::lib::schedule::k427b_tests::gate_427b_diagnose_lists_a_row_the_shared_run_limits_blocked_with_its_numbers",
 ]
 incident = ["#427-B"]
 
@@ -1184,11 +725,9 @@ incident = ["#429 R-15b"]
 [[gate]]
 coverage = "Y"
 tests = [
-    "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e24_the_status_records_the_entry_process_creation_time",
     "actingcommand-lab-rescue::lib::install::gate_411_p49::p49_l4_the_list_tells_a_reused_pid_from_the_entry_by_its_creation_time",
     "actingcommand-lab-rescue::lib::install::gate_411_p49::p49_m1_a_pid_the_probe_cannot_judge_marks_its_row_and_the_list_still_answers",
     "actingcommand-lab-rescue::lib::install::gate_inst1_update::p49_l9_the_notice_asks_no_reconnect_for_an_mcp_entrys_child",
-    "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e25_a_newer_install_during_a_deferred_switch_is_planned_again",
 ]
 incident = ["#411 P49"]
 
@@ -1201,14 +740,6 @@ tests = [
     "actingcommand-actingd::bin:actingcommand-actingd::config::gate_agt_1a::agent_wake_invalid_names_its_config_key",
 ]
 incident = ["#432 AGT-1a"]
-
-# AGT-1b (Workflow #432, 0.12.37; design rd-1031/agt/model-agt-v2.md section 10; register section 1.246; contracts/agent-wake.md): the overview's block agent_wake is the status member of the one Status read, and absent with no section.
-[[gate]]
-coverage = "Y"
-tests = [
-    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_422_ov24k::overview_block_comes_from_the_one_status_read",
-]
-incident = ["#432 AGT-1b"]
 
 # Workflow #407 GPU-1 D (0.12.44; register §1.286; brief rd-1031/perf-407/brief-gpu1d.md; design rd-1031/perf-407/design-gpu1.md §1.2, §1.4, §2.5, §6.1 and §7 row D; actingd-config revision 27): the vision section admits execution_provider directml only with a directml_device whose expected_identity is a well-formed dxgi-pci identity and without a cuda_device, refuses the device beside cpu or cuda (vision_config_invalid), and the device naming a DXGI index or a LUID does not decode; gpu_fallback is cpu when absent, takes cpu or refuse with directml, is refused beside cpu or cuda and refuses another word; a directml root whose onnxruntime.dll is off the runtime pin fails check-config at config_vision with vision_runtime_unavailable naming the file as path and refuses the start, while the same root under cpu passes; over a fake adapter source and a fixture pin, a start whose identity no adapter has records execution_provider directml→cpu, directml_adapter <identity>→none and the CPU closure, and writes one vision_gpu_unavailable warning (adapter_missing, gpu_fallback cpu, stage vision_startup) as its WARN and OUTCOME lines, while a resolving one records directml, <identity>;index=0;luid=<luid> and the DirectML closure and writes nothing; check-config's vision.directml lists every adapter in DXGI order with its physical, software, indirect-display and paravirtualized flags and PCI location, the one the identity resolves to (index 0 among its copies), the pinned files' states and nn_execution_provider cpu, and notes one vision_gpu_unavailable at config_vision when no adapter has the identity or DirectML.dll is missing or off the pin
 [[gate]]
@@ -1244,7 +775,6 @@ incident = ["#434 LAB-1b"]
 coverage = "Y"
 tests = [
     "actingcommand-actinglab::bin:actinglab::lab2_cli::operation::gate_433_labdo1::lab_do_post_receipt_check_failure_names_effect",
-    "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_433_labdo1::lab_do_post_receipt_check_failure_passes_through_mcp",
 ]
 incident = ["#433 LABDO-1"]
 
@@ -1262,7 +792,6 @@ coverage = "Y"
 tests = [
     "actingcommand-lab-ops::lib::overview::tests::cw1_the_catalog_block_shows_the_compile_warnings_and_is_unchanged_without_them",
     "actingcommand-lab-ops::lib::overview::tests::cw1_a_cut_fact_and_the_catalog_block_say_how_many_rows_are_missing",
-    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_mcp8::cw1_ac_overview_cuts_the_compile_warnings_items_just_before_the_catalog_block",
 ]
 incident = ["#428 CW-1"]
 
@@ -1352,7 +881,7 @@ tests = [
 ]
 incident = ["#421 INST-5"]
 
-# Workflow #421 INST-5b (0.12.53; register §1.300, "INST-5b"; brief rd-1111/brief-inst5b.md; contracts/install-cli.md, "Instances, the first slice" ("No moment unpaused") and "The Lab's rescue module"): on fake roots and seams, the hold of the Lab's rescue module's instance add also sets, after its instance pauses and before the close, one global pause with the hold's own reason, kept across the restart and lifted only after the added instance is paused with instance.added: the calls come in the order hold, global pause, close, start, the added instance's pause, global resume, release, and every status read between the start and the added instance's pause shows the global pause; the pause step's intent asks for it and its evidence records it as the operation's own (own_pauses.global), the release's evidence says global_resumed; a global pause another party set before is neither replaced nor lifted, its reason and revision unchanged, and no global pause or resume is asked; when the added instance's pause is refused the command ends post_check_failed with the global pause and the hold kept and next naming pause_added and actingctl_resume_global beside release-hold, which then resumes the global pause and the hold's pause and nothing else; config replace and config restore ask for no global pause or resume
+# Workflow #421 INST-5b (0.12.53; register §1.300, "INST-5b"; brief rd-1111/brief-inst5b.md; contracts/install-cli.md, "Instances, the first slice" ("No moment unpaused") and "The Lab's rescue module"): on fake roots and seams, the hold of the Lab's rescue module's instance add also sets, after its instance pauses and before the close, one global pause with the hold's own reason, kept across the restart and lifted only after the added instance is paused with instance.added: the calls come in the order hold, global pause, close, start, the added instance's pause, global resume, release, and every status read between the start and the added instance's pause shows the global pause; the pause step's intent asks for it and its evidence records it as the operation's own (own_pauses.global), the release's evidence says global_resumed; a global pause another party set before is neither replaced nor lifted, its reason and revision unchanged, and no global pause or resume is asked; when the added instance's pause is refused the command ends post_check_failed with the global pause and the hold kept and next naming pause_added and resume_global (the Lab's resume; actingctl_resume_global until Workflow #434 LAB-7) beside release-hold, which then resumes the global pause and the hold's pause and nothing else; config replace and config restore ask for no global pause or resume
 [[gate]]
 coverage = "Y"
 tests = [
@@ -1510,7 +1039,6 @@ tests = [
     "actingcommand-actinglab::bin:actinglab::tests::gate_434_lab5g1b::lab5g1b_the_callers_cursor_binding_binds_events_and_no_other_cursor",
     "actingcommand-actinglab::bin:actinglab::tests::gate_434_lab5g1b::lab5g1b_the_errors_page_of_diagnose_is_bound_to_the_callers_binding",
     "actingcommand-lab-ops::lib::gate_434_lab5g1b::lab_ops_undeclared_members_follow_the_table",
-    "actingcommand-actingctl::gate::lab5g1b_front_mcp::lab5g1b_front_mcp_connects_as_todays_mcp_server",
 ]
 incident = ["#434 LAB-5G1b"]
 
@@ -1679,7 +1207,6 @@ tests = [
     "actingcommand-actinglab-mcp::bin:actinglab-mcp::gate_434_lab5g2b::mcp_budget_cut_and_export",
     "actingcommand-actinglab-mcp::serve_calls::mcp_stdio_one_row_per_kind",
     "actingcommand-actinglab-mcp::serve_calls::mcp_refusals_send_nothing",
-    "actingcommand-actinglab-mcp::serve_calls::mcp_write_provenance_as_todays_server",
 ]
 incident = ["#434 LAB-5G2b"]
 
@@ -1940,13 +1467,19 @@ tests = [
     "actingcommand-lab-rescue::lib::install::gate_434_lab6s2b1::lab6s2b1_rescue_module_client_binds_lab_with_its_word_and_the_cli_envelope",
     "actingcommand-watchdog::lib::gate_434_lab6s2b1::lab6s2b1_watchdog_probe_binds_lab_with_its_word_and_sends_health_and_bind_only",
     "actingcommand-watchdog::lib::gate_434_lab6s2b1::lab6s2b1_a_runtime_that_drops_the_word_leaves_the_probe_unbound_once",
-    "actingcommand-actinglab-mcp::serve_calls::mcp_write_provenance_as_todays_server",
-    "actingcommand-actingctl::gate::lab5g1b_front_mcp::lab5g1b_front_mcp_connects_as_todays_mcp_server",
     "actingcommand-actinglab::bin:actinglab::tests::gate_434_lab6s2b1::lab6s2b1_core_rows_under_serve_front_mcp_record_lab_with_via_mcp",
     "actingcommand-actinglab::lab6s2b1_set_front::lab6s2b1_a_command_line_binds_the_core_rows_lab_with_lab_cli",
     "actingcommand-actinglab::lab6s2b1_set_front::lab6s2b1_serve_front_mcp_binds_the_core_rows_lab_with_lab_mcp",
 ]
 incident = ["#434 LAB-6S2-B1"]
+
+# Workflow #434 LAB-7 (pass 4, the second review's (f); the property of the retired rk1_an_unknown_key_refuses_ac_config_set_whole_with_a_declared_receipt_top): on a test host whose configuration declares one settable key, the Lab's core row config set through the command line's module, with that key's change and a misspelt key no row of the key table has, is refused whole by the Runtime: exit 1, the line's outcome config_key_unknown with only values the catalog declares for the code, beside the denied receipt with its request id; afterwards the declared key still has its file value (source default)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::tests::gate_434_lab6s2b1::lab7_config_set_of_an_unknown_key_is_refused_whole",
+]
+incident = ["#434 LAB-7"]
 
 # Workflow #449 REC-ARCH (0.12.59; register §1.344; brief rd-1113/brief-449-record-archive.md; contracts/lab-recording.md, "Archiving"; contracts/lab-operations.json, the rows record archive and record reopen; board #449): a recording can be ended as material only, reopened later, and a swipe becomes a step. A swipe sent with --record on the open step that declares no effect declares the step's drag between boxes of one pixel at its two points (source swipe) and records its execution; marked, record stop generates the standard drag click of those boxes and duration. Steps a swipe and a tap of two initiators added and a last step without input archive: archive-manifest-1.json's header and rows (kind, frames, the frames before and after, page, package, tap or swipe, time, request id) are the step table's, its step table hash that file's; the step table and every frame keep their bytes; the copy into a directory that does not exist holds them and the manifest byte for byte. A step table in the form 0.12.54 wrote archives. A recorded frame, tap and swipe answer the recording's id, when it started and their step. No session, a stopped one and an unknown id archive nothing (record_session_not_active, record_not_archived state missing). On actinglab's command line: steps without marks whose last has a tap, record stop refuses (record_final_step_has_click) and writes nothing; record archive ends it, its rows the step table's; record status shows record and lab archived; record start starts another without --force; every frame and the step table keep their bytes. The copy into a directory that does not exist and, named again by id, into an empty one (already_archived, no second manifest) hold the recording's files; into a directory holding a file it is refused record_archive_target_not_empty before anything is written and the recording stays active. A stored frame that does not hold its recorded sha256 makes the copy's check fail record_archive_verify_failed naming the file, what was copied stays, the recording is archived; with the frame put back the retry by id copies it. record reopen is refused on the active recording (record_not_archived state active) and while another is active (record_session_active); after it the archived recording is active again and, marked and stopped, builds the files a twin never archived builds (but the provenance's generation time), its manifest staying. Fix 1 (brief rd-1113/brief-1675-fix1.md): --copy-to empty, of white space only and relative, on the command line and through serve --stdio, are each validation_failed with their reason and path before anything is written, the recording still active; record stop on an archived recording is record_session_not_active with reason recording_archived and writes nothing; record reopen without an id reopens the recording the session header names; an archive after a reopen writes archive-manifest-2.json and leaves the first as it was; a recording record start --force left behind is archived by its id from its own step table and copied, the session header (another recording's) left as it is and named in lab.session_header, and once the other is archived record reopen --record-id makes it active
 [[gate]]
@@ -2012,22 +1545,6 @@ tests = [
 ]
 incident = ["#453 S7"]
 
-# Workflow #434 LAB-6S2-B2 (0.12.59; register §1.287, "Slice LAB-6S2-B2"; brief rd-1113/brief-lab6s2b2.md; contracts/lab-two-entries.md §2.4, §4.2, §4.3): actingctl binds lab with Lab-CLI and today's MCP server (actingctl mcp-serve) lab with Lab-MCP, each without via and with the envelope it sent on 0.12.58. On the runtime client's scripted Runtime, each first request refused: actingctl's own command lines (status, request-shutdown, config set, pause, resume, task-offset's status read, each (Cli, Cli), install-transition's query and drain having left with the subcommand in Workflow #434 LAB-6S4a; agent-apply-resource-targets and agent-publish-facts, each (Agent, Adapter)) bind lab with Lab-CLI, Health, BindChannel and the first kind each with that envelope; an operation-layer command of actingctl (routine-summary, Front::Actingctl, which actingctl never changes and whose word is Lab-CLI) the same with (Cli, Cli); on Windows the rescue module's client and the watchdog's probe as actingctl's install, start, restart, watchdog and overview make them bind lab with Lab-CLI, (Cli, Cli), the probe sending Health and BindChannel only; the real mcp-serve's kept connection (ac_schedule's status) and its write connections (ac_config_set's ConfigureSettings, (Cli, Cli); ac_remedy_set's PublishFacts, (Agent, Adapter); since Workflow #434 LAB-6S4a the write itself first, where the identity card and the client action came first) bind lab with Lab-MCP; a Runtime that drops the word leaves the real actingctl status unbound after one reconnect without BindChannel, answered, with client_channel_unsupported once on stderr. On the test host, one ConfigureSettings of a key no configuration holds through the real actingctl config set records cli.command (Cli, actingctl, Cli) and command.received cli without via, and through the real mcp-serve's ac_config_set cli.command and mcp without via, the literals of 0.12.58. The receipts the released console's installation helper decodes strictly, made by the real actingctl on the test host (request-shutdown, an accepted shutdown; install-transition's drain and the commit of its ticket left with the subcommand in Workflow #434 LAB-6S4a): each receipt decodes into the helper's receipt type (the pinned RuntimeReceipt's members, unknown members refused), which takes every member it has, with channel cli, no via and no initiator. Fix 1 (brief rd-1113/brief-1683-fix1.md): on Windows, through the real actingctl's own dispatch (main's watchdog site, which hands the watchdog actingctl's word), watchdog status --root on a single-location root whose owner lock the test holds probes the scripted Runtime once: Health and BindChannel only, lab with Lab-CLI, no via, (Cli, Cli), and reports watchdog_alive
-[[gate]]
-coverage = "Y"
-tests = [
-    "actingcommand-actingctl::bin:actingctl::gate_434_lab6s2b2::lab6s2b2_command_lines_bind_lab_with_lab_cli_and_keep_their_envelope",
-    "actingcommand-actingctl::bin:actingctl::gate_434_lab6s2b2::lab6s2b2_operation_layer_commands_bind_lab_with_lab_cli",
-    "actingcommand-actingctl::bin:actingctl::gate_434_lab6s2b2::lab6s2b2_shared_code_binds_lab_with_lab_cli",
-    "actingcommand-actingctl::gate::lab6s2b2::lab6s2b2_mcp_serve_binds_lab_with_lab_mcp_and_keeps_its_envelopes",
-    "actingcommand-actingctl::gate::lab6s2b2::lab6s2b2_actingctl_records_as_on_0_12_58",
-    "actingcommand-actingctl::gate::lab6s2b2::lab6s2b2_mcp_serve_records_as_on_0_12_58",
-    "actingcommand-actingctl::gate::lab6s2b2::lab6s2b2_request_shutdown_receipt_decodes_as_the_released_helper_decodes",
-    "actingcommand-actingctl::gate::lab6s2b2::lab6s2b2_a_runtime_that_drops_the_word_leaves_actingctl_unbound_once",
-    "actingcommand-actingctl::gate::lab6s2b2::lab6s2b2_watchdog_status_through_actingctl_probes_with_lab_cli",
-]
-incident = ["#434 LAB-6S2-B2"]
-
 # Workflow #453 S11 (0.12.60; register §1.358; brief rd-1114/brief-453-s11-state-root-record.md; contracts/state-root-installation.md, contracts/actingd-check-config.md): actingd check-config judges the state root's installation record as the start would, its installation root the root --install-root names, else the directory of --config, each only when it holds the installer's install\state.json, and never mints or writes: a configuration in a folder without the installer's state file reports state_root_installation not_installed and does not read a record of another installation in its state root; a configuration in an installation root without an identity on an unrecorded state root reports unclaimed; a configuration elsewhere with --install-root naming an installation whose number the state root's record holds reports claimed_by_this; another installation's record is refused state_root_installation_mismatch at stage config_state_root with the state root as path; a record that is no record is refused state_root_installation_record_invalid at stage config_state_root with the record as path; afterwards every file is as it was and the only files added are the ones the test wrote (no identity minted, no record written). The installer: on the fake host's single-location root an update to the staged build and the rollback to the adopted one leave install\identity.json in place byte for byte, with no kept copy beside it. Fix round 1 (brief rd-1114/brief-1700-fix1.md): the daemon line where actingd prints it is asserted by the process test an_idle_runtime_accepts_the_first_shutdown_request_right_after_ready (gate key 48), which runs once more from a folder whose install folder holds the installer's state.json: one state_root_claimed outcome line, category info, before runtime_ready, with installation.json and install\identity.json placed; from the other folder none and no record
 [[gate]]
 coverage = "Y"
@@ -2070,7 +1587,7 @@ tests = [
 ]
 incident = ["#453 S3"]
 
-# Workflow #453 S4 (0.12.60; register §1.366; brief rd-1114/brief-453-s4-install-new.md, fix round 1 after the review and the first CI run; contracts/install-cli.md, "Fresh root"): the rescue row new on the fake host, from a release folder of the neutral release fixture whose Runtime member carries the shipped template actingd.config.first.json, into temporary roots, no sleep and no clock read. Into an absent root: install_command_done of install_new (commit_sha, installation_changed true, install_operation_id), the tree exactly the build (live and kept, byte for byte), the kept build's release.json, actingd.config.json, install\state.json, the writer lock, the journal and its end marker, and the empty folder <new_root>\state; the configuration the template with state_root (absolute, that folder), the salt and lab_module_authoring true; one check-config of the live build with --config the part and --install-root before the rename; state.json the live build installed by the operation, the kept build local_build (no facts), no pack, the configuration's SHA-256; the journal of kind new with the initiator and its steps in order (copy_build, verify_tree, place_build, one stage_file and one swap_file per file, verify_tree, write_config, create_state_root, record_state), every one done; next names place, instance add and up. A given new_state_root: that folder, empty, absolute in the configuration, and none under the root. The salt: 64 lowercase hexadecimal digits, two runs two salts, its text in no other file of the root, not in the answer's line and not in any program line the host logged. A root holding a file refused root_not_empty and a state root holding a file refused state_root_not_empty, the whole tree (files and folders) before equal to after; a release with a file of other bytes refused release_check_failed with file_mismatch and the reader's failures, an actingd-config range [90, 99] beside the installer's refused interface_edge with the failed row, each with nothing written and no root made. A check-config of the live build that refuses: config_refused_by_target, the part actingd.config.json.new-<ms>.part kept, no configuration, no state file, no state folder, the operation ended with its write_config step started and next naming its undo. A crash after each step: install_operation_interrupted, next naming actingctl install resume, and install resume brings the root to the clean run's tree (the salt, the state root's path and the operation's ids and milliseconds aside); undo after each step: done, every byte still there under a name set aside (.rolledback- or .abandoned-), no configuration, state file, state folder or kept build left under its name, no unfinished operation. No install\identity.json and no state-root installation.json after new. With watchdog: watchdog install once, last, the fake Runtime never spawned, paused or closed. actingd: the template holds no salt and no state root, is composer mode with one host (each *_available_milli 1000) and no instance, and filled as new fills it passes load, assemble_or_refusal and check-config with --install-root; the example configuration is byte for byte what it was. Fix round 1: no assertion prints the generated salt (every compared document without it); the edge's refusal names the release's work folder, which is there; the step create_vision_root makes <new_root>\vision empty (after create_state_root, before record_state) and the undo of the finished operation sets it aside as vision.rolledback-<ms2>, empty; the undo after each step finds state.rolledback- and vision.rolledback- folders once their steps ran; actingd's check-config passes the filled template before the state folder exists and again with the empty state and vision folders
+# Workflow #453 S4 (0.12.60; register §1.366; brief rd-1114/brief-453-s4-install-new.md, fix round 1 after the review and the first CI run; contracts/install-cli.md, "Fresh root"): the rescue row new on the fake host, from a release folder of the neutral release fixture whose Runtime member carries the shipped template actingd.config.first.json, into temporary roots, no sleep and no clock read. Into an absent root: install_command_done of install_new (commit_sha, installation_changed true, install_operation_id), the tree exactly the build (live and kept, byte for byte), the kept build's release.json, actingd.config.json, install\state.json, the writer lock, the journal and its end marker, and the empty folder <new_root>\state; the configuration the template with state_root (absolute, that folder), the salt and lab_module_authoring true; one check-config of the live build with --config the part and --install-root before the rename; state.json the live build installed by the operation, the kept build local_build (no facts), no pack, the configuration's SHA-256; the journal of kind new with the initiator and its steps in order (copy_build, verify_tree, place_build, one stage_file and one swap_file per file, verify_tree, write_config, create_state_root, record_state), every one done; next names place, instance add and up. A given new_state_root: that folder, empty, absolute in the configuration, and none under the root. The salt: 64 lowercase hexadecimal digits, two runs two salts, its text in no other file of the root, not in the answer's line and not in any program line the host logged. A root holding a file refused root_not_empty and a state root holding a file refused state_root_not_empty, the whole tree (files and folders) before equal to after; a release with a file of other bytes refused release_check_failed with file_mismatch and the reader's failures, an actingd-config range [90, 99] beside the installer's refused interface_edge with the failed row, each with nothing written and no root made. A check-config of the live build that refuses: config_refused_by_target, the part actingd.config.json.new-<ms>.part kept, no configuration, no state file, no state folder, the operation ended with its write_config step started, no next and move_aside naming the folder (Workflow #434 LAB-7). A crash after each step: install_operation_interrupted, next naming the new root's actinglab op resume and undo once the configuration is in place and move_aside before it (Workflow #434 LAB-7), and resume brings the root to the clean run's tree (the salt, the state root's path and the operation's ids and milliseconds aside); undo after each step: done, every byte still there under a name set aside (.rolledback- or .abandoned-), no configuration, state file, state folder or kept build left under its name, no unfinished operation. No install\identity.json and no state-root installation.json after new. With watchdog: watchdog install once, last, the fake Runtime never spawned, paused or closed. actingd: the template holds no salt and no state root, is composer mode with one host (each *_available_milli 1000) and no instance, and filled as new fills it passes load, assemble_or_refusal and check-config with --install-root; the example configuration is byte for byte what it was. Fix round 1: no assertion prints the generated salt (every compared document without it); the edge's refusal names the release's work folder, which is there; the step create_vision_root makes <new_root>\vision empty (after create_state_root, before record_state) and the undo of the finished operation sets it aside as vision.rolledback-<ms2>, empty; the undo after each step finds state.rolledback- and vision.rolledback- folders once their steps ran; actingd's check-config passes the filled template before the state folder exists and again with the empty state and vision folders
 [[gate]]
 coverage = "Y"
 tests = [
@@ -2133,14 +1650,11 @@ tests = [
     "actingcommand-lab::lib::gate_463_l1::l1_the_next_frame_comes_after_the_declared_wait_and_opens_the_next_step",
     "actingcommand-lab::lib::gate_463_l1::l1_a_whole_recording_in_the_fewest_calls_generates_the_three_call_package",
     "actingcommand-actinglab::bin:actinglab::tests::gate_463_l1::l1_the_device_form_refuses_dry_run_and_its_flags_need_record",
-    "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_463_l1::l1_each_new_record_tool_reaches_its_command_and_answers_its_envelope",
-    "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_463_l1::l1_ac_lab_do_hands_the_one_call_form_to_actinglab",
     "actingcommand-lab::lib::gate_463_l1::l1_fix1_a_step_operation_is_refused",
     "actingcommand-lab::lib::gate_463_l1::l1_fix1_a_transition_is_refused",
     "actingcommand-lab::lib::gate_463_l1::l1_fix1_a_step_other_than_the_open_one_is_refused",
     "actingcommand-lab::lib::gate_463_l1::l1_fix1_a_frame_file_is_refused",
     "actingcommand-actinglab::bin:actinglab::tests::gate_463_l1::l1_fix1_the_next_frames_device_configuration_is_resolved_before_the_press",
-    "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_463_l1::l1_fix1_an_exported_ac_lab_do_answer_keeps_its_next_frame_inline",
     "actingcommand-actinglab-mcp::serve_calls::mcp_lab_overflow_rule_keeps_next_frame_inline",
     "actingcommand-lab::lib::gate_463_l1::l1_fix2_a_tap_rect_step_sent_again_says_what_to_look_at_before_its_press",
 ]
@@ -2301,16 +1815,15 @@ tests = [
 ]
 incident = ["#463 V3"]
 
-# Workflow #469 F1 (0.12.62; register §1.387; brief rd-1115/brief-469-f1-run-reads.md; contracts/runtime-state-observation.md, "Contained-run queries"), on A42's fake Runtime with one failed run whose terminal outcome carries a vocabulary word (receipt_state), an id (lease_id) and a duration (retry_after_ms): ac_get_run's full status (run_show's read and answer, which actinglab run show answers too), the ac_runs row beside its failure_code, the overview's run block (a brief status) and the diagnosis's runs row (a brief status) each show failure_values {receipt_state: failed} beside the code and neither the id nor the duration; runs_grouped still groups by (catalog_task_id, failure_code, final_page) and carries no failure_values
+# Workflow #469 F1 (0.12.62; register §1.387; brief rd-1115/brief-469-f1-run-reads.md; contracts/runtime-state-observation.md, "Contained-run queries"), the Lab's half since Workflow #434 LAB-7 deleted actingctl and its tests of it: a row of the runs list (lab_ops::run_list's row, which the Lab's runs row answers on both front ends) copies its terminal's failure_values beside failure_code, of the retired test's failed outcome (receipt_state failed, lease_id, retry_after_ms) {receipt_state: failed} alone, and has no such member for a succeeded run without an outcome or a failed run whose outcome holds only values codes mode drops; the diagnosis's runs_grouped (lab_ops::diagnose's grouped_run and group_runs) puts two failed manual runs of contained_task_deadline_exceeded whose failure_values differ (receipt_state failed, denied) into one group of count 2 without failure_values and a run of another code into another, and grouping them sends nothing beyond the handshake. The run status's own failure_values (and so run show, the overview's run and the diagnosis's runs rows, which print it verbatim) are the contract.toml #469 F1 row's; Workflow #434 LAB-7 pass 4: run show's answer (lab_ops::run_show::answer) is that status's JSON whole, its terminal's failure_code and failure_values {receipt_state: failed} among it
 [[gate]]
 coverage = "Y"
 tests = [
-    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_469_f1::f1_ac_get_run_shows_the_terminal_values_in_full",
-    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_469_f1::f1_ac_runs_shows_the_values_beside_the_failure_code",
-    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_469_f1::f1_the_overview_run_shows_the_terminal_values",
-    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_469_f1::f1_the_diagnosis_runs_show_the_terminal_values_and_the_groups_keep_the_code",
+    "actingcommand-lab-ops::lib::run_list::f1_tests::f1_a_runs_row_copies_the_terminal_values_beside_the_failure_code_and_has_none_without_them",
+    "actingcommand-lab-ops::lib::diagnose::f1_tests::f1_runs_grouped_groups_by_the_code_and_not_by_the_terminal_values",
+    "actingcommand-lab-ops::lib::run_show::f1_tests::f1_run_show_answers_the_run_status_as_it_is",
 ]
-incident = ["#469 F1"]
+incident = ["#469 F1", "#434 LAB-7"]
 
 # Workflow #469 D4a (0.12.62; register §1.400; brief rd-1115/brief-469-d4-owner-four.md; the owner's approval on board #469): call_budget_exhausted is a warning. The overview's two writers of it (a block whose read the call budget left no time to start, performance_incomplete true, and the not-running rows) write it as a warning beside the overview's success line: runtime_overview_reported, exit 0, no developer line (so the Lab's MCP answers isError false), each warning's envelope category warning
 [[gate]]

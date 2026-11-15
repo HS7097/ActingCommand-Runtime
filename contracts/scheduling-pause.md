@@ -234,7 +234,7 @@ lease_queue_cancelled`, warning, as a `stop` does), then releases the key, so no
 follows on an instance that failed its preparation; the failure stays in the receipt's
 self-check and in `instance_preparation_finished` (Workflow #369 S6c review low (b)). A
 self-check's failed preparation does the same.
-`actingctl selfcheck <alias>` (`SelfCheckInstance`) runs the same phase without a pause, on its
+The Lab's `emu selfcheck <alias>` (`SelfCheckInstance`) runs the same phase without a pause, on its
 own `SelfCheck` claim, which waits as the reconnect claim does (at most
 `CONNECTION_PREPARATION_CLAIM_WAIT_MS`, without the admission guard; not granted in time, it is
 refused `lease_queue_expired` and no preparation runs), and answers
@@ -435,13 +435,13 @@ it on an instance it adds while the Runtime is stopped (Workflow #453 S3, 0.12.6
   records the instance in its release's `held_again` (`{alias, reason, revision}`, the reason
   `instance.added`, the revision answered), not among the instances `resumed`, in its journal and
   its answer ([install-cli.md](install-cli.md), "A hand-back the Runtime answers by holding the
-  instance again"); `actingctl install release-hold`, whose face does not change, still lists it
-  as resumed while it stays paused: the safe side.
-- **Who lifts it, and how.** A person, by a resume of the instance: the console's resume,
-  `actingctl resume --state-root <s> --instance <alias>` (below) or the Lab's `resume <alias>`.
+  instance again").
+- **Who lifts it, and how.** A person, by a resume of the instance: the console's resume
+  or the Lab's `resume <alias>` (below).
   Once lifted, the applied row keeps it from coming back.
-- **What the installer's stop needs to know.** `actingctl install stop` (and every form that
-  stops) treats it as another party's pause: the stop refuses `guard_failed` unless
+- **What the installer's stop needs to know.** The installer's `install stop` (and every form
+  that stops; the rescue module takes every pause as known, [install-cli.md](install-cli.md))
+  treats it as another party's pause: the stop refuses `guard_failed` unless
   `--known-pause <alias>=instance.added` names it, as for the installer's own `instance.added`
   pause today ([install-cli.md](install-cli.md), "Formal stop, start and the hold (INST-2)");
   the start restores it as every pause. An `install start` whose Runtime holds the pause for the
@@ -457,12 +457,13 @@ it on an instance it adds while the Runtime is stopped (Workflow #453 S3, 0.12.6
 ## CLI
 
 ```bash
-actingctl pause  --state-root <state-root> [--instance <alias>] [--reason <code>] [--drain-timeout-ms <n>]
-actingctl resume --state-root <state-root> [--instance <alias>]
-actingctl status --state-root <state-root>
+actinglab pause  [<alias>] [--reason <code>] [--drain <duration>]
+actinglab resume [<alias>]
+actinglab status
 ```
 
-Origin `(Cli, Cli)`. Without `--instance` the scope is global. `--reason` defaults to
-`operator` and `--drain-timeout-ms` to `60000`; both are checked against the bounds above
+The Lab's core rows, on the Lab channel (until Workflow #434 LAB-7 `actingctl pause`, `resume`
+and `status`, origin `(Cli, Cli)`). Without an instance the scope is global. `--reason` defaults
+to `operator` and the drain to 60 s; both are checked against the bounds above
 before any request is sent. `pause` / `resume` print the result; `status` prints the global
 and per-instance pause states within the status.

@@ -59,7 +59,7 @@ query check described under the limits below. It is never ignored: any operation
 `verify` refuses it with `maintenance_arguments_invalid` before the root is touched, and
 `verify` refuses it the same way on a root that is not formal (a Segment or candidate root),
 where the check cannot run. Without it `verify --full` is exactly the complete read it was
-before the check existed. `actingctl install` and `acsetup` pass neither flag.
+before the check existed. The installer (the Lab's rescue module) and `acsetup` pass neither flag.
 
 Relative destinations resolve against the process working directory before
 validation, creation and sync. Backup paths must be disjoint from the source and
@@ -134,7 +134,7 @@ Its receipt's `ledger` is the authenticated head, head hash and migration record
 **`--full`** reports `verified-sqlite` and is the complete read described under the limits below:
 the checked open's whole-file `quick_check(1)`, the State validation and digest, every record with
 the migrated prefix, the frame index rows, and the refusal of an unsettled eviction. `--frame-query`
-is `--full` with its check. `actingctl install` and `acsetup` never pass them: on a production
+is `--full` with its check. The installer and `acsetup` never pass them: on a production
 ledger the complete read keeps every event in memory and may not finish in the pass's deadline.
 
 A Missing (Segment) or candidate root behaves as before, with or without `--full`: the checked

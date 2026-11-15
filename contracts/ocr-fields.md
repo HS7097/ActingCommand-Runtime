@@ -388,7 +388,7 @@ reports inside the existing created/verified `DiagnosticJson` artifact chain. Th
 comparison envelope carries the versioned report. Task/run and minted FrameId links remain
 host-owned; report frame indices resolve only to that run's verified observation artifacts.
 
-`RuntimeClient::run_contained_task` and `actingctl task-run` expose
+`RuntimeClient::run_contained_task` and the Lab's `run start` expose
 `official_ocr_fields_projection` with schema
 `actingcommand.runtime.official-ocr-fields-projection.v2`. It contains the declaration,
 ordered records, each record's FrameId and observation artifact, report artifact lifecycle

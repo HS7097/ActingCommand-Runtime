@@ -214,7 +214,7 @@ request serializes and the page answers as before. No outcome code is added. The
 run listing and the run status reads of `runtime-client` (`latest_runs`,
 `list_contained_runs`, `contained_run_status` and the overview's
 run block built on them), which never read the groups, ask for every page so.
-So does every page of `actingctl diagnose` and `ac_diagnose` (#422 QR-2b): its
+So does every page of the Lab's `diagnose` (MCP `ac_diagnose`; #422 QR-2b): its
 run listing (`list_window_runs`), its runs' status, dispatch intent and relayed
 terminal pages, its errors page and its failure-record pages. The errors page's
 cursor binds the query and profile, not this member, so `events` / `ac_events`

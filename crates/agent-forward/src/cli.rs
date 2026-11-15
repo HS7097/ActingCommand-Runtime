@@ -23,7 +23,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 /// The command's first word on `actingctl`'s command line.
 pub const COMMAND: &str = "agent-channel";
 
-const USAGE: &str = "usage: actingctl agent-channel add --state-root <path> --name <name> --client <claude|codex|dsh|antigravity> --native-id <id> [--dsh-app-root <path> --dsh-home <path> --dsh-node <path>] [--restore <on|off>]\n  --restore (Claude channels only, default on): restore the channel's stopped session through Claude Desktop before a send; it switches the conversation Claude Desktop shows and restores a minimized window, and waits while the window holds an unsent draft\nusage: actingctl agent-channel remove --state-root <path> --name <name>\nusage: actingctl agent-channel list --state-root <path>\nusage: actingctl agent-channel claude-hook <start|end> --state-root <path>\nusage: actingctl agent-channel claude-register --state-root <path> --name <name>\nusage: actingctl agent-channel notice";
+const USAGE: &str = "usage: actinglab agent add --name <name> --client <claude|codex|dsh|antigravity> --native-id <id> [--dsh-app-root <path> --dsh-home <path> --dsh-node <path>] [--restore <on|off>]\n  --restore (Claude channels only, default on): restore the channel's stopped session through Claude Desktop before a send; it switches the conversation Claude Desktop shows and restores a minimized window, and waits while the window holds an unsent draft\nusage: actinglab agent remove --name <name>\nusage: actinglab agent list\nusage: actinglab agent claude-hook <start|end>\nusage: actinglab agent claude-register --name <name>\nusage: actinglab agent notice";
 
 const STATE_ROOT: &str = "--state-root";
 const NAME: &str = "--name";

@@ -333,8 +333,7 @@ fn deploy_not_blocked_by_mcp() {
     host.processes.borrow_mut().clear();
 }
 
-/// The images of the two MCP entries' programs, in their generations' folders.
-const ENTRY_G1: &str = "mcp-entry/g1/actingcommand-mcp-entry.exe";
+/// The image of the second MCP entry's program, in its generation's folder.
 const ENTRY_G2: &str = "mcp-entry/g2/actingcommand-mcp-entry-g2.exe";
 
 /// The plan notice's `mcp_clients_reconnect` of a deploy to C2 on `root` while `rows` run.
@@ -349,41 +348,30 @@ fn reconnect(host: &FakeHost, root: &Path, rows: &[Probed<'_>]) -> Value {
 // notice counts a renamed `actinglab-mcp.exe` by the rule it counts today's `actingctl.exe
 // mcp-serve` by. One started by the second entry is switched by that entry and asks no client to
 // reconnect, as one started by the first entry; one started without an entry asks its client to
-// reconnect, as today's started without one does.
+// reconnect, as today's started without one does. Workflow #434 LAB-7 (adapted): actingctl.exe
+// and the first entry are deleted, so the server is held to the rule's two answers themselves: no
+// reconnect for the second entry's child, a reconnect for a server a client started itself.
 #[test]
 fn deploy_notice_counts_the_mcp_server_as_todays() {
     let temp = TempDir::new().expect("tempdir");
     let host = FakeHost::new(&temp.path().join("work"));
     let root = prepared(temp.path(), "notice", &host, false);
-    let control = "runtime/actingctl.exe";
     let server = "tools/actinglab-mcp.exe";
 
     // Started by an entry.
-    let today = reconnect(
-        &host,
-        &root,
-        &[(ENTRY_G1, 50, true, 1), (control, 77, true, 50)],
-    );
-    assert_eq!(today, json!(false));
     let new = reconnect(
         &host,
         &root,
         &[(ENTRY_G2, 60, false, 1), (server, 81, false, 60)],
     );
-    assert_eq!(new, today, "a server the second entry started");
+    assert_eq!(new, json!(false), "a server the second entry started");
 
     // Started without an entry.
-    let today = reconnect(
-        &host,
-        &root,
-        &[(ENTRY_G1, 50, true, 1), (control, 78, true, 99)],
-    );
-    assert_eq!(today, json!(true));
     let new = reconnect(
         &host,
         &root,
         &[(ENTRY_G2, 60, false, 1), (server, 82, false, 99)],
     );
-    assert_eq!(new, today, "a server a client started itself");
+    assert_eq!(new, json!(true), "a server a client started itself");
     host.processes.borrow_mut().clear();
 }

@@ -86,7 +86,7 @@
       "since": "0.12.0",
       "description": "A ConfigureSettings change names a key the configuration key table does not have, or a per-instance key of an instance that is not configured; the whole request is refused and nothing changes.",
       "common_causes": "A misspelt key, a key of a later Runtime, or an instance id that is not in the configuration.",
-      "handling": "Read the keys in effect with actingctl status --config and send the change again with an existing key."
+      "handling": "Read the keys in effect with actinglab config and send the change again with an existing key."
     },
     "config_override_base_changed": {
       "category": "warning",

@@ -5,54 +5,53 @@ and the owner fragments it names; nobody edits it by hand. After a change to a f
 `py -3 -I -B ci/outcome_codes_index.py` from the workspace root and commit
 `contracts/outcome-codes/index/`; the `rust` check of CI runs the script with `--check` and fails
 while the committed index is not what the script generates. The catalog's contract is
-[runtime-outcomes.md](../../runtime-outcomes.md); `actingctl codes` and the MCP tool
-`ac_outcome_code` look up one code. In the tables, *Codes* counts every code of a fragment, active
-and retired, and *Active* its active codes. *Text written* counts the active codes whose
-`common_causes` and `handling` are both written (neither empty nor `TBD`, as the outcome guard's G10
-reads a text); the other active codes still hold `TBD`, or nothing, in one or both. *Settled* counts
-the active codes whose `review` is `settled`; the others are `pending`. Each owner's file lists
-every code of its fragment, retired ones included, sorted by code, with its category, ladder class,
-`since`, status (a retired code with the code that replaces it, where it names one), review, text
-(`written` when both texts are written, else `TBD`) and the first sentence of its description, cut
-at a space within 160 characters and then ending in `…`. The index holds codes only: the catalog's
-1764 locations are not in it, and 10 of the header's 41 owners have no fragment file and so no file
-here.
+[runtime-outcomes.md](../../runtime-outcomes.md); the Lab's `codes <code>` and its MCP tool
+`ac_codes` look up one code. In the tables, *Codes* counts every code of a fragment, active and
+retired, and *Active* its active codes. *Text written* counts the active codes whose `common_causes`
+and `handling` are both written (neither empty nor `TBD`, as the outcome guard's G10 reads a text);
+the other active codes still hold `TBD`, or nothing, in one or both. *Settled* counts the active
+codes whose `review` is `settled`; the others are `pending`. Each owner's file lists every code of
+its fragment, retired ones included, sorted by code, with its category, ladder class, `since`,
+status (a retired code with the code that replaces it, where it names one), review, text (`written`
+when both texts are written, else `TBD`) and the first sentence of its description, cut at a space
+within 160 characters and then ending in `…`. The index holds codes only: the catalog's 1764
+locations are not in it, and 9 of the header's 39 owners have no fragment file and so no file here.
 
 ## Codes by status
 
 | Status | Codes |
 |---|---:|
-| active | 3872 |
-| retired | 88 |
+| active | 3861 |
+| retired | 99 |
 | all | 3960 |
 
 ## Active codes by category
 
 | Category | Codes |
 |---|---:|
-| success | 125 |
+| success | 120 |
 | info | 212 |
 | warning | 152 |
-| error | 3366 |
+| error | 3360 |
 | fatal | 17 |
 
 ## Text and review of the active codes
 
 | Active codes | Codes |
 |---|---:|
-| `common_causes` and `handling` both written | 720 |
+| `common_causes` and `handling` both written | 716 |
 | one of the two written, the other `TBD` or empty | 4 |
-| neither written (`TBD` or empty) | 3148 |
-| `settled` | 154 |
-| `pending` | 3718 |
-| all active codes | 3872 |
+| neither written (`TBD` or empty) | 3141 |
+| `settled` | 153 |
+| `pending` | 3708 |
+| all active codes | 3861 |
 
 ## By owner
 
 | Owner | Codes | Active | Text written | Settled |
 |---|---:|---:|---:|---:|
 | [actingcommand-entry](actingcommand-entry.md) | 10 | 10 | 10 | 0 |
-| [actingctl](actingctl.md) | 204 | 199 | 40 | 8 |
+| [actingctl](actingctl.md) | 204 | 191 | 39 | 7 |
 | [actingd](actingd.md) | 155 | 153 | 98 | 85 |
 | [actinglab](actinglab.md) | 43 | 42 | 42 | 0 |
 | [actinglab-mcp](actinglab-mcp.md) | 3 | 2 | 2 | 0 |
@@ -66,8 +65,7 @@ here.
 | [lab](lab.md) | 12 | 12 | 10 | 0 |
 | [ledger](ledger.md) | 293 | 292 | 26 | 0 |
 | [ledger-forensics](ledger-forensics.md) | 52 | 52 | 0 | 0 |
-| [mcp-entry](mcp-entry.md) | 3 | 3 | 3 | 0 |
-| [mcp-entry-g2](mcp-entry-g2.md) | 3 | 3 | 3 | 0 |
+| [mcp-entry-g2](mcp-entry-g2.md) | 6 | 3 | 3 | 0 |
 | [pack-containment](pack-containment.md) | 40 | 40 | 0 | 0 |
 | [page-detector](page-detector.md) | 2 | 2 | 2 | 0 |
 | [policy](policy.md) | 119 | 117 | 56 | 0 |
@@ -82,4 +80,4 @@ here.
 | [scheduler](scheduler.md) | 14 | 14 | 0 | 0 |
 | [selection-policy](selection-policy.md) | 27 | 27 | 0 | 0 |
 | [vision-ffi](vision-ffi.md) | 4 | 4 | 1 | 0 |
-| all | 3960 | 3872 | 720 | 154 |
+| all | 3960 | 3861 | 716 | 153 |

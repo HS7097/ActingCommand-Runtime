@@ -82,7 +82,7 @@ use std::process::Command;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-const USAGE: &str = "usage: actingctl diagnose --state-root <path> [--root <install root>] [--instance <alias|instance_id|ADB port>] [--task-id <task_id>] [--since-unix-ms <ms>]\nwithout --instance every instance; the errors_page next_cursor one call prints answers cursor_invalid in any later call (page on with actingctl events --view errors)";
+const USAGE: &str = "usage: actinglab diagnose [<instance>] [--task <task_id>] [--since <duration> | --since-unix-ms <ms>]\nwithout <instance> every instance; the errors_page next_cursor one call prints answers cursor_invalid in any later call (page on with actinglab events --view errors)";
 const DAY_MS: u64 = 24 * 60 * 60 * 1000;
 /// The window when no since_unix_ms is given: the last 24 h.
 const DEFAULT_WINDOW_MS: u64 = DAY_MS;
@@ -244,14 +244,6 @@ impl SuspensionReport {
         Self(Ok(thread::spawn(move || {
             child::run_captured_ending(command, deadline)
         })))
-    }
-
-    /// #422 QR-2b gate: a report that was not started, as `start` answers when it finds no
-    /// configuration (the gate reads the Runtime's sections, not the child's). Workflow #434 LAB-1:
-    /// the gate stays in actingctl, which turns on `test-hooks` for its tests.
-    #[cfg(any(test, feature = "test-hooks"))]
-    pub fn not_started(outcome: Outcome) -> Self {
-        Self(Err(outcome))
     }
 }
 
@@ -2123,5 +2115,327 @@ mod r6b1_tests {
             Some("task:diagnose-fixture")
         );
         assert_eq!(record.code, scheduled_failure_code_str(&paused_failure));
+    }
+}
+
+// Workflow #372 K4 (K372 addendum of 2026-10-15, K4.4, row K4-T7, the diagnosis half): the
+// instance's `clock_slots` rows of the report in the window, at most 10, refused and superseded
+// rows first, then deferred and expired rows, then owed rows, newest first in each, and how many
+// there are. Workflow #434 LAB-7: moved here from actingctl's MCP tests (`clock_slots`), which
+// left with actingctl; the order is `clock_slot_rows`', which the Lab's diagnose row answers on
+// the command line and through MCP alike. Every expected value comes from the frozen model.
+#[cfg(test)]
+mod k4_tests {
+    use super::clock_slot_rows;
+    use serde_json::{Value, json};
+
+    const ALIAS: &str = "fixture-instance-a";
+    const INSTANCE_ID: &str = "instance_0192f3a4-5b6c-7d8e-9f01-23456789abcd";
+    /// 2023-11-16 00:00 UTC, the start of the diagnosis window.
+    const SINCE_UNIX_MS: u64 = 1_700_092_800_000;
+    const MINUTE_MS: u64 = 60_000;
+
+    /// A row of `code` recorded `minutes` after the window start, with `members` beside.
+    fn row(code: &str, index: u64, minutes: u64, members: Value) -> Value {
+        let mut recorded = json!({
+            "code": code,
+            "task_id": format!("fixture.slot.{index:02}"),
+            "instance_id": ALIAS,
+            "recorded_sequence": 200_000 + minutes,
+            "recorded_at_unix_ms": SINCE_UNIX_MS + minutes * MINUTE_MS,
+        });
+        if let (Some(fields), Value::Object(members)) = (recorded.as_object_mut(), members) {
+            fields.extend(members);
+        }
+        recorded
+    }
+
+    /// A refused row (its gate's code beside it).
+    fn refused(index: u64, minutes: u64) -> Value {
+        row(
+            "clock_slot_refused",
+            index,
+            minutes,
+            json!({"gate_code": "policy_budget_exhausted", "slot_fate": "next_window"}),
+        )
+    }
+
+    /// A deferred row (an operator pause, not settled yet).
+    fn deferred(index: u64, minutes: u64) -> Value {
+        row(
+            "clock_slot_deferred",
+            index,
+            minutes,
+            json!({"gate_code": "dispatch_paused_instance", "slot_fate": "pending"}),
+        )
+    }
+
+    /// An owed row of a run that served the day before's slot.
+    fn owed(index: u64, minutes: u64) -> Value {
+        row(
+            "clock_slot_owed",
+            index,
+            minutes,
+            json!({
+                "window_start_unix_ms": SINCE_UNIX_MS + (minutes - 7) * MINUTE_MS,
+                "slot_fate": "served",
+            }),
+        )
+    }
+
+    /// An expired row, at its occurrence's grace of two hours.
+    fn expired(index: u64, minutes: u64) -> Value {
+        row(
+            "clock_slot_expired",
+            index,
+            minutes,
+            json!({"grace_ms": 7_200_000, "slot_fate": "expired"}),
+        )
+    }
+
+    /// A superseded row, ten minutes after the occurrence that absorbed its own.
+    fn superseded(index: u64, minutes: u64) -> Value {
+        row(
+            "clock_slot_superseded",
+            index,
+            minutes,
+            json!({"slot_fate": "collapsed"}),
+        )
+    }
+
+    #[test]
+    fn k4_t7_clock_slot_rows_keep_refused_and_superseded_first_then_deferred_and_expired_then_owed()
+    {
+        // Four owed runs in the morning, then expired, refused, deferred and superseded rows
+        // through the day; the report lists them newest first.
+        let mut rows = (0..4)
+            .map(|index| owed(index, 360 + index))
+            .collect::<Vec<_>>();
+        rows.extend([
+            refused(4, 400),
+            expired(5, 450),
+            deferred(6, 500),
+            expired(7, 600),
+            superseded(8, 650),
+            refused(9, 700),
+            deferred(10, 800),
+            superseded(11, 900),
+        ]);
+        rows.reverse();
+        let document = json!({
+            "schema_version": "actingcommand.actingd.suspended.v1",
+            "status": "ok",
+            "clock_slots": rows,
+        });
+
+        let (kept, total) = clock_slot_rows(&document, ALIAS, &json!(INSTANCE_ID), SINCE_UNIX_MS);
+        assert_eq!(total, 12, "the instance's rows in the window");
+        let minutes = kept
+            .iter()
+            .map(|row| {
+                (row["recorded_at_unix_ms"]
+                    .as_u64()
+                    .expect("a recorded time")
+                    - SINCE_UNIX_MS)
+                    / MINUTE_MS
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            minutes,
+            [900, 700, 650, 400, 800, 600, 500, 450, 363, 362],
+            "refused and superseded, then deferred and expired, then owed, newest first in each"
+        );
+    }
+}
+
+// Workflow #469 F1 (0.12.62; register §1.387; contracts/runtime-state-observation.md,
+// "Contained-run queries"), the diagnosis's half: `runs_grouped` keeps grouping by (policy task,
+// failure code, final page) and by nothing the terminal's values say. Workflow #434 LAB-7: the
+// test of `ac_diagnose` that held it left with actingctl; the groups are `grouped_run`'s and
+// `group_runs`', which the Lab's diagnose row answers on the command line and through MCP alike.
+// Two failed runs of one code whose `failure_values` differ are one group, which carries no such
+// member, and a run of another code is another group. The runs are manual and their codes
+// registered, so grouping them reads nothing: the scripted Runtime receives the handshake alone.
+// The failed outcome is the retired test's (a vocabulary word codes mode keeps, an id and a
+// duration it drops), its word changed for the second run.
+#[cfg(test)]
+mod f1_tests {
+    use super::{Budget, Clock, group_runs, grouped_run};
+    use actingcommand_contract::codes::SharedCode;
+    use actingcommand_contract::outcome::Outcome;
+    use actingcommand_contract::{
+        IdentifierIssuer, InstanceId, RuntimeErrorCode, RuntimeReceiptState, TaskOutcome,
+        TaskRunIdentity,
+    };
+    use actingcommand_runtime_client::test_support::{ScriptedConnection, ScriptedRuntime};
+    use actingcommand_runtime_client::{
+        ContainedRunEvidence, ContainedRunState, ContainedRunStatus, ContainedRunTerminal,
+        RunDispatch, RunOrigin, RuntimeClient, WindowRun,
+    };
+    use serde_json::{Value, json};
+    use std::time::{Duration, Instant};
+    use tempfile::TempDir;
+
+    const FAILURE: RuntimeErrorCode = RuntimeErrorCode::ContainedTaskDeadlineExceeded;
+    const FINAL_PAGE: &str = "neutral/page_failed";
+
+    /// A clock that stands still before the deadline: the budget is never spent.
+    struct Still(Instant);
+
+    impl Clock for Still {
+        fn now(&self) -> Instant {
+            self.0
+        }
+    }
+
+    /// The retired test's failed outcome, with `receipt_state` as its word.
+    fn failure(receipt_state: RuntimeReceiptState) -> Outcome {
+        Outcome::new(FAILURE)
+            .receipt_state(receipt_state)
+            .lease_id("lease_00000000000000000000000000000001")
+            .retry_after_ms(1_500_u64)
+    }
+
+    /// A failed manual run of `instance_id` listed at `sequence` whose terminal carries
+    /// `outcome`'s code and the values codes mode keeps of it, as the run status's fold reads
+    /// them (`Outcome::codes_only`): the run as the window's listing shows it, and its status.
+    fn failed_run(
+        issuer: &IdentifierIssuer,
+        instance_id: InstanceId,
+        sequence: u64,
+        outcome: &Outcome,
+    ) -> (WindowRun, ContainedRunStatus) {
+        let identity = TaskRunIdentity {
+            request_id: *issuer.mint_request_id().expect("request id").transport(),
+            correlation_id: *issuer
+                .mint_correlation_id()
+                .expect("correlation id")
+                .transport(),
+            instance_id,
+            task_id: *issuer.mint_task_id().expect("task id").transport(),
+            run_id: *issuer.mint_run_id().expect("run id").transport(),
+        };
+        let status = ContainedRunStatus {
+            schema_version: "actingcommand.run-status.v1",
+            request_id: Some(identity.request_id),
+            correlation_id: Some(identity.correlation_id),
+            run_id: Some(identity.run_id),
+            task_id: Some(identity.task_id),
+            instance_id: Some(instance_id),
+            dispatch: RunDispatch::Manual,
+            origin: RunOrigin::Lab,
+            package_label: Some("neutral.package".to_owned()),
+            recovery_package_labels: Vec::new(),
+            state: ContainedRunState::Failed,
+            terminal: Some(ContainedRunTerminal {
+                outcome: TaskOutcome::Failure,
+                failure_code: Some(outcome.code().clone()),
+                failure_values: outcome.codes_only().values().clone(),
+                final_page: Some(FINAL_PAGE.to_owned()),
+                executed_steps: Some(1),
+                cancellation_reason: None,
+                sequence: sequence + 1,
+                event_id: *issuer.mint_event_id().expect("event id").transport(),
+            }),
+            lease: None,
+            progress: None,
+            evidence: ContainedRunEvidence {
+                snapshot_ledger_position: sequence + 1,
+                admitted_sequence: Some(sequence),
+                restarted_after_admission: false,
+            },
+        };
+        let run = WindowRun {
+            identity,
+            order_sequence: sequence,
+            settled: None,
+            opened_in_window: true,
+        };
+        (run, status)
+    }
+
+    #[test]
+    fn f1_runs_grouped_groups_by_the_code_and_not_by_the_terminal_values() {
+        let issuer = IdentifierIssuer::new().expect("identifier issuer");
+        let instance_id = *issuer.mint_instance_id().expect("instance id").transport();
+        let other = SharedCode::ContainedTaskHomeEntryNotMatched.code();
+        let runs = [
+            failed_run(
+                &issuer,
+                instance_id,
+                10,
+                &failure(RuntimeReceiptState::Failed),
+            ),
+            failed_run(
+                &issuer,
+                instance_id,
+                20,
+                &failure(RuntimeReceiptState::Denied),
+            ),
+            failed_run(
+                &issuer,
+                instance_id,
+                30,
+                &Outcome::new(other).receipt_state(RuntimeReceiptState::Failed),
+            ),
+        ];
+        // The two runs of one code carry different values beside it.
+        let values = |index: usize| {
+            runs[index]
+                .1
+                .terminal
+                .as_ref()
+                .map_or(Value::Null, |terminal| {
+                    Value::Object(terminal.failure_values.clone())
+                })
+        };
+        assert_eq!(values(0), json!({"receipt_state": "failed"}));
+        assert_eq!(values(1), json!({"receipt_state": "denied"}));
+
+        let root = TempDir::new().expect("tempdir");
+        let runtime = ScriptedRuntime::start(root.path(), |_| vec![ScriptedConnection::new()]);
+        let client = RuntimeClient::connect(crate::front::client_config(root.path()))
+            .expect("connect to the scripted Runtime");
+        let at = Instant::now();
+        let clock = Still(at);
+        let budget = Budget {
+            deadline: at + Duration::from_secs(60),
+            clock: &clock,
+        };
+        let grouped = runs
+            .iter()
+            .map(|(run, status)| {
+                grouped_run(&client, run, status, 31, &budget)
+                    .unwrap_or_else(|refused| {
+                        panic!("a run not grouped: {}", refused.outcome().code().as_str())
+                    })
+                    .expect("a manual run of a registered code is grouped without a read")
+            })
+            .collect::<Vec<_>>();
+        drop(client);
+        let record = runtime.finish();
+        assert!(record.unscripted.is_empty(), "a connection beyond the one");
+        assert_eq!(
+            record
+                .connections
+                .iter()
+                .map(|connection| connection.requests.len())
+                .collect::<Vec<_>>(),
+            [2],
+            "the handshake's Health and BindChannel, and no read"
+        );
+
+        let groups = group_runs(&grouped, None);
+        assert_eq!(groups.len(), 2, "{groups:?}");
+        // The most frequent group first: the two runs of one code, whatever their values.
+        let same = &groups[0];
+        assert_eq!(same["failure_code"], json!(FAILURE.as_str()), "{same}");
+        assert_eq!(same["final_page"], json!(FINAL_PAGE), "{same}");
+        assert_eq!(same["count"], json!(2), "{same}");
+        assert!(same.get("failure_values").is_none(), "{same}");
+        let alone = &groups[1];
+        assert_eq!(alone["failure_code"], json!(other.as_str()), "{alone}");
+        assert_eq!(alone["count"], json!(1), "{alone}");
+        assert!(alone.get("failure_values").is_none(), "{alone}");
     }
 }

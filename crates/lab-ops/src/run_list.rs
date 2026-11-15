@@ -29,7 +29,7 @@ use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-const USAGE: &str = "usage: actingctl runs --state-root <path> [--instance <alias|instance_id|ADB port>] [--since-unix-ms <ms>] [--until-unix-ms <ms>] [--task-prefix <text>] [--dispatch manual|scheduled] [--state open|succeeded|failed|cancelled|interrupted_unterminated] [--limit <1-100>] [--cursor <next_cursor>]";
+const USAGE: &str = "usage: actinglab runs [<instance>] [--since <duration> | --since-unix-ms <ms>] [--until-unix-ms <ms>] [--task-prefix <text>] [--dispatch manual|scheduled] [--state open|succeeded|failed|cancelled|interrupted_unterminated] [--limit <1-100>] [--cursor <next_cursor>]";
 pub const DEFAULT_LIMIT: u64 = 20;
 pub const MAX_LIMIT: u64 = 100;
 const DAY_MS: u64 = 24 * 60 * 60 * 1000;
@@ -708,4 +708,149 @@ fn parse(arguments: &[OsString]) -> Result<(PathBuf, RunsRequest), Failure> {
 #[cfg(test)]
 pub(crate) fn parse_refusal(arguments: &[OsString]) -> Option<Outcome> {
     parse(arguments).err().map(|failure| failure.outcome())
+}
+
+// Workflow #469 F1 (0.12.62; register §1.387; contracts/runtime-state-observation.md,
+// "Contained-run queries"), the run list's half: a row of `runs` copies its terminal's
+// `failure_values` (what codes mode keeps of the terminal outcome's values, as the run status
+// carries them) beside its `failure_code`, and has no such member when there are none. Workflow
+// #434 LAB-7: the test of `ac_runs` that held it left with actingctl; the row is `row`'s, which
+// the Lab's `runs` row answers on the command line and through MCP alike. The failed outcome is
+// the retired test's: a vocabulary word codes mode keeps (`receipt_state`), an id (`lease_id`)
+// and a duration (`retry_after_ms`) it drops.
+#[cfg(test)]
+mod f1_tests {
+    use super::row;
+    use actingcommand_contract::codes::SharedCode;
+    use actingcommand_contract::outcome::Outcome;
+    use actingcommand_contract::{
+        IdentifierIssuer, RuntimeErrorCode, RuntimeReceiptState, TaskOutcome,
+    };
+    use actingcommand_runtime_client::{
+        ContainedRunEvidence, ContainedRunState, ContainedRunStatus, ContainedRunTerminal,
+        ListedContainedRun, RunDispatch, RunOrigin,
+    };
+    use serde_json::json;
+
+    const FAILURE: RuntimeErrorCode = RuntimeErrorCode::ContainedTaskDeadlineExceeded;
+    const FINAL_PAGE: &str = "neutral/page_failed";
+    /// When the run recorded its first fact (the retired test's ledger start, 2100-01-01 plus
+    /// 4 000 000 s) and its terminal, a second later.
+    const ADMITTED_UNIX_MS: u64 = 4_102_444_800_000 + 4_000_000_000;
+    const ENDED_UNIX_MS: u64 = ADMITTED_UNIX_MS + 1_000;
+
+    /// The retired test's failed outcome.
+    fn failure() -> Outcome {
+        Outcome::new(FAILURE)
+            .receipt_state(RuntimeReceiptState::Failed)
+            .lease_id("lease_00000000000000000000000000000001")
+            .retry_after_ms(1_500_u64)
+    }
+
+    /// A manual run in `state` whose terminal is `task_result` with `outcome`, as a run list
+    /// holds it: the terminal's code and the values codes mode keeps of `outcome`, as the run
+    /// status's fold reads them (`Outcome::codes_only`).
+    fn listed(
+        state: ContainedRunState,
+        task_result: TaskOutcome,
+        outcome: Option<&Outcome>,
+    ) -> ListedContainedRun {
+        let issuer = IdentifierIssuer::new().expect("identifier issuer");
+        let status = ContainedRunStatus {
+            schema_version: "actingcommand.run-status.v1",
+            request_id: Some(*issuer.mint_request_id().expect("request id").transport()),
+            correlation_id: Some(
+                *issuer
+                    .mint_correlation_id()
+                    .expect("correlation id")
+                    .transport(),
+            ),
+            run_id: Some(*issuer.mint_run_id().expect("run id").transport()),
+            task_id: Some(*issuer.mint_task_id().expect("task id").transport()),
+            instance_id: Some(*issuer.mint_instance_id().expect("instance id").transport()),
+            dispatch: RunDispatch::Manual,
+            origin: RunOrigin::Lab,
+            package_label: Some("neutral.package".to_owned()),
+            recovery_package_labels: Vec::new(),
+            state,
+            terminal: Some(ContainedRunTerminal {
+                outcome: task_result,
+                failure_code: outcome.map(|outcome| outcome.code().clone()),
+                failure_values: outcome
+                    .map(|outcome| outcome.codes_only().values().clone())
+                    .unwrap_or_default(),
+                final_page: Some(FINAL_PAGE.to_owned()),
+                executed_steps: Some(1),
+                cancellation_reason: None,
+                sequence: 2,
+                event_id: *issuer.mint_event_id().expect("event id").transport(),
+            }),
+            lease: None,
+            progress: None,
+            evidence: ContainedRunEvidence {
+                snapshot_ledger_position: 2,
+                admitted_sequence: Some(1),
+                restarted_after_admission: false,
+            },
+        };
+        ListedContainedRun {
+            status,
+            catalog_task_id: None,
+            order_sequence: 1,
+            first_fact_unix_ms: ADMITTED_UNIX_MS,
+            terminal_unix_ms: Some(ENDED_UNIX_MS),
+        }
+    }
+
+    #[test]
+    fn f1_a_runs_row_copies_the_terminal_values_beside_the_failure_code_and_has_none_without_them()
+    {
+        let failure = failure();
+        let failed = row(
+            &listed(
+                ContainedRunState::Failed,
+                TaskOutcome::Failure,
+                Some(&failure),
+            ),
+            None,
+        );
+        assert_eq!(failed["task_result"], json!("failure"), "{failed}");
+        assert_eq!(failed["failure_code"], json!(FAILURE.as_str()), "{failed}");
+        // The word alone, without the id or the duration.
+        assert_eq!(
+            failed["failure_values"],
+            json!({"receipt_state": "failed"}),
+            "{failed}"
+        );
+
+        // No value codes mode keeps: no member, whether the row has a code or not.
+        let not_kept = Outcome::new(SharedCode::ContainedTaskHomeEntryNotMatched.code())
+            .request_id("request_00000000000000000000000000000001")
+            .host_halted(false);
+        for (case, state, task_result, outcome) in [
+            (
+                "succeeded, no outcome",
+                ContainedRunState::Succeeded,
+                TaskOutcome::Success,
+                None,
+            ),
+            (
+                "failed, only values codes mode drops",
+                ContainedRunState::Failed,
+                TaskOutcome::Failure,
+                Some(&not_kept),
+            ),
+        ] {
+            let answered = row(&listed(state, task_result, outcome), None);
+            assert_eq!(
+                answered.get("failure_code").is_some(),
+                outcome.is_some(),
+                "{case}: {answered}"
+            );
+            assert!(
+                answered.get("failure_values").is_none(),
+                "{case}: {answered}"
+            );
+        }
+    }
 }

@@ -44,7 +44,7 @@ const WIDTH: &str = "--hour|--day";
 /// The members an answer written whole to its caller's export keeps beside `export` (Workflow
 /// #434 LAB-5D: moved from MCP's `ac_routine_summary`).
 const EXPORTED_HEADER: [&str; 3] = ["owner_epoch", "granularity", "revision"];
-const USAGE: &str = "usage: actingctl routine-summary (--hour | --day) [--instance <alias|instance_id|ADB port>] [--since <revision>] --state-root <path>";
+const USAGE: &str = "usage: actinglab summary [<instance>] [--hour | --day] [--since <revision>]";
 
 /// Why a routine summary read answered nothing.
 pub enum Failure {

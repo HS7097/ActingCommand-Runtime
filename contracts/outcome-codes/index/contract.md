@@ -53,7 +53,7 @@ column means. 918 codes.
 | `catalog_transition_failed` | error | none | 0.12.0 | active | pending | TBD | The diagnostic code of a ledger diagnostic record: catalog transition failed. |
 | `client_action_invalid` | error | none | 0.12.0 | active | pending | TBD | A code several owners emit with one meaning (contract-owned, A2a D3): client action invalid. |
 | `command_rejected` | error | none | 0.12.0 | active | pending | written | The diagnostic code of a command.rejected record: a request the Runtime refused, or a Lab operation that failed. |
-| `command_wait_expired` | error | none | 0.12.0 | active | pending | TBD | A command's --wait (actingctl emulator start, stop, restart and task-run; actinglab after U-3) ended before its request did: the command stopped waiting after… |
+| `command_wait_expired` | error | none | 0.12.0 | active | pending | TBD | A command's --wait (actinglab emu start, stop, restart and run start) ended before its request did: the command stopped waiting after waited_ms and the request… |
 | `config_decode_failed` | error | none | 0.12.0 | active | pending | TBD | A code several owners emit with one meaning (contract-owned, #389 MCP-11 ruling Q6, from actingd): the configuration file does not decode as actingd's… |
 | `config_manifest_parameters_too_many` | error | none | 0.12.0 | active | pending | TBD | Event or record sanitization refused a value: config manifest parameters too many. |
 | `config_manifest_subsystems_too_many` | error | none | 0.12.0 | active | pending | TBD | Event or record sanitization refused a value: config manifest subsystems too many. |
@@ -605,8 +605,8 @@ column means. 918 codes.
 | `ocr_fields_zero_input_outcome_invalid` | error | declaration_error | 0.12.0 | active | pending | TBD | A task flow declaration was refused: ocr fields zero input outcome invalid. |
 | `ocr_fields_zero_input_pages_invalid` | error | declaration_error | 0.12.0 | active | pending | TBD | A task flow declaration was refused: ocr fields zero input pages invalid. |
 | `offline_fixture_missing` | error | none | 0.12.0 | active | pending | TBD | A code several owners emit with one meaning (contract-owned, A2a D3): offline fixture missing. |
-| `outcome_catalog_unreadable` | error | none | 0.12.0 | active | pending | TBD | A code several owners emit with one meaning (contract-owned, A2a D3; moved from actingctl by #378 A8b): actingctl codes, ac_outcome_code or actingledger codes… |
-| `outcome_code_unknown` | error | none | 0.12.0 | active | pending | TBD | A code several owners emit with one meaning (contract-owned, A2a D3; moved from actingctl by #378 A8b): actingctl codes, ac_outcome_code or actingledger codes… |
+| `outcome_catalog_unreadable` | error | none | 0.12.0 | active | pending | TBD | A code several owners emit with one meaning (contract-owned, A2a D3; moved from actingctl by #378 A8b): actinglab codes, ac_outcome_code or actingledger codes… |
+| `outcome_code_unknown` | error | none | 0.12.0 | active | pending | TBD | A code several owners emit with one meaning (contract-owned, A2a D3; moved from actingctl by #378 A8b): actinglab codes, ac_outcome_code or actingledger codes… |
 | `outcome_projection_not_ready` | error | none | 0.12.0 | active | pending | TBD | A code several owners emit with one meaning (contract-owned, A2a D3): outcome projection not ready. |
 | `outcome_relay_unregistered` | error | none | 0.12.0 | active | pending | TBD | A code arrived as its spelling (relayed by a crate whose channel is not typed yet, received from a client, or read back from a record) and the embedded catalog… |
 | `owner_compaction_unrecoverable` | error | none | 0.12.0 | active | pending | TBD | A code several owners emit with one meaning (contract-owned, A2a D3): owner compaction unrecoverable. |

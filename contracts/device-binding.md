@@ -153,7 +153,7 @@ No record, key, code or word is added; the switch's refusal no longer names `dis
   (one device drives one instance). A serial is 1 to 64 bytes of printable ASCII without white
   space; an alias is an instance alias of at most 248 bytes. `bound_via` is `cli`, `mcp`, `ui` or
   `manual`. The file is at most 1 MiB.
-- Writers: `actingctl devices bind|unbind` (RD-1c; the UI calls the same command) and a person.
+- Writers: the Lab's `devices bind` and `devices unbind` (RD-1c; the UI calls the same rows) and a person.
   The Runtime never writes it.
 - Readers: actingd's configuration assembly, once per start and per check-config, and only when
   the configuration has a handset. A change takes effect at the next start.
@@ -222,30 +222,29 @@ the emulators.
   baseline").
 - Emulator control refuses a handset as it refuses every instance bound without discovery
   (`emulator_control_unavailable`, [emulator-control.md](emulator-control.md)).
-- `actingctl status` gives no ADB port for an instance addressed by a serial, as before; check-config
+- The Lab's `status` gives no ADB port for an instance addressed by a serial, as before; check-config
   prints `adb_host` and `adb_port` `null` for a handset.
 
 ## Choosing a device (RD-1c)
 
 Workflow #398 RD-1c (model-398 v1.1 §3.3). A person or an agent picks a handset's device from
-what adb discovers; the UI's device page will call the same command. Three subcommands of
-`actingctl`, and the MCP tools that answer the same (observer tools before U-3, as the
-configuration tools of #387 D1b):
+what adb discovers; the UI's device page will call the same command. Three core rows of
+the Lab (subcommands of `actingctl` until Workflow #434 LAB-7), on the command line and through
+the Lab's MCP server:
 
 | CLI | MCP | Answer |
 |---|---|---|
-| `actingctl devices list --state-root <dir> [--root <install root>]` | `ac_devices` | `{devices: [{handle?, transport, state, model?, bound_alias?, endpoint?}]}` |
-| `actingctl devices bind <alias> <handle> --state-root <dir> [--root <install root>]` | `ac_device_bind {alias, handle}` | `{alias, handle, model?, restart_required: true}` |
-| `actingctl devices unbind <alias> --state-root <dir>` | `ac_device_unbind {alias}` | `{alias, unbound, restart_required}` |
+| `actinglab devices` | `ac_devices` | `{devices: [{handle?, transport, state, model?, bound_alias?, endpoint?}]}` |
+| `actinglab devices bind <alias> <handle>` | `ac_devices_bind {instance, handle}` | `{alias, handle, model?, restart_required: true}` |
+| `actinglab devices unbind <alias>` | `ac_devices_unbind {instance}` | `{alias, unbound, restart_required}` |
 
 - They never run the Runtime and record nothing in the ledger; the next start records a binding
   by fingerprint in `runtime.instance_bound`, so a change takes effect at the next start
-  (`restart_required`). The MCP tools take the server's install root and state root for
-  `--root` and `--state-root`. A success line carries `device_list_reported` or
+  (`restart_required`). Both take the install root and the state root of the root the Lab runs from. A success line carries `device_list_reported` or
   `device_binding_changed`.
 - **The adb** is the install root's, `<install root>\tools\platform-tools\adb.exe` (Workflow #337),
-  the install root found as `actingctl packs` finds it (this process's install selection, else
-  `--root`, else the install root the executable runs from; `install_root_unresolved` without
+  the install root found as the Lab's `packs` finds it (this process's install selection, else
+  the install root the executable runs from; `install_root_unresolved` without
   one). It runs `adb devices -l` once per `list` and once per `bind`.
 - **A row** is one device of adb's list: `handle` `<transport>:<transport_id>` (the adb server's
   session number for the device, never a device value; it changes when the device is replugged

@@ -33,7 +33,9 @@
 //!   EOF the server exits 0. Workflow #434 LAB-5G2b (adapted, as above): the call the cancellation
 //!   and the batch hold is `ac_app_launch`'s, a row that slice still refuses. Workflow #434
 //!   LAB-5G4b (adapted, as above): the same call, refused since for its missing `instance`
-//!   (`arguments_invalid`, `required`) before any child starts.
+//!   (`arguments_invalid`, `required`) before any child starts. Workflow #434 LAB-7 (added: the
+//!   first MCP server's protocol tests left with it): a line that is no JSON is answered -32700
+//!   `mcp_message_malformed` with a null id, an unknown method -32601 `mcp_method_unknown`.
 
 use serde_json::{Map, Value, json};
 use std::collections::BTreeSet;
@@ -47,7 +49,9 @@ use std::time::Duration;
 const GATE_WAIT: Duration = Duration::from_secs(120);
 const PROGRAM: &str = env!("CARGO_BIN_EXE_actinglab-mcp");
 const MODERN: &str = "2026-07-28";
+const PARSE_ERROR: i64 = -32700;
 const INVALID_REQUEST: i64 = -32600;
+const METHOD_NOT_FOUND: i64 = -32601;
 const INVALID_PARAMS: i64 = -32602;
 const UNSUPPORTED: &str = "mcp_operation_unsupported";
 
@@ -90,8 +94,13 @@ impl Server {
     }
 
     fn send(&mut self, message: &Value) {
+        self.send_line(&message.to_string());
+    }
+
+    /// Writes `line` as it is, one line (Workflow #434 LAB-7: also a line that is no JSON).
+    fn send_line(&mut self, line: &str) {
         let input = self.input.as_mut().expect("actinglab-mcp stdin is open");
-        writeln!(input, "{message}").expect("write a line to actinglab-mcp");
+        writeln!(input, "{line}").expect("write a line to actinglab-mcp");
         input.flush().expect("flush actinglab-mcp stdin");
     }
 
@@ -482,6 +491,27 @@ fn mcp_loop_initialize_list_batch_and_cancel() {
     }));
     let ping = server.request(7, "ping", json!({}));
     assert_eq!(ping["result"], json!({}), "{ping}");
+    // Workflow #434 LAB-7 (the JSON-RPC codes the first MCP server's
+    // `gate_malformed_messages_unknown_methods_and_malformed_calls_get_their_json_rpc_codes`
+    // held, which left with that server): a line that is no JSON is answered -32700
+    // (`mcp_message_malformed`, its id null), a method the server does not know -32601
+    // (`mcp_method_unknown`), and the server goes on.
+    server.send_line(r#"{"jsonrpc": "2.0", "id": 8, "method": "#);
+    let malformed = server.recv();
+    assert_eq!(malformed["id"], Value::Null, "{malformed}");
+    let (code, outcome) = rpc_error(&malformed);
+    assert_eq!(
+        (code, &outcome["code"]),
+        (PARSE_ERROR, &json!("mcp_message_malformed")),
+        "{malformed}"
+    );
+    let unknown = server.request(9, "neutral/unknown", json!({}));
+    let (code, outcome) = rpc_error(&unknown);
+    assert_eq!(
+        (code, &outcome["code"]),
+        (METHOD_NOT_FOUND, &json!("mcp_method_unknown")),
+        "{unknown}"
+    );
     let (left, exited) = server.finish();
     assert!(
         left.is_empty(),

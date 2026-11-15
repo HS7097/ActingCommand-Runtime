@@ -19,31 +19,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "366ffbaa4442f4684d91e2cd7c5ea7c4ed8add41959a31447066e279e432b618"
 
 [[package]]
-name = "actingcommand-actingctl"
-version = "0.1.0"
-dependencies = [
- "actingcommand-artifact-store",
- "actingcommand-contract",
- "actingcommand-device",
- "actingcommand-lab-ops",
- "actingcommand-lab-rescue",
- "actingcommand-ledger",
- "actingcommand-pack-containment",
- "actingcommand-policy",
- "actingcommand-runtime-client",
- "actingcommand-runtime-config",
- "actingcommand-runtime-database",
- "actingcommand-runtime-host",
- "actingcommand-scheduler",
- "actingcommand-watchdog",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "zip",
-]
-
-[[package]]
 name = "actingcommand-actingd"
 version = "0.1.0"
 dependencies = [
@@ -320,17 +295,6 @@ dependencies = [
  "actingcommand-display-adapter",
  "actingcommand-ledger",
  "actingcommand-runtime-database",
- "serde",
- "serde_json",
- "tempfile",
-]
-
-[[package]]
-name = "actingcommand-mcp-entry"
-version = "0.1.0"
-dependencies = [
- "actingcommand-contract",
- "actingcommand-host-metrics",
  "serde",
  "serde_json",
  "tempfile",

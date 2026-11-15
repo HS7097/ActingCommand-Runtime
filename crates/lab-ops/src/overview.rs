@@ -89,7 +89,7 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-const USAGE: &str = "usage: actingctl overview --state-root <path> [--root <install root>] [--instance <alias|instance_id|ADB port>] [--sections <block>[,<block>...]]\nblocks: global_pause, instances, run_window, lab_tool, install, performance, catalog, config_generation, watchdog, fact_refresh, agent_wake (default all); daemon and incomplete are always answered";
+const USAGE: &str = "usage: actinglab status [<instance>] [--sections <block>[,<block>...]]\nblocks: global_pause, instances, run_window, lab_tool, install, performance, catalog, config_generation, watchdog, fact_refresh, agent_wake (default all); daemon and incomplete are always answered";
 /// The run window: the last 24 h.
 const RUN_WINDOW_MS: u64 = 24 * 60 * 60 * 1000;
 /// `<root>\runtime\BUILD-MANIFEST.json` is read whole up to this size.

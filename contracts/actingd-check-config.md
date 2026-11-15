@@ -29,7 +29,7 @@ actingd check-config --config <path> [--install-root <root>]
 [install-cli.md](install-cli.md)) judges the install root as `<root>` instead of
 from the running executable: the install root's adb (see "Default ADB") and the
 default vision root `<root>\vision` (see "Vision root"), exactly as a daemon
-running from `<root>\runtime` would. `actingctl install` runs a kept build's
+running from `<root>\runtime` would. The installer (the Lab's rescue module) runs a kept build's
 check-config with it, because from `<root>\install\builds\<commit>\runtime\` the
 executable's own root is the kept build's folder. `<root>` must be an install
 root itself (it holds `runtime\BUILD-MANIFEST.json`); otherwise the check ends
@@ -261,7 +261,7 @@ The members of `report`:
   when the file's `performance` section named it and `default` otherwise. The
   values are read from the manifest, so they equal the
   `performance.pressure_start_samples` / `performance.pressure_end_samples`
-  parameters there and what `actingctl status --config` shows after startup.
+  parameters there and what the Lab's `config` shows after startup.
 - `device_paths` echoes the daemon-level device tool paths, always with all
   five names (`nemu_folder`, `nemu_ipc_dll`, `droidcast_apk`,
   `minitouch_path`, `maatouch_path`): `{ path, source: "explicit" }` for a
@@ -272,8 +272,8 @@ The members of `report`:
   as `assemble` hands it to the host (`RuntimeConfigManifest`, see
   `contracts/runtime-fact-store.md`, "Producers"); at startup the daemon
   records it as the program facts `config.subsystems` and
-  `config.parameters.<section>`, which `actingctl facts --program` returns
-  whole and `actingctl status --config` returns on their own. Every parameter
+  `config.parameters.<section>`, which the Lab's `facts --program` returns
+  whole and the Lab's `config` returns on their own. Every parameter
   carries `settable` (Workflow #387 D1b). Printing it here has no side effect.
 - `config_selection` (Workflow #387 D1b): what startup records as the program
   fact `config.selection`: `config_sha256` and `defaults_sha256`
@@ -898,7 +898,7 @@ A6a): the developer line `ERROR actingd: <code> <text>`, whose text names
 - `resource_package_missing`: the path does not exist (or is empty).
 - `resource_package_invalid`: the path exists but is neither a file nor a
   directory, or the contained-task package loader (`PreparedContainedTask::load_path`,
-  the loader `actingctl task-run` uses, no vision provider, one 60 s deadline)
+  the loader the Lab's `run start` uses, no vision provider, one 60 s deadline)
   refuses it. Workflow #336 PKG-S1: the path chooses the reading (a directory, a
   `.json` or `.zip` container, or a `.zip` assembled package;
   `contracts/package-reference.md`, "Content-directory admission"), admission is

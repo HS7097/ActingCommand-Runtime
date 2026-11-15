@@ -99,6 +99,10 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   §1.287, "Slice LAB-6S4a") lowers it to [0, 0]: the request kind `InstallTransition` and
 ///   actingd's `--install-held` start, which revision 1 named, are gone; an installer that speaks
 ///   [0, 1] meets [0, 0] and takes its cold path (revision 0).
+/// - `install-cli` [2, 2]: Workflow #434 LAB-7 (since 0.12.64, register §1.287, "Slice LAB-7")
+///   declares it: the installer's face is the Lab's rescue module (revision 2), and revision 1,
+///   `actingctl install`, is deleted with actingctl. An installed installer keeps an interface it
+///   does not know and checks none, so the build stays deployable.
 /// - `install-selection` is unchanged (model-378 §10).
 /// - `ledger` [3, 3]: SQLite format 2, `actingcommand.event.v3`; format 1 is refused. Workflow
 ///   #411 BT-LR (register §1.153) raises `max` to 4 once for the 0.12.x B train (Alice
@@ -171,6 +175,7 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 /// - `runtime-outcomes` [1, 1]: the new interface of model-378 §10.
 const V0120: &[(&str, [u64; 2])] = &[
     ("actingd-config", [5, 32]),
+    ("install-cli", [2, 2]),
     ("install-control", [0, 0]),
     ("install-selection", [1, 1]),
     ("ledger", [3, 8]),

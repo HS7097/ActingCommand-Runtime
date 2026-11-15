@@ -776,22 +776,15 @@ fn inst5b_a_refused_pause_of_the_added_instance_keeps_the_global_pause_and_the_h
     assert_eq!(host.runtime.pause_of(ADDED), None);
 
     // `next` names both ways out: the added instance's pause and the global pause's resume, the
-    // core commands as actingctl runs them, beside the module's own release.
+    // Lab's core rows (Workflow #434 LAB-7, adapted: the core commands as actingctl ran them
+    // before), beside the module's own release.
     let next = &line["next"];
-    assert_eq!(next["pause_added"][0], "actingctl", "{line}");
-    assert_eq!(next["pause_added"][1], "pause", "{line}");
-    assert_eq!(next["pause_added"][5], ADDED, "{line}");
-    assert_eq!(next["pause_added"][7], "instance.added", "{line}");
     assert_eq!(
-        next["actingctl_resume_global"],
-        json!([
-            "actingctl",
-            "resume",
-            "--state-root",
-            next["pause_added"][3]
-        ]),
+        next["pause_added"],
+        json!(["pause", ADDED, "--reason", "instance.added"]),
         "{line}"
     );
+    assert_eq!(next["resume_global"], json!(["resume"]), "{line}");
     assert_eq!(
         next["release_hold"],
         json!(["release-hold", reason]),

@@ -34,15 +34,23 @@
 //     `mcp`;
 //   - `lab6s2b1_watchdog_probe_records_nothing` (Windows): the probe with `Lab-看门狗` is
 //     answered, and the host records no client and no command record, as for 0.12.58's probe.
+// - Workflow #434 LAB-7 (pass 4, the second review's (f); the property of the retired
+//   `rk1_an_unknown_key_refuses_ac_config_set_whole_with_a_declared_receipt_top`), on a host whose
+//   configuration declares one settable key: `lab7_config_set_of_an_unknown_key_is_refused_whole`:
+//   the core row `config set` through the command line's module, with that key and a misspelt one
+//   no row of the key table has, is refused by the Runtime whole: exit 1, the line's outcome
+//   `config_key_unknown` with every value one the catalog declares for the code, beside the denied
+//   receipt with its request id; afterwards the declared key still has its file value.
 // No ids, times or paths are compared, and no clock is read.
 
 use super::*;
 use crate::cli_module::{self, serve, words};
 use actingcommand_contract::{
-    CommandPayload, ConfigSettingChange, DeclaredInitiator, EventActor, EventPayload, EventQuery,
-    EventSource, EventType, OriginModule, ProjectedEvent, ProjectionPayload, ProjectionProfile,
+    CommandPayload, ConfigParameter, ConfigParameterSource, ConfigSettingChange, DeclaredInitiator,
+    EventActor, EventPayload, EventQuery, EventSource, EventType, FactScalar, FactValue,
+    OriginModule, ProjectedEvent, ProjectionPayload, ProjectionProfile, RuntimeConfigManifest,
     RuntimeControlPlaneStatus, RuntimeOperation, RuntimeRequest, RuntimeResult,
-    SchedulingPauseScope,
+    SchedulingPauseScope, config_parameter_section, config_parameters_fact_key,
 };
 use actingcommand_lab_ops::core_ops::{self, Caller};
 use actingcommand_lab_ops::front::{self, Connection, Front};
@@ -303,10 +311,12 @@ fn records_of(reader: &RuntimeClient, event_type: EventType) -> Vec<ProjectedEve
         .expect("records")
 }
 
-/// The records of the host whose state root `root` is, read on a connection of actingctl's front
-/// (a read records nothing).
+/// The records of the host whose state root `root` is, read on a connection with the CLI's
+/// envelope and `Lab-CLI`, as actingctl's front connected until Workflow #434 LAB-7 deleted it (a
+/// read records nothing).
 fn recorded(root: &Path) -> Recorded {
-    let reader = RuntimeClient::connect(front::config(Front::Actingctl, root)).expect("reader");
+    let reader =
+        RuntimeClient::connect(front::cli_envelope(root, Some(Initiator::LabCli))).expect("reader");
     let client = [
         EventType::CliCommand,
         EventType::LabRequest,
@@ -466,4 +476,97 @@ fn lab6s2b1_watchdog_probe_records_nothing() {
             command: Vec::new(),
         }
     );
+}
+
+/// Workflow #434 LAB-7 pass 4: the instance whose cooldown key the configuration declares (the
+/// retired test's; no instance of the host is this one, and the key table's rows need none).
+const DECLARED_INSTANCE: &str = "instance_0123456789abcdef0123456789abcdef";
+
+#[test]
+fn lab7_config_set_of_an_unknown_key_is_refused_whole() {
+    let _guard = env_lock();
+    set_variable(None);
+    let root = TempDir::new().expect("state root");
+    let cooldown = format!("instance.{DECLARED_INSTANCE}.stuck_recovery_cooldown_secs");
+    // A misspelt member: no row of the key table has it.
+    let misspelt = format!("instance.{DECLARED_INSTANCE}.stuck_recovery_cooldown_seconds");
+    let instance_id = *IdentifierIssuer::new()
+        .expect("identifier issuer")
+        .mint_instance_id()
+        .expect("instance id")
+        .transport();
+    let host = RuntimeHost::start(
+        RuntimeHostConfig::new(root.path(), b"actinglab-lab7-config-set-test")
+            .with_config_manifest(RuntimeConfigManifest {
+                subsystems: Vec::new(),
+                parameters: vec![ConfigParameter {
+                    key: cooldown.clone(),
+                    value: FactScalar::Integer(600),
+                    source: ConfigParameterSource::Default,
+                    settable: true,
+                }],
+            }),
+        Arc::new(AuthoringRuntimeProvider { instance_id }),
+    )
+    .expect("Runtime host");
+    let state_root = use_runtime_state_root(root.path());
+
+    // The row as a person types it: the declared key's change and the misspelt one, one request.
+    let exit = cli_module::run_line(&[
+        "config".to_owned(),
+        "set".to_owned(),
+        format!("{cooldown}=120"),
+        format!("{misspelt}=120"),
+    ]);
+    assert_eq!(exit.code, 1, "{:?}", exit.line);
+    let line = exit.line.expect("the row's line");
+    let outcome = &line["outcome"];
+    assert_eq!(outcome["code"], json!("config_key_unknown"), "{line}");
+    assert_eq!(line["receipt"]["state"], json!("denied"), "{line}");
+    assert!(
+        line["receipt"]["request_id"]
+            .as_str()
+            .is_some_and(|request_id| !request_id.is_empty()),
+        "{line}"
+    );
+    let catalog =
+        actingcommand_contract::outcome::catalog_json().expect("the embedded catalog parses");
+    let declared = &catalog["codes"]["config_key_unknown"]["values"];
+    let values = outcome["values"].as_object().cloned().unwrap_or_default();
+    let undeclared = values
+        .keys()
+        .filter(|key| declared.get(key.as_str()).is_none())
+        .collect::<Vec<_>>();
+    assert!(
+        undeclared.is_empty(),
+        "values of the refusal the catalog does not declare for its code: {undeclared:?}: {line}"
+    );
+
+    // Nothing changed: the configuration in effect still has the file's value of the declared key.
+    let reader =
+        RuntimeClient::connect(front::client_config(root.path())).expect("connect a reader");
+    let snapshot = reader
+        .runtime_fact_snapshot()
+        .expect("the runtime fact snapshot");
+    drop(reader);
+    drop(state_root);
+    let section = config_parameters_fact_key(config_parameter_section(&cooldown));
+    let Some(FactValue::RecordList(rows)) = snapshot
+        .records
+        .iter()
+        .find(|record| record.key == section)
+        .map(|record| &record.value)
+    else {
+        panic!("no record list {section}");
+    };
+    let row = rows
+        .iter()
+        .find(|row| row.get("key") == Some(&FactScalar::String(cooldown.clone())))
+        .unwrap_or_else(|| panic!("no row {cooldown}: {rows:?}"));
+    assert_eq!(row.get("value"), Some(&FactScalar::Integer(600)));
+    assert_eq!(
+        row.get("source"),
+        Some(&FactScalar::String("default".to_owned()))
+    );
+    host.close().expect("close the Runtime");
 }

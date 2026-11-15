@@ -58,8 +58,8 @@ const CHANNELS: &[Check] = &[Check::G2, Check::G3, Check::G4, Check::G5];
 /// Owners line of model section 11 assigns to it when it converts them. A channel of a converted
 /// member that another owner's code fills, or that a later slice replaces, stays a string behind
 /// a bridge entry (a function or a field) whose reason names the slice that removes it. The two
-/// tools, MCP's JSON-RPC `error_response` (actingctl's and, since Workflow #434 LAB-5G2a, the
-/// Lab's MCP server's copy) and the configuration manifest's subsystem names
+/// tools, MCP's JSON-RPC `error_response` (the Lab's MCP server's, since Workflow #434 LAB-5G2a;
+/// actingctl's left with it in LAB-7) and the configuration manifest's subsystem names
 /// (`apps/actingd/src/config/manifest.rs` `build`, G5) are standing entries (kept after B6).
 pub const ALLOW_LIST: &[AllowEntry] = &[
     member(
@@ -721,12 +721,6 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "A2b/A2c merge follow-up: carries a runtime host error's code (RuntimeHostError::code, which still relays ledger, state, artifact-store and kernel spellings until the host and ledger channels take Code together after the A2 train); then it becomes a Code",
     ),
     // End of the A2b bridges.
-    AllowEntry {
-        path: "apps/actingctl/src/mcp/protocol.rs",
-        item: Some("error_response"),
-        checks: &[Check::G3],
-        reason: "standing: JSON-RPC requires error.code and error.message (model section 7.3)",
-    },
     AllowEntry {
         path: "apps/actinglab-mcp/src/protocol.rs",
         item: Some("error_response"),

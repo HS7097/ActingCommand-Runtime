@@ -533,7 +533,7 @@ The v1.1 degraded mode, `ledger_write_unconfirmed` and the 10-minute halt do not
   - A reader tolerates unknown members. A `dump_version` newer than the reader is
     `ledger_dump_unsupported`.
 - The dump holds sanitized drafts only; it is private to the state root and never exported. Its
-  existence, size and import result are reported through actingctl and IPC, never its content.
+  existence, size and import result are reported through the Lab's reads and IPC, never its content.
 - As built by AO-1 (register §1.26 AO1): the header's `owner_epoch` is the owner epoch's id
   (`epoch_…`); `runtime_commit` is present when the build knows its commit. A record's `draft`
   holds the sanitized draft's members (`schema_version`, `event_id`, `timestamp_unix_ms`,
@@ -1181,7 +1181,7 @@ every later command fails at once as `writer_unavailable`.
 
 ### 14.2 Status blocks
 
-`actingctl status` and MCP `ac_overview` gain two blocks, read from memory, writing nothing
+The Lab's `status` (MCP `ac_status`) has two blocks, read from memory, writing nothing
 (AO-8, with the UI-paired runtime-client revision):
 
 - `ledger`: committed head, flush lag, tier and bytes, dump segment size and place, capture counts

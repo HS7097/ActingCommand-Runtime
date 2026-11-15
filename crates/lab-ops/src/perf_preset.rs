@@ -38,7 +38,7 @@ use std::path::PathBuf;
 pub const COMMAND: &str = "perf-preset";
 pub const SET: &str = "set";
 pub const GET: &str = "get";
-const USAGE: &str = "usage: actingctl perf-preset set <preset> --state-root <path>\nusage: actingctl perf-preset get --state-root <path>";
+const USAGE: &str = "usage: actinglab preset set <preset>\nusage: actinglab preset";
 
 /// Why a preset command answered nothing.
 pub enum Failure {

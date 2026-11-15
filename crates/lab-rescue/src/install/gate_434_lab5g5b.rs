@@ -12,9 +12,8 @@
 //   `actinglab-mcp.exe` refuses `mcp_server_not_in_build` (`commit_sha`, `path`) with the tunables,
 //   no child; a file in place that no manifest lists is not carried either.
 // - `mcp_plan_refuses_entry_protocol_1`: protocol 1 (and 3) refused `--entry-protocol`
-//   `not_recognised`, as the first generation's plan refuses protocol 2.
-// - `mcp_plan_refuses_while_the_writer_lock_is_held`: the line the first generation's plan answers
-//   (`writer_lock_failed` with the tunables).
+//   `not_recognised` (Workflow #434 LAB-7: held to its members, the first generation deleted).
+// - `mcp_plan_refuses_while_the_writer_lock_is_held`: `writer_lock_failed` with the tunables.
 // - `mcp_entries_lists_both_generations`: a status file of each generation in a temporary root,
 //   both listed, each with its generation; a file stating none without one.
 // - `mcp_config_gives_each_clients_snippet`: each client's shape, the second generation's
@@ -26,16 +25,13 @@
 // The machine is the fake host of `fixture.rs` (the rows ask nothing of it); every root is a
 // temporary folder with neutral files; no Runtime, no device, no clock, no sleep.
 
-use super::fixture::{BuildSpec, C1, C2, FakeHost, live_root, sha256_hex, word};
+use super::files;
+use super::fixture::{BuildSpec, C1, C2, FakeHost, live_root, sha256_hex};
 use super::lock::WriterLock;
-use super::mcp_entry;
 use super::state::Paths;
-use super::{files, print};
 use crate::agent_channel::Answer as Answered;
-use crate::cli_line;
-use crate::codes::{ActingctlCode, InstallLocation};
+use crate::codes::InstallLocation;
 use crate::rescue::{self, Context};
-use actingcommand_contract::outcome::Detail;
 use actingcommand_lab_ops::initiator::Initiator;
 use actingcommand_lab_ops::table::{ModuleRole, operation_table};
 use serde_json::{Map, Value, json};
@@ -302,17 +298,10 @@ fn mcp_plan_refuses_entry_protocol_1() {
     let temp = TempDir::new().expect("tempdir");
     let host = FakeHost::new(&temp.path().join("work"));
     let root = sample_root(temp.path());
-    // The first generation's plan refuses the second generation's protocol.
-    let first = mcp_entry::plan(&["--root", word(&root), "--entry-protocol", "2"])
-        .expect_err("protocol 2 is not the first generation's");
-    assert!(first.is(ActingctlCode::ActingctlUsageInvalid), "{first}");
-    let first = cli_line::outcome_value(&first, Detail::Full);
-    assert_eq!(first["values"]["argument"], "--entry-protocol", "{first}");
-    assert_eq!(
-        first["values"]["argument_problem"], "not_recognised",
-        "{first}"
-    );
-    // The second generation's row refuses protocol 1, and any other, alike.
+    // The second generation's row refuses protocol 1, and any other, alike: the usage refusal
+    // naming `--entry-protocol` as not recognised, and nothing else, nothing read. Workflow #434
+    // LAB-7 (adapted): the first generation's plan, whose refusal of protocol 2 this was held to,
+    // is deleted, so the refusal is held to its members.
     for protocol in [1, 3] {
         let (answered, exit) = rescue_line(
             &host,
@@ -321,10 +310,23 @@ fn mcp_plan_refuses_entry_protocol_1() {
             json!({"entry_protocol": protocol}),
         );
         assert_eq!(exit, 1, "{protocol}: {answered}");
+        let outcome = &answered["outcome"];
         assert_eq!(
-            answered,
-            json!({"outcome": first}),
-            "{protocol}: refused as the first generation refuses protocol 2, nothing read"
+            outcome["code"], "actingctl_usage_invalid",
+            "{protocol}: {answered}"
+        );
+        assert_eq!(
+            outcome["values"]["argument"], "--entry-protocol",
+            "{protocol}: {answered}"
+        );
+        assert_eq!(
+            outcome["values"]["argument_problem"], "not_recognised",
+            "{protocol}: {answered}"
+        );
+        assert_eq!(
+            answered.as_object().map(Map::len),
+            Some(1),
+            "{protocol}: the outcome alone, nothing read: {answered}"
         );
     }
 }
@@ -344,11 +346,8 @@ fn mcp_plan_refuses_while_the_writer_lock_is_held() {
         "{answered}"
     );
     assert_eq!(answered["tunables"], tunables(), "{answered}");
-    // As the first generation's plan answers it: the same refusal, the same tunables.
-    let first = mcp_entry::plan(&["--root", word(&root), "--entry-protocol", "1"])
-        .expect("the first generation's answer");
-    let first = print(first).line.expect("its line");
-    assert_eq!(answered, first);
+    // Workflow #434 LAB-7 (adapted): the first generation's plan, whose answer this line was held
+    // to, is deleted; the refusal and the tunables above are the row's own.
 }
 
 #[test]

@@ -1081,9 +1081,9 @@ falls back to reading the scheduling catalog.
 the length; a refusal's receipt is the error's `received_receipt()`.
 
 ```text
-actingctl agent-apply-resource-targets --state-root <state-root> --policy-file <policy.json>
+actinglab targets set <instance> <policy.json>
 ```
 
-The CLI reads at most 65536 bytes, requires UTF-8 (`resource_targets_file_invalid` otherwise,
+The Lab's `targets set` (`crates/lab-ops`' `targets`, `actingctl agent-apply-resource-targets` until Workflow #434 LAB-7) reads at most 65536 bytes of the file, requires UTF-8 (`resource_targets_file_invalid` otherwise,
 a local fatal) and does not parse the content. It prints `{"applied": ...}`, or
 `{"receipt": ...}` with a non-zero exit when the Runtime refuses.

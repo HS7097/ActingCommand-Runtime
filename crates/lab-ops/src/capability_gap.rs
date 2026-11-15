@@ -25,7 +25,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const COMMAND: &str = "capability-gap";
-const USAGE: &str = "usage: actingctl capability-gap --capability <text> --why <text>";
+const USAGE: &str = "usage: actinglab gap --capability <text> --why <text>";
 /// The schema of one line of the log.
 const GAP_SCHEMA: &str = "actingcommand.capability-gap.v1";
 /// The log below the user's local application data.

@@ -61,7 +61,7 @@ use std::time::{Duration, Instant};
 
 pub const COMMAND: &str = "run";
 pub const ACTION: &str = "evidence";
-const USAGE: &str = "usage: actingctl run evidence --state-root <path> (--request-id <request_id> | --run-id <run_id>) [--from-step <n>] [--limit <1-100>] [--detail full|summary]";
+const USAGE: &str = "usage: actinglab run evidence <request_id|run_id> [--from-step <n>] [--limit <1-100>] [--detail full|summary]";
 pub const DEFAULT_LIMIT: u64 = 20;
 pub const MAX_LIMIT: u64 = 100;
 /// The largest `from_step`: a step position counts like a step index.

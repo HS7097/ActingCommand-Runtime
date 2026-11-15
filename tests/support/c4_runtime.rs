@@ -245,22 +245,14 @@ fn record_event(path: &Path, event: &str) -> DeviceResult<()> {
 pub struct RuntimeChild {
     child: Option<Child>,
     stop_path: PathBuf,
-    // Read only by `restart`, whose caller is the actingctl gate binary (`tests/gate/mcp_shell.rs`).
-    #[allow(dead_code)]
-    launch: Launch,
 }
 
-/// The first spawn's child entry, instance and alias, which a restart on the same state root
-/// keeps.
+/// The spawn's child entry, instance and alias.
 struct Launch {
     child_test_name: String,
     instance_id: InstanceId,
     instance_alias: String,
     input_delay: Duration,
-    /// Numbers the fresh stop-signal paths of the restarts.
-    // Read only by `RuntimeChild::restart`, whose caller is the actingctl gate binary.
-    #[allow(dead_code)]
-    restarts: u32,
 }
 
 impl RuntimeChild {
@@ -294,33 +286,16 @@ impl RuntimeChild {
             instance_id,
             instance_alias: instance_alias.to_owned(),
             input_delay,
-            restarts: 0,
         };
         let child = launch_child(root, &stop_path, &launch);
         Self {
             child: Some(child),
             stop_path,
-            launch,
         }
     }
 
     pub fn wait_ready(&mut self, root: &Path) -> RuntimeInfo {
         self.wait_info(root, |_| true)
-    }
-
-    /// Stops this Runtime cleanly and starts it again on the same state root, with the first
-    /// spawn's instance id and alias and a fresh stop-signal path (the earlier signal file stays
-    /// where it is); returns once `runtime-info.json` names an owner epoch other than
-    /// `previous`'s, polled as `wait_ready` polls.
-    // Called only by the actingctl gate binary (`apps/actingctl/tests/gate/mcp_shell.rs`).
-    #[allow(dead_code)]
-    pub fn restart(&mut self, root: &Path, previous: &RuntimeInfo) -> RuntimeInfo {
-        self.stop_clean();
-        self.launch.restarts += 1;
-        self.stop_path = root.join(format!("stop-runtime-restart-{}", self.launch.restarts));
-        self.child = Some(launch_child(root, &self.stop_path, &self.launch));
-        let previous = previous.owner_epoch();
-        self.wait_info(root, |info| info.owner_epoch() != previous)
     }
 
     /// The first valid `runtime-info.json` that `accept` takes, within 5 s.

@@ -965,8 +965,8 @@ package, and `ocr_alone_unchecked` is `record stop`'s alone:
 **Where the frame comes from.** A run that met a screen its package never recorded ends with
 `contained_task_linear_unrecorded_screen` ([linear-steps.md](linear-steps.md), "A screen the
 package never recorded"); its `artifact_id` names the frame of the run's `Failure` pin, the closing
-decision's last frame. That id is no material ref: `run evidence <request_id>` (actinglab and
-actingctl, MCP `ac_run_evidence`) lists the run's frames as material refs
+decision's last frame. That id is no material ref: `run evidence <request_id>` (actinglab,
+MCP `ac_run_evidence`) lists the run's frames as material refs
 `<seq>:<event_id>:<artifact_id>`, the run's last one as `final.frame_ref`, and the ref whose last
 part is the failure's `artifact_id` is the frame; `material <ref> --out <dir>` (actinglab) writes
 it whole as `<dir>/<sha256>.png`, the file `--frame` takes (MCP `ac_material` with `mode: export`
@@ -1323,8 +1323,8 @@ frame attachment or recording persistence. The global parser handles the flag at
   declared click. The package still declares the gesture.
 - observe and do need a carrier package: any admissible package of the same game and
   resolution, including an earlier Lab package.
-- Pause the instance's scheduling for the recording (`actingctl pause --instance <alias>`,
-  then `resume`): a scheduled task between two commands would act on another screen.
+- Pause the instance's scheduling for the recording (`actinglab pause <alias>`,
+  then `actinglab resume <alias>`): a scheduled task between two commands would act on another screen.
 
 ## One call per step
 
@@ -1429,12 +1429,7 @@ takes the row's parameters (`mark_request`, `mark_request_json`, `next_frame_aft
   not taken can both be `device_error`: the second's details have `record` (its `step_closed`
   true) and `next_frame.taken` false, the first's have neither. actinglab's own line keeps the
   details whole whatever `ACTINGCOMMAND_DETAIL` says, and so does the Lab's MCP server's refusal
-  (`{outcome, message?, details?}`). Today's MCP server (`actingctl mcp-serve`) carries them as the
-  `raw_text` of `lab_tool_failed`'s `foreign_other_error` link: with `--detail full` (the default)
-  its first 4096 bytes, where `record` and `next_frame` lead; `--detail codes` withholds every
-  foreign text, so there the two read alike (`lab_tool_failed` caused by `device_error`), and the
-  step's state is read with `ac_record_status` (the open step, its click's execution) before
-  anything is pressed again.
+  (`{outcome, message?, details?}`).
 - **Answer.** `do --capture --record`'s answer, whose `record` gains `mark` (the `record mark`
   output) with a mark request and which, with a next frame, gains `next_frame`: `capture
   --record`'s members (`width`, `height`, `capture_backend_used`, `adb_source`, `adb_warning`,

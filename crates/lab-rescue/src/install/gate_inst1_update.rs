@@ -9,11 +9,12 @@
 //   `--accept-ledger-one-way` (planned and journalled with it), a placed bundle the target
 //   cannot run; an unknown declaration is the caveat `pack_declaration_unknown`;
 // - IT-6: the plan refuses an A/B root, a running Runtime (`--preview` reports it), a held owner
-//   lock, a foreign `.part`, a running image other than actingctl.exe that would change, and a
-//   running adb.exe that would change;
+//   lock, a foreign `.part`, a running image other than the renamable ones that would change,
+//   and a running adb.exe that would change;
 // - IT-7: apply with a stale plan id refuses `plan_changed` and changes nothing;
 // - IT-8: apply swaps Tools before the Runtime, never touches an unchanged file, renames a
-//   running actingctl.exe aside while it stays open, keeps the old bytes as `.old-<ms>`,
+//   running actinglab-mcp.exe (Workflow #434 LAB-7; actingctl.exe before) aside while it stays
+//   open, keeps the old bytes as `.old-<ms>`,
 //   verifies every manifest file, records the state, and leaves extra live files;
 // - IT-9: after a stop at each step, `resume` reaches the uninterrupted tree and `undo` restores
 //   the old tree byte for byte with every displaced file kept;
@@ -71,6 +72,9 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Duration;
 use tempfile::TempDir;
+
+/// Workflow #434 LAB-7: the one image renamed aside while it runs, the Lab's MCP server.
+const SERVER: &str = "actinglab-mcp.exe";
 
 /// The tick's wall clock.
 const T0: u64 = 1_800_000_000_000;
@@ -403,7 +407,7 @@ fn inst1_it_6_the_update_plan_refuses_what_may_not_change() {
     let refused = plan_update(&host, &root, C2, &[]);
     assert_refused(&refused, "install_update_plan", "foreign_part");
 
-    // A running image other than actingctl.exe that would change.
+    // A running image other than the renamable ones that would change.
     let root = prepared(temp.path(), "ledger-reader", &live, &target, &host);
     host.processes
         .replace(vec![image(&root, "tools/actingledger.exe", 51, false)]);
@@ -473,12 +477,21 @@ fn inst1_it_7_apply_with_a_stale_plan_changes_nothing() {
 fn inst1_it_8_apply_swaps_tools_first_and_keeps_and_leaves_what_it_must() {
     let temp = TempDir::new().expect("tempdir");
     let host = FakeHost::new(&temp.path().join("work"));
-    let live = BuildSpec::new(C1);
+    // Workflow #434 LAB-7 (adapted): the image renamed aside while it runs is the Lab's MCP
+    // server in `tools\`, since actingctl.exe, which this test ran before, is no renamable image.
+    let mut live = BuildSpec::new(C1);
+    live.tools
+        .files
+        .push((SERVER.to_owned(), b"neutral server one".to_vec()));
     let mut target = BuildSpec::new(C2);
     target
         .runtime
         .files
         .push(("INSTALL.md".to_owned(), b"neutral notes".to_vec()));
+    target
+        .tools
+        .files
+        .push((SERVER.to_owned(), b"neutral server two".to_vec()));
     let root = prepared(temp.path(), "root", &live, &target, &host);
     fs::write(
         root.join("runtime").join("notes.txt"),
@@ -488,8 +501,8 @@ fn inst1_it_8_apply_swaps_tools_first_and_keeps_and_leaves_what_it_must() {
     let unchanged = root.join("tools").join("actingwatch.exe");
     let unchanged_before = fs::metadata(&unchanged).expect("the unchanged file");
     host.processes
-        .replace(vec![image(&root, "runtime/actingctl.exe", 77, true)]);
-    let mut open = File::open(root.join("runtime").join("actingctl.exe")).expect("an open image");
+        .replace(vec![image(&root, "tools/actinglab-mcp.exe", 77, true)]);
+    let mut open = File::open(root.join("tools").join(SERVER)).expect("an open image");
 
     let planned = plan_update(&host, &root, C2, &[]);
     assert_done(&planned, "install_update_plan");
@@ -560,25 +573,25 @@ fn inst1_it_8_apply_swaps_tools_first_and_keeps_and_leaves_what_it_must() {
         "no copy of an unchanged file"
     );
     // The running image was renamed aside and still reads its old bytes.
-    let old_control = live
-        .runtime
+    let old_server = live
+        .tools
         .entries()
         .into_iter()
-        .find(|(path, _)| path == "actingctl.exe")
-        .expect("the old control")
+        .find(|(path, _)| path == SERVER)
+        .expect("the old server")
         .1;
     let mut read = Vec::new();
     open.read_to_end(&mut read).expect("read the open image");
-    assert_eq!(read, old_control);
-    let kept = fs::read_dir(root.join("runtime"))
-        .expect("runtime")
+    assert_eq!(read, old_server);
+    let kept = fs::read_dir(root.join("tools"))
+        .expect("tools")
         .map(|entry| entry.expect("an entry").path())
         .find(|path| {
             path.file_name()
-                .is_some_and(|name| name.to_string_lossy().starts_with("actingctl.exe.old-"))
+                .is_some_and(|name| name.to_string_lossy().starts_with("actinglab-mcp.exe.old-"))
         })
         .expect("the kept old image");
-    assert_eq!(fs::read(kept).expect("the kept old image"), old_control);
+    assert_eq!(fs::read(kept).expect("the kept old image"), old_server);
     // Every manifest file verified, the state recorded, the extra file left.
     let listed = target.runtime.files.len() + target.tools.files.len();
     assert_eq!(applied.members["verified"], json!(listed));
@@ -1775,18 +1788,32 @@ fn inst1_fix1_9_status_check_rollback_evaluates_the_whole_gate() {
 /// #411 P49 (brief rd-1028/brief-wave1.md W1-10; MCP-ENTRY review L9): the update plan's notice
 /// asks for MCP clients to reconnect only when a renamed `mcp-serve` image was started by a
 /// client itself. One that an MCP entry under the root started is switched to the live build by
-/// that entry. The process probe reads each image's parent.
+/// that entry. The process probe reads each image's parent. Workflow #434 LAB-7 (adapted): the
+/// entry is the second generation and its child the Lab's MCP server in `tools\`, since the
+/// first generation's child actingctl.exe is no renamable image.
 #[test]
 fn p49_l9_the_notice_asks_no_reconnect_for_an_mcp_entrys_child() {
     let temp = TempDir::new().expect("tempdir");
     let host = FakeHost::new(&temp.path().join("work"));
-    let live = BuildSpec::new(C1);
-    let target = BuildSpec::new(C2);
+    let mut live = BuildSpec::new(C1);
+    live.tools
+        .files
+        .push((SERVER.to_owned(), b"neutral server one".to_vec()));
+    let mut target = BuildSpec::new(C2);
+    target
+        .tools
+        .files
+        .push((SERVER.to_owned(), b"neutral server two".to_vec()));
     let root = prepared(temp.path(), "root", &live, &target, &host);
-    let entry = image(&root, "mcp-entry/g1/actingcommand-mcp-entry.exe", 50, false);
+    let entry = image(
+        &root,
+        "mcp-entry/g2/actingcommand-mcp-entry-g2.exe",
+        50,
+        false,
+    );
     let child = RunningImage {
         parent_pid: Some(50),
-        ..image(&root, "runtime/actingctl.exe", 77, true)
+        ..image(&root, "tools/actinglab-mcp.exe", 77, true)
     };
     host.processes.replace(vec![entry.clone(), child]);
     let planned = plan_update(&host, &root, C2, &[]);
@@ -1805,7 +1832,7 @@ fn p49_l9_the_notice_asks_no_reconnect_for_an_mcp_entrys_child() {
     // A server a client started itself: that client reconnects.
     let direct = RunningImage {
         parent_pid: Some(60),
-        ..image(&root, "runtime/actingctl.exe", 78, true)
+        ..image(&root, "tools/actinglab-mcp.exe", 78, true)
     };
     host.processes.replace(vec![entry, direct]);
     let planned = plan_update(&host, &root, C2, &[]);
@@ -1821,7 +1848,7 @@ fn p49_l9_the_notice_asks_no_reconnect_for_an_mcp_entrys_child() {
     let plain = super::files::plain(&root);
     let rows = json!([{
         "pid": 77,
-        "path": format!("{plain}\\runtime\\actingctl.exe"),
+        "path": format!("{plain}\\tools\\actinglab-mcp.exe"),
         "mcp": true,
         "parent": 50,
     }]);

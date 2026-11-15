@@ -266,8 +266,8 @@ takes the factor of the new mode. `full` is set only in the configuration file.
   dwell per stage over the last 24 h and in all and how often each would have stopped work, and
   the stage and factor in effect), and the warnings now (`perf_probe_unavailable`,
   `perf_baseline_clamped`; `vision_gpu_unavailable` below). A monitor without counters answers its rows at their start with
-  the health `unavailable`. `actingctl perf-status` prints it; `ac_overview` answers it as its
-  block `performance`. Both write each distinct dwell object once, in `dwell`, each view naming
+  the health `unavailable`. The Lab's `status` answers it as its
+  block `performance`, on the command line and through MCP; both write each distinct dwell object once, in `dwell`, each view naming
   its 24 h and total dwell by their index there (`dwell_24h_ref`, `dwell_total_ref`; #422
   OV-24K). #422 W1-8 (register W20, since 0.12.25): the status also carries the optional
   `ledger_read_pages {pages, total_ms, longest_ms, last_ms}`, the view pages the ledger's

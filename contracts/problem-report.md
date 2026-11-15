@@ -15,8 +15,8 @@ the next views come without renaming anything. Not built yet, and named as missi
 report ("Not in this report yet"): the views `package` and `run`, successes included (RPT-2);
 the part that needs no Runtime (the configuration without its secrets, the tails of the Runtime's
 and the console's logs, each instance's schedule and status, the machine, the plan of a report
-before it is written, a report while the Runtime is stopped: RPT-3); the tool on `actingctl
-mcp-serve` (RPT-4).
+before it is written, a report while the Runtime is stopped: RPT-3); an MCP tool of its own
+(RPT-4).
 
 ## 1 The row
 

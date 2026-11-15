@@ -52,7 +52,8 @@ fn gate_each_subcommand_refuses_its_malformed_arguments_with_its_code_and_exit_1
         "extra",
     ];
     let rows: &[(Subcommand, &[&str], ActingdCode)] = &[
-        // unlock-owner: its five codes.
+        // unlock-owner: its five codes. Workflow #434 LAB-7 (adapted): four words after the
+        // subcommand at most, and `--confirm-resources-released` is an unknown option.
         (
             unlock,
             &[
@@ -61,7 +62,6 @@ fn gate_each_subcommand_refuses_its_malformed_arguments_with_its_code_and_exit_1
                 "a.json",
                 "--actor",
                 "operator",
-                "--confirm-resources-released",
                 "extra",
             ],
             ActingdCode::UnlockOwnerUsageInvalid,
@@ -78,11 +78,7 @@ fn gate_each_subcommand_refuses_its_malformed_arguments_with_its_code_and_exit_1
         ),
         (
             unlock,
-            &[
-                "unlock-owner",
-                "--confirm-resources-released",
-                "--confirm-resources-released",
-            ],
+            &["unlock-owner", "--confirm-resources-released"],
             ActingdCode::UnlockOwnerOptionInvalid,
         ),
         (

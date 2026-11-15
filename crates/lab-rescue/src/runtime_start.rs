@@ -30,12 +30,13 @@
 //! decides as info (the installer holds its writer lock, a tick holds the run lock) is
 //! `start_runtime_refused` caused by that decision, so it exits 1.
 //!
-//! Workflow #434 LAB-3: moved from `apps/actingctl` unchanged; [`dispatch`] builds the line that
-//! actingctl prints, and the Lab's rescue module's `up` (on an A/B root) and `restart` run the
-//! same start and restart for the root they run from ([`run_located`]).
+//! Workflow #434 LAB-3: moved from `apps/actingctl` unchanged; the Lab's rescue module's `up` (on
+//! an A/B root) and `restart` run the same start and restart for the root they run from
+//! ([`run_located`]). Workflow #434 LAB-7: `actingctl start|restart`, their `dispatch` and the
+//! parse of their flags are deleted with actingctl.
 
 use crate::cli_line::{self, Exit};
-use crate::codes::{ActingctlCode, ArgumentProblem};
+use crate::codes::ActingctlCode;
 use crate::watchdog::{self, decide, io_failure, observe, start};
 use actingcommand_contract::outcome::{Category, CauseRelation, IoOp, Outcome};
 use actingcommand_contract::{
@@ -46,16 +47,12 @@ use actingcommand_lab_ops::shutdown_wait;
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig, RuntimeClientError};
 use serde::Serialize;
 use serde_json::Value;
-use std::ffi::{OsStr, OsString};
 use std::fs::{self, File};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
-const USAGE: &str = "usage: actingctl start --root <root> [--config <file>] [--state-root <dir>] [--ready-timeout-s <s>]\nusage: actingctl restart --root <root> [--config <file>] [--state-root <dir>] [--wait-idle <s>] [--ready-timeout-s <s>]";
-/// Upper bound of `--ready-timeout-s` and `--wait-idle`, as of `request-shutdown --wait`.
-const MAX_WAIT_SECONDS: u64 = 3600;
 /// `restart` waits for the shutdown as `request-shutdown --wait 60` does.
 const SHUTDOWN_WAIT: Duration = Duration::from_secs(60);
 /// How often `restart --wait-idle` reads Status again (train 4 review ruling): every Status
@@ -64,27 +61,6 @@ const SHUTDOWN_WAIT: Duration = Duration::from_secs(60);
 const IDLE_POLL: Duration = Duration::from_secs(10);
 /// The bound of a configuration file (the bound of an installed selection's config).
 const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
-
-/// Runs `start` or `restart` when the first argument names one; `None` leaves every other
-/// command to the CLI, unchanged. The caller (actingctl) prints the exit. Workflow #434
-/// LAB-6S2-B2: every connection it makes, the readiness probe's included, declares `initiator`,
-/// the caller's word (actingctl's `Lab-CLI`) ([`client_config`]).
-pub fn dispatch(arguments: &[OsString], initiator: Initiator) -> Option<Exit> {
-    let mode = match arguments.first()?.to_str()? {
-        "start" => Mode::Start,
-        "restart" => Mode::Restart,
-        _ => return None,
-    };
-    if let Err(invalid) = cli_line::detail() {
-        return Some(cli_line::failure(&invalid, None));
-    }
-    let parsed = match Arguments::parse(mode, &arguments[1..]) {
-        Ok(parsed) => parsed,
-        Err(usage) => return Some(cli_line::failure(&usage, Some(USAGE))),
-    };
-    // Workflow #434 LAB-6S2-B2: the caller's word, where LAB-6S2-B1 declared none.
-    Some(exit_of(run(mode, &parsed, Some(initiator))))
-}
 
 /// Workflow #434 LAB-3: `start` or `restart` of the installation at `root`, with `config` (a
 /// single-location root's configuration file) or without it (an A/B root's selection), as
@@ -146,8 +122,9 @@ pub(crate) enum Mode {
     Restart,
 }
 
-/// The flags of one `start` or `restart`; each at most once, `--wait-idle` for `restart` only.
-#[derive(Debug, PartialEq, Eq)]
+/// What one `start` or `restart` runs with (Workflow #434 LAB-7: since actingctl's flags left with
+/// it, as [`run_located`] gives them).
+#[derive(Debug)]
 struct Arguments {
     root: PathBuf,
     config: Option<PathBuf>,
@@ -155,72 +132,6 @@ struct Arguments {
     /// `--ready-timeout-s`; without it the configuration's start window (#411 A66).
     ready_timeout: Option<Duration>,
     wait_idle: Duration,
-}
-
-impl Arguments {
-    /// A flag the subcommand does not take, a flag given twice and a stray word are refused by
-    /// name (Workflow #382 A1-FLAG); any other usage error unnamed.
-    fn parse(mode: Mode, arguments: &[OsString]) -> Result<Self, Outcome> {
-        let usage = || Outcome::new(ActingctlCode::ActingctlUsageInvalid);
-        let mut root = None;
-        let mut config = None;
-        let mut state_root = None;
-        let mut ready_timeout = None;
-        let mut wait_idle = None;
-        let mut index = 0;
-        while index < arguments.len() {
-            let flag = arguments[index].to_str().ok_or_else(usage)?;
-            let given = match flag {
-                "--root" => root.is_some(),
-                "--config" => config.is_some(),
-                "--state-root" => state_root.is_some(),
-                "--ready-timeout-s" => ready_timeout.is_some(),
-                "--wait-idle" if mode == Mode::Restart => wait_idle.is_some(),
-                _ => {
-                    return Err(cli_line::usage_invalid(
-                        Some(flag),
-                        ArgumentProblem::Unknown,
-                    ));
-                }
-            };
-            if given {
-                return Err(cli_line::usage_invalid(
-                    Some(flag),
-                    ArgumentProblem::Repeated,
-                ));
-            }
-            index += 1;
-            let value = arguments.get(index).ok_or_else(usage)?;
-            match flag {
-                "--root" => root = Some(PathBuf::from(value)),
-                "--config" => config = Some(PathBuf::from(value)),
-                "--state-root" => state_root = Some(PathBuf::from(value)),
-                "--ready-timeout-s" => {
-                    ready_timeout = Some(seconds(value, 1..=MAX_WAIT_SECONDS).ok_or_else(usage)?);
-                }
-                "--wait-idle" => {
-                    wait_idle = Some(seconds(value, 0..=MAX_WAIT_SECONDS).ok_or_else(usage)?);
-                }
-                // Every flag taken above has its arm.
-                _ => return Err(usage()),
-            }
-            index += 1;
-        }
-        Ok(Self {
-            root: root.ok_or_else(usage)?,
-            config,
-            state_root,
-            ready_timeout,
-            wait_idle: wait_idle.unwrap_or(Duration::ZERO),
-        })
-    }
-}
-
-fn seconds(value: &OsStr, range: std::ops::RangeInclusive<u64>) -> Option<Duration> {
-    let seconds = value.to_str()?.parse::<u64>().ok()?;
-    range
-        .contains(&seconds)
-        .then_some(Duration::from_secs(seconds))
 }
 
 /// A failure of `start` or `restart`: its outcome, and developer text for the stderr line (what
@@ -638,75 +549,4 @@ fn restart_runtime(
 fn connect(state_root: &Path, initiator: Option<Initiator>) -> Result<RuntimeClient, Failed> {
     RuntimeClient::connect(client_config(state_root, initiator))
         .map_err(|error| Failed::runtime(&error))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn parse(mode: Mode, arguments: &[&str]) -> Option<Arguments> {
-        let arguments = arguments.iter().map(OsString::from).collect::<Vec<_>>();
-        Arguments::parse(mode, &arguments).ok()
-    }
-
-    /// §2.1 and §4.11: each subcommand takes only its own flags, each once; the defaults are
-    /// the configuration's start window for readiness (#411 A66: no flag value, decided when the
-    /// configuration is read) and 0 s (idle now) for `--wait-idle`.
-    #[test]
-    fn start_and_restart_take_only_their_flags_once() {
-        let start = parse(Mode::Start, &["--root", "R"]).expect("start --root");
-        assert_eq!(
-            (
-                start.ready_timeout,
-                start.wait_idle,
-                start.config,
-                start.state_root
-            ),
-            (None, Duration::ZERO, None, None)
-        );
-        let restart = parse(
-            Mode::Restart,
-            &[
-                "--root",
-                "R",
-                "--config",
-                "C",
-                "--state-root",
-                "S",
-                "--wait-idle",
-                "30",
-                "--ready-timeout-s",
-                "60",
-            ],
-        )
-        .expect("restart with every flag");
-        assert_eq!(
-            restart,
-            Arguments {
-                root: PathBuf::from("R"),
-                config: Some(PathBuf::from("C")),
-                state_root: Some(PathBuf::from("S")),
-                ready_timeout: Some(Duration::from_secs(60)),
-                wait_idle: Duration::from_secs(30),
-            }
-        );
-        let refused: [&[&str]; 6] = [
-            &["--config", "C"],
-            &["--root", "R", "--root", "R"],
-            &["--root", "R", "--wait-idle", "5"],
-            &["--root", "R", "--state-root"],
-            &["--root", "R", "--instance", "a"],
-            &["--root", "R", "--ready-timeout-s", "0"],
-        ];
-        for refused in refused {
-            assert_eq!(parse(Mode::Start, refused), None, "start {refused:?}");
-        }
-        assert_eq!(
-            parse(
-                Mode::Restart,
-                &["--root", "R", "--wait-idle", "5", "--wait-idle", "5"]
-            ),
-            None
-        );
-    }
 }

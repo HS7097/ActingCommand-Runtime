@@ -5,7 +5,7 @@ declares (recorded as `package_label`) and found by its path. Since PKG-S4 no in
 takes a package digest: the Runtime requests (`ContainedTaskRequest` and its recovery
 binding, `PackageDebugRequest`, the contained Lab operation, contained observation and
 saved-artifact OCR requests), the actingd configuration (`instances[].startup_package`,
-`policy.procedure_manifest[]`), `actingctl task-run`, the MCP
+`policy.procedure_manifest[]`), the Lab's `run start`, the MCP
 tools and the actinglab flags name a package by its path alone, and a request or a
 configuration that still names `expected_sha256` or `package_digest` does not decode. Since
 PKG-S5 no package reference type remains (`PackageRef`, its content-directory and legacy ZIP
@@ -725,7 +725,7 @@ removed.
 
 ## Consumers
 
-Workflow #336 PKG-S4 (option 丙): `actingctl task-run --package <path>` and the optional
+Workflow #336 PKG-S4 (option 丙): the Lab's `run start <instance> <path>` and the optional
 `--recovery-package <path>` name the packages by their paths; `--expected-sha256`,
 `--package-ref` and their `--recovery-*` forms are refused as unknown flags. Package-consuming
 Lab commands (debug/run, observe, do, preflight, dry run and resource restore) take
@@ -918,7 +918,7 @@ data files beside its package directories, one directory per game below the conf
   replaced table kept beside it (`<name>.old-<ms>`, as a deploy kit keeps it too), and what the
   Lab rescue module's `undo` sets aside (`<name>.abandoned-<ms>`, `<name>.rolledback-<ms>`). Such
   an entry is skipped by every reader of `tables/`: it is not read, has no row (check-config's
-  `tables`, `actingctl packs` and `ac_packs`, `actinglab resource validate`'s family
+  `tables`, the Lab's `packs` (MCP `ac_packs`), `actinglab resource validate`'s family
   `standard_pack_tables`), adds no record at startup, and does not count toward the 64, at
   startup or in a run's preparation: the limit counts the entries that are read, in file name
   order, after the skip. In a resource repository a selected file of such a name takes no row of
@@ -1017,7 +1017,7 @@ data files beside its package directories, one directory per game below the conf
     listed as without the file. A file that exists but cannot be read is
     `package_binding_unreadable` with its OS error as the cause. The file makes a directory a game
     root for its readers, so `ui.json` without `bundle.json` is `bundle_missing`.
-  - **Readers.** Only `actingctl packs` and `ac_packs`, offline (`parse_standard_pack_ui`,
+  - **Readers.** Only the Lab's `packs` (MCP `ac_packs`), offline (`parse_standard_pack_ui`,
     `read_standard_pack_root_with_ui`), which deliver a valid file as written, its members in the
     file's order ([runtime-interface.md](runtime-interface.md), `packs`). The Runtime's root
     reader, its startup and run preparation, the policy crate and check-config never read it,
@@ -1156,7 +1156,7 @@ data files beside its package directories, one directory per game below the conf
   (empty for the whole document); a file that cannot be read for another reason than its
   absence is `standard_pack_root_unreadable`, its OS error the cause. Workflow #357 DB-1: a table
   is checked by `parse_standard_pack_table` and a game root's `tables/` read by
-  `read_standard_pack_tables`, shared by the Runtime's startup, check-config, `actingctl packs`
+  `read_standard_pack_tables`, shared by the Runtime's startup, check-config, the Lab's `packs`
   (`ac_packs`) and `actinglab resource validate` (family `standard_pack_tables`).
 - **When the Runtime reads it.** At startup every game root, root files only and no package
   admitted: each is recorded as a `runtime.lifecycle_observed` `standard_pack_read` record

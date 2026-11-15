@@ -1315,7 +1315,7 @@ fragment = "apps"
 key = "17"
 ruling = "Workflow #434 LAB-6S4a (0.12.63; register §1.287, \"Slice LAB-6S4a\"; the coordinator's brief rd-1115/brief-434-lab6s4a-five-kinds.md and rulings N4 and N8 of the LAB-6 survey, board #434)"
 reason = "The row held actingctl install-transition's client budget (one deadline from the run's start, a query that declares no identity card, a query answered while the ledger writer stalls in preparing). The subcommand went with InstallTransition."
-covered_by = "actingctl refuses the subcommand before any connection as a word no subcommand is: actingcommand-actingctl::gate::cli_grammar::gate_a_usage_error_of_these_subcommands_is_reported_before_any_connection (its usage rows name install-transition and the one form 0.12.61 took)."
+covered_by = "actingctl refuses the subcommand before any connection as a word no subcommand is: actingcommand-actingctl::gate::cli_grammar::gate_a_usage_error_of_these_subcommands_is_reported_before_any_connection (its usage rows name install-transition and the one form 0.12.61 took). Workflow #434 LAB-7 deletes actingctl with that gate (its own entry below); a request of the kind is refused undecoded: actingcommand-runtime-host::lib::tests::gate_434_lab6s4a::lab6s4a_an_unknown_operation_tag_is_refused_undecoded_and_the_runtime_goes_on."
 
 [[retired]]
 fragment = "apps"
@@ -1367,4 +1367,1499 @@ fragment = "apps"
 test = "actingcommand-actingctl::gate::lab6s2b2::lab6s2b2_install_transition_receipts_decode_as_the_released_helper_decodes"
 ruling = "Workflow #434 LAB-6S4a (0.12.63; register §1.287, \"Slice LAB-6S4a\"; the coordinator's brief rd-1115/brief-434-lab6s4a-five-kinds.md and rulings N4 and N8 of the LAB-6 survey, board #434)"
 reason = "Removed with install-transition: it pinned the receipts of the transition's drain and of its ticket's commit, as the released console's installation helper decodes them. With install-control [0, 0] the helper negotiates revision 0 and takes its cold path, request-shutdown."
-covered_by = "actingcommand-actingctl::gate::lab6s2b2::lab6s2b2_request_shutdown_receipt_decodes_as_the_released_helper_decodes, in the same apps.toml row: the cold path's receipt, decoded as the helper decodes it."
+covered_by = "actingcommand-actingctl::gate::lab6s2b2::lab6s2b2_request_shutdown_receipt_decodes_as_the_released_helper_decodes, in the same apps.toml row: the cold path's receipt, decoded as the helper decodes it. Workflow #434 LAB-7 deletes actingctl with that gate; what holds its risk now is in its own entry below."
+
+
+# Workflow #434 LAB-7 (register §1.287, "Slice LAB-7"): apps/actingctl and the first MCP entry
+# apps/mcp-entry are deleted, with their tests; actinglab-mcp's parity test with actingctl's
+# MCP server goes with that server. Each covered_by names what holds the risk now.
+[[retired]]
+fragment = "host"
+test = "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_hs2::hs2_mcp_backend_key_needs_operator_tier"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: #402 HS-2 (0.12.39; brief rd-1031/backend-switch/brief-hs-2.md; register §1.270; contracts/runtime-config.md, \"Switching an instance's backe)."
+covered_by = "None: the property went with the program. The operator tier a backend key needed was the first MCP server's; the Lab's MCP server has no tiers, and tier_not_enabled is retired."
+
+[[retired]]
+fragment = "host"
+test = "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_386_sr3::sr3_t13_ac_diagnose_carries_the_instances_suspended_packages_as_codes_and_ids"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: Workflow #386 SR-3 (frozen scheduling model v1.4.2 §2.4 items 2 and 5, §11, rows T12, T13 and T31; coordinator ruling 4 of wave 14): check-c)."
+covered_by = "actingcommand-actingd::process::sr3_t12_check_config_lists_a_package_refused_with_a_suspend_code_and_stays_ok, left in the same host.toml row."
+
+[[retired]]
+fragment = "exec"
+test = "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_rec4::gate_ac_record_mark_hands_a_click_follow_request_to_actinglab_unchanged"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: Workflow #396 REC-4: a Lab recording's click follows a template mark. --click-follow generates a target click and --click with --click-follo)."
+covered_by = "actingcommand-lab::lib::gate_396_rec4::rec4_a_click_following_a_template_generates_a_target_click_guarded_by_it, left in the same exec.toml row."
+
+[[retired]]
+fragment = "exec"
+test = "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_463_r2::r2_ac_record_mark_hands_an_ending_request_to_actinglab_unchanged"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: #463 R2 (0.12.61; register §1.384; brief rd-1115/brief-463-r2-record-ending.md; design rd-1114/463-l3l5-design.md, section C.3 and the coord)."
+covered_by = "actingcommand-lab::lib::gate_463_r2::r2_an_ending_from_a_frame_is_taken_after_stop_regenerated_and_admitted, left in the same exec.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::tests::task_run_request_uses_maximum_bounded_response_deadline"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: Request shaping)."
+covered_by = "The Lab's run start row (crates/lab-ops core_ops) sends the contained run through the runtime client; actingcommand-actinglab-mcp::serve_calls::mcp_jobs_handles_entry_status holds its request (the #434 LAB-5G3 row)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::tests::task_run_request_preserves_the_typed_recovery_identity"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: Request shaping)."
+covered_by = "The Lab's run start row (crates/lab-ops core_ops) sends the contained run through the runtime client; actingcommand-actinglab-mcp::serve_calls::mcp_jobs_handles_entry_status holds its request (the #434 LAB-5G3 row)."
+
+[[retired]]
+fragment = "apps"
+key = "14"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "Every test of the row was a test of apps/actingctl or the first MCP entry, which are deleted (row: Request shaping)."
+covered_by = "The Lab's run start row (crates/lab-ops core_ops) sends the contained run through the runtime client; actingcommand-actinglab-mcp::serve_calls::mcp_jobs_handles_entry_status holds its request (the #434 LAB-5G3 row)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::c4_process::actingctl_observe_and_reset_leave_runtime_alive_and_share_projection_shape"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: The Runtime survives a killed client; a replay cannot duplicate a terminal)."
+covered_by = "The Lab's command line on the same c4 fake Runtime child (tests/support/c4_runtime.rs): apps/actinglab/tests/c4_runtime_process.rs and session_closeout.rs; the replay and terminal rules are the host's own host.toml gates."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::c4_process::actingctl_status_monitor_and_stream_are_runtime_backed"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: The Runtime survives a killed client; a replay cannot duplicate a terminal)."
+covered_by = "The Lab's command line on the same c4 fake Runtime child (tests/support/c4_runtime.rs): apps/actinglab/tests/c4_runtime_process.rs and session_closeout.rs; the replay and terminal rules are the host's own host.toml gates."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::c4_process::actingctl_runs_neutral_contained_task_without_lab_and_runtime_survives_client_exit"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: The Runtime survives a killed client; a replay cannot duplicate a terminal)."
+covered_by = "The Lab's command line on the same c4 fake Runtime child (tests/support/c4_runtime.rs): apps/actinglab/tests/c4_runtime_process.rs and session_closeout.rs; the replay and terminal rules are the host's own host.toml gates."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::c4_process::process_replay_cannot_duplicate_or_conflict_a_contained_task_terminal"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: The Runtime survives a killed client; a replay cannot duplicate a terminal)."
+covered_by = "The Runtime's own rules, on the host: actingcommand-runtime-host::lib::tests::task_replay::contained_task_replay_without_connection_cache_reuses_runtime_terminal (a replayed run answers its first terminal, one input, one admission, one terminal), contained_task_terminal_is_absorbing_across_request_ids_and_rejections_are_audited (a second, conflicting terminal is denied and recorded as rejected) and inactive_incomplete_contained_task_replay_recovers_terminal_after_lease_expiry (a run whose client is gone is closed once, recovered after its lease expired); the client's side is the Lab's command line on the same c4 fake Runtime child (tests/support/c4_runtime.rs), apps/actinglab/tests/c4_runtime_process.rs."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::c4_process::runtime_finishes_and_rebuilds_contained_task_after_client_is_killed"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: The Runtime survives a killed client; a replay cannot duplicate a terminal)."
+covered_by = "The Runtime's own rules, on the host: actingcommand-runtime-host::lib::tests::task_replay::contained_task_replay_without_connection_cache_reuses_runtime_terminal (a replayed run answers its first terminal, one input, one admission, one terminal), contained_task_terminal_is_absorbing_across_request_ids_and_rejections_are_audited (a second, conflicting terminal is denied and recorded as rejected) and inactive_incomplete_contained_task_replay_recovers_terminal_after_lease_expiry (a run whose client is gone is closed once, recovered after its lease expired); the client's side is the Lab's command line on the same c4 fake Runtime child (tests/support/c4_runtime.rs), apps/actinglab/tests/c4_runtime_process.rs."
+
+[[retired]]
+fragment = "apps"
+key = "16"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "Every test of the row was a test of apps/actingctl or the first MCP entry, which are deleted (row: The Runtime survives a killed client; a replay cannot duplicate a terminal)."
+covered_by = "The Lab's command line on the same c4 fake Runtime child (tests/support/c4_runtime.rs): apps/actinglab/tests/c4_runtime_process.rs and session_closeout.rs; the replay and terminal rules are the host's own host.toml gates."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::watchdog_process::watchdog_install_registers_the_task_and_uninstall_removes_it"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: Watchdog state, log and task)."
+covered_by = "actingcommand-watchdog::lib::state::tests::state_reads_tolerantly_and_sets_other_schemas_aside, left in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::gate::mcp_shell::gate_initialize_answers_the_requested_legacy_version_and_2025_11_25_for_any_other"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: Era classification and JSON-RPC errors)."
+covered_by = "actingcommand-actinglab-mcp::server_stdio::mcp_loop_initialize_list_batch_and_cancel and mcp_calls_refused_unsupported_and_an_unknown_tool (the #434 LAB-5G2a row)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::gate::mcp_shell::gate_a_modern_request_is_served_without_initialize_and_every_modern_result_is_marked"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: Era classification and JSON-RPC errors)."
+covered_by = "actingcommand-actinglab-mcp::server_stdio::mcp_loop_initialize_list_batch_and_cancel and mcp_calls_refused_unsupported_and_an_unknown_tool (the #434 LAB-5G2a row)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::gate::mcp_shell::gate_a_legacy_or_unknown_meta_version_is_32022_and_a_request_of_no_era_is_32602"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: Era classification and JSON-RPC errors)."
+covered_by = "actingcommand-actinglab-mcp::server_stdio::mcp_loop_initialize_list_batch_and_cancel and mcp_calls_refused_unsupported_and_an_unknown_tool (the #434 LAB-5G2a row)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::gate::mcp_shell::gate_malformed_messages_unknown_methods_and_malformed_calls_get_their_json_rpc_codes"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: Era classification and JSON-RPC errors)."
+covered_by = "actingcommand-actinglab-mcp::server_stdio::mcp_loop_initialize_list_batch_and_cancel, which since LAB-7 also asserts the Lab's MCP server answers a line that is no JSON -32700 (mcp_message_malformed) and an unknown method -32601 (mcp_method_unknown), and mcp_calls_refused_unsupported_and_an_unknown_tool for a malformed call (-32602) (the #434 LAB-5G2a row)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::gate::mcp_shell::gate_tool_definitions_and_call_results_take_the_shape_of_the_negotiated_version"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: Era classification and JSON-RPC errors)."
+covered_by = "actingcommand-actinglab-mcp::server_stdio::mcp_loop_initialize_list_batch_and_cancel and mcp_calls_refused_unsupported_and_an_unknown_tool (the #434 LAB-5G2a row)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::gate::mcp_shell::gate_a_batch_is_answered_as_one_array_under_2025_03_26_and_refused_after_later_versions"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: Era classification and JSON-RPC errors)."
+covered_by = "actingcommand-actinglab-mcp::server_stdio::mcp_loop_initialize_list_batch_and_cancel and mcp_calls_refused_unsupported_and_an_unknown_tool (the #434 LAB-5G2a row)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::gate::mcp_shell::gate_a_legacy_ping_is_answered_before_initialize_and_a_modern_ping_is_32601"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: Era classification and JSON-RPC errors)."
+covered_by = "actingcommand-actinglab-mcp::server_stdio::mcp_loop_initialize_list_batch_and_cancel and mcp_calls_refused_unsupported_and_an_unknown_tool (the #434 LAB-5G2a row)."
+
+[[retired]]
+fragment = "apps"
+key = "28"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "Every test of the row was a test of apps/actingctl or the first MCP entry, which are deleted (row: Era classification and JSON-RPC errors)."
+covered_by = "actingcommand-actinglab-mcp::server_stdio::mcp_loop_initialize_list_batch_and_cancel and mcp_calls_refused_unsupported_and_an_unknown_tool (the #434 LAB-5G2a row)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_mcpt1::gate_a_result_over_the_budget_is_output_budget_exceeded_and_one_inside_is_unchanged"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: The result envelope and output budget; an overflow goes to the export, never to silent truncation)."
+covered_by = "the Lab's MCP budget: actingcommand-actinglab-mcp::bin:actinglab-mcp::gate_434_lab5g2b::mcp_budget_cut_and_export (the #434 LAB-5G2b row) and lab-ops' own budget gates (crates/lab-ops/src/gate_434_lab5d.rs); actingcommand-actinglab-mcp::serve_calls::mcp_lab_overflow_rule (the #434 LAB-5G4 row)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_mcpt1::gate_a_lab_answer_over_the_budget_is_exported_whole_and_one_inside_comes_back_unchanged"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: The result envelope and output budget; an overflow goes to the export, never to silent truncation)."
+covered_by = "the Lab's MCP budget: actingcommand-actinglab-mcp::bin:actinglab-mcp::gate_434_lab5g2b::mcp_budget_cut_and_export (the #434 LAB-5G2b row) and lab-ops' own budget gates (crates/lab-ops/src/gate_434_lab5d.rs); actingcommand-actinglab-mcp::serve_calls::mcp_lab_overflow_rule (the #434 LAB-5G4 row)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::gate::mcp_shell::gate_an_events_page_over_the_budget_is_truncated_and_its_cursor_resumes_after_its_last_row"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: The result envelope and output budget; an overflow goes to the export, never to silent truncation)."
+covered_by = "the Lab's MCP budget: actingcommand-actinglab-mcp::bin:actinglab-mcp::gate_434_lab5g2b::mcp_budget_cut_and_export (the #434 LAB-5G2b row) and lab-ops' own budget gates (crates/lab-ops/src/gate_434_lab5d.rs); actingcommand-actinglab-mcp::serve_calls::mcp_lab_overflow_rule (the #434 LAB-5G4 row)."
+
+[[retired]]
+fragment = "apps"
+key = "30"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "Every test of the row was a test of apps/actingctl or the first MCP entry, which are deleted (row: The result envelope and output budget; an overflow goes to the export, never to silent truncation)."
+covered_by = "the Lab's MCP budget: actingcommand-actinglab-mcp::bin:actinglab-mcp::gate_434_lab5g2b::mcp_budget_cut_and_export (the #434 LAB-5G2b row) and lab-ops' own budget gates (crates/lab-ops/src/gate_434_lab5d.rs); actingcommand-actinglab-mcp::serve_calls::mcp_lab_overflow_rule (the #434 LAB-5G4 row)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_mcpt1::gate_eight_jobs_run_a_ninth_is_refused_unrun_and_a_start_succeeds_once_one_ended"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: Jobs: at most 8, handle lookup, and a wait that stops on cancel)."
+covered_by = "actingcommand-actinglab-mcp::bin:actinglab-mcp::gate_434_lab5g3::mcp_job_start_options and actingcommand-actinglab-mcp::serve_calls::mcp_jobs_handles_entry_status (the #434 LAB-5G3 row)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_mcpt1::gate_find_returns_a_started_job_by_its_handle_and_none_for_one_never_started"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: Jobs: at most 8, handle lookup, and a wait that stops on cancel)."
+covered_by = "actingcommand-actinglab-mcp::bin:actinglab-mcp::gate_434_lab5g3::mcp_job_start_options and actingcommand-actinglab-mcp::serve_calls::mcp_jobs_handles_entry_status (the #434 LAB-5G3 row)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::gate::mcp_shell::gate_get_run_answers_handle_unknown_for_job_handles_this_process_never_held"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: Jobs: at most 8, handle lookup, and a wait that stops on cancel)."
+covered_by = "actingcommand-actinglab-mcp::bin:actinglab-mcp::gate_434_lab5g3::mcp_job_start_options and actingcommand-actinglab-mcp::serve_calls::mcp_jobs_handles_entry_status (the #434 LAB-5G3 row)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_mcpt1::gate_a_cancelled_wait_returns_false_and_leaves_the_job_running"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: Jobs: at most 8, handle lookup, and a wait that stops on cancel)."
+covered_by = "actingcommand-actinglab-mcp::bin:actinglab-mcp::gate_434_lab5g3::mcp_job_start_options and actingcommand-actinglab-mcp::serve_calls::mcp_jobs_handles_entry_status (the #434 LAB-5G3 row)."
+
+[[retired]]
+fragment = "apps"
+key = "31"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "Every test of the row was a test of apps/actingctl or the first MCP entry, which are deleted (row: Jobs: at most 8, handle lookup, and a wait that stops on cancel)."
+covered_by = "actingcommand-actinglab-mcp::bin:actinglab-mcp::gate_434_lab5g3::mcp_job_start_options and actingcommand-actinglab-mcp::serve_calls::mcp_jobs_handles_entry_status (the #434 LAB-5G3 row)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::gate::mcp_shell::gate_events_pages_follow_next_cursor_without_gap_or_repeat_up_to_the_first_snapshot"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: Cursors round-trip; after a reconnect an old cursor answers cursor_invalid)."
+covered_by = "actingcommand-actinglab-mcp::serve_calls::mcp_cursor_bound_to_connection (the #434 LAB-5G3 row)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::gate::mcp_shell::gate_an_events_cursor_sent_with_other_filters_answers_cursor_invalid"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: Cursors round-trip; after a reconnect an old cursor answers cursor_invalid)."
+covered_by = "actingcommand-actinglab-mcp::serve_calls::mcp_cursor_bound_to_connection (the #434 LAB-5G3 row)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::gate::mcp_shell::gate_an_events_cursor_from_before_a_runtime_restart_answers_cursor_invalid"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: Cursors round-trip; after a reconnect an old cursor answers cursor_invalid)."
+covered_by = "actingcommand-actinglab-mcp::serve_calls::mcp_cursor_bound_to_connection (the #434 LAB-5G3 row)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::gate::mcp_shell::gate_an_events_cursor_of_another_server_process_answers_cursor_invalid"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: Cursors round-trip; after a reconnect an old cursor answers cursor_invalid)."
+covered_by = "actingcommand-actinglab-mcp::serve_calls::mcp_cursor_bound_to_connection (the #434 LAB-5G3 row)."
+
+[[retired]]
+fragment = "apps"
+key = "34"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "Every test of the row was a test of apps/actingctl or the first MCP entry, which are deleted (row: Cursors round-trip; after a reconnect an old cursor answers cursor_invalid)."
+covered_by = "actingcommand-actinglab-mcp::serve_calls::mcp_cursor_bound_to_connection (the #434 LAB-5G3 row)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::gate::mcp_shell::gate_at_stdin_eof_the_requests_already_read_are_answered_and_the_server_exits_0"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: At stdin EOF the server answers in-flight requests within 2 s and exits 0)."
+covered_by = "actingcommand-actinglab-mcp::server_stdio::mcp_loop_initialize_list_batch_and_cancel and the stdin-EOF exit 0 every serve_calls test checks."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::gate::mcp_shell::gate_a_call_still_running_at_stdin_eof_does_not_hold_the_exit"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: At stdin EOF the server answers in-flight requests within 2 s and exits 0)."
+covered_by = "actingcommand-actinglab-mcp::server_stdio::mcp_loop_initialize_list_batch_and_cancel and the stdin-EOF exit 0 every serve_calls test checks."
+
+[[retired]]
+fragment = "apps"
+key = "35"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "Every test of the row was a test of apps/actingctl or the first MCP entry, which are deleted (row: At stdin EOF the server answers in-flight requests within 2 s and exits 0)."
+covered_by = "actingcommand-actinglab-mcp::server_stdio::mcp_loop_initialize_list_batch_and_cancel and the stdin-EOF exit 0 every serve_calls test checks."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::gate::mcp_events_parity::gate_actingctl_events_prints_the_ac_events_result_of_the_same_parameters"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: CLI and MCP give the same answer for the same parameters: one parity test per slice on the real binaries (MCP-0 command table v1.1 §2.3; Wor)."
+covered_by = "the Lab's row serves the command line and MCP from one table row (crates/lab-ops core_ops); actingcommand-actinglab-mcp::serve_calls::mcp_stdio_one_row_per_kind holds an MCP answer to the command line's line (the #434 LAB-5G2b row)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::gate::mcp_observe_parity::gate_observe_export_and_ac_observe_answer_the_same_frame_for_the_same_instance_argument"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: CLI and MCP give the same answer for the same parameters: one parity test per slice on the real binaries (MCP-0 command table v1.1 §2.3; Wor)."
+covered_by = "the Lab's row serves the command line and MCP from one table row (crates/lab-ops core_ops); actingcommand-actinglab-mcp::serve_calls::mcp_stdio_one_row_per_kind holds an MCP answer to the command line's line (the #434 LAB-5G2b row)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::gate::mcp_runs_parity::gate_actingctl_runs_and_ac_runs_answer_the_same_run_list_for_the_same_arguments"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: CLI and MCP give the same answer for the same parameters: one parity test per slice on the real binaries (MCP-0 command table v1.1 §2.3; Wor)."
+covered_by = "the Lab's row serves the command line and MCP from one table row (crates/lab-ops core_ops); actingcommand-actinglab-mcp::serve_calls::mcp_stdio_one_row_per_kind holds an MCP answer to the command line's line (the #434 LAB-5G2b row)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::gate::mcp_diagnose_parity::gate_actingctl_diagnose_and_ac_diagnose_answer_the_same_diagnosis_with_its_groups"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: CLI and MCP give the same answer for the same parameters: one parity test per slice on the real binaries (MCP-0 command table v1.1 §2.3; Wor)."
+covered_by = "the Lab's row serves the command line and MCP from one table row (crates/lab-ops core_ops); actingcommand-actinglab-mcp::serve_calls::mcp_stdio_one_row_per_kind holds an MCP answer to the command line's line (the #434 LAB-5G2b row)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::gate::mcp_packs::gate_packs_and_ac_packs_answer_the_same_bindings_of_the_selected_configuration"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: CLI and MCP give the same answer for the same parameters: one parity test per slice on the real binaries (MCP-0 command table v1.1 §2.3; Wor)."
+covered_by = "the Lab's row serves the command line and MCP from one table row (crates/lab-ops core_ops); actingcommand-actinglab-mcp::serve_calls::mcp_stdio_one_row_per_kind holds an MCP answer to the command line's line (the #434 LAB-5G2b row)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::gate::mcp_facts_parity::gate_actingctl_facts_and_ac_facts_answer_the_same_facts_for_the_same_arguments"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: CLI and MCP give the same answer for the same parameters: one parity test per slice on the real binaries (MCP-0 command table v1.1 §2.3; Wor)."
+covered_by = "the Lab's row serves the command line and MCP from one table row (crates/lab-ops core_ops); actingcommand-actinglab-mcp::serve_calls::mcp_stdio_one_row_per_kind holds an MCP answer to the command line's line (the #434 LAB-5G2b row)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::gate::mcp_overview_parity::gate_actingctl_overview_and_ac_overview_answer_the_same_overview_for_the_same_arguments"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: CLI and MCP give the same answer for the same parameters: one parity test per slice on the real binaries (MCP-0 command table v1.1 §2.3; Wor)."
+covered_by = "the Lab's row serves the command line and MCP from one table row (crates/lab-ops core_ops); actingcommand-actinglab-mcp::serve_calls::mcp_stdio_one_row_per_kind holds an MCP answer to the command line's line (the #434 LAB-5G2b row)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::gate::mcp_codes_parity::gate_actingctl_codes_and_ac_outcome_code_answer_the_same_entry_and_list_for_the_same_arguments"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: CLI and MCP give the same answer for the same parameters: one parity test per slice on the real binaries (MCP-0 command table v1.1 §2.3; Wor)."
+covered_by = "the Lab's row serves the command line and MCP from one table row (crates/lab-ops core_ops); actingcommand-actinglab-mcp::serve_calls::mcp_stdio_one_row_per_kind holds an MCP answer to the command line's line (the #434 LAB-5G2b row)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::gate::mcp_run_evidence_parity::gate_actingctl_run_evidence_and_ac_run_evidence_answer_the_same_steps_for_the_same_arguments"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: CLI and MCP give the same answer for the same parameters: one parity test per slice on the real binaries (MCP-0 command table v1.1 §2.3; Wor)."
+covered_by = "the Lab's row serves the command line and MCP from one table row (crates/lab-ops core_ops); actingcommand-actinglab-mcp::serve_calls::mcp_stdio_one_row_per_kind holds an MCP answer to the command line's line (the #434 LAB-5G2b row)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_mcp13a::gate_ac_app_runs_actinglab_session_app_with_the_same_action_and_instance"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: CLI and MCP give the same answer for the same parameters: one parity test per slice on the real binaries (MCP-0 command table v1.1 §2.3; Wor)."
+covered_by = "the Lab's row serves the command line and MCP from one table row (crates/lab-ops core_ops); actingcommand-actinglab-mcp::serve_calls::mcp_stdio_one_row_per_kind holds an MCP answer to the command line's line (the #434 LAB-5G2b row)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::gate::emulator_wait::gate_an_emulator_control_that_ends_within_its_wait_answers_what_emulator_and_ac_emulator_answer"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: CLI and MCP give the same answer for the same parameters: one parity test per slice on the real binaries (MCP-0 command table v1.1 §2.3; Wor)."
+covered_by = "the Lab's row serves the command line and MCP from one table row (crates/lab-ops core_ops); actingcommand-actinglab-mcp::serve_calls::mcp_stdio_one_row_per_kind holds an MCP answer to the command line's line (the #434 LAB-5G2b row)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::gate::mcp_ladder_drill_parity::gate_actingctl_ladder_drill_and_ac_ladder_drill_send_the_same_drill_and_answer_the_same_object"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: CLI and MCP give the same answer for the same parameters: one parity test per slice on the real binaries (MCP-0 command table v1.1 §2.3; Wor)."
+covered_by = "the Lab's row serves the command line and MCP from one table row (crates/lab-ops core_ops); actingcommand-actinglab-mcp::serve_calls::mcp_stdio_one_row_per_kind holds an MCP answer to the command line's line (the #434 LAB-5G2b row)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::gate::mcp_events_parity::gate_actingctl_events_and_ac_events_answer_the_same_page_for_a_type_union_and_a_fact_key"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: CLI and MCP give the same answer for the same parameters: one parity test per slice on the real binaries (MCP-0 command table v1.1 §2.3; Wor)."
+covered_by = "the Lab's row serves the command line and MCP from one table row (crates/lab-ops core_ops); actingcommand-actinglab-mcp::serve_calls::mcp_stdio_one_row_per_kind holds an MCP answer to the command line's line (the #434 LAB-5G2b row)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::gate::mcp_events_parity::gate_actingctl_events_and_ac_events_answer_the_same_summary_page_with_each_record_s_outcome"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: CLI and MCP give the same answer for the same parameters: one parity test per slice on the real binaries (MCP-0 command table v1.1 §2.3; Wor)."
+covered_by = "the Lab's row serves the command line and MCP from one table row (crates/lab-ops core_ops); actingcommand-actinglab-mcp::serve_calls::mcp_stdio_one_row_per_kind holds an MCP answer to the command line's line (the #434 LAB-5G2b row)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::gate::mcp_overview_parity::gate_actingctl_overview_and_ac_overview_answer_the_same_foreground_the_instance_last_reported"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: CLI and MCP give the same answer for the same parameters: one parity test per slice on the real binaries (MCP-0 command table v1.1 §2.3; Wor)."
+covered_by = "the Lab's row serves the command line and MCP from one table row (crates/lab-ops core_ops); actingcommand-actinglab-mcp::serve_calls::mcp_stdio_one_row_per_kind holds an MCP answer to the command line's line (the #434 LAB-5G2b row)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::gate::mcp_devices_parity::gate_actingctl_devices_and_the_ac_device_tools_answer_the_same_for_the_same_arguments"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: CLI and MCP give the same answer for the same parameters: one parity test per slice on the real binaries (MCP-0 command table v1.1 §2.3; Wor)."
+covered_by = "the Lab's row serves the command line and MCP from one table row (crates/lab-ops core_ops); actingcommand-actinglab-mcp::serve_calls::mcp_stdio_one_row_per_kind holds an MCP answer to the command line's line (the #434 LAB-5G2b row)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::gate::mcp_performance_parity::gate_actingctl_perf_status_and_ac_overview_answer_the_same_performance_status"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: CLI and MCP give the same answer for the same parameters: one parity test per slice on the real binaries (MCP-0 command table v1.1 §2.3; Wor)."
+covered_by = "the Lab's row serves the command line and MCP from one table row (crates/lab-ops core_ops); actingcommand-actinglab-mcp::serve_calls::mcp_stdio_one_row_per_kind holds an MCP answer to the command line's line (the #434 LAB-5G2b row)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::gate::mcp_fact_refresh_parity::gate_actingctl_fact_refresh_and_ac_overview_answer_the_same_fact_refresh_status"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: CLI and MCP give the same answer for the same parameters: one parity test per slice on the real binaries (MCP-0 command table v1.1 §2.3; Wor)."
+covered_by = "the Lab's row serves the command line and MCP from one table row (crates/lab-ops core_ops); actingcommand-actinglab-mcp::serve_calls::mcp_stdio_one_row_per_kind holds an MCP answer to the command line's line (the #434 LAB-5G2b row)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_labobs::gate_labobs_ac_lab_observe_and_ac_lab_do_pass_preview_to_actinglab_as_the_cli_takes_it"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: CLI and MCP give the same answer for the same parameters: one parity test per slice on the real binaries (MCP-0 command table v1.1 §2.3; Wor)."
+covered_by = "the Lab's row serves the command line and MCP from one table row (crates/lab-ops core_ops); actingcommand-actinglab-mcp::serve_calls::mcp_stdio_one_row_per_kind holds an MCP answer to the command line's line (the #434 LAB-5G2b row)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::gate::mcp_capability_gap_parity::gate_actingctl_capability_gap_and_ac_capability_gap_record_the_same_gap_locally"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: CLI and MCP give the same answer for the same parameters: one parity test per slice on the real binaries (MCP-0 command table v1.1 §2.3; Wor)."
+covered_by = "the Lab's row serves the command line and MCP from one table row (crates/lab-ops core_ops); actingcommand-actinglab-mcp::serve_calls::mcp_stdio_one_row_per_kind holds an MCP answer to the command line's line (the #434 LAB-5G2b row)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::gate::mcp_events_parity::gate_actingctl_events_and_ac_events_answer_the_same_newest_page_without_a_position"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: CLI and MCP give the same answer for the same parameters: one parity test per slice on the real binaries (MCP-0 command table v1.1 §2.3; Wor)."
+covered_by = "the Lab's row serves the command line and MCP from one table row (crates/lab-ops core_ops); actingcommand-actinglab-mcp::serve_calls::mcp_stdio_one_row_per_kind holds an MCP answer to the command line's line (the #434 LAB-5G2b row)."
+
+[[retired]]
+fragment = "apps"
+key = "41"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "Every test of the row was a test of apps/actingctl or the first MCP entry, which are deleted (row: CLI and MCP give the same answer for the same parameters: one parity test per slice on the real binaries (MCP-0 command table v1.1 §2.3; Wor)."
+covered_by = "the Lab's row serves the command line and MCP from one table row (crates/lab-ops core_ops); actingcommand-actinglab-mcp::serve_calls::mcp_stdio_one_row_per_kind holds an MCP answer to the command line's line (the #434 LAB-5G2b row)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_387_d1b::d1_m8_cli_and_mcp_changes_leave_the_same_values_in_effect_from_an_observer_session"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: actingctl config set|clear and MCP ac_config_set send the same changes, from an observer session (Workflow #387 D1b, D1-M8))."
+covered_by = "the Lab's row serves the command line and MCP from one table row (crates/lab-ops core_ops); actingcommand-actinglab-mcp::serve_calls::mcp_stdio_one_row_per_kind holds an MCP answer to the command line's line (the #434 LAB-5G2b row); the Lab's config set row is lab-ops configure."
+
+[[retired]]
+fragment = "apps"
+key = "42"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "Every test of the row was a test of apps/actingctl or the first MCP entry, which are deleted (row: actingctl config set|clear and MCP ac_config_set send the same changes, from an observer session (Workflow #387 D1b, D1-M8))."
+covered_by = "the Lab's row serves the command line and MCP from one table row (crates/lab-ops core_ops); actingcommand-actinglab-mcp::serve_calls::mcp_stdio_one_row_per_kind holds an MCP answer to the command line's line (the #434 LAB-5G2b row); the Lab's config set row is lab-ops configure."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_429_r4::r4_t7_each_read_point_answers_the_version_the_last_receipt_carried"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: Workflow #429 R-4 (0.12.36; brief rd-1031/brief-r4.md; register §1.239; contracts/runtime-config.md, \"ConfigureSettings\"; contracts/runtime-)."
+covered_by = "The settings' version is the host's (the #429 R-4 host.toml rows); the Lab's config rows read it through lab-ops configure for both front ends."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_429_r12::actingctl_summary_prints_the_page"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: Workflow #429 R-12 (0.12.38; brief rd-1031/agt/brief-r12.md; register §1.264; contracts/runtime-interface.md, the command and tool tables):)."
+covered_by = "The Lab's summary row is lab-ops routine_summary for both front ends; the #429 R-12 host.toml row keeps the Runtime's page."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_429_r12::mcp_routine_summary_is_an_observer_read"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: Workflow #429 R-12 (0.12.38; brief rd-1031/agt/brief-r12.md; register §1.264; contracts/runtime-interface.md, the command and tool tables):)."
+covered_by = "The Lab's summary row is lab-ops routine_summary for both front ends; the #429 R-12 host.toml row keeps the Runtime's page."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::tests::every_command_has_its_success_code_and_every_failure_its_code"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: actingctl, MCP and the watchdog speak outcomes: one result line per exit with its exit code by category, MCP errors {class, outcome}, watchd)."
+covered_by = "actingcommand-lab-ops::lib::cli_line::tests::a_result_line_is_the_result_members_and_one_outcome_envelope, left in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_mcpt1::gate_a_tool_error_is_exactly_class_and_outcome_and_tier_not_enabled_names_its_blocker"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: actingctl, MCP and the watchdog speak outcomes: one result line per exit with its exit code by category, MCP errors {class, outcome}, watchd)."
+covered_by = "actingcommand-lab-ops::lib::cli_line::tests::a_result_line_is_the_result_members_and_one_outcome_envelope, left in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_mcpt1::gate_interpret_answers_each_actinglab_exit_by_its_class_with_actinglab_s_code_as_the_cause"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: actingctl, MCP and the watchdog speak outcomes: one result line per exit with its exit code by category, MCP errors {class, outcome}, watchd)."
+covered_by = "actingcommand-lab-ops::lib::cli_line::tests::a_result_line_is_the_result_members_and_one_outcome_envelope, left in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_387_d1b::rk1_an_unknown_key_refuses_ac_config_set_whole_with_a_declared_receipt_top"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: actingctl, MCP and the watchdog speak outcomes: one result line per exit with its exit code by category, MCP errors {class, outcome}, watchd)."
+covered_by = "actingcommand-actinglab::bin:actinglab::tests::gate_434_lab6s2b1::lab7_config_set_of_an_unknown_key_is_refused_whole (LAB-7 pass 4: the Lab's config set row with a declared key and a misspelt one is refused whole, config_key_unknown with only declared values beside the denied receipt and its request id, the declared key unchanged), with actingcommand-runtime-host::lib::tests::gate_387_d1b::d1_m5_a_key_read_only_at_start_and_an_unknown_key_are_refused (the Runtime's own refusal of an unknown key) and actingcommand-actinglab-mcp::serve_calls::mcp_stdio_one_row_per_kind (a write the Runtime refuses is the Lab's MCP tool's answer as the command line's line, the receipt's top its outcome)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::gate::flag_refusals::gate_every_subcommand_refuses_a_flag_it_does_not_take_naming_it"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: actingctl refuses a flag a subcommand does not take, a flag given twice and a stray word, naming it (Workflow #382 A1-FLAG))."
+covered_by = "The Lab's command line refuses a flag its row does not declare: actingcommand-lab-ops::lib::gate_434_lab5g1b::lab_ops_undeclared_members_follow_the_table (the #434 LAB-5G1b row) and actinglab's #434 LAB-2 rows."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::gate::flag_refusals::gate_every_subcommand_refuses_a_flag_given_twice_naming_it"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: actingctl refuses a flag a subcommand does not take, a flag given twice and a stray word, naming it (Workflow #382 A1-FLAG))."
+covered_by = "The Lab's command line refuses a flag its row does not declare: actingcommand-lab-ops::lib::gate_434_lab5g1b::lab_ops_undeclared_members_follow_the_table (the #434 LAB-5G1b row) and actinglab's #434 LAB-2 rows."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::gate::flag_refusals::gate_every_subcommand_refuses_a_stray_word_naming_it"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: actingctl refuses a flag a subcommand does not take, a flag given twice and a stray word, naming it (Workflow #382 A1-FLAG))."
+covered_by = "The Lab's command line refuses a flag its row does not declare: actingcommand-lab-ops::lib::gate_434_lab5g1b::lab_ops_undeclared_members_follow_the_table (the #434 LAB-5G1b row) and actinglab's #434 LAB-2 rows."
+
+[[retired]]
+fragment = "apps"
+key = "44"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "Every test of the row was a test of apps/actingctl or the first MCP entry, which are deleted (row: actingctl refuses a flag a subcommand does not take, a flag given twice and a stray word, naming it (Workflow #382 A1-FLAG))."
+covered_by = "The Lab's command line refuses a flag its row does not declare: actingcommand-lab-ops::lib::gate_434_lab5g1b::lab_ops_undeclared_members_follow_the_table (the #434 LAB-5G1b row) and actinglab's #434 LAB-2 rows."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_mcp8::gate_ac_overview_cuts_every_block_in_the_order_of_4_9_and_never_the_identity_or_pauses"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: ac_overview cuts an answer over the output budget one block at a time in the order of the MCP-0 command table §4.9, marks each cut block and)."
+covered_by = "the Lab's MCP budget: actingcommand-actinglab-mcp::bin:actinglab-mcp::gate_434_lab5g2b::mcp_budget_cut_and_export (the #434 LAB-5G2b row) and lab-ops' own budget gates (crates/lab-ops/src/gate_434_lab5d.rs); lab-ops' overview tests keep the blocks."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_mcp8::gate_ac_overview_stops_cutting_as_soon_as_the_answer_fits"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: ac_overview cuts an answer over the output budget one block at a time in the order of the MCP-0 command table §4.9, marks each cut block and)."
+covered_by = "the Lab's MCP budget: actingcommand-actinglab-mcp::bin:actinglab-mcp::gate_434_lab5g2b::mcp_budget_cut_and_export (the #434 LAB-5G2b row) and lab-ops' own budget gates (crates/lab-ops/src/gate_434_lab5d.rs); lab-ops' overview tests keep the blocks."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::gate::mcp_overview_parity::gate_overview_and_ac_overview_refuse_an_unknown_section_naming_it"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: ac_overview cuts an answer over the output budget one block at a time in the order of the MCP-0 command table §4.9, marks each cut block and)."
+covered_by = "the Lab's MCP budget: actingcommand-actinglab-mcp::bin:actinglab-mcp::gate_434_lab5g2b::mcp_budget_cut_and_export (the #434 LAB-5G2b row) and lab-ops' own budget gates (crates/lab-ops/src/gate_434_lab5d.rs); lab-ops' overview tests keep the blocks."
+
+[[retired]]
+fragment = "apps"
+key = "47"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "Every test of the row was a test of apps/actingctl or the first MCP entry, which are deleted (row: ac_overview cuts an answer over the output budget one block at a time in the order of the MCP-0 command table §4.9, marks each cut block and)."
+covered_by = "the Lab's MCP budget: actingcommand-actinglab-mcp::bin:actinglab-mcp::gate_434_lab5g2b::mcp_budget_cut_and_export (the #434 LAB-5G2b row) and lab-ops' own budget gates (crates/lab-ops/src/gate_434_lab5d.rs); lab-ops' overview tests keep the blocks."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::mcp::code_lookup::tests::a_list_over_the_output_budget_is_cut_with_truncated_and_read_on_from_its_cursor"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: actingctl codes and ac_outcome_code refuse a code the embedded catalog does not list (outcome_code_unknown with code_name), a cursor that is)."
+covered_by = "actingcommand-lab-ops::lib::code_lookup::tests::each_refusal_of_a_code_lookup_carries_its_registered_code, left in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::gate_382_a1::gate_the_documented_forms_parse_to_their_commands"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: actingctl's closed grammar: the documented forms of pause/resume, emulator, selfcheck, install-transition and monitor-set parse to their com)."
+covered_by = "The Lab's command line grammar: actinglab's #434 LAB-2, LAB-2b and CLI-IN rows of apps.toml."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::gate::cli_grammar::gate_a_usage_error_of_these_subcommands_is_reported_before_any_connection"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: actingctl's closed grammar: the documented forms of pause/resume, emulator, selfcheck, install-transition and monitor-set parse to their com)."
+covered_by = "The Lab's command line grammar: actinglab's #434 LAB-2, LAB-2b and CLI-IN rows of apps.toml."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::gate::cli_grammar::gate_an_empty_instance_alias_is_a_usage_error_not_a_global_scope"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: actingctl's closed grammar: the documented forms of pause/resume, emulator, selfcheck, install-transition and monitor-set parse to their com)."
+covered_by = "The Lab's command line grammar: actinglab's #434 LAB-2, LAB-2b and CLI-IN rows of apps.toml."
+
+[[retired]]
+fragment = "apps"
+key = "13"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "Every test of the row was a test of apps/actingctl or the first MCP entry, which are deleted (row: actingctl's closed grammar: the documented forms of pause/resume, emulator, selfcheck, install-transition and monitor-set parse to their com)."
+covered_by = "The Lab's command line grammar: actinglab's #434 LAB-2, LAB-2b and CLI-IN rows of apps.toml."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::gate::cli_grammar::gate_a_refused_request_of_these_subcommands_exits_1_with_the_receipts_outcome"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: A request the Runtime refuses exits 1 with the refused receipt's outcome as the one result line (Workflow #382 A-1 G10))."
+covered_by = "actingcommand-lab-ops::lib::cli_line::tests::the_exit_code_follows_the_category_and_a_refusal_is_never_zero (the key 43 row)."
+
+[[retired]]
+fragment = "apps"
+key = "15"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "Every test of the row was a test of apps/actingctl or the first MCP entry, which are deleted (row: A request the Runtime refuses exits 1 with the refused receipt's outcome as the one result line (Workflow #382 A-1 G10))."
+covered_by = "actingcommand-lab-ops::lib::cli_line::tests::the_exit_code_follows_the_category_and_a_refusal_is_never_zero (the key 43 row)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::gate_382_a1::gate_the_wait_completes_when_the_target_epoch_closed_and_its_process_exited"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: the wait it held is lab-ops' shutdown_wait since Workflow #434 LAB-1b, and the test moved there (row: request-shutdown --wait waits for the exact owner epoch's close and its process's exit; another epoch's close never counts, and past its tim)."
+covered_by = "actingcommand-lab-ops::lib::shutdown_wait::g11_tests::gate_the_wait_completes_when_the_target_epoch_closed_and_its_process_exited, the same journal, poller and assertions on the wait the Lab's shutdown --wait runs; the same apps.toml row (key 18) holds it."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::gate_382_a1::gate_another_epochs_close_does_not_end_the_wait_which_times_out_with_the_last_state"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: the wait it held is lab-ops' shutdown_wait since Workflow #434 LAB-1b, and the test moved there (row: request-shutdown --wait waits for the exact owner epoch's close and its process's exit; another epoch's close never counts, and past its tim)."
+covered_by = "actingcommand-lab-ops::lib::shutdown_wait::g11_tests::gate_another_epochs_close_does_not_end_the_wait_which_times_out_with_the_last_state, the same journal, poller and assertions on the wait the Lab's shutdown --wait runs; the same apps.toml row (key 18) holds it."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::gate_382_a1::gate_a_closed_epoch_whose_process_outlives_the_wait_times_out_with_the_last_state"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: the wait it held is lab-ops' shutdown_wait since Workflow #434 LAB-1b, and the test moved there (row: request-shutdown --wait waits for the exact owner epoch's close and its process's exit; another epoch's close never counts, and past its tim)."
+covered_by = "actingcommand-lab-ops::lib::shutdown_wait::g11_tests::gate_a_closed_epoch_whose_process_outlives_the_wait_times_out_with_the_last_state, the same journal, poller and assertions on the wait the Lab's shutdown --wait runs; the same apps.toml row (key 18) holds it."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_389_u2::u2_an_option_tool_starts_actinglab_naming_mcp_as_its_forwarding_counter"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: Workflow #389 U-2 (unified interface model v2.2.3 §8.2 TU-5, TU-6, TU-7): actinglab's Runtime connections bind the Lab channel with the enve)."
+covered_by = "actingcommand-actinglab::bin:actinglab::tests::gate_389_u2::u2_via_names_the_counter_that_forwarded_the_work, left in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::mcp::run_evidence::tests::a_page_over_the_output_budget_is_cut_to_whole_steps_with_truncated_and_next_step"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: actingctl run evidence and ac_run_evidence refuse a request without exactly one of request_id and run_id, a malformed one and a page out of)."
+covered_by = "actingcommand-lab-ops::lib::run_evidence::tests::each_refusal_of_run_evidence_carries_its_registered_code, left in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::gate::mcp_app::gate_ac_app_is_an_operator_tool_that_refuses_what_session_app_does_not_take"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: ac_app is an operator tool before U-3: a server without the operator tier neither lists it nor runs it (tier_not_enabled, mcp_blocker server)."
+covered_by = "The tiers are gone: actingcommand-actinglab-mcp::server_stdio::mcp_tier_refused; the app rows are table rows, actingcommand-actinglab-mcp::bin:actinglab-mcp::gate_434_lab5g2a::mcp_tools_from_op_table (the #434 LAB-5G2a row)."
+
+[[retired]]
+fragment = "apps"
+key = "52"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "Every test of the row was a test of apps/actingctl or the first MCP entry, which are deleted (row: ac_app is an operator tool before U-3: a server without the operator tier neither lists it nor runs it (tier_not_enabled, mcp_blocker server)."
+covered_by = "The tiers are gone: actingcommand-actinglab-mcp::server_stdio::mcp_tier_refused; the app rows are table rows, actingcommand-actinglab-mcp::bin:actinglab-mcp::gate_434_lab5g2a::mcp_tools_from_op_table (the #434 LAB-5G2a row)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::tests::mcp21_wait_bounds_an_emulator_control_or_a_task_run_and_its_expiry_names_the_request"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: actingctl emulator start|stop|restart and task-run take --wait <s> (1-3600); a wait that ends before its request prints {request_id?, correl)."
+covered_by = "The Lab's emu and run rows wait through lab-ops wait (moved by Workflow #434 LAB-1b); actingcommand-actinglab-mcp::serve_calls::mcp_run_show_and_run_stop_wait (the #434 LAB-5G3 row)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::gate::emulator_wait::gate_an_emulator_wait_that_ends_first_exits_1_with_command_wait_expired_and_the_control_goes_on"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: actingctl emulator start|stop|restart and task-run take --wait <s> (1-3600); a wait that ends before its request prints {request_id?, correl)."
+covered_by = "The Lab's emu and run rows wait through lab-ops wait (moved by Workflow #434 LAB-1b); actingcommand-actinglab-mcp::serve_calls::mcp_run_show_and_run_stop_wait (the #434 LAB-5G3 row)."
+
+[[retired]]
+fragment = "apps"
+key = "53"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "Every test of the row was a test of apps/actingctl or the first MCP entry, which are deleted (row: actingctl emulator start|stop|restart and task-run take --wait <s> (1-3600); a wait that ends before its request prints {request_id?, correl)."
+covered_by = "The Lab's emu and run rows wait through lab-ops wait (moved by Workflow #434 LAB-1b); actingcommand-actinglab-mcp::serve_calls::mcp_run_show_and_run_stop_wait (the #434 LAB-5G3 row)."
+
+[[retired]]
+fragment = "apps"
+key = "63"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "Every test of the row was a test of apps/actingctl or the first MCP entry, which are deleted (row: actingctl ladder-drill --instance <selector> [--device] and MCP ac_ladder_drill (instance, device) send the same DrillRecoveryLadder (a plan)."
+covered_by = "the Lab's row serves the command line and MCP from one table row (crates/lab-ops core_ops); actingcommand-actinglab-mcp::serve_calls::mcp_stdio_one_row_per_kind holds an MCP answer to the command line's line (the #434 LAB-5G2b row); the drill row is lab-ops ladder_drill."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_mcp8::gate_mcp5b_ac_overview_cuts_each_row_s_foreground_after_the_monitors_and_before_the_build"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: ac_overview cuts each instance row's foreground (the package last seen in the foreground, MCP-5b) after every row's monitor and before insta)."
+covered_by = "the Lab's MCP budget: actingcommand-actinglab-mcp::bin:actinglab-mcp::gate_434_lab5g2b::mcp_budget_cut_and_export (the #434 LAB-5G2b row) and lab-ops' own budget gates (crates/lab-ops/src/gate_434_lab5d.rs)."
+
+[[retired]]
+fragment = "apps"
+key = "60"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "Every test of the row was a test of apps/actingctl or the first MCP entry, which are deleted (row: ac_overview cuts each instance row's foreground (the package last seen in the foreground, MCP-5b) after every row's monitor and before insta)."
+covered_by = "the Lab's MCP budget: actingcommand-actinglab-mcp::bin:actinglab-mcp::gate_434_lab5g2b::mcp_budget_cut_and_export (the #434 LAB-5G2b row) and lab-ops' own budget gates (crates/lab-ops/src/gate_434_lab5d.rs)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::gate::emulator_restart::gate_emulator_restart_whose_start_times_out_exits_non_zero_and_leaves_no_stale_connection"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: emulator restart reports the failure and the final state: actingctl emulator restart and MCP ac_emulator run the Runtime's Stop then Start,)."
+covered_by = "The Lab's emu restart row (lab-ops emulators) and the host's emulator-control gates of host.toml (Workflow #381 B, #382 A-4)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::gate::emulator_restart::gate_ac_emulator_restart_whose_start_times_out_answers_its_failure_and_never_dispatches_the_vendor_restart"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: emulator restart reports the failure and the final state: actingctl emulator restart and MCP ac_emulator run the Runtime's Stop then Start,)."
+covered_by = "The Lab's emu restart row (lab-ops emulators) and the host's emulator-control gates of host.toml (Workflow #381 B, #382 A-4)."
+
+[[retired]]
+fragment = "apps"
+key = "19"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "Every test of the row was a test of apps/actingctl or the first MCP entry, which are deleted (row: emulator restart reports the failure and the final state: actingctl emulator restart and MCP ac_emulator run the Runtime's Stop then Start,)."
+covered_by = "The Lab's emu restart row (lab-ops emulators) and the host's emulator-control gates of host.toml (Workflow #381 B, #382 A-4)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::tests::s4_t3_task_run_refuses_a_package_digest_flag"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: Workflow #336 PKG-S4 (option 丙): the input surfaces name a package by its path only. A configuration with startup_package {package} checks,)."
+covered_by = "actingcommand-actingd::process::s4_t1_a_package_digest_key_refuses_the_configuration_and_the_path_shape_checks, left in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::gate::mcp_pkgs4::s4_t4_ac_run_pack_and_ac_pack_check_take_no_package_digest"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: Workflow #336 PKG-S4 (option 丙): the input surfaces name a package by its path only. A configuration with startup_package {package} checks,)."
+covered_by = "actingcommand-actingd::process::s4_t1_a_package_digest_key_refuses_the_configuration_and_the_path_shape_checks, left in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::gate::mcp_performance_parity::gate_perf_status_without_actingd_exits_1_with_the_runtime_s_absence"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: actingctl perf-status prints the shadow measurement's status (PerformanceStatus) with runtime_performance_reported, and without actingd it r)."
+covered_by = "The Lab's status carries the performance block (lab-ops overview); runtime_performance_reported is retired with actingctl perf-status."
+
+[[retired]]
+fragment = "apps"
+key = "57"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "Every test of the row was a test of apps/actingctl or the first MCP entry, which are deleted (row: actingctl perf-status prints the shadow measurement's status (PerformanceStatus) with runtime_performance_reported, and without actingd it r)."
+covered_by = "The Lab's status carries the performance block (lab-ops overview); runtime_performance_reported is retired with actingctl perf-status."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_labobs::gate_labobs_an_exported_answer_still_states_its_frame_inline_within_the_budget"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: Workflow #410 item 1 (board #410, approved by the owner 2026-10-15): ac_lab_observe and ac_lab_do keep A5's shapes and budgets: an answer over t)."
+covered_by = "actingcommand-actinglab-mcp::serve_calls::mcp_lab_overflow_rule and mcp_lab_overflow_rule_keeps_next_frame_inline (the #434 LAB-5G4 and #463 L1 rows)."
+
+[[retired]]
+fragment = "apps"
+key = "66"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "Every test of the row was a test of apps/actingctl or the first MCP entry, which are deleted (row: Workflow #410 item 1 (board #410, approved by the owner 2026-10-15): ac_lab_observe and ac_lab_do keep A5's shapes and budgets: an answer over t)."
+covered_by = "actingcommand-actinglab-mcp::serve_calls::mcp_lab_overflow_rule and mcp_lab_overflow_rule_keeps_next_frame_inline (the #434 LAB-5G4 and #463 L1 rows)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::mcp::tests::clock_slots::ac_diagnose_keeps_refused_and_superseded_rows_first_then_deferred_and_expired_then_owed"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: its clock-slot order moved with the function it read (row: Workflow #372 K4 (K372 addendum of 2026-10-15, K4.4 and row K4-T7, the ac_diagnose half; register §1.79): ac_diagnose keeps at most 10 of th)."
+covered_by = "actingcommand-lab-ops::lib::diagnose::k4_tests::k4_t7_clock_slot_rows_keep_refused_and_superseded_first_then_deferred_and_expired_then_owed, the same rows and order on lab_ops::diagnose::clock_slot_rows, which the Lab's diagnose row answers on both front ends; the same apps.toml row (key 68) holds it."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::tests::nine1_status_shows_each_emulator_as_last_read_with_the_time"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: Workflow #390 九处-1 (board #390 comment 6095942731, item 1; corrected ruling 4 of wave 18; register §1.91): actingctl status beside each inst)."
+covered_by = "actingcommand-lab-ops::lib::overview::tests::nine1_each_overview_row_shows_its_emulator_as_last_read_with_the_time, left in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::gate::mcp_overview_parity::nine1_status_and_overview_show_unknown_while_the_runtime_holds_no_reading"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: Workflow #390 九处-1 (board #390 comment 6095942731, item 1; corrected ruling 4 of wave 18; register §1.91): actingctl status beside each inst)."
+covered_by = "actingcommand-lab-ops::lib::overview::tests::nine1_each_overview_row_shows_its_emulator_as_last_read_with_the_time, left in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_0121_pkgcheck::ac_pack_check_runs_actinglab_package_check_and_answers_its_data_verbatim"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: Workflow #411 A5 (M-PKG §3.2, S5-T4; register §1.97 PC1, PC2): actinglab package check --package <path> gives the Runtime's own structural a)."
+covered_by = "actingcommand-actinglab::bin:actinglab::package_cli::gate_0121_pkgcheck::package_check_gives_the_runtime_admission_verdict_for_every_package_form, left in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::gate::mcp_overview_parity::a7_cli_and_mcp_rows_carry_the_same_backend_selfcheck"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: #411 A7 (v0.12.1; register §1.98 A7-1): each actingctl overview / ac_overview instance row carries backend_selfcheck, one entry per self-che)."
+covered_by = "actingcommand-lab-ops::lib::overview::tests::a7_the_overview_row_shows_a_failed_capture_self_check_with_its_time, left in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_mcp8::r0b2_ac_overview_never_cuts_a_row_s_activity"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: Workflow #429 R-0b2 (0.12.36; register §1.243; contracts/runtime-interface.md, the overview rows): each actingctl overview / ac_overview ins)."
+covered_by = "actingcommand-lab-ops::lib::overview::tests::r0b2_an_overview_row_shows_the_status_activity_and_an_idle_row_has_no_member, left in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::gate::mcp_overview_parity::r0b2_cli_and_mcp_rows_carry_the_same_activity_from_one_status_read"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: Workflow #429 R-0b2 (0.12.36; register §1.243; contracts/runtime-interface.md, the overview rows): each actingctl overview / ac_overview ins)."
+covered_by = "actingcommand-lab-ops::lib::overview::tests::r0b2_an_overview_row_shows_the_status_activity_and_an_idle_row_has_no_member, left in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_rc2_a8::a8_ac_lab_do_with_capture_and_no_package_is_arguments_invalid_naming_package"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: #411 A8, A14 (v0.12.1-rc.2; register §1.100 A8-1, A14-1; related keys 41, 43): MCP ac_lab_do and ac_lab_observe with capture, without dry_ru)."
+covered_by = "the Lab's MCP server takes each tool's parameters from the operation table: actingcommand-actinglab-mcp::bin:actinglab-mcp::gate_434_lab5g2b::mcp_served_and_refused_partition and actingcommand-actinglab-mcp::serve_calls::mcp_refusals_send_nothing (the #434 LAB-5G2b row)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_rc2_a8::a8_ac_lab_observe_with_capture_and_no_package_is_refused_the_same"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: #411 A8, A14 (v0.12.1-rc.2; register §1.100 A8-1, A14-1; related keys 41, 43): MCP ac_lab_do and ac_lab_observe with capture, without dry_ru)."
+covered_by = "the Lab's MCP server takes each tool's parameters from the operation table: actingcommand-actinglab-mcp::bin:actinglab-mcp::gate_434_lab5g2b::mcp_served_and_refused_partition and actingcommand-actinglab-mcp::serve_calls::mcp_refusals_send_nothing (the #434 LAB-5G2b row)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_rc2_a8::a8_a_locator_no_capture_or_dry_run_passes_the_package_check"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: #411 A8, A14 (v0.12.1-rc.2; register §1.100 A8-1, A14-1; related keys 41, 43): MCP ac_lab_do and ac_lab_observe with capture, without dry_ru)."
+covered_by = "the Lab's MCP server takes each tool's parameters from the operation table: actingcommand-actinglab-mcp::bin:actinglab-mcp::gate_434_lab5g2b::mcp_served_and_refused_partition and actingcommand-actinglab-mcp::serve_calls::mcp_refusals_send_nothing (the #434 LAB-5G2b row)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_rc2_a8::a14_ac_lab_do_with_target_tap_and_tap_is_arguments_invalid_naming_tap"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: #411 A8, A14 (v0.12.1-rc.2; register §1.100 A8-1, A14-1; related keys 41, 43): MCP ac_lab_do and ac_lab_observe with capture, without dry_ru)."
+covered_by = "the Lab's MCP server takes each tool's parameters from the operation table: actingcommand-actinglab-mcp::bin:actinglab-mcp::gate_434_lab5g2b::mcp_served_and_refused_partition and actingcommand-actinglab-mcp::serve_calls::mcp_refusals_send_nothing (the #434 LAB-5G2b row)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_rc2_a8::p58_ac_lab_do_target_tap_with_coordinates_is_refused_with_a_req_id"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: #411 A8, A14 (v0.12.1-rc.2; register §1.100 A8-1, A14-1; related keys 41, 43): MCP ac_lab_do and ac_lab_observe with capture, without dry_ru)."
+covered_by = "the Lab's MCP server takes each tool's parameters from the operation table: actingcommand-actinglab-mcp::bin:actinglab-mcp::gate_434_lab5g2b::mcp_served_and_refused_partition and actingcommand-actinglab-mcp::serve_calls::mcp_refusals_send_nothing (the #434 LAB-5G2b row)."
+
+[[retired]]
+fragment = "apps"
+key = "73"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "Every test of the row was a test of apps/actingctl or the first MCP entry, which are deleted (row: #411 A8, A14 (v0.12.1-rc.2; register §1.100 A8-1, A14-1; related keys 41, 43): MCP ac_lab_do and ac_lab_observe with capture, without dry_ru)."
+covered_by = "the Lab's MCP server takes each tool's parameters from the operation table: actingcommand-actinglab-mcp::bin:actinglab-mcp::gate_434_lab5g2b::mcp_served_and_refused_partition and actingcommand-actinglab-mcp::serve_calls::mcp_refusals_send_nothing (the #434 LAB-5G2b row)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_lab_l1::l1_ac_lab_do_and_ac_lab_observe_refuse_the_removed_arguments_as_unknown"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: #411 Lab L1 (v0.12.x; register §1.118, no persisted ledger shape; G7; related: exec 96, apps 73): MCP ac_lab_do no longer takes priority, le)."
+covered_by = "the Lab's MCP server takes each tool's parameters from the operation table: actingcommand-actinglab-mcp::bin:actinglab-mcp::gate_434_lab5g2b::mcp_served_and_refused_partition and actingcommand-actinglab-mcp::serve_calls::mcp_refusals_send_nothing (the #434 LAB-5G2b row)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_lab_l1::l1_ac_lab_do_with_capture_refuses_the_destructive_guard_as_conflicting"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: #411 Lab L1 (v0.12.x; register §1.118, no persisted ledger shape; G7; related: exec 96, apps 73): MCP ac_lab_do no longer takes priority, le)."
+covered_by = "the Lab's MCP server takes each tool's parameters from the operation table: actingcommand-actinglab-mcp::bin:actinglab-mcp::gate_434_lab5g2b::mcp_served_and_refused_partition and actingcommand-actinglab-mcp::serve_calls::mcp_refusals_send_nothing (the #434 LAB-5G2b row)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_lab_l1::l1_the_destructive_guard_passes_offline_and_with_dry_run"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: #411 Lab L1 (v0.12.x; register §1.118, no persisted ledger shape; G7; related: exec 96, apps 73): MCP ac_lab_do no longer takes priority, le)."
+covered_by = "the Lab's MCP server takes each tool's parameters from the operation table: actingcommand-actinglab-mcp::bin:actinglab-mcp::gate_434_lab5g2b::mcp_served_and_refused_partition and actingcommand-actinglab-mcp::serve_calls::mcp_refusals_send_nothing (the #434 LAB-5G2b row)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_lab_l1::l1_the_tool_schemas_drop_the_removed_arguments"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: #411 Lab L1 (v0.12.x; register §1.118, no persisted ledger shape; G7; related: exec 96, apps 73): MCP ac_lab_do no longer takes priority, le)."
+covered_by = "the Lab's MCP server takes each tool's parameters from the operation table: actingcommand-actinglab-mcp::bin:actinglab-mcp::gate_434_lab5g2b::mcp_served_and_refused_partition and actingcommand-actinglab-mcp::serve_calls::mcp_refusals_send_nothing (the #434 LAB-5G2b row)."
+
+[[retired]]
+fragment = "apps"
+key = "76"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "Every test of the row was a test of apps/actingctl or the first MCP entry, which are deleted (row: #411 Lab L1 (v0.12.x; register §1.118, no persisted ledger shape; G7; related: exec 96, apps 73): MCP ac_lab_do no longer takes priority, le)."
+covered_by = "the Lab's MCP server takes each tool's parameters from the operation table: actingcommand-actinglab-mcp::bin:actinglab-mcp::gate_434_lab5g2b::mcp_served_and_refused_partition and actingcommand-actinglab-mcp::serve_calls::mcp_refusals_send_nothing (the #434 LAB-5G2b row)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::gate::remedy_choices::b15w_remedy_set_get_and_lift_round_trip"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: Workflow #411 B15 R6 (v0.12.3; register §1.116 B15W-4, B15W-5; no persisted ledger shape; model-b15 §5.1, §7.6; key assigned by the coordina)."
+covered_by = "The Lab's remedy rows (lab-ops remedy): actinglab's #434 LAB-5C rows of apps.toml."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::gate::remedy_choices::b15w_ac_remedy_set_and_get_write_and_read_the_same_record"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: Workflow #411 B15 R6 (v0.12.3; register §1.116 B15W-4, B15W-5; no persisted ledger shape; model-b15 §5.1, §7.6; key assigned by the coordina)."
+covered_by = "The Lab's remedy rows (lab-ops remedy): actinglab's #434 LAB-5C rows of apps.toml."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::gate::remedy_choices::b15w_remedy_set_and_ac_remedy_set_refuse_a_server_scope"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: Workflow #411 B15 R6 (v0.12.3; register §1.116 B15W-4, B15W-5; no persisted ledger shape; model-b15 §5.1, §7.6; key assigned by the coordina)."
+covered_by = "The Lab's remedy rows (lab-ops remedy): actinglab's #434 LAB-5C rows of apps.toml."
+
+[[retired]]
+fragment = "apps"
+key = "74"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "Every test of the row was a test of apps/actingctl or the first MCP entry, which are deleted (row: Workflow #411 B15 R6 (v0.12.3; register §1.116 B15W-4, B15W-5; no persisted ledger shape; model-b15 §5.1, §7.6; key assigned by the coordina)."
+covered_by = "The Lab's remedy rows (lab-ops remedy): actinglab's #434 LAB-5C rows of apps.toml."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_411_b15w2::b15w2_ac_diagnose_shows_the_instances_stopped_remedies"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: Workflow #411 B15 R7 (v0.12.3; register §1.117 B15W2-2; no persisted ledger shape; contracts/policy-suspension.md `remedies`; key assigned b)."
+covered_by = "The Lab's diagnose row is lab-ops diagnose for both front ends; the report half is the host's (host key 116)."
+
+[[retired]]
+fragment = "apps"
+key = "75"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "Every test of the row was a test of apps/actingctl or the first MCP entry, which are deleted (row: Workflow #411 B15 R7 (v0.12.3; register §1.117 B15W2-2; no persisted ledger shape; contracts/policy-suspension.md `remedies`; key assigned b)."
+covered_by = "The Lab's diagnose row is lab-ops diagnose for both front ends; the report half is the host's (host key 116)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_lab_b2::b2_ac_lab_observe_and_do_pass_sample_scenes_before_scene"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: #411 Lab B-2 (v0.12.x; register §1.131 B2-5, no persisted ledger shape; G8 offline; coordinator decision Q1 of 2026-10-19; related: apps 73,)."
+covered_by = "the Lab's MCP server takes each tool's parameters from the operation table: actingcommand-actinglab-mcp::bin:actinglab-mcp::gate_434_lab5g2b::mcp_served_and_refused_partition and actingcommand-actinglab-mcp::serve_calls::mcp_refusals_send_nothing (the #434 LAB-5G2b row)."
+
+[[retired]]
+fragment = "apps"
+key = "78"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "Every test of the row was a test of apps/actingctl or the first MCP entry, which are deleted (row: #411 Lab B-2 (v0.12.x; register §1.131 B2-5, no persisted ledger shape; G8 offline; coordinator decision Q1 of 2026-10-19; related: apps 73,)."
+covered_by = "the Lab's MCP server takes each tool's parameters from the operation table: actingcommand-actinglab-mcp::bin:actinglab-mcp::gate_434_lab5g2b::mcp_served_and_refused_partition and actingcommand-actinglab-mcp::serve_calls::mcp_refusals_send_nothing (the #434 LAB-5G2b row)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_406_t4::t4_ac_lab_do_passes_the_seed_and_answers_the_sampling"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: Workflow #406 T4 (0.12.x; register §1.138 T4-9; no persisted ledger shape: an MCP argument and actinglab's answer relayed; plan-405-406 Q20))."
+covered_by = "the Lab's MCP server takes each tool's parameters from the operation table: actingcommand-actinglab-mcp::bin:actinglab-mcp::gate_434_lab5g2b::mcp_served_and_refused_partition and actingcommand-actinglab-mcp::serve_calls::mcp_refusals_send_nothing (the #434 LAB-5G2b row)."
+
+[[retired]]
+fragment = "apps"
+key = "79"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "Every test of the row was a test of apps/actingctl or the first MCP entry, which are deleted (row: Workflow #406 T4 (0.12.x; register §1.138 T4-9; no persisted ledger shape: an MCP argument and actinglab's answer relayed; plan-405-406 Q20))."
+covered_by = "the Lab's MCP server takes each tool's parameters from the operation table: actingcommand-actinglab-mcp::bin:actinglab-mcp::gate_434_lab5g2b::mcp_served_and_refused_partition and actingcommand-actinglab-mcp::serve_calls::mcp_refusals_send_nothing (the #434 LAB-5G2b row)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::gate::mcp_schedule_parity::gate_actingctl_schedule_and_ac_schedule_answer_the_same_explanation"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: Workflow #386 SR-6b, MCP-19b (brief-MCP19b requirements 1 and 2; register §1.144 M19B-1, M19B-2; no persisted ledger shape; plan-mcp19 §2, d)."
+covered_by = "the Lab's row serves the command line and MCP from one table row (crates/lab-ops core_ops); actingcommand-actinglab-mcp::serve_calls::mcp_stdio_one_row_per_kind holds an MCP answer to the command line's line (the #434 LAB-5G2b row); the schedule row is lab-ops schedule."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_mcp19b::mcp19b_ac_schedule_cuts_candidate_rows_from_the_end"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: Workflow #386 SR-6b, MCP-19b (brief-MCP19b requirements 1 and 2; register §1.144 M19B-1, M19B-2; no persisted ledger shape; plan-mcp19 §2, d)."
+covered_by = "the Lab's row serves the command line and MCP from one table row (crates/lab-ops core_ops); actingcommand-actinglab-mcp::serve_calls::mcp_stdio_one_row_per_kind holds an MCP answer to the command line's line (the #434 LAB-5G2b row); the schedule row is lab-ops schedule."
+
+[[retired]]
+fragment = "apps"
+key = "80"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "Every test of the row was a test of apps/actingctl or the first MCP entry, which are deleted (row: Workflow #386 SR-6b, MCP-19b (brief-MCP19b requirements 1 and 2; register §1.144 M19B-1, M19B-2; no persisted ledger shape; plan-mcp19 §2, d)."
+covered_by = "the Lab's row serves the command line and MCP from one table row (crates/lab-ops core_ops); actingcommand-actinglab-mcp::serve_calls::mcp_stdio_one_row_per_kind holds an MCP answer to the command line's line (the #434 LAB-5G2b row); the schedule row is lab-ops schedule."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_mcp19b::mcp19b_diagnose_lists_deferred_rows_up_to_the_configured_bound"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: Workflow #386 SR-6b, MCP-19b (brief-MCP19b requirements 3 and 4; register §1.144 M19B-3, M19B-4; no persisted ledger shape; plan-mcp19 §2, d)."
+covered_by = "actingcommand-lab-ops::lib::overview::tests::mcp19b_each_overview_row_shows_its_not_running_row, left in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_411_e4::e4_t1_ac_events_names_the_event_type_it_does_not_know"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: Workflow #411 B27 (slice E4, 0.12.x; register §1.156 E4-1, E4-5; no persisted ledger shape; B-train plan §6, Q15): ac_events given an event_)."
+covered_by = "actingcommand-lab-ops::lib::events::tests::each_argument_problem_of_events_is_the_usage_outcome_with_its_argument_values (the key 43 row) and the Lab's MCP server takes each tool's parameters from the operation table: actingcommand-actinglab-mcp::bin:actinglab-mcp::gate_434_lab5g2b::mcp_served_and_refused_partition and actingcommand-actinglab-mcp::serve_calls::mcp_refusals_send_nothing (the #434 LAB-5G2b row)."
+
+[[retired]]
+fragment = "apps"
+key = "87"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "Every test of the row was a test of apps/actingctl or the first MCP entry, which are deleted (row: Workflow #411 B27 (slice E4, 0.12.x; register §1.156 E4-1, E4-5; no persisted ledger shape; B-train plan §6, Q15): ac_events given an event_)."
+covered_by = "actingcommand-lab-ops::lib::events::tests::each_argument_problem_of_events_is_the_usage_outcome_with_its_argument_values (the key 43 row) and the Lab's MCP server takes each tool's parameters from the operation table: actingcommand-actinglab-mcp::bin:actinglab-mcp::gate_434_lab5g2b::mcp_served_and_refused_partition and actingcommand-actinglab-mcp::serve_calls::mcp_refusals_send_nothing (the #434 LAB-5G2b row)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_411_e4_tail::e4_tail_t1_ac_pack_check_result_schema_names_its_warnings"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: Workflow #411 E4 tail (B34 follow-up; wave-3 row 13; register §1.172 unused; text only, the result's bytes do not change): the declared ac_p)."
+covered_by = "The Lab's MCP tool schemas come from the operation table: actingcommand-actinglab-mcp::bin:actinglab-mcp::gate_434_lab5g2a::mcp_tools_from_op_table (the #434 LAB-5G2a row)."
+
+[[retired]]
+fragment = "apps"
+key = "97"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "Every test of the row was a test of apps/actingctl or the first MCP entry, which are deleted (row: Workflow #411 E4 tail (B34 follow-up; wave-3 row 13; register §1.172 unused; text only, the result's bytes do not change): the declared ac_p)."
+covered_by = "The Lab's MCP tool schemas come from the operation table: actingcommand-actinglab-mcp::bin:actinglab-mcp::gate_434_lab5g2a::mcp_tools_from_op_table (the #434 LAB-5G2a row)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_412_b3_s2::b3_s2_t2_7_ac_lab_do_passes_operation_and_refuses_its_conflicts_before_the_child"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: #412 Lab B-3 S2 (register §1.162 B3S2-6; design §1.3, §5 S2 T2-7): ac_lab_do passes operation to actinglab as --operation (with seed); opera)."
+covered_by = "the Lab's MCP server takes each tool's parameters from the operation table: actingcommand-actinglab-mcp::bin:actinglab-mcp::gate_434_lab5g2b::mcp_served_and_refused_partition and actingcommand-actinglab-mcp::serve_calls::mcp_refusals_send_nothing (the #434 LAB-5G2b row)."
+
+[[retired]]
+fragment = "apps"
+key = "92"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "Every test of the row was a test of apps/actingctl or the first MCP entry, which are deleted (row: #412 Lab B-3 S2 (register §1.162 B3S2-6; design §1.3, §5 S2 T2-7): ac_lab_do passes operation to actinglab as --operation (with seed); opera)."
+covered_by = "the Lab's MCP server takes each tool's parameters from the operation table: actingcommand-actinglab-mcp::bin:actinglab-mcp::gate_434_lab5g2b::mcp_served_and_refused_partition and actingcommand-actinglab-mcp::serve_calls::mcp_refusals_send_nothing (the #434 LAB-5G2b row)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::gate::evidence_confirm_read::ln7c_c_mcp_and_the_cli_each_record_one_client_action_with_its_frame_index_row"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: #422 LN-7c C (v0.12.16; rd-1026/ln7c/final-query.md §4 and §7 row C; the owner's ruling 70): MCP ac_evidence_confirm_read records one client.act)."
+covered_by = "The Lab's evidence read row (lab-ops evidence_read) and the host's #422 LN-7c frame index gates of host.toml."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::gate::evidence_confirm_read::ln7c_c_an_unknown_artifact_or_run_is_refused_and_nothing_is_recorded"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: #422 LN-7c C (v0.12.16; rd-1026/ln7c/final-query.md §4 and §7 row C; the owner's ruling 70): MCP ac_evidence_confirm_read records one client.act)."
+covered_by = "The Lab's evidence read row (lab-ops evidence_read) and the host's #422 LN-7c frame index gates of host.toml."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::gate::evidence_confirm_read::ln7c_c_ac_run_evidence_and_ac_observe_record_no_confirmation"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: #422 LN-7c C (v0.12.16; rd-1026/ln7c/final-query.md §4 and §7 row C; the owner's ruling 70): MCP ac_evidence_confirm_read records one client.act)."
+covered_by = "The Lab's evidence read row (lab-ops evidence_read) and the host's #422 LN-7c frame index gates of host.toml."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e1_the_entry_pipes_both_ways_and_keeps_ids"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of the first MCP entry (apps/mcp-entry), which is deleted: what it ran is gone with the program (row: Workflow #421 MCP-ENTRY (v0.12.18; rd-1027/brief-mcp-entry.md, the owner, 10-27 14:24 and 14:37): the stable MCP entry pipes JSON-RPC both ways w)."
+covered_by = "The second generation's own tests (apps/mcp-entry-g2: its E- cases copied for its child actinglab-mcp, the #434 LAB-5G5a and LAB-5G6 rows of apps.toml)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e2_the_handshake_is_replayed_and_a_changed_protocol_version_is_refused"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of the first MCP entry (apps/mcp-entry), which is deleted: what it ran is gone with the program (row: Workflow #421 MCP-ENTRY (v0.12.18; rd-1027/brief-mcp-entry.md, the owner, 10-27 14:24 and 14:37): the stable MCP entry pipes JSON-RPC both ways w)."
+covered_by = "The second generation's own tests (apps/mcp-entry-g2: its E- cases copied for its child actinglab-mcp, the #434 LAB-5G5a and LAB-5G6 rows of apps.toml)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e3_a_switch_happens_only_between_calls"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of the first MCP entry (apps/mcp-entry), which is deleted: what it ran is gone with the program (row: Workflow #421 MCP-ENTRY (v0.12.18; rd-1027/brief-mcp-entry.md, the owner, 10-27 14:24 and 14:37): the stable MCP entry pipes JSON-RPC both ways w)."
+covered_by = "The second generation's own tests (apps/mcp-entry-g2: its E- cases copied for its child actinglab-mcp, the #434 LAB-5G5a and LAB-5G6 rows of apps.toml)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e4_a_failed_candidate_keeps_the_old_child_and_is_reported"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of the first MCP entry (apps/mcp-entry), which is deleted: what it ran is gone with the program (row: Workflow #421 MCP-ENTRY (v0.12.18; rd-1027/brief-mcp-entry.md, the owner, 10-27 14:24 and 14:37): the stable MCP entry pipes JSON-RPC both ways w)."
+covered_by = "The second generation's own tests (apps/mcp-entry-g2: its E- cases copied for its child actinglab-mcp, the #434 LAB-5G5a and LAB-5G6 rows of apps.toml)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e5_a_child_that_dies_mid_call_gives_outcome_unknown_and_is_never_resent"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of the first MCP entry (apps/mcp-entry), which is deleted: what it ran is gone with the program (row: Workflow #421 MCP-ENTRY (v0.12.18; rd-1027/brief-mcp-entry.md, the owner, 10-27 14:24 and 14:37): the stable MCP entry pipes JSON-RPC both ways w)."
+covered_by = "The second generation's own tests (apps/mcp-entry-g2: its E- cases copied for its child actinglab-mcp, the #434 LAB-5G5a and LAB-5G6 rows of apps.toml)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e6_outstanding_handles_defer_the_switch_until_they_reach_zero"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of the first MCP entry (apps/mcp-entry), which is deleted: what it ran is gone with the program (row: Workflow #421 MCP-ENTRY (v0.12.18; rd-1027/brief-mcp-entry.md, the owner, 10-27 14:24 and 14:37): the stable MCP entry pipes JSON-RPC both ways w)."
+covered_by = "The second generation's own tests (apps/mcp-entry-g2: its E- cases copied for its child actinglab-mcp, the #434 LAB-5G5a and LAB-5G6 rows of apps.toml)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e7_a_child_without_entry_status_counts_as_zero"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of the first MCP entry (apps/mcp-entry), which is deleted: what it ran is gone with the program (row: Workflow #421 MCP-ENTRY (v0.12.18; rd-1027/brief-mcp-entry.md, the owner, 10-27 14:24 and 14:37): the stable MCP entry pipes JSON-RPC both ways w)."
+covered_by = "The second generation's own tests (apps/mcp-entry-g2: its E- cases copied for its child actinglab-mcp, the #434 LAB-5G5a and LAB-5G6 rows of apps.toml)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e8_no_plan_while_an_install_operation_is_under_way"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of the first MCP entry (apps/mcp-entry), which is deleted: what it ran is gone with the program (row: Workflow #421 MCP-ENTRY (v0.12.18; rd-1027/brief-mcp-entry.md, the owner, 10-27 14:24 and 14:37): the stable MCP entry pipes JSON-RPC both ways w)."
+covered_by = "The second generation's own tests (apps/mcp-entry-g2: its E- cases copied for its child actinglab-mcp, the #434 LAB-5G5a and LAB-5G6 rows of apps.toml)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e9_the_legacy_notice_is_sent_and_the_refetch_recorded"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of the first MCP entry (apps/mcp-entry), which is deleted: what it ran is gone with the program (row: Workflow #421 MCP-ENTRY (v0.12.18; rd-1027/brief-mcp-entry.md, the owner, 10-27 14:24 and 14:37): the stable MCP entry pipes JSON-RPC both ways w)."
+covered_by = "The second generation's own tests (apps/mcp-entry-g2: its E- cases copied for its child actinglab-mcp, the #434 LAB-5G5a and LAB-5G6 rows of apps.toml)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e10_the_2026_07_28_notice_goes_through_subscriptions_listen"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of the first MCP entry (apps/mcp-entry), which is deleted: what it ran is gone with the program (row: Workflow #421 MCP-ENTRY (v0.12.18; rd-1027/brief-mcp-entry.md, the owner, 10-27 14:24 and 14:37): the stable MCP entry pipes JSON-RPC both ways w)."
+covered_by = "The second generation's own tests (apps/mcp-entry-g2: its E- cases copied for its child actinglab-mcp, the #434 LAB-5G5a and LAB-5G6 rows of apps.toml)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e11_the_status_file_says_what_the_entry_runs"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of the first MCP entry (apps/mcp-entry), which is deleted: what it ran is gone with the program (row: Workflow #421 MCP-ENTRY (v0.12.18; rd-1027/brief-mcp-entry.md, the owner, 10-27 14:24 and 14:37): the stable MCP entry pipes JSON-RPC both ways w)."
+covered_by = "The second generation's own tests (apps/mcp-entry-g2: its E- cases copied for its child actinglab-mcp, the #434 LAB-5G5a and LAB-5G6 rows of apps.toml)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_mcp_entry::e12_mcp_config_entry_renders_each_clients_snippet"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: Workflow #421 MCP-ENTRY (v0.12.18; rd-1027/brief-mcp-entry.md, the owner, 10-27 14:24 and 14:37): the stable MCP entry pipes JSON-RPC both ways w)."
+covered_by = "The second generation's own tests (apps/mcp-entry-g2: its E- cases copied for its child actinglab-mcp, the #434 LAB-5G5a and LAB-5G6 rows of apps.toml)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-mcp-entry::entry_process::mcp_entry_process_pipes_a_session_and_switches_once"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of the first MCP entry (apps/mcp-entry), which is deleted: what it ran is gone with the program (row: Workflow #421 MCP-ENTRY (v0.12.18; rd-1027/brief-mcp-entry.md, the owner, 10-27 14:24 and 14:37): the stable MCP entry pipes JSON-RPC both ways w)."
+covered_by = "The second generation's own tests (apps/mcp-entry-g2: its E- cases copied for its child actinglab-mcp, the #434 LAB-5G5a and LAB-5G6 rows of apps.toml)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e13_an_initial_plan_after_the_install_changed_under_the_child_is_a_switch"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of the first MCP entry (apps/mcp-entry), which is deleted: what it ran is gone with the program (row: Workflow #421 MCP-ENTRY fix round 1 (v0.12.18; rd-1027/brief-mcp-entry-fix1.md, review rd-1027/mcp-entry/review.md): a first plan asked afte)."
+covered_by = "The second generation's own tests (apps/mcp-entry-g2: its E- cases copied for its child actinglab-mcp, the #434 LAB-5G5a and LAB-5G6 rows of apps.toml)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e14_an_unfinished_operation_file_alone_does_not_hold_the_entry_back"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of the first MCP entry (apps/mcp-entry), which is deleted: what it ran is gone with the program (row: Workflow #421 MCP-ENTRY fix round 1 (v0.12.18; rd-1027/brief-mcp-entry-fix1.md, review rd-1027/mcp-entry/review.md): a first plan asked afte)."
+covered_by = "The second generation's own tests (apps/mcp-entry-g2: its E- cases copied for its child actinglab-mcp, the #434 LAB-5G5a and LAB-5G6 rows of apps.toml)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_mcp_entry::e15_a_cancelled_call_leaves_no_uncollectable_handle"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: Workflow #421 MCP-ENTRY fix round 1 (v0.12.18; rd-1027/brief-mcp-entry-fix1.md, review rd-1027/mcp-entry/review.md): a first plan asked afte)."
+covered_by = "The second generation's own tests (apps/mcp-entry-g2: its E- cases copied for its child actinglab-mcp, the #434 LAB-5G5a and LAB-5G6 rows of apps.toml)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e16_the_status_names_the_outstanding_handles"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of the first MCP entry (apps/mcp-entry), which is deleted: what it ran is gone with the program (row: Workflow #421 MCP-ENTRY fix round 1 (v0.12.18; rd-1027/brief-mcp-entry-fix1.md, review rd-1027/mcp-entry/review.md): a first plan asked afte)."
+covered_by = "The second generation's own tests (apps/mcp-entry-g2: its E- cases copied for its child actinglab-mcp, the #434 LAB-5G5a and LAB-5G6 rows of apps.toml)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_mcp_entry::e17_a_run_pack_job_counts_while_it_submits"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: Workflow #421 MCP-ENTRY fix round 1 (v0.12.18; rd-1027/brief-mcp-entry-fix1.md, review rd-1027/mcp-entry/review.md): a first plan asked afte)."
+covered_by = "The second generation's own tests (apps/mcp-entry-g2: its E- cases copied for its child actinglab-mcp, the #434 LAB-5G5a and LAB-5G6 rows of apps.toml)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e18_consecutive_refusals_back_off_and_carry_the_tunables"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of the first MCP entry (apps/mcp-entry), which is deleted: what it ran is gone with the program (row: Workflow #421 MCP-ENTRY fix round 1 (v0.12.18; rd-1027/brief-mcp-entry-fix1.md, review rd-1027/mcp-entry/review.md): a first plan asked afte)."
+covered_by = "The second generation's own tests (apps/mcp-entry-g2: its E- cases copied for its child actinglab-mcp, the #434 LAB-5G5a and LAB-5G6 rows of apps.toml)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e19_a_stopped_child_is_ended_only_past_its_grace"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of the first MCP entry (apps/mcp-entry), which is deleted: what it ran is gone with the program (row: Workflow #421 MCP-ENTRY fix round 1 (v0.12.18; rd-1027/brief-mcp-entry-fix1.md, review rd-1027/mcp-entry/review.md): a first plan asked afte)."
+covered_by = "The second generation's own tests (apps/mcp-entry-g2: its E- cases copied for its child actinglab-mcp, the #434 LAB-5G5a and LAB-5G6 rows of apps.toml)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e20_a_rejected_candidate_is_tried_once_more_after_settle"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of the first MCP entry (apps/mcp-entry), which is deleted: what it ran is gone with the program (row: Workflow #421 MCP-ENTRY fix round 1 (v0.12.18; rd-1027/brief-mcp-entry-fix1.md, review rd-1027/mcp-entry/review.md): a first plan asked afte)."
+covered_by = "The second generation's own tests (apps/mcp-entry-g2: its E- cases copied for its child actinglab-mcp, the #434 LAB-5G5a and LAB-5G6 rows of apps.toml)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e21_a_fresh_child_of_another_build_sends_the_notice"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of the first MCP entry (apps/mcp-entry), which is deleted: what it ran is gone with the program (row: Workflow #421 MCP-ENTRY fix round 1 (v0.12.18; rd-1027/brief-mcp-entry-fix1.md, review rd-1027/mcp-entry/review.md): a first plan asked afte)."
+covered_by = "The second generation's own tests (apps/mcp-entry-g2: its E- cases copied for its child actinglab-mcp, the #434 LAB-5G5a and LAB-5G6 rows of apps.toml)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e22_the_status_drops_an_answered_call_at_once"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of the first MCP entry (apps/mcp-entry), which is deleted: what it ran is gone with the program (row: Workflow #421 MCP-ENTRY fix round 1 (v0.12.18; rd-1027/brief-mcp-entry-fix1.md, review rd-1027/mcp-entry/review.md): a first plan asked afte)."
+covered_by = "The second generation's own tests (apps/mcp-entry-g2: its E- cases copied for its child actinglab-mcp, the #434 LAB-5G5a and LAB-5G6 rows of apps.toml)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e23_a_zero_count_is_ignored_after_a_call_reached_the_child"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of the first MCP entry (apps/mcp-entry), which is deleted: what it ran is gone with the program (row: Workflow #421 MCP-ENTRY fix round 1 (v0.12.18; rd-1027/brief-mcp-entry-fix1.md, review rd-1027/mcp-entry/review.md): a first plan asked afte)."
+covered_by = "The second generation's own tests (apps/mcp-entry-g2: its E- cases copied for its child actinglab-mcp, the #434 LAB-5G5a and LAB-5G6 rows of apps.toml)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::gate::mcp_packs::gate_r11_packs_and_ac_packs_answer_the_same_ui_irreversible_and_task_ids"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: Workflow #429 R-11 (0.12.36; register §1.240; design rd-1029/429-A-runtime.md A.7.3; work order rd-1031/brief-r11.md, tests 1 to 6): a game)."
+covered_by = "actingcommand-contract::lib::standard_pack_ui::tests::r11_t1_a_valid_ui_json_reads_back_exactly_as_written, left in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_422_ov24k::ov24k_o1_five_full_runs_and_performance_fit_the_budget_with_every_block"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: #422 OV-24K (v0.12.20; rd-1027/brief-ov24k.md, audit rd-1027/ac-audit-420-6442672243.md 二.3 and 二.1): five instances with full runs and perf)."
+covered_by = "the Lab's MCP budget: actingcommand-actinglab-mcp::bin:actinglab-mcp::gate_434_lab5g2b::mcp_budget_cut_and_export (the #434 LAB-5G2b row) and lab-ops' own budget gates (crates/lab-ops/src/gate_434_lab5d.rs); lab-ops' overview tests keep the blocks."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_422_ov24k::ov24k_o2_the_performance_block_writes_each_dwell_once"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: #422 OV-24K (v0.12.20; rd-1027/brief-ov24k.md, audit rd-1027/ac-audit-420-6442672243.md 二.3 and 二.1): five instances with full runs and perf)."
+covered_by = "the Lab's MCP budget: actingcommand-actinglab-mcp::bin:actinglab-mcp::gate_434_lab5g2b::mcp_budget_cut_and_export (the #434 LAB-5G2b row) and lab-ops' own budget gates (crates/lab-ops/src/gate_434_lab5d.rs); lab-ops' overview tests keep the blocks."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_422_ov24k::ov24k_o3_a_spent_budget_skips_performance_and_fact_refresh_and_asks_the_runtime_for_neither"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: #422 OV-24K (v0.12.20; rd-1027/brief-ov24k.md, audit rd-1027/ac-audit-420-6442672243.md 二.3 and 二.1): five instances with full runs and perf)."
+covered_by = "the Lab's MCP budget: actingcommand-actinglab-mcp::bin:actinglab-mcp::gate_434_lab5g2b::mcp_budget_cut_and_export (the #434 LAB-5G2b row) and lab-ops' own budget gates (crates/lab-ops/src/gate_434_lab5d.rs); lab-ops' overview tests keep the blocks."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_422_ov24k::ov24k_o4_over_the_budget_the_cut_keeps_fact_refresh_and_names_what_it_cut"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: #422 OV-24K (v0.12.20; rd-1027/brief-ov24k.md, audit rd-1027/ac-audit-420-6442672243.md 二.3 and 二.1): five instances with full runs and perf)."
+covered_by = "the Lab's MCP budget: actingcommand-actinglab-mcp::bin:actinglab-mcp::gate_434_lab5g2b::mcp_budget_cut_and_export (the #434 LAB-5G2b row) and lab-ops' own budget gates (crates/lab-ops/src/gate_434_lab5d.rs); lab-ops' overview tests keep the blocks."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_422_ov24k::ov24k_o5_a_configuration_file_actingd_has_not_loaded_warns_on_an_install_without_generations"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: #422 OV-24K (v0.12.20; rd-1027/brief-ov24k.md, audit rd-1027/ac-audit-420-6442672243.md 二.3 and 二.1): five instances with full runs and perf)."
+covered_by = "the Lab's MCP budget: actingcommand-actinglab-mcp::bin:actinglab-mcp::gate_434_lab5g2b::mcp_budget_cut_and_export (the #434 LAB-5G2b row) and lab-ops' own budget gates (crates/lab-ops/src/gate_434_lab5d.rs); lab-ops' overview tests keep the blocks."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_422_ov24k::ov24k_o6_text_and_structured_content_follow_the_negotiated_version"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: #422 OV-24K (v0.12.20; rd-1027/brief-ov24k.md, audit rd-1027/ac-audit-420-6442672243.md 二.3 and 二.1): five instances with full runs and perf)."
+covered_by = "the Lab's MCP budget: actingcommand-actinglab-mcp::bin:actinglab-mcp::gate_434_lab5g2b::mcp_budget_cut_and_export (the #434 LAB-5G2b row) and lab-ops' own budget gates (crates/lab-ops/src/gate_434_lab5d.rs); lab-ops' overview tests keep the blocks."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_422_ov24k::ov24k_fix1_m1_a_text_only_client_sees_every_warning_what_was_cut_and_how_to_narrow"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: #422 OV-24K fix round 1 (rd-1027/brief-ov24k-fix1.md, review rd-1027/v01220-review/ov24k.md M1, L1, L3): a client that reads only the text c)."
+covered_by = "the Lab's MCP budget: actingcommand-actinglab-mcp::bin:actinglab-mcp::gate_434_lab5g2b::mcp_budget_cut_and_export (the #434 LAB-5G2b row) and lab-ops' own budget gates (crates/lab-ops/src/gate_434_lab5d.rs); lab-ops' overview tests keep the blocks."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_422_ov24k::ov24k_fix1_l1_the_overview_is_fitted_to_the_version_the_session_negotiated"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: #422 OV-24K fix round 1 (rd-1027/brief-ov24k-fix1.md, review rd-1027/v01220-review/ov24k.md M1, L1, L3): a client that reads only the text c)."
+covered_by = "the Lab's MCP budget: actingcommand-actinglab-mcp::bin:actinglab-mcp::gate_434_lab5g2b::mcp_budget_cut_and_export (the #434 LAB-5G2b row) and lab-ops' own budget gates (crates/lab-ops/src/gate_434_lab5d.rs); lab-ops' overview tests keep the blocks."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_422_ov24k::ov24k_fix1_l3_a_spent_budget_skips_the_not_running_read"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: #422 OV-24K fix round 1 (rd-1027/brief-ov24k-fix1.md, review rd-1027/v01220-review/ov24k.md M1, L1, L3): a client that reads only the text c)."
+covered_by = "the Lab's MCP budget: actingcommand-actinglab-mcp::bin:actinglab-mcp::gate_434_lab5g2b::mcp_budget_cut_and_export (the #434 LAB-5G2b row) and lab-ops' own budget gates (crates/lab-ops/src/gate_434_lab5d.rs); lab-ops' overview tests keep the blocks."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_422_qr2::qr2_t3_the_run_block_listing_and_status_ask_for_no_run_recovery_and_answer_as_before"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: #422 QR-2 (v0.12.23; brief rd-1028/brief-qr2-overview-pages.md, investigation rd-1028/qr2-investigation.md §4 R4): on A42's fake Runtime, th)."
+covered_by = "The Lab's status, runs and run show rows are lab-ops overview, run_list and run_evidence for both front ends; the #422 QR-2 host.toml rows keep the queries."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_422_qr2b::qr2b_t1_one_call_lists_once_with_and_without_an_instance"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: #422 QR-2b (brief rd-1028/brief-qr2b-diagnose.md, investigation rd-1028/qr2-investigation.md §3): on A42's fake Runtime, which logs every Qu)."
+covered_by = "The Lab's diagnose row is lab-ops diagnose for both front ends; the #422 QR-2b host.toml rows keep the queries."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_422_qr2b::qr2b_t2_settled_runs_are_not_status_read"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: #422 QR-2b (brief rd-1028/brief-qr2b-diagnose.md, investigation rd-1028/qr2-investigation.md §3): on A42's fake Runtime, which logs every Qu)."
+covered_by = "The Lab's diagnose row is lab-ops diagnose for both front ends; the #422 QR-2b host.toml rows keep the queries."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_422_qr2b::qr2b_t3_every_page_asks_for_no_run_recovery"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: #422 QR-2b (brief rd-1028/brief-qr2b-diagnose.md, investigation rd-1028/qr2-investigation.md §3): on A42's fake Runtime, which logs every Qu)."
+covered_by = "The Lab's diagnose row is lab-ops diagnose for both front ends; the #422 QR-2b host.toml rows keep the queries."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_422_qr2b::qr2b_t4_a_section_past_the_deadline_answers_incomplete_and_the_rest_answers"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: #422 QR-2b (brief rd-1028/brief-qr2b-diagnose.md, investigation rd-1028/qr2-investigation.md §3): on A42's fake Runtime, which logs every Qu)."
+covered_by = "The Lab's diagnose row is lab-ops diagnose for both front ends; the #422 QR-2b host.toml rows keep the queries."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_422_qr2b::qr2b_t5_an_answer_without_a_slow_section_is_as_before"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: #422 QR-2b (brief rd-1028/brief-qr2b-diagnose.md, investigation rd-1028/qr2-investigation.md §3): on A42's fake Runtime, which logs every Qu)."
+covered_by = "The Lab's diagnose row is lab-ops diagnose for both front ends; the #422 QR-2b host.toml rows keep the queries."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_427b::gate_427b_ac_schedule_answers_the_shared_run_limits_with_their_numbers"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: Workflow #427-B (brief rd-1028/brief-427b-budget.md; contracts/runtime-config.md, \"The performance section\"): the start-up assembly hands th)."
+covered_by = "actingcommand-actingd::bin:actingcommand-actingd::config::gate_427b::gate_427b_the_assembly_hands_the_limits_and_the_max_key_over_in_every_pacing_mode, left in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_427b::gate_427b_ac_diagnose_lists_a_row_the_shared_run_limits_blocked_with_its_numbers"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: Workflow #427-B follow-up (brief rd-1028/brief-427b-followup.md; review rd-1028/review-427b.md L1): ac_diagnose's not_run lists, beside the)."
+covered_by = "actingcommand-lab-ops::lib::schedule::k427b_tests::gate_427b_diagnose_lists_a_row_the_shared_run_limits_blocked_with_its_numbers, the same explanation and assertions on lab_ops::schedule's not_run rows, which the Lab's diagnose row lists on both front ends; the same apps.toml row holds it."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e24_the_status_records_the_entry_process_creation_time"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of the first MCP entry (apps/mcp-entry), which is deleted: what it ran is gone with the program (row: #411 P49 (v0.12.25; brief rd-1028/brief-wave1.md W1-10, board #411 6444748093 and #421 6436231390, review rd-1027/mcp-entry/review.md L4, L9)."
+covered_by = "actingcommand-lab-rescue::lib::install::gate_411_p49::p49_l4_the_list_tells_a_reused_pid_from_the_entry_by_its_creation_time, left in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e25_a_newer_install_during_a_deferred_switch_is_planned_again"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of the first MCP entry (apps/mcp-entry), which is deleted: what it ran is gone with the program (row: #411 P49 (v0.12.25; brief rd-1028/brief-wave1.md W1-10, board #411 6444748093 and #421 6436231390, review rd-1027/mcp-entry/review.md L4, L9)."
+covered_by = "actingcommand-lab-rescue::lib::install::gate_411_p49::p49_l4_the_list_tells_a_reused_pid_from_the_entry_by_its_creation_time, left in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_422_ov24k::overview_block_comes_from_the_one_status_read"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: AGT-1b (Workflow #432, 0.12.37; design rd-1031/agt/model-agt-v2.md section 10; register section 1.246; contracts/agent-wake.md): the overvie)."
+covered_by = "The Lab's status row is lab-ops overview, whose agent_wake block comes from the same Status read."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_433_labdo1::lab_do_post_receipt_check_failure_passes_through_mcp"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: Workflow #433 LABDO-1 (board #433 6733194460; brief rd-1109/labdo-exit4/brief-labdo1.md; contracts/lab-two-entries.md section 9.3): an onlin)."
+covered_by = "actingcommand-actinglab::bin:actinglab::lab2_cli::operation::gate_433_labdo1::lab_do_post_receipt_check_failure_names_effect, left in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_mcp8::cw1_ac_overview_cuts_the_compile_warnings_items_just_before_the_catalog_block"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: #428 CW-1 (0.12.47; register §1.290; brief rd-1110/brief-cw1.md): the catalog block of actingctl overview and ac_overview carries the active)."
+covered_by = "actingcommand-lab-ops::lib::overview::tests::cw1_the_catalog_block_shows_the_compile_warnings_and_is_unchanged_without_them, left in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::gate::lab5g1b_front_mcp::lab5g1b_front_mcp_connects_as_todays_mcp_server"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: Workflow #434 LAB-5G1b (0.12.57; register §1.287, \"Slice LAB-5G1b\"; brief rd-1112/brief-lab5g1b.md; contracts/lab-two-entries.md §9.3): the)."
+covered_by = "actingcommand-actinglab::bin:actinglab::tests::gate_434_lab5g1b::lab5g1b_a_budget_cuts_or_exports_and_none_is_the_command_lines_line, left in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actinglab-mcp::serve_calls::mcp_write_provenance_as_todays_server"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of actinglab-mcp's parity test with actingctl mcp-serve, which is deleted: what it ran is gone with the program (row: Workflow #434 LAB-5G2b (0.12.57; register §1.287, \"Slice LAB-5G2b\"; brief rd-1112/brief-lab5g2b.md; contracts/lab-two-entries.md §8.1 and §9)."
+covered_by = "actingcommand-actinglab::bin:actinglab::tests::gate_434_lab6s2b1::lab6s2b1_mcp_server_in_process_records_as_on_0_12_58 (the server's binding and envelope, the LAB-6S2-B1 row) and actingcommand-actinglab-mcp::serve_calls::mcp_stdio_one_row_per_kind (the LAB-5G2b row: since Workflow #434 LAB-6S4a the write is its connection's first request after the handshake, with no identity card and no client action before it)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::gate_434_lab6s2b2::lab6s2b2_command_lines_bind_lab_with_lab_cli_and_keep_their_envelope"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: Workflow #434 LAB-6S2-B2 (0.12.59; register §1.287, \"Slice LAB-6S2-B2\"; brief rd-1113/brief-lab6s2b2.md; contracts/lab-two-entries.md §2.4,)."
+covered_by = "actingctl's binding is gone with it; the Lab's programs' bindings are held by the LAB-6S2-B1 row (actinglab gate_434_lab6s2b1, crates/watchdog and crates/lab-rescue gate_434_lab6s2b1)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::gate_434_lab6s2b2::lab6s2b2_operation_layer_commands_bind_lab_with_lab_cli"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: Workflow #434 LAB-6S2-B2 (0.12.59; register §1.287, \"Slice LAB-6S2-B2\"; brief rd-1113/brief-lab6s2b2.md; contracts/lab-two-entries.md §2.4,)."
+covered_by = "actingctl's binding is gone with it; the Lab's programs' bindings are held by the LAB-6S2-B1 row (actinglab gate_434_lab6s2b1, crates/watchdog and crates/lab-rescue gate_434_lab6s2b1)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::gate_434_lab6s2b2::lab6s2b2_shared_code_binds_lab_with_lab_cli"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: Workflow #434 LAB-6S2-B2 (0.12.59; register §1.287, \"Slice LAB-6S2-B2\"; brief rd-1113/brief-lab6s2b2.md; contracts/lab-two-entries.md §2.4,)."
+covered_by = "actingctl's binding is gone with it; the Lab's programs' bindings are held by the LAB-6S2-B1 row (actinglab gate_434_lab6s2b1, crates/watchdog and crates/lab-rescue gate_434_lab6s2b1)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::gate::lab6s2b2::lab6s2b2_mcp_serve_binds_lab_with_lab_mcp_and_keeps_its_envelopes"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: Workflow #434 LAB-6S2-B2 (0.12.59; register §1.287, \"Slice LAB-6S2-B2\"; brief rd-1113/brief-lab6s2b2.md; contracts/lab-two-entries.md §2.4,)."
+covered_by = "actingctl's binding is gone with it; the Lab's programs' bindings are held by the LAB-6S2-B1 row (actinglab gate_434_lab6s2b1, crates/watchdog and crates/lab-rescue gate_434_lab6s2b1)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::gate::lab6s2b2::lab6s2b2_actingctl_records_as_on_0_12_58"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: Workflow #434 LAB-6S2-B2 (0.12.59; register §1.287, \"Slice LAB-6S2-B2\"; brief rd-1113/brief-lab6s2b2.md; contracts/lab-two-entries.md §2.4,)."
+covered_by = "actingctl's binding is gone with it; the Lab's programs' bindings are held by the LAB-6S2-B1 row (actinglab gate_434_lab6s2b1, crates/watchdog and crates/lab-rescue gate_434_lab6s2b1)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::gate::lab6s2b2::lab6s2b2_mcp_serve_records_as_on_0_12_58"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: Workflow #434 LAB-6S2-B2 (0.12.59; register §1.287, \"Slice LAB-6S2-B2\"; brief rd-1113/brief-lab6s2b2.md; contracts/lab-two-entries.md §2.4,)."
+covered_by = "actingctl's binding is gone with it; the Lab's programs' bindings are held by the LAB-6S2-B1 row (actinglab gate_434_lab6s2b1, crates/watchdog and crates/lab-rescue gate_434_lab6s2b1)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::gate::lab6s2b2::lab6s2b2_request_shutdown_receipt_decodes_as_the_released_helper_decodes"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: Workflow #434 LAB-6S2-B2 (0.12.59; register §1.287, \"Slice LAB-6S2-B2\"; brief rd-1113/brief-lab6s2b2.md; contracts/lab-two-entries.md §2.4,)."
+covered_by = "actingctl's binding is gone with it; the Lab's programs' bindings are held by the LAB-6S2-B1 row (actinglab gate_434_lab6s2b1, crates/watchdog and crates/lab-rescue gate_434_lab6s2b1)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::gate::lab6s2b2::lab6s2b2_a_runtime_that_drops_the_word_leaves_actingctl_unbound_once"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: Workflow #434 LAB-6S2-B2 (0.12.59; register §1.287, \"Slice LAB-6S2-B2\"; brief rd-1113/brief-lab6s2b2.md; contracts/lab-two-entries.md §2.4,)."
+covered_by = "actingctl's binding is gone with it; the Lab's programs' bindings are held by the LAB-6S2-B1 row (actinglab gate_434_lab6s2b1, crates/watchdog and crates/lab-rescue gate_434_lab6s2b1)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::gate::lab6s2b2::lab6s2b2_watchdog_status_through_actingctl_probes_with_lab_cli"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: Workflow #434 LAB-6S2-B2 (0.12.59; register §1.287, \"Slice LAB-6S2-B2\"; brief rd-1113/brief-lab6s2b2.md; contracts/lab-two-entries.md §2.4,)."
+covered_by = "actingctl's binding is gone with it; the Lab's programs' bindings are held by the LAB-6S2-B1 row (actinglab gate_434_lab6s2b1, crates/watchdog and crates/lab-rescue gate_434_lab6s2b1)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_463_l1::l1_each_new_record_tool_reaches_its_command_and_answers_its_envelope"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: Workflow #463 L1 (0.12.60; register §1.370; brief rd-1114/brief-463-l1-record-one-call.md; contracts/lab-recording.md, \"One call per step\";)."
+covered_by = "actingcommand-lab::lib::gate_463_l1::l1_one_call_records_the_step_the_three_calls_record, left in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_463_l1::l1_ac_lab_do_hands_the_one_call_form_to_actinglab"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: Workflow #463 L1 (0.12.60; register §1.370; brief rd-1114/brief-463-l1-record-one-call.md; contracts/lab-recording.md, \"One call per step\";)."
+covered_by = "actingcommand-lab::lib::gate_463_l1::l1_one_call_records_the_step_the_three_calls_record, left in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_463_l1::l1_fix1_an_exported_ac_lab_do_answer_keeps_its_next_frame_inline"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl, which is deleted: what it ran is gone with the program (row: Workflow #463 L1 (0.12.60; register §1.370; brief rd-1114/brief-463-l1-record-one-call.md; contracts/lab-recording.md, \"One call per step\";)."
+covered_by = "actingcommand-lab::lib::gate_463_l1::l1_one_call_records_the_step_the_three_calls_record, left in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_469_f1::f1_ac_get_run_shows_the_terminal_values_in_full"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl that Workflow #469 F1 added on main after LAB-7's base, merged into LAB-7, which deletes the program: it ran on actingctl's own fake Runtime (A42's) and MCP tools, both gone (row: Workflow #469 F1 (0.12.62; register §1.387): the run reads show failure_values beside the code)."
+covered_by = "actingcommand-runtime-client::lib::tests::gate_c2::f1_a_run_terminal_carries_the_values_codes_mode_keeps_of_its_outcome (the full status's terminal carries failure_values, in the struct and in its JSON), which lab_ops::run_show answers verbatim to the Lab's run show and ac_run_show: actingcommand-lab-ops::lib::run_show::f1_tests::f1_run_show_answers_the_run_status_as_it_is (the answer is the status's JSON whole, failure_code and failure_values among it; LAB-7 pass 4)."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_469_f1::f1_ac_runs_shows_the_values_beside_the_failure_code"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl that Workflow #469 F1 added on main after LAB-7's base, merged into LAB-7, which deletes the program: it ran on actingctl's own fake Runtime (A42's) and MCP tools, both gone (row: Workflow #469 F1 (0.12.62; register §1.387): the run reads show failure_values beside the code)."
+covered_by = "actingcommand-lab-ops::lib::run_list::f1_tests::f1_a_runs_row_copies_the_terminal_values_beside_the_failure_code_and_has_none_without_them (the copy beside failure_code in lab_ops::run_list's row, which the Lab's runs row answers on both front ends, with the retired test's failed outcome; no member without such a value), in the apps.toml #469 F1 row; the status it copies from is actingcommand-runtime-client::lib::tests::gate_c2::f1_a_run_terminal_carries_the_values_codes_mode_keeps_of_its_outcome."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_469_f1::f1_the_overview_run_shows_the_terminal_values"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl that Workflow #469 F1 added on main after LAB-7's base, merged into LAB-7, which deletes the program: it ran on actingctl's own fake Runtime (A42's) and MCP tools, both gone (row: Workflow #469 F1 (0.12.62; register §1.387): the run reads show failure_values beside the code)."
+covered_by = "actingcommand-runtime-client::lib::tests::gate_c2::f1_a_run_terminal_carries_the_values_codes_mode_keeps_of_its_outcome (the brief status's terminal carries failure_values), which the overview's run block holds verbatim; no test holds the block itself since LAB-7."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_469_f1::f1_the_diagnosis_runs_show_the_terminal_values_and_the_groups_keep_the_code"
+ruling = "Workflow #434 LAB-7 (board #434: the command line and MCP are shells around the Lab, and actingctl with its MCP server are the older shells that go; the owner's ruling of 11-15, brief-common.md: nothing is kept compatible with earlier builds)"
+reason = "A test of apps/actingctl that Workflow #469 F1 added on main after LAB-7's base, merged into LAB-7, which deletes the program: it ran on actingctl's own fake Runtime (A42's) and MCP tools, both gone (row: Workflow #469 F1 (0.12.62; register §1.387): the run reads show failure_values beside the code)."
+covered_by = "actingcommand-runtime-client::lib::tests::gate_c2::f1_a_run_terminal_carries_the_values_codes_mode_keeps_of_its_outcome (the brief status's terminal carries failure_values), which the diagnosis's runs rows hold verbatim; that runs_grouped keeps grouping by the code alone is actingcommand-lab-ops::lib::diagnose::f1_tests::f1_runs_grouped_groups_by_the_code_and_not_by_the_terminal_values (two failed runs of one code whose failure_values differ are one group without the member), in the apps.toml #469 F1 row."

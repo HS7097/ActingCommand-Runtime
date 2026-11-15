@@ -47,7 +47,7 @@ use std::path::{Path, PathBuf};
 
 pub const COMMAND: &str = "evidence";
 pub const CONFIRM_READ: &str = "confirm-read";
-const USAGE: &str = "usage: actingctl evidence confirm-read (--artifact <artifact_id> | --run <run_id>) --state-root <path>";
+const USAGE: &str = "usage: actinglab evidence read (--artifact <artifact_id> | --run <run_id>)";
 /// The `surface_id` of the confirmations the CLI records.
 const CLI_SURFACE: &str = "cli";
 

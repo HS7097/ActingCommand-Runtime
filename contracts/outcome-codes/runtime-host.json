@@ -70,7 +70,7 @@
       "since": "0.11.5",
       "description": "A policy candidate, or its admission, met an instance that a claim holds or that an eligible claim waits for (holder_kind names the holder, or the waiting claim that receives the key next; count is the number of eligible waiting claims). The candidate is deferred with no wake, or its intent is rejected at info; the policy driver evaluates again when a lease is released, transferred or expires.",
       "common_causes": "A stuck-recovery ladder, a startup package, an operator command or a direct task run holds the instance, or waits for it, when a dispatch is due.",
-      "handling": "Nothing to repair. The candidate runs after the holder releases the instance; actingctl status shows lease_active and queued_request_count meanwhile."
+      "handling": "Nothing to repair. The candidate runs after the holder releases the instance; actinglab status shows lease_active and queued_request_count meanwhile."
     },
     "dispatch_random_delay_waiting": {
       "category": "info",
@@ -684,7 +684,7 @@
       "since": "0.12.0",
       "description": "A transient gate held back a due clock slot of a policy task on an instance (task_id, alias). A control gate (an operator scheduling pause; since 0.12.35 a #403 resource fence, dispatch_resource_fenced, Workflow #429 R-7a2, register section 1.234) is recorded at first sight; a queue wait (a held instance, a retry backoff, an activity interval or any other deferral) or an unavailable instance only at an evaluation where the pair's activity window is closed, that is once the wait outlasted the window. gate_code is the gate's own code. Recorded once per task, instance and occurrence as a goal_missed planning signal whose signal_id is signal:clock_slot:deferred:<sha256 of task, alias and occurrence>; it carries the same values as clock_slot_refused. A later refusal of the same occurrence because its window closed is not recorded.",
       "common_causes": "An operator paused scheduling across the slot; another claim held the instance until the activity window closed; the instance stayed unavailable until the window closed.",
-      "handling": "Nothing to repair for an operator pause. For a wait that outlasted the window, check what held the instance (actingctl status) or why it stayed unavailable."
+      "handling": "Nothing to repair for an operator pause. For a wait that outlasted the window, check what held the instance (actinglab status) or why it stayed unavailable."
     },
     "clock_slot_owed": {
       "category": "info",
@@ -855,7 +855,7 @@
       "since": "0.12.0",
       "description": "An unconfirmed close of one instance's own resources (instance_id) fenced that instance instead of ending the whole Runtime (Workflow #403). The fenced instance gets no new dispatch and its policy availability is withheld; its key goes only to the recovery ladder, and a person is needed once the ladder ended without proving the close (status resource_fence.awaiting_person). Recorded once when the instance is fenced, as a runtime.failed lifecycle record whose caused_by link is the unconfirmed failure (for example application_backend_operation_failed); the work that met the failure ends with this code, non-fatal. A policy dispatch to the fenced instance is deferred, and an intent evaluated before the fence refused, with dispatch_resource_fenced instead (since 0.12.35, Workflow #429 R-7a2, register section 1.234). Only a preparation whose self-check passes lifts the fence (instance_resources_fence_lifted). An unconfirmed failure that names no single instance still ends the whole Runtime.",
       "common_causes": "An application, input or capture backend of the instance did not confirm that its processes or handles ended: an adb command that hung while the emulator showed a black screen, a device that stopped answering in the middle of a close.",
-      "handling": "Usually nothing: the recovery ladder restarts the application or the emulator and re-prepares the instance. When status shows the fence awaiting a person, bring the device back and run actingctl resume, an emulator restart or actingctl selfcheck for the instance; a passing self-check lifts the fence. If those are refused or keep failing, restart the Runtime: its start prepares and self-checks the instance again, and the other instances are not affected."
+      "handling": "Usually nothing: the recovery ladder restarts the application or the emulator and re-prepares the instance. When status shows the fence awaiting a person, bring the device back and run actinglab resume, an emulator restart or actinglab emu selfcheck for the instance; a passing self-check lifts the fence. If those are refused or keep failing, restart the Runtime: its start prepares and self-checks the instance again, and the other instances are not affected."
     },
     "instance_resources_fence_lifted": {
       "category": "info",
@@ -901,7 +901,7 @@
       "since": "0.12.9",
       "description": "A fenced instance (instance_id) began to wait for a person (#411 A38): the recovery ladder that held its fence ended without proving the close, no ladder could start, or manual work met the fence. failure_code is the fence's cause. While it waits, the Runtime runs the instance's self-check (the recheck) every retry_after_ms (recovery_ladder.fence_recheck.interval_ms), at most limit_count times (recovery_ladder.fence_recheck.max_attempts; 0 turns the recheck off); next_occurrence_unix_ms is the first recheck's time, absent while the recheck is off. Recorded once per wait as a runtime.failed record under the instance's links; status shows the wait as resource_fence.person_wait.",
       "common_causes": "A capture, input or application backend of the instance, or the emulator, did not come back within the recovery ladder's rungs; the ladder is off or cooling down; a person's direct run, lease or command met the fence.",
-      "handling": "Usually wait for the rechecks: a passing one lifts the fence. When they keep failing, bring the device back and run actingctl selfcheck, actingctl resume or an emulator restart for the instance."
+      "handling": "Usually wait for the rechecks: a passing one lifts the fence. When they keep failing, bring the device back and run actinglab emu selfcheck, actinglab resume or an emulator restart for the instance."
     },
     "instance_resources_fence_recheck_failed": {
       "category": "warning",
@@ -924,9 +924,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.9",
-      "description": "A periodic self-check (recheck) of a fenced instance (instance_id) that waits for a person failed (#411 A38): attempts is its number, limit_count the most rechecks of the wait, failure_code the self-check's failure when it named one. The instance stays fenced and waiting; next_occurrence_unix_ms is the next recheck's time, absent after the last one, after which only a person, or a change of the fence, ends the wait. The recheck is the self-check actingctl selfcheck runs (a preparation on the instance's key: no game input, no application launch, no emulator start); it starts no recovery ladder. Recorded as a runtime.failed record under the recheck's request links.",
+      "description": "A periodic self-check (recheck) of a fenced instance (instance_id) that waits for a person failed (#411 A38): attempts is its number, limit_count the most rechecks of the wait, failure_code the self-check's failure when it named one. The instance stays fenced and waiting; next_occurrence_unix_ms is the next recheck's time, absent after the last one, after which only a person, or a change of the fence, ends the wait. The recheck is the self-check actinglab emu selfcheck runs (a preparation on the instance's key: no game input, no application launch, no emulator start); it starts no recovery ladder. Recorded as a runtime.failed record under the recheck's request links.",
       "common_causes": "The capture or input backend of the instance still does not open: the emulator or the device is not back yet.",
-      "handling": "Nothing until the last recheck has failed; then bring the device back and run actingctl selfcheck, actingctl resume or an emulator restart for the instance."
+      "handling": "Nothing until the last recheck has failed; then bring the device back and run actinglab emu selfcheck, actinglab resume or an emulator restart for the instance."
     },
     "instance_resources_fence_recheck_passed": {
       "category": "info",
@@ -8438,7 +8438,7 @@
       "since": "0.12.0",
       "description": "A request, a Runtime claim or a probe that would open an instance's device session, or a self-check, found the instance's emulator stopped: its discovery binding holds no ADB port.",
       "common_causes": "The instance is bound by emulator discovery and its emulator is stopped, so its binding is pending with no ADB port: a lease request, a Runtime claim, an observation or a monitor probe is refused before any device access, and a self-check ends so when the emulator's status read finds no emulator process. The runtime.failed record of a refused request reads adb_endpoint=pending in its raw_text.",
-      "handling": "Start the emulator (actingctl emulator start --instance <alias>, or ac_emulator) and send the request again once the instance is bound; nothing was performed."
+      "handling": "Start the emulator (actinglab emu start <alias>, or ac_emulator) and send the request again once the instance is bound; nothing was performed."
     },
     "instance_worker_spawn_failed": {
       "category": "error",
@@ -10422,8 +10422,8 @@
       "status": "active",
       "since": "0.12.0",
       "description": "The start restored a scheduling pause that was in force when the previous Runtime stopped: an instance's (alias names it) or the global one (no alias); at_unix_ms is since when it holds. actingd writes it as a daemon line.",
-      "common_causes": "A pause set with actingctl pause or the console before the restart.",
-      "handling": "None; lift it with actingctl resume when scheduling should run."
+      "common_causes": "A pause set with actinglab pause or the console before the restart.",
+      "handling": "None; lift it with actinglab resume when scheduling should run."
     },
     "scheduling_pause_dropped": {
       "category": "info",
@@ -10769,7 +10769,7 @@
       "since": "0.12.4",
       "description": "#411 Lab L5 and L5c: a Lab observation that holds no lease across its captures had to take several frames for its package's target consensus, and an input reached the instance between its first and its last capture, so the frames are not one screen; nothing is recognised or decided from them and the observation fails. The Runtime checks an online keyless observation (actinglab observe --capture, L5a and L5b); actinglab checks its client capture forms (do --capture --dry-run, ensure --capture and wait --capture, L5c) through the Runtime's event query and answers device_error with this code in details.error.",
       "common_causes": "A scheduled task, another Lab request or a script pressed the instance while the frames were being taken; observe --capture and the client capture forms hold no lease across their captures, so they cannot keep inputs away.",
-      "handling": "Pause the instance's scheduling (actingctl pause --instance <alias>) or wait until it is idle, then observe or run the form again; an online do --capture without --dry-run holds a lease and is not affected."
+      "handling": "Pause the instance's scheduling (actinglab pause <alias>) or wait until it is idle, then observe or run the form again; an online do --capture without --dry-run holds a lease and is not affected."
     },
     "observation_verified_artifact_mismatch": {
       "category": "error",
@@ -20359,7 +20359,7 @@
       "since": "0.12.0",
       "description": "A holding interruption (shutdown, a lost key, an install drain, a closed admission, a pause drain or a key renewal refusal) ended a stuck-recovery ladder's climb; the outcome of the recovery_ladder_finished record and of the recovery_rung_finished record of the rung it ended, caused by the interruption.",
       "common_causes": "A holding interruption ended a stuck-recovery ladder's climb: a requested shutdown, the ladder's lost key, an install drain, a scheduling pause or a capacity refusal, or a refused key renewal. The interruption is the caused_by link.",
-      "handling": "Nothing to repair in the ladder: it stopped on purpose (planned_stop). Look at the interruption the link names; a scheduling pause, for example, lasts until actingctl resume."
+      "handling": "Nothing to repair in the ladder: it stopped on purpose (planned_stop). Look at the interruption the link names; a scheduling pause, for example, lasts until actinglab resume."
     },
     "recovery_rung_busy_outcome": {
       "category": "info",
@@ -21702,7 +21702,7 @@
       "since": "0.12.0",
       "description": "A policy evaluation found no usable instance fact (fact_key) for an instance and projected the instance unavailable.",
       "common_causes": "A scheduling evaluation found no active, well-formed fact fact_key (session.instance.available, session.instance.capabilities or session.instance.preferred_tasks) for a configured instance, for example a device self-checked instance whose connection preparation has not published its availability yet.",
-      "handling": "The instance is projected unavailable and takes no scheduled work while the fact is missing. A device self-checked instance gets session.instance.available from a passing self-check (actingctl selfcheck <alias>); the other keys are seeded from the configured policy inputs at each start."
+      "handling": "The instance is projected unavailable and takes no scheduled work while the fact is missing. A device self-checked instance gets session.instance.available from a passing self-check (actinglab emu selfcheck <alias>); the other keys are seeded from the configured policy inputs at each start."
     },
     "policy_fact_rows_exceeded": {
       "category": "warning",
@@ -21843,7 +21843,7 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A priority offset names a task (task_id) the active catalog does not declare; the offset is ignored.",
-      "common_causes": "A priority offset (actingctl task-offset) names a task_id that the active catalog does not declare: a misspelt id, or a task the catalog no longer holds.",
+      "common_causes": "A priority offset (actinglab offset) names a task_id that the active catalog does not declare: a misspelt id, or a task the catalog no longer holds.",
       "handling": "The offset is ignored, and each evaluated cycle shows one blocked decision of that task with this reason. Set the offset again under a task id the active catalog declares."
     },
     "policy_detection_reason_unknown": {
@@ -22036,7 +22036,7 @@
       "since": "0.12.0",
       "description": "A handset left device (#398 R1 RD-2, model-398 section 4.2): its availability is withdrawn under device_link:<state>, device.link and device.connected are recorded, its retained session is closed and the Runtime waits for the link. Recorded once per state.",
       "common_causes": "A bound handset left adb's device state (device_link_state): its cable is out (absent), adb reports it offline, unauthorized, no_permissions or another state, or the link watch is not running (unwatched).",
-      "handling": "The handset takes no work until its link is back and a preparation passes, which the Runtime queues by itself. Plug the cable in, allow USB debugging on the handset for unauthorized or fix the host's driver for no_permissions; a person's self-check (actingctl selfcheck <alias>) also starts a failed link watch again."
+      "handling": "The handset takes no work until its link is back and a preparation passes, which the Runtime queues by itself. Plug the cable in, allow USB debugging on the handset for unauthorized or fix the host's driver for no_permissions; a person's self-check (actinglab emu selfcheck <alias>) also starts a failed link watch again."
     },
     "device_link_restored": {
       "category": "info",
@@ -22150,7 +22150,7 @@
       "since": "0.12.0",
       "description": "The shadow measurement's stage of the host (no instance_id) or of one instance changed: the curve read at the tracked responsiveness, with a pressure's stage-one floor. perf.pacing_changed carries it; under mode observe nothing takes effect (Workflow #385 PERF sections 4 and 12.1, P-m).",
       "common_causes": "The host's probes or an instance's frame acquisitions and touch responses slowed down or recovered, or a pressure began or ended.",
-      "handling": "Nothing to repair: it is a measurement. Read the views with actingctl perf-status or the performance block of ac_overview."
+      "handling": "Nothing to repair: it is a measurement. Read the views with actinglab status or the performance block of ac_overview."
     },
     "perf_probe_unavailable": {
       "category": "warning",
@@ -22523,7 +22523,7 @@
       "since": "0.12.0",
       "description": "A configured start was performed, but the connection preparation after it did not pass (Workflow #369 S6c); the preparation recorded its failure, and the ladder it admitted holds the key. A report line. EMU-BIND (since 0.12.28): with watch_kind recognize, the recognition of a running emulator whose endpoint was pending or bound to another port did not pass its self-check (the emulator status read, the port's binding, the ADB baseline or the opens; the preparation recorded the failing step), and nothing was started; a ladder it admitted holds the key, as after a start. EMU-BIND fix 1 (since 0.12.28): so also for the recognition of an instance bound to the reported port but unprepared on it.",
       "common_causes": "A configured emulator start was performed (with watch_kind recognize, a running emulator was recognised instead), but the connection preparation after it did not pass its self-check: the emulator status read, the port's binding, the ADB baseline or the backend opens failed.",
-      "handling": "Read the failure the preparation recorded on that instance; a stuck-recovery ladder it admitted may already hold the instance. Once the cause is fixed, a self-check (actingctl selfcheck <alias>) prepares the instance again."
+      "handling": "Read the failure the preparation recorded on that instance; a stuck-recovery ladder it admitted may already hold the instance. Once the cause is fixed, a self-check (actinglab emu selfcheck <alias>) prepares the instance again."
     },
     "emulator_autostart_failed": {
       "category": "error",
@@ -22656,7 +22656,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The trigger of a drill's stuck-recovery ladder: a person asked for a drill of the instance's ladder (DrillRecoveryLadder, actingctl ladder-drill, MCP ac_ladder_drill; Workflow #390 DRILL-1). Its recovery_ladder_started names it as the trigger's failure_code with stage drill; every record of the drill's own is tagged drill.",
+      "description": "The trigger of a drill's stuck-recovery ladder: a person asked for a drill of the instance's ladder (DrillRecoveryLadder, actinglab drill, MCP ac_ladder_drill; Workflow #390 DRILL-1). Its recovery_ladder_started names it as the trigger's failure_code with stage drill; every record of the drill's own is tagged drill.",
       "common_causes": "A person asked for a drill of the instance's ladder.",
       "handling": "Nothing to do; follow the drill's records by its ladder_request_id."
     },
@@ -22698,7 +22698,7 @@
       "since": "0.12.0",
       "description": "A drill of an instance's stuck-recovery ladder was refused because stuck recovery is off for that instance, so no ladder starts on it (Workflow #390 DRILL-1). The command's command.rejected carries it; nothing else is recorded.",
       "common_causes": "instances[].stuck_recovery or recovery_ladder.enabled is false for the instance.",
-      "handling": "Turn stuck recovery on for the instance (actingctl config set) if the drill should run, then ask again."
+      "handling": "Turn stuck recovery on for the instance (actinglab config set) if the drill should run, then ask again."
     },
     "agent_wake_delivery_failed": {
       "category": "error",
@@ -22903,7 +22903,7 @@
       "since": "0.12.0",
       "description": "Workflow #384 D2-S5: the candidates of the instance have waited for the key (fact_key) for elapsed_ms, at least scheduling.fact_refresh.overdue_ms, without a usable reading. A transition of the fact refresh recorder, reported once per wait and only while a recognition maintenance package (package_id) serves the key; it reports only and never takes part in a decision. Not reported while overdue_ms is unset.",
       "common_causes": "The recognition maintenance package keeps failing or leaving the key unread, a limit holds it back, or the instance stays occupied; scheduling.fact_refresh.min_interval_ms is longer than the freshness the readers need.",
-      "handling": "Look at the instance's fact_refresh rows (actingctl fact-refresh, ac_overview) for the reason and the gate, then fix the package, the limit or the occupation."
+      "handling": "Look at the instance's fact_refresh rows (actinglab status, ac_overview) for the reason and the gate, then fix the package, the limit or the occupation."
     },
     "runtime_fact_refresh_status_too_large_for_frame": {
       "category": "error",
@@ -23081,9 +23081,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.9",
-      "description": "A self-check (actingctl selfcheck, SelfCheckInstance, and an instance resume's reconnect; #411 A48) read the emulator status first (MuMuManager info, a status read that starts nothing) and found the emulator process running, but its device could not be recognized, so nothing was opened. stage names the step: read_instance_state when the read reported Android not started or no ADB port; probe_adb_baseline when the reported port was bound (the Runtime had held the instance stopped or unrecognized) and adbd did not answer through the 30 s ADB baseline wait, the last probe's failure being the caused_by link (an adb child the probe left unconfirmed fences the instance, and the fence is the link). process_started, android_started, adb_port_present and adb_port are the status read; elapsed_ms is the time from the read to the failure. Recorded once as a connection-preparation runtime.failed record (its stage the step) under the self-check's links, before the preparation's instance_preparation_finished; the self-check reports the code as its failure_code and the instance stays unavailable.",
+      "description": "A self-check (actinglab emu selfcheck, SelfCheckInstance, and an instance resume's reconnect; #411 A48) read the emulator status first (MuMuManager info, a status read that starts nothing) and found the emulator process running, but its device could not be recognized, so nothing was opened. stage names the step: read_instance_state when the read reported Android not started or no ADB port; probe_adb_baseline when the reported port was bound (the Runtime had held the instance stopped or unrecognized) and adbd did not answer through the 30 s ADB baseline wait, the last probe's failure being the caused_by link (an adb child the probe left unconfirmed fences the instance, and the fence is the link). process_started, android_started, adb_port_present and adb_port are the status read; elapsed_ms is the time from the read to the failure. Recorded once as a connection-preparation runtime.failed record (its stage the step) under the self-check's links, before the preparation's instance_preparation_finished; the self-check reports the code as its failure_code and the instance stays unavailable.",
       "common_causes": "The emulator was started outside the Runtime and is still booting; adbd of a running emulator does not answer (a hung Android, an adb server problem).",
-      "handling": "Wait until the emulator has finished booting and run actingctl selfcheck again; if adbd stays silent, restart the emulator through the Runtime (actingctl emulator restart)."
+      "handling": "Wait until the emulator has finished booting and run actinglab emu selfcheck again; if adbd stays silent, restart the emulator through the Runtime (actinglab emu restart)."
     },
     "emulator_state_read_failed": {
       "category": "warning",
@@ -23180,7 +23180,7 @@
       "since": "0.12.12",
       "description": "A poll of the emulator watch (emu-watch, R3) found the configured instance's emulator stopped, but the watch already started it emulator_control.restart_attempts times (limit_count; attempts in the window) within emulator_control.restart_window_ms: it starts it no more until the oldest of those restarts leaves the window (retry_after_ms) or a person's emulator control of the instance clears the count. Once per streak; a device_state_observed record under the instance and the same report line. EMU-BIND (since 0.12.28): watch_kind tells the two bounds apart: restart for the restarts above; recognize when the watch found the emulator running with its endpoint pending or bound to another port but already requested its recognition limit_count times within the window (counted apart from the restarts): it recognizes it no more until the oldest leaves the window or a person's emulator control of the instance clears the count.",
       "common_causes": "The emulator stops again soon after each start, or its Start keeps failing.",
-      "handling": "Look at the instance's emulator and the failures of the watch's starts or recognitions (emulator_autostart_failed and emulator_autostart_preparation_failed and their causes). Start it by hand with actingctl emulator start (or ac_emulator), which also clears the count; with watch_kind recognize, actingctl selfcheck of the instance also binds the running emulator's reported port and prepares the instance (#411 A48), after which no recognition is needed. Or wait for the window to pass."
+      "handling": "Look at the instance's emulator and the failures of the watch's starts or recognitions (emulator_autostart_failed and emulator_autostart_preparation_failed and their causes). Start it by hand with actinglab emu start (or ac_emulator), which also clears the count; with watch_kind recognize, actinglab emu selfcheck of the instance also binds the running emulator's reported port and prepares the instance (#411 A48), after which no recognition is needed. Or wait for the window to pass."
     },
     "instance_idle_action": {
       "category": "info",
@@ -23729,9 +23729,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.57",
-      "description": "A device-level action on a member of a device group of several (Workflow #437 MAPP-1b, register 1.330, contracts/device-group.md \"Device-level actions\"), refused before any device step: alias is the member the request names and operation the action. With operation control_emulator_instance, an operator's emulator control (start, stop, restart: actingctl emulator, the console, ac_emulator), refused before its intent with no record, because it would rebind and refresh that member only and leave the other members' endpoints and device facts as they were. With operation observe_readonly, a keyless read-only observation of the member (an observe, a capture sequence, a Lab observation) while another member of the device holds it, refused under the device's admission guard with scheduler.denied and the failure's record, because it would open a second member's session on the device. An instance alone on its device never meets it.",
+      "description": "A device-level action on a member of a device group of several (Workflow #437 MAPP-1b, register 1.330, contracts/device-group.md \"Device-level actions\"), refused before any device step: alias is the member the request names and operation the action. With operation control_emulator_instance, an operator's emulator control (start, stop, restart: the Lab's emu rows, on the command line and through MCP, and the console), refused before its intent with no record, because it would rebind and refresh that member only and leave the other members' endpoints and device facts as they were. With operation observe_readonly, a keyless read-only observation of the member (an observe, a capture sequence, a Lab observation) while another member of the device holds it, refused under the device's admission guard with scheduler.denied and the failure's record, because it would open a second member's session on the device. An instance alone on its device never meets it.",
       "common_causes": "Several applications declared on one device (device_group in instances[]), and a person or a tool asks to start, stop or restart the emulator through one of them, or to observe one of them while another runs a task, a ladder, a startup package or any other claim on the device.",
-      "handling": "Nothing was performed. Start, stop or restart the emulator by hand in the emulator manager; a release that makes these actions group-aware lifts the refusal. Observe the member again once the other member has released the device (actingctl status shows the holder), or observe the member that holds it."
+      "handling": "Nothing was performed. Start, stop or restart the emulator by hand in the emulator manager; a release that makes these actions group-aware lifts the refusal. Observe the member again once the other member has released the device (actinglab status shows the holder), or observe the member that holds it."
     },
     "application_switch_failed": {
       "category": "error",
@@ -23755,7 +23755,7 @@
       "since": "0.12.59",
       "description": "The switch that brings a member of a device group of several to the front before its run failed at one of its steps (Workflow #437 MAPP-2a, contracts/device-group.md \"The switch before a run\"): alias is the member to run, application_switch_step the step, failure_code the step's own code and application_id the package the step concerned (the member's own for foreground_read, startup_package and lease_renewal, the stopped member's for stop). The step's failure is its cause. The switch reads the package in front through the member's registration, stops another member's application under the run's key with that member's records, and runs the member's startup package on the run's key, which it hands back to the run unrenewed; since 0.12.60 (MAPP-2d) the run then renews its lease to its own response deadline and the heartbeat reserve before its task (step lease_renewal). In 0.12.59 the switch has no caller: no run goes through it and nothing settles a run with this code; an instance alone on its device never meets it.",
       "common_causes": "Several applications declared on one device (device_group in instances[]): the device's ADB query did not answer, the application in front could not be force-stopped, the member's startup package did not reach its home page, the run's key had too little time left for the startup package to start, or the run's lease was lost before its renewal after the startup package.",
-      "handling": "Read the step and its cause. For foreground_read, check the emulator's ADB connection. For stop, check the stopped member's application and its records. For startup_package, run the member's startup package by hand and check that it reaches its home page within its response deadline. For lease_renewal, read the lease's records (actingctl status shows the device's holder): the member's application is at its home and the task is tried again after the member's switch cooldown."
+      "handling": "Read the step and its cause. For foreground_read, check the emulator's ADB connection. For stop, check the stopped member's application and its records. For startup_package, run the member's startup package by hand and check that it reaches its home page within its response deadline. For lease_renewal, read the lease's records (actinglab status shows the device's holder): the member's application is at its home and the task is tried again after the member's switch cooldown."
     }
   },
   "locations": {

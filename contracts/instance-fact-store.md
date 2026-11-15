@@ -487,7 +487,7 @@ offset record the projection consumed, so a changed offset changes the
 one, so identities of offset-free inputs are unchanged. This is not a wire
 change.
 
-**Configured game.** For the `actingctl task-offset` default scope, the control
+**Configured game.** For the default scope of the Lab's `offset`, the control
 plane status (`RuntimeInstanceStatus.game_id`) names the game of each
 instance's configured policy identity; it is absent when the host runs without
 policy inputs.
@@ -689,8 +689,8 @@ instance's own records apply. The view carries no ledger position and no snapsho
 The read appends nothing; a reply larger than the host's `maximum_frame_bytes` is refused
 `instance_fact_snapshot_too_large_for_frame` (receipt state `denied`, not fatal).
 
-`actingctl facts --instance <alias|instance_id|ADB port> --state-root <state-root>
-[--key-prefix <prefix>]` and MCP `ac_facts` with `scope` `instance` resolve the selector with
+The Lab's `facts <alias|instance_id|ADB port> [--prefix <prefix>]` and MCP `ac_facts` with
+`instance` resolve the selector with
 one status read and print `{scope, read_at_unix_ms, snapshot, records_total, records_kept}`:
 `read_at_unix_ms` is the source's `sampled_completed_at_unix_ms`, against which each record's
 `observed_at_unix_ms` and `expires_at_unix_ms` tell its freshness; `--key-prefix` keeps only
@@ -708,15 +708,15 @@ key and 63 columns takes about 2.6 KB, and one such list stops at the observatio
 
 A read by key prefix must be filtered before the frame is built. **Before S168-LB1a it was
 not:** the request named only the instance (`InstanceFactSnapshot{instance}`), the host builds and measures the whole
-view, and `actingctl facts --key-prefix` and `ac_facts` with `key_prefix` drop the other records
+view, and actingctl's `facts --key-prefix` and its `ac_facts` with `key_prefix` dropped the other records
 only after the answer arrived, so a prefix read of an instance whose whole view is over the frame
 is refused as the whole read is. S168-LB1a (since 0.12.55) adds the optional request member
 `key_prefix` (an
 instance fact key prefix, the CLI's and the MCP tool's value): the host keeps only the records
 whose key starts with it, then builds and measures the view, and the answer carries the optional
 `records_total`, the instance's records before the filter, so `records_total` and
-`records_kept` print as before; `actingctl facts --instance … --key-prefix` and `ac_facts` with
-`key_prefix` send it. A request without the member answers and serializes as before, and its
+`records_kept` print as before; the Lab's `facts <instance> --prefix` and `ac_facts` with
+`prefix` send it. A request without the member answers and serializes as before, and its
 answer carries no `records_total`. Both are `runtime-client` 7 shapes
 ([component-interfaces.md](component-interfaces.md), the `runtime-client` row 7). `actinglab replay --facts` still needs the answer read
 without a prefix, so an instance over the frame cannot be replayed with its facts until a later
@@ -836,8 +836,8 @@ row of the scope; publishing the list without a package's rows withdraws only th
 (R-8) are the Lab's two core rows, `pack-schedule <inst>` (the view) and `pack-schedule set
 <scope> <package_id> --rows <json> [--expected-version <n>]` (the edit; the scope one word,
 `instance:<inst>`, `server:<id>` or `game:<id>`; `contracts/lab-operations.json`), an agent
-through MCP's tools of those rows, and the console; there is no `actingctl pack-schedule` and
-none is added. The key is a family of its own in the general key family (`fact_key_family`,
+through MCP's tools of those rows, and the console; no other command
+is added. The key is a family of its own in the general key family (`fact_key_family`,
 `FactKeyFamily::PackSchedule`, `contracts/runtime-interface.md`), so all three counters may write
 it, and an observation that mixes it with keys of another family is refused as
 `fact_origin_mixed`. Until #389's slice U-6 removes the origin exception, R-8 accepts it like a
@@ -985,11 +985,11 @@ order, row by row; the first broken rule answers:
 
 **Writing.** One observation writes a scope's whole list, atomically; publishing an empty list
 withdraws the scope's choices. The publisher chooses the lifetime: no `expires_at_unix_ms` never
-expires. The writers are `actingctl remedy set` (`--instance <alias|instance_id|ADB port>` or
-`--game <id>`, with `--rows <file>`; `--server` is no flag of the command and is refused as
-`actingctl_usage_invalid` with `argument_problem` `unknown`), `actingctl remedy get
---instance <selector>` (the records that apply, most specific first, and the one in effect),
-`actingctl remedy lift --instance <selector>` (republishes the instance record unchanged, or an
+expires. The writers are the Lab's `remedy set` (`--instance <alias|instance_id|ADB port>` or
+`--game <id>`, with a file or `--rows <json>`; `--server` is no flag of the row and is refused as
+`actingctl_usage_invalid` with `argument_problem` `unknown`), `remedy [<selector>]` (the
+records that apply, most specific first, and the one in effect), `remedy lift <selector>`
+(republishes the instance record unchanged, or an
 empty one when there is none, with a new observation: the explicit lift of a stopped remedy), the
 MCP general tools `ac_remedy_set` (`instance` or `game`, `rows`, optional `lift`; `server` is no
 argument and is refused as `arguments_invalid` with `argument_problem` `unknown`) and
