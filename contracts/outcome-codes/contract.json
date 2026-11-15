@@ -2047,7 +2047,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A code several owners emit with one meaning (contract-owned, A2a D3): contained task guard evaluation failed.",
+      "description": "A code several owners emit with one meaning (contract-owned, A2a D3): contained task guard evaluation failed. A step's guard target could not be evaluated: its evaluation ended in an error that is not the vision provider's (for example a text read that refused to conclude, or a unique template search past its limit); the detail is the evaluation's error, with the code of an evaluation that refused to conclude as its cause= token. A failure of the vision provider at the guard is contained_task_vision_provider_failed instead (#469 D4b, since 0.12.63). An operation's when target whose evaluation ended in such an error ends the run with this code too, in place of contained_task_recognition_failed, when the host cannot archive that evaluation's PP-OCR reports and the Runtime runs on (the archive failure ends only that run, beside this code); a failure of the vision provider there is contained_task_vision_provider_failed. A scheduled run that ends with it starts the default recovery ladder (trigger pack_logic).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -2107,8 +2107,8 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A recognition evaluation of a contained task ended in an error that is not the vision provider's: a page evaluation of its frame, or the evaluation of a when, select, scan or expected identity target.",
-      "common_causes": "An evaluation returned an error rather than a match or no match: an OCR region that does not resolve on the frame, a text read that refuses to conclude, a target kind the pack cannot evaluate, or no vision provider for it. A failure of the provider itself is contained_task_vision_provider_failed instead.",
+      "description": "A recognition evaluation of a contained task ended in an error: a page evaluation of its frame, or the evaluation of a when, select, scan or expected identity target. At a page evaluation, a when and an expected identity the error is not the vision provider's: a failure of the provider there is contained_task_vision_provider_failed (Workflow #387 D1c-G; at the when and the identity #469 D4b, since 0.12.63). Where a select's or a scan's evaluation ends with this code, it does so whatever failed, the provider included.",
+      "common_causes": "An evaluation returned an error rather than a match or no match: an OCR region that does not resolve on the frame, a text read that refuses to conclude, a target kind the pack cannot evaluate, or no vision provider for it. A failure of the provider itself is contained_task_vision_provider_failed instead, except at a select's or a scan's evaluation.",
       "handling": "Read the failing target and its cause in the run's task diagnostic records (the overlay of actingctl run evidence --run-id <run_id>, read with ac_material); the target's declaration is the pack author's to fix. A scheduled run's failure starts the default recovery ladder (trigger pack_logic) for the instance."
     },
     "current_page_unknown": {
