@@ -13,8 +13,9 @@
 //!   core write (`pause`) on a connection of its own, each refused by the scripted Runtime: each
 //!   answer's text is the line the command line's code (`lab_ops::core_ops`) gives for the same
 //!   parameters, the ids each run issues masked, `structuredContent` repeats it and `isError` is
-//!   true exactly when that line exits non-zero. The write's connection carries today's
-//!   provenance before the write, the read's nothing of it. The second part, on Windows: a rescue
+//!   true exactly when that line exits non-zero. Workflow #434 LAB-6S4a (0.12.63): the write's
+//!   connection sends the write first after the handshake, as the read's does (it carried today's
+//!   provenance before the write until then). The second part, on Windows: a rescue
 //!   row that needs no Runtime (`leftovers`), answered by a copy of the program in a made-up root,
 //!   is the line the rescue module's code gives for it on that root. Workflow #434 LAB-5G4b: a row
 //!   a `serve` child serves (`package check` of a package that is not there), answered through the
@@ -30,12 +31,14 @@
 //! - `mcp_write_provenance_as_todays_server`: today's server (`actingctl mcp-serve`, the program
 //!   the same build puts beside this one) and this one each pause scheduling once on a scripted
 //!   Runtime of their own: both connections carry the same requests, their issued ids and times
-//!   left out (`Health`, `BindChannel`, the identity card `actingctl-mcp`, the client action of
-//!   `ac_pause` on surface `mcp`, then `PauseScheduling`), each with the envelope (Cli, Cli).
-//!   Workflow #434 LAB-6S2-B1 (adapted): but for the binding, which this server declares as `lab`
-//!   with `Lab-MCP` and no `via`, and today's server as the MCP channel until LAB-6S2-B2.
+//!   left out (`Health`, `BindChannel`, then `PauseScheduling`), each with the envelope (Cli,
+//!   Cli). Workflow #434 LAB-6S2-B1 (adapted): but for the binding, which this server declares as
+//!   `lab` with `Lab-MCP` and no `via`, and today's server as the MCP channel until LAB-6S2-B2.
 //!   Workflow #434 LAB-6S2-B2 (adapted): today's server declares `lab` with `Lab-MCP` and no
-//!   `via` too.
+//!   `via` too. Workflow #434 LAB-6S4a (adapted, 0.12.63; the coordinator's ruling N8 on board
+//!   #434): the identity card `actingctl-mcp` and the client action of `ac_pause` on surface
+//!   `mcp`, which both sent between the binding and the pause, are gone; the binding's initiator
+//!   is the write's provenance.
 //!
 //! Workflow #434 LAB-5G3 (register §1.287, "Slice LAB-5G3"), each server with a short call budget
 //! (`--call-budget`), so that no test waits for today's 25 s:
@@ -105,9 +108,10 @@
 //!   inline verbatim, after `frame_coordinates` and before `after_attachment`, as today's server
 //!   keeps it; its `record` stays in the export.
 //! - `mcp_capture_records_client_action`: after the child of `ac_lab_observe` or `ac_do` with
-//!   `capture` true answered, the scripted Runtime receives on a connection of its own the identity
-//!   card and the client action (surface `mcp`, the tool, kind `command`, the call's instance, the
-//!   envelope's `req_id` as its value), from (Cli, Cli); without a request id it is recorded
+//!   `capture` true answered, the scripted Runtime receives on a connection of its own the client
+//!   action (surface `mcp`, the tool, kind `command`, the call's instance, the envelope's `req_id`
+//!   as its value), from (Cli, Cli), first after the handshake (Workflow #434 LAB-6S4a, 0.12.63:
+//!   the identity card before it is gone); without a request id it is recorded
 //!   without a value and the line carries `client_action_without_req_id`; a recording the Runtime
 //!   refuses gives `client_action_not_recorded` caused by the refusal and the call's answer stands;
 //!   `capture` absent or false records nothing; `capture` with `dry_run` records, as today. Each
@@ -347,38 +351,11 @@ fn operation_of(request: &RuntimeRequest) -> String {
         .to_owned()
 }
 
-/// The connection of one write with today's provenance: the identity card accepted, the client
-/// action recorded, the pause refused.
+/// The connection of one write: the pause, the first request after the handshake, refused.
+/// Workflow #434 LAB-6S4a (0.12.63; the coordinator's ruling N8 on board #434): the identity card
+/// and the client action that came before it are gone.
 fn write_connection() -> ScriptedConnection {
-    ScriptedConnection::new()
-        .request(|request| match request.operation() {
-            RuntimeOperation::DeclareGovernanceIdentity { .. } => {
-                ScriptedAnswer::completed(request, RuntimeResult::GovernanceIdentityAccepted)
-            }
-            other => panic!("the identity card comes first, not {other:?}"),
-        })
-        .request(|request| match request.operation() {
-            RuntimeOperation::RecordClientAction { .. } => {
-                let event_id = *IdentifierIssuer::new()
-                    .expect("identifiers")
-                    .mint_event_id()
-                    .expect("an event id")
-                    .transport();
-                let receipt = RuntimeReceipt::success(
-                    request,
-                    RuntimeReceiptState::Completed,
-                    Some(TerminalEvent {
-                        sequence: 1,
-                        event_id,
-                    }),
-                    RuntimeResult::ClientActionRecorded,
-                )
-                .expect("the client action's receipt");
-                ScriptedAnswer::Receipt(Box::new(receipt))
-            }
-            other => panic!("the client action comes second, not {other:?}"),
-        })
-        .request(denied_one("pause_scheduling"))
+    ScriptedConnection::new().request(denied_one("pause_scheduling"))
 }
 
 /// A request as sent, without what each connection issues for itself: its ids and its time.
@@ -501,7 +478,7 @@ fn mcp_stdio_one_row_per_kind() {
         vec![
             // The server's kept connection: the core read.
             ScriptedConnection::new().request(denied_one("discover_instances")),
-            // The server's write connection: today's provenance, then the core write.
+            // The server's write connection: the core write after the handshake.
             write_connection(),
             // The command line's code: the same read and the same write, each on its own.
             ScriptedConnection::new().request(denied_one("discover_instances")),
@@ -539,27 +516,13 @@ fn mcp_stdio_one_row_per_kind() {
     assert_eq!(
         operations(kept),
         ["health", "bind_channel", "discover_instances"],
-        "the read: on the kept connection, no provenance"
+        "the read: on the kept connection"
     );
+    // Workflow #434 LAB-6S4a (0.12.63): no identity card and no client action before the write.
     assert_eq!(
         operations(written),
-        [
-            "health",
-            "bind_channel",
-            "declare_governance_identity",
-            "record_client_action",
-            "pause_scheduling",
-        ],
-        "the write: today's provenance first, on a connection of its own"
-    );
-    let action = sent(&written.requests[3]);
-    assert_eq!(
-        (
-            &action["operation"]["action"]["surface_id"],
-            &action["operation"]["action"]["control_id"],
-        ),
-        (&json!("mcp"), &json!("ac_pause")),
-        "{action}"
+        ["health", "bind_channel", "pause_scheduling"],
+        "the write: first after the handshake, on a connection of its own"
     );
 
     // Workflow #434 LAB-5G2b, second part: the rescue row.
@@ -728,16 +691,15 @@ fn mcp_write_provenance_as_todays_server() {
         without_binding(&todays_sent),
         "the new server sends what today's server sends for the same write, its binding apart"
     );
-    assert_eq!(
-        operations(&connection),
-        [
-            "health",
-            "bind_channel",
-            "declare_governance_identity",
-            "record_client_action",
-            "pause_scheduling",
-        ]
-    );
+    // Workflow #434 LAB-6S4a (0.12.63; the coordinator's ruling N8 on board #434): neither server
+    // sends the identity card or the client action before the write any more; the binding's
+    // initiator `Lab-MCP` is the write's provenance.
+    for sent_on in [&connection, &todays_connection] {
+        assert_eq!(
+            operations(sent_on),
+            ["health", "bind_channel", "pause_scheduling"]
+        );
+    }
     let bound = |request: &RuntimeRequest| {
         let RuntimeOperation::BindChannel {
             channel,
@@ -769,11 +731,6 @@ fn mcp_write_provenance_as_todays_server() {
             "{request}"
         );
     }
-    assert_eq!(
-        todays_sent[2]["operation"]["card"]["client"],
-        json!("actingctl-mcp"),
-        "the identity card"
-    );
     for request in &todays_sent {
         assert_eq!(
             (&request["actor"], &request["source"]),
@@ -921,14 +878,14 @@ fn large_pack_schedule(request: &RuntimeRequest) -> ScriptedAnswer {
     )
 }
 
-/// The client action of today's provenance, recorded.
+/// The client action after a capture, recorded.
 fn recorded_action(request: &RuntimeRequest) -> ScriptedAnswer {
     assert!(
         matches!(
             request.operation(),
             RuntimeOperation::RecordClientAction { .. }
         ),
-        "the client action comes second, not {:?}",
+        "the client action comes first after the handshake, not {:?}",
         request.operation()
     );
     let event_id = *IdentifierIssuer::new()
@@ -949,17 +906,12 @@ fn recorded_action(request: &RuntimeRequest) -> ScriptedAnswer {
     ScriptedAnswer::Receipt(Box::new(receipt))
 }
 
-/// A write's own connection, today's provenance first: the identity card accepted, the client
-/// action recorded.
-fn provenance() -> ScriptedConnection {
-    ScriptedConnection::new()
-        .request(|request| match request.operation() {
-            RuntimeOperation::DeclareGovernanceIdentity { .. } => {
-                ScriptedAnswer::completed(request, RuntimeResult::GovernanceIdentityAccepted)
-            }
-            other => panic!("the identity card comes first, not {other:?}"),
-        })
-        .request(recorded_action)
+/// A capture's own connection whose client action the Runtime records. Workflow #434 LAB-6S4a
+/// (0.12.63; the coordinator's ruling N8 on board #434): a write's own connection no longer opens
+/// with today's provenance (the identity card and the client action), so this script, `provenance`
+/// until then, serves the client action after a capture alone.
+fn recorded_capture() -> ScriptedConnection {
+    ScriptedConnection::new().request(recorded_action)
 }
 
 /// An event query of a ledger that holds nothing.
@@ -1108,8 +1060,9 @@ fn mcp_jobs_handles_entry_status() {
         let held = hold.clone();
         let submitted = submit.clone();
         vec![
-            // The server's kept connection: the held read; a pack schedule far past the budget;
-            // the instance of the run.
+            // The server's kept connection: the held read; a pack schedule far past the budget.
+            // Workflow #434 LAB-6S4a (0.12.63): no status read names the run's instance here any
+            // more, since no client action names it.
             ScriptedConnection::new()
                 .request(move |request| {
                     assert_eq!(operation_of(request), "discover_instances");
@@ -1118,12 +1071,10 @@ fn mcp_jobs_handles_entry_status() {
                 .open(&written)
                 .request(healthy(owner_epoch))
                 .request(status_listing(owner_epoch, &[INSTANCE]))
-                .request(large_pack_schedule)
-                .request(healthy(owner_epoch))
-                .request(status_listing(owner_epoch, &[INSTANCE])),
-            // The run's own connection: today's provenance, the instance again, the run held and
-            // refused.
-            provenance()
+                .request(large_pack_schedule),
+            // The run's own connection: the instance, the run held and refused (Workflow #434
+            // LAB-6S4a: no identity card and no client action before them).
+            ScriptedConnection::new()
                 .request(status_listing(owner_epoch, &[INSTANCE]))
                 .request(move |request| {
                     assert!(
@@ -1413,9 +1364,10 @@ fn mcp_run_show_and_run_stop_wait() {
     let runtime = ScriptedRuntime::start(state.path(), |owner_epoch| {
         let held = hold.clone();
         vec![
-            // The stop's own connection: today's provenance, the run's read held, then a status
-            // that names no instance for it.
-            provenance()
+            // The stop's own connection: the run's read held, then a status that names no
+            // instance for it (Workflow #434 LAB-6S4a: no identity card and no client action
+            // before them).
+            ScriptedConnection::new()
                 .request(move |request| empty_page(request).after(&held))
                 .request(status_listing(owner_epoch, &[])),
         ]
@@ -2560,27 +2512,20 @@ fn mcp_lab_overflow_rule_keeps_next_frame_inline() {
     assert_eq!(warning_codes(&act), ["answer_exported"], "{act}");
 }
 
-/// A capture's own connection whose client action the Runtime refuses: the identity card
-/// accepted, the client action denied.
+/// A capture's own connection whose client action the Runtime refuses (Workflow #434 LAB-6S4a,
+/// 0.12.63: the first request after the handshake, with no identity card before it).
 fn refused_recording() -> ScriptedConnection {
-    ScriptedConnection::new()
-        .request(|request| match request.operation() {
-            RuntimeOperation::DeclareGovernanceIdentity { .. } => {
-                ScriptedAnswer::completed(request, RuntimeResult::GovernanceIdentityAccepted)
-            }
-            other => panic!("the identity card comes first, not {other:?}"),
-        })
-        .request(|request| {
-            assert!(
-                matches!(
-                    request.operation(),
-                    RuntimeOperation::RecordClientAction { .. }
-                ),
-                "the client action comes second, not {:?}",
-                request.operation()
-            );
-            denied(request)
-        })
+    ScriptedConnection::new().request(|request| {
+        assert!(
+            matches!(
+                request.operation(),
+                RuntimeOperation::RecordClientAction { .. }
+            ),
+            "the client action comes first after the handshake, not {:?}",
+            request.operation()
+        );
+        denied(request)
+    })
 }
 
 #[test]
@@ -2610,10 +2555,10 @@ fn mcp_capture_records_client_action() {
     // One connection per capture: recorded, recorded, refused, recorded.
     let runtime = ScriptedRuntime::start(state.path(), |_| {
         vec![
-            provenance(),
-            provenance(),
+            recorded_capture(),
+            recorded_capture(),
             refused_recording(),
-            provenance(),
+            recorded_capture(),
         ]
     });
     let mut server = Server::start(with_children(
@@ -2684,7 +2629,8 @@ fn mcp_capture_records_client_action() {
     assert_eq!(answered_as(&planned), acted, "capture with dry_run");
 
     // The scripted Runtime: one connection of its own per capture that a child answered, carrying
-    // the identity card and the client action, nothing else.
+    // the client action, nothing else (Workflow #434 LAB-6S4a, 0.12.63: the identity card that
+    // came before it is gone).
     let record = runtime.finish();
     assert!(
         record.unscripted.is_empty(),
@@ -2704,15 +2650,10 @@ fn mcp_capture_records_client_action() {
     for (connection, (tool, instance, req_id)) in record.connections.iter().zip(expected) {
         assert_eq!(
             operations(connection),
-            [
-                "health",
-                "bind_channel",
-                "declare_governance_identity",
-                "record_client_action",
-            ],
+            ["health", "bind_channel", "record_client_action"],
             "{tool} {instance}: a connection of its own"
         );
-        let request = sent(&connection.requests[3]);
+        let request = sent(&connection.requests[2]);
         let action = &request["operation"]["action"];
         assert_eq!(
             (
@@ -2757,37 +2698,32 @@ fn goal_request_denied(
 
 // Workflow #463 V3: the rows `goals`, `goals get`, `goals set` and `goals clear` through the
 // server answer the line the command line's code answers, each refused by the Runtime: the two
-// reads on the kept connection, the instance resolved by one status read each time; each write's
-// instance resolved first by one status read on the kept connection, for its client action, then
-// the write on a connection of its own after today's provenance, where the serving code resolves
-// it again (fix round 4: the order every write that names an instance takes, `ac_run_start`'s in
-// `mcp_jobs_handles_entry_status`). `package variables` of a package that is not there, served by
-// a `serve` child of the real actinglab, answers the line actinglab's command line prints with
-// `--json`.
+// reads on the kept connection, the instance resolved by one status read each time; each write on
+// a connection of its own, where the serving code resolves its instance by one status read (the
+// order every write that names an instance takes, `ac_run_start`'s in
+// `mcp_jobs_handles_entry_status`). Workflow #434 LAB-6S4a (0.12.63; the coordinator's ruling N8
+// on board #434): a write's instance is no longer resolved first on the kept connection for its
+// client action, and no identity card and no client action come before the write (fix round 4's
+// order until then). `package variables` of a package that is not there, served by a `serve`
+// child of the real actinglab, answers the line actinglab's command line prints with `--json`.
 #[test]
 fn mcp_goals_rows_are_the_command_lines() {
     let state = TempDir::new().expect("tempdir");
     let temp = TempDir::new().expect("tempdir");
     let runtime = ScriptedRuntime::start(state.path(), |owner_epoch| {
         vec![
-            // The server's kept connection: `goals`, then `goals get`, then the instance of
-            // `goals set`'s client action and that of `goals clear`'s.
+            // The server's kept connection: `goals`, then `goals get`.
             ScriptedConnection::new()
                 .request(status_listing(owner_epoch, &[INSTANCE]))
                 .request(goal_request_denied("goal_view"))
                 .request(healthy(owner_epoch))
                 .request(status_listing(owner_epoch, &[INSTANCE]))
-                .request(goal_request_denied("goal_view"))
-                .request(healthy(owner_epoch))
-                .request(status_listing(owner_epoch, &[INSTANCE]))
-                .request(healthy(owner_epoch))
-                .request(status_listing(owner_epoch, &[INSTANCE])),
-            // `goals set` and `goals clear`, each on its own connection: today's provenance, the
-            // instance again, the edit.
-            provenance()
+                .request(goal_request_denied("goal_view")),
+            // `goals set` and `goals clear`, each on its own connection: the instance, the edit.
+            ScriptedConnection::new()
                 .request(status_listing(owner_epoch, &[INSTANCE]))
                 .request(goal_request_denied("edit_goal")),
-            provenance()
+            ScriptedConnection::new()
                 .request(status_listing(owner_epoch, &[INSTANCE]))
                 .request(goal_request_denied("edit_goal")),
             // The command line's code: the same four, each on its own connection.
@@ -2851,29 +2787,18 @@ fn mcp_goals_rows_are_the_command_lines() {
             "goal_view",
             "health",
             "status",
-            "goal_view",
-            "health",
-            "status",
-            "health",
-            "status"
+            "goal_view"
         ],
-        "the reads and the writes' instances: on the kept connection, no provenance"
+        "the reads: on the kept connection"
     );
     for written in [first_write, second_write] {
         assert_eq!(
             operations(written),
-            [
-                "health",
-                "bind_channel",
-                "declare_governance_identity",
-                "record_client_action",
-                "status",
-                "edit_goal",
-            ],
-            "a write: today's provenance first, on a connection of its own"
+            ["health", "bind_channel", "status", "edit_goal"],
+            "a write: on a connection of its own, no provenance before it"
         );
     }
-    let sent_edit = sent(&first_write.requests[5]);
+    let sent_edit = sent(&first_write.requests[3]);
     assert_eq!(
         (
             &sent_edit["operation"]["expected_version"],
@@ -3093,9 +3018,9 @@ fn neutral_package(temp: &Path) -> std::path::PathBuf {
 // clear` through the server answer the line the command line's code answers when the Runtime
 // takes each call (the page, its entry `pick`, and the edit's version and event), on the same
 // connections as a refused call (fix round 4: the kept one also resolving each write's instance
-// first); `package variables` of a package the reader reads, through a
-// `serve` child of the real actinglab, answers the line actinglab's command line prints with
-// `--json`, no error.
+// first, until Workflow #434 LAB-6S4a); `package variables` of a package the reader reads,
+// through a `serve` child of the real actinglab, answers the line actinglab's command line prints
+// with `--json`, no error.
 #[test]
 fn mcp_goals_rows_accepted_are_the_command_lines() {
     let state = TempDir::new().expect("tempdir");
@@ -3107,24 +3032,20 @@ fn mcp_goals_rows_accepted_are_the_command_lines() {
         .transport();
     let runtime = ScriptedRuntime::start(state.path(), move |owner_epoch| {
         vec![
-            // The server's kept connection: `goals`, then `goals get`, then (fix round 4) the
-            // instance of `goals set`'s client action and that of `goals clear`'s.
+            // The server's kept connection: `goals`, then `goals get` (Workflow #434 LAB-6S4a:
+            // no longer the instances of the writes' client actions, fix round 4's).
             ScriptedConnection::new()
                 .request(status_listing(owner_epoch, &[INSTANCE]))
                 .request(goal_view_answered)
                 .request(healthy(owner_epoch))
                 .request(status_listing(owner_epoch, &[INSTANCE]))
-                .request(goal_view_answered)
-                .request(healthy(owner_epoch))
-                .request(status_listing(owner_epoch, &[INSTANCE]))
-                .request(healthy(owner_epoch))
-                .request(status_listing(owner_epoch, &[INSTANCE])),
-            // `goals set` and `goals clear`, each on its own connection: today's provenance, the
-            // instance again, the edit.
-            provenance()
+                .request(goal_view_answered),
+            // `goals set` and `goals clear`, each on its own connection: the instance, the edit
+            // (Workflow #434 LAB-6S4a: no identity card and no client action before them).
+            ScriptedConnection::new()
                 .request(status_listing(owner_epoch, &[INSTANCE]))
                 .request(goal_edit_taken(event_id)),
-            provenance()
+            ScriptedConnection::new()
                 .request(status_listing(owner_epoch, &[INSTANCE]))
                 .request(goal_edit_taken(event_id)),
             // The command line's code: the same four, each on its own connection.

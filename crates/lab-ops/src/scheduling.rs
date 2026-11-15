@@ -40,13 +40,8 @@ pub fn pause_scope(instance_alias: Option<String>) -> SchedulingPauseScope {
     }
 }
 
-/// The instance a scope names; `None` for the global scope.
-pub fn scope_alias(scope: &SchedulingPauseScope) -> Option<&str> {
-    match scope {
-        SchedulingPauseScope::Instance { instance_alias } => Some(instance_alias.as_str()),
-        SchedulingPauseScope::Global => None,
-    }
-}
+// Workflow #434 LAB-6S4a (0.12.63): `scope_alias`, the instance MCP's provenance and its jobs
+// named, went with the provenance before a write.
 
 /// `pause`: scheduling paused on `scope` for `reason`, an instance's runs drained within
 /// `drain_timeout_ms`; the Runtime's result.

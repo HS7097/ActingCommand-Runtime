@@ -10,7 +10,7 @@ use super::super::jobs::Jobs;
 use super::super::protocol::Era;
 use super::super::runtime::RuntimeAccess;
 use super::super::tools::{ToolContext, find};
-use crate::held_runtime::{HELD_SALT, NoInstances};
+use crate::no_instance_runtime::{NoInstances, TEST_SALT};
 use actingcommand_contract::outcome::Detail;
 use actingcommand_contract::{
     ConfigParameter, ConfigParameterSource, FactScalar, RuntimeConfigManifest,
@@ -79,7 +79,7 @@ fn r4_t7_each_read_point_answers_the_version_the_last_receipt_carried() {
     let root = TempDir::new().expect("tempdir");
     let cooldown = instance_key(INSTANCE, STUCK_RECOVERY_COOLDOWN_SECS);
     let host = RuntimeHost::start(
-        RuntimeHostConfig::new(root.path(), HELD_SALT)
+        RuntimeHostConfig::new(root.path(), TEST_SALT)
             .with_runtime_clock(Arc::new(FixedClock {
                 elapsed_ms: AtomicU64::new(0),
             }))

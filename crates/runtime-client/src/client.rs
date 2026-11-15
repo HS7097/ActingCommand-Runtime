@@ -7,25 +7,24 @@ use actingcommand_contract::codes::{ContractLocation, RuntimeContractCode, Share
 use actingcommand_contract::outcome::{Code, Detail, Location, Outcome};
 use actingcommand_contract::{
     AgentSessionContext, AgentSessionId, AgentSessionResponse, AgentSessionStatus, AgentWakeId,
-    ApplicationLifecycleAction, ApprovalDecisionRecord, ArtifactKind, ArtifactProducer,
-    ArtifactRedactionState, CaptureSequenceSpec, CatalogProposal, ClientActionRecord,
-    ContainedTaskCancellationReason, ContainedTaskCancellationStatus, ContainedTaskRequest,
-    CorrelationId, DeclaredInitiator, EffectDisposition, EmulatorInstanceAction, EventActor,
-    EventId, EventPayload, EventQuery, EventSource, EventType, FactRecord, FactScope, FrameId,
-    GovernanceIdentityCard, HolderId, IdentifierIssuer, InputAction, InputFrameReference,
-    InputPayload, IssuedCorrelationId, LeaseQueuePolicy, LeaseQueueStatus, LeaseToken,
-    MAX_RUNTIME_EVENT_QUERY_EVENTS, OCR_FIELDS_REPORT_SCHEMA, OcrFieldPrivacy, OcrFieldReason,
-    OcrFieldResult, OcrFieldType, OcrFieldValue, OcrFieldsDeclaration, OcrFieldsReport,
-    OriginModule, OwnerEpoch, PackageDebugRequest, PolicyExecutionOutcome, PolicyFailureClass,
-    PolicyFailureDisposition, PolicyPayload, ProjectDecisionPageCursor, ProjectDecisionPageRequest,
-    ProjectInterfaceRequest, ProjectLedgerSnapshot, ProjectedArtifactReference, ProjectedEvent,
-    ProjectionPayload, ProjectionProfile, ProposalPreview, ProposalPromotion, RUNTIME_INFO_FILE,
-    RequestId, ResourceAuthoringEvent, RetentionClass, RunId, RuntimeControlPlaneStatus,
-    RuntimeDebugEvent, RuntimeErrorCode, RuntimeEventBatch, RuntimeEventQueryPage,
-    RuntimeEventQueryPageRequest, RuntimeEvidenceExportRequest, RuntimeFactSnapshot,
-    RuntimeForwardProjectionRequest, RuntimeInfo, RuntimeInstanceDiscovery,
-    RuntimeMaintenanceQuery, RuntimeMonitorInstanceStatus, RuntimeMonitorPolicy,
-    RuntimeMonitorRegistryStatus, RuntimeOperation, RuntimePlanningDocument,
+    ApplicationLifecycleAction, ArtifactKind, ArtifactProducer, ArtifactRedactionState,
+    CaptureSequenceSpec, CatalogProposal, ClientActionRecord, ContainedTaskCancellationReason,
+    ContainedTaskCancellationStatus, ContainedTaskRequest, CorrelationId, DeclaredInitiator,
+    EffectDisposition, EmulatorInstanceAction, EventActor, EventId, EventPayload, EventQuery,
+    EventSource, EventType, FactRecord, FactScope, FrameId, HolderId, IdentifierIssuer,
+    InputAction, InputFrameReference, InputPayload, IssuedCorrelationId, LeaseQueuePolicy,
+    LeaseQueueStatus, LeaseToken, MAX_RUNTIME_EVENT_QUERY_EVENTS, OCR_FIELDS_REPORT_SCHEMA,
+    OcrFieldPrivacy, OcrFieldReason, OcrFieldResult, OcrFieldType, OcrFieldValue,
+    OcrFieldsDeclaration, OcrFieldsReport, OriginModule, OwnerEpoch, PackageDebugRequest,
+    PolicyExecutionOutcome, PolicyFailureClass, PolicyFailureDisposition, PolicyPayload,
+    ProjectDecisionPageCursor, ProjectDecisionPageRequest, ProjectInterfaceRequest,
+    ProjectLedgerSnapshot, ProjectedArtifactReference, ProjectedEvent, ProjectionPayload,
+    ProjectionProfile, ProposalPreview, ProposalPromotion, RUNTIME_INFO_FILE, RequestId,
+    ResourceAuthoringEvent, RetentionClass, RunId, RuntimeControlPlaneStatus, RuntimeDebugEvent,
+    RuntimeErrorCode, RuntimeEventBatch, RuntimeEventQueryPage, RuntimeEventQueryPageRequest,
+    RuntimeEvidenceExportRequest, RuntimeFactSnapshot, RuntimeForwardProjectionRequest,
+    RuntimeInfo, RuntimeInstanceDiscovery, RuntimeMaintenanceQuery, RuntimeMonitorInstanceStatus,
+    RuntimeMonitorPolicy, RuntimeMonitorRegistryStatus, RuntimeOperation, RuntimePlanningDocument,
     RuntimePlanningDocumentKind, RuntimePolicyInputIdentity, RuntimeReceipt, RuntimeRequest,
     RuntimeResult, RuntimeStrategicReportRequest, RuntimeSubscriptionRequest,
     SCHEDULING_PAUSE_CHECKPOINT_GRACE_MS, SchedulingPauseExpectation, SchedulingPauseReason,
@@ -1141,69 +1140,6 @@ impl RuntimeClient {
             RuntimeResult::Status { status } => Ok(status),
             _ => Err(self.unexpected_result(ClientLocation::RuntimeStatus.location())),
         }
-    }
-
-    /// Submits one installation control request to this connection's exact owner.
-    /// A missing receipt is unknown: reconnect and query the original transition ID.
-    /// This method never retries or converts a client timeout into a Host timeout.
-    pub fn install_transition(
-        &self,
-        action: actingcommand_contract::InstallTransitionAction,
-    ) -> RuntimeClientResult<RuntimeReceipt> {
-        let target = self.shared.info.shutdown_target();
-        let committing = matches!(
-            action,
-            actingcommand_contract::InstallTransitionAction::CommitShutdown { .. }
-        );
-        let expected = action.clone();
-        let receipt = self
-            .execute_receipt(
-                ContractLocation::InstallTransition.location(),
-                RuntimeOperation::InstallTransition { target, action },
-                None,
-            )
-            .map_err(|error| {
-                if error.projection().is_some() {
-                    error
-                } else {
-                    RuntimeClientError::fatal(
-                        ClientCode::InstallTransitionReceiptUnconfirmed,
-                        ContractLocation::InstallTransition.location(),
-                    )
-                    .with_related(error)
-                }
-            })?;
-        let matches = match receipt.result() {
-            Some(RuntimeResult::InstallTransition { status }) => {
-                !committing
-                    && status.ticket.target == target
-                    && match &expected {
-                        actingcommand_contract::InstallTransitionAction::BeginDrain {
-                            transition_id,
-                            ..
-                        } => {
-                            status.ticket.transition_id == *transition_id
-                                && status.ticket.request_id == receipt.request_id()
-                        }
-                        actingcommand_contract::InstallTransitionAction::Query {
-                            transition_id,
-                        } => status.ticket.transition_id == *transition_id,
-                        actingcommand_contract::InstallTransitionAction::Abort { ticket }
-                        | actingcommand_contract::InstallTransitionAction::Release {
-                            ticket, ..
-                        } => status.ticket == *ticket,
-                        _ => false,
-                    }
-            }
-            Some(RuntimeResult::ShutdownAccepted { target: accepted }) => {
-                committing && *accepted == target
-            }
-            _ => false,
-        };
-        if !matches {
-            return Err(self.unexpected_result(ContractLocation::InstallTransition.location()));
-        }
-        Ok(receipt)
     }
 
     /// Re-runs the provider's instance discovery through the Runtime and returns every
@@ -2878,68 +2814,6 @@ impl RuntimeClient {
             self.unexpected_result(ContractLocation::RecordClientAction.location())
         })?;
         Ok(receipt)
-    }
-
-    pub fn record_approval_decision(
-        &self,
-        decision: ApprovalDecisionRecord,
-    ) -> RuntimeClientResult<TerminalEvent> {
-        self.record_approval_decision_receipt(decision)?
-            .terminal()
-            .ok_or_else(|| {
-                self.unexpected_result(ContractLocation::RecordApprovalDecision.location())
-            })
-    }
-
-    /// Returns the complete validated approval receipt without changing its authorization or replay.
-    pub fn record_approval_decision_receipt(
-        &self,
-        decision: ApprovalDecisionRecord,
-    ) -> RuntimeClientResult<RuntimeReceipt> {
-        decision.validate().map_err(|_| {
-            RuntimeClientError::fatal(
-                SharedCode::ApprovalDecisionInvalid,
-                ContractLocation::RecordApprovalDecision.location(),
-            )
-        })?;
-        let approval_id = decision.approval_id().to_owned();
-        let disposition = decision.disposition();
-        let receipt = self.execute_receipt(
-            ContractLocation::RecordApprovalDecision.location(),
-            RuntimeOperation::RecordApprovalDecision { decision },
-            None,
-        )?;
-        if !matches!(
-            receipt.result(),
-            Some(RuntimeResult::ApprovalDecisionRecorded {
-                approval_id: recorded_id,
-                disposition: recorded_disposition,
-            }) if recorded_id == &approval_id && *recorded_disposition == disposition
-        ) {
-            return Err(self.unexpected_result(ContractLocation::RecordApprovalDecision.location()));
-        }
-        receipt.terminal().ok_or_else(|| {
-            self.unexpected_result(ContractLocation::RecordApprovalDecision.location())
-        })?;
-        Ok(receipt)
-    }
-
-    /// Declares this connection's governance identity card (Workflow #318 cfg4); the Runtime
-    /// verifies and records it, and governance writes on this connection only follow an
-    /// accepted card. Peers gain no authority from it.
-    pub fn declare_governance_identity(
-        &self,
-        card: &GovernanceIdentityCard,
-    ) -> RuntimeClientResult<()> {
-        match self.execute(
-            ContractLocation::DeclareGovernanceIdentity.location(),
-            RuntimeOperation::DeclareGovernanceIdentity { card: card.clone() },
-        )? {
-            RuntimeResult::GovernanceIdentityAccepted => Ok(()),
-            _ => {
-                Err(self.unexpected_result(ContractLocation::DeclareGovernanceIdentity.location()))
-            }
-        }
     }
 
     pub fn start_agent_session(

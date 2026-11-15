@@ -252,18 +252,16 @@ impl HostShared {
     }
 
     /// Restores the persisted pauses at start, before any instance is prepared, and returns
-    /// one line per restored or dropped pause for the daemon's stdout.
-    ///
-    /// - An installer-held start keeps the pauses its transition restored and records them.
-    /// - Any other start reads `host.scheduling_pause`: the global pause comes back at revision
-    ///   1, an instance pause at revision 1 with stage `released` (the device is left as it
-    ///   is), each with its reason and `since`; a pause of an alias no longer registered is
-    ///   dropped. The restored rows are recorded again with `restored_from_owner_epoch`, which
-    ///   is the ledger record of the restore and of every dropped row. A ledger without the
-    ///   fact restores nothing.
+    /// one line per restored or dropped pause for the daemon's stdout. The start reads
+    /// `host.scheduling_pause`: the global pause comes back at revision 1, an instance pause at
+    /// revision 1 with stage `released` (the device is left as it is), each with its reason and
+    /// `since`; a pause of an alias no longer registered is dropped. The restored rows are
+    /// recorded again with `restored_from_owner_epoch`, which is the ledger record of the restore
+    /// and of every dropped row. A ledger without the fact restores nothing. Workflow #434
+    /// LAB-6S4a (0.12.63): the installer-held start, which kept the pauses its transition
+    /// restored, is gone; every start reads the fact.
     pub(super) fn restore_scheduling_pauses(
         &self,
-        held: bool,
         previous_owner_epoch: Option<OwnerEpoch>,
     ) -> RuntimeHostResult<Vec<Outcome>> {
         let _persist = lock(
@@ -274,30 +272,6 @@ impl HostShared {
         let recorded = lock(&self.runtime_facts, HostLocation::ReadSchedulingPauseFact)?
             .get(&RuntimeFactScope::Runtime, SCHEDULING_PAUSE_FACT_KEY)
             .cloned();
-        if held {
-            let origin = PauseOrigin {
-                set_in_owner_epoch: match &previous {
-                    Some(previous) => previous.clone(),
-                    None => epoch_text(self.owner_epoch)?,
-                },
-                restored_from_owner_epoch: previous,
-            };
-            let mut table = lock(
-                &self.scheduling_pause,
-                HostLocation::ReadInstallRestoredPauses,
-            )?
-            .clone();
-            table.adopt_origins(&origin);
-            if recorded.is_some() || table.holds_pauses() {
-                self.record_scheduling_pauses(&table)?;
-            }
-            lock(
-                &self.scheduling_pause,
-                HostLocation::AdoptInstallPauseOrigins,
-            )?
-            .adopt_origins(&origin);
-            return Ok(Vec::new());
-        }
         let Some(recorded) = recorded else {
             return Ok(Vec::new());
         };

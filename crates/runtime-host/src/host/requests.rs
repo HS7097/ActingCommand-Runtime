@@ -131,17 +131,6 @@ impl HostShared {
         let validated = match request.validate() {
             Ok(validated) => validated.with_channel(channel),
             Err(error) => {
-                if let RuntimeOperation::InstallTransition { action, .. } = request.operation() {
-                    let failure = self.invalid_install_request(action, error.code())?;
-                    return runtime_failure_receipt(
-                        request,
-                        failure.state,
-                        failure.terminal,
-                        failure
-                            .error
-                            .receipt_outcome_latched(self.fatal.current()?.is_some()),
-                    );
-                }
                 // Workflow #378 A4 (model section 7.2, L3): the denied receipt carries its
                 // refusal, the contract's validation code, over `invalid_request`.
                 return runtime_failure_receipt(
@@ -160,7 +149,7 @@ impl HostShared {
         {
             None
         } else {
-            match self.begin_request(request.operation(), connection_id)? {
+            match self.begin_request(request.operation())? {
                 Some(work) => Some(work),
                 None => {
                     return runtime_error_receipt(
@@ -311,9 +300,6 @@ impl HostShared {
             ),
             RuntimeOperation::RequestShutdown { target } => {
                 self.request_shutdown(validated, *target)
-            }
-            RuntimeOperation::InstallTransition { target, action } => {
-                self.install_transition(validated, *target, action, connection_id)
             }
             RuntimeOperation::Health => Ok(OperationSuccess {
                 state: RuntimeReceiptState::Completed,
@@ -701,12 +687,6 @@ impl HostShared {
             RuntimeOperation::RecordClientAction { action } => {
                 self.record_client_action(request, validated, action)
             }
-            RuntimeOperation::DeclareGovernanceIdentity { card } => {
-                self.declare_governance_identity(request, validated, connection_id, card)
-            }
-            RuntimeOperation::RecordApprovalDecision { decision } => {
-                self.record_approval_decision(request, validated, decision, connection_id)
-            }
             RuntimeOperation::StartAgentSession { wake_id } => {
                 self.start_agent_session(request, validated, *wake_id)
             }
@@ -758,8 +738,8 @@ impl HostShared {
                 connection_id,
             ),
             // Workflow #389 U-1: the contract has these shapes and later slices add the
-            // behaviour (LoadPack and UnloadPack U-3, UpgradeState and UpgradeStateStatus U-4).
-            // Until then each is refused and records nothing.
+            // behaviour (LoadPack and UnloadPack U-3; the upgrade state's two kinds went with
+            // Workflow #434 LAB-6S4a). Until then each is refused and records nothing.
             // Workflow #389 U-2; Workflow #434 LAB-6S1a: the initiator a `lab` connection
             // declares is kept with its channel.
             RuntimeOperation::BindChannel {
@@ -772,12 +752,6 @@ impl HostShared {
             ),
             RuntimeOperation::LoadPack { .. } => Err(not_implemented(HostLocation::LoadPack)),
             RuntimeOperation::UnloadPack { .. } => Err(not_implemented(HostLocation::UnloadPack)),
-            RuntimeOperation::UpgradeState { .. } => {
-                Err(not_implemented(HostLocation::UpgradeState))
-            }
-            RuntimeOperation::UpgradeStateStatus { .. } => {
-                Err(not_implemented(HostLocation::UpgradeStateStatus))
-            }
             // Workflow #429 R-0 (register §1.213): the player workbench's kinds have their wire
             // shapes; R-5 and R-13c add the behaviour. Until then each is refused and records
             // nothing.
@@ -1450,7 +1424,7 @@ fn connection_loop(
         };
         let material_context = MaterialReadContext::for_request(&request, maximum_frame_bytes)?;
         // Idle sockets hold no admission. A decoded request remains in flight through its reply.
-        let _work = shared.begin_request(request.operation(), connection_id)?;
+        let _work = shared.begin_request(request.operation())?;
         if let Ok(validated) = request.validate() {
             context.links = validated.event_links(None, None, None);
         }
