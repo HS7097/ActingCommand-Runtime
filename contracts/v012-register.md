@@ -27764,6 +27764,67 @@ remedy's persistent gates, the held clock).
 of the new build (its execution record is in the journal); a pair whose execution record the
 journal does not hold shows the pause without the word.
 
+### 1.399 Slice #469 H3 (0.12.62): an emulator control failure says where it failed (Workflow #469; the owner's decision of 11-15 on board #469 that the most mixed codes carry a reason word; the design `rd-1115/status-codes-a-design.md`, Part 2's three facts, place 8 of A-1 and the slice row H3; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-469-word-slices.md`, read on main `a5827228` (after #1738 and #1739))
+
+The coordinator gave this slice 1.399; 1.395 to 1.398 belong to the slices dispatched with it (K1,
+K2, H1, H2). It ships in 0.12.62.
+
+**What it is.** `emulator_control_failed`, every provider control failure that is not a binding
+refusal, an unsupported provider or an expired readiness wait, carries the two values V0 declared
+for it (§1.386): `stage`, the location the failure arose at, and `device_category`, the device
+diagnostic's category (vocabulary `device_category`). Both are what the function that builds the
+failure (`emulator_control_error`, `crates/runtime-host/src/host/emulator_instance.rs`) already
+decided and wrote into the record's primary detail: `stage` is the device diagnostic's stage, or
+without a diagnostic the default `mumu_manager_control`; `device_category` is present when the
+failure carries a device diagnostic and is its category. Without a diagnostic no
+`device_category` is set: the detail's category `child_exit` there is a default, and no child
+process exited. No new vocabulary, no new code; the value stays optional
+([emulator-control.md](emulator-control.md), "Event shape", item 4).
+
+**Where a reader finds them.** The receipt carries both values, and so does a settled timeout's
+`caused_by` link (`emulator_control_timeout_settled` relays the failure's outcome whole). The
+ledger's `runtime.failed` record gains only `device_category`: the host's lifecycle record writes
+its own stage into the `stage` of every failure it records (`host/lifecycle.rs`, unchanged; the
+ledger's failure signatures read it), so the record's `stage` stays
+`runtime_lifecycle_operation_cleanup`. A reader who needs the device stage reads the receipt. The
+cause a failed restart wraps carries neither value: it is a newly built outcome of the failing
+phase's code and operation, and the stage that phase failed at stays in the restart record's
+primary detail.
+
+**What does not change.** The code chosen for each stage, its class, the receipt state, the effect,
+the wire code `backend_operation_failed`, the other values, the primary detail and the native
+detail; the three other codes this function builds carry neither value; the stop-result table;
+a restart's wrapping, which compares the code (the design keeps the values optional until a
+failed restart's record is shown to keep them); the number of records; the burst count, which
+reads class and severity; the lifecycle record's stage. An operator, autostart or rung control is
+no run: no failure identity or streak reads this outcome.
+
+**Texts.** `emulator_control_failed`'s catalog text (`runtime-host.json`) says when each is set and
+where a reader finds them; [emulator-control.md](emulator-control.md) item 4 says it.
+
+**Tests.** `crates/runtime-host/src/tests/gate_469_h3.rs` (gate map `host.toml`, "#469 H3"), one
+discovery-bound instance on the scripted emulator controller (HOST-I1), an operator `start` and
+then a `stop` the controller fails, one test per stage family the controller gives: the vendor
+command exited (`mumu_manager_control_exit`, `child_exit`, exit code 1), the tool could not run
+(`mumu_manager_run`, `backend_launch`, no exit code), the vendor's error envelope
+(`mumu_manager_control_errcode`, `response`, exit code 0): the receipt is
+`emulator_control_failed` with the failure's stage and category as `stage` and `device_category`;
+the control's one `runtime.failed` record is `emulator_control_failed` with the category as
+`device_category` and `runtime_lifecycle_operation_cleanup` as `stage`, keeps `elapsed_ms`,
+`exit_code` and `device_process_present`, and its primary detail is the category, the stage,
+`mumu_manager` and `control_instance` (1-3).
+`crates/runtime-host/src/host/emulator_instance/gate_469_h3.rs` (the same gate row), on the
+building function and a hand-made failure, the family the scripted controller cannot reach (it
+gives every failure a diagnostic): no diagnostic gives `stage` `mumu_manager_control` and no
+`device_category`, the detail `mumu_manager_control` and `child_exit` (4); the expired readiness
+wait, the binding refusal and the unsupported provider carry neither value, their detail
+unchanged (5). No existing test changes, no golden changes, no test leaves the gate map.
+
+**Counts.** Two gate files (3 and 2 tests) and one gate map row. No code, key, word, configuration
+key, record shape or interface revision is added.
+
+**At deploy.** Nothing to do.
+
 ### 1.400 Slice #469 D4a (0.12.62): a locked device and an application update stop on purpose; a spent call budget is a warning (Workflow #469; the owner's approval on board #469 on 11-15 of the four corrections that change what the program does, these three of them; the design `rd-1115/status-codes-a-design.md`, Part 2, A-2 item 1, the rows of `device_locked`, `contained_task_application_update_required` and `call_budget_exhausted`, and the slice row D4; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-469-d4-owner-four.md`, read on main `a5827228`)
 
 The coordinator gave this slice 1.400: main `a5827228` holds the sections up to §1.387, and the
