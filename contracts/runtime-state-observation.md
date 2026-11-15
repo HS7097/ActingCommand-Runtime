@@ -125,8 +125,9 @@ revision moves.
 
 Workflow #463 S3-3 (since 0.12.63): the terminal also names the business end the run finished on
 as `outcome_key`, the `outcome_key` of the package's `scheduling_outcome` mapping whose terminal
-page the run completed on, its target page or one of its ending pages
-([linear-steps.md](linear-steps.md), "Endings"). The host writes that key on the terminal fact
+page the run completed on: its target page, one of its ending pages
+([linear-steps.md](linear-steps.md), "Endings"), a select's `on_empty` page, or any other terminal
+page one of its mappings names (a page graph's terminal pages included). The host writes that key on the terminal fact
 (`scheduling_disposition`, beside the effect evidence the mapping was chosen by), and the fold
 takes the key from that fact, in Full and Brief alike, with no other read; the effect evidence is
 not projected. It is absent when the terminal carries no disposition: a failed or cancelled run,

@@ -94,9 +94,10 @@ pub enum ContainedRunState {
 ///
 /// Workflow #463 S3-3 (since 0.12.63): `outcome_key` names the business end the run finished
 /// on, the `outcome_key` of the package's `scheduling_outcome` mapping whose terminal page the
-/// run completed on (its target page or one of its ending pages), as the host wrote it on the
-/// terminal fact (`scheduling_disposition`). Absent when the terminal carries no disposition: a
-/// failed or cancelled run, and a run whose package declares no mappings.
+/// run completed on (the target page, an ending page, a select's `on_empty` page, or any other
+/// terminal page one of its mappings names), as the host wrote it on the terminal fact
+/// (`scheduling_disposition`). Absent when the terminal carries no disposition: a failed or
+/// cancelled run, and a run whose package declares no mappings.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ContainedRunTerminal {

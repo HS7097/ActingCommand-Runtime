@@ -27934,6 +27934,7 @@ from the final page.
 |---|---|
 | completed on the package's target page | the target mapping's key |
 | completed on an ending page | that ending's key |
+| completed on another terminal page a mapping names (a select's `on_empty` page, a terminal page of a page graph) | that mapping's key |
 | completed, its package declaring no `scheduling_outcome` | absent |
 | failed or cancelled | absent |
 | a keying the host refused (`contained_task_outcome_*`: the run is committed failed) | absent |
