@@ -640,7 +640,7 @@ actingcommand_contract::outcome_vocabulary! {
         // from the live build's `actingd claim-state-root`: it did not run, printed none, or was
         // left running at its deadline.
         StateRootClaimUnanswered => "state_root_claim_unanswered",
-        // Workflow #463 S3-2 (since 0.12.63): the rescue module's `place` of a plan that changes
+        // Workflow #463 S3-2 (since 0.12.64): the rescue module's `place` of a plan that changes
         // something names no authorization (`--authorization` absent or blank); its `--enables`
         // is not the plan's `enters` (the answer's `expected` and `given`); the plan answers no
         // `enters` (the zip's side unread), so the packages the placement would enable cannot be

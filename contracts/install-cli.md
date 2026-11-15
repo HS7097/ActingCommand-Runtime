@@ -1072,7 +1072,7 @@ the rescue face:
   (`actingctl_usage_invalid`, `argument_problem` `unknown`). `deploy`, `rollback`, `config replace`
   and `place` plan and apply in one call under the writer lock; `--plan` (a switch) answers the
   plan only. A one-way ledger edge is journalled `one_way: true` instead of acknowledged. `place`'s
-  `--authorization` and `--enables` (Workflow #463 S3-2, since 0.12.63; "The authorization a
+  `--authorization` and `--enables` (Workflow #463 S3-2, since 0.12.64; "The authorization a
   placement names", below) are statements of the caller that the tool records, not confirmations
   it asks for.
 - **Every pause is known.** A hold takes every pause it finds on an affected instance as known,
@@ -1341,7 +1341,7 @@ the rescue face:
     `processes_unreadable`); no status read comes first there, so a running Runtime is
     `owner_lock_held`. The `undo` and the `resume` of a placement begun with a Runtime are
     unchanged. The `undo` of a placement, with a Runtime or without one, asks for no
-    authorization (Workflow #463 S3-2, since 0.12.63, does not change it): it restores the content
+    authorization (Workflow #463 S3-2, since 0.12.64, does not change it): it restores the content
     the placement replaced, so a package the placement made leave scheduling is scheduled again,
     and no record says under which authorization.
 
@@ -1349,7 +1349,7 @@ the rescue face:
   the watchdog stands aside (`pack_place` is off row 7a″'s pass list), so no Runtime starts on a
   half-placed game root; the next start reads the placed game root.
 - **The packages a placement makes enter or leave scheduling** (Workflow #463 S3-1, since
-  0.12.63; register §1.408; the coordinator's rulings on board #463, not the owner's words). A
+  0.12.64; register §1.408; the coordinator's rulings on board #463, not the owner's words). A
   placement is the act that enables: once a game root is placed, the workbench composes it and
   dispatches every package a rule names and no hold keeps back. So the plan of `place` (its
   `--plan` answer and the answer's step `plan`) says which packages enter or leave scheduling,
@@ -1451,7 +1451,7 @@ the rescue face:
     or holding a role after enters, and `leaves` and `content_only` are not complete. With the
     zip's side unread the answer carries `packages` and `unread` and none of the three lists:
     what the scheduler uses after the placement is not known. Nothing is refused for it.
-- **The authorization a placement names** (Workflow #463 S3-2, since 0.12.63; register §1.409;
+- **The authorization a placement names** (Workflow #463 S3-2, since 0.12.64; register §1.409;
   the coordinator's rulings on board #463, not the owner's words). The owner's rule is that
   nothing enters normal scheduling without her explicit authorization, and the placement is the
   act that enables. So a placement whose plan changes something names the authorization it acts
@@ -3302,7 +3302,7 @@ the fragment registers, names the command.
   running at its deadline) and `install_caveat` `fingerprints_discontinuous` (`path` the kept
   record), which only this row answers; the existing `owner_lock_held`, `runtime_running` and `processes_unreadable`
   for its stopped rule; no code or key is new.
-- **Workflow #463 S3-2** (since 0.12.63; "The Lab's rescue module", "The authorization a
+- **Workflow #463 S3-2** (since 0.12.64; "The Lab's rescue module", "The authorization a
   placement names"): `install_refusal` `place_authorization_missing`, `place_enables_mismatch`
   (the answer's `expected` and `given`, not values) and `place_enables_unknown` (no cause is
   attached: why the lists cannot be stated is in the plan's `schedule_changes` beside the outcome,

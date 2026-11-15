@@ -28937,10 +28937,10 @@ round's.
 
 **At deploy.** Nothing to do: the answer gains its members, and nothing on disk changes.
 
-### 1.408 Slice #463 S3-1 (0.12.63): the placement plan lists the packages that enter or leave scheduling (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, and her rule that no package enters normal scheduling without her explicit authorization; the design `rd-1115/pack-stage3-design.md` §4.2, S3-1, with §1.1 rows W10 and W11, §2.5 and §2.6; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s31-place-plan.md`, read on main `44cbab53`)
+### 1.408 Slice #463 S3-1 (0.12.64): the placement plan lists the packages that enter or leave scheduling (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, and her rule that no package enters normal scheduling without her explicit authorization; the design `rd-1115/pack-stage3-design.md` §4.2, S3-1, with §1.1 rows W10 and W11, §2.5 and §2.6; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s31-place-plan.md`, read on main `44cbab53`)
 
 The coordinator gave this slice 1.408: main `44cbab53` holds the sections up to §1.400, and the
-numbers between them and this one belong to slices dispatched with it. The slice ships in 0.12.63.
+numbers between them and this one belong to slices dispatched with it. The slice ships in 0.12.64.
 The next slice, S3-2, is built on it and makes a placement name the packages of `enters`.
 
 **What it is.** A placement is the act that enables: once a game root is placed, the workbench
@@ -29103,10 +29103,10 @@ before.
 **At deploy.** Nothing to do. A reader of the plan's boolean `schedule_changes` reads the item
 `schedule.json` instead.
 
-### 1.409 Slice #463 S3-2 (0.12.63): a placement names its authorization and the packages it enables (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, and her rule that nothing enters normal scheduling without her explicit authorization; the design `rd-1115/pack-stage3-design.md` §4.2, S3-2, with §2.3's last paragraph and §2.6; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s32-place-authorization.md`, built on S3-1, §1.408)
+### 1.409 Slice #463 S3-2 (0.12.64): a placement names its authorization and the packages it enables (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, and her rule that nothing enters normal scheduling without her explicit authorization; the design `rd-1115/pack-stage3-design.md` §4.2, S3-2, with §2.3's last paragraph and §2.6; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s32-place-authorization.md`, built on S3-1, §1.408)
 
 The coordinator gave this slice 1.409, after S3-1's §1.408, on whose branch it is built. The
-slice ships in 0.12.63.
+slice ships in 0.12.64.
 
 **What it is.** The placement is the act that enables (§1.408), and until this slice `place`
 asked for nothing: its journal recorded who started it and what was placed, not under which
@@ -29255,10 +29255,10 @@ separately.
 `--authorization` and `--enables` from this build on; a placement without them is refused before
 anything happens, so nothing is half done.
 
-### 1.417 Slice #463 S3-10 (0.12.63): `standard-pack trial`: its plan, its refusals and its record (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, whose stage three puts a trial on a real application under the owner's explicit authorization; the design `rd-1115/pack-stage3-design.md`, §2.4 and §4.2 "S3-10"; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s310-trial-plan.md`, read on main `44cbab53`)
+### 1.417 Slice #463 S3-10 (0.12.64): `standard-pack trial`: its plan, its refusals and its record (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, whose stage three puts a trial on a real application under the owner's explicit authorization; the design `rd-1115/pack-stage3-design.md`, §2.4 and §4.2 "S3-10"; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s310-trial-plan.md`, read on main `44cbab53`)
 
 The coordinator gave this slice 1.417; the numbers between §1.400 and this one belong to slices
-dispatched with it. The slice ships in 0.12.63.
+dispatched with it. The slice ships in 0.12.64.
 
 **What it is.** A new authoring row, `standard-pack trial` (slice `PACK-TRIAL`; actinglab's own
 command `standard-pack trial`, MCP's `ac_standard_pack_trial` through a `serve` child), the half of

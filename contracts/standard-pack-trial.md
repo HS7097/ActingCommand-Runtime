@@ -1,6 +1,6 @@
 # Standard-pack trial: `standard-pack trial`
 
-Workflow #463, slice S3-10 (Runtime 0.12.63; [v012-register.md](v012-register.md) §1.417). A
+Workflow #463, slice S3-10 (Runtime 0.12.64; [v012-register.md](v012-register.md) §1.417). A
 package that has not run through on a real device stays held, and packages are opened one by one
 as each is run through; "run through" is one real run on a real application, and a trial on a real
 application is an act under the owner's explicit authorization. `actinglab standard-pack trial`

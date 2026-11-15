@@ -2858,11 +2858,11 @@
     },
     "trial_state_place": {
       "type": "vocab:trial_state_place",
-      "description": "Where a state directory refused for trial records lies: a repository or an installed root (Workflow #463 S3-10, since 0.12.63)."
+      "description": "Where a state directory refused for trial records lies: a repository or an installed root (Workflow #463 S3-10, since 0.12.64)."
     },
     "trial_record_problem": {
       "type": "vocab:trial_record_problem",
-      "description": "Why a file of a trial record's name is not read as that record: the read failed, it is too large, it does not decode, or it is not the record its name says (Workflow #463 S3-10 fix round 2, since 0.12.63)."
+      "description": "Why a file of a trial record's name is not read as that record: the read failed, it is too large, it does not decode, or it is not the record its name says (Workflow #463 S3-10 fix round 2, since 0.12.64)."
     }
   },
   "vocabularies": {
@@ -8216,13 +8216,13 @@
           "description": "The Lab's rescue module's state-root claim got no report from the live build's actingd claim-state-root (contracts/state-root-installation.md, \"Handing a state root over\"): it did not run (the child's failure as the caused_by link), printed no report (a build before 0.12.60 refuses the subcommand as a start's arguments: foreign_other_error with the exit code and stderr), or was still running at install.child.check_config_timeout_ms and was left running (pid and config_key). path is the state root. Whether actingd handed the state root over is then not known: run the row again once no actingd runs; a hand-over that was done answers that nothing changed. (Workflow #453 S12, since 0.12.60)"
         },
         "place_authorization_missing": {
-          "description": "The Lab's rescue module's place of a plan that changes something names no authorization: --authorization is absent or blank (contracts/install-cli.md, \"The authorization a placement names\"). plan_id and game name the plan. Only --plan and a plan that changes nothing need none; the tool records a reference and grants nothing, so it never supplies one. Refused after the plan and before the hold: nothing was paused or written, no journal begun. (Workflow #463 S3-2, since 0.12.63)"
+          "description": "The Lab's rescue module's place of a plan that changes something names no authorization: --authorization is absent or blank (contracts/install-cli.md, \"The authorization a placement names\"). plan_id and game name the plan. Only --plan and a plan that changes nothing need none; the tool records a reference and grants nothing, so it never supplies one. Refused after the plan and before the hold: nothing was paused or written, no journal begun. (Workflow #463 S3-2, since 0.12.64)"
         },
         "place_enables_mismatch": {
-          "description": "The Lab's rescue module's place: the packages --enables names are not exactly the plan's enters, the packages the placement makes enter scheduling (a name missing, a name too many, or one given twice; --enables given when nothing enters). The answer's expected (enters) and given (--enables), each sorted, say which; plan_id and game name the plan. Compared after the authorization is found. Refused before the hold: nothing was paused or written, no journal begun. (Workflow #463 S3-2, since 0.12.63)"
+          "description": "The Lab's rescue module's place: the packages --enables names are not exactly the plan's enters, the packages the placement makes enter scheduling (a name missing, a name too many, or one given twice; --enables given when nothing enters). The answer's expected (enters) and given (--enables), each sorted, say which; plan_id and game name the plan. Compared after the authorization is found. Refused before the hold: nothing was paused or written, no journal begun. (Workflow #463 S3-2, since 0.12.64)"
         },
         "place_enables_unknown": {
-          "description": "The Lab's rescue module's place: the plan answers no enters because it could not read the zip's side (its schedule.json, refused by the contract crate's reader or by the composer's reference check), so the packages the placement would enable cannot be named and no --enables can match them; the answer carries the plan's schedule_changes beside the outcome, whose unread names that refusal (standard_pack_root_invalid at the file), and plan_id and game name the plan. A zip whose other root files the reader refuses is refused pack_invalid earlier, in the plan; an installed game root that cannot be read refuses nothing (a placement is how it is repaired). Refused before the hold: nothing was paused or written, no journal begun. (Workflow #463 S3-2, since 0.12.63)"
+          "description": "The Lab's rescue module's place: the plan answers no enters because it could not read the zip's side (its schedule.json, refused by the contract crate's reader or by the composer's reference check), so the packages the placement would enable cannot be named and no --enables can match them; the answer carries the plan's schedule_changes beside the outcome, whose unread names that refusal (standard_pack_root_invalid at the file), and plan_id and game name the plan. A zip whose other root files the reader refuses is refused pack_invalid earlier, in the plan; an installed game root that cannot be read refuses nothing (a placement is how it is repaired). Refused before the hold: nothing was paused or written, no journal begun. (Workflow #463 S3-2, since 0.12.64)"
         }
       }
     },
@@ -10547,7 +10547,7 @@
       }
     },
     "trial_state_place": {
-      "description": "Where a state directory refused for trial records lies, the value trial_state_place of trial_state_dir_refused (Workflow #463 S3-10, contracts/standard-pack-trial.md \"The record\", since 0.12.63).",
+      "description": "Where a state directory refused for trial records lies, the value trial_state_place of trial_state_dir_refused (Workflow #463 S3-10, contracts/standard-pack-trial.md \"The record\", since 0.12.64).",
       "review": "pending",
       "source": {
         "file": "crates/resource-tooling/src/codes.rs",
@@ -10563,7 +10563,7 @@
       }
     },
     "trial_record_problem": {
-      "description": "Why a file of a trial record's name is not read as that record, the value trial_record_problem of trial_record_unreadable (Workflow #463 S3-10 fix round 2, contracts/standard-pack-trial.md \"The record\", since 0.12.63).",
+      "description": "Why a file of a trial record's name is not read as that record, the value trial_record_problem of trial_record_unreadable (Workflow #463 S3-10 fix round 2, contracts/standard-pack-trial.md \"The record\", since 0.12.64).",
       "review": "pending",
       "source": {
         "file": "crates/resource-tooling/src/codes.rs",
