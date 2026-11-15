@@ -929,11 +929,60 @@ fn read_newest(
     })
 }
 
+/// Workflow #467 RPT-1 fix round 2: what a search for the newest records sends its QueryEvents
+/// pages through: the Runtime client, or, in a test, a made-up Runtime that keeps the requests
+/// the search builds. `late` says that the search's time is spent, so that it starts no other
+/// read; the client's is never (`events` holds its own search to nothing else).
+pub(crate) trait EventPages {
+    fn event_page(
+        &self,
+        query: EventQuery,
+        profile: ProjectionProfile,
+        page: RuntimeEventQueryPageRequest,
+    ) -> Result<RuntimeEventQueryPage, RuntimeClientError>;
+
+    fn late(&self) -> bool {
+        false
+    }
+}
+
+impl EventPages for RuntimeClient {
+    fn event_page(
+        &self,
+        query: EventQuery,
+        profile: ProjectionProfile,
+        page: RuntimeEventQueryPageRequest,
+    ) -> Result<RuntimeEventQueryPage, RuntimeClientError> {
+        self.query_event_page(query, profile, page)
+    }
+}
+
+/// Workflow #467 RPT-1 fix round 2, item 4: `pages` held to the time `late` says is spent.
+struct Held<'a> {
+    pages: &'a dyn EventPages,
+    late: &'a dyn Fn() -> bool,
+}
+
+impl EventPages for Held<'_> {
+    fn event_page(
+        &self,
+        query: EventQuery,
+        profile: ProjectionProfile,
+        page: RuntimeEventQueryPageRequest,
+    ) -> Result<RuntimeEventQueryPage, RuntimeClientError> {
+        self.pages.event_page(query, profile, page)
+    }
+
+    fn late(&self) -> bool {
+        (self.late)() || self.pages.late()
+    }
+}
+
 /// Workflow #434 CLI-EV: the ledger's head, read once per search: the snapshot of one page that
 /// selects nothing (its range starts past every sequence a ledger reaches, with no other
 /// condition, one row, no run recovery), which the Runtime answers without reading a record: a
 /// page's statements run only while its range is not empty (QP-1, register §1.292).
-fn ledger_head(client: &RuntimeClient) -> Result<u64, EventsError> {
+fn ledger_head(client: &dyn EventPages) -> Result<u64, EventsError> {
     let request = RuntimeEventQueryPageRequest::new(1, None)
         .map_err(|_| EventsError::Pagination)?
         .without_run_recovery();
@@ -942,7 +991,7 @@ fn ledger_head(client: &RuntimeClient) -> Result<u64, EventsError> {
         ..EventQuery::default()
     };
     let page = client
-        .query_event_page(nothing, SEARCH_PROFILE, request)
+        .event_page(nothing, SEARCH_PROFILE, request)
         .map_err(EventsError::Runtime)?;
     if !page.events().is_empty() {
         return Err(EventsError::Pagination);
@@ -962,37 +1011,68 @@ pub(crate) struct Newest {
     /// A read the Runtime cut short (its read budget) ended the search with what it had found;
     /// older records of the window were not searched.
     pub(crate) cut: bool,
+    /// Fix round 2, item 4: the search's time was spent before it ended; it answers no record.
+    pub(crate) late: bool,
+}
+
+impl Newest {
+    /// A search whose time was spent: nothing found.
+    fn late() -> Self {
+        Self {
+            events: Vec::new(),
+            searched_from: None,
+            cut: false,
+            late: true,
+        }
+    }
 }
 
 /// Workflow #467 RPT-1 fix round 1: the newest `limit` records `query` matches inside its time
 /// window, found as a read of the newest records finds them ([`read_newest`], without its wait),
-/// by the same reads: the ledger's head read once ([`ledger_head`]); the window's first record as
-/// the search's floor ([`window_start`]); the search ([`Search::newest`]); and the records it
-/// found read with their payloads ([`Search::rows`]), again from the first not yet read when the
-/// Runtime cuts a page to its response bound. `query` names no sequence. No answer of `events`
-/// changes: this calls the parts its own read calls.
+/// by the same reads: the ledger's head read once ([`ledger_head`]); the window's first record of
+/// the query's instance as the search's floor ([`window_start`]); the search
+/// ([`Search::newest`]); and the records it found read with their payloads ([`Search::rows`]),
+/// again from the first not yet read when the Runtime cuts a page to its response bound. `query`
+/// names no sequence. No answer of `events` changes: this calls the parts its own read calls.
+/// Fix round 2, item 4: no read starts once `late` says the search's time is spent; the search
+/// then answers [`Newest::late`].
 pub(crate) fn newest_in_window(
-    client: &RuntimeClient,
+    pages: &dyn EventPages,
     query: &EventQuery,
     limit: u16,
+    late: &dyn Fn() -> bool,
 ) -> Result<Newest, EventsError> {
-    let head = ledger_head(client)?;
-    let Some(floor) = window_start(client, query, head)? else {
+    let held = Held { pages, late };
+    if held.late() {
+        return Ok(Newest::late());
+    }
+    let head = ledger_head(&held)?;
+    if held.late() {
+        return Ok(Newest::late());
+    }
+    let Some(floor) = window_start(&held, query, head)? else {
         return Ok(Newest {
             events: Vec::new(),
             searched_from: None,
             cut: false,
+            late: false,
         });
     };
     let search = Search {
-        client,
+        client: &held,
         query,
         head,
     };
     let found = search.newest(limit, floor)?;
+    if found.late {
+        return Ok(Newest::late());
+    }
     let mut events = Vec::with_capacity(found.sequences.len());
     let mut rest = found.sequences.as_slice();
     while !rest.is_empty() {
+        if held.late() {
+            return Ok(Newest::late());
+        }
         let page = search.rows(rest)?.events;
         if page.is_empty() {
             return Err(EventsError::Pagination);
@@ -1006,16 +1086,18 @@ pub(crate) fn newest_in_window(
         events,
         searched_from,
         cut: found.cut,
+        late: false,
     })
 }
 
-/// Workflow #467 RPT-1 fix round 1: the sequence of the first record of `query`'s time window at
-/// the snapshot `head`: one page of one record under the time bound alone, without run recovery
-/// (a page with a time bound starts at the window's first record, LN-WS); `None` when the window
-/// holds none. A page the Runtime's read budget cut before it found one starts the search after
-/// the position the page reached.
+/// Workflow #467 RPT-1 fix round 1: the sequence of the first record of `query`'s instance in
+/// its time window at the snapshot `head`: one page of one record under the time bound and the
+/// instance (fix round 2, item 3: every read of the report carries its instance), without run
+/// recovery (a page with a time bound starts at the window's first record, LN-WS); `None` when
+/// the window holds none of the instance's. A page the Runtime's read budget cut before it found
+/// one starts the search after the position the page reached.
 fn window_start(
-    client: &RuntimeClient,
+    client: &dyn EventPages,
     query: &EventQuery,
     head: u64,
 ) -> Result<Option<u64>, EventsError> {
@@ -1027,10 +1109,11 @@ fn window_start(
         from_timestamp_unix_ms: query.from_timestamp_unix_ms,
         to_timestamp_unix_ms: query.to_timestamp_unix_ms,
         to_sequence: Some(head),
+        instance_id: query.instance_id,
         ..EventQuery::default()
     };
     let page = client
-        .query_event_page(bounds, SEARCH_PROFILE, request)
+        .event_page(bounds, SEARCH_PROFILE, request)
         .map_err(EventsError::Runtime)?;
     if page.snapshot_ledger_position() != head {
         return Err(EventsError::Pagination);
@@ -1048,20 +1131,23 @@ fn window_start(
 }
 
 /// Workflow #434 CLI-EV: the reads of one search for the newest records: the records `query`
-/// matches at the snapshot `head`, each read by a sequence range and without run recovery.
+/// matches at the snapshot `head`, each read by a sequence range and without run recovery
+/// (Workflow #467 RPT-1 fix round 2: through [`EventPages`], none once its time is spent).
 struct Search<'a> {
-    client: &'a RuntimeClient,
+    client: &'a dyn EventPages,
     query: &'a EventQuery,
     head: u64,
 }
 
 /// What a search found: the sequences of the newest records it found, oldest first; `reached`,
 /// the lowest sequence of the range it searched through the head without a gap (`head + 1` when
-/// it searched none); `cut` when a read the Runtime cut short (its read budget) ended it.
+/// it searched none); `cut` when a read the Runtime cut short (its read budget) ended it; `late`
+/// when its time was spent before a read (Workflow #467 RPT-1 fix round 2, item 4).
 struct Found {
     sequences: Vec<u64>,
     reached: u64,
     cut: bool,
+    late: bool,
 }
 
 impl Found {
@@ -1100,7 +1186,7 @@ impl Search<'_> {
         };
         let page = self
             .client
-            .query_event_page(query, profile, request)
+            .event_page(query, profile, request)
             .map_err(EventsError::Runtime)?;
         if page.snapshot_ledger_position() != self.head
             || page
@@ -1127,12 +1213,17 @@ impl Search<'_> {
             sequences: Vec::new(),
             reached: self.head.saturating_add(1),
             cut: false,
+            late: false,
         };
         let mut need = limit;
         let mut top = self.head;
         for width in NEWEST_WINDOWS {
             if top < lowest {
                 break;
+            }
+            if self.client.late() {
+                found.late = true;
+                return Ok(found);
             }
             let from = self.head.saturating_sub(width - 1).max(lowest);
             let page = self.read((from, top), need, SEARCH_PROFILE)?;
@@ -1169,6 +1260,10 @@ impl Search<'_> {
     ) -> Result<Found, EventsError> {
         let mut start = high.saturating_sub(u64::from(need) - 1).max(low);
         for _ in 0..=u64::BITS {
+            if self.client.late() {
+                found.late = true;
+                return Ok(found);
+            }
             let page = self.read((start, high), need, SEARCH_PROFILE)?;
             let rows = page.returned_count();
             if page.has_more() {

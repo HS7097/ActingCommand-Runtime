@@ -9531,7 +9531,7 @@
       },
       "tokens": {
         "not_read_to_end": {
-          "description": "The read stopped before its end, at its own limit or at the Runtime's read budget: what it holds may miss what came after, and a listing that was not read to its end never says none."
+          "description": "The read stopped before its end, at its own limit or at the Runtime's read budget (for an errors view, a read the Runtime cut short): what it holds may miss what came after, and a listing that was not read to its end never says none."
         },
         "budget_spent": {
           "description": "The report's read budget was spent before the read began or while it ran (caused by call_budget_exhausted, or by the client's time limit once the budget was spent)."
@@ -9550,6 +9550,9 @@
         },
         "unreadable": {
           "description": "What was read is not what it must be: lines of the diagnostic stream that are no record, a bundle file that is no JSON (caused by foreign_data_error)."
+        },
+        "search_windows_spent": {
+          "description": "The errors view's search for the newest rows read its largest window of ledger sequences without reaching the window's first record: older rows of the window were not searched (summary.json's searched_from is the lowest sequence searched)."
         }
       }
     },

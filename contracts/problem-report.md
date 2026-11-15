@@ -53,12 +53,20 @@ reached.
 
 ## 2 What is read
 
-Every read names a request id, or an instance with the report's window; none reads without one,
-and none starts from the ledger's first record (a page with a time bound starts at the first
-record of the window, [ledger-observer.md](ledger-observer.md), "LN-WS"). One deadline of 120 s
-covers the reads of one report, and each read stops 20 s after it starts at the latest. The runs
-are read first, each instance's errors view after them (fix round 1), so a slow errors view
-never spends the time the runs need.
+Every read that selects a record names a request id, or an instance with the report's window;
+none reads without one, and none starts from the ledger's first record (a page with a time bound
+starts at the first record of the window, [ledger-observer.md](ledger-observer.md), "LN-WS").
+One read selects no record and so names neither (fix round 2): the errors view's search first
+reads the ledger's head with one page whose range starts past every sequence a ledger reaches
+and that has no other condition, which the Runtime answers with its snapshot and no row; every
+other read of that search carries the instance, the first record of the window it starts from
+included. One deadline of 120 s covers the reads of one report, and each read stops 20 s after
+it starts at the latest. The errors view's search is one such read (fix round 2): none of its
+pages starts after its 20 s or after the deadline, whichever comes first (a page already sent
+waits as long as the connection lets it, the client giving this page no shorter limit), and a
+search its time cut is the part missing, `not_read_to_end` at its own 20 s, `budget_spent` at the
+deadline. The runs are read first, each instance's errors view after them (fix round 1), so a
+slow errors view never spends the time the runs need.
 
 | Read | Through | Bound |
 |---|---|---|
@@ -71,16 +79,19 @@ never spends the time the runs need.
 | the failing step's recognition | `QueryEvents` of `task.recognition_completed`, by the request id, from the step's first record to the next step's | that step's records |
 | the diagnostic stream | `material`'s read of its reference (`ReadMaterial`, verified) | at most 8 MiB; a larger one is not read (`material_too_large`) |
 | frames | `material`'s read of their references | at most 3 a run, each at most 32 MiB |
-| each instance's errors view | `events`' search for the newest records (CLI-EV, [v012-register.md](v012-register.md) §1.306): the ledger's head once, the window's first record (one record of its time bound) as the floor, windows of sequences that end at the head, then the rows found with their payloads; view `errors`, the instance, the window's time bound | the newest 200; the window is not read from its start and its rows are not counted |
+| each instance's errors view | `events`' search for the newest records (CLI-EV, [v012-register.md](v012-register.md) §1.306): the ledger's head once (a page that selects no row, above), the instance's first record of the window (one record of the instance and the time bound) as the floor, windows of sequences that end at the head, then the rows found with their payloads; view `errors`, the instance, the window's time bound | the newest 200; the window is not read from its start and its rows are not counted |
 
 **A read that stops short is never "none"** (fix round 1). A run listing the deadline or the
 Runtime's read budget ended before its end (`runs`' listing answers no run then) is the part
 `run_listing` of `report_part_missing`, reason `not_read_to_end` (or `budget_spent` once the
 report's deadline has passed), naming the instance; the summary says for each instance whether
 its listing was read to its end, and says that the window holds no failed or unfinished run only
-when every listing was. An errors view whose search stopped above the window's first record (its
-largest window, or a read the Runtime cut) is the part `errors_view`, `not_read_to_end`, and the
-summary says older rows were not searched.
+when every listing was. An errors view whose search stopped above the window's first record is
+the part `errors_view` with one word for each cause (fix round 2): `not_read_to_end` when a read
+the Runtime cut short ended it, `search_windows_spent` when it read its largest window of
+sequences without reaching the window's first record (`summary.json`'s `searched_from` is the
+lowest sequence it searched); the rows it found are written, and the summary says older rows
+were not searched. A search its time cut writes no row (above).
 
 Never read: a ledger, database, lock or state file directly (no `actingd suspended`, no
 `check-config`, no `actingledger`); the state root's key file, the private device bindings. The
@@ -150,8 +161,8 @@ One file `problem-report-<YYYYMMDD-HHMMSS>Z-<the first 8 hex digits of its SHA-2
 | Entry | Holds |
 |---|---|
 | `report/SUMMARY.md` | the page a person reads first (below) |
-| `report/manifest.json` | `schema_version`, `view`, `tool`, `generated_unix_ms`, `instances`, `window`, `max_runs`, `max_bytes`, `within_bound` (whether the archive is within `max_bytes`, section 8), `runtime_online`, `frames`, `files` (every other entry: `path`, `size`, `sha256`), `left_out` (`file`, `why`), `not_in_this_report_yet` (`part`, `slice`), `secrets` (what is read of the configuration and what is never opened, section 7), `masks_applied`, `warnings` |
-| `report/summary.json` | the summary's data: `schema_version`, `view`, `generated_unix_ms`, `instances`, `window`, `runtime_online`, `frames`, `within_bound`, `versions`, `listings` (each instance: `alias`, `read_to_end`, `why` a token of `report_part_reason` when it was not), `runs` (each: its listing, the code's description, the step, its page, the page the run started from, the last page, the display line, the scores, its frames and whether each was kept, `excerpt_cut`, the parts missing), `succeeded_before_newest`, `errors` (each instance: `alias`, `file`, `read`, `why` when it was not, `kept`, `newest_only` (as many rows as the bound: older ones were not read), `searched_to_start`, `searched_from`, `in_archive`), `left_out`, `not_in_this_report_yet`, `warnings` |
+| `report/manifest.json` | `schema_version`, `view`, `tool`, `generated_unix_ms`, `instances`, `window`, `max_runs`, `max_bytes`, `within_bound` (whether the archive is within `max_bytes`, section 8), `runtime_online`, `frames`, `files` (every other entry: `path`, its name in the archive, `size`, `sha256`), `left_out` (`file`, `why`), `not_in_this_report_yet` (`part`, `slice`), `secrets` (what is read of the configuration and what is never opened, section 7), `masks_applied`, `names_not_looked_for` (fix round 2: each name the masks could not learn, section 7), `warnings` |
+| `report/summary.json` | the summary's data: `schema_version`, `view`, `generated_unix_ms`, `instances`, `window`, `runtime_online`, `frames`, `within_bound`, `versions`, `listings` (each instance: `alias`, `read_to_end`, `why` a token of `report_part_reason` when it was not), `runs` (each: its listing, the code's description, the step, its page, the page the run started from, the last page, the display line, the scores, its frames and whether each was kept, `excerpt_cut`, the parts missing), `succeeded_before_newest`, `errors` (each instance: `alias`, `file`, `read`, `why` when it was not, `kept`, `newest_only` (as many rows as the bound: older ones were not read), `searched_to_start`, `stopped` (fix round 2: when the search stopped above the window's start, why: `not_read_to_end` or `search_windows_spent`), `searched_from`, `in_archive`), `left_out`, `not_in_this_report_yet`, `warnings` |
 | `report/versions.json` | `lab_ops` (this program's version); for `runtime`, `tools` and `ui` the member's `BUILD-MANIFEST.json` (`repository`, `commit_sha`, `tree_sha`, `source_artifact_name`, `interfaces`; null without one); `bundles`: each game root's bundle source `{repository, commit}` (a package is named by its `package_id` and its bundle's source, no digest) |
 | `report/runs/<run id, else request id>/run.json` | the run's listing row and its status as `run show` answers it |
 | `…/steps.json` | the run's steps as `run evidence` answers them (the last 1 000), `final`, `overlay` |
@@ -161,8 +172,8 @@ One file `problem-report-<YYYYMMDD-HHMMSS>Z-<the first 8 hex digits of its SHA-2
 | `…/frames/<sequence>-<role>.png` | the frames (section 4) |
 | `report/instances/<alias>/errors.jsonl` | the instance's errors view: its newest rows of the window, at most 200, oldest first, each as `events --view errors --detail summary` answers it, with its `module` |
 
-A run's and an instance's folder name keeps `A-Z a-z 0-9 _ -` of its id or alias and writes every
-other character as `_`.
+A run's and an instance's folder name keeps `A-Z a-z 0-9 _ -` of its id or alias as the masks
+leave it and writes every other character as `_` (fix round 2, section 7).
 
 **The summary page** `SUMMARY.md`, fixed labels in English and Chinese, every value data:
 
@@ -170,9 +181,10 @@ other character as `_`.
 2. The versions in one line (`runtime`, `tools`, `ui` by their short commit, `lab-ops`, each
    game's bundle source).
 3. The screenshots (fix round 1): with frames, that the screenshots can show a player's name and
-   numbers, and that the report can be exported without them (`--no-frames`; on the console,
-   untick the screenshots), which leaves out what is read from them too; without, that it holds
-   none and nothing read from them.
+   numbers, and that the report can be exported without them with the command's own option
+   `--no-frames` (fix round 2: the way that exists today; the console's control comes with
+   UI-RPT-1), which leaves out what is read from them too; without, that it holds none and
+   nothing read from them.
 4. The size (fix round 1): within the bound of `max_mib`, or over it with every part that may be
    left out left out (section 8).
 5. For each instance, whether the listing of its failed and unfinished runs was read to its end
@@ -188,8 +200,9 @@ other character as `_`.
    so), the parts missing.
 7. Each instance's errors view: how many rows its file keeps, and whether they are every row of
    the window, the newest of it (as many as the bound: older ones were not read), or the newest
-   found by a search that stopped above the window's start (older ones were not searched); then
-   the newest ten (time, severity, code with the catalog's description, module, run).
+   found by a search that stopped above the window's start (older ones were not searched; fix
+   round 2: with its word); then the newest ten (time, severity, code with the catalog's
+   description, module, run).
 8. What was left out and why; what is not in this report yet; the warnings.
 
 ## 6 Without frames
@@ -211,14 +224,32 @@ from a frame leave every written file:
 
 They leave the excerpt `overlay-excerpt.jsonl`, the errors files and everything made from them
 (the scores of `scores.json` and `summary.json`, the summary page); each record and row that held
-any is marked `text_removed: true`, and `scores.text_removed` is true. What measures a frame
-without showing what it shows stays: scores, thresholds and margins, confidences, colour
-distances and means, rectangles, a value test's comparison and verdict, page and target
-verdicts, sizes and the display map. What the Runtime itself recorded in the ledger beyond these
-members stays as the ledger holds it (an outcome's codes and other values, a step's targets
-matched or not). The summary says "none: what the screen showed is missing, and the text and
-values read from it are removed", and the manifest's `left_out` names `runs/*/frames/*.png` with
-`why` `no_frames`.
+any is marked `text_removed: true`, and `scores.text_removed` is true.
+
+**The rule** (fix round 2): without frames the report holds no text and no game quantity read
+from a frame. Recognition's own measures stay, because they say how well a mark matched and not
+what the screen showed: a match score, a mean colour, a brightness ratio; so do thresholds and
+margins, confidences, colour distances, rectangles, a value test's comparison and verdict, page
+and target verdicts, sizes and the display map. An identity a package defines stays as a page
+name does: the `observed_identity` of the `selection_*` codes is the package's name for what was
+recognised, not text read from the frame. What the Runtime itself recorded in the ledger beyond
+the members above stays as the ledger holds it (an outcome's codes and other values, a step's
+targets matched or not).
+
+**The scheduler's readings never reach the report** (fix round 2, checked in the code). The
+values `basis_readings` (`policy_no_progress`), `pool_reading` (`capped_spend`, `pool_line_held`)
+and `maximum` (`selection_table_list_max`) are game quantities, but each of these codes is
+`info` and is only ever a reason of a decision's reason chain (`DecisionReason`, written in the
+`reasons` of a policy dispatch record or of a selection record). A row of the errors view is a
+record of severity `warning` or above, and it carries that record's own outcome only (`events
+--detail summary`): a policy dispatch record's own outcome is its rejection, the Runtime's
+refusal with its operation, kept apart from the reason chain, and a selection record's is its
+confirmation's failure. No record's own outcome is one of these reasons, and the report writes no
+record's payload; a run's status and steps (`run show`, `run evidence`) and its diagnostic stream
+hold no policy reason either. So no value of theirs is in the report, with frames or without.
+
+The summary says "none: what the screen showed is missing, and the text and values read from it
+are removed", and the manifest's `left_out` names `runs/*/frames/*.png` with `why` `no_frames`.
 
 ## 7 What is never in it, and the masks
 
@@ -229,23 +260,56 @@ never in the archive; fix round 1, the manifest's `secrets` says so), the state 
 opened), the installation wizard's configuration, the ledger or database, event payloads beyond
 the summary detail, the whole diagnostic stream.
 
-Every text part passes through the masks before it is written (fix round 1):
+Every text part passes through the masks before it is written (fix round 1; fix round 2, the
+coordinator's ruling, which replaces round 1's rule on where a name is replaced and what the
+masks search):
 
-- **Replaced.** The process's user name (`USERNAME`, else `USER`) becomes `<user>`; each of the
-  computer's names becomes `<computer>`: its NetBIOS name (`COMPUTERNAME`), its DNS host name and
-  its full DNS name (host and domain) as the operating system gives them (`GetComputerNameExW`
-  with `ComputerNameDnsHostname` and `ComputerNameDnsFullyQualified`; on another system, none).
-  Each name of three characters or more is replaced wherever it stands, inside a longer word too
-  (a folder `<name>_packs`), without regard to case (Unicode lowercase); the longest name is
-  tried first, and a mark already written is never searched again. The segment after a `Users`
-  folder of a path, with one or more separators of either kind on each side (`\Users\`,
-  `/users/`, a doubly escaped `\\Users\\`), up to the next separator, quote or line break,
-  becomes `<user>`, whoever's it is.
-- **Not replaced.** A name of one or two characters; a name in another form than the text's own
-  (percent-encoded, base64, UTF-16, split by an escape); another person's name that is not a
-  `Users` folder's segment; the domain alone where it stands without the host; addresses (IP,
-  MAC); anything inside a frame's pixels (frames are written as the Runtime verified them; leave
-  them out with `no_frames`).
+**The names.** The process's user name (`USERNAME`, else `USER`) becomes `<user>`; each of the
+computer's names becomes `<computer>`: its NetBIOS name (`COMPUTERNAME`), its DNS host name and its
+full DNS name (host and domain) as the operating system gives them (`GetComputerNameExW` with
+`ComputerNameDnsHostname` and `ComputerNameDnsFullyQualified`; on another system, none). A name of
+five characters or more is replaced wherever it stands, inside a longer word too, without regard
+to case (Unicode lowercase); a shorter one only where it stands alone, between characters that are
+no letter and no digit or at the text's ends: with the user `val`, `\Users\val\x`, `VAL-PC` and
+`val_packs` are replaced, `values` and `interval` are not. The longest name is tried first, and a
+mark already written is never searched again. The segment after a `Users` folder of a path, with
+one or more separators of either kind on each side (`\Users\`, `/users/`, a doubly escaped
+`\\Users\\`), up to the next separator, quote or line break, becomes `<user>`, whoever's it is and
+whatever its length. A name the masks could not learn (the variable is not set, the system cannot
+be asked for it, or the system gives none) was not looked for and may stand in the report: the
+manifest's `names_not_looked_for` names it (`user_name`, `netbios_name`, `dns_host_name`,
+`dns_full_name`).
+
+**What the masks search** (fix round 2):
+
+| Kept as it is | Searched and replaced |
+|---|---|
+| every member's name, of every JSON entry and line | |
+| numbers and booleans | |
+| a hash: `sha256:` and 64 hexadecimal digits, 40 or 64 hexadecimal digits (a commit, a tree, a digest), and the members `sha256`, `input_sha256`, `digest`, `commit`, `commit_sha`, `tree_sha` | |
+| an id the Runtime gave: a string of lowercase words, `_` and 32 hexadecimal digits (`request_…`, `run_…`, `evt_…`, `artifact_…`), a material reference `<sequence>:<event id>:<artifact id>`, and the members `request_id`, `run_id`, `event_id`, `correlation_id`, `causation_id`, `instance_id`, `artifact_id`, `frame_id`, `action_id`, `step_action_id`, `physical_action_id`, `recognition_id`, `lease_id`, `owner_epoch`, `ref`, `frame_ref` (a sequence is a number) | |
+| a code or a word of a closed vocabulary: the members `code`, `failure_code`, `ended_with`, `type`, `event_type`, `severity`, `state`, `kind`, `category`, `relation`, `schema`, `schema_version`, `payload_schema`, `view`, `module`, `media_type`, `why`, `from`, `phase`, `role`, `result`, `conclusion`, `match_mode`, `op`, `stopped`; in an outcome's `values` (and the records of a `records` value), every key the outcome key table types as a code, a location, a vocabulary's word, a token, an id, a pointer, a number, a time, a boolean, a hash, a commit or a version | in an outcome's `values`, a key the table types as a name, a path, a URL or evidence (`alias`, `path`, `file`, `raw_text`, …), and a key it does not hold |
+| the report's own fixed texts: `program`, `lab_ops`, `display`, `ended_with_description`, `secrets`, `names_not_looked_for`, `part`, `slice` | |
+| the name of an entry of the archive, wherever it is written (below) | |
+| | every other string value: aliases, paths, names, labels, a package's, page's and target's ids, messages, notes, hosts, repositories, the text a frame showed, the summary page's values |
+
+The summary page masks each value as it writes it by the same table (an outcome's values by their
+keys); its labels are never searched.
+
+**The entries' names** (fix round 2). Every entry's name is built from text that went through the
+masks: a run's folder from its run id (else its request id), which the masks keep; an instance's
+folder from its alias as the masks leave it, written as one word of a name (`<user>` is written
+`_user_`, so the alias `<name>-pc` makes `instances/_user_-pc/errors.jsonl`); a frame's name from
+its run's folder, its record's sequence and its role. The manifest's `files`, its `left_out`, the
+summary's data and the page name each entry by the name it has in the archive, never searched
+again, so that the manifest checks each of its entries by name and digest.
+
+**Not replaced.** A name in another form than the text's own (percent-encoded, base64, UTF-16,
+split by an escape); a name of fewer than five characters inside a longer word; another person's
+name that is not a `Users` folder's segment; the domain alone where it stands without the host;
+addresses (IP, MAC); what the table above keeps (a name that is also an id, a hash, a code or a
+word stays there); anything inside a frame's pixels (frames are written as the Runtime verified
+them; leave them out with `no_frames`).
 
 The manifest counts the masks applied (`masks_applied`). The answer line names the archive's
 real path, for the caller to open it; it holds no secret.
@@ -294,7 +358,7 @@ of the four below carries a required value of a closed vocabulary.
 | Vocabulary | Tokens |
 |---|---|
 | `report_part` | `run_listing` (an instance's listing, `alias`), `run_before` (the listing of the run before the newest, `alias`), `run_status`, `run_steps`, `run_geometry`, `run_scores` (the failing step's recognition records), `run_excerpt` (the failing step's stream records), `frame` (each with `request_id` and `file`), `errors_view` (`alias`, `file`), `versions` (`file` `versions.json`) |
-| `report_part_reason` | `not_read_to_end` (a listing or a search that stopped before its end), `budget_spent` (the report's deadline passed), `runtime_refused` (the Runtime answered with its refusal, or without the material), `read_failed` (the connection, the client's own check, the file system), `not_recorded` (a run without a diagnostic stream), `too_large` (`material_too_large`), `unreadable` (stream lines that are no record, a bundle file that is no JSON, a reference that is none) |
+| `report_part_reason` | `not_read_to_end` (a listing or a read that stopped before its end, at its own limit or at the Runtime's read budget; an errors view's search a read the Runtime cut short ended, or that its 20 s cut), `budget_spent` (the report's deadline passed), `runtime_refused` (the Runtime answered with its refusal, or without the material, or did not find the run: fix round 2), `read_failed` (the connection, the client's own check, the file system), `not_recorded` (a run without a diagnostic stream), `too_large` (`material_too_large`), `unreadable` (stream lines that are no record, a bundle file that is no JSON, a reference that is none), `search_windows_spent` (fix round 2: an errors view's search that read its largest window of sequences without reaching the window's first record) |
 | `report_write_step` | `pack` (`path` the output directory), `create_directory`, `name_exists` (`path` the archive), `write_partial` (`path` the partial file), `rename` (`path` the archive, `from_path` the partial file) |
 | `report_fit` | `fits`, `still_over` |
 | `report_output_root` | `install_root`, `state_root` |

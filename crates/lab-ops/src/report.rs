@@ -28,7 +28,10 @@ mod scores;
 mod source;
 mod summary;
 
-pub use archive::{COMPUTER_MARK, Mask, SHORTEST_NAME, USER_MARK};
+pub use archive::{COMPUTER_MARK, Mask, SHORTEST_ANYWHERE, USER_MARK};
+// Fix round 2, item 4: the tests read the requests the errors view's search builds through it.
+#[cfg(test)]
+pub(crate) use source::errors_view;
 pub use source::{
     DisplayFacts, Errors, Geometry, Instance, Listed, Missed, PageVerdict, Recognition, RunRow,
     RuntimeSource, Source, TargetVerdict, Which, Window,
@@ -48,7 +51,7 @@ use archive::{END_BYTES, Entry};
 use scores::Scores;
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::fs;
 use std::io;
@@ -131,6 +134,8 @@ const NOT_YET: [(&str, &str); 7] = [
 /// Why a part is left out.
 const WHY_SIZE: &str = "size_bound";
 const WHY_NO_FRAMES: &str = "no_frames";
+/// What `no_frames` leaves out, as `left_out` names it.
+const NO_FRAMES_FILES: &str = "runs/*/frames/*.png";
 /// What the manifest says of the configuration and the secrets (fix round 1, item 6).
 const SECRETS: &str = "the configuration is read for its standard_packs.root alone and nothing \
      of it is written, its secret_fingerprint_salt included; the state root's key file and the \
@@ -256,6 +261,8 @@ struct Page<'a> {
     /// Fix round 1, item 4: whether the archive fits its bound.
     fit: ReportFit,
     warnings: &'a [Outcome],
+    /// Fix round 2, item 2: the entries' names, kept as they are where the page names them.
+    entries: &'a BTreeSet<String>,
 }
 
 /// One part of the archive, before the summary and the manifest.
@@ -296,8 +303,19 @@ impl Part {
         })
     }
 
-    fn json(name: String, mut value: Value, mask: &Mask) -> Self {
-        mask.value(&mut value);
+    fn json(name: String, value: Value, mask: &Mask) -> Self {
+        Self::json_naming(name, value, mask, &BTreeSet::new())
+    }
+
+    /// A JSON part whose strings that name an entry of `entries` are kept as they are (fix round
+    /// 2, item 2: the manifest and the summary's data name each entry as the archive does).
+    fn json_naming(
+        name: String,
+        mut value: Value,
+        mask: &Mask,
+        entries: &BTreeSet<String>,
+    ) -> Self {
+        mask.value_naming(&mut value, entries);
         Self {
             name,
             bytes: format!("{value:#}\n").into_bytes(),
@@ -337,7 +355,9 @@ fn hex_sha256(bytes: &[u8]) -> String {
         .collect()
 }
 
-/// `text` as one word of an archive name: every character but `A-Z a-z 0-9 _ -` as `_`.
+/// `text` as one word of an archive name: every character but `A-Z a-z 0-9 _ -` as `_` (fix
+/// round 2, item 2: its callers hand it text that went through the mask, so a mark is written
+/// `_user_` or `_computer_`).
 fn file_word(text: &str) -> String {
     text.chars()
         .map(|character| {
@@ -809,14 +829,35 @@ fn list_runs(
     Ok((candidates, listings))
 }
 
+/// The folder of a run in the archive: `runs/` and its run id, else its request id, through the
+/// mask (fix round 2, item 2; an id is kept as it is) as one word of a name.
+fn run_dir(row: &RunRow, mask: &Mask) -> String {
+    let id = match &row.run_id {
+        Some(run_id) => mask.member("run_id", run_id),
+        None => mask.member("request_id", &row.request_id),
+    };
+    format!("runs/{}", file_word(&id))
+}
+
+/// The file of an instance's errors view in the archive: `instances/`, its alias through the
+/// mask as one word of a name, `/errors.jsonl` (fix round 2, item 2).
+fn errors_file(alias: &str, mask: &Mask) -> String {
+    format!(
+        "instances/{}/errors.jsonl",
+        file_word(&mask.member("alias", alias))
+    )
+}
+
 /// One run read whole: its status, steps, geometry, the failing step's recognition record and
 /// stream records with their scores, and its frames.
-fn run_report(source: &dyn Source, row: RunRow, request: &Request) -> Result<RunReport, Outcome> {
+fn run_report(
+    source: &dyn Source,
+    row: RunRow,
+    request: &Request,
+    mask: &Mask,
+) -> Result<RunReport, Outcome> {
     let id = row.request_id.clone();
-    let dir = format!(
-        "runs/{}",
-        file_word(row.run_id.as_deref().unwrap_or(&row.request_id))
-    );
+    let dir = run_dir(&row, mask);
     let mut warnings = Vec::new();
     let status = read_part(
         source.run(&id),
@@ -1066,6 +1107,47 @@ fn drop_order(reports: &[RunReport], errors: &[InstanceErrors]) -> Vec<String> {
     order
 }
 
+/// Fix round 2, item 2: the name of every entry the report made or names, each built from text
+/// that went through the mask ([`run_dir`], [`errors_file`]): the parts, each run's frames and
+/// excerpt, each instance's errors file, every file a warning names (a part that is missing),
+/// the three entries rendered last, the versions and what `no_frames` leaves out; each with and
+/// without the archive's folder.
+fn entry_names(
+    parts: &[Part],
+    reports: &[RunReport],
+    errors: &[InstanceErrors],
+    warnings: &[Outcome],
+) -> BTreeSet<String> {
+    let mut names = BTreeSet::new();
+    names.extend(parts.iter().map(|part| part.name.clone()));
+    for report in reports {
+        names.extend(report.frames.iter().map(|frame| frame.name.clone()));
+        names.insert(report.excerpt_name());
+    }
+    names.extend(errors.iter().map(|instance| instance.file.clone()));
+    names.extend(
+        warnings
+            .iter()
+            .filter_map(|warning| warning.value("file")?.as_str().map(str::to_owned)),
+    );
+    names.extend(
+        [
+            SUMMARY_PAGE,
+            MANIFEST,
+            SUMMARY_DATA,
+            VERSIONS,
+            NO_FRAMES_FILES,
+        ]
+        .map(str::to_owned),
+    );
+    let in_folder = names
+        .iter()
+        .map(|name| format!("{PREFIX}{name}"))
+        .collect::<Vec<_>>();
+    names.extend(in_folder);
+    names
+}
+
 /// What every rendering of the summary and the manifest is made from: what was read, and the
 /// warnings and the masks applied before the size bound's trimming.
 struct Read<'a> {
@@ -1078,6 +1160,9 @@ struct Read<'a> {
     errors: &'a [InstanceErrors],
     warnings: &'a [Outcome],
     masks_before: usize,
+    /// Fix round 2, item 2: the name of every entry the report made, each from masked text,
+    /// with and without its folder: kept as it is wherever the summary and the manifest name it.
+    entries: &'a BTreeSet<String>,
 }
 
 /// The summary page, the manifest and the summary's data, rendered for one choice of the parts
@@ -1114,7 +1199,7 @@ fn render(
         .map(|file| json!({"file": file, "why": WHY_SIZE}))
         .collect::<Vec<_>>();
     if !request.frames {
-        left_out.push(json!({"file": "runs/*/frames/*.png", "why": WHY_NO_FRAMES}));
+        left_out.push(json!({"file": NO_FRAMES_FILES, "why": WHY_NO_FRAMES}));
     }
     let mut warnings = read.warnings.to_vec();
     if !dropped.is_empty() || fit == ReportFit::StillOver {
@@ -1147,14 +1232,22 @@ fn render(
         left_out: &left_out,
         fit,
         warnings: &warnings,
+        entries: read.entries,
     };
+    // Fix round 2, item 1: the page masks each value as it writes it, so that its labels, codes,
+    // ids and entry names stay whole.
     let masks_start = mask.applied();
     let summary_page = Part {
         name: SUMMARY_PAGE.to_owned(),
-        bytes: mask.text(&summary::page(&page)).into_bytes(),
+        bytes: summary::page(&page, mask).into_bytes(),
         stored: false,
     };
-    let summary_data = Part::json(SUMMARY_DATA.to_owned(), summary::data(&page), mask);
+    let summary_data = Part::json_naming(
+        SUMMARY_DATA.to_owned(),
+        summary::data(&page),
+        mask,
+        read.entries,
+    );
     let masks_applied = read.masks_before + (mask.applied() - masks_start);
     let files = [&summary_page, &summary_data]
         .iter()
@@ -1187,9 +1280,10 @@ fn render(
         "not_in_this_report_yet": not_yet(),
         "secrets": SECRETS,
         "masks_applied": masks_applied,
+        "names_not_looked_for": mask.not_looked_for(),
         "warnings": warnings.iter().map(cli_line::warning).collect::<Vec<_>>(),
     });
-    let manifest = Part::json(MANIFEST.to_owned(), manifest, mask);
+    let manifest = Part::json_naming(MANIFEST.to_owned(), manifest, mask, read.entries);
     let mut total = END_BYTES + kept.iter().map(|measured| measured.packed).sum::<u64>();
     for part in [&summary_page, &manifest, &summary_data] {
         total += archive::packed_size(&part.to_entry())
@@ -1238,7 +1332,7 @@ pub fn export(
     };
     let mut reports = Vec::new();
     for row in selected {
-        let report = run_report(source, row, request)?;
+        let report = run_report(source, row, request, mask)?;
         warnings.extend(report.warnings.iter().cloned());
         reports.push(report);
     }
@@ -1246,7 +1340,7 @@ pub fn export(
     let mut errors = Vec::new();
     for instance in &instances {
         let alias = instance.alias.as_str();
-        let file = format!("instances/{}/errors.jsonl", file_word(alias));
+        let file = errors_file(alias, mask);
         let place = |warning: Outcome| warning.alias(alias).file(file.as_str());
         let (read, unread) = match source.errors(instance, window, ERRORS_PER_INSTANCE) {
             Ok(mut read) => {
@@ -1255,11 +1349,11 @@ pub fn export(
                         scores::strip_row(row);
                     }
                 }
-                if !read.searched_to_start() {
-                    let miss = Missed {
-                        why: ReportPartReason::NotReadToEnd,
-                        cause: None,
-                    };
+                // Fix round 2, item 5: a search that stopped above the window's first record
+                // says why, the Runtime's cut (`not_read_to_end`) or its windows spent
+                // (`search_windows_spent`).
+                if let Some(why) = read.stopped {
+                    let miss = Missed { why, cause: None };
                     warnings.push(missing(ReportPart::ErrorsView, miss, place)?);
                 }
                 (Some(read), None)
@@ -1292,6 +1386,7 @@ pub fn export(
             parts.push(Part::lines(instance.file.clone(), &read.rows, mask));
         }
     }
+    let entries = entry_names(&parts, &reports, &errors, &warnings);
     let measured = parts
         .into_iter()
         .map(|part| part.measured(&request.out))
@@ -1306,6 +1401,7 @@ pub fn export(
         errors: &errors,
         warnings: &warnings,
         masks_before: mask.applied(),
+        entries: &entries,
     };
     // Within the size bound: the parts of the drop order left out in turn while the archive is
     // over it.

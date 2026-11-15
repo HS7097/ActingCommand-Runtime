@@ -25514,10 +25514,12 @@ Lab's half of the errors view: one archive, with a page a person reads first.
   step: one `QueryEvents` page sequence over the run's eight record types), `events`' row shape,
   `material`'s `resolve` (one page at the reference's sequence) and `read_whole` (verified
   ranges); a run of a hundred steps costs one evidence read of a few pages. Every read of the
-  module names a request id, or an instance with the report's window (a time-bounded page starts
-  at the window's first record, [ledger-observer.md](ledger-observer.md), "LN-WS"); none reads
-  without an instance, none from the ledger's first record. No row's answer changes: the module
-  calls their code, it extracts nothing.
+  module that selects a record names a request id, or an instance with the report's window (a
+  time-bounded page starts at the window's first record, [ledger-observer.md](ledger-observer.md),
+  "LN-WS"); none reads without an instance, none from the ledger's first record. The one read that
+  selects none, the errors view's search's read of the ledger's head (fix round 1; a page whose
+  range starts past every sequence, with no other condition), carries no instance (fix round 2
+  says so). No row's answer changes: the module calls their code, it extracts nothing.
 - *Ruling Q4.* `task.recognition_completed` holds for each target matched or not (`passed`) and
   its box, and since ledger revision 4 `candidate_scores`: for each candidate page `passed`,
   `best_score_milli` and `first_failed_target_id` (at most 16 pages, `omitted` the rest); no
@@ -25605,9 +25607,9 @@ output refusals holding; still 0.12.61, nothing of it shipped in 0.12.60).
   `report_fit`, `report_output_refused` requires `report_output_root`. Five keys and five
   vocabularies are new in [outcome-codes/catalog.json](outcome-codes/catalog.json) and the key
   table (`crates/actingcommand-contract/src/outcome/keys.rs`), each vocabulary an enum of
-  `crates/lab-ops/src/codes.rs`: `report_part` (10 tokens), `report_part_reason` (7),
-  `report_write_step` (5), `report_fit` (2), `report_output_root` (2); `since` 0.12.61, pending;
-  the index is regenerated. No code is added.
+  `crates/lab-ops/src/codes.rs`: `report_part` (10 tokens), `report_part_reason` (7; 8 since fix
+  round 2), `report_write_step` (5), `report_fit` (2), `report_output_root` (2); `since` 0.12.61,
+  pending; the index is regenerated. No code is added.
 - *The reads.* The runs are read before the errors views, and an errors view is its newest 200
   rows found by `events`' search for the newest records (CLI-EV, §1.306; `events::newest_in_window`
   calls the search's own parts, with the window's first record as its floor, and changes no
@@ -25632,6 +25634,56 @@ output refusals holding; still 0.12.61, nothing of it shipped in 0.12.60).
   item 7), the reads' order (item 7), the size bound's fixture (incompressible excerpts within
   1 MiB of packed bytes, item 8), the part named missing for a stream above 8 MiB (the run's
   excerpt, `too_large`), the fake source's error type, and the secrets fixture (above).
+
+**Fix round 2** (coordinator brief `rd-1115/brief-1725-fix2.md`, after the review of fix round 1,
+which found its items done, every read bounded, the vocabularies registered and required, the
+packed size measured as written and the tests failing when the behaviour breaks; main
+`60c28e64` (the train 0.12.61a, #463 K1 §1.374 and V1 §1.378) merged; still 0.12.61). The
+contract's sections 2, 5, 6, 7 and 9 say each point.
+- *The masks* (the coordinator's ruling, which replaces round 1's item 11) never search a
+  member's name, a number, a hash, an id the Runtime gave, a code or a word of a closed
+  vocabulary: by the member that holds a string (the report's own list of id, hash, code and word
+  members; in an outcome's `values`, the outcome key table's type of the key), by its shape
+  (`sha256:…`, 40 or 64 hexadecimal digits, a typed id, a material reference), or because it
+  names an entry of the archive. A name of five characters or more is replaced wherever it
+  stands; a shorter one only where it stands alone; the `Users` folder's segment whatever its
+  length. The summary page masks each value as it writes it, by the same rule; before, it was
+  masked whole, labels and codes included.
+- *The entries' names* are built from masked text (an instance's folder from its masked alias,
+  `<user>` written `_user_`; a run's from its id, which the masks keep), and the manifest, the
+  summary's data and the page name each entry as the archive does.
+- *The search's floor carries the instance*: `events::window_start` reads the instance's first
+  record of the window (the instance beside the time bound); the head's read selects no row and
+  carries none, which the contract, this register and [lab-two-entries.md](lab-two-entries.md)
+  §9.3 now say. No answer of `events` changes.
+- *The deadline.* The errors view's search is held to its step's 20 s and the report's deadline:
+  `events::newest_in_window` reads its pages through `EventPages` (the Runtime client, or a test's
+  made-up Runtime) and starts none once its time is spent (`EventPages::late`, false for the
+  client, so `events` itself is unchanged); a search so cut is `report_part_missing`
+  (`errors_view`, `not_read_to_end` at the step's limit, `budget_spent` at the deadline) and writes
+  no row. `report::errors_view` is the composition the Runtime source and the tests share.
+- *One word, one cause*: a search that read its largest window is `search_windows_spent`, new in
+  `report_part_reason` (8 tokens; catalog, enum and the code's description), apart from
+  `not_read_to_end` (the Runtime cut a read short); `summary.json` says which (`stopped`). The
+  index is regenerated.
+- *The masks say what they could not learn*: a name not set or that the system cannot be asked
+  for (`user_name`, `netbios_name`, `dns_host_name`, `dns_full_name`) is named in the manifest's
+  `names_not_looked_for`.
+- *A run the Runtime does not find* (`run evidence`'s `run_unknown`) is `runtime_refused`.
+- *The summary page* names the command's own option `--no-frames`, not a console control that
+  does not exist yet.
+- *`no_frames`' rule*: no text and no game quantity read from a frame; recognition's own measures
+  (a match score, a mean colour, a brightness ratio) and an identity a package defines
+  (`observed_identity` of the `selection_*` codes) stay.
+- *The scheduler's readings* (`basis_readings`, `pool_reading`, `maximum`): checked in the code,
+  their codes are `info` reasons of a decision's reason chain, never a record's own outcome, and
+  an errors view row carries only that; the contract says why they never reach the report.
+- *Tests.* New: `rpt1_fix2_the_masks_keep_member_names_hashes_and_ids_and_replace_a_short_name_alone`,
+  `rpt1_fix2_an_alias_holding_the_name_names_its_entry_as_the_manifest_does`,
+  `rpt1_fix2_every_read_of_the_errors_search_carries_the_instance`,
+  `rpt1_fix2_the_deadline_cuts_the_errors_search_and_the_part_says_so`, in the row's gate.
+  Adapted (the items change what they pin): round 1's masks test (short names alone, the ruling
+  replacing item 11), the reads' code (`errors_view`), the fake's errors view (`stopped`).
 
 **At deploy.** Nothing to configure: the Lab programs of 0.12.61 have the row
 (`actinglab report export --out <dir>`, `ac_report_export` on `actinglab-mcp`). A script that

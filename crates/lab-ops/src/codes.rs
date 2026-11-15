@@ -838,6 +838,9 @@ actingcommand_contract::outcome_vocabulary! {
         /// What was read is not what it must be (a line of the stream that is no record, a file
         /// that is no JSON).
         Unreadable => "unreadable",
+        /// Fix round 2, item 5: the search for the newest rows read its largest window of
+        /// sequences without reaching the window's first record; older rows were not searched.
+        SearchWindowsSpent => "search_windows_spent",
     }
 }
 

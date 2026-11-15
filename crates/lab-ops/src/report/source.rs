@@ -7,12 +7,12 @@
 //! the report's window; none reads without one. No method writes, captures, pins or confirms
 //! anything: the trait has no such method. Fix round 1: a read that answers nothing says why
 //! ([`Missed`], vocabulary `report_part_reason`), and a listing or a search that stopped before
-//! its end says so ([`Listed::cut`], [`Errors::cut`]).
+//! its end says so ([`Listed::cut`], [`Errors::stopped`]).
 
 use super::READ_STEP;
 use crate::cli_line;
 use crate::codes::{ActingctlCode, ArgumentProblem, ReportPartReason, RunState};
-use crate::events::{self, Detail as RowDetail, EventsError};
+use crate::events::{self, Detail as RowDetail, EventPages, EventsError};
 use crate::instance_selector::{self, SelectorMiss};
 use crate::material;
 use crate::run_evidence::{self, Evidence, EvidenceRequest, StepDetail};
@@ -29,6 +29,7 @@ use actingcommand_runtime_client::{
 };
 use serde::Serialize;
 use serde_json::{Value, json};
+use std::cell::Cell;
 use std::time::Instant;
 
 /// One instance of the Runtime's status: its alias, and its `instance_id` (a made-up source
@@ -100,20 +101,22 @@ pub struct Listed {
 /// the newest records `events` has (fix round 1, item 7): oldest first, each as `events --view
 /// errors --detail summary` answers it with its `module`. When fewer than were asked for were
 /// found and the search did not reach the window's first record, `searched_from` is the lowest
-/// sequence it searched; `cut` when a read the Runtime cut short ended it. Either way older rows
-/// of the window were not searched.
+/// sequence it searched. `stopped` says why older rows of the window were not searched (fix
+/// round 2, item 5, one word for each cause): `not_read_to_end`, a read the Runtime cut short
+/// ended the search; `search_windows_spent`, the search read its largest window and stopped
+/// there.
 #[derive(Debug, Clone, Default)]
 pub struct Errors {
     pub rows: Vec<Value>,
     pub searched_from: Option<u64>,
-    pub cut: bool,
+    pub stopped: Option<ReportPartReason>,
 }
 
 impl Errors {
     /// Whether the search reached the window's first record (or found every row it was asked
     /// for, the newest of the window).
     pub fn searched_to_start(&self) -> bool {
-        !self.cut && self.searched_from.is_none()
+        self.stopped.is_none()
     }
 }
 
@@ -320,6 +323,77 @@ fn missed_for(why: ReportPartReason) -> impl Fn(Outcome) -> Missed {
     move |cause| Missed::new(why, cause)
 }
 
+/// The query of the errors view of `instance` in `window`: the view `errors`, the instance, the
+/// window's time bound.
+fn errors_query(instance: &Instance, window: Window) -> Result<EventQuery, Missed> {
+    Ok(EventQuery {
+        view: Some(LedgerView::Errors),
+        instance_id: Some(id_of(instance).map_err(missed_for(ReportPartReason::ReadFailed))?),
+        from_timestamp_unix_ms: Some(window.since_unix_ms),
+        to_timestamp_unix_ms: window.until_unix_ms,
+        ..EventQuery::default()
+    })
+}
+
+/// The errors view of `instance` in `window`: its newest `keep` rows, found through `pages` by
+/// the search for the newest records `events` has (fix round 1, item 7), every read of it
+/// carrying the instance but the ledger head's, which selects no row (fix round 2, item 3).
+/// Fix round 2, item 4: `late` says, once the time the read is held to is spent, the word for
+/// that (`not_read_to_end` at the step's own limit, `budget_spent` at the report's deadline);
+/// the search then starts no other read, and the part is missing with that word. A read the
+/// Runtime cut short stops the search with `not_read_to_end`, the search's largest window with
+/// `search_windows_spent` (fix round 2, item 5). A failure of the Runtime is what `failed` says.
+pub(crate) fn errors_view(
+    pages: &dyn EventPages,
+    instance: &Instance,
+    window: Window,
+    keep: usize,
+    late: &dyn Fn() -> Option<ReportPartReason>,
+    failed: &dyn Fn(&RuntimeClientError) -> Missed,
+) -> Result<Errors, Missed> {
+    let query = errors_query(instance, window)?;
+    let limit = u16::try_from(keep).unwrap_or(u16::MAX);
+    // The word of the moment the time was found spent.
+    let word = Cell::new(None);
+    let spent = || {
+        if word.get().is_none() {
+            word.set(late());
+        }
+        word.get().is_some()
+    };
+    let found =
+        events::newest_in_window(pages, &query, limit, &spent).map_err(|error| match &error {
+            EventsError::Runtime(failure) => failed(failure),
+            _ => Missed::new(ReportPartReason::ReadFailed, error.outcome()),
+        })?;
+    if found.late {
+        // The search answers `late` only after `spent` said so, which kept the word.
+        let why = word.get().unwrap_or(ReportPartReason::NotReadToEnd);
+        return Err(Missed { why, cause: None });
+    }
+    let stopped = if found.cut {
+        Some(ReportPartReason::NotReadToEnd)
+    } else if found.searched_from.is_some() {
+        Some(ReportPartReason::SearchWindowsSpent)
+    } else {
+        None
+    };
+    let envelope = |outcome: &Outcome| cli_line::outcome_value(outcome, Detail::Full);
+    Ok(Errors {
+        rows: found
+            .events
+            .iter()
+            .map(|event| {
+                let mut row = events::row(event, RowDetail::Summary, &envelope);
+                row["module"] = json!(event.origin.module());
+                row
+            })
+            .collect(),
+        searched_from: found.searched_from,
+        stopped,
+    })
+}
+
 /// A value's JSON text: a string as it is, anything else as JSON.
 pub(super) fn text_of<T: Serialize>(value: &T) -> String {
     match json!(value) {
@@ -444,34 +518,14 @@ impl Source for RuntimeSource<'_> {
         })
     }
 
+    /// Fix round 2, item 4: the search is held to the step's time and the report's deadline,
+    /// whichever comes first ([`errors_view`]): no read of it starts after that, and a search cut
+    /// there is the part missing with the word [`Self::cut`] gives.
     fn errors(&self, instance: &Instance, window: Window, keep: usize) -> Result<Errors, Missed> {
-        let query = EventQuery {
-            view: Some(LedgerView::Errors),
-            instance_id: Some(id_of(instance).map_err(missed_for(ReportPartReason::ReadFailed))?),
-            from_timestamp_unix_ms: Some(window.since_unix_ms),
-            to_timestamp_unix_ms: window.until_unix_ms,
-            ..EventQuery::default()
-        };
-        self.step()?;
-        let limit = u16::try_from(keep).unwrap_or(u16::MAX);
-        let found =
-            events::newest_in_window(self.client, &query, limit).map_err(|error| match &error {
-                EventsError::Runtime(failure) => self.failed(failure),
-                _ => Missed::new(ReportPartReason::ReadFailed, error.outcome()),
-            })?;
-        let envelope = |outcome: &Outcome| cli_line::outcome_value(outcome, Detail::Full);
-        Ok(Errors {
-            rows: found
-                .events
-                .iter()
-                .map(|event| {
-                    let mut row = events::row(event, RowDetail::Summary, &envelope);
-                    row["module"] = json!(event.origin.module());
-                    row
-                })
-                .collect(),
-            searched_from: found.searched_from,
-            cut: found.cut,
+        let until = self.step()?;
+        let late = || (Instant::now() >= until).then(|| self.cut());
+        errors_view(self.client, instance, window, keep, &late, &|failure| {
+            self.failed(failure)
         })
     }
 
@@ -502,12 +556,18 @@ impl Source for RuntimeSource<'_> {
             limit: u64::MAX,
             detail: StepDetail::Full,
         };
+        // Fix round 2, item 7: a run the Runtime does not find is its refusal.
         run_evidence::read(self.client, &request, deadline).map_err(|failure| match &failure {
             run_evidence::Failure::Runtime(error) => self.failed(error),
+            run_evidence::Failure::RunUnknown { .. } => {
+                Missed::new(ReportPartReason::RuntimeRefused, failure.outcome())
+            }
             run_evidence::Failure::Output(_) => {
                 Missed::new(ReportPartReason::Unreadable, failure.outcome())
             }
-            _ => Missed::new(ReportPartReason::ReadFailed, failure.outcome()),
+            run_evidence::Failure::Argument { .. } => {
+                Missed::new(ReportPartReason::ReadFailed, failure.outcome())
+            }
         })
     }
 

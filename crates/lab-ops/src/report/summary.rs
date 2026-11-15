@@ -2,18 +2,20 @@
 
 //! The report's first entry, a page a person reads first (`SUMMARY.md`), and its data
 //! (`summary.json`) (Workflow #467 RPT-1; `contracts/problem-report.md`, "The summary"). Fixed
-//! labels in English and Chinese; every value is data.
+//! labels in English and Chinese; every value is data. Fix round 2, item 1: the page masks each
+//! value as it writes it ([`Mask::member`]), so that its labels, codes, ids and the entries'
+//! names stay whole.
 
 use super::scores::{ScoreSource, TargetScore};
 use super::source::Geometry;
 use super::{
-    ERRORS_ON_SUMMARY, ERRORS_PER_INSTANCE, InstanceErrors, MEMBERS, MIB, NOT_YET, Page, RunReport,
-    SCHEMA, VIEW_ERRORS, not_yet, row_json, window_json,
+    ERRORS_ON_SUMMARY, ERRORS_PER_INSTANCE, InstanceErrors, MEMBERS, MIB, Mask, NOT_YET, Page,
+    RunReport, SCHEMA, VIEW_ERRORS, not_yet, row_json, window_json,
 };
 use crate::cli_line;
 use crate::code_lookup::{self, Answer, Query};
-use crate::codes::ReportFit;
-use actingcommand_contract::outcome::CodeStr;
+use crate::codes::{ReportFit, ReportPartReason};
+use actingcommand_contract::outcome::{CodeStr, Outcome};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
@@ -128,6 +130,19 @@ fn cell(text: &str) -> String {
     text.replace('|', "/").replace(['\n', '\r'], " ")
 }
 
+/// A text on one line: its control characters escaped, as an outcome's `Display` writes them.
+fn one_line(text: &str) -> String {
+    text.chars()
+        .map(|character| {
+            if character.is_control() {
+                character.escape_default().to_string()
+            } else {
+                character.to_string()
+            }
+        })
+        .collect()
+}
+
 fn number(value: Option<f64>) -> String {
     value.map_or_else(String::new, |value| format!("{value:.3}"))
 }
@@ -136,12 +151,13 @@ fn yes_no(value: bool) -> &'static str {
     if value { "yes" } else { "no" }
 }
 
-/// What a target read, for the table's last column.
-fn read(target: &TargetScore, removed: bool) -> String {
+/// What a target read, for the table's last column, masked as the scores' data is.
+fn read(target: &TargetScore, removed: bool, mask: &Mask) -> String {
     if let Some(text) = &target.text {
+        let text = cell(&mask.member("text", text));
         return match target.confidence {
-            Some(confidence) => format!("`{}` ({confidence:.2})", cell(text)),
-            None => format!("`{}`", cell(text)),
+            Some(confidence) => format!("`{text}` ({confidence:.2})"),
+            None => format!("`{text}`"),
         };
     }
     if removed && target.kind == "ocr" {
@@ -151,9 +167,41 @@ fn read(target: &TargetScore, removed: bool) -> String {
         return format!("colour distance {distance:.1} of at most {largest:.1}");
     }
     if let Some(test) = &target.value_test {
+        let mut test = test.clone();
+        mask.value(&mut test);
         return format!("value test {}", cell(&test.to_string()));
     }
     String::new()
+}
+
+/// Fix round 2, item 1: `outcome` in one line as its `Display` writes it (its code, each value,
+/// its causes), each value masked by its key as an outcome's `values` are in the data, the
+/// entries' names kept.
+fn outcome_line(outcome: &Outcome, page: &Page<'_>, mask: &Mask) -> String {
+    let mut line = outcome.code().as_str().to_owned();
+    for (key, value) in outcome.values() {
+        let mut value = value.clone();
+        mask.outcome_value(key, &mut value, page.entries);
+        match value {
+            Value::String(text) => line.push_str(&format!(" {key}={}", one_line(&text))),
+            other => line.push_str(&format!(" {key}={other}")),
+        }
+    }
+    if !outcome.causes().is_empty() {
+        let causes = outcome
+            .causes()
+            .iter()
+            .map(|link| {
+                format!(
+                    "{}: {}",
+                    link.relation(),
+                    outcome_line(link.outcome(), page, mask)
+                )
+            })
+            .collect::<Vec<_>>();
+        line.push_str(&format!(" [{}]", causes.join("; ")));
+    }
+    line
 }
 
 fn ended_with_text(code: Option<&CodeStr>) -> &str {
@@ -185,19 +233,21 @@ fn first_page(report: &RunReport) -> Option<&str> {
         .map(|step| step.page.as_str())
 }
 
-fn table_row(label: &str, row: &super::RunRow) -> String {
+fn table_row(label: &str, row: &super::RunRow, mask: &Mask) -> String {
     format!(
         "| {label} | {} | {} | {} | {} | {} | {} |\n",
-        cell(&row.alias),
+        cell(&mask.member("alias", &row.alias)),
         row.state.as_str(),
-        cell(row.package.as_deref().unwrap_or("")),
+        cell(&mask.member("package", row.package.as_deref().unwrap_or(""))),
         ended_with_text(row.ended_with.as_ref()),
-        cell(row.final_page.as_deref().unwrap_or("")),
+        cell(&mask.member("final_page", row.final_page.as_deref().unwrap_or(""))),
         utc(row.first_unix_ms)
     )
 }
 
-fn versions_line(versions: &Value) -> String {
+/// The versions in one line: each member's commit (a hash, kept), this program's version, each
+/// game root's bundle source (its game a member name, kept; its repository masked).
+fn versions_line(versions: &Value, mask: &Mask) -> String {
     let short = |commit: &str| commit.get(..12).unwrap_or(commit).to_owned();
     let mut shown = Vec::new();
     for member in MEMBERS {
@@ -217,7 +267,7 @@ fn versions_line(versions: &Value) -> String {
         for (game, source) in bundles {
             shown.push(format!(
                 "{game} {}@{}",
-                source["repository"].as_str().unwrap_or("?"),
+                mask.member("repository", source["repository"].as_str().unwrap_or("?")),
                 short(source["commit"].as_str().unwrap_or("?"))
             ));
         }
@@ -225,7 +275,7 @@ fn versions_line(versions: &Value) -> String {
     shown.join(" · ")
 }
 
-fn targets_table(report: &RunReport) -> String {
+fn targets_table(report: &RunReport, mask: &Mask) -> String {
     let scores = &report.scores;
     let from = match scores.source {
         ScoreSource::Stream => "from the diagnostic stream / 来自诊断流",
@@ -244,15 +294,15 @@ fn targets_table(report: &RunReport) -> String {
         for target in &scores.targets {
             out.push_str(&format!(
                 "| {} | {} | {} | {} | {} | {} | {} | {} | {} |\n",
-                cell(&target.target),
-                cell(&target.kind),
+                cell(&mask.member("target", &target.target)),
+                cell(&mask.member("kind", &target.kind)),
                 yes_no(target.matched),
                 number(target.last),
                 number(target.best),
                 number(target.threshold),
                 number(target.margin()),
                 target.frames,
-                read(target, scores.text_removed)
+                read(target, scores.text_removed, mask)
             ));
         }
         out.push('\n');
@@ -263,12 +313,15 @@ fn targets_table(report: &RunReport) -> String {
         for page in &scores.pages {
             out.push_str(&format!(
                 "| {} | {} | {} | {} | {} |\n",
-                cell(&page.page),
+                cell(&mask.member("page", &page.page)),
                 yes_no(page.matched),
                 page.evaluated,
                 page.best_milli
                     .map_or_else(String::new, |best| best.to_string()),
-                cell(page.first_failed.as_deref().unwrap_or(""))
+                cell(&mask.member(
+                    "first_failed_target",
+                    page.first_failed.as_deref().unwrap_or("")
+                ))
             ));
         }
         out.push('\n');
@@ -299,12 +352,12 @@ fn frames_line(report: &RunReport, page: &Page<'_>) -> String {
     format!("- Frames / 截图: {}\n", names.join(", "))
 }
 
-fn run_section(number: usize, report: &RunReport, page: &Page<'_>) -> String {
+fn run_section(number: usize, report: &RunReport, page: &Page<'_>, mask: &Mask) -> String {
     let row = &report.row;
     let mut out = format!(
         "## Run {number} / 运行 {number}: {} ({})\n\n",
-        row.run_id.as_deref().unwrap_or("-"),
-        row.request_id
+        mask.member("run_id", row.run_id.as_deref().unwrap_or("-")),
+        mask.member("request_id", &row.request_id)
     );
     let ended = match &row.ended_with {
         Some(code) => format!(
@@ -318,14 +371,17 @@ fn run_section(number: usize, report: &RunReport, page: &Page<'_>) -> String {
     out.push_str(&format!("- Ended / 结束: {ended}\n"));
     out.push_str(&format!(
         "- Package / 包: {}\n",
-        row.package.as_deref().unwrap_or("unknown")
+        mask.member("package", row.package.as_deref().unwrap_or("unknown"))
     ));
     match report.step() {
         Some(step) => out.push_str(&format!(
             "- Step / 步骤: {} (started on page `{}`; the run started on page `{}`)\n",
             step.step_index,
-            step.page,
-            first_page(report).unwrap_or("unknown")
+            mask.member("step_page", &step.page),
+            mask.member(
+                "run_started_on_page",
+                first_page(report).unwrap_or("unknown")
+            )
         )),
         None => out.push_str(
             "- Step / 步骤: none recorded (the run ended before its first step, or its steps \
@@ -334,13 +390,13 @@ fn run_section(number: usize, report: &RunReport, page: &Page<'_>) -> String {
     }
     out.push_str(&format!(
         "- Last page recognised / 最后识别的页: `{}`\n",
-        last_page(report)
+        mask.member("last_page", last_page(report))
     ));
     out.push_str(&format!(
         "- Display / 显示: {}\n",
         display_line(report.geometry())
     ));
-    out.push_str(&targets_table(report));
+    out.push_str(&targets_table(report, mask));
     out.push_str(&frames_line(report, page));
     if report.excerpt_cut {
         out.push_str(
@@ -349,14 +405,17 @@ fn run_section(number: usize, report: &RunReport, page: &Page<'_>) -> String {
         );
     }
     for warning in &report.warnings {
-        out.push_str(&format!("- Missing / 缺: {warning}\n"));
+        out.push_str(&format!(
+            "- Missing / 缺: {}\n",
+            outcome_line(warning, page, mask)
+        ));
     }
     out.push('\n');
     out
 }
 
 /// What one instance's errors view holds, in one sentence (fix round 1, item 7: its newest rows,
-/// and whether the search reached the window's start).
+/// and whether the search reached the window's start; fix round 2, item 5: why it did not).
 fn errors_line(instance: &InstanceErrors) -> String {
     let Some(read) = &instance.read else {
         let why = instance.unread.map_or("", |why| why.as_str());
@@ -364,17 +423,30 @@ fn errors_line(instance: &InstanceErrors) -> String {
     };
     let count = read.rows.len();
     let file = &instance.file;
-    if read.cut {
-        return format!(
-            "{count} rows in {file}, the newest found; the Runtime cut the search short, so \
-             older rows of the window were not searched / Runtime 中途截断了搜索，更早的记录没有读到"
-        );
-    }
-    if let Some(from) = read.searched_from {
-        return format!(
-            "{count} rows in {file}, the newest found; searched from ledger sequence {from} \
-             on, so older rows of the window were not searched / 从账本序号 {from} 起搜索，更早的记录没有读到"
-        );
+    match (read.stopped, read.searched_from) {
+        (Some(ReportPartReason::NotReadToEnd), _) => {
+            return format!(
+                "{count} rows in {file}, the newest found; the Runtime cut the search short \
+                 (`not_read_to_end`), so older rows of the window were not searched / Runtime \
+                 中途截断了搜索，更早的记录没有读到"
+            );
+        }
+        (Some(why), Some(from)) => {
+            return format!(
+                "{count} rows in {file}, the newest found; the search spent its windows \
+                 (`{}`) and searched from ledger sequence {from} on, so older rows of the window \
+                 were not searched / 搜索用完了它的窗口，从账本序号 {from} 起搜索，更早的记录没有读到",
+                why.as_str()
+            );
+        }
+        (Some(why), None) => {
+            return format!(
+                "{count} rows in {file}, the newest found; the search stopped above the \
+                 window's start (`{}`), so older rows of the window were not searched / 搜索没到时间窗开头，更早的记录没有读到",
+                why.as_str()
+            );
+        }
+        (None, _) => {}
     }
     if count >= ERRORS_PER_INSTANCE {
         return format!(
@@ -388,13 +460,13 @@ fn errors_line(instance: &InstanceErrors) -> String {
     format!("{count} rows in {file}, every row of the window / 时间窗里的全部记录")
 }
 
-fn errors_section(page: &Page<'_>) -> String {
+fn errors_section(page: &Page<'_>, mask: &Mask) -> String {
     let mut out = String::new();
     let mut descriptions: BTreeMap<String, Option<String>> = BTreeMap::new();
     for instance in page.errors {
         out.push_str(&format!(
             "## Errors view / 错误视图: {}\n\n",
-            cell(&instance.alias)
+            cell(&mask.member("alias", &instance.alias))
         ));
         out.push_str(&errors_line(instance));
         let Some(read) = &instance.read else {
@@ -419,15 +491,16 @@ fn errors_section(page: &Page<'_>) -> String {
                 Some(text) => format!("`{code}`: {}", cell(text)),
                 None => format!("`{code}`"),
             };
-            let run = row["run_id"]
-                .as_str()
-                .or_else(|| row["request_id"].as_str())
-                .unwrap_or("");
+            let run = match (row["run_id"].as_str(), row["request_id"].as_str()) {
+                (Some(run_id), _) => mask.member("run_id", run_id),
+                (None, Some(request_id)) => mask.member("request_id", request_id),
+                (None, None) => String::new(),
+            };
             out.push_str(&format!(
                 "| {} | {} | {code_text} | {} | {run} |\n",
                 row["ts"].as_u64().map_or_else(String::new, utc),
-                row["severity"].as_str().unwrap_or(""),
-                row["module"].as_str().unwrap_or("")
+                mask.member("severity", row["severity"].as_str().unwrap_or("")),
+                mask.member("module", row["module"].as_str().unwrap_or(""))
             ));
         }
         out.push('\n');
@@ -445,13 +518,14 @@ fn bound_text(bytes: u64) -> String {
 }
 
 /// Fix round 1, item 10: what the screenshots can show, and how to export without them; or that
-/// this report has none.
+/// this report has none. Fix round 2, item 8: the way named is the command's own option, which
+/// exists today (the console's control comes with its own slice).
 fn privacy_line(frames: bool) -> &'static str {
     if frames {
         "Screenshots / 截图: the screenshots in this report can show a player's name and numbers. \
-         To send a report without them, export again with `--no-frames` (in the console: untick \
-         the screenshots); the text and values read from them are left out too / \
-         本报告里的截图可能显示玩家的名字和数字；不想带截图时，用 --no-frames 重新导出（监控台上取消勾选截图），\
+         To send a report without them, export again with `--no-frames` (the command's own \
+         option); the text and values read from them are left out too / \
+         本报告里的截图可能显示玩家的名字和数字；不想带截图时，加上命令自己的选项 --no-frames 重新导出，\
          从截图读出的文字和数值也会一起去掉。\n\n"
     } else {
         "Screenshots / 截图: none; the text and values read from them are left out too / \
@@ -475,10 +549,10 @@ fn size_line(page: &Page<'_>) -> String {
 
 /// Fix round 1, item 3: for each instance, whether the listing of its failed and unfinished runs
 /// was read to its end.
-fn listings_lines(page: &Page<'_>) -> String {
+fn listings_lines(page: &Page<'_>, mask: &Mask) -> String {
     let mut out = String::new();
     for listing in page.listings {
-        let alias = cell(&listing.alias);
+        let alias = cell(&mask.member("alias", &listing.alias));
         match listing.cut {
             None => out.push_str(&format!(
                 "- Listing of {alias} / {alias} 的运行列表: read to its end / 读完\n"
@@ -498,8 +572,9 @@ fn listings_lines(page: &Page<'_>) -> String {
 
 /// `SUMMARY.md`: its first line says the view, the instances and the window; then the
 /// versions, the screenshots, the size, the runs' listings and table, each run, the errors view
-/// of each instance, what was left out, what is not in this report yet, and the warnings.
-pub(super) fn page(page: &Page<'_>) -> String {
+/// of each instance, what was left out, what is not in this report yet, and the warnings. Each
+/// value is masked as it is written (fix round 2, item 1).
+pub(super) fn page(page: &Page<'_>, mask: &Mask) -> String {
     let request = page.request;
     let until = request
         .until_unix_ms
@@ -507,7 +582,11 @@ pub(super) fn page(page: &Page<'_>) -> String {
     let instances = if page.instances.is_empty() {
         "none".to_owned()
     } else {
-        page.instances.join(", ")
+        page.instances
+            .iter()
+            .map(|alias| mask.member("alias", alias))
+            .collect::<Vec<_>>()
+            .join(", ")
     };
     let frames = if request.frames {
         "included / 带截图"
@@ -523,7 +602,7 @@ pub(super) fn page(page: &Page<'_>) -> String {
     ));
     out.push_str(&format!(
         "Versions / 版本: {}\n\n",
-        versions_line(page.versions)
+        versions_line(page.versions, mask)
     ));
     out.push_str(privacy_line(request.frames));
     out.push_str(&size_line(page));
@@ -531,12 +610,12 @@ pub(super) fn page(page: &Page<'_>) -> String {
         "## Runs / 运行: {} failed or unfinished, newest first / 失败或未结束的运行，新的在前\n\n",
         page.reports.len()
     ));
-    out.push_str(&listings_lines(page));
+    out.push_str(&listings_lines(page, mask));
     let unread = page
         .listings
         .iter()
         .filter(|listing| listing.cut.is_some())
-        .map(|listing| cell(&listing.alias))
+        .map(|listing| cell(&mask.member("alias", &listing.alias)))
         .collect::<Vec<_>>();
     if page.reports.is_empty() && unread.is_empty() {
         out.push_str(
@@ -554,17 +633,17 @@ pub(super) fn page(page: &Page<'_>) -> String {
         );
         out.push_str("|---|---|---|---|---|---|---|\n");
         for (index, report) in page.reports.iter().enumerate() {
-            out.push_str(&table_row(&(index + 1).to_string(), &report.row));
+            out.push_str(&table_row(&(index + 1).to_string(), &report.row, mask));
         }
         if let Some(before) = page.previous {
-            out.push_str(&table_row("before 1 / 1 之前", before));
+            out.push_str(&table_row("before 1 / 1 之前", before, mask));
         }
         out.push('\n');
     }
     for (index, report) in page.reports.iter().enumerate() {
-        out.push_str(&run_section(index + 1, report, page));
+        out.push_str(&run_section(index + 1, report, page, mask));
     }
-    out.push_str(&errors_section(page));
+    out.push_str(&errors_section(page, mask));
     if !page.left_out.is_empty() {
         out.push_str("## Left out / 未放入\n\n");
         for left in page.left_out {
@@ -584,7 +663,7 @@ pub(super) fn page(page: &Page<'_>) -> String {
     if !page.warnings.is_empty() {
         out.push_str("## Warnings / 警告\n\n");
         for warning in page.warnings {
-            out.push_str(&format!("- {warning}\n"));
+            out.push_str(&format!("- {}\n", outcome_line(warning, page, mask)));
         }
         out.push('\n');
     }
@@ -642,6 +721,7 @@ pub(super) fn data(page: &Page<'_>) -> Value {
             "kept": instance.read.as_ref().map(|read| read.rows.len()),
             "newest_only": instance.read.as_ref().map(|read| read.rows.len() >= ERRORS_PER_INSTANCE),
             "searched_to_start": instance.read.as_ref().map(super::Errors::searched_to_start),
+            "stopped": instance.read.as_ref().and_then(|read| read.stopped).map(|why| why.as_str()),
             "searched_from": instance.read.as_ref().and_then(|read| read.searched_from),
             "in_archive": page.kept.contains(&instance.file),
         })).collect::<Vec<_>>(),

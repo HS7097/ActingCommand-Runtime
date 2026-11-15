@@ -922,8 +922,10 @@ sentence fails that test.
     one problem report archive of the view `errors` into the directory `out` names, after it has
     refused an output inside the installation root or the state root and before it reaches the
     Runtime; it reads only through the rows' own read code (`status`, `runs`, `events`, `run
-    show`, `run evidence`, `material`), each read by a request id or by an instance with the
-    window, and confirms, captures and pins nothing. Its Runtime is required; the part that needs
+    show`, `run evidence`, `material`), each read that selects a record by a request id or by an
+    instance with the window (the one read that selects none, the errors view's search's read of
+    the ledger's head, a page whose range starts past every sequence, carries neither; fix round
+    2), and confirms, captures and pins nothing. Its Runtime is required; the part that needs
     none, and the views `package` and `run`, come with later slices. The words took the place of
     actinglab's own placeholder of the same words (the coordinator's ruling Q6).
   - `--envelope` is gone: nothing needs it once actinglab's own command lines answer as before.

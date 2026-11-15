@@ -62,6 +62,24 @@
 //!   report with frames and in no entry without them; what measures a frame stays (item 5).
 //! - `rpt1_fix1_the_masks_replace_names_inside_words_escaped_paths_and_dns_names`: the masks of
 //!   item 11.
+//!
+//! Fix round 2 (`rd-1115/brief-1725-fix2.md`), adapting where its items change what they pin
+//! (the fake's errors view says why it stopped, item 5; the masks of round 1's test, where the
+//! coordinator's ruling replaces item 11; the reads' code, whose errors view now goes through
+//! `errors_view`, item 4), and four new tests; the search's tests read the requests the search
+//! builds on a made-up Runtime ([`Pages`]) whose time a count of its requests spends, no clock:
+//! - `rpt1_fix2_the_masks_keep_member_names_hashes_and_ids_and_replace_a_short_name_alone`: with
+//!   the short names `val`, `ada` and `deb`, the members' names, a hash, a commit, the ids, a
+//!   code and an outcome's words stay whole, in a value and in a report, whose manifest checks
+//!   its entries; the three path and host forms are replaced (item 1).
+//! - `rpt1_fix2_an_alias_holding_the_name_names_its_entry_as_the_manifest_does`: the entry of an
+//!   alias that holds the user's name is named from the masked alias, as the manifest, the
+//!   summary's data and the page name it (item 2).
+//! - `rpt1_fix2_every_read_of_the_errors_search_carries_the_instance`: the head's read selects
+//!   no row; every other read of the search carries the instance (item 3).
+//! - `rpt1_fix2_the_deadline_cuts_the_errors_search_and_the_part_says_so`: no read of the search
+//!   starts once its time is spent, and the errors view is the part missing with the word for
+//!   that (item 4).
 
 use crate::code_lookup::{self, Answer, Query};
 use crate::codes::{
@@ -71,7 +89,7 @@ use crate::codes::{
 use crate::core_ops::{self, Caller, Place};
 use crate::core_reads::READ_HERE;
 use crate::devices::{self, AdbRun, Bind};
-use crate::events::CursorBinding;
+use crate::events::{CursorBinding, EventPages};
 use crate::front::Connection;
 use crate::material_export::MAX_EXPORT_BYTES;
 use crate::report::{
@@ -84,7 +102,14 @@ use crate::table::{
     operation_table,
 };
 use actingcommand_contract::outcome::{CodeStr, Outcome};
-use actingcommand_contract::{DeviceBoundVia, RuntimeOperationKind};
+use actingcommand_contract::{
+    AuditInput, DeviceBoundVia, EventAction, EventActor, EventDraft, EventLinksDraft, EventOrigin,
+    EventPayloadDraft, EventQuery, EventSeverity, EventSource, IdentifierIssuer, InstanceId,
+    LedgerView, OriginModule, ProjectedEvent, ProjectionPayload, ProjectionProfile,
+    RuntimeEventQueryPage, RuntimeEventQueryPageRequest, RuntimeOperationKind, RuntimePayloadDraft,
+    SanitizationError, SecretField, SecretFingerprinter, Sha256Fingerprint,
+};
+use actingcommand_runtime_client::RuntimeClientError;
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use std::cell::RefCell;
@@ -329,7 +354,7 @@ impl Source for Fake {
         Ok(Errors {
             rows: all[skipped..].to_vec(),
             searched_from: None,
-            cut: false,
+            stopped: None,
         })
     }
 
@@ -1564,12 +1589,12 @@ fn rpt1_the_report_only_reads_and_confirms_no_evidence() {
         .flat_map(str::split_whitespace)
         .collect::<String>();
     // Fix round 1, item 7: the errors view through the search for the newest records `events`
-    // has.
+    // has; fix round 2, item 4: through `errors_view`, which holds that search to its time.
     let reaching = [
         "self.client.status(",
         "self.client.list_contained_runs(",
         "self.client.visit_events(",
-        "events::newest_in_window(self.client,",
+        "errors_view(self.client,",
         "run_show::read(self.client,",
         "run_evidence::read(self.client,",
         "material::resolve(self.client,",
@@ -2324,14 +2349,662 @@ fn rpt1_fix1_the_masks_replace_names_inside_words_escaped_paths_and_dns_names() 
         assert_eq!(mask.text(given), masked, "{given}");
     }
     assert!(mask.applied() > 0);
-    // A mark already written is never searched again, even for a name that is in it.
+    // A mark already written is never searched again, even for a name that is in it. Fix round
+    // 2 (the coordinator's ruling, which replaces round 1's item 11): a name of fewer than five
+    // characters is replaced only where it stands alone, so `User` in `username` stays.
     let user = Mask::new(Some("User"), &[]);
     assert_eq!(
-        user.text("the username in C:\\Users\\Bob"),
-        "the <user>name in C:\\Users\\<user>"
+        user.text("the username in C:\\Users\\Bob\\x and User"),
+        "the username in C:\\Users\\<user>\\x and <user>"
     );
-    // A name of fewer than three characters is not masked.
     let short = Mask::new(Some("Al"), &["PC"]);
-    assert_eq!(short.text("Alpha on PC-2"), "Alpha on PC-2");
-    assert_eq!(report::SHORTEST_NAME, 3);
+    assert_eq!(short.text("Alpha on PC-2"), "Alpha on <computer>-2");
+    assert_eq!(report::SHORTEST_ANYWHERE, 5);
+}
+
+// ---- Fix round 2 (`rd-1115/brief-1725-fix2.md`)
+
+/// A made-up instance id: the requests of the errors view's search carry it.
+const INSTANCE_ID: &str = "instance_0123456789abcdef0123456789abcdef";
+/// The made-up Runtime's ledger head for the search, and the sequences of the records it holds.
+const SEARCH_HEAD: u64 = 1_000;
+const SEARCH_RECORDS: [u64; 3] = [900, 950, 980];
+/// An alias that holds the made-up user's name.
+const NAMED_ALIAS: &str = "zephyrine-pc";
+
+fn instance_id() -> InstanceId {
+    serde_json::from_value(json!(INSTANCE_ID))
+        .unwrap_or_else(|_| panic!("{INSTANCE_ID} is an instance id"))
+}
+
+/// The instance `alpha` with its id, and the report's window.
+fn searched_instance() -> Instance {
+    Instance {
+        alias: "alpha".to_owned(),
+        id: Some(instance_id()),
+    }
+}
+
+fn day() -> Window {
+    Window {
+        since_unix_ms: SINCE,
+        until_unix_ms: None,
+    }
+}
+
+/// A failure of the made-up Runtime, which never fails.
+fn read_failed(error: &RuntimeClientError) -> Missed {
+    Missed::new(ReportPartReason::ReadFailed, error.outcome())
+}
+
+struct NoSecrets;
+
+impl SecretFingerprinter for NoSecrets {
+    fn fingerprint(
+        &self,
+        _field: SecretField,
+        _original: &str,
+    ) -> Result<Sha256Fingerprint, SanitizationError> {
+        panic!("the made-up records hold no secret")
+    }
+}
+
+/// One made-up record at `sequence`, recorded `sequence` seconds after the window's start, as a
+/// forensic read projects it (the issuer mints its event id).
+fn search_record(issuer: &IdentifierIssuer, sequence: u64) -> ProjectedEvent {
+    let payload: EventPayloadDraft =
+        RuntimePayloadDraft::started(EventAction::RuntimeStart, AuditInput::new()).into();
+    let sanitized = EventDraft::new(
+        issuer.mint_event_id().expect("event id"),
+        SINCE + sequence * 1_000,
+        EventSeverity::Info,
+        EventOrigin::new(
+            EventSource::Runtime,
+            OriginModule::Runtime,
+            EventActor::Runtime,
+        ),
+        EventLinksDraft::default(),
+        payload,
+    )
+    .sanitize(&NoSecrets)
+    .expect("sanitize a made-up record");
+    ProjectedEvent {
+        views: Vec::new(),
+        artifact_evictions: Vec::new(),
+        schema_version: sanitized.schema_version().to_owned(),
+        sequence,
+        event_id: *sanitized.event_id(),
+        timestamp_unix_ms: sanitized.timestamp_unix_ms(),
+        event_type: sanitized.event_type(),
+        severity: sanitized.severity(),
+        sensitivity: sanitized.sensitivity(),
+        origin: sanitized.origin().clone(),
+        links: sanitized.links().clone(),
+        payload_schema: sanitized.payload_schema().to_owned(),
+        payload: ProjectionPayload::Full(Box::new(sanitized.payload().clone())),
+        artifacts: Vec::new(),
+    }
+}
+
+/// One QueryEvents page request the search sent.
+struct Asked {
+    query: EventQuery,
+    page: RuntimeEventQueryPageRequest,
+}
+
+/// The made-up Runtime the errors view's search reads (fix round 2): its ledger at the snapshot
+/// [`SEARCH_HEAD`] holds a record at each of [`SEARCH_RECORDS`]; a page answers the records of
+/// its sequence range recorded from its time bound's start on, at most its limit, with nothing
+/// more to come; every request is kept as the search built it.
+struct Pages {
+    records: Vec<ProjectedEvent>,
+    asked: RefCell<Vec<Asked>>,
+}
+
+impl Pages {
+    fn new() -> Self {
+        let issuer = IdentifierIssuer::new().expect("identifier issuer");
+        Self {
+            records: SEARCH_RECORDS
+                .iter()
+                .map(|sequence| search_record(&issuer, *sequence))
+                .collect(),
+            asked: RefCell::new(Vec::new()),
+        }
+    }
+
+    /// How many pages were asked for.
+    fn count(&self) -> usize {
+        self.asked.borrow().len()
+    }
+}
+
+impl EventPages for Pages {
+    fn event_page(
+        &self,
+        query: EventQuery,
+        _profile: ProjectionProfile,
+        page: RuntimeEventQueryPageRequest,
+    ) -> Result<RuntimeEventQueryPage, RuntimeClientError> {
+        let from = query.from_sequence.unwrap_or(1);
+        let through = query.to_sequence.unwrap_or(SEARCH_HEAD);
+        let since = query.from_timestamp_unix_ms.unwrap_or(0);
+        let limit = page.limit();
+        let events = self
+            .records
+            .iter()
+            .filter(|record| {
+                (from..=through).contains(&record.sequence) && record.timestamp_unix_ms >= since
+            })
+            .take(usize::from(limit))
+            .cloned()
+            .collect::<Vec<_>>();
+        self.asked.borrow_mut().push(Asked { query, page });
+        Ok(
+            RuntimeEventQueryPage::new(events, SEARCH_HEAD, limit, false, None)
+                .unwrap_or_else(|_| panic!("a made-up page")),
+        )
+    }
+}
+
+/// The made-up Runtime of [`Fake`] whose errors views are read by the search itself, through
+/// [`report::errors_view`] on `pages`, held to the time `late` says is spent (fix round 2,
+/// item 4); its instances carry an id.
+struct Searched<'a> {
+    fake: &'a Fake,
+    pages: &'a Pages,
+    late: &'a dyn Fn() -> Option<ReportPartReason>,
+}
+
+impl Source for Searched<'_> {
+    fn instances(&self, selector: Option<&str>) -> Result<Vec<Instance>, Outcome> {
+        Ok(self
+            .fake
+            .instances(selector)?
+            .into_iter()
+            .map(|instance| Instance {
+                id: Some(instance_id()),
+                ..instance
+            })
+            .collect())
+    }
+
+    fn runs(
+        &self,
+        instance: &Instance,
+        window: Window,
+        which: Which,
+        limit: usize,
+    ) -> Result<Listed, Missed> {
+        self.fake.runs(instance, window, which, limit)
+    }
+
+    fn errors(&self, instance: &Instance, window: Window, keep: usize) -> Result<Errors, Missed> {
+        report::errors_view(self.pages, instance, window, keep, self.late, &read_failed)
+    }
+
+    fn run(&self, request_id: &str) -> Result<Value, Missed> {
+        self.fake.run(request_id)
+    }
+
+    fn evidence(&self, request_id: &str) -> Result<Evidence, Missed> {
+        self.fake.evidence(request_id)
+    }
+
+    fn geometry(&self, request_id: &str) -> Result<Vec<Geometry>, Missed> {
+        self.fake.geometry(request_id)
+    }
+
+    fn recognitions(
+        &self,
+        request_id: &str,
+        from: u64,
+        through: Option<u64>,
+    ) -> Result<Vec<Recognition>, Missed> {
+        self.fake.recognitions(request_id, from, through)
+    }
+
+    fn material(&self, reference: &str, limit: u64) -> Result<Vec<u8>, Missed> {
+        self.fake.material(reference, limit)
+    }
+}
+
+/// Every member name of `value`, at any depth.
+fn member_names(value: &Value, names: &mut Vec<String>) {
+    match value {
+        Value::Object(members) => {
+            for (name, member) in members {
+                names.push(name.clone());
+                member_names(member, names);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                member_names(item, names);
+            }
+        }
+        _ => {}
+    }
+}
+
+#[test]
+fn rpt1_fix2_the_masks_keep_member_names_hashes_and_ids_and_replace_a_short_name_alone() {
+    // The short names of the review: `val` would cut `values` and `interval`; `ada` and `deb`,
+    // made of the letters a to f, would cut a hash and the ids.
+    let mask = Mask::new(Some("val"), &["ada", "deb"]);
+    for (given, masked) in [
+        // The three path and host forms: a Users folder's segment (once and doubly escaped), a
+        // host name, a folder whose name begins with the name.
+        ("C:\\Users\\val\\x", "C:\\Users\\<user>\\x"),
+        ("C:\\\\Users\\\\val\\\\x", "C:\\\\Users\\\\<user>\\\\x"),
+        ("VAL-PC", "<user>-PC"),
+        ("D:\\packs\\val_packs", "D:\\packs\\<user>_packs"),
+        ("on ada.deb.example", "on <computer>.<computer>.example"),
+        // Inside a longer word a short name stays.
+        ("values in an interval", "values in an interval"),
+        ("cadabra", "cadabra"),
+    ] {
+        assert_eq!(mask.text(given), masked, "{given}");
+    }
+
+    // In a value: the members' names, the numbers, a hash, a commit, an id, a code and the
+    // words of an outcome's vocabularies stay whole; the free text is masked.
+    let digest = format!("sha256:{}adad", "adadeb".repeat(10));
+    let commit = format!("{}adad", "adadeb".repeat(6));
+    let request = format!("request_{}", "ada0".repeat(8));
+    let mut value = json!({
+        "values": "val",
+        "interval": {"max_bytes": 24, "runtime_online": true},
+        "sha256": digest,
+        "commit_sha": commit,
+        "request_id": request,
+        "path": "C:\\Users\\val\\x",
+        "row": {
+            "code": "val_missing",
+            "outcome": {
+                "code": "report_part_missing",
+                "values": {
+                    "report_part": "run_listing",
+                    "report_part_reason": "not_read_to_end",
+                    "alias": "val",
+                },
+            },
+        },
+    });
+    mask.value(&mut value);
+    assert_eq!(
+        value,
+        json!({
+            "values": "<user>",
+            "interval": {"max_bytes": 24, "runtime_online": true},
+            "sha256": digest,
+            "commit_sha": commit,
+            "request_id": request,
+            "path": "C:\\Users\\<user>\\x",
+            "row": {
+                "code": "val_missing",
+                "outcome": {
+                    "code": "report_part_missing",
+                    "values": {
+                        "report_part": "run_listing",
+                        "report_part_reason": "not_read_to_end",
+                        "alias": "<user>",
+                    },
+                },
+            },
+        })
+    );
+    // A short name that stands alone in a code or a vocabulary's word: the word stays where it
+    // is a code or a word, the same text is replaced where it is free text.
+    let run = Mask::new(Some("run"), &[]);
+    let mut outcome =
+        json!({"code": "run_unknown", "values": {"report_part": "run_listing", "alias": "run"}});
+    run.value(&mut outcome);
+    assert_eq!(
+        outcome,
+        json!({"code": "run_unknown", "values": {"report_part": "run_listing", "alias": "<user>"}})
+    );
+    assert_eq!(run.text("run_listing"), "<user>_listing");
+
+    // A report masked by them: its run's ids hold `ada` and `deb`, its errors view a row with
+    // the three forms, its versions a commit of `ada` and `deb`.
+    let folder = TempDir::new().expect("a temporary folder");
+    let mut source = fake(64, 0);
+    let run_id = format!("run_{}", "deb0".repeat(8));
+    source.runs[0].row.request_id = request.clone();
+    source.runs[0].row.run_id = Some(run_id.clone());
+    source.errors.entry("alpha").or_default().push(json!({
+        "seq": 2_000, "ts": SINCE + 400_000, "type": "task.failed", "severity": "error",
+        "code": "val_missing", "run_id": run_id, "module": "runtime_host", "interval_ms": 5,
+        "path": "C:\\Users\\val\\x", "host": "VAL-PC", "folder": "D:\\packs\\val_packs",
+        "outcome": {"code": "report_part_missing", "values": {
+            "report_part": "run_listing", "alias": "val",
+        }},
+    }));
+    let installed = Installed {
+        versions: json!({
+            "lab_ops": "0.1.0",
+            "runtime": {"repository": "example/runtime", "commit_sha": commit},
+            "tools": null,
+            "ui": null,
+            "bundles": {},
+        }),
+        warnings: Vec::new(),
+    };
+    let exported = report::export(
+        &source,
+        &asked(folder.path(), true, default_bound()),
+        &installed,
+        &mask,
+    )
+    .unwrap_or_else(|outcome| panic!("the report is written: {outcome}"));
+    let entries = archive_entries(&exported.path);
+    // Every member name of every JSON entry is whole.
+    for (name, bytes) in &entries {
+        let documents = if name.ends_with(".jsonl") {
+            String::from_utf8_lossy(bytes)
+                .lines()
+                .map(|line| serde_json::from_str::<Value>(line).expect("a JSON line"))
+                .collect::<Vec<_>>()
+        } else if name.ends_with(".json") {
+            vec![serde_json::from_slice::<Value>(bytes).expect("JSON")]
+        } else {
+            continue;
+        };
+        for document in documents {
+            let mut found = Vec::new();
+            member_names(&document, &mut found);
+            assert!(
+                found
+                    .iter()
+                    .all(|member| !member.contains(report::USER_MARK)
+                        && !member.contains(report::COMPUTER_MARK)),
+                "{name}: {found:?}"
+            );
+        }
+    }
+    let manifest = document(&entries, "report/manifest.json");
+    for member in [
+        "max_bytes",
+        "runtime_online",
+        "within_bound",
+        "masks_applied",
+    ] {
+        assert!(manifest.get(member).is_some(), "{member}: {manifest}");
+    }
+    // The manifest checks its entries: each file it names is an entry of its size and digest,
+    // and it names every entry but itself.
+    let files = manifest["files"].as_array().expect("the manifest's files");
+    assert_eq!(files.len() + 1, entries.len());
+    for file in files {
+        let path = file["path"].as_str().unwrap_or_default();
+        let bytes = entry(&entries, path);
+        assert_eq!(file["size"], bytes.len(), "{path}");
+        assert_eq!(file["sha256"], hex(&Sha256::digest(bytes)), "{path}");
+    }
+    // The ids and the commit stay whole, in the run's folder too.
+    let run_folder = format!("report/runs/{run_id}");
+    let run_json = document(&entries, &format!("{run_folder}/run.json"));
+    assert_eq!(run_json["listing"]["request_id"], json!(request));
+    assert_eq!(run_json["listing"]["run_id"], json!(run_id));
+    assert_eq!(
+        document(&entries, &format!("{run_folder}/steps.json"))["request_id"],
+        json!(request)
+    );
+    assert_eq!(
+        document(&entries, "report/versions.json")["runtime"]["commit_sha"],
+        json!(commit)
+    );
+    let summary = text(&entries, "report/SUMMARY.md");
+    assert!(
+        summary.contains(&format!("## Run 1 / 运行 1: {run_id} ({request})")),
+        "{summary}"
+    );
+    // The short names are replaced where they stand alone: the three forms of the errors row;
+    // its code, its member names and the word of its outcome stay.
+    let row = text(&entries, "report/instances/alpha/errors.jsonl")
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("a row"))
+        .find(|row| row["seq"] == 2_000)
+        .expect("the row with the three forms");
+    assert_eq!(row["path"], "C:\\Users\\<user>\\x", "{row}");
+    assert_eq!(row["host"], "<user>-PC", "{row}");
+    assert_eq!(row["folder"], "D:\\packs\\<user>_packs", "{row}");
+    assert_eq!(row["code"], "val_missing", "{row}");
+    assert_eq!(row["interval_ms"], 5, "{row}");
+    assert_eq!(
+        row["outcome"]["values"],
+        json!({"report_part": "run_listing", "alias": "<user>"}),
+        "{row}"
+    );
+}
+
+#[test]
+fn rpt1_fix2_an_alias_holding_the_name_names_its_entry_as_the_manifest_does() {
+    // A third instance whose alias holds the user's name, with three rows in its errors view.
+    let folder = TempDir::new().expect("a temporary folder");
+    let mut source = fake(64, 0);
+    source.instances.push(NAMED_ALIAS);
+    source
+        .errors
+        .insert(NAMED_ALIAS, (1..=3).map(error_row).collect());
+    let exported = export_from(
+        &source,
+        &asked(folder.path(), true, default_bound()),
+        &versions(),
+    );
+    let entries = archive_entries(&exported.path);
+    // The entry is named from the masked alias, and the manifest names it as the archive does.
+    let file = "instances/_user_-pc/errors.jsonl";
+    let named = format!("report/{file}");
+    let bytes = entry(&entries, &named);
+    let manifest = document(&entries, "report/manifest.json");
+    let files = manifest["files"].as_array().expect("the manifest's files");
+    let row = files
+        .iter()
+        .find(|row| row["path"] == named.as_str())
+        .unwrap_or_else(|| panic!("the manifest names {named}: {manifest}"));
+    assert_eq!(row["size"], bytes.len());
+    assert_eq!(row["sha256"], hex(&Sha256::digest(bytes)));
+    // Every name the manifest gives is an entry's; no entry's name holds the user's name.
+    let entry_names = names(&entries);
+    for row in files {
+        let path = row["path"].as_str().unwrap_or_default();
+        assert!(entry_names.contains(&path), "{path}: {entry_names:?}");
+    }
+    for name in &entry_names {
+        assert!(!name.to_ascii_lowercase().contains("zephyrine"), "{name}");
+    }
+    // The same masked alias in the manifest, the summary's data and the page.
+    assert_eq!(manifest["instances"], json!(["alpha", "beta", "<user>-pc"]));
+    let data = document(&entries, "report/summary.json");
+    assert_eq!(data["errors"][2]["alias"], "<user>-pc");
+    assert_eq!(data["errors"][2]["file"], file);
+    assert_eq!(data["errors"][2]["in_archive"], true);
+    let summary = text(&entries, "report/SUMMARY.md");
+    for line in [
+        "## Errors view / 错误视图: <user>-pc\n".to_owned(),
+        format!("3 rows in {file}, every row of the window"),
+    ] {
+        assert!(summary.contains(&line), "{line}\n{summary}");
+    }
+}
+
+#[test]
+fn rpt1_fix2_every_read_of_the_errors_search_carries_the_instance() {
+    let pages = Pages::new();
+    let errors = report::errors_view(
+        &pages,
+        &searched_instance(),
+        day(),
+        report::ERRORS_PER_INSTANCE,
+        &|| None,
+        &read_failed,
+    )
+    .unwrap_or_else(|miss| panic!("the errors view is read: {miss:?}"));
+    assert_eq!(
+        errors
+            .rows
+            .iter()
+            .map(|row| row["seq"].as_u64())
+            .collect::<Vec<_>>(),
+        SEARCH_RECORDS.map(Some)
+    );
+    assert_eq!(errors.stopped, None);
+    // The requests the search built: the head's, the window's start, one window, the rows.
+    let asked = pages.asked.borrow();
+    assert_eq!(asked.len(), 4);
+    // The head's selects no row: its range starts past the head and it has no other condition,
+    // the instance included.
+    let (head, rest) = asked.split_first().expect("the head's read");
+    assert!(
+        head.query
+            .from_sequence
+            .is_some_and(|from| from > SEARCH_HEAD),
+        "{:?}",
+        head.query
+    );
+    assert_eq!(
+        EventQuery {
+            from_sequence: None,
+            ..head.query.clone()
+        },
+        EventQuery::default()
+    );
+    assert_eq!(head.page.limit(), 1);
+    // Every other read carries the instance and the window's time bound, at the head's
+    // snapshot, without run recovery.
+    for read in rest {
+        assert_eq!(
+            read.query.instance_id,
+            Some(instance_id()),
+            "{:?}",
+            read.query
+        );
+        assert_eq!(
+            (
+                read.query.from_timestamp_unix_ms,
+                read.query.to_timestamp_unix_ms
+            ),
+            (Some(SINCE), None),
+            "{:?}",
+            read.query
+        );
+        assert_eq!(read.page.snapshot_position(), Some(SEARCH_HEAD));
+        assert!(!read.page.derives_run_recovery(), "{:?}", read.page);
+    }
+    // The window's start: the instance and the time bound alone, through the head, one row.
+    assert_eq!(
+        rest[0].query,
+        EventQuery {
+            from_timestamp_unix_ms: Some(SINCE),
+            to_sequence: Some(SEARCH_HEAD),
+            instance_id: Some(instance_id()),
+            ..EventQuery::default()
+        }
+    );
+    assert_eq!(rest[0].page.limit(), 1);
+    // The window and the rows: the errors view, between the instance's first record of the
+    // window and the head.
+    for read in &rest[1..] {
+        assert_eq!(
+            read.query.view,
+            Some(LedgerView::Errors),
+            "{:?}",
+            read.query
+        );
+        let (Some(from), Some(through)) = (read.query.from_sequence, read.query.to_sequence) else {
+            panic!("a read without its range: {:?}", read.query);
+        };
+        assert!(
+            SEARCH_RECORDS[0] <= from && from <= through && through <= SEARCH_HEAD,
+            "[{from}, {through}]"
+        );
+    }
+}
+
+#[test]
+fn rpt1_fix2_the_deadline_cuts_the_errors_search_and_the_part_says_so() {
+    // The time spent once the window's start was read (before the search's first window), or
+    // once its window was read (before the rows): no read starts after it, and the errors view
+    // is missing with the word the time gives.
+    for (reads, word) in [
+        (2, ReportPartReason::BudgetSpent),
+        (3, ReportPartReason::NotReadToEnd),
+    ] {
+        let pages = Pages::new();
+        let late = || (pages.count() >= reads).then_some(word);
+        let miss = report::errors_view(
+            &pages,
+            &searched_instance(),
+            day(),
+            report::ERRORS_PER_INSTANCE,
+            &late,
+            &read_failed,
+        )
+        .expect_err("the search is cut");
+        assert_eq!(miss.why, word);
+        assert!(miss.cause.is_none(), "{miss:?}");
+        assert_eq!(pages.count(), reads, "a read after the time was spent");
+    }
+
+    // Through the report: its errors views read by that search, the time spent once alpha's
+    // window start was read; both instances' errors views are missing with the word, nothing
+    // is read after it, and the rest of the report is written.
+    let folder = TempDir::new().expect("a temporary folder");
+    let made_up = fake(64, 0);
+    let pages = Pages::new();
+    let late = || (pages.count() >= 2).then_some(ReportPartReason::BudgetSpent);
+    let source = Searched {
+        fake: &made_up,
+        pages: &pages,
+        late: &late,
+    };
+    let exported = export_from_source(&source, &asked(folder.path(), true, default_bound()));
+    assert_eq!(pages.count(), 2);
+    for alias in ["alpha", "beta"] {
+        let warning = missing_part(
+            &exported,
+            ReportPart::ErrorsView,
+            ReportPartReason::BudgetSpent,
+            "alias",
+            alias,
+        );
+        assert_eq!(
+            warning.value("file"),
+            Some(&json!(format!("instances/{alias}/errors.jsonl"))),
+            "{warning}"
+        );
+    }
+    let entries = archive_entries(&exported.path);
+    assert!(
+        !names(&entries)
+            .iter()
+            .any(|name| name.ends_with("errors.jsonl")),
+        "{:?}",
+        names(&entries)
+    );
+    assert!(names(&entries).contains(&"report/runs/run-a/run.json"));
+    let data = document(&entries, "report/summary.json");
+    for place in 0..2 {
+        assert_eq!(data["errors"][place]["read"], false, "{}", data["errors"]);
+        assert_eq!(
+            data["errors"][place]["why"], "budget_spent",
+            "{}",
+            data["errors"]
+        );
+    }
+    let summary = text(&entries, "report/SUMMARY.md");
+    assert!(
+        summary.contains(
+            "## Errors view / 错误视图: alpha\n\nNot read (`budget_spent`); see the warnings"
+        ),
+        "{summary}"
+    );
+}
+
+/// The report of `source` with the made-up versions and masks.
+fn export_from_source(source: &dyn Source, request: &Request) -> Exported {
+    report::export(source, request, &versions(), &mask())
+        .unwrap_or_else(|outcome| panic!("the report is written: {outcome}"))
 }
