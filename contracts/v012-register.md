@@ -25546,22 +25546,25 @@ built here.
 **The request member** `select` (request form only; [lab-recording.md](lab-recording.md)):
 `slots[]` (1 to 16; `rect`, optional `click`, `name`), `read`, `names[]`, `match`, `wanted {name,
 default}`, optional `pressed`, `on_empty_key` (default `<task_id>_not_found`) and `confirm`
-(`candidate_set` or `decision`). Additive: an older build refuses it as an unknown member. The
-`select/` prefix of mark ids is reserved (`record_mark_id_reserved`), the ids of the generated slot
-targets and of the probe's marks.
+(`candidate_set` or `decision`); fix round 1: `clear_select` (request form only), which takes a
+select off. Additive: an older build refuses either as an unknown member. The `select/` prefix of
+mark ids is reserved (`record_mark_id_reserved`), the ids of the generated slot targets and of the
+probe's marks.
 
 **Codes and words** (`contracts/outcome-codes/lab.json`, catalog key and vocabulary
 `select_problem`): `record_select_invalid` (error, exit 3, value `select_problem`), words
 `with_follow`, `with_gesture`, `with_click`, `with_retry`, `on_optional_step`, `with_application`,
-`on_final_step`, `slot_outside_frame`, `name_id_invalid`, `name_duplicate`, `default_not_in_names`,
-`pressed_not_in_names`, `wanted_name_taken`, `on_empty_key_invalid`, `on_empty_key_taken`,
-`guard_missing`, `kernel_refused` (the design's nine and, one situation each, eight more). The
-self-test's reasons of `record_mark_rejected` (unregistered, as every reason of that code):
-`select_name_unread`, `select_pressed_absent`, `select_press_mismatch`, and the existing
-`self_test_error` for a dry run that fails; at stop the same reasons inside
-`record_step_self_mismatch`. Without an OCR model a select is `not_evaluated` (`lab_ocr_unavailable`)
-and listed in `marks_not_evaluated` as `select/<page>`; one whose step has no recorded press is
-refused `lab_ocr_unavailable`, as L2's located-text click.
+`on_final_step`, `slot_outside_frame`, `name_id_invalid`, `wanted_name_invalid`, `name_duplicate`,
+`default_not_in_names`, `pressed_not_in_names`, `wanted_name_taken`, `on_empty_key_invalid`,
+`on_empty_key_reserved`, `on_empty_key_taken`, `guard_missing`, `kernel_refused`: nineteen words,
+the design's nine and, one situation each, ten more (fix round 1 split `name_id_invalid`, which
+had stood for `wanted.name` too, and `on_empty_key_taken`, which had stood for the `_done` key
+too). The self-test's reasons of `record_mark_rejected` (unregistered, as every reason of that
+code): `select_name_unread`, `select_pressed_absent`, `select_press_mismatch`,
+`select_other_page_passes` (fix round 1), and the existing `self_test_error` for a dry run that
+fails; at stop the first three inside `record_step_self_mismatch`. Without an OCR model a select
+is `not_evaluated` (`lab_ocr_unavailable`) and listed in `marks_not_evaluated` as `select/<page>`;
+one whose step has no recorded press is refused `lab_ocr_unavailable`, as L2's located-text click.
 
 **The wanted value is a constant** (the coordinator's ruling): the one gate `wanted.<name>` keeps
 `allowed: [<default>]` and `control.json` has no `variables` member; `select.wanted {name, default}`
@@ -25580,17 +25583,46 @@ the admitted package (the step's page the one page that passes; every name known
 frame the pressed name selects the slot the press hit). A recording without a select generates the
 same bytes: every addition is absent without one.
 
-Tests: Lab `gate_463_r1.rs` (exec gate row "#463 R1", twelve tests): accepted, generated and admitted
-with its tap inside the default's slot; each `select_problem` and the reserved prefix; the second
-select's own name and key; `on_final_step`; a sample with the pressed name in the other slot; a press
-outside the selected slot; an unread slot and an absent pressed name; without an OCR model; L1's one
-call; a given `on_empty` key and an empty first decision; a default changed after stop regenerating
-another package; a recording without a select. No existing test changes, no golden changes, no test
-leaves the gate map.
+**Fix round 1** (coordinator brief `rd-1115/brief-1729-fix1.md`, after the independent review).
+- A select on the application entry step, which has no frame, was dropped (`apply_application`
+  answered for a request naming no application): it is now `with_application` on an application
+  step and `record_step_frame_missing` on any other step without a frame. The same path drops no
+  other member: `replace_click` and `replace_transition` are permissions that change nothing by
+  themselves on any path, `optional_settle_ms` goes with `optional`, `frame` is a conflict there,
+  and every other member needs a frame.
+- The contract now says which read bounds the Lab refuses (`validation_failed`, exit 2) and which
+  only the kernel's admission refuses (`kernel_refused`, exit 3, the kernel's code in
+  `loader_code`); no bound of the kernel is copied.
+- A select declared on a step whose tap has an outcome on record (also after `record stop`) keeps
+  the tap's own rectangle, source and mark in `select.click_before`; `clear_select` gives them back
+  (the select's own executed press: `record_click_executed`), so the recording generates the
+  package it generated before.
+- Each frame's decision is reported by its kind (`selected` with its slot, `empty`, `ambiguous`,
+  `insufficient`, `unknown`, `blocked`) in the mark's answer, `recording.json` and `lab.selects`
+  (`frames[{frame_id, pressed, default}]`, replacing `pressed_slot` and `default_slot`); the first
+  decision answers `would_end_empty` only for an empty decision.
+- The words above; the probe's select step is pinned by a test against the one `record stop`
+  generates; another step's page the mark knows is checked on the select's frames at mark time
+  (`select_other_page_passes`); the MCP tool `ac_record_mark` names `select` and `clear_select`.
 
-**At deploy.** Nothing installed changes: no recording holds a select before this build, and a
-recording without one is read, written and generated as before. A package generated with a select
-step needs a Runtime of 0.12.61 or later (`package` 13; an earlier Runtime refuses it at admission).
+Tests: Lab `gate_463_r1.rs` (exec gate row "#463 R1", sixteen tests): accepted, generated and
+admitted with its tap inside the default's slot; each `select_problem` and the reserved prefix; the
+second select's own name and key; `on_final_step`; a sample with the pressed name in the other slot;
+a press outside the selected slot; an unread slot (its default `blocked`) and an absent pressed name;
+without an OCR model; L1's one call; a given `on_empty` key and an empty first decision; a default
+changed after stop regenerating another package; a recording without a select, compared with
+constants (no existing test compares a generated package with one); fix round 1: a select on an
+application step; a select added after stop and taken off regenerating the package as before;
+another step's page on the select's frame; the probe's select step against the package's. Fix
+round 1 adapted this slice's own tests where the requirement changed what they pin (the frames'
+decisions by kind, the two new words, a second list that is a screen of its own). No existing test
+of main changes, no golden changes, no test leaves the gate map.
+
+**At deploy.** Nothing installed changes but one: a mark id beginning with `select/` is now
+refused (`record_mark_id_reserved`), the one change for a recording without a select. No recording
+holds a select before this build, and a recording without one is read, written and generated as
+before. A package generated with a select step needs a Runtime of 0.12.61 or later (`package` 13;
+an earlier Runtime refuses it at admission).
 
 **Rollback** (below 0.12.61). An earlier `actinglab` does not decode a recording that holds a select
 (`lab_recording_unreadable`, the file left as it is) and refuses a request with one

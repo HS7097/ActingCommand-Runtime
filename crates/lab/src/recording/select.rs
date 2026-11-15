@@ -12,9 +12,11 @@
 //! called on a probe package that holds the step as `record stop` generates it: on every live
 //! frame of the step every slot's name must read a known name (`select_name_unread`), the pressed
 //! name must select a slot on the primary frame (`select_pressed_absent`) and the executed press
-//! must lie in that slot (`select_press_mismatch`); the default's decision is reported per frame.
-//! Without an OCR model the select is `not_evaluated` (`lab_ocr_unavailable`), never passed.
-//! Every declaration that cannot hold is `record_select_invalid` with its `select_problem`.
+//! must lie in that slot (`select_press_mismatch`); the default's decision is reported per frame
+//! by its kind. Fix 1: the page of another step the mark knows must not pass on those frames
+//! (`select_other_page_passes`, checked in `steps.rs`). Without an OCR model the select is
+//! `not_evaluated` (`lab_ocr_unavailable`), never passed. Every declaration that cannot hold is
+//! `record_select_invalid` with its `select_problem`; `clear_select` takes a select off again.
 
 use super::frames::{LoadedFrame, rect_inside};
 use super::generate::{
@@ -23,19 +25,23 @@ use super::generate::{
 use super::marks::MarkRejection;
 use super::model::{
     ClickSpec, LabRecording, MarkRequest, RecordPoint, RecordRect, RecordedFrame, RecordedMark,
-    RecordingStep, SelectSelfTest, SelectSpec, SelfTestStatus, StepClick, StepSelect,
+    RecordingStep, SelectClickBefore, SelectDecision, SelectFrameDecision, SelectSelfTest,
+    SelectSpec, SelfTestStatus, StepClick, StepSelect,
 };
 use super::store::{blocked, invalid, now_unix_ms, with_details};
 use crate::LabOcr;
 use crate::codes::{LabCode, SelectProblem};
 use actingcommand_contract::candidate_projection::{CandidateFeature, ProjectedCandidate};
 use actingcommand_contract::outcome::{Detail, Outcome};
-use actingcommand_contract::{InstanceFactContext, InstanceFactSnapshot, LabError, LabResult};
+use actingcommand_contract::{
+    InstanceFactContext, InstanceFactSnapshot, LabError, LabResult, TaskSelectionOutcome,
+};
 use actingcommand_device::Frame;
 use actingcommand_execution_kernel::{PreparedContainedTask, dry_run_select};
 use actingcommand_recognition_pack::{
     CandidateIdentityDeclaration, CandidateIdentityEntry, CandidateIdentityRecognition,
 };
+use serde::Serialize;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
@@ -51,6 +57,9 @@ pub(crate) const PRESS_MISMATCH: &str = "select_press_mismatch";
 /// The kernel's dry run of the select failed on a frame (the existing reason of an evaluation
 /// error of a mark's self-test).
 pub(crate) const SELF_TEST_ERROR: &str = "self_test_error";
+/// Fix 1: the page of another effective step passes on a live frame of the select step too, so
+/// the run's select would not know its page there (the kernel's `select_page_mismatch` at stop).
+pub(crate) const OTHER_PAGE_PASSES: &str = "select_other_page_passes";
 /// The instance the probe package is admitted for.
 const PROBE_INSTANCE: &str = "lab.record.select";
 /// The time the probe's admission may take, as `record stop`'s.
@@ -139,10 +148,20 @@ fn identity(select: &SelectSpec) -> CandidateIdentityDeclaration {
 
 /// The rules of a request that declares a select, before any recording is read: nothing beside
 /// it that the step's one effect cannot hold (`with_application`, `with_follow`, `with_gesture`,
-/// `with_click`, `with_retry`, `on_optional_step`), then its shape. A shape the kernel's rules
-/// refuse (the slots' count and sizes, the read, the names' count and aliases, the match) is
-/// `validation_failed` (exit 2); a name, key or value that breaks its own rule has its word.
+/// `with_click`, `with_retry`, `on_optional_step`), then its shape. The Lab's own reading of the
+/// shape (the slots' count, a rectangle without width or height, an empty value of the read, a
+/// zero timeout, a confidence outside 1..=1000, a digest that is not 64 lowercase hex, and the
+/// identity domain and match as the identity declaration validates them) is `validation_failed`
+/// (exit 2); a name, key or value that breaks its own rule has its word. Fix 1: every other bound
+/// of the read (a timeout, the languages, the model reference) is the kernel's: its admission of
+/// the probe refuses it at the self-test, `kernel_refused` with the kernel's code.
 pub(crate) fn validate_select_request(request: &MarkRequest) -> LabResult<()> {
+    if request.clear_select && request.select.is_some() {
+        return Err(invalid(
+            "validation_failed",
+            "give one of select and clear_select",
+        ));
+    }
     let Some(select) = &request.select else {
         return Ok(());
     };
@@ -261,7 +280,7 @@ fn validate_select_shape(step: Option<u32>, select: &SelectSpec) -> LabResult<()
         .map_err(|message| shape(format!("names or match: {message}")))?;
     if !name_id_valid(&select.wanted.name) {
         return refuse(
-            SelectProblem::NameIdInvalid,
+            SelectProblem::WantedNameInvalid,
             format!(
                 "the wanted name '{}' must match ^[a-z][a-z0-9_]{{0,63}}$",
                 select.wanted.name
@@ -304,12 +323,18 @@ fn validate_select_shape(step: Option<u32>, select: &SelectSpec) -> LabResult<()
 /// stays in the way (`record_select_invalid`). A click without an outcome, the select's own
 /// among them, is replaced only with `replace_click` (`record_click_exists` otherwise, so that a
 /// one-call step sent again presses nothing twice). An application operation of the step stays in
-/// the way too. Returns whether the step had no press to keep a click box from: without an OCR
-/// model such a select cannot find its click.
+/// the way too. Fix 1: an executed click that was not the select's own keeps its rectangle,
+/// source and mark in the select (`click_before`, carried over when the select is declared
+/// again), which `clear_select` gives back. Returns whether the step had no press to keep a
+/// click box from: without an OCR model such a select cannot find its click.
 pub(crate) fn declare_select(step: &mut RecordingStep, request: &MarkRequest) -> LabResult<bool> {
     let Some(spec) = &request.select else {
         return Ok(false);
     };
+    let carried = step
+        .select
+        .as_ref()
+        .and_then(|select| select.click_before.clone());
     let index = step.index;
     let refuse =
         |problem: SelectProblem, message: String| select_invalid(Some(index), problem, message);
@@ -343,7 +368,7 @@ pub(crate) fn declare_select(step: &mut RecordingStep, request: &MarkRequest) ->
         attempts,
         needs_review: false,
     };
-    let (click, fresh) = match step.click.take() {
+    let (click, fresh, click_before) = match step.click.take() {
         Some(click) if click.execution.is_some() => {
             let problem = if click.gesture.is_some() {
                 Some((
@@ -370,6 +395,17 @@ pub(crate) fn declare_select(step: &mut RecordingStep, request: &MarkRequest) ->
                 step.click = Some(click);
                 return Err(refuse(problem, message));
             }
+            // Fix 1: the select's own press keeps what an earlier declaration kept; any other
+            // press keeps its own rectangle, source and mark.
+            let before = if click.source == SELECT_SOURCE {
+                carried
+            } else {
+                Some(SelectClickBefore {
+                    rect: click.rect,
+                    source: click.source.clone(),
+                    from: click.from.clone(),
+                })
+            };
             (
                 StepClick {
                     source: SELECT_SOURCE.to_string(),
@@ -377,6 +413,7 @@ pub(crate) fn declare_select(step: &mut RecordingStep, request: &MarkRequest) ->
                     ..click
                 },
                 false,
+                before,
             )
         }
         Some(click) if !request.replace_click => {
@@ -392,8 +429,8 @@ pub(crate) fn declare_select(step: &mut RecordingStep, request: &MarkRequest) ->
                 json!({"step": index}),
             ));
         }
-        Some(click) => (declared(click.attempts), true),
-        None => (declared(Vec::new()), true),
+        Some(click) => (declared(click.attempts), true, None),
+        None => (declared(Vec::new()), true, None),
     };
     step.click = Some(click);
     step.select = Some(StepSelect {
@@ -404,8 +441,53 @@ pub(crate) fn declare_select(step: &mut RecordingStep, request: &MarkRequest) ->
             reason: None,
             frames: Vec::new(),
         },
+        click_before,
     });
     Ok(fresh)
+}
+
+/// Fix 1: a request's `clear_select` takes the step's select off, also on a stopped recording.
+/// An executed click the select took over gets back its own rectangle, source and mark
+/// (`click_before`), so the step is the one recorded before the select; the select's own click
+/// without an outcome goes with it, with its click guard, and the step has no effect again. The
+/// select's own press, executed, is no click of its own to give back: `record_click_executed`
+/// (reopen the step first). A step without a select is left as it is.
+pub(crate) fn clear_select(step: &mut RecordingStep) -> LabResult<()> {
+    let index = step.index;
+    let Some(select) = &step.select else {
+        return Ok(());
+    };
+    let executed = step
+        .click
+        .as_ref()
+        .is_some_and(|click| click.execution.is_some());
+    if select.click_before.is_none() && executed {
+        return Err(with_details(
+            blocked(
+                "record_click_executed",
+                format!(
+                    "step {index}'s press was the select's own, so there is no click of its own to \
+                     give back; run `record mark --reopen-step {index}` first, or declare the \
+                     select again"
+                ),
+            ),
+            json!({"step": index}),
+        ));
+    }
+    match step.select.take().and_then(|select| select.click_before) {
+        Some(before) => {
+            if let Some(click) = step.click.as_mut() {
+                click.rect = before.rect;
+                click.source = before.source;
+                click.from = before.from;
+            }
+        }
+        None => {
+            step.click = None;
+            step.click_guard = None;
+        }
+    }
+    Ok(())
 }
 
 /// The rules a select step keeps after every `record mark` of it, whatever the command changed:
@@ -479,10 +561,11 @@ pub(crate) struct SelectProbe {
 }
 
 /// The self-test of the select of `probe.step` on its live `frames`: the rules that need the
-/// recording (`slot_outside_frame`, `on_final_step`, `on_empty_key_taken`, `wanted_name_taken`),
-/// then the probe package admitted by the kernel (`guard_missing`, `kernel_refused`), then, with
-/// an OCR model, the kernel's dry run on every frame. `fresh` says the step had no press to keep a
-/// click box from (see [`declare_select`]); without an OCR model such a select is refused
+/// recording (`slot_outside_frame`, `on_final_step`, `on_empty_key_reserved`,
+/// `on_empty_key_taken`, `wanted_name_taken`), then the probe package admitted by the kernel
+/// (`guard_missing`, `kernel_refused`), then, with an OCR model, the kernel's dry run on every
+/// frame, each frame's decisions reported by their kind. `fresh` says the step had no press to
+/// keep a click box from (see [`declare_select`]); without an OCR model such a select is refused
 /// `lab_ocr_unavailable`, every other one is `not_evaluated`.
 pub(crate) fn check_step_select(
     recording: &LabRecording,
@@ -538,7 +621,7 @@ pub(crate) fn check_step_select(
     let key = on_empty_key(&recording.task_id, spec);
     if key == done_key(&recording.task_id) {
         return refuse(
-            SelectProblem::OnEmptyKeyTaken,
+            SelectProblem::OnEmptyKeyReserved,
             format!("the on_empty key '{key}' is the usual ending's key"),
         );
     }
@@ -649,6 +732,8 @@ pub(crate) fn check_step_select(
                 continue;
             }
         };
+        // Fix 1: the refusal names the default's decision on the frame too (`blocked`: the run
+        // would fail there).
         if let Some((slot, cause)) = default.unread.first() {
             rejections.push(MarkRejection::new(
                 SELECT_REJECTION_ID,
@@ -661,13 +746,14 @@ pub(crate) fn check_step_select(
                         .unread
                         .iter()
                         .map(|(slot, cause)| json!({"slot": slot, "cause": cause}))
-                        .collect::<Vec<_>>()
+                        .collect::<Vec<_>>(),
+                    "default": default.kind
                 }),
             ));
             continue;
         }
         let pressed = match &override_document {
-            None => default.selected,
+            None => default.kind,
             Some(document) => {
                 match decide(
                     &prepared,
@@ -676,7 +762,7 @@ pub(crate) fn check_step_select(
                     Some(document),
                     instant,
                 )? {
-                    Ok(decided) => decided.selected,
+                    Ok(decided) => decided.kind,
                     Err(failure) => {
                         rejections.push(MarkRejection::new(
                             SELECT_REJECTION_ID,
@@ -689,11 +775,15 @@ pub(crate) fn check_step_select(
             }
         };
         if primary {
-            let Some(slot) = pressed else {
+            let Some(slot) = pressed.slot() else {
                 rejections.push(MarkRejection::new(
                     SELECT_REJECTION_ID,
                     PRESSED_ABSENT,
-                    json!({"frame_id": frame_id, "pressed": spec.pressed_name()}),
+                    json!({
+                        "frame_id": frame_id,
+                        "pressed": spec.pressed_name(),
+                        "decision": pressed
+                    }),
                 ));
                 continue;
             };
@@ -721,10 +811,10 @@ pub(crate) fn check_step_select(
             }
             click_rect = Some(rect);
         }
-        decisions.push(super::model::SelectFrameDecision {
+        decisions.push(SelectFrameDecision {
             frame_id: frame_id.to_string(),
-            pressed_slot: pressed,
-            default_slot: default.selected,
+            pressed,
+            default: default.kind,
         });
     }
     if rejections.is_empty() && click_rect.is_none() {
@@ -754,11 +844,11 @@ fn point_in(point: RecordPoint, rect: RecordRect) -> bool {
         && i64::from(point.y) < i64::from(rect.y) + i64::from(rect.height)
 }
 
-/// One decision of the kernel's dry run of a select on one frame: the slot it selects (`None`:
-/// empty), each slot's click box, and the slots whose name read no known name, each with its
-/// typed cause.
+/// One decision of the kernel's dry run of a select on one frame: its kind (fix 1: `selected`
+/// with its slot, `empty`, or the kind of a decision the run fails on), each slot's click box, and
+/// the slots whose name read no known name, each with its typed cause.
 pub(crate) struct Decided {
-    pub(crate) selected: Option<u32>,
+    pub(crate) kind: SelectDecision,
     pub(crate) clicks: BTreeMap<u32, RecordRect>,
     pub(crate) unread: Vec<(u32, Value)>,
 }
@@ -822,40 +912,76 @@ pub(crate) fn decide(
         }
     };
     let candidates = dry.candidate_projection.candidates();
-    let slot_of = |id: &str| {
-        candidates
-            .iter()
-            .find(|candidate| candidate.id == id)
-            .map(|candidate| candidate.instance_index)
-    };
-    let selected = match dry.decision.selected.as_slice() {
-        [] => None,
-        [id] => Some(slot_of(id.as_str()).ok_or_else(|| {
-            invalid(
-                "validation_failed",
-                format!("the dry run selected '{id}', no candidate of its projection"),
-            )
-        })?),
-        more => {
-            return Err(invalid(
-                "validation_failed",
-                format!("the dry run selected {} candidates of one list", more.len()),
-            ));
+    let unread = candidates
+        .iter()
+        .filter_map(|candidate| {
+            unread_cause(candidate).map(|cause| (candidate.instance_index, cause))
+        })
+        .collect::<Vec<_>>();
+    // Fix 1: the decision by its kind, as the run takes it: an empty or insufficient decision
+    // while a slot reads no known name is blocked (S0 §3.2 rule 2, which the run applies).
+    let kind = match mirrored_outcome(&dry.decision.outcome)? {
+        TaskSelectionOutcome::Selected { .. } => {
+            let [id] = dry.decision.selected.as_slice() else {
+                return Err(invalid(
+                    "validation_failed",
+                    format!(
+                        "the dry run selected {} candidates of one list",
+                        dry.decision.selected.len()
+                    ),
+                ));
+            };
+            let slot = candidates
+                .iter()
+                .find(|candidate| candidate.id == *id)
+                .map(|candidate| candidate.instance_index)
+                .ok_or_else(|| {
+                    invalid(
+                        "validation_failed",
+                        format!("the dry run selected '{id}', no candidate of its projection"),
+                    )
+                })?;
+            SelectDecision::Selected { slot }
         }
+        TaskSelectionOutcome::Empty | TaskSelectionOutcome::Insufficient { .. }
+            if !unread.is_empty() =>
+        {
+            SelectDecision::Blocked
+        }
+        TaskSelectionOutcome::Empty => SelectDecision::Empty,
+        TaskSelectionOutcome::Insufficient { .. } => SelectDecision::Insufficient,
+        TaskSelectionOutcome::Ambiguous { .. } => SelectDecision::Ambiguous,
+        TaskSelectionOutcome::Unknown { .. } => SelectDecision::Unknown,
     };
     Ok(Ok(Decided {
-        selected,
+        kind,
         clicks: candidates
             .iter()
             .map(|candidate| (candidate.instance_index, click_of(candidate)))
             .collect(),
-        unread: candidates
-            .iter()
-            .filter_map(|candidate| {
-                unread_cause(candidate).map(|cause| (candidate.instance_index, cause))
-            })
-            .collect(),
+        unread,
     }))
+}
+
+/// Fix 1: the kernel's decision outcome as the contract mirrors it (`TaskSelectionOutcome`,
+/// through their shared serde shape, as the run's record takes it): the evaluator's `detail`
+/// text of an unknown outcome stays out, as the record leaves it out.
+fn mirrored_outcome(outcome: &impl Serialize) -> LabResult<TaskSelectionOutcome> {
+    let mut value = serde_json::to_value(outcome).map_err(|error| {
+        invalid(
+            "validation_failed",
+            format!("the dry run's outcome does not encode: {error}"),
+        )
+    })?;
+    if let Some(object) = value.as_object_mut() {
+        object.remove("detail");
+    }
+    serde_json::from_value(value).map_err(|error| {
+        invalid(
+            "validation_failed",
+            format!("the dry run's outcome is no outcome the contract mirrors: {error}"),
+        )
+    })
 }
 
 fn click_of(candidate: &ProjectedCandidate) -> RecordRect {

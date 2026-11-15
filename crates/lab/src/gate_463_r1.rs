@@ -17,9 +17,18 @@
 // (12 + 40k, 30). The color mark `state/page` on a flat area recognizes the list page and guards
 // the select. No device is used; the tests read no clock and never sleep. Every expected value
 // comes from the brief's and the design's lines and the values above, never from the code.
+//
+// Fix round 1 (brief rd-1115/brief-1729-fix1.md): each frame's decisions by their kind; the wanted
+// name and the task's `_done` key have words of their own; a select on an application step is
+// refused, never dropped; a select added after stop keeps the tap it took over and clear_select
+// gives it back; another step's page passing on the select's frame is refused at mark time; the
+// probe holds the select step record stop generates; a recording without a select is compared
+// with constants.
 
 use crate::codes::{LabCode, SelectProblem};
 use crate::recording::crosscheck::admit;
+use crate::recording::generate::{render, select_probe_plan};
+use crate::recording::model::LabRecording;
 use crate::recording::store::{hex_sha256, old_record_path, recording_path};
 use crate::{
     AttachFrameRequest, ClickEffect, ClickPlan, CommitClickRequest, LAB_RECORD_MARK_SCHEMA, LabOcr,
@@ -182,13 +191,34 @@ fn png(values: &[u8]) -> Vec<u8> {
 
 // The list showing in slot `k` the marker given for it (`None`: no name).
 fn list(names: [Option<u8>; 2]) -> Vec<u8> {
+    list_on(names, BACKGROUND)
+}
+
+// The list of `names` whose page area (2, 50, 4, 4), where the page marks stand, has the gray
+// value `page`.
+fn list_on(names: [Option<u8>; 2], page: u8) -> Vec<u8> {
     let mut values = vec![BACKGROUND; (WIDTH * HEIGHT) as usize];
+    for row in 50..54 {
+        for column in 2..6 {
+            values[(row * WIDTH + column) as usize] = page;
+        }
+    }
     for (slot, marker) in (0_u32..).zip(names) {
         if let Some(marker) = marker {
             values[(30 * WIDTH + 12 + 40 * slot) as usize] = marker;
         }
     }
     png(&values)
+}
+
+// Fix 1: one frame's decisions as recording.json, the mark's answer and lab.selects report them:
+// the pressed name's and the default's, each `selected` with its slot or (`None`) `empty`.
+fn decisions(frame_id: &str, pressed: Option<u32>, default: Option<u32>) -> Value {
+    let kind = |slot: Option<u32>| match slot {
+        Some(slot) => json!({"result": "selected", "slot": slot}),
+        None => json!({"result": "empty"}),
+    };
+    json!({"frame_id": frame_id, "pressed": kind(pressed), "default": kind(default)})
 }
 
 // The next screen: a noise patch at (40, 46), with no marker value.
@@ -463,7 +493,7 @@ fn r1_a_marked_select_is_accepted_generated_and_admitted() {
     );
     assert_eq!(
         marked_select["self_test"]["frames"],
-        json!([{"frame_id": "f0001", "pressed_slot": 0, "default_slot": 1}]),
+        json!([decisions("f0001", Some(0), Some(1))]),
         "{marked_select}"
     );
     assert_eq!(
@@ -541,7 +571,7 @@ fn r1_a_marked_select_is_accepted_generated_and_admitted() {
         json!([{"step": 1, "record_index": 1, "op": "step_01_select", "layout": "layout/step_01",
                 "wanted": {"name": "list_item", "default": "item_b"}, "pressed": "item_a",
                 "on_empty_key": NOT_FOUND,
-                "frames": [{"frame_id": "f0001", "pressed_slot": 0, "default_slot": 1}]}]),
+                "frames": [decisions("f0001", Some(0), Some(1))]}]),
         "{lab}"
     );
     assert_eq!(lab["first_decision"]["status"], "would_click", "{lab}");
@@ -614,9 +644,10 @@ fn r1_each_select_rule_is_refused_with_its_word() {
             selecting(&|select| select["names"][0]["id"] = json!("Item_A")),
             SelectProblem::NameIdInvalid,
         ),
+        // Fix 1: the wanted name has a word of its own.
         (
             selecting(&|select| select["wanted"]["name"] = json!("list-item")),
-            SelectProblem::NameIdInvalid,
+            SelectProblem::WantedNameInvalid,
         ),
         (
             selecting(&|select| select["names"][1]["id"] = json!("item_a")),
@@ -630,9 +661,11 @@ fn r1_each_select_rule_is_refused_with_its_word() {
             selecting(&|select| select["on_empty_key"] = json!("Sold Out")),
             SelectProblem::OnEmptyKeyInvalid,
         ),
+        // Fix 1: the task's own `_done` key has a word of its own; another select's key is
+        // on_empty_key_taken (the next test).
         (
             selecting(&|select| select["on_empty_key"] = json!("neutral_task_done")),
-            SelectProblem::OnEmptyKeyTaken,
+            SelectProblem::OnEmptyKeyReserved,
         ),
         (
             selecting(&|select| select["slots"][1]["rect"] = json!(rect(80, 8, 32, 32))),
@@ -672,7 +705,9 @@ fn r1_each_select_rule_is_refused_with_its_word() {
 }
 
 // The design's "unique in the recording": a second select step with the first one's wanted name
-// or its on_empty key is refused; with its own name and key it is accepted.
+// or its on_empty key is refused; with its own name and key it is accepted. Fix 1: the second
+// list is a screen of its own (its page area another gray, its own color mark), since step 1's
+// page passing on its frame is refused at mark time (`select_other_page_passes`, a test below).
 #[test]
 fn r1_a_second_select_has_its_own_wanted_name_and_on_empty_key() {
     let recording = Recording::new();
@@ -682,8 +717,9 @@ fn r1_a_second_select_has_its_own_wanted_name_and_on_empty_key() {
         .unwrap_or_else(|error| panic!("record mark: {} {:?}", error.code, error.details));
     recording.press_open_step();
     let second = |declared: Value| {
-        json!({"frame": recording.frame("second", &list([Some(BRAVO), Some(ALPHA)])),
-               "reuse": [PAGE], "select": declared})
+        json!({"frame": recording.frame("second", &list_on([Some(BRAVO), Some(ALPHA)], 120)),
+               "add": [{"id": "state/second_page", "family": "color", "region": rect(2, 50, 4, 4)}],
+               "select": declared})
     };
     // The first one's wanted name with a key of its own, then a name of its own with the first
     // one's key (both the default `neutral_task_not_found`).
@@ -755,8 +791,8 @@ fn r1_a_sample_with_the_pressed_name_in_another_slot_is_accepted() {
     assert_eq!(
         marked_select["self_test"]["frames"],
         json!([
-            {"frame_id": "f0001", "pressed_slot": 0, "default_slot": 1},
-            {"frame_id": "f0002", "pressed_slot": 1, "default_slot": 0}
+            decisions("f0001", Some(0), Some(1)),
+            decisions("f0002", Some(1), Some(0))
         ]),
         "{marked_select}"
     );
@@ -814,6 +850,13 @@ fn r1_an_unread_slot_or_an_absent_pressed_name_is_refused() {
     let refused = select_rejection(error, "select_name_unread");
     assert_eq!(refused["slot"], 1, "{refused}");
     assert_eq!(refused["cause"], "low_confidence", "{refused}");
+    // Fix 1: the default's decision there is no empty end: the unread slot may hold item_b, so
+    // the run would fail (blocked), and the refusal says so.
+    assert_eq!(
+        refused["default"],
+        json!({"result": "blocked"}),
+        "{refused}"
+    );
     assert_eq!(recording.recording()["steps"], json!([]), "nothing written");
 
     let error = recording
@@ -985,7 +1028,7 @@ fn r1_one_call_records_a_select_step() {
     assert_eq!(steps[0]["click"]["source"], "select", "{steps}");
     assert_eq!(
         steps[0]["select"]["self_test"]["frames"],
-        json!([{"frame_id": "f0001", "pressed_slot": 1, "default_slot": 0}]),
+        json!([decisions("f0001", Some(1), Some(0))]),
         "{steps}"
     );
 }
@@ -1004,7 +1047,7 @@ fn r1_the_on_empty_key_is_the_given_one_and_ends_an_empty_first_decision() {
     let marked_select = serde_json::to_value(&marked.select).expect("select JSON");
     assert_eq!(
         marked_select["self_test"]["frames"],
-        json!([{"frame_id": "f0001", "pressed_slot": 0, "default_slot": null}]),
+        json!([decisions("f0001", Some(0), None)]),
         "{marked_select}"
     );
     recording.press_open_step();
@@ -1073,8 +1116,11 @@ fn r1_a_default_changed_after_stop_regenerates_another_package() {
 }
 
 // Item 3 of the brief: a recording without a select has no select anywhere: no step key, no layout,
-// no policy document, one mapping, a click operation and no `selects` (the bytes the existing tests
-// pin, gate_463_l1 and gate_463_l2 among them, are unchanged).
+// no policy document, one mapping, a click operation and no `selects`. Fix 1 (item 9): no existing
+// test compares a generated package with a constant (gate_e5_record_stop compares two runs of one
+// build), so this test holds one: the package's files, its control and resource documents, and
+// its task without the task's provenance (which carries the recording's write times), as
+// lab-recording.md "Package generation" states them for this recording.
 #[test]
 fn r1_a_recording_without_a_select_generates_as_before() {
     let recording = Recording::new();
@@ -1110,4 +1156,258 @@ fn r1_a_recording_without_a_select_generates_as_before() {
     );
     assert_eq!(lab.get("selects"), None, "{lab}");
     assert_eq!(lab["cross_check"].get("selects"), None, "{lab}");
+
+    assert_eq!(
+        entries.keys().map(String::as_str).collect::<Vec<_>>(),
+        [
+            "control.json",
+            "resources/operations/neutral_task/assets/ui_next.png",
+            "resources/operations/neutral_task/task.json",
+            "resources/operations/resources.json",
+        ]
+    );
+    assert_eq!(
+        document(&entries, "control.json"),
+        json!({
+            "schema_version": "Lab-1y.control.v2",
+            "package_id": "neutral.test.neutral_task",
+            "execution_mode": "linear_steps",
+            "game": "neutral",
+            "server": "test",
+            "resolution": {"width": WIDTH, "height": HEIGHT},
+            "entry_task_id": TASK_ID,
+            "timeout_ms": 40_200,
+            "step_timeout_ms": 15_000,
+            "max_steps": 1
+        })
+    );
+    assert_eq!(
+        document(&entries, "resources/operations/resources.json"),
+        json!({"schema_version": "1.0", "resources": [], "resource_count": 0})
+    );
+    let frame_sha256 = recording.recording()["steps"][0]["frames"][0]["sha256"].clone();
+    let mut without_provenance = task;
+    without_provenance
+        .as_object_mut()
+        .expect("task object")
+        .remove("provenance")
+        .expect("the task's provenance");
+    let mark_provenance = |step: u32| {
+        json!({"source": "lab_record", "record_id": RECORD_ID, "step": step,
+               "record_index": step, "self_test": "passed"})
+    };
+    assert_eq!(
+        without_provenance,
+        json!({
+            "schema_version": "0.9",
+            "task_id": TASK_ID,
+            "game": "neutral",
+            "server_scope": ["test"],
+            "locale": "en-US",
+            "goal": "Lab recording record_r1: 1 click step(s)",
+            "coordinate_space": {"width": WIDTH, "height": HEIGHT},
+            "defaults": {"template_threshold": 0.95, "color_max_distance": 20,
+                         "match_metric": "ccoeff_normed"},
+            "timeout_ms": 40_200,
+            "max_steps": 1,
+            "entry_page": "step_01",
+            "target_page": "step_02",
+            "scheduling_outcome": {"mappings": [{"outcome_key": "neutral_task_done",
+                                                 "effect": "no_designated_effect",
+                                                 "terminal_pages": ["step_02"]}]},
+            "verify_templates": [{"id": "ui/next", "template": "assets/ui_next.png",
+                                  "region": {"mode": "rect", "rect": rect(40, 46, 12, 12)},
+                                  "provenance": mark_provenance(2)}],
+            "color_probes": [{"id": PAGE,
+                              "region": {"mode": "rect", "rect": rect(2, 50, 4, 4)},
+                              "expected": [BACKGROUND, BACKGROUND, BACKGROUND],
+                              "provenance": mark_provenance(1)}],
+            "page_rules": {"step_01": {"required": [PAGE]}, "step_02": {"required": ["ui/next"]}},
+            "operations": [{
+                "id": "step_01_click",
+                "purpose": "Lab recording step 1",
+                "from": "step_01",
+                "to": "step_02",
+                "click": {"kind": "rect", "x": 8, "y": 8, "width": 32, "height": 32},
+                "guard": {"page_id": "step_01", "target_id": PAGE,
+                          "expected_rect": rect(2, 50, 4, 4), "color_probe": PAGE},
+                "expect_after": {"page_id": "step_02", "timeout_ms": 15_000, "interval_ms": 500},
+                "post_delay_ms": 200,
+                "provenance": {"source": "lab_record", "record_id": RECORD_ID, "step": 1,
+                               "record_index": 1, "frame_sha256": frame_sha256}
+            }]
+        })
+    );
+}
+
+// The files of a package, the task's provenance without its generation time (the time the
+// recording was last written, which every `record mark` changes).
+fn without_generation_time(mut entries: BTreeMap<String, Vec<u8>>) -> BTreeMap<String, Vec<u8>> {
+    for (name, bytes) in &mut entries {
+        if !name.ends_with("/task.json") {
+            continue;
+        }
+        let mut task: Value = serde_json::from_slice(bytes).expect("task JSON");
+        task["provenance"]
+            .as_object_mut()
+            .expect("provenance")
+            .remove("generated_at_unix_ms")
+            .expect("the generation time");
+        *bytes = serde_json::to_vec(&task).expect("task bytes");
+    }
+    entries
+}
+
+// Fix 1, item 1: a select on the application entry step, which has no frame, is never dropped:
+// with `optional: false` beside it, or alone, it is record_select_invalid with with_application,
+// as a select beside an application operation is, and nothing is written.
+#[test]
+fn r1_fix1_a_select_on_an_application_step_is_refused() {
+    let recording = Recording::new();
+    recording
+        .mark(json!({"application": {"action": "launch"}}))
+        .unwrap_or_else(|error| panic!("record mark: {} {:?}", error.code, error.details));
+    let before = recording.recording_bytes();
+    for value in [
+        json!({"step": 1, "select": select(Some("item_a"), "item_b"), "optional": false}),
+        json!({"step": 1, "select": select(Some("item_a"), "item_b")}),
+    ] {
+        let error = recording
+            .mark(value)
+            .expect_err("an application step takes no select");
+        assert_eq!(
+            select_problem(error),
+            SelectProblem::WithApplication.as_str()
+        );
+        assert_eq!(recording.recording_bytes(), before, "nothing written");
+    }
+}
+
+// Fix 1, item 3: after record stop a select turns the recorded tap of step 1 into a choice by name
+// (the tap lies in slot 0, where the pressed name item_a stands), the tap's own rectangle and
+// source kept beside it in recording.json; clear_select gives them back, the step is the one
+// recorded before, and the next record stop regenerates the package it generated before.
+#[test]
+fn r1_fix1_a_select_added_after_stop_and_taken_off_generates_the_package_again() {
+    let recording = Recording::new();
+    recording
+        .mark(recording.step_one(
+            &list([Some(ALPHA), Some(BRAVO)]),
+            &[],
+            ("click", json!({"region": SLOTS[0]})),
+        ))
+        .unwrap_or_else(|error| panic!("record mark: {} {:?}", error.code, error.details));
+    recording.press_open_step();
+    recording.mark_next_step(&recording.ocr);
+    let generated = recording.stop_session();
+    let steps = recording.recording()["steps"].clone();
+    let package = without_generation_time(recording.package(&generated));
+
+    let selected = recording
+        .mark(json!({"step": 1, "select": select(Some("item_a"), "item_b")}))
+        .unwrap_or_else(|error| panic!("record mark: {} {:?}", error.code, error.details));
+    assert!(selected.after_stop);
+    let click = serde_json::to_value(&selected.click).expect("click JSON");
+    assert_eq!(click["source"], "select", "{click}");
+    assert_eq!(click["rect"], json!(SLOTS[0]), "{click}");
+    assert_eq!(
+        recording.recording()["steps"][0]["select"]["click_before"],
+        json!({"rect": SLOTS[0], "source": "declared", "from": null})
+    );
+
+    let cleared = recording
+        .mark(json!({"step": 1, "clear_select": true}))
+        .unwrap_or_else(|error| panic!("record mark: {} {:?}", error.code, error.details));
+    assert!(cleared.after_stop);
+    assert!(cleared.select.is_none(), "{:?}", cleared.select);
+    assert_eq!(
+        recording.recording()["steps"],
+        steps,
+        "the step recorded before"
+    );
+    let regenerated = recording.stop_with(&recording.ocr);
+
+    assert_eq!(regenerated["lab_status"], "regenerated", "{regenerated}");
+    assert_eq!(
+        without_generation_time(recording.package(&regenerated)),
+        package
+    );
+}
+
+// Fix 1, item 7: a select on a list whose frame step 1's page passes on too (the second step
+// reuses step 1's only mark) is refused at mark time with select_other_page_passes, naming step 1
+// and the frame, as record stop would find it (self-check item 8); nothing is written.
+#[test]
+fn r1_fix1_a_select_on_a_frame_another_page_passes_on_is_refused() {
+    let recording = Recording::new();
+    recording
+        .mark(recording.step_one(
+            &list([Some(ALPHA), Some(BRAVO)]),
+            &[],
+            ("click", json!({"region": SLOTS[0]})),
+        ))
+        .unwrap_or_else(|error| panic!("record mark: {} {:?}", error.code, error.details));
+    recording.press_open_step();
+    let before = recording.recording_bytes();
+
+    let error = recording
+        .mark(
+            json!({"frame": recording.frame("second", &list([Some(BRAVO), Some(ALPHA)])),
+                     "reuse": [PAGE], "select": select(Some("item_a"), "item_b")}),
+        )
+        .expect_err("step 1's page passes on the list");
+
+    let refused = select_rejection(error, "select_other_page_passes");
+    assert_eq!(refused["step"], 1, "{refused}");
+    assert_eq!(refused["frame_id"], "f0002", "{refused}");
+    assert_eq!(refused["transition"], false, "{refused}");
+    assert_eq!(recording.recording_bytes(), before, "nothing written");
+}
+
+// Fix 1, item 6: the select step the mark-time probe admits is the one record stop generates. For
+// one recording, the probe built from the stopped recording's step holds the package's policy
+// document byte for byte, its layout and slot targets, and its operation but for expect_after's
+// timeout, which the probe takes at the largest a package declares.
+#[test]
+fn r1_fix1_the_probe_holds_the_select_step_record_stop_generates() {
+    let recording = Recording::new();
+    recording
+        .mark(recording.step_one(
+            &list([Some(ALPHA), Some(BRAVO)]),
+            &[],
+            ("select", select(Some("item_a"), "item_b")),
+        ))
+        .unwrap_or_else(|error| panic!("record mark: {} {:?}", error.code, error.details));
+    recording.press_open_step();
+    recording.mark_next_step(&recording.ocr);
+    let lab = recording.stop_with(&recording.ocr);
+    let entries = recording.package(&lab);
+    let stopped: LabRecording =
+        serde_json::from_slice(&recording.recording_bytes()).expect("the recording");
+    let step = stopped.steps[0].clone();
+
+    let plan = select_probe_plan(&stopped, &step, step.marks.clone())
+        .unwrap_or_else(|error| panic!("probe plan: {} {:?}", error.code, error.details));
+    let probe = render(&plan, None, &BTreeMap::new())
+        .unwrap_or_else(|error| panic!("probe render: {} {:?}", error.code, error.details));
+
+    assert_eq!(
+        probe.get(POLICY).expect("the probe's policy document"),
+        entries.get(POLICY).expect("the package's policy document")
+    );
+    let (probe_task, package_task) = (task(&probe), task(&entries));
+    for member in ["candidate_layouts", "ocr_targets"] {
+        assert_eq!(probe_task[member], package_task[member], "{member}");
+    }
+    let operation = |task: &Value| {
+        let mut operation = task["operations"][0].clone();
+        operation["expect_after"]
+            .as_object_mut()
+            .expect("expect_after")
+            .remove("timeout_ms")
+            .expect("a timeout");
+        operation
+    };
+    assert_eq!(package_task["operations"][0]["id"], "step_01_select");
+    assert_eq!(operation(&probe_task), operation(&package_task));
 }

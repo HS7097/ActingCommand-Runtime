@@ -520,7 +520,7 @@ fn refuse_select_rules(steps: &[PlanStep], task_id: &str) -> LabResult<()> {
         let key = on_empty_key(task_id, &select.declaration);
         if key == done {
             return Err(refuse(
-                SelectProblem::OnEmptyKeyTaken,
+                SelectProblem::OnEmptyKeyReserved,
                 format!("the on_empty key '{key}' of step {index} is the usual ending's key"),
             ));
         }
@@ -569,7 +569,7 @@ fn requires_invalid(requires: &str, reason: &str, message: String) -> LabError {
 
 /// The marks of a page: own marks then reused ids, without the members of its `any_of`
 /// checks (a member of an `any_of` check is not required on its own).
-fn required_ids(
+pub(crate) fn required_ids(
     own: &[RecordedMark],
     reused: &[String],
     marks: &BTreeMap<String, RecordedMark>,
@@ -588,6 +588,26 @@ fn required_ids(
         .collect::<BTreeSet<_>>();
     ids.into_iter()
         .filter(|id| !any_of_members.contains(id))
+        .collect()
+}
+
+/// The marks a step's page requires in the package: [`required_ids`] of its own and reused marks,
+/// without (#463 L2 fix 1) the located-text mark its click follows, which is the click's guard
+/// and target and no mark of the page. `marks` holds every mark the page names. #463 R1 fix 1:
+/// the mark-time check that no other step's page passes on a select's frames reads it too.
+pub(crate) fn page_required(
+    step: &RecordingStep,
+    marks: &BTreeMap<String, RecordedMark>,
+) -> Vec<String> {
+    let followed_text = step
+        .click
+        .as_ref()
+        .and_then(|click| click.follow.as_ref())
+        .map(|follow| follow.mark_id.as_str())
+        .filter(|id| marks.get(*id).is_some_and(RecordedMark::locates_text));
+    required_ids(&step.marks, &step.reused, marks)
+        .into_iter()
+        .filter(|id| Some(id.as_str()) != followed_text)
         .collect()
 }
 
@@ -819,16 +839,7 @@ pub(crate) fn plan(recording: &LabRecording, settings: &StopSettings) -> LabResu
         });
         // #463 L2 fix 1: the located-text mark a click follows is the click's guard and target,
         // and no mark of the step's page, which its other marks recognize.
-        let followed_text = step
-            .click
-            .as_ref()
-            .and_then(|click| click.follow.as_ref())
-            .map(|follow| follow.mark_id.as_str())
-            .filter(|id| marks.get(*id).is_some_and(RecordedMark::locates_text));
-        let required = required_ids(&step.marks, &step.reused, &marks)
-            .into_iter()
-            .filter(|id| Some(id.as_str()) != followed_text)
-            .collect::<Vec<_>>();
+        let required = page_required(step, &marks);
         let (transition_page, transition_required) = match &step.transition {
             Some(StepTransition::Page {
                 marks: transition_marks,

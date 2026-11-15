@@ -5000,7 +5000,10 @@
           "description": "A slot's rectangle, click box or name region does not lie inside the frame."
         },
         "name_id_invalid": {
-          "description": "A name's id or the wanted value's name breaks the grammar ^[a-z][a-z0-9_]{0,63}$."
+          "description": "A name's id breaks the grammar ^[a-z][a-z0-9_]{0,63}$."
+        },
+        "wanted_name_invalid": {
+          "description": "The wanted value's name breaks the grammar ^[a-z][a-z0-9_]{0,63}$."
         },
         "name_duplicate": {
           "description": "Two names of the select have one id."
@@ -5017,8 +5020,11 @@
         "on_empty_key_invalid": {
           "description": "The on_empty_key breaks the grammar ^[a-z0-9][a-z0-9_]{0,127}$."
         },
+        "on_empty_key_reserved": {
+          "description": "The on_empty key is <task_id>_done, the key of the run's usual end."
+        },
         "on_empty_key_taken": {
-          "description": "The on_empty_key is the usual ending's key or another select step's."
+          "description": "The on_empty key is another select step's of the recording."
         },
         "guard_missing": {
           "description": "The step's page has no template, color, color digest or check mark (or a value test named as its click guard): a select step needs a guard."

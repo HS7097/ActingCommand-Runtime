@@ -10,7 +10,10 @@
 use super::follow::followed_evaluation_box;
 use super::frames::LoadedFrame;
 use super::generate::{Plan, PlanStep, follows_located_text, select_policy_document};
-use super::model::{ClickFollow, ClickGesture, MarkFamily, RecordRect, RecordedFrame, StepSelect};
+use super::model::{
+    ClickFollow, ClickGesture, MarkFamily, RecordRect, RecordedFrame, SelectDecision,
+    SelectFrameDecision, StepSelect,
+};
 use super::select::{
     NAME_UNREAD, PRESS_MISMATCH, PRESSED_ABSENT, SELF_TEST_ERROR, decide, on_empty_key,
 };
@@ -560,16 +563,32 @@ fn select_first_decision(
             }),
         ));
     }
-    let Some(slot) = decided.selected else {
-        return Ok(FirstDecision {
-            value: json!({
-                "status": "would_end_empty",
-                "operation_label": operation,
-                "outcome_key": on_empty_key(&plan.task_id, &select.declaration),
-                "frame": frame.frame_id
-            }),
-            warning: None,
-        });
+    // #463 R1 fix 1: only an empty decision is the run's normal end; any other decision that
+    // selects no slot is one the run fails on.
+    let slot = match decided.kind {
+        SelectDecision::Selected { slot } => slot,
+        SelectDecision::Empty => {
+            return Ok(FirstDecision {
+                value: json!({
+                    "status": "would_end_empty",
+                    "operation_label": operation,
+                    "outcome_key": on_empty_key(&plan.task_id, &select.declaration),
+                    "frame": frame.frame_id
+                }),
+                warning: None,
+            });
+        }
+        other => {
+            return Err(admission_failed(
+                "first_decision",
+                format!(
+                    "on its primary frame {} the select of step 1 selects no slot, and the run \
+                     would fail there",
+                    frame.frame_id
+                ),
+                json!({"frame": frame.frame_id, "decision": other}),
+            ));
+        }
     };
     let rect = decided.clicks.get(&slot).copied().ok_or_else(|| {
         invalid(
@@ -735,20 +754,20 @@ pub(crate) fn select_checks(
                     step,
                     frame,
                     NAME_UNREAD,
-                    json!({"slot": slot, "cause": cause}),
+                    json!({"slot": slot, "cause": cause, "default": default.kind}),
                 ));
             }
             let pressed = match &override_document {
-                None => default.selected,
-                Some(document) => run(Some(document))?.selected,
+                None => default.kind,
+                Some(document) => run(Some(document))?.kind,
             };
             if frame.role == "primary" {
-                let slot = pressed.ok_or_else(|| {
+                let slot = pressed.slot().ok_or_else(|| {
                     select_mismatch(
                         step,
                         frame,
                         PRESSED_ABSENT,
-                        json!({"pressed": spec.pressed_name()}),
+                        json!({"pressed": spec.pressed_name(), "decision": pressed}),
                     )
                 })?;
                 if let Some(point) = executed {
@@ -768,10 +787,11 @@ pub(crate) fn select_checks(
                     }
                 }
             }
-            frames.push(json!({
-                "frame_id": frame.frame_id,
-                "pressed_slot": pressed,
-                "default_slot": default.selected
+            // #463 R1 fix 1: each decision by its kind, as at mark time.
+            frames.push(json!(SelectFrameDecision {
+                frame_id: frame.frame_id.clone(),
+                pressed,
+                default: default.kind,
             }));
         }
         item["frames"] = json!(frames);

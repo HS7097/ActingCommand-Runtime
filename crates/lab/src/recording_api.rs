@@ -999,6 +999,7 @@ fn validate_mark_request(request: &MarkRequest) -> LabResult<()> {
         || request.replace_click
         || request.application.is_some()
         || request.select.is_some()
+        || request.clear_select
         || page_rule;
     if request.step_action.is_some() {
         if marks_or_click
@@ -1021,6 +1022,7 @@ fn validate_mark_request(request: &MarkRequest) -> LabResult<()> {
             || request.replace_click
             || request.application.is_some()
             || request.select.is_some()
+            || request.clear_select
         {
             return Err(invalid(
                 "record_transition_has_click",

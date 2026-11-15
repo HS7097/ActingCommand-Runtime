@@ -115,9 +115,10 @@ actingcommand_contract::outcome_vocabulary! {
         OnFinalStep => "on_final_step",
         /// A slot's rectangle, click box or name region does not lie inside the frame.
         SlotOutsideFrame => "slot_outside_frame",
-        /// A name's `id` or the wanted value's `name` breaks the grammar
-        /// `^[a-z][a-z0-9_]{0,63}$`.
+        /// A name's `id` breaks the grammar `^[a-z][a-z0-9_]{0,63}$`.
         NameIdInvalid => "name_id_invalid",
+        /// Fix 1: the wanted value's `name` breaks the grammar `^[a-z][a-z0-9_]{0,63}$`.
+        WantedNameInvalid => "wanted_name_invalid",
         /// Two names of the select have one `id`.
         NameDuplicate => "name_duplicate",
         /// The wanted value's `default` is no `id` of the select's names.
@@ -128,7 +129,10 @@ actingcommand_contract::outcome_vocabulary! {
         WantedNameTaken => "wanted_name_taken",
         /// The `on_empty_key` breaks the grammar `^[a-z0-9][a-z0-9_]{0,127}$`.
         OnEmptyKeyInvalid => "on_empty_key_invalid",
-        /// The `on_empty_key` is the usual ending's key or another select step's.
+        /// Fix 1: the `on_empty` key is `<task_id>_done`, the key of the run's usual end.
+        OnEmptyKeyReserved => "on_empty_key_reserved",
+        /// The `on_empty` key is another select step's of the recording (fix 1: the usual end's
+        /// key is `on_empty_key_reserved`).
         OnEmptyKeyTaken => "on_empty_key_taken",
         /// The step's page has no template, color, color digest or check mark (or a value test
         /// named as its click guard): a select step needs a guard.

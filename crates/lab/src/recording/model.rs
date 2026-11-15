@@ -911,6 +911,10 @@ pub struct MarkRequest {
     /// each slot; its click is the slot the decision selects for `pressed` on the primary frame.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub select: Option<SelectSpec>,
+    /// #463 R1 fix 1 (request form only): the step's select is taken off; an executed click the
+    /// select took over gets back its own rectangle, source and mark (`select.click_before`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub clear_select: bool,
 }
 
 /// #463 R1 (`contracts/lab-recording.md`, "Selecting in a list"): a select over fixed slots, the
@@ -1019,13 +1023,27 @@ pub enum SelectConfirmSpec {
 }
 
 /// #463 R1: a step's select as `recording.json` keeps it: the declaration as given, when it was
-/// marked, and its last self-test.
+/// marked, and its last self-test. Fix 1: when the select took over a click with an outcome on
+/// record (a tap recorded before the select, also after `record stop`), that click's own
+/// rectangle, source and mark (`click_before`), which `clear_select` gives back; absent otherwise.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StepSelect {
     pub declaration: SelectSpec,
     pub marked_at_unix_ms: u64,
     pub self_test: SelectSelfTest,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub click_before: Option<SelectClickBefore>,
+}
+
+/// #463 R1 fix 1: the rectangle, source and mark of an executed click before a select took it
+/// over.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SelectClickBefore {
+    pub rect: RecordRect,
+    pub source: String,
+    pub from: Option<String>,
 }
 
 /// #463 R1: the mark-time self-test of a select, by the kernel's dry run of the step as `record
@@ -1040,15 +1058,41 @@ pub struct SelectSelfTest {
     pub frames: Vec<SelectFrameDecision>,
 }
 
-/// #463 R1: the decisions of one live frame: the slot the pressed name selects (`None`: it is on
-/// no slot of this frame, a sample only) and the slot the wanted value's default selects (`None`:
-/// the decision is empty, the run would end with the `on_empty` key).
+/// #463 R1: the decisions of one live frame: the kernel's decision for the pressed name and for
+/// the wanted value's default, each by its kind (fix 1: a decision that is not `selected` is
+/// `empty` only when the run would end normally with the `on_empty` key).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SelectFrameDecision {
     pub frame_id: String,
-    pub pressed_slot: Option<u32>,
-    pub default_slot: Option<u32>,
+    pub pressed: SelectDecision,
+    pub default: SelectDecision,
+}
+
+/// #463 R1 fix 1: one decision of the kernel's dry run of a select on a frame, by its kind:
+/// `selected` with its slot; `empty`, the run's normal end with the `on_empty` key; `ambiguous`,
+/// `insufficient` and `unknown`, the evaluator's kinds of a decision the run fails on; `blocked`,
+/// an empty or insufficient decision while a slot reads no known name, which the run refuses
+/// since that slot may hold the wanted name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "result", rename_all = "snake_case")]
+pub enum SelectDecision {
+    Selected { slot: u32 },
+    Empty,
+    Ambiguous,
+    Insufficient,
+    Blocked,
+    Unknown,
+}
+
+impl SelectDecision {
+    /// The slot a `selected` decision chose; `None` for every other kind.
+    pub fn slot(self) -> Option<u32> {
+        match self {
+            Self::Selected { slot } => Some(slot),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
