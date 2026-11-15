@@ -695,6 +695,14 @@ pub(super) struct ContainedRunControl {
     /// own time reaches the largest runtime that budget still admits; fix round 3 (item 4): or
     /// that the budget's end could not be read.
     runtime_budget_end: std::sync::OnceLock<RuntimeBudgetEnd>,
+    /// Workflow #463 U1b: set once, before a scheduled run executes, when its pair is past the
+    /// break-in of the package content it runs: a linear step's closing decision that finds a
+    /// screen the package never recorded ends that run with `page_confirmation_failed`.
+    past_break_in: std::sync::OnceLock<()>,
+    /// Workflow #463 U1b fix round 2 (review item 3): set once when the run's kernel run of its
+    /// package began, its `PackageAdmitted` recorded (a layer's run records none of its own): a
+    /// scheduled run counts in its pair's break-in only then.
+    package_began: std::sync::OnceLock<()>,
 }
 
 /// Workflow #463 U1, fix round 3 (item 4): what a scheduled run noted, before it executed, of the
@@ -929,6 +937,8 @@ impl ContainedRunControl {
             stop_reset: std::sync::OnceLock::new(),
             borrowed_key: std::sync::OnceLock::new(),
             runtime_budget_end: std::sync::OnceLock::new(),
+            past_break_in: std::sync::OnceLock::new(),
+            package_began: std::sync::OnceLock::new(),
         }
     }
 
@@ -1101,6 +1111,34 @@ impl ContainedRunControl {
     /// Workflow #463 U1, fix round 2: what [`Self::note_runtime_budget_end`] noted.
     fn runtime_budget_end(&self) -> Option<RuntimeBudgetEnd> {
         self.runtime_budget_end.get().copied()
+    }
+
+    /// Workflow #463 U1b: notes, before a scheduled run executes, that its pair is past the
+    /// break-in of the package content it runs.
+    fn note_past_break_in(&self) {
+        let _ = self.past_break_in.set(());
+    }
+
+    /// Workflow #463 U1b fix round 2 (review item 3): notes that the run's kernel run of its
+    /// package began, once its `PackageAdmitted` is recorded.
+    fn note_package_began(&self) {
+        let _ = self.package_began.set(());
+    }
+
+    /// Workflow #463 U1b fix round 2: what [`Self::note_package_began`] noted.
+    fn package_began(&self) -> bool {
+        self.package_began.get().is_some()
+    }
+
+    /// Workflow #463 U1b: the code an unrecorded verdict of a linear step's closing decision ends
+    /// the run with: `page_confirmation_failed` for a scheduled run noted past its break-in, the
+    /// dedicated code for every other run (a run in its break-in, a direct run, a Lab run).
+    fn unrecorded_screen_end(&self) -> actingcommand_execution_kernel::UnrecordedScreenEnd {
+        if self.past_break_in.get().is_some() {
+            actingcommand_execution_kernel::UnrecordedScreenEnd::PageConfirmation
+        } else {
+            actingcommand_execution_kernel::UnrecordedScreenEnd::Dedicated
+        }
     }
 
     /// Workflow #437 MAPP-2a: marks the run as one on a borrowed key, before it executes.
@@ -4648,6 +4686,11 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
         self.control.is_host_package()
     }
 
+    /// Workflow #463 U1b: what the run's scheduled path noted of its pair's break-in.
+    fn unrecorded_screen_end(&self) -> actingcommand_execution_kernel::UnrecordedScreenEnd {
+        self.control.unrecorded_screen_end()
+    }
+
     /// Workflow #463 U1, fix round 2 (rule 6): the Runtime-clock time left before the earlier of
     /// the run's host deadline and the end of its admitted runtime budget (a scheduled run's,
     /// `ContainedRunControl::runtime_budget_end`); none for a run with neither. A failed clock
@@ -5635,6 +5678,8 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                         AuditInput::new(),
                     ),
                 )?;
+                // Workflow #463 U1b fix round 2 (review item 3): the run of its package began.
+                self.control.note_package_began();
                 let (game, server) = &self.declared_game_server;
                 for (key, value) in [(TASK_GAME_FACT_KEY, game), (TASK_SERVER_FACT_KEY, server)] {
                     self.host
@@ -8554,6 +8599,22 @@ impl HostShared {
                 .control
                 .note_runtime_budget_end(RuntimeBudgetEnd::Unread),
         }
+        // Workflow #463 U1b (`contracts/policy-suspension.md`, "A failure that pauses at its first
+        // occurrence"): a pair past the break-in of the package content this run was prepared
+        // with ends an unrecorded verdict with `page_confirmation_failed`; the keys are read now,
+        // so a value set while the Runtime runs counts from the next run. Fix round 2 (review
+        // item 2): a break-in that cannot be read aborts no run, as the budget's end above does
+        // not: the run goes on as one outside its break-in, and the host records
+        // `policy_break_in_unread` (`HostShared::scheduled_run_past_break_in`). Fix round 3: a
+        // content its preparation did not measure too (`content_unmeasured`); what goes up here
+        // is what goes up everywhere: a broken lock of the host's run state, or the record that
+        // cannot be written.
+        if self
+            .scheduled_run_past_break_in(context)
+            .map_err(RequestFailure::poison_without_terminal)?
+        {
+            active_run.control.note_past_break_in();
+        }
         // Workflow #429 R-0b (register §1.238): the policy run shows while it executes, with the
         // request it runs as (the one `contained_runs` tracks) and its package; its guard drops
         // however the run returns.
@@ -8589,6 +8650,13 @@ impl HostShared {
         );
         // R-0b: the run's execution ended (its lease is released, or handed to its ladder).
         drop(activity);
+        // Workflow #463 U1b fix round 2 (review item 3): a run that began its package counts in
+        // its pair's break-in when it is settled; one that ended before (a refusal of the
+        // handset's start gate, a stop at its entry) does not.
+        if active_run.control.package_began() {
+            self.note_scheduled_package_began(context.decision_id())
+                .map_err(RequestFailure::poison_without_terminal)?;
+        }
         // Workflow #429 R-12 (register §1.264): the routine summary counts the run as it settled.
         self.note_routine_run(instance_alias, &task_label, &executed)
             .map_err(RequestFailure::poison_without_terminal)?;
@@ -9422,20 +9490,23 @@ impl HostShared {
                 // Workflow #386 SR-1: a kernel failure that carries the values its code declares (a
                 // sampling timeout's `attempts`, `timeout_ms` and `stage`; a sampling budget's
                 // `required_ms` and `remaining_ms`) keeps them on the terminal and the receipt.
-                if error.has_values() {
+                // Workflow #463 U1b: a closing decision that found a screen the package never
+                // recorded names its frame whichever code the run ends with, so the failure's
+                // outcome gains `artifact_id` also where the code carries no values of its own.
+                if error.has_values() || error.closing_found_unrecorded() {
                     let values = error.outcome();
                     // #411 A15: an unconfirmed step also names the frame of the run's `Failure`
                     // pin, and so (Workflow #463 U1) does a linear step that met a screen its
                     // package never recorded: the run's last frame, the decision's; #411 A30: a
                     // guard refusal names the frame the guard judged on, its `GuardRejection` pin.
-                    // Each is read before the summary moves into the terminal's draft.
-                    let frame_pin = if spelled(
-                        error.code().as_str(),
-                        &[
-                            ExecutionKernelCode::ContainedTaskStepUnconfirmed.code(),
-                            ExecutionKernelCode::ContainedTaskLinearUnrecordedScreen.code(),
-                        ],
-                    ) {
+                    // Each is read before the summary moves into the terminal's draft. Workflow
+                    // #463 U1b: the linear step's pin follows the closing decision's verdict, not
+                    // the code (`contained_task_linear_unrecorded_screen` in its break-in,
+                    // `page_confirmation_failed` after it).
+                    let frame_pin = if error.closing_found_unrecorded()
+                        || error.code().as_str()
+                            == ExecutionKernelCode::ContainedTaskStepUnconfirmed.as_str()
+                    {
                         Some(PinnedFrameReason::Failure)
                     } else if error.code().as_str()
                         == ExecutionKernelCode::ContainedTaskGuardRefused.as_str()

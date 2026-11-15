@@ -1007,6 +1007,11 @@ actingcommand_contract::outcome_codes! {
         PolicyAdmissionContextUntrusted => "policy_admission_context_untrusted": error / none,
         PolicyAdmissionEventInvalid => "policy_admission_event_invalid": error / none,
         PolicyApprovalFactMissing => "policy_approval_fact_missing": error / none,
+        /// Warning (Workflow #463 U1b fix round 2, since 0.12.63). The break-in of a scheduled
+        /// run's pair could not be established before the run executed; the run went on as one
+        /// outside its break-in (`contracts/policy-suspension.md`, "Only during a package's
+        /// break-in"). Fix round 3: which half, `break_in_problem` ([`BreakInProblem`]).
+        PolicyBreakInUnread => "policy_break_in_unread": warning / none,
         PolicyBudgetCounterOverflow => "policy_budget_counter_overflow": error / none,
         PolicyBudgetExhausted => "policy_budget_exhausted": error / budget_or_permission,
         PolicyBudgetReceiptInvalid => "policy_budget_receipt_invalid": error / none,
@@ -2678,6 +2683,9 @@ pub(crate) mod test_spellings {
             ExpireAllQueuedForTest => "expire_all_queued_for_test",
             ExpireDueLeasesForTest => "expire_due_leases_for_test",
             ExpireLeaseOnceForTest => "expire_lease_once_for_test",
+            // Workflow #463 U1b, fix round 3: a test makes a scheduled run's read of its break-in
+            // fail.
+            FailBreakInReadForTest => "fail_break_in_read_for_test",
             // Workflow #463 U1, fix round 3: a test makes a scheduled run's read of its runtime
             // budget's end fail.
             FailPolicyRunBudgetEndForTest => "fail_policy_run_budget_end_for_test",
@@ -3506,3 +3514,23 @@ actingcommand_contract::outcome_vocabulary! {
     }
 }
 // ---- Workflow #469 V0: end ----
+
+// ---- Workflow #463 U1b fix round 3 (register §1.389): begin ----
+actingcommand_contract::outcome_vocabulary! {
+    /// What of a scheduled run's break-in could not be established before the run executed
+    /// (vocabulary `break_in_problem`, since 0.12.63): the value of `policy_break_in_unread`, whose
+    /// `caused_by` link is the failure behind it. The run is judged outside its break-in whichever
+    /// word it is.
+    pub enum BreakInProblem: "break_in_problem" {
+        /// The package's content was not measured when the run was prepared: the containment
+        /// could not measure the package, or a read the measurement needs (the Runtime clock,
+        /// `scheduling.suspension.lift_check_min_interval_ms`, the lift checks' memory) failed.
+        /// The run counts in no break-in.
+        ContentUnmeasured => "content_unmeasured",
+        /// The pair's break-in could not be judged before the run executed: the decision memory
+        /// does not hold the run's dispatch, or the two keys or the Runtime clock could not be
+        /// read. The run counts as any run of its content does.
+        RecordUnread => "record_unread",
+    }
+}
+// ---- Workflow #463 U1b fix round 3: end ----

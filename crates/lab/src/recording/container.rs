@@ -117,9 +117,50 @@ fn lab_dir_invalid(dir: &Path, reason: &str) -> LabError {
     )
 }
 
+/// #464 P4: the directory that `dir` is or lies inside whose `install\state.json` is a file, the
+/// root of an installation (`contracts/install-cli.md`, "Layout": the installer's state file),
+/// whose packages a running Runtime reads; looked for on `dir` made absolute and on its nearest
+/// existing part with its links resolved. `None` outside every installed root. #464 P4, fix round
+/// 2: a child named `install` alone (a folder of installers, matched without case on Windows) is
+/// no installation.
+fn installed_root(dir: &Path) -> Option<PathBuf> {
+    let absolute = std::path::absolute(dir).unwrap_or_else(|_| dir.to_path_buf());
+    let resolved = absolute
+        .ancestors()
+        .find(|ancestor| ancestor.exists())
+        .and_then(|existing| fs::canonicalize(existing).ok());
+    absolute
+        .ancestors()
+        .chain(resolved.iter().flat_map(|path| path.ancestors()))
+        .find(|ancestor| ancestor.join("install").join("state.json").is_file())
+        .map(Path::to_path_buf)
+}
+
 /// Section 4.7 step 2: the directory (or its parent) exists; an existing
-/// `<lab-dir>/<package_id>.<ext>` is a file, which is replaced. Reads only.
+/// `<lab-dir>/<package_id>.<ext>` is a file, which is replaced. Reads only. #464 P4: a directory
+/// that is or lies inside an installed root (one holding the file `install\state.json`) is
+/// refused, reason `inside_installed_root`: a recording's output never lands where an
+/// installation reads its packages.
 pub(crate) fn preflight_lab_dir(dir: &Path, file_name: &str) -> LabResult<LabDirPlan> {
+    if let Some(root) = installed_root(dir) {
+        return Err(with_details(
+            invalid(
+                "record_lab_dir_invalid",
+                format!(
+                    "--lab-dir {} cannot be used: it lies inside the installed root {}, whose \
+                     packages a running installation reads; give a directory outside it and \
+                     adopt the package into its standard pack (actinglab standard-pack adopt)",
+                    dir.display(),
+                    root.display()
+                ),
+            ),
+            json!({
+                "lab_dir": dir.display().to_string(),
+                "reason": "inside_installed_root",
+                "installed_root": root.display().to_string()
+            }),
+        ));
+    }
     let create_dir = match fs::metadata(dir) {
         Ok(metadata) if metadata.is_dir() => false,
         Ok(_) => return Err(lab_dir_invalid(dir, "not_a_directory")),
@@ -176,11 +217,12 @@ fn written_details(mut error: LabError, written: &[String], extra: Value) -> Lab
 }
 
 /// Section 4.7 step 4: creates the directory when the plan says so, then replaces
-/// `<lab-dir>/<package_id>.<ext>` in place.
+/// `<lab-dir>/<package_id>.<ext>` in place (#464 P4: the replaced file kept, named in `kept`).
 pub(crate) fn write_lab_dir(
     plan: &LabDirPlan,
     bytes: &[u8],
     written: &mut Vec<String>,
+    kept: &mut Vec<String>,
 ) -> LabResult<bool> {
     if plan.create_dir {
         fs::create_dir(&plan.dir).map_err(|error| {
@@ -191,21 +233,52 @@ pub(crate) fn write_lab_dir(
             )
         })?;
     }
-    replace_in_place(&plan.target, bytes, written)
+    replace_in_place(&plan.target, bytes, written, kept)
+}
+
+/// #464 P4: the name an existing `<name>` is set aside as, `<name>.old-<unix_ms>`: the first
+/// millisecond from now no file of `parent` holds, so that no kept file is ever overwritten.
+fn set_aside_name(parent: &Path, name: &str, written: &[String]) -> LabResult<PathBuf> {
+    let mut stamp = now_unix_ms();
+    loop {
+        let candidate = parent.join(format!("{name}.old-{stamp}"));
+        match fs::symlink_metadata(&candidate) {
+            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(candidate),
+            Ok(_) => {
+                stamp = stamp.checked_add(1).ok_or_else(|| {
+                    state_io(format!(
+                        "no free name to set {name} aside in {}",
+                        parent.display()
+                    ))
+                })?;
+            }
+            Err(error) => {
+                return Err(written_details(
+                    state_io(format!(
+                        "failed to inspect {}: {error}",
+                        candidate.display()
+                    )),
+                    written,
+                    json!({"stage": "replace_set_aside"}),
+                ));
+            }
+        }
+    }
 }
 
 /// Workflow #336 PKG-S5 (M-PKG v1.1 §3.5, D9): writes `bytes` beside `target` as
-/// `<name>.part`, sets an existing `target` aside as `<name>.old-<unix_ms>`, renames the `.part`
-/// file into place and deletes the old one; returns whether a file was replaced. The target name
-/// only ever changes by rename, so a reader opens the old file, the new one or none, never part
-/// of one. Every file written is pushed onto `written`. Nothing is skipped and every failed step is
-/// `record_state_io_failed`: the `.part` file is named; when the new file cannot be put in place
-/// the old one is renamed back (`restored`); once the new file is in place, an old file that cannot
-/// be deleted is named in `left_files`.
+/// `<name>.part`, sets an existing `target` aside as `<name>.old-<unix_ms>` and renames the
+/// `.part` file into place; returns whether a file was replaced. #464 P4: the set-aside file is
+/// kept, never deleted and never overwritten ([`set_aside_name`]), and named in `kept`. The target
+/// name only ever changes by rename, so a reader opens the old file, the new one or none, never
+/// part of one. Every file written is pushed onto `written`. Nothing is skipped and every failed
+/// step is `record_state_io_failed`: the `.part` file is named; when the new file cannot be put in
+/// place the old one is renamed back (`restored`).
 pub(crate) fn replace_in_place(
     target: &Path,
     bytes: &[u8],
     written: &mut Vec<String>,
+    kept: &mut Vec<String>,
 ) -> LabResult<bool> {
     let (parent, name) = match (
         target.parent(),
@@ -266,7 +339,7 @@ pub(crate) fn replace_in_place(
         })?;
     drop(file);
     let old = if replaces {
-        let old = parent.join(format!("{name}.old-{}", now_unix_ms()));
+        let old = set_aside_name(parent, name, written)?;
         fs::rename(target, &old).map_err(|error| {
             written_details(
                 state_io(format!(
@@ -300,19 +373,7 @@ pub(crate) fn replace_in_place(
     }
     written.retain(|path| *path != part_display);
     written.push(target.display().to_string());
-    if let Some(old) = old {
-        fs::remove_file(&old).map_err(|error| {
-            written_details(
-                state_io(format!(
-                    "{} is in place, but the replaced file {} could not be deleted and is left \
-                     there: {error}",
-                    target.display(),
-                    old.display()
-                )),
-                written,
-                json!({"stage": "replace_delete_old", "left_files": [old.display().to_string()]}),
-            )
-        })?;
-    }
+    // #464 P4: the output an earlier stop wrote stays beside the new one.
+    kept.extend(old.map(|old| old.display().to_string()));
     Ok(replaces)
 }

@@ -60,6 +60,11 @@ actingcommand_contract::outcome_codes! {
         /// end on it there; nothing is written (exit 3; actinglab details `outcome_key`, `page`,
         /// `frames`).
         RecordEndingAmbiguous => "record_ending_ambiguous": error / none,
+        /// Error. #463 R4: an optional step a stopped recording inserts after the effect of one of
+        /// its steps (`record mark --optional-after`, a request's `optional_after`), or gives up
+        /// (`remove_inserted`), cannot be inserted or given up (key `optional_after_problem`:
+        /// why); the command is refused and nothing is written (exit 3; actinglab details `step`).
+        RecordOptionalAfterInvalid => "record_optional_after_invalid": error / none,
     }
 }
 
@@ -198,5 +203,36 @@ actingcommand_contract::outcome_vocabulary! {
         Usual => "usual",
         /// The frames of another ending of the recording.
         OtherEnding => "other_ending",
+    }
+}
+
+// #463 R4: why an optional step a stopped recording inserts after one of its steps cannot be
+// inserted or given up.
+actingcommand_contract::outcome_vocabulary! {
+    /// Why an optional step inserted after the stop cannot hold (`optional_after_problem`).
+    pub enum OptionalAfterProblem: "optional_after_problem" {
+        /// The recording is active: a step is inserted after `record stop`, which generated the
+        /// package of the recorded path first.
+        RecordingActive => "recording_active",
+        /// The request names another change beside `optional_after` or `remove_inserted`, or both
+        /// of these.
+        WithOtherChange => "with_other_change",
+        /// `optional_after.step` names no step of the recording (none, a dropped or a converted
+        /// one).
+        StepUnknown => "step_unknown",
+        /// `optional_after.step` names the last step: every run ends on its page, after which
+        /// nothing is pressed.
+        StepLast => "step_last",
+        /// `optional_after.step` names a step whose effect is an application operation.
+        StepApplication => "step_application",
+        /// The inserted step adds and reuses no mark, so its page would recognize nothing.
+        NoMarks => "no_marks",
+        /// The inserted step declares no click, so nothing would close its pop-up.
+        NoClick => "no_click",
+        /// The request clears `optional` on an inserted step: a step never recorded on the path
+        /// stays optional.
+        ClearsOptional => "clears_optional",
+        /// `remove_inserted` names no inserted step of the recording that is not given up yet.
+        NotInserted => "not_inserted",
     }
 }

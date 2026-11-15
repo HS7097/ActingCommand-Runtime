@@ -2202,6 +2202,40 @@ fn load_decision_memory(ledger: &GlobalLedger) -> RuntimeHostResult<LoadedDecisi
     Ok(loaded)
 }
 
+/// Workflow #463 U1b fix round 2 (`contracts/ledger-observer.md` §11.5, "Without the marker"):
+/// each pair's break-in as the latest value record the index names for it holds it, by (task,
+/// instance); a pair whose record holds none is left out. A replay of the dispatch records
+/// rebuilds no break-in (a success does not name the content it ran), so a start that seeds and a
+/// re-alignment before the seeding take it from here, as a loading start loads it.
+fn recorded_break_ins(
+    ledger: &GlobalLedger,
+) -> RuntimeHostResult<BTreeMap<(String, String), actingcommand_contract::PolicyBreakInRecord>> {
+    let rows = crate::tagged_state::index_records(
+        ledger,
+        LedgerIndexRole::State,
+        &[DECISION_MEMORY_PREFIXES[0]],
+    )?;
+    let mut break_ins = BTreeMap::new();
+    for row in rows.records {
+        let EventPayload::Policy(PolicyPayload::ControlStateRecorded(payload)) =
+            row.event.payload()
+        else {
+            return Err(fatal(
+                HostCode::PolicyRecoveryFailed,
+                HostLocation::RecoverPolicyControl,
+            ));
+        };
+        let state = payload.state();
+        if let Some(break_in) = &state.break_in {
+            break_ins.insert(
+                (state.task_id.clone(), state.instance_id.clone()),
+                break_in.clone(),
+            );
+        }
+    }
+    Ok(break_ins)
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct DetectionQuotaState {
     windows: BTreeMap<(String, String), DetectionQuotaUsage>,
@@ -3444,6 +3478,49 @@ impl PolicyHost {
             admission,
         )?;
         crate::policy_control::runtime_budget_allowance_ms(&intent, admission)
+    }
+
+    /// Workflow #463 U1b (`contracts/policy-suspension.md`, "A failure that pauses at its first
+    /// occurrence"): the break-in of the pair the dispatch `decision_id` dispatched to, as the
+    /// decision memory holds it.
+    pub(crate) fn pair_break_in(
+        &self,
+        decision_id: &str,
+    ) -> RuntimeHostResult<Option<actingcommand_contract::PolicyBreakInRecord>> {
+        let dispatch = self.seen_dispatches.get(decision_id).ok_or_else(|| {
+            fatal(
+                HostCode::PolicyDispatchUnknown,
+                HostLocation::RunScheduledContainedTask,
+            )
+        })?;
+        Ok(self
+            .control
+            .break_in(&dispatch.data.task_id, &dispatch.data.instance_id)
+            .cloned())
+    }
+
+    /// Workflow #463 U1b: the run of the dispatch `decision_id`, prepared with the package
+    /// content `content`, settled now as a success or a failure, at `settled_at_unix_ms`: its
+    /// pair's break-in counts it. The pair's next value record carries the change.
+    pub(crate) fn note_break_in_run(
+        &mut self,
+        decision_id: &str,
+        content: &str,
+        settled_at_unix_ms: u64,
+    ) -> RuntimeHostResult<()> {
+        let dispatch = self.seen_dispatches.get(decision_id).ok_or_else(|| {
+            fatal(
+                HostCode::PolicyDispatchUnknown,
+                HostLocation::RecordPolicyDispatchOutcome,
+            )
+        })?;
+        let (task_id, instance_id) = (
+            dispatch.data.task_id.clone(),
+            dispatch.data.instance_id.clone(),
+        );
+        self.control
+            .note_break_in_run(&task_id, &instance_id, content, settled_at_unix_ms);
+        Ok(())
     }
 
     pub(crate) fn pending_dispatch_completions(&self) -> Vec<String> {
@@ -6278,6 +6355,10 @@ impl PolicyHost {
             )?;
         }
         journal.prune(None);
+        // Workflow #463 U1b fix round 2: the pairs' break-ins, which no dispatch record holds,
+        // from their latest value records (a root's second start seeds, so without this its
+        // break-ins were lost there and in every record the seeding wrote).
+        control.restore_break_ins(recorded_break_ins(ledger)?);
         self.pinned_dispatches = self.pinned_of(&journal.seen)?;
         self.seen_dispatches = journal.seen;
         self.dispatch_order = journal.order;

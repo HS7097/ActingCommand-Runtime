@@ -17,6 +17,8 @@ pub(crate) mod ending;
 pub(crate) mod follow;
 pub(crate) mod frames;
 pub(crate) mod generate;
+// #463 R4: an optional step a stopped recording inserts after one of its steps, from a frame.
+pub(crate) mod inserted;
 pub(crate) mod lock;
 pub(crate) mod marks;
 pub(crate) mod model;
