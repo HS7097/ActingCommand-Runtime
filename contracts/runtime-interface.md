@@ -1136,10 +1136,12 @@ Both console connections bind `ui`; from U-6 both send `(User, Ui)`.
   touched).
 - A refused actinglab command prints one JSON line and exits 1.
 
-Scripts that called `actingctl task-run` call `actinglab run start` with the same
-parameters and the same output shape. Scripts that stop the Runtime call the Lab's
-`shutdown` (`actingctl request-shutdown` until LAB-7): the upgrade state is for upgrades only,
-and a script that does not hold `install\writer.lock` would race the watchdog.
+Scripts that called `actingctl task-run` call `actinglab run start <instance> <package>
+[--recovery <path>] [--deadline <duration>] [--wait <duration>]` (the operation table's row):
+there is no `--state-root` (the Lab finds its state root from its place), `--recovery-package`
+is `--recovery`, and `--wait` takes a duration where it took seconds; the output keeps its
+shape. Scripts that stop the Runtime call the Lab's `shutdown` (`actingctl request-shutdown`
+until LAB-7); a script that does not hold `install\writer.lock` would race the watchdog.
 
 ## Upgrade state
 

@@ -102,7 +102,7 @@
       "since": "0.12.35",
       "description": "The actingd entry refused to start the Runtime: an installer operation that row 7a'' stands aside for is unfinished, and the start does not carry its ACTINGCOMMAND_INSTALL_OPERATION. Exit 1 (stable-entry.md).",
       "common_causes": "An old Startup-folder launcher or a person starting the Runtime in the middle of an update.",
-      "handling": "Run actinglab op resume or install undo for the operation."
+      "handling": "Run actinglab op resume <id> or actinglab undo <id> for the operation."
     },
     "entry_layout_unknown": {
       "category": "error",
