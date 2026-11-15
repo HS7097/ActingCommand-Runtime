@@ -1684,7 +1684,7 @@ the field is `"application": null | {"action": "restart"}`.
 | the last effective step is closed and no arrival screen came yet | #463 S1-3: one capture first, as a press takes it, which opens the step the operation lands on (the next row) | `record_application_entry_invalid` (3) |
 | open step, no effect (#463 S1-3: with marks or without them) | Performed: the step's effect, executed, the step closed, then the screen after it. Indeterminate: declared with the attempt, open | the step's effect, declared, open |
 | open step with a click | `record_step_effect_exists` (3), nothing sent | replaced with `--replace-click`, otherwise `record_step_effect_exists`; a click with an outcome is `record_click_executed` |
-| open step with a declared application operation (also one left by an indeterminate result) | the same action is sent: Performed records the execution and closes the step, Indeterminate adds an attempt. Another action: `record_step_effect_exists` (3), nothing sent | replaced with `--replace-click` (its attempts are kept), otherwise `record_step_effect_exists` |
+| open step with a declared application operation (also one left by an indeterminate result) | the same action is sent (#463 S1-3: no screen is taken before it; the step's frame stands): Performed records the execution and closes the step, Indeterminate adds an attempt. Another action: `record_step_effect_exists` (3), nothing sent | replaced with `--replace-click` (its attempts are kept), otherwise `record_step_effect_exists` |
 
 - With `--frame` (a new offline frame) or `--step k` the operation becomes the effect of
   that step, from its page. A declared effect is replaced only with
@@ -1727,12 +1727,14 @@ the field is `"application": null | {"action": "restart"}`.
 - The record instance and the command instance must agree (`record_instance_mismatch`). The
   recording lock is taken before any Runtime request and held until the result is recorded;
   a busy lock is `record_busy` and nothing is sent.
-- Order: #463 S1-3: the screen before (but on the entry step), then the step is planned (the
-  refusals above send nothing); the request is the
+- Order: #463 S1-3: on an open step the step is planned first (the refusals above capture and
+  send nothing), then the screen before, captured immediately before the operation (but on the
+  entry step and on a step that already declares the operation); without an open step after a
+  closed one the screen before opens the step, which is then planned; the request is the
   `session app` request (`RuntimeClient::control_application`); then the Runtime result
   decides:
-  - a completed receipt: recorded, the step closed, then (but on the entry step) the screen after
-    it; the output is the `session app` output plus `record{status:"application_recorded",
+  - a completed receipt: recorded, the step closed, then (when it names its `before_frame`: not
+    on the entry step) the screen after it; the output is the `session app` output plus `record{status:"application_recorded",
     record_id, step, step_opened, step_closed, application, after}` ("In the middle of a
     business");
   - a denied receipt (for example `fixture_execution_scope_forbidden` on a fixture instance,
@@ -1773,21 +1775,33 @@ session app <launch|restart|stop|force-stop> --record [--after-ms <0..60000>] [-
 
 All with the global `--json --instance <i>`; `session instance app` the same. Through the Lab's MCP
 server (`actinglab-mcp`) they are the tools of the rows `app launch`, `app restart` and `app stop`
-with `record`, `after_ms` and `still_max_ms` ([lab-operations.json](lab-operations.json));
+with `record`, `after_ms` and `still_max_ms` ([lab-operations.json](lab-operations.json)): these
+core rows take `record`, the slice's ruling replacing the coordinator's ruling of 2026-11-11
+(L5C-7) that kept it off the core rows, so no flag of `session app` is an exception to its rows;
 `lab_ops::apps::App::recorded` passes them on its actinglab child's line. Today's server
 (`actingctl mcp-serve`) is unchanged. The launch of a game is the application launch only: nothing
 here presses a launcher icon or reads the home screen but for the frame.
 
-- **The screen before.** When the recording has an effective step, the screen before is taken as a
-  press's: when no step is open, one frame as `capture --record` takes it, which opens the step the
-  operation lands on; when a step is open, its live primary frame stands and nothing is taken.
-  Then the step is planned, and its refusals ("Where the operation lands") send nothing.
+- **The screen before** (round 2 of S1-3, after fix round 2 of S1-1). When the recording has an
+  effective step, the screen before is a press's ("Recording while playing"): one frame captured
+  as `capture --record` takes it, immediately before the operation, and kept as a press keeps it.
+  When no step is open it opens the step the operation lands on. On an open step without marks it
+  is the step's live primary frame, the older frame staying in the step, superseded. On an open
+  step with marks it is not stored and the stored frame stands (it must be of the recording's
+  size, `record_frame_size_mismatch`). The Runtime's reference of the frame, which a press is sent
+  with, is not used: an application operation names no frame; a capture whose observation carries
+  no frame id is `device_error` all the same, and nothing is sent. On an open step the step is
+  planned first, and its refusals ("Where the operation lands") capture and send nothing. A step
+  that already declares the operation (an earlier attempt without a completed receipt, or `record
+  mark --application`) takes no frame before it: such a step refuses a device frame
+  (`record_step_click_not_executed`), and the frame it was declared on stands.
 - **The entry step is as before.** On a recording without an effective step the operation opens
   the application entry step, which has no frame: nothing is taken before it or after it, and no
   device is asked for. Its package operation starts `from: "any"`. The next press's screen before
   (or the next `capture --record`) is the business's first screen: it opens the step after the
   entry step and is no screen after it.
-- **The screen after.** After a completed receipt (but on the entry step) the command waits
+- **The screen after.** After a completed receipt that names its `before_frame` (not on the entry
+  step, the entry launch run again after an indeterminate one included) the command waits
   `--after-ms` (2000 without it) and takes the screen after it as a press's, `--still-max-ms`
   (30000 without it) being the bound of the wait for a still screen (slice S1-2); it opens the
   next step. A receipt without completion is recorded as before (`record_application_indeterminate`,

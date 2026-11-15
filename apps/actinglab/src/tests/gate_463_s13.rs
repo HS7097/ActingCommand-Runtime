@@ -9,11 +9,12 @@
 // on the fake's clock and capture (`RecordFramePorts`). The presses are `tap --record`'s
 // (`record_press`).
 // - `s13_a_restart_in_the_middle_of_a_business_is_the_open_steps_effect_with_both_screens`: a tap,
-//   then `restart --record` on the open step it opened, which has no mark: nothing is captured
-//   before the operation; the operation is that step's effect, executed and closed, its
-//   `before_frame` the step's frame (the tap's screen after); the wait handed is the default 2000
-//   ms, a capture opens the next step, which is the operation's `after_frame`, with
-//   `after_capture`; the answer is the plain command's with `record` and `after`.
+//   then `restart --record` on the open step it opened, which has no mark: round 2, a capture
+//   immediately before the operation is that step's live primary frame (the tap's screen after
+//   superseded, and still the tap's `after_frame`); the operation is that step's effect, executed
+//   and closed, its `before_frame` that capture; the wait handed is the default 2000 ms, a capture
+//   opens the next step, which is the operation's `after_frame`, with `after_capture`; the answer
+//   is the plain command's with `record` and `after`.
 // - `s13_an_entry_launch_has_no_screen_before_or_after_it_and_starts_from_any`: `launch --record` on
 //   an empty recording opens the entry step with no frame, takes no frame and asks for no device;
 //   the next press's screen before opens the step after it and is no screen after the entry step;
@@ -23,6 +24,17 @@
 // - `s13_the_waits_handed_to_the_screen_after_are_the_flags_or_the_defaults`: `--after-ms` and
 //   `--still-max-ms` as given, `AfterCapture::for_application`'s 2000 and 30000 without them, and
 //   `validation_failed` (`range`) outside 0..=60000 or for a value that is no whole number.
+// Round 2 (the parent's fix round: every press is sent on a frame captured immediately before it;
+// an application operation's screen before follows the same rule):
+// - `s13_an_operation_on_a_marked_step_keeps_the_stored_frame`: on an open step with a mark the
+//   capture before the operation is not stored; the operation's `before_frame` is the stored frame
+//   the mark was made on, and the screen after takes the next frame id.
+// - `s13_two_operations_in_a_row_each_capture_the_screen_before_them`: `restart --record`, then
+//   `stop --record` on the step the restart's screen after opened: each captures before it, each
+//   `before_frame` is that capture, and the restart's `after_frame` is not rewritten.
+// - `s13_a_press_after_an_operation_replaces_the_frame_its_screen_after_opened_the_step_with`: a tap
+//   after `restart --record`: its capture before replaces the frame the restart's screen after
+//   opened the step with, and the restart's `after_frame` is not rewritten.
 // Frames are synthetic 1280x720 (a square of one colour at the top left on gray); no Runtime, no
 // device; the tests read no clock and never sleep. The fake's captures repeat their last screen,
 // and the assertions read what the operation hands the screen after, not how many captures it
@@ -33,11 +45,12 @@ use crate::flag_args::reads;
 use crate::session_management::{
     Operated, SESSION_APP_READS, application_after_capture, record_application_operation,
 };
+use actingcommand_contract::InputFrameReference;
 use actingcommand_device::{CaptureBackendName, Frame, PixelFormat};
 use actingcommand_lab::{
     AfterCapture, ApplicationExecution, ApplicationPlan, ApplicationSpec, AttachFrameRequest,
-    ClickEffect, ClickPlan, CommitClickRequest, LAB_RECORD_MARK_SCHEMA, LabError, LabOcr,
-    LabResult, MarkFamily, MarkRequest, MarkSpec, OpaqueJson, PlanApplicationRequest,
+    CapturedFrame, ClickEffect, ClickPlan, CommitClickRequest, LAB_RECORD_MARK_SCHEMA, LabError,
+    LabOcr, LabResult, MarkFamily, MarkRequest, MarkSpec, OpaqueJson, PlanApplicationRequest,
     PlanClickRequest, PointPress, RecordFramePorts, RecordPoint, RecordPressRequest, RecordRect,
     RecordStartOptions, RecordStopOptions, RecordingLock, record_attach_frame, record_mark,
     record_press, record_start, record_stop,
@@ -157,14 +170,28 @@ impl RecordFramePorts for FakeDevice<'_> {
             .push(format!("wait {}", duration.as_millis()));
     }
 
-    fn capture(&mut self) -> LabResult<AttachFrameRequest> {
+    fn capture(&mut self) -> LabResult<CapturedFrame> {
         self.log.borrow_mut().push("capture".to_owned());
         let last = self.screens.len().saturating_sub(1);
         let Some(&index) = self.screens.get(self.taken.min(last)) else {
             panic!("a capture the test did not script");
         };
         self.taken += 1;
-        Ok(captured(index))
+        Ok(CapturedFrame {
+            frame: captured(index),
+            input_frame: Some(reference(self.taken)),
+        })
+    }
+}
+
+/// Round 2: the reference of the frame the fake Runtime committed for its `number`th capture of one
+/// command (1 the first), of the synthetic frames' size; an application operation names none.
+fn reference(number: usize) -> InputFrameReference {
+    InputFrameReference {
+        frame_id: serde_json::from_value(json!(format!("frame_{number:032x}")))
+            .expect("a frame id"),
+        width: WIDTH,
+        height: HEIGHT,
     }
 }
 
@@ -222,7 +249,9 @@ impl Bench {
             taken: 0,
             log: &log,
         };
-        let mut press = |_: &ClickPlan| -> LabResult<CommitClickRequest> { Ok(performed_tap()) };
+        let mut press = |_: &ClickPlan, _: InputFrameReference| -> LabResult<CommitClickRequest> {
+            Ok(performed_tap())
+        };
         let request = RecordPressRequest {
             click: PlanClickRequest::default(),
             point_press: Some(PointPress::Tap {
@@ -369,13 +398,13 @@ fn s13_a_restart_in_the_middle_of_a_business_is_the_open_steps_effect_with_both_
             still_max_ms: 30_000
         }
     );
-    let (result, log) = bench.application("restart", &after, [2]);
+    let (result, log) = bench.application("restart", &after, [2, 0]);
     let data = the_answer(result);
-    // Nothing is taken before the operation, which lands on step 2; after it, the wait handed
-    // and a capture.
+    // Round 2: a capture immediately before the operation, which lands on step 2; after it, the
+    // wait handed and a capture.
     assert_eq!(
-        log.iter().take(4).map(String::as_str).collect::<Vec<_>>(),
-        ["frames", "operate 2", "wait 2000", "capture"],
+        log.iter().take(5).map(String::as_str).collect::<Vec<_>>(),
+        ["frames", "capture", "operate 2", "wait 2000", "capture"],
         "{log:?}"
     );
 
@@ -395,12 +424,16 @@ fn s13_a_restart_in_the_middle_of_a_business_is_the_open_steps_effect_with_both_
     assert_eq!(application["attempts"], json!([]), "{step}");
     let executed = &application["executed"];
     assert_eq!(executed["request_id"], "request-s13", "{step}");
-    // The screen before: the step's frame, the tap's screen after.
+    // The screen before: the capture before the operation, the step's live primary frame; the
+    // frame the tap's screen after opened the step with stays in it, superseded, and is still the
+    // tap's `after_frame`.
     let before = live_primary(step);
-    assert!(before["frame_id"].is_string(), "{step}");
-    assert_eq!(executed["before_frame"], before["frame_id"], "{step}");
+    assert_eq!(before["frame_id"], "f0003", "{step}");
+    assert_eq!(executed["before_frame"], "f0003", "{step}");
+    assert_eq!(step["frames"][0]["frame_id"], "f0002", "{step}");
+    assert_eq!(step["frames"][0]["superseded"], true, "{step}");
     assert_eq!(
-        executed["before_frame"], steps[0]["click"]["execution"]["after_frame"],
+        steps[0]["click"]["execution"]["after_frame"], "f0002",
         "{recording}"
     );
     // The screen after: the frame that opened step 3.
@@ -583,4 +616,175 @@ fn s13_the_waits_handed_to_the_screen_after_are_the_flags_or_the_defaults() {
         assert_eq!(details["argument"], argument, "{words:?}: {details}");
         assert_eq!(details["reason"], "range", "{words:?}: {details}");
     }
+}
+
+// The step's frame `frame_id`, or null.
+fn frame_of(step: &Value, frame_id: &Value) -> Value {
+    step["frames"]
+        .as_array()
+        .expect("the step's frames")
+        .iter()
+        .find(|frame| frame["frame_id"] == *frame_id)
+        .cloned()
+        .unwrap_or(Value::Null)
+}
+
+#[test]
+fn s13_an_operation_on_a_marked_step_keeps_the_stored_frame() {
+    let bench = Bench::new();
+    // `capture --record` of screen 0: step 1, open, then marked on that frame.
+    record_attach_frame(&bench.lock, captured(0))
+        .unwrap_or_else(|error| panic!("frame: {}: {}", error.code, error.message));
+    bench.mark(1, "first_square", None);
+    let (result, log) = bench.application("restart", &AfterCapture::for_application(None), [1, 2]);
+    let data = the_answer(result);
+    // The capture before the operation is taken all the same, immediately before it.
+    assert_eq!(
+        log.iter().take(5).map(String::as_str).collect::<Vec<_>>(),
+        ["frames", "capture", "operate 1", "wait 2000", "capture"],
+        "{log:?}"
+    );
+
+    let recording = bench.recording();
+    let steps = recording["steps"].as_array().expect("steps");
+    assert_eq!(steps.len(), 2, "{recording}");
+    let step = &steps[0];
+    // It is not stored: the step keeps the one frame its mark was made on.
+    assert_eq!(step["frames"].as_array().map(Vec::len), Some(1), "{step}");
+    assert_eq!(step["frames"][0]["frame_id"], "f0001", "{step}");
+    assert_eq!(step["frames"][0]["superseded"], false, "{step}");
+    assert_eq!(step["marks"].as_array().map(Vec::len), Some(1), "{step}");
+    assert_eq!(step["closed_by"], "application", "{step}");
+    let executed = &step["application"]["executed"];
+    assert_eq!(executed["before_frame"], "f0001", "{step}");
+    // The screen after takes the next frame id: the capture before took none.
+    let next = &steps[1];
+    assert_eq!(next["frames"][0]["frame_id"], "f0002", "{next}");
+    assert_eq!(
+        executed["after_frame"],
+        live_primary(next)["frame_id"],
+        "{recording}"
+    );
+    assert_eq!(executed["after_capture"]["after_ms"], 2_000, "{step}");
+    assert_eq!(
+        data["record"]["after"]["frame_id"], executed["after_frame"],
+        "{data}"
+    );
+}
+
+#[test]
+fn s13_two_operations_in_a_row_each_capture_the_screen_before_them() {
+    let bench = Bench::new();
+    // A tap: screen 0 opens step 1, screen 1 after it opens step 2.
+    bench.tap(100, 200, [0, 1]);
+    let after = AfterCapture::for_application(None);
+    // `restart --record` on step 2, then `stop --record` on step 3, which the restart's screen
+    // after opened; neither step has a mark.
+    let (first, first_log) = bench.application("restart", &after, [2, 0]);
+    let restarted = the_answer(first);
+    let (second, second_log) = bench.application("stop", &after, [1, 2]);
+    let stopped = the_answer(second);
+    assert_eq!(
+        first_log
+            .iter()
+            .take(5)
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        ["frames", "capture", "operate 2", "wait 2000", "capture"],
+        "{first_log:?}"
+    );
+    assert_eq!(
+        second_log
+            .iter()
+            .take(5)
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        ["frames", "capture", "operate 3", "wait 2000", "capture"],
+        "{second_log:?}"
+    );
+    let restart_after = restarted["record"]["after"]["frame_id"].clone();
+    assert!(restart_after.is_string(), "{restarted}");
+
+    let recording = bench.recording();
+    let steps = recording["steps"].as_array().expect("steps");
+    assert_eq!(steps.len(), 4, "{recording}");
+    let restart = &steps[1];
+    assert_eq!(restart["application"]["action"], "restart", "{restart}");
+    assert_eq!(
+        restart["application"]["executed"]["before_frame"],
+        live_primary(restart)["frame_id"],
+        "{restart}"
+    );
+    // Its screen after is not rewritten by the capture before the next operation.
+    assert_eq!(
+        restart["application"]["executed"]["after_frame"], restart_after,
+        "{recording}"
+    );
+    let stop = &steps[2];
+    assert_eq!(stop["index"], 3, "{stop}");
+    assert_eq!(stop["application"]["action"], "stop", "{stop}");
+    assert_eq!(stop["closed_by"], "application", "{stop}");
+    // The frame the restart's screen after opened step 3 with is superseded by the capture before
+    // the stop, which is the stop's `before_frame`.
+    assert_eq!(frame_of(stop, &restart_after)["superseded"], true, "{stop}");
+    let before = live_primary(stop);
+    assert!(before["frame_id"].is_string(), "{stop}");
+    assert_ne!(before["frame_id"], restart_after, "{stop}");
+    assert_eq!(
+        stop["application"]["executed"]["before_frame"], before["frame_id"],
+        "{stop}"
+    );
+    // The stop's screen after opened step 4.
+    let last = &steps[3];
+    assert_eq!(last["closed"], false, "{last}");
+    assert_eq!(
+        stop["application"]["executed"]["after_frame"],
+        live_primary(last)["frame_id"],
+        "{recording}"
+    );
+    assert_eq!(stopped["record"]["step"], 3, "{stopped}");
+    assert_eq!(stopped["record"]["after"]["step"], 4, "{stopped}");
+}
+
+#[test]
+fn s13_a_press_after_an_operation_replaces_the_frame_its_screen_after_opened_the_step_with() {
+    let bench = Bench::new();
+    bench.tap(100, 200, [0, 1]);
+    let (result, _) = bench.application("restart", &AfterCapture::for_application(None), [2, 0]);
+    let restarted = the_answer(result);
+    let restart_after = restarted["record"]["after"]["frame_id"].clone();
+    assert!(restart_after.is_string(), "{restarted}");
+    // A tap on step 3, which the restart's screen after opened and which has no mark.
+    bench.tap(300, 400, [1, 2]);
+
+    let recording = bench.recording();
+    let steps = recording["steps"].as_array().expect("steps");
+    assert_eq!(steps.len(), 4, "{recording}");
+    // The restart's screen after is not rewritten.
+    assert_eq!(
+        steps[1]["application"]["executed"]["after_frame"], restart_after,
+        "{recording}"
+    );
+    let pressed = &steps[2];
+    assert_eq!(pressed["index"], 3, "{pressed}");
+    assert_eq!(pressed["closed_by"], "click", "{pressed}");
+    // The press's capture before it supersedes the frame the restart's screen after opened the
+    // step with, and is the press's `before_frame`.
+    assert_eq!(
+        frame_of(pressed, &restart_after)["superseded"],
+        true,
+        "{pressed}"
+    );
+    let before = live_primary(pressed);
+    assert!(before["frame_id"].is_string(), "{pressed}");
+    assert_ne!(before["frame_id"], restart_after, "{pressed}");
+    assert_eq!(
+        pressed["click"]["execution"]["before_frame"], before["frame_id"],
+        "{pressed}"
+    );
+    assert_eq!(
+        pressed["click"]["execution"]["after_frame"],
+        live_primary(&steps[3])["frame_id"],
+        "{recording}"
+    );
 }

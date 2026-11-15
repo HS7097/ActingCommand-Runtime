@@ -28476,6 +28476,46 @@ three tools take `record`, `after_ms` and `still_max_ms` on the Lab's MCP server
 a client registered with today's server has no such parameter until its registration moves, which
 is the owner's to do.
 
+**Round 2** (coordinator work order `rd-1115/brief-463-s13-fix2.md`, after #463 S1-1's fix round 2,
+§1.402; the parent's branch merged at `24e48b47`).
+- *The screen before an application operation follows a press's.* On an open step the plan comes
+  first (its refusals capture and send nothing), then S1-1's `record_before_frame` captures one
+  frame immediately before the operation, always, and keeps it as a press's: no step open, it
+  opens the step; an open step without marks, it is the step's live primary frame (the older one
+  superseded); an open step with marks, it is not stored. The frame reference it answers is not
+  used (an application operation names no frame); no second capture path is written. The entry
+  launch on an empty recording still captures nothing and asks for no device.
+- *Established by reading: a step that already declares the operation.* `plan_application` sends
+  the same action again on an open step that declares it without a completed receipt (an earlier
+  attempt, or `record mark --application`), the documented way on after
+  `record_application_indeterminate`; but such a step refuses a device frame
+  (`application_arrival`, `record_step_click_not_executed`), so a capture stored there would
+  refuse the operation. Such a step takes no frame before it (the frame it was declared on stands);
+  the command reads whether the open step declares one as `record status` reads it
+  (`record_status`). Only a completed receipt that names its `before_frame` takes a screen after
+  it, so an entry launch run again after an indeterminate one takes none either (the first round
+  would have answered `record_step_not_found` after the operation there).
+- *An uncertain outcome* is recorded as before and takes no screen after it. The classification
+  stays `session app`'s (`application_not_completed`, `apps/actinglab/src/session_management.rs`):
+  a denied receipt did not run; a failed receipt or no receipt may have run. It agrees with
+  S1-1's for a press on what may have run; S1-1 counts a denied receipt as not performed only
+  with a usage or safety class, the application path on the receipt's state alone, as it did.
+- *Merged functions.* `note_after_frame` and `note_after_capture` hold S1-1's code for a press as
+  it is and read an application's completed receipt beside it; the application arm of
+  `note_after_frame` returns early through `?` (clippy's `question_mark` on the first round's
+  head). `DECLARED_EXCEPTIONS` stays empty and `declared_rows_match_their_commands` passed with it
+  on the first round's head; the rows' notes and "In the middle of a business" say that the three
+  `app` rows take `record`. The rows' `help` is 128, 138 and 135 bytes.
+- *Tests* (`apps/actinglab/src/tests/gate_463_s13.rs`, exec gate map "#463 S1-3"). Adapted, as the
+  requirement changes what it pins: the restart after a tap now captures before the operation
+  (step 2's live primary f0003 and its `before_frame`, f0002 superseded and still the tap's
+  `after_frame`); the fakes take S1-1's new signatures (`CapturedFrame`, the press closure's frame
+  reference). New: an operation on a marked step (the capture not stored, `before_frame` the
+  stored f0001, the screen after the next frame id); two operations in a row (each capture before
+  its `before_frame`, the restart's `after_frame` as its answer named it); a tap after an operation
+  (its capture before supersedes the frame the operation's screen after opened the step with, the
+  operation's `after_frame` not rewritten). No test leaves the gate map.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

@@ -481,10 +481,10 @@ fn note_after_frame(recording: &mut LabRecording, frame_id: &str) -> Option<u32>
             &mut execution.after_frame
         }
         (None, Some(application)) => {
-            let execution = application.executed.as_mut()?;
-            if execution.before_frame.is_none() {
-                return None;
-            }
+            let execution = application
+                .executed
+                .as_mut()
+                .filter(|execution| execution.before_frame.is_some())?;
             &mut execution.after_frame
         }
         (None, None) => return None,

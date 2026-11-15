@@ -14,10 +14,10 @@ use actingcommand_contract::{
 };
 use actingcommand_lab::{
     AfterCapture, AfterFrame, ApplicationAttempt, ApplicationExecution, ApplicationPlan,
-    AttachFrameRequest, CommitApplicationOutcome, CommitApplicationRequest,
-    LAB_RECORDING_MAX_NEXT_FRAME_MS, OpaqueJson, PlanApplicationRequest, RecordFramePorts,
-    RecordingLock, record_after_frame, record_application_append_failed, record_before_frame,
-    record_commit_application, record_plan_application,
+    AttachFrameRequest, CapturedFrame, CommitApplicationOutcome, CommitApplicationRequest,
+    LAB_RECORDING_MAX_NEXT_FRAME_MS, LabStatus, OpaqueJson, PlanApplicationRequest,
+    RecordFramePorts, RecordingLock, record_after_frame, record_application_append_failed,
+    record_before_frame, record_commit_application, record_plan_application, record_status,
 };
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientError, RuntimeFlowOutput};
 use serde_json::{Map, Value, json};
@@ -476,15 +476,24 @@ pub(crate) struct Operated {
 /// - An empty recording: the operation opens the application entry step, with no screen before it
 ///   and none after it (the next press's or capture's frame opens the step after it); `frames` is
 ///   never asked.
-/// - Any other: the screen before it as a press takes it ([`record_before_frame`]: one capture when
-///   no step is open, which opens the step the operation lands on; an open step's frame stands);
-///   the plan on that step, whose refusals send nothing; the operation; its completed receipt
-///   recorded, naming the step's frame as its `before_frame`; then the screen after it
-///   ([`record_after_frame`] with `after`), which opens the next step and is the execution's
-///   `after_frame`, with its `after_capture`. A screen after that cannot be taken answers its own
-///   code and class, and the operation and its closed step stand: its details begin with `record`
-///   (the operation as recorded), `after: {after_ms, taken: false}` and `operation`, then the
-///   capture's own members.
+/// - An open step: the plan on it first, whose refusals capture and send nothing. Round 2: then
+///   the screen before as a press takes it, captured immediately before the operation
+///   ([`record_before_frame`], its frame reference unused: an application operation names no
+///   frame): on a step without marks it is the step's live primary frame, the older one
+///   superseded; on a step with marks it is not stored and the stored frame stands. A step that
+///   already declares the operation (an earlier attempt without a completed receipt, or `record
+///   mark --application`) takes no frame, since it refuses a device frame
+///   (`record_step_click_not_executed`): the frame it was declared on stands.
+/// - No open step after a closed one: the screen before, which opens the step the operation
+///   lands on, then the plan on that step.
+///
+/// Then the operation; its completed receipt recorded, naming the step's live primary frame as its
+/// `before_frame` (none on an entry step, retried too); then, only for a receipt that names its
+/// `before_frame`, the screen after it ([`record_after_frame`] with `after`), which opens the next
+/// step and is the execution's `after_frame`, with its `after_capture`. A screen after that cannot
+/// be taken answers its own code and class, and the operation and its closed step stand: its
+/// details begin with `record` (the operation as recorded), `after: {after_ms, taken: false}` and
+/// `operation`, then the capture's own members.
 ///
 /// The answer is the plain command's with `record`: the operation as recorded and `after`, the
 /// screen after it (`null` on the entry step).
@@ -497,12 +506,21 @@ pub(crate) fn record_application_operation<P: RecordFramePorts>(
 ) -> CliOutcome<Value> {
     let (plan, mut ports) = match record_plan_application(lock, request) {
         Ok(plan) if plan.opens_entry_step => (plan, None),
-        // A refusal of this plan is the next one's, after the screen before.
-        _ => {
-            let mut ports = frames()?;
-            record_before_frame(lock, &mut ports)?;
-            (record_plan_application(lock, request)?, Some(ports))
-        }
+        planned => match (planned, open_step_declares(lock)?) {
+            (Ok(plan), Some(true)) => (plan, Some(frames()?)),
+            (Ok(plan), Some(false)) => {
+                let mut ports = frames()?;
+                record_before_frame(lock, &mut ports)?;
+                (plan, Some(ports))
+            }
+            (Err(error), Some(_)) => return Err(error),
+            // A refusal without an open step is the next plan's, after the screen before.
+            (_, None) => {
+                let mut ports = frames()?;
+                record_before_frame(lock, &mut ports)?;
+                (record_plan_application(lock, request)?, Some(ports))
+            }
+        },
     };
     let Operated {
         execution,
@@ -516,7 +534,12 @@ pub(crate) fn record_application_operation<P: RecordFramePorts>(
         Ok(outcome) => outcome,
         Err(error) => return Err(with_operation(error, data)),
     };
-    let after_frame = match &mut ports {
+    let names_before = outcome
+        .application
+        .executed
+        .as_ref()
+        .is_some_and(|execution| execution.before_frame.is_some());
+    let after_frame = match ports.as_mut().filter(|_| names_before) {
         None => None,
         Some(device) => {
             let (frame, record) = match record_after_frame(lock, device, after) {
@@ -543,6 +566,19 @@ pub(crate) fn record_application_operation<P: RecordFramePorts>(
     record["after"] = record_json(&after_frame)?;
     data["record"] = record;
     Ok(data)
+}
+
+/// #463 S1-3 round 2: whether a step of the recording is open (`None` when none is) and, when one
+/// is, whether it already declares an application operation, read as `record status` reads it.
+fn open_step_declares(lock: &RecordingLock) -> CliOutcome<Option<bool>> {
+    let Some(LabStatus::Recording(view)) = record_status(lock.state_dir(), lock.instance())? else {
+        return Ok(None);
+    };
+    Ok(view.open_step.map(|index| {
+        view.steps
+            .iter()
+            .any(|step| step.index == index && step.application.is_some())
+    }))
 }
 
 /// The JSON of what the recording answered, for the command's `record`.
@@ -601,7 +637,8 @@ fn after_frame_failed(
 
 /// #463 S1-3: the caller's clock and the Runtime's capture of `session app <verb> --record`: each
 /// frame is taken as `capture --record` takes it, on the device configuration of the command's
-/// instance.
+/// instance; round 2: with the reference of the frame the Runtime committed for it, as a press's
+/// capture carries it (`record_before_frame` asks for it; the operation names none).
 struct ApplicationFrames {
     device: DeviceRuntimeConfig,
 }
@@ -611,7 +648,7 @@ impl RecordFramePorts for ApplicationFrames {
         std::thread::sleep(duration);
     }
 
-    fn capture(&mut self) -> CliOutcome<AttachFrameRequest> {
+    fn capture(&mut self) -> CliOutcome<CapturedFrame> {
         let captured = capture_for_command(
             &self.device,
             self.device.capture_backend,
@@ -622,12 +659,15 @@ impl RecordFramePorts for ApplicationFrames {
             .frame
             .png_for_artifact()
             .map_err(|err| CliError::device(err.to_string()))?;
-        Ok(AttachFrameRequest {
-            png,
-            source: "lab_capture".to_string(),
-            runtime_artifact: None,
-            capture_backend: Some(captured.frame.backend_name.as_str().to_string()),
-            freshness: Some(OpaqueJson::from_serializable(&captured.freshness)?),
+        Ok(CapturedFrame {
+            frame: AttachFrameRequest {
+                png,
+                source: "lab_capture".to_string(),
+                runtime_artifact: None,
+                capture_backend: Some(captured.frame.backend_name.as_str().to_string()),
+                freshness: Some(OpaqueJson::from_serializable(&captured.freshness)?),
+            },
+            input_frame: captured.input_frame,
         })
     }
 }
