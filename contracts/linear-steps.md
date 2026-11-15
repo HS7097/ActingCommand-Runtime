@@ -158,7 +158,10 @@ operation dispatched, with `step_index` `d` the number of operations dispatched 
 
 1. The run progress becomes `d + 1`, and `StepStarted` names the operation and the step's page.
 2. The guard is evaluated on the frame on which the step's page passed; a refusal is the
-   existing `contained_task_guard_refused`, with no input and no retry. Workflow #411 B12: a
+   existing `contained_task_guard_refused`, with no input and no retry. A guard target that
+   cannot be evaluated is `contained_task_guard_evaluation_failed`, or, when the vision provider
+   failed or answered invalidly, `contained_task_vision_provider_failed` (#469 D4b, since
+   0.12.63), with the same detail and no input. Workflow #411 B12: a
    click that declares an `input_recheck` is then checked again on fresh frames as on the
    page-graph path (`resource-declarations.md`, section Task schema `0.9` observation windows and
    input rechecks), each evaluated against the step's page only; a refusal of the recheck
@@ -1035,7 +1038,7 @@ dispatched from. A `fresh_frame` recheck's refusal is the guard's own and carrie
 | A declared input recheck that did not hold before the step timeout (Workflow #411 B12) | `contained_task_input_stability_unconfirmed` (`stable_frames`) or `contained_task_input_still_unconfirmed` (`still_frames`), with `pack_operation_id` and `timeout_ms` | none |
 | The task deadline | `contained_task_timeout` | `task` / the stage it expired in |
 | A recognition error | `contained_task_recognition_failed` | none |
-| The vision provider failed or answered invalidly (Workflow #387 D1c-G) | `contained_task_vision_provider_failed` | none |
+| The vision provider failed or answered invalidly (Workflow #387 D1c-G), at a page evaluation or (#469 D4b, since 0.12.63) at a guard's target | `contained_task_vision_provider_failed` | none |
 | A frame the display adapter cannot map: no pure scale of the package without a declaration, a translation or a cropped frame (until Workflow #392 DA-2b), a frame smaller than the package or in its other orientation (`contracts/display-adapter.md` section 8) | `display_map_unresolved` with its `display_problem` | none |
 | A package outside the admission rules | `contained_task_linear_invalid` (admission) | none |
 | The prerequisite gate ("Prerequisite packages" above) | `contained_task_prerequisite_*` | `page_recognition` / `entry_recognition` for `contained_task_prerequisite_entry_unmatched` |
