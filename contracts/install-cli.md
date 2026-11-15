@@ -1389,6 +1389,40 @@ the rescue face:
     the plan itself does not check) leaves each package of that side `unread` with its roles.
     An `unread` before counts as neither scheduled nor holding a role for `enters`; a package
     `unread` after enters and leaves by its roles only. Nothing is refused for it.
+- **The authorization a placement names** (Workflow #463 S3-2, since 0.12.63; register §1.409;
+  the coordinator's rulings on board #463, not the owner's words). The owner's rule is that
+  nothing enters normal scheduling without her explicit authorization, and the placement is the
+  act that enables. So a placement whose plan changes something names the authorization it acts
+  under and, one by one, the packages it enables; `place --plan` and the placement of a plan
+  that changes nothing (every item `unchanged`) need neither and read neither.
+  - **The parameters.** `--authorization <reference>`: the reference of the authorization (a
+    board comment's address, say), non-blank, at most 1024 bytes, no control character.
+    `--enables <package_id>`, repeated: every package of the plan's `enters`, once each, and
+    absent when nothing enters. There is no default, no variable and no switch that places
+    without them.
+  - **The checks**, after the plan and before the hold, any pause and any write, once for both
+    paths (with a Runtime and while it is stopped), in this order, each refusal with `plan_id`
+    and `game`: no `--authorization`, or a blank one, is `install_command_refused`
+    `place_authorization_missing`; one longer than 1024 bytes or holding a control character
+    `actingctl_usage_invalid` (`unusable`, `--authorization`); a plan that could not read the
+    zip's `schedule.json` (`unread` names `bundle`) `place_enables_unknown`, the reader's refusal
+    (`standard_pack_root_invalid` at the file) as the cause: the packages the placement would
+    enable cannot be named. The zip's other root files are refused `pack_invalid` in the plan
+    already; an installed game root that cannot be read refuses nothing, since a placement is how
+    a broken root is repaired, and its `enters` are then the plan's as above. Last, `--enables`,
+    sorted, not exactly the plan's `enters` (a name missing, one too many, one given twice, or any
+    when nothing enters) is `place_enables_mismatch`, the answer's `expected` (`enters`) and
+    `given` (`--enables`), each sorted, beside the outcome. A caller without a reference learns
+    that first.
+  - **The record.** The `pack_place` journal's `inputs` gain `authorization` (the reference as
+    given) and `enabled` (the sorted list of the packages the placement enables, `[]` when none),
+    with a Runtime and without one; `op status <op>` shows them with the journal. A journal
+    an earlier build began has neither member: it loads and is resumed and undone as before, and
+    its authorization reads as not recorded, never as an empty one.
+  - **What the tool does not do.** It records an authorization and grants none: it does not judge
+    the reference, and never supplies one. `--enables` is the caller's statement that it knows
+    which packages it is enabling; the plan's `enters` is what the tool holds it to. A plan that
+    lists `enters` is not an authorization, and neither is a passed check.
 - **`vision manifest --provider cpu|directml` and `vision check`** (Workflow #453 S7, since
   0.12.60; register §1.355; [vision-model-folders.md](vision-model-folders.md), "The manifest";
   the coordinator's rulings on board #453, not the owner's words). Two read-only rows, `runtime`
@@ -3202,6 +3236,13 @@ the fragment registers, names the command.
   running at its deadline) and `install_caveat` `fingerprints_discontinuous` (`path` the kept
   record), which only this row answers; the existing `owner_lock_held`, `runtime_running` and `processes_unreadable`
   for its stopped rule; no code or key is new.
+- **Workflow #463 S3-2** (since 0.12.63; "The Lab's rescue module", "The authorization a
+  placement names"): `install_refusal` `place_authorization_missing`, `place_enables_mismatch`
+  (the answer's `expected` and `given`, not values) and `place_enables_unknown` (the reader's
+  refusal as the cause), each with `plan_id` and `game`, which only `install_pack_place` answers,
+  each before the hold and any write; the existing `actingctl_usage_invalid` (`unusable`,
+  `wrong_type`) for a malformed `--authorization` or `--enables`; no code, location or key is
+  new.
 - **`install_caveat`, INST-2**: `start_stalled`, `stop_terminal_unconfirmed`,
   `runs_not_continued`.
 - **`install_refusal`**: `not_single_location`, `layout_ab_unsupported`, `not_adopted`,

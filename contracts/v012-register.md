@@ -28144,6 +28144,102 @@ before.
 **At deploy.** Nothing to do. A reader of the plan's boolean `schedule_changes` reads the item
 `schedule.json` instead.
 
+### 1.409 Slice #463 S3-2 (0.12.63): a placement names its authorization and the packages it enables (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, and her rule that nothing enters normal scheduling without her explicit authorization; the design `rd-1115/pack-stage3-design.md` §4.2, S3-2, with §2.3's last paragraph and §2.6; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s32-place-authorization.md`, built on S3-1, §1.408)
+
+The coordinator gave this slice 1.409, after S3-1's §1.408, on whose branch it is built. The
+slice ships in 0.12.63.
+
+**What it is.** The placement is the act that enables (§1.408), and until this slice `place`
+asked for nothing: its journal recorded who started it and what was placed, not under which
+authorization and not which packages began to be scheduled. Now the rescue module's `place`
+(`crates/lab-rescue/src/install/place.rs`, `authorize`; called once by `crates/lab-rescue/src/rescue.rs`,
+`place`) requires, for a plan that changes something, `--authorization <reference>` and
+`--enables <package_id>` repeated, and records both ([install-cli.md](install-cli.md), "The
+Lab's rescue module", "The authorization a placement names"). `--plan` and a plan whose items
+are all `unchanged` need neither and read neither; everything else needs the reference, also a
+placement that only replaces content or only places held packages.
+
+| Check, in this order, after the plan and before the hold | Answer |
+|---|---|
+| no `--authorization`, or a blank one | `install_command_refused` `place_authorization_missing` |
+| a reference over 1024 bytes or holding a control character | `actingctl_usage_invalid` `unusable` (`--authorization`) |
+| the plan could not read the zip's `schedule.json` (`unread` names `bundle`) | `place_enables_unknown`, the reader's `standard_pack_root_invalid` as the cause |
+| `--enables`, sorted, not exactly the plan's `enters` (a name missing, one too many, one twice, any when nothing enters) | `place_enables_mismatch`, the answer's `expected` and `given`, each sorted |
+
+Each refusal carries `plan_id` and `game` and comes before the hold, any pause, the writer lock
+and any write. The check runs once in `place`, after the early answer of `--plan` and of a plan
+that changes nothing and before the path is chosen, so the placement with a Runtime and the one
+while it is stopped (`place_cold`) pass the same code. The journal's `inputs` gain
+`authorization` (the reference as given) and `enabled` (the sorted list of the packages enabled,
+`[]` when none), on both paths; `op status <op>` shows them with the journal.
+
+**Codes.** No code is new. The three refusals are words of the vocabulary `install_refusal` of
+the existing `install_command_refused` (registered in `crates/lab-ops/src/codes.rs`, the fragment
+`contracts/outcome-codes/catalog.json`), as every refusal of the rescue module is; the index is
+regenerated. Each refuses, exit 1. A malformed reference is the module's existing argument
+refusal.
+
+| Word | The one situation | Refuses or warns | Exit |
+|---|---|---|---|
+| `place_authorization_missing` | a placement of a plan that changes something names no authorization | refuses | 1 |
+| `place_enables_mismatch` | `--enables` is not exactly the plan's `enters` | refuses | 1 |
+| `place_enables_unknown` | the plan could not read the zip's `schedule.json`, so what the placement enables cannot be named | refuses | 1 |
+
+**The zip's side and the installed side.** The plan refuses a zip whose other root files the
+reader refuses (`pack_invalid`, caused by `standard_pack_root_invalid`) and a `bundle.json` the
+index does not take, before this check; its own reading of the zip's `schedule.json`, which no
+earlier check reads, is the one way the zip's side is `unread`, and that is
+`place_enables_unknown`. An installed game root that cannot be read refuses nothing (a placement
+is how a broken root is repaired): the names required are the plan's `enters` as S3-1 gives them.
+
+**What the texts say.** The tool records an authorization and grants none: it does not judge the
+reference and never supplies one; there is no default, no variable and no switch that places
+without it. `--enables` is the caller's statement that it knows what it is enabling. A plan that
+lists `enters` is not an authorization. The row `place` of
+[lab-operations.json](lab-operations.json) gains the parameters `authorization` (an option) and
+`enables` (an option, repeated), which the Lab's MCP tool takes from the row; its notes say the
+same.
+
+**A journal already on disk.** A `pack_place` journal an earlier build began has neither member.
+It loads, and is resumed, undone and shown as before; its authorization reads as not recorded
+(the members absent), never as an empty one. The inputs are free JSON, so nothing else reads
+them.
+
+**Tests.** `crates/lab-rescue/src/install/gate_463_s32.rs`, gate map `apps.toml` "#463 S3-2", on
+the fake host with an installed game root whose one pack a rule names (both roots of every scene
+hold a `schedule.json` and the installed one is read, so no test depends on how S3-1 counts a
+root without one or an installed root that cannot be read): no reference, a blank one, and none
+beside a wrong `--enables` refuse `place_authorization_missing`, with a Runtime and without;
+1025 bytes, a line feed and a tab refuse `unusable`, 1024 bytes pass to the next check;
+`--enables` absent, a name too many, a name twice, another name, and any name where nothing
+enters refuse `place_enables_mismatch` with `expected` and `given`, on both paths; an unreadable
+zip `schedule.json` refuses `place_enables_unknown` with its cause, on both paths, and without a
+reference `place_authorization_missing` first; each refusal leaves the root's `install` folder
+and the game root byte for byte, asks the Runtime nothing and pauses nothing. A content-only
+placement with a Runtime records the reference and `[]`, `op status` shows both, and the journal
+without them loads and is answered without them; a cold placement that enables a pack records it;
+`--plan` and an unchanged bundle need neither.
+
+Adapted, because every placement that changes something now names its authorization: the
+placements of `gate_434_lab3.rs` (`place_holds_only_the_bundles_idle_instances`),
+`gate_444_notices2.rs`, `gate_451_loadp.rs`, `gate_451_place_pkg.rs`, `gate_453_cold_place.rs`,
+`gate_455_gr1.rs` and `gate_463_v1.rs` pass the reference and, when their plan lists `enters`,
+those names, through one fixture function (`fixture::authorized`, which asks the module's own
+plan; their `--plan` calls are unchanged). In `gate_453_cold_place.rs` the bundles' placeholder
+`schedule.json` bytes, which the reader refuses and which would now be `place_enables_unknown`,
+are a schedule without rules or holds, and the two tests that list the journal's input names
+(`s5_a_hot_placement_with_a_bound_instance_answers_as_before`,
+`s6_cold_place_places_the_items_and_keeps_the_replaced_ones`) list `authorization` and
+`enabled` too. No golden changes, no test leaves the gate map.
+
+**What is not changed.** What a placement places, holds and checks; the plan, its id, its items
+and its `schedule_changes` (S3-1's); `release stage`, `deploy` and the other rows; every
+interface revision.
+
+**At deploy.** Nothing to do on the root. A caller of `place` that changes something passes
+`--authorization` and `--enables` from this build on; a placement without them is refused before
+anything happens, so nothing is half done.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

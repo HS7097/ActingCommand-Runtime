@@ -55,7 +55,18 @@ pub static READ_HERE: [Reads; 22] = [
             "application_id",
         ],
     ),
-    reads("place", &["bundle", "sums", "facts", "plan"]),
+    // Workflow #463 S3-2: and the authorization a placement names, with the packages it enables.
+    reads(
+        "place",
+        &[
+            "bundle",
+            "sums",
+            "facts",
+            "plan",
+            "authorization",
+            "enables",
+        ],
+    ),
     // Workflow #453 S4: the new root and its state root under names the module does not refuse.
     reads(
         "new",

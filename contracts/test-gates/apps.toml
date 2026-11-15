@@ -2333,3 +2333,17 @@ tests = [
     "actingcommand-lab-rescue::lib::install::gate_463_s31::s31_an_unchanged_bundle_lists_nothing",
 ]
 incident = ["#463 S3-1"]
+
+# Workflow #463 S3-2 (0.12.63; register §1.409; brief rd-1115/brief-463-s32-place-authorization.md; design rd-1115/pack-stage3-design.md §4.2, S3-2, §2.3 and §2.6; contracts/install-cli.md, "The Lab's rescue module", "The authorization a placement names"): on the fake host with an installer of package [3, 10], bundles declaring [3, 3] and an installed game root whose one pack a rule names, with the fake Runtime running one instance bound to the game and with no Runtime, the Lab rescue module's place of a plan that changes something: no --authorization, a blank one, or none beside an --enables that is not enters, is install_command_refused place_authorization_missing with the plan's plan_id and the game, exit 1, nothing asked of the Runtime (no pause), the root's install folder (no journal) and the game root byte for byte as they were; a reference of 1025 bytes, with a line feed or with a tab is actingctl_usage_invalid unusable naming --authorization with nothing done, one of 1024 bytes taken; --enables absent, with a name too many, a name twice or another name, and any name where nothing enters, is place_enables_mismatch with the answer's expected (enters) and given, both sorted, nothing done; a zip whose schedule.json the reader refuses (unread bundle) is place_enables_unknown caused by standard_pack_root_invalid schedule_invalid at the zip's file, with or without --enables, and without a reference place_authorization_missing first, nothing done; with a Runtime a content-only placement with a reference and no --enables is done, the instance held and handed back, the journal's inputs authorization (as given) and enabled [] shown by op status, and the same journal without both members loads and op status answers it without either; with no Runtime a placement that adds a pack named by a rule, with a reference and --enables naming it, is done with the journal's inputs cold, authorization and enabled [the pack], shown by op status; place --plan and a bundle that changes nothing need neither and do nothing
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-lab-rescue::lib::install::gate_463_s32::s32_no_reference_is_refused_before_the_hold_hot_and_cold",
+    "actingcommand-lab-rescue::lib::install::gate_463_s32::s32_a_reference_out_of_bounds_is_refused_unusable",
+    "actingcommand-lab-rescue::lib::install::gate_463_s32::s32_enables_not_the_plans_enters_is_refused_hot_and_cold",
+    "actingcommand-lab-rescue::lib::install::gate_463_s32::s32_an_unreadable_bundle_schedule_is_refused_enables_unknown",
+    "actingcommand-lab-rescue::lib::install::gate_463_s32::s32_a_content_only_placement_records_the_reference_and_no_package",
+    "actingcommand-lab-rescue::lib::install::gate_463_s32::s32_a_cold_placement_records_the_packages_it_enables",
+    "actingcommand-lab-rescue::lib::install::gate_463_s32::s32_the_plan_and_an_unchanged_bundle_need_neither",
+]
+incident = ["#463 S3-2"]

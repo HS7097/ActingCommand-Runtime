@@ -35,6 +35,15 @@
 //!   `content_only` ([`ScheduleChanges`]). The plan document, its id, its items and every check
 //!   are as before; a root that cannot be read for it refuses nothing and is named under
 //!   `unread`.
+//! - **The authorization a placement names** (Workflow #463 S3-2, [`authorize`]): a placement
+//!   whose plan changes something names, by `--authorization`, the reference of the authorization
+//!   it acts under, and, by `--enables`, every package of the plan's `enters`; before the hold and
+//!   before any write, hot and cold alike, one is refused without a reference
+//!   (`place_authorization_missing`), then when the plan could not read the zip's `schedule.json`
+//!   (`place_enables_unknown`), then when `--enables` is not exactly `enters`
+//!   (`place_enables_mismatch`, the answer's `expected` and `given`). The journal's inputs record
+//!   both (`authorization`, `enabled`). The tool records the reference and grants nothing: it does
+//!   not judge it, and a plan that lists `enters` is no authorization.
 //! - **The operation** (`kind` `pack_place`, journalled) while a Runtime runs: the hold of the
 //!   instances bound to the bundle's game (`pause`), then each item that changes (`pack_item`:
 //!   written to
@@ -82,7 +91,8 @@ use super::manifest;
 use super::plan::Loaded;
 use super::programs::{self, Deadline};
 use super::state::{KindLocation, OperationKind, Paths};
-use crate::codes::{InstallCaveat, InstallLocation, InstallRefusal};
+use crate::cli_line::{self, Exit};
+use crate::codes::{ArgumentProblem, InstallCaveat, InstallLocation, InstallRefusal};
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::{CauseRelation, IoOp, Outcome};
 use actingcommand_contract::{
@@ -99,7 +109,7 @@ use actingcommand_contract::{
     read_standard_pack_root, standard_pack_maintenance_packages,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::io::{Read, Write};
@@ -225,7 +235,8 @@ pub(crate) struct Placement {
     pub(crate) zip_sha256: String,
     pub(crate) items: Vec<Item>,
     /// Workflow #463 S3-1: the packages the placement makes enter or leave scheduling, answered
-    /// as the plan's `schedule_changes`; no step, check or journal reads it.
+    /// as the plan's `schedule_changes`; no step or check reads it. Workflow #463 S3-2: the
+    /// placement's authorization ([`authorize`]) holds `--enables` to its `enters`.
     pub(crate) scheduling: ScheduleChanges,
 }
 
@@ -370,7 +381,8 @@ struct Change {
 }
 
 /// Workflow #463 S3-1: what a placement changes of its game's scheduling, the plan's
-/// `schedule_changes`. Read only: nothing a placement writes or checks reads it.
+/// `schedule_changes`. Read only: no step or check of a placement reads it; (Workflow #463 S3-2)
+/// its authorization ([`authorize`]) reads `enters` and whether the zip's side was read.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ScheduleChanges {
     /// Each package whose part or content changes, by package id.
@@ -495,7 +507,19 @@ impl ScheduleChanges {
         }
         value
     }
+
+    /// Workflow #463 S3-2: why the zip's side could not be read (its root `bundle` under
+    /// `unread`), when it could not.
+    fn bundle_unread(&self) -> Option<&Outcome> {
+        self.unread
+            .iter()
+            .find(|(side, _)| *side == BUNDLE_SIDE)
+            .map(|(_, failure)| failure)
+    }
 }
+
+/// Workflow #463 S3-2: the name [`ScheduleChanges::between`] gives the zip's side under `unread`.
+const BUNDLE_SIDE: &str = "bundle";
 
 /// `pack_invalid` of `place` with `path`.
 fn invalid(path: &Path) -> Outcome {
@@ -1486,6 +1510,113 @@ pub(crate) fn plan(
     })
 }
 
+/// Workflow #463 S3-2: the longest reference `--authorization` takes, in bytes.
+const MAX_AUTHORIZATION_BYTES: usize = 1024;
+/// Workflow #463 S3-2: the two parameters as a refusal names them.
+const AUTHORIZATION_FLAG: &str = "--authorization";
+const ENABLES_FLAG: &str = "--enables";
+/// Workflow #463 S3-2: the inputs of a `pack_place` journal that record the reference of the
+/// authorization the placement acts under and the packages it enables. A journal an earlier build
+/// began has neither: not recorded, never an empty authorization.
+const AUTHORIZATION_INPUT: &str = "authorization";
+const ENABLED_INPUT: &str = "enabled";
+
+/// Workflow #463 S3-2: what a placement that changes something names ([`authorize`]): the
+/// reference of the authorization it acts under, as the caller gave it, and the packages it
+/// enables, the plan's `enters`, sorted, which the caller named one by one.
+#[derive(Debug)]
+pub(crate) struct Authorized {
+    reference: String,
+    enabled: Vec<String>,
+}
+
+impl Authorized {
+    /// Records both in a `pack_place` journal's `inputs`: [`AUTHORIZATION_INPUT`] and
+    /// [`ENABLED_INPUT`] (the list empty when nothing enters).
+    fn record(&self, inputs: &mut Value) {
+        inputs[AUTHORIZATION_INPUT] = json!(self.reference);
+        inputs[ENABLED_INPUT] = json!(self.enabled);
+    }
+}
+
+/// Workflow #463 S3-2: the authorization a placement whose plan `placement` changes something
+/// names, from the caller's `authorization` (`--authorization`) and `enables` (`--enables`,
+/// repeated), judged in this order, after the plan and before anything is held or written (the
+/// caller asks it once, before it chooses the placement with a Runtime or without one):
+/// - no reference, or a blank one: `place_authorization_missing`; one longer than
+///   [`MAX_AUTHORIZATION_BYTES`] bytes or holding a control character: `actingctl_usage_invalid`
+///   (`unusable`, `--authorization`); a value of another type `wrong_type`. The reference is kept
+///   as given and never judged: the tool records an authorization and grants none;
+/// - an `--enables` value that is no list of strings: `wrong_type`;
+/// - the plan could not read the zip's `schedule.json` (its side `bundle` under `unread`): the
+///   packages the placement would enable cannot be named, `place_enables_unknown`, the reader's
+///   failure as the cause;
+/// - `--enables`, sorted, not exactly the plan's `enters`: `place_enables_mismatch`, the answer's
+///   `expected` (`enters`) and `given`, each sorted; a name given twice is one too many, and no
+///   `--enables` is the empty list. `--enables` is the caller's statement that it knows what it
+///   enables; `enters` alone is no authorization.
+///
+/// Each refusal names the plan (`plan_id`) and the game.
+pub(crate) fn authorize(
+    placement: &Placement,
+    authorization: Option<&Value>,
+    enables: Option<&Value>,
+) -> Result<Authorized, Exit> {
+    let refused = |refusal: InstallRefusal| {
+        super::refusal(PLACE, refusal)
+            .plan_id(placement.id.clone())
+            .game(placement.game.clone())
+    };
+    let failed = |outcome: Outcome| cli_line::failure(&outcome, None);
+    let wrong = |flag: &str| {
+        failed(cli_line::usage_invalid(
+            Some(flag),
+            ArgumentProblem::WrongType,
+        ))
+    };
+    let reference = match authorization {
+        Some(Value::String(text)) if !text.trim().is_empty() => text,
+        None | Some(Value::String(_)) => {
+            return Err(failed(refused(InstallRefusal::PlaceAuthorizationMissing)));
+        }
+        Some(_) => return Err(wrong(AUTHORIZATION_FLAG)),
+    };
+    if reference.len() > MAX_AUTHORIZATION_BYTES || reference.chars().any(char::is_control) {
+        return Err(failed(super::unusable(AUTHORIZATION_FLAG)));
+    }
+    let mut given = match enables {
+        None => Vec::new(),
+        Some(Value::Array(names)) => names
+            .iter()
+            .map(|name| name.as_str().map(str::to_owned))
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(|| wrong(ENABLES_FLAG))?,
+        Some(_) => return Err(wrong(ENABLES_FLAG)),
+    };
+    if let Some(failure) = placement.scheduling.bundle_unread() {
+        return Err(failed(
+            refused(InstallRefusal::PlaceEnablesUnknown).caused_by(failure.clone()),
+        ));
+    }
+    given.sort();
+    let mut expected = placement.scheduling.enters.clone();
+    expected.sort();
+    if given != expected {
+        let mut members = Map::new();
+        members.insert("expected".to_owned(), json!(expected));
+        members.insert("given".to_owned(), json!(given));
+        return Err(cli_line::receipt(
+            members,
+            &refused(InstallRefusal::PlaceEnablesMismatch),
+            true,
+        ));
+    }
+    Ok(Authorized {
+        reference: reference.clone(),
+        enabled: given,
+    })
+}
+
 /// The post-placement check's intent.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1583,6 +1714,9 @@ pub(crate) struct Begun<'a> {
     /// status read before the hold showed them (paused or not), journalled as the input
     /// [`BOUND_INPUT`].
     pub(crate) bound: &'a [String],
+    /// Workflow #463 S3-2: the authorization the placement names, journalled as the inputs
+    /// [`AUTHORIZATION_INPUT`] and [`ENABLED_INPUT`].
+    pub(crate) authorized: &'a Authorized,
 }
 
 /// Workflow #453 S5: the input of a `pack_place` journal that lists the instances bound to the
@@ -1615,6 +1749,7 @@ pub(crate) fn open<'h>(
         "config_sha256": loaded.config_sha256,
     });
     inputs[BOUND_INPUT] = json!(begun.bound);
+    begun.authorized.record(&mut inputs);
     let opening = Opening {
         kind: OperationKind::PackPlace,
         initiator: begun.initiator,
@@ -1655,12 +1790,14 @@ const COLD_INPUT: &str = "cold";
 /// caller having applied the stopped rule under the writer lock: the same plan and plan id, the
 /// inputs of a placement without its hold (no `hold`, `known_pauses` or `instances`),
 /// [`COLD_INPUT`] and (fix 1) [`BOUND_INPUT`], the instances the configuration binds to the
-/// bundle's game ([`configured_bound`]), no S0, no guards, and the steps [`cold_steps`].
+/// bundle's game ([`configured_bound`]), (Workflow #463 S3-2) the authorization `authorized` as
+/// with a Runtime, no S0, no guards, and the steps [`cold_steps`].
 pub(crate) fn open_cold<'h>(
     host: &'h dyn Host,
     paths: &Paths,
     loaded: &Loaded,
     placement: &Placement,
+    authorized: &Authorized,
     initiator: Option<actingcommand_lab_ops::initiator::Initiator>,
 ) -> Result<Operation<'h>, Outcome> {
     let mut inputs = json!({
@@ -1672,6 +1809,7 @@ pub(crate) fn open_cold<'h>(
     });
     inputs[COLD_INPUT] = Value::Bool(true);
     inputs[BOUND_INPUT] = json!(configured_bound(&loaded.config, &placement.game));
+    authorized.record(&mut inputs);
     let opening = Opening {
         kind: OperationKind::PackPlace,
         initiator,

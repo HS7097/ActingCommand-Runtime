@@ -178,6 +178,9 @@ mod gate_453_s9;
 // Test-only: Workflow #463 S3-1, the packages the plan of `place` says enter or leave scheduling.
 #[cfg(test)]
 mod gate_463_s31;
+// Test-only: Workflow #463 S3-2, the authorization a placement names and the packages it enables.
+#[cfg(test)]
+mod gate_463_s32;
 
 pub(crate) use host::{Host, SystemHost};
 // Workflow #421 INST-1, watchdog row 7a″: what the watchdog and `actingctl start` read.
