@@ -2247,3 +2247,195 @@ mod k4_tests {
         );
     }
 }
+
+// Workflow #469 F1 (0.12.62; register §1.387; contracts/runtime-state-observation.md,
+// "Contained-run queries"), the diagnosis's half: `runs_grouped` keeps grouping by (policy task,
+// failure code, final page) and by nothing the terminal's values say. Workflow #434 LAB-7: the
+// test of `ac_diagnose` that held it left with actingctl; the groups are `grouped_run`'s and
+// `group_runs`', which the Lab's diagnose row answers on the command line and through MCP alike.
+// Two failed runs of one code whose `failure_values` differ are one group, which carries no such
+// member, and a run of another code is another group. The runs are manual and their codes
+// registered, so grouping them reads nothing: the scripted Runtime receives the handshake alone.
+// The failed outcome is the retired test's (a vocabulary word codes mode keeps, an id and a
+// duration it drops), its word changed for the second run.
+#[cfg(test)]
+mod f1_tests {
+    use super::{Budget, Clock, group_runs, grouped_run};
+    use actingcommand_contract::codes::SharedCode;
+    use actingcommand_contract::outcome::Outcome;
+    use actingcommand_contract::{
+        IdentifierIssuer, InstanceId, RuntimeErrorCode, RuntimeReceiptState, TaskOutcome,
+        TaskRunIdentity,
+    };
+    use actingcommand_runtime_client::test_support::{ScriptedConnection, ScriptedRuntime};
+    use actingcommand_runtime_client::{
+        ContainedRunEvidence, ContainedRunState, ContainedRunStatus, ContainedRunTerminal,
+        RunDispatch, RunOrigin, RuntimeClient, WindowRun,
+    };
+    use serde_json::{Value, json};
+    use std::time::{Duration, Instant};
+    use tempfile::TempDir;
+
+    const FAILURE: RuntimeErrorCode = RuntimeErrorCode::ContainedTaskDeadlineExceeded;
+    const FINAL_PAGE: &str = "neutral/page_failed";
+
+    /// A clock that stands still before the deadline: the budget is never spent.
+    struct Still(Instant);
+
+    impl Clock for Still {
+        fn now(&self) -> Instant {
+            self.0
+        }
+    }
+
+    /// The retired test's failed outcome, with `receipt_state` as its word.
+    fn failure(receipt_state: RuntimeReceiptState) -> Outcome {
+        Outcome::new(FAILURE)
+            .receipt_state(receipt_state)
+            .lease_id("lease_00000000000000000000000000000001")
+            .retry_after_ms(1_500_u64)
+    }
+
+    /// A failed manual run of `instance_id` listed at `sequence` whose terminal carries
+    /// `outcome`'s code and the values codes mode keeps of it, as the run status's fold reads
+    /// them (`Outcome::codes_only`): the run as the window's listing shows it, and its status.
+    fn failed_run(
+        issuer: &IdentifierIssuer,
+        instance_id: InstanceId,
+        sequence: u64,
+        outcome: &Outcome,
+    ) -> (WindowRun, ContainedRunStatus) {
+        let identity = TaskRunIdentity {
+            request_id: *issuer.mint_request_id().expect("request id").transport(),
+            correlation_id: *issuer
+                .mint_correlation_id()
+                .expect("correlation id")
+                .transport(),
+            instance_id,
+            task_id: *issuer.mint_task_id().expect("task id").transport(),
+            run_id: *issuer.mint_run_id().expect("run id").transport(),
+        };
+        let status = ContainedRunStatus {
+            schema_version: "actingcommand.run-status.v1",
+            request_id: Some(identity.request_id),
+            correlation_id: Some(identity.correlation_id),
+            run_id: Some(identity.run_id),
+            task_id: Some(identity.task_id),
+            instance_id: Some(instance_id),
+            dispatch: RunDispatch::Manual,
+            origin: RunOrigin::Lab,
+            package_label: Some("neutral.package".to_owned()),
+            recovery_package_labels: Vec::new(),
+            state: ContainedRunState::Failed,
+            terminal: Some(ContainedRunTerminal {
+                outcome: TaskOutcome::Failure,
+                failure_code: Some(outcome.code().clone()),
+                failure_values: outcome.codes_only().values().clone(),
+                final_page: Some(FINAL_PAGE.to_owned()),
+                executed_steps: Some(1),
+                cancellation_reason: None,
+                sequence: sequence + 1,
+                event_id: *issuer.mint_event_id().expect("event id").transport(),
+            }),
+            lease: None,
+            progress: None,
+            evidence: ContainedRunEvidence {
+                snapshot_ledger_position: sequence + 1,
+                admitted_sequence: Some(sequence),
+                restarted_after_admission: false,
+            },
+        };
+        let run = WindowRun {
+            identity,
+            order_sequence: sequence,
+            settled: None,
+            opened_in_window: true,
+        };
+        (run, status)
+    }
+
+    #[test]
+    fn f1_runs_grouped_groups_by_the_code_and_not_by_the_terminal_values() {
+        let issuer = IdentifierIssuer::new().expect("identifier issuer");
+        let instance_id = *issuer.mint_instance_id().expect("instance id").transport();
+        let other = SharedCode::ContainedTaskHomeEntryNotMatched.code();
+        let runs = [
+            failed_run(
+                &issuer,
+                instance_id,
+                10,
+                &failure(RuntimeReceiptState::Failed),
+            ),
+            failed_run(
+                &issuer,
+                instance_id,
+                20,
+                &failure(RuntimeReceiptState::Denied),
+            ),
+            failed_run(
+                &issuer,
+                instance_id,
+                30,
+                &Outcome::new(other).receipt_state(RuntimeReceiptState::Failed),
+            ),
+        ];
+        // The two runs of one code carry different values beside it.
+        let values = |index: usize| {
+            runs[index]
+                .1
+                .terminal
+                .as_ref()
+                .map_or(Value::Null, |terminal| {
+                    Value::Object(terminal.failure_values.clone())
+                })
+        };
+        assert_eq!(values(0), json!({"receipt_state": "failed"}));
+        assert_eq!(values(1), json!({"receipt_state": "denied"}));
+
+        let root = TempDir::new().expect("tempdir");
+        let runtime = ScriptedRuntime::start(root.path(), |_| vec![ScriptedConnection::new()]);
+        let client = RuntimeClient::connect(crate::front::client_config(root.path()))
+            .expect("connect to the scripted Runtime");
+        let at = Instant::now();
+        let clock = Still(at);
+        let budget = Budget {
+            deadline: at + Duration::from_secs(60),
+            clock: &clock,
+        };
+        let grouped = runs
+            .iter()
+            .map(|(run, status)| {
+                grouped_run(&client, run, status, 31, &budget)
+                    .unwrap_or_else(|refused| {
+                        panic!("a run not grouped: {}", refused.outcome().code().as_str())
+                    })
+                    .expect("a manual run of a registered code is grouped without a read")
+            })
+            .collect::<Vec<_>>();
+        drop(client);
+        let record = runtime.finish();
+        assert!(record.unscripted.is_empty(), "a connection beyond the one");
+        assert_eq!(
+            record
+                .connections
+                .iter()
+                .map(|connection| connection.requests.len())
+                .collect::<Vec<_>>(),
+            [2],
+            "the handshake's Health and BindChannel, and no read"
+        );
+
+        let groups = group_runs(&grouped, None);
+        assert_eq!(groups.len(), 2, "{groups:?}");
+        // The most frequent group first: the two runs of one code, whatever their values.
+        let same = &groups[0];
+        assert_eq!(same["failure_code"], json!(FAILURE.as_str()), "{same}");
+        assert_eq!(same["final_page"], json!(FINAL_PAGE), "{same}");
+        assert_eq!(same["count"], json!(2), "{same}");
+        assert!(same.get("failure_values").is_none(), "{same}");
+        let alone = &groups[1];
+        assert_eq!(alone["failure_code"], json!(other.as_str()), "{alone}");
+        assert_eq!(alone["count"], json!(1), "{alone}");
+        assert!(alone.get("failure_values").is_none(), "{alone}");
+    }
+}

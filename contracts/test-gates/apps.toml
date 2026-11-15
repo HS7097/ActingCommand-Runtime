@@ -1807,3 +1807,12 @@ tests = [
     "actingcommand-actinglab-mcp::serve_calls::mcp_goals_rows_accepted_are_the_command_lines",
 ]
 incident = ["#463 V3"]
+
+# Workflow #469 F1 (0.12.62; register §1.387; brief rd-1115/brief-469-f1-run-reads.md; contracts/runtime-state-observation.md, "Contained-run queries"), the Lab's half since Workflow #434 LAB-7 deleted actingctl and its tests of it: a row of the runs list (lab_ops::run_list's row, which the Lab's runs row answers on both front ends) copies its terminal's failure_values beside failure_code, of the retired test's failed outcome (receipt_state failed, lease_id, retry_after_ms) {receipt_state: failed} alone, and has no such member for a succeeded run without an outcome or a failed run whose outcome holds only values codes mode drops; the diagnosis's runs_grouped (lab_ops::diagnose's grouped_run and group_runs) puts two failed manual runs of contained_task_deadline_exceeded whose failure_values differ (receipt_state failed, denied) into one group of count 2 without failure_values and a run of another code into another, and grouping them sends nothing beyond the handshake. The run status's own failure_values (and so run show, the overview's run and the diagnosis's runs rows, which print it verbatim) are the contract.toml #469 F1 row's
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-lab-ops::lib::run_list::f1_tests::f1_a_runs_row_copies_the_terminal_values_beside_the_failure_code_and_has_none_without_them",
+    "actingcommand-lab-ops::lib::diagnose::f1_tests::f1_runs_grouped_groups_by_the_code_and_not_by_the_terminal_values",
+]
+incident = ["#469 F1", "#434 LAB-7"]
