@@ -179,6 +179,7 @@ pub(super) fn help_data() -> Value {
             ],
             "standard-pack check": crate::standard_pack_cli::options(),
             "standard-pack compose": crate::standard_pack_cli::compose_options(),
+            "standard-pack build": crate::resource_verify::build_options(),
             "standard-pack adopt": crate::standard_pack_cli::adopt_options(),
             "package fmt": [
                 "--package <content directory>",

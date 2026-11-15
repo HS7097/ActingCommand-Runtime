@@ -53,8 +53,9 @@ use crate::{
 };
 
 /// The strict rows: [`accepted`] answers for each of them and, beside them, for the rows of
-/// [`CORE_STRICT_ROWS`] only.
-pub(crate) const STRICT_ROWS: [&str; 31] = [
+/// [`CORE_STRICT_ROWS`] only. Workflow #464 P2: `standard-pack build`, checked against its list
+/// as `resource verify` is.
+pub(crate) const STRICT_ROWS: [&str; 32] = [
     "tap",
     "swipe",
     "long-tap",
@@ -81,6 +82,7 @@ pub(crate) const STRICT_ROWS: [&str; 31] = [
     "resource verify",
     "resource restore",
     "standard-pack compose",
+    "standard-pack build",
     // Workflow #464 P1.
     "standard-pack adopt",
     "scheduling compile",
@@ -366,6 +368,8 @@ pub(crate) fn accepted(row: &str) -> Option<Accepted> {
         "resource restore" => from_lists(resource_restore::RESTORE_FLAGS, &[], none),
         "standard-pack check" => from_lists(standard_pack_cli::CHECK_FLAGS, &[], none),
         "standard-pack compose" => from_lists(standard_pack_cli::COMPOSE_FLAGS, &[], none),
+        // Workflow #464 P2.
+        "standard-pack build" => from_lists(resource_verify::BUILD_FLAGS, &[], none),
         "standard-pack adopt" => from_lists(
             standard_pack_cli::ADOPT_FLAGS,
             &standard_pack_cli::ADOPT_SWITCHES,
@@ -463,7 +467,8 @@ pub(crate) const UNROWED_READS: [&FlagReads; 4] = [
 /// CLI-COMP (register §1.318): `completion`, parsed by its read list, and `__complete`, the
 /// completion scripts' callback, which reads every word of its line (its options, the index, the
 /// typed words in their form) and answers a line it cannot read with no candidate, ignoring none.
-pub(crate) const REFUSING_COMMANDS: [&str; 62] = [
+/// Workflow #464 P2: `standard-pack build`, against its strict list.
+pub(crate) const REFUSING_COMMANDS: [&str; 63] = [
     "schema",
     "touch-probe",
     "tap",
@@ -515,6 +520,7 @@ pub(crate) const REFUSING_COMMANDS: [&str; 62] = [
     "resource verify",
     "standard-pack check",
     "standard-pack compose",
+    "standard-pack build",
     "standard-pack adopt",
     "runtime reset",
     "runtime observe",

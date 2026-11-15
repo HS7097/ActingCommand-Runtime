@@ -2793,7 +2793,7 @@ the end of the B train (plan §4); until then they are admitted by code. Gate: e
 | B12-1 | `input_recheck: {kind: "still_frames", frames, region?, max_distance_milli?}` | resource file format (task schema `0.9`, no version change) (exec 126) | BT-B12 | resource side | `frames` 2..=32 and `frames - 1` control capture intervals within the control step timeout; `region` `{x, y, width, height}` with a positive size inside the coordinate space; `max_distance_milli` an unsigned integer (Runtime admission, `contained_task_operation_invalid`); the declaration gate refuses a wrong shape (`resource_declaration_invalid`: `InvalidType`, `UnknownField`, `MissingField`) and an older task schema `UnconsumedField` |
 | B12-2 | the `still_frames` recheck | rule (no shape change) (exec 126) | BT-B12 | BT-B12 | fresh frames one control capture interval apart; the count restarts at 0 when the guard fails or no page passes, and at 1 when the region's frame change since the frame before exceeds the threshold (default 1500 milli, D8: the whole frame on a 16×9 grid); the input is drawn from and bound to the last frame |
 | B12-3 | `contained_task_input_still_unconfirmed` (error, `ladder_class` `pack_logic_mismatch`, values `pack_operation_id`, `timeout_ms`) | new code (pending) (exec 126) | BT-B12 | BT-B12 | the step timeout ended before the frames held and stayed still; the input is refused through the operation's failure decision (page graph) or ends the run (`linear_steps`) |
-| B12-4 | an `input_recheck` of any kind under `linear_steps` | admission rule (no shape change) (exec 126) | BT-B12 | resource side | `contained_task_linear_invalid` `reason=input_recheck` is retired; each fresh frame is evaluated against the step's page only; a refusal ends the run as a guard refusal does |
+| B12-4 | an `input_recheck` of any kind under `linear_steps` | admission rule (no shape change) (exec 126) | BT-B12 | resource side | `contained_task_linear_invalid` `reason=input_recheck` is retired; each fresh frame is evaluated against the step's page only; a refusal ends the run as a guard refusal does; within revision 6 |
 | B12-5 | `frame_change_digest`, `frame_change_milli`, `FRAME_CHANGE_MAX_MILLI` (`actingcommand_recognition::color_digest`, re-exported by the execution kernel) | Runtime-internal interface (memory only) | BT-B12 | BT-B12 | the one frame-change measure: the `color_digest.v1` digest of a region (the whole frame by default) on 16×9 cells, each axis at most the region's pixels; the change is the digests' `mean_milli`, no cell excluded; still at most 1500 by default |
 
 ### 1.156 Slice E4 (0.12.x): four refusals and warnings say what is wrong (#411 B27, B28, B34, B39 A part; B-train plan §6, Q15)
@@ -25213,6 +25213,197 @@ a select step at admission (`reason=operation_effect`), before any lease, and it
 a bundle that declares `package` 13 through its `package` edge. A rollback stays open while no root
 is placed from such a bundle. A bundle with such a package that declares less than 13 is placed by
 an earlier installer too, and every run of that package is refused (closing round, "Interface").
+
+### 1.376 Slice #464 P2 (0.12.61): `standard-pack build`, a game's whole standard pack from one commit of its working root, on the steps of `resource verify` (Workflow #464; the owner asked on 11-14 that the Lab build a game's standard pack by itself, board #464; the design `rd-1114/464-pack-build-design.md`, its sections A, C.1, C.2, D and E and the row "P2 build" of its section G, read on main `17197d8e`, with the coordinator's rulings on its section H, not the owner's words; coordinator work orders `rd-1114/brief-464-p2-build.md`, read on main `17197d8e`, `rd-1114/brief-1719-fix1.md` (fix round 1, after the independent review and CI), `rd-1114/brief-1719-fix2.md` (fix round 2, after the second review), `rd-1115/brief-1719-main.md` (after release 0.12.60) and `rd-1115/brief-1719-rev1314.md` (revisions 13 and 14, after the train 0.12.61a); main `155366bb` merged, then main `1e67d1c5` in fix round 1, then main `2eaf9b7e` (release 0.12.60), then main `60c28e64` (the train 0.12.61a); the number 1.376 is the coordinator's, the numbers between belong to other open pull requests)
+
+**What it is.** A new authoring row of the operation table, `standard-pack build` (command `actinglab
+standard-pack build --repo <checkout> --source-repository <owner>/<name> --out <directory>
+[--commit <40-hex>]`, MCP tool `ac_standard_pack_build`, served through a `serve` child), which
+builds one game's whole standard pack from one commit of its working root and writes it, ready for
+`place`, into a new or empty directory: the zip, `SHA256SUMS` and `build.json`
+([resource-verify.md](resource-verify.md), "`standard-pack build`"; [package-reference.md](package-reference.md),
+"The built standard pack").
+
+**What the code showed before the build** (the work order's three questions). (1) `resource
+verify`'s steps live in `apps/actinglab/src/resource_verify.rs` and its `steps.rs`, `bundle.rs` and
+`git.rs`, which call the library code of `crates/resource-tooling` (`package_bundle`,
+`check_standard_pack_root`): one function, `verify`, ran them in order, so it could become the one
+both rows call (`run_steps`, with the row as `StepsFor`) without a change to what `resource verify`
+reports. The function stays in the Lab, where the steps are, not in `crates/resource-tooling` as the
+design's slice table says; that changes no step. (2) `package bundle` lays `pages.json`,
+`interrupts.json`, `navigation.json`, `schedule.json`, `display-layout.json`, `loading.json` with
+`loading/`, `notices/` and, since G-R1 (§1.356), `goals.json`; `resource verify` passes all of them
+but `goals.json`. `tables/`: the contract defines the zip's `tables/<listed id>.json` (the
+installer's `place`) and the index member `tables`, which `package bundle` does not write (the
+repositories' bundle script was to add it); the build adds both. `ui.json`: see fix round 1. (3)
+The range is the zip's `interfaces.json` `package [r, r]`, `r` fixed: 3, or 10 with `notices/`. The
+content decides more than the design's three cases (fix round 1 below).
+
+**One function.** `resource verify` calls `run_steps` with `StepsFor::Verify` and passes what it
+passed before: its report is the same for the same input. `standard-pack build` calls it with
+`StepsFor::Build`, its work in `<out>/work/`, and differs in five things: the checkout's read paths
+are every input its bundle carries (`schedule.json`, `display-layout.json`, `loading.json`,
+`goals.json`, `ui.json` and the files under `loading/`, `notices/` and `tables/` besides `resource
+verify`'s); `package bundle` gets `goals.json` (`--goals`); the repository's tables, read as the
+Runtime reads a game root's (`read_standard_pack_tables`), go into the zip and its installed root,
+listed in the zip's `bundle.json` `tables`; its `ui.json` goes into the zip (fix round 1); and
+`interfaces.json` declares the revision the content needs. The product is written only when every
+step passed: the zip copied from `<out>/work/out/`, `SHA256SUMS` and `build.json`
+(`actingcommand.standard-pack-build.v1`; the source repository, the commit, its tree, the Tools head
+and executable SHA-256, and, read back from the zip, the game, the range, the root files and
+directories, the packs and the zip's name, SHA-256 and size; no readiness member, which the
+readiness slice's function adds later). A tree with any change is refused by the precondition;
+`--out` that is a file, a directory that is not empty, one whose parent is no directory or one
+inside `--repo` is refused before anything is read. Nothing is written into the repository and
+nothing is deleted.
+
+**Fix round 1** (the independent review and CI on `d4d3d2a6`; work order `rd-1114/brief-1719-fix1.md`).
+
+- **The revision, complete and exact.** The first build counted the members of the `package` rows 4
+  to 9 and 11 by name anywhere in a pack's JSON, and nothing of the root: too low for the members
+  the register's B-train sections put into revision 6 (they joined it "which BT-PK6 declares", and
+  DB-2 declared 6 in 0.12.37) and for `interrupts.json`'s `limit_cause` and `result`, too high for
+  `post_admission_ocr`, which a task of schema `0.7` or `0.8` must write. The table of
+  resource-verify.md, "The `package` revision", now lists every member, file and value a `package`
+  row of [component-interfaces.md](component-interfaces.md), the register sections it cites and the
+  B train's sections put into a revision, each with its file (a pack's `control.json`, task file,
+  selection-policy document or navigation projection; the root's `interrupts.json`, `notices/`,
+  `goals.json`), the member that holds it, the value it must hold and its condition: 43 member rows
+  and 4 file rows (`apps/actinglab/src/resource_verify/revision.rs`; 45 and 4 since revisions 13
+  and 14, below). The conditional ones:
+  `post_admission_ocr` of a task of schema `0.9` only; an `input_recheck` of any kind only in a pack
+  whose `control.json` names `linear_steps` (resource-declarations.md: "until then it, and an input
+  recheck under `linear_steps`, are admitted by code"); `dictionary` only in a value whose `type` is
+  `unsigned_integer` (the `dictionary` of a `dictionary_entry` value is older); `on_guard_refused`
+  only as an object. No row depends on anything outside the archive. A game root's `tables/` and
+  `ui.json` need no revision. `resource verify` keeps its fixed rule (3, or 10), so the two rows can
+  declare different revisions for one commit, and it checks neither `goals.json` nor `tables/`:
+  both are known differences for a follow-up slice on `resource verify`.
+- **`ui.json`.** It is a root file of the standard package root (package-reference.md, "Standard
+  package root"), which `place` places and sets aside when a zip carries none, so placing a build
+  without it took the console's labels away. The build carries it into the zip, as it carries the
+  tables, when `parse_standard_pack_ui` takes it against the zip's `bundle.json`; each violation of a
+  refused file fails the `bundle` step as `standard_pack_root_invalid`, and `build.json` lists it
+  among the root files.
+- **The product.** Each of the three files is written under its `.part` name and renamed when all
+  three are complete, `build.json` last; a final name that exists is never replaced. `--out` that
+  does not exist is made by the `bundle` step, so a call the checkout precondition refuses leaves
+  nothing behind. A `--out` inside an installation root is not refused: no code of the Lab or the
+  rescue module tells whether a directory lies inside one (`lab-ops`'s `executable_install_root`
+  and `locate::installed_root` find the root of a running program by its place).
+- **The codes' names.** The outcome guard's G8 refused the first names: the prefix `standard_pack_`
+  belongs to the contract's and runtime-host's fragments, not the Lab's. The three codes take the
+  prefix `resource_` of the Lab's fragment, as `resource verify`'s own do:
+  `resource_build_output_invalid`, `resource_build_failed`, `resource_build_write_failed`.
+- **The row's slice.** The row's `slice` was `LAB-2`, another slice's word, only because one more
+  word made rustfmt break the line of `BUILT_SLICES` and MCP's test misread it. It is now its own,
+  `PACK-BUILD`, in actinglab's `BUILT_SLICES` and the MCP server's `ACTINGLAB_SLICES`, and the test
+  (`gate_434_lab5g2a::actinglab_built_slices`) finds the `[` after the `=` wherever the line breaks.
+- main `1e67d1c5` (§1.369 G-R2s) merged; this section moved from 1.369 to 1.376.
+
+**Fix round 2** (the second review; work order `rd-1114/brief-1719-fix2.md`).
+
+- **Revision 7's anchor.** The row looked for a `repeated_anchor` layout's anchor among the `anchors`
+  of its own task file only, while the parser resolves it among every template target of the
+  derived pack (§1.282 FS1-3; resource-declarations.md: `verify_templates[]` entries take `mask`,
+  `maskRange` and `scales` as `anchors[]` entries do), so a pack whose masked anchor stood in
+  `verify_templates` or in another task declared 6 where it needs 7. The table now collects, for
+  each pack, the target ids of every `anchors[]` (`page/<id>`) and `verify_templates[]` (`<id>`)
+  entry of every task file that declares one of the three members, and judges each layout's anchor
+  against that set.
+- **An input recheck under `linear_steps`** stays at revision 6 (the coordinator's ruling on the
+  question fix round 1 left): §1.155 B12-4 now says "within revision 6", as the table computes.
+- **Texts.** resource-verify.md says that a rename failing half way can leave the zip, or the zip
+  and `SHA256SUMS`, under their final names without `build.json`, the mark of a complete build, and
+  says what the table matches instead of "neither lower nor higher".
+
+**Main `2eaf9b7e` merged** (release 0.12.60 and the train before it; work order
+`rd-1115/brief-1719-main.md`). The slice ships in 0.12.61 (release 0.12.60 is cut without it): its
+codes' `since`, this section, its rows of the gate map and its contract sentences say 0.12.61. The
+section keeps 1.376, and nothing of its behaviour changes.
+
+**Revisions 13 and 14** (main `60c28e64` merged, the train 0.12.61a: #463 K1, §1.374, and V1,
+§1.378, which brought the `package` rows 13 and 14; work order `rd-1115/brief-1719-rev1314.md`).
+The table stopped at 12: it passed a select step of a `linear_steps` task and a package's
+`variables` through and counted `goals.json` 12 whatever it held, so a bundle built from such
+content would declare too little, the installer would place it or refuse it for the wrong reason,
+and an earlier Runtime would refuse its package at every run. Three rows now
+(resource-verify.md, "The `package` revision"):
+
+- **13**: in a pack whose `control.json` `execution_mode` is `linear_steps`, the member `select` of
+  an element of a task's `operations`, holding an object. That is where the kernel's admission
+  finds a select step (`TaskOperation.select`, an `Option` that an absent member or `null` leaves
+  empty; `TaskProgram::validate_linear` takes it as `LinearEffect::Select`); that reader is private
+  to the kernel crate, which actinglab does not depend on, so the table reads the same member. A
+  page-graph select step keeps its revision.
+- **14**: a pack's `control.json` with the top-level member `variables`, whatever it holds, as the
+  installer's `place` reads it (`check_variables_declared`; `VARIABLES_PACKAGE_REVISION`).
+- **14**: `goals.json` at the zip's root, by its presence, as `place` reads it
+  (`check_goals_declared`; `GOALS_PACKAGE_REVISION`, 14 since V1 fix round 3), whatever version it
+  holds. A version 1 file is refused by the check (`goal_version_retired` at `/schema_version`:
+  `package bundle --goals` refuses it, so the build fails at its `bundle` step), not by the
+  revision. No content needs 12 any more.
+
+The table has 45 member rows and 4 file rows. Tests (gate map `apps.toml`, "#464 P2 revisions 13
+and 14"): `p2_revision_13_select_step_of_a_linear_steps_pack_only` (over entries needing 11, a
+`linear_steps` select step 13; the same select step in a `navigable_route` pack, and a
+`linear_steps` click step, 11); `p2_revision_14_variables_of_control` (over entries needing 13, a
+control with `variables` 14, without it 13); `p2_revision_14_goals_json` (renamed from
+`p2_revision_12_goals_json`: over entries needing 13, `goals.json` 14, a version 1 document too,
+without the file 13); `p2_a_select_step_declares_13_and_with_variables_14` (a bundle's entries
+whose `linear_steps` pack has a select step: 13 without variables, 14 with them). Adapted, because
+V1 fix round 3 changes what it pinned: `p2_notices_give_package_10_and_goals_give_12`, renamed
+`p2_notices_give_package_10_and_goals_give_14`, whose `goals.json` is version 2 (`package bundle
+--goals` refuses version 1) and whose zip and `build.json` declare [14, 14]. The rows' helper
+`assert_row` takes its base from `assert_row_over`, whose base may lie more than one below the row
+(no content needs 12). The file holds 59 tests; neither renamed test was on main, so no
+`[[retired]]` entry is needed. The merge kept both sides in section order: this section between
+§1.374 and §1.378, the gate map's rows of #464 P2 before #463 V1's, and in `bundle.rs` the build's
+`goals.json` with main's note that its packer declares 14.
+
+**Codes.** Three, in the actinglab fragment, since 0.12.61, review pending:
+`resource_build_output_invalid` (`path`), `resource_build_failed` (`failed_step_count`,
+caused by the steps' outcome) and `resource_build_write_failed` (`path`). No key, word or
+vocabulary is added; a dirty tree's refusal is caused by `resource_verify_checkout_dirty`, a
+refused `ui.json` is `standard_pack_root_invalid`. The outcome code index is regenerated
+(actinglab 43 codes).
+
+**Counts.** The command inventory (`ratchet/actinglab_commands.json`) 103 commands, 47 arms; the
+strict rows 31, the census's group (a) 62, the commands of actinglab's own rows
+(`engine::COMMANDS`) 64; the built slices 7.
+
+**Tests.** `apps/actinglab/src/tests/gate_464_p2.rs` (gate map `apps.toml`, "#464 P2", "#464 P2
+fix round 1", "#464 P2 fix round 2" and "#464 P2 revisions 13 and 14"; 59 tests), on a neutral fixture repository made with git (RV-1's
+files): `resource verify` of a commit reports what RV-1 pins and `standard-pack build` of it
+writes that zip byte for byte and the same `SHA256SUMS`; `notices/` gives 10 and `goals.json` 12 (14 since revisions 13 and 14, above) (and `resource verify` of that commit
+still leaves `goals.json` out and declares 10); a tracked change and an untracked file are refused
+`resource_build_failed` caused by `resource_verify_checkout_dirty`, `--out` not made (fix round 1,
+adapted: it pinned an empty `--out`), and an `--out` that holds a file or lies inside the
+repository `resource_build_output_invalid`; `build.json` matches the zip and has no other member.
+Fix round 1: a commit's `tables/` is carried, listed and needs no revision, and a refused table
+fails the build with the reader's refusal; a commit's `ui.json` is carried and listed, and a
+refused one fails the build with `standard_pack_root_invalid`; one test per row of the revision
+table (47; 49 since revisions 13 and 14, above), each over entries one revision below the row: with the row's member, file or value the
+row's revision, without it one lower. `gate_434_lab5g2a::mcp_tools_from_op_table`'s reader of
+`BUILT_SLICES` is adapted (it finds the list wherever rustfmt breaks the line). Fix round 2: three
+more of revision 7, each over entries needing 6 and differing only in what the row detects (a
+`verify_templates` entry with `mask` as the anchor; the masked anchor in another task file of the
+pack; `maskRange` alone), and `p2_revision_7_masked_anchor_of_a_repeated_anchor_layout` adapted (its
+layout names the anchor by its target id, `page/a`, as the parser resolves it).
+
+**What is not changed.** `package bundle`'s behaviour and flags; `place` and the rescue module;
+`resource verify`'s report and its fixed number; the recording and the kernel; no interface
+revision, configuration key, record type or wire shape moves; `build.json` gains no member.
+
+**At deploy.** Nothing changes for an installation: the operation is offline and the Runtime does
+not run it. Once a Tools release carries it, the resource repositories' scripts can shrink (a later
+slice, one pull request per repository): the release script to the Tools pin check, one
+`standard-pack build` and the publication of its zip and `SHA256SUMS`; its workflow's sparse
+checkout to the whole tree without LFS.
+
+**Rollback** (below 0.12.61). Nothing is persisted; an earlier Tools has no `standard-pack build`
+and refuses the words, and a built zip places on any installer whose `package` range holds its
+declared maximum.
 
 ### 1.377 Slice #464 P1 (0.12.61): `actinglab standard-pack adopt` makes a recorded package a member of its game's standard pack in a resource repository's checkout (Workflow #464; the design `rd-1114/464-pack-build-design.md`, sections A, B, C.1, C.2, D and the row "P1 adopt" of G with its tests, and the coordinator's rulings 1, 2, 7 and 8 on board #464, not the owner's words; the coordinator's ruling on the value's origin, sent during the slice: adopt never writes `fixed_value_origin: "model"` on a caller's word; coordinator work order `rd-1114/brief-464-p1-adopt.md`, read on main `17197d8e`; fix round 1, after an independent review, with the coordinator's rulings on what is derived and on the check tree, coordinator work order `rd-1114/brief-1722-fix1.md`, main `1e67d1c5`; fix round 2, after the review of fix round 1, with the coordinator's rulings on its other points, coordinator work order `rd-1115/brief-1722-fix2.md`, main `2eaf9b7e` (release 0.12.60) merged)
 

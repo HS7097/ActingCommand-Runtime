@@ -80,8 +80,16 @@ pub(crate) fn instructions(budget_s: u64) -> String {
 /// (`apps/actinglab/src/cli_module/words.rs`), which this server's test holds equal. Workflow
 /// #449 REC-ARCH: its rows `record archive` and `record reopen`, served through a `serve` child.
 /// Workflow #464 P1: its row `standard-pack adopt` (slice SP-ADOPT), through a `serve` child.
-pub(crate) const ACTINGLAB_SLICES: [&str; 7] = [
-    "LAB-1", "LAB-1b", "LAB-2", "R-6", "R-8", "REC-ARCH", "SP-ADOPT",
+/// Workflow #464 P2 (`PACK-BUILD`): its row `standard-pack build`, the same.
+pub(crate) const ACTINGLAB_SLICES: [&str; 8] = [
+    "LAB-1",
+    "LAB-1b",
+    "LAB-2",
+    "PACK-BUILD",
+    "R-6",
+    "R-8",
+    "REC-ARCH",
+    "SP-ADOPT",
 ];
 /// The slice whose planned rows this server offers itself (§9.2): `record draft`, `mcp config`,
 /// `mcp entries` and, since LAB-5G5b, `mcp plan` (Workflow #434 LAB-5G2b, second part: the three

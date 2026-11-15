@@ -17,6 +17,12 @@
 //! <decision.json>] [--replace] [--state-dir <dir>]` makes a recorded package a member of its
 //! game's standard pack in a resource repository's checkout. Under `--dry-run` it runs every check
 //! and writes nothing in the repository.
+//!
+//! Workflow #464 P2 (contracts/resource-verify.md, "`standard-pack build`"): `actinglab
+//! standard-pack build --repo <checkout> --source-repository <owner>/<name> --out <directory>
+//! [--commit <40-hex>]` builds a game's whole standard pack from one commit of its working root, on
+//! the steps of `resource verify` (`crate::resource_verify`). It writes a directory, so `--dry-run`
+//! refuses it.
 
 use crate::{CliError, CliOutcome, FlagArgs, GlobalOptions};
 use actingcommand_contract::codes::ContractCode;
@@ -153,6 +159,8 @@ pub(crate) fn run_standard_pack(
                 CliError::device(format!("failed to serialize the composition: {error}"))
             })
         }
+        // Workflow #464 P2: a game's whole standard pack from one commit of its working root.
+        "build" => crate::resource_verify::run_standard_pack_build(global, args),
         "adopt" => run_adopt(global, args),
         other => Err(CliError::usage(format!(
             "unknown standard-pack command: {other}"
