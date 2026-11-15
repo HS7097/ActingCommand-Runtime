@@ -948,12 +948,9 @@ fn d4a_a_locked_device_still_skips_its_rung_device_not_ready_and_starts_no_ladde
         );
     }
     let defaults = ladder(serde_json::json!({}));
-    for stage in [
-        RecoveryTriggerStage::Task,
-        RecoveryTriggerStage::StartupPreparation,
-        RecoveryTriggerStage::ConnectionPreparation,
-        RecoveryTriggerStage::StabilityWarnings,
-    ] {
+    // Every stage of the seven, the recovery preparation's, the resource fence's and a drill's
+    // included.
+    for stage in RecoveryTriggerStage::ALL {
         assert_eq!(
             defaults.classify(stage, locked),
             TriggerVerdict::Unmatched,

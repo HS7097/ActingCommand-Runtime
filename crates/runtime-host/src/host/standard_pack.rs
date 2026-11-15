@@ -1500,7 +1500,7 @@ impl RuntimeContainedTask<'_> {
         })
         .map_err(ContainedTaskRunError::Boundary)?;
         // UPD-1 (design §2.2, §3.3): a page whose data names the run's result `application
-        // update required` ends it with its own code (warning, ladder class none).
+        // update required` ends it with its own code (warning, ladder class `planned_stop`).
         if then == TaskInterruptThen::EndRun
             && entry.result == Some(InterruptResult::ApplicationUpdateRequired)
         {
@@ -1522,9 +1522,9 @@ impl RuntimeContainedTask<'_> {
     /// UPD-1 (design §2.2, §3.3): the failure that ends the run the update dialog `page` ended,
     /// the instance's `health.application.update_required` recorded true first, before the
     /// terminal: `contained_task_application_update_required` with `page_id` (warning, ladder
-    /// class none). Fix round 1 (review M2): `handler_failure`, the page's handler's own failure
-    /// short of fatal, rides along as a `related` link. A refusal of the store fails the run with
-    /// the refusal (Fail Loud); a fatal failure poisons it.
+    /// class `planned_stop`). Fix round 1 (review M2): `handler_failure`, the page's handler's own
+    /// failure short of fatal, rides along as a `related` link. A refusal of the store fails the
+    /// run with the refusal (Fail Loud); a fatal failure poisons it.
     fn end_by_application_update(
         &self,
         page: &str,

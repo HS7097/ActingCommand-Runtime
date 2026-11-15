@@ -2446,7 +2446,10 @@ fn upd1_a1_b2_a_scheduled_run_meeting_the_update_dialog_ends_by_a_condition_and_
     };
     assert_eq!(seed, "application_update:seed");
     assert!(*published_at < failed_terminal(&events));
-    assert!(!ladder_started(&events), "class none opens no ladder");
+    assert!(
+        !ladder_started(&events),
+        "class planned_stop opens no ladder"
+    );
     let failure = b43_recorded_failure(&host, context.run_id());
     assert_eq!(
         actingcommand_contract::scheduled_failure_code_str(&failure.outcome).as_str(),

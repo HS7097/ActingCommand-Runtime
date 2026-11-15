@@ -3507,8 +3507,9 @@ actingcommand_contract::outcome_vocabulary! {
     pub enum AvailabilitySource: "availability_source" {
         /// The configured seed: the configuration marks the application unavailable.
         Configured => "configured",
-        /// The backend self-check gate: a self-check not passed or not yet recorded, a resource
-        /// fence, or a gated instance configured unavailable (they share the record's source).
+        /// The backend self-check gate: a self-check not passed, not yet recorded or no longer
+        /// valid, or a resource fence (they share the record's source); a gated instance the
+        /// configuration marks unavailable reads `configured` (Workflow #469 H1 fix round 2).
         SelfCheck => "self_check",
         /// The handset's wired device link is not `device` (with `device_link_state`).
         DeviceLink => "device_link",

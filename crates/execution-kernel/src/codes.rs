@@ -438,8 +438,9 @@ actingcommand_contract::outcome_vocabulary! {
     /// there; it goes into the outcome's values, never into the detail text, so the failure
     /// identity and the streak stay as they are. The kernel slices set it.
     pub enum ConfirmationProblem: "confirmation_problem" {
-        /// The step's own page was still on screen after the input, and nothing else was seen in
-        /// between.
+        /// The program saw the step's own page at the end of the confirmation after the input and
+        /// had seen no other page since the input (a linear step judges the frames in between, a
+        /// page-graph step only the last frame).
         InputNotTaken => "input_not_taken",
         /// After the input the screen showed something else and was the step's own page (the
         /// page the input was sent from) again at the end (Workflow #469 K1 fix round 2).

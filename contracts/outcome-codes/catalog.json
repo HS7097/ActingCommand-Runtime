@@ -10318,7 +10318,7 @@
       },
       "tokens": {
         "input_not_taken": {
-          "description": "The step's own page was still on screen after the input and nothing else was seen in between: the input did not take; check its target and the gap before it."
+          "description": "The program saw the step's own page at the end of the confirmation after the input and had seen no other page since the input (a linear step judges the frames in between, a page-graph step only the last frame): the input did not take; check its target and the gap before it."
         },
         "returned_to_own_page": {
           "description": "After the input the screen showed something else and was the step's own page again at the end: the input took and the screen came back; open the run's frames to see what was shown in between."
@@ -10411,7 +10411,7 @@
       }
     },
     "availability_source": {
-      "description": "Who withdrew an application's availability, the value availability_source of instance_unavailable, read from the source of the active session.instance.available record that withdrew it, with device_link_state or device_hold beside device_link and device_state. The application is held back at placement whichever word it is (Workflow #469 V0, the owner's option A on board #469, since 0.12.62; the host slice sets it).",
+      "description": "Who withdrew an application's availability, the value availability_source of instance_unavailable, read from the source of the active session.instance.available record that withdrew it and from the application's configured seed, with device_link_state or device_hold beside device_link and device_state. An application the configuration marks unavailable reads configured whichever publisher wrote the record that holds false, the self-check gate's withdrawal included (with no record holding false it reads facts_missing); self_check covers a self-check that failed, one not recorded yet (a failed preparation step included) or no longer valid, and a resource fence, which the gate withdraws under the same source. The application is held back at placement whichever word it is (Workflow #469 V0, the owner's option A on board #469, since 0.12.62; the host slice sets it).",
       "review": "pending",
       "source": {
         "file": "crates/runtime-host/src/codes.rs",

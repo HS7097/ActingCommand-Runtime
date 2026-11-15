@@ -27882,15 +27882,15 @@ embedded catalog gives the code `warning` and `planned_stop`; a run whose `task.
 Errors view; a warning of the class `none` appended to the run is listed alone (missing relation,
 unknown). `crates/runtime-host/src/host/recovery_ladder/tests.rs`, `d4a_a_locked_device_…`: the
 four holds are `planned_stop` and each is skipped `device_not_ready`; no default trigger item
-matches `device_locked` at any stage; three of its warnings within the window register no burst.
+matches `device_locked` at any of the seven stages; three of its warnings within the window
+register no burst.
 `crates/runtime-host/src/tests/gate_373_nav6.rs`, `d4a_the_update_dialog_…` (UPD-1 A4's run): the
 rung fails with the code, the ladder ends `exhausted` at Warning with
 `recovery_ladder_interrupted`, no emulator restart, one ladder only (gate map `host.toml`).
 `crates/lab-ops/src/overview.rs`, `d4a_a_spent_call_budget_…` (gate map `apps.toml`): the
 overview's two writers give warnings beside its success line, exit 0, no developer line, envelope
-`warning`; a line whose top it were exits 0. Adapted: `upd1_a9_…` of `gate_373_nav6.rs` asserted the
-update code's class `none`; it asserts `planned_stop`. No golden changes, no test leaves the gate
-map.
+`warning`. Adapted: `upd1_a9_…` of `gate_373_nav6.rs` asserted the update code's class `none`; it
+asserts `planned_stop`. No golden changes, no test leaves the gate map.
 
 **What is not changed.** Every emitter, every detail text, every other code's class and category,
 every decision that names a code, the configuration, the record shapes and every interface

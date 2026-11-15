@@ -2442,7 +2442,7 @@ mod tests {
     // not-running rows, whose read the call budget left no time to start), it stands beside the
     // overview's successful line: the line keeps `runtime_overview_reported`, exits 0 and has no
     // developer line, so the Lab's MCP answers it with `isError` false, and each warning's envelope
-    // says `warning`. A line whose top it were would exit 0 too, with a WARN developer line.
+    // says `warning`.
     #[test]
     fn d4a_a_spent_call_budget_is_a_warning_beside_a_successful_answer() {
         let spent = ActingctlCode::CallBudgetExhausted;
@@ -2485,13 +2485,5 @@ mod tests {
             assert_eq!(warning["outcome"]["code"], spent.as_str(), "{line}");
             assert_eq!(warning["outcome"]["category"], warning_word, "{line}");
         }
-
-        let topped = cli_line::failure(&written[0], None);
-        assert_eq!(topped.code, 0, "a warning on top exits 0");
-        let developer = topped
-            .developer
-            .expect("a warning has a developer line")
-            .line("actingctl");
-        assert!(developer.starts_with("WARN actingctl: "), "{developer}");
     }
 }

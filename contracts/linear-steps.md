@@ -1141,9 +1141,9 @@ What tells `input_not_taken` and `returned_to_own_page` apart is what the progra
 recorded at that end, never a further look at the screen: the failed wait passed the step's
 intermediate page (its detail's `intermediate_seen=true`) or a run's skip target, or the retry
 decision passed the late gate before the continued wait. Then the input took and the screen came
-back to the page it was sent from (`returned_to_own_page`); without any of them nothing else was
-seen in between (`input_not_taken`), which is always so after a retry decision that saw neither
-page.
+back to the page it was sent from (`returned_to_own_page`); without any of them the program had
+seen no other page since the input (`input_not_taken`), which is always so after a retry decision
+that saw neither page.
 
 Where it is not made, the word is that of the first of these that holds: the failed wait, or the
 retry decision, ended on the attempt's loading allowance (`loading_limit`, beside the loading
