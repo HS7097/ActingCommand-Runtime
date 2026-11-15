@@ -28493,6 +28493,94 @@ adapted: what it pinned stays pinned. No golden changes, no test leaves the gate
 
 **At deploy.** Nothing to do: a run recorded before 0.12.63 keeps the code it ended with.
 
+### 1.410 Slice #463 S3-3 (0.12.63): a run's read names the outcome key it finished on (Workflow #463; the owner's approval of 11-15 of the three-stage blueprint of package making as a whole, which lifted its pause, recorded on board #463; the design `rd-1115/pack-stage3-design.md`, §4.2 "S3-3", with §2.4 "How the result is read back" and the row W9 of §1.1; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s33-outcome-key.md`, read on main `44cbab53`)
+
+The coordinator gave this slice 1.410: main `44cbab53` holds the sections up to §1.400. The slice
+ships in 0.12.63.
+
+**Why.** A recorded package may end in more than one way: on its target page, or on an ending page
+added later from a real frame ([linear-steps.md](linear-steps.md), "Endings", §1.380). Each end is
+named by the `outcome_key` of the package's `scheduling_outcome` mapping, and the host already
+writes that key on the run's terminal fact. The run's read (`run show`, MCP `ac_get_run`,
+`actingcommand.run-status.v1`) dropped it: a reader saw "completed on page X" and mapped the page to
+the key by hand (the design's H12). A run that ended normally is not the business having succeeded;
+the key says which end it was, and the trial the design plans for stage three (S3-11) is to
+compare it with the end expected.
+
+**What the terminal fact holds.** `TerminalCommitted.scheduling_disposition` is a
+`SchedulingDisposition` (`crates/actingcommand-contract/src/event/payload.rs`) of two members:
+`outcome_key`, the key of the one mapping whose effect condition and terminal page the run's end
+matched (the host's `select_scheduling_disposition`, called when the terminal is checked), and
+`effect`, the designated-effect evidence that chose the condition (`kind`
+`no_designated_effect`, `designated_effect_completed` with its step and operation, or
+`designated_effects` with one tally per member of a set). The fact's own validation lets only a
+success without an outcome carry one, and only with a final page. This slice reads the key alone;
+the effect evidence is not projected.
+
+**What it is.** One optional member of `ContainedRunTerminal`
+(`crates/actingcommand-contract/src/run_summary.rs`), `outcome_key` (a text), right after
+`outcome`. `RunFold` takes it from the `TerminalCommitted` fact it takes the terminal from: no
+record is read for it and no query is added. It knows no key, compares none and never derives one
+from the final page.
+
+| The run | `outcome_key` |
+|---|---|
+| completed on the package's target page | the target mapping's key |
+| completed on an ending page | that ending's key |
+| completed on another terminal page a mapping names (a select's `on_empty` page, a terminal page of a page graph) | that mapping's key |
+| completed, its package declaring no `scheduling_outcome` | absent |
+| failed or cancelled | absent |
+| a keying the host refused (`contained_task_outcome_*`: the run is committed failed) | absent |
+
+Absent is no member (`skip_serializing_if`), never an empty text: a terminal without a disposition
+serializes byte for byte as before.
+
+**Readers** (as in §1.387, every one on the same contract crate, none kept for an earlier shape):
+runtime-client's `ContainedRunStatus.terminal`, brief and full, carries the fold's terminal as it
+is; lab-ops's `run_show` answers that status as it is (`answer` is the status's JSON), so actinglab
+`run show`, MCP `ac_get_run` (actingctl's `runs::get_run` calls `run_show::read` and
+`run_show::answer`) and the problem report's `run` part carry the member without a line of their
+own, as does the overview's `run` (a brief status); a `QueryRuns` row's status carries it. The
+diagnosis's `runs` are brief statuses too, but it lists failed and open runs only (its
+`FAILED_OR_OPEN`), none of which has a disposition, and its `runs_grouped` keeps its groups. The
+run list's row (`run_list::row`: `actingctl runs`, MCP `ac_runs`, actinglab `run list`) builds its
+own members and does not take it.
+
+**Interfaces.** No revision moves, as for `failure_values` (§1.387, the precedent this slice
+follows): a run's status is the client's projection of `QueryEvents` pages, whose shape is
+unchanged, and `QueryRuns` is carried by no operation yet; `ledger` does not move, no record
+changes.
+
+**Faces.** `ac_get_run` and actinglab `run show`: `terminal {outcome, outcome_key?, failure_code?,
+failure_values?, final_page?, executed_steps?, cancellation_reason?, sequence, event_id}`; the
+overview's `run`: the same terminal of the brief status. The contract texts:
+[runtime-state-observation.md](runtime-state-observation.md) ("Contained-run queries"),
+[global-ledger-query.md](global-ledger-query.md) (the P32 B-1 note), and the notes of the rows
+`status` and `run show` of [lab-operations.json](lab-operations.json). The tool texts of the MCP
+servers are not changed.
+
+**Counts.** One member of `ContainedRunTerminal` (nine from eight); `gate_c2.rs` holds 15 tests (14
+before); one new gate map row (`contract.toml`).
+
+**Tests.** `crates/runtime-client/src/tests/gate_c2.rs`,
+`s3_3_a_run_terminal_names_the_outcome_key_of_the_end_it_finished_on` (gate map `contract.toml`,
+"#463 S3-3"), on the ScriptedRuntime ledger of the run-status gates (R7), in brief and in full: a
+run completed on its target page whose terminal carries the disposition `task_done` answers
+`outcome_key` `task_done`, one completed on an ending page with `task_short` answers `task_short`,
+each with the page it finished on, in the struct and in the status's JSON; a failed run, a
+cancelled run and a completed run of a package without mappings (no disposition) have no
+`outcome_key`, in the struct or in the JSON. No existing test changes, no golden changes, no test
+leaves the gate map.
+
+**What is not changed.** The ledger's records and the host (the key was already written); the
+scheduler and its `outcome` predicate; the fold's anomaly rules and what makes a run's state; the
+run list's row and the grouped reads; every outcome code, its keys and its words; the outcome code
+index (no fragment changes). No outcome code, outcome value key, word, configuration key,
+interface revision or record shape is added.
+
+**At deploy.** Nothing to do: the member is computed when a run is read. A run recorded before
+0.12.63 whose terminal carries a disposition shows its key.
+
 ### 1.411 Slice #463 S3-4 (0.12.63): a first adoption as held needs two flags and no decision file (Workflow #463; the owner's approval on 11-15 of the three-stage blueprint of package making, board #463; the rule the work order states, that a package not run through on a real device is registered with its rules and stays held; the design `rd-1115/pack-stage3-design.md`, §4.2 "S3-4", with §1.1 rows W1 to W3, §1.2 H1, H3 and H16 and §2.1 "Missing" item 1; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s34-adopt-held.md`, read on main `44cbab53`)
 
 The coordinator gave this slice 1.411; the numbers between §1.400 and this one belong to slices
