@@ -269,6 +269,11 @@ impl PreparedSelect {
     pub(super) fn identity_feature(&self) -> Option<&str> {
         self.identity_feature.as_deref()
     }
+
+    /// Workflow #463 K-R3a: the step's admitted `scan`, when it declares one.
+    pub(super) fn scan(&self) -> Option<&ScanDeclaration> {
+        self.scan.as_ref()
+    }
 }
 
 #[cfg(test)]
@@ -2417,24 +2422,7 @@ pub(super) fn dry_run_select_with_facts(
     }
     let policy = match policy_override {
         Some(policy) => {
-            let layout = task
-                .evaluator
-                .candidate_layout(&prepared.layout_id)
-                .ok_or_else(|| {
-                    ContainedTaskError::with_detail(
-                        SELECT_INVALID,
-                        format!(
-                            "layout={} is not in the recognition pack",
-                            prepared.layout_id
-                        ),
-                    )
-                })?;
-            policy.validate().map_err(|error| {
-                ContainedTaskError::with_detail(SELECT_POLICY_INVALID, error.to_string())
-            })?;
-            check_policy(policy, layout).map_err(|reason| {
-                ContainedTaskError::with_detail(SELECT_POLICY_MISMATCH, reason)
-            })?;
+            check_policy_override(task, prepared, policy)?;
             policy
         }
         None => &prepared.policy,
@@ -2459,6 +2447,35 @@ pub(super) fn dry_run_select_with_facts(
         decision,
         policy_override: policy_override.is_some(),
     })
+}
+
+/// A dry run's draft document in place of the select step's sealed one, checked as admission
+/// checks the sealed one: the selection-policy crate's own validation, and it applies to the
+/// step's layout, which it returns. Workflow #463 K-R3a: `dry_run_scan_decide` checks its draft
+/// with it too.
+pub(super) fn check_policy_override<'t>(
+    task: &'t PreparedContainedTask,
+    prepared: &PreparedSelect,
+    policy: &SelectionPolicy,
+) -> Result<&'t CandidateLayout, ContainedTaskError> {
+    let layout = task
+        .evaluator
+        .candidate_layout(&prepared.layout_id)
+        .ok_or_else(|| {
+            ContainedTaskError::with_detail(
+                SELECT_INVALID,
+                format!(
+                    "layout={} is not in the recognition pack",
+                    prepared.layout_id
+                ),
+            )
+        })?;
+    policy.validate().map_err(|error| {
+        ContainedTaskError::with_detail(SELECT_POLICY_INVALID, error.to_string())
+    })?;
+    check_policy(policy, layout)
+        .map_err(|reason| ContainedTaskError::with_detail(SELECT_POLICY_MISMATCH, reason))?;
+    Ok(layout)
 }
 
 #[cfg(test)]

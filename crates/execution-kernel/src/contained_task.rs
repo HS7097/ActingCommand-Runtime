@@ -117,6 +117,9 @@ mod gate_463_v1;
 // Workflow #463 V2: a run reads its package's variables with their kinds' types.
 #[cfg(test)]
 mod gate_463_v2;
+// Workflow #463 K-R3a: a scan select dry-run offline as far as its decision.
+#[cfg(test)]
+mod gate_463_r3a;
 // Workflow #390 EXEC-2.
 mod observation_window;
 // Workflow #384 D2-S2.
@@ -363,8 +366,9 @@ pub use remedies::{
 };
 pub use run_tables::{RunTableFailure, RunTableRead, RunTables};
 pub use scan::{
-    ScanDeclaration, ScanDryRun, ScanDryRunMember, ScanDryRunUnknown, ScanDryRunViewport,
-    dry_run_scan, dry_run_scan_with_tables, replay_scan, replay_scan_with_tables,
+    ScanDeclaration, ScanDryRun, ScanDryRunDecided, ScanDryRunMember, ScanDryRunUnknown,
+    ScanDryRunViewport, dry_run_scan, dry_run_scan_decide, dry_run_scan_with_tables, replay_scan,
+    replay_scan_with_tables,
 };
 pub use selection::{SelectionDryRun, SelectionState, SelectionStateRequest, dry_run_select};
 pub use settled_path::{SettledHolds, SettledPath};

@@ -40,7 +40,10 @@ mod select;
 pub(super) use online::RuntimeScanSource;
 #[cfg(test)]
 pub(super) use online::run_scan;
-pub use online::{dry_run_scan, dry_run_scan_with_tables, replay_scan, replay_scan_with_tables};
+pub use online::{
+    dry_run_scan, dry_run_scan_decide, dry_run_scan_with_tables, replay_scan,
+    replay_scan_with_tables,
+};
 pub(super) use select::{
     IdentityState, ScanSelectEnd, ScanSelection, SelectionKind, bound_inputs, decision_blocking,
     record_bound, result_blocked,
@@ -51,6 +54,7 @@ use crate::codes::{ExecutionKernelCode, ExecutionKernelLocation};
 use actingcommand_contract::{
     CandidateFeature, CandidateFeatureMap, CandidateRect, CandidateUnknownReason, FrameId,
     ScanAxis, ScanCoverageState, ScanStartEvidence, ScanUnknownCause, ScanViewportMotion,
+    TaskSelectionUnknownCheck,
 };
 use actingcommand_recognition::color_digest::{self, ColorDigest};
 use actingcommand_recognition_pack::CandidateLayout;
@@ -2624,6 +2628,18 @@ pub struct ScanDryRunUnknown {
     pub cause: ScanUnknownCause,
     pub identity: Option<String>,
     pub identity_unknown: Option<CandidateUnknownReason>,
+}
+
+/// Workflow #463 K-R3a: a scan select dry-run as far as its decision (`dry_run_scan_decide`): the
+/// session's account as [`dry_run_scan`] gives it, the decision `Decide` took (the evaluator's
+/// abort, when that ended the scan), the unknown-instance check of S0 §3.2 as the step's record
+/// carries it, and the chosen member when the decision selected one member and nothing blocks it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ScanDryRunDecided {
+    pub scan: ScanDryRun,
+    pub decision: SelectionDecision,
+    pub unknown_check: TaskSelectionUnknownCheck,
+    pub chosen: Option<ScanDryRunMember>,
 }
 
 #[cfg(test)]

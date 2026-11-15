@@ -27254,6 +27254,80 @@ declare an ending page declares [15, 15], which an installer of [3, 14] refuses 
 
 **Rollback** (below 0.12.61). Nothing is persisted; an earlier Tools has no `standard-pack build`.
 
+### 1.392 Slice #463 K-R3a (0.12.62): the kernel's offline dry run of a scan select as far as its decision (Workflow #463; the owner's rule on board #463 that every package but a complex looping battle is recorded, never written by hand, and the owner's rule that what stands in a list is chosen by what is read, never by its position; the design note `rd-1115/463-r3-scan-design.md`, section 3.1 and its row K-R3a of section 8, which the coordinator accepted; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-r3-first-slices.md`, read on main `d32d4d6c`)
+
+1.392 is the number the coordinator gave this slice; main `d32d4d6c` holds the sections up to
+§1.385, and the numbers between, and 1.393, belong to slices dispatched with this one. The slice
+ships in 0.12.62 (release 0.12.61 is cut without it).
+
+**What it is.** A recording can choose in a list that scrolls only if the Lab can test, on the
+frames it recorded, what the kernel's scan select would decide there (slice R3b). The kernel had
+`dry_run_scan`, which stops at the coverage checks; `Decide` and its unknown-instance rules lived in
+`ScanSession::select`, crate-private. This slice adds, beside it (`scan/online.rs`, exported from
+the crate):
+
+```rust
+pub fn dry_run_scan_decide(
+    task: &PreparedContainedTask, operation_id: &str, frames: Vec<Frame>,
+    (snapshot, now_unix_ms): (&InstanceFactSnapshot, u64), run_parameters: &RunParameters,
+    policy_override: Option<&SelectionPolicy>,
+) -> Result<ScanDryRunDecided, ContainedTaskError>;
+pub struct ScanDryRunDecided {
+    pub scan: ScanDryRun, pub decision: SelectionDecision,
+    pub unknown_check: TaskSelectionUnknownCheck, pub chosen: Option<ScanDryRunMember>,
+}
+```
+
+It reads the step's own admitted `scan` (`PreparedSelect::scan`, new; a step without one is
+`contained_task_select_invalid`, `operation=<id> scan=undeclared`), replays the frames as
+`dry_run_scan` does and decides as the step does. `scan` is the session's account exactly as
+`dry_run_scan` gives it; `unknown_check` is what the step's record would carry; `chosen` is the
+member of the one selected candidate when nothing blocks the decision. Nothing returns, confirms or
+is pressed. A failure before the decision is the error.
+
+**The split.** `ScanSession::select` now runs the session, then `decide_attempt(end)`: the
+evaluator's abort as the decision (P2, P3) or the members evaluated once, the unknown positions,
+their bound and the blocking of rules 2 and 3. What follows (blocked, `on_empty`, `Return`,
+`Confirm`) is unchanged. The abort path is the same as before: `decision_blocking` answers `none`
+for an `unknown` decision, and the match's last arm gives the same `selection_not_selected` the
+early return gave, with the same record. The online path (`scan_select_attempt`) and its records
+are not touched. `run_scan`'s body became `scan_session`, which takes an optional draft policy and
+the body to run on the session; `run_scan` (so `dry_run_scan`, `replay_scan`) and
+`dry_run_scan_decide` are its two bodies, their signatures unchanged.
+
+**The draft policy.** Checked as `dry_run_select` checks one (its check moved into
+`check_policy_override`, shared, unchanged: `contained_task_select_policy_invalid`, `_mismatch`),
+then held to the one admission rule of a scan that reads the policy, its last tie-break key: the
+scan's own `admission_refusal` runs with the draft, and its refusal is the admission's,
+`contained_task_select_invalid` `operation=<id> scan tie_break=last_not_candidate_id_lowest_first`.
+The other admission rules that read a policy (`on_empty`'s mode, the upper bound's inputs) are not
+run again for a draft; an upper bound a draft cannot give fails at `Decide` with the admission's
+code.
+
+**Facts and frames.** As `dry_run_select` (the snapshot with the run parameters overlaid, the rows
+of the record lists the evaluated policy declares; no snapshot check), and no shared table, as
+`dry_run_scan`. The frames (the design's point not verified, read): `run_scan`'s first capture is
+the dispatched frame, `settle_capture` takes captures until two give the same core anchors, and
+after a move the first capture has nothing to compare with; `capture_frame_gated` takes one frame
+per capture when the pack declares no target consensus. So a forward run of viewports v0 … vn is
+v0, v0, v1, v1, …, vn, vn; with a target consensus each capture takes the pack's sample frames.
+
+**Codes, contract, interface.** No code, word, key or record shape is added; the outcome code index
+does not change. [selection-graph.md](selection-graph.md), "Offline", gains the paragraph. The
+entry is a kernel function the Lab calls in the same build: no interface revision moves.
+
+**Tests** (kernel `gate_463_r3a.rs`, exec gate row "#463 K-R3a"; no clock read), on K1's card list
+(`gate_463_k1`'s scan run: its cards, layout, scan and policy shape, admitted by the kernel's own
+admission) in a list area of the frame's rows 4 to 55 that holds four cards, its band, tracking
+area and moves fitted to it, and with a seventh name no card shows; the frames v0, v0, v1, v1:
+the wanted card on the second viewport only, selected and chosen; a wanted name on no card,
+`empty` with nothing unknown; that card unreadable, `empty` blocked by its one unknown instance; a
+draft that wants a card of the first viewport, the draft's decision and choice; a draft without
+`candidate_id lowest_first` last, refused. No existing test changes (SEL-L3, SEL-L4b, SEL-L6b, K1
+run the same code), no golden changes, no test leaves the gate map.
+
+**At deploy.** Nothing: no Runtime behaviour, record or configuration changes.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
