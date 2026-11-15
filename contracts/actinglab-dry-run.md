@@ -269,8 +269,9 @@ and its session alias likewise preview the mark changes with `dry_run: true`.
 
 `resource catalog` is `no_effect`: it reads the authoring catalog and its validation results.
 
-All nine device recording forms (#463 S1-1: the last three rows) declare `refused` and stop
-before recording locks, Runtime access or saved recording changes. `--dry-run` is recognized at
+All nine device recording forms (#463 S1-1: the last three rows, each with its own capability
+entry since its fix round 2) declare `refused` and stop before recording locks, Runtime access or
+saved recording changes. `--dry-run` is recognized at
 every argv position.
 
 | Form | `dry_run_refusal_code` | Refusal owner |

@@ -1302,7 +1302,7 @@
       "source": ["actinglab tap"],
       "slice": "LAB-2",
       "status": "planned",
-      "notes": "#463 S1-1 (contracts/lab-recording.md, Recording while playing): with record, each screen is one capture through the Runtime as capture --record takes it, the ObserveReadonly read; no request kind is new to the Runtime"
+      "notes": "#463 S1-1 (contracts/lab-recording.md, Recording while playing): with record, the press is a step of the instance's recording; each screen is one capture through the Runtime as capture --record takes it, the ObserveReadonly read, and (fix round 2) the press is sent with the frame reference of the capture taken immediately before it; no request kind is new to the Runtime"
     },
     {
       "name": "swipe",
@@ -1317,7 +1317,7 @@
         {"name": "record", "form": "switch", "type": "boolean", "required": false, "note": "#463 S1-1: the swipe is a step of the instance's recording, a drag between boxes of one pixel at its two points, with the screen before it and the screen after it; no dry run"},
         {"name": "after_ms", "form": "option", "type": "integer", "required": false, "note": "#463 S1-1, with record: 0 to 60000, default 800: the wait between the press and the screen after it"}
       ],
-      "help": "Swipes from one point of an instance's screen to another through the Runtime; with record, the press is a step of the instance's recording, with the screens before and after.",
+      "help": "Swipes between two points of an instance's screen through the Runtime; with record, a step of the instance's recording with the screens before and after.",
       "output": "as today's command; with record, its record: the step, the screen before and the screen after",
       "writes": true,
       "irreversible": false,
@@ -1327,7 +1327,7 @@
       "source": ["actinglab swipe"],
       "slice": "LAB-2",
       "status": "planned",
-      "notes": "#463 S1-1 (contracts/lab-recording.md, Recording while playing): with record, each screen is one capture through the Runtime as capture --record takes it, the ObserveReadonly read; no request kind is new to the Runtime"
+      "notes": "#463 S1-1 (contracts/lab-recording.md, Recording while playing): with record, the press is a step of the instance's recording; each screen is one capture through the Runtime as capture --record takes it, the ObserveReadonly read, and (fix round 2) the press is sent with the frame reference of the capture taken immediately before it; no request kind is new to the Runtime"
     },
     {
       "name": "long-tap",
@@ -1340,7 +1340,7 @@
         {"name": "record", "form": "switch", "type": "boolean", "required": false, "note": "#463 S1-1: the long press is a step of the instance's recording, a box of one pixel at the point held for duration_ms (1 to 60000), with the screen before it and the screen after it; no dry run"},
         {"name": "after_ms", "form": "option", "type": "integer", "required": false, "note": "#463 S1-1, with record: 0 to 60000, default 800: the wait between the press and the screen after it"}
       ],
-      "help": "Presses and holds one point of an instance's screen through the Runtime; with record, the press is a step of the instance's recording, with the screens before and after.",
+      "help": "Presses and holds one point of an instance's screen through the Runtime; with record, a step of the instance's recording with the screens before and after.",
       "output": "as today's command; with record, its record: the step, the screen before and the screen after",
       "writes": true,
       "irreversible": false,
@@ -1350,7 +1350,7 @@
       "source": ["actinglab long-tap"],
       "slice": "LAB-2",
       "status": "planned",
-      "notes": "#463 S1-1 (contracts/lab-recording.md, Recording while playing): with record, each screen is one capture through the Runtime as capture --record takes it, the ObserveReadonly read; no request kind is new to the Runtime"
+      "notes": "#463 S1-1 (contracts/lab-recording.md, Recording while playing): with record, the press is a step of the instance's recording; each screen is one capture through the Runtime as capture --record takes it, the ObserveReadonly read, and (fix round 2) the press is sent with the frame reference of the capture taken immediately before it; no request kind is new to the Runtime"
     },
     {
       "name": "key",

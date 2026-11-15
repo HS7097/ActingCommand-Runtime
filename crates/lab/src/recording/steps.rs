@@ -520,7 +520,9 @@ pub(crate) fn note_after_capture(
     Ok(())
 }
 
-fn has_marks(step: &RecordingStep) -> bool {
+/// Whether the step carries marks (its own or reused ones). #463 S1-1 fix round 2: the capture
+/// before a press on such an open step is not stored (`record_before_frame`).
+pub(crate) fn has_marks(step: &RecordingStep) -> bool {
     !step.marks.is_empty() || !step.reused.is_empty()
 }
 
@@ -3616,13 +3618,21 @@ fn plan_swipe(
     let inside = recording
         .coordinate_space
         .is_some_and(|size| rect_inside(from, size) && rect_inside(to, size));
+    // #463 S1-1 fix round 2: the refusals name their argument and reason, as a tap's do
+    // (`plan_point`).
     if !inside {
         return Err(with_details(
             invalid(
                 "validation_failed",
                 "--swipe must start and end inside the frame",
             ),
-            json!({"step": index, "swipe_from": swipe.from, "swipe_to": swipe.to}),
+            json!({
+                "step": index,
+                "argument": "point",
+                "reason": "outside_frame",
+                "swipe_from": swipe.from,
+                "swipe_to": swipe.to
+            }),
         ));
     }
     if !(1..=LAB_RECORDING_MAX_GESTURE_MS).contains(&swipe.duration_ms) {
@@ -3631,7 +3641,12 @@ fn plan_swipe(
                 "validation_failed",
                 format!("--swipe must last 1..={LAB_RECORDING_MAX_GESTURE_MS} ms"),
             ),
-            json!({"step": index, "duration_ms": swipe.duration_ms}),
+            json!({
+                "step": index,
+                "argument": "duration_ms",
+                "reason": "duration_range",
+                "duration_ms": swipe.duration_ms
+            }),
         ));
     }
     Ok(super::model::ClickPlan {

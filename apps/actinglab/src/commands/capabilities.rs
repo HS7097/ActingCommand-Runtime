@@ -149,6 +149,11 @@ pub(crate) fn command_capabilities() -> Vec<Value> {
             ["running_runtime", "device", "lab_lease"],
             "available",
         ),
+        // #463 S1-1: a press recorded by the command that makes it (its dry run is refused,
+        // `dry_run_gate`); the needs are the command's own.
+        command_cap("tap --record", ["device"], "available"),
+        command_cap("swipe --record", ["device"], "available"),
+        command_cap("long-tap --record", ["device"], "available"),
         command_cap("current-page", ["device"], "available"),
         command_cap("is-visible", ["device"], "available"),
         command_cap("locate", ["device"], "available"),
