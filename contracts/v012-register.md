@@ -27487,13 +27487,21 @@ reads is building a value, not a decision point; no code chooses what happens ne
 
 **Tests.** A new gate file, `crates/runtime-host/src/tests/gate_469_h2.rs`, host gate map
 `contracts/test-gates/host.toml`: one test per word, each settling a run through
-`record_policy_dispatch_outcome` on a fresh start of the host: the record keeps the input's failure
-identity byte for byte and the expected counts, the pair's streak in its latest L7 record
-serializes byte for byte as the one built from the record's own members; the pair's
-`policy_task_paused` at its next due evaluation carries the word and the record's code, its detail
-naming neither, live and after a restart that loads the streak from its value record; the closed
-root's `actingd suspended` row carries the word. One test for the backoff's `failure_code`, live and
-after a restart. No existing test is changed.
+`record_policy_dispatch_outcome` on a fresh start of the host, and one with two causes at once (a
+sensitive task's run over its runtime budget, whose record is both sensitive and severe:
+`runtime_budget_exceeded`, the settlement's order): the record keeps the input's failure identity
+byte for byte and the expected counts, the pair's streak in its latest L7 record serializes byte
+for byte as the one built from the record's own members; the pair's `policy_task_paused` at its
+next due evaluation carries the word and the record's code, its detail naming neither (both
+asserted), live, on the root's next start and on the start after it; the closed root's
+`actingd suspended` row carries the word. The start checked last loads: a root's first start writes
+no marker and its second seeds, replaying the history (LN-4), so only a later start loads the streak
+from its value record, as every restart of an installation does, and gives the word back from the
+dispatch journal. Each test asserts the kind of both starts from their `StartReport`
+(`tagged_state`): `load` for the last; for the one before it `seed` after one run (the word a
+replay gives) and `load` after two. One test for the backoff's `failure_code`, its detail not
+naming the code, live, on the root's second start (`seed`) and on its third (`load`). No existing
+test is changed.
 
 **What is not changed.** When a pair is paused, backed off or lifted; the lift and its restart
 rule; the streak's comparison (code, identity, class); the failure identity; every record and its

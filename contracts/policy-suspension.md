@@ -298,6 +298,11 @@ replay set it from the record, and a start that loads the pair's streak from its
 dispatch journal holds; no persisted member is added. `actingd suspended` computes the same word
 from the same record for the pair's `suspended` row (`pause_cause`), and `ac_schedule`, the not-run
 rows of `ac_diagnose` and a `policy.dispatch_rejected` record show the outcome with its values.
+A pause carries no `pause_cause` when the dispatch journal holds no execution record of the
+streak's dispatch that names its failure, which can be on a start that loaded the streak: that
+start's journal holds the dispatches the pair's value record names, and once the pause was lifted,
+a run that a condition ended leaves the streak as it was ("Condition termination and owed reruns
+(Workflow #386 SR-2)", "Settlement") while the value record names that run, not the paused one.
 
 ## Settlement of an accumulating failure
 
