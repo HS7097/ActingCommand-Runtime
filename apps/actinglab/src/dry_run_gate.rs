@@ -325,6 +325,8 @@ const DECLARATIONS: &[(&str, Mode)] = &[
     ("standard-pack check", Mode::NoEffect),
     // Workflow #464 P3: it reads a game root only.
     ("standard-pack ready", Mode::NoEffect),
+    // Workflow #463 S3-14: it reads a game root, its packs and the trial records only.
+    ("standard-pack status", Mode::NoEffect),
     ("wait", Mode::NoEffect),
     ("package validate", Mode::NoEffect),
     ("package preflight", Mode::NoEffect),

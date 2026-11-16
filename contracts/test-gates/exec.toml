@@ -3746,3 +3746,19 @@ tests = [
     "actingcommand-resource-tooling::lib::gate_463_s312::s312_next_names_bindings_json_only_when_the_rule_has_no_value",
 ]
 incident = ["#463 S3-12"]
+
+# #463 S3-14 (0.12.68; register §1.446; brief rd-1116/brief-463-s314-pack-status.md; contracts/standard-pack-schedule.md, "Where a pack stands: `standard-pack status`"): one read of where each pack of a game root stands. One installed game root of five packs inside a made-up installation whose pack_place journal names one pack in enabled, and a state directory beside it with three trial records the trial's writer writes: the held pack is admitted, can_be_tried, enabled.state held, its only missing item S2 failing held with the hold's reason and reference (1); a pack the readiness answers ready_to_place answers the trial's own content prefix and the passed trial of that content with its request, its business end and its time (2); the pack the journal names is enabled with authorization not_recorded and authorization_unrecorded journals_not_read, the journals belonging to the rescue module this read cannot reach (3); a pack a rule enables and no journal names answers the same (4); the counts of each stage_state and each enabled.state are the numbers of rows with each word and add up to the five packs (5); package_id answers the one row as the whole answer gives it and the root's counts, and a package id the root does not register is validation_failed naming --package-id not_recognised (6); a later failed record of another content leaves a pack's passed trial standing, and a pack whose only record names another content answers none (7); the installation, the game root and the state directory are byte for byte what they were (8); each row's conditions are the items standard-pack ready answers for the same root and its missing the failing ones (9).
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-resource-tooling::lib::gate_463_s314::s314_a_held_pack_can_be_tried_and_its_hold_is_missing",
+    "actingcommand-resource-tooling::lib::gate_463_s314::s314_a_pack_ready_to_place_answers_the_passed_trial_of_its_content",
+    "actingcommand-resource-tooling::lib::gate_463_s314::s314_a_pack_placed_under_a_journal_that_names_it_answers_journals_not_read",
+    "actingcommand-resource-tooling::lib::gate_463_s314::s314_a_pack_that_runs_unnamed_by_any_journal_answers_not_recorded",
+    "actingcommand-resource-tooling::lib::gate_463_s314::s314_the_counts_add_up",
+    "actingcommand-resource-tooling::lib::gate_463_s314::s314_package_id_answers_one_pack",
+    "actingcommand-resource-tooling::lib::gate_463_s314::s314_a_trial_record_of_other_content_does_not_count",
+    "actingcommand-resource-tooling::lib::gate_463_s314::s314_the_read_writes_nothing",
+    "actingcommand-resource-tooling::lib::gate_463_s314::s314_conditions_are_what_standard_pack_ready_answers",
+]
+incident = ["#463 S3-14"]

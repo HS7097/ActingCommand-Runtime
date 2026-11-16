@@ -212,6 +212,7 @@ refused form runs before it refuses; every other check runs only on a real invoc
 | `standard-pack compose` | refused | `dry_run_unsupported` | flag parsing only (ROUT-L RL-1a: it writes a new directory); alternative `standard-pack check` |
 | `standard-pack build` | refused | `dry_run_unsupported` | flag parsing (Workflow #464 P2: it writes its product and its work into `--out`); no alternative |
 | `standard-pack ready` | no_effect | | reads a game root only (Workflow #464 P3) |
+| `standard-pack status` | no_effect | | reads a game root, its packs' directories, the trial records of the state directory and, with `--repo`, the checkout's packs only (Workflow #463 S3-14) |
 | `standard-pack trial` | mixed | | `--plan`: no_effect, it reads the package directory, `--root` and the state directory's place only, writes nothing and sends nothing (Workflow #463 S3-10); without `--plan` (the run, and `--collect`): refused, `dry_run_unsupported`, after the flags and before anything is read, alternative `standard-pack trial --plan` (Workflow #463 S3-11: the run sends one run and writes its record, `--collect` writes the record) |
 | `runtime reset` | refused | `dry_run_unsupported` | positional arguments, Runtime flags, `--state-root`, instance; no alternative; no capability entry |
 | `runtime observe` | no_effect | | |

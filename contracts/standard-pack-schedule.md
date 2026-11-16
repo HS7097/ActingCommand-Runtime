@@ -1060,6 +1060,62 @@ answers none. Every caller of the function answers both members as they are:
 command) and its MCP tool `ac_standard_pack_ready` (through a `serve` child) serialize the whole
 answer.
 
+## Where a pack stands: `standard-pack status` (Workflow #463 S3-14, since 0.12.68)
+
+Register §1.446. To learn where one package stands an agent asked four places: the readiness, the
+hold's reason, the trial records and the placement journals. This row is the one read, for the
+part that needs no running installation. It reads only, offline: the game root, its packs'
+directories, the Lab's state directory and, with `--repo`, the checkout's packs. It writes nothing,
+starts nothing (no child process) and reads no installation, no secret and no Runtime; under
+`--dry-run` it answers the same ([actinglab-dry-run.md](actinglab-dry-run.md), `no_effect`).
+
+```text
+actinglab standard-pack status --root <game root> [--repo <checkout game root>]
+    [--package-id <id>] [--state-dir <dir>]
+```
+
+The row `standard-pack status` of the operation table ([lab-operations.json](lab-operations.json),
+module `authoring`, slice `463-S3-14`); over MCP the tool `ac_standard_pack_status`, served by a
+`serve` child. `--root` is a game root as the readiness takes it; `--state-dir` the Lab's state
+directory, where the trial keeps its records ([standard-pack-trial.md](standard-pack-trial.md), "The
+record"), default actinglab's; `--repo` the game's working root in a resource repository's
+checkout ([standard-pack-authoring.md](standard-pack-authoring.md)); `--package-id` one pack of the
+root. A flag the row does not take, a positional word, a flag given twice or an option without its
+value is refused before anything is read; a `--package-id` the root does not register is
+`validation_failed` naming `--package-id` with `not_recognised`; a `--repo` that is no directory
+`validation_failed`. The readiness's refusals of the root are this row's.
+
+**The answer.** `{root, game, state_dir, repo?, stage_states, enabled_states, packs}`, beside
+`lab_operation_completed`. `stage_states` counts the root's packs at each `stage_state`
+(`not_admitted`, `can_be_tried`, `enabled`) and `enabled_states` at each `enabled.state`
+(`enabled`, `held`, `not_placed`, `not_scheduled`, `not_judged`), each word with its count, 0
+included; with `--package-id` too they are the root's. `packs` holds a row per pack in the
+readiness's order, or the one row `--package-id` names: it is the part of the answer that grows
+with the root, where it may be cut; through MCP an answer over the budget is written whole to the
+export directory (`answer_exported`), and `--package-id` reads one pack. Each row:
+
+| Member | What it is, and what it is judged from |
+|---|---|
+| `package_id`, `server` | As the readiness's row names them. |
+| `formed.admitted` | Whether the readiness item S1 holds (the Runtime's loader admits the pack and `standard-pack check` refuses no admission of it). |
+| `formed.content_hash_prefix` | The first 12 hex digits of the content hash of the pack's directory, the hash the containment crate's `measure_content_hash` computes: the hash and the digits a trial names a content by ([standard-pack-trial.md](standard-pack-trial.md), "The package"). Absent when the containment's reader cannot read the directory of a pack whose S1 does not hold (the loader reads it by the same reader, so S1 carries the refusal); a directory of a pack whose S1 holds that cannot be read refuses the answer, `package_invalid`. |
+| `formed.checkout` | With `--repo`: `{pack, content_hash_prefix}`, the checkout's `packs/<package_id>` and its prefix measured the same way, `null` when nothing is at that path; anything there that cannot be read as a pack directory refuses the answer, `package_invalid`. |
+| `conditions` | The pack's thirteen items exactly as `standard-pack ready --root` answers them for the same root ("Readiness", above): the one function, called as that row calls it (no declared range, no installation), never a copy. |
+| `missing` | Each item of `conditions` that fails, in their order, as answered; the S2 of a held pack carries `held`, `{reason, reference?}`, the hold as its `held` entry writes it. |
+| `trial` | The latest trial record of this content (`formed.content_hash_prefix`) among the package's records, read by the trial's own reader (`latest_trial_record`, which refuses a file of a record's name that is not that record, `trial_record_unreadable`): `state` `passed` when its run ended normally (`end.outcome` `success`, on whichever end; `matched` says whether that was the end expected), `failed` when it failed or was cancelled, `none` when no record names this content; then `request_id`, `end` (`outcome`, `outcome_key`, the business end, `final_page`, `failure_code`, `failure_values`, each when it has one), `matched` and `at_unix_ms`, as the record keeps them. A record of another content does not count. Absent when the content was not read. |
+| `enabled.state` | Whether the root's `schedule.json` enables the pack, judged from the classification the readiness's S2 reads ("Classification"), in this order: `not_judged` when the composer refuses the file (S2 `composition_refused`; the Runtime then keeps the last schedule it accepted, "Last good rules", which this root does not tell); `enabled` when a rule names the pack and it is not held, whatever supporting part it plays beside; `not_scheduled` when it plays a supporting part a root file gives it and no rule dispatches it (the readiness's `not_scheduled`); `held` when `schedule.json` holds it; `not_placed` otherwise: no rule names it, or the root holds no `schedule.json`. |
+| `enabled.authorization` | `not_recorded`, with `enabled.authorization_unrecorded` `journals_not_read`: the placement journals (`pack_place`, whose inputs name the authorization and the packages a placement enables, [install-cli.md](install-cli.md)) belong to the Lab's rescue module, whose reader this row's module cannot reach, so they are not read. The tool never infers an authorization: a pack a rule enables answers `not_recorded` whether a journal names it or not. Reading the journals, and an installation's readings, are a later slice's (S3-15). |
+| `stage_state` | `not_admitted` while S1 does not hold; else `enabled` when `enabled.state` is `enabled`; else `can_be_tried`. |
+
+Three sentences the row keeps true: `enabled` is what the root's schedule says, not who authorized
+it; a passed trial is not an authorization; `ready_to_place` in `conditions` is the readiness of a
+root without an installation, never `dispatchable`.
+
+**Words.** Five vocabularies of the answer's members, registered in the outcome catalog (none is an
+outcome value, and no outcome code is added): `stage_state`, `enabled_state`, `trial_state`
+(`passed`, `failed`, `none`), `pack_authorization` (`not_recorded`) and `authorization_unrecorded`
+(`journals_not_read`).
+
 ## What does not change
 
 No ledger record type or member is added. A composed generation is activated with the existing
