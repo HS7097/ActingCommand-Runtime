@@ -659,16 +659,16 @@ impl HostShared {
         .contains_key(&token.lease_id()))
     }
 
-    /// Workflows #456, #458 and #461, test only: whether a refused close isolates its instance. A
-    /// test turns it off (`RuntimeHost::close_isolates_off_for_test`), and then nothing of the
-    /// slices applies: the refusals end the Runtime as before.
+    /// Workflows #456, #458, #461 and #475, test only: whether a refused close isolates its
+    /// instance. A test turns it off (`RuntimeHost::close_isolates_off_for_test`), and then
+    /// nothing of the slices applies: the refusals end the Runtime as before.
     #[cfg(test)]
     fn refused_close_isolates(&self) -> bool {
         !self.close_isolates_off_for_test.load(Ordering::Acquire)
     }
 
-    /// Workflows #456, #458 and #461: a refused close of one instance's session isolates that
-    /// instance.
+    /// Workflows #456, #458, #461 and #475: a refused close of one instance's session isolates
+    /// that instance.
     #[cfg(not(test))]
     fn refused_close_isolates(&self) -> bool {
         true
@@ -1568,18 +1568,24 @@ impl HostShared {
     /// it belongs"): the lease sweep's step for each member of a device group of several whose
     /// start preparation the device's hold refused (`device_held_for_member_close`, recorded once
     /// as that preparation's failure, which left the member unavailable). Once the fence that held
-    /// the device is lifted and the device is free (no lease holds it, no claim waits, no takeover
-    /// cooldown runs), it only queues, for each such member, one self-check claim of the Runtime's
-    /// own (`queue_held_start_preparation`), as a fence's recheck is queued
-    /// (`queue_fence_recheck`); the member's worker makes the start's preparation on that claim's
-    /// key (`run_held_start_preparation`), so the sweep waits for no device step (Workflow #369
-    /// Q-8). A member is passed over while another member's fence holds its device, while its
-    /// scheduling is paused with a released pause (as the start passes it over; its resume
-    /// prepares it), inside a blackout of the member (a preparation the Runtime starts on its
-    /// own, as a recheck: `scheduling-blackout.md`, "Complete silence") and while the device is
-    /// not free; it stays owed and is looked at again at the next tick. A member whose claim waits
-    /// or runs is not queued again, and a member owes nothing once a preparation of it is granted
-    /// its key or lease. Memory only: a restart prepares every member.
+    /// the device is lifted and the device is idle, it only queues, for each such member, one
+    /// self-check claim of the Runtime's own (`queue_held_start_preparation`), as a fence's
+    /// recheck is queued (`queue_fence_recheck`); the member's worker makes the start's
+    /// preparation on that claim's key (`run_held_start_preparation`), so the sweep waits for no
+    /// device step (Workflow #369 Q-8). A member is passed over while another member's fence
+    /// holds its device, while its scheduling is paused with a released pause (as the start
+    /// passes it over; its resume prepares it), inside a blackout of the member (a preparation the
+    /// Runtime starts on its own, as a recheck: `scheduling-blackout.md`, "Complete silence") and
+    /// while the device is not idle; it stays owed and is looked at again at the next tick. A
+    /// member whose claim waits or runs is not queued again, and a member owes nothing once a
+    /// preparation of it is granted its key or lease. Memory only: a restart prepares every
+    /// member. The train's fix round 1: idle is no lease on the device, no takeover cooldown and
+    /// no entry of its queue that is eligible now by the scheduler's own judgement
+    /// (`SeedScheduler::eligible_count`, the predicate of `first_eligible` and of the queue's
+    /// grant), each entry by its own member's gate as the pump reads them (`device_gates`, before
+    /// the scheduler's lock): an entry parked behind its own member's closed gate (another
+    /// member's routine claim behind its own pause or blackout) keeps no preparation back, and one
+    /// that waits eligible does, so the claim is queued only when it is the device's next work.
     pub(super) fn queue_members_after_device_hold(&self) -> RuntimeHostResult<()> {
         if self.fatal.is_shutdown_requested() {
             return Ok(());
@@ -1611,17 +1617,19 @@ impl HostShared {
             {
                 continue;
             }
+            let gates = self.device_gates(instance_id)?;
+            let gate = |member: InstanceId| gates.gate_of(member);
             let now_monotonic_ms = self.monotonic_ms()?;
-            let free = {
+            let idle = {
                 let scheduler = lock(
                     &self.scheduler,
                     HostLocation::ReadHeldStartPreparationDevice,
                 )?;
                 scheduler.active_lease(instance_id).is_none()
-                    && scheduler.queued_count(instance_id) == 0
+                    && scheduler.eligible_count(instance_id, gate, now_monotonic_ms) == 0
                     && !scheduler.cooldown_active(instance_id, now_monotonic_ms)
             };
-            if !free {
+            if !idle {
                 continue;
             }
             let marked = match lock(
@@ -1650,10 +1658,12 @@ impl HostShared {
     /// (`HostClaimWork::HeldStartPreparation`, a payload of its own: a recheck's runs only for a
     /// fence's wait for a person, which the member has not, and a link's restore reports to the
     /// handset link machine). A claim the queue refuses is recorded once (`runtime.failed`, stage
-    /// `operation_cleanup`) and settles what the member owes: while another member's fence holds
-    /// the device again by then the member stays owed and is queued once that fence is lifted;
-    /// otherwise it owes nothing more and stays unavailable until a person's self-check or resume,
-    /// as after a failed preparation. Only a failure the Runtime does not survive is returned.
+    /// `operation_cleanup`) and settles what the member owes by the refusal's own code: refused
+    /// `device_held_for_member_close` (a self-check claim is an operator's, refused at once while
+    /// another member's fence holds the device again), the member stays owed and is queued once
+    /// that fence is lifted; refused otherwise, it owes nothing more and stays unavailable until a
+    /// person's self-check or resume, as after a failed preparation. Only a failure the Runtime
+    /// does not survive is returned.
     fn queue_held_start_preparation(
         &self,
         instance_id: InstanceId,
@@ -1747,7 +1757,11 @@ impl HostShared {
                     links,
                     None,
                 )?;
-                let held_again = self.device_held_for(instance_id)?.is_some();
+                // The train's fix round 1: decided from the refusal's own code, not from a second
+                // read of the hold: refused for another member's hold that came back between the
+                // step's read and the claim, the member stays owed; any other refusal settles it.
+                let held_again =
+                    failure.error.code() == HostCode::DeviceHeldForMemberClose.as_str();
                 let mut owed = lock(
                     &self.start_preparations_held,
                     HostLocation::SettleHeldStartPreparation,
@@ -2568,9 +2582,11 @@ impl RuntimeHost {
         Ok(())
     }
 
-    /// Workflows #456, #458 and #461: turns the slices off (`true`) or on again: while off, a
-    /// refused close at a lease's expiry, at a holder's own end, in a failed input's clean-up or
-    /// after a capture failure ends the Runtime, as before.
+    /// Workflows #456, #458, #461 and #475: turns the slices off (`true`) or on again: while off,
+    /// a refused close at a lease's expiry, at a holder's own end, in a failed input's clean-up,
+    /// after a capture failure or on #475's five paths under a lapsed key (its hand-over to its
+    /// ladder, a pre-emption's hand-over, an application command's preparation, a backend switch,
+    /// a member switch's close) ends the Runtime, as before.
     pub(crate) fn close_isolates_off_for_test(&self, off: bool) -> RuntimeHostResult<()> {
         let location = crate::codes::test_spellings::TestLocation::CloseIsolatesOffForTest;
         self.shared_ref(location)?

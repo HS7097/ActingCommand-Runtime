@@ -23,15 +23,18 @@
 //! Evidence leaves the adapter in device-frame pixels: a recognised target's region is the
 //! device box that covers it (outward rounding). The kernel makes every input in base pixels;
 //! Workflow #392 DA-3: the host's input of a run maps it to the device frame under the frame's
-//! map (`DisplayMap::admit_input`, `device_input`), and a Lab declared operation, whose runtime
-//! knows no game declaration and no producer geometry, sends an input only on a frame of its
-//! package's size.
+//! map (`DisplayMap::admit_input`, `device_input`).
+//!
+//! Workflow #392 DA-5ab (`contracts/display-adapter.md` section 11): the Lab's frames take the
+//! same gate. A frame a Lab operation observes, read back from its picture, carries no producer
+//! geometry, and the Lab reads no game declaration: [`lab_scene_on_base`] brings it to its
+//! package's base with this gate's own map and resample, and [`lab_display_map`] gives the map a
+//! Lab operation's input leaves under (`DisplayMap::send_input`, the run's exit).
 
-use super::{
-    ContainedTaskError, ExecutionKernelCode, Resolution, scene_from_frame, scene_from_pixels,
-};
+use super::{ContainedTaskError, ExecutionKernelCode, Resolution, scene_from_pixels};
 use actingcommand_contract::{
-    CaptureExtent, DisplayMapKind, RecognizedTarget, StandardPackDisplayLayout,
+    CaptureExtent, CaptureGeometryObservation, CaptureGeometryUnknownReason, DisplayMapKind,
+    RecognizedTarget, StandardPackDisplayLayout,
 };
 use actingcommand_device::{Frame, PixelFormat};
 use actingcommand_display_adapter::{
@@ -43,7 +46,7 @@ use actingcommand_recognition::resample::resample_pixels;
 
 /// One delivered frame through the gate: its map M and the scale frame recognition sees.
 pub(super) struct ScaleFrame<'a> {
-    frame: &'a Frame,
+    frame: FramePixels<'a>,
     map: DisplayMap,
     /// The frame resampled to the scale frame under a pure scale; `None` under the identity,
     /// where the frame's own buffer is the scale frame.
@@ -51,6 +54,7 @@ pub(super) struct ScaleFrame<'a> {
 }
 
 /// The pixels a stability sample is cut from: a delivered frame's, or a scale frame's.
+#[derive(Clone, Copy)]
 pub(super) struct FramePixels<'a> {
     pub(super) width: u32,
     pub(super) height: u32,
@@ -83,13 +87,62 @@ impl Resolution {
         frame: &'a Frame,
         layout: Option<&StandardPackDisplayLayout>,
     ) -> Result<ScaleFrame<'a>, ContainedTaskError> {
+        self.validate_pixels(FramePixels::from(frame), &frame.geometry, layout)
+    }
+
+    /// The gate over a frame's pixels and the geometry its producer recorded with it
+    /// (Workflow #392 DA-5ab: the one implementation the Lab's frames take too): the frame's map
+    /// ([`Self::frame_map`]) and, under a pure scale, the frame resampled once to the scale frame.
+    fn validate_pixels<'a>(
+        &self,
+        frame: FramePixels<'a>,
+        geometry: &CaptureGeometryObservation,
+        layout: Option<&StandardPackDisplayLayout>,
+    ) -> Result<ScaleFrame<'a>, ContainedTaskError> {
+        let map = self.frame_map(frame.width, frame.height, geometry, layout)?;
+        let resampled = match map.kind() {
+            DisplayMapKind::Identity => None,
+            DisplayMapKind::Scale | DisplayMapKind::Translate => {
+                let target = map.scale_frame_extent();
+                let channels = match frame.pixel_format {
+                    PixelFormat::Rgb8 => 3,
+                    PixelFormat::Rgba8 => 4,
+                };
+                Some(
+                    resample_pixels(
+                        frame.pixels,
+                        (frame.width, frame.height),
+                        channels,
+                        (target.width(), target.height()),
+                    )
+                    .map_err(|_| frame_invalid())?,
+                )
+            }
+        };
+        Ok(ScaleFrame {
+            frame,
+            map,
+            resampled,
+        })
+    }
+
+    /// The map M of a delivered frame of `width` x `height` with its producer's `geometry`, under
+    /// the game's declaration `layout`: the identity or a pure scale (see the module header); any
+    /// other map, and a frame the map refuses, is the frame's refusal.
+    fn frame_map(
+        &self,
+        width: u32,
+        height: u32,
+        geometry: &CaptureGeometryObservation,
+        layout: Option<&StandardPackDisplayLayout>,
+    ) -> Result<DisplayMap, ContainedTaskError> {
         let base = CaptureExtent::new(self.width, self.height).ok_or_else(|| {
             ContainedTaskError::new(ExecutionKernelCode::ContainedTaskResolutionInvalid.code())
         })?;
-        let delivered = CaptureExtent::new(frame.width, frame.height).ok_or_else(frame_invalid)?;
+        let delivered = CaptureExtent::new(width, height).ok_or_else(frame_invalid)?;
         let map = DisplayMap::build(
             base,
-            DisplayObservation::of_frame(delivered, &frame.geometry),
+            DisplayObservation::of_frame(delivered, geometry),
             layout.map(DisplayRule::from),
         )
         .map_err(|error| refusal(error, delivered, base))?;
@@ -107,31 +160,74 @@ impl Resolution {
         if map.kind() == DisplayMapKind::Translate || map.crop().is_some() {
             return Err(waits(DisplayProblem::TranslationUnsupported));
         }
-        let resampled = match map.kind() {
-            DisplayMapKind::Identity => None,
-            DisplayMapKind::Scale | DisplayMapKind::Translate => {
-                let target = map.scale_frame_extent();
-                let channels = match frame.pixel_format {
-                    PixelFormat::Rgb8 => 3,
-                    PixelFormat::Rgba8 => 4,
-                };
-                Some(
-                    resample_pixels(
-                        &frame.pixels,
-                        (frame.width, frame.height),
-                        channels,
-                        (target.width(), target.height()),
-                    )
-                    .map_err(|_| frame_invalid())?,
-                )
-            }
-        };
-        Ok(ScaleFrame {
-            frame,
-            map,
-            resampled,
-        })
+        Ok(map)
     }
+}
+
+/// Workflow #392 DA-5ab: a Lab frame on its package's base (see [`lab_scene_on_base`]): the
+/// frame's map M, a pure scale, and the scene of its scale frame.
+#[derive(Debug, Clone)]
+pub struct LabBaseScene {
+    pub map: DisplayMap,
+    pub scene: Scene,
+}
+
+/// Workflow #392 DA-5ab (`contracts/display-adapter.md` section 11): a frame a Lab operation took,
+/// as the Lab reads it back from its picture, brought to its package's base `base` (width,
+/// height) by the frame gate itself, the map and the one resample a run's frame takes
+/// ([`Resolution::validate_frame`]'s). Such a frame carries no producer geometry and the Lab reads
+/// no game declaration, as its declared operations map: only the identity and a pure scale map.
+/// `None` for a frame of the base's size, the plain identity, which recognition sees as it is;
+/// otherwise the frame's map and its scale frame's scene. A frame the map refuses is refused as a
+/// run's frame is: `display_map_unresolved` with its `display_problem` at `display_map_build` and
+/// the frame's and the base's sizes (a smaller frame `scale_below_base`, another ratio
+/// `layout_undeclared`, a frame of the other orientation `orientation_mismatch`).
+pub fn lab_scene_on_base(
+    base: (u32, u32),
+    scene: &Scene,
+) -> Result<Option<LabBaseScene>, ContainedTaskError> {
+    if (scene.width(), scene.height()) == base {
+        return Ok(None);
+    }
+    let scale = Resolution {
+        width: base.0,
+        height: base.1,
+    }
+    .validate_pixels(
+        FramePixels {
+            width: scene.width(),
+            height: scene.height(),
+            pixel_format: PixelFormat::Rgb8,
+            pixels: scene.rgb8_pixels(),
+        },
+        &read_back_geometry(),
+        None,
+    )?;
+    let reduced = scale.scene()?;
+    Ok(Some(LabBaseScene {
+        map: scale.map,
+        scene: reduced,
+    }))
+}
+
+/// Workflow #392 DA-5ab: the map M of a Lab frame of `frame` size (width, height) for its
+/// package's base `base`, as [`lab_scene_on_base`] builds it, or the same refusal: the map a Lab
+/// operation's input on that frame leaves under.
+pub fn lab_display_map(
+    base: (u32, u32),
+    frame: (u32, u32),
+) -> Result<DisplayMap, ContainedTaskError> {
+    Resolution {
+        width: base.0,
+        height: base.1,
+    }
+    .frame_map(frame.0, frame.1, &read_back_geometry(), None)
+}
+
+/// What a frame read back from its picture says of its display: nothing, so it shows itself
+/// (`DisplayObservation::of_frame`).
+fn read_back_geometry() -> CaptureGeometryObservation {
+    CaptureGeometryObservation::Unknown(CaptureGeometryUnknownReason::ProducerObservationAbsent)
 }
 
 impl ScaleFrame<'_> {
@@ -143,7 +239,12 @@ impl ScaleFrame<'_> {
     /// The scene recognition runs on: the scale frame's.
     pub(super) fn scene(&self) -> Result<Scene, ContainedTaskError> {
         match &self.resampled {
-            None => scene_from_frame(self.frame),
+            None => scene_from_pixels(
+                self.frame.width,
+                self.frame.height,
+                self.frame.pixels,
+                self.frame.pixel_format,
+            ),
             Some(pixels) => {
                 let extent = self.map.scale_frame_extent();
                 scene_from_pixels(
@@ -159,7 +260,7 @@ impl ScaleFrame<'_> {
     /// The scale frame's pixels: the frame's own buffer under the identity.
     pub(super) fn pixels(&self) -> FramePixels<'_> {
         match &self.resampled {
-            None => FramePixels::from(self.frame),
+            None => self.frame,
             Some(pixels) => {
                 let extent = self.map.scale_frame_extent();
                 FramePixels {

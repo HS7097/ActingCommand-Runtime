@@ -35,7 +35,18 @@ naming this file.
   `ac_material` takes `export` and no `out`, `ac_frame` and `ac_report_export` take no `out`
   (section 6); `ac_run_show`
   and `ac_run_stop` take `wait_s`, `ac_events` and `ac_codes` take `cursor` (section 4);
-  `ac_deploy` and `ac_rollback` take no `detach` (section 9).
+  `ac_deploy` and `ac_rollback` take no `detach` (section 9). These are the only parameters of a
+  row a tool leaves out; the command line also takes `actinglab`'s global options, a positional
+  given as its flag (`--id`, `--instance`) and `devices bind`'s own `--root` (the server hands on
+  the root it runs from), which no tool needs. No tool takes `words` either (Workflow #434 LW-1):
+  the further words a row handed on before Workflow #434 LAB-5B4, which no row declares and a row
+  served in the server's own process refuses by name.
+- **Closed word lists** (Workflow #434 LW-1, 0.12.67). Where an operation takes only the words of
+  a closed list for a parameter the table types as text, the schema lists them (`enum`; for a
+  list its items' `enum`): `ac_status`'s `sections` (the overview's blocks; `daemon` and
+  `incomplete` are always answered and are no section) and `ac_events`' `type`, `event_type`,
+  `exclude_event_types` (the ledger's event types) and `origin_module`. Another word is refused
+  before anything is sent (section 7).
 - **No tiers.** Every tool may be called. `--tier`, today's server's option, refuses the start.
 
 ## 2 How to start
@@ -69,6 +80,26 @@ naming this file.
   Runtime 0.12.63, which retires it with the identity card): report them with it.
 - **`lab_operation_check_failed`**: the Runtime answered a Lab operation and a check after it
   failed. The operation may have taken effect: read its effect before you send it again.
+- **Coordinates** (Workflow #392 DA-5ab, Runtime 0.12.67; `contracts/display-adapter.md`
+  section 11): `ac_lab_observe` and `ac_do` answer what the command line answers, in the package's
+  base. On a display of the base's size their `frame_coordinates` is `{device_pixels,
+  orientation, applies_to}`, the device's own pixels. On a display that maps to the base (1920×1080
+  or 3840×2160 for a 1280×720 package) it is `{space: "base", base_pixels, reduced_from,
+  orientation, applies_to}`: every frame was reduced from the device size `reduced_from` to the
+  base, every rectangle and point of the answer is the base's, `ac_do` takes `tap`, `tap_rect`,
+  `swipe` and an element in the base, and its `frame_path` and `preview` are the reduced frames.
+  A display the base does not map to (another ratio, a smaller one) is refused
+  `display_map_unresolved`; a press at a ratio the input side does not send under (5/4) is refused
+  `display_map_unresolved` (`input_scale_unsupported`), nothing sent. `ac_lab_observe` and `ac_do`
+  with `record` on such a display are refused before anything is sent or written (the train of
+  DA-5ab and DA-5cd; `contracts/lab-recording.md`, "A recording's size"):
+  `record_display_not_base` when the recording has no frame yet, `record_frame_size_mismatch` when
+  the display changed during the recording, `record_size_not_base` for a recording not at the base
+  size; `ac_do` with `record` captures one frame before its press for this. A saved scene of such a
+  size answers the same base form (below, "Offline scenes of another size"). `ac_frame` is one
+  frame of the instance as the device gives it, of the device's size (3840×2160 on such a
+  display), and the device commands (`ac_tap`, `ac_swipe`, `ac_long_tap`) take the device's own
+  pixels.
 
 ## 4 Jobs, handles and cursors
 
@@ -88,10 +119,23 @@ naming this file.
   it again every second while the run is not found, admitted or running. A run a job of this
   process submits carries that job as `job` (`kind`, `job_phase`, and its `line` once it ended).
   A job's phase is `running`, `submitting` (a run's job), `done` or `failed`.
+- **A run's line** (Workflow #434 LW-1, 0.12.67). The line `run start` gives once its run ended
+  holds every ledger record of the run (`events`, with payloads: 100 KB to 500 KB for a run that
+  went far). This server never sends them: the job's `line` that `ac_run_show` carries and the
+  answer of `ac_run_start` with `wait` are that line without `events`, with `events_total` (how
+  many were left out), `truncated` (what was left out, as JSON pointers: `/events`, and
+  `/official_ocr_projection` or `/official_ocr_fields_projection` when the run's OCR reads did
+  not fit beside the rest) and `rest`, the calls that read it: `ac_run_evidence` with the run's
+  request id (its steps, page by page) and `ac_events` with its correlation id and `detail`
+  `payload` (its records). The receipt (state, outcome, `executed_steps`, `final_page`) and the
+  line's outcome stay. So the answer of a finished run no longer grows with its steps or its
+  records. What stays is never cut: the receipt and the line's `warnings` (and, with `ac_run_show`,
+  the run's own line beside the job); a run whose answer still does not fit with them is refused
+  `output_budget_exceeded` with its job's handle (section 5), never cut silently.
 - **`ac_run_start`** without the row's `wait` answers at once `{handle, correlation_id,
   job_phase}` (`submitting`): the handle is the run's request id, and the run is submitted in a
   job. With `wait` the call waits up to that long, within the call budget, and answers the run's
-  line when the run ended by then, else the same handle. #463 S3-9 (0.12.68;
+  line (as above) when the run ended by then, else the same handle. #463 S3-9 (0.12.68;
   `contracts/runtime-interface.md`, "The variable values of a contained run"): `variable`, a list
   of `<name>=<json>` (one per variable, as `run start --variable` takes them), gives the run values
   for variables its package declares; a name given twice is `repeated` and a right side that is no
@@ -132,6 +176,8 @@ naming this file.
     own order and marks the cut (`truncated`, and a cursor where the answer pages), or it writes
     the whole answer to the export directory (section 6) and answers its header with the warning
     `answer_exported`;
+  - a run's line, wherever this server gives it (`ac_run_start` with `wait`, the job of
+    `ac_run_show`), leaves the run's ledger records out and says so (section 4, "A run's line");
   - a child's success line (section 8) that does not fit is written whole to the export directory
     and answered `{req_id, export, overflowed: true}`, `answer_exported` first among its
     `warnings`. `ac_record_stop` keeps its four binding parts together under `lab`, and
@@ -203,13 +249,37 @@ naming this file.
   neither server sends the identity card or the client action before a write, the binding's
   `Lab-MCP` naming where it came from); and, on Windows, the rescue module's rows, for the root the
   server runs from, their journals recording `Lab-MCP` (`deploy` and `rollback` start a detached
-  run of their own and answer at once, section 9).
+  run of their own and answer at once, section 9). These requests keep the command line's
+  envelope until slice LAB-6S2-E (`contracts/lab-two-entries.md` §2.4 and its slice table): so a
+  run `ac_run_start` starts is listed with `origin` `cli` (`ac_runs`, `ac_run_show`), while its
+  command record's channel is `mcp`; from that slice on it is `lab`.
 - **Through a child**: every other row, by `actinglab.exe serve --stdio --front mcp`, the
   `actinglab.exe` beside the server's own file, as `Lab-MCP` (on each step and mark it adds to a
   recording). One call per child at a time. A child idle for `--child-idle` seconds (default 10)
   is ended by closing its input; no child is ever killed. After a call of `ac_lab_observe` or
   `ac_do` with `capture`, the server records the client action today's server records, naming the
   Lab request; its warnings join the line.
+- **Presses** (Workflow #434 LW-1, 0.12.67). `ac_tap`, `ac_swipe` and `ac_long_tap` without
+  `record` press on every instance. What one such press does: on every instance, one status read
+  first (on a connection of its own), to learn whether the instance's input presses only on a
+  frame the Runtime captured (its capability table names the input, `touch_backend` `nemu_ipc`,
+  the emulator's own interface); on such an instance, one capture (an `ObserveReadonly`, of which
+  the command takes the frame's reference alone) and the press sent on that frame, as a recorded
+  press does, the answer naming the frame (`input_frame`); elsewhere nothing is captured. When the
+  Runtime no longer holds that frame when the press names it (`input_frame_unavailable`: another
+  capture took its place, nothing sent), the command captures once more and sends the press once
+  more under the same lease, once (`input_frame_captured_twice`); a second refusal is the answer.
+  A status read that fails stops no press: the press is sent without a frame, as before this
+  slice (an input that needs one is refused by the Runtime itself, `nemu_input_frame_required`),
+  and the answer's `touch_backend_warnings` says so (a refusal's is in its `details`, the
+  Runtime's refusal of that press too). Such an instance sends no key and no text:
+  `ac_key` and `ac_text` answer `nemu_input_capability_unsupported` there, nothing sent, and the
+  Runtime has no other way to send a key on it; the refusal's `details.hint` says what to press
+  instead (the screen's own control: `ac_tap`, or `ac_do` with `capture` on a package's element).
+  `ac_tap_target` and
+  `ac_navigate` only plan on a saved frame (`scene` with `dry_run`) and press nothing anywhere,
+  as their command line does: `ac_do` with `capture` and the package's element, or `tap` with a
+  point, presses a target on an instance, and `ac_ensure` with `capture` routes one to a page.
 - **Recordings** (Workflow #449 REC-ARCH, 0.12.59; `contracts/lab-recording.md`, "Archiving"). A
   recording belongs to the instance: while one is active, every call with `record` on that
   instance, whoever sends it, adds a step to it, and its answer's `record` names the recording it
@@ -295,6 +365,34 @@ naming this file.
   hold the point pressed (`record_click_outside_step_rect` with `recorded_point_outside_box`
   otherwise) and the press stays as recorded; `ac_record_stop` then writes the package of the
   boxes, and a later `record archive` lists the box as the press's `rect`.
+  Workflow #392 DA-5cd (0.12.67; `contracts/lab-recording.md`, "A recording's size"): a recording
+  is made at the base size, 1280x720. `ac_record_start` first reads the instance's display as the
+  Runtime last observed it (the device frame of its latest task) and refuses one of another size,
+  `record_display_not_base` with `frame_width`, `frame_height`, `base_width` and `base_height`,
+  before anything is written or paused; its answer names `display_last_observed` (`{width,
+  height, observed_at_unix_ms}`, not the display now; `null` when none was observed). That is an
+  early warning: the start writes the base size in the recording's header, and the recording's
+  first frame of any other size is refused `record_display_not_base` before it is stored, nothing
+  written. `ac_record_stop` refuses a recording whose frames are not the base size,
+  `record_size_not_base`, and converts nothing; `ac_record_ready` lists it first as
+  `size_not_base`, a frame added to it is refused with the same code, and `ac_record_status`,
+  `ac_record_frames` and `ac_record_archive` read it as before: archive it and record again. The
+  train of DA-5ab and DA-5cd: every tool that records (`ac_tap`, `ac_swipe` and `ac_long_tap` with
+  `record`, `ac_do` and `ac_lab_observe` with `record`) judges the recording and the frame it took
+  before it sends or writes anything, with these codes and `record_frame_size_mismatch` for a
+  frame of another size than the recording already has; nothing is pressed first.
+- **Offline scenes of another size** (Workflow #392 DA-5cd, 0.12.67, as the train of DA-5ab and
+  DA-5cd leaves it; `contracts/display-adapter.md` section 12). `ac_recognize`, `ac_detect_page`,
+  `ac_current_page`, `ac_is_visible`, `ac_lab_observe` on a saved scene, `ac_tap_target` and
+  `ac_navigate` with `dry_run`, and the offline dry runs and waits of `ac_do`, `ac_ensure` and
+  `ac_wait`, take a scene of another size exactly as the live observation takes a frame of that
+  size, by the same function: a scene of the package's ratio, not smaller and in its orientation
+  (1600x900, 1920x1080, 3840x2160 for 1280x720), is reduced to the package's base, every rectangle
+  and point of the answer is the base's, and the answer names `frame_coordinates` in the base form
+  (`{space: "base", base_pixels, reduced_from, orientation, applies_to}`, `reduced_from` the
+  scene's own size). A scene of the base's size answers as before. Any other scene is refused
+  `lab_scene_size_unsupported` (`display_problem`, `frame_width`, `frame_height`, `base_width`,
+  `base_height`); a live capture the map cannot take is `display_map_unresolved` instead.
 - **Adoption** (Workflow #464 P1, 0.12.61; `contracts/standard-pack-authoring.md`).
   `ac_standard_pack_adopt` (`repo`, `record_id` or `package`, `decide`, or `held_reason` with an
   optional `held_reference`, `replace`, `state_dir`) makes a stopped recording's package, or any

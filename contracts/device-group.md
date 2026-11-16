@@ -1125,7 +1125,9 @@ of a device group of several:
     under the request, projected as `lease_busy`; so is the dedicated lease of its own connection
     preparation at the start, recorded once as that preparation's failure, which leaves the member
     unavailable. Such a member comes back by itself (fix rounds 1 and 2): once the hold has ended
-    and the device is free (no lease holds it, no claim waits, no takeover cooldown runs), the
+    and the device is idle (no lease holds it, no takeover cooldown runs, and no entry of its
+    queue is eligible now, each by its own member's gate, so that an entry parked behind its own
+    member's closed gate keeps nothing back; the train's fix round 1), the
     lease sweep only queues, as it queues a fence's recheck, one self-check claim of the Runtime's
     own for it, and the device's worker makes the start's preparation on that claim's key
     (`queue_members_after_device_hold`, `run_held_start_preparation`); the sweep waits for no
@@ -1136,8 +1138,10 @@ of a device group of several:
     preparation of it is granted its key or lease (memory only). A preparation that fails is
     recorded as every preparation is and leaves the member unavailable, and nothing queues it
     again (its ladder, a person's self-check or resume, or a restart prepares it); a claim the
-    queue refuses is recorded once and is queued again only after another member's hold that
-    stands by then has ended;
+    queue refuses is recorded once, and is queued again once another member's hold has ended only
+    when its refusal is `device_held_for_member_close` (the claim is a self-check, an operator's,
+    which a hold that came back refuses at once; read from the refusal's own code since the
+    train's fix round 1);
   - an operator's claim of another member that met the device's admission guard taken waits in
     the queue instead of being refused, held in its place; when its wait ends while the hold
     stands, its refusal `lease_queue_expired` names the hold as its cause

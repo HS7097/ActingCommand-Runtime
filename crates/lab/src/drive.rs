@@ -4,7 +4,9 @@ use crate::readonly::{
     detect_current_page, load_evaluator, load_page_detector, needs_detection, recognition_scene,
     rect_response, target_evaluation_response,
 };
-use crate::{Clock, Lab, LabPorts, SemanticInputExecutor, SemanticLedgerContext};
+use crate::{
+    Clock, Lab, LabPorts, SemanticInputExecutor, SemanticLedgerContext, package_base, scene_in_base,
+};
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::Code;
 use actingcommand_contract::{EnvResolved, LabError, LabResult};
@@ -23,6 +25,15 @@ use actingcommand_recognition_pack::{
 use serde_json::{Value, json};
 use std::time::{Duration, Instant};
 
+/// Workflow #434 LW-1 (register §1.435): the refusal of `tap-target` without `--dry-run`. The
+/// command plans on a saved scene only (actinglab refuses `--capture`, the retired legacy semantic
+/// capture, before this code runs), and the text names what presses a package's target on an
+/// instance.
+const TAP_TARGET_PLANS_ONLY: &str = "tap-target only plans on a saved scene (--dry-run with --scene) and presses nothing; to press a package's target on an instance use do --capture with --package and the target, an element, or --tap x,y";
+/// Workflow #434 LW-1: the refusal of `navigate` without `--dry-run`, which plans a route on a saved
+/// scene only; the text names what routes an instance to a page.
+const NAVIGATE_PLANS_ONLY: &str = "navigate only plans a route on a saved scene (--dry-run with --scene) and presses nothing; to route an instance to a page use ensure --capture with --package and --to";
+
 impl<P: LabPorts> Lab<P> {
     pub fn tap_target(
         &mut self,
@@ -32,10 +43,11 @@ impl<P: LabPorts> Lab<P> {
         if !request.allow_destructive {
             reject_dangerous_semantic_id("target", &request.target)?;
         }
+        // Workflow #434 LW-1 (register §1.435): actinglab refuses `--capture` here (the legacy
+        // semantic capture is retired), so this command only plans; the refusal names what
+        // presses a package's target on an instance.
         if !request.dry_run && !request.capture_requested {
-            return Err(LabError::usage(
-                "tap-target real execution requires --capture; use --dry-run with --scene for offline planning",
-            ));
+            return Err(LabError::usage(TAP_TARGET_PLANS_ONLY));
         }
 
         let (evaluator, env_resolved) = load_evaluator(self, &mut request.input)?;
@@ -52,6 +64,15 @@ impl<P: LabPorts> Lab<P> {
         }
 
         let scene = recognition_scene(self, &mut request.input)?;
+        // Workflow #392 DA-5cd: a dry run plans in the package's coordinate space, on the scene
+        // reduced to it when it is a pure scale of it; a press keeps the scene as it was given.
+        // The train of DA-5: by the live observation's own reduction, and the answer names the
+        // base it was reduced to (`frame_coordinates`).
+        let (scene, frame_coordinates) = if request.dry_run {
+            scene_in_base(package_base(&evaluator), scene)?
+        } else {
+            (scene, None)
+        };
         let evaluation = evaluator
             .evaluate_target(&scene, &request.target)
             .map_err(|error| LabError::usage(error.to_string()))?;
@@ -133,6 +154,7 @@ impl<P: LabPorts> Lab<P> {
                 safety_gate: "navigation_only_default".to_string(),
                 device: None,
                 env_resolved,
+                frame_coordinates,
             }
         } else {
             let input = SemanticInput::Tap {
@@ -167,6 +189,7 @@ impl<P: LabPorts> Lab<P> {
                 safety_gate: "navigation_only_default".to_string(),
                 device: Some(device),
                 env_resolved,
+                frame_coordinates: None,
             }
         };
         Ok(response)
@@ -177,10 +200,10 @@ impl<P: LabPorts> Lab<P> {
         mut request: crate::NavigateRequest,
         ledger: &mut SemanticLedgerContext,
     ) -> LabResult<crate::NavigateResponse> {
+        // Workflow #434 LW-1: as `tap-target`, it only plans; the refusal names what routes an
+        // instance.
         if !request.dry_run && !request.capture_requested {
-            return Err(LabError::usage(
-                "navigate real execution requires --capture; use --dry-run with --scene for route planning",
-            ));
+            return Err(LabError::usage(NAVIGATE_PLANS_ONLY));
         }
 
         let (evaluator, env_resolved) = load_evaluator(self, &mut request.input)?;
@@ -194,6 +217,15 @@ impl<P: LabPorts> Lab<P> {
         record_env_resolved(ledger, "navigate", &env_resolved)?;
         let graph = load_navigation_graph(request.input.resources.loaded_bundle())?;
         let scene = recognition_scene(self, &mut request.input)?;
+        // Workflow #392 DA-5cd: a dry run plans in the package's coordinate space, on the scene
+        // reduced to it when it is a pure scale of it; a route that presses keeps it as given.
+        // The train of DA-5: by the live observation's own reduction, and the answer names the
+        // base it was reduced to (`frame_coordinates`).
+        let (scene, frame_coordinates) = if request.dry_run {
+            scene_in_base(package_base(&evaluator), scene)?
+        } else {
+            (scene, None)
+        };
         let start = detect_current_page(
             &evaluator,
             &detector,
@@ -244,6 +276,7 @@ impl<P: LabPorts> Lab<P> {
                 steps: None,
                 safety_gate: None,
                 env_resolved,
+                frame_coordinates,
             });
         }
 
@@ -284,6 +317,7 @@ impl<P: LabPorts> Lab<P> {
                 steps: None,
                 safety_gate: Some("navigation_only_default".to_string()),
                 env_resolved,
+                frame_coordinates,
             });
         }
 
@@ -319,6 +353,7 @@ impl<P: LabPorts> Lab<P> {
             steps: Some(steps),
             safety_gate: Some("navigation_only_default".to_string()),
             env_resolved,
+            frame_coordinates: None,
         })
     }
 }
@@ -678,6 +713,7 @@ fn standby_page_response() -> crate::PageDetectionResponse {
         env_resolved: Vec::new(),
         needs_detection: None,
         recognition_coverage: None,
+        frame_coordinates: None,
     }
 }
 

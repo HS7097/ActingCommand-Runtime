@@ -415,6 +415,44 @@ pub fn handed_words(
     ))
 }
 
+/// Workflow #434 LW-1 (register §1.435): the refusal the parser of a handed command line gives
+/// `argv` (as [`handed_words`] or [`offline_words`] built it), if any, without running the command:
+/// its words and flags read as the command reads them before it connects, nothing connected, read
+/// or written (`inline`: `remedy set`'s rows go beside the words). A front's test walks every
+/// property of every tool of the core rows handed so through it. A command line no parser of this
+/// crate reads is refused as its first word, `unknown`, as [`answer`] refuses a word no command
+/// takes; an empty one `required`. Fix round 1: test builds and the feature `test-hooks` only (the
+/// MCP server's dev-dependency turns it on for its gate); a production build has none.
+#[cfg(any(test, feature = "test-hooks"))]
+pub fn handed_refusal(argv: &[OsString], inline: bool) -> Option<Outcome> {
+    let Some(first) = argv.first() else {
+        return Some(cli_line::usage_invalid(None, ArgumentProblem::Required));
+    };
+    let command = first.to_string_lossy();
+    match &*command {
+        "codes" => code_lookup::parse_refusal(argv),
+        capability_gap::COMMAND => capability_gap::parse_refusal(argv),
+        "packs" => packs::parse_refusal(argv),
+        "overview" => overview::parse_refusal(argv),
+        routine_summary::COMMAND => routine_summary::parse_refusal(argv),
+        events::COMMAND => events::cli_request(&argv[1..])
+            .err()
+            .map(|error| error.outcome()),
+        "runs" => run_list::parse_refusal(argv),
+        run_evidence::COMMAND => run_evidence::parse_refusal(argv),
+        "diagnose" => diagnose::parse_refusal(argv),
+        remedy::COMMAND => remedy::parse_refusal(argv, inline),
+        "observe" => observe_export::parse_refusal(argv),
+        perf_preset::COMMAND => perf_preset::parse_refusal(argv),
+        evidence_read::COMMAND => evidence_read::parse_refusal(argv),
+        devices::COMMAND => devices::parse_refusal(argv),
+        other => Some(cli_line::usage_invalid(
+            Some(other),
+            ArgumentProblem::Unknown,
+        )),
+    }
+}
+
 /// Workflow #434 LAB-5B1: the command line the row's constant `handed` gives for `params`: the
 /// command's words, then each part in its place (the state root when there is one, the install
 /// root when the program runs from one); a parameter refused while it is written is its line.

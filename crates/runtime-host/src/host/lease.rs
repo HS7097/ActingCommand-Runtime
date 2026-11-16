@@ -4156,7 +4156,10 @@ impl HostShared {
         // person's or a client's claim (an operator claim: a direct run, an input or application
         // command, a self-check, a resume, a backend switch) of a member whose device is held for
         // another member's unconfirmed close is refused at once, naming that member; the Runtime's
-        // own claims of the member wait in the device's queue, held by its gate.
+        // own routine and internal claims of the member (a ladder, a startup package, an
+        // autostart) wait in the device's queue, held by its gate. A self-check claim is of the
+        // operator's class whoever asks for it: the start preparation the lease sweep queues
+        // (`queue_held_start_preparation`) is refused here too, and its member stays owed.
         if claim.kind.class() == ClaimClass::Operator
             && let Some(held) = self.device_held_error(instance_id)?
         {

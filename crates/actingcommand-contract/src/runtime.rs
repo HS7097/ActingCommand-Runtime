@@ -6882,6 +6882,10 @@ mod gate_434_lab6s1a;
 #[cfg(test)]
 mod gate_434_lab6s1b;
 
+// Workflow #392 DA-5ab fix round 1: the check of an observation's projection frame.
+#[cfg(test)]
+mod gate_392_da5ab;
+
 // Workflow #463 S3-8: the request member `ContainedTaskRequest.variables` (`runtime-client` 11).
 #[cfg(test)]
 mod gate_463_s38;

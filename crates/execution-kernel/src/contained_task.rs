@@ -33,6 +33,8 @@ use actingcommand_contract::{TaskPhaseRefusal, validate_task_phases_located};
 // Workflow #392 DA-2a: the run's display declaration, the frame gate's scale frame.
 use actingcommand_contract::StandardPackDisplayLayout;
 use display_gate::{FramePixels, ScaleFrame};
+// Workflow #392 DA-5ab: the Lab's frames and inputs take the frame gate's own map and resample.
+pub use display_gate::{LabBaseScene, lab_display_map, lab_scene_on_base};
 // #411 A44: each candidate page's verdict (ledger revision 4, register §1.153 LR-8).
 use actingcommand_contract::{
     RecognitionCandidateScore, RecognitionCandidateScores, TASK_RECOGNITION_CANDIDATE_SCORE_LIMIT,
@@ -13554,6 +13556,9 @@ impl ClickRect {
     }
 }
 
+/// Workflow #392 DA-5ab: the frame gate takes a frame's pixels ([`display_gate`]), so only the
+/// tests build a scene from a whole frame.
+#[cfg(test)]
 fn scene_from_frame(frame: &Frame) -> Result<Scene, ContainedTaskError> {
     scene_from_pixels(frame.width, frame.height, &frame.pixels, frame.pixel_format)
 }

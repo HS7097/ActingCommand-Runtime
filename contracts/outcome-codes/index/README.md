@@ -22,9 +22,9 @@ here.
 
 | Status | Codes |
 |---|---:|
-| active | 3894 |
+| active | 3897 |
 | retired | 89 |
-| all | 3983 |
+| all | 3986 |
 
 ## Active codes by category
 
@@ -33,19 +33,19 @@ here.
 | success | 125 |
 | info | 212 |
 | warning | 156 |
-| error | 3384 |
+| error | 3387 |
 | fatal | 17 |
 
 ## Text and review of the active codes
 
 | Active codes | Codes |
 |---|---:|
-| `common_causes` and `handling` both written | 742 |
+| `common_causes` and `handling` both written | 747 |
 | one of the two written, the other `TBD` or empty | 4 |
-| neither written (`TBD` or empty) | 3148 |
+| neither written (`TBD` or empty) | 3146 |
 | `settled` | 154 |
-| `pending` | 3740 |
-| all active codes | 3894 |
+| `pending` | 3743 |
+| all active codes | 3897 |
 
 ## By owner
 
@@ -58,12 +58,12 @@ here.
 | [actinglab-mcp](actinglab-mcp.md) | 3 | 2 | 2 | 0 |
 | [actingledger](actingledger.md) | 4 | 4 | 0 | 0 |
 | [artifact-store](artifact-store.md) | 77 | 77 | 2 | 0 |
-| [contract](contract.md) | 920 | 896 | 154 | 32 |
+| [contract](contract.md) | 920 | 896 | 155 | 32 |
 | [device](device.md) | 33 | 33 | 27 | 23 |
 | [display-adapter](display-adapter.md) | 2 | 2 | 0 | 0 |
 | [execution-kernel](execution-kernel.md) | 204 | 201 | 30 | 0 |
 | [host-metrics](host-metrics.md) | 17 | 17 | 0 | 0 |
-| [lab](lab.md) | 13 | 13 | 11 | 0 |
+| [lab](lab.md) | 16 | 16 | 14 | 0 |
 | [ledger](ledger.md) | 293 | 292 | 26 | 0 |
 | [ledger-forensics](ledger-forensics.md) | 52 | 52 | 0 | 0 |
 | [mcp-entry](mcp-entry.md) | 3 | 3 | 3 | 0 |
@@ -77,9 +77,9 @@ here.
 | [runtime-client](runtime-client.md) | 211 | 209 | 5 | 0 |
 | [runtime-config](runtime-config.md) | 11 | 11 | 11 | 0 |
 | [runtime-database](runtime-database.md) | 51 | 51 | 2 | 0 |
-| [runtime-host](runtime-host.md) | 1162 | 1115 | 192 | 6 |
+| [runtime-host](runtime-host.md) | 1162 | 1115 | 193 | 6 |
 | [runtime-state](runtime-state.md) | 176 | 176 | 0 | 0 |
 | [scheduler](scheduler.md) | 14 | 14 | 0 | 0 |
 | [selection-policy](selection-policy.md) | 27 | 27 | 0 | 0 |
 | [vision-ffi](vision-ffi.md) | 4 | 4 | 1 | 0 |
-| all | 3983 | 3894 | 742 | 154 |
+| all | 3986 | 3897 | 747 | 154 |

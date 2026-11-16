@@ -110,7 +110,11 @@ impl LabInputPort for RuntimeInputBackend {
     }
 }
 
-fn device_error(error: RuntimeClientError) -> DeviceError {
+/// The device error an input's Runtime failure is answered as. Workflow #434 LW-1 fix round 1: a
+/// plain `tap`, `swipe` or `long-tap`, which sends through the Runtime's input proxy itself (it reads
+/// the frame's refusal off the client's error to send the press once more), answers its failures so
+/// too.
+pub(super) fn device_error(error: RuntimeClientError) -> DeviceError {
     let severity = if error.is_fallback_eligible() {
         DeviceErrorSeverity::Transient
     } else {
