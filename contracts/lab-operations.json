@@ -1989,16 +1989,16 @@
         {"name": "metric", "form": "option", "type": "enum:ccoeff_normed|ccorr_normed", "required": false}
       ],
       "help": "Starts a recording session for one task and pauses the instance's scheduling for it with a reason of its own; with no Runtime it starts holding nothing.",
-      "output": "as today's command, with hold: what the recording holds",
+      "output": "as today's command, with hold: what the recording holds, and display_extent: the instance's display as the Runtime knows it",
       "writes": true,
       "irreversible": false,
       "runtime": "optional",
       "entries": ["lab"],
-      "requests": ["Status", "PauseScheduling"],
+      "requests": ["InstanceFactSnapshot", "Status", "PauseScheduling"],
       "source": ["actinglab record start", "actinglab session record start", "MCP ac_record_start"],
       "slice": "LAB-2",
       "status": "planned",
-      "notes": "#463 S1-7 (contracts/lab-recording.md, A recording holds its instance): one status read; an instance not paused is paused as the pause row pauses it (drain 300s), reason lab-record-<the session's started_at_unix_ms>, kept in the session header's hold; an instance paused by another party is held by that pause and nothing is sent (foreign); with force the replaced recording's own pause is taken over. Fix round 2 (0.12.64): the session header names the own hold before PauseScheduling is sent; a pause the Runtime refuses puts the header back and starts nothing; a pause without an answer that says it was not made leaves the header and fails with the hold in its details, so that record stop or record start --force releases it; nothing listening: nothing held, hold.warnings no_runtime_listening; a Runtime that listens but does not complete the handshake, or a status refused, starts nothing; force over a header that cannot be read: hold.warnings replaced_header_unread with replaced_header.path; the start waits as the pause waits, up to the drain, the pause's checkpoint grace (30s) and the IO timeout (5s). Today's MCP server runs this command too"
+      "notes": "#463 S1-7 (contracts/lab-recording.md, A recording holds its instance): one status read; an instance not paused is paused as the pause row pauses it (drain 300s), reason lab-record-<the session's started_at_unix_ms>, kept in the session header's hold; an instance paused by another party is held by that pause and nothing is sent (foreign); with force the replaced recording's own pause is taken over. Fix round 2 (0.12.64): the session header names the own hold before PauseScheduling is sent; a pause the Runtime refuses puts the header back and starts nothing; a pause without an answer that says it was not made leaves the header and fails with the hold in its details, so that record stop or record start --force releases it; nothing listening: nothing held, hold.warnings no_runtime_listening; a Runtime that listens but does not complete the handshake, or a status refused, starts nothing; force over a header that cannot be read: hold.warnings replaced_header_unread with replaced_header.path; the start waits as the pause waits, up to the drain, the pause's checkpoint grace (30s) and the IO timeout (5s). Today's MCP server runs this command too. Workflow #392 DA-5cd (0.12.67; contracts/lab-recording.md, A recording's size): before the status read, one InstanceFactSnapshot of the instance's display.frame_extent (the device frame of its latest contained task, read from memory, no device step); a display of another size than the base size 1280x720 is refused record_display_not_base (exit 3, values frame_width, frame_height, base_width, base_height) before anything is written or paused; display_extent {width, height}, or null when the Runtime knows none or nothing listens"
     },
     {
       "name": "record mark",

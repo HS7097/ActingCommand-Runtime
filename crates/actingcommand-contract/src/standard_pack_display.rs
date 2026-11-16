@@ -23,6 +23,25 @@ use serde_json::Value;
 
 /// The game root's display declaration (model 392 §4.1).
 pub const STANDARD_PACK_DISPLAY_LAYOUT_FILE: &str = "display-layout.json";
+
+/// Workflow #392 DA-5cd: a width and a height in pixels, the base size of the standard packages.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StandardPackBaseSize {
+    pub width: u32,
+    pub height: u32,
+}
+
+/// Workflow #392 DA-5cd (`contracts/display-adapter.md` section 11, `contracts/lab-recording.md`,
+/// "A recording's size"): the base size, the `coordinate_space` every standard package declares
+/// today. Neither a package, a game root nor its `display-layout.json` declares a base of its own
+/// that the Lab could read, so this is its one home: a Lab recording is made at this size, and
+/// `record start` refuses an instance whose display the Runtime knows at another. A package keeps
+/// declaring its own `coordinate_space`, which the display adapter maps every frame onto.
+pub const STANDARD_PACK_BASE_SIZE: StandardPackBaseSize = StandardPackBaseSize {
+    width: 1280,
+    height: 720,
+};
 /// The largest nearest-correction radius, in base pixels: the bound of the declaration's shape
 /// (the correction's `dx`, `dy` stay within it), not a tunable (model 392 §1.1, §4.1).
 pub const MAX_DISPLAY_CORRECTION_RADIUS_PX: u32 = 64;

@@ -15,6 +15,17 @@
 // pixel 0 shows the page, pixel 1 the button or not, pixel 2 the capture's number. Every expected
 // value comes from those requirement lines. Packages are synthetic and neutral; the declared
 // interval is 1 ms.
+// Workflow #392 DA-5cd (register §1.437; `contracts/display-adapter.md` section 11): the client
+// forms that press nothing decide on a capture that is a pure scale of the package's coordinate
+// space as on the package's own size. The fake screen then shows its 3x1 frame enlarged by 3
+// (nearest neighbour, 9x3), which the Lab reduces back to 3x1 exactly.
+// - `da5cd_do_capture_dry_run_plans_on_a_scaled_capture`: `do --capture --dry-run` plans the same
+//   page, guard evaluation, click and coordinates on the 9x3 capture as on the 3x1 one, its answer
+//   naming `scaled_from` {9, 3}, and the 3x1 one's naming none.
+// - `da5cd_ensure_capture_dry_run_plans_on_a_scaled_capture`: `ensure --capture --dry-run` plans the
+//   same route from the same page, with `scaled_from` {9, 3}.
+// - `da5cd_wait_capture_arrives_on_a_scaled_capture`: `wait --capture --page` arrives on the same
+//   page, with `scaled_from` {9, 3}.
 
 use super::*;
 use actingcommand_contract::{
@@ -45,9 +56,17 @@ struct FakeScreen {
     script: Mutex<Vec<([u8; 3], [u8; 3])>>,
     captures: AtomicUsize,
     taps: AtomicUsize,
+    /// Workflow #392 DA-5cd: the factor each 3x1 frame is enlarged by (nearest neighbour), 0 and 1
+    /// none.
+    scale: AtomicUsize,
 }
 
 impl FakeScreen {
+    /// Workflow #392 DA-5cd: every capture from now on enlarged `factor` times.
+    fn enlarge(&self, factor: usize) {
+        self.scale.store(factor, Ordering::SeqCst);
+    }
+
     /// Shows `screens` from the next capture on, the counts starting from zero again.
     fn show(&self, screens: &[([u8; 3], [u8; 3])]) {
         *self.script.lock().expect("screen script") = screens.to_vec();
@@ -80,10 +99,17 @@ impl CaptureBackend for FakeCapture {
                 .unwrap_or((BLANK, BLANK))
         };
         let marker = (number % 256) as u8;
+        // Workflow #392 DA-5cd: each pixel a `scale` x `scale` block.
+        let scale = self.screen.scale.load(Ordering::SeqCst).max(1);
+        let pixels = [page, button, [marker; 3]];
+        let row = (0..3 * scale)
+            .flat_map(|x| pixels[x / scale])
+            .collect::<Vec<u8>>();
+        let size = u32::try_from(scale).expect("a small factor");
         Frame::from_pixels(
-            3,
-            1,
-            [page, button, [marker; 3]].concat(),
+            3 * size,
+            size,
+            row.repeat(scale),
             PixelFormat::Rgb8,
             CaptureBackendName::AdbScreencap,
         )
@@ -627,5 +653,94 @@ fn l5c_a_package_without_consensus_captures_one_frame_as_before() {
     assert_eq!(ensured["page"], PAGE_A_PAGE, "{ensured}");
     assert_eq!(lab.screen.taps(), 1, "{ensured}");
     assert_eq!(lab.screen.captures(), 3, "{ensured}");
+    lab.close();
+}
+
+/// Workflow #392 DA-5cd: the answer of `words` on the entry page with its button, captured at the
+/// package's size and enlarged 3 times: the two answers, the second naming `scaled_from` {9, 3}
+/// and the first none; nothing pressed.
+fn da5cd_answers(lab: &Lab, words: &[&str], package: &str) -> (Value, Value) {
+    let mut answers = Vec::new();
+    for factor in [1, 3] {
+        lab.screen.enlarge(factor);
+        lab.screen.show(&[(ENTRY, BUTTON)]);
+        let answer = data(&lab.run(words, package), &format!("{words:?} x{factor}"));
+        assert_eq!(lab.screen.taps(), 0, "{words:?} x{factor}: {answer}");
+        answers.push(answer);
+    }
+    let scaled = answers.pop().expect("the enlarged capture's answer");
+    let base = answers.pop().expect("the package size's answer");
+    assert!(base.get("scaled_from").is_none(), "{words:?}: {base}");
+    assert_eq!(
+        scaled["scaled_from"],
+        json!({"width": 9, "height": 3}),
+        "{words:?}: {scaled}"
+    );
+    (base, scaled)
+}
+
+/// Workflow #392 DA-5cd: `do --capture --dry-run` plans on the 9x3 capture as on the 3x1 one.
+#[test]
+fn da5cd_do_capture_dry_run_plans_on_a_scaled_capture() {
+    let lab = Lab::new();
+    let package = lab.package("single.zip", false);
+    let (base, scaled) = da5cd_answers(&lab, &["do", "ui/button", "--dry-run"], &package);
+    assert_eq!(base["state"], "planned", "{base}");
+    assert_eq!(base["page"], ENTRY_PAGE, "{base}");
+    for member in ["state", "page", "actual_click", "frame_coordinates"] {
+        assert_eq!(scaled[member], base[member], "{member}: {scaled}");
+    }
+    assert_eq!(
+        scaled["guard_result"]["evaluation"], base["guard_result"]["evaluation"],
+        "{scaled}"
+    );
+    assert_eq!(
+        scaled["frame_coordinates"]["device_pixels"],
+        json!([3, 1]),
+        "{scaled}"
+    );
+    lab.close();
+}
+
+/// Workflow #392 DA-5cd: `ensure --capture --dry-run` plans the same route on the 9x3 capture.
+#[test]
+fn da5cd_ensure_capture_dry_run_plans_on_a_scaled_capture() {
+    let lab = Lab::new();
+    let package = lab.package("single.zip", false);
+    let (base, scaled) = da5cd_answers(
+        &lab,
+        &["ensure", "--to", PAGE_A_PAGE, "--dry-run"],
+        &package,
+    );
+    assert_eq!(base["state"], "planned", "{base}");
+    assert_eq!(base["page"], ENTRY_PAGE, "{base}");
+    for member in ["state", "page", "to", "route", "executed"] {
+        assert_eq!(scaled[member], base[member], "{member}: {scaled}");
+    }
+    lab.close();
+}
+
+/// Workflow #392 DA-5cd: `wait --capture --page` arrives on the same page on the 9x3 capture.
+#[test]
+fn da5cd_wait_capture_arrives_on_a_scaled_capture() {
+    let lab = Lab::new();
+    let package = lab.package("single.zip", false);
+    let (base, scaled) = da5cd_answers(
+        &lab,
+        &[
+            "wait",
+            "--page",
+            ENTRY_PAGE,
+            "--timeout-ms",
+            "10000",
+            "--poll-ms",
+            "1",
+        ],
+        &package,
+    );
+    assert_eq!(base["state"], "arrived", "{base}");
+    for member in ["state", "page", "matched"] {
+        assert_eq!(scaled[member], base[member], "{member}: {scaled}");
+    }
     lab.close();
 }

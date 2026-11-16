@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use crate::env_detection::load_scene;
-use crate::{Lab, LabPorts};
+use crate::{Lab, LabPorts, frames_in_base, package_base};
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::{EnvResolved, LabError, LabErrorClass, LabResult};
 use actingcommand_execution_kernel::{ReadonlyRecognitionEngine, ReadonlyRecognitionError};
@@ -14,23 +14,30 @@ pub(crate) use actingcommand_execution_kernel::{
 };
 
 impl<P: LabPorts> Lab<P> {
+    /// Workflow #392 DA-5cd: the frames are evaluated in the package's coordinate space, a pure
+    /// scale of it reduced to it first (`display_base`); the answer names what it was reduced from.
     pub fn recognize(
         &mut self,
         mut request: crate::RecognizeRequest,
     ) -> LabResult<crate::RecognizeResponse> {
         let (evaluator, env_resolved) = load_evaluator(self, &mut request.input)?;
+        let base = package_base(&evaluator);
         let engine = ReadonlyRecognitionEngine::new(evaluator, env_resolved);
-        let frames = if engine
+        let (frames, scaled_from) = if engine
             .target_requires_scene(&request.target)
             .map_err(readonly_error)?
         {
-            recognition_frames(self, &mut request.input)?
+            frames_in_base(base, recognition_frames(self, &mut request.input)?)?
         } else {
-            Vec::new()
+            (Vec::new(), None)
         };
-        engine
+        let mut response = engine
             .recognize_frames(&request.target, &frame_refs(&frames))
-            .map_err(readonly_error)
+            .map_err(readonly_error)?;
+        if let crate::RecognizeResponse::Evaluated(evaluated) = &mut response {
+            evaluated.scaled_from = scaled_from;
+        }
+        Ok(response)
     }
 
     pub fn detect_page(
@@ -42,15 +49,20 @@ impl<P: LabPorts> Lab<P> {
             &request.input,
             "detect-page requires --pages or --resource-root --game",
         )?;
+        let base = package_base(&evaluator);
         let engine = ReadonlyRecognitionEngine::new(evaluator, env_resolved);
-        let frames = if request.check_pages {
-            Vec::new()
+        let (frames, scaled_from) = if request.check_pages {
+            (Vec::new(), None)
         } else {
-            recognition_frames(self, &mut request.input)?
+            frames_in_base(base, recognition_frames(self, &mut request.input)?)?
         };
-        engine
+        let mut output = engine
             .detect_page_frames(&detector, &frame_refs(&frames), request.check_pages)
-            .map_err(readonly_error)
+            .map_err(readonly_error)?;
+        if let crate::DetectPageResponse::Detection(detection) = &mut output.response {
+            detection.scaled_from = scaled_from;
+        }
+        Ok(output)
     }
 
     pub fn current_page(
@@ -62,10 +74,15 @@ impl<P: LabPorts> Lab<P> {
             &request.input,
             "semantic page commands require --pages or --resource-root --game",
         )?;
-        let frames = recognition_frames(self, &mut request.input)?;
-        ReadonlyRecognitionEngine::new(evaluator, env_resolved)
+        let (frames, scaled_from) = frames_in_base(
+            package_base(&evaluator),
+            recognition_frames(self, &mut request.input)?,
+        )?;
+        let mut response = ReadonlyRecognitionEngine::new(evaluator, env_resolved)
             .current_page_frames(&detector, &frame_refs(&frames))
-            .map_err(readonly_error)
+            .map_err(readonly_error)?;
+        response.scaled_from = scaled_from;
+        Ok(response)
     }
 
     pub fn is_visible(
@@ -73,18 +90,21 @@ impl<P: LabPorts> Lab<P> {
         mut request: crate::IsVisibleRequest,
     ) -> LabResult<crate::IsVisibleResponse> {
         let (evaluator, env_resolved) = load_evaluator(self, &mut request.input)?;
+        let base = package_base(&evaluator);
         let engine = ReadonlyRecognitionEngine::new(evaluator, env_resolved);
-        let frames = if engine
+        let (frames, scaled_from) = if engine
             .target_requires_scene(&request.target)
             .map_err(readonly_error)?
         {
-            recognition_frames(self, &mut request.input)?
+            frames_in_base(base, recognition_frames(self, &mut request.input)?)?
         } else {
-            Vec::new()
+            (Vec::new(), None)
         };
-        engine
+        let mut response = engine
             .is_visible_frames(&request.target, &frame_refs(&frames))
-            .map_err(readonly_error)
+            .map_err(readonly_error)?;
+        response.scaled_from = scaled_from;
+        Ok(response)
     }
 }
 

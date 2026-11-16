@@ -16,6 +16,9 @@
 
 mod codes;
 mod context;
+// Workflow #392 DA-5cd: an offline scene that is a pure scale of its package, and a recording made
+// on a display that is not the base size.
+mod display_base;
 mod drive;
 mod drive_api;
 mod env_api;
@@ -115,6 +118,9 @@ mod touch;
 
 pub use codes::LabCode;
 pub use context::*;
+pub use display_base::{
+    frames_in_base, is_base_size, package_base, record_display_not_base, scene_in_base, scene_png,
+};
 pub use drive::*;
 pub use drive_api::*;
 pub use env_api::*;

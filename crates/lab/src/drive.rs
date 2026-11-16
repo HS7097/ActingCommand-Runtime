@@ -4,7 +4,9 @@ use crate::readonly::{
     detect_current_page, load_evaluator, load_page_detector, needs_detection, recognition_scene,
     rect_response, target_evaluation_response,
 };
-use crate::{Clock, Lab, LabPorts, SemanticInputExecutor, SemanticLedgerContext};
+use crate::{
+    Clock, Lab, LabPorts, SemanticInputExecutor, SemanticLedgerContext, package_base, scene_in_base,
+};
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::Code;
 use actingcommand_contract::{EnvResolved, LabError, LabResult};
@@ -52,6 +54,13 @@ impl<P: LabPorts> Lab<P> {
         }
 
         let scene = recognition_scene(self, &mut request.input)?;
+        // Workflow #392 DA-5cd: a dry run plans in the package's coordinate space, on the scene
+        // reduced to it when it is a pure scale of it; a press keeps the scene as it was given.
+        let (scene, scaled_from) = if request.dry_run {
+            scene_in_base(package_base(&evaluator), scene)?
+        } else {
+            (scene, None)
+        };
         let evaluation = evaluator
             .evaluate_target(&scene, &request.target)
             .map_err(|error| LabError::usage(error.to_string()))?;
@@ -133,6 +142,7 @@ impl<P: LabPorts> Lab<P> {
                 safety_gate: "navigation_only_default".to_string(),
                 device: None,
                 env_resolved,
+                scaled_from,
             }
         } else {
             let input = SemanticInput::Tap {
@@ -167,6 +177,7 @@ impl<P: LabPorts> Lab<P> {
                 safety_gate: "navigation_only_default".to_string(),
                 device: Some(device),
                 env_resolved,
+                scaled_from: None,
             }
         };
         Ok(response)
@@ -194,6 +205,13 @@ impl<P: LabPorts> Lab<P> {
         record_env_resolved(ledger, "navigate", &env_resolved)?;
         let graph = load_navigation_graph(request.input.resources.loaded_bundle())?;
         let scene = recognition_scene(self, &mut request.input)?;
+        // Workflow #392 DA-5cd: a dry run plans in the package's coordinate space, on the scene
+        // reduced to it when it is a pure scale of it; a route that presses keeps it as given.
+        let (scene, scaled_from) = if request.dry_run {
+            scene_in_base(package_base(&evaluator), scene)?
+        } else {
+            (scene, None)
+        };
         let start = detect_current_page(
             &evaluator,
             &detector,
@@ -244,6 +262,7 @@ impl<P: LabPorts> Lab<P> {
                 steps: None,
                 safety_gate: None,
                 env_resolved,
+                scaled_from,
             });
         }
 
@@ -284,6 +303,7 @@ impl<P: LabPorts> Lab<P> {
                 steps: None,
                 safety_gate: Some("navigation_only_default".to_string()),
                 env_resolved,
+                scaled_from,
             });
         }
 
@@ -319,6 +339,7 @@ impl<P: LabPorts> Lab<P> {
             steps: Some(steps),
             safety_gate: Some("navigation_only_default".to_string()),
             env_resolved,
+            scaled_from: None,
         })
     }
 }
@@ -678,6 +699,7 @@ fn standby_page_response() -> crate::PageDetectionResponse {
         env_resolved: Vec::new(),
         needs_detection: None,
         recognition_coverage: None,
+        scaled_from: None,
     }
 }
 

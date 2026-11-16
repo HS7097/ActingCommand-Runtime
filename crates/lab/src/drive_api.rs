@@ -35,6 +35,10 @@ pub struct TapTargetResponse {
     pub device: Option<SemanticDeviceResponse>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub env_resolved: Vec<EnvResolved>,
+    /// Workflow #392 DA-5cd: the size of the scene a dry run was given, when it was reduced to the
+    /// package's coordinate space before anything was evaluated.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scaled_from: Option<crate::SceneExtentResponse>,
 }
 
 pub struct NavigateRequest {
@@ -67,6 +71,10 @@ pub struct NavigateResponse {
     pub safety_gate: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub env_resolved: Vec<EnvResolved>,
+    /// Workflow #392 DA-5cd: the size of the scene a dry run was given, when it was reduced to the
+    /// package's coordinate space before anything was evaluated.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scaled_from: Option<crate::SceneExtentResponse>,
 }
 
 #[derive(Debug, Clone, Serialize)]

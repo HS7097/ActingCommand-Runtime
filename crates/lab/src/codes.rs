@@ -65,6 +65,17 @@ actingcommand_contract::outcome_codes! {
         /// (`remove_inserted`), cannot be inserted or given up (key `optional_after_problem`:
         /// why); the command is refused and nothing is written (exit 3; actinglab details `step`).
         RecordOptionalAfterInvalid => "record_optional_after_invalid": error / none,
+        /// Error. Workflow #392 DA-5cd: an offline scene is neither of its package's
+        /// `coordinate_space` nor a pure scale of it the display adapter admits for a run (keys
+        /// `display_problem`: why, `frame_width`, `frame_height`: the scene's size, `base_width`,
+        /// `base_height`: the package's); nothing is evaluated (exit 2).
+        LabSceneSizeUnsupported => "lab_scene_size_unsupported": error / none,
+        /// Error. Workflow #392 DA-5cd: `record start` on an instance whose display the Runtime
+        /// knows at another size than the base size, or `record stop` of a recording whose frames
+        /// show a larger display of the base size's ratio (keys `frame_width`, `frame_height`: the
+        /// display's size, `base_width`, `base_height`: the base size); nothing is written, and a
+        /// refused start holds nothing (exit 3).
+        RecordDisplayNotBase => "record_display_not_base": error / none,
     }
 }
 
@@ -324,6 +335,10 @@ actingcommand_contract::outcome_vocabulary! {
         /// An ending's page reuses a mark that is no mark of an effective step
         /// (`record_mark_rejected`, `reuse_source_missing`).
         EndingMarkMissing => "ending_mark_missing",
+        /// Workflow #392 DA-5cd: the recording's frames show a larger display of the base size's
+        /// ratio, a recording made on a display that is not the base size
+        /// (`record_display_not_base`).
+        DisplayNotBase => "display_not_base",
     }
 }
 

@@ -183,6 +183,7 @@ impl ReadonlyRecognitionEngine {
                     .flatten(),
                 env_resolved: self.env_resolved.clone(),
                 recognition_coverage: recognition_coverage(&self.evaluator, frames.len()),
+                scaled_from: None,
             },
         )))
     }
@@ -295,6 +296,7 @@ impl ReadonlyRecognitionEngine {
                 .flatten(),
             env_resolved: self.env_resolved.clone(),
             recognition_coverage: recognition_coverage(&self.evaluator, frames.len()),
+            scaled_from: None,
         })
     }
 }
@@ -395,6 +397,7 @@ pub fn detect_current_page_frames(
             .flatten(),
         env_resolved,
         recognition_coverage: recognition_coverage(evaluator, frames.len()),
+        scaled_from: None,
     })
 }
 
@@ -563,6 +566,18 @@ pub struct RecognizeEvaluatedResponse {
     /// #411 Lab B-2: present when the pack declares target consensus.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recognition_coverage: Option<RecognitionCoverageResponse>,
+    /// Workflow #392 DA-5cd: present when the scene was reduced to the package's coordinate space.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scaled_from: Option<SceneExtentResponse>,
+}
+
+/// Workflow #392 DA-5cd (`contracts/display-adapter.md` section 11): the size of the scene an
+/// offline answer was given, when the Lab reduced it to its package's coordinate space before it
+/// evaluated anything; every rectangle and point of the answer is in that coordinate space.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct SceneExtentResponse {
+    pub width: u32,
+    pub height: u32,
 }
 
 /// #411 Lab B-2: the frames an offline answer was given (`provided_frames`) and the most any
@@ -605,6 +620,9 @@ pub struct IsVisibleResponse {
     /// #411 Lab B-2: present when the pack declares target consensus.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recognition_coverage: Option<RecognitionCoverageResponse>,
+    /// Workflow #392 DA-5cd: present when the scene was reduced to the package's coordinate space.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scaled_from: Option<SceneExtentResponse>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -626,6 +644,9 @@ pub struct PageDetectionResponse {
     /// #411 Lab B-2: present when the pack declares target consensus.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recognition_coverage: Option<RecognitionCoverageResponse>,
+    /// Workflow #392 DA-5cd: present when the scene was reduced to the package's coordinate space.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scaled_from: Option<SceneExtentResponse>,
 }
 
 #[derive(Debug, Clone, Serialize)]

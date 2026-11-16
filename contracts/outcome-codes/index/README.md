@@ -22,9 +22,9 @@ here.
 
 | Status | Codes |
 |---|---:|
-| active | 3889 |
+| active | 3891 |
 | retired | 88 |
-| all | 3977 |
+| all | 3979 |
 
 ## Active codes by category
 
@@ -33,19 +33,19 @@ here.
 | success | 125 |
 | info | 212 |
 | warning | 156 |
-| error | 3379 |
+| error | 3381 |
 | fatal | 17 |
 
 ## Text and review of the active codes
 
 | Active codes | Codes |
 |---|---:|
-| `common_causes` and `handling` both written | 737 |
+| `common_causes` and `handling` both written | 739 |
 | one of the two written, the other `TBD` or empty | 4 |
 | neither written (`TBD` or empty) | 3148 |
 | `settled` | 154 |
-| `pending` | 3735 |
-| all active codes | 3889 |
+| `pending` | 3737 |
+| all active codes | 3891 |
 
 ## By owner
 
@@ -63,7 +63,7 @@ here.
 | [display-adapter](display-adapter.md) | 2 | 2 | 0 | 0 |
 | [execution-kernel](execution-kernel.md) | 204 | 201 | 30 | 0 |
 | [host-metrics](host-metrics.md) | 17 | 17 | 0 | 0 |
-| [lab](lab.md) | 13 | 13 | 11 | 0 |
+| [lab](lab.md) | 15 | 15 | 13 | 0 |
 | [ledger](ledger.md) | 293 | 292 | 26 | 0 |
 | [ledger-forensics](ledger-forensics.md) | 52 | 52 | 0 | 0 |
 | [mcp-entry](mcp-entry.md) | 3 | 3 | 3 | 0 |
@@ -82,4 +82,4 @@ here.
 | [scheduler](scheduler.md) | 14 | 14 | 0 | 0 |
 | [selection-policy](selection-policy.md) | 27 | 27 | 0 | 0 |
 | [vision-ffi](vision-ffi.md) | 4 | 4 | 1 | 0 |
-| all | 3977 | 3889 | 737 | 154 |
+| all | 3979 | 3891 | 739 | 154 |

@@ -22,9 +22,12 @@
 // - `s18_record_start_from_an_installation_holds_its_instance`: `record start` without the variable
 //   from an installation, against the runtime client's scripted Runtime on its state root (as
 //   gate_463_s17 runs it): one connection, the handshake, `status`, `pause_scheduling`; the answer's
-//   `hold.state` is `own`, with no warning.
+//   `hold.state` is `own`, with no warning. Workflow #392 DA-5cd (register §1.437), adapted as the
+//   requirement changes what it pins: the display read `instance_fact_snapshot` comes before
+//   `status`, the Runtime knowing none here.
 // No device, no clock, no sleep; made-up paths and aliases.
 
+use super::gate_392_da5cd::{DISPLAY_READ, display_known};
 use super::gate_434_lab5b4::{Isolated, printed};
 use super::*;
 use crate::cli_module::{authoring, place};
@@ -262,6 +265,7 @@ fn s18_record_start_from_an_installation_holds_its_instance() {
     let runtime = ScriptedRuntime::start(&state_root, |owner_epoch| {
         vec![
             ScriptedConnection::new()
+                .request(display_known(None))
                 .request(status(owner_epoch))
                 .request(paused),
         ]
@@ -295,6 +299,12 @@ fn s18_record_start_from_an_installation_holds_its_instance() {
     assert_eq!(record.connections.len(), 1);
     assert_eq!(
         operations(&record.connections[0]),
-        ["health", "bind_channel", "status", "pause_scheduling"]
+        [
+            "health",
+            "bind_channel",
+            DISPLAY_READ,
+            "status",
+            "pause_scheduling"
+        ]
     );
 }

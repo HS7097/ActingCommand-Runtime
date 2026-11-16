@@ -274,6 +274,25 @@ naming this file.
   hold the point pressed (`record_click_outside_step_rect` with `recorded_point_outside_box`
   otherwise) and the press stays as recorded; `ac_record_stop` then writes the package of the
   boxes, and a later `record archive` lists the box as the press's `rect`.
+  Workflow #392 DA-5cd (0.12.67; `contracts/lab-recording.md`, "A recording's size"): a recording
+  is made at the base size, 1280x720. `ac_record_start` first reads the instance's display as the
+  Runtime knows it (the device frame of its latest task) and refuses one of another size,
+  `record_display_not_base` with `frame_width`, `frame_height`, `base_width` and `base_height`,
+  before anything is written or paused; its answer names `display_extent` (`null` when the display
+  is not known). `ac_record_stop` refuses a recording whose frames show a larger display of that
+  ratio (1920x1080, 3840x2160) with the same code and converts nothing; `ac_record_ready` lists it
+  first as `display_not_base`; `ac_record_status`, `ac_record_frames` and `ac_record_archive` read
+  it as before.
+- **Offline scenes of another size** (Workflow #392 DA-5cd, 0.12.67;
+  `contracts/display-adapter.md` section 11). `ac_recognize`, `ac_detect_page`, `ac_current_page`,
+  `ac_is_visible`, `ac_lab_observe` on a saved scene, `ac_tap_target` and `ac_navigate` with
+  `dry_run`, and the dry runs and waits of `ac_do`, `ac_ensure` and `ac_wait`, take a scene that is
+  a pure scale of the package's `coordinate_space` whose double is a whole number (3/2, 2, 5/2, 3:
+  1920x1080 or 3840x2160 for 1280x720): it is reduced to the coordinate space as a run reduces a
+  frame, every rectangle and point of the answer is in the coordinate space, and the answer names
+  `scaled_from`, the scene's own size. A scene of the coordinate space answers as before. Any other
+  scene is refused `lab_scene_size_unsupported` (`display_problem`, `frame_width`, `frame_height`,
+  `base_width`, `base_height`).
 - **Adoption** (Workflow #464 P1, 0.12.61; `contracts/standard-pack-authoring.md`).
   `ac_standard_pack_adopt` (`repo`, `record_id` or `package`, `decide`, or `held_reason` with an
   optional `held_reference`, `replace`, `state_dir`) makes a stopped recording's package, or any

@@ -682,8 +682,9 @@ fn run_session_record_inner(
             // #463 S1-7 (`contracts/lab-recording.md`, "A recording holds its instance"): the
             // recording holds its instance; fix round 2: `take` writes the session header naming
             // the hold before it asks the Runtime to pause, and puts it back when the Runtime
-            // refuses the pause.
-            let mut hold_answer = record_hold::take(
+            // refuses the pause. Workflow #392 DA-5cd ("A recording's size"): before both, it
+            // refuses a display the Runtime knows at another size than the base size.
+            let (mut hold_answer, display_extent) = record_hold::take(
                 &record_path,
                 &mut record,
                 replaced
@@ -710,7 +711,8 @@ fn run_session_record_inner(
                 "lab_recording": lab_recording,
                 "record_flag_state_dir": flag_state_dir,
                 "record_flag_reachable": reachable,
-                "hold": hold_answer
+                "hold": hold_answer,
+                "display_extent": display_extent
             }))
         }
         "status" => Ok(json!({

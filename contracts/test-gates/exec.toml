@@ -3644,3 +3644,26 @@ tests = [
     "actingcommand-actinglab::runtime_input_proxy::s19_the_retry_after_input_frame_unavailable_keeps_the_one_lease",
 ]
 incident = ["#463 S1-9"]
+
+# Workflow #392 DA-5cd (0.12.67; register §1.437; brief rd-1116/brief-392-da5cd-offline-scale-and-record-refusal.md; study rd-1116/report-392-lab-on-mapped-display-study.md, its slices (b) and (c); contracts/display-adapter.md section 11, contracts/lab-recording.md, "A recording's size"): offline recognition takes a scene that is a pure scale of its package's coordinate space, and a recording is refused on a display that is not the base size. On actinglab's command line with a synthetic 8x4 package in 2x2 blocks, one test per offline command (observe, do --dry-run, ensure --dry-run and wait on saved scenes, recognize, is-visible, detect-page, current-page, tap-target --dry-run, navigate --dry-run): the frame enlarged 3 times (24x12) and 3/2 times (12x6) by nearest neighbour answers as the 8x4 frame, its identifiers, times and scene path aside, naming scaled_from with its size; the 8x4 frame's answer names none; recognize's enlarged answer is the 8x4 one and the member; 8x6 (another ratio), 4x2 (smaller) and 10x5 (5/4) are each refused lab_scene_size_unsupported, exit 2, with display_problem layout_undeclared, scale_below_base and input_scale_unsupported, the scene's size and the package's (1). The Lab's --capture client forms on the Runtime host over a fake instance whose 3x1 frame is enlarged 3 times: do --capture --dry-run, ensure --capture --dry-run and wait --capture answer as on the 3x1 frame with scaled_from 9x3, pressing nothing (2). record start against the scripted Runtime that knows the instance's display at 1920x1080: record_display_not_base with the display's size and the base size 1280x720, the wire the handshake and instance_fact_snapshot only (the instance not held), no session header, no recording, no file but the lock's; at 1280x720 the start holds the instance as before, display_extent 1280x720 (3). A recording whose frames are 1920x1080: record ready lists display_not_base first, record stop refuses record_display_not_base and writes nothing, record status reads it, record archive archives it (4).
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::tests::gate_392_da5cd::da5cd_observe_takes_a_scaled_scene",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_392_da5cd::da5cd_do_dry_run_takes_a_scaled_scene",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_392_da5cd::da5cd_ensure_dry_run_takes_a_scaled_scene",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_392_da5cd::da5cd_wait_takes_a_scaled_scene",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_392_da5cd::da5cd_recognize_takes_a_scaled_scene",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_392_da5cd::da5cd_is_visible_takes_a_scaled_scene",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_392_da5cd::da5cd_detect_page_takes_a_scaled_scene",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_392_da5cd::da5cd_current_page_takes_a_scaled_scene",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_392_da5cd::da5cd_tap_target_dry_run_takes_a_scaled_scene",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_392_da5cd::da5cd_navigate_dry_run_takes_a_scaled_scene",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_lab_l5c::da5cd_do_capture_dry_run_plans_on_a_scaled_capture",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_lab_l5c::da5cd_ensure_capture_dry_run_plans_on_a_scaled_capture",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_lab_l5c::da5cd_wait_capture_arrives_on_a_scaled_capture",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_392_da5cd::da5cd_record_start_on_a_display_that_is_not_the_base_size_starts_nothing",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_392_da5cd::da5cd_record_start_on_a_display_of_the_base_size_starts_as_before",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_392_da5cd::da5cd_a_recording_of_another_display_is_listed_refused_and_still_read",
+]
+incident = ["#392 DA-5cd"]

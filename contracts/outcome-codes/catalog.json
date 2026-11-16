@@ -5387,6 +5387,9 @@
         },
         "ending_mark_missing": {
           "description": "An ending's page reuses a mark that is no mark of an effective step (record_mark_rejected, reuse_source_missing)."
+        },
+        "display_not_base": {
+          "description": "Workflow #392 DA-5cd: the recording's frames show a larger display of the base size's ratio, a recording made on a display that is not the base size (record_display_not_base)."
         }
       }
     },

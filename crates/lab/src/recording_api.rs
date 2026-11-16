@@ -6,6 +6,7 @@
 
 use crate::LabOcr;
 use crate::codes::{LabCode, ReadyCheck};
+use crate::display_base::{larger_display_of_base_ratio, record_display_not_base};
 use crate::recording::archive::{ARCHIVED, latest_manifest, read_recording};
 use crate::recording::boxes::{expanded_add, validate_boxes, with_press_click};
 use crate::recording::container::{
@@ -39,7 +40,7 @@ use crate::recording::model::{
 };
 use crate::recording::ready::{
     RecordReadyOutcome, check_item, generator_warnings, lack_items, packaged, point_press_warnings,
-    ready_outcome,
+    ready_outcome, with_display_item,
 };
 use crate::recording::select::{not_evaluated_id, validate_select_request};
 use crate::recording::steps::{
@@ -61,7 +62,7 @@ use crate::recording::{
     frames::{LoadedFrame, check_frame_size, decode_frame, read_stored_frame},
 };
 use actingcommand_contract::{
-    InputAction, InputFrameReference, LabError, LabErrorClass, LabResult,
+    InputAction, InputFrameReference, LabError, LabErrorClass, LabResult, STANDARD_PACK_BASE_SIZE,
 };
 use actingcommand_pack_containment::ContentContainer;
 use actingcommand_recognition::color_digest::{
@@ -347,8 +348,12 @@ pub fn record_ready(
         Some(artifact) if recording.status == "stopped" => regeneration_settings(artifact, options),
         _ => stop_settings(&recording, options),
     };
+    // Workflow #392 DA-5cd: a recording made on a display that is not the base size is listed
+    // first; `record stop` refuses it before its self-checks, so none of them runs.
+    let display = display_not_base(&recording);
     let (missing, checks_after) = match survey(&recording, &settings)? {
         Survey::Lacking(lacks) => (lack_items(&recording, &lacks)?, ReadyCheck::ALL.to_vec()),
+        Survey::Planned(_) if display.is_some() => (Vec::new(), ReadyCheck::ALL.to_vec()),
         Survey::Planned(plan) => match self_checks(&plan, ocr) {
             Ok(checked) => {
                 warnings.extend(generator_warnings(&checked.warnings)?);
@@ -376,10 +381,36 @@ pub fn record_ready(
     Ok(ready_outcome(
         &recording,
         session,
-        missing,
+        with_display_item(display.as_ref(), missing),
         warnings,
         &checks_after,
     ))
+}
+
+/// Workflow #392 DA-5cd (`contracts/lab-recording.md`, "A recording's size"): the refusal of a
+/// recording whose frames show a larger display of the base size's ratio, which a display that is
+/// not the base size made before `record start` refused one (`record_display_not_base`); `None`
+/// for any other recording. Nothing of it is converted: `record stop` makes no package of it, and
+/// `record status`, `record frames` and `record archive` read it as they read every recording.
+fn display_not_base(recording: &LabRecording) -> Option<LabError> {
+    let size = recording.coordinate_space?;
+    larger_display_of_base_ratio(size.width, size.height).then(|| {
+        record_display_not_base(
+            size.width,
+            size.height,
+            format!(
+                "the recording {} holds frames of {}x{}, a display that is not the base size \
+                 {}x{}; record stop makes no package of it and converts nothing: record the task \
+                 again on an instance at the base size, or keep this one as material with record \
+                 archive",
+                recording.record_id,
+                size.width,
+                size.height,
+                STANDARD_PACK_BASE_SIZE.width,
+                STANDARD_PACK_BASE_SIZE.height
+            ),
+        )
+    })
 }
 
 /// #463 S2-1: the recording `record ready` reads and its session's state as `record status` says
@@ -447,6 +478,11 @@ fn generate_and_write(
     ocr: &LabOcr,
     regenerate: bool,
 ) -> LabResult<RecordStopOutcome> {
+    // Workflow #392 DA-5cd: a recording made on a display that is not the base size builds no
+    // package, before anything is planned or written.
+    if let Some(refusal) = display_not_base(recording) {
+        return Err(refusal);
+    }
     let plan = generate_plan(recording, settings)?;
     let Checked {
         entries,

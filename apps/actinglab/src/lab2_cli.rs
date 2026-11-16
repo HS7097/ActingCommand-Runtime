@@ -34,8 +34,13 @@ mod operation;
 pub(crate) use operation::lab_operation_call_error;
 
 /// Workflow #410 item 1: the members an observe or do answer adds about its frame; Min never
-/// drops them.
-const FRAME_MEMBERS: [&str; 3] = ["frame_coordinates", "preview", "after_attachment"];
+/// drops them. Workflow #392 DA-5cd: nor the size its frame was reduced from.
+const FRAME_MEMBERS: [&str; 4] = [
+    "frame_coordinates",
+    "preview",
+    "after_attachment",
+    "scaled_from",
+];
 
 struct Lab2Ids {
     issuer: IdIssuer,
@@ -69,6 +74,9 @@ pub(super) struct Lab2Scene {
     /// #411 Lab L3: the Runtime frame the scene was captured as, which an input planned on it
     /// names (`input_with_frame`); none for a scene file.
     input_frame: Option<InputFrameReference>,
+    /// Workflow #392 DA-5cd: the size the frames were reduced from to the package's coordinate
+    /// space ([`in_package_base`]); none for frames of that size, and for frames not reduced.
+    scaled_from: Option<actingcommand_lab::SceneExtentResponse>,
 }
 
 impl Lab2Scene {
@@ -78,6 +86,37 @@ impl Lab2Scene {
             .iter()
             .chain(std::iter::once(&self.scene))
             .collect()
+    }
+}
+
+/// Workflow #392 DA-5cd (`contracts/display-adapter.md` section 11): `loaded`'s frames in the
+/// package's coordinate space: each reduced to it when it is a pure scale of it that a run admits,
+/// the frame's PNG then the reduced frame's, with the size the current frame was reduced from; a
+/// frame of that size as it is; any other refused `lab_scene_size_unsupported` before anything is
+/// evaluated. The offline frames are taken so, and the Runtime captures of a client form that
+/// presses nothing.
+fn in_package_base(loaded: Lab2Scene, evaluator: &RecognitionEvaluator) -> CliOutcome<Lab2Scene> {
+    let base = actingcommand_lab::package_base(evaluator);
+    let (scene, scaled_from) = actingcommand_lab::scene_in_base(base, loaded.scene)?;
+    let (samples, _) = actingcommand_lab::frames_in_base(base, loaded.samples)?;
+    let png = match scaled_from {
+        Some(_) => Some(actingcommand_lab::scene_png(&scene)?),
+        None => loaded.png,
+    };
+    Ok(Lab2Scene {
+        scene,
+        samples,
+        png,
+        scaled_from,
+        ..loaded
+    })
+}
+
+/// Workflow #392 DA-5cd: an answer about `scene` names the size its frame was reduced from, when
+/// it was (`scaled_from`); every rectangle and point of it is in the package's coordinate space.
+fn attach_scaled_from(payload: &mut Value, scene: &Lab2Scene) {
+    if let Some(scaled_from) = scene.scaled_from {
+        payload["scaled_from"] = json!(scaled_from);
     }
 }
 
@@ -290,6 +329,7 @@ pub(crate) fn run_observe(global: &GlobalOptions, args: &[String]) -> CliOutcome
     // Workflow #410 item 1: the scene's coordinate system, and its preview when asked.
     payload["frame_coordinates"] =
         frame::coordinates(loaded_scene.scene.width(), loaded_scene.scene.height());
+    attach_scaled_from(&mut payload, &loaded_scene);
     if flags.bool("--preview") {
         payload["preview"] = frame::scene_preview(&loaded_scene.scene, loaded_scene.png.as_deref());
     }
@@ -561,8 +601,14 @@ fn run_runtime_do(
     start_runtime_debug_operation(&session, RuntimeDebugOperation::Do)?;
     let result = (|| -> CliOutcome<Value> {
         // #411 Lab L5c: the frame set the package's target consensus needs, decided on as the
-        // offline frames are; the click and the coordinates are the current frame's.
+        // offline frames are; the click and the coordinates are the current frame's. Workflow #392
+        // DA-5cd: a dry run, which presses nothing, decides in the package's coordinate space.
         let loaded_scene = load_runtime_lab2_frames(&session, instance, &evaluator)?;
+        let loaded_scene = if dry_run {
+            in_package_base(loaded_scene, &evaluator)?
+        } else {
+            loaded_scene
+        };
         let frames = loaded_scene.frames();
         let before = detect_current_page_over(&evaluator, &detector, &frames)?;
         let evaluation = evaluate_target_over(&evaluator, &frames, target)?;
@@ -666,6 +712,7 @@ fn run_runtime_do(
                 loaded_scene.scene.height(),
             ),
         });
+        attach_scaled_from(&mut payload, &loaded_scene);
         // #411 Lab L5c: as offline `do` reports its frames (B-2 R4), only for a package that
         // declares target consensus.
         if let Some(coverage) = offline_recognition_coverage(&evaluator, frames.len()) {
@@ -732,11 +779,17 @@ fn run_runtime_ensure(
     start_runtime_debug_operation(&session, RuntimeDebugOperation::Ensure)?;
     let result = (|| -> CliOutcome<Value> {
         let target_page = canonical_navigation_page(&graph, to);
-        // #411 Lab L5c: the frame set the package's target consensus needs.
+        // #411 Lab L5c: the frame set the package's target consensus needs. Workflow #392 DA-5cd:
+        // a dry run, which presses nothing, decides in the package's coordinate space.
         let scene = load_runtime_lab2_frames(&session, instance, &evaluator)?;
+        let scene = if dry_run {
+            in_package_base(scene, &evaluator)?
+        } else {
+            scene
+        };
         let start = detect_current_page_over(&evaluator, &detector, &scene.frames())?;
         if start.matched && start.page == target_page {
-            return Ok(json!({
+            let mut payload = json!({
                 "req_id": session.correlation_id(),
                 "state": "already_at_target",
                 "instance": instance,
@@ -747,7 +800,9 @@ fn run_runtime_ensure(
                 "frame_age_ms": scene.frame_age_ms,
                 "backend": scene.backend,
                 "arbitration": runtime_scheduler_projection(false),
-            }));
+            });
+            attach_scaled_from(&mut payload, &scene);
+            return Ok(payload);
         }
         if !start.matched {
             return Err(CliError::safety_blocked(
@@ -776,7 +831,7 @@ fn run_runtime_ensure(
         }
         let route_json = route.iter().map(navigation_edge_json).collect::<Vec<_>>();
         if dry_run {
-            return Ok(json!({
+            let mut payload = json!({
                 "req_id": session.correlation_id(),
                 "state": "planned",
                 "instance": instance,
@@ -787,7 +842,9 @@ fn run_runtime_ensure(
                 "frame_age_ms": scene.frame_age_ms,
                 "backend": scene.backend,
                 "arbitration": runtime_scheduler_projection(false),
-            }));
+            });
+            attach_scaled_from(&mut payload, &scene);
+            return Ok(payload);
         }
 
         let step_timeout = parse_optional_duration_ms(flags, "--step-timeout-ms", 5_000)?;
@@ -1090,11 +1147,15 @@ fn runtime_wait_for_page(
 ) -> CliOutcome<Value> {
     let started = Instant::now();
     loop {
-        // #411 Lab L5c: each poll takes one frame set.
-        let scene = load_runtime_lab2_frames(session, instance, evaluator)?;
+        // #411 Lab L5c: each poll takes one frame set. Workflow #392 DA-5cd: a wait presses
+        // nothing and decides in the package's coordinate space.
+        let scene = in_package_base(
+            load_runtime_lab2_frames(session, instance, evaluator)?,
+            evaluator,
+        )?;
         let outcome = detect_current_page_over(evaluator, detector, &scene.frames())?;
         if outcome.matched && outcome.page == page {
-            return Ok(json!({
+            let mut payload = json!({
                 "req_id": session.correlation_id(),
                 "wf_id": session.correlation_id(),
                 "state": "arrived",
@@ -1103,7 +1164,9 @@ fn runtime_wait_for_page(
                 "elapsed_ms": started.elapsed().as_millis() as u64,
                 "frame_age_ms": scene.frame_age_ms,
                 "backend": scene.backend
-            }));
+            });
+            attach_scaled_from(&mut payload, &scene);
+            return Ok(payload);
         }
         if started.elapsed() >= timeout {
             return Err(CliError::safety_blocked(
@@ -1131,8 +1194,12 @@ fn runtime_wait_for_stable_target(
 ) -> CliOutcome<Value> {
     guard_stable_target(evaluator, target)?;
     let started = Instant::now();
-    // #411 Lab L5c: the baseline and each poll take one frame set.
-    let first = load_runtime_lab2_frames(session, instance, evaluator)?;
+    // #411 Lab L5c: the baseline and each poll take one frame set. Workflow #392 DA-5cd: a wait
+    // presses nothing and decides in the package's coordinate space.
+    let first = in_package_base(
+        load_runtime_lab2_frames(session, instance, evaluator)?,
+        evaluator,
+    )?;
     let mut previous = evaluate_target_over(evaluator, &first.frames(), target)?;
     if !previous.passed {
         return Err(CliError::safety_blocked(
@@ -1148,10 +1215,13 @@ fn runtime_wait_for_stable_target(
         })));
     }
     loop {
-        let next_scene = load_runtime_lab2_frames(session, instance, evaluator)?;
+        let next_scene = in_package_base(
+            load_runtime_lab2_frames(session, instance, evaluator)?,
+            evaluator,
+        )?;
         let current = evaluate_target_over(evaluator, &next_scene.frames(), target)?;
         if actingcommand_lab::target_evaluations_stable_for_wait(&previous, &current) {
-            return Ok(json!({
+            let mut payload = json!({
                 "req_id": session.correlation_id(),
                 "wf_id": session.correlation_id(),
                 "state": "stable",
@@ -1160,7 +1230,9 @@ fn runtime_wait_for_stable_target(
                 "frame_age_ms": next_scene.frame_age_ms,
                 "backend": next_scene.backend,
                 "evaluation": target_eval_json(&current)
-            }));
+            });
+            attach_scaled_from(&mut payload, &next_scene);
+            return Ok(payload);
         }
         if started.elapsed() >= timeout {
             return Err(CliError::safety_blocked(
@@ -1363,6 +1435,7 @@ fn load_runtime_lab2_scene(
         frame_age_ms,
         png,
         input_frame,
+        scaled_from: None,
     };
     Ok((loaded, receipt))
 }
@@ -2120,6 +2193,7 @@ pub(crate) fn run_do(global: &GlobalOptions, args: &[String]) -> CliOutcome<Valu
                 loaded_scene.scene.height(),
             ),
         });
+        attach_scaled_from(&mut payload, &loaded_scene);
         if let Some(coverage) = offline_recognition_coverage(&evaluator, frames.len()) {
             payload["recognition_coverage"] = coverage;
         }
@@ -2178,6 +2252,7 @@ pub(crate) fn run_ensure(global: &GlobalOptions, args: &[String]) -> CliOutcome<
                 "backend": scene.backend,
                 "arbitration": isolated_offline_projection(),
             });
+            attach_scaled_from(&mut payload, &scene);
             attach_env_resolved(&mut payload, &env_resolved);
             // Workflow #428 LAB-OCR-DL: the deadline the switch raised the OCR inference to.
             return super::offline_ocr::with_ocr_deadline(payload, ocr_deadline_max);
@@ -2223,6 +2298,7 @@ pub(crate) fn run_ensure(global: &GlobalOptions, args: &[String]) -> CliOutcome<
             "backend": scene.backend,
             "arbitration": isolated_offline_projection(),
         });
+        attach_scaled_from(&mut payload, &scene);
         attach_env_resolved(&mut payload, &env_resolved);
         super::offline_ocr::with_ocr_deadline(payload, ocr_deadline_max)
     })();
@@ -2943,23 +3019,28 @@ fn load_lab2_scene(
                 "offline Lab-2 CLI verbs require --scene <png>",
             ));
         };
-        return Ok(Lab2Scene {
-            scene,
-            samples: frames.into_iter().map(|(_, scene)| scene).collect(),
-            backend: if test_delay.is_some() {
-                "test_stub_capture".to_string()
-            } else {
-                "scene_file".to_string()
+        // Workflow #392 DA-5cd: a pure scale of the package's coordinate space is reduced to it.
+        return in_package_base(
+            Lab2Scene {
+                scene,
+                samples: frames.into_iter().map(|(_, scene)| scene).collect(),
+                backend: if test_delay.is_some() {
+                    "test_stub_capture".to_string()
+                } else {
+                    "scene_file".to_string()
+                },
+                source: json!({
+                    "kind": if test_delay.is_some() { "test_stub_capture" } else { "scene" },
+                    "path": scene_path.display().to_string(),
+                    "delay_ms": test_delay.map(|delay| delay.as_millis() as u64)
+                }),
+                frame_age_ms: 0,
+                png: Some(png),
+                input_frame: None,
+                scaled_from: None,
             },
-            source: json!({
-                "kind": if test_delay.is_some() { "test_stub_capture" } else { "scene" },
-                "path": scene_path.display().to_string(),
-                "delay_ms": test_delay.map(|delay| delay.as_millis() as u64)
-            }),
-            frame_age_ms: 0,
-            png: Some(png),
-            input_frame: None,
-        });
+            evaluator,
+        );
     }
     Err(CliError::usage(
         "offline Lab-2 CLI verbs require --scene <png>; use --capture for Runtime-backed mode",
@@ -3140,7 +3221,7 @@ fn wait_for_page(
         let scene = load_lab2_scene(global, flags, evaluator)?;
         let outcome = detect_current_page_over(evaluator, detector, &scene.frames())?;
         if outcome.matched && outcome.page == page {
-            return Ok(json!({
+            let mut payload = json!({
                 "req_id": ids.req_id,
                 "wf_id": ids.wf_id,
                 "state": "arrived",
@@ -3149,7 +3230,9 @@ fn wait_for_page(
                 "elapsed_ms": started.elapsed().as_millis() as u64,
                 "frame_age_ms": scene.frame_age_ms,
                 "backend": scene.backend
-            }));
+            });
+            attach_scaled_from(&mut payload, &scene);
+            return Ok(payload);
         }
         if started.elapsed() >= timing.timeout {
             let details = lab2_error_payload_for_flags(
@@ -3203,7 +3286,7 @@ fn wait_for_stable_target(
         let next_scene = load_lab2_scene(global, flags, evaluator)?;
         let current = evaluate_target_over(evaluator, &next_scene.frames(), target)?;
         if actingcommand_lab::target_evaluations_stable_for_wait(&previous, &current) {
-            return Ok(json!({
+            let mut payload = json!({
                 "req_id": ids.req_id,
                 "wf_id": ids.wf_id,
                 "state": "stable",
@@ -3212,7 +3295,9 @@ fn wait_for_stable_target(
                 "frame_age_ms": next_scene.frame_age_ms,
                 "backend": next_scene.backend,
                 "evaluation": target_eval_json(&current)
-            }));
+            });
+            attach_scaled_from(&mut payload, &next_scene);
+            return Ok(payload);
         }
         if started.elapsed() >= timing.timeout {
             let details = lab2_error_details_for_flags(
