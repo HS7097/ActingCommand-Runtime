@@ -3891,3 +3891,11 @@ tests = [
     "actingcommand-resource-tooling::lib::gate_463_s314::s314_train_an_unreadable_record_leaves_only_its_pack_not_read",
 ]
 incident = ["#463 S3-12", "#463 S3-14"]
+
+# The 0.12.68 train (#477 PC-1, #463 stage three, S3-8 and S3-9, and stage two joined in pull request #1789; register §1.444, "The 0.12.68 train"; brief rd-1116/brief-train-01268.md, point 3; contracts/package-variables.md, "What is built now, and what is not"; contracts/standard-pack-trial.md): a trial's plan of a package directory that declares one ordered variable as stage two's record stop writes it (list_item, its options item_a and item_b titled ALPHA and BRAVO, min_count 1, max_count 2, default ["item_b"]) answers the value ["item_a", "item_b"] in its plan as given, and refuses ["item_a", "item_c"] validation_failed naming --variable (not_recognised) with variable_name list_item and variable_problem keys_left_out
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-resource-tooling::lib::gate_463_s310::train_01268_a_generated_choice_variable_takes_an_allowed_order_and_refuses_another",
+]
+incident = ["#463 0.12.68 train"]

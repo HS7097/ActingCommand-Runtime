@@ -32917,7 +32917,8 @@ this section, with §1.440, §1.442 and §1.443:
   and a sentence in "What a recording still lacks: `record ready`" naming the one function; the
   row `record review`'s `output` and `notes`; the MCP manual's `ac_record_review`. No count the
   manuals carry changes (only this section adds a row). The outcome-code index, regenerated after
-  the merges, counts 3895 active codes, 88 retired, 3983 in all (`--check`: current).
+  the merges and again after those of the 0.12.68 train (§1.438 to §1.446 in one branch), counts
+  3909 active codes, 89 retired, 3998 in all (`--check`: current).
 - *Test* (`crates/lab/src/gate_463_s2_train.rs`; exec gate map row "#463 stage two, train"):
   `s2_train_each_step_reviews_exactly_its_items_of_the_one_readiness_judgement`, on §1.443's bench
   (its `Bench`, `INSTANCE`, `EVERY_CHECK` and `complete` made `pub(crate)` for it): step 2 marked as
@@ -33612,6 +33613,21 @@ merges after it.
   `apps/actinglab/src/tests/gate_463_s311.rs`
   `s311_an_unknown_result_sends_nothing_again_and_writes_no_record` (`next` is `{unconfirmed:
   no_receipt}`, no collect line). No test leaves a gate map; no golden changes.
+
+**The 0.12.68 train.** This section's branch (pull request #1789) carries the 0.12.68 train: main
+`3a17b927` (0.12.67), #477 PC-1 (§1.438) at `13712223` and #463 stage two (§1.439, §1.440, §1.442,
+§1.443) at `e564402b`, merged in that order onto this slice and stage three (§1.445, §1.446). Since
+§1.442 every choice of a generated package is an `ordered` variable whose default is the recorded
+order; this section's checks take it as they take any declared variable (the trial's plan by
+`PackageVariable::judge`, the host by `resolve_variable`). The tests above pin a refusal of an
+`ordered` value only, of another shape, so the train adds one test:
+`crates/resource-tooling/src/gate_463_s310.rs`,
+`train_01268_a_generated_choice_variable_takes_an_allowed_order_and_refuses_another` (exec gate
+map, "The 0.12.68 train"): a package directory declaring `list_item` as §1.442's own gate shows
+`record stop` writing it (options `item_a` and `item_b`, `min_count` 1, `max_count` 2, default
+`["item_b"]`); a trial's plan given `["item_a", "item_b"]` shows it `given`, and one given
+`["item_a", "item_c"]` is `validation_failed` naming `--variable` with `variable_name`
+`list_item` and `variable_problem` `keys_left_out`. No code, word, key or revision is added.
 
 ### 1.445 Slice #463 S3-12 (0.12.68): adoption shows the trial, names the offline review as what it is, and warns before enabling (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, and her rules that a package not run through on a real device stays held and that nothing is enabled without her explicit authorization; the design `rd-1115/pack-stage3-design.md`, §4.2 "S3-12", §2.1 "Missing" items 2 and 4, §2.2 "The value's source", §2.3 and §2.4; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1116/brief-463-s312-adopt-trial-review.md`, read on main `40abd08b`)
 
