@@ -150,6 +150,10 @@ mod gate_463_s310;
 #[cfg(test)]
 mod gate_463_s311;
 
+// Workflow #463 S3-14 (register §1.446): where each pack of a game root stands.
+#[cfg(test)]
+mod gate_463_s314;
+
 mod maa_task_graph;
 // Workflow #444 NOTICES-3: a notices directory on disk, held to the contract crate's rules.
 mod notices_directory;
@@ -172,6 +176,8 @@ mod standard_pack_schedule;
 mod standard_pack_ready;
 // Workflow #463 S3-10: `standard-pack trial`, its plan, its refusals and its record.
 mod standard_pack_trial;
+// Workflow #463 S3-14: `standard-pack status`, where each pack of a game root stands.
+mod standard_pack_status;
 
 pub use adopt::{
     AdoptClass, AdoptCoverage, AdoptDecision, AdoptSource, AdoptWorktree, DerivedDrift,
@@ -235,4 +241,11 @@ pub use standard_pack_trial::{
     check_trial_run, check_trial_state_dir, installed_root_containing, latest_trial_record,
     plan_standard_pack_trial, trial_record_of_run, trial_record_path, trial_records,
     write_trial_record,
+};
+// Workflow #463 S3-14: the one read of where each pack of a game root stands, and its words.
+pub use codes::{AuthorizationUnrecorded, EnabledState, PackAuthorization, StageState, TrialState};
+pub use standard_pack_status::{
+    CheckoutContent, EnabledStateCounts, MissingItem, PackEnabled, PackFormed, PackStatus,
+    PackTrial, StageStateCounts, StandardPackStatus, StandardPackStatusRequest,
+    standard_pack_status,
 };

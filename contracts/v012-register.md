@@ -31580,6 +31580,101 @@ their words; a plain press that reads the instance's status first on every insta
 Nemu-input instance at the cost of one capture (one more when the frame was lost before the press),
 and that is still sent, without a frame, when the status cannot be read.
 
+### 1.446 Slice #463 S3-14 (0.12.68): `standard-pack status` says where each pack of a game root stands (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making, whose stage three shows each package's states: formed, its running conditions met or what is missing, tried or not, enabled and under which authorization; the design `rd-1115/pack-stage3-design.md`, §2.3 "One read for one package and for a whole game root" and §4.2 "S3-14"; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1116/brief-463-s314-pack-status.md`, read on main `40abd08b`)
+
+The coordinator gave this slice 1.446. It ships in 0.12.68.
+
+**What it is.** To learn where one package stands an agent asked four places: the readiness, the
+hold's reason, the trial records and the placement journals. `actinglab standard-pack status
+--root <game root> [--repo <checkout game root>] [--package-id <id>] [--state-dir <dir>]` is the
+one read, for the part that needs no running installation
+([standard-pack-schedule.md](standard-pack-schedule.md), "Where a pack stands: `standard-pack
+status`"): per pack `formed` (`admitted`, `content_hash_prefix`), `conditions` (the readiness's
+thirteen items, by the one function), `missing` (each failing item, a hold with its reason and
+reference), `trial` (the latest record of this content, by the trial's own reader), `enabled`
+(`state` and the authorization) and `stage_state`; for the root the counts of each `stage_state` and
+each `enabled.state`. It reads only, offline, and writes nothing.
+
+**Where the code corrected the design.**
+- *The journals are not reachable.* Their reader (`crates/lab-rescue`, `install::journal`,
+  `pub(crate)` in a crate built on Windows only) cannot be reached from the module the row lives in:
+  the row's command is actinglab's own (`apps/actinglab/src/standard_pack_cli.rs`), which reaches
+  the rescue module only through its served operations, and the rescue module may not reach the
+  resource tooling, where the readiness and the trial records are read (the architecture guard
+  `production_packages_cannot_reach_resource_tooling`). So, as the work order says for this case:
+  every pack answers `enabled.authorization` `not_recorded` with `enabled.authorization_unrecorded`
+  `journals_not_read`, never an authorization inferred; the row lives in module `authoring`, beside
+  `standard-pack trial`; the journal's part moves to S3-15. The journal's reader is neither moved
+  nor copied.
+- *A fifth word of `enabled.state`, `not_judged`.* When the composer refuses `schedule.json`, the
+  readiness's S2 is not judged (`composition_refused`) and the Runtime keeps the last schedule it
+  accepted ("Last good rules"), so this root does not tell whether a pack is enabled: none of the
+  work order's four words would be true.
+- *What the readiness's answer does not name.* Its rows name neither a pack's directory nor, for a
+  maintenance-role pack that waits, whether a rule names it. `judge_readiness_and_placement`
+  (crate-internal) answers the readiness and, per pack, its directory and its `enabled.state` from
+  the classification S2 read (`Context::enabled_state`, beside `Context::supporting`), in the same
+  reading; `judge_standard_pack_readiness` answers through it, its answer unchanged.
+
+**Decided here** (the design and the work order leave them open). `--repo` is read for one thing:
+`formed.checkout`, the checkout's `packs/<package_id>` and its content prefix, `null` when nothing
+is there. `trial.state` is `passed` when the record's `end.outcome` is `success` (on whichever end;
+`matched` beside), `failed` for `failure` and `cancelled`. `stage_state` `enabled` is `enabled.state`
+`enabled` on an admitted pack; a supporting pack stands `can_be_tried`. The content of a pack whose
+S1 fails and whose directory the containment's reader cannot read is not answered (no prefix, no
+`trial`): the loader reads it by the same reader, so S1 carries the refusal; a directory of a pack
+whose S1 holds that cannot be read refuses the answer (`package_invalid`).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| S314-1 | `standard_pack_status`, `StandardPackStatusRequest`, `StandardPackStatus` and its rows | resource tooling function and answer | S3-14 | `crates/resource-tooling/src/standard_pack_status.rs` (new) | reads only |
+| S314-2 | `judge_readiness_and_placement`, `PackPlacement`, `Context::enabled_state` | crate-internal readiness entry | S3-14 | `standard_pack_ready.rs` | the readiness's judgement and answer unchanged |
+| S314-3 | the row `standard-pack status` (authoring, `runtime: offline`, `writes: false`, slice `463-S3-14`) and its command | operation table row and actinglab command | S3-14 | `contracts/lab-operations.json`, `standard_pack_cli.rs` | `engine::COMMANDS`, `own_flags::STRICT_ROWS` and `REFUSING_COMMANDS`, `words::BUILT_SLICES` and the MCP server's `ACTINGLAB_SLICES`, the help's options, the capability (`offline`, `read_only`), the dry-run declaration (`no_effect`), the command inventory (107) |
+| S314-4 | five vocabularies of the answer's members | outcome catalog (`catalog.json`, `vocabularies`) | S3-14 | `crates/resource-tooling/src/codes.rs` | no code, no key; the index holds codes only and is current |
+
+**Codes and words.** No outcome code and no key. The words, each of an answer member (none
+refuses or warns; the row answers beside `lab_operation_completed`, exit 0):
+
+| Word | The one situation |
+|---|---|
+| `stage_state` `not_admitted` | S1 does not hold |
+| `stage_state` `can_be_tried` | admitted, `enabled.state` not `enabled` |
+| `stage_state` `enabled` | admitted, `enabled.state` `enabled` |
+| `enabled_state` `enabled` | a rule names it and it is not held |
+| `enabled_state` `held` | `schedule.json` holds it, no supporting part |
+| `enabled_state` `not_placed` | no rule, no hold, no supporting part, or no `schedule.json` |
+| `enabled_state` `not_scheduled` | a supporting part no rule dispatches |
+| `enabled_state` `not_judged` | the composer refuses `schedule.json` |
+| `trial_state` `passed`, `failed`, `none` | the latest record of this content ended `success`; `failure` or `cancelled`; no record of this content |
+| `pack_authorization` `not_recorded` | no journal read names the pack |
+| `authorization_unrecorded` `journals_not_read` | the journals were not read: their reader is the rescue module's |
+
+The refusals reuse existing codes: `validation_failed` for a flag off the row, a positional word, a
+flag given twice, an option without its value, `--package-id` the root does not register (with
+`argument` `--package-id`, `argument_problem` `not_recognised`) and `--repo` that is no directory;
+`package_invalid` for a pack directory that cannot be read; `trial_record_unreadable` from the
+trial's reader; the readiness's refusals of the root. No decision reads a code.
+
+**Tests** (`crates/resource-tooling/src/gate_463_s314.rs`, gate map `contracts/test-gates/exec.toml`
+"#463 S3-14"; one installed game root of five packs inside a made-up installation whose `pack_place`
+journal names one pack in `enabled`, and three trial records written by the trial's writer): the
+held pack (`can_be_tried`, `held`, S2 alone missing with its reason and reference); a pack the
+readiness answers `ready_to_place` with the passed trial of its content (the trial's own prefix,
+request, business end and time); the pack the journal names (`enabled`, `not_recorded`,
+`journals_not_read`); a pack no journal names (the same); the counts (each word's count the rows
+with it, five in all); `package_id` (the one row as the whole answer gives it, the root's counts;
+an unknown id `validation_failed` `--package-id` `not_recognised`); a record of other content
+(counts for nothing, a later failed one included); nothing written (the installation, the root and
+the state directory byte for byte); `conditions` equal to `standard-pack ready`'s items and
+`missing` to its failing ones. No existing test changes; none leaves the gate map.
+
+**What is not changed.** The readiness's judgement and answer; the trial's records, writer and
+reader; the journals; the placement; anything on disk. No interface revision, record type, key or
+configuration key.
+
+**At deploy.** Nothing to configure. Through MCP the tool is `ac_standard_pack_status` of the
+Lab's MCP server, listed with the authoring module and served by a `serve` child.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

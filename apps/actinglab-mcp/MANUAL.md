@@ -349,6 +349,16 @@ naming this file.
   the check, and wrote nothing; with `dry_run` nothing is written in the checkout. Its `value` is
   `"pending"` or a number of the pack's own: a decision that names the origin `model` is refused
   (`value_origin_model`).
+- **Where a pack stands** (#463 S3-14, 0.12.68; `contracts/standard-pack-schedule.md`, "Where a
+  pack stands"). `ac_standard_pack_status` (`root`, `repo`, `package_id`, `state_dir`) answers, for
+  each pack of a game root, through a child and reading only: `formed` (admitted, and its content
+  hash prefix as the trial names a content), `conditions` (its readiness items as
+  `ac_standard_pack_ready` answers them) and `missing` (each failing one, a hold with its reason and
+  reference), `trial` (the latest trial of this content: `passed`, `failed` or `none`), `enabled`
+  (whether the root's schedule enables it) and `stage_state`, with the root's counts. The
+  placement journals are not read here: `enabled.authorization` is `not_recorded` with
+  `journals_not_read`, never an authorization guessed. `packs` grows with the root: an answer over
+  the budget is written whole to the export directory; `package_id` reads one pack.
 - **Busy** is `job_capacity_exhausted` with `limit_count`: a call that would start a job while
   `--jobs` jobs run (default 8), or that needs a child while all `--children` children (default 8)
   are working. It is refused, not queued, and nothing is sent: call again later. More calls at

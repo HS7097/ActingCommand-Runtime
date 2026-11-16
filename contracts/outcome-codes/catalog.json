@@ -10777,6 +10777,95 @@
           "description": "Fix round 2: the run was sent by hand on another channel than the Lab's (origin cli or ui); a trial's run is sent on the Lab's channel."
         }
       }
+    },
+    "stage_state": {
+      "description": "Where a pack stands in stage three of package making, the member stage_state of standard-pack status and the counts stage_states (Workflow #463 S3-14, contracts/standard-pack-schedule.md \"Where a pack stands\", since 0.12.68).",
+      "review": "pending",
+      "source": {
+        "file": "crates/resource-tooling/src/codes.rs",
+        "enum": "StageState"
+      },
+      "tokens": {
+        "not_admitted": {
+          "description": "Its readiness item S1 does not hold: the Runtime's loader, or standard-pack check, refuses its admission."
+        },
+        "can_be_tried": {
+          "description": "Admitted, and no rule of the root's schedule.json enables it (enabled.state is not enabled)."
+        },
+        "enabled": {
+          "description": "Admitted, and a rule of the root's schedule.json enables it (enabled.state enabled)."
+        }
+      }
+    },
+    "enabled_state": {
+      "description": "Whether the root's schedule.json enables a pack, judged from the classification its readiness item S2 reads, the member enabled.state of standard-pack status and the counts enabled_states (Workflow #463 S3-14, contracts/standard-pack-schedule.md \"Where a pack stands\", since 0.12.68).",
+      "review": "pending",
+      "source": {
+        "file": "crates/resource-tooling/src/codes.rs",
+        "enum": "EnabledState"
+      },
+      "tokens": {
+        "enabled": {
+          "description": "A rule names it and it is not held: the scheduler dispatches it by that rule, whatever supporting part it plays beside."
+        },
+        "held": {
+          "description": "schedule.json holds it, and no root file gives it a supporting part."
+        },
+        "not_placed": {
+          "description": "No rule names it, it is not held and no root file gives it a supporting part, or the root holds no schedule.json: nothing places it into scheduling."
+        },
+        "not_scheduled": {
+          "description": "It plays a supporting part a root file gives it and no rule dispatches it (the readiness's not_scheduled)."
+        },
+        "not_judged": {
+          "description": "The composer refuses the root's schedule.json, so no rule is classified (S2 composition_refused); the Runtime keeps the last schedule it accepted, which this root does not tell."
+        }
+      }
+    },
+    "trial_state": {
+      "description": "The latest trial of a pack's content, as its trial record keeps it, the member trial.state of standard-pack status (Workflow #463 S3-14, contracts/standard-pack-schedule.md \"Where a pack stands\", since 0.12.68).",
+      "review": "pending",
+      "source": {
+        "file": "crates/resource-tooling/src/codes.rs",
+        "enum": "TrialState"
+      },
+      "tokens": {
+        "passed": {
+          "description": "The latest trial of this content ended normally (its record's end.outcome success), on whichever end it reached; matched says whether that was the end expected. A passed trial is not an authorization."
+        },
+        "failed": {
+          "description": "The latest trial of this content failed or was cancelled (end.outcome failure or cancelled)."
+        },
+        "none": {
+          "description": "No trial record names this content; a record of another content does not count."
+        }
+      }
+    },
+    "pack_authorization": {
+      "description": "What standard-pack status says of the authorization a pack was enabled under, the member enabled.authorization (Workflow #463 S3-14, contracts/standard-pack-schedule.md \"Where a pack stands\", since 0.12.68).",
+      "review": "pending",
+      "source": {
+        "file": "crates/resource-tooling/src/codes.rs",
+        "enum": "PackAuthorization"
+      },
+      "tokens": {
+        "not_recorded": {
+          "description": "No placement journal read names the pack; enabled.authorization_unrecorded says why. The tool never infers an authorization."
+        }
+      }
+    },
+    "authorization_unrecorded": {
+      "description": "Why standard-pack status records no authorization for a pack, the member enabled.authorization_unrecorded (Workflow #463 S3-14, contracts/standard-pack-schedule.md \"Where a pack stands\", since 0.12.68).",
+      "review": "pending",
+      "source": {
+        "file": "crates/resource-tooling/src/codes.rs",
+        "enum": "AuthorizationUnrecorded"
+      },
+      "tokens": {
+        "journals_not_read": {
+          "description": "The placement journals were not read: their reader belongs to the Lab's rescue module, which the row's module cannot reach."
+        }
+      }
     }
   },
   "domains": {
