@@ -31048,6 +31048,10 @@ behind a relay that takes a keyless observation before the press's lease connect
 capture, lease, capture, input, capture, release; one lease, one tap, `captured_twice`). The tests
 of stage one stay as they are.
 
+**The capture-speed train** (0.12.66; coordinator work order `rd-1116/brief-463-train-speed.md`):
+pull request #1772 carries this slice (pull request #1773) with #463 S1-10 (§1.430) on main of
+release 0.12.65, both whole, so that the two ship in one merge.
+
 ### 1.430 Slice #463 S1-10 (0.12.66): a Lab pin's admission looks its trigger up by index first (Workflow #463; production 0.12.64, the coordinator's reading of the ledger after two taps recorded with the Lab; read-only study `rd-1116/report-post-store-stall-study.md`; coordinator work order `rd-1116/brief-463-s110-lab-pin-point-lookup.md`)
 
 This section follows §1.428, the highest on main when it was written; §1.429 is another slice's.
@@ -31095,6 +31099,10 @@ Lab relation (T1); one whose trigger is related only through its run is admitted
 (T3); on the SQLite store, an anchor staged in one batch with the trigger and the pin admits it
 without that read (T4). The reads are counted through `GlobalLedgerConfig::with_lab_relations_reads`,
 which exists in test builds only.
+
+**The capture-speed train** (0.12.66; coordinator work order `rd-1116/brief-463-train-speed.md`):
+this slice's pull request #1772 carries it with #463 S1-9 (§1.429, pull request #1773) on main of
+release 0.12.65, both whole, so that the two ship in one merge.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
