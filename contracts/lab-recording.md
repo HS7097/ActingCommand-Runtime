@@ -2222,7 +2222,9 @@ smaller instance.
   height}`; the installed command writes `STANDARD_PACK_BASE_SIZE`, the Lab's
   `RECORDING_BASE_SIZE`). It is a member added with a default and absent when not written, so a
   recording started before fix round 1 reads as before and is byte for byte what it was; the Lab's
-  own test fixtures and actinglab's unit tests start recordings without it.
+  own test fixtures and actinglab's unit tests start recordings without it. A recording the Lab
+  re-creates because its session's header exists and `recording.json` does not writes the base size
+  in its header as `record start` does (the train's fix round 1).
 - **The first frame is checked.** The first frame that enters a recording whose header names a
   base size (any frame while the recording has no size yet: a capture before a press or an
   application operation, `capture --record`, `observe --capture --record`, `record mark --frame`)
@@ -2231,7 +2233,7 @@ smaller instance.
   the frame's size as `frame_width`, `frame_height`, and nothing is written: no frame, no step, the
   header as it was; the recording stays active as it was, and nothing was pressed. A frame of the
   base size enters, and the recording takes its size. A recording whose header names no base size
-  takes its first frame's size, as before.
+  takes its first frame's size, as before, but for the paths that press after it (below).
 - **A recording whose frames are not the base size** (`record_size_not_base`, fix round 1; before
   it this was `record_display_not_base`): a recording whose header names a base size and whose
   frames are of any other size, or one whose header names none (started before fix round 1) and
@@ -2263,10 +2265,17 @@ smaller instance.
     nothing is captured, sent or written, also when the open step is marked and the frame before
     the press would not be stored (the case DA-5cd's fix round left, where the press went first);
     the frame before the press is judged as it enters (stored) or against the recording's size (not
-    stored);
+    stored). The train's fix round 1: a frame before the press that would be the recording's first
+    is judged, before it is stored, as if the recording already had its size, by the same
+    judgement; one it would refuse is refused `record_display_not_base` (its size and the base
+    size), nothing stored and nothing sent. So a recording whose header names no base size (begun
+    on 0.12.66) no longer takes a first frame of a larger display of the base size's ratio, presses
+    on it, and refuses only the frame after the press;
   - `do --capture --record` judges the recording, then captures one frame through the Runtime
     before its press (as `tap --record` captures the frame before its press; it is not stored, the
-    Lab operation takes its own) and judges it, before anything is pressed or written;
+    Lab operation takes its own; the train's fix round 1: its size is the one the Runtime's
+    observation answers, the frame not read back) and judges it, before anything is pressed or
+    written; a capture that fails is `device_error`, nothing pressed or written;
   - `observe --capture --record` judges the recording before it captures and the Runtime's device
     frame after it observed, before its frame file or the recording is written.
 

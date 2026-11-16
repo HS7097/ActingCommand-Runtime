@@ -639,11 +639,15 @@ fn run_runtime_observe(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<V
     super::contained_resources::finish_package_use(result, reader.close())
 }
 
+/// `do --capture --dry-run`, the client form of `do` on Runtime captures: it plans on the frame set
+/// and sends nothing. Workflow #392 DA-5, the train's fix round 1 (review A, (e)): `do --capture`
+/// without `--dry-run` is always the Lab operation (`run_do` turns to it before this form), so this
+/// form never presses; its branch that sent its own tap (`device.action`, `device.base_action`)
+/// was never reached and is gone, with the flag that chose it.
 fn run_runtime_do(
     flags: &FlagArgs,
     target: &str,
     instance: &str,
-    dry_run: bool,
     allow_destructive: bool,
     draw: Option<DriveDraw>,
 ) -> CliOutcome<Value> {
@@ -698,60 +702,15 @@ fn run_runtime_do(
         }
         // Workflow #406 T4: with a seed, the point is drawn in the box.
         let (point, sampling) = do_press_point(draw.as_ref(), actual_click.rect, target)?;
-        let (action_id, device) = if dry_run {
-            (Value::Null, json!({"executed": false, "mode": "dry_run"}))
-        } else {
-            // Workflow #392 DA-5ab: the point is in the package's base.
-            let sent = sent_on_scene(
-                &loaded_scene,
-                InputAction::Tap {
-                    x: point.x,
-                    y: point.y,
-                },
-                &[pack_box(actual_click.rect)],
-            )?;
-            let InputAction::Tap {
-                x: sent_x,
-                y: sent_y,
-            } = &sent
-            else {
-                return Err(CliError::device("a tap leaves for the device as a tap"));
-            };
-            // Workflow #392 DA-5ab fix round 1: `action` is the point sent to the device; on a
-            // display that maps to the package's base, `base_action` beside it is that point in
-            // the base, where the click (`actual_click.point`) chose it.
-            let mut device = json!({
-                "executed": true,
-                "backend": "runtime_proxy",
-                "authority": "runtime_execution_kernel",
-                "action": {"type": "tap", "x": *sent_x, "y": *sent_y}
-            });
-            if loaded_scene.reduced_from.is_some() {
-                device["base_action"] = json!({"type": "tap", "x": point.x, "y": point.y});
-            }
-            let action_id =
-                execute_runtime_debug_input(&session, instance, sent, loaded_scene.input_frame)?;
-            (
-                serde_json::to_value(action_id)
-                    .map_err(|error| CliError::device(error.to_string()))?,
-                device,
-            )
-        };
-        let after = if dry_run {
-            before
-        } else {
-            let after_scene = load_runtime_lab2_frames(&session, instance, &evaluator)?;
-            detect_current_page_over(&evaluator, &detector, &after_scene.frames())?
-        };
         let mut payload = json!({
             "req_id": session.correlation_id(),
             "reco_id": Value::Null,
-            "action_id": action_id,
-            "state": if dry_run { "planned" } else { "sent" },
+            "action_id": Value::Null,
+            "state": "planned",
             "instance": instance,
-            "executed": !dry_run,
+            "executed": false,
             "target": target,
-            "page": after.page,
+            "page": before.page,
             "frame_age_ms": loaded_scene.frame_age_ms,
             "backend": loaded_scene.backend,
             "actual_click": {
@@ -767,9 +726,9 @@ fn run_runtime_do(
                 "passed": true,
                 "evaluation": target_eval_json(&evaluation)
             },
-            "observation": page_detection_json(&after),
-            "device": device,
-            "arbitration": runtime_scheduler_projection(!dry_run),
+            "observation": page_detection_json(&before),
+            "device": {"executed": false, "mode": "dry_run"},
+            "arbitration": runtime_scheduler_projection(false),
             // Workflow #410 item 1: the coordinate system of the frame the click was planned on
             // (Workflow #392 DA-5ab: the package's base on a display of another size).
             "frame_coordinates": scene_coordinates(&loaded_scene),
@@ -2263,8 +2222,10 @@ pub(crate) fn run_do(global: &GlobalOptions, args: &[String]) -> CliOutcome<Valu
     // Workflow #406 T4 (plan Q20): with `--seed`, the point `do` plans in its target's box is
     // drawn; without it, the box's centre.
     let draw = super::lab_draw::press_draw(super::lab_draw::seed_flag(&flags)?)?;
+    // `--capture` here is `--capture --dry-run`: without `--dry-run` it turned to the Lab operation
+    // above.
     if flags.bool("--capture") {
-        return run_runtime_do(&flags, &target, &instance, dry_run, allow_destructive, draw);
+        return run_runtime_do(&flags, &target, &instance, allow_destructive, draw);
     }
     let result = (|| -> CliOutcome<Value> {
         let resources =
@@ -2800,7 +2761,16 @@ fn lab2_command_contracts() -> Vec<Lab2CommandContract> {
                 "--seed <u64> (with --capture, not --dry-run: draw the point of each box the route presses from this seed; without it each box's centre)",
                 "--test-capture-delay-ms <ms> (test-only scene delay)",
             ],
-            output_fields: &["req_id", "state", "page", "to", "route", "steps", "ledger"],
+            output_fields: &[
+                "req_id",
+                "state",
+                "page",
+                "to",
+                "route",
+                "steps",
+                "frame_coordinates",
+                "ledger",
+            ],
             requires_lease: true,
         },
         Lab2CommandContract {
@@ -2823,6 +2793,7 @@ fn lab2_command_contracts() -> Vec<Lab2CommandContract> {
                 "page",
                 "target",
                 "elapsed_ms",
+                "frame_coordinates",
                 "ledger",
             ],
             requires_lease: false,

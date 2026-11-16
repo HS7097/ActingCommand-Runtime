@@ -20,7 +20,9 @@
 //!   a display the Runtime last observed at another size and (fix round 1) of the first frame of a
 //!   recording whose header names the base size, a frame of another size; and `record_size_not_base`
 //!   (this recording holds frames that are not the base size) of `record stop`, `record ready`'s
-//!   item and a frame added to such a recording.
+//!   item and a frame added to such a recording. The train's fix round 1: on the paths that press,
+//!   the first frame of a recording is judged before it is stored as if the recording already had
+//!   its size ([`admit_pressed_first_frame`]), a header with a base size or not.
 
 use crate::FrameCoordinates;
 use crate::codes::LabCode;
@@ -288,7 +290,8 @@ pub(crate) fn recording_not_base(recording: &LabRecording) -> Option<LabError> {
 /// frame (the recording has no size yet) of another size than the base size its header names is
 /// refused `record_display_not_base`; every frame of a recording whose frames are not the base size
 /// ([`recording_not_base`]) is refused `record_size_not_base`. A first frame of a recording whose
-/// header names no base size enters as before, and the recording takes its size.
+/// header names no base size enters as before, and the recording takes its size (the train's fix
+/// round 1: on the paths that press, [`admit_pressed_first_frame`] judges it first).
 pub(crate) fn admit_recording_frame(recording: &LabRecording, given: RecordSize) -> LabResult<()> {
     match (recording.coordinate_space, recording.base_size) {
         (None, Some(base)) if given != base => Err(record_display_not_base(
@@ -315,4 +318,50 @@ pub(crate) fn admit_recording_frame(recording: &LabRecording, given: RecordSize)
             None => Ok(()),
         },
     }
+}
+
+/// Workflow #392 DA-5, the train's fix round 1 (review B's must-fix; `contracts/lab-recording.md`,
+/// "A recording's size"): the first frame of `recording` (it has no size yet), of `given` size, that
+/// a path which presses after it is about to store (`record_before_frame`: `tap`, `swipe` and
+/// `long-tap --record`, `session app --record`), judged before anything of it is kept and before
+/// anything is sent: the recording is judged as if it already had this frame's size, by the one
+/// judgement `record stop` makes ([`recording_not_base`]), and one it would refuse is refused
+/// `record_display_not_base` (this instance's display is not the base size), with the frame's size
+/// and the base size it is judged against. So a recording whose header names no base size no longer
+/// takes a first frame of a larger display of the base size's ratio, presses on it and refuses only
+/// the frame after the press. A recording that has a size passes here; the frame that enters is then
+/// judged as every frame is ([`admit_recording_frame`]).
+pub(crate) fn admit_pressed_first_frame(
+    recording: &LabRecording,
+    given: RecordSize,
+) -> LabResult<()> {
+    if recording.coordinate_space.is_some() {
+        return Ok(());
+    }
+    let judged = LabRecording {
+        coordinate_space: Some(given),
+        ..recording.clone()
+    };
+    if recording_not_base(&judged).is_none() {
+        return Ok(());
+    }
+    let base = recording.base_size.unwrap_or(RECORDING_BASE_SIZE);
+    Err(record_display_not_base(
+        given,
+        base,
+        format!(
+            "the first frame of the recording {} is {}x{}, and a recording of that size is not at \
+             the base size {}x{}: the display of {} is not the base size. Nothing was recorded, \
+             pressed or sent and the recording is as it was; record on an instance whose display \
+             is {}x{} (set this one's display to it, or use another), then press again",
+            recording.record_id,
+            given.width,
+            given.height,
+            base.width,
+            base.height,
+            recording.instance,
+            base.width,
+            base.height
+        ),
+    ))
 }

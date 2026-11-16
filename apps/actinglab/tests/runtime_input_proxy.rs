@@ -7400,6 +7400,103 @@ fn da5_train_recorded_do_and_observe_after_the_display_changed_send_and_write_no
     );
 }
 
+/// Workflow #392 DA-5, the train's fix round 1 (review B, (h) and (l); `contracts/lab-recording.md`,
+/// "A recording's size"): the frame `do --capture --record` takes through the Runtime before its
+/// press, whose size it judges, cannot be taken. The installed `record start` (nothing listening)
+/// writes the base size 1280x720; on the fake host, whose frames are 1280x720, `observe --capture
+/// --record` takes the recording's first frame; the fake's next capture, the one before the press,
+/// then fails in its backend: `do --capture --record --tap-rect 0,0,1,1` answers `device_error`
+/// before anything is pressed or written: no tap, and the recording's files are byte for byte as
+/// the observation left them.
+#[test]
+fn da5_train_fix1_a_recorded_do_whose_frame_before_the_press_fails_presses_and_writes_nothing() {
+    let root = TempDir::new().expect("tempdir");
+    let runtime_root = root.path().join("runtime");
+    let local = root.path().join("local");
+    let config = root.path().join("actinglab.json");
+    fs::write(&config, "{}").expect("write config");
+    let observe_package = root.path().join("observe.zip");
+    write_zip(&observe_package, &[
+        ("control.json", br#"{"game":"neutral","server":"test","package_id":"neutral.observation","entry_task_id":"task"}"#),
+        ("resources/manifest.json", br#"{"entry_task_id":"task"}"#),
+        ("resources/operations/task/task.json", br#"{}"#),
+        ("resources/recognition/neutral.test.pack.json", br#"{"schema_version":"0.3","coordinate_space":{"width":1280,"height":720},"targets":[{"type":"color","id":"anchor","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0]}]}"#),
+        ("resources/recognition/neutral.test.pages.json", br#"{"schema_version":"0.3","pages":[{"id":"page","required":["anchor"]}]}"#),
+        ("resources/navigation/neutral.test.navigation.json", br#"{"schema_version":"0.3","navigation":[]}"#),
+    ]);
+    let observe_package = observe_package.to_str().expect("observe package path");
+    let resources = root.path().join("resources");
+    let semantic_package = root.path().join("semantic.zip");
+    write_semantic_resources_at(&resources, (1280, 720));
+    write_semantic_package(&semantic_package, &resources);
+    let semantic_package = semantic_package.to_str().expect("semantic package path");
+    let started = s17_record_start(&config, &runtime_root, &local);
+    assert_eq!(started["hold"]["state"], "none", "{started}");
+    let state = base_frames();
+    let host = l3_host(
+        &runtime_root,
+        &state,
+        b"lab-da5-train-fix1-frame-before-fails",
+    );
+
+    let observed = run_actinglab_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "--instance",
+            "node.a",
+            "observe",
+            "--capture",
+            "--zip",
+            observe_package,
+            "--record",
+        ],
+    );
+    assert!(observed["record"]["frame"].is_object(), "{observed}");
+    let lab = local
+        .join("ActingCommand")
+        .join("actinglab")
+        .join("session")
+        .join("record-artifacts")
+        .join("record_s17")
+        .join("lab");
+    let before = da5_train_recording_files(&lab);
+
+    // The next capture the fake takes, the frame before the press, fails in its backend.
+    state.capture_fails_at.store(
+        state.captures.load(Ordering::Acquire) + 1,
+        Ordering::Release,
+    );
+    let (_, failed) = run_actinglab_failure_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "--instance",
+            "node.a",
+            "do",
+            "--capture",
+            "--zip",
+            semantic_package,
+            "--record",
+            "--tap-rect",
+            "0,0,1,1",
+        ],
+    );
+    host.close().expect("close host");
+
+    assert_eq!(failed["outcome"]["code"], "device_error", "{failed}");
+    assert_eq!(state.taps.load(Ordering::Acquire), 0, "nothing pressed");
+    assert_eq!(
+        da5_train_recording_files(&lab),
+        before,
+        "nothing recorded or written"
+    );
+}
+
 /// Workflow #392 DA-5cd fix round 1 (`contracts/lab-recording.md`, "A recording's size"): the
 /// installed `record start`, while nothing listens (so no display is known), writes the base size
 /// 1280x720 in the recording's header and no size; on the fake Runtime host, whose frames are

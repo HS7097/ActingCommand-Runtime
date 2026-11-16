@@ -6,7 +6,7 @@
 
 use crate::LabOcr;
 use crate::codes::{LabCode, ReadyCheck, ReadyCheckStop, ReadySource};
-use crate::display_base::{admit_recording_frame, recording_not_base};
+use crate::display_base::{admit_pressed_first_frame, admit_recording_frame, recording_not_base};
 use crate::recording::archive::{ARCHIVED, latest_manifest, read_recording};
 use crate::recording::boxes::{expanded_add, validate_boxes, with_press_click};
 use crate::recording::container::{
@@ -2655,20 +2655,21 @@ pub trait RecordFramePorts {
 /// `record_size_not_base` and nothing is captured, sent or written, whether the open step is marked
 /// (its frame before the press then not stored) or not. A frame that is stored is judged as every
 /// frame that enters the recording (`admit_frame`); one that is not, against the recording's size.
+/// The train's fix round 1 (review B's must-fix): a frame that would be the recording's first is
+/// judged before it is stored as if the recording already had its size
+/// (`admit_pressed_first_frame`, `record_display_not_base`), so that a recording whose header names
+/// no base size takes no first frame `record stop` would refuse and no press is sent on one.
 pub fn record_before_frame(
     lock: &RecordingLock,
     ports: &mut impl RecordFramePorts,
 ) -> LabResult<BeforeCapture> {
-    let (stores, coordinate_space) = {
-        let session = open_session(lock)?;
-        let recording = &session.recording;
-        if let Some(refusal) = recording_not_base(recording) {
-            return Err(refusal);
-        }
-        let stores = open_step(recording)
-            .is_none_or(|index| !step_ref(recording, index).is_some_and(has_marks));
-        (stores, recording.coordinate_space)
-    };
+    let session = open_session(lock)?;
+    let recording = &session.recording;
+    if let Some(refusal) = recording_not_base(recording) {
+        return Err(refusal);
+    }
+    let stores =
+        open_step(recording).is_none_or(|index| !step_ref(recording, index).is_some_and(has_marks));
     let captured = ports.capture()?;
     // The fix round after the train's review: this frame is taken before a press or (#463 S1-3) an
     // application operation, and the texts name both.
@@ -2679,16 +2680,20 @@ pub fn record_before_frame(
              recorded",
         )
     })?;
+    let label = "the frame before the press or application operation";
     if stores {
+        if recording.coordinate_space.is_none() {
+            let first = decode_frame(captured.frame.png.clone(), label)?;
+            admit_pressed_first_frame(recording, first.size())?;
+        }
         let arrived = record_attach_frame(lock, captured.frame)?;
         return Ok(BeforeCapture {
             input_frame,
             arrived: Some(arrived),
         });
     }
-    let label = "the frame before the press or application operation";
     check_frame_size(
-        coordinate_space,
+        recording.coordinate_space,
         &decode_frame(captured.frame.png, label)?,
         label,
     )?;
