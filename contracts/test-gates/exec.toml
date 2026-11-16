@@ -3824,3 +3824,11 @@ tests = [
     "actingcommand-lab::lib::gate_463_s21c::s21c_fix1_a_pre_check_item_never_carries_frames_or_target",
 ]
 incident = ["#463 S2-1c"]
+
+# #463 stage two, train (0.12.68; S2-2 #1786, S2-7 #1784, S2-6 #1787 and S2-1c #1788 in pull request #1784; register §1.439, §1.440, §1.442 and §1.443, each its paragraph "Train"; brief rd-1116/brief-463-train-stage2.md, point 3; contracts/lab-recording.md, "Reviewing a recording step by step: record review" and "What a recording still lacks: record ready"): record ready and record review answer from the one readiness judgement, and a step's record review lists exactly its items. S2-1c's bench (four steps recorded as stage one records them, each with a colour mark) with step 2 marked as holding a choice and not refined, step 1's mark expecting another colour and the recording's locale taken out of the step table. Without a locale: record ready draft, the locale item (no step) and step 2's select_unrefined (record_select_invalid, f0003), no check run and every check in checks_after; record review of each step lists exactly that step's items of record ready, step 2 its select_unrefined and its choice mark as the step table holds it, the locale on no step. Then choice false on step 2 and the locale given: record ready lists step 1's first_decision and cross_check failures (f0001), the checks before final_package complete; record review of each step lists exactly that step's items, step 1 the two (1). A pre-check that fails runs no self-check, so the two kinds of item are read in two readings of the one recording.
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-lab::lib::gate_463_s2_train::s2_train_each_step_reviews_exactly_its_items_of_the_one_readiness_judgement",
+]
+incident = ["#463 stage two train"]

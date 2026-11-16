@@ -87,6 +87,10 @@ mod gate_463_s21;
 // #463 S2-1c: `record ready` lists every failure of each self-check, and whether its list is all.
 #[cfg(test)]
 mod gate_463_s21c;
+// #463 stage two, train (S2-2, S2-7, S2-6, S2-1c): each step's `record review` lists exactly its
+// items of the one readiness judgement `record ready` answers with.
+#[cfg(test)]
+mod gate_463_s2_train;
 // #463 S2-13: `record frames` lists the stored frames just before and just after one step's press.
 #[cfg(test)]
 mod gate_463_s213;

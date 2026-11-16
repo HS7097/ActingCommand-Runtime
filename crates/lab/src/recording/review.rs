@@ -25,6 +25,13 @@
 //! and no completed receipt; a frame whose file is not there is answered with no path and the
 //! warning `record frames` gives it (`around::located`, `frame_file_missing`); the answer's paths
 //! are the archive module's (`archive::display`).
+//!
+//! #463 stage two, train (S2-2, S2-7, S2-6, S2-1c): a step's `missing` is its items of the one
+//! readiness judgement `record ready` answers with (`recording_api::ready_of`): a pre-check's that
+//! names it (S2-6's `select_unrefined` among them), or, once none fails, every self-check failure
+//! that names it (S2-1c); an item that names no step is no step's. A step marked as holding a choice
+//! (S2-6) shows its mark (`choice`); a step S2-7 dropped is no effective step and is not listed, and
+//! one `restore_step` gave back is listed again.
 
 use super::archive::{PERFORMED, display, outcome_of, step_kind, stored_frame_path};
 use super::around::{FRAME_FILE_MISSING, RecordFramesWarning, Stored, located, sequence_of};
@@ -32,7 +39,7 @@ use super::boxes::box_mark_id;
 use super::generate::effective_steps;
 use super::model::{
     AfterCaptureRecord, ClickGesture, LabRecording, RecordPoint, RecordRect, RecordedFrame,
-    RecordedMark, RecordingStep,
+    RecordedMark, RecordingStep, StepChoice,
 };
 use super::preview::{
     Colour, Glyph, MARK_COLOUR, Overlay, PRESS_BOX_COLOUR, RECOGNIZE_BOX_COLOUR, render,
@@ -106,7 +113,14 @@ pub struct RecordReviewStep {
     pub between: Vec<RecordReviewBetween>,
     /// The step's own marks, as stored (a recognize box is a template mark `box/<nn>/...`).
     pub marks: Vec<RecordedMark>,
-    /// The step's items of `record ready`, as `record ready` answers them.
+    /// #463 stage two, train: the step's choice mark (#463 S2-6) as the step table holds it, on a
+    /// step marked as holding a choice, refined or not; absent on every other step. A refined
+    /// choice's press is `press`: the select's click as the step table holds it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub choice: Option<StepChoice>,
+    /// The step's items of `record ready`, as `record ready` answers them: the pre-checks' items
+    /// that name this step (#463 S2-6's `select_unrefined` among them) or, once none fails, every
+    /// self-check's failure that names it (#463 S2-1c); an item that names no step is no step's.
     pub missing: Vec<ReadyItem>,
 }
 
@@ -287,6 +301,7 @@ pub(crate) fn review_outcome(
             after,
             between,
             marks: step.marks.clone(),
+            choice: step.choice.clone(),
             missing: ready
                 .missing
                 .iter()

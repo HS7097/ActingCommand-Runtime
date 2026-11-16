@@ -70,7 +70,9 @@ use std::sync::Arc;
 use std::time::Duration;
 use tempfile::TempDir;
 
-const INSTANCE: &str = "neutral.instance";
+// #463 stage two, train: the bench, its instance and the checks' order are the train's gate's too
+// (`gate_463_s2_train`).
+pub(crate) const INSTANCE: &str = "neutral.instance";
 const RECORD_ID: &str = "record_0463_s21c";
 const TASK_ID: &str = "neutral_task";
 const STARTED_AT: u64 = 1_700_000_000_000;
@@ -89,7 +91,7 @@ const SQUARE: RecordRect = RecordRect {
 /// The point each tap presses, on the gray.
 const POINT: RecordPoint = RecordPoint { x: 100, y: 50 };
 /// The self-checks of `record stop`, in the order they run.
-const EVERY_CHECK: [&str; 7] = [
+pub(crate) const EVERY_CHECK: [&str; 7] = [
     "frames",
     "admission",
     "first_decision",
@@ -289,9 +291,9 @@ impl RecordFramePorts for Screens {
 // A state directory with an active session of `INSTANCE` and its Lab recording, its game, server
 // and locale known, without an OCR model (`ocr`; fix round 1: `read`, the scripted OCR model). The
 // lock is held as one command holds it and dropped before the directory.
-struct Bench {
+pub(crate) struct Bench {
     lock: RecordingLock,
-    ocr: LabOcr,
+    pub(crate) ocr: LabOcr,
     read: LabOcr,
     temp: TempDir,
 }
@@ -299,7 +301,7 @@ struct Bench {
 impl Bench {
     // The recording of four screens: three taps, each on the screen before it, the screen after it
     // one capture later, then each step marked with a colour mark on its square.
-    fn marked() -> Self {
+    pub(crate) fn marked() -> Self {
         let temp = TempDir::new().expect("temporary directory");
         let state = temp.path().join("state");
         fs::create_dir_all(&state).expect("state directory");
@@ -342,7 +344,7 @@ impl Bench {
         bench
     }
 
-    fn state(&self) -> PathBuf {
+    pub(crate) fn state(&self) -> PathBuf {
         self.temp.path().join("state")
     }
 
@@ -395,7 +397,7 @@ impl Bench {
 
     // The colour mark of step `step` with its member `member` set to `value`, written into the step
     // table in place.
-    fn break_mark(&self, step: u32, member: &str, value: Value) {
+    pub(crate) fn break_mark(&self, step: u32, member: &str, value: Value) {
         let path = recording_path(&self.state(), RECORD_ID);
         let mut recording: Value =
             serde_json::from_slice(&fs::read(&path).expect("step table")).expect("step table JSON");
@@ -456,13 +458,13 @@ impl Bench {
     }
 
     // Fix round 1: the step table as the recording's file holds it.
-    fn recording(&self) -> Value {
+    pub(crate) fn recording(&self) -> Value {
         let path = recording_path(&self.state(), RECORD_ID);
         serde_json::from_slice(&fs::read(path).expect("step table")).expect("step table JSON")
     }
 
     // Fix round 1: the step table written back in place.
-    fn write_recording(&self, recording: &Value) {
+    pub(crate) fn write_recording(&self, recording: &Value) {
         fs::write(
             recording_path(&self.state(), RECORD_ID),
             serde_json::to_vec(recording).expect("step table JSON"),
@@ -483,7 +485,7 @@ impl Bench {
     }
 
     // Fix round 1: `record mark` of the request `value`, without an OCR model.
-    fn mark_request(&self, mut value: Value) {
+    pub(crate) fn mark_request(&self, mut value: Value) {
         value["schema_version"] = json!(LAB_RECORD_MARK_SCHEMA);
         let request: MarkRequest = serde_json::from_value(value).expect("a record mark request");
         record_mark(&self.lock, &request, false, &self.ocr).unwrap_or_else(|error| {
@@ -575,7 +577,7 @@ impl Bench {
 }
 
 // `checks` of the self-checks `ran` (each complete), in that order.
-fn complete(ran: &[&str]) -> Value {
+pub(crate) fn complete(ran: &[&str]) -> Value {
     json!(
         ran.iter()
             .map(|check| json!({"check": check, "complete": true}))
