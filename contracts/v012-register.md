@@ -31215,8 +31215,8 @@ fence.
 ### 1.432 Fix #475 (0.12.67): a close refused because the key's lease had already lapsed isolates the instance on five more paths (Workflow #475, found by the independent review of #461's fix by reading, never seen on an installation; the rule of board #419, [runtime-outcomes.md](runtime-outcomes.md), "Failure scope"; the models are #458's fix, §1.364, and #461's, §1.431; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1116/brief-475-refused-close-isolates-five.md`, read on main `8eb03787`)
 
 This section takes 1.432, the number the work order gives: §1.431 is the highest on main
-`8eb03787`; §1.429 and §1.430 belong to a train not merged yet, §1.433 and §1.434 to two slices
-being built. It ships in 0.12.67.
+`8eb03787` (§1.429 and §1.430, the capture-speed train, were merged after it), and §1.433 and
+§1.434 belong to two slices being built. It ships in 0.12.67.
 
 **The five places, established by reading.** Each closes a session under a held key after the
 key was validated, and before the key's end; a key whose lease lapsed meanwhile (a device call
