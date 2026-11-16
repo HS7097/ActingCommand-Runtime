@@ -113,6 +113,9 @@ mod gate_463_k1;
 // Workflow #463 K2: a linear task ends normally on a declared ending page.
 #[cfg(test)]
 mod gate_463_k2;
+// Workflow #463 KP-1: a linear step presses the back key.
+#[cfg(test)]
+mod gate_463_kp1;
 // Workflow #463 V1: a package's declared variables at kernel admission.
 #[cfg(test)]
 mod gate_463_v1;
@@ -4014,7 +4017,9 @@ impl PreparedContainedTask {
                 })
                 // Workflow #463 KP-1: a key step sends an input too.
                 .any(|operation| {
-                    operation.click.is_some() || operation.select.is_some() || operation.key.is_some()
+                    operation.click.is_some()
+                        || operation.select.is_some()
+                        || operation.key.is_some()
                 });
         (capture, input)
     }

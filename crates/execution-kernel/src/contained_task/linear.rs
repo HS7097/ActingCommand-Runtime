@@ -81,10 +81,10 @@ use super::{
     ExtraRounds, InputRecheck, KeyInputSupport, MAX_DECLARED_INTERVAL_MS, MAX_STEP_TIMEOUT_MS,
     MAX_STEPS, MAX_TASK_TIMEOUT_MS, PaceClock, PageCandidates, PageObservation,
     PostAdmissionOcrCollector, PreparedContainedTask, RecheckedInput, SampleRetries, StepKey,
-    StepPacing, TaskControl, TaskOperation, TaskProgram, UnrecordedScreenEnd,
-    budget_elapsed_since, budget_now, budget_observation_now,
-    invariant_broken, is_geometry_change, pace_pause, paced_step, resolve_page_reference,
-    runtime_touch_choice, sample_budget_invalid, selection, step_point_draw,
+    StepPacing, TaskControl, TaskOperation, TaskProgram, UnrecordedScreenEnd, budget_elapsed_since,
+    budget_now, budget_observation_now, invariant_broken, is_geometry_change, pace_pause,
+    paced_step, resolve_page_reference, runtime_touch_choice, sample_budget_invalid, selection,
+    step_point_draw,
 };
 use crate::codes::{ConfirmationProblem, ExecutionKernelCode, ExecutionKernelLocation};
 use crate::{InputFrameContext, RunOperationPolicy};
@@ -1354,15 +1354,12 @@ impl PreparedContainedTask {
         runtime: &mut R,
         plan: &LinearPlan,
     ) -> Result<(), ContainedTaskRunError<R::Error>> {
-        let Some((operation, key)) = plan
-            .steps
-            .iter()
-            .zip(&self.program.operations)
-            .find_map(|(step, operation)| match step.effect {
+        let Some((operation, key)) = plan.steps.iter().zip(&self.program.operations).find_map(
+            |(step, operation)| match step.effect {
                 LinearEffect::Key(key) => Some((operation, key)),
                 _ => None,
-            })
-        else {
+            },
+        ) else {
             return Ok(());
         };
         match runtime

@@ -8,7 +8,8 @@ launch, restart or stop the instance's assigned application (rulings R24 and R25
 steps" below). A step whose page does not always appear may be declared optional and is then
 skipped when its page does not appear ([Workflow #339](https://github.com/HS7097/ActingCommand-Workflow/issues/339),
 "Optional steps" below). A step may instead choose one item of a list by what its frame shows
-and tap it once (Workflow #463 K1, "Select steps" below). Besides its target page, a task may name
+and tap it once (Workflow #463 K1, "Select steps" below), or press the back key on its page
+(Workflow #463 KP-1, "Key steps" below). Besides its target page, a task may name
 pages its path ends on after its last press, its ending pages, each a normal end (Workflow #463 K2,
 "Endings" below). Packages that do not declare the mode keep their page-graph execution unchanged.
 No game-specific values are part of this contract.
@@ -70,7 +71,7 @@ one operation is at fault; an existing check keeps its existing code.
 | 1 to 1000 operations | `operation_count` |
 | `max_steps` declared in task and control, both equal to the operation count | `max_steps` |
 | no `error_pages`, `recovery`, `stability_termination`, `post_admission_ocr`; `stop_on_confirmation` is not `false` (Workflow #384 D2-S2: `resource_readings`, the reading marks, are admitted) | the field name |
-| each operation's effect is `click`, `application` or (Workflow #463 K1, since 0.12.61) `select`; no `on_error` | `operation_effect` |
+| each operation's effect is `click`, `application`, (Workflow #463 K1, since 0.12.61) `select` or (Workflow #463 KP-1, since 0.12.69) `key`, exactly one of them; no `on_error` | `operation_effect` |
 | no operation declares an `observation_window`, a page-graph declaration (Workflow #390 EXEC-2, `resource-declarations.md`); an `input_recheck` of any kind is admitted (Workflow #411 B12) | the field name |
 | no operation declares a `when` or an `on_guard_refused`, page-graph candidate operations (Workflow #390 EXEC-1, `resource-declarations.md`) | the field name |
 | no operation declares `max_runs` or `on_max_runs`, a page-graph per-run cap (Workflow #411 B16 part 1, `resource-declarations.md`) | `max_runs` |
@@ -95,6 +96,7 @@ one operation is at fault; an existing check keeps its existing code.
 | an application entry declares no `prerequisite_package_id` ("Prerequisite packages" below) | `prerequisite_with_application_entry` |
 | the optional-step rules of "Optional steps" below | `optional_first_step`, `optional_application`, `optional_restart_segment_end`, `optional_settle`, `optional_candidates`, `transition_page` |
 | the select-step rules of "Select steps" below (Workflow #463 K1) | `select_optional`, `select_retry`, `expect_identity`, `any_requires_application`, `select_on_empty_target`, `select_on_empty_terminal` |
+| the key-step rules of "Key steps" below (Workflow #463 KP-1, since 0.12.69) | `key_unknown`, `key_retry`, `any_requires_application` |
 
 Every operation still passes the existing operation checks (guard or trusted coordinate, click
 shape, retry fields, `post_delay_ms`); operation ids are unique (`contained_task_program_invalid`).
@@ -170,7 +172,8 @@ operation dispatched, with `step_index` `d` the number of operations dispatched 
    ends the run the same way, and the input is drawn from the recheck's last frame. A select step
    (Workflow #463 K1) replaces items 2 and 3 with its attempt ([selection-graph.md](selection-graph.md),
    "Execution", "Select over a scan"): its confirmation frame binds its one tap; an empty decision
-   with `on_empty` ends the run ("Select steps" below).
+   with `on_empty` ends the run ("Select steps" below). A key step (Workflow #463 KP-1) goes
+   through items 2 and 3 as a click does, its input its key ("Key steps" below).
 3. The effect intent, the input bound to that frame's input context and the effect completion
    follow, in the order of the page-graph path.
 4. The post-input wait is `post_delay_ms`, or the window's `min_ms` when larger.
@@ -503,6 +506,78 @@ finished on an ending (too little balance) is held as one consumption until the 
 reading, which corrects it; `produces` enters only the expectations of later decisions, never a
 pool's amount. A task without an ending page has the candidate lists, the details and the records
 it had.
+
+## Key steps
+
+Workflow #463 KP-1 (since 0.12.69, [v012-register.md](v012-register.md) §1.448; the owner's ruling
+on board #463 that the back key is not recorded while playing and that an agent adds such a step
+to a recorded package afterwards; the coordinator's rulings on the study of board #463 and in the
+work order). An operation's effect may be a key step: instead of a click it presses one key on its
+page.
+
+```json
+{"id": "step_04_key", "from": "step_04", "to": "step_05",
+ "key": {"key": "back"},
+ "guard": {"page_id": "step_04", "target_id": "step_04/mark", "color_probe": "step_04/mark",
+           "expected_rect": {"x": 0, "y": 0, "width": 40, "height": 20}},
+ "expect_after": {"page_id": "step_05", "timeout_ms": 5000}}
+```
+
+The key is a word of a closed vocabulary of one word, `back`, the system back key (the owner's
+ruling names the back key; the coordinator's: no other key and no text). `key` is an object whose
+one member `key` is a string; the resource declaration check reports another shape with its
+existing reasons (`InvalidType`, `MissingField`, `UnknownField`) and leaves the word to admission.
+The existing operation checks hold as for a click: a key step declares a `guard`, checked as a
+click's guard is (`contained_task_guard_invalid`), and is never an `unguarded_trusted_coordinate`,
+having no coordinate to trust (`contained_task_guard_missing` otherwise); an `input_recheck` beside
+it is refused (`contained_task_operation_invalid`, `operation=<id> field=input_recheck`). A key
+step in a task of any other mode is `contained_task_operation_invalid`, detail
+`operation=<id> key requires linear_steps`. Then these rules (`contained_task_linear_invalid`,
+`operation=<id>`):
+
+| Rule | `reason` |
+|---|---|
+| `key` is the operation's one effect: no `click`, `application` or `select` beside it | `operation_effect` |
+| the word is in the vocabulary | `key_unknown` |
+| a key step declares no `retryable`, `max_attempts` or `retry_interval_ms`: its one press, whose next page does not come, ends the run as a click step's last attempt does ("Retries") | `key_retry` |
+| a key step does not start from `any`: its guard is on a page ("Application steps") | `any_requires_application` |
+
+A key step may stand wherever a click step may but at an application entry: first (its guard
+judges the entry frame), last, optional, before or after a run of optional steps. After an
+application `stop` it is refused as any input is (`input_after_application_stop`).
+
+**Execution.** As a click step's ("Execution", items 1 to 6): with a step gap (ACT-2) a fresh frame
+of its page first; its guard on the frame its page passed on, a refusal ending the run with
+`contained_task_guard_refused` and no input; then the effect intent, the input and the effect
+completion, in a click's order. The input is `Key` with the key's input code, `4` for `back`
+(Android's `KEYCODE_BACK`, the code the Lab's `key back` sends), drawn from no box and carrying no
+sampling evidence, bound to the input context of the frame its guard passed on; the kernel hands it
+to the runtime's input as it hands a tap, and the host sends it on the instance's input backend.
+The post-input wait, the intermediate state and the arrival over the step's candidates follow as
+after a click. A key step declares no retry, so its one attempt is its last: where its arrival ends
+with `page_confirmation_failed`, the closing decision of "Retries" follows as after a click step's
+last attempt, and only a still screen that shows nothing the package declares ends the run with
+`contained_task_linear_unrecorded_screen` ("A screen the package never recorded" under "Failure
+codes").
+
+**A key the instance's input does not send.** A run of a package with a key step asks the runtime
+once, after `RunStarted` and before any capture, input or effect intent, whether the instance's
+input sends the key of the package's first key step. The host answers from the capability table the
+instance's backends declare, its row `input.key`: where that row says the configured input does not
+implement keys, the run ends there with `contained_task_linear_key_unsupported`, detail
+`operation=<id>` and value `pack_operation_id`, both naming that first key step. Nothing was sent
+and no effect was intended, so the run's record holds no effect intent and calls no effect
+indeterminate. The table has one row for every key, so the first key step answers for all of them.
+A runtime without a capability table (an instance whose provider declares none, a fixture, the
+offline simulation) refuses nothing there, and its input path answers for each key it is sent as
+for any input. Every run of a package asks for its own key steps, a layer the host runs before the
+task (a prerequisite, return-home or entry recovery package) on the run's instance too. The code's
+class is `declaration_error` ([runtime-outcomes.md](runtime-outcomes.md): a package and what the
+run uses that do not fit, decided before any frame, the same on every run); a scheduled run that
+ends with it is rerun only ([policy-suspension.md](policy-suspension.md), "Which failures
+accumulate") and fails the same way until the instance's input or the package changes.
+
+A task without a key step is admitted, run and recorded as before, and asks nothing.
 
 ## Loading pages
 
@@ -1033,6 +1108,7 @@ dispatched from. A `fresh_frame` recheck's refusal is the guard's own and carrie
 | Workflow #463 U1b (since 0.12.63): the same verdict in a scheduled run whose pair is past that break-in (below) | `page_confirmation_failed` as the first row gives that end, its detail and timing, value `confirmation_problem` `unrecorded_screen` (Workflow #469 K1), and (from the host) `artifact_id` | as the first row |
 | After an application step, the intermediate page is not seen, the next step's page does not pass in its budget, or it does not follow a seen intermediate page; or (LOAD-4) its wait ended on its loading allowance, with the loading values | `contained_task_linear_application_unconfirmed`, detail `operation=<id> application=<action> attempts=1 transition=none\|page\|window ... intermediate_seen=<bool>` | `postcondition` / `postcondition`, `limit_ms` the spent budget |
 | An instance without an assigned application, including the offline simulation | `application_effect_requires_assigned_application` (`invalid_request`, denied), before any capture | none |
+| Workflow #463 KP-1 (since 0.12.69): the instance's input does not send a key step's key, as its capability table declares ("Key steps") | `contained_task_linear_key_unsupported` (class `declaration_error`), detail `operation=<id>`, value `pack_operation_id`, the package's first key step, after `RunStarted` and before any capture, input or effect intent | none |
 | The adb command of an application effect fails | `application_backend_operation_failed` | none |
 | A guard refusal | `contained_task_guard_refused`, its outcome naming `page_id` (the page of the frame the guard judged on) and `artifact_id` (that frame, the run's `GuardRejection` pin) on the terminal and the receipt (#411 A30), and (Workflow #469 K2) why, `guard_problem` `page_mismatch` or `target_not_passed` with the target's reason as `failure_code` (above) | none |
 | A select step's attempt fails (Workflow #463 K1, "Select steps") | the select step's codes ([selection-graph.md](selection-graph.md), "Execution", "Record per path"), with their own ladder classes | as there |
@@ -1202,6 +1278,7 @@ linear run is read by older builds.
 | Skipped optional step | none | a skip shows as the preceding `StepFinished` naming the skip target instead of its declared destination, and as no `StepStarted` of that operation in the run |
 | Input | `EffectIntent`, `EffectCompleted` | unchanged |
 | Select step (Workflow #463 K1) | `task.selection_evaluated`, then its tap's `EffectIntent` and `EffectCompleted`, or none of them after an empty decision | its one decision record, as on the page graph ([selection-graph.md](selection-graph.md), "Record per path") |
+| Key step (Workflow #463 KP-1) | `EffectIntent`, `EffectCompleted` | the intent's action `Key`, its key written `[redacted]` as every key input's is, with no sampling; a run refused `contained_task_linear_key_unsupported` writes no `StepStarted` and none of them ("Key steps") |
 | Application effect | `application.intent`, then `application.completed` followed by `EffectCompleted`, or `application.failed`, which ends the step and the task with no `EffectCompleted` (the `application.*` records are written by the host, with the task and run ids and their own action id); no `EffectIntent` | unchanged |
 | Intermediate page | `RecognitionStarted`, `RecognitionCompleted` | the intermediate page as the only candidate; it is seen when it is the matched page |
 | Attempt end | `StepFinished` | the page that passed (the next step's page, a candidate of a run of optional steps, or (Workflow #463 K2) an ending page), the step's own page (a swallowed input, or a select step's empty decision) or `<unrecognized>` |
@@ -1256,13 +1333,26 @@ written by the resource repository's packaging and, since Workflow #464 P2b, com
 `linear_steps` package as 15, [resource-verify.md](resource-verify.md), "The `package` revision"),
 and checked by nothing when a bundle is placed or a package is admitted, so an earlier installer
 places such a bundle that declares less, and an earlier Runtime refuses its package at every run.
+A build before Workflow #463 KP-1 (below 0.12.69) refuses a key step before `PackageAdmitted`: its
+declaration gate does not know the member (`resource_declaration_invalid`, `UnknownField` at
+`/operations/<i>/key`). A bundle whose packs declare one declares `package` [17, 17], which the
+`package` edge of an earlier installer (its range ending below 17) refuses before it places
+anything ([component-interfaces.md](component-interfaces.md), the `package` row 17). That 17 is
+written by the resource repository's packaging; the Lab's `standard-pack build` does not count a key
+step in its revision table ([resource-verify.md](resource-verify.md), "The `package` revision"), and
+nothing checks the 17 when a bundle is placed or a package is admitted, so an earlier installer
+places such a bundle that declares less, and an earlier Runtime refuses its package at every run.
 
 ## Tools
 
 The offline simulation runs the same interpreter: its first decision of a linear package is
 the first operation's click or, when the first operation is a select step (Workflow #463 K1), the
 first input its attempt makes on the frames given (its tap, or a scan's first move), as on the page
-graph, or a refusal; the first operation is never optional.
+graph, or a refusal; the first operation is never optional. When the first operation is a key step
+(Workflow #463 KP-1, since 0.12.69, "Key steps"), the decision is its press, `would_press_key`
+(`operation_label`, `key` the word of the vocabulary, `guard` the guard outcome it would press it
+under), never a `would_click`; the simulation declares no capability table, so it never refuses the
+key.
 A first select step that ends empty (`on_empty`) completes the run with its step counted, so its
 offline simulation reports `offline_simulation_executed_step_invariant`, as a page-graph task's
 empty end does. A package
@@ -1270,7 +1360,8 @@ with an application operation is always
 refused, `application_effect_requires_assigned_application` with no capture, provided the frame
 list is not empty (an empty list is `offline_fixture_missing` before the interpreter). `package build --execution-mode linear_steps`,
 `lab run` and the Lab capability listing accept the mode; a built package is admitted by the
-rules above. `lab run` passes `transition` and `optional` through unread, ignores
+rules above (Workflow #463 KP-1: `package build`'s source parser does not take a key step yet; it
+asks a click of every step that is no application, wait or list reading step). `lab run` passes `transition` and `optional` through unread, ignores
 `prerequisite_package_id` and runs no prerequisite package; the offline simulation runs the
 package alone, without the gate. `record stop` (`lab-recording.md`, "Package generation")
 generates a linear package from a Lab recording and admits it by these rules, without a vision

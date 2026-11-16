@@ -32129,6 +32129,152 @@ their words; a plain press that reads the instance's status first on every insta
 Nemu-input instance at the cost of one capture (one more when the frame was lost before the press),
 and that is still sent, without a frame, when the status cannot be read.
 
+### 1.448 Slice #463 KP-1 (0.12.69): a linear package step that presses the back key (Workflow #463; the owner's ruling on board #463 that the back key is not recorded while playing and that the agent adds such a step in stage two or three; the read-only study `rd-1116/report-463-key-step-study.md`, sections (c), (e) and the slice KP-1 of (f), with the coordinator's rulings at its end; the rules below are the coordinator's rulings in the work order and on the takeover, not the owner's words; coordinator work order `rd-1116/brief-463-kp1-linear-key-step.md`, built on the branch of Workflow #437 G1, §1.433)
+
+The coordinator gave this slice 1.448 and the `package` revision 17: 16 is Workflow #477 PC-1's,
+which merges before it and is not on its base. It ships in 0.12.69. One implementer began it and
+another finished it from its breakpoint (`rd-1116/brief-463-continue.md`).
+
+**What it is.** The package's half of the back key ([linear-steps.md](linear-steps.md), "Key
+steps"): a `linear_steps` operation's effect may be `"key": {"key": "back"}`, a closed vocabulary of
+one word (the owner's ruling names the back key; the coordinator's: no other key and no text). The
+step is guarded as a click step is (a declared guard, never a trusted coordinate), declares no
+retry, and its key goes out through the input as a click's tap does: the step gap (ACT-2), the guard
+on the frame its page passed on, the effect intent, the input `Key` with Android's back code `4`
+(the code the Lab's `key back` sends; `StepKey::input_key`) bound to that frame's input context and
+drawn from no box, the effect completion, the post-input wait, the intermediate state and the
+arrival over the step's candidates. Its one attempt is its last, so where its next page does not
+come the closing decision of Workflow #463 U1 follows and the run ends as a click step's last
+attempt ends (`page_confirmation_failed`, or `contained_task_linear_unrecorded_screen` on a still
+screen the package never declared). Two sibling slices: KB-1 (the emulator backend sends the key;
+its capability row and the foreground gate) is built beside this one, and KR-1 (the agent puts the
+step into a recording) after it.
+
+**Admission** (`contained_task_linear_invalid`, `operation=<id>`; the reason words are detail values
+of that code, registered in [linear-steps.md](linear-steps.md)'s admission tables as their family's
+words are):
+
+| Rule | `reason` |
+|---|---|
+| `key` beside `click`, `application` or `select` | `operation_effect` (widened) |
+| the word is in the vocabulary | `key_unknown` (new) |
+| a key step declares no `retryable`, `max_attempts` or `retry_interval_ms` | `key_retry` (new) |
+| a key step does not start from `any` | `any_requires_application` (widened) |
+
+Before them the common operation check (`TaskOperation::validate`) holds a key step to a declared
+guard and no trusted coordinate (`contained_task_guard_missing`), checks the guard as a click's
+(`contained_task_guard_invalid`) and refuses an `input_recheck` beside it (the recheck asks a
+click). A `key` in a page-graph task is `contained_task_operation_invalid`, detail
+`operation=<id> key requires linear_steps`, as a `transition` or an `optional` there is. The
+declaration gate (`crates/pack-containment/src/source/declarations.rs`, `operation`) admits the
+member `key`: an object whose one member `key` is a string (`InvalidType`, `MissingField`,
+`UnknownField` otherwise), the only effect a step may then carry without a click; the word is
+admission's. A key step may be optional and may stand first.
+
+**The refusal before anything.** A run of a package with a key step asks the runtime once whether
+the instance's input sends the key of its first key step:
+`PreparedContainedTask::refuse_unsendable_key` (`linear.rs`), called in `run_with_collector`'s
+`linear_steps` branch right after the plan is resolved again (`validate_linear`) and before
+`run_linear_steps`, so after `PackageAdmitted` and `RunStarted` and before any capture, input,
+`StepStarted` or `EffectIntent`. The runtime's answer is the new trait method
+`ContainedTaskRuntime::key_input_support(StepKey) -> KeyInputSupport`, `Supported` by default (the
+offline simulation, the replay, the Lab's declared operations, fixtures). The host's
+`RuntimeContainedTask` reads the capability table the run's instance's backends declare
+(`resolve_instance`, `resolve_registered_backend`, `capabilities()`), its row `input.key`:
+`Unsupported` only where that row's implementation is `unsupported`; an instance whose provider
+declares no table answers `Supported`, and its input path still answers for each key it is sent.
+`EntryRecoveryRuntime` (a prerequisite, return-home or entry recovery layer) asks the run's. Where
+the answer is `Unsupported` the run ends with the new code; nothing was sent and no effect was
+intended, so no record of the run calls an effect indeterminate (an input refused after its intent
+is the case the code keeps out). The decision reads a closed vocabulary the runtime answers, no code.
+
+**Offline.** The offline first decision of a package whose first step is a key step is the new
+`OfflineDecision::WouldPressKey {operation_label, key, guard}` (status `would_press_key`, the key
+its word), chosen when the intercepted intent's action is a key of the vocabulary
+(`StepKey::of_action`); a click is reported as before. No consumer outside the kernel matches the
+decision exhaustively.
+
+**Codes and words.**
+
+| Word | The one situation | Refuses or warns | Exit status |
+|---|---|---|---|
+| `contained_task_linear_key_unsupported` (execution-kernel, error, `declaration_error`; key `pack_operation_id`, required; since 0.12.69, review pending) | the instance's input does not send a key step's key, as its capability table declares; the run is refused before any capture, input or intent | refuses the run | the run's failed terminal, as any task failure (category `error`) |
+| `key_unknown` (reason word of `contained_task_linear_invalid`) | a key step's word is not in the vocabulary | refuses admission | as `contained_task_linear_invalid` |
+| `key_retry` (reason word of `contained_task_linear_invalid`) | a key step declares a retry | refuses admission | as `contained_task_linear_invalid` |
+| `back` (the package format's key vocabulary, `StepKey`) | the system back key | none | none |
+| `would_press_key` (status of the offline first decision) | the first effect is a key step's press | none | none |
+
+The catalog fragment `contracts/outcome-codes/execution-kernel.json` gains the code, with its
+texts; the outcome code index is regenerated (its `--check` reads "is current"). A scheduled run
+that ends with the code is rerun only ([policy-suspension.md](policy-suspension.md), "Which failures
+accumulate"): it is not on the list that accumulates, and its class decides nothing there.
+
+**Not in this slice** (the coordinator's rulings on the takeover): the foreground gate and the
+capability table are KB-1's, so this slice reads what a backend declares for `input.key` and
+changes nothing of the device crate's backends, the table or the gate. The source parser of
+`package build` (`crates/pack-containment/src/source/mod.rs`) still asks a click of every step that
+is no application, wait or list reading step, so it does not build a key step, and the revision
+table of the Lab's `standard-pack build` (`apps/actinglab/src/resource_verify/revision.rs`) does not
+count one (as it counted no ending before §1.385): follow-ups for the recording side (KR-1) and
+the Lab.
+
+**Interface: `package` 17**, by row 13's reasoning ([component-interfaces.md](component-interfaces.md),
+"What a range means": a bundle's maximum is the revision its packs need). Every Runtime before this
+slice refuses a key step before `PackageAdmitted` (its declaration gate does not know the member:
+`resource_declaration_invalid`, `UnknownField` at `/operations/<i>/key`), so every run of such a
+package would fail and the installer must refuse the bundle instead. The minimum stays 3 (no reader
+stops reading an older pack), so the Runtime declares `package` [3, 17]
+(`distribution/windows/component-interfaces.json`; the row 17, which names 16 as Workflow #477
+PC-1's). A pack without a key step keeps its revision; a bundle whose packs declare one declares
+[17, 17], which the `package` edge of an earlier installer refuses in the plan, before the hold and
+any write. Nobody checks the 17: it is written by the resource repository's packaging, `place` asks
+it of no bundle and the Runtime does not check a package's declared range at admission, so an
+earlier installer places such a bundle that declares less and an earlier Runtime refuses its
+package at every run. `ledger`, `runtime-client`, `actingd-config` and `runtime-outcomes` do not
+move: a key step's records are a click's (`EffectIntent` with the action `Key`, its key written
+`[redacted]` as every key input's is, and `EffectCompleted`), with no new record type, member or
+enum value.
+
+**At deploy.** No installed package declares a key step (an earlier build refused one), so nothing
+installed changes. The host's capability table declares `input.key` implemented only for MaaTouch
+input until KB-1 changes it (`capability_profile` in `crates/runtime-host/src/provider.rs`), so a
+package with a key step run on an instance of any other input is refused
+`contained_task_linear_key_unsupported` before any frame. The Runtime declares `package` [3, 17]; a
+bundle that declares 17 is placed only by this build's installer or a later one.
+
+**Rollback** (below 0.12.69). No record shape changes; a build below refuses a package with a key
+step before `PackageAdmitted`, and its installer refuses a bundle that declares `package` 17 through
+its `package` edge. A rollback stays open while no root is placed from such a bundle.
+
+Tests: kernel `crates/execution-kernel/src/contained_task/gate_463_kp1.rs` (exec gate row "#463
+KP-1"), on synthetic `neutral` zip packages through the whole admission (`PreparedContainedTask::load`,
+the declaration gate included) and the kernel's scripted runtime and clock:
+`kp1_a_back_key_step_sends_one_key_after_its_guard_and_goes_on_to_the_next_page` (the second step
+`back` sends one `Key` `4` after its guard passed on the list, its intent naming that guard; the run
+is Completed on done after two steps; the runtime asked once, for `back`; on a list without the
+guard mark `contained_task_guard_refused`, one input, no intent of `back`);
+`kp1_the_next_page_not_coming_fails_as_a_click_step_does` (the list stays after the key:
+`page_confirmation_failed` with a click step's detail, the arrival's postcondition timing and
+`input_not_taken`, `back`'s `StepFinished` on `<unrecognized>`, no second key);
+`kp1_a_backend_without_the_key_refuses_the_run_before_any_capture_input_or_intent` (the new code,
+detail `operation=back`, `pack_operation_id` `back`, no capture, no input, no `StepStarted`, no
+`EffectIntent`, no `EffectCompleted`, `RunStarted` written, one question for `back`; a package
+without a key step on the same device Completed, asked nothing);
+`kp1_admission_refuses_an_unknown_key_a_retried_key_and_a_click_with_a_key` (`key_unknown`,
+`key_retry`, `operation_effect`, each naming `back`);
+`kp1_a_package_with_a_key_step_needs_revision_17_and_one_without_keeps_its_revision` (the build's
+own declaration reads [3, 17]; by the installer's edge rule `package_edge_holds` it holds a bundle
+of [17, 17] and a range ending at 16 refuses it, and both hold a bundle without a key step, [3, 15];
+this build admits both packages); `kp1_the_offline_first_decision_names_the_key_step`
+(`would_press_key` with `back`, the key `back` and the guard that passed). The kernel's scripted
+runtime (`contained_task/tests/scripted.rs`) answers `key_input_support` (`without_key_input`) and
+keeps each question. Adapted because the requirement changes what they pin (the build's `package`
+range), names kept: the rescue module's
+`install::gate_463_v1::v1_the_build_declares_package_through_revision_14` holds [3, 17] and 14
+within it (its gate row in `apps.toml` gains the incident `#463 KP-1`), and the architecture pin
+`the_runtime_declares_each_v0120_interface_revision_once` and its comment. The host's `key_input_support` has no test of its own (the work order names the kernel's
+tests). No golden changes; no test leaves the gate map.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

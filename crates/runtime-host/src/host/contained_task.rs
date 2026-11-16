@@ -1926,6 +1926,15 @@ impl ContainedTaskRuntime for EntryRecoveryRuntime<'_, '_> {
         self.inner.control_application(action)
     }
 
+    /// Workflow #463 KP-1 (`contracts/linear-steps.md`, "Key steps"): a layer's key step is sent
+    /// on the run's instance, so the run's capability table answers.
+    fn key_input_support(
+        &mut self,
+        key: actingcommand_execution_kernel::StepKey,
+    ) -> Result<actingcommand_execution_kernel::KeyInputSupport, Self::Error> {
+        self.inner.key_input_support(key)
+    }
+
     fn update_run_progress(&mut self, executed_steps: u32) {
         self.inner.update_run_progress(executed_steps);
     }
@@ -5648,7 +5657,9 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
         let registered = self.host.resolve_instance(self.instance_alias)?;
         let resolved = self.host.resolve_registered_backend(&registered)?;
         let unsupported = resolved.capabilities().is_some_and(|table| {
-            table.evidence(EmulatorCapability::InputKey).implementation()
+            table
+                .evidence(EmulatorCapability::InputKey)
+                .implementation()
                 == Some(EmulatorCapabilityImplementation::Unsupported)
         });
         Ok(if unsupported {
