@@ -97,6 +97,19 @@
 //! applies by its default's origin (and, fix round 1, under `not_applying` each variable of a
 //! package that counts as irreversible by the whole root). A root whose packages declare no
 //! variable answers as before.
+//!
+//! Workflow #477 PC-1 (register §1.438; contracts/pack-catalog.md): last, the game root's package
+//! declaration `pack-catalog.json`, read by the contract crate's reader against the registry and
+//! the pools `schedule.json` declares. A root without it is a note, not a defect (the answer's
+//! `catalog`, `standard_pack_catalog_absent`); a file unreadable or wrong in its business part
+//! refuses the root (`standard_pack_root_invalid` with its first error, so that whatever refuses
+//! a root the check refuses refuses it); a display defect is one
+//! `standard_pack_catalog_display_invalid` warning; every difference between an entry's business
+//! part and the rules of its package in `schedule.json` one `standard_pack_catalog_schedule_differs`
+//! warning; the packages without an entry are counted and listed in `catalog`
+//! (`standard_pack_catalog_coverage`). A root that still holds `ui.json` gets one
+//! `standard_pack_ui_retired` warning: no program reads that file any more. The file is listed in
+//! `root_files` before `loading.json`.
 
 use crate::codes::ResourceToolingCode;
 use crate::notices_directory::game_root_notices;
@@ -107,18 +120,21 @@ use crate::standard_pack_goals::{
 };
 use crate::standard_pack_schedule::report_schedule;
 use crate::{
-    DEFAULT_MAX_BUFFERED_PAYLOAD_BYTES, StandardPackCheckRequest, StandardPackCheckResponse,
-    StandardPackModel, StandardPackRootFiles,
+    DEFAULT_MAX_BUFFERED_PAYLOAD_BYTES, StandardPackCatalogReport, StandardPackCheckRequest,
+    StandardPackCheckResponse, StandardPackModel, StandardPackRootFiles,
 };
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::{Detail, Outcome, RemedyProblem};
 use actingcommand_contract::{
     BundleIndex, InterruptThen, LabError, LabErrorClass, LabResult, NavigationProblem,
     NavigationRole, ProvidedCapability, RuntimeErrorCode, STANDARD_PACK_BUNDLE_FILE,
-    STANDARD_PACK_DISPLAY_LAYOUT_FILE, STANDARD_PACK_GOALS_FILE, STANDARD_PACK_INTERRUPTS_FILE,
-    STANDARD_PACK_LOADING_FILE, STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_PAGES_FILE,
-    STANDARD_PACK_SCHEDULE_FILE, StandardPackProblem, StandardPackRoot, StandardPackRootBytes,
-    StandardPackRootIssue, parse_standard_pack_schedule, read_standard_pack_root,
+    STANDARD_PACK_CATALOG_FILE, STANDARD_PACK_DISPLAY_LAYOUT_FILE, STANDARD_PACK_GOALS_FILE,
+    STANDARD_PACK_INTERRUPTS_FILE, STANDARD_PACK_LOADING_FILE, STANDARD_PACK_NAVIGATION_FILE,
+    STANDARD_PACK_PAGES_FILE, STANDARD_PACK_RETIRED_UI_FILE, STANDARD_PACK_SCHEDULE_FILE,
+    StandardPackProblem, StandardPackRoot, StandardPackRootBytes, StandardPackRootIssue,
+    catalog_display_outcome, parse_standard_pack_catalog, parse_standard_pack_schedule,
+    read_standard_pack_root, retired_ui_outcome, standard_pack_catalog_differences,
+    standard_pack_schedule_pools,
 };
 use actingcommand_execution_kernel::{
     ContainedTaskError, NavigationPackageDescriptor, PreparedContainedTask, RemedyDeclarations,
@@ -462,6 +478,16 @@ pub(crate) fn check_standard_pack_root_with_catalog(
             &issues,
         ));
     }
+    // Workflow #477 PC-1 (register §1.438): the package declaration, last; a wrong business part
+    // refuses the root.
+    let catalog = catalog_report(
+        &game,
+        &root,
+        &checked,
+        bytes(STANDARD_PACK_SCHEDULE_FILE),
+        &mut present,
+        &mut warnings,
+    )?;
     if fs::symlink_metadata(&loading).is_ok() {
         present.push(STANDARD_PACK_LOADING_FILE);
     }
@@ -479,8 +505,91 @@ pub(crate) fn check_standard_pack_root_with_catalog(
         notices,
         models,
         variable_provenance,
+        catalog,
     };
     Ok((response, compiled))
+}
+
+/// Workflow #477 PC-1 (register §1.438; contracts/pack-catalog.md, "What the tools say"): the
+/// game root `root` of `game`'s `pack-catalog.json`, read against its registry (`checked`) and the
+/// pools its `schedule.json` (`schedule`, its bytes, already composed) declares. Without the file:
+/// the note `standard_pack_catalog_absent`. With it: the file among `present`; refused, when it is
+/// unreadable or wrong in its business part, as `standard_pack_root_invalid` with its first error;
+/// otherwise each display defect (`standard_pack_catalog_display_invalid`) and each difference from
+/// the rules (`standard_pack_catalog_schedule_differs`) in `warnings`, and the note
+/// `standard_pack_catalog_coverage` with the packages it lists no entry for. Then, when the root
+/// still holds `ui.json`, `standard_pack_ui_retired` in `warnings`.
+fn catalog_report(
+    game: &str,
+    root: &Path,
+    checked: &StandardPackRoot,
+    schedule: Option<&[u8]>,
+    present: &mut Vec<&'static str>,
+    warnings: &mut Vec<Outcome>,
+) -> LabResult<StandardPackCatalogReport> {
+    let path = root.join(STANDARD_PACK_CATALOG_FILE);
+    let report = match read_bounded(&path)? {
+        None => StandardPackCatalogReport::absent(game, &path),
+        Some(bytes) => {
+            present.push(STANDARD_PACK_CATALOG_FILE);
+            let schedule = schedule
+                .map(parse_standard_pack_schedule)
+                .transpose()
+                .map_err(|issue| {
+                    root_invalid(game, &root.join(STANDARD_PACK_SCHEDULE_FILE), &issue)
+                })?;
+            let pools = schedule
+                .as_ref()
+                .map(standard_pack_schedule_pools)
+                .unwrap_or_default();
+            let catalog =
+                match parse_standard_pack_catalog(&bytes, game, &checked.registry, Some(&pools)) {
+                    Ok(catalog) => catalog,
+                    Err(issues) => return Err(catalog_refused(game, &path, issues)),
+                };
+            for issue in catalog.display_issues() {
+                warnings.push(catalog_display_outcome(game, &path, issue));
+            }
+            for difference in standard_pack_catalog_differences(&catalog, schedule.as_ref()) {
+                warnings.push(difference.outcome(game));
+            }
+            let unlisted = catalog.unlisted(&checked.registry);
+            StandardPackCatalogReport {
+                note: Outcome::new(SharedCode::StandardPackCatalogCoverage)
+                    .game(game)
+                    .path(&path)
+                    .count(unlisted.len()),
+                unlisted: Some(unlisted),
+            }
+        }
+    };
+    let retired = root.join(STANDARD_PACK_RETIRED_UI_FILE);
+    if fs::symlink_metadata(&retired).is_ok() {
+        warnings.push(retired_ui_outcome(game, &retired));
+    }
+    Ok(report)
+}
+
+/// Workflow #477 PC-1: a `pack-catalog.json` at `path` the reader refuses (`issues`, its errors in
+/// the reader's order): `standard_pack_root_invalid` with the first.
+pub(crate) fn catalog_refused(
+    game: &str,
+    path: &Path,
+    issues: Vec<StandardPackRootIssue>,
+) -> LabError {
+    match issues.into_iter().next() {
+        Some(first) => root_invalid(game, path, &first),
+        // The reader refuses with at least one error; a refusal without one is the whole file's.
+        None => root_invalid(
+            game,
+            path,
+            &StandardPackRootIssue {
+                file: STANDARD_PACK_CATALOG_FILE,
+                problem: StandardPackProblem::Malformed,
+                pointer: String::new(),
+            },
+        ),
+    }
 }
 
 /// The cross-check of one game root (module doc): the report's warnings, or the first package

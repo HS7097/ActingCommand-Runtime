@@ -138,6 +138,11 @@ mod gate_451_loadp;
 // round 3, the revision of version 2).
 #[cfg(test)]
 mod gate_455_gr1;
+// Test-only: Workflow #477 PC-1, the rescue module's `place` of a bundle's root file
+// `pack-catalog.json`, of one wrong in its business part, and of a game root that still holds
+// `ui.json`.
+#[cfg(test)]
+mod gate_477_pc1;
 // Test-only: Workflow #463 V1, the `package` revision 14 a bundle whose packages declare variables
 // (and, fix round 3, one that carries `goals.json` version 2) declares, at the installer's edge,
 // and this build's declaration of it.

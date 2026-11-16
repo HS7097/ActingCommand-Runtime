@@ -299,6 +299,19 @@ naming this file.
   the check, and wrote nothing; with `dry_run` nothing is written in the checkout. Its `value` is
   `"pending"` or a number of the pack's own: a decision that names the origin `model` is refused
   (`value_origin_model`).
+- **The package declaration** (Workflow #477 PC-1, 0.12.68; `contracts/pack-catalog.md`).
+  `ac_standard_pack_catalog` (`root`, `plan`) builds or brings up to date a game root's
+  `pack-catalog.json`, through a child: an entry for every package of `bundle.json`, a new entry's
+  display from a leftover `ui.json` and its `consumes` and `produces` the union over the package's
+  rules in `schedule.json`; an entry already there is kept as written and its differences from the
+  rules are answered (`differences`, each also a `standard_pack_catalog_schedule_differs`
+  warning). With `plan` it writes nothing and answers the `document` it would write; without it,
+  it writes the file atomically (`status` `written`, or `unchanged` when the file holds those
+  bytes). `root` is a repository's working copy or a scratch copy, never a root inside an
+  installation (`standard_pack_catalog_root_refused`): an installed root takes the file through
+  `ac_standard_pack_build` and `ac_place`. Do not edit the file by hand. `ac_packs` answers each
+  game's `index` (per pool the packages that produce and consume it) and each composed row's
+  `catalog`; `ac_standard_pack_check` answers the root's `catalog` note and the file's warnings.
 - **Busy** is `job_capacity_exhausted` with `limit_count`: a call that would start a job while
   `--jobs` jobs run (default 8), or that needs a child while all `--children` children (default 8)
   are working. It is refused, not queued, and nothing is sent: call again later. More calls at

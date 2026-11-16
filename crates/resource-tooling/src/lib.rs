@@ -150,6 +150,11 @@ mod gate_463_s310;
 #[cfg(test)]
 mod gate_463_s311;
 
+// Workflow #477 PC-1 (register §1.438): standard-pack check of a game root's `pack-catalog.json`,
+// the writer `standard-pack catalog`, and the composition that never reads the file.
+#[cfg(test)]
+mod gate_477_pc1;
+
 mod maa_task_graph;
 // Workflow #444 NOTICES-3: a notices directory on disk, held to the contract crate's rules.
 mod notices_directory;
@@ -163,6 +168,8 @@ mod package_validate;
 mod package_variables;
 mod resource_convert;
 mod resource_restore;
+// Workflow #477 PC-1: `standard-pack catalog`, the writer of a game root's `pack-catalog.json`.
+mod standard_pack_catalog;
 mod standard_pack_check;
 // Workflow #455 G-R1: `goals.json` in `package bundle --goals` and `standard-pack check`.
 mod standard_pack_goals;
@@ -210,6 +217,7 @@ pub use resource_convert::{
     canonical_server, resolve_resource_root, validate_maa_semantic_declarations,
 };
 pub use resource_restore::*;
+pub use standard_pack_catalog::write_standard_pack_catalog;
 pub use standard_pack_check::check_standard_pack_root;
 pub use standard_pack_ready::{
     InstallationRead, ItemState, PackReadiness, ReadinessAnswer, ReadinessBasis, ReadinessBinding,

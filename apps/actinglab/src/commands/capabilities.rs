@@ -68,6 +68,8 @@ pub(crate) fn command_capabilities() -> Vec<Value> {
             ["offline", "running_runtime", "device"],
             "available",
         ),
+        // Workflow #477 PC-1: writes a game root's `pack-catalog.json` from what it declares.
+        command_cap("standard-pack catalog", ["offline"], "available"),
         command_cap("package fmt", ["offline"], "available"),
         command_cap("package edit", ["offline"], "available"),
         // Workflow #463 V3: what one package's control declaration declares; reads only.

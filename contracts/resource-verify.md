@@ -247,8 +247,9 @@ actinglab [--json] standard-pack build --repo <checkout> --source-repository <ow
   runs them as before, so its report is the same for the same input. The build differs in five
   things only:
   - the checkout's read paths are every input its bundle carries: besides those of "Clean" above,
-    `schedule.json`, `display-layout.json`, `loading.json`, `goals.json`, `ui.json` and every file
-    under `loading/`, `notices/` and `tables/`, each the committed blob and none an ignored file;
+    `schedule.json`, `display-layout.json`, `loading.json`, `goals.json`, `pack-catalog.json`
+    (Workflow #477 PC-1; `ui.json` before it) and every file under `loading/`, `notices/` and
+    `tables/`, each the committed blob and none an ignored file;
   - `package bundle` is given `goals.json` too when the repository holds it (`--goals`);
   - the repository's tables, `tables/<table_id>.json` at its root, read as the Runtime reads a game
     root's tables (`read_standard_pack_tables`; a refused table fails the `bundle` step with its
@@ -257,14 +258,18 @@ actinglab [--json] standard-pack build --repo <checkout> --source-repository <ow
     `bundle.json` lists them in `tables`, in file name order (the index member an updater reads,
     [package-reference.md](package-reference.md)); without a table the zip's `bundle.json` is the
     one `package bundle` wrote;
-  - (fix round 1) the repository's `ui.json`, a root file of the standard package root
+  - (fix round 1, `ui.json`; since Workflow #477 PC-1, 0.12.68, [pack-catalog.md](pack-catalog.md))
+    the repository's `pack-catalog.json`, a root file of the standard package root
     ([package-reference.md](package-reference.md), "Standard package root") that `place` places
     and sets aside when a zip carries none, goes into the zip's root byte for byte, and into the
-    installed root, when its reader `parse_standard_pack_ui` takes it against the zip's
-    `bundle.json`; each violation of a refused file fails the `bundle` step as
-    `standard_pack_root_invalid` (`game`, `path`, `standard_pack_problem`, `json_pointer`) and the
-    file is not carried. `package bundle` still has no flag for it: the build adds it to the zip,
-    as it adds the tables;
+    installed root, when its reader `parse_standard_pack_catalog` takes its business part against
+    the zip's `bundle.json` and the pools the repository's `schedule.json` declares; each error of
+    a refused file fails the `bundle` step as `standard_pack_root_invalid` (`game`, `path`,
+    `standard_pack_problem`, `json_pointer`) and the file is not carried; its display defects are
+    the installed root's check's warnings. A repository that still holds `ui.json` gets the
+    `bundle` step's warning `standard_pack_ui_retired`, and the zip never carries that file.
+    `package bundle` still has no flag for the catalog: the build adds it to the zip, as it adds
+    the tables;
   - `interfaces.json` declares the `package` revision the zip's content needs ("The `package`
     revision" below), not resource verify's 3 or 10.
 - **Clean, and bound to its commit.** The `checkout` precondition refuses a tree with a change, an
@@ -287,7 +292,7 @@ actinglab [--json] standard-pack build --repo <checkout> --source-repository <ow
   way can leave the zip, or the zip and `SHA256SUMS`, under their final names without `build.json`.
   `build.json` is the mark of a complete build: it is there only beside the other two, and a reader
   takes a directory without it as incomplete. For a commit whose repository holds no
-  `goals.json`, no table and no `ui.json` and whose packs need no revision above 3, the zip is
+  `goals.json`, no table and no `pack-catalog.json` and whose packs need no revision above 3, the zip is
   `resource verify`'s zip of that commit, byte for byte.
 - **Steps that did not all pass** write no product: `resource_build_failed`
   (`failed_step_count`), caused by the steps' outcome (`resource_verify_failed` with each failed
@@ -447,7 +452,8 @@ nothing admits. A terminal page in a task file that is not the entry task's need
 admission reads it as the package's program.
 
 Nothing else needs a revision: a game root's `tables/` (row 6: no member of a pack reads them),
-`ui.json` (§1.240: no revision), the other root files and every other file of a pack need 3. A
+`pack-catalog.json` (§1.438: no revision; `ui.json`, §1.240, before it), the other root files and
+every other file of a pack need 3. A
 member is found by its name, its file and its place, not by the declaration reader, and where an
 older member of the same name exists, by the value or the condition that tells them apart. Fix
 round 2: a member the table counts under a holder is matched by the name of its direct holder

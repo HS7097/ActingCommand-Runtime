@@ -479,6 +479,10 @@ outcome_keys! {
     added_package_ids: list(name),
     removed_package_ids: list(name),
     // ---- Workflow #373 NAV-6: end ----
+    // Workflow #477 PC-1 (contracts/pack-catalog.md): the side of a package's business part a
+    // pool stands on, and which of `pack-catalog.json` and `schedule.json` lacks it.
+    catalog_side: vocab(catalog_side),
+    catalog_difference: vocab(catalog_difference),
     // ROUT-L RL-1b (frozen model v1.0 §3.8): what a game's `schedule.json` gave the scheduler
     // workbench: its sha256 and its rules, held and unclassified packages.
     schedule_sha256: hash,

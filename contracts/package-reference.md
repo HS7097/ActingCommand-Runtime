@@ -534,8 +534,9 @@ repository:
                                     (with tables when the repository has some), interfaces.json,
                                     the root files and directories the repository holds
                                     (pages.json, interrupts.json, navigation.json, schedule.json,
-                                    display-layout.json, goals.json, ui.json, loading.json with
-                                    loading/, notices/, tables/), packs/<package_id>/
+                                    display-layout.json, goals.json, pack-catalog.json,
+                                    loading.json with loading/, notices/, tables/),
+                                    packs/<package_id>/
 <out>/SHA256SUMS                    <hex>  <zip name>
 <out>/build.json                    actingcommand.standard-pack-build.v1
 <out>/work/                         the steps' work, kept
@@ -545,9 +546,13 @@ repository:
 its `interfaces.json` declares `package [r, r]`, `r` computed from the content (resource-verify.md,
 "The `package` revision": every member, file and value a `package` row of
 [component-interfaces.md](component-interfaces.md) or the register puts into a revision, where it
-stands and under its condition), never written by hand. Fix round 1: the zip carries the
-repository's `ui.json` (above, "Standard package root"), checked by its reader against the zip's
-`bundle.json`, so placing the zip keeps the console's labels; the three files are written under
+stands and under its condition), never written by hand. Fix round 1: the zip carried the
+repository's `ui.json`; Workflow #477 PC-1 (0.12.68): it carries the repository's
+`pack-catalog.json` instead ([pack-catalog.md](pack-catalog.md)), byte for byte, checked by its
+reader against the zip's `bundle.json` and the repository's `schedule.json` (an error of its
+business part fails the build; a display defect is a warning), so placing the zip keeps the
+console's labels; a leftover `ui.json` is not carried and is the warning
+`standard_pack_ui_retired`; the three files are written under
 `.part` names and renamed when all three are complete, `build.json` last; `--out` is made only once
 the checkout precondition passed.
 
@@ -801,7 +806,7 @@ data files beside its package directories, one directory per game below the conf
   tables/            actingcommand.table.v1: the shared tables, <table_id>.json (#357 DB-1)
   schedule.json      actingcommand.schedule.v1: the game's schedule rules (ROUT-L RL-1a)
   display-layout.json  actingcommand.display-layout.v1: the game's display declaration (#392 DA-4)
-  ui.json            actingcommand.ui.v1, optional: display metadata for clients (#429 R-11)
+  pack-catalog.json  actingcommand.pack-catalog.v1, optional: one declaration per package (#477 PC-1)
   goals.json         actingcommand.goals.v2, optional: the goal entries the game offers (#455 G-R1; v2 #463 V1)
   loading.json       actingcommand.loading.v1, optional: the game's loading pages, for audit (#407 LOAD-1)
   loading/           the templates loading.json declares (#407 LOAD-1)
@@ -962,70 +967,30 @@ data files beside its package directories, one directory per game below the conf
   `bundle.json` it is `bundle_missing`. The display adapter (model 392, DA-2a and later) reads
   the declaration a run's preparation read; until then nothing uses it, and a run is as it was
   without the file. No resource repository's standard package carries one yet.
-- **`ui.json`** (Workflow #429 R-11, since 0.12.36; `v012-register.md` §1.240; design
-  `rd-1029/429-A-runtime.md` A.7.3). Optional. The display metadata a client shows for the
-  game's packages: the groups it sorts them into, per package a title, a summary, its group,
-  opaque risk words and its parameters' labels, each text per locale, and the display the game
-  supports:
-
-  ```text
-  {schema_version: "actingcommand.ui.v1", game,
-   groups: [{id, title: {<locale>: text}}],
-   packs: [{package_id, title: {..}, summary: {..}, group?, risk?: [word],
-            parameters?: {<name>: {label: {..}, options?: {<option>: {..}}}}}],
-   display?: {aspect_ratios: ["<w>:<h>"], safe_area?: word}}
-  ```
-
-  **The Runtime checks only shape, limits and references, and never interprets a string.**
-  Texts, locales, group ids, risk words, parameter and option names and the safe-area word are
-  opaque: compared only for equality and measured only in bytes. An aspect ratio is only checked
-  to be `<w>:<h>` (1–5 decimal digits per side, no leading zero); nothing computes with it. The
-  risk words decide nothing in the Runtime: a client's risk badge is the Runtime's own
-  `irreversible` (below) plus these words, and a pack that is off by default is the pack-level
-  default row's (A.7.1, R-9), never a risk word's.
-  - **Members.** The document has `schema_version`, `game`, `groups` and `packs`, and optionally
-    `display`; a group `{id, title}`; a pack `{package_id, title, summary}` and optionally
-    `group`, `risk`, `parameters`; a parameter `{label}` and optionally `options`; `display`
-    `{aspect_ratios}` and optionally `safe_area`. A member that is unknown, missing or not of its
-    type, a member repeated in one object and another `schema_version` are `malformed` at that
-    member's pointer; no JSON or no object is `malformed` for the whole document; a `game` that
-    is not the directory's is `game_mismatch`.
-  - **References.** A pack's `package_id` is a package of `bundle.json` (`package_not_listed`),
-    its `group` an id of `groups` (`ui_group_unknown`), and each name under its `parameters` a
-    parameter the package declares (`ui_parameter_undeclared`). A package's variables carry their
-    own texts ([package-variables.md](package-variables.md)); `parameters` names nothing, so any
-    name under it is `ui_parameter_undeclared`. Group ids, the packs' `package_id`, one
-    pack's risk words and the aspect ratios are each listed once (`ui_duplicate`). A package
-    without an entry is shown by its `package_id`; so is every package of a game root without
-    the file.
-  - **Limits** (`ui_out_of_limits`; bounds of the shape, not tunables):
-
-    | What | Limit |
-    |---|---|
-    | the file | at most 256 KiB |
-    | `groups` | 0–64 entries |
-    | `packs` | 0–1024 entries |
-    | a text (`title`, `summary`, `label`, an option's text) | 1–16 locales, each locale name 1–35 bytes |
-    | `title`, `label`, an option's text | 1–128 bytes per locale |
-    | `summary` | 1–1024 bytes per locale |
-    | a word: a group's `id`, a pack's `group`, a risk word, a parameter name, an option name, `safe_area` | 1–64 bytes |
-    | `risk` | 0–8 words |
-    | `parameters` | 0–16 names |
-    | `options` | 0–32 names |
-    | `aspect_ratios` | 1–8 entries |
-
-  - **Reporting.** Every violation is reported, each as `standard_pack_root_invalid` with
-    `game`, `path` (the file), `standard_pack_problem` and `json_pointer`, at most 64 of them in
-    document order. A refused file never breaks its game root: the root and its packages are
-    listed as without the file. A file that exists but cannot be read is
-    `package_binding_unreadable` with its OS error as the cause. The file makes a directory a game
-    root for its readers, so `ui.json` without `bundle.json` is `bundle_missing`.
-  - **Readers.** Only `actingctl packs` and `ac_packs`, offline (`parse_standard_pack_ui`,
-    `read_standard_pack_root_with_ui`), which deliver a valid file as written, its members in the
-    file's order ([runtime-interface.md](runtime-interface.md), `packs`). The Runtime's root
-    reader, its startup and run preparation, the policy crate and check-config never read it,
-    so the file never changes a run, and a directory that holds only `ui.json` is no game root
-    for them. A real standard package's `ui.json` is the resource side's to write.
+- **`pack-catalog.json`** (Workflow #477 PC-1, since 0.12.68; `v012-register.md` §1.438;
+  [pack-catalog.md](pack-catalog.md) is the contract). Optional. The game root's one declaration
+  per package: its **display part** (the groups a client sorts the game's packages into, per
+  package a title, a summary, its group and opaque risk words, each text per locale, and the
+  display the game supports) and its **business part** (per package the pools of `schedule.json`
+  it consumes and produces, each with an optional quantity), from which the Lab computes the
+  index both ways (per pool, which packages produce it and which consume it). An error of the
+  business part or of the file as a whole makes the root's declaration wrong
+  (`standard_pack_root_invalid`); a display defect is a warning
+  (`standard_pack_catalog_display_invalid`) and that package shows by its `package_id`, as does
+  every package without an entry and every package of a root without the file. Readers:
+  `actingctl packs` and `ac_packs`, `actinglab standard-pack check`, `standard-pack build` and the
+  installer's `place`; the Runtime's root reader, its startup and run preparation, the policy crate
+  and check-config never read it, so the file never changes a run. It is written by `actinglab
+  standard-pack catalog`, not by hand. The file makes a directory a game root for its readers, so
+  `pack-catalog.json` without `bundle.json` is `bundle_missing`.
+- **`ui.json`** (Workflow #429 R-11, 0.12.36 to 0.12.67; `v012-register.md` §1.240) is retired:
+  `pack-catalog.json` replaced it outright (the owner's answer 1 on board #477), its display part
+  holding what `ui.json` held but `parameters` (a package's variables carry their own texts,
+  [package-variables.md](package-variables.md)). No program reads `ui.json` any more; a root that
+  still holds it gets the warning `standard_pack_ui_retired` from `packs`, `standard-pack check`,
+  `standard-pack catalog` and `standard-pack build`, the build does not carry it, and the
+  installer's `place` sets an installed one aside like any root file a bundle no longer carries.
+  `standard-pack catalog` takes each new entry's display from it.
 - **`goals.json`** (Workflow #455 G-R1, since 0.12.60; `v012-register.md` §1.356;
   [standard-pack-goals.md](standard-pack-goals.md) is the contract). Optional. The goal entries the
   game offers on one page, in file order: each entry's stable name, its type (one of eight in
@@ -1036,8 +1001,9 @@ data files beside its package directories, one directory per game below the conf
   is stored in it. `actinglab standard-pack check` and `package bundle
   --goals` read it after the composition they already run: the check reports each problem of a
   refused file as a `standard_pack_root_invalid` warning and never fails the root for it, and the
-  bundle refuses a refused file. The installer's `place` places it as the last root file and sets it
-  aside when a later bundle carries none; a bundle that carries it declares `package` [12, 12]
+  bundle refuses a refused file. The installer's `place` places it as the last root file (since
+  Workflow #477 PC-1 the last but `pack-catalog.json`) and sets it aside when a later bundle
+  carries none; a bundle that carries it declares `package` [12, 12]
   ([component-interfaces.md](component-interfaces.md), row 12), for version 2 [14, 14] (row 14),
   and `place` refuses one that declares a maximum below 12 (`goal_undeclared`, G-R1 fix round 1;
   below 14 since Workflow #463 V1 fix round 3). The Runtime's root reader, its

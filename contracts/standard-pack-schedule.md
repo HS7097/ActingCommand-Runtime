@@ -861,7 +861,10 @@ other games are composed.
   composed tasks that run its package in id order (the rule's id, or `<rule id>@<alias>` for a
   rule composed for two or more instances), `irreversible` when the package's `control.json`
   reads, and its game's `ui.json` entry for the package and `display`
-  ([runtime-interface.md](runtime-interface.md), `packs`). Workflow #455 G-R2s (since 0.12.60):
+  ([runtime-interface.md](runtime-interface.md), `packs`); Workflow #477 PC-1 (since 0.12.68):
+  that display, and the package's business part (`catalog`, `{consumes, produces}`), come from
+  its game's `pack-catalog.json`, which replaced `ui.json`, and each game carries the index both
+  ways ([pack-catalog.md](pack-catalog.md)). Workflow #455 G-R2s (since 0.12.60):
   their composition takes the composer's irreversible input from that same reading of every
   registered package's `control.json` ("The irreversible mark", its limit there); the row member
   `irreversible` stays the package's own declaration.

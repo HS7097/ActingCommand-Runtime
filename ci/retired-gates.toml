@@ -1368,3 +1368,25 @@ test = "actingcommand-actingctl::gate::lab6s2b2::lab6s2b2_install_transition_rec
 ruling = "Workflow #434 LAB-6S4a (0.12.63; register §1.287, \"Slice LAB-6S4a\"; the coordinator's brief rd-1115/brief-434-lab6s4a-five-kinds.md and rulings N4 and N8 of the LAB-6 survey, board #434)"
 reason = "Removed with install-transition: it pinned the receipts of the transition's drain and of its ticket's commit, as the released console's installation helper decodes them. With install-control [0, 0] the helper negotiates revision 0 and takes its cold path, request-shutdown."
 covered_by = "actingcommand-actingctl::gate::lab6s2b2::lab6s2b2_request_shutdown_receipt_decodes_as_the_released_helper_decodes, in the same apps.toml row: the cold path's receipt, decoded as the helper decodes it."
+
+# apps.toml, the row of Workflow #429 R-11 (ui.json), and the row of Workflow #464 P2 fix round 1.
+[[retired]]
+fragment = "apps"
+test = "actingcommand-contract::lib::standard_pack_ui::tests::r11_t1_a_valid_ui_json_reads_back_exactly_as_written"
+ruling = "Workflow #477 PC-1 (0.12.68; register §1.438; the coordinator's brief rd-1116/brief-477-pc1-pack-catalog.md; the owner's answer 1 of 11-16 on board #477: pack-catalog.json replaces ui.json outright)"
+reason = "Removed with the reader of ui.json (standard_pack_ui.rs became standard_pack_catalog.rs): nothing reads ui.json any more, a root that still holds it gets standard_pack_ui_retired."
+covered_by = "actingcommand-contract::lib::standard_pack_catalog::tests::pc1_a_full_catalog_reads_with_both_parts and pc1_display_defects_are_warnings_with_the_fallback, in the apps.toml row of #477 PC-1: the display part of pack-catalog.json, which holds what ui.json held, reads back as written and falls back by package."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-contract::lib::standard_pack_ui::tests::r11_t2_each_ui_json_violation_is_reported_at_its_place"
+ruling = "Workflow #477 PC-1 (0.12.68; register §1.438; the coordinator's brief rd-1116/brief-477-pc1-pack-catalog.md; the owner's answer 1 of 11-16 on board #477: pack-catalog.json replaces ui.json outright)"
+reason = "Removed with the reader of ui.json and its four words ui_out_of_limits, ui_duplicate, ui_group_unknown and ui_parameter_undeclared; the catalog's words replace the first three, and the catalog has no parameters member (a package's variables carry their own texts since Workflow #463 V1)."
+covered_by = "actingcommand-contract::lib::standard_pack_catalog::tests::pc1_each_business_refusal_is_an_error_at_its_pointer, pc1_an_unknown_member_and_a_value_member_are_errors and pc1_display_defects_are_warnings_with_the_fallback, in the apps.toml row of #477 PC-1: each error and each display defect of pack-catalog.json at its pointer."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actinglab::bin:actinglab::tests::gate_464_p2::p2_ui_json_is_carried_and_a_refused_one_fails_the_build"
+ruling = "Workflow #477 PC-1 (0.12.68; register §1.438; the coordinator's brief rd-1116/brief-477-pc1-pack-catalog.md, item 7; the owner's answer 1 of 11-16 on board #477: pack-catalog.json replaces ui.json outright)"
+reason = "Replaced: standard-pack build carries pack-catalog.json instead of ui.json, which it carries no more."
+covered_by = "actingcommand-actinglab::bin:actinglab::tests::gate_464_p2::p2_pack_catalog_is_carried_and_one_wrong_in_its_business_part_fails_the_build, in the apps.toml row of #477 PC-1: the file goes into the zip byte for byte and one wrong in its business part fails the build."

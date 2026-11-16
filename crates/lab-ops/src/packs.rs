@@ -13,13 +13,19 @@
 //! composer-mode configuration (a `policy` without `catalog` and `procedure_manifest`) decodes as
 //! actingd decodes it, and its installation rows are the procedures the scheduler workbench
 //! composes from the games' `schedule.json` for the configured instances, with the same composer.
-//! Workflow #429 R-11 (register §1.240): offline, with no interface revision, each sound game root
-//! of `standard_packs` also carries its `ui.json` as written (`ui`) and that file's `display`, and
-//! each composed installation row the tasks that run its package (`task_ids`, until SS-7), whether
-//! its package is irreversible as the Runtime derives it from its `control.json` `provides`
-//! (`irreversible`), and its game's `ui.json` entry for it (`ui`) and `display`. A game root
-//! without `ui.json` answers as before plus `task_ids` and `irreversible`; a refused `ui.json`
-//! adds its warnings and changes no row.
+//! Workflow #429 R-11 (register §1.240): offline, with no interface revision, each composed
+//! installation row carries the tasks that run its package (`task_ids`, until SS-7) and whether its
+//! package is irreversible as the Runtime derives it from its `control.json` `provides`
+//! (`irreversible`). Workflow #477 PC-1 (register §1.438; contracts/pack-catalog.md): the display
+//! R-11 read from `ui.json` comes from the game root's `pack-catalog.json`, which replaced it:
+//! each sound game root of `standard_packs` carries the file's display part as a client reads it
+//! (`ui`, `{groups, packs}`), its `display` and the index both ways (`index`), and each composed
+//! row its package's display (`ui`), the game's `display` and its package's business part
+//! (`catalog`, `{consumes, produces}`). A game root without the file answers as before; a file
+//! whose business part is wrong adds its errors as warnings (`standard_pack_root_invalid`) and
+//! changes no row; a display defect is the warning `standard_pack_catalog_display_invalid` and
+//! that package shows with its id; a root that still holds `ui.json` gets the warning
+//! `standard_pack_ui_retired`, and nothing reads that file.
 
 use crate::budget::{self, Budget, Fitted};
 use crate::cli_line;
@@ -28,14 +34,16 @@ use crate::instance_selector::SelectorMiss;
 use actingcommand_contract::codes::{ContractCode, SharedCode};
 use actingcommand_contract::outcome::{IoOp, Outcome, RawSource};
 use actingcommand_contract::{
-    BundleIndex, BundleMaintenance, DeclaredCapabilities, InstalledProcess, IrreversiblePackages,
-    MAX_STANDARD_PACK_UI_BYTES, ProvidedCapability, STANDARD_PACK_BUNDLE_FILE,
-    STANDARD_PACK_DISPLAY_LAYOUT_FILE, STANDARD_PACK_INTERRUPTS_FILE,
-    STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_PAGES_FILE, STANDARD_PACK_SCHEDULE_FILE,
-    STANDARD_PACK_TABLES_DIRECTORY, STANDARD_PACK_UI_FILE, StandardPackRegistry, StandardPackRoot,
-    StandardPackRootBytes, StandardPackRootIssue, StandardPackTableReport, StandardPackUi,
-    parse_standard_pack_ui, read_standard_pack_root, read_standard_pack_root_with_ui,
-    read_standard_pack_tables,
+    BundleIndex, BundleMaintenance, CatalogBusiness, DeclaredCapabilities, InstalledProcess,
+    IrreversiblePackages, MAX_STANDARD_PACK_CATALOG_BYTES, ProvidedCapability,
+    STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_CATALOG_FILE, STANDARD_PACK_DISPLAY_LAYOUT_FILE,
+    STANDARD_PACK_INTERRUPTS_FILE, STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_PAGES_FILE,
+    STANDARD_PACK_RETIRED_UI_FILE, STANDARD_PACK_SCHEDULE_FILE, STANDARD_PACK_TABLES_DIRECTORY,
+    StandardPackCatalog, StandardPackCatalogIndex, StandardPackRegistry, StandardPackRoot,
+    StandardPackRootBytes, StandardPackRootIssue, StandardPackTableReport, catalog_display_outcome,
+    parse_standard_pack_catalog, parse_standard_pack_schedule, read_standard_pack_root,
+    read_standard_pack_root_with_catalog, read_standard_pack_tables, retired_ui_outcome,
+    standard_pack_schedule_pools,
 };
 use actingcommand_policy::{
     STANDARD_PACK_OPERATION_ID, StandardPackBinding, StandardPackComposeInput,
@@ -155,17 +163,23 @@ struct StandardPacksRow {
 struct StandardPackGameRow {
     game: String,
     tables: Vec<StandardPackTableReport>,
-    /// R-11: the root's `ui.json` as written, when it holds one that keeps its rules.
+    /// Workflow #477 PC-1: the display part of the root's `pack-catalog.json` as a client reads
+    /// it, `{groups, packs}` ([`StandardPackCatalog::ui`]), when the file's business part keeps
+    /// every rule (R-11's `ui.json`, as written, before it).
     #[serde(skip_serializing_if = "Option::is_none")]
-    ui: Option<StandardPackUi>,
-    /// R-11: that file's `display`, when it declares one.
+    ui: Option<Value>,
+    /// PC-1: that file's `display`, when it declares one that keeps every rule.
     #[serde(skip_serializing_if = "Option::is_none")]
     display: Option<Value>,
+    /// PC-1: the index both ways of that file, computed when it is read, never stored.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    index: Option<StandardPackCatalogIndex>,
 }
 
 /// A binding of the installation. `readable` is present exactly when `path` is. R-11: a composed
 /// row (composer mode) also carries `task_ids` and, when they are known, `irreversible`, `ui` and
-/// `display`; a configured binding (catalog mode) carries none of them.
+/// `display` (Workflow #477 PC-1: from `pack-catalog.json`) and (PC-1) `catalog`; a configured
+/// binding (catalog mode) carries none of them.
 #[derive(Serialize)]
 struct InstallationRow {
     role: Role,
@@ -187,12 +201,18 @@ struct InstallationRow {
     /// `control.json` cannot be read.
     #[serde(skip_serializing_if = "Option::is_none")]
     irreversible: Option<bool>,
-    /// R-11: the entry of its game's `ui.json` for the package, as written.
+    /// R-11: the package's display, as written; Workflow #477 PC-1: its entry's display members
+    /// in its game's `pack-catalog.json` when they keep every rule (the contract's
+    /// `CatalogEntry::display`).
     #[serde(skip_serializing_if = "Option::is_none")]
     ui: Option<Value>,
-    /// R-11: its game's `ui.json` `display`, as written.
+    /// R-11: its game's `display`, as written; PC-1: of its game's `pack-catalog.json`.
     #[serde(skip_serializing_if = "Option::is_none")]
     display: Option<Value>,
+    /// PC-1: the package's business part, `{consumes, produces}`, as its entry of its game's
+    /// `pack-catalog.json` declares it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    catalog: Option<CatalogBusiness>,
 }
 
 pub struct Answer {
@@ -605,6 +625,16 @@ impl Rows {
         });
     }
 
+    /// Workflow #477 PC-1: a root file of a game root that is there and cannot be read:
+    /// `package_binding_unreadable` with its path and the OS error beneath it.
+    fn unreadable_file(&mut self, path: &Path, error: &std::io::Error) {
+        self.warn(
+            Outcome::new(ActingctlCode::PackageBindingUnreadable)
+                .path(path)
+                .caused_by(Outcome::from_io_error(error, IoOp::Read)),
+        );
+    }
+
     fn instance(&mut self, instance: &InstanceEntry) -> InstanceRow {
         let mut packs = Vec::new();
         if self.wants(Role::Startup)
@@ -694,6 +724,7 @@ impl Rows {
                 irreversible: None,
                 ui: None,
                 display: None,
+                catalog: None,
             });
         }
         rows
@@ -710,9 +741,10 @@ impl Rows {
     /// each broken root and each refused `schedule.json` is `standard_pack_root_invalid`, and that
     /// game is left out while the others are composed; a composition refused as a whole lists
     /// no row. Workflow #429 R-11: a row also carries the composed tasks that run its package
-    /// (`task_ids`, by `procedure_ref`, in id order), whether the package is irreversible
-    /// ([`Rows::irreversible`]), and, when its game root holds a `ui.json` that keeps its rules
-    /// ([`Rows::game_ui`]), the file's entry for the package (`ui`) and its `display`.
+    /// (`task_ids`, by `procedure_ref`, in id order) and whether the package is irreversible
+    /// ([`Rows::irreversible`]). Workflow #477 PC-1: and, when its game root holds a
+    /// `pack-catalog.json` whose business part keeps every rule ([`Rows::game_catalog`]), the
+    /// package's display (`ui`), the file's `display` and the package's business part (`catalog`).
     fn composed_installation(
         &mut self,
         configured: &Path,
@@ -738,13 +770,16 @@ impl Rows {
             .map(|binding| binding.game_id.clone())
             .collect::<BTreeSet<_>>();
         let mut read = BTreeMap::new();
-        let mut uis = BTreeMap::new();
+        let mut catalogs = BTreeMap::new();
         for game in games {
             let directory = root.join(&game);
             match schedule_game(&directory, &game) {
                 Ok(Some(files)) => {
-                    if let Some(ui) = self.game_ui(&directory, &game, &files.root.registry) {
-                        uis.insert(game.clone(), ui);
+                    let pools = schedule_pools(files.schedule.as_deref());
+                    if let Some(catalog) =
+                        self.game_catalog(&directory, &game, &files.root.registry, pools.as_ref())
+                    {
+                        catalogs.insert(game.clone(), catalog);
                     }
                     read.insert(game, files);
                 }
@@ -853,7 +888,8 @@ impl Rows {
                 if !readable {
                     self.unreadable(&path, None);
                 }
-                let ui = uis.get(&procedure.game_id);
+                let catalog = catalogs.get(&procedure.game_id);
+                let entry = catalog.and_then(|catalog| catalog.entry(&procedure.package_id));
                 InstallationRow {
                     role: Role::Procedure,
                     package_id: Some(procedure.package_id.clone()),
@@ -871,8 +907,11 @@ impl Rows {
                             .collect(),
                     ),
                     irreversible: self.irreversible(&path, readable, &declared),
-                    ui: ui.and_then(|ui| ui.pack(&procedure.package_id)).cloned(),
-                    display: ui.and_then(StandardPackUi::display).cloned(),
+                    ui: entry
+                        .and_then(|entry| entry.display.clone())
+                        .map(Value::Object),
+                    display: catalog.and_then(StandardPackCatalog::display).cloned(),
+                    catalog: entry.map(|entry| entry.business.clone()),
                 }
             })
             .collect::<Vec<_>>();
@@ -900,34 +939,44 @@ impl Rows {
         rows
     }
 
-    /// Workflow #429 R-11 (register §1.240): the `ui.json` of the game root `directory` of
-    /// `game`, whose registry is `registry`, when it holds one that keeps its rules, checked by
-    /// the contract's [`parse_standard_pack_ui`]. A file that cannot be read is
-    /// `package_binding_unreadable` with its path and the OS error beneath it; each violation of
-    /// a refused one is `standard_pack_root_invalid` (the game, the file's path, its
-    /// `standard_pack_problem` and `json_pointer`). Either way the root and its rows are listed
-    /// as without the file: no Runtime component reads it.
-    fn game_ui(
+    /// Workflow #477 PC-1 (register §1.438; contracts/pack-catalog.md): the `pack-catalog.json` of
+    /// the game root `directory` of `game`, whose registry is `registry` and whose `schedule.json`
+    /// declares `pools` (`None`: not judged, that file could not be read), when it holds one whose
+    /// business part keeps every rule, read by the contract's [`parse_standard_pack_catalog`]. A
+    /// file that cannot be read is `package_binding_unreadable` with its path and the OS error
+    /// beneath it; each error of a refused one is `standard_pack_root_invalid` (the game, the
+    /// file's path, its `standard_pack_problem` and `json_pointer`), and the root and its rows are
+    /// then listed as without the file. Each display defect of a file that reads is
+    /// `standard_pack_catalog_display_invalid`. A root that still holds `ui.json` gets one
+    /// `standard_pack_ui_retired` (the game, the file's path): nothing reads that file. No Runtime
+    /// component reads either file.
+    fn game_catalog(
         &mut self,
         directory: &Path,
         game: &str,
         registry: &StandardPackRegistry,
-    ) -> Option<StandardPackUi> {
-        let path = directory.join(STANDARD_PACK_UI_FILE);
-        let bytes = match read_capped(&path, MAX_STANDARD_PACK_UI_BYTES as u64) {
+        pools: Option<&BTreeSet<String>>,
+    ) -> Option<StandardPackCatalog> {
+        let retired = directory.join(STANDARD_PACK_RETIRED_UI_FILE);
+        if fs::symlink_metadata(&retired).is_ok() {
+            self.warn(retired_ui_outcome(game, &retired));
+        }
+        let path = directory.join(STANDARD_PACK_CATALOG_FILE);
+        let bytes = match read_capped(&path, MAX_STANDARD_PACK_CATALOG_BYTES as u64) {
             Ok(bytes) => bytes,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
             Err(error) => {
-                self.warn(
-                    Outcome::new(ActingctlCode::PackageBindingUnreadable)
-                        .path(&path)
-                        .caused_by(Outcome::from_io_error(&error, IoOp::Read)),
-                );
+                self.unreadable_file(&path, &error);
                 return None;
             }
         };
-        match parse_standard_pack_ui(&bytes, game, registry) {
-            Ok(ui) => Some(ui),
+        match parse_standard_pack_catalog(&bytes, game, registry, pools) {
+            Ok(catalog) => {
+                for issue in catalog.display_issues() {
+                    self.warn(catalog_display_outcome(game, &path, issue));
+                }
+                Some(catalog)
+            }
             Err(issues) => {
                 for issue in issues {
                     self.warn(root_invalid(game, directory, issue));
@@ -1012,11 +1061,12 @@ impl Rows {
     /// them, their column expiries judged at `now_unix_ms`. A broken game root's tables are not
     /// read and the root is not listed (check-config and the Runtime's start report it); a root
     /// that cannot be listed is the warning `package_binding_unreadable`, and a `tables/` that
-    /// cannot be listed is the warning `standard_pack_table_unreadable`. Workflow #429 R-11: a
-    /// sound root also lists its `ui.json` as written (`ui`) and that file's `display`
-    /// ([`Rows::game_ui`]); a directory that is a game root only by its `ui.json`, which neither
-    /// check-config nor the Runtime reads, is the warning `standard_pack_root_invalid`
-    /// `bundle_missing` and is not listed.
+    /// cannot be listed is the warning `standard_pack_table_unreadable`. Workflow #477 PC-1: a
+    /// sound root also lists the display part of its `pack-catalog.json` (`ui`), that file's
+    /// `display` and the index both ways (`index`) ([`Rows::game_catalog`], the pools those of its
+    /// `schedule.json`); a directory that is a game root only by its `pack-catalog.json`, which
+    /// neither check-config nor the Runtime reads, is the warning `standard_pack_root_invalid`
+    /// `bundle_missing` and is not listed (R-11's rule of `ui.json`, which nothing reads now).
     fn standard_packs(&mut self, configured: &Path, now_unix_ms: u64) -> StandardPacksRow {
         let root = self.resolve(configured);
         let mut games = Vec::new();
@@ -1041,13 +1091,38 @@ impl Rows {
                             Vec::new()
                         }
                     };
-                    let ui = self.game_ui(&directory, &game, &sound.registry);
-                    let display = ui.as_ref().and_then(StandardPackUi::display).cloned();
+                    // `schedule.json` is read for the catalog's pools only when the root holds the
+                    // catalog, so that a root without it answers as before.
+                    let has_catalog =
+                        fs::symlink_metadata(directory.join(STANDARD_PACK_CATALOG_FILE)).is_ok();
+                    let pools = if has_catalog {
+                        match fs::read(directory.join(STANDARD_PACK_SCHEDULE_FILE)) {
+                            Ok(schedule) => schedule_pools(Some(schedule.as_slice())),
+                            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                                schedule_pools(None)
+                            }
+                            Err(error) => {
+                                self.unreadable_file(
+                                    &directory.join(STANDARD_PACK_SCHEDULE_FILE),
+                                    &error,
+                                );
+                                None
+                            }
+                        }
+                    } else {
+                        None
+                    };
+                    let catalog =
+                        self.game_catalog(&directory, &game, &sound.registry, pools.as_ref());
                     games.push(StandardPackGameRow {
                         game,
                         tables,
-                        ui,
-                        display,
+                        ui: catalog.as_ref().map(StandardPackCatalog::ui),
+                        display: catalog
+                            .as_ref()
+                            .and_then(StandardPackCatalog::display)
+                            .cloned(),
+                        index: catalog.as_ref().map(StandardPackCatalog::index),
                     });
                 }
             }
@@ -1081,9 +1156,10 @@ fn game_directories(root: &Path) -> Option<Vec<(String, PathBuf)>> {
 /// The sound game root of `game` at `directory` as the Runtime reads it (the contract's
 /// [`read_standard_pack_root`] over its root files, and `tables/` making it one); `None` for a
 /// root that is broken or whose root files cannot be read, and for a directory that is no game
-/// root. Workflow #429 R-11: a directory that is a game root only by its `ui.json` (no other root
-/// file, no `tables/`) is the contract's refusal of [`read_standard_pack_root_with_ui`],
-/// `bundle_missing`: neither the Runtime nor check-config reads `ui.json`, so `packs` reports it.
+/// root. Workflow #477 PC-1 (R-11's rule, of the file that replaced `ui.json`): a directory that is
+/// a game root only by its `pack-catalog.json` (no other root file, no `tables/`) is the contract's
+/// refusal of [`read_standard_pack_root_with_catalog`], `bundle_missing`: neither the Runtime nor
+/// check-config reads the file, so `packs` reports it.
 fn sound_game_root(
     directory: &Path,
     game: &str,
@@ -1104,7 +1180,7 @@ fn sound_game_root(
         return Ok(None);
     };
     let tables = fs::symlink_metadata(directory.join(STANDARD_PACK_TABLES_DIRECTORY)).is_ok();
-    let ui = fs::symlink_metadata(directory.join(STANDARD_PACK_UI_FILE)).is_ok();
+    let catalog = fs::symlink_metadata(directory.join(STANDARD_PACK_CATALOG_FILE)).is_ok();
     let files = StandardPackRootBytes {
         bundle: bundle.as_deref(),
         pages: pages.as_deref(),
@@ -1115,8 +1191,21 @@ fn sound_game_root(
     };
     match read_standard_pack_root(files, game) {
         Ok(Some(root)) => Ok(Some(root)),
-        Ok(None) => read_standard_pack_root_with_ui(files, ui, game),
+        Ok(None) => read_standard_pack_root_with_catalog(files, catalog, game),
         Err(_) => Ok(None),
+    }
+}
+
+/// Workflow #477 PC-1: the pools the `schedule.json` of a game root declares, which its
+/// `pack-catalog.json` may name: none for a root without the file (`schedule` `None`), `None` for
+/// one whose file the contract's reader refuses (that refusal is the composition's, and no pool
+/// reference of the catalog is judged by `packs` then).
+fn schedule_pools(schedule: Option<&[u8]>) -> Option<BTreeSet<String>> {
+    match schedule {
+        None => Some(BTreeSet::new()),
+        Some(bytes) => parse_standard_pack_schedule(bytes)
+            .ok()
+            .map(|schedule| standard_pack_schedule_pools(&schedule)),
     }
 }
 
@@ -1186,9 +1275,9 @@ struct ScheduleGame {
 /// bundle's maintenance entries, `schedule.json`); `None` when the directory holds no game root.
 /// A file that cannot be read is `package_binding_unreadable` with its `path`; a broken root is
 /// `standard_pack_root_invalid` with the game, the refused file, its problem and pointer.
-/// Workflow #429 R-11: a directory that is a game root only by its `ui.json` is such a broken
-/// root (`bundle_missing`, [`read_standard_pack_root_with_ui`]); the file itself is read by
-/// [`Rows::game_ui`] and never breaks the root.
+/// Workflow #477 PC-1: a directory that is a game root only by its `pack-catalog.json` is such a
+/// broken root (`bundle_missing`, [`read_standard_pack_root_with_catalog`]); the file itself is
+/// read by [`Rows::game_catalog`] and never breaks the root.
 fn schedule_game(directory: &Path, game: &str) -> Result<Option<ScheduleGame>, Outcome> {
     let read = |file: &str| {
         let path = directory.join(file);
@@ -1206,8 +1295,8 @@ fn schedule_game(directory: &Path, game: &str) -> Result<Option<ScheduleGame>, O
     let navigation = read(STANDARD_PACK_NAVIGATION_FILE)?;
     let display_layout = read(STANDARD_PACK_DISPLAY_LAYOUT_FILE)?;
     let tables = fs::symlink_metadata(directory.join(STANDARD_PACK_TABLES_DIRECTORY)).is_ok();
-    let ui = fs::symlink_metadata(directory.join(STANDARD_PACK_UI_FILE)).is_ok();
-    let root = read_standard_pack_root_with_ui(
+    let catalog = fs::symlink_metadata(directory.join(STANDARD_PACK_CATALOG_FILE)).is_ok();
+    let root = read_standard_pack_root_with_catalog(
         StandardPackRootBytes {
             bundle: bundle.as_deref(),
             pages: pages.as_deref(),
@@ -1216,7 +1305,7 @@ fn schedule_game(directory: &Path, game: &str) -> Result<Option<ScheduleGame>, O
             tables,
             display_layout: display_layout.as_deref(),
         },
-        ui,
+        catalog,
         game,
     )
     .map_err(|issue| root_invalid(game, directory, issue))?;
@@ -2131,5 +2220,187 @@ mod tests {
     /// How many packages the G-R2s fixture registers.
     fn packages_count(unread: bool) -> usize {
         if unread { 4 } else { 3 }
+    }
+
+    // Workflow #477 PC-1 (register §1.438; work order `rd-1116/brief-477-pc1-pack-catalog.md`, the
+    // tests of `packs`): the R-11 fixture's game root, its `schedule.json` declaring two pools.
+    const POOL_A: &str = "pool.fixture_a";
+    const POOL_B: &str = "pool.fixture_b";
+
+    /// A pool of constant capacity read from a fact, as the composer takes one.
+    fn fixture_pool(id: &str) -> Value {
+        serde_json::json!({
+            "id": id,
+            "capacity": 1000,
+            "projection": {"kind": "none"},
+            "observation": {"kind": "fact", "fact_key": format!("resource.{}", &id["pool.".len()..])},
+            "value_source": {"kind": "ledger_fact", "minimum_confidence_milli": 500},
+            "group_delay": {"minimum_delay_ms": 60000, "maximum_delay_ms": 300000}
+        })
+    }
+
+    /// Below `root`, the R-11 fixture's game root of [`GAME`] with [`IRREVERSIBLE`] and [`PLAIN`],
+    /// one instance bound to it, and its `schedule.json` declaring [`POOL_A`] and [`POOL_B`].
+    /// Answers the configuration's path and the game root.
+    fn pc1_install(root: &Path) -> (PathBuf, PathBuf) {
+        use crate::standard_pack_schedule_fixture::write_json;
+        let config = r11_install(
+            root,
+            &[(
+                GAME,
+                vec![
+                    (
+                        "fixture.one",
+                        IRREVERSIBLE,
+                        Some(irreversible_control(IRREVERSIBLE)),
+                    ),
+                    ("fixture.two", PLAIN, Some(plain_control(PLAIN))),
+                ],
+            )],
+            &[("node-a", GAME)],
+        );
+        let game_root = root.join("packages").join(GAME);
+        let path = game_root.join(STANDARD_PACK_SCHEDULE_FILE);
+        let mut schedule: Value =
+            serde_json::from_slice(&fs::read(&path).expect("schedule.json")).expect("JSON");
+        schedule["pools"] = serde_json::json!([fixture_pool(POOL_A), fixture_pool(POOL_B)]);
+        write_json(&path, &schedule);
+        (config, game_root)
+    }
+
+    /// PC-1, `packs` with the file: each composed row carries its package's display as the file
+    /// writes it (`ui`, absent for a package whose entry writes none), the file's `display` and its
+    /// package's business part (`catalog`); the game carries the display part a client reads
+    /// (`ui`: the groups and the packages' displays), the file's `display` and the index both ways
+    /// (`index`). A file without a defect adds no warning.
+    #[test]
+    fn pc1_with_the_file_rows_carry_display_and_catalog_and_the_game_its_index() {
+        use crate::standard_pack_schedule_fixture::write_json;
+        let root = TempDir::new().expect("tempdir");
+        let (config, game_root) = pc1_install(root.path());
+        let display = serde_json::json!({"aspect_ratios": ["16:9"], "safe_area": "declared_word"});
+        let irreversible_display = serde_json::json!({
+            "package_id": IRREVERSIBLE,
+            "title": {"en": "Irreversible"},
+            "summary": {"en": "A fixture package."},
+            "group": "group_a"
+        });
+        let irreversible_business = serde_json::json!({
+            "consumes": [{"pool_id": POOL_A, "quantity": {"kind": "constant", "amount": 2}}],
+            "produces": [{"pool_id": POOL_B, "quantity": {"kind": "pending"}}]
+        });
+        let mut irreversible_entry = irreversible_display.clone();
+        for side in ["consumes", "produces"] {
+            irreversible_entry[side] = irreversible_business[side].clone();
+        }
+        let groups = serde_json::json!([{"id": "group_a", "title": {"en": "Group A"}}]);
+        write_json(
+            &game_root.join(STANDARD_PACK_CATALOG_FILE),
+            &serde_json::json!({
+                "schema_version": "actingcommand.pack-catalog.v1",
+                "game": GAME,
+                "groups": groups,
+                "display": display,
+                "packs": [
+                    irreversible_entry,
+                    {"package_id": PLAIN, "consumes": [], "produces": [{"pool_id": POOL_B}]}
+                ]
+            }),
+        );
+
+        let answer = r11_answer(&config);
+
+        assert!(answer.warnings().is_empty(), "{:?}", answer.warnings());
+        let rows = rows_by_package(&answer);
+        assert_eq!(rows[IRREVERSIBLE]["ui"], irreversible_display);
+        assert_eq!(rows[IRREVERSIBLE]["display"], display);
+        assert_eq!(rows[IRREVERSIBLE]["catalog"], irreversible_business);
+        assert_eq!(
+            rows[IRREVERSIBLE]["task_ids"],
+            serde_json::json!(["fixture.one"])
+        );
+        assert_eq!(rows[PLAIN].get("ui"), None, "no display: its id");
+        assert_eq!(rows[PLAIN]["display"], display);
+        assert_eq!(
+            rows[PLAIN]["catalog"],
+            serde_json::json!({"consumes": [], "produces": [{"pool_id": POOL_B}]})
+        );
+        assert_eq!(
+            serde_json::to_value(answer.packs()).expect("encode the answer")["standard_packs"]["games"],
+            serde_json::json!([{
+                "game": GAME,
+                "tables": [],
+                "ui": {"groups": groups, "packs": [irreversible_display]},
+                "display": display,
+                "index": {
+                    "producing": {POOL_B: [IRREVERSIBLE, PLAIN]},
+                    "consuming": {POOL_A: [IRREVERSIBLE]}
+                }
+            }])
+        );
+    }
+
+    /// PC-1, `packs` without the file and with only a leftover `ui.json`: the answer is the one
+    /// without either, byte for byte, but for one warning, `standard_pack_ui_retired` naming the
+    /// game and the file: the display is the fallback (no `ui`, `display` or `index` on the game,
+    /// none of them or `catalog` on a row), since nothing reads `ui.json` any more.
+    #[test]
+    fn pc1_with_only_a_leftover_ui_json_the_display_falls_back_with_one_warning() {
+        use crate::standard_pack_schedule_fixture::write_json;
+        let root = TempDir::new().expect("tempdir");
+        let (config, game_root) = pc1_install(root.path());
+        let without = r11_answer(&config);
+        assert!(without.warnings().is_empty(), "{:?}", without.warnings());
+        let without_line = serde_json::to_string(without.packs()).expect("encode the answer");
+        assert_eq!(
+            serde_json::to_value(without.packs()).expect("encode the answer")["standard_packs"]["games"],
+            serde_json::json!([{"game": GAME, "tables": []}])
+        );
+        for row in rows_by_package(&without).values() {
+            for member in ["ui", "display", "catalog"] {
+                assert_eq!(row.get(member), None, "{member}: {row}");
+            }
+        }
+
+        let ui = game_root.join(STANDARD_PACK_RETIRED_UI_FILE);
+        write_json(
+            &ui,
+            &serde_json::json!({
+                "schema_version": "actingcommand.ui.v1",
+                "game": GAME,
+                "groups": [{"id": "group_a", "title": {"en": "Group A"}}],
+                "packs": [{"package_id": PLAIN, "title": {"en": "Plain"},
+                           "summary": {"en": "A fixture package."}, "group": "group_a"}],
+                "display": {"aspect_ratios": ["16:9"]}
+            }),
+        );
+        let leftover = r11_answer(&config);
+
+        assert_eq!(
+            serde_json::to_string(leftover.packs()).expect("encode the answer"),
+            without_line,
+            "the answer but its warning is the one without the file"
+        );
+        let base = Path::new(&leftover.packs().source().config)
+            .parent()
+            .expect("the configuration's folder")
+            .to_path_buf();
+        let warnings = leftover.warnings();
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(
+            warnings[0].is(SharedCode::StandardPackUiRetired),
+            "{warnings:?}"
+        );
+        assert_eq!(warnings[0].value("game"), Some(&Value::from(GAME)));
+        assert_eq!(
+            warnings[0].value("path"),
+            Some(&Value::from(
+                base.join("packages")
+                    .join(GAME)
+                    .join(STANDARD_PACK_RETIRED_UI_FILE)
+                    .display()
+                    .to_string()
+            ))
+        );
     }
 }

@@ -31332,6 +31332,114 @@ review of `75a76e03` and the first CI run on it; the rules are the coordinator's
 **At deploy.** Nothing to configure: an installation's configuration already names each
 instance's game and server in `policy.facts.instances`.
 
+### 1.438 Slice #477 PC-1 (0.12.68): one package declaration per standard-pack root, `pack-catalog.json`, read, checked, indexed both ways and carried by build and place (Workflow #477; the owner's approval on board #477 on 11-16 and her six answers for this slice; the rest the coordinator's ruling under her words "the rest is approved"; read-only study `rd-1116/report-pack-catalog-claims-study.md`; coordinator work order `rd-1116/brief-477-pc1-pack-catalog.md`, read on main `03258b33`)
+
+This section takes 1.438, the number the work order gives: §1.432 to §1.437 belong to slices not
+merged yet. It ships in 0.12.68.
+
+**Why.** A game root said what its packages are and do in five places (`ui.json`, the rules of
+`schedule.json`, the packages' own declarations, the goal declaration, the model's tables), and
+no rule declared a production, so a resource goal reached nothing. The owner approved one
+declaration per package, whose business part the scheduler will later read as an index. The
+contract is [pack-catalog.md](pack-catalog.md); its section "The owner's six answers" gives the
+reason of each choice.
+
+**The rule.**
+- *The file.* `<game root>/pack-catalog.json`, `actingcommand.pack-catalog.v1`: a display part
+  (`groups`, `display`, per entry `title`, `summary`, `group`, `risk`: what `ui.json` carried but
+  `parameters`) and a business part (per entry `consumes` and `produces`, each pool of
+  `schedule.json` with an optional quantity `{"kind":"constant","amount":N}` or
+  `{"kind":"pending"}`). No value member: a member the reader does not know is an error at its
+  pointer, everywhere in the file.
+- *Errors and warnings* (the owner's answer 6). An error of the file or of its business part
+  (`malformed`, `game_mismatch`, `package_not_listed`, `catalog_duplicate`,
+  `catalog_pool_undeclared`, `catalog_out_of_limits`) makes the root's declaration wrong; a display
+  defect (`malformed`, `catalog_text_missing`, `catalog_group_unknown`, `catalog_duplicate`,
+  `catalog_out_of_limits`) is a warning and leaves out what it touches, the package showing by its
+  id. A package without an entry is neither, counted and listed.
+- *The index* (`producing`, `consuming`: per pool the packages, each once, pending and absent
+  quantities included) is computed by the reader and never stored.
+- *`ui.json` is gone* (the owner's answer 1): its reader `standard_pack_ui.rs` became
+  `standard_pack_catalog.rs`; `packs`, `standard-pack check`, the build and `place` read the new
+  file instead; a root that still holds `ui.json` gets `standard_pack_ui_retired`, and nothing
+  reads both.
+- *Two places, compared* (answer 2): each difference between an entry's business part and the
+  package's rules in `schedule.json` is `standard_pack_catalog_schedule_differs`.
+- *The writer* (answer 5): `actinglab standard-pack catalog --root <game root> [--plan]`, one rule
+  (`merge_standard_pack_catalog`): an entry for every package of `bundle.json`, an existing entry
+  kept as written and its differences answered, a new one's display from a leftover `ui.json` and
+  its business part the union over its rules (constant when every rule states the same amount,
+  else pending); `--plan` answers the document, without it an atomic write when the bytes change;
+  a root inside an installation refused.
+- *The Runtime does not read the file* (answer 4): its root reader, startup, run preparation, the
+  policy crate, the scheduler workbench and check-config are unchanged, and a change of the file
+  triggers no composition.
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The reader, the index, the comparison, the merge | `crates/actingcommand-contract/src/standard_pack_catalog.rs` (was `standard_pack_ui.rs`): `parse_standard_pack_catalog`, `read_standard_pack_root_with_catalog`, `StandardPackCatalog::{ui, display, index, unlisted}`, `standard_pack_catalog_differences`, `merge_standard_pack_catalog`, `catalog_display_outcome`, `retired_ui_outcome`; the words in `standard_pack.rs` (`StandardPackProblem`) and the vocabularies `catalog_side`, `catalog_difference`; `goals.json`, `loading.json` and the variables keep reading their texts with the moved helpers |
+| `packs` | `crates/lab-ops/src/packs.rs`: `game_catalog` (in place of `game_ui`), the game row's `ui`, `display`, `index`, the composed row's `ui`, `display`, `catalog`; `apps/actingctl/src/mcp/packs.rs`: `ac_packs`' description and result schema |
+| `standard-pack check` | `crates/resource-tooling/src/standard_pack_check.rs`: `catalog_report`, the answer's last member `catalog` (`StandardPackCatalogReport`: `note`, `unlisted`) |
+| The writer | `crates/resource-tooling/src/standard_pack_catalog.rs` (`write_standard_pack_catalog`); `apps/actinglab/src/standard_pack_cli.rs` (`run_catalog`) |
+| Build | `apps/actinglab/src/resource_verify/bundle.rs` (`carry_catalog` in place of `carry_ui`), `steps.rs` (the checkout's read paths) |
+| Place | `crates/lab-rescue/src/install/place.rs`: `ROOT_FILES` (the catalog last, `ui.json` out), `RETIRED_WHEN_ABSENT` (the catalog first, `ui.json` kept so an installed one is set aside), `check_catalog` in the plan |
+| The row | `standard-pack catalog` in [lab-operations.json](lab-operations.json) (authoring, `root`, `plan`, slice `477-PC1`) and the notes of `packs`, `standard-pack check`, `standard-pack build` and `place`; `engine::COMMANDS` 71 (was 70), `own_flags::STRICT_ROWS` 34 and `REFUSING_COMMANDS` 67, `words::BUILT_SLICES` and the MCP server's `ACTINGLAB_SLICES` 15 each, the capability `standard-pack catalog` (offline), the dry-run declaration (mixed: `--plan` no effect, without it `dry_run_unsupported`), `ratchet/actinglab_commands.json` 107 commands. The Lab's MCP server offers `ac_standard_pack_catalog` through a `serve` child |
+| Texts | [pack-catalog.md](pack-catalog.md) (new); [package-reference.md](package-reference.md) (the root's files, the build's zip, `pack-catalog.json` and the retired `ui.json`); [standard-pack-schedule.md](standard-pack-schedule.md), [runtime-interface.md](runtime-interface.md) (`packs`), [resource-verify.md](resource-verify.md), [install-cli.md](install-cli.md), [standard-pack-goals.md](standard-pack-goals.md), [actinglab-dry-run.md](actinglab-dry-run.md), [lab-two-entries.md](lab-two-entries.md) (the rows children serve, counted again: 164 on Windows, 125 elsewhere, with `record ready` and `record frames`, which the count had not taken), `apps/actinglab-mcp/MANUAL.md` section 8, the READMEs |
+
+**Codes and words.** Seven contract codes, prefix `standard_pack_`:
+
+| Code | Category | Read by |
+|---|---|---|
+| `standard_pack_catalog_absent` (`game`, `path`) | info, a note | `standard-pack check`'s `catalog.note` |
+| `standard_pack_catalog_coverage` (`game`, `path`, `count`) | info, a note | the same, beside `unlisted` |
+| `standard_pack_catalog_display_invalid` (`game`, `path`, `standard_pack_problem`, `json_pointer`) | warning | `packs`, `standard-pack check`, `standard-pack catalog` |
+| `standard_pack_catalog_schedule_differs` (`game`, `package_id`, `pool_id`, `catalog_side`, `catalog_difference`, `task_id`?) | warning | `standard-pack check`, `standard-pack catalog` |
+| `standard_pack_ui_retired` (`game`, `path`) | warning | `packs`, `standard-pack check`, `standard-pack catalog`, `standard-pack build` |
+| `standard_pack_catalog_root_refused` (`path`, `install_root`) | error, the line refused | `standard-pack catalog` |
+| `standard_pack_catalog_write_failed` (`path`, the OS error its cause) | error, the line refused | `standard-pack catalog` |
+
+An error of the business part is the existing `standard_pack_root_invalid` (one warning per error
+in `packs`; the refusal of `standard-pack check` and `standard-pack catalog` with the first; a
+failure of the build's `bundle` step per error; `place`'s `pack_invalid` cause). The closed
+vocabulary `standard_pack_problem` loses `ui_out_of_limits`, `ui_duplicate`, `ui_group_unknown`
+and `ui_parameter_undeclared` and gains `catalog_out_of_limits`, `catalog_duplicate`,
+`catalog_pool_undeclared`, `catalog_group_unknown` and `catalog_text_missing`; two vocabularies are
+new, `catalog_side` (`consumes`, `produces`) and `catalog_difference` (`catalog_lacks`,
+`schedule_lacks`), each an outcome key of its own. No decision reads a code or a word. The
+outcome-code index is regenerated.
+
+**Tests** (apps gate map "#477 PC-1", sixteen): the contract reader (a full file with both parts
+and the smallest one; each refusal at its pointer; an unknown member and a value member; display
+defects as warnings with their fallback; the index from a merge of three rules naming one pool,
+with pending and absent quantities); `packs` (rows with display and `catalog`, the game's `index`;
+a leftover `ui.json` alone: ids and one warning); `standard-pack check` (each finding with its
+code; a wrong business part makes the root not ready, a display defect does not; the composition
+the same with and without the file); the writer (from `bundle.json` and `schedule.json` with a
+leftover `ui.json`, a second run unchanged; an entry kept and its differences; an installation
+refused; on the command line and through `serve --stdio`, `--plan` writing nothing); the build
+(the file carried byte for byte, one wrong in its business part failing the build); `place` (the
+file placed with its digest and set aside by a later zip without it, an installed `ui.json` set
+aside; a zip whose file is wrong in its business part refused before the hold). Adapted:
+`gate_r11_packs_and_ac_packs_answer_the_same_ui_irreversible_and_task_ids` reads the display from
+`pack-catalog.json`; `standard-pack check`'s goldens gain the member `catalog`
+(`gate_453_s8`, `gate_cov1`, `gate_sched_c1f1`). Retired with their mapping
+([ci/retired-gates.toml](../ci/retired-gates.toml)): the two R-11 reader tests and P2 fix round 1's
+`ui.json` build test.
+
+**What is not changed.** The policy crate, the composition bench and its file marks,
+`schedule.json`'s format, `adopt` and the readiness judgement (they do not know the file), the
+model's repository, every Runtime interface and every `package` revision: the Runtime reads no
+member of the file, and the `packs` answer is the Lab's offline read, which no revision covers. For
+a root without the file every answer is as before but `standard-pack check`'s new last member
+`catalog` (its note `standard_pack_catalog_absent`).
+
+**At deploy.** Nothing to configure. A resource repository writes its roots' files with
+`actinglab standard-pack catalog --root <working copy of the game root>` (each new entry taking
+its display from the root's `ui.json`), commits them, removes `ui.json`, and builds and places as
+before. A zip built before 0.12.68 that carries `ui.json` is refused by this `place`.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

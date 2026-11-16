@@ -213,6 +213,7 @@ refused form runs before it refuses; every other check runs only on a real invoc
 | `standard-pack build` | refused | `dry_run_unsupported` | flag parsing (Workflow #464 P2: it writes its product and its work into `--out`); no alternative |
 | `standard-pack ready` | no_effect | | reads a game root only (Workflow #464 P3) |
 | `standard-pack trial` | mixed | | `--plan`: no_effect, it reads the package directory, `--root` and the state directory's place only, writes nothing and sends nothing (Workflow #463 S3-10); without `--plan` (the run, and `--collect`): refused, `dry_run_unsupported`, after the flags and before anything is read, alternative `standard-pack trial --plan` (Workflow #463 S3-11: the run sends one run and writes its record, `--collect` writes the record) |
+| `standard-pack catalog` | mixed | | `--plan`: no_effect, it reads the game root's `bundle.json`, `schedule.json`, `pack-catalog.json` and `ui.json` and answers the document it would write, writing nothing (Workflow #477 PC-1); without `--plan`: refused, `dry_run_unsupported`, after the flags and before anything is read, alternative `standard-pack catalog --plan` (the line writes `pack-catalog.json`) |
 | `runtime reset` | refused | `dry_run_unsupported` | positional arguments, Runtime flags, `--state-root`, instance; no alternative; no capability entry |
 | `runtime observe` | no_effect | | |
 | `ledger show` | no_effect | | retired |

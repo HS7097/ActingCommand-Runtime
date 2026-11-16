@@ -1230,7 +1230,16 @@ the rescue face:
   `package` maximum of 14 at least (`pack_invalid`, `variable_undeclared` at
   `<zip>\interfaces.json` with the first such pack's `package_id`, in the plan), and (fix round 3,
   `goals.json` version 2, the only version this build reads) a zip that carries `goals.json`
-  declares 14 at least (`goal_undeclared`, as before at 12);
+  declares 14 at least (`goal_undeclared`, as before at 12); from 0.12.68 (Workflow #477 PC-1,
+  [pack-catalog.md](pack-catalog.md), no `package` revision: the Runtime reads no member of it)
+  the package declaration `pack-catalog.json` is the last root file of the layout, placed with
+  its SHA-256 as its item's digest and, when the zip no longer carries it, set aside as
+  `pack-catalog.json.old-<ms>` as the other root files are; a zip whose `pack-catalog.json` is
+  wrong in its business part against the zip's `bundle.json` and `schedule.json` is refused
+  `pack_invalid` caused by `standard_pack_root_invalid` (the file's error at its pointer), in the
+  plan, before the hold; `ui.json`, which `pack-catalog.json` replaced, is no root file of the
+  layout any more: a zip that carries it is refused as a member no layout knows, and every
+  placement sets an installed one aside as `ui.json.old-<ms>`;
   `alive [--wait]`
   is the watchdog's status of the root; `instance add <alias> …` (Workflow #421 INST-5, first
   slice; "Configuration, instances, packs and a fresh root", "Instances, the first slice") composes

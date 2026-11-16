@@ -53,6 +53,12 @@
 //! counts nothing toward a break-in; a trial is one run, sent once. Fix round 2: `--collect` takes
 //! only a run sent by hand on the Lab's channel; a run has one record, whatever content the
 //! package directory holds when it is collected; a run is answered by its end state.
+//!
+//! Workflow #477 PC-1 (contracts/pack-catalog.md, "Who writes it"; register §1.438): `actinglab
+//! standard-pack catalog --root <game root> [--plan]` builds or brings up to date a game root's
+//! `pack-catalog.json` from what the root declares (the resource tooling's
+//! `write_standard_pack_catalog`): with `--plan` it writes nothing and answers the document; without
+//! it, it writes the file atomically. Under the global `--dry-run` only `--plan` runs.
 
 use crate::{CliError, CliOutcome, ErrorKind, FlagArgs, GlobalOptions};
 use actingcommand_contract::codes::{ContractCode, ContractLocation};
@@ -65,11 +71,12 @@ use actingcommand_lab_ops::wait::{Waited, wait_at_most};
 use actingcommand_lab_ops::{instance_selector, run_evidence, run_show, wait};
 use actingcommand_resource_tooling::{
     AdoptDecision, AdoptSource, AdoptWorktree, PackTrialRecord, ResourceToolingCode,
-    StandardPackAdoptRequest, StandardPackCheckRequest, StandardPackComposeRequest,
-    StandardPackReadyRequest, StandardPackTrialAnswer, StandardPackTrialRequest,
-    TrialCollectProblem, TrialRecordPlan, TrialRunEnd, check_standard_pack_root, check_trial_run,
-    compose_standard_packs, judge_standard_pack_readiness, plan_standard_pack_trial,
-    standard_pack_adopt, trial_record_of_run, write_trial_record,
+    StandardPackAdoptRequest, StandardPackCatalogRequest, StandardPackCheckRequest,
+    StandardPackComposeRequest, StandardPackReadyRequest, StandardPackTrialAnswer,
+    StandardPackTrialRequest, TrialCollectProblem, TrialRecordPlan, TrialRunEnd,
+    check_standard_pack_root, check_trial_run, compose_standard_packs,
+    judge_standard_pack_readiness, plan_standard_pack_trial, standard_pack_adopt,
+    trial_record_of_run, write_standard_pack_catalog, write_trial_record,
 };
 use actingcommand_runtime_client::{
     ContainedRunState, ContainedRunStatus, RunDispatch, RunKey, RunOrigin, RuntimeClient,
@@ -139,6 +146,10 @@ const WAIT_FLAG: &str = "--wait";
 pub(crate) const TRIAL_SWITCHES: [&str; 2] = ["--irreversible", "--plan"];
 /// Workflow #463 S3-10: the row's name, which its refusals name.
 const TRIAL: &str = "standard-pack trial";
+/// Workflow #477 PC-1: the flags `standard-pack catalog` takes, and the one of them that takes no
+/// value, which takes none from the next word but `true` or `false` (`FlagArgs::parse_switches`).
+pub(crate) const CATALOG_FLAGS: [&str; 2] = ["--root", "--plan"];
+pub(crate) const CATALOG_SWITCHES: [&str; 1] = ["--plan"];
 
 pub(crate) fn options() -> [&'static str; 1] {
     ["--root <installed game root: <standard_packs.root>/<game>>"]
@@ -169,6 +180,14 @@ pub(crate) fn adopt_options() -> [&'static str; 8] {
         "--held-reference <text> (with --held-reason only: the held decision's reference)",
         "--replace (adopt a package adopted before again)",
         "--state-dir <the Lab's state directory; default actinglab's>",
+    ]
+}
+
+/// Workflow #477 PC-1: the flags of `standard-pack catalog`.
+pub(crate) fn catalog_options() -> [&'static str; 2] {
+    [
+        "--root <a game root of a repository's working copy or a scratch copy: <game>/ with bundle.json; never inside an installation>",
+        "--plan (answers the pack-catalog.json it would write; writes nothing)",
     ]
 }
 
@@ -288,10 +307,53 @@ pub(crate) fn run_standard_pack(
         // Workflow #463 S3-10: the plan of a trial on a real application; Workflow #463 S3-11:
         // without `--plan`, its one run.
         "trial" => run_trial(global, args),
+        // Workflow #477 PC-1: the writer of a game root's `pack-catalog.json`.
+        "catalog" => run_catalog(global, args),
         other => Err(CliError::usage(format!(
             "unknown standard-pack command: {other}"
         ))),
     }
+}
+
+/// Workflow #477 PC-1: `standard-pack catalog` (module doc). A flag off its list, a positional
+/// word, `--root` twice or without its value is a usage error before anything is read; under the
+/// global `--dry-run` the line without `--plan` is `dry_run_unsupported` (it writes the file), its
+/// read-only form `--plan`.
+fn run_catalog(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
+    let flags = FlagArgs::parse_switches(args, &CATALOG_SWITCHES);
+    if let Some(flag) = flags
+        .flags
+        .keys()
+        .find(|flag| !CATALOG_FLAGS.contains(&flag.as_str()))
+    {
+        return Err(CliError::usage(format!(
+            "standard-pack catalog does not accept {flag}"
+        )));
+    }
+    flags.expect_positionals("standard-pack catalog", 0)?;
+    for flag in CATALOG_FLAGS {
+        if flags.count(flag) > 1 {
+            return Err(CliError::usage(format!(
+                "standard-pack catalog takes {flag} once"
+            )));
+        }
+    }
+    let root = flags.required_path("--root")?;
+    let plan = flags.bool("--plan");
+    if !plan {
+        crate::dry_run_gate::refuse(
+            global,
+            "standard-pack catalog",
+            Some("standard-pack catalog --plan"),
+            Value::Null,
+        )?;
+    }
+    let response = write_standard_pack_catalog(StandardPackCatalogRequest { root, plan })?;
+    serde_json::to_value(response).map_err(|error| {
+        CliError::device(format!(
+            "failed to serialize the standard-pack catalog answer: {error}"
+        ))
+    })
 }
 
 /// Workflow #464 P1: `standard-pack adopt` (module doc). The recording `--record-id` names is the

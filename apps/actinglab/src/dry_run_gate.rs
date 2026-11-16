@@ -154,6 +154,10 @@ const TRIAL_FORMS: &[(&str, Mode)] = &[
     ("--plan", Mode::NoEffect),
     ("without --plan (the run, --collect)", UNSUPPORTED),
 ];
+// Workflow #477 PC-1: `--plan` reads the root and writes nothing; without it the line writes the
+// file.
+const CATALOG_FORMS: &[(&str, Mode)] =
+    &[("--plan", Mode::NoEffect), ("without --plan", UNSUPPORTED)];
 
 /// The declaration table of `commands[].dry_run_mode`. A capability entry not listed here is
 /// `no_effect` when its status is retired, reserved or unavailable, and `undeclared` otherwise.
@@ -310,6 +314,7 @@ const DECLARATIONS: &[(&str, Mode)] = &[
     // Workflow #463 S3-10: `--plan` reads only and sends nothing; Workflow #463 S3-11: the run
     // and `--collect` are refused.
     ("standard-pack trial", Mode::Mixed(TRIAL_FORMS)),
+    ("standard-pack catalog", Mode::Mixed(CATALOG_FORMS)),
     // no_effect
     ("version", Mode::NoEffect),
     ("doctor", Mode::NoEffect),

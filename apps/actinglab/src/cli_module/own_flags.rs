@@ -55,7 +55,7 @@ use crate::{
 /// The strict rows: [`accepted`] answers for each of them and, beside them, for the rows of
 /// [`CORE_STRICT_ROWS`] only. Workflow #464 P2: `standard-pack build`, checked against its list
 /// as `resource verify` is.
-pub(crate) const STRICT_ROWS: [&str; 33] = [
+pub(crate) const STRICT_ROWS: [&str; 34] = [
     "tap",
     "swipe",
     "long-tap",
@@ -87,6 +87,8 @@ pub(crate) const STRICT_ROWS: [&str; 33] = [
     "standard-pack adopt",
     // Workflow #463 S3-10.
     "standard-pack trial",
+    // Workflow #477 PC-1.
+    "standard-pack catalog",
     "scheduling compile",
     "scheduling timeline",
     "regression",
@@ -394,6 +396,12 @@ pub(crate) fn accepted(row: &str) -> Option<Accepted> {
             &standard_pack_cli::TRIAL_SWITCHES,
             none,
         ),
+        // Workflow #477 PC-1.
+        "standard-pack catalog" => from_lists(
+            standard_pack_cli::CATALOG_FLAGS,
+            &standard_pack_cli::CATALOG_SWITCHES,
+            none,
+        ),
         "scheduling compile" => from_lists(scheduling_cli::COMPILE_FLAGS, &[], none),
         "scheduling timeline" => from_lists(scheduling_cli::TIMELINE_FLAGS, &[], none),
         "regression" => from_lists(recognition_regression::REGRESSION_FLAGS, &[], none),
@@ -489,7 +497,7 @@ pub(crate) const UNROWED_READS: [&FlagReads; 4] = [
 /// completion scripts' callback, which reads every word of its line (its options, the index, the
 /// typed words in their form) and answers a line it cannot read with no candidate, ignoring none.
 /// Workflow #464 P2: `standard-pack build`, against its strict list.
-pub(crate) const REFUSING_COMMANDS: [&str; 66] = [
+pub(crate) const REFUSING_COMMANDS: [&str; 67] = [
     "schema",
     "touch-probe",
     "tap",
@@ -549,6 +557,8 @@ pub(crate) const REFUSING_COMMANDS: [&str; 66] = [
     "standard-pack ready",
     // Workflow #463 S3-10: refuses every flag off its list and any positional.
     "standard-pack trial",
+    // Workflow #477 PC-1: refuses every flag but `--root` and `--plan` and any positional.
+    "standard-pack catalog",
     "runtime reset",
     "runtime observe",
     "session backend",

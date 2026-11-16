@@ -233,6 +233,10 @@ mod gate_463_s310;
 // business end and records it; `--collect` reads an end later.
 #[path = "gate_463_s311.rs"]
 mod gate_463_s311;
+// Workflow #477 PC-1: `standard-pack catalog`, the writer of a game root's `pack-catalog.json`, on
+// the command line and through `serve --stdio`.
+#[path = "gate_477_pc1.rs"]
+mod gate_477_pc1;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
 use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{
