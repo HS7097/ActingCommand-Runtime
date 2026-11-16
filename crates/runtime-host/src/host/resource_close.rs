@@ -593,7 +593,14 @@ impl HostShared {
     /// unconfirmed one settled, by the close path; a fatal failure (the Runtime's own) is returned.
     /// Workflow #475: every session the lease owes is closed so, the lease's own instance's or
     /// another member's of its device group (`fence_expired_close_of`); the entry is taken once,
-    /// so no owed close is made twice and none is left behind by the lease's end.
+    /// so no owed close is made twice and none is left behind by the lease's end. Fix round 1:
+    /// only a holder of the owed instance's own key takes its session over (the session is the
+    /// instance's, Workflow #191 H, and that holder's lease end or preparation closes it). A
+    /// device that a lease of another member holds (no path reaches it today: the owing lease's
+    /// end hands the device to no one, under the guard) passes nothing over silently: the close
+    /// is tried, the session close ahead refuses the held device (`lease_busy`, not fatal), and
+    /// that refusal is recorded once below and leaves the session to the fenced member's own
+    /// paths, as every refusal of that close does.
     pub(super) fn close_expired_lease_session_guarded(
         &self,
         token: &LeaseToken,
@@ -610,7 +617,7 @@ impl HostShared {
             if self.fatal.is_shutdown_requested()
                 || lock(&self.scheduler, HostLocation::ReadResourceCloseLease)?
                     .active_lease(instance_id)
-                    .is_some()
+                    .is_some_and(|active| active.token().instance_id() == instance_id)
             {
                 continue;
             }

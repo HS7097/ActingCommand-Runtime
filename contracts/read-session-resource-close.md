@@ -221,8 +221,23 @@ expiry), which closes every owed session under the session close ahead once it h
 above; the ladder and the preempting claim then wait in the queue. Each caller answers its own
 failure: the run its own, the application command and the member switch (`application_switch_failed`
 at its step `stop`) the refusal, the backend switch `backend_switch_refused` with
-`instance_fenced`. During shutdown, where no fence may take the instance, and for a failure of
-the Runtime itself, these paths keep their fatality as above. #411 A64's own
+`instance_fenced`. The refusal the close met is fatal as the close path builds it, so neither the
+application command nor the member switch hands it on: each answers with a refusal of its own
+that is not fatal, `lease_expired` naming the key's lease (at `prepare_application_resources`, at
+`close_execution_session`), and so does a member switch's stop whose preparation met it. Each
+session the key's end owes is closed so, except two: during shutdown the Host close's second pass
+closes it, and a session whose instance's own key a holder took on is that holder's, whose lease
+end or preparation closes it. A session owed for a member whose device a lease of another member
+holds then (no path reaches it today) is not passed over: its close is tried, the session close
+ahead refuses the held device (`lease_busy`), and that refusal is recorded once and leaves the
+session to a preparation of the fenced member, as any refusal of that close does. A close that a
+connection preparation makes under a held key (`prepare_connection_attempt` on the key of a
+person's self-check, an emulator control, the recovery ladder, the emulator watch or a backend
+switch's candidate and restored backends: the retained session's close before the opens, and the
+close after a failed open or outside the multi-Nemu gate) is not among these: the same refusal
+there keeps its fatality, left to a later slice of Workflow #475. During shutdown, where no fence
+may take the instance, and for a failure of the Runtime itself, these paths keep their fatality
+as above. #411 A64's own
 dedicated close lease, refused for any
 reason that is not fatal (a waiting entry, the takeover cooldown, a queue ahead whose claim the
 fenced instance's gate holds back), is recorded once and leaves the session to the waiting entry

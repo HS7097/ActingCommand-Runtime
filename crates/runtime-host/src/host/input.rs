@@ -742,8 +742,11 @@ impl HostShared {
                     // makes the close once the lease has ended. The command answers the refusal
                     // as its own failure, before its step, as a lapsed key at its step does. A
                     // failure of the Runtime itself in the fence (its record) stays fatal.
+                    // Fix round 1: the refusal the close met was made fatal where the close path
+                    // built it (`retire_instance_resources`), so the command answers with a
+                    // refusal of its own that is not: the scheduler's `lease_expired` naming the
+                    // key's lease, built as its step builds one (below), at this preparation.
                     Err(refused) if self.expiry_close_refused(&refused.error) => {
-                        let refusal = (*refused.error).clone();
                         if let Err(error) = self.fence_expired_close_of(
                             token,
                             target,
@@ -756,7 +759,13 @@ impl HostShared {
                             };
                         }
                         return CriticalActionReport::Failed {
-                            error: ActionFailure::scheduler(refusal),
+                            error: ActionFailure::scheduler(
+                                RuntimeHostError::scheduler(
+                                    HostLocation::PrepareApplicationResources,
+                                    &SchedulerError::LeaseExpired,
+                                )
+                                .naming_lease(token.lease_id()),
+                            ),
                             effect: EffectDisposition::NotPerformed,
                         };
                     }

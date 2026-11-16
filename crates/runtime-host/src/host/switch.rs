@@ -870,11 +870,21 @@ impl HostShared {
                 // device's admission guard; the key's end (the run's, or the expiry) hands the
                 // device to no one and makes that close once the lease has ended. The stop fails
                 // with the refusal as its close's failure (`application_switch_failed`, step
-                // `stop`). A failure of the Runtime itself in the fence stays fatal.
+                // `stop`). A failure of the Runtime itself in the fence stays fatal. Fix round 1:
+                // the refusal the close met was made fatal where the close path built it
+                // (`retire_instance_resources`), so the stop hands on a refusal of its own that is
+                // not: the scheduler's `lease_expired` naming the key's lease, at this close. The
+                // stop's preparation meets the same refusal in `control_application_of`, which
+                // answers it the same way, so its failure above is not fatal either.
                 Err(refused) if self.expiry_close_refused(&refused.error) => {
-                    let refusal = (*refused.error).clone();
                     self.fence_expired_close_of(token, member, *refused.error, stop_links)?;
-                    Some(refusal)
+                    Some(
+                        RuntimeHostError::scheduler(
+                            HostLocation::CloseExecutionSession,
+                            &SchedulerError::LeaseExpired,
+                        )
+                        .naming_lease(token.lease_id()),
+                    )
                 }
                 Err(failure) => return Err(*failure.error),
             }

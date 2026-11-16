@@ -2021,6 +2021,22 @@ impl Fixture {
             .expect("arm the lapse");
     }
 
+    /// Fix round 1: as [`Self::lapse_inside_the_next_close`], one close later. The next close of
+    /// an instance's resources that finds a session to close runs as it would, and arms the lapse
+    /// for the close after it.
+    fn lapse_inside_the_close_after_the_next(&self) {
+        let host = Arc::clone(&self.host);
+        let clock = Arc::clone(&self.clock);
+        self.host
+            .run_before_next_resource_close_for_test(Box::new(move || {
+                host.run_before_next_resource_close_for_test(Box::new(move || {
+                    clock.advance(LAPSE_MS);
+                }))
+                .expect("arm the lapse in the close after it");
+            }))
+            .expect("arm the next close");
+    }
+
     /// Only `alias` is fenced, with `lease_expired` as its cause (in the status and in one fence
     /// record after `after`, which names it), and the refusal of its session's close is recorded
     /// once after `after`, at the stage `runtime_lifecycle_session_close`, naming it: that record.
@@ -2142,7 +2158,9 @@ impl Fixture {
 /// `RUN`, the run's lease and the stage `runtime_lifecycle_session_close`; the run's lease is
 /// released once, never expired and never handed on; `RUN`'s session is closed after that
 /// release, and only after that close is the ladder's claim queued (high priority); Y then runs a
-/// direct run to its end. Before the fix the hand-over's refusal stopped the Runtime.
+/// direct run to its end. Before the fix the hand-over's refusal stopped the Runtime. Fix round 1:
+/// the hand-over itself (`hand_off_to_ladder`) withheld the key once, which a ladder that waits in
+/// the queue instead never reaches (the records of the two are the same).
 #[test]
 fn close475_a_failed_runs_hand_over_to_its_ladder_after_its_lease_lapsed_fences_only_its_instance()
 {
@@ -2191,6 +2209,15 @@ fn close475_a_failed_runs_hand_over_to_its_ladder_after_its_lease_lapsed_fences_
     assert!(
         handed_on_from(&events, &lease).is_empty(),
         "the run's key is handed to no one"
+    );
+    assert_eq!(
+        fixture
+            .host
+            .ladder_hand_offs_withheld_for_test()
+            .expect("the hand-overs withheld"),
+        1,
+        "the run's failed end took the hand-over to its ladder, which withheld the key for the \
+         owed close (a ladder waiting in the queue never reaches the hand-over)"
     );
     let until_release = events
         .iter()
@@ -2407,6 +2434,114 @@ fn close475_a_record_that_cannot_be_appended_at_a_preemptions_close_still_stops_
     fixture.close_unchecked();
 }
 
+/// #475 fix round 1, the second place at an input's end (`transfer_preempted_while_guarded`): X's
+/// observation opens X's session and a client's lease of X holds X; a safe reset under that lease
+/// is under way when another client's claim of X at high priority asks for the lease's
+/// pre-emption, which waits for the reset's write (the claim answers `queued`, its pre-emption
+/// requested); the write returns, the reset's end hands the lease over, and the lease lapses
+/// inside that hand-over's close of X's session (the test's hook). The reset completes; the
+/// Runtime's health stays clean; X alone is fenced, with `lease_expired` as its cause; the refusal
+/// is recorded once, naming X, X's lease and the stage `runtime_lifecycle_session_close`; X's
+/// lease is released once (the pre-emption's end), never expired and never handed on; X's session
+/// is closed once after that, under a fenced close, and no grant of the claim precedes that close;
+/// Y then runs a direct run to its end. Before the fix the refusal stopped the Runtime.
+#[test]
+fn close475_a_preemption_at_an_inputs_end_whose_lease_lapsed_fences_only_its_instance() {
+    let fixture = Fixture::alone(&alone_ids(), false);
+    let observed = fixture.observe(X).1;
+    assert_eq!(
+        observed.state(),
+        RuntimeReceiptState::Completed,
+        "{observed:?}"
+    );
+    let connection = fixture.connection();
+    let x_lease = fixture.acquire_on(X, connection);
+    fixture.sample_capacity();
+    // The reset's write reports `true` once it is in flight, the reset `false` once it ended; the
+    // write returns when the test lets it.
+    let (report, reports) = mpsc::channel::<bool>();
+    let (let_write_return, write_returns) = mpsc::channel::<()>();
+    let write_report = report.clone();
+    let hook: Box<dyn FnOnce() + Send> = Box::new(move || {
+        write_report
+            .send(true)
+            .expect("the reset's write is in flight");
+        write_returns.recv().expect("the reset's write returns");
+    });
+    *fixture.states[X].input_hook.lock().expect("input hook") = Some(hook);
+    let reset = fixture.request(RuntimeOperation::Input {
+        frame: None,
+        token: x_lease.clone(),
+        action: InputAction::Reset,
+    });
+    let scan = fixture
+        .host
+        .hold_lease_expiry_scan_for_test()
+        .expect("hold the lease sweep's expiry scan");
+    let mark = fixture.head();
+
+    // The scope owns the channel's ends, so a failed step drops them and the reset's write returns.
+    let (fixture_ref, host) = (&fixture, &fixture.host);
+    let ((claim, queued), answered) = thread::scope(move |scope| {
+        let input = scope.spawn(move || {
+            let answered = host.process_request_for_test(&reset, connection);
+            report.send(false).expect("the reset ended");
+            answered
+        });
+        assert!(
+            reports.recv().expect("the reset reports"),
+            "the reset ended before its write"
+        );
+        let preempted = fixture_ref.preempt(X);
+        fixture_ref.lapse_inside_the_next_close();
+        let_write_return
+            .send(())
+            .expect("let the reset's write return");
+        (preempted, input.join().expect("the reset's thread"))
+    });
+
+    let queued = queued.expect("the claim's receipt");
+    assert_eq!(queued.state(), RuntimeReceiptState::Queued, "{queued:?}");
+    assert!(
+        matches!(
+            queued.result(),
+            Some(RuntimeResult::LeaseQueued { status }) if status.preempt_requested()
+        ),
+        "the claim asks for the pre-emption, which waits for the write: {queued:?}"
+    );
+    let answered = answered.expect("the reset's receipt");
+    assert_eq!(
+        answered.state(),
+        RuntimeReceiptState::Completed,
+        "{answered:?}"
+    );
+    fixture.assert_runtime_runs();
+    let refusal = fixture.assert_fenced_by_one_refusal(X, mark);
+    let lease = lease_value(&x_lease.lease_id());
+    assert_eq!(failure_outcome(&refusal).value("lease_id"), Some(&lease));
+    let close = fixture.assert_released_then_closed_once(X, mark, &lease);
+    assert_eq!(
+        fixture.states[X]
+            .unfenced_capture_close_count
+            .load(Ordering::Acquire),
+        0,
+        "under a fenced resource-close step"
+    );
+    let events = fixture.events_after(mark);
+    assert!(
+        events
+            .iter()
+            .filter(|event| event.links().request_id() == Some(&claim.request_id()))
+            .all(|event| event.event_type() != EventType::LeaseTransferred
+                && (event.event_type() != EventType::LeaseGranted || event.sequence() > close)),
+        "the claim is handed nothing, and no grant of it precedes X's close"
+    );
+    drop(scan);
+    fixture.assert_y_runs();
+    // The claim may still wait behind X's fence: the Host close of it is not this test's subject.
+    fixture.close_unchecked();
+}
+
 /// #475, the third place: an application command's preparation. X's observation opens X's
 /// session; a client's `launch` of X's application takes the command's own claim, and the claim
 /// lapses inside the preparation's close of X's session (the test's hook), before any command is
@@ -2598,6 +2733,110 @@ fn close475_a_record_that_cannot_be_appended_at_a_backend_switchs_close_still_st
     fixture.assert_record_failure_latched();
     drop(scan);
     fixture.close_unchecked();
+}
+
+/// #475 fix round 1, the fourth place at the switch's restore (`restore_backends`): X and Y in
+/// #402 HS-2's shape; X's observation keeps X's session; the ledger refuses the switch's
+/// `host.config_overrides` (`fail_next_config_persist_for_test`, as `gate_hs2.rs` refuses it), so
+/// the candidate, which opened and passed, is not committed and the switch brings X's previous
+/// backends back, whose first step closes the candidate's session on the switch's key. The claim
+/// lapses inside that close (the test's hook, armed by the switch's first close, of X's kept
+/// session). The switch is refused with the commit's failure (`host_config_overrides_persist_failed`,
+/// failed), the restore's refusal (`lease_expired`) among its outcome's links; the registration
+/// took the candidate first; the Runtime's health stays clean; X alone is fenced, with
+/// `lease_expired` as its cause; the refusal is recorded once, under the switch's request, naming
+/// X, the claim's lease and the stage `runtime_lifecycle_session_close`, after the switch's first
+/// close; the claim's lease is released once (the switch's end of its key), never expired and
+/// never handed on; X's session is closed once after that; Y then runs a direct run to its end,
+/// and the host closes. Before the fix the refusal stopped the Runtime.
+#[test]
+fn close475_a_backend_switchs_restore_whose_key_lapsed_before_its_close_fences_only_its_instance() {
+    let fixture = Fixture::switching();
+    let observed = fixture.observe(X).1;
+    assert_eq!(
+        observed.state(),
+        RuntimeReceiptState::Completed,
+        "{observed:?}"
+    );
+    fixture
+        .host
+        .fail_next_config_persist_for_test()
+        .expect("the ledger refuses the next host.config_overrides");
+    fixture.lapse_inside_the_close_after_the_next();
+    let scan = fixture
+        .host
+        .hold_lease_expiry_scan_for_test()
+        .expect("hold the lease sweep's expiry scan");
+    let mark = fixture.head();
+
+    let (switch, answered) = fixture.switch_backends(X);
+
+    let refused = answered.expect("the switch's receipt");
+    assert_eq!(refused.state(), RuntimeReceiptState::Failed, "{refused:?}");
+    assert_eq!(
+        refused.outcome().code().as_str(),
+        crate::codes::ConfigHostCode::OverridesPersistFailed.as_str(),
+        "{refused:?}"
+    );
+    let outcome = fixture
+        .host
+        .failure_outcome_for_test(switch.request_id())
+        .expect("refusal outcomes")
+        .expect("the switch was refused");
+    assert!(
+        outcome
+            .causes()
+            .iter()
+            .any(|link| link.outcome().code().as_str() == RuntimeErrorCode::LeaseExpired.as_str()),
+        "{outcome:?}"
+    );
+    let first_switch = fixture.states[X]
+        .switches
+        .lock()
+        .expect("fake switches")
+        .first()
+        .map(|(touch, capture, _)| (touch.clone(), capture.clone()));
+    assert_eq!(
+        first_switch,
+        Some((SWITCH_TO.0.to_owned(), SWITCH_TO.1.to_owned())),
+        "the registration took the candidate: the switch reached its restore"
+    );
+    fixture.assert_runtime_runs();
+    let refusal = fixture.assert_fenced_by_one_refusal(X, mark);
+    assert_eq!(refusal.links().request_id(), Some(&switch.request_id()));
+    let lease = failure_outcome(&refusal)
+        .value("lease_id")
+        .cloned()
+        .expect("the refusal names the switch's lease");
+    let events = fixture.events_after(mark);
+    assert!(
+        lease_events(&events, EventType::LeaseExpired, &lease).is_empty(),
+        "the switch's end of its key ended the lease, never the sweep"
+    );
+    assert!(
+        handed_on_from(&events, &lease).is_empty(),
+        "the switch's key is handed to no one"
+    );
+    let releases = lease_events(&events, EventType::LeaseReleased, &lease);
+    let [release] = releases.as_slice() else {
+        panic!("the switch's lease is released once: {releases:#?}");
+    };
+    let closes = confirmed_closes(&events, fixture.ids[X]);
+    let [kept, owed] = closes.as_slice() else {
+        panic!(
+            "X's kept session closed at the switch's first step, its candidate's after: {closes:?}"
+        );
+    };
+    assert!(
+        *kept < refusal.sequence()
+            && refusal.sequence() < release.sequence()
+            && release.sequence() < *owed,
+        "the restore's close was refused after the first close, and X's session is closed once \
+         after the lease ended: {closes:?}"
+    );
+    drop(scan);
+    fixture.assert_y_runs();
+    fixture.close();
 }
 
 /// #475, the fifth place: the member switch, in a device group of several (which no installation

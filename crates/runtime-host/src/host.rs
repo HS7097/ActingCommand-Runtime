@@ -2319,6 +2319,8 @@ impl RuntimeHost {
             #[cfg(test)]
             resource_close_hook_for_test: Mutex::new(None),
             #[cfg(test)]
+            ladder_hand_offs_withheld_for_test: AtomicU64::new(0),
+            #[cfg(test)]
             monitor_loop_held_for_test: AtomicBool::new(false),
             fact_refresh_bindings,
             instance_facts_loaded_at_unix_ms,
@@ -4526,6 +4528,18 @@ impl RuntimeHost {
         Ok(disposition == Some(actingcommand_contract::OwnerResourceDisposition::Unconfirmed))
     }
 
+    /// Workflow #475 fix round 1, test builds: how many failed runs' hand-overs of their key to
+    /// their ladder (`hand_off_to_ladder`) withheld the key because the lease owed the close its
+    /// lapsed lease refused, since the host started.
+    #[cfg(test)]
+    pub(crate) fn ladder_hand_offs_withheld_for_test(&self) -> RuntimeHostResult<u64> {
+        let location = crate::codes::test_spellings::TestLocation::LadderHandOffsWithheldForTest;
+        Ok(self
+            .shared_ref(location)?
+            .ladder_hand_offs_withheld_for_test
+            .load(Ordering::Acquire))
+    }
+
     /// Workflow #458 fix round 1: whether the resident lease sweep's thread still runs.
     #[cfg(test)]
     pub(crate) fn sweep_thread_runs_for_test(&self) -> bool {
@@ -6566,6 +6580,11 @@ struct HostShared {
     // session to close runs once, before it asks its write authority (`retire_instance_resources`).
     #[cfg(test)]
     resource_close_hook_for_test: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    // Workflow #475 fix round 1, test only: how many failed runs' hand-overs of their key to their
+    // ladder withheld the key because the lease owed the close its lapsed lease refused
+    // (`hand_off_to_ladder`).
+    #[cfg(test)]
+    ladder_hand_offs_withheld_for_test: AtomicU64,
     // Workflow #437 MAPP-1d, test only: while set the resident monitor loop takes no probe, and a
     // test runs each round itself (`RuntimeHost::run_due_monitor_probe_for_test`).
     #[cfg(test)]

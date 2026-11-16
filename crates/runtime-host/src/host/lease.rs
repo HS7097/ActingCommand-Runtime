@@ -2210,6 +2210,11 @@ impl HostShared {
         self.end_lease_device_use(token, connection_id, LeaseDeviceEnd::HolderEnd)
             .map_err(|failure| *failure.error)?;
         if self.expired_close_owed(token)? {
+            // Fix round 1, test only: a test tells this withheld hand-over from a ladder that
+            // never reached it (one that waits in the queue ends the lease the same way).
+            #[cfg(test)]
+            self.ladder_hand_offs_withheld_for_test
+                .fetch_add(1, Ordering::AcqRel);
             return Ok(Some(ladder));
         }
         let claim_request = ladder.claim().clone();
