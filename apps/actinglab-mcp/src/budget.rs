@@ -21,6 +21,11 @@
 //! - **The export** ([`export_directory`], [`write_export`]): today's server's directory (the
 //!   coordinator's ruling 18, board #434 6775192250) and the writer it shares with
 //!   `actingctl observe --export` (`lab_ops::material_export::write`).
+//! - **A run's line** (Workflow #434 LW-1, register §1.435; [`run_line`]): the line of a run's
+//!   job, `run start`'s, carries every ledger record of the run's correlation (`events`, the
+//!   forensic projection with payloads), 100 KB to 500 KB for a run that went far. This server
+//!   answers it without them, counted, saying what it left out and which calls read it, wherever it
+//!   gives that line: `ac_run_start` with `wait` and the `job` of `ac_run_show`.
 
 use crate::protocol::{self, Era};
 use actingcommand_contract::outcome::Outcome;
@@ -175,6 +180,71 @@ pub(crate) fn job_summary(line: &Value) -> Value {
         summary.insert("truncated".to_owned(), truncated.clone());
     }
     Value::Object(summary)
+}
+
+/// Workflow #434 LW-1: the member of `run start`'s line that holds every ledger record of the run's
+/// correlation (`RuntimeFlowOutput::events`, the forensic projection with payloads).
+const RUN_EVENTS: &str = "events";
+/// Workflow #434 LW-1: how many records the answer left out of `events`.
+const RUN_EVENTS_TOTAL: &str = "events_total";
+/// Workflow #434 LW-1: the run's official OCR reads, kept while the answer fits.
+const RUN_OCR: [&str; 2] = ["official_ocr_projection", "official_ocr_fields_projection"];
+/// Workflow #434 LW-1: what the answer left out, as JSON pointers into the line (the overview's
+/// `truncated` names its cut blocks so).
+const TRUNCATED: &str = "truncated";
+/// Workflow #434 LW-1: the calls that read what the answer left out.
+const REST: &str = "rest";
+/// Workflow #434 LW-1: the tools of those calls: a run's steps page by page, and its records.
+const RUN_EVIDENCE_TOOL: &str = "ac_run_evidence";
+const EVENTS_TOOL: &str = "ac_events";
+
+/// Workflow #434 LW-1 (register §1.435): the line of a run's job, `run start`'s (the receipt, every
+/// ledger record of the run's correlation under `events`, the official OCR reads when the run made
+/// them, and the outcome), as this server answers it: every member but `events`, which is left out
+/// and counted (`events_total`), and but the OCR reads unless `keep_ocr`; `truncated` lists what
+/// was left out as JSON pointers into the line, and `rest` the calls that read it: `ac_run_evidence`
+/// with the run's request id (`request_id`), its steps page by page, and `ac_events` with the
+/// receipt's correlation id (the request id when the receipt names none) and `detail` `payload`,
+/// its records as the line carried them. A line without `events` (a refusal, a client failure
+/// that came back without the run's records) is answered as it is.
+pub(crate) fn run_line(line: &Value, request_id: &str, keep_ocr: bool) -> Value {
+    let Some(members) = line.as_object() else {
+        return line.clone();
+    };
+    let Some(events) = members.get(RUN_EVENTS).and_then(Value::as_array) else {
+        return line.clone();
+    };
+    let mut shaped = Map::new();
+    let mut left_out = vec![Value::String(format!("/{RUN_EVENTS}"))];
+    for (name, value) in members {
+        if name == RUN_EVENTS {
+            continue;
+        }
+        if !keep_ocr && RUN_OCR.contains(&name.as_str()) {
+            left_out.push(Value::String(format!("/{name}")));
+            continue;
+        }
+        shaped.insert(name.clone(), value.clone());
+    }
+    shaped.insert(RUN_EVENTS_TOTAL.to_owned(), json!(events.len()));
+    shaped.insert(TRUNCATED.to_owned(), Value::Array(left_out));
+    let mut records = Map::new();
+    match line
+        .pointer("/receipt/correlation_id")
+        .and_then(Value::as_str)
+    {
+        Some(correlation_id) => records.insert("correlation_id".to_owned(), json!(correlation_id)),
+        None => records.insert("request".to_owned(), json!(request_id)),
+    };
+    records.insert("detail".to_owned(), json!("payload"));
+    shaped.insert(
+        REST.to_owned(),
+        json!([
+            {"tool": RUN_EVIDENCE_TOOL, "arguments": {"id": request_id}},
+            {"tool": EVENTS_TOOL, "arguments": records},
+        ]),
+    );
+    Value::Object(shaped)
 }
 
 /// The warnings a line carries.

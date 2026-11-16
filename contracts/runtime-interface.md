@@ -336,7 +336,7 @@ stood until Workflow #434 LAB-6S1b (0.12.58) deleted them with every origin gate
 | Kind | Block | Class | Sent by | G14 |
 |---|---|---|---|---|
 | RunContainedTask | option two | operation (manual package run) | actinglab `run start` (new, replaces `actingctl task-run`) and `lab run`; mcp `ac_run_pack` (forwarded to `run start`). Frames pinned `Lab` and kept | yes |
-| Input | option two | operation (tap and input) | actinglab tap commands, `touch-probe`, `session recover`, `tap-target`, `navigate`, `ensure`, the stream's input forwarding | yes |
+| Input | option two | operation (tap and input) | actinglab tap commands, `touch-probe`, `session recover`, `ensure`, the stream's input forwarding (Workflow #434 LW-1: not `tap-target` and `navigate`, which only plan on a saved frame and send nothing) | yes |
 | AcquireLease, QueueLease, PollQueuedLease, RenewLease, ReleaseLease, CancelQueuedLease | option two | operation (the leases input needs) | actinglab's input proxy and debug session; queueing and polling stay on one Lab connection | yes |
 | SafeReset | option two | operation (reset) | actinglab `runtime reset`, `run stop`; `actingctl reset` retires | yes |
 | RunContainedLabOperation | option two | operation (Lab operation) | actinglab `do`; mcp `ac_lab_do` | yes |
