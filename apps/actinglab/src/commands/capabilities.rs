@@ -24,6 +24,8 @@ pub(crate) fn command_capabilities() -> Vec<Value> {
         command_cap("resource compile-maa", ["offline"], "available"),
         // Workflow #411 RV-1: `report_schema` tells a repository wrapper this build can verify.
         resource_verify_capability(),
+        // #463 RC-1: a checkout's regression cases run offline; it reads only.
+        command_cap("resource regression", ["offline", "read_only"], "available"),
         command_cap("observe", ["offline", "device_optional"], "available"),
         command_cap(
             "do",

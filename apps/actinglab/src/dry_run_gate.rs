@@ -322,6 +322,8 @@ const DECLARATIONS: &[(&str, Mode)] = &[
     ("resource catalog", Mode::NoEffect),
     ("resource compile-maa", Mode::NoEffect),
     ("resource check-release", Mode::NoEffect),
+    // #463 RC-1: it reads the checkout only.
+    ("resource regression", Mode::NoEffect),
     ("standard-pack check", Mode::NoEffect),
     // Workflow #464 P3: it reads a game root only.
     ("standard-pack ready", Mode::NoEffect),

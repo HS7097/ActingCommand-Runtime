@@ -2604,6 +2604,28 @@
       "status": "planned"
     },
     {
+      "name": "resource regression",
+      "module": "authoring",
+      "params": [
+        {"name": "repo", "form": "option", "type": "dir", "required": true, "note": "a resource repository's checkout: its cases are regression/<game>/<case>/case.json, each run on the package packs/<package_id>/ its case.json names"},
+        {"name": "game", "form": "option", "type": "string", "required": false, "note": "actinglab's global --game: only the cases under regression/<game>/"},
+        {"name": "case", "form": "option", "type": "string", "required": false, "note": "only the cases whose directory regression/<game>/<case>/ has this name"},
+        {"name": "package_id", "form": "option", "type": "string", "required": false, "note": "only the cases whose case.json names this package_id"}
+      ],
+      "help": "Runs the regression cases of a resource repository's checkout offline on the kernel's page detection and target evaluation, and answers each case's verdict; reads only.",
+      "output": "repo; counts {cases, passed, failed, partial, not_run}; failed: the paths of the failed cases; cases[{path, game, case, id, package_id, verdict (passed, failed, partial, not_run), checks[{at, result, problem?, reason?, page?, target?, detail?}], warnings?}]; when a case failed, the refusal resource_regression_failed whose details are this answer",
+      "writes": false,
+      "irreversible": false,
+      "runtime": "offline",
+      "entries": ["lab"],
+      "requests": [],
+      "source": ["actinglab resource regression"],
+      "new": "#463",
+      "slice": "463-RC1",
+      "status": "planned",
+      "notes": "#463 RC-1 (0.12.69; contracts/resource-regression-case.md): the reader and runner of the Lab (crates/lab regression_case: read_regression_case, RegressionPackage::load and run, run_regression_case) on the kernel's own read-only recognition engine, as offline current-page and recognize call it; a case of another schema_version is not_run with the warning case_schema_unsupported and fails nothing; a scene whose pixels outside its rectangles are not the canvas colour warns resource_regression_scene_outside_rects; a package is admitted once per run; nothing is written. Exit 1 on actinglab's own line when a case failed. The MCP server keeps counts and failed beside an exported success line"
+    },
+    {
       "name": "standard-pack build",
       "module": "authoring",
       "params": [

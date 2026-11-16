@@ -10,7 +10,8 @@
 //! - **Which rows** ([`LAB_ROWS`], one table in one place): `record stop`, `observe` and `do`, the
 //!   rows of today's `ac_record_stop`, `ac_lab_observe` and `ac_lab_do`, each with the parts its
 //!   exported line keeps inline and whether a capture records a client action. The operation
-//!   table cannot say either (see the table).
+//!   table cannot say either (see the table). #463 RC-1: and `resource regression`, which keeps
+//!   its counts and its failed cases.
 //! - **The client action after a capture** ([`client_action`]; today's `author` and
 //!   `record_action`): once the child of a call of `observe` or `do` with `capture` true answered,
 //!   whatever its `dry_run` says (the coordinator's ruling 2 of 2026-11-13: as today's server
@@ -77,6 +78,9 @@ const FRAME_PARTS: [&str; 5] = [
     "next_frame",
     "after_attachment",
 ];
+/// #463 RC-1: the parts of a `resource regression` line kept beside its export, in this order: the
+/// counts of the cases' verdicts and the paths of the failed cases (`cases` is what grows).
+const REGRESSION_PARTS: [&str; 2] = ["counts", "failed"];
 
 /// What a line written whole to the export keeps inline beside `{req_id, export, overflowed}`.
 #[derive(Debug, Clone, Copy)]
@@ -111,8 +115,9 @@ struct LabRow {
 /// (`output`), but no member of the line it answers, so it cannot name the parts to keep beside
 /// an export; and seven of its rows take `capture` (`observe`, `do`, `recover`, `ensure`, `wait`,
 /// `record step`, `locate`), of which today's server records a client action after `observe` and
-/// `do` alone, the Lab requests the Runtime records (`lab.request`).
-static LAB_ROWS: [LabRow; 3] = [
+/// `do` alone, the Lab requests the Runtime records (`lab.request`). #463 RC-1: and `resource
+/// regression` (`ac_resource_regression`), whose answer grows with the cases of a checkout.
+static LAB_ROWS: [LabRow; 4] = [
     LabRow {
         row: "record stop",
         kept: Kept::Together {
@@ -130,6 +135,11 @@ static LAB_ROWS: [LabRow; 3] = [
         row: "do",
         kept: Kept::EachInOrder(&FRAME_PARTS),
         capture_recorded: true,
+    },
+    LabRow {
+        row: "resource regression",
+        kept: Kept::EachInOrder(&REGRESSION_PARTS),
+        capture_recorded: false,
     },
 ];
 

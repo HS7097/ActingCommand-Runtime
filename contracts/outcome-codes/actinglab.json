@@ -650,6 +650,20 @@
       "common_causes": "Another program removed or changed the build's work directory after the steps had checked it; the disk could not be read.",
       "handling": "The zip, SHA256SUMS and build.json are complete. Judge the readiness with actinglab standard-pack ready --root on the installed root once it can be read again, or build again into a new directory."
     },
+    "resource_regression_failed": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actinglab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.69",
+      "description": "#463 RC-1 (contracts/resource-regression-case.md, the operation): actinglab resource regression ran the regression cases of a checkout and at least one case's verdict is failed: a check of the reader, the scene, the package or an expectation failed, each with its word (regression_problem). Every selected case was run; the details are the whole answer (cases with their verdicts and checks, counts, failed). Nothing was written. Exit 1 on actinglab's own line.",
+      "common_causes": "A page or a target of the package no longer recognises its scene as the case expects, or several pages match it; the scene's bytes do not match scene_sha256, its size the canvas, or a rectangle leaves the canvas; a member of case.json the contract does not list or of the wrong type; the case's package is missing or its admission refuses it.",
+      "handling": "Read the failed cases in details.failed and each failed check's at, problem and detail; fix the package or the case and run resource regression again (with --case or --package-id to run one)."
+    },
     "resource_check_release_retired": {
       "category": "error",
       "ladder_class": "none",

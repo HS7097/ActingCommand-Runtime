@@ -233,6 +233,10 @@ mod gate_463_s310;
 // business end and records it; `--collect` reads an end later.
 #[path = "gate_463_s311.rs"]
 mod gate_463_s311;
+// #463 RC-1: the regression case as a Runtime contract: its reader, its offline runner on the
+// kernel's recognition, and `resource regression` over a checkout's cases.
+#[path = "gate_463_rc1.rs"]
+mod gate_463_rc1;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
 use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{

@@ -104,6 +104,8 @@ mod readonly;
 mod readonly_api;
 mod recording;
 mod recording_api;
+// #463 RC-1: a resource repository's regression case, its reader and its runner.
+mod regression_case;
 mod scheduling;
 // #463 R2 fix 1: the scripted clock of a gate test that runs the kernel's interpreter on a device
 // of its own; no gate file reads a clock.
@@ -113,7 +115,10 @@ mod state;
 // Workflow #406 T4: the touch keys of the Lab's root configuration.
 mod touch;
 
-pub use codes::LabCode;
+// #463 RC-1: and the words of a regression case's verdict.
+pub use codes::{
+    LabCode, RegressionNotRun, RegressionProblem, RegressionResult, RegressionVerdict,
+};
 pub use context::*;
 pub use drive::*;
 pub use drive_api::*;
@@ -137,6 +142,8 @@ pub use projection::*;
 pub use readonly_api::*;
 pub use recording::*;
 pub use recording_api::*;
+// #463 RC-1: the regression case's reader and runner.
+pub use regression_case::*;
 pub use scheduling::*;
 pub use state::*;
 pub use touch::LabTouch;

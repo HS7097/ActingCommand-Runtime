@@ -161,6 +161,12 @@ actingcommand_contract::outcome_codes! {
         /// refusal, and the build succeeded (keys `path`; the cause the refusal's own code).
         ResourceBuildReadinessRefused => "resource_build_readiness_refused": warning / none,
         // ---- end of #463 S3-7
+        // ---- #463 RC-1 (pending): `actinglab resource regression`
+        // (contracts/resource-regression-case.md, "The operation").
+        /// Error. At least one regression case of the checkout failed; every selected case was run
+        /// and the details are the whole answer (no keys).
+        ResourceRegressionFailed => "resource_regression_failed": error / none,
+        // ---- end of #463 RC-1
         // ---- Workflow #411 B34 (slice E4, pending): `package check` warns on a click box of one
         // point.
         /// Warning. `package check` admitted the package, and an operation's click declares a
