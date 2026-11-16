@@ -120,9 +120,11 @@ and artifact names bind the complete source SHA.
 
 - 接口：**`runtime-client` 从 [3, 9] 升到 [3, 10]**（`component-interfaces.json` 8；契约表 `runtime-client` 第 10 行，`contracts/component-interfaces.md` 155）：状态回执的实例行多了可选成员 `device_held`
   （`crates/actingcommand-contract/src/runtime.rs` 1654–1658），而 `RuntimeInstanceStatus` 拒未知成员（1620）。最低值留 3：加载时一律拒绝一台几个应用，今天没有安装能填出这个成员；放开一台多应用的那一片把最低值升到 10。
-  钉在修订 9 的客户端：不带这个成员的状态照旧解得开；带的那份整个解不开（`runtime_receipt_decode_failed`，锁住连接），今天出不来。其余逐行和 v0.12.66 一样：`actingd-config` [5, 33]、`install-selection` [1, 1]、
+  钉在修订 9 的客户端：不带这个成员的状态照旧解得开；带的那份整个解不开（`runtime_receipt_decode_failed`，锁住连接），今天出不来。**修订 10 也是投影放宽的那一版**（DA-5ab）：
+  显示不是包的基准尺寸时，观察的投影帧是缩到基准的帧，`ContainedPageObservation::validate` 收观察帧本身或同比例、不大于它的缩小帧（`crates/actingcommand-contract/src/runtime/online_observation.rs` 296、324）；
+  修订 10 以下的客户端库只收观察帧本身，判这种回执（`ObserveContainedPage`、`RunContainedLabOperation`）无效并锁住连接；基准尺寸的显示上没有差别（见「配对」）。其余逐行和 v0.12.66 一样：`actingd-config` [5, 33]、`install-selection` [1, 1]、
   `install-control` [0, 0]、`ledger` [3, 8]、`package` [3, 15]、`runtime-outcomes` [1, 1]（`component-interfaces.json` 4–10）。没找到该升没升的：账本没有加记录种类、成员或修订（`crates/ledger` 一个文件没改）；
-  录制头的 `base_size` 不属于表里任何一个接口，旧版本读不了它写在「退回」里；投影帧的尺寸是现有成员的值，旧的客户端库在映射显示上判它无效写在「配对」里。
+  录制头的 `base_size` 不属于表里任何一个接口，旧版本读不了它写在「退回」里。
 - **Runtime 改了的文件**：宿主 `crates/runtime-host/src/` 的生产代码 `host.rs`、`codes.rs` 和 `host/` 下的 `backend_switch.rs`、`contained_task.rs`、`device_group.rs`、`facts.rs`、`host_claims.rs`、`input.rs`、
   `lab_operation.rs`、`lease.rs`、`online_observation.rs`、`read_events.rs`、`resource_close.rs`、`resource_fence.rs`、`switch.rs`，测试 `tests.rs` 和 `tests/` 下的 `gate_392_da3.rs`、`gate_392_da5ab.rs`、`gate_437_g1.rs`、
   `gate_458_close_isolates.rs`、`gate_epoch_close.rs`；调度库 `crates/scheduler/src/lib.rs`；内核 `crates/execution-kernel`（帧闸、在线观察、只读回答）；显示适配壳 `crates/display-adapter`；契约库 `crates/actingcommand-contract`；
