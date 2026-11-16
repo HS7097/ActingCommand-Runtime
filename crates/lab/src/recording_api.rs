@@ -6,6 +6,7 @@
 
 use crate::LabOcr;
 use crate::codes::{LabCode, ReadyCheck, ReadySource};
+use crate::display_base::{admit_pressed_first_frame, admit_recording_frame, recording_not_base};
 use crate::recording::archive::{ARCHIVED, latest_manifest, read_recording};
 use crate::recording::boxes::{expanded_add, validate_boxes, with_press_click};
 use crate::recording::container::{
@@ -31,7 +32,7 @@ use crate::recording::model::{
     CommitClickRequest, FrameView, LAB_RECORD_MARK_SCHEMA, LAB_RECORDING_MAX_NEXT_FRAME_MS,
     LAB_RECORDING_MAX_SETTLE_MS, LabRecording, LabRecordingStart, LabStatus, LabStatusView,
     MarkOutcome, MarkRequest, MarkStatusView, MarkView, NextFrameOutcome, OpaqueJson,
-    PlanApplicationRequest, PlanClickRequest, RecordPressOutcome, RecordPressRequest,
+    PlanApplicationRequest, PlanClickRequest, RecordPressOutcome, RecordPressRequest, RecordSize,
     RecordStartOptions, RecordStepOutcome, RecordStepRequest, RecordStopOptions, RecordStopOutcome,
     RecordedFrame, RecordedMark, RecordingArtifact, RecordingDefaults, RecordingStep,
     SelfTestStatus, StepClick, StepOptionalView, StepStateView, StepTransition, StepView,
@@ -40,6 +41,7 @@ use crate::recording::model::{
 use crate::recording::ready::{
     Known, ReadyOptionConflict, ReadySources, ReadyWarningItem, RecordReadyOutcome, check_item,
     generator_warnings, known, lack_items, packaged, point_press_warnings, ready_outcome,
+    with_size_item,
 };
 use crate::recording::select::{not_evaluated_id, validate_select_request};
 use crate::recording::steps::{
@@ -58,7 +60,7 @@ use crate::recording::store::{
 };
 use crate::recording::{
     RecordingLock,
-    frames::{LoadedFrame, check_frame_size, decode_frame, read_stored_frame},
+    frames::{LoadedFrame, check_frame_size, check_size, decode_frame, read_stored_frame},
 };
 use actingcommand_contract::{
     InputAction, InputFrameReference, LabError, LabErrorClass, LabResult,
@@ -118,12 +120,15 @@ pub fn record_start(
     if lab_dir(state_dir, &old.record_id).exists() {
         return Ok(unavailable("record_id_reused"));
     }
+    // Workflow #392 DA-5cd fix round 1: the header names the base size the options give, the size
+    // its first frame must have.
     let recording = new_recording(
         &old,
         defaults.clone(),
         options.game.clone(),
         options.server.clone(),
         options.locale.clone(),
+        options.base_size,
     );
     create_recording(state_dir, &recording)?;
     Ok(LabRecordingStart {
@@ -426,8 +431,13 @@ pub fn record_ready(
         Some(artifact) if recording.status == "stopped" => regeneration_settings(artifact, options),
         _ => stop_settings(&recording, options),
     };
+    // Workflow #392 DA-5cd: a recording whose frames are not the base size is listed first (fix
+    // round 1: `size_not_base`, `record_size_not_base`); `record stop` refuses it before its
+    // self-checks, so none of them runs.
+    let not_base = recording_not_base(&recording);
     let (missing, checks_after) = match survey(&recording, &settings)? {
         Survey::Lacking(lacks) => (lack_items(&recording, &lacks)?, ReadyCheck::ALL.to_vec()),
+        Survey::Planned(_) if not_base.is_some() => (Vec::new(), ReadyCheck::ALL.to_vec()),
         Survey::Planned(plan) => match self_checks(&plan, ocr) {
             Ok(checked) => {
                 warnings.extend(generator_warnings(&checked.warnings)?);
@@ -455,7 +465,7 @@ pub fn record_ready(
     Ok(ready_outcome(
         &recording,
         session,
-        missing,
+        with_size_item(not_base.as_ref(), missing),
         warnings,
         &checks_after,
         sources,
@@ -527,6 +537,11 @@ fn generate_and_write(
     ocr: &LabOcr,
     regenerate: bool,
 ) -> LabResult<RecordStopOutcome> {
+    // Workflow #392 DA-5cd: a recording whose frames are not the base size builds no package
+    // (fix round 1: `record_size_not_base`), before anything is planned or written.
+    if let Some(refusal) = recording_not_base(recording) {
+        return Err(refusal);
+    }
     let plan = generate_plan(recording, settings)?;
     let Checked {
         entries,
@@ -1722,6 +1737,43 @@ pub fn record_frame_preflight(lock: &RecordingLock) -> LabResult<()> {
     check_device_arrival(&session.recording)
 }
 
+/// Workflow #392 DA-5, the train of DA-5ab and DA-5cd (its rule R4; `contracts/lab-recording.md`,
+/// "A recording's size"; `contracts/display-adapter.md` sections 11 and 12): nothing is sent before
+/// the recording is known to take it. The one judgement `record stop` makes of a recording
+/// (`recording_not_base`), asked before anything goes to the device by `do --capture --record`
+/// before its press and by `observe --capture --record` before its capture (`tap`, `swipe` and
+/// `long-tap --record` and `session app --record` ask it in [`record_before_frame`]): a recording
+/// whose frames are not the base size is refused `record_size_not_base`, nothing written. Any
+/// other recording passes. It replaces DA-5ab's check of the recording's size against the Lab
+/// operation's package base (`record_frame_size_mismatch`).
+pub fn record_size_check(lock: &RecordingLock) -> LabResult<()> {
+    let session = open_session(lock)?;
+    match recording_not_base(&session.recording) {
+        Some(refusal) => Err(refusal),
+        None => Ok(()),
+    }
+}
+
+/// Workflow #392 DA-5, the train (R4): a frame of `width` x `height` (`label` names it) that a
+/// recording path took before it sends or writes anything, judged as a frame that enters the
+/// recording is, whether or not it will be stored: [`admit_recording_frame`] (the recording's
+/// first frame of another size than the base its header names `record_display_not_base`; a frame
+/// of a recording whose frames are not the base size `record_size_not_base`), then the recording's
+/// own size (`record_frame_size_mismatch`: the display changed during the recording). `do
+/// --capture --record` asks it of the frame it captures before its press, and `observe --capture
+/// --record` of the Runtime frame it observed, before its frame file or the recording is written.
+/// Nothing is written. It replaces DA-5ab's check of the observed frame against the package's base.
+pub fn record_frame_check(
+    lock: &RecordingLock,
+    (width, height): (u32, u32),
+    label: &str,
+) -> LabResult<()> {
+    let session = open_session(lock)?;
+    let size = RecordSize { width, height };
+    admit_recording_frame(&session.recording, size)?;
+    check_size(session.recording.coordinate_space, size, label)
+}
+
 /// Records a frame from `capture --record` or `observe --capture --record`.
 pub fn record_attach_frame(
     lock: &RecordingLock,
@@ -2332,17 +2384,28 @@ pub trait RecordFramePorts {
 /// A capture whose observation carries no frame id cannot be pressed on: `device_error`, before
 /// anything of it is stored. Answers the Runtime's reference of the frame, which the press is sent
 /// with, and its arrival (`None` when it was not stored).
+///
+/// Workflow #392 DA-5, the train (R4; `contracts/lab-recording.md`, "A recording's size"): first,
+/// before anything is captured, the one judgement `record stop` makes of the recording
+/// ([`record_size_check`]'s): a recording whose frames are not the base size is refused
+/// `record_size_not_base` and nothing is captured, sent or written, whether the open step is marked
+/// (its frame before the press then not stored) or not. A frame that is stored is judged as every
+/// frame that enters the recording (`admit_frame`); one that is not, against the recording's size.
+/// The train's fix round 1 (review B's must-fix): a frame that would be the recording's first is
+/// judged before it is stored as if the recording already had its size
+/// (`admit_pressed_first_frame`, `record_display_not_base`), so that a recording whose header names
+/// no base size takes no first frame `record stop` would refuse and no press is sent on one.
 pub fn record_before_frame(
     lock: &RecordingLock,
     ports: &mut impl RecordFramePorts,
 ) -> LabResult<BeforeCapture> {
-    let (stores, coordinate_space) = {
-        let session = open_session(lock)?;
-        let recording = &session.recording;
-        let stores = open_step(recording)
-            .is_none_or(|index| !step_ref(recording, index).is_some_and(has_marks));
-        (stores, recording.coordinate_space)
-    };
+    let session = open_session(lock)?;
+    let recording = &session.recording;
+    if let Some(refusal) = recording_not_base(recording) {
+        return Err(refusal);
+    }
+    let stores =
+        open_step(recording).is_none_or(|index| !step_ref(recording, index).is_some_and(has_marks));
     let captured = ports.capture()?;
     // The fix round after the train's review: this frame is taken before a press or (#463 S1-3) an
     // application operation, and the texts name both.
@@ -2353,16 +2416,20 @@ pub fn record_before_frame(
              recorded",
         )
     })?;
+    let label = "the frame before the press or application operation";
     if stores {
+        if recording.coordinate_space.is_none() {
+            let first = decode_frame(captured.frame.png.clone(), label)?;
+            admit_pressed_first_frame(recording, first.size())?;
+        }
         let arrived = record_attach_frame(lock, captured.frame)?;
         return Ok(BeforeCapture {
             input_frame,
             arrived: Some(arrived),
         });
     }
-    let label = "the frame before the press or application operation";
     check_frame_size(
-        coordinate_space,
+        recording.coordinate_space,
         &decode_frame(captured.frame.png, label)?,
         label,
     )?;

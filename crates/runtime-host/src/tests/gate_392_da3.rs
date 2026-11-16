@@ -15,8 +15,8 @@
 use super::gate_392_da2a::{number, text};
 use super::*;
 use actingcommand_contract::{
-    CaptureExtent, DisplayMapKind, InputPathPoint, LabOperationEnd, LabOperationStage,
-    TaskGeometryObservation, TaskGeometryPhase,
+    CaptureExtent, DisplayMapKind, InputPathPoint, LabOperationEnd, TaskGeometryObservation,
+    TaskGeometryPhase,
 };
 use actingcommand_device::{PathDragAction, SegmentedDragAction};
 use actingcommand_ledger_forensics::{
@@ -595,19 +595,20 @@ fn da3_fix1_a_scale_whose_double_is_not_whole_refuses_the_first_input_up_front()
     );
 }
 
-/// Fix 1, work order point 1 (`contracts/display-adapter.md` section 10): a Lab declared
-/// operation, whose runtime reads no game declaration and whose frames carry no producer
-/// geometry, sends its input only on a frame of its package's size. `op_a` of a 16x9 package taps
-/// the point (1, 0) from `page_a` to `page_b` (the page in the frame's 3x3 top-left block). On a
-/// 16x9 device, the identity, the device receives the literal tap (1, 0) and the operation is
-/// confirmed. On a 32x18 device, a pure scale of 2 that the kernel's frame gate admits, the
-/// operation fails at its input with `display_map_unresolved` (`input_scale_unsupported` at
-/// `display_input_map`, the frame 32x18 and the base 16x9): its one attempt keeps the base tap
-/// (1, 0) and never reached its input, and the device received nothing.
+/// Workflow #392 DA-5ab (`contracts/display-adapter.md` section 11; it replaces DA-3 fix 1's
+/// refusal, which this test pinned before under the name
+/// `da3_fix1_a_lab_declared_operation_sends_its_base_point_only_on_a_frame_of_its_package`): a Lab
+/// declared operation, whose runtime reads no game declaration and whose frames carry no producer
+/// geometry, maps its frames as the Lab's observation does and sends its input under the frame's
+/// map. `op_a` of a 16x9 package taps the point (1, 0) from `page_a` to `page_b` (the page in the
+/// frame's 3x3 top-left block). On a 16x9 device, the identity, the device receives the literal
+/// tap (1, 0); on a 48x27 device, three times the package, the kernel recognises `page_a` on the
+/// reduced frame and the device receives the tap (3, 0). Either way the operation is confirmed and
+/// its one attempt keeps the base tap (1, 0).
 #[test]
-fn da3_fix1_a_lab_declared_operation_sends_its_base_point_only_on_a_frame_of_its_package() {
+fn da3_fix1_a_lab_declared_operation_sends_its_base_point_under_its_frames_map() {
     use super::gate_412_b3_s2 as lab;
-    for k in [1_u32, 2] {
+    for k in [1_u32, 3] {
         let root = TempDir::new().expect("tempdir");
         let state = Arc::new(FakeState::default());
         state.physical_task_geometry.store(true, Ordering::Release);
@@ -658,30 +659,15 @@ fn da3_fix1_a_lab_declared_operation_sends_its_base_point_only_on_a_frame_of_its
             .lock()
             .expect("fake input actions")
             .clone();
-        if k == 1 {
-            assert!(record.failure.is_none(), "{:?}", record.failure);
-            assert_eq!(result.end, LabOperationEnd::Confirmed);
-            assert_eq!(received, [InputAction::Tap { x: 1, y: 0 }]);
-        } else {
-            let failure = record.failure.as_ref().expect("the operation failed");
-            assert_eq!(failure.code, "display_map_unresolved", "{failure:?}");
-            assert_eq!(failure.stage, LabOperationStage::Input, "{failure:?}");
-            assert_eq!(result.end, LabOperationEnd::Failed);
-            let outcome = verified.receipt().outcome();
-            assert_eq!(outcome.code().as_str(), "display_map_unresolved");
-            assert_eq!(
-                text(outcome, "display_problem"),
-                Some("input_scale_unsupported")
-            );
-            assert_eq!(text(outcome, "stage"), Some("display_input_map"));
-            assert_eq!(number(outcome, "frame_width"), Some(32));
-            assert_eq!(number(outcome, "frame_height"), Some(18));
-            assert_eq!(number(outcome, "base_width"), Some(16));
-            assert_eq!(number(outcome, "base_height"), Some(9));
-            assert!(!attempt.input_returned, "the tap never reached its input");
-            assert!(received.is_empty(), "{received:?}");
-            assert_eq!(state.input_count.load(Ordering::Acquire), 0, "no input");
-        }
+        assert!(record.failure.is_none(), "{k}: {:?}", record.failure);
+        assert_eq!(result.end, LabOperationEnd::Confirmed, "{k}");
+        assert!(attempt.input_returned, "{k}: the tap reached its input");
+        let scale = i32::try_from(k).expect("a small scale");
+        assert_eq!(
+            received,
+            [InputAction::Tap { x: scale, y: 0 }],
+            "{k}: the base point under the frame's map"
+        );
         drop(client);
         host.close().expect("close host");
     }

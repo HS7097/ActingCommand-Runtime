@@ -6,7 +6,7 @@ use crate::fact_store::{priority_offset_milli, valid_priority_offset_task_id};
 use actingcommand_contract::codes::{ContractLocation, SharedCode};
 use actingcommand_contract::{
     CaptureExtent, CaptureGeometryObservation, CaptureRotation, CaptureRotationObservation,
-    RESOURCE_TARGETS_FACT_KEY, priority_offset_task_id,
+    DISPLAY_FRAME_EXTENT_FACT_KEY, RESOURCE_TARGETS_FACT_KEY, priority_offset_task_id,
 };
 
 /// `source_detector` of the three configuration-seeded policy instance facts.
@@ -34,8 +34,9 @@ const DEVICE_STATE_AVAILABILITY_SNAPSHOT_PREFIX: &str = "device_state:";
 /// `source_detector` of the instance display facts.
 const DISPLAY_FACT_DETECTOR: &str = "runtime.display-adapter";
 const DISPLAY_FACT_SCHEMA: &str = "fact.v1";
-/// The device frame: one `record_list` row `{width, height}`.
-const DISPLAY_FRAME_EXTENT_FACT_KEY: &str = "display.frame_extent";
+// The device frame, one `record_list` row `{width, height}`, is the contract crate's
+// `DISPLAY_FRAME_EXTENT_FACT_KEY` (Workflow #392 DA-5cd fix round 1: one home for the key, which
+// the Lab's `record start` reads).
 /// The display rotation: `r0`, `r90`, `r180`, `r270` or `unknown`.
 const DISPLAY_ROTATION_FACT_KEY: &str = "display.rotation";
 /// The frame's orientation: `landscape`, `portrait` or `square`.

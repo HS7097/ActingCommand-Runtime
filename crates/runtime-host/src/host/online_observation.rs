@@ -557,7 +557,7 @@ pub(super) fn observation_admission_error(
         .with_native_detail(cause.to_string())
 }
 pub(super) fn observation_kernel_error(error: OnlineObservationError) -> RuntimeHostError {
-    RuntimeHostError::request(
+    let relayed = RuntimeHostError::request(
         error.code(),
         error.stage(),
         if error.stage() == ContractLocation::AdmitContainedObservation.location()
@@ -568,7 +568,17 @@ pub(super) fn observation_kernel_error(error: OnlineObservationError) -> Runtime
             RuntimeErrorCode::RecognitionFailed
         },
     )
-    .with_native_detail(error.cause().to_string())
+    .with_native_detail(error.cause().to_string());
+    // Workflow #392 DA-5ab: a frame the display map refuses answers the run's code for it with
+    // the values that code carries (`display_map_unresolved`: `display_problem`, `stage`, the
+    // frame's and the base's sizes).
+    match error.values() {
+        Some(values) => {
+            let values = values.clone().operation(error.stage());
+            relayed.with_outcome_values(|_| values)
+        }
+        None => relayed,
+    }
 }
 pub(super) fn observation_integrity_failure(code: impl Into<Code>) -> RequestFailure {
     RequestFailure::poison_without_terminal(RuntimeHostError::fatal(

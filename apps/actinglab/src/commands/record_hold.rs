@@ -38,11 +38,14 @@
 
 use super::session_record::{SessionRecordContext, with_archive_context};
 use crate::{CliError, CliOutcome, runtime_state_root, write_json_file_atomic};
-use actingcommand_contract::{RUNTIME_INFO_FILE, RuntimeInfo, SchedulingPauseReason};
+use actingcommand_contract::{
+    DISPLAY_FRAME_EXTENT_FACT_KEY, FactContent, FactScalar, FactScope, FactValue,
+    RUNTIME_INFO_FILE, RuntimeInfo, SchedulingPauseReason,
+};
 use actingcommand_lab::{
     LAB_RECORDING_WARNING_HOLD_UNREAD, LAB_RECORDING_WARNING_INSTANCE_NOT_HELD,
     LAB_RECORDING_WARNING_NO_RUNTIME_LISTENING, LAB_RECORDING_WARNING_REPLACED_HEADER_UNREAD,
-    RecordingHold, RecordingHoldFound, RecordingHoldView,
+    RECORDING_BASE_SIZE, RecordSize, RecordingHold, RecordingHoldFound, RecordingHoldView,
 };
 use actingcommand_lab_ops::scheduling::{self, RecordingHoldReleased};
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig, RuntimeClientError};
@@ -229,12 +232,20 @@ fn pause_unsettled(instance: &str, hold: Option<&RecordingHold>, mut error: CliE
 ///   the start with the hold in its details ([`pause_unsettled`]).
 ///
 /// A header that cannot be written fails the start with the hold in its details.
+///
+/// Workflow #392 DA-5cd (`contracts/lab-recording.md`, "A recording's size"): on a connection,
+/// before the status read, the instance's display as the Runtime last observed it
+/// ([`last_observed_display`]); a display of another size than the base size fails the start
+/// `record_display_not_base` before anything is written or paused. Fix round 1: an early warning,
+/// not the guard (the recording's first frame is checked against the base size its header names).
+/// Answers the `hold` member and the display the Runtime last observed (`display_last_observed`:
+/// `{width, height, observed_at_unix_ms}`, `null` when it observed none or nothing listens).
 pub(super) fn take(
     path: &Path,
     record: &mut SessionRecordContext,
     replaced: Option<&RecordingHold>,
     before: Option<&[u8]>,
-) -> CliOutcome<Value> {
+) -> CliOutcome<(Value, Value)> {
     let instance = record.instance.clone();
     let reason = RecordingHold::reason_for(record.started_at_unix_ms);
     let own = pause_reason(&reason)?;
@@ -252,9 +263,26 @@ pub(super) fn take(
             );
             answer["runtime_error"] = json!(cause);
             write_header(path, record)?;
-            return Ok(answer);
+            return Ok((answer, Value::Null));
         }
         Reached::NotHandshaken(error) => return Err(started_nothing(&instance, &reason, error)),
+    };
+    let observed = last_observed_display(&client, &instance)
+        .map_err(|error| started_nothing(&instance, &reason, error))?;
+    let display_last_observed = match observed {
+        Some(seen) if !actingcommand_lab::is_base_size(seen.size.width, seen.size.height) => {
+            return Err(started_nothing(
+                &instance,
+                &reason,
+                display_not_base(&instance, seen.size),
+            ));
+        }
+        Some(seen) => json!({
+            "width": seen.size.width,
+            "height": seen.size.height,
+            "observed_at_unix_ms": seen.observed_at_unix_ms
+        }),
+        None => Value::Null,
     };
     let shown = scheduling::instance_pause_reason(&client, &instance).map_err(|error| {
         started_nothing(
@@ -269,7 +297,10 @@ pub(super) fn take(
             replaced,
         );
         write_header(path, record)?;
-        return Ok(start_answer(record.hold.as_ref(), replaced));
+        return Ok((
+            start_answer(record.hold.as_ref(), replaced),
+            display_last_observed,
+        ));
     }
     // Fix round 2: the header names the own hold before the pause is sent, so that a start killed
     // or timed out in the pause's drain leaves a header whose end releases the pause by its reason.
@@ -279,7 +310,7 @@ pub(super) fn take(
     match scheduling::pause_for_recording(&client, &instance, own) {
         Ok(paused) => {
             answer["paused"] = json!(paused);
-            Ok(answer)
+            Ok((answer, display_last_observed))
         }
         Err(error) if scheduling::pause_refused(&error) => {
             let refused = started_nothing(
@@ -307,6 +338,90 @@ pub(super) fn take(
             crate::runtime_slice_cli::map_runtime_error(error),
         )),
     }
+}
+
+/// Workflow #392 DA-5cd fix round 1: the display the Runtime last observed for an instance, the
+/// size of the first frame of the latest contained task run on it, and when it observed it. It is
+/// not the display now: a display changed since is observed only when a task runs on it again.
+struct LastObserved {
+    size: RecordSize,
+    observed_at_unix_ms: u64,
+}
+
+/// Workflow #392 DA-5cd (`contracts/lab-recording.md`, "A recording's size"): the display of
+/// `instance` as the Runtime last observed it, its `display.frame_extent` fact (the device frame
+/// the instance's latest contained task saw, `contracts/instance-fact-store.md`, "Display facts"),
+/// with the fact's `observed_at_unix_ms` (fix round 1), read from the Runtime's memory on `client`
+/// with no device step; `None` when the Runtime holds none for it (no contained task has run on
+/// the device, or the instance has no device). A read the Runtime refuses fails as the start's
+/// status read fails; a fact of another shape than its one row `{width, height}` fails the start
+/// (`device_error`).
+fn last_observed_display(
+    client: &RuntimeClient,
+    instance: &str,
+) -> CliOutcome<Option<LastObserved>> {
+    let read = client
+        .instance_fact_snapshot_by_prefix(instance, Some(DISPLAY_FRAME_EXTENT_FACT_KEY))
+        .map_err(crate::runtime_slice_cli::map_runtime_error)?;
+    let Some(record) = read.snapshot.records.iter().find(|record| {
+        record.key == DISPLAY_FRAME_EXTENT_FACT_KEY
+            && matches!(record.scope, FactScope::Instance { .. })
+    }) else {
+        return Ok(None);
+    };
+    let extent = match &record.content {
+        FactContent::Inline {
+            value: FactValue::RecordList(rows),
+        } => match rows.as_slice() {
+            [row] => match (row.get("width"), row.get("height")) {
+                (Some(FactScalar::Integer(width)), Some(FactScalar::Integer(height))) => {
+                    u32::try_from(*width).ok().zip(u32::try_from(*height).ok())
+                }
+                _ => None,
+            },
+            _ => None,
+        },
+        _ => None,
+    };
+    let (width, height) = extent.ok_or_else(|| {
+        CliError::device(format!(
+            "the Runtime's {DISPLAY_FRAME_EXTENT_FACT_KEY} fact of {instance} is no one row \
+             {{width, height}}"
+        ))
+    })?;
+    Ok(Some(LastObserved {
+        size: RecordSize { width, height },
+        observed_at_unix_ms: record.observed_at_unix_ms,
+    }))
+}
+
+/// Workflow #392 DA-5cd: `record_display_not_base` of a start on `instance`, whose display the
+/// Runtime last observed at `display`. Fix round 1: the text says what to do on an instance whose
+/// scheduling is paused, where no task runs to observe a display changed since, and that the
+/// recording's first frame is checked in any case.
+fn display_not_base(instance: &str, display: RecordSize) -> CliError {
+    let base = RECORDING_BASE_SIZE;
+    actingcommand_lab::record_display_not_base(
+        display,
+        base,
+        format!(
+            "the Runtime last observed the display of {instance} at {}x{}, in the first frame of \
+             the latest task run on it, and a recording is made at the base size {}x{} that every \
+             standard package declares: record on an instance whose display is {}x{}. If this \
+             display was set to {}x{} since, the Runtime observes it only when a task runs on the \
+             instance again, and an instance whose scheduling is paused runs none: resume its \
+             scheduling until a task has run, or start the recording on another instance at the \
+             base size. The recording's first frame is checked against the base size in any case",
+            display.width,
+            display.height,
+            base.width,
+            base.height,
+            base.width,
+            base.height,
+            base.width,
+            base.height
+        ),
+    )
 }
 
 /// `record start`'s `hold` member: the view of what the recording holds, with `taken_over: true`

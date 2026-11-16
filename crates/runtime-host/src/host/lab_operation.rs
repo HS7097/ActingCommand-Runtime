@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use super::contained_task::contained_task_sampling_seed;
+use super::contained_task::{contained_task_sampling_seed, input_send_failure};
 use super::online_observation::{
     observation_admission_error, observation_artifact_failure, observation_integrity_failure,
     observation_kernel_error,
@@ -9,7 +9,7 @@ use super::*;
 use crate::codes::{HostCode, HostLocation};
 use actingcommand_contract::codes::{RuntimeContractCode, SharedCode};
 use actingcommand_contract::outcome::{Code, Outcome, StateProblem};
-use actingcommand_contract::page_projection::{FrameIdentity, FrameKind, PageProjection};
+use actingcommand_contract::page_projection::{FrameIdentity, FrameKind, Geometry, PageProjection};
 use actingcommand_contract::{
     ContainedLabOperationRequest, ContainedLabOperationResult, ContainedObservationEvidence,
     ContainedPageObservation, InputFrameReference, InputSamplingEvidence, InputSamplingRegion,
@@ -246,13 +246,44 @@ impl HostShared {
             failure,
             cleanup_failure: None,
         };
-        if record.failure.is_none() {
+        // Workflow #392 DA-5ab (`contracts/display-adapter.md` section 11): the selection's input
+        // is in the package's base; it leaves for the device through the run's own exit, or the
+        // operation fails at its input with nothing sent.
+        let sent = if record.failure.is_some() {
+            None
+        } else {
+            let converted = lab_sent_action(
+                observer.base(),
+                record
+                    .prepared
+                    .before_frame
+                    .as_ref()
+                    .expect("prepared frame"),
+                record.prepared.action.as_ref().expect("prepared action"),
+                &record
+                    .prepared
+                    .geometry
+                    .as_ref()
+                    .map_or_else(Vec::new, geometry_boxes),
+            );
+            match converted {
+                Ok(action) => Some(action),
+                Err(failed) => {
+                    let (input_failure, outcome) =
+                        lab_operation_failure(LabOperationStage::Input, failed)?;
+                    record.failure = Some(input_failure);
+                    failure_outcome = Some(outcome);
+                    None
+                }
+            }
+        };
+        if let Some(sent) = &sent {
             let held = token.as_ref().expect("prepared action holds lease");
             // No instance guard or destructive step is held across this owner call.
             let (input_terminal, input_failure) = match self.input(
                 request,
                 held,
-                record.prepared.action.as_ref().expect("prepared action"),
+                sent,
                 connection_id,
                 resolved.provenance(),
                 RuntimeInputContext {
@@ -1515,34 +1546,77 @@ fn lab_declared_state_invalid() -> RequestFailure {
     )
 }
 
-/// Workflow #392 DA-3 fix 1 (`contracts/display-adapter.md` section 10): a declared operation's
-/// input on a frame of `frame` size, which is not its package's base `base`. The Lab's runtime
-/// reads no game declaration and its frames, read back from their pictures, carry no producer
-/// geometry, so it cannot know the map a run's input leaves under; it never sends a base point
-/// to such a frame. The input is refused before anything is sent, as a run's input under a map
-/// it does not map: `display_map_unresolved` (`input_scale_unsupported`) at stage
-/// `display_input_map`, with the frame's and the base's sizes. Only that operation fails,
-/// non-fatal.
-fn lab_input_scale_unsupported(frame: (u32, u32), base: (u32, u32)) -> RequestFailure {
-    RequestFailure::request(
-        RuntimeHostError::request(
-            actingcommand_display_adapter::DisplayCode::MapUnresolved,
-            HostLocation::ValidateTaskGeometryInput,
-            RuntimeErrorCode::BackendOperationFailed,
-        )
-        .with_outcome_values(|outcome| {
-            outcome
-                .display_problem(
-                    actingcommand_display_adapter::DisplayProblem::InputScaleUnsupported,
+/// Workflow #392 DA-5ab (`contracts/display-adapter.md` section 11; it replaces DA-3 fix 1's
+/// refusal): the input a Lab operation sends for `action`, made in its package's base `base`
+/// (width, height) and decided on `frame`. On a frame of the base's size it is `action` itself,
+/// byte for byte. On any other frame it leaves under that frame's map, built as the Lab's
+/// observation built it (`lab_display_map`: no game declaration, no producer geometry), through
+/// the run's own exit (`DisplayMap::send_input`): admitted, checked against the frame it was
+/// decided on, and converted to device pixels, each point inside the device box of its box in
+/// `boxes` (base pixels). A map the input side does not send under is refused with the run's
+/// code for it (`display_map_unresolved` at `display_input_map`: a pure scale whose double is
+/// not a whole number `input_scale_unsupported`), and nothing is sent; only that operation fails.
+fn lab_sent_action(
+    base: (u32, u32),
+    frame: &LabOperationFrame,
+    action: &InputAction,
+    boxes: &[actingcommand_display_adapter::Rect],
+) -> Result<InputAction, RequestFailure> {
+    let device = (frame.observation.width(), frame.observation.height());
+    if device == base {
+        return Ok(action.clone());
+    }
+    let map = actingcommand_execution_kernel::lab_display_map(base, device)
+        .map_err(|error| lab_kernel_failure(&error))?;
+    map.send_input(
+        action,
+        boxes,
+        actingcommand_contract::CaptureExtent::new(device.0, device.1),
+    )
+    .map_err(input_send_failure)
+}
+
+/// Workflow #392 DA-5ab: the boxes (base pixels) a selection's input was drawn in, its geometry's
+/// rectangles: a tap's one, a drag's press and end (a long tap reads the first).
+fn geometry_boxes(geometry: &Geometry) -> Vec<actingcommand_display_adapter::Rect> {
+    match geometry {
+        Geometry::Tap { rect, .. } => vec![adapter_rect(*rect)],
+        Geometry::Drag {
+            from_rect, to_rect, ..
+        } => vec![adapter_rect(*from_rect), adapter_rect(*to_rect)],
+    }
+}
+
+/// Workflow #392 DA-5ab: the boxes (base pixels) an attempt of a declared operation drew its
+/// points in, its sampling regions, as a run's step keeps them for its input; none without a draw.
+fn sampling_boxes(
+    sampling: Option<&InputSamplingEvidence>,
+) -> Vec<actingcommand_display_adapter::Rect> {
+    sampling.map_or_else(Vec::new, |sampling| {
+        sampling
+            .source_regions()
+            .iter()
+            .map(|region| {
+                actingcommand_display_adapter::Rect::new(
+                    i64::from(region.x()),
+                    i64::from(region.y()),
+                    i64::from(region.width()),
+                    i64::from(region.height()),
                 )
-                .stage(actingcommand_display_adapter::DisplayLocation::InputMap)
-                .frame_width(frame.0)
-                .frame_height(frame.1)
-                .base_width(base.0)
-                .base_height(base.1)
-        }),
-        RuntimeReceiptState::Failed,
-        None,
+            })
+            .collect()
+    })
+}
+
+/// A projection rectangle as the display adapter's box.
+fn adapter_rect(
+    rect: actingcommand_contract::page_projection::Rect,
+) -> actingcommand_display_adapter::Rect {
+    actingcommand_display_adapter::Rect::new(
+        i64::from(rect.x),
+        i64::from(rect.y),
+        i64::from(rect.width),
+        i64::from(rect.height),
     )
 }
 
@@ -1643,8 +1717,8 @@ struct LabOperationRuntime<'a> {
     failure_stage: Option<LabOperationStage>,
     /// A failed read of the Runtime clock, reported at the next capture, input or record.
     clock_failure: Option<RuntimeHostError>,
-    /// Workflow #392 DA-3 fix 1: the package's base (its control resolution), `(width, height)`;
-    /// an input is sent only on a frame of this size.
+    /// The package's base (its control resolution), `(width, height)`: Workflow #392 DA-5ab, an
+    /// input on a frame of another size leaves under that frame's map.
     base: (u32, u32),
 }
 
@@ -1813,8 +1887,8 @@ impl LabOperationRuntime<'_> {
     /// bound it to. Its intent and outcome are read from after the previous attempt's events
     /// (after the prepared record for attempt 1). A frame other than the one captured last fails
     /// the operation with `contained_task_effect_frame_identity_mismatch` (ISO-2b: non-fatal).
-    /// Workflow #392 DA-3 fix 1: an input on a frame of another size than the package's base is
-    /// refused before anything is sent ([`lab_input_scale_unsupported`]).
+    /// Workflow #392 DA-5ab (it replaces DA-3 fix 1's refusal): an input on a frame of another
+    /// size than the package's base leaves under that frame's map ([`lab_sent_action`]).
     fn press(
         &mut self,
         action: InputAction,
@@ -1838,19 +1912,15 @@ impl LabOperationRuntime<'_> {
                 HostCode::ContainedTaskEffectFrameIdentityMismatch,
             ));
         }
-        let input_frame = self
-            .frames
-            .last()
-            .map(|entry| {
-                (
-                    entry.frame.observation.width(),
-                    entry.frame.observation.height(),
-                )
-            })
-            .ok_or_else(invalid)?;
-        if input_frame != self.base {
-            return Err(lab_input_scale_unsupported(input_frame, self.base));
-        }
+        // Workflow #392 DA-5ab: the kernel made the input in the package's base; on a frame of
+        // another size it leaves through the run's own exit, its points inside the device boxes
+        // of the boxes the attempt drew them in, or the operation fails with nothing sent.
+        let sent = lab_sent_action(
+            self.base,
+            &self.frames.last().ok_or_else(invalid)?.frame,
+            &action,
+            &sampling_boxes(self.attempts[index].sampling.as_ref()),
+        )?;
         self.host.device_state_keepalive(
             self.instance_id,
             self.instance_alias,
@@ -1860,7 +1930,7 @@ impl LabOperationRuntime<'_> {
         let (returned, input_failure) = match self.host.input(
             self.request,
             self.token,
-            &action,
+            &sent,
             self.connection_id,
             self.provenance,
             RuntimeInputContext {
