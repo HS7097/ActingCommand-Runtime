@@ -178,7 +178,7 @@ pub(crate) fn trial_options() -> [&'static str; 11] {
         "--instance <the instance the trial is for; the run is sent to it>",
         "--package <a pack directory: packs/<id> of a checkout or a placed pack; no container>",
         "--authorization <the owner's authorization reference, 1 to 1024 bytes; the run needs it>",
-        "--variable <name>=<json> (repeatable; judged by the plan; a run carries none yet)",
+        "--variable <name>=<json> (repeatable; judged by the plan; the run carries it)",
         "--expect <an outcome key the package declares; the run answers whether it matched>",
         "--irreversible (acknowledges a package the irreversible mark flags; its run needs it)",
         "--root <judges the mark; a pack it does not register is marked; without it not judged>",
@@ -448,7 +448,7 @@ fn run_trial(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     }
     let plan = serde_json::to_value(&answer.plan).map_err(encode_failed)?;
     let run = TrialRun {
-        kept: check_trial_run(&answer, &request)?,
+        kept: check_trial_run(&answer)?,
         request: &request,
         answer: &answer,
         plan,
@@ -493,6 +493,11 @@ impl TrialRun<'_> {
             "package".to_owned(),
             Value::String(self.answer.plan.package.clone()),
         );
+        // Workflow #463 S3-8, S3-9: the values given, as `run start`'s `--variable` takes them, so
+        // that its own parser reads them into the request; none without one.
+        if !self.request.variables.is_empty() {
+            params.insert("variable".to_owned(), variable_words(self.request));
+        }
         let prepared = run_start_prepared(&params, client).map_err(|exit| self.not_sent(&exit))?;
         let request_id = prepared.request_id();
         let correlation_id = prepared.correlation_id();
@@ -886,6 +891,11 @@ impl TrialRun<'_> {
             "--authorization".to_owned(),
             self.kept.authorization.clone(),
         ];
+        // Workflow #463 S3-8, S3-9: the values the run was sent with, so that the record the
+        // later line writes names them.
+        for (name, value) in &self.request.variables {
+            words.extend(["--variable".to_owned(), format!("{name}={value}")]);
+        }
         if let Some(expected) = &plan.expect {
             words.extend(["--expect".to_owned(), expected.clone()]);
         }
@@ -932,6 +942,19 @@ fn beside(mut error: CliError, members: Map<String, Value>) -> CliError {
         details.entry(name).or_insert(value);
     }
     error.with_details(Value::Object(details))
+}
+
+/// Workflow #463 S3-8, S3-9: the values the trial `request` gives, each `<name>=<json>` (the value
+/// as compact JSON), in the order given: the parameter `variable` of `run start`, as its command
+/// line and its MCP tool hand it on.
+fn variable_words(request: &StandardPackTrialRequest) -> Value {
+    Value::Array(
+        request
+            .variables
+            .iter()
+            .map(|(name, value)| Value::String(format!("{name}={value}")))
+            .collect(),
+    )
 }
 
 /// Workflow #463 S3-11: the end a trial's answer shows: the run's state as `run show` names it and

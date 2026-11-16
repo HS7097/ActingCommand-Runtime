@@ -8,11 +8,11 @@
 // product sends them:
 // - `s311_each_run_only_refusal_sends_nothing_and_writes_nothing`: no `--authorization`
 //   (`trial_authorization_missing`), a package the mark flags over `--root` without
-//   `--irreversible` (`trial_irreversible_unacknowledged`), a `--variable`
-//   (`trial_variables_not_carried`), `--dry-run` (`dry_run_unsupported`), and the run's flags
-//   beside the plan or each other (`conflicting`), a `--collect` that is no request id
-//   (`not_recognised`) and a `--wait` that is no duration (`wrong_type`): no connection, no state
-//   directory;
+//   `--irreversible` (`trial_irreversible_unacknowledged`), `--dry-run` (`dry_run_unsupported`),
+//   and the run's flags beside the plan or each other (`conflicting`), a `--collect` that is no
+//   request id (`not_recognised`) and a `--wait` that is no duration (`wrong_type`): no
+//   connection, no state directory (adapted by Workflow #463 S3-8, S3-9, register §1.444: a
+//   `--variable` is no refusal any more, `trial_variables_not_carried` is retired);
 // - `s311_a_run_ending_on_the_target_page_records_its_key_and_matched`: the run sent once, then
 //   its projection, its facts, the two restart reads and its terminal's record read; the answer's
 //   end `succeeded` with the target's key and page, `expected` and `matched` true, no warning; the
@@ -48,6 +48,10 @@
 //   `trial_terminal_unrecorded`, both without `next`; no record;
 // - `s311_a_refused_write_names_the_line_that_records_the_run_later`: a `.part` of the record's
 //   name left there: the writer's `trial_record_exists` naming it, with `next`.
+// Workflow #463 S3-8, S3-9 (register §1.444):
+// - `s38_a_trial_with_a_value_sends_it_and_its_record_names_it`: the run sent with the value given
+//   in its request's `variables`, the plan and the record naming it, the code
+//   `trial_variables_not_carried` retired.
 // No device, no clock read, no sleep: temporary directories, a made-up package, made-up ledgers.
 
 use super::*;
@@ -836,15 +840,6 @@ fn s311_each_run_only_refusal_sends_nothing_and_writes_nothing() {
     assert_eq!(
         details["outcome"]["values"],
         json!({"package_id": PACKAGE_ID})
-    );
-    let details = refused(
-        &context.line(&["--authorization", AUTHORIZATION, "--variable", "floor=20"]),
-        "trial_variables_not_carried",
-        2,
-    );
-    assert_eq!(
-        details["outcome"]["values"],
-        json!({"package_id": PACKAGE_ID, "variable_name": "floor"})
     );
     // The global `--dry-run`: the run and `--collect` are refused after the flags.
     let package = context.package().display().to_string();
@@ -1652,4 +1647,68 @@ fn s311_a_refused_write_names_the_line_that_records_the_run_later() {
         .to_string_lossy()
         .into_owned();
     assert_eq!(names_in(&context.trials()), vec![part_name]);
+}
+
+// Workflow #463 S3-8, S3-9 (register §1.444; contracts/standard-pack-trial.md, "The variables",
+// "The run"): a trial with `--variable floor=20` sends its one run with the value in the request's
+// `variables` (the frames of any trial's run, nothing more), succeeds, answers the plan with the
+// value given, and its record's plan names it; `trial_variables_not_carried` is retired in the
+// outcome catalog, in 0.12.68.
+#[test]
+fn s38_a_trial_with_a_value_sends_it_and_its_record_names_it() {
+    let context = Context::new();
+    let instance = IdentifierIssuer::new()
+        .expect("identifier issuer")
+        .mint_instance_id()
+        .expect("instance id");
+    let runtime = ScriptedRuntime::start(&context.runtime_root(), |owner_epoch| {
+        vec![sent_run(
+            owner_epoch,
+            instance,
+            End::Keyed(DONE_KEY, "neutral/done"),
+        )]
+    });
+    let answered = context.line(&[
+        "--authorization",
+        AUTHORIZATION,
+        "--variable",
+        "floor=20",
+        "--expect",
+        DONE_KEY,
+    ]);
+    let record = runtime.finish();
+    assert_eq!(operations(&record.connections[0]), sent_frames());
+    assert!(record.unscripted.is_empty());
+    let sent = record.connections[0]
+        .requests
+        .iter()
+        .find_map(|sent| match sent.operation() {
+            RuntimeOperation::RunContainedTask { request, .. } => {
+                Some(request.variables().clone())
+            }
+            _ => None,
+        })
+        .expect("the run's request");
+    assert_eq!(
+        sent,
+        std::collections::BTreeMap::from([("floor".to_owned(), json!(20))])
+    );
+
+    let shown = answered.envelope_json();
+    assert_eq!(answered.exit_code(), 0, "{shown}");
+    let data = answered.envelope.data.clone().expect("the answer");
+    let given = json!([{"name": "floor", "value": 20, "source": "given"}]);
+    assert_eq!(data["plan"]["variables"], given, "{shown}");
+    assert_eq!(data["matched"], true, "{shown}");
+    let kept = record_at(&data["record"]);
+    assert_eq!(kept["plan"]["variables"], given);
+    assert_eq!(kept["end"]["outcome_key"], DONE_KEY);
+
+    let catalog: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/outcome-codes/resource-tooling.json"
+    ))
+    .expect("the resource tooling's fragment reads");
+    let retired = &catalog["codes"]["trial_variables_not_carried"];
+    assert_eq!(retired["status"], "retired", "{retired}");
+    assert_eq!(retired["retired_in"], "0.12.68", "{retired}");
 }

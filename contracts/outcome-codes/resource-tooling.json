@@ -1420,11 +1420,12 @@
         "variable_name": "required"
       },
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.65",
-      "description": "Workflow #463 S3-11 (contracts/standard-pack-trial.md, \"The run\"): the run of the package package_id was asked for with --variable (variable_name, the first given), and a direct run carries no variable value yet: it runs every declared default. Nothing was sent and nothing was written. The plan keeps showing the values given, judged by their declarations.",
-      "common_causes": "A trial of a non-default choice, which a direct run cannot make yet.",
-      "handling": "Leave --variable out to try the defaults; a trial of another value waits until a direct run carries variable values."
+      "retired_in": "0.12.68",
+      "description": "Retired (Workflow #463 S3-8, S3-9): a direct run carries the values --variable gives (ContainedTaskRequest.variables, runtime-client 11), so the trial's run sends them and nothing refuses a --variable for this cause. Was: Workflow #463 S3-11 (contracts/standard-pack-trial.md, \"The run\"): the run of the package package_id was asked for with --variable (variable_name, the first given), and a direct run carries no variable value yet: it runs every declared default. Nothing was sent and nothing was written. The plan keeps showing the values given, judged by their declarations.",
+      "common_causes": "A trial of a non-default choice, which a direct run could not make before 0.12.68.",
+      "handling": "None in 0.12.68 and later: the code is no longer emitted."
     },
     "trial_end_unexpected": {
       "category": "warning",

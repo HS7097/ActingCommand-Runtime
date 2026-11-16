@@ -18163,6 +18163,26 @@
       "description": "A completed receipt of an EditGoal request (Workflow #463 V3, runtime-client 9): one value of an application's goal page was set or cleared by its name and the application's session.resource_targets record published as one fact.published (or, replayed, the record already held it); the result names the record's version after the edit and that event. Workflow #378 A4: one success code per request kind.",
       "common_causes": "The request succeeded.",
       "handling": "Nothing to do; send the result's version as the next edit's expected_version."
+    },
+    "invalid_contained_task_variables": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.68",
+      "description": "Runtime contract validation refused a value (Workflow #463 S3-8, runtime-client 11): a contained task request's variables holds more values than a package declares variables (16), or a name outside a variable's form (1 to 64 bytes of [a-z][a-z0-9_]*). Nothing was sent, or the Runtime refused the request before reading its package.",
+      "common_causes": "A run start --variable whose name is no variable's name, or more than 16 of them.",
+      "handling": "Give each value under the name the package's control.json declares (package variables reads them), at most once per variable."
     }
   },
   "locations": {

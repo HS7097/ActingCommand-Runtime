@@ -173,6 +173,9 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   (0.12.67, register §1.433) raises `max` to 10: the status member `device_held`, which a
 ///   reader whose `max` is below 10 refuses (the status denies unknown members); no installation
 ///   can fill it while the load refuses every device group of several, so `min` stays: [3, 10].
+///   Workflow #463 S3-8 (0.12.68, register §1.444) raises `max` to 11: the request member
+///   `ContainedTaskRequest.variables`, which a Runtime of 10 or lower cannot decode; a request
+///   without it serializes and is answered as before and no answer changes, so [3, 11].
 /// - `runtime-outcomes` [1, 1]: the new interface of model-378 §10.
 const V0120: &[(&str, [u64; 2])] = &[
     ("actingd-config", [5, 33]),
@@ -180,7 +183,7 @@ const V0120: &[(&str, [u64; 2])] = &[
     ("install-selection", [1, 1]),
     ("ledger", [3, 8]),
     ("package", [3, 15]),
-    ("runtime-client", [3, 10]),
+    ("runtime-client", [3, 11]),
     ("runtime-outcomes", [1, 1]),
 ];
 

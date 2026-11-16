@@ -23801,6 +23801,74 @@
       "description": "A request of a member of a device group of several that asks for the device was refused because another member of the device is fenced for resources of its own whose state could not be confirmed (a close, an ADB check's clean-up or a contained failure left them so; Workflow #437 G1, contracts/device-group.md \"A failure stays where it belongs\"; Workflow #403): alias is that fenced member. The device is held for it and given to no other member until a preparation of that member whose self-check passes lifts its fence. The request asked for the device at once or as a person's or a client's work: a client's AcquireLease, a Lab operation, a policy dispatch admitted in the same moment, a direct run, an input or application command, a self-check, a resume, a backend switch (as the cause of backend_switch_refused instance_busy), or the member's own connection preparation at the start (recorded once as that preparation's failure, which leaves the member unavailable; since the G1 fix rounds the lease sweep queues that preparation once the fence is lifted, on a free device, as a self-check claim of the Runtime's own that the device's worker makes on its key). It is refused with scheduler.denied under the request, projected as lease_busy; nothing was granted and nothing ran. A claim of the member that already waited in the device's queue, a client's QueueLease and the Runtime's own claims wait in their places instead, and are granted once the fence is lifted; so does an operator's claim that met the device's admission guard taken, and when its wait ends while the device is still held, its lease_queue_expired names this code as its cause. A fence whose close was refused before it began and then confirmed holds nothing of the kind, nor does a fence whose resources were confirmed. An instance alone on its device, the fenced member itself and a member whose own fence holds the device too never meet it.",
       "common_causes": "Several applications declared on one device (device_group in instances[]), and the close of another application's session could not be confirmed, so that application is fenced: its fence waits for its ladder, its recheck or a person.",
       "handling": "Nothing was performed. Lift the fence of the member alias names: run its self-check (actingctl selfcheck), or resume it; actingctl status shows its resource_fence, and each held member's device_held. Then ask again."
+    },
+    "run_variable_undeclared": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "package_id": "required",
+        "variable_name": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.68",
+      "description": "A direct run (RunContainedTask; actinglab run start --variable, standard-pack trial --variable) gives a value under the name variable_name, and its package package_id declares no variable of that name (Workflow #463 S3-8, contracts/runtime-interface.md \"The variable values of a contained run\"). Denied in the run's preparation, after its package was read and before any record, claim or lease: nothing ran.",
+      "common_causes": "A name written otherwise than the package's control.json declares it, or a value meant for another package.",
+      "handling": "Read the package's variables (actinglab package variables --package <dir>) and give each value under its declared name."
+    },
+    "run_variable_value_refused": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "package_id": "required",
+        "variable_name": "required",
+        "variable_problem": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.68",
+      "description": "A direct run gives a value of the variable variable_name of its package package_id that the variable does not take whole: the dispatch's own judgement of a value (the policy crate's resolve_variable, the function a dispatch resolves a stored value by) answers variable_problem (not_an_option, out_of_range, off_step, type_changed, keys_removed, count_out_of_range, key_repeated, or keys_left_out for an ordered value it would take in part) (Workflow #463 S3-8). Denied in the run's preparation, before any record, claim or lease: nothing ran.",
+      "common_causes": "A choice that is none of the options, a number outside the range or off its step, a value of another type, an ordered list with a key twice, keys not offered, or too few or too many keys.",
+      "handling": "Give a value the declaration takes (actinglab package variables --package <dir> shows each variable's options, range, step and counts)."
+    },
+    "run_variable_not_applying": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "package_id": "required",
+        "variable_name": "required",
+        "variable_problem": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.68",
+      "description": "A direct run gives a value of the variable variable_name of its package package_id, and the variable does not apply in the instance's game root now, as the variable table a dispatch reads says it (VariableTable::root_word): variable_problem is the root's word (declaration_conflict, goal_name_conflict, irreversible_by_root, package_unreadable, name_out_of_limits, cap_range, goals_unreadable, or root_unchecked while no check judges the game's root, an instance the configuration binds to no game included) (Workflow #463 S3-8). A dispatch hands such a variable no value from outside. Denied in the run's preparation, before any record, claim or lease: nothing ran.",
+      "common_causes": "Packages of the game root that declare the name otherwise, a goals.json entry that takes the name, a package of the root that counts as able to do something irreversible, a game root that failed its check, or a game without a standard pack root.",
+      "handling": "Read why in standard-pack check --root <game root> (or goals <inst>, which names the cause); run without the value, which reads the default, or repair the root first."
     }
   },
   "locations": {
@@ -31029,6 +31097,14 @@
       "status": "active",
       "since": "0.12.67",
       "description": "A Runtime host operation (Workflow #437 G1 fix round 2): such a member's start preparation on its self-check claim's key on the device's worker, under the device's admission guard, and the key's release; a member that owes none any more, or whose pause is released, runs nothing."
+    },
+    "check_run_variables": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.68",
+      "description": "A Runtime host operation or stage: check a direct run's given variable values against its package's declaration and the variable table a dispatch reads, in its preparation, before any record, claim or lease (Workflow #463 S3-8)."
     }
   }
 }

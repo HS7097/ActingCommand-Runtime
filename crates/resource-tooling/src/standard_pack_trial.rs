@@ -500,21 +500,20 @@ pub fn plan_standard_pack_trial(
 }
 
 /// Workflow #463 S3-11 (`contracts/standard-pack-trial.md`, "The run"): the refusals only the run
-/// needs, after the plan `answer` that [`plan_standard_pack_trial`] gave `request` (its refusals come
+/// needs, after the plan `answer` that [`plan_standard_pack_trial`] gave (its refusals come
 /// first), in this order, each before anything is sent and before anything is written:
 /// - no authorization: `trial_authorization_missing`;
 /// - a package the irreversible mark flags (`marked`) and no `--irreversible`:
 ///   `trial_irreversible_unacknowledged`; a mark not judged (no `--root`) refuses nothing, as the
-///   plan says;
-/// - any `--variable`: `trial_variables_not_carried`, since a direct run carries no variable value
-///   yet (the plan keeps showing them).
+///   plan says.
 ///
-/// Then the plan as the record keeps it ([`TrialRecordPlan`]). It reads and writes nothing, and it
-/// judges no authorization: the reference is recorded as given.
-pub fn check_trial_run(
-    answer: &StandardPackTrialAnswer,
-    request: &StandardPackTrialRequest,
-) -> LabResult<TrialRecordPlan> {
+/// Workflow #463 S3-8, S3-9: a `--variable` refuses nothing any more (`trial_variables_not_carried`
+/// is retired): the run carries the values the plan shows as given.
+///
+/// Then the plan as the record keeps it ([`TrialRecordPlan`]), its variables with the values the
+/// run is sent with. It reads and writes nothing, and it judges no authorization: the reference is
+/// recorded as given.
+pub fn check_trial_run(answer: &StandardPackTrialAnswer) -> LabResult<TrialRecordPlan> {
     let plan = &answer.plan;
     if plan.authorization.is_none() {
         return Err(refused(
@@ -536,17 +535,6 @@ pub fn check_trial_run(
                 "the irreversible mark flags {} over the root given (see the plan's \
                  irreversible_basis): its trial is sent only with --irreversible",
                 plan.package_id
-            ),
-        ));
-    }
-    if let Some((name, _)) = request.variables.first() {
-        return Err(refused(
-            Outcome::new(ResourceToolingCode::TrialVariablesNotCarried)
-                .package_id(&plan.package_id)
-                .variable_name(name),
-            format!(
-                "--variable {name} is given, but a direct run carries no variable value yet: a \
-                 trial runs every declared default (the plan shows them); give no --variable"
             ),
         ));
     }

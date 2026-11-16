@@ -233,6 +233,10 @@ mod gate_463_s310;
 // business end and records it; `--collect` reads an end later.
 #[path = "gate_463_s311.rs"]
 mod gate_463_s311;
+// Workflow #463 S3-9: `run start --variable <name>=<json>`, read by the one parser of
+// `--variable`, sends the values in the run's request.
+#[path = "gate_463_s38.rs"]
+mod gate_463_s38;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
 use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{

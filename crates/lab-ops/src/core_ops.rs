@@ -1123,14 +1123,81 @@ fn run_start(params: Params<'_>, client: &RuntimeClient) -> Result<Exit, Exit> {
     run_start_answer(&output)
 }
 
+/// Workflow #463 S3-9: why one `--variable` is refused, as the one parser of `--variable`
+/// ([`parse_variables`]) says it: the word of the vocabulary `argument_problem` and its text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VariableRefusal {
+    pub problem: ArgumentProblem,
+    pub message: String,
+}
+
+/// Workflow #463 S3-9 (`contracts/package-variables.md`, "Runs without a dispatch"): the
+/// `--variable <name>=<json>` values `texts` of the command `command`, in the order given: the one
+/// parser of `--variable`, which the scan replay, `standard-pack trial` and `run start` read with
+/// (Workflow #463 V2 wrote it for the scan replay; S3-9 moved it here). A value given without its
+/// value (blank, or the word `true` a flag without one leaves) is `value_missing`; one that is not
+/// `<name>=<json>` (no `=`, an empty name, or a right side that is no JSON) `not_recognised`; a
+/// name given twice `repeated`, never last-wins. What the name and the value may be is the
+/// package's to judge.
+pub fn parse_variables<'a>(
+    command: &str,
+    texts: impl IntoIterator<Item = &'a str>,
+) -> Result<Vec<(String, Value)>, VariableRefusal> {
+    let mut given: Vec<(String, Value)> = Vec::new();
+    for text in texts {
+        if text == "true" || text.trim().is_empty() {
+            return Err(VariableRefusal {
+                problem: ArgumentProblem::ValueMissing,
+                message: format!("{command} takes --variable <name>=<json>"),
+            });
+        }
+        let Some((name, value)) = text.split_once('=').and_then(|(name, json)| {
+            let value = serde_json::from_str::<Value>(json).ok()?;
+            (!name.is_empty()).then_some((name, value))
+        }) else {
+            return Err(VariableRefusal {
+                problem: ArgumentProblem::NotRecognised,
+                message: format!("--variable {text} is not <name>=<json>"),
+            });
+        };
+        if given.iter().any(|(given, _)| given == name) {
+            return Err(VariableRefusal {
+                problem: ArgumentProblem::Repeated,
+                message: format!(
+                    "{command} takes --variable {name} once; a repeated variable is refused, never \
+                     last-wins"
+                ),
+            });
+        }
+        given.push((name.to_owned(), value));
+    }
+    Ok(given)
+}
+
+/// Workflow #463 S3-9: the values `run start`'s `--variable` gives, by name, read by
+/// [`parse_variables`] before anything is sent; a refusal is `--variable` with its word.
+fn run_variables(params: Params<'_>) -> Result<std::collections::BTreeMap<String, Value>, Exit> {
+    let texts = list_of(params, "variable").unwrap_or_default();
+    let given = parse_variables(RUN_START, texts.iter().map(String::as_str)).map_err(|refusal| {
+        cli_line::failure(
+            &cli_line::usage_invalid(Some("--variable"), refusal.problem),
+            Some(refusal.message.as_str()),
+        )
+    })?;
+    Ok(given.into_iter().collect())
+}
+
 /// Workflow #434 LAB-5G3: the instance `run start` names, resolved by one status read on
 /// `client`, and the run's request: the package, and its recovery package, by their paths made
 /// absolute, and the deadline (absent: the longest a run may have). `run start` reads them so
-/// before it runs or prepares the run, as before.
+/// before it runs or prepares the run, as before. Workflow #463 S3-9: and the values its
+/// `--variable` gives (`ContainedTaskRequest.variables`, `runtime-client` 11), read first: a
+/// refused one reads nothing of the Runtime; without one the request is as before.
 fn run_start_request(
     params: Params<'_>,
     client: &RuntimeClient,
 ) -> Result<(String, ContainedTaskRequest), Exit> {
+    let variables = run_variables(params)?;
     let alias = alias_of(client, required_text(params, "instance")?)?;
     let package = canonical(required_text(params, "package")?)?;
     let recovery = match text(params, "recovery") {
@@ -1150,6 +1217,13 @@ fn run_start_request(
         })
         .and_then(|request| request.with_response_deadline_ms(deadline))
         .map_err(|_| usage("<package>", ArgumentProblem::Unusable))?;
+    if variables.is_empty() {
+        return Ok((alias, request));
+    }
+    // A name outside a variable's form, or more values than a package declares variables.
+    let request = request
+        .with_variables(variables)
+        .map_err(|_| usage("--variable", ArgumentProblem::NotRecognised))?;
     Ok((alias, request))
 }
 

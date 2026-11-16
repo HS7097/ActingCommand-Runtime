@@ -176,7 +176,7 @@ actingcommand_contract::outcome_codes! {
         /// `.part`; the refusal as its cause). The writer answers success with it in `warnings`.
         TrialRecordPartLeft => "trial_record_part_left": warning / none,
         // Workflow #463 S3-11: the run of `actinglab standard-pack trial`
-        // (contracts/standard-pack-trial.md, "The run"). The first three are the refusals only the
+        // (contracts/standard-pack-trial.md, "The run"). The first two are the refusals only the
         // run needs, before anything is sent or written (`check_trial_run`).
         /// Workflow #463 S3-11: a trial's run was asked for without `--authorization` (key
         /// `package_id`); a plan needs none.
@@ -184,9 +184,8 @@ actingcommand_contract::outcome_codes! {
         /// Workflow #463 S3-11: the irreversible mark flags the package over the root given, and
         /// the run was asked for without `--irreversible` (key `package_id`).
         TrialIrreversibleUnacknowledged => "trial_irreversible_unacknowledged": error / none,
-        /// Workflow #463 S3-11: the run was asked for with a `--variable`, and a direct run carries
-        /// no variable value yet (keys `package_id`, `variable_name`, the first given).
-        TrialVariablesNotCarried => "trial_variables_not_carried": error / none,
+        // Workflow #463 S3-8, S3-9: `trial_variables_not_carried` is retired in 0.12.68: a direct
+        // run carries the values `--variable` gives.
         /// Warning (Workflow #463 S3-11): the trial's run ended normally on another end than the
         /// one `--expect` named (key `package_id`; optional `outcome_key`, the end's key). The
         /// command succeeds with `matched` false.
