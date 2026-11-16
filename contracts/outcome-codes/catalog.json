@@ -10867,7 +10867,7 @@
       }
     },
     "authorization_unrecorded": {
-      "description": "Why standard-pack status records no authorization for a pack, the member enabled.authorization_unrecorded (Workflow #463 S3-14, contracts/standard-pack-schedule.md \"Where a pack stands\", since 0.12.68).",
+      "description": "Why standard-pack status records no authorization for a pack, the member enabled.authorization_unrecorded (Workflow #463 S3-14, contracts/standard-pack-schedule.md \"Where a pack stands\", since 0.12.68; one word per cause since Workflow #463 S3-15a, 0.12.69).",
       "review": "pending",
       "source": {
         "file": "crates/resource-tooling/src/codes.rs",
@@ -10875,7 +10875,29 @@
       },
       "tokens": {
         "journals_not_read": {
-          "description": "The placement journals were not read: their reader is private to the Lab's rescue module (install::journal, pub(crate)), and that crate is built for Windows only (the train of S3-12 and S3-14). A later slice reads them."
+          "description": "The placement journals were not read: the row was not asked to read the installation (--installation)."
+        },
+        "no_journal_names_it": {
+          "description": "Workflow #463 S3-15a: every journal of the installation was read and no placement that counts names the pack in its input enabled: none that finished with every item placed and was neither undone nor rolled back."
+        },
+        "journals_unreadable": {
+          "description": "Workflow #463 S3-15a: no journal that was read names the pack, and some journals could not be read (the root's installation.operations_unread): one of them may name it."
+        }
+      }
+    },
+    "pairs_unread": {
+      "description": "Why standard-pack status --installation answers no pairs: each pack's pairs in place of its list, and the root's installation.pairs_unread beside the outcome that says why (Workflow #463 S3-15a, contracts/standard-pack-schedule.md \"Where a pack stands\", since 0.12.69).",
+      "review": "pending",
+      "source": {
+        "file": "crates/resource-tooling/src/codes.rs",
+        "enum": "PairsUnread"
+      },
+      "tokens": {
+        "suspension_report_not_read": {
+          "description": "The installation's actingd suspended gave no report: it could not be started, it failed or printed no report, it read another state root, or it was ended at its deadline; the outcome beside it is the one a diagnosis gives the same child."
+        },
+        "bindings_not_read": {
+          "description": "The report was read, but the composed bindings that name the package each catalog task runs could not be read (actingctl packs' reading of the installation's configuration); its refusal is the outcome beside it."
         }
       }
     }

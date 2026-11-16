@@ -32916,6 +32916,93 @@ not the owner's words, and the review of #1785). What it changed of this section
   `s314_train_an_unreadable_record_leaves_only_its_pack_not_read`. None of these names was on main,
   so none needs a retirement.
 
+### 1.451 Slice #463 S3-15a (0.12.69): `standard-pack status --installation` answers the authorization a pack was enabled under and each pair's suspension and break-in (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making, whose stage three shows each package enabled and under which authorization, held, in its break-in period or out of it; the design `rd-1115/pack-stage3-design.md`, §2.3 "One read for one package and for a whole game root" and §4.2 "S3-15", its half of the journals and the pairs; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1116/brief-463-s315a-status-installation.md`, stacked on the stage-three train, pull request #1783, head `ae6b11ed`)
+
+The coordinator gave this slice 1.451. It ships in 0.12.69.
+
+**What it is.** S3-14's row (§1.446) answered every pack's authorization `not_recorded` with
+`journals_not_read` and said nothing of the machine. With `--installation` the row reads the
+installation actinglab runs from and hands the status function (`standard_pack_status_with`) what
+it read: the placement that last enabled each pack, from the rescue module's journals, and each
+pair's suspension and break-in, from one run of the installation's `actingd suspended`
+([standard-pack-schedule.md](standard-pack-schedule.md), "The installation's part";
+[install-cli.md](install-cli.md), "What the placements enabled"). Without `--installation` the
+answer is S3-14's, byte for byte.
+
+**Where the code corrected the design.**
+- *The reader lives where the journals are, the status where the readiness is.* The rescue crate
+  may not reach the resource tooling (the architecture guard
+  `production_packages_cannot_reach_resource_tooling`) and the resource tooling no installation, so
+  actinglab's command joins them: the rescue crate's one new public function
+  (`rescue::placements_enabling(location, game_root)`), `lab-ops`' `SuspensionReport` and its
+  `packs` read, and the resource tooling's status function, which takes what they read as plain
+  values (`StatusInstallation`).
+- *A break-in row names its task, not its package.* `actingd suspended`'s `break_ins` carry
+  `task_id` and `instance_id` only; a task is mapped to its package by the composed bindings as
+  `actingctl packs` reads them (`task_ids` per `package.<package_id>`), for the `suspended` rows too,
+  so one map serves both. Its own word when it cannot be read (`bindings_not_read`).
+- *A pack may have two pairs on one instance* (two rules), so each pair names its `task_id` beside
+  the design's `instance_id`.
+- *`diagnose` read its child inside a private function.* The part of `SuspensionReport::finish`
+  that waits for the child and judges what it printed is now `SuspensionReport::document` (public,
+  with `ReportUnread`), which `finish` calls: one implementation, a diagnosis unchanged. The bound is
+  `diagnose`'s command-line budget, `CLI_READ_BUDGET` (24 s), now public.
+
+**Decided here.** A placement counts when its journal records its end with every `pack_item`
+step `done` and no `undo` or `rollback` record: one that ended before placing (`instances_not_idle`)
+has its items `planned` and does not count; one whose check after the placement failed placed them
+and counts. `at_unix_ms` is the journal's `finished_at_unix_ms`. The authorization is answered
+whatever `enabled.state` says now. `--root` is compared with the installed game root as written,
+then resolved. The child's outcome is answered once, in the root's `installation`, beside the word
+each pack's `pairs` answers. Only the report's `ledger_read_incomplete` is passed on.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| S315A-1 | `rescue::placements_enabling`, `InstalledPlacements`, `EnablingPlacements`, `EnablingPlacement` | the rescue crate's one new public read | S3-15a | `crates/lab-rescue/src/rescue.rs`; its reading in `install/place.rs` (`enabling`, `placed_enabling`; `packs_root` now `pub(crate)`) | the journal's reader and every write unchanged |
+| S315A-2 | `SuspensionReport::document`, `ReportUnread`, `CLI_READ_BUDGET` public | lab-ops | S3-15a | `crates/lab-ops/src/diagnose.rs` | `finish` reads through it; `diagnose` unchanged |
+| S315A-3 | `standard_pack_status_with`, `StatusInstallation`, `InstallationJournals`, `InstallationPairs`, `PlacementAuthorization`, `InstallationReading`, `EnabledAuthorization`, `PackPairs`, `PairStatus`, `PairSuspended`; `PackEnabled.authorization` an `EnabledAuthorization`, `authorization_unrecorded` optional; the answer's `installation`, `warnings` and the row's `pairs` | resource tooling function and answer | S3-15a | `crates/resource-tooling/src/standard_pack_status.rs` | each new member absent without an installation |
+| S315A-4 | the switch `installation` of the row `standard-pack status` and its command | operation table row and actinglab command | S3-15a | `contracts/lab-operations.json`, `apps/actinglab/src/standard_pack_cli.rs`, `cli_module/own_flags.rs` | the help's options; the MCP tool's schema follows the row |
+| S315A-5 | two codes, two words of `authorization_unrecorded`, the vocabulary `pairs_unread` | outcome catalog | S3-15a | `crates/resource-tooling/src/codes.rs` | index regenerated |
+
+**Codes and words.**
+
+| Word or code | The one situation | Refuses or a value | Exit |
+|---|---|---|---|
+| `package_status_root_not_installed` (`path`) | `--installation` beside a `--root` that is not the installation's game root of its game, or an installation whose configuration names no `standard_packs.root` | refuses, before anything is read | 2 |
+| `package_status_installation_unbuilt` | `--installation` on a build without the rescue module (not Windows) | refuses, before anything is read | 2 |
+| `authorization_unrecorded` `journals_not_read` | no `--installation` | value | 0 |
+| `authorization_unrecorded` `no_journal_names_it` | every journal read, no counting placement names the pack | value | 0 |
+| `authorization_unrecorded` `journals_unreadable` | no readable journal names it, some could not be read | value | 0 |
+| `pairs_unread` `suspension_report_not_read` | the child gave no report (not started, failed, no report, another state root, ended at its deadline) | value; the child's outcome beside it | 0 |
+| `pairs_unread` `bindings_not_read` | the report was read, the composed bindings not | value; their reader's outcome beside it | 0 |
+
+A root or configuration the rescue module cannot read refuses with its outcome
+(`install_command_refused` of `install_status`), and a program in no installation with the
+location's (`install_root_unresolved`), each exit 4. No decision reads a code.
+
+**Tests** (`apps/actinglab/src/tests/gate_463_s315.rs`, Windows only; gate map
+`contracts/test-gates/exec.toml` "#463 S3-15a"; a made-up single-location installation whose
+journals are written as `place` writes them, and no actingd): a pack's journal's reference,
+initiator, time and operation; the later of two placements; a later content-only placement changes
+nothing; an undone placement, and one that placed nothing, do not count; a pack no counting journal
+names (an unfinished one and one of another game do) answers `no_journal_names_it`; an unreadable
+journal is listed, hides no other, and makes `journals_unreadable`; the command line without
+`--installation` answers S3-14's function's answer byte for byte; pairs from a report and bindings;
+a child not started (for real), failed and ended at its deadline (the outcomes a diagnosis gives),
+and bindings not read; the two refusals and `--installation` reaching the location before the root;
+nothing written. Adapted, not renamed: `s314_an_enabled_pack_answers_not_recorded_with_journals_not_read`
+and `s314_every_pack_answers_not_recorded_with_journals_not_read` compare `authorization` as an
+`EnabledAuthorization` and `authorization_unrecorded` as an option (the member's type now holds a
+recorded authorization; their JSON assertions are unchanged). No test leaves the gate map.
+
+**What is not changed.** The journals' format and every write of the rescue module (`place`,
+`undo`, `update`, `op status`); `actingd suspended`; a diagnosis; the readiness and its items I1
+to I6, which this row still does not read (S3-15b); the trial; anything on disk. No interface
+revision, record type or configuration key.
+
+**At deploy.** Nothing to configure. Through MCP, `ac_standard_pack_status` gains
+`installation` and is served by a `serve` child, which on Windows holds the rescue module.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

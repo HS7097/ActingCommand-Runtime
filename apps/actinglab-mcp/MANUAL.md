@@ -398,7 +398,8 @@ naming this file.
   `"pending"` or a number of the pack's own: a decision that names the origin `model` is refused
   (`value_origin_model`).
 - **Where a pack stands** (#463 S3-14, 0.12.68; `contracts/standard-pack-schedule.md`, "Where a
-  pack stands"). `ac_standard_pack_status` (`root`, `repo`, `package_id`, `state_dir`) answers, for
+  pack stands"). `ac_standard_pack_status` (`root`, `repo`, `package_id`, `state_dir`,
+  `installation`) answers, for
   each pack of a game root, through a child and reading only: `formed` (admitted, and its content
   hash prefix as the trial names a content), `conditions` (its readiness items as
   `ac_standard_pack_ready` answers them) and `missing` (each failing one, a hold with its reason and
@@ -407,9 +408,21 @@ naming this file.
   as `ac_standard_pack_adopt`'s `review.trial`; `trial_not_read` instead for a pack whose records
   cannot be read), `enabled` (whether the root's schedule enables it) and `stage_state`
   (`not_admitted`, `not_judged`, `can_be_tried`, `supporting` or `enabled`), with the root's
-  counts. The placement journals are not read here: `enabled.authorization` is `not_recorded`
-  with `journals_not_read`, never an authorization guessed. `packs` grows with the root: an answer
-  over the budget is written whole to the export directory; `package_id` reads one pack.
+  counts. Without `installation` the placement journals are not read: `enabled.authorization` is
+  `not_recorded` with `journals_not_read`, never an authorization guessed. With `installation`
+  (#463 S3-15a, 0.12.69; served where the rescue module is built, Windows) the child reads the
+  installation it runs from, and `root` must be that installation's game root of its game
+  (`package_status_root_not_installed` otherwise, before anything is read; a build without the
+  rescue module answers `package_status_installation_unbuilt`): `enabled.authorization` is the
+  placement that last enabled the pack (`reference`, `initiator`, `at_unix_ms`, `operation`) or
+  `not_recorded` with `no_journal_names_it` or `journals_unreadable`; each pack answers `pairs`
+  (each task and instance the installation's one `actingd suspended` names: its `suspended`
+  `pause_cause` and its `break_in` row, as the report names it), or in their place the word
+  `suspension_report_not_read` or `bindings_not_read`; the root answers `installation`
+  (`operations_read`, `operations_unread`, `suspension_report_read`, and the word's outcome) and
+  passes the report's `ledger_read_incomplete` on in `warnings`. The readiness items of an
+  installation (I1 to I6) are not read. `packs`, `pairs` within them, grows with the root: an
+  answer over the budget is written whole to the export directory; `package_id` reads one pack.
 - **Busy** is `job_capacity_exhausted` with `limit_count`: a call that would start a job while
   `--jobs` jobs run (default 8), or that needs a child while all `--children` children (default 8)
   are working. It is refused, not queued, and nothing is sent: call again later. More calls at

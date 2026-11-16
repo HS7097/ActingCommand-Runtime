@@ -1558,6 +1558,36 @@
       "description": "Workflow #463 S3-12 (contracts/standard-pack-authoring.md, \"The trial and the two warnings\"): no passed trial of the content actinglab standard-pack adopt writes for the package package_id is on record in its state directory: no trial record of that content (by the content prefix a trial keeps of packs/<package_id>/), or none whose run ended normally on the end it expected. A record of another content of the same package counts for nothing. The answer's review.trial says what is on record (passed, failed or none, with the latest record's authorization, time and end, and other_content). Not warned when the trial records could not be read: review.trial_not_read says why instead. Nothing is refused; it rides in the answer's warnings.",
       "common_causes": "A package not tried on a real application yet, a trial that failed or ended on another end, or a content changed since its trial (a new recording, a repaired package).",
       "handling": "Under the owner's authorization, try the adopted directory (actinglab standard-pack trial --instance <instance> --package <checkout>/packs/<package_id> --authorization <reference>) before it is enabled; keep it held until a trial of this content passes."
+    },
+    "package_status_root_not_installed": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "resource-tooling",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "path": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.69",
+      "description": "Workflow #463 S3-15a (contracts/standard-pack-schedule.md, \"Where a pack stands\"): actinglab standard-pack status was given --installation and a --root (path, the root given) that is not the installed game root of its game in the installation actinglab runs from: <standard_packs.root>\\<game> of that installation's configuration, the game being the root's directory name, as the rescue module's place finds a game root; or the configuration names no standard_packs.root, or the root names no game. Nothing was read: no game root, no placement journal and no suspension report; exit 2.",
+      "common_causes": "A bundle laid out elsewhere, a checkout's working root or another installation's game root given with --installation; actinglab run from another installation than the one meant.",
+      "handling": "Give --root <standard_packs.root>\\<game> of the installation actinglab runs from (the message names it), or leave --installation out to read the root alone."
+    },
+    "package_status_installation_unbuilt": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "resource-tooling",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.69",
+      "description": "Workflow #463 S3-15a (contracts/standard-pack-schedule.md, \"Where a pack stands\"): actinglab standard-pack status was given --installation by a build that holds no rescue module (it is built for Windows only), so it reads no installation: no placement journal and no suspension report. Nothing was read; exit 2.",
+      "common_causes": "actinglab run on another system than Windows with --installation.",
+      "handling": "Run the line with the installation's own actinglab on Windows, or leave --installation out to read the root alone."
     }
   }
 }

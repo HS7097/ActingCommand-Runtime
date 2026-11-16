@@ -1493,6 +1493,28 @@ the rescue face:
     the reference, and never supplies one. `--enables` is the caller's statement that it knows
     which packages it is enabling; the plan's `enters` is what the tool holds it to. A plan that
     lists `enters` is not an authorization, and neither is a passed check.
+- **What the placements enabled** (Workflow #463 S3-15a, since 0.12.69; register §1.451; the
+  coordinator's rulings, not the owner's words). The one public read the rescue crate offers
+  another module, beside its rows (`crate::rescue::placements_enabling`, used by `actinglab
+  standard-pack status --installation`, [standard-pack-schedule.md](standard-pack-schedule.md),
+  "The installation's part"): for an installation located as the module's rows locate one and a
+  game root, first whether the game root is the installed one of its game (the configuration's
+  `standard_packs.root`, a relative one against the root, and the game below it, as `place` finds
+  one), else nothing more is read and the answer says so (`OtherRoot`, with the installed game root
+  where the configuration names one); then every journal by the journal's own reader, which stays
+  private and unchanged, and per package id the newest `pack_place` operation of that game that
+  finished (`finished_at_unix_ms`) with every `pack_item` step `done`, was not undone (an `undo`
+  record, begun or ended, excludes it) and not rolled back (a `rollback` record excludes it), and
+  names the package in its input `enabled`: its `authorization` as given, its `initiator`, its
+  `finished_at_unix_ms` and its operation id. A placement that ended before it placed an item (its
+  instances not idle in time) has its items `planned` and does not count; one whose check after
+  the placement failed placed them and counts. A journal an earlier build began names neither input
+  and enables nothing here. A journal that cannot be read is named (`operations_unread`) and hides
+  none of the others; the answer also counts the journals read. It writes nothing, starts nothing
+  and asks no Runtime; a root it cannot resolve is `install_command_refused` `state_invalid`, a
+  configuration it cannot read `config_unreadable`, an operations folder it cannot list that
+  listing's failure, each of the operation `install_status`. No journal, no write and no row of the
+  module changes.
 - **`vision manifest --provider cpu|directml` and `vision check`** (Workflow #453 S7, since
   0.12.60; register §1.355; [vision-model-folders.md](vision-model-folders.md), "The manifest";
   the coordinator's rulings on board #453, not the owner's words). Two read-only rows, `runtime`

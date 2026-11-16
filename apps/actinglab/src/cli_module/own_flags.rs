@@ -396,8 +396,12 @@ pub(crate) fn accepted(row: &str) -> Option<Accepted> {
             &standard_pack_cli::TRIAL_SWITCHES,
             none,
         ),
-        // Workflow #463 S3-14.
-        "standard-pack status" => from_lists(standard_pack_cli::STATUS_FLAGS, &[], none),
+        // Workflow #463 S3-14. Workflow #463 S3-15a: and its switch `--installation`.
+        "standard-pack status" => from_lists(
+            standard_pack_cli::STATUS_FLAGS,
+            &standard_pack_cli::STATUS_SWITCHES,
+            none,
+        ),
         "scheduling compile" => from_lists(scheduling_cli::COMPILE_FLAGS, &[], none),
         "scheduling timeline" => from_lists(scheduling_cli::TIMELINE_FLAGS, &[], none),
         "regression" => from_lists(recognition_regression::REGRESSION_FLAGS, &[], none),

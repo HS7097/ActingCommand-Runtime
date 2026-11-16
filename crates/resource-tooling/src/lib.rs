@@ -257,3 +257,12 @@ pub use standard_pack_status::{
     CheckoutContent, EnabledStateCounts, MissingItem, PackEnabled, PackFormed, PackStatus,
     StageStateCounts, StandardPackStatus, StandardPackStatusRequest, standard_pack_status,
 };
+// Workflow #463 S3-15a: what `--installation` hands the status (the placement journals, the
+// suspension report and the composed bindings), what it answers of them, its word for pairs not
+// read and its two refusals.
+pub use codes::PairsUnread;
+pub use standard_pack_status::{
+    EnabledAuthorization, InstallationJournals, InstallationPairs, InstallationReading, PackPairs,
+    PairStatus, PairSuspended, PlacementAuthorization, StatusInstallation,
+    standard_pack_status_with, status_installation_unbuilt, status_root_not_installed,
+};
