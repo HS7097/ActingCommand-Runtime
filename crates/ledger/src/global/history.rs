@@ -309,6 +309,9 @@ pub(super) struct WriterHistory<'a, B> {
     page_rows: usize,
     /// LN-8d (#422): the open's deadline, checked before each page a read of the open reads.
     deadline: Option<Instant>,
+    /// #463 S1-10, tests: counts the reads of every Lab relation (`lab_relations`).
+    #[cfg(test)]
+    lab_relations_reads: Option<&'a std::sync::Arc<std::sync::atomic::AtomicU64>>,
 }
 
 impl<B: DurableStorage> WriterHistory<'_, B> {
@@ -404,11 +407,29 @@ impl<B: DurableStorage> WriterHistory<'_, B> {
 
     /// The Lab relations of the committed and the staged records through `through`.
     pub(super) fn lab_relations(&self, through: u64) -> GlobalLedgerResult<LabRelations> {
+        #[cfg(test)]
+        if let Some(counter) = self.lab_relations_reads {
+            counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
         let mut staged = LabRelations::default();
         staged.add_anchors(self.staged, through);
         let mut relations = self.backend.lab_relations(through, &staged)?;
         relations.add_runs(self.staged, through);
         Ok(relations)
+    }
+
+    /// #463 S1-10: whether a staged or a committed Lab anchor through `through` names the request
+    /// or the correlation of `keys`: the first two relations of `LAB_RELATIONS`, which
+    /// `lab_relations` reads with every other. The staged anchors are those `lab_relations` seeds
+    /// its read with; the committed ones are looked up by the link indexes of that request and
+    /// that correlation (`DurableStorage::lab_anchor_names`).
+    fn lab_anchor_names(&self, keys: &LabKeys, through: u64) -> GlobalLedgerResult<bool> {
+        let mut staged = LabRelations::default();
+        staged.add_anchors(self.staged, through);
+        if staged.related(keys) {
+            return Ok(true);
+        }
+        self.backend.lab_anchor_names(keys, through)
     }
 }
 
@@ -419,7 +440,13 @@ impl<B: DurableStorage> RetentionHistory for WriterHistory<'_, B> {
         self.record_at(reference)
     }
 
+    /// #463 S1-10: an anchor that names the record's request or correlation relates it at once,
+    /// as the read of every relation would; only without one is that read made, which also
+    /// relates the record by its run. The answer is the read's in every case.
     fn lab_related(&self, keys: &LabKeys, through: u64) -> GlobalLedgerResult<bool> {
+        if self.lab_anchor_names(keys, through)? {
+            return Ok(true);
+        }
         Ok(self.lab_relations(through)?.related(keys))
     }
 }
@@ -440,6 +467,8 @@ impl<B: DurableStorage> EventStore<B> {
             retention: &self.retention,
             page_rows: self.history_page_rows,
             deadline,
+            #[cfg(test)]
+            lab_relations_reads: self.lab_relations_reads.as_ref(),
         }
     }
 

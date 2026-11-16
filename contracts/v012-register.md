@@ -30972,6 +30972,138 @@ variable wherever the program runs; an installation's state root without the var
 installation whose state root cannot be located refused, never the default; `record start` from an
 installation without the variable holding its instance on a scripted Runtime (`hold.state` `own`).
 
+### 1.429 Slice #463 S1-9 (0.12.66): a recorded press keeps its lease until the captures after it are done (Workflow #463; the owner asked on board #463 that the captures after a recorded press be close together and that stage two can show the frames of the transition; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1116/brief-463-s19-lease-through-after-captures.md`)
+
+This section follows §1.428, the highest on main when it was written. It ships in 0.12.66.
+
+**What production showed.** On release 0.12.64 two recorded taps were made on a production
+instance. The first capture after each press entered the step table about 2.56 s after the press,
+the next about 0.9 s later, and both showed the settled screen. The ledger of those taps: the
+press's own lease (`lease.requested` to `input.committed` about 200 ms) was released about 45 ms
+later, and the first capture after the press opened the instance's device session again
+(`capture.requested` to `runtime.lifecycle_observed` about 1.6 s), which the second capture found
+open. The press took its own lease and released it as soon as the input was committed
+(`send_recorded_press`, `apps/actinglab/src/commands/device_commands.rs`); while two or more
+registered instances use Nemu, every lease end closes the device session (the multi-Nemu gate,
+`keeps_device_session` and `end_lease_device_use`, `crates/runtime-host/src/host/resource_close.rs`).
+The other cost, about 0.72 s on every Lab capture after its frame is stored, is the ledger's and
+another slice's (S1-10).
+
+**What changes** (in the Lab only; `contracts/lab-recording.md`, "Recording while playing", "The
+lease of a recorded press"). The input proxy, and with it the lease, is held by the recorded press
+as a whole (`run_recorded_touch`), not by the one input: the press's first input connects it and
+takes the lease, the one retry on `input_frame_unavailable` is sent through it (one lease per
+recorded press), the loop after the press runs while it is held, and it is released once
+`record_press` has answered, whatever the outcome: after the loop's last capture (still or at its
+bound), after a capture after the press that could not be taken (what was taken is recorded
+first), and at once when no capture follows the press (an indeterminate press, a refused input, a
+refusal of the recording after the lease was taken). `input_outcome.close_stage` keeps its place in
+the answer and is filled after the release (`close_error` with a failure); a failed release is the
+first failure after a performed press, as before; a refused input's `input_outcome` gets it as
+before; another error answered with a lease taken (a refusal of the retry) is answered as it is,
+and a release that failed beside it adds itself to its message and its details' `input_outcome`
+`{close_stage: "failed", close_error}`. A renewal of the lease that failed while it was held is
+answered as a failed release. The press's `executed_at_unix_ms` is now stamped before the release,
+so it no longer includes a session close.
+
+**What it costs, and what it does not give.** The instance's one queue is held from the press to
+the end of the captures after it, at most `after_ms + still_max_ms` and one capture more (with the
+one retry, its capture and status read more); the recording's own hold already keeps scheduling
+away. When the lease is released at the end, the session of an instance behind the multi-Nemu gate
+is closed again, so the capture before the next press opens it again: the reopening moves from
+after the press, where it hid the transition, to before the next press, where it only makes the
+agent wait. Taking it away needs a change of the multi-Nemu gate (#191 H), which this slice does not
+make.
+
+**Checked in the code before building** (main `e3758be8`). A keyless read-only observation is
+taken on an instance whose lease is held: `capture_readonly_observation`
+(`crates/runtime-host/src/host/observation.rs`) takes the admission guard only while it captures
+(an input takes it only while it is admitted, `host/input.rs`) and refuses only a member of a device
+group of several while another member holds the device (`refuse_keyless_observation_of_group`,
+`host/device_group.rs`); its frame is an observer's (`FrameOwner::Observer`), whose capture drops
+and replaces only the observers' frame and leaves the lease holder's in place (`InputFrames`,
+`crates/execution-kernel/src/session.rs`); and an input resolves the frame it names whichever owner
+committed it (`InputFrames::committed`, reached from the frame's resolution before the input's
+intent, `host/input.rs`), so an instance whose input is the emulator's own still presses only on a
+frame the Runtime captured.
+
+**Unchanged.** `tap`, `swipe` and `long-tap` without `--record` (their lease is the press's alone);
+`session app … --record`, which shares with the press only the capture of one frame
+(`runtime_captured_frame`) and the library's loop after an effect, neither of which changes; the
+order "capture, then press on that capture"; the frame rule; the timing of the loop after a press;
+what the step table and the answer record, but for the moment `close_stage` is filled; nothing
+under `crates/runtime-host` or `crates/ledger`, and no Runtime request.
+
+**No code, no word, no row.** No outcome code or word and no key are added; the operation table and
+the outcome catalog do not change. At deploy nothing is configured.
+
+**Gate** (`contracts/test-gates/exec.toml`, `#463 S1-9`, in `apps/actinglab/tests/runtime_input_proxy.rs`
+against the fake Runtime host, the press's requests read from its ledger in order): a press with two
+captures after it on an instance whose input is the emulator's own (capture, lease, input, capture,
+capture, release); a capture after the press that fails (capture, lease, input, capture, capture
+failed, release; what was taken recorded, `unfinished`); an indeterminate press and a refused input
+(capture, lease, input, release, the release the Runtime's own after an input its backend failed,
+as before; capture, lease, release); the retry after `input_frame_unavailable`
+behind a relay that takes a keyless observation before the press's lease connection (capture,
+capture, lease, capture, input, capture, release; one lease, one tap, `captured_twice`). The tests
+of stage one stay as they are.
+
+**The capture-speed train** (0.12.66; coordinator work order `rd-1116/brief-463-train-speed.md`):
+pull request #1772 carries this slice (pull request #1773) with #463 S1-10 (§1.430) on main of
+release 0.12.65, both whole, so that the two ship in one merge.
+
+### 1.430 Slice #463 S1-10 (0.12.66): a Lab pin's admission looks its trigger up by index first (Workflow #463; production 0.12.64, the coordinator's reading of the ledger after two taps recorded with the Lab; read-only study `rd-1116/report-post-store-stall-study.md`; coordinator work order `rd-1116/brief-463-s110-lab-pin-point-lookup.md`)
+
+This section follows §1.428, the highest on main when it was written; §1.429 is another slice's.
+It ships in 0.12.66.
+
+**What production showed.** On 0.12.64 every read-only observation the Lab sent took 720 to 755 ms
+between its frame's `artifact.pin_recorded` and its `capture.completed`, with a cold capture
+session and with a warm one, while a scheduled run's capture on the same instance and day took
+1 ms between the same two records. The pin of a Lab observation has the reason `lab`, a run's
+`explicit`.
+
+**The cause.** The observing thread appends the pin and waits for the writer's answer. Before the
+writer admits a pin whose reason is `Lab`, retention asks whether the pin's trigger record is
+related to the Lab (refused `artifact_pin_reason_conflict` otherwise: a Lab pin lands only inside
+the Lab's range, which the frame cleaner's statement L and the Lab's unpin rely on). The writer
+answered by reading the Lab relations of the whole ledger (`read_lab_relations`: the request and
+the correlation of every Lab anchor, then the run of every link row naming one of them), with no
+cache on its side: RB-1 (§1.194 LNWS-6) gave the reader pool an index of them, not the writer. That
+read grows with the Lab's history.
+
+**The change.** The writer's answer first looks whether a Lab anchor (a record of the source `lab`
+or of the type `lab.request`) at or before the record being checked names the trigger's request or
+its correlation: among the records staged in the batch, then among the stored ones through the
+link indexes `ledger_links_request` and `ledger_links_correlation` (one statement of at most one
+row; the in-memory test store answers from its anchor index). A hit answers "related" at once; a
+miss reads every Lab relation as before, which also covers a record related by its run alone.
+"Related" is the disjunction of the request, the correlation and the run relations, and a hit is
+one of the first two at the same position, so the answer is the whole read's in every case. A Lab
+observation's own `lab.request` names its request, so a Lab observation's pin always hits. The
+other questions retention puts to the writer's history (a record in a sealed scope, an eviction
+intent's Lab protection) take the same lookup first.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| S110-1 | the writer's Lab relation of a record (a Lab pin's trigger, a record in a sealed scope, an eviction intent's frame) | Runtime-internal behaviour (no key, code, format, table or index) (ledger gate row "#463 S1-10") | S1-10 | — | first the Lab anchors that name the record's request or correlation, staged or stored (`ledger_links_request`, `ledger_links_correlation`); a hit answers related, a miss reads every Lab relation as before; the answer is the whole read's in every case |
+
+**What does not change.** No answer, no record, no format, no ledger contract, no interface
+revision, no configuration key, no outcome code or word; the reader pool's index of RB-1 is as it
+was. At deploy nothing is configured.
+
+**Gate** (`contracts/test-gates/ledger.toml`, `gate_463_s110`): on the SQLite store and on the
+in-memory store, a Lab pin whose trigger's request an anchor names is admitted without reading every
+Lab relation (T1); one whose trigger is related only through its run is admitted by one such read
+(T2); one whose trigger nothing relates is refused `artifact_pin_reason_conflict`, fatal, as before
+(T3); on the SQLite store, an anchor staged in one batch with the trigger and the pin admits it
+without that read (T4). The reads are counted through `GlobalLedgerConfig::with_lab_relations_reads`,
+which exists in test builds only.
+
+**The capture-speed train** (0.12.66; coordinator work order `rd-1116/brief-463-train-speed.md`):
+this slice's pull request #1772 carries it with #463 S1-9 (§1.429, pull request #1773) on main of
+release 0.12.65, both whole, so that the two ship in one merge.
+
 ### 1.431 Fix #461 (0.12.66): a close refused because the lease had already lapsed isolates the instance on two more paths, a client's disconnect and a failed input's clean-up (Workflow #461, found by reading when #458 was fixed, never seen on an installation; the rule of board #419, [runtime-outcomes.md](runtime-outcomes.md), "Failure scope"; the model is #458's fix, §1.364; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1116/brief-461-expired-lease-close-isolates.md`, read on main `e3758be8`)
 
 This section takes 1.431, the number the work order gives: §1.428 is the highest on main
