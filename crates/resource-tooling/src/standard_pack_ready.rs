@@ -429,11 +429,15 @@ pub fn judge_standard_pack_readiness(
 /// Workflow #463 S3-14 (register §1.446): what `standard-pack status` reads of one pack beyond its
 /// row of the readiness: the pack's directory in the game root, as the registry names it, and
 /// whether the game's `schedule.json` enables it, judged from the classification S2 judged by
-/// ([`Context::enabled_state`]), never read a second time.
+/// ([`Context::enabled_state`]), never read a second time. The train of S3-12 and S3-14 (register
+/// §1.446, "Train", ruling R5): and its hold as the accepted file's `held` entry writes it
+/// ([`Context::hold_entry`]), whatever S2 answers, so that a held pack in a supporting role, whose
+/// S2 holds by its role and whose row of the readiness names no hold, shows it on its own row.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PackPlacement {
     pub(crate) directory: PathBuf,
     pub(crate) enabled: EnabledState,
+    pub(crate) held: Option<ReadinessHold>,
 }
 
 /// Workflow #463 S3-14: [`judge_standard_pack_readiness`]'s answer, unchanged, and each pack's
@@ -519,6 +523,7 @@ pub(crate) fn judge_readiness_and_placement(
             PackPlacement {
                 directory: root.join(&entry.directory),
                 enabled: context.enabled_state(package_id),
+                held: context.hold_entry(package_id),
             },
         );
     }
@@ -1057,9 +1062,6 @@ impl Context<'_> {
     /// `held` (the classification reads that list, whose package ids are distinct); `None`
     /// otherwise. Its texts are copied as written and decide nothing.
     fn held(&self, package_id: &str, items: &[ReadinessAnswer]) -> Option<ReadinessHold> {
-        let Rules::Composed(rules) = self.rules else {
-            return None;
-        };
         let fails_held = items
             .iter()
             .find(|answer| answer.item == ReadinessItem::Classified)
@@ -1071,6 +1073,17 @@ impl Context<'_> {
         if !fails_held {
             return None;
         }
+        self.hold_entry(package_id)
+    }
+
+    /// The train of S3-12 and S3-14 (ruling R5): the hold of the pack `package_id` as its `held`
+    /// entry of the composer-accepted `schedule.json` writes it, whatever S2 answers; `None` when
+    /// the file holds it not, or the root holds no accepted file. [`Self::held`] answers it only
+    /// when S2 fails `held`.
+    fn hold_entry(&self, package_id: &str) -> Option<ReadinessHold> {
+        let Rules::Composed(rules) = self.rules else {
+            return None;
+        };
         rules
             .schedule
             .held

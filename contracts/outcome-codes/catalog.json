@@ -10782,7 +10782,7 @@
       }
     },
     "trial_state": {
-      "description": "The latest trial of the content standard-pack adopt writes, as the trial records of its state directory keep it, the member review.trial.state of its answer (Workflow #463 S3-12, contracts/standard-pack-authoring.md \"The trial and the two warnings\", since 0.12.68).",
+      "description": "The latest trial of a content as the trial records of the state directory keep it, the state of the one summary of a content's trials: the member review.trial.state of standard-pack adopt (Workflow #463 S3-12, contracts/standard-pack-authoring.md \"The trial and the two warnings\") and trial.state of standard-pack status (S3-14, contracts/standard-pack-schedule.md \"Where a pack stands\"); each record judged as contracts/standard-pack-trial.md \"The record\" defines a trial that passed (the train of S3-12 and S3-14, since 0.12.68).",
       "review": "pending",
       "source": {
         "file": "crates/resource-tooling/src/codes.rs",
@@ -10790,10 +10790,10 @@
       },
       "tokens": {
         "passed": {
-          "description": "The latest record of this content is of a run that ended normally, on the end the trial expected when it named one (matched not false)."
+          "description": "The latest record of this content passed, as contracts/standard-pack-trial.md \"The record\" defines it: its run ended on an end the package declares (end.outcome success) and, when the trial was given an expectation (--expect), on that end (matched not false)."
         },
         "failed": {
-          "description": "The latest record of this content is of a run that failed or was cancelled, or that ended normally on another end than the one the trial expected (matched false)."
+          "description": "The latest record of this content did not pass: its run failed or was cancelled, or ended normally on another end than the one the trial expected (matched false). passed_on_record says whether an earlier record of it passed."
         },
         "none": {
           "description": "No record of this content is on record; a record of another content of the same package counts for nothing (other_content says whether there is one)."
@@ -10801,7 +10801,7 @@
       }
     },
     "stage_state": {
-      "description": "Where a pack stands in stage three of package making, the member stage_state of standard-pack status and the counts stage_states (Workflow #463 S3-14, contracts/standard-pack-schedule.md \"Where a pack stands\", since 0.12.68).",
+      "description": "Where a pack stands in stage three of package making, the member stage_state of standard-pack status and the counts stage_states, saying only what the row knows (Workflow #463 S3-14 and the train of S3-12 and S3-14, contracts/standard-pack-schedule.md \"Where a pack stands\", since 0.12.68).",
       "review": "pending",
       "source": {
         "file": "crates/resource-tooling/src/codes.rs",
@@ -10811,8 +10811,14 @@
         "not_admitted": {
           "description": "Its readiness item S1 does not hold: the Runtime's loader, or standard-pack check, refuses its admission."
         },
+        "not_judged": {
+          "description": "The train of S3-12 and S3-14: admitted, and the composer refuses the root's schedule.json (enabled.state not_judged); the Runtime keeps the last schedule it accepted, which this root does not tell."
+        },
         "can_be_tried": {
-          "description": "Admitted, and no rule of the root's schedule.json enables it (enabled.state is not enabled)."
+          "description": "Admitted, and nothing of the root's accepted schedule.json enables it: it is held (enabled.state held) or no rule names it (not_placed)."
+        },
+        "supporting": {
+          "description": "The train of S3-12 and S3-14: admitted, and it plays a supporting part a root file gives it, used by other packs' runs, and no rule names it (enabled.state not_scheduled)."
         },
         "enabled": {
           "description": "Admitted, and a rule of the root's schedule.json enables it (enabled.state enabled)."
@@ -10866,7 +10872,7 @@
       },
       "tokens": {
         "journals_not_read": {
-          "description": "The placement journals were not read: their reader belongs to the Lab's rescue module, which the row's module cannot reach."
+          "description": "The placement journals were not read: their reader is private to the Lab's rescue module (install::journal, pub(crate)), and that crate is built for Windows only (the train of S3-12 and S3-14). A later slice reads them."
         }
       }
     }

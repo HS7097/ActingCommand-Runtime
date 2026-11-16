@@ -227,10 +227,12 @@ actingcommand_contract::outcome_codes! {
 actingcommand_contract::outcome_vocabulary! {
     /// Workflow #463 S3-12: the latest trial of the content an adoption writes, as the trial
     /// records keep it (vocabulary `trial_state`, the member `review.trial.state` of `standard-pack
-    /// adopt`).
+    /// adopt`). The train of S3-12 and S3-14 (rulings R1, R2): the one vocabulary of a content's
+    /// trials, the `state` of the trial module's `TrialSummary`, which `standard-pack status`
+    /// answers as `trial.state` too; each record judged by `PackTrialRecord::passed`.
     pub enum TrialState: "trial_state" {
-        /// The latest record of this content is of a run that ended normally, on the end the trial
-        /// expected when it named one.
+        /// The latest record of this content passed (`PackTrialRecord::passed`): its run ended on
+        /// an end the package declares and, when the trial named the end it expected, on that end.
         Passed => "passed",
         /// The latest record of this content is of a run that failed or was cancelled, or that
         /// ended normally on another end than the one the trial expected.
@@ -514,13 +516,21 @@ actingcommand_contract::outcome_vocabulary! {
 // ---- Workflow #463 S3-14 (`contracts/standard-pack-schedule.md`, "Where a pack stands"): begin ----
 actingcommand_contract::outcome_vocabulary! {
     /// Workflow #463 S3-14: where a pack stands in stage three of package making (the vocabulary
-    /// `stage_state`, the member `stage_state` of `standard-pack status`).
+    /// `stage_state`, the member `stage_state` of `standard-pack status`). The train of S3-12 and
+    /// S3-14 (ruling R5): it says only what the row knows.
     pub enum StageState: "stage_state" {
         /// Its readiness item S1 does not hold: the loader, or `standard-pack check`, refuses it.
         NotAdmitted => "not_admitted",
-        /// Admitted, and no rule of the root's `schedule.json` enables it (`enabled.state` is not
-        /// `enabled`).
+        /// The train (R5): admitted, and the composer refuses the root's `schedule.json`
+        /// (`enabled.state` `not_judged`): the Runtime keeps the last schedule it accepted, which
+        /// the root does not tell.
+        NotJudged => "not_judged",
+        /// Admitted, and nothing of the root's accepted `schedule.json` enables it: it is held
+        /// (`enabled.state` `held`), or no rule names it (`not_placed`).
         CanBeTried => "can_be_tried",
+        /// The train (R5): admitted, and it plays a supporting part a root file gives it, used by
+        /// other packs' runs, and no rule names it (`enabled.state` `not_scheduled`).
+        Supporting => "supporting",
         /// Admitted, and a rule of the root's `schedule.json` enables it (`enabled.state`
         /// `enabled`).
         Enabled => "enabled",
@@ -562,8 +572,9 @@ actingcommand_contract::outcome_vocabulary! {
     /// Workflow #463 S3-14: why no authorization is recorded for a pack (the vocabulary
     /// `authorization_unrecorded`, the member `enabled.authorization_unrecorded`).
     pub enum AuthorizationUnrecorded: "authorization_unrecorded" {
-        /// The placement journals were not read: their reader belongs to the Lab's rescue module,
-        /// which the row's module cannot reach.
+        /// The placement journals were not read: their reader is private to the Lab's rescue
+        /// module (`install::journal`, `pub(crate)`), and that crate is built for Windows only (the
+        /// train of S3-12 and S3-14, ruling R6). A later slice reads them.
         JournalsNotRead => "journals_not_read",
     }
 }

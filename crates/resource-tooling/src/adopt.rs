@@ -82,20 +82,23 @@
 //!   directory and matched by the trial's own content prefix. Two warnings refuse nothing:
 //!   `enabling_needs_authorization` for a decision of a class that runs, `not_tried` while no
 //!   passed trial of the content is on record. `next` names `ours/model/bindings.json` with the
-//!   rule's two ways to a value while the adopted rule has none.
+//!   rule's two ways to a value while the adopted rule has none. The train of S3-12 and S3-14
+//!   (register §1.445, "Train"): `review.trial` is the trial module's one summary
+//!   (`trial_summary`, with `passed_on_record`), each record judged by `PackTrialRecord::passed`,
+//!   which the status row answers too.
 
-use crate::codes::{AdoptProblem, ResourceToolingCode, TrialState};
+use crate::codes::{AdoptProblem, ResourceToolingCode};
 use crate::package_directory::PACK_DEADLINE;
 use crate::standard_pack_check::{check_standard_pack_root_with_catalog, root_issue_outcome};
 use crate::standard_pack_trial::{
-    PackTrialRecord, TrialRunEnd, content_hash_prefix_of, trial_records,
+    TrialNotRead, TrialSummary, cause_of, content_hash_prefix_of, trial_summary,
 };
 use crate::{
     PackReadiness, PackageBundleRequest, StandardPackCheckRequest, StandardPackCheckResponse,
     StandardPackReadyRequest, StandardPackRootFiles, judge_standard_pack_readiness, package_bundle,
 };
 use actingcommand_contract::codes::SharedCode;
-use actingcommand_contract::outcome::{Detail, IoOp, Outcome, OutcomeEnvelope};
+use actingcommand_contract::outcome::{Detail, IoOp, Outcome};
 use actingcommand_contract::{
     BundleMaintenance, LabError, LabErrorClass, LabResult, MaintenanceUse,
     SCHEDULE_RULE_FIXED_VALUE_MEMBER, SCHEDULE_RULE_FIXED_VALUE_ORIGIN_MEMBER,
@@ -104,8 +107,8 @@ use actingcommand_contract::{
     STANDARD_PACK_INTERRUPTS_FILE, STANDARD_PACK_LOADING_FILE, STANDARD_PACK_NAVIGATION_FILE,
     STANDARD_PACK_NOTICES_DIRECTORY, STANDARD_PACK_PAGES_FILE, STANDARD_PACK_SCHEDULE_FILE,
     STANDARD_PACK_SCHEDULE_VERSION, ScheduleItem, ScheduleRule, StandardPackClassification,
-    StandardPackRegistry, StandardPackRoot, StandardPackSchedule, TaskOutcome,
-    canonical_json_bytes, package_id_names_one_path_segment, parse_standard_pack_interrupts,
+    StandardPackRegistry, StandardPackRoot, StandardPackSchedule, canonical_json_bytes,
+    package_id_names_one_path_segment, parse_standard_pack_interrupts,
     parse_standard_pack_navigation, parse_standard_pack_pages, parse_standard_pack_schedule,
     reserved_package_id, standard_pack_maintenance_packages,
 };
@@ -480,62 +483,14 @@ pub struct RecordingReview {
     /// checked offline, a recording's, its cross-check passed, its first decision evaluated and no
     /// step needing review. It says nothing of a run on a device; that is [`Self::trial`].
     pub recording_checked: bool,
-    /// Workflow #463 S3-12: the latest trial of the content this adoption writes on record in the
-    /// state directory; absent only beside [`Self::trial_not_read`].
+    /// Workflow #463 S3-12: the trials of the content this adoption writes on record in the state
+    /// directory; absent only beside [`Self::trial_not_read`]. The train of S3-12 and S3-14
+    /// (ruling R2): the trial module's one summary, which the status row answers too.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub trial: Option<AdoptTrial>,
+    pub trial: Option<TrialSummary>,
     /// Workflow #463 S3-12: why the trial records of the package were not read; absent otherwise.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub trial_not_read: Option<TrialNotRead>,
-}
-
-/// Workflow #463 S3-12: the latest trial of the content an adoption writes, read from the trial
-/// records of its state directory (`contracts/standard-pack-trial.md`, "The record").
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct AdoptTrial {
-    /// `passed`, `failed` or `none`.
-    pub state: TrialState,
-    /// The content the adoption writes into `packs/<package_id>/`, as a trial of that directory
-    /// measures it and names its record by: the first 12 hex digits of its content hash.
-    pub content_hash_prefix: String,
-    /// The latest record of this content; absent with `none`.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub record: Option<AdoptTrialRecord>,
-    /// A record of another content of the same package is on record; it counts for nothing here.
-    pub other_content: bool,
-}
-
-/// Workflow #463 S3-12: a trial record's reference: the authorization its run was sent under, the
-/// time it ended and how it ended.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct AdoptTrialRecord {
-    /// The reference of the owner's authorization, as the record keeps it.
-    pub authorization: String,
-    /// When the trial ended; it names the record's file.
-    pub at_unix_ms: u64,
-    /// The trial's run.
-    pub request_id: String,
-    /// How the run ended, as the record keeps it.
-    pub end: TrialRunEnd,
-    /// Whether the end was the one the trial expected; absent when it named none.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub matched: Option<bool>,
-}
-
-/// Workflow #463 S3-12: the reader of the trial records refused the package's records, so whether
-/// its content was tried is not known; the adoption is the same without it.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct TrialNotRead {
-    /// The reader's refusal, with its code as the reader answered it.
-    pub outcome: Outcome,
-    /// The same in words.
-    pub text: String,
-}
-
-impl Serialize for TrialState {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(self.as_str())
-    }
 }
 
 /// One of the repository's own items adopt does not write, by its path relative to `--repo`.
@@ -915,16 +870,18 @@ pub fn standard_pack_adopt(
     // The review (ruling 2): a class other than `held` needs a recording checked offline.
     // Workflow #463 S3-12: and the latest trial of the content this adoption writes, read from the
     // trial records of the state directory, which the trial keeps by the same content prefix; it
-    // refuses nothing.
+    // refuses nothing. The train of S3-12 and S3-14 (rulings R1, R2): the trial module's one
+    // summary, and `not_tried` while no record of this content passed.
     let mut review = package.review();
     if review.record_id.is_none() {
         review.record_id = record_id;
     }
     let content = content_hash_prefix_of(&package.files);
-    let not_tried = match adopted_trial(&state, &package_id, &content) {
-        Ok((trial, passed_on_record)) => {
+    let not_tried = match trial_summary(&state, &package_id, &content) {
+        Ok(trial) => {
+            let untried = !trial.passed_on_record;
             review.trial = Some(trial);
-            !passed_on_record
+            untried
         }
         Err(not_read) => {
             review.trial_not_read = Some(not_read);
@@ -1181,62 +1138,6 @@ pub fn standard_pack_adopt(
         readiness_not_judged,
         next: next_items(&repo, &root.game, unvalued_rule.as_deref()),
     })
-}
-
-/// Workflow #463 S3-12: the latest trial record of the content `content` (its content prefix) of
-/// the package `package_id` under the state directory `state`, read by the trial's own reader
-/// (`trial_records`, in the order the trials ended), and whether any record of that content passed;
-/// a record of another content of the package counts for nothing and is only said
-/// (`other_content`). A trial passed when its run ended normally and, when the trial named the end
-/// it expected, on that end. When the reader refuses the package's records, why, and nothing else.
-fn adopted_trial(
-    state: &Path,
-    package_id: &str,
-    content: &str,
-) -> Result<(AdoptTrial, bool), TrialNotRead> {
-    let records = trial_records(state, package_id).map_err(|error| TrialNotRead {
-        outcome: cause_of(&error),
-        text: format!(
-            "the trial records of {package_id} under {} were not read: {error}; whether the \
-             content {content} was tried is not known, and the adoption is answered without it",
-            state.display()
-        ),
-    })?;
-    let passed = |record: &PackTrialRecord| {
-        record.end.outcome == TaskOutcome::Success && record.matched != Some(false)
-    };
-    let mut latest = None;
-    let mut passed_on_record = false;
-    let mut other_content = false;
-    for record in records {
-        if record.plan.content_hash_prefix == content {
-            passed_on_record |= passed(&record);
-            latest = Some(record);
-        } else {
-            other_content = true;
-        }
-    }
-    let trial_state = match &latest {
-        None => TrialState::NoRecord,
-        Some(record) if passed(record) => TrialState::Passed,
-        Some(_) => TrialState::Failed,
-    };
-    let record = latest.map(|record| AdoptTrialRecord {
-        authorization: record.plan.authorization,
-        at_unix_ms: record.at_unix_ms,
-        request_id: record.request_id,
-        end: record.end,
-        matched: record.matched,
-    });
-    Ok((
-        AdoptTrial {
-            state: trial_state,
-            content_hash_prefix: content.to_owned(),
-            record,
-            other_content,
-        },
-        passed_on_record,
-    ))
 }
 
 /// Workflow #463 S3-5: the row of the adopted pack `package_id` of the readiness of the check
@@ -4881,17 +4782,6 @@ fn bounded_text(text: &str) -> bool {
 
 fn text_value<'a>(outcome: &'a Outcome, key: &str) -> Option<&'a str> {
     outcome.value(key).and_then(Value::as_str)
-}
-
-/// The outcome a Lab error carries in its details, else the outcome of its code.
-fn cause_of(error: &LabError) -> Outcome {
-    error
-        .details
-        .as_ref()
-        .and_then(|details| details.get("outcome"))
-        .and_then(|outcome| serde_json::from_value::<OutcomeEnvelope>(outcome.clone()).ok())
-        .map(OutcomeEnvelope::into_outcome)
-        .unwrap_or_else(|| Outcome::relayed(&error.code))
 }
 
 fn adopt(problem: AdoptProblem) -> Outcome {

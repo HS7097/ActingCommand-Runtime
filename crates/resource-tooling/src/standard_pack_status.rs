@@ -6,25 +6,30 @@
 //! a game root, where it stands, and the counts of the root. It reads only, offline: the game root
 //! (by the readiness), the pack directories (their content), the Lab's state directory (the trial
 //! records) and, with `--repo`, the checkout's pack directories. It writes nothing, starts nothing
-//! and reads no installation and no Runtime.
+//! and reads no installation and no Runtime. The train of S3-12 and S3-14 (register §1.446,
+//! "Train"; the coordinator's rulings R1 to R6) made its trial and its content the trial module's
+//! and said its words only of what the row knows.
 //!
-//! - **Formed**: `admitted`, whether the readiness item S1 holds; `content_hash_prefix`, the first
-//!   [`CONTENT_PREFIX_DIGITS`] hex digits of the content hash the containment crate's
-//!   `measure_content_hash` computes for the pack's directory, the hash and the prefix the trial
-//!   names a content by.
+//! - **Formed**: `admitted`, whether the readiness item S1 holds; `content_hash_prefix`, the
+//!   content identity the trial names a content by, by the trial module's one function
+//!   (`content_hash_prefix_of`) over the pack's directory read as the trial reads one.
 //! - **Conditions**: the pack's thirteen readiness items as `standard-pack ready` answers them, from
 //!   the one function that judges them (`judge_readiness_and_placement`), never a copy; **missing**,
-//!   each item that fails, the S2 of a held pack with the hold's reason and reference.
-//! - **Trial**: the latest record of this content among the trial records the trial itself keeps
-//!   (the trial's own reader, `latest_trial_record`): `passed`, `failed` or `none`.
+//!   each item that fails, the S2 of a held pack with the hold's reason and reference; **held**, the
+//!   pack's hold whenever the root's `schedule.json` holds it, a pack in a supporting role too.
+//! - **Trial**: the trial module's one summary of this content's trials (`trial_summary`, each
+//!   record judged by `PackTrialRecord::passed`): `passed`, `failed` or `none`, the latest record and
+//!   whether any record passed; a pack whose records the reader refuses answers `trial_not_read`
+//!   instead, and the other packs are answered.
 //! - **Enabled**: whether the root's `schedule.json` enables the pack, judged from the
-//!   classification the readiness's S2 reads; and the authorization: the placement journals belong
-//!   to the Lab's rescue module, whose reader this module cannot reach, so every pack answers
-//!   `not_recorded` with `journals_not_read`. The tool never infers an authorization.
-//! - **Stage**: `not_admitted`, `can_be_tried` or `enabled`.
+//!   classification the readiness's S2 reads; and the authorization: the placement journals are not
+//!   read (their reader is private to the Lab's rescue module, `install::journal`, and that crate is
+//!   built for Windows only), so every pack answers `not_recorded` with `journals_not_read`. The
+//!   tool never infers an authorization.
+//! - **Stage**: `not_admitted`, `not_judged`, `can_be_tried`, `supporting` or `enabled`.
 
 use crate::codes::{
-    AuthorizationUnrecorded, EnabledState, PackAuthorization, ReadinessItem, StageState, TrialState,
+    AuthorizationUnrecorded, EnabledState, PackAuthorization, ReadinessItem, StageState,
 };
 use crate::package_directory::{PACK_DEADLINE, pack_error};
 use crate::standard_pack_ready::{
@@ -32,12 +37,12 @@ use crate::standard_pack_ready::{
     StandardPackReadyRequest, judge_readiness_and_placement,
 };
 use crate::standard_pack_trial::{
-    CONTENT_PREFIX_DIGITS, PackTrialRecord, TrialRunEnd, latest_trial_record,
+    NOT_RECOGNISED, TrialNotRead, TrialSummary, absolute, argument_refused, content_hash_prefix_of,
+    trial_summary,
 };
-use actingcommand_contract::{LabError, LabResult, TaskOutcome};
+use actingcommand_contract::{LabError, LabResult};
 use actingcommand_pack_containment::{Containment, ContainmentError};
 use serde::{Serialize, Serializer};
-use serde_json::json;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -48,9 +53,6 @@ use std::time::Instant;
 const CHECKOUT_PACKS: &str = "packs";
 /// The flag a refusal of an unknown package id names, as the command line writes it.
 const PACKAGE_ID_FLAG: &str = "--package-id";
-/// The argument problem of a value that names nothing of its kind (the vocabulary
-/// `argument_problem`).
-const NOT_RECOGNISED: &str = "not_recognised";
 
 /// What `actinglab standard-pack status --root <game root> [--repo <checkout game root>]
 /// [--package-id <id>] [--state-dir <dir>]` asks.
@@ -91,7 +93,9 @@ pub struct StandardPackStatus {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 pub struct StageStateCounts {
     pub not_admitted: usize,
+    pub not_judged: usize,
     pub can_be_tried: usize,
+    pub supporting: usize,
     pub enabled: usize,
 }
 
@@ -117,10 +121,21 @@ pub struct PackStatus {
     pub conditions: Vec<ReadinessAnswer>,
     /// Each item of `conditions` that fails, in their order.
     pub missing: Vec<MissingItem>,
-    /// The latest trial of this content; absent when the content could not be read (then the
-    /// pack's S1 fails with the loader's refusal of the same directory).
+    /// The train of S3-12 and S3-14 (ruling R5): the pack's hold as the `held` entry of the root's
+    /// `schedule.json` writes it, whenever the file the composer accepted holds the pack, whatever
+    /// S2 answers: a held pack in a supporting role, whose S2 holds by its role, shows it here.
+    /// Absent otherwise.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub trial: Option<PackTrial>,
+    pub held: Option<ReadinessHold>,
+    /// The trials of this content (the trial module's one summary, ruling R2); absent when the
+    /// content could not be read (then the pack's S1 fails with the loader's refusal of the same
+    /// directory) or its records were not read ([`Self::trial_not_read`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trial: Option<TrialSummary>,
+    /// The train (ruling R4): why the pack's trial records were not read, as adoption answers it;
+    /// the other packs are answered. Absent otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trial_not_read: Option<TrialNotRead>,
     pub enabled: PackEnabled,
 }
 
@@ -129,8 +144,8 @@ pub struct PackStatus {
 pub struct PackFormed {
     /// Whether its readiness item S1 holds.
     pub admitted: bool,
-    /// The first [`CONTENT_PREFIX_DIGITS`] hex digits of its directory's content hash; absent
-    /// when the directory could not be read and S1 fails.
+    /// Its directory's content identity as the trial names a content; absent when the directory
+    /// could not be read and S1 fails.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content_hash_prefix: Option<String>,
     /// With `--repo`: the checkout's directory of the pack and its content.
@@ -154,23 +169,6 @@ pub struct MissingItem {
     pub answer: ReadinessAnswer,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub held: Option<ReadinessHold>,
-}
-
-/// The latest trial of a pack's content, as its record keeps it.
-#[derive(Debug, Clone, Serialize)]
-pub struct PackTrial {
-    pub state: TrialState,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub request_id: Option<String>,
-    /// How its run ended: the business end is its `outcome_key`.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub end: Option<TrialRunEnd>,
-    /// Whether the end was the one the trial expected; absent when it expected none.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub matched: Option<bool>,
-    /// When its run ended, as the record says.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub at_unix_ms: Option<u64>,
 }
 
 /// Whether the root's schedule enables a pack, and under which authorization.
@@ -209,7 +207,9 @@ impl StageStateCounts {
     fn count(&mut self, state: StageState) {
         let counted = match state {
             StageState::NotAdmitted => &mut self.not_admitted,
+            StageState::NotJudged => &mut self.not_judged,
             StageState::CanBeTried => &mut self.can_be_tried,
+            StageState::Supporting => &mut self.supporting,
             StageState::Enabled => &mut self.enabled,
         };
         *counted += 1;
@@ -229,41 +229,14 @@ impl EnabledStateCounts {
     }
 }
 
-impl PackTrial {
-    /// The trial of a content whose latest record is `record`: `passed` when its run ended
-    /// normally, on whichever end, `failed` when it failed or was cancelled; `none` without one.
-    fn of(record: Option<PackTrialRecord>) -> Self {
-        let Some(record) = record else {
-            return Self {
-                state: TrialState::NoRecord,
-                request_id: None,
-                end: None,
-                matched: None,
-                at_unix_ms: None,
-            };
-        };
-        let state = if record.end.outcome == TaskOutcome::Success {
-            TrialState::Passed
-        } else {
-            TrialState::Failed
-        };
-        Self {
-            state,
-            request_id: Some(record.request_id),
-            end: Some(record.end),
-            matched: record.matched,
-            at_unix_ms: Some(record.at_unix_ms),
-        }
-    }
-}
-
 /// Workflow #463 S3-14 (module doc): where each pack of the game root `request.root` stands, or
 /// the one `request.package_id` names, and the counts of the root. The readiness's refusals of the
 /// root are this read's; then a `package_id` the root does not register is `validation_failed`
 /// naming `--package-id` (`not_recognised`), a `--repo` that is no directory `validation_failed`,
-/// a pack directory or a checkout's pack directory the containment crate cannot read
-/// `package_invalid` (but a pack whose S1 fails: its content is then not answered), and a trial
-/// record that does not read as one `trial_record_unreadable`, as the trial's reader refuses it.
+/// and a pack directory or a checkout's pack directory the containment crate cannot read
+/// `package_invalid` (but a pack whose S1 fails: its content is then not answered). The train of
+/// S3-12 and S3-14 (ruling R4): a pack whose trial records the reader refuses answers
+/// `trial_not_read`, and refuses nothing.
 pub fn standard_pack_status(request: &StandardPackStatusRequest) -> LabResult<StandardPackStatus> {
     let (readiness, placements) = judge_readiness_and_placement(&StandardPackReadyRequest {
         root: request.root.clone(),
@@ -273,7 +246,14 @@ pub fn standard_pack_status(request: &StandardPackStatusRequest) -> LabResult<St
     if let Some(named) = &request.package_id
         && !readiness.packs.iter().any(|pack| pack.package_id == *named)
     {
-        return Err(unknown_package_id(named, &readiness.game));
+        return Err(argument_refused(
+            PACKAGE_ID_FLAG,
+            NOT_RECOGNISED,
+            format!(
+                "{PACKAGE_ID_FLAG} {named:?} is no pack of the game root of {}",
+                readiness.game
+            ),
+        ));
     }
     let state_dir = absolute(&request.state_dir)?;
     let repo = match &request.repo {
@@ -331,15 +311,20 @@ pub fn standard_pack_status(request: &StandardPackStatusRequest) -> LabResult<St
     })
 }
 
-/// A pack's stage: `not_admitted` while S1 does not hold, else `enabled` when the root's schedule
-/// enables it, else `can_be_tried`.
+/// A pack's stage, saying only what the row knows (the train, ruling R5): `not_admitted` while S1
+/// does not hold; else, by `enabled.state`, `not_judged` when the composer refuses the root's
+/// `schedule.json`, `enabled` when a rule enables it, `supporting` when it plays a supporting part
+/// other packs' runs use and no rule names it (`not_scheduled`), `can_be_tried` when it is held or
+/// nothing places it.
 fn stage_of(admitted: bool, enabled: EnabledState) -> StageState {
     if !admitted {
-        StageState::NotAdmitted
-    } else if enabled == EnabledState::Enabled {
-        StageState::Enabled
-    } else {
-        StageState::CanBeTried
+        return StageState::NotAdmitted;
+    }
+    match enabled {
+        EnabledState::NotJudged => StageState::NotJudged,
+        EnabledState::Enabled => StageState::Enabled,
+        EnabledState::NotScheduled => StageState::Supporting,
+        EnabledState::Held | EnabledState::NotPlaced => StageState::CanBeTried,
     }
 }
 
@@ -353,8 +338,8 @@ struct Row<'a> {
 
 impl Row<'_> {
     /// The pack's row: its content (the root's directory, and the checkout's under `repo`), its
-    /// items, the failing ones, the latest trial of its content under `state_dir`, and whether the
-    /// root's schedule enables it.
+    /// items, the failing ones, its hold, the trials of its content under `state_dir`, and
+    /// whether the root's schedule enables it.
     fn status(&self, state_dir: &Path, repo: Option<&Path>) -> LabResult<PackStatus> {
         let pack = self.pack;
         let directory = &self.placement.directory;
@@ -364,11 +349,13 @@ impl Row<'_> {
             Err(_) if !self.admitted => None,
             Err(error) => return Err(pack_error(directory, error)),
         };
-        let trial = content
-            .as_deref()
-            .map(|prefix| latest_trial_record(state_dir, &pack.package_id, prefix))
-            .transpose()?
-            .map(PackTrial::of);
+        let (trial, trial_not_read) = match content.as_deref() {
+            None => (None, None),
+            Some(prefix) => match trial_summary(state_dir, &pack.package_id, prefix) {
+                Ok(trial) => (Some(trial), None),
+                Err(not_read) => (None, Some(not_read)),
+            },
+        };
         let checkout = repo
             .map(|checkout| checkout_content(checkout, &pack.package_id))
             .transpose()?;
@@ -396,7 +383,9 @@ impl Row<'_> {
             },
             conditions: pack.items.clone(),
             missing,
+            held: self.placement.held.clone(),
             trial,
+            trial_not_read,
             enabled: PackEnabled {
                 state: self.placement.enabled,
                 authorization: PackAuthorization::NotRecorded,
@@ -406,13 +395,13 @@ impl Row<'_> {
     }
 }
 
-/// The content hash prefix of the directory `directory`, as the trial names a content: the first
-/// [`CONTENT_PREFIX_DIGITS`] hex digits of the hash the containment crate's `measure_content_hash`
-/// computes, the hash the trial's plan computes from its one reading.
+/// The content identity of the directory `directory`, as the trial names a content (the train,
+/// ruling R3): the directory read as the trial reads the one it tries (containment's
+/// `snapshot_content_directory`) and named by the trial module's `content_hash_prefix_of`.
 fn content_prefix(directory: &Path) -> Result<String, ContainmentError> {
-    let hash =
-        Containment::new().measure_content_hash(directory, Instant::now() + PACK_DEADLINE)?;
-    Ok(hash.chars().take(CONTENT_PREFIX_DIGITS).collect())
+    let entries =
+        Containment::new().snapshot_content_directory(directory, Instant::now() + PACK_DEADLINE)?;
+    Ok(content_hash_prefix_of(&entries))
 }
 
 /// The checkout's directory of the pack `package_id` under the working root `repo` and its
@@ -428,22 +417,4 @@ fn checkout_content(repo: &Path, package_id: &str) -> LabResult<CheckoutContent>
         pack: pack.display().to_string(),
         content_hash_prefix,
     })
-}
-
-/// `validation_failed` naming `--package-id` with `not_recognised`: the root of `game` registers
-/// no pack `package_id`.
-fn unknown_package_id(package_id: &str, game: &str) -> LabError {
-    LabError::usage(format!(
-        "{PACKAGE_ID_FLAG} {package_id:?} is no pack of the game root of {game}"
-    ))
-    .with_details(json!({
-        "argument": PACKAGE_ID_FLAG,
-        "argument_problem": NOT_RECOGNISED,
-        "arguments": [{"argument": PACKAGE_ID_FLAG, "argument_problem": NOT_RECOGNISED}],
-    }))
-}
-
-fn absolute(path: &Path) -> LabResult<PathBuf> {
-    std::path::absolute(path)
-        .map_err(|error| LabError::usage(format!("{}: {error}", path.display())))
 }

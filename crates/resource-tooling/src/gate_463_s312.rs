@@ -26,6 +26,20 @@
 // - `s312_next_names_bindings_json_only_when_the_rule_has_no_value`: a business rule with
 //   `"pending"` alone: `next` names `ours/model/bindings.json` with the rule's id, a value binding
 //   and a hand entry; with its value: `next` names nothing (under `--dry-run`).
+// The train of S3-12 and S3-14 (register §1.445, "Train"; the coordinator's rulings R1 and R2 and
+// the review of #1783):
+// - `s312_train_an_end_other_than_the_expected_one_is_failed`: a trial that expected the package's
+//   key and whose run ended normally on another end did not pass: `failed`, `matched` false,
+//   `not_tried` warned.
+// - `s312_train_passed_once_and_failed_since_shows_both`: a passed trial of this content, then a
+//   failed one: `failed`, `passed_on_record` true, no `not_tried`.
+// - `s312_train_an_unreadable_record_answers_trial_not_read`: a file of a record's name that is no
+//   record: no `trial`, `trial_not_read` with the reader's refusal, no `not_tried`.
+// - `s312_train_a_first_business_adoption_warns_enabling_and_a_bare_replace_does_not`: a first
+//   adoption by a business decision warns `enabling_needs_authorization`; adopted again with
+//   `--replace` and no decision, it does not.
+// - `s312_train_next_items_are_objects_with_a_path`: a checkout that holds the regression
+//   directory, the catalog section and the census row: `next` is those three, each `{path}` alone.
 // No device, no Runtime, no clock read, no sleep: temporary directories and made-up packages.
 
 use crate::codes::{AdoptProblem, ResourceToolingCode, TrialState};
@@ -60,6 +74,10 @@ const FIRST: u64 = 1_000;
 const SECOND: u64 = 2_000;
 /// When a trial's run ended, which names its record.
 const TRIED_AT: u64 = 1_500;
+/// When a later trial's run ended.
+const LATER_TRIED_AT: u64 = 1_600;
+/// An end a run reached normally that is not the package's key its trial expected.
+const OTHER_END: &str = "task_skipped";
 const BINDINGS: &str = "ours/model/bindings.json";
 
 /// A repository checkout in a temporary directory, its state directory beside it.
@@ -355,7 +373,22 @@ fn measured(fixture: &Fixture, package: &Path) -> String {
 /// recorded.
 #[track_caller]
 fn record_trial(fixture: &Fixture, package: &Path, request_id: &str, end: TrialRunEnd) -> String {
-    let tried = trial_request(fixture, package);
+    record_trial_with(fixture, package, request_id, None, TRIED_AT, end)
+}
+
+/// The train: [`record_trial`] of a trial given `--expect <expect>` when `expect` names one, whose
+/// run ended at `at_unix_ms`.
+#[track_caller]
+fn record_trial_with(
+    fixture: &Fixture,
+    package: &Path,
+    request_id: &str,
+    expect: Option<&str>,
+    at_unix_ms: u64,
+    end: TrialRunEnd,
+) -> String {
+    let mut tried = trial_request(fixture, package);
+    tried.expect = expect.map(str::to_owned);
     let answer = plan_standard_pack_trial(&tried)
         .unwrap_or_else(|error| panic!("the trial's plan: {error}"));
     let content = answer.plan.content_hash_prefix.clone();
@@ -363,7 +396,7 @@ fn record_trial(fixture: &Fixture, package: &Path, request_id: &str, end: TrialR
         .unwrap_or_else(|error| panic!("the trial's run may be sent: {error}"));
     let record = PackTrialRecord::of_run(
         plan,
-        TRIED_AT,
+        at_unix_ms,
         request_id.to_owned(),
         Some(format!("run-{request_id}")),
         end,
@@ -378,6 +411,18 @@ fn ended() -> TrialRunEnd {
     TrialRunEnd {
         outcome: TaskOutcome::Success,
         outcome_key: Some(OUTCOME_KEY.to_owned()),
+        final_page: Some("page_b".to_owned()),
+        failure_code: None,
+        failure_values: Map::new(),
+    }
+}
+
+/// A run that ended normally on the target page, with the key [`OTHER_END`], which the package does
+/// not declare.
+fn ended_otherwise() -> TrialRunEnd {
+    TrialRunEnd {
+        outcome: TaskOutcome::Success,
+        outcome_key: Some(OTHER_END.to_owned()),
         final_page: Some("page_b".to_owned()),
         failure_code: None,
         failure_values: Map::new(),
@@ -683,4 +728,209 @@ fn s312_next_names_bindings_json_only_when_the_rule_has_no_value() {
     );
     let printed = serde_json::to_value(&answer).expect("the answer serializes");
     assert_eq!(printed["next"], json!([]), "{printed}");
+}
+
+#[test]
+fn s312_train_an_end_other_than_the_expected_one_is_failed() {
+    let fixture = Fixture::new();
+    let source = package_dir(&fixture, "package", "Adopted fixture", "passed");
+    let decision = decide(&fixture, "decision", &business(&fixed(9_000)));
+    adopted(request(
+        &fixture,
+        source.clone(),
+        Some(decision),
+        false,
+        FIRST,
+    ));
+
+    // A trial that expected the package's key, whose run ended normally on another end.
+    let content = record_trial_with(
+        &fixture,
+        &fixture.adopted_directory(),
+        "req-other-end",
+        Some(OUTCOME_KEY),
+        TRIED_AT,
+        ended_otherwise(),
+    );
+    let answer = adopted(request(&fixture, source, None, true, SECOND));
+    let trial = answer.review.trial.clone().expect("the review's trial");
+    assert_eq!(trial.state, TrialState::Failed, "{trial:?}");
+    assert_eq!(trial.content_hash_prefix, content);
+    assert!(!trial.passed_on_record, "{trial:?}");
+    let record = trial.record.expect("the record's reference");
+    assert_eq!(record.request_id, "req-other-end");
+    assert_eq!(record.end, ended_otherwise());
+    assert_eq!(record.matched, Some(false));
+    warns_once(&answer, ResourceToolingCode::NotTried);
+    let printed = serde_json::to_value(&answer).expect("the answer serializes");
+    assert_eq!(
+        printed["review"]["trial"]["state"],
+        json!("failed"),
+        "{printed}"
+    );
+    assert_eq!(
+        printed["review"]["trial"]["record"]["matched"],
+        json!(false),
+        "{printed}"
+    );
+}
+
+#[test]
+fn s312_train_passed_once_and_failed_since_shows_both() {
+    let fixture = Fixture::new();
+    let source = package_dir(&fixture, "package", "Adopted fixture", "passed");
+    let decision = decide(&fixture, "decision", &business(&fixed(9_000)));
+    adopted(request(
+        &fixture,
+        source.clone(),
+        Some(decision),
+        false,
+        FIRST,
+    ));
+
+    let passed = record_trial_with(
+        &fixture,
+        &fixture.adopted_directory(),
+        "req-passed",
+        None,
+        TRIED_AT,
+        ended(),
+    );
+    let failed_since = record_trial_with(
+        &fixture,
+        &fixture.adopted_directory(),
+        "req-failed",
+        None,
+        LATER_TRIED_AT,
+        failed(),
+    );
+    assert_eq!(passed, failed_since);
+    let answer = adopted(request(&fixture, source, None, true, SECOND));
+    let trial = answer.review.trial.clone().expect("the review's trial");
+    // The latest record of this content failed; an earlier one passed.
+    assert_eq!(trial.state, TrialState::Failed, "{trial:?}");
+    assert!(trial.passed_on_record, "{trial:?}");
+    let record = trial.record.expect("the record's reference");
+    assert_eq!(record.request_id, "req-failed");
+    assert_eq!(record.at_unix_ms, LATER_TRIED_AT);
+    assert!(
+        warned(&answer, ResourceToolingCode::NotTried).is_empty(),
+        "{:?}",
+        answer.warnings
+    );
+    let printed = serde_json::to_value(&answer).expect("the answer serializes");
+    assert_eq!(
+        printed["review"]["trial"]["passed_on_record"],
+        json!(true),
+        "{printed}"
+    );
+    assert_eq!(
+        printed["review"]["trial"]["state"],
+        json!("failed"),
+        "{printed}"
+    );
+}
+
+#[test]
+fn s312_train_an_unreadable_record_answers_trial_not_read() {
+    let fixture = Fixture::new();
+    // A file of a record's name among the package's trial records, which is no record.
+    let records = fixture.state().join("trials").join(ADOPTED);
+    fs::create_dir_all(&records).expect("the records' directory");
+    fs::write(records.join("0123456789ab-1.json"), b"{}").expect("the file");
+    let source = package_dir(&fixture, "package", "Adopted fixture", "passed");
+    let decision = decide(&fixture, "decision", &business(&fixed(9_000)));
+    let mut dry_run = request(&fixture, source, Some(decision), false, FIRST);
+    dry_run.dry_run = true;
+
+    let answer = adopted(dry_run);
+
+    assert_eq!(answer.review.trial, None, "{:?}", answer.review);
+    let not_read = answer
+        .review
+        .trial_not_read
+        .clone()
+        .expect("why the records were not read");
+    assert!(
+        not_read
+            .outcome
+            .is(ResourceToolingCode::TrialRecordUnreadable),
+        "{not_read:?}"
+    );
+    assert_eq!(
+        not_read.outcome.value("trial_record_problem"),
+        Some(&json!("undecodable")),
+        "{not_read:?}"
+    );
+    // Whether this content was tried is not known: `not_tried` is not warned.
+    assert!(
+        warned(&answer, ResourceToolingCode::NotTried).is_empty(),
+        "{:?}",
+        answer.warnings
+    );
+    let printed = serde_json::to_value(&answer).expect("the answer serializes");
+    assert!(printed["review"].get("trial").is_none(), "{printed}");
+    assert_eq!(
+        printed["review"]["trial_not_read"]["outcome"]["code"],
+        json!("trial_record_unreadable"),
+        "{printed}"
+    );
+}
+
+#[test]
+fn s312_train_a_first_business_adoption_warns_enabling_and_a_bare_replace_does_not() {
+    let fixture = Fixture::new();
+    let source = package_dir(&fixture, "package", "Adopted fixture", "passed");
+    let decision = decide(&fixture, "decision", &business(&fixed(9_000)));
+
+    let first = adopted(request(
+        &fixture,
+        source.clone(),
+        Some(decision),
+        false,
+        FIRST,
+    ));
+
+    assert_eq!(first.class, AdoptClass::Business);
+    warns_once(&first, ResourceToolingCode::EnablingNeedsAuthorization);
+
+    // Adopted again with --replace and no decision: its role is kept, nothing is enabled anew.
+    let again = adopted(request(&fixture, source, None, true, SECOND));
+    assert!(
+        warned(&again, ResourceToolingCode::EnablingNeedsAuthorization).is_empty(),
+        "{:?}",
+        again.warnings
+    );
+}
+
+#[test]
+fn s312_train_next_items_are_objects_with_a_path() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo();
+    fs::create_dir_all(repo.join("regression")).expect("the regression directory");
+    fs::create_dir_all(repo.join("docs")).expect("the docs directory");
+    fs::write(repo.join("docs").join("PACKS.md"), b"# Packs\n").expect("the catalog section");
+    fs::create_dir_all(repo.join("ours").join("coverage")).expect("the coverage directory");
+    fs::write(
+        repo.join("ours").join("coverage").join("business-v1.csv"),
+        b"package_id\n",
+    )
+    .expect("the census");
+    let source = package_dir(&fixture, "package", "Adopted fixture", "passed");
+    let decision = decide(&fixture, "decision", &business(&fixed(9_000)));
+    let mut dry_run = request(&fixture, source, Some(decision), false, FIRST);
+    dry_run.dry_run = true;
+
+    let answer = adopted(dry_run);
+
+    let printed = serde_json::to_value(&answer).expect("the answer serializes");
+    assert_eq!(
+        printed["next"],
+        json!([
+            {"path": format!("regression/{GAME}/")},
+            {"path": "docs/PACKS.md"},
+            {"path": "ours/coverage/business-v1.csv"}
+        ]),
+        "{printed}"
+    );
 }
