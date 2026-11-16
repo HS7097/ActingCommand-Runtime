@@ -1137,43 +1137,50 @@ coordinator's rulings in the work order, not the owner's words). `--installation
 row's parameter `installation`) reads the installation actinglab runs from, located as every row of
 the rescue module locates one (the program's own root, [install-cli.md](install-cli.md), "The Lab's
 rescue module": no root word), and hands the status function what it read; the function reads no
-installation itself. It still writes nothing and reaches no Runtime. In this order:
+installation itself. It still writes nothing and reaches no Runtime. In this order (fix round 1:
+the child is started before the journals are read, so that its bound runs beside the readings
+instead of after them):
 
-1. **The root and the journals**, by the rescue module's one public read
-   ([install-cli.md](install-cli.md), "What the placements enabled"): `--root` must be the installed
-   game root of its game in that installation, `<standard_packs.root>\<game>` of its configuration
-   (a relative one against the root, the game the root's directory name), as `place` finds a game
-   root, else the line is refused `package_status_root_not_installed` (`path` the root given; exit
-   2) before the game root, a journal or the report is read; a configuration that names no
-   `standard_packs.root` places no game root, and is refused so too. Then every journal of the
-   installation, by the journal's own reader: per package id, the newest `pack_place` of that game
-   that finished (`finished_at_unix_ms`) with every `pack_item` step `done`, was not undone (no
-   `undo` record, begun or ended) and not rolled back (no `rollback` record), and whose input
-   `enabled` names the package; a later placement whose `enabled` does not name it (a content-only
-   replacement) changes nothing. A journal that cannot be read hides none of the others. A root or
-   configuration the rescue module cannot read refuses the line with its outcome
-   (`install_command_refused` of `install_status`; exit 4), as does a program that runs from no
-   installation (the location's own outcome).
-2. **One `actingd suspended`** for the whole answer: the installation's own, started as `diagnose`
-   starts it (the program of the generation selected now, `--config` its configuration,
-   `--deadline-ms` the deadline less 2 s) and ended at `diagnose`'s command-line budget (24 s), its
-   report read and judged by the function a diagnosis reads it with: printed, succeeded, and of the
-   installation's state root. The row reads no ledger itself. A child that cannot be started,
-   fails, prints no report, reads another state root or is ended at its deadline leaves the pairs
-   not read, with the outcome a diagnosis gives it, and refuses nothing.
-3. **The composed bindings**, beside a report that was read: each catalog task with the package it
-   runs, as `actingctl packs` reads them (its installation rows' `package_id` and `task_ids`, the
-   procedures `package.<package_id>` the scheduler workbench composes for the configured instances;
-   "The readers of composer mode", above).
+1. **The root**, by the rescue module's one public read ([install-cli.md](install-cli.md), "What
+   the placements enabled"): `--root` must be the installed game root of its game in that
+   installation, `<standard_packs.root>\<game>` of its configuration (a relative one against the
+   root, the game the root's directory name), as `place` finds a game root, the two compared as
+   written, then resolved; else the line is refused `package_status_root_not_installed` (`path` the
+   root given) before the game root, a journal or the report is read and before the child is
+   started; a configuration that names no `standard_packs.root` places no game root, and is refused
+   so too. A root or configuration the rescue module cannot read refuses the line with its outcome
+   (`install_command_refused` of `install_status`), as does a program that runs from no
+   installation (the location's own outcome, `install_root_unresolved`).
+2. **One `actingd suspended`** for the whole answer, started now: the installation's own, started
+   as `diagnose` starts it (the program of the generation selected now, `--config` its
+   configuration, `--deadline-ms` the deadline less 2 s) and ended at `diagnose`'s command-line
+   budget (24 s).
+3. **The journals**, while it runs: every journal of the installation, by the journal's own reader:
+   per package id, the newest `pack_place` of that game that finished (`finished_at_unix_ms`) with
+   every `pack_item` step `done`, was not undone (no `undo` record, begun or ended) and not rolled
+   back (no `rollback` record), and whose input `enabled` names the package; a later placement
+   whose `enabled` does not name it (a content-only replacement) changes nothing. A journal that
+   cannot be read hides none of the others. An operations folder that cannot be listed refuses the
+   line with that listing's failure, after the child has ended (it is never left running).
+4. **The composed bindings**, while it runs: each catalog task with the package it runs, as
+   `actingctl packs` reads them (its installation rows' `package_id` and `task_ids`, the procedures
+   `package.<package_id>` the scheduler workbench composes for the configured instances; "The
+   readers of composer mode", above), and the warnings that reading gives which concern the root's
+   game (each naming the game, or a path below its game root).
+5. **The report**, read and judged by the function a diagnosis reads it with: printed, succeeded,
+   and of the installation's state root. The row reads no ledger itself. A child that cannot be
+   started, fails, prints no report, reads another state root or is ended at its deadline leaves
+   the pairs not read, with the outcome a diagnosis gives it, and refuses nothing; the composed
+   bindings are used only beside a report that was read.
 
 What it answers, beside the members above:
 
 | Member | What it is, and what it is judged from |
 |---|---|
 | `enabled.authorization`, `enabled.authorization_unrecorded` | The placement that last enabled the pack, `{reference, initiator?, at_unix_ms, operation}`: the reference its journal's input `authorization` holds, as given; the initiator that began it (absent where the journal names none); when it finished; its operation id. Whatever `enabled.state` says now: a pack a later placement held keeps the authorization it was last enabled under. Else `not_recorded` with `no_journal_names_it` (every journal was read and no placement that counts names it) or `journals_unreadable` (none that was read names it, and some could not be read: one of them may). |
-| `pairs` | Each pair of a catalog task that runs the pack and an instance that the report names in its `suspended` or its `break_ins`, by task, then instance: `{task_id, instance_id, suspended?, break_in?}`. `suspended`, when the pair is suspended: `{pause_cause?}`, the report's word, absent where its row names none. `break_in`, when the report has the pair's row: that row's members as the report names them (`content_hash_prefix`, `runs`, `runs_needed`, `first_settled_at_unix_ms`, `since_first_ms`, `ms_needed`, `in_break_in`; [policy-suspension.md](policy-suspension.md), "`actingd suspended`"). A row's task is the pack's when the composed bindings bind it to the pack; a row whose task no binding names (a composition the configuration does not make now) is no pack's. A pack the report names no pair of answers `[]`. When the pairs were not read, every pack answers in their place one word (`pairs_unread`): `suspension_report_not_read` or `bindings_not_read`. |
-| `installation` (the root) | `{operations_read, operations_unread, suspension_report_read, pairs_unread?, pairs_unread_outcome?}`: how many journals were read, of any kind; the ids of those that could not be, oldest first; whether the report was read; and, when the pairs were not read, the word and beside it the outcome that says why (the child's own, as a diagnosis gives it, or the bindings' reader's). `stage_states` and `enabled_states` do not change. |
-| `warnings` (the root) | `["ledger_read_incomplete"]`, as the report spells it, when the report that was read carries it: its ledger read ran out of its deadline, so its rows are what it read. Absent otherwise. |
+| `pairs` | Each pair of a catalog task that runs the pack and an instance that the report names in its `suspended` or its `break_ins`, by task, then instance: `{task_id, instance_id, suspended?, break_in?}`. `suspended`, when the pair is suspended: `{pause_cause?}`, the report's word, absent where its row names none. `break_in`, when the report has the pair's row: that row's members as the report names them (`content_hash_prefix`, `runs`, `runs_needed`, `first_settled_at_unix_ms`, `since_first_ms`, `ms_needed`, `in_break_in`; [policy-suspension.md](policy-suspension.md), "`actingd suspended`"). A row's task is the pack's when the composed bindings bind it to the pack; a row whose task no binding names (a composition the configuration does not make now) is no pack's. A pack a bound task runs, of which the report names no pair, answers `[]`. Fix round 1: a pack the composed bindings bind no task to answers in their place its own word (`pairs_unread`) `no_task_bound`: a configuration that binds its procedures itself, whose rows name no task; a game the composition left out (its warnings in `warnings`); a pack no composed rule runs. When the pairs were not read, every pack answers in their place one word: `suspension_report_not_read` or `bindings_not_read`. |
+| `installation` (the root) | `{operations_read, operations_unread, suspension_report_read, report_warnings?, pairs_unread?, pairs_unread_outcome?}`: how many journals were read, of any kind; the ids of those that could not be, oldest first; whether the report was read; (fix round 1) `report_warnings`, the words of the report's warnings the row passes on, as the report spells them: `["ledger_read_incomplete"]` when the report that was read carries it (its ledger read ran out of its deadline, so its rows are what it read), absent otherwise; and, when the pairs were not read, the word and beside it the outcome that says why (the child's own, as a diagnosis gives it, or the bindings' reader's). The outcome is given in the detail the line is (fix round 1): under `ACTINGCOMMAND_DETAIL=codes` its codes-only projection, its codes and no text (no tail of the child's stderr). `stage_states` and `enabled_states` do not change. |
+| `warnings` (the root) | Fix round 1: this row's warnings only, each an outcome in its own shape `{code, category, values, …}`, as every row of this command line carries them: beside pairs that were read, the warnings the reading of the composed bindings gave that concern the root's game (a game root it could not read or that the composition refused, `standard_pack_root_invalid`; a file of it it could not read, `package_binding_unreadable`; and the like), as that reading gave them. Absent when there are none. |
 
 `pairs` lies inside each row of `packs`, the part that grows with the root and where an answer over
 the MCP budget is written whole to the export directory. What the row still does not read: the
@@ -1182,12 +1189,20 @@ readiness items of an installation, I1 to I6 ("Readiness", above), which stay `n
 nor `vision check` is run. Where it is served: actinglab on Windows, where the rescue module is
 built, on its command line and through a `serve` child (so the Lab's MCP server's
 `ac_standard_pack_status` too); a build without the rescue module refuses `--installation`
-`package_status_installation_unbuilt` (exit 2) before anything is read.
+`package_status_installation_unbuilt` before anything is read.
+
+**Exit statuses** (fix round 1). The two refusals of S3-15a refuse (category `error`, class
+`none`): exit 1 on actinglab's command line, which prints the CLI module's line, and in the
+envelope a `--via` line prints exit 2 (their class `usage_validation`); the rescue module's
+refusal of a root, configuration or operations folder it cannot read, and the location's refusal
+of a program in no installation, exit 1 on actinglab's command line too, and 4 in a `--via` line's
+envelope (class `device_instance`). Through MCP each is a refusal object.
 
 Words and codes of S3-15a: `authorization_unrecorded` gains `no_journal_names_it` and
 `journals_unreadable` (answer values); the vocabulary `pairs_unread` (`suspension_report_not_read`,
-`bindings_not_read`; answer values); and two refusals, `package_status_root_not_installed` and
-`package_status_installation_unbuilt`, each `error`, exit 2.
+`bindings_not_read`, and since fix round 1 `no_task_bound`, a pack's own; answer values); and two
+refusals, `package_status_root_not_installed` and `package_status_installation_unbuilt`, each
+`error`.
 
 ## What does not change
 

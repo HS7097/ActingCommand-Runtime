@@ -624,6 +624,12 @@ actingcommand_contract::outcome_vocabulary! {
         /// The report was read, but the composed bindings that name the package each catalog task
         /// runs could not be read (`actingctl packs`' reading of the installation's configuration).
         BindingsNotRead => "bindings_not_read",
+        /// Fix round 1: the report and the composed bindings were read, and the bindings hold no
+        /// task that runs this pack (a configuration that binds its procedures itself, whose rows
+        /// name no task; a game the composition left out, its warnings in the answer's
+        /// `warnings`; a pack no composed rule runs), so no row of the report can be the pack's.
+        /// A pack's own word, never the root's.
+        NoTaskBound => "no_task_bound",
     }
 }
 // ---- Workflow #463 S3-15a: end ----

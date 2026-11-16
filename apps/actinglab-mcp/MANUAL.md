@@ -494,11 +494,14 @@ naming this file.
   `not_recorded` with `no_journal_names_it` or `journals_unreadable`; each pack answers `pairs`
   (each task and instance the installation's one `actingd suspended` names: its `suspended`
   `pause_cause` and its `break_in` row, as the report names it), or in their place the word
-  `suspension_report_not_read` or `bindings_not_read`; the root answers `installation`
-  (`operations_read`, `operations_unread`, `suspension_report_read`, and the word's outcome) and
-  passes the report's `ledger_read_incomplete` on in `warnings`. The readiness items of an
-  installation (I1 to I6) are not read. `packs`, `pairs` within them, grows with the root: an
-  answer over the budget is written whole to the export directory; `package_id` reads one pack.
+  `suspension_report_not_read` or `bindings_not_read`, or (fix round 1) for a pack no composed task
+  runs `no_task_bound`; the root answers `installation` (`operations_read`, `operations_unread`,
+  `suspension_report_read`, `report_warnings`, the report's `ledger_read_incomplete` passed on, and
+  the word's outcome, in the detail `ACTINGCOMMAND_DETAIL` sets) and, in `warnings`, outcomes
+  only: the composition's warnings that concern the game. The child is started before the
+  journals are read and runs beside them. The readiness items of an installation (I1 to I6) are
+  not read. `packs`, `pairs` within them, grows with the root: an answer over the budget is
+  written whole to the export directory; `package_id` reads one pack.
 - **The package declaration** (Workflow #477 PC-1, 0.12.68; `contracts/pack-catalog.md`).
   `ac_standard_pack_catalog` (`root`, `plan`) builds or brings up to date a game root's
   `pack-catalog.json`, through a child: an entry for every package of `bundle.json`, a new entry's

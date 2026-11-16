@@ -102,6 +102,7 @@ use actingcommand_contract::outcome::{
 use actingcommand_lab_ops::core_reads::{
     Handed, Params, Part, ROOT_FLAG, STATE_ROOT_FLAG, Written,
 };
+use actingcommand_lab_ops::diagnose::same_directory;
 use actingcommand_lab_ops::initiator::{self, Initiator};
 use actingcommand_lab_ops::locate::Location;
 use serde::Serialize;
@@ -2902,15 +2903,61 @@ pub fn answer_here(name: &str, params: &Map<String, Value>, initiator: Initiator
 }
 
 /// Workflow #463 S3-15a (register §1.451; `contracts/install-cli.md`, "What the placements
-/// enabled"): what [`placements_enabling`] answers.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// enabled"): what [`placements_enabling`] answers. Fix round 1: the journals are read by
+/// [`InstalledGameRoot::placements`], so that a caller can start other work between the check of
+/// the root and that reading.
+#[derive(Debug, Clone)]
 pub enum InstalledPlacements {
     /// The game root given is not the installed game root of its game in this installation,
     /// `<standard_packs.root>\<game>` (`installed`; `None` where the configuration names no
     /// `standard_packs.root` or the root given names no game): no journal was read.
     OtherRoot { installed: Option<PathBuf> },
-    /// The journals of the installation, read for the game of the root given.
-    Read(EnablingPlacements),
+    /// The game root given is the installed one of its game; nothing of its journals is read yet.
+    Installed(InstalledGameRoot),
+}
+
+/// Workflow #463 S3-15a fix round 1: an installation's game root that [`placements_enabling`]
+/// found installed, and its game.
+#[derive(Debug, Clone)]
+pub struct InstalledGameRoot {
+    paths: Paths,
+    game: String,
+}
+
+impl InstalledGameRoot {
+    /// The game of the root (its directory's name).
+    pub fn game(&self) -> &str {
+        &self.game
+    }
+
+    /// Every journal of the installation by the journal's own reader, and per package id the
+    /// newest `pack_place` operation of the game that finished with its items placed, was neither
+    /// undone nor rolled back and names the package in its input `enabled`
+    /// (`crate::install::place`, `enabling`). An operations folder that cannot be listed is its
+    /// listing's failure; a journal that cannot be read is named and hides none of the others. It
+    /// writes nothing, starts nothing and asks no Runtime.
+    pub fn placements(&self) -> Result<EnablingPlacements, Outcome> {
+        let read = place::enabling(&SystemHost::of(None), &self.paths, &self.game)?;
+        Ok(EnablingPlacements {
+            operations_read: read.read,
+            operations_unread: read.unread,
+            enabled_by: read
+                .by_package
+                .into_iter()
+                .map(|(package_id, by)| {
+                    (
+                        package_id,
+                        EnablingPlacement {
+                            reference: by.reference,
+                            initiator: by.initiator.map(|initiator| initiator.as_str().to_owned()),
+                            at_unix_ms: by.at_unix_ms,
+                            operation_id: by.operation_id,
+                        },
+                    )
+                })
+                .collect(),
+        })
+    }
 }
 
 /// Workflow #463 S3-15a: the placement journals of an installation, read for one game.
@@ -2937,17 +2984,15 @@ pub struct EnablingPlacement {
 
 /// Workflow #463 S3-15a (register §1.451): the one read another module makes of this module's
 /// placements. For the installation `location` (located as every row of the module is,
-/// [`actingcommand_lab_ops::locate`]) and the game root `game_root`: first whether `game_root` is
-/// the installed game root of its game (its directory's name) in this installation, as `place`
-/// finds one (`standard_packs.root` of the installation's configuration, a relative one against the
-/// root, and the game below it), else [`InstalledPlacements::OtherRoot`] and nothing else is read;
-/// then every journal of the root by the journal's own reader, and per package id the newest
-/// `pack_place` operation of that game that finished with its items placed, was neither undone nor
-/// rolled back and names the package in its input `enabled` (`crate::install::place`, `enabling`).
-/// It writes nothing, starts nothing and asks no Runtime. A root that cannot be resolved is
+/// [`actingcommand_lab_ops::locate`]) and the game root `game_root`: whether `game_root` is the
+/// installed game root of its game (its directory's name) in this installation, as `place` finds
+/// one (`standard_packs.root` of the installation's configuration, a relative one against the
+/// root, and the game below it), the two compared as written, then resolved (fix round 1: by
+/// `diagnose`'s one comparison of two directories); else [`InstalledPlacements::OtherRoot`]. Fix
+/// round 1: no journal is read here; [`InstalledGameRoot::placements`] reads them. It writes
+/// nothing, starts nothing and asks no Runtime. A root that cannot be resolved is
 /// `install_command_refused` `state_invalid`, a configuration that cannot be read
-/// `config_unreadable`, an operations folder that cannot be listed its listing's failure, each of
-/// the operation `install_status`.
+/// `config_unreadable`, each of the operation `install_status`.
 pub fn placements_enabling(
     location: &Location,
     game_root: &Path,
@@ -2977,39 +3022,10 @@ pub fn placements_enabling(
             installed: Some(installed),
         });
     }
-    let read = place::enabling(&SystemHost::of(None), &paths, game)?;
-    Ok(InstalledPlacements::Read(EnablingPlacements {
-        operations_read: read.read,
-        operations_unread: read.unread,
-        enabled_by: read
-            .by_package
-            .into_iter()
-            .map(|(package_id, by)| {
-                (
-                    package_id,
-                    EnablingPlacement {
-                        reference: by.reference,
-                        initiator: by.initiator.map(|initiator| initiator.as_str().to_owned()),
-                        at_unix_ms: by.at_unix_ms,
-                        operation_id: by.operation_id,
-                    },
-                )
-            })
-            .collect(),
+    Ok(InstalledPlacements::Installed(InstalledGameRoot {
+        paths,
+        game: game.to_owned(),
     }))
-}
-
-/// Workflow #463 S3-15a: whether two paths name the same directory: the same once made absolute,
-/// or the same once resolved (both must resolve).
-fn same_directory(left: &Path, right: &Path) -> bool {
-    let absolute = |path: &Path| std::path::absolute(path).ok();
-    if absolute(left).is_some_and(|left| Some(left) == absolute(right)) {
-        return true;
-    }
-    matches!(
-        (std::fs::canonicalize(left), std::fs::canonicalize(right)),
-        (Ok(left), Ok(right)) if left == right
-    )
 }
 
 /// Workflow #453 S4: the row `new` (`crate::install::new`) on `host`, as `initiator`: the

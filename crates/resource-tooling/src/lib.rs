@@ -277,3 +277,5 @@ pub use standard_pack_status::{
     PairStatus, PairSuspended, PlacementAuthorization, StatusInstallation,
     standard_pack_status_with, status_installation_unbuilt, status_root_not_installed,
 };
+// Workflow #463 S3-15a fix round 1: the composed bindings with the warnings of their reading.
+pub use standard_pack_status::ComposedBindings;

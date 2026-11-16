@@ -22,10 +22,17 @@
 // - `s315_pairs_show_a_suspension_and_a_break_in_and_a_pack_without_pairs_is_empty`: from a report
 //   as `actingd suspended` prints it and the composed bindings;
 // - `s315_a_report_not_read_leaves_the_word_the_outcome_and_the_authorization`: the child that
-//   cannot be started (the installation holds no actingd), the outcome a diagnosis gives a child
-//   that failed and one it ended at its deadline, and bindings that could not be read;
+//   cannot be started (the installation holds no actingd), (fix round 1) a stand-in child that
+//   fails, the outcome a diagnosis gives a child it ended at its deadline, and bindings that could
+//   not be read;
 // - `s315_a_root_not_the_installations_and_a_build_without_the_rescue_module_are_refused`;
 // - `s315_the_row_writes_nothing`.
+// Fix round 1 (register §1.451, "Fix round 1"):
+// - `s315_fix1_a_placement_whose_undo_began_does_not_count_though_its_item_reads_done`;
+// - `s315_fix1_a_placement_with_a_rollback_record_does_not_count`;
+// - `s315_fix1_the_composed_bindings_map_a_break_in_row_to_its_pack`: the bindings read from a
+//   composer-mode configuration, a break-in row mapped to its pack, `no_task_bound` for the pack
+//   no task runs.
 // The installation is a made-up single-location root whose `pack_place` journals are written as
 // the rescue module's `place` writes them; the child is the installation's own `actingd
 // suspended`, started as `diagnose` starts it, which this root does not hold. No Runtime, no
@@ -33,17 +40,17 @@
 
 use super::env_lock;
 use super::gate_434_lab5b4::Isolated;
-use crate::standard_pack_cli::read_installation;
+use crate::standard_pack_cli::{composed_bindings, read_installation};
 use crate::{ErrorKind, run_cli};
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_lab_ops::codes::ActingctlCode;
 use actingcommand_lab_ops::locate::Location;
 use actingcommand_resource_tooling::{
-    AuthorizationUnrecorded, EnabledAuthorization, InstallationJournals, InstallationPairs,
-    PackAuthorization, PackPairs, PackStatus, PairsUnread, PlacementAuthorization,
-    StandardPackStatus, StandardPackStatusRequest, StatusInstallation, standard_pack_status,
-    standard_pack_status_with, status_installation_unbuilt,
+    AuthorizationUnrecorded, ComposedBindings, EnabledAuthorization, InstallationJournals,
+    InstallationPairs, PackAuthorization, PackPairs, PackStatus, PairsUnread,
+    PlacementAuthorization, StandardPackStatus, StandardPackStatusRequest, StatusInstallation,
+    standard_pack_status, standard_pack_status_with, status_installation_unbuilt,
 };
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -74,6 +81,12 @@ const THEN_UNDONE: &str = "board item 463, comment 0000000004";
 const UNFINISHED: &str = "board item 463, comment 0000000005";
 const PLACED_NOTHING: &str = "board item 463, comment 0000000006";
 const OF_ANOTHER_GAME: &str = "board item 463, comment 0000000007";
+/// Fix round 1: the references of the placement whose undo began and of the one rolled back.
+const UNDO_BEGUN: &str = "board item 463, comment 0000000008";
+const ROLLED_BACK: &str = "board item 463, comment 0000000009";
+/// Fix round 1: their operations, each after every journal of the fixture.
+const UNDO_BEGUN_MS: u64 = 9_000;
+const ROLLED_BACK_MS: u64 = 9_100;
 /// A placement's journal records its end this long after its own milliseconds.
 const FINISHED_AFTER_MS: u64 = 5;
 /// The operations the fixture's journals record, the two of the first two placements.
@@ -97,6 +110,12 @@ enum End {
     Undone,
     /// It never finished: no end recorded.
     Unfinished,
+    /// Fix round 1: it finished with its item placed, and its undo began and never ended: the
+    /// undo record is there, its item still reads `done`.
+    UndoBegun,
+    /// Fix round 1: it finished with its item placed, and a rollback began before its steps were
+    /// reversed: the rollback record is there, its item still reads `done`.
+    RolledBack,
 }
 
 fn write_json(path: &Path, value: &Value) {
@@ -240,14 +259,16 @@ fn schedule() -> Value {
 /// packages it enables), its one item and its check after the placement, ended as `end` says.
 fn journal(root: &Path, ms: u64, game: &str, reference: &str, enabled: &[&str], end: End) -> Value {
     let (item, check) = match end {
-        End::Placed => ("done", "done"),
+        End::Placed | End::UndoBegun | End::RolledBack => ("done", "done"),
         End::PlacedNothing => ("planned", "planned"),
         End::Undone => ("undone", "undone"),
         End::Unfinished => ("done", "started"),
     };
     let finished = match end {
         End::Unfinished => Value::Null,
-        End::Placed | End::PlacedNothing | End::Undone => json!(ms + FINISHED_AFTER_MS),
+        End::Placed | End::PlacedNothing | End::Undone | End::UndoBegun | End::RolledBack => {
+            json!(ms + FINISHED_AFTER_MS)
+        }
     };
     let undo = match end {
         End::Undone => json!({
@@ -255,10 +276,15 @@ fn journal(root: &Path, ms: u64, game: &str, reference: &str, enabled: &[&str], 
             "finished_at_unix_ms": ms + 12,
             "initiator": LAB_CLI
         }),
-        End::Placed | End::PlacedNothing | End::Unfinished => Value::Null,
+        End::UndoBegun => json!({
+            "started_at_unix_ms": ms + 10,
+            "finished_at_unix_ms": null,
+            "initiator": LAB_CLI
+        }),
+        End::Placed | End::PlacedNothing | End::Unfinished | End::RolledBack => Value::Null,
     };
     let initiator = if ms == SECOND_MS { LAB_MCP } else { LAB_CLI };
-    json!({
+    let mut written = json!({
         "schema_version": "actingcommand.install-operation.v1",
         "operation_id": format!("op-{ms}"),
         "kind": "pack_place",
@@ -306,7 +332,16 @@ fn journal(root: &Path, ms: u64, game: &str, reference: &str, enabled: &[&str], 
         "undo": undo,
         "result": null,
         "finished_at_unix_ms": finished
-    })
+    });
+    if let End::RolledBack = end {
+        written["rollback"] = json!({
+            "started_at_unix_ms": ms + 10,
+            "to": "0".repeat(40),
+            "failed": ["post_check"],
+            "reversed_at_unix_ms": null
+        });
+    }
+    written
 }
 
 /// The made-up installation `<temp>/installation`, its configuration naming the standard-pack
@@ -404,6 +439,27 @@ impl Fixture {
             &Self::journal_path(&self.root, UNREADABLE_MS),
             &json!({"neutral": "not a journal"}),
         );
+    }
+
+    /// Fix round 1: adds the journal of a placement of the game's packs `enabled` under
+    /// `reference`, the operation `op-<ms>`, ended as `end` says.
+    fn add_journal(&self, ms: u64, reference: &str, enabled: &[&str], end: End) {
+        write_json(
+            &Self::journal_path(&self.root, ms),
+            &journal(&self.root, ms, GAME, reference, enabled, end),
+        );
+    }
+
+    /// Fix round 1: places a stand-in for the installation's `actingd`, as `diagnose`'s own gate
+    /// places one: a program of this build (this test program), which refuses `suspended
+    /// --config <config> --deadline-ms <ms>` as arguments it does not take, prints no report and
+    /// exits non-zero.
+    fn place_failing_actingd(&self) {
+        let runtime = self.root.join("runtime");
+        fs::create_dir_all(&runtime).expect("the runtime folder");
+        let program = std::env::current_exe().expect("this test program");
+        fs::copy(program, runtime.join("actingcommand-actingd.exe"))
+            .expect("place the actingd stand-in");
     }
 
     /// The installation as the rescue module locates one, its configuration `config`.
@@ -790,16 +846,22 @@ fn s315_pairs_show_a_suspension_and_a_break_in_and_a_pack_without_pairs_is_empty
         ],
         "warnings": ["config_newer_than_daemon_start", "ledger_read_incomplete"]
     });
-    let bindings = BTreeMap::from([
+    // Fix round 1: the undone pack is bound too, by a task the report names no row of; the
+    // return-home pack by none.
+    let tasks = BTreeMap::from([
         (rule_id(PLACED), PLACED.to_owned()),
         (twice_task.clone(), TWICE.to_owned()),
         (rule_id(RUNS), RUNS.to_owned()),
+        (rule_id(UNDONE), UNDONE.to_owned()),
     ]);
     let installation = StatusInstallation {
         journals: InstallationJournals::default(),
         pairs: InstallationPairs::Read {
             report,
-            bindings: Ok(bindings),
+            bindings: Ok(ComposedBindings {
+                tasks,
+                warnings: Vec::new(),
+            }),
         },
     };
 
@@ -829,17 +891,26 @@ fn s315_pairs_show_a_suspension_and_a_break_in_and_a_pack_without_pairs_is_empty
         pairs(RUNS),
         json!([{"task_id": rule_id(RUNS), "instance_id": NODE_C, "suspended": {}}])
     );
-    // No pair of the report is the pack's: an empty list.
-    for package_id in [UNDONE, HOME] {
-        assert_eq!(
-            row(&answer, package_id).pairs,
-            Some(PackPairs::Read(Vec::new())),
-            "{package_id}"
-        );
-    }
-    assert_eq!(answer.warnings, vec!["ledger_read_incomplete".to_owned()]);
+    // A pack a task runs, of which the report names no pair: an empty list.
+    assert_eq!(
+        row(&answer, UNDONE).pairs,
+        Some(PackPairs::Read(Vec::new()))
+    );
+    // Fix round 1: a pack no task of the bindings runs: its own word, never an empty list.
+    assert_eq!(
+        row(&answer, HOME).pairs,
+        Some(PackPairs::NotRead(PairsUnread::NoTaskBound))
+    );
+    assert_eq!(pairs(HOME), json!("no_task_bound"));
+    // Fix round 1: the report's warning word is in the root's part; `warnings` holds outcomes of
+    // this row only, none here.
+    assert!(answer.warnings.is_empty(), "{:?}", answer.warnings);
     let installation = answer.installation.as_ref().expect("the root's part");
     assert!(installation.suspension_report_read, "{installation:?}");
+    assert_eq!(
+        installation.report_warnings,
+        vec!["ledger_read_incomplete".to_owned()]
+    );
     assert_eq!(installation.pairs_unread, None);
     assert!(installation.pairs_unread_outcome.is_none());
     let serialized = serde_json::to_value(&answer).expect("the answer");
@@ -848,13 +919,18 @@ fn s315_pairs_show_a_suspension_and_a_break_in_and_a_pack_without_pairs_is_empty
         [
             "operations_read",
             "operations_unread",
+            "report_warnings",
             "suspension_report_read"
         ]
         .into_iter()
         .map(str::to_owned)
         .collect::<BTreeSet<_>>()
     );
-    assert_eq!(serialized["warnings"], json!(["ledger_read_incomplete"]));
+    assert_eq!(
+        serialized["installation"]["report_warnings"],
+        json!(["ledger_read_incomplete"])
+    );
+    assert!(serialized.get("warnings").is_none(), "{serialized}");
 }
 
 #[test]
@@ -871,7 +947,10 @@ fn s315_a_report_not_read_leaves_the_word_the_outcome_and_the_authorization() {
         outcome.is(ActingctlCode::SuspendedReportSpawnFailed),
         "{outcome:?}"
     );
-    let failed = || Outcome::new(ActingctlCode::SuspendedReportFailed);
+    // Fix round 1: the child that fails, for real: a stand-in that prints no report and exits
+    // non-zero, judged as a diagnosis judges it (`suspended_report_unreadable`).
+    fixture.place_failing_actingd();
+    let failed = fixture.installation();
     let ended = || Outcome::new(ActingctlCode::SuspendedReportTimeout);
     let cases = [
         (
@@ -879,14 +958,7 @@ fn s315_a_report_not_read_leaves_the_word_the_outcome_and_the_authorization() {
             read.clone(),
             ActingctlCode::SuspendedReportSpawnFailed,
         ),
-        (
-            "failed",
-            StatusInstallation {
-                journals: read.journals.clone(),
-                pairs: InstallationPairs::ReportNotRead(failed()),
-            },
-            ActingctlCode::SuspendedReportFailed,
-        ),
+        ("failed", failed, ActingctlCode::SuspendedReportUnreadable),
         (
             "ended at its deadline",
             StatusInstallation {
@@ -912,6 +984,7 @@ fn s315_a_report_not_read_leaves_the_word_the_outcome_and_the_authorization() {
             "{case}: {part:?}"
         );
         assert!(answer.warnings.is_empty(), "{case}");
+        assert!(part.report_warnings.is_empty(), "{case}: {part:?}");
         for pack in &answer.packs {
             assert_eq!(
                 pack.pairs,
@@ -937,7 +1010,8 @@ fn s315_a_report_not_read_leaves_the_word_the_outcome_and_the_authorization() {
         );
     }
 
-    // The report read, the composed bindings not: their own word, the report's warning passed on.
+    // The report read, the composed bindings not: their own word, the report's warning passed on
+    // in the root's part (fix round 1), not in `warnings`.
     let installation = StatusInstallation {
         journals: read.journals.clone(),
         pairs: InstallationPairs::Read {
@@ -959,7 +1033,11 @@ fn s315_a_report_not_read_leaves_the_word_the_outcome_and_the_authorization() {
         row(&answer, TWICE).pairs,
         Some(PackPairs::NotRead(PairsUnread::BindingsNotRead))
     );
-    assert_eq!(answer.warnings, vec!["ledger_read_incomplete".to_owned()]);
+    assert_eq!(
+        part.report_warnings,
+        vec!["ledger_read_incomplete".to_owned()]
+    );
+    assert!(answer.warnings.is_empty(), "{:?}", answer.warnings);
 }
 
 #[test]
@@ -1054,4 +1132,136 @@ fn s315_the_row_writes_nothing() {
         after.keys().collect::<Vec<_>>()
     );
     assert!(before == after, "a file changed");
+}
+
+/// Fix round 1: the fixture's seven journals and the one a test added were all read.
+fn assert_read_eight(answer: &StandardPackStatus) {
+    let installation = answer.installation.as_ref().expect("the root's part");
+    assert_eq!(installation.operations_read, 8, "{installation:?}");
+    assert!(
+        installation.operations_unread.is_empty(),
+        "{installation:?}"
+    );
+}
+
+#[test]
+fn s315_fix1_a_placement_whose_undo_began_does_not_count_though_its_item_reads_done() {
+    let _guard = env_lock();
+    let fixture = Fixture::write();
+    // `op-9000`, the newest, placed the undone pack under its own reference and finished with its
+    // item `done`; its undo began and never ended, so its item still reads `done`: only the undo
+    // record keeps it from counting.
+    fixture.add_journal(UNDO_BEGUN_MS, UNDO_BEGUN, &[UNDONE], End::UndoBegun);
+    let bytes = fs::read(Fixture::journal_path(&fixture.root, UNDO_BEGUN_MS)).expect("op-9000");
+    let written: Value = serde_json::from_slice(&bytes).expect("op-9000 reads");
+    assert_eq!(written["steps"][0]["kind"], "pack_item");
+    assert_eq!(written["steps"][0]["state"], "done");
+    assert_eq!(written["undo"]["finished_at_unix_ms"], Value::Null);
+    assert_eq!(
+        written["finished_at_unix_ms"],
+        json!(UNDO_BEGUN_MS + FINISHED_AFTER_MS)
+    );
+
+    let answer = fixture.installed();
+
+    assert_read_eight(&answer);
+    assert_eq!(
+        row(&answer, UNDONE).enabled.authorization,
+        recorded(FIRST, LAB_CLI, FIRST_MS)
+    );
+}
+
+#[test]
+fn s315_fix1_a_placement_with_a_rollback_record_does_not_count() {
+    let _guard = env_lock();
+    let fixture = Fixture::write();
+    // `op-9100`, the newest, placed a pack two placements named under its own reference and
+    // finished with its item `done`; a rollback began before its steps were reversed: only the
+    // rollback record keeps it from counting.
+    fixture.add_journal(ROLLED_BACK_MS, ROLLED_BACK, &[TWICE], End::RolledBack);
+    let bytes = fs::read(Fixture::journal_path(&fixture.root, ROLLED_BACK_MS)).expect("op-9100");
+    let written: Value = serde_json::from_slice(&bytes).expect("op-9100 reads");
+    assert_eq!(written["steps"][0]["state"], "done");
+    assert_eq!(written["undo"], Value::Null);
+    assert_eq!(written["rollback"]["reversed_at_unix_ms"], Value::Null);
+
+    let answer = fixture.installed();
+
+    assert_read_eight(&answer);
+    assert_eq!(
+        row(&answer, TWICE).enabled.authorization,
+        recorded(SECOND, LAB_MCP, SECOND_MS)
+    );
+}
+
+#[test]
+fn s315_fix1_the_composed_bindings_map_a_break_in_row_to_its_pack() {
+    let fixture = Fixture::write();
+    // A configuration in composer mode, which binds the game's server to one instance: the
+    // scheduler workbench composes a task for each rule.
+    let composer = fixture.root.join("composer.config.json");
+    write_json(
+        &composer,
+        &json!({
+            "state_root": fixture.temp.path().join("state-root"),
+            "instances": [],
+            "standard_packs": {"root": fixture.root.join("packages")},
+            "policy": {
+                "facts": {
+                    "instances": [{"instance_id": NODE_A, "game_id": GAME, "server_id": SERVER}]
+                }
+            }
+        }),
+    );
+
+    let bindings = composed_bindings(&fixture.location_with(composer), GAME)
+        .unwrap_or_else(|outcome| panic!("the composed bindings: {outcome}"));
+
+    // Each pack a rule runs is bound by its composed task; the return-home pack, which no rule
+    // runs, by none.
+    assert_eq!(
+        bindings.tasks.values().cloned().collect::<BTreeSet<_>>(),
+        [PLACED, TWICE, UNDONE, RUNS]
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<BTreeSet<_>>(),
+        "{bindings:?}"
+    );
+    let placed_task = bindings
+        .tasks
+        .iter()
+        .find(|(_, package_id)| package_id.as_str() == PLACED)
+        .map(|(task_id, _)| task_id.clone())
+        .unwrap_or_else(|| panic!("no task runs {PLACED}: {bindings:?}"));
+    let break_in = json!({
+        "content_hash_prefix": "0123456789ab",
+        "runs": 3,
+        "runs_needed": 20,
+        "first_settled_at_unix_ms": 1000,
+        "since_first_ms": 5000,
+        "ms_needed": 604800000,
+        "in_break_in": true
+    });
+    let mut row_of_report = break_in.clone();
+    row_of_report["task_id"] = json!(placed_task);
+    row_of_report["instance_id"] = json!(NODE_A);
+    let installation = StatusInstallation {
+        journals: InstallationJournals::default(),
+        pairs: InstallationPairs::Read {
+            report: json!({"break_ins": [row_of_report]}),
+            bindings: Ok(bindings),
+        },
+    };
+
+    let answer = fixture.status_with(&installation);
+
+    assert_eq!(
+        serde_json::to_value(&row(&answer, PLACED).pairs).expect("the pairs"),
+        json!([{"task_id": placed_task, "instance_id": NODE_A, "break_in": break_in}])
+    );
+    assert_eq!(row(&answer, TWICE).pairs, Some(PackPairs::Read(Vec::new())));
+    assert_eq!(
+        row(&answer, HOME).pairs,
+        Some(PackPairs::NotRead(PairsUnread::NoTaskBound))
+    );
 }

@@ -1689,8 +1689,10 @@ fn clock_slot_rank(row: &Value) -> u8 {
     }
 }
 
-/// Whether two paths name the same directory, as written or once resolved.
-fn same_directory(left: &Path, right: &Path) -> bool {
+/// Whether two paths name the same directory, as written or once resolved. Workflow #463 S3-15a
+/// fix round 1: the rescue module's read of the placements compares a game root with the
+/// installed one by it too (`lab-rescue` `rescue::placements_enabling`), the one copy.
+pub fn same_directory(left: &Path, right: &Path) -> bool {
     left == right
         || matches!(
             (fs::canonicalize(left), fs::canonicalize(right)),

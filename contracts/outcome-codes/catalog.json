@@ -10982,6 +10982,9 @@
         },
         "bindings_not_read": {
           "description": "The report was read, but the composed bindings that name the package each catalog task runs could not be read (actingctl packs' reading of the installation's configuration); its refusal is the outcome beside it."
+        },
+        "no_task_bound": {
+          "description": "Fix round 1 (0.12.69): the report and the composed bindings were read, and the bindings hold no task that runs this pack (a configuration that binds its procedures itself, whose rows name no task; a game the composition left out, its warnings in the answer's warnings; a pack no composed rule runs), so no row of the report can be the pack's. A pack's own word in its pairs, never the root's installation.pairs_unread."
         }
       }
     },

@@ -72,7 +72,10 @@
 //! started and bounded as `diagnose` starts it (`SuspensionReport::start` with `diagnose`'s CLI
 //! budget, its report read by `SuspensionReport::document`); and, when that report was read, the
 //! composed bindings as `actingctl packs` reads them. A build without the rescue module refuses
-//! `--installation` (`package_status_installation_unbuilt`). It writes nothing.
+//! `--installation` (`package_status_installation_unbuilt`). It writes nothing. Fix round 1
+//! (register §1.451, "Fix round 1"): the rescue module checks the root first; the child is started
+//! next and runs while the journals and the composed bindings are read; the child's outcome
+//! follows `ACTINGCOMMAND_DETAIL`.
 //!
 //! Workflow #477 PC-1 (contracts/pack-catalog.md, "Who writes it"; register §1.438): `actinglab
 //! standard-pack catalog --root <root> [--plan]` builds or brings up to date a game root's
@@ -116,7 +119,8 @@ use actingcommand_lab_rescue::rescue::{InstalledPlacements, placements_enabling}
 use actingcommand_resource_tooling::status_installation_unbuilt;
 #[cfg(windows)]
 use actingcommand_resource_tooling::{
-    InstallationJournals, InstallationPairs, PlacementAuthorization, status_root_not_installed,
+    ComposedBindings, InstallationJournals, InstallationPairs, PlacementAuthorization,
+    status_root_not_installed,
 };
 use actingcommand_runtime_client::{
     ContainedRunState, ContainedRunStatus, RunDispatch, RunKey, RunOrigin, RuntimeClient,
@@ -556,63 +560,82 @@ fn installation_here(_root: &Path) -> CliOutcome<StatusInstallation> {
 }
 
 /// Workflow #463 S3-15a (module doc): what `--installation` reads of the installation `location`
-/// for the game root `root`, in this order. The rescue module's one read of its placement journals
+/// for the game root `root`, in this order. The rescue module's check of the root
 /// (`placements_enabling`): a `--root` that is not the installation's game root of its game is
-/// refused there (`package_status_root_not_installed`), before any journal, the game root or the
-/// child is read; a root or configuration it cannot read is refused with its outcome. Then one run
-/// of the installation's own `actingd suspended`, started as `diagnose` starts it
-/// (`SuspensionReport::start`, the program of the generation selected now, `--deadline-ms` the
-/// budget less its margin) and ended at `diagnose`'s CLI budget, its report read and judged by the
-/// one function a diagnosis reads it with (`SuspensionReport::document`, the state root
+/// refused there (`package_status_root_not_installed`), before any journal or the game root is read
+/// and before the child is started; a root or configuration it cannot read is refused with its
+/// outcome. Fix round 1: then the installation's own `actingd suspended` is started, so that its
+/// bound runs beside the readings that follow instead of after them: started as `diagnose` starts
+/// it (`SuspensionReport::start`, the program of the generation selected now, `--deadline-ms` the
+/// budget less its margin) and ended at `diagnose`'s CLI budget. While it runs, the placement
+/// journals (the rescue module's one read of them, `InstalledGameRoot::placements`; its refusal
+/// waits for the child, which is never left running, then refuses the line with its outcome) and
+/// the composed bindings ([`composed_bindings`]) are read. Then its report is read and judged by
+/// the one function a diagnosis reads it with (`SuspensionReport::document`, the state root
 /// `location`'s): a report not read leaves the pairs not read, with the child's outcome, and
-/// refuses nothing. Then, beside a report that was read, the composed bindings
-/// ([`composed_bindings`]).
+/// refuses nothing; the bindings are used only beside a report that was read. Fix round 1: the
+/// child's outcome and the bindings' refusal are given in the detail the process's line is
+/// (`ACTINGCOMMAND_DETAIL`; under `codes` their codes-only projection, no text).
 #[cfg(windows)]
 pub(crate) fn read_installation(
     location: &Location,
     root: &Path,
 ) -> CliOutcome<StatusInstallation> {
-    let journals = match placements_enabling(location, root).map_err(|outcome| {
+    let journals_refused = |outcome: Outcome| {
         refusal(
             &outcome,
             format!("{STATUS} --installation: the placement journals were not read"),
             Map::new(),
             ErrorKind::DeviceInstance,
         )
-    })? {
+    };
+    let installed = match placements_enabling(location, root).map_err(journals_refused)? {
         InstalledPlacements::OtherRoot { installed } => {
             return Err(status_root_not_installed(root, installed.as_deref()));
         }
-        InstalledPlacements::Read(read) => InstallationJournals {
-            operations_read: read.operations_read,
-            operations_unread: read.operations_unread,
-            enabled_by: read
-                .enabled_by
-                .into_iter()
-                .map(|(package_id, by)| {
-                    (
-                        package_id,
-                        PlacementAuthorization {
-                            reference: by.reference,
-                            initiator: by.initiator,
-                            at_unix_ms: by.at_unix_ms,
-                            operation_id: by.operation_id,
-                        },
-                    )
-                })
-                .collect(),
-        },
+        InstalledPlacements::Installed(installed) => installed,
     };
     let report = SuspensionReport::start(
         Some(location.root.as_path()),
         Instant::now() + CLI_READ_BUDGET,
     );
+    let read = match installed.placements() {
+        Ok(read) => read,
+        Err(outcome) => {
+            // The line is refused: the child is waited for (ended at its bound when it still
+            // runs, as a diagnosis ends it), and its report is not read.
+            drop(report.document(None));
+            return Err(journals_refused(outcome));
+        }
+    };
+    let journals = InstallationJournals {
+        operations_read: read.operations_read,
+        operations_unread: read.operations_unread,
+        enabled_by: read
+            .enabled_by
+            .into_iter()
+            .map(|(package_id, by)| {
+                (
+                    package_id,
+                    PlacementAuthorization {
+                        reference: by.reference,
+                        initiator: by.initiator,
+                        at_unix_ms: by.at_unix_ms,
+                        operation_id: by.operation_id,
+                    },
+                )
+            })
+            .collect(),
+    };
+    let detail = cli_line::detail().unwrap_or(Detail::Full);
+    let in_detail = |outcome: Outcome| match detail {
+        Detail::Codes => outcome.codes_only(),
+        Detail::Full => outcome,
+    };
+    let bindings = composed_bindings(location, installed.game()).map_err(in_detail);
     let pairs = match report.document(Some(location.state_root.as_path())) {
-        Ok(report) => InstallationPairs::Read {
-            report,
-            bindings: composed_bindings(location),
-        },
-        Err(unread) => InstallationPairs::ReportNotRead(unread.outcome),
+        Ok(report) => InstallationPairs::Read { report, bindings },
+        Err(unread) => InstallationPairs::ReportNotRead(in_detail(unread.outcome)),
     };
     Ok(StatusInstallation { journals, pairs })
 }
@@ -621,9 +644,14 @@ pub(crate) fn read_installation(
 /// id with the package id it runs, as `actingctl packs` reads them (`lab_ops::packs`, its
 /// installation rows' `package_id` and `task_ids`: the procedures `package.<package_id>` the
 /// scheduler workbench composes for the configured instances, by the same composer); its refusal
-/// as the outcome.
+/// as the outcome. Fix round 1: and the warnings that reading gave which concern the game `game`
+/// (`ComposedBindings::warnings`): those that name the game (`game`), and those that name a path
+/// (`path`) below its game root under the standard-pack root the reading names.
 #[cfg(windows)]
-fn composed_bindings(location: &Location) -> Result<BTreeMap<String, String>, Outcome> {
+pub(crate) fn composed_bindings(
+    location: &Location,
+    game: &str,
+) -> Result<ComposedBindings, Outcome> {
     let answer = packs::read_with_tables(
         location.installation.as_ref(),
         &location.config,
@@ -635,7 +663,7 @@ fn composed_bindings(location: &Location) -> Result<BTreeMap<String, String>, Ou
             .raw_source(RawSource::Json)
             .raw_text(error.to_string())
     })?;
-    let mut bindings = BTreeMap::new();
+    let mut tasks = BTreeMap::new();
     for row in document
         .get("installation")
         .and_then(Value::as_array)
@@ -652,10 +680,29 @@ fn composed_bindings(location: &Location) -> Result<BTreeMap<String, String>, Ou
             .flatten()
             .filter_map(Value::as_str)
         {
-            bindings.insert(task_id.to_owned(), package_id.to_owned());
+            tasks.insert(task_id.to_owned(), package_id.to_owned());
         }
     }
-    Ok(bindings)
+    let game_root = document
+        .get("standard_packs")
+        .and_then(|section| section.get("root"))
+        .and_then(Value::as_str)
+        .map(|root| Path::new(root).join(game));
+    let concerns_game = |warning: &&Outcome| {
+        warning.value("game").and_then(Value::as_str) == Some(game)
+            || warning
+                .value("path")
+                .and_then(Value::as_str)
+                .zip(game_root.as_deref())
+                .is_some_and(|(path, below)| Path::new(path).starts_with(below))
+    };
+    let warnings = answer
+        .warnings()
+        .iter()
+        .filter(concerns_game)
+        .cloned()
+        .collect();
+    Ok(ComposedBindings { tasks, warnings })
 }
 
 /// Workflow #463 S3-10: `standard-pack trial` (module doc). The flags' own refusals come first,

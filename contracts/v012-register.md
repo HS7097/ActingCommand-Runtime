@@ -34088,9 +34088,9 @@ each pack's `pairs` answers. Only the report's `ledger_read_incomplete` is passe
 
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|
-| S315A-1 | `rescue::placements_enabling`, `InstalledPlacements`, `EnablingPlacements`, `EnablingPlacement` | the rescue crate's one new public read | S3-15a | `crates/lab-rescue/src/rescue.rs`; its reading in `install/place.rs` (`enabling`, `placed_enabling`; `packs_root` now `pub(crate)`) | the journal's reader and every write unchanged |
-| S315A-2 | `SuspensionReport::document`, `ReportUnread`, `CLI_READ_BUDGET` public | lab-ops | S3-15a | `crates/lab-ops/src/diagnose.rs` | `finish` reads through it; `diagnose` unchanged |
-| S315A-3 | `standard_pack_status_with`, `StatusInstallation`, `InstallationJournals`, `InstallationPairs`, `PlacementAuthorization`, `InstallationReading`, `EnabledAuthorization`, `PackPairs`, `PairStatus`, `PairSuspended`; `PackEnabled.authorization` an `EnabledAuthorization`, `authorization_unrecorded` optional; the answer's `installation`, `warnings` and the row's `pairs` | resource tooling function and answer | S3-15a | `crates/resource-tooling/src/standard_pack_status.rs` | each new member absent without an installation |
+| S315A-1 | `rescue::placements_enabling`, `InstalledPlacements`, `EnablingPlacements`, `EnablingPlacement`; (fix round 1) `InstalledGameRoot` | the rescue crate's one new public read | S3-15a | `crates/lab-rescue/src/rescue.rs`; its reading in `install/place.rs` (`enabling`, `placed_enabling`; `packs_root` now `pub(crate)`) | the journal's reader and every write unchanged |
+| S315A-2 | `SuspensionReport::document`, `ReportUnread`, `CLI_READ_BUDGET` public; (fix round 1) `diagnose::same_directory` public | lab-ops | S3-15a | `crates/lab-ops/src/diagnose.rs` | `finish` reads through it; `diagnose` unchanged |
+| S315A-3 | `standard_pack_status_with`, `StatusInstallation`, `InstallationJournals`, `InstallationPairs`, (fix round 1) `ComposedBindings`, `PlacementAuthorization`, `InstallationReading`, `EnabledAuthorization`, `PackPairs`, `PairStatus`, `PairSuspended`; `PackEnabled.authorization` an `EnabledAuthorization`, `authorization_unrecorded` optional; the answer's `installation`, `warnings` and the row's `pairs` | resource tooling function and answer | S3-15a | `crates/resource-tooling/src/standard_pack_status.rs` | each new member absent without an installation |
 | S315A-4 | the switch `installation` of the row `standard-pack status` and its command | operation table row and actinglab command | S3-15a | `contracts/lab-operations.json`, `apps/actinglab/src/standard_pack_cli.rs`, `cli_module/own_flags.rs` | the help's options; the MCP tool's schema follows the row |
 | S315A-5 | two codes, two words of `authorization_unrecorded`, the vocabulary `pairs_unread` | outcome catalog | S3-15a | `crates/resource-tooling/src/codes.rs` | index regenerated |
 
@@ -34098,17 +34098,20 @@ each pack's `pairs` answers. Only the report's `ledger_read_incomplete` is passe
 
 | Word or code | The one situation | Refuses or a value | Exit |
 |---|---|---|---|
-| `package_status_root_not_installed` (`path`) | `--installation` beside a `--root` that is not the installation's game root of its game, or an installation whose configuration names no `standard_packs.root` | refuses, before anything is read | 2 |
-| `package_status_installation_unbuilt` | `--installation` on a build without the rescue module (not Windows) | refuses, before anything is read | 2 |
+| `package_status_root_not_installed` (`path`) | `--installation` beside a `--root` that is not the installation's game root of its game, or an installation whose configuration names no `standard_packs.root` | refuses, before anything is read | 1 on actinglab's command line; 2 in a `--via` line's envelope (fix round 1) |
+| `package_status_installation_unbuilt` | `--installation` on a build without the rescue module (not Windows) | refuses, before anything is read | 1 on actinglab's command line; 2 in a `--via` line's envelope (fix round 1) |
 | `authorization_unrecorded` `journals_not_read` | no `--installation` | value | 0 |
 | `authorization_unrecorded` `no_journal_names_it` | every journal read, no counting placement names the pack | value | 0 |
 | `authorization_unrecorded` `journals_unreadable` | no readable journal names it, some could not be read | value | 0 |
 | `pairs_unread` `suspension_report_not_read` | the child gave no report (not started, failed, no report, another state root, ended at its deadline) | value; the child's outcome beside it | 0 |
 | `pairs_unread` `bindings_not_read` | the report was read, the composed bindings not | value; their reader's outcome beside it | 0 |
+| `pairs_unread` `no_task_bound` (fix round 1) | the report and the bindings were read, and the bindings hold no task that runs this pack | value, a pack's own, never the root's | 0 |
 
 A root or configuration the rescue module cannot read refuses with its outcome
 (`install_command_refused` of `install_status`), and a program in no installation with the
-location's (`install_root_unresolved`), each exit 4. No decision reads a code.
+location's (`install_root_unresolved`), each exit 1 on actinglab's command line and 4 in a `--via`
+line's envelope (fix round 1: this paragraph said 4 alone, the `--via` line's). No decision reads a
+code.
 
 **Tests** (`apps/actinglab/src/tests/gate_463_s315.rs`, Windows only; gate map
 `contracts/test-gates/exec.toml` "#463 S3-15a"; a made-up single-location installation whose
@@ -34132,6 +34135,50 @@ revision, record type or configuration key.
 
 **At deploy.** Nothing to configure. Through MCP, `ac_standard_pack_status` gains
 `installation` and is served by a `serve` child, which on Windows holds the rescue module.
+
+**Fix round 1** (0.12.69; coordinator work order `rd-1116/brief-01269-s315a-fix1.md`, after the
+independent review of pull request #1796; merged with main at the release commit of 0.12.68). What
+it changed:
+- *The report's warning is no bare text in `warnings`* (the coordinator's ruling). The word moved
+  into the root's `installation`, as `report_warnings` (the words of the report's warnings the row
+  passes on, as the report spells them: `ledger_read_incomplete`, absent when none); the answer's
+  `warnings` holds outcomes only, in the shape every row of this command line carries them
+  (`Vec<Outcome>`): the composed bindings' warnings that concern the root's game, beside pairs that
+  were read.
+- *Exit statuses as they are.* The two refusals exit 1 on actinglab's command line, which prints
+  the CLI module's line, and 2 in the envelope of a `--via` line (their class `usage_validation`);
+  the rescue module's and the location's refusals 1 and 4. The code table above, the contract's
+  "Exit statuses", the two doc comments and the two descriptions of the outcome fragment say so.
+- *A pack no composed task runs answers its own word*, `no_task_bound` (vocabulary `pairs_unread`,
+  one cause: the bindings hold no task for the pack: a configuration that binds its procedures
+  itself, a game the composition left out, a pack no rule runs), never an empty list; `[]` now
+  means a bound pack of which the report names no pair.
+- *One comparison of two directories*: the rescue module's root check calls `diagnose`'s
+  `same_directory` (now public in `lab-ops`), as written, then resolved, which the "Decided here"
+  sentence above already said; the copy is gone. It differs from the copy only for a root that
+  does not resolve but is the same once made absolute, which the readiness then refused anyway.
+- *The child's outcome follows the detail setting*: under `ACTINGCOMMAND_DETAIL=codes` the root's
+  `pairs_unread_outcome` is the outcome's codes-only projection (`Outcome::codes_only`), its codes
+  and no text, no tail of the child's stderr; the line's own detail decides, as `cli_line` does.
+- *The child starts before the journals are read*: `placements_enabling` now checks the root only
+  (`InstalledPlacements::Installed(InstalledGameRoot)`), the child is started, then the journals
+  (`InstalledGameRoot::placements`) and the composed bindings are read while it runs, then its
+  report is read; the judgement is unchanged (a root refused before anything is read or started;
+  the bindings used only beside a report that was read). A journal listing that fails after the
+  start waits for the child, which is never left running, then refuses.
+- *Tests* (exec gate map "#463 S3-15a", items 12 to 14): a placement whose undo began with its item
+  still `done` does not count (it fails when the `undo` check of `placed_enabling` is deleted); a
+  placement with a `rollback` record does not count (it fails when the `rollback` check is
+  deleted); the composed bindings read from a composer-mode configuration map a break-in row to
+  its pack, and the return-home pack answers `no_task_bound`. The child that fails runs for real:
+  this test program, placed as the installation's `actingd`, prints no report and exits non-zero
+  (`suspended_report_unreadable`, as a diagnosis judges it); "ended at its deadline" stays a given
+  outcome. Adapted: `s315_pairs_show_a_suspension_and_a_break_in_and_a_pack_without_pairs_is_empty`
+  (the undone pack bound, the return-home pack `no_task_bound`, the word in `report_warnings`) and
+  `s315_a_report_not_read_leaves_the_word_the_outcome_and_the_authorization` (the stand-in child,
+  `report_warnings`): the requirement changed what they pin. No test leaves the gate map.
+- *The operation table's help* of the row is 160 bytes at most again (CI's
+  `lab_ops_table_complete` refused 230).
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

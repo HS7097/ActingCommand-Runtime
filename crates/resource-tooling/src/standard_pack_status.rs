@@ -36,7 +36,10 @@
 //! `actingd suspended` names: its pause cause and its break-in row, mapped to the pack by the
 //! composed bindings) or, in their place, the word saying why they were not read, and the root
 //! answers `installation`, what was read of it. Without an installation the answer is S3-14's,
-//! byte for byte.
+//! byte for byte. Fix round 1 (register §1.451, "Fix round 1"): the report's warning word goes in
+//! the root's `installation.report_warnings`; the answer's `warnings` holds outcomes only, the
+//! composition's warnings that concern the game; a pack the composed bindings bind no task to
+//! answers its own word, `no_task_bound`.
 
 use crate::codes::{
     AuthorizationUnrecorded, EnabledState, PackAuthorization, PairsUnread, ReadinessItem,
@@ -56,7 +59,7 @@ use actingcommand_contract::{LabError, LabErrorClass, LabResult};
 use actingcommand_pack_containment::{Containment, ContainmentError};
 use serde::{Serialize, Serializer};
 use serde_json::{Map, Value, json};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -101,10 +104,12 @@ pub struct StandardPackStatus {
     /// Workflow #463 S3-15a: what was read of the installation; absent without `--installation`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub installation: Option<InstallationReading>,
-    /// Workflow #463 S3-15a: the suspension report's warning `ledger_read_incomplete`, as the
-    /// report spells it, when the report that was read carries it; absent otherwise.
+    /// Workflow #463 S3-15a fix round 1: this row's warnings, each an outcome in its own shape, as
+    /// every row's `warnings` holds them: beside pairs that were read, the warnings the reading of
+    /// the composed bindings gave that concern the root's game ([`ComposedBindings::warnings`]).
+    /// Absent when there are none.
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub warnings: Vec<String>,
+    pub warnings: Vec<Outcome>,
     /// One row per pack, or the one `package_id` names: the part of the answer that grows with
     /// the root, where it may be cut.
     pub packs: Vec<PackStatus>,
@@ -119,8 +124,14 @@ pub struct InstallationReading {
     pub operations_unread: Vec<String>,
     /// Whether the installation's `actingd suspended` gave its report.
     pub suspension_report_read: bool,
+    /// Fix round 1: the words of the report's warnings the row passes on, as the report spells
+    /// them: `ledger_read_incomplete` when its ledger read ran out of its deadline, so that its
+    /// rows are what it read. Absent when the report gave none of them, or was not read.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub report_warnings: Vec<String>,
     /// Why no pack answers its pairs, the word each pack's `pairs` answers in their place; absent
-    /// when they are answered.
+    /// when they are answered (fix round 1: a pack may still answer its own word,
+    /// `no_task_bound`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pairs_unread: Option<PairsUnread>,
     /// Beside `pairs_unread`: the outcome that says why, the child's own (as a diagnosis gives
@@ -167,14 +178,26 @@ pub struct PlacementAuthorization {
 #[derive(Debug, Clone)]
 pub enum InstallationPairs {
     /// The installation's one `actingd suspended` printed its report (`report`, whole, as it
-    /// printed it), and the composed bindings, each catalog task id with the package id it runs
-    /// (`bindings`), or the outcome of their reader's refusal.
+    /// printed it), and the composed bindings (`bindings`), or the outcome of their reader's
+    /// refusal.
     Read {
         report: Value,
-        bindings: Result<BTreeMap<String, String>, Outcome>,
+        bindings: Result<ComposedBindings, Outcome>,
     },
     /// It gave no report: the outcome a diagnosis gives the same child.
     ReportNotRead(Outcome),
+}
+
+/// Workflow #463 S3-15a: the composed bindings of the installation, as `actingctl packs` reads
+/// them.
+#[derive(Debug, Clone, Default)]
+pub struct ComposedBindings {
+    /// Each catalog task id with the package id it runs.
+    pub tasks: BTreeMap<String, String>,
+    /// Fix round 1: the warnings that reading gave which concern the root's game (a game root it
+    /// could not read or that the composition refused, a package file it could not read), as it
+    /// gave them; the answer's `warnings` beside pairs that were read.
+    pub warnings: Vec<Outcome>,
 }
 
 /// Workflow #463 S3-15a: the authorization a pack was enabled under: the placement that last
@@ -385,7 +408,8 @@ pub fn standard_pack_status(request: &StandardPackStatusRequest) -> LabResult<St
 /// Workflow #463 S3-15a (module doc): [`standard_pack_status`] with what `--installation` read of
 /// the installation, `installation`: each pack's `enabled.authorization` from its journals, its
 /// `pairs` from its suspension report and its composed bindings, and the root's `installation`
-/// and `warnings`. `None` answers S3-14's answer, byte for byte. Nothing more is refused.
+/// and (fix round 1) `warnings`, the composition's warnings that concern the game. `None` answers
+/// S3-14's answer, byte for byte. Nothing more is refused.
 pub fn standard_pack_status_with(
     request: &StandardPackStatusRequest,
     installation: Option<&StatusInstallation>,
@@ -472,20 +496,29 @@ pub fn standard_pack_status_with(
 
 /// Workflow #463 S3-15a: the suspension report's warning that its ledger read ran out of its
 /// deadline (`contracts/policy-suspension.md`, "`actingd suspended`"), the one warning of the
-/// report the answer passes on, as the report spells it.
+/// report the answer passes on, as the report spells it (fix round 1: in the root's
+/// `installation.report_warnings`).
 const LEDGER_READ_INCOMPLETE: &str = "ledger_read_incomplete";
 
 /// Workflow #463 S3-15a: each package's pairs, by package id; within a package by task, then
 /// instance.
 type FoundPairs = BTreeMap<String, BTreeMap<(String, String), PairStatus>>;
 
+/// Workflow #463 S3-15a: the pairs of the installation's report by package, and (fix round 1) the
+/// packages a composed task runs.
+struct ReadPairs {
+    by_package: BTreeMap<String, Vec<PairStatus>>,
+    bound: BTreeSet<String>,
+}
+
 /// Workflow #463 S3-15a: what the answer says of an installation, prepared once for every row.
 struct Installed<'a> {
     journals: &'a InstallationJournals,
-    /// Each package's pairs, or the word saying why none are answered.
-    pairs: Result<BTreeMap<String, Vec<PairStatus>>, PairsUnread>,
+    /// The pairs that were read, or the word saying why none are answered.
+    pairs: Result<ReadPairs, PairsUnread>,
     reading: InstallationReading,
-    warnings: Vec<String>,
+    /// Fix round 1: the row's warnings, the composition's that concern the game.
+    warnings: Vec<Outcome>,
 }
 
 impl<'a> Installed<'a> {
@@ -500,7 +533,14 @@ impl<'a> Installed<'a> {
             InstallationPairs::Read {
                 report,
                 bindings: Ok(bindings),
-            } => (Ok(pairs_by_package(report, bindings)), None, true),
+            } => (
+                Ok(ReadPairs {
+                    by_package: pairs_by_package(report, &bindings.tasks),
+                    bound: bindings.tasks.values().cloned().collect(),
+                }),
+                None,
+                true,
+            ),
             InstallationPairs::Read {
                 bindings: Err(outcome),
                 ..
@@ -510,14 +550,21 @@ impl<'a> Installed<'a> {
                 true,
             ),
         };
-        let warnings = match &installation.pairs {
-            InstallationPairs::Read { report, .. } => report_warnings(report),
-            InstallationPairs::ReportNotRead(_) => Vec::new(),
+        let (passed_on, warnings) = match &installation.pairs {
+            InstallationPairs::Read { report, bindings } => (
+                report_warnings(report),
+                bindings
+                    .as_ref()
+                    .map(|read| read.warnings.clone())
+                    .unwrap_or_default(),
+            ),
+            InstallationPairs::ReportNotRead(_) => (Vec::new(), Vec::new()),
         };
         let reading = InstallationReading {
             operations_read: journals.operations_read,
             operations_unread: journals.operations_unread.clone(),
             suspension_report_read: report_read,
+            report_warnings: passed_on,
             pairs_unread: pairs.as_ref().err().copied(),
             pairs_unread_outcome: unread_outcome,
         };
@@ -547,11 +594,15 @@ impl<'a> Installed<'a> {
     }
 
     /// The pairs of the pack `package_id` (none when the report names none of its tasks), or the
-    /// word saying why none are answered.
+    /// word saying why none are answered: the root's, or (fix round 1) `no_task_bound` when the
+    /// composed bindings hold no task that runs the pack.
     fn pairs(&self, package_id: &str) -> PackPairs {
         match &self.pairs {
-            Ok(by_package) => {
-                PackPairs::Read(by_package.get(package_id).cloned().unwrap_or_default())
+            Ok(read) if !read.bound.contains(package_id) => {
+                PackPairs::NotRead(PairsUnread::NoTaskBound)
+            }
+            Ok(read) => {
+                PackPairs::Read(read.by_package.get(package_id).cloned().unwrap_or_default())
             }
             Err(unread) => PackPairs::NotRead(*unread),
         }
@@ -559,7 +610,7 @@ impl<'a> Installed<'a> {
 }
 
 /// Workflow #463 S3-15a: the report's warning [`LEDGER_READ_INCOMPLETE`], when its `warnings`
-/// list it.
+/// list it (fix round 1: the root's `installation.report_warnings`).
 fn report_warnings(report: &Value) -> Vec<String> {
     report_rows(report, "warnings")
         .filter_map(Value::as_str)
@@ -638,7 +689,9 @@ fn pair_of<'f>(
 /// Workflow #463 S3-15a: the refusal of `--installation` beside a `--root` that is not the
 /// installed game root of its game in the installation actinglab runs from (`installed`, where
 /// the installation places one): `package_status_root_not_installed` naming the root given, before
-/// the game root, a journal or the suspension report is read. Exit 2.
+/// the game root, a journal or the suspension report is read (fix round 1: and before the child is
+/// started). Exit 1 on actinglab's command line, which prints the CLI module's line; in the
+/// envelope a `--via` line prints, exit 2 (the class `usage_validation`).
 pub fn status_root_not_installed(root: &Path, installed: Option<&Path>) -> LabError {
     let outcome = Outcome::new(ResourceToolingCode::PackageStatusRootNotInstalled).path(root);
     let message = match installed {
@@ -657,7 +710,8 @@ pub fn status_root_not_installed(root: &Path, installed: Option<&Path>) -> LabEr
 
 /// Workflow #463 S3-15a: the refusal of `--installation` by a build of actinglab without the
 /// rescue module (it is built for Windows only): `package_status_installation_unbuilt`, before
-/// anything is read. Exit 2.
+/// anything is read. Exit 1 on actinglab's command line, which prints the CLI module's line; in the
+/// envelope a `--via` line prints, exit 2 (the class `usage_validation`).
 pub fn status_installation_unbuilt() -> LabError {
     refusal(
         &Outcome::new(ResourceToolingCode::PackageStatusInstallationUnbuilt),

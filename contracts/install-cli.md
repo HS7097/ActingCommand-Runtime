@@ -1524,7 +1524,12 @@ the rescue face:
   and asks no Runtime; a root it cannot resolve is `install_command_refused` `state_invalid`, a
   configuration it cannot read `config_unreadable`, an operations folder it cannot list that
   listing's failure, each of the operation `install_status`. No journal, no write and no row of the
-  module changes.
+  module changes. Fix round 1 (register §1.451, "Fix round 1"): the read is two calls, so that a
+  caller can start other work between them (`standard-pack status` starts its `actingd suspended`
+  there): `placements_enabling` checks the game root only, comparing it with the installed one as
+  written, then resolved (by `diagnose`'s one comparison of two directories, `lab-ops`
+  `diagnose::same_directory`), and answers `OtherRoot` or `Installed`; the journals are read by
+  `Installed`'s `placements()`, which answers the listing's failure.
 - **`vision manifest --provider cpu|directml` and `vision check`** (Workflow #453 S7, since
   0.12.60; register §1.355; [vision-model-folders.md](vision-model-folders.md), "The manifest";
   the coordinator's rulings on board #453, not the owner's words). Two read-only rows, `runtime`

@@ -1572,7 +1572,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.69",
-      "description": "Workflow #463 S3-15a (contracts/standard-pack-schedule.md, \"Where a pack stands\"): actinglab standard-pack status was given --installation and a --root (path, the root given) that is not the installed game root of its game in the installation actinglab runs from: <standard_packs.root>\\<game> of that installation's configuration, the game being the root's directory name, as the rescue module's place finds a game root; or the configuration names no standard_packs.root, or the root names no game. Nothing was read: no game root, no placement journal and no suspension report; exit 2.",
+      "description": "Workflow #463 S3-15a (contracts/standard-pack-schedule.md, \"Where a pack stands\"): actinglab standard-pack status was given --installation and a --root (path, the root given) that is not the installed game root of its game in the installation actinglab runs from: <standard_packs.root>\\<game> of that installation's configuration, the game being the root's directory name, as the rescue module's place finds a game root; or the configuration names no standard_packs.root, or the root names no game. Nothing was read and nothing started: no game root, no placement journal and no suspension report. Exit 1 on actinglab's command line, which prints the CLI module's line; in the envelope a --via line prints, exit 2.",
       "common_causes": "A bundle laid out elsewhere, a checkout's working root or another installation's game root given with --installation; actinglab run from another installation than the one meant.",
       "handling": "Give --root <standard_packs.root>\\<game> of the installation actinglab runs from (the message names it), or leave --installation out to read the root alone."
     },
@@ -1586,7 +1586,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.69",
-      "description": "Workflow #463 S3-15a (contracts/standard-pack-schedule.md, \"Where a pack stands\"): actinglab standard-pack status was given --installation by a build that holds no rescue module (it is built for Windows only), so it reads no installation: no placement journal and no suspension report. Nothing was read; exit 2.",
+      "description": "Workflow #463 S3-15a (contracts/standard-pack-schedule.md, \"Where a pack stands\"): actinglab standard-pack status was given --installation by a build that holds no rescue module (it is built for Windows only), so it reads no installation: no placement journal and no suspension report. Nothing was read. Exit 1 on actinglab's command line, which prints the CLI module's line; in the envelope a --via line prints, exit 2.",
       "common_causes": "actinglab run on another system than Windows with --installation.",
       "handling": "Run the line with the installation's own actinglab on Windows, or leave --installation out to read the root alone."
     }
