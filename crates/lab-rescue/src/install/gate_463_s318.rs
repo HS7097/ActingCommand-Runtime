@@ -42,9 +42,30 @@
 //   `install_operation_id` and `installation_changed` alone and no link, and its record has no
 //   `schedule_changes`; `undo --plan` of it is refused `unusable` (`--plan`) and `actingctl install
 //   undo --plan` `unknown`, each with nothing written.
+// Fix round 1 (coordinator work order `rd-1116/brief-01269-s318-fix1.md`, the review of pull
+// request #1795), each with a Runtime and without:
+// - `s318_fix1_an_undo_run_again_answers_what_its_record_holds_hot_and_cold`: a placement that
+//   removed the rule of [`BACK`] and replaced [`KEPT`]'s content; its undo stopped (the fake host's
+//   crash) after it put `schedule.json` back and before it put [`KEPT`] back. Run again, its plan
+//   form and the undo done answer the record's `schedule_changes` `{enters: [BACK], leaves: []}`
+//   and the warning naming [`BACK`] (computed again from the half-undone root, nothing would enter
+//   and no warning would be given); the plan form's `reverses` holds [`KEPT`]'s step and not the
+//   step undone already; the undo done puts [`KEPT`] back. And `op resume` of an undo that ended
+//   its steps and stopped before `current.json` was retired answers the record's lists, and the
+//   undo's own outcome (its `related` link) carries the warning;
+// - `s318_fix1_a_root_file_set_aside_comes_back_and_is_read_as_it_will_be_hot_and_cold`: a
+//   placement of a bundle without `schedule.json` set the game root's aside (`.old-<ms>`); its
+//   undo, planned and done, reads the file it puts back: [`KEPT`] enters (`unclassified` before,
+//   `scheduled` after) and is warned of; `schedule.json` is back byte for byte;
+// - `s318_fix1_an_undo_that_lets_one_pack_enter_and_others_leave_names_each_hot_and_cold`: a
+//   placement that made [`KEPT`] leave, let [`BACK`] enter and added [`ADDED`] with no rule,
+//   undone: `enters` [`KEPT`], `leaves` [`ADDED`] and [`BACK`] ([`ADDED`] no longer carried, which
+//   the placement's own lists never named: the reverse of its lists would miss it), the warning
+//   naming [`KEPT`] alone.
 // The machine is the fake host of `fixture.rs` with its fake Runtime and fake clock: no device, no
 // sleep, no clock read; every root is a temporary folder with neutral files (made-up ids, no real
-// game). Both roots of every scene hold a `schedule.json`.
+// game). Both roots of every scene hold a `schedule.json`, but the bundle of the second test of
+// fix round 1.
 
 use super::fixture::{
     BuildSpec, C1, FakeHost, REPOSITORY, code, live_root, run, tree, word, write_json,
@@ -100,6 +121,8 @@ struct Layout {
     rules: Vec<(&'static str, &'static str)>,
     /// Bytes of `schedule.json` in place of those its rules give.
     schedule: Option<&'static [u8]>,
+    /// Fix round 1: no `schedule.json` at all.
+    without_schedule: bool,
 }
 
 impl Layout {
@@ -115,6 +138,11 @@ impl Layout {
 
     fn schedule_bytes(mut self, bytes: &'static [u8]) -> Self {
         self.schedule = Some(bytes);
+        self
+    }
+
+    fn without_schedule(mut self) -> Self {
+        self.without_schedule = true;
         self
     }
 
@@ -137,7 +165,8 @@ impl Layout {
         }
     }
 
-    /// The root files, each `(name, bytes)`: `bundle.json` and `schedule.json`.
+    /// The root files, each `(name, bytes)`: `bundle.json` and `schedule.json` (none with
+    /// `without_schedule`).
     fn root_files(&self) -> Vec<(&'static str, Vec<u8>)> {
         let packs = self
             .packs
@@ -153,18 +182,19 @@ impl Layout {
                 })
             })
             .collect::<Vec<_>>();
-        vec![
-            (
-                "bundle.json",
-                serde_json::to_vec(&json!({
-                    "schema_version": "actingcommand.bundle.v4",
-                    "game": GAME,
-                    "packs": packs,
-                }))
-                .expect("JSON"),
-            ),
-            ("schedule.json", self.schedule()),
-        ]
+        let mut files = vec![(
+            "bundle.json",
+            serde_json::to_vec(&json!({
+                "schema_version": "actingcommand.bundle.v4",
+                "game": GAME,
+                "packs": packs,
+            }))
+            .expect("JSON"),
+        )];
+        if !self.without_schedule {
+            files.push(("schedule.json", self.schedule()));
+        }
+        files
     }
 
     /// Lays the root out as an installed game root: each pack's `<game root>\<id>\control.json`,
@@ -245,6 +275,23 @@ fn replaced() -> Layout {
     Layout::default()
         .pack(KEPT, CONTROL_REPLACED)
         .rule("rule.kept", KEPT)
+}
+
+/// Fix round 1: [`replaced`] and [`BACK`] with no rule: placed over `with_back(true)`, [`BACK`]
+/// leaves and [`KEPT`]'s content is replaced (`bundle.json` keeps its bytes).
+fn back_left_kept_replaced() -> Layout {
+    replaced().pack(BACK, CONTROL)
+}
+
+/// Fix round 1: [`KEPT`] with no rule, [`BACK`] named by a rule and [`ADDED`] with none: placed
+/// over `with_back(false)`, [`KEPT`] leaves, [`BACK`] enters and [`ADDED`] is added, taking no
+/// part.
+fn swapped_with_added() -> Layout {
+    Layout::default()
+        .pack(KEPT, CONTROL)
+        .pack(BACK, CONTROL)
+        .pack(ADDED, CONTROL)
+        .rule("rule.back", BACK)
 }
 
 /// How the placement finds the Runtime.
@@ -875,4 +922,247 @@ fn s318_the_undo_of_another_kind_answers_as_before() {
         ["finished_at_unix_ms", "initiator", "started_at_unix_ms"],
         "{record}"
     );
+}
+
+/// Fix round 1: the `pack_item` step of `journal` whose target ends with `name`.
+fn item_step(journal: &Value, name: &str) -> Value {
+    journal["steps"]
+        .as_array()
+        .expect("the steps")
+        .iter()
+        .find(|step| {
+            step["kind"] == "pack_item"
+                && step["target"]
+                    .as_str()
+                    .is_some_and(|target| target.ends_with(name))
+        })
+        .cloned()
+        .unwrap_or_else(|| panic!("the pack_item of {name}: {journal}"))
+}
+
+/// Fix round 1: the number of the journal's `step`.
+fn step_number(step: &Value) -> usize {
+    step["n"]
+        .as_u64()
+        .and_then(|n| usize::try_from(n).ok())
+        .unwrap_or_else(|| panic!("a step number: {step}"))
+}
+
+/// Fix round 1: the one link of `outcome` (a line's outcome, or a link) whose relation is
+/// `relation`.
+fn the_link(outcome: &Value, relation: &str, case: &str) -> Value {
+    let links = outcome["causes"]
+        .as_array()
+        .map(|links| {
+            links
+                .iter()
+                .filter(|link| link["relation"] == relation)
+                .cloned()
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let [link] = links.as_slice() else {
+        panic!("{case}: one {relation} link: {outcome}");
+    };
+    link.clone()
+}
+
+// Fix round 1, items 1, 2 and 4: an undo stopped after it put `schedule.json` back and before it
+// put the replaced pack back, run again: its plan form and the undo done answer and warn of what
+// the first run recorded, not of the half-undone game root (from which nothing would enter); and
+// `op resume` of an undo that ended its steps answers the same, with a Runtime and without.
+#[test]
+fn s318_fix1_an_undo_run_again_answers_what_its_record_holds_hot_and_cold() {
+    let recorded = json!({"enters": [BACK], "leaves": []});
+    for way in WAYS {
+        let scene = staged(way, &with_back(true), &back_left_kept_replaced());
+        let operation_id = scene.placed();
+        let journal = scene.journal(&operation_id);
+        let schedule_step = item_step(&journal, "schedule.json");
+        let pack_step = item_step(&journal, KEPT);
+        // The root files are placed after the packs: the undo, from the last, puts
+        // `schedule.json` back first.
+        assert!(
+            step_number(&schedule_step) > step_number(&pack_step),
+            "{way:?}: {journal}"
+        );
+
+        scene
+            .host
+            .crash_after_undone
+            .set(Some(step_number(&schedule_step)));
+        let (stopped, exit) = scene.undo(&operation_id, false);
+        assert_ne!(exit, 0, "{way:?}: {stopped}");
+        assert_eq!(
+            stopped["outcome"]["code"], "install_operation_interrupted",
+            "{way:?}: {stopped}"
+        );
+        assert_eq!(
+            fs::read(scene.game_root.join("schedule.json")).expect("schedule.json"),
+            with_back(true).schedule(),
+            "{way:?}: schedule.json is back"
+        );
+        assert_eq!(
+            fs::read(scene.game_root.join(KEPT).join("control.json")).expect("the pack"),
+            CONTROL_REPLACED,
+            "{way:?}: the pack is not back yet"
+        );
+        assert_eq!(
+            scene.journal(&operation_id)["undo"]["schedule_changes"],
+            recorded,
+            "{way:?}: the first run's record"
+        );
+
+        let (planned, exit) = scene.undo(&operation_id, true);
+        let case = format!("{way:?}: run again, --plan");
+        assert_undo_done(&planned, exit, &operation_id, true, &case);
+        assert_eq!(planned["schedule_changes"], recorded, "{case}: {planned}");
+        let note = the_note(&planned, "undo_enters_scheduling", &case);
+        assert_eq!(note["values"]["names"], json!([BACK]), "{case}: {planned}");
+        let reverses = planned["reverses"].as_array().expect("reverses");
+        assert!(
+            reverses.iter().any(|step| step["n"] == pack_step["n"]),
+            "{case}: the pack's step: {planned}"
+        );
+        assert!(
+            !reverses.iter().any(|step| step["n"] == schedule_step["n"]),
+            "{case}: not the step undone already: {planned}"
+        );
+
+        let (undone, exit) = scene.undo(&operation_id, false);
+        let case = format!("{way:?}: run again, the undo done");
+        assert_undo_done(&undone, exit, &operation_id, false, &case);
+        assert_eq!(undone["schedule_changes"], recorded, "{case}: {undone}");
+        let note = the_note(&undone, "undo_enters_scheduling", &case);
+        assert_eq!(note["values"]["names"], json!([BACK]), "{case}: {undone}");
+        assert_eq!(
+            fs::read(scene.game_root.join(KEPT).join("control.json")).expect("the pack"),
+            CONTROL,
+            "{case}: the pack is back"
+        );
+        assert_eq!(
+            scene.journal(&operation_id)["undo"]["schedule_changes"],
+            recorded,
+            "{case}: the record kept"
+        );
+
+        // `op resume` of an undo that ended its steps and stopped before `current.json` was
+        // retired.
+        let scene = staged(way, &with_back(true), &with_back(false));
+        let operation_id = scene.placed();
+        scene.host.crash_before_retire.set(true);
+        let (stopped, exit) = scene.undo(&operation_id, false);
+        let case = format!("{way:?}: op resume");
+        assert_ne!(exit, 0, "{case}: {stopped}");
+        assert_eq!(
+            stopped["outcome"]["code"], "install_operation_interrupted",
+            "{case}: {stopped}"
+        );
+        assert!(
+            scene.journal(&operation_id)["undo"]["finished_at_unix_ms"].is_u64(),
+            "{case}: the undo's end is journalled"
+        );
+        let (resumed, exit) = scene.line("op resume", json!({"op": operation_id}));
+        assert_eq!(exit, 0, "{case}: {resumed}");
+        assert_eq!(
+            resumed["outcome"]["code"], "install_command_done",
+            "{case}: {resumed}"
+        );
+        assert_eq!(
+            resumed["outcome"]["values"]["operation"], "install_resume",
+            "{case}: {resumed}"
+        );
+        assert_eq!(resumed["schedule_changes"], recorded, "{case}: {resumed}");
+        let ended = the_link(&resumed["outcome"], "related", &case);
+        assert_eq!(ended["code"], "install_command_done", "{case}: {resumed}");
+        assert_eq!(
+            ended["values"]["operation"], "install_undo",
+            "{case}: {resumed}"
+        );
+        let note = the_link(&ended, "note", &case);
+        assert_eq!(note["code"], "install_caveat_noted", "{case}: {resumed}");
+        assert_eq!(
+            note["values"]["install_caveat"], "undo_enters_scheduling",
+            "{case}: {resumed}"
+        );
+        assert_eq!(note["values"]["names"], json!([BACK]), "{case}: {resumed}");
+    }
+}
+
+// Fix round 1, item 4: a root file the placement set aside (`schedule.json`, which its bundle no
+// longer carries) is put back by the undo and read as it will be (the kept `.old-<ms>` file), so
+// the pack its rule names enters, planned and done, with a Runtime and without.
+#[test]
+fn s318_fix1_a_root_file_set_aside_comes_back_and_is_read_as_it_will_be_hot_and_cold() {
+    for way in WAYS {
+        let scene = staged(way, &kept(), &kept().without_schedule());
+        let operation_id = scene.placed();
+        assert!(
+            !scene.game_root.join("schedule.json").exists(),
+            "{way:?}: the placement set schedule.json aside"
+        );
+        for plan in [true, false] {
+            let case = format!("{way:?}: {}", form(plan));
+            let (line, exit) = scene.undo(&operation_id, plan);
+            assert_undo_done(&line, exit, &operation_id, plan, &case);
+            assert_lists(&line, &json!([KEPT]), &json!([]), &json!([]), &case);
+            assert_eq!(
+                line["schedule_changes"]["packages"],
+                json!([{"package_id": KEPT, "before": {"state": "unclassified"},
+                    "after": {"state": "scheduled"}}]),
+                "{case}: {line}"
+            );
+            let note = the_note(&line, "undo_enters_scheduling", &case);
+            assert_eq!(note["values"]["names"], json!([KEPT]), "{case}: {line}");
+        }
+        assert_eq!(
+            fs::read(scene.game_root.join("schedule.json")).expect("schedule.json"),
+            kept().schedule(),
+            "{way:?}: schedule.json is back"
+        );
+    }
+}
+
+// Fix round 1, item 4: a placement that made one pack leave, let another enter and added a third
+// that takes no part, undone: `enters` names the first, `leaves` the second and the third (no
+// longer carried; the placement's own lists never named it, so the reverse of its lists would
+// miss it), planned and done, with a Runtime and without.
+#[test]
+fn s318_fix1_an_undo_that_lets_one_pack_enter_and_others_leave_names_each_hot_and_cold() {
+    for way in WAYS {
+        let scene = staged(way, &with_back(false), &swapped_with_added());
+        let operation_id = scene.placed();
+        for plan in [true, false] {
+            let case = format!("{way:?}: {}", form(plan));
+            let (line, exit) = scene.undo(&operation_id, plan);
+            assert_undo_done(&line, exit, &operation_id, plan, &case);
+            assert_lists(
+                &line,
+                &json!([KEPT]),
+                &json!([ADDED, BACK]),
+                &json!([]),
+                &case,
+            );
+            assert_eq!(
+                line["schedule_changes"]["packages"],
+                json!([
+                    {"package_id": ADDED, "before": {"state": "unclassified"},
+                        "after": {"state": "absent"}, "content": "retire"},
+                    {"package_id": BACK, "before": {"state": "scheduled"},
+                        "after": {"state": "unclassified"}},
+                    {"package_id": KEPT, "before": {"state": "unclassified"},
+                        "after": {"state": "scheduled"}},
+                ]),
+                "{case}: {line}"
+            );
+            let note = the_note(&line, "undo_enters_scheduling", &case);
+            assert_eq!(note["values"]["names"], json!([KEPT]), "{case}: {line}");
+        }
+        assert!(!scene.game_root.join(ADDED).exists(), "{way:?}");
+        assert_eq!(
+            fs::read(scene.game_root.join("schedule.json")).expect("schedule.json"),
+            with_back(false).schedule(),
+            "{way:?}"
+        );
+    }
 }

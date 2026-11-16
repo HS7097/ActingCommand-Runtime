@@ -16,7 +16,9 @@
 //! (`super::place::undone`), answers them as `schedule_changes`, warns when packages enter or when
 //! that cannot be known, and records the two lists in its undo record; `--plan` (the rescue
 //! module's, for such an operation only) answers the same and what the undo would reverse, and
-//! writes nothing. It asks for no authorization.
+//! writes nothing. It asks for no authorization. Fix round 1: once the undo record is written, an
+//! undo run again after it stopped and its plan form answer and warn of the lists that record
+//! holds, computing nothing again; the steps an undo reverses are [`reversed_steps`]'s.
 
 use super::deploy::of_rollback;
 use super::files;
@@ -121,6 +123,17 @@ fn started_inside(journal: &journal::Journal) -> bool {
             (StepState::Started | StepState::Done, Some(evidence)) => spawned(evidence),
             _ => false,
         })
+}
+
+/// Workflow #463 S3-18 fix round 1: the steps an undo reverses, in its order: those started or
+/// done, from the last. The one statement of them: the undo's own loop, its plan form's
+/// `reverses` and the places the undo of a placement changes (`super::place::undone_items`) read
+/// it.
+pub(crate) fn reversed_steps(steps: &[journal::Step]) -> impl Iterator<Item = &journal::Step> {
+    steps
+        .iter()
+        .rev()
+        .filter(|step| matches!(step.state, StepState::Started | StepState::Done))
 }
 
 /// Workflow #463 S3-18: the switch of the rescue module's `undo` that answers what the undo of a
@@ -255,7 +268,7 @@ pub(crate) fn undo(words: &[&str], host: &dyn Host, face: super::Face) -> Result
         if operation.journal().undo.is_none() && operation.journal().finished() {
             journal::refuse_unfinished(UNDO, &paths)?;
         }
-        return planned(&operation, &place::undone(&operation));
+        return planned(&operation, place::undone(&operation).as_ref());
     }
     let _lock = if changes_program || cold {
         let loaded = plan::load(&paths, UNDO)?;
@@ -274,8 +287,13 @@ pub(crate) fn undo(words: &[&str], host: &dyn Host, face: super::Face) -> Result
         None
     };
     // Workflow #463 S3-18: what the undo of a placement changes of its game's scheduling, read
-    // before its first step and recorded with its start.
-    let scheduling = (kind == OperationKind::PackPlace).then(|| place::undone(&operation));
+    // before its first step and recorded with its start; fix round 1: an undo run again after it
+    // stopped answers what its record holds.
+    let scheduling = if kind == OperationKind::PackPlace {
+        place::undone(&operation)
+    } else {
+        None
+    };
     let ms2 = operation.begin_undo_with(
         face.initiator(),
         scheduling.as_ref().map(UndoneScheduling::record),
@@ -283,15 +301,15 @@ pub(crate) fn undo(words: &[&str], host: &dyn Host, face: super::Face) -> Result
     let mut kept = Vec::new();
     let steps = operation.journal().steps.clone();
     let previous = operation.journal().previous.clone();
-    for step in steps.iter().rev() {
-        if !matches!(step.state, StepState::Started | StepState::Done) {
-            continue;
-        }
+    for step in reversed_steps(&steps) {
         let evidence = reverse_step(&operation, step, &previous, ms2)
             .map_err(|cause| operation.interrupted(cause))?;
         kept.extend(evidence.iter().cloned());
         operation
             .undone(step.n, Some(json!({ "kept": evidence })))
+            .map_err(|cause| operation.interrupted(cause))?;
+        // Workflow #463 S3-18 fix round 1: a test stops the undo here, as if the process died.
+        host.after_undone(operation.id(), step.n)
             .map_err(|cause| operation.interrupted(cause))?;
     }
     if changes_program && let Some(previous_commit) = &previous.live {
@@ -331,27 +349,30 @@ pub(crate) fn undo(words: &[&str], host: &dyn Host, face: super::Face) -> Result
 /// Workflow #463 S3-18: the rescue module's `undo --plan` of a `pack_place` operation, judged as
 /// the undo is up to its first write: `install_command_done` of `install_undo`
 /// (`installation_changed` false, the warnings of `scheduling` as notes), with `operation_id`, the
-/// steps the undo would reverse in its order (`reverses`, each `{n, kind, target}`: those started
-/// or done, from the last) and `schedule_changes`. Nothing is written.
-fn planned(operation: &Operation<'_>, scheduling: &UndoneScheduling) -> Result<Answer, Outcome> {
-    let reverses = operation
-        .journal()
-        .steps
-        .iter()
-        .rev()
-        .filter(|step| matches!(step.state, StepState::Started | StepState::Done))
+/// steps the undo would reverse in its order (`reverses`, each `{n, kind, target}`:
+/// [`reversed_steps`]) and `schedule_changes`. Nothing is written. Fix round 1: of an undo under
+/// way, `scheduling` is its record's; an undo an earlier build began, whose record holds none,
+/// answers no `schedule_changes` and no warning.
+fn planned(
+    operation: &Operation<'_>,
+    scheduling: Option<&UndoneScheduling>,
+) -> Result<Answer, Outcome> {
+    let reverses = reversed_steps(&operation.journal().steps)
         .map(|step| json!({"n": step.n, "kind": step.kind, "target": step.target}))
         .collect::<Vec<_>>();
     let outcome = plan::with_notes(
         super::done(UNDO)
             .install_operation_id(operation.id())
             .installation_changed(false),
-        &scheduling.notes(),
+        &scheduling.map(UndoneScheduling::notes).unwrap_or_default(),
     );
-    Answer::new(outcome)
+    let answer = Answer::new(outcome)
         .with("operation_id", operation.id())?
-        .with("reverses", reverses)?
-        .with("schedule_changes", scheduling.value())
+        .with("reverses", reverses)?;
+    match scheduling {
+        Some(undone) => answer.with("schedule_changes", undone.value()),
+        None => Ok(answer),
+    }
 }
 
 /// Reverses one started or done step of `operation` (`install undo`'s table, and an automatic

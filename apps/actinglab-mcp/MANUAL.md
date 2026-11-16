@@ -511,7 +511,9 @@ naming this file.
   `reverses` and undoes nothing. Packages that enter are the warning `undo_enters_scheduling`
   (`names`), a list that cannot be known `undo_scheduling_unknown`, each a note of the answer's
   outcome (`outcome.causes`), not a refusal: report them with the answer. It asks for no
-  authorization.
+  authorization. An undo run again after it stopped, its `plan`, and `ac_op_resume` of an undo
+  that ended its steps answer the lists its undo record holds (`{enters, leaves}`) and their
+  warnings, never lists computed again from a half-undone root.
 - **Busy** is `job_capacity_exhausted` with `limit_count`: a call that would start a job while
   `--jobs` jobs run (default 8), or that needs a child while all `--children` children (default 8)
   are working. It is refused, not queued, and nothing is sent: call again later. More calls at

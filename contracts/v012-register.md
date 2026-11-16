@@ -34094,8 +34094,8 @@ warnings**, each a note of the answer's `install_command_done` (`install_caveat_
 
 | Word | The one situation | Refuses or warns | Exit | Where an agent reads it |
 |---|---|---|---|---|
-| `undo_enters_scheduling` | the undo lets packages enter scheduling, or take a supporting role, again (`enters` not empty); `names` those, sorted | warns | 0 | `outcome.causes`, relation `note`, of the answer's line (command line and MCP alike) |
-| `undo_scheduling_unknown` | the game root as the undo leaves it cannot be read, so no list is answered; its failure the `caused_by` link | warns | 0 | the same |
+| `undo_enters_scheduling` | the undo lets packages enter scheduling, or take a supporting role, again (`enters` not empty); `names` those, sorted | warns | 0 | `outcome.causes`, relation `note`, of the answer's line: `actinglab --json undo …`, `actinglab serve --stdio` and `ac_undo` of the Lab's MCP server (`structuredContent`) answer the same line; (fix round 1) under `op resume` of an undo that ended its steps, in the `causes` of the outcome's `related` link (the undo's own `install_command_done`). On the `--via` line: nowhere, as no `--via` line runs `undo`: only MCP's actinglab child sends `--via` (`lab_ops::lab_child`, `--json --via mcp` before the words), and actinglab gives such a line to its own commands (`apps/actinglab/src/cli_module.rs`, `route`), which have no `undo` and refuse it |
+| `undo_scheduling_unknown` | the game root as the undo leaves it cannot be read, so no list is answered; its failure the `caused_by` link (fix round 1: none when an undo run again, its plan form or `op resume` answers it from the undo record, whose lists are `null`) | warns | 0 | the same as `undo_enters_scheduling`, `--via` included |
 
 Both are words of the vocabulary `install_caveat` of the existing `install_caveat_noted`
 (`crates/lab-ops/src/codes.rs`, the fragment `contracts/outcome-codes/catalog.json`), which takes
@@ -34106,7 +34106,8 @@ is regenerated. No code, location or key is new.
 `schedule_changes: Option<UndoSchedule>`, `{enters, leaves}`, each the sorted list or both `null`
 when not known, written with the record when the undo starts (`Operation::begin_undo_with`;
 `begin_undo` is it without the member, for every other kind); an undo that goes on after it
-stopped keeps the record it has and answers lists computed again. A record without the member
+stopped keeps the record it has and (fix round 1) answers the lists that record holds, computing
+nothing again. A record without the member
 (the undo of another kind, or one an earlier build wrote) loads (`serde(default)`) and `op status`
 shows it without it. The other members of the journal are unchanged.
 
@@ -34137,11 +34138,52 @@ its outcome's three values with no link, records no `schedule_changes`, and refu
 stopped rule it applies, the hold it takes and hands back (the undo of a placement takes none and
 asks the Runtime nothing), and the undo of every other
 kind of operation, whose answers are byte for byte as before; `place` and its plan, and the
-judgement of `ScheduleChanges::between`; the journals on disk; `op resume`, `rollback`, `update`.
+judgement of `ScheduleChanges::between`; the journals on disk; `op resume` (but, fix round 1, its
+answer of an undo of a placement that ended its steps), `rollback`, `update`.
 
 **At deploy.** Nothing to do on the root. A pack_place journal an earlier build undid keeps its
 record without the member; the undo of one begun by an earlier build and undone by this one
-computes and records the lists as any other.
+computes and records the lists as any other. (Fix round 1) An undo of a placement that an earlier
+build began and that stopped, gone on with by this build, answers no `schedule_changes` and no
+warning: its record holds none.
+
+**Fix round 1** (coordinator work order `rd-1116/brief-01269-s318-fix1.md`, after the review of
+pull request #1795 at `8a7cb8ce`; the coordinator's rulings, not the owner's words). Main after
+release 0.12.68 (`ff74c80c`) merged first, in one merge commit; this section keeps its number. Then:
+- *An undo run again answers what it recorded* (the review's item 1). The undo reverses its steps
+  from the last, so the root files (placed after the packs) are put back before the packs; an undo
+  stopped between the two left a half-undone game root, from which the lists computed again named
+  no package that the first run let enter, and gave no warning. Now `place::undone` computes only
+  while the operation has no undo record (the undo's first run and the plan form before it); once
+  the record is written, an undo run again, its plan form and `op resume` answer the record's
+  `schedule_changes` `{enters, leaves}` (the shape `op status` shows) and their warnings from it:
+  `undo_enters_scheduling` naming the recorded `enters`, `undo_scheduling_unknown` when they are
+  `null`, then without its cause (the record keeps none). A record without the member (an undo an
+  earlier build began) answers none and no warning. `UndoneScheduling` holds either the computed
+  `ScheduleChanges` or the record (`UndoneLists`); the journal's types are unchanged.
+- *`op resume` of an undo that ended its steps* (the review's third optional change): `install resume`
+  of such an operation (the undo's end journalled, `current.json` not retired) answers the record's
+  `schedule_changes` beside its outcome, and the warnings as notes of the undo's own
+  `install_command_done`, which it links `related`.
+- *One statement of the steps an undo reverses* (the review's (d)): `undo::reversed_steps`, the
+  steps started or done, from the last, read by the undo's loop, the plan form's `reverses` and
+  `place::undone_items` (which took them from the first; it keys what it reads by place and pack,
+  so the order changes no answer).
+- *A test hook*: `Host::after_undone`, called after `install undo` records a step undone,
+  `Ok` in production; the fake host stops the undo there once (`crash_after_undone`), as
+  `after_step` stops an operation.
+- *Texts.* [install-cli.md](install-cli.md): "The packages the undo of a placement makes enter or
+  leave scheduling" loses "computes them again" and gains "An undo run again after it stopped";
+  `resume` and the outcome codes' S3-18 entry say the same; the catalog's two descriptions; the MCP
+  manual; the table above says where each word is read, `--via` included.
+- *Tests* (gate map `apps.toml`, "#463 S3-18 fix round 1"; none adapted, none leaves the gate map):
+  `s318_fix1_an_undo_run_again_answers_what_its_record_holds_hot_and_cold` (an undo stopped
+  after it put `schedule.json` back and before the pack: its plan form and the undo done answer
+  the record and warn of the pack it records entering, and `op resume` of an undo that ended its
+  steps answers the same), `s318_fix1_a_root_file_set_aside_comes_back_and_is_read_as_it_will_be_hot_and_cold`
+  and `s318_fix1_an_undo_that_lets_one_pack_enter_and_others_leave_names_each_hot_and_cold` (one
+  pack enters, two leave, one of them a pack the placement added with no rule, which the
+  placement's own lists never named).
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

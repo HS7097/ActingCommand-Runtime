@@ -2513,3 +2513,13 @@ tests = [
     "actingcommand-lab-rescue::lib::install::gate_463_s318::s318_the_undo_of_another_kind_answers_as_before",
 ]
 incident = ["#463 S3-18"]
+
+# Workflow #463 S3-18 fix round 1 (0.12.69; register §1.452, "Fix round 1"; brief rd-1116/brief-01269-s318-fix1.md; contracts/install-cli.md, "The packages the undo of a placement makes enter or leave scheduling"): on the same fake host, with the fake Runtime running and with no Runtime: an undo of a placement that removed a pack's rule and replaced another's content, stopped by the fake host after it put schedule.json back and before it put the pack back, run again: its plan form and the undo done answer the record's schedule_changes {enters, leaves} and the warning undo_enters_scheduling naming the pack (not computed again from the half-undone root), the plan form's reverses without the step already undone, the pack then back; op resume of an undo that ended its steps and stopped before current.json was retired answers the record's lists and its related undo outcome carries the warning (1); a placement whose bundle carries no schedule.json set the game root's aside, undone, planned and done: the undo reads the kept file it puts back, the pack its rule names enters unclassified to scheduled and is warned of, schedule.json back byte for byte (2); a placement that made one pack leave, let another enter and added a third with no rule, undone, planned and done: enters the first, leaves the second and the third (absent after, content retire), the warning naming the first (3)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-lab-rescue::lib::install::gate_463_s318::s318_fix1_an_undo_run_again_answers_what_its_record_holds_hot_and_cold",
+    "actingcommand-lab-rescue::lib::install::gate_463_s318::s318_fix1_a_root_file_set_aside_comes_back_and_is_read_as_it_will_be_hot_and_cold",
+    "actingcommand-lab-rescue::lib::install::gate_463_s318::s318_fix1_an_undo_that_lets_one_pack_enter_and_others_leave_names_each_hot_and_cold",
+]
+incident = ["#463 S3-18"]

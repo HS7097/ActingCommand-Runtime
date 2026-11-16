@@ -374,7 +374,10 @@ edges or the gate ("Undo and resume", below).
   between the journal's last write and the rename of `current.json`) is not run again: `resume`
   only renames `current.json` `current.json.finished-<ms>` and answers the end it recorded (the
   journal's `result`; done of `install_undo` for an undo) as its `related` link (INST-1b-F fix
-  round 1, review S1 F5). A failure of that last write or rename is
+  round 1, review S1 F5); of the undo of a `pack_place` operation, with the
+  `schedule_changes` its undo record holds and their warnings (Workflow #463 S3-18 fix round 1,
+  "The packages the undo of a placement makes enter or leave scheduling"). A failure of that last
+  write or rename is
   `install_operation_interrupted`, so the person knows to resume.
 - `undo` of a finished update or rollback reads the state root's owner journal: a journal that
   cannot be read or whose last record this installer does not recognise refuses
@@ -1554,13 +1557,25 @@ the rescue face:
     `schedule_changes`: the lists the undo, run next on the same root, answers.
   - **In the answer** of the undo done: `schedule_changes` as computed before its first step,
     beside `operation_id` and `kept`, and the warnings above as notes of its
-    `install_command_done`. An undo that goes on after it stopped computes them again from the
-    game root as it then is.
+    `install_command_done`.
+  - **An undo run again after it stopped** (fix round 1). Once the undo record is written, the
+    game root is half undone (the steps are reversed from the last, so a root file such as
+    `schedule.json` is put back before the packs), and computed again the lists would no longer
+    name what the undo lets enter. So nothing is computed again: an undo that goes on after it
+    stopped answers the `schedule_changes` its undo record holds, `{enters, leaves}` (both `null`
+    when they were not known), as `op status` shows it, and its warnings from it:
+    `undo_enters_scheduling` naming the recorded `enters` when not empty, `undo_scheduling_unknown`
+    when they are `null`, without a cause (the record keeps no failure; the first run's answer
+    carried it). Its plan form answers the same, and so does `op resume` of an undo that ended its
+    steps but whose `current.json` was not retired: its `schedule_changes` beside the outcome, the
+    warnings as notes of the undo's own `install_command_done`, which `op resume` links `related`.
+    An undo an earlier build began, whose record holds no `schedule_changes`, answers none and no
+    warning. Only the undo's first run, and the plan form before it, compute.
   - **On record.** The journal's undo record gains `schedule_changes` `{enters, leaves}`, each the
     sorted list, both `null` when they were not known, written with the record when the undo
-    starts (an undo that goes on after it stopped keeps the record it has); `op status <op>` shows
-    it with the journal. A record without it (the undo of another kind, or one an earlier build
-    wrote) loads and is shown without it.
+    starts (an undo that goes on after it stopped keeps the record it has, and answers it);
+    `op status <op>` shows it with the journal. A record without it (the undo of another kind, or
+    one an earlier build wrote) loads and is shown without it.
   - **What it does not do.** It asks for no authorization and records none: whether the undo of a
     placement must name an authorization, as the placement does, is the owner's to rule and is
     open. What the undo reverses, its order, its refusals, its writer lock and stopped rule, and
@@ -3393,7 +3408,9 @@ the fragment registers, names the command.
 - **Workflow #463 S3-18** (since 0.12.69; "The Lab's rescue module", "The packages the undo of a
   placement makes enter or leave scheduling"): `install_caveat` `undo_enters_scheduling` (`game`,
   `names` the packages that enter, sorted) and `undo_scheduling_unknown` (`game`, the failure of
-  the game root as the undo leaves it as its cause), each a warning, exit 0, a note of
+  the game root as the undo leaves it as its cause; fix round 1: no cause when an undo run again
+  after it stopped, its plan form or `op resume` answers it from the undo record, whose lists are
+  `null`), each a warning, exit 0, a note of
   `install_command_done` of `install_undo` of a `pack_place` operation, done or planned
   (`--plan`), which only the rescue module answers; `install_caveat_noted` takes the existing key
   `names`; the existing `actingctl_usage_invalid` (`unusable`, `--plan`) for `--plan` of another

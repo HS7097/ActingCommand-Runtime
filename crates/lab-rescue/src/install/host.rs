@@ -138,6 +138,13 @@ pub(crate) trait Host {
     fn before_retire(&self, _operation_id: &str) -> Result<(), Outcome> {
         Ok(())
     }
+    /// Workflow #463 S3-18 fix round 1: called after `install undo` records the step `step` of
+    /// `operation_id` undone. Production never fails here; a test returns the failure of a crash
+    /// at that point, and the undo stops there as if the process had died (the journal, its undo
+    /// record and `current.json` stay).
+    fn after_undone(&self, _operation_id: &str, _step: usize) -> Result<(), Outcome> {
+        Ok(())
+    }
     /// Workflow #421 INST-2: the root's Runtime.
     fn runtime(&self) -> &dyn RuntimeLink;
     /// Waits `ms` milliseconds between two polls (readiness, progress). Production sleeps; a

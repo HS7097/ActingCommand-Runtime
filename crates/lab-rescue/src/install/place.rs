@@ -67,7 +67,10 @@
 //!   one judgement ([`ScheduleChanges::between`]) over sides built by the one reading of a game
 //!   root ([`side_read_by`]), the side after the undo reading at each place the undo changes what
 //!   it leaves there ([`undone_items`]). It answers it, warns when packages enter, or when the side
-//!   after the undo cannot be read, and records the two lists; it asks for no authorization.
+//!   after the undo cannot be read, and records the two lists; it asks for no authorization. Fix
+//!   round 1: once the undo record holds the lists, they are what an undo run again after it
+//!   stopped, its plan form and `op resume` of an undo that ended its steps answer and warn of;
+//!   nothing is computed again from a game root half undone.
 //! - **The operation** (`kind` `pack_place`, journalled) while a Runtime runs: the hold of the
 //!   instances bound to the bundle's game (`pause`), then each item that changes (`pack_item`:
 //!   written to
@@ -2778,39 +2781,56 @@ const UNDONE_SIDE: &str = "undone";
 
 /// Workflow #463 S3-18: what the undo of a `pack_place` operation changes of its game's
 /// scheduling ([`undone`]): the plan's `schedule_changes` from the game root as it is to the game
-/// root as the undo leaves it.
+/// root as the undo leaves it. Fix round 1: computed only before the undo's first step; once its
+/// undo record is written, the two lists that record holds.
 pub(crate) struct UndoneScheduling {
     /// The placement's game, as its `post_check` step records it; `None` when its journal holds
     /// none that this build reads.
     game: Option<String>,
-    changes: ScheduleChanges,
+    lists: UndoneLists,
+}
+
+/// Workflow #463 S3-18 fix round 1: where the lists of an [`UndoneScheduling`] come from.
+enum UndoneLists {
+    /// Computed before the undo's first step ([`computed`]).
+    Computed(ScheduleChanges),
+    /// The undo record's (`journal::UndoRecord::schedule_changes`): an undo run again after it
+    /// stopped, its plan form, and `op resume` of an undo that ended its steps, when the game root
+    /// is half undone or undone and only the record holds what was computed before the first step.
+    Recorded(UndoSchedule),
 }
 
 impl UndoneScheduling {
-    /// The answer's member `schedule_changes`, in the plan's form ([`ScheduleChanges::value`]):
-    /// `packages`, `enters`, `leaves` and `content_only` (none of the three lists when the game
-    /// root as the undo leaves it cannot be read), and `unread` (`installed`, [`UNDONE_SIDE`]).
+    /// The answer's member `schedule_changes`: computed, in the plan's form
+    /// ([`ScheduleChanges::value`]): `packages`, `enters`, `leaves` and `content_only` (none of
+    /// the three lists when the game root as the undo leaves it cannot be read), and `unread`
+    /// (`installed`, [`UNDONE_SIDE`]); from the record, the record's `{enters, leaves}`, as
+    /// `op status` shows it.
     pub(crate) fn value(&self) -> Value {
-        self.changes.value()
+        match &self.lists {
+            UndoneLists::Computed(changes) => changes.value(),
+            UndoneLists::Recorded(recorded) => {
+                json!({"enters": recorded.enters, "leaves": recorded.leaves})
+            }
+        }
     }
 
     /// The undo's record of it ([`UndoSchedule`]): `enters` and `leaves`, both `None` when they
     /// are not known.
     pub(crate) fn record(&self) -> UndoSchedule {
-        UndoSchedule {
-            enters: self.changes.enters.clone(),
-            leaves: self
-                .changes
-                .enters
-                .as_ref()
-                .map(|_| self.changes.leaves.clone()),
+        match &self.lists {
+            UndoneLists::Computed(changes) => UndoSchedule {
+                enters: changes.enters.clone(),
+                leaves: changes.enters.as_ref().map(|_| changes.leaves.clone()),
+            },
+            UndoneLists::Recorded(recorded) => recorded.clone(),
         }
     }
 
     /// Its warnings, each `install_caveat_noted` of `install_undo` with the game: when packages
     /// enter, `undo_enters_scheduling` naming them (`names`, sorted); when no list is known,
-    /// `undo_scheduling_unknown`, caused by the failure of the game root as the undo leaves it;
-    /// none otherwise.
+    /// `undo_scheduling_unknown`, caused by the failure of the game root as the undo leaves it when
+    /// it was computed here (a record keeps no failure); none otherwise.
     pub(crate) fn notes(&self) -> Vec<Outcome> {
         let caveat = |word: InstallCaveat| {
             let note = super::caveat(InstallLocation::Undo, word);
@@ -2819,22 +2839,28 @@ impl UndoneScheduling {
                 None => note,
             }
         };
-        match &self.changes.enters {
+        let (enters, failure) = match &self.lists {
+            UndoneLists::Computed(changes) => (
+                changes.enters.as_ref(),
+                changes
+                    .unread
+                    .iter()
+                    .find(|(side, _)| *side == UNDONE_SIDE)
+                    .map(|(_, failure)| failure),
+            ),
+            UndoneLists::Recorded(recorded) => (recorded.enters.as_ref(), None),
+        };
+        match enters {
             Some(enters) if enters.is_empty() => Vec::new(),
             Some(enters) => {
                 vec![caveat(InstallCaveat::UndoEntersScheduling).names(enters.iter().cloned())]
             }
             None => {
-                let mut note = caveat(InstallCaveat::UndoSchedulingUnknown);
-                if let Some((_, failure)) = self
-                    .changes
-                    .unread
-                    .iter()
-                    .find(|(side, _)| *side == UNDONE_SIDE)
-                {
-                    note = note.caused_by(failure.clone());
-                }
-                vec![note]
+                let note = caveat(InstallCaveat::UndoSchedulingUnknown);
+                vec![match failure {
+                    Some(failure) => note.caused_by(failure.clone()),
+                    None => note,
+                }]
             }
         }
     }
@@ -2881,19 +2907,17 @@ fn undone_source(item: &Item) -> Result<Option<Option<PathBuf>>, Outcome> {
     })
 }
 
-/// Workflow #463 S3-18: the `pack_item` steps of `operation` the undo reverses (those started or
-/// done, as `install undo` walks them), each read by [`undone_source`]: the places it changes and
-/// the items with what it does to each ([`Undone`]). A step's intent that cannot be read, or a
-/// place whose content cannot be read, is the failure.
+/// Workflow #463 S3-18: the `pack_item` steps of `operation` the undo reverses (fix round 1: the
+/// steps `install undo` reverses, [`super::undo::reversed_steps`]), each read by
+/// [`undone_source`]: the places it changes and the items with what it does to each ([`Undone`]).
+/// A step's intent that cannot be read, or a place whose content cannot be read, is the failure.
 fn undone_items(operation: &Operation<'_>) -> Result<Undone, Outcome> {
     let mut reversed = Undone {
         sources: Vec::new(),
         items: Vec::new(),
     };
-    for step in &operation.journal().steps {
-        if step.kind != StepKind::PackItem
-            || !matches!(step.state, StepState::Started | StepState::Done)
-        {
+    for step in super::undo::reversed_steps(&operation.journal().steps) {
+        if step.kind != StepKind::PackItem {
             continue;
         }
         let item: Item = serde_json::from_value(step.intent.clone())
@@ -2949,6 +2973,26 @@ fn placed_game(operation: &Operation<'_>) -> Result<(String, PathBuf), Outcome> 
     Ok((intent.game, PathBuf::from(intent.game_root)))
 }
 
+/// Workflow #463 S3-18 fix round 1: what the undo of the `pack_place` operation `operation`
+/// changes of its game's scheduling. Before its undo record is written (the undo's first run, and
+/// the plan form before it), computed ([`computed`]); once it is (an undo run again after it
+/// stopped, its plan form, `op resume` of an undo that ended its steps), the lists the record holds
+/// and nothing computed again: the game root is then half undone, and the side before the undo is
+/// no longer the one the record was computed from. `None` for a record without them (an undo an
+/// earlier build began): nothing is answered of it.
+pub(crate) fn undone(operation: &Operation<'_>) -> Option<UndoneScheduling> {
+    match &operation.journal().undo {
+        None => Some(computed(operation)),
+        Some(record) => {
+            let recorded = record.schedule_changes.clone()?;
+            Some(UndoneScheduling {
+                game: placed_game(operation).ok().map(|(game, _)| game),
+                lists: UndoneLists::Recorded(recorded),
+            })
+        }
+    }
+}
+
 /// Workflow #463 S3-18: what the undo of the `pack_place` operation `operation` changes of its
 /// game's scheduling, before it moves anything, by the plan's own [`ScheduleChanges::between`]:
 /// from the game root as it is ([`installed_side`]) to the game root as the undo leaves it, the
@@ -2957,18 +3001,20 @@ fn placed_game(operation: &Operation<'_>) -> Result<(String, PathBuf), Outcome> 
 /// changes ([`Undone::items`]). Read only, and it refuses nothing: a game root that cannot be read
 /// on either side is `unread` as in the plan, and with the side after the undo unread no list is
 /// known; a journal whose game root cannot be read leaves both sides unread.
-pub(crate) fn undone(operation: &Operation<'_>) -> UndoneScheduling {
+fn computed(operation: &Operation<'_>) -> UndoneScheduling {
     let (game, game_root) = match placed_game(operation) {
         Ok(placed) => placed,
         Err(failure) => {
             return UndoneScheduling {
                 game: None,
-                changes: ScheduleChanges::between(
-                    Side::unreadable(failure.clone()),
-                    Side::unreadable(failure),
-                    &[],
-                )
-                .of_undo(),
+                lists: UndoneLists::Computed(
+                    ScheduleChanges::between(
+                        Side::unreadable(failure.clone()),
+                        Side::unreadable(failure),
+                        &[],
+                    )
+                    .of_undo(),
+                ),
             };
         }
     };
@@ -2984,6 +3030,6 @@ pub(crate) fn undone(operation: &Operation<'_>) -> UndoneScheduling {
     };
     UndoneScheduling {
         game: Some(game),
-        changes: changes.of_undo(),
+        lists: UndoneLists::Computed(changes.of_undo()),
     }
 }
