@@ -4483,6 +4483,20 @@ impl RuntimeHost {
             .expire_due_leases()
     }
 
+    /// Workflow #461: the end of the client connection `connection_id` once its stream is gone, as
+    /// the connection's thread runs it (`requests::end_connection`): its queued claims and leases
+    /// are cleaned up as a disconnect's, a failure is recorded and a fatal one latched and
+    /// returned.
+    #[cfg(test)]
+    pub(crate) fn end_connection_for_test(
+        &self,
+        connection_id: ConnectionId,
+    ) -> RuntimeHostResult<()> {
+        let shared =
+            self.shared_ref(crate::codes::test_spellings::TestLocation::EndConnectionForTest)?;
+        requests::end_connection(shared, connection_id, None)
+    }
+
     /// Workflow #458 fix round 1: whether the resident lease sweep's thread still runs.
     #[cfg(test)]
     pub(crate) fn sweep_thread_runs_for_test(&self) -> bool {
@@ -6508,8 +6522,9 @@ struct HostShared {
     // instance, until the lease's end closes the session (`close_expired_lease_session_guarded`).
     // A leaf lock. Memory only: a restart opens no session it would owe.
     expired_lease_closes: Mutex<BTreeSet<LeaseId>>,
-    // Workflows #456 and #458, test only: nothing of the two slices applies while set (a refused
-    // close at a lease's expiry or after a capture failure ends the Runtime), as before them.
+    // Workflows #456, #458 and #461, test only: nothing of the slices applies while set (a refused
+    // close at a lease's expiry, at a holder's own end, in a failed input's clean-up or after a
+    // capture failure ends the Runtime), as before them.
     #[cfg(test)]
     close_isolates_off_for_test: AtomicBool,
     // Workflows #456 and #458, test only: while set, the record of a refused close that would

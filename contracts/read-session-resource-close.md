@@ -19,7 +19,9 @@ admission guard and on a free device: the session the monitor's probe opened
 session a run's lease that lapsed in its end phase left open (below, and
 [device-group.md](device-group.md), "Device-level actions", row 7). Workflow #458 uses it for
 the session any instance's lease left open when its close at the lease's expiry was refused,
-an instance alone on its device included (below).
+an instance alone on its device included (below); Workflow #461 for the session it left open when
+the close at a client's disconnect, at a backend failure's lease end or in a failed input's
+clean-up met the lapsed lease before the lease sweep did (below).
 `begin_resource_close` admits the native close and returns its `FencedWrite`;
 ordinary input validation rejects this lease. Host invokes
 `close_instance(FencedDeviceWrite(Arc<FencedWrite>))` only after that
@@ -162,7 +164,8 @@ lock, an identifier, an invariant of the scheduler), the close keeps its fatalit
 An earlier fatal does not skip other instances' permitted cleanup. A close attempted
 under an otherwise invalid lease, an unresolved destructive step, or an unconfirmed native
 close retains failure and owner protection; a close refused under an expired lease fences its
-instance instead, at a lease's expiry (below) and after a capture failure (above). The end of an
+instance instead, at a lease's expiry, at a holder's own end of the lapsed lease and in a failed
+input's clean-up (below), and after a capture failure (above). The end of an
 expired lease attempts no close (Workflow #191 H): it keeps the session and forgets its input
 frames, as for no session. A session that must close (it needs the close, its instance is
 outside the multi-Nemu gate, or it is a member of a device group of several) is asked to close
@@ -185,7 +188,21 @@ the session to a preparation of the fenced instance; a failed close is recorded,
 unconfirmed one settled, by the close path. Only a preparation whose self-check passes lifts the
 fence. During shutdown, and where no fence may take the instance, the lease end fails as before;
 a failure of the Runtime itself in these paths (a record that cannot be appended, a poisoned
-lock, the owner's journal) stays fatal. #411 A64's own dedicated close lease, refused for any
+lock, the owner's journal) stays fatal. Workflow #461 (Runtime 0.12.66) does the same for two
+paths that meet the lapsed lease before the lease sweep does. A holder's own end of its lapsed
+lease, a client's connection that closes (`cleanup_connection`) or a backend failure's lease end,
+asks the close under the lapsed lease and is refused the same way; and an input under way when
+its lease lapses, which then fails, asks its clean-up's close under that lease
+(`finish_input_failure`) and is refused the same way, before its own lease end is. Each refusal
+is recorded once (it names the lease; its stage is the session close), the instance is fenced
+with `lease_expired` as its cause, and the lease ends handing the device to no one; once it has
+ended, still under the instance's admission guard, the session is closed under the session close
+ahead (`close_expired_lease_session_guarded`), as above. The failed input answers its own failure
+and retains no owner as unconfirmed: the close it owes is made after its lease ended, and while
+the fence holds the owner's resources stay `in_use`. During shutdown, where no fence may take the
+instance, and for a failure of the Runtime itself, these two paths keep their fatality as above
+(the failed input's clean-up then retains the owner as unconfirmed, as before). #411 A64's own
+dedicated close lease, refused for any
 reason that is not fatal (a waiting entry, the takeover cooldown, a queue ahead whose claim the
 fenced instance's gate holds back), is recorded once and leaves the session to the waiting entry
 or to a preparation of the fenced instance (fix round 1: before, a queue ahead reached the lease

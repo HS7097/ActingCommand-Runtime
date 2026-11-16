@@ -30972,6 +30972,114 @@ variable wherever the program runs; an installation's state root without the var
 installation whose state root cannot be located refused, never the default; `record start` from an
 installation without the variable holding its instance on a scripted Runtime (`hold.state` `own`).
 
+### 1.431 Fix #461 (0.12.66): a close refused because the lease had already lapsed isolates the instance on two more paths, a client's disconnect and a failed input's clean-up (Workflow #461, found by reading when #458 was fixed, never seen on an installation; the rule of board #419, [runtime-outcomes.md](runtime-outcomes.md), "Failure scope"; the model is #458's fix, §1.364; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1116/brief-461-expired-lease-close-isolates.md`, read on main `e3758be8`)
+
+This section takes 1.431, the number the work order gives: §1.428 is the highest on main
+`e3758be8`, and two other slices being built take §1.429 and §1.430. It ships in 0.12.66. Line
+numbers are of this fix's head.
+
+**The two paths, established by reading.**
+
+*A client's disconnect.* When a client's connection ends, `end_connection`
+(`host/requests.rs:1325`, the end of `connection_boundary` split out so that a test runs the same
+code) cleans its leases up: `cleanup_connection` (`host/lease.rs:3131`) → `cleanup_token` with
+`Disconnect` → `cleanup_token_guarded` → `end_lease_ordered`, whose `end_lease_device_use` closes
+the session under the lease when it must close (#458's condition: it needs its close, its instance
+is outside the multi-Nemu gate, or it is a member of a device group of several). When the lease had
+lapsed and the sweep had not ended it yet (a device call held the instance's admission guard longer
+than the lease, so the sweep's `try_lock` left it, and the client gave up and disconnected),
+`begin_resource_close` refused the close `lease_expired`. The end passed the kind `Keep`, which
+#458's branch does not take, so the refusal returned as a poison (fatal), and the connection's end
+latched it: the Runtime stopped.
+
+*A failed input.* An input writes without the admission guard, and the sweep leaves a lease alone
+while a write is in flight on it (ISO-5a row B02). When the lease lapsed during the write and the
+input then failed with its resources confirmed, `finish_input_failure`
+(`host/resource_close.rs:1237`) ended the input's step and closed the session under the input's
+lease, which `begin_resource_close` refused `lease_expired`; its `Err` arm recorded the failure,
+retained the owner as unconfirmed (`OwnerGuard::retain_unconfirmed`) and latched the refusal.
+That arm alone is not the whole path: the input's own lease end follows (`cleanup_token` with
+`BackendFailure`, `host/input.rs:544`), and its close under the same lapsed lease (the kernel marks
+a session as needing its close after a failed input) is refused the same way and returned to the
+input, whose `replace_with_poison` made it fatal. This path reaches every instance: a failed input
+always closes the session.
+
+**The cure.**
+
+| Part | Where |
+|---|---|
+| A holder's own end | `LeaseDeviceEnd::HolderEnd` (`host/resource_close.rs:22`): `end_lease_ordered` (`host/lease.rs:2505`) passes it for a disconnect and a backend failure's end, `Expiry` for an expiry and `Keep` for every other reason. `close_instance_resources` (`host/resource_close.rs:304`) takes a refusal of every end but `Keep` that `expiry_close_refused` (`:478`; `lease_expired` at `begin_destructive_resource_close`, not during shutdown) names into #458's `fence_expired_lease_close` (`:496`, which now takes the error itself), after #411 A64's branch, which stays first. The refusal is recorded once per lease, the instance is fenced with `lease_expired` as its cause, the close is owed, `end_lease_ordered` names no transfer (`expired_close_owed`), the lease is released, and `cleanup_token_guarded` (`host/lease.rs:2482`) makes the owed close under the session close ahead (`close_expired_lease_session_guarded`, `host/resource_close.rs:566`), as at an expiry. Otherwise `HolderEnd` is `Keep` |
+| A failed input's clean-up | `finish_input_failure`: a refusal of its close that `expiry_close_refused` names goes, still under the instance's admission guard, to `fence_expired_lease_close` (`:1274`), and the input answers its own failure; no owner is retained and nothing is latched. The input's own lease end then meets the same refusal as a `HolderEnd`, records nothing more (the lease's close is owed already), ends the lease handing the device to no one and makes the close. Should another end of the lease come first (the sweep's expiry, a disconnect), that end makes it |
+| A test's way in | `RuntimeHost::end_connection_for_test` (`host.rs:4491`, `cfg(test)` only, test spelling `end_connection_for_test`) runs `end_connection` for a connection, as the connection's thread runs it once its stream is gone |
+
+**Which failures stay fatal.** As #458 kept them: a refusal during shutdown (`expiry_close_refused`
+takes none then), a refusal where no fence may take the instance (`fence_refused_close` returns it,
+fatal), and the Runtime's own failures (the refusal's record, a lock, the owner's journal, an
+identifier, an invariant of the scheduler). On the disconnect's path they return through
+`end_lease_ordered` and `cleanup_connection` to `end_connection`, which latches a fatal one; on the
+input's path to `finish_input_failure`'s `Err` arm, unchanged, which records them, retains the
+owner as unconfirmed and latches. Only `lease_expired` at `begin_destructive_resource_close` is
+taken.
+
+**The owner on the input's path, and why it is safe.** Before, the refused close retained the owner
+as unconfirmed (the owner's journal records `unconfirmed`, and the host's close then fails
+`owner_resource_unconfirmed`), although the refusal comes before the close's write authority, so no
+device step ran and nothing was left half closed. Now it retains nothing, as #458's expiry and
+#456's capture failure retain nothing. No device is left held: the lease ends at the input's own end
+(or at whichever end comes first) handing the device to no one, and the owed close runs under the
+session close ahead before the instance's admission guard is let go, so no other lease of the device
+begins while the session is open. No session is leaked: the owed close closes it; a refusal of that
+close lease that is not fatal is recorded and leaves it to a preparation of the fenced instance,
+which closes a kept session before it opens; at shutdown the Host close's second pass closes it.
+While the fence holds, the owner's resources stay `in_use` (`record_owner_resource_close`), and the
+next lease of the instance is used only after a preparation whose self-check passes lifts the fence,
+as fences are lifted today.
+
+**A third path of the same kind (the work order's search).** Every caller of the session's close
+that maps a refusal to a fatal error while the lease may have lapsed:
+- fixed by the same change, in the same function family (`end_lease_ordered` →
+  `end_lease_device_use` → `close_instance_resources`): every other backend failure's lease end of a
+  lapsed lease (`cleanup_composite_failure`, `cleanup_composite_failure_with_run_links` for a run
+  outside its end phase, an application command's or an emulator control's failure), which the
+  input's own lease end above needs;
+- not fixed, each another function: a failed policy run's hand-off to its admitted ladder
+  (`hand_off_to_ladder`, `end_lease_device_use` with `Keep`, `host/lease.rs:2154`), a ready transfer
+  of a lapsed lease (`perform_transfer`, `:1025`; a preempted lease handed on after an input that
+  outlasted it), and the closes under a held key right after its validation (an application
+  command's preparation, `prepare_application_resources_result` through `host/input.rs:716`; the
+  backend switch, `host/backend_switch.rs:421`; a member's switch, `host/switch.rs:856`), reached
+  only when the lease lapses between the validation and the close;
+- not reachable: an explicit release (`host/lease.rs:1699`) and a release that hands the key to a
+  claim (`:2311`) validate the lease under the guard first and deny a lapsed one.
+
+**Tests.** In `crates/runtime-host/src/tests/gate_458_close_isolates.rs` (gate map `host.toml`, the
+row "Workflow #461"), on #458's fixture (X and Y alone on their devices, both on the Nemu IPC, a
+manual Runtime clock, stuck recovery off), the lease sweep's expiry scan held so that the holder's
+own end, not the sweep, meets the lapsed lease:
+`close461_a_disconnect_after_its_lease_lapsed_fences_only_its_instance_and_the_runtime_runs`,
+`close461_an_input_whose_lease_lapsed_under_it_fails_alone_and_keeps_no_owner_unconfirmed` (the
+input's write moves the clock just past the lease and then fails),
+`close461_a_record_that_cannot_be_appended_at_a_disconnects_close_still_stops_the_runtime` and
+`close461_a_record_that_cannot_be_appended_at_a_failed_inputs_close_still_stops_the_runtime`
+(#458's test-only switch makes the refusal's record fail). Each of the first two asserts the
+Runtime's health clean, only X fenced with `lease_expired` (one fence record), the refusal recorded
+once naming X, the lease and the stage `runtime_lifecycle_session_close`, X's lease released once
+by the holder's own end and never expired, X's session closed once after that under a fenced close,
+and Y's direct run dispatched and completed; the second also that the close's record keeps no owner
+unconfirmed and that the host closes. No existing test is adapted or retired.
+
+**What is not added.** No outcome code, value key, word, configuration key, record type, payload
+member, fact, wire shape, interface revision or ledger revision. The test-only switch
+`close_isolates_off_for_test` now turns these two paths off as well.
+
+**At deploy.** Nothing to do. What an operator sees when it happens: the Runtime keeps running; the
+instance's row shows its resource fence with `lease_expired` as its cause, waiting for a person (a
+client's lease is manual work) or handed to a ladder; the ledger holds the refusal's
+`runtime.failed` record (stage `runtime_lifecycle_session_close`, naming the lease; on the input's
+path under the input's request), `instance_resources_fenced`, and the lease's `lease.released`;
+a failed input answers its own failure. A self-check, a resume or the fence's recheck lifts the
+fence.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
