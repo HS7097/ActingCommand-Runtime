@@ -80,6 +80,26 @@ naming this file.
   Runtime 0.12.63, which retires it with the identity card): report them with it.
 - **`lab_operation_check_failed`**: the Runtime answered a Lab operation and a check after it
   failed. The operation may have taken effect: read its effect before you send it again.
+- **Coordinates** (Workflow #392 DA-5ab, Runtime 0.12.67; `contracts/display-adapter.md`
+  section 11): `ac_lab_observe` and `ac_do` answer what the command line answers, in the package's
+  base. On a display of the base's size their `frame_coordinates` is `{device_pixels,
+  orientation, applies_to}`, the device's own pixels. On a display that maps to the base (1920×1080
+  or 3840×2160 for a 1280×720 package) it is `{space: "base", base_pixels, reduced_from,
+  orientation, applies_to}`: every frame was reduced from the device size `reduced_from` to the
+  base, every rectangle and point of the answer is the base's, `ac_do` takes `tap`, `tap_rect`,
+  `swipe` and an element in the base, and its `frame_path` and `preview` are the reduced frames.
+  A display the base does not map to (another ratio, a smaller one) is refused
+  `display_map_unresolved`; a press at a ratio the input side does not send under (5/4) is refused
+  `display_map_unresolved` (`input_scale_unsupported`), nothing sent. `ac_lab_observe` and `ac_do`
+  with `record` on such a display are refused before anything is sent or written (the train of
+  DA-5ab and DA-5cd; `contracts/lab-recording.md`, "A recording's size"):
+  `record_display_not_base` when the recording has no frame yet, `record_frame_size_mismatch` when
+  the display changed during the recording, `record_size_not_base` for a recording not at the base
+  size; `ac_do` with `record` captures one frame before its press for this. A saved scene of such a
+  size answers the same base form (below, "Offline scenes of another size"). `ac_frame` is one
+  frame of the instance as the device gives it, of the device's size (3840×2160 on such a
+  display), and the device commands (`ac_tap`, `ac_swipe`, `ac_long_tap`) take the device's own
+  pixels.
 
 ## 4 Jobs, handles and cursors
 
@@ -341,6 +361,34 @@ naming this file.
   hold the point pressed (`record_click_outside_step_rect` with `recorded_point_outside_box`
   otherwise) and the press stays as recorded; `ac_record_stop` then writes the package of the
   boxes, and a later `record archive` lists the box as the press's `rect`.
+  Workflow #392 DA-5cd (0.12.67; `contracts/lab-recording.md`, "A recording's size"): a recording
+  is made at the base size, 1280x720. `ac_record_start` first reads the instance's display as the
+  Runtime last observed it (the device frame of its latest task) and refuses one of another size,
+  `record_display_not_base` with `frame_width`, `frame_height`, `base_width` and `base_height`,
+  before anything is written or paused; its answer names `display_last_observed` (`{width,
+  height, observed_at_unix_ms}`, not the display now; `null` when none was observed). That is an
+  early warning: the start writes the base size in the recording's header, and the recording's
+  first frame of any other size is refused `record_display_not_base` before it is stored, nothing
+  written. `ac_record_stop` refuses a recording whose frames are not the base size,
+  `record_size_not_base`, and converts nothing; `ac_record_ready` lists it first as
+  `size_not_base`, a frame added to it is refused with the same code, and `ac_record_status`,
+  `ac_record_frames` and `ac_record_archive` read it as before: archive it and record again. The
+  train of DA-5ab and DA-5cd: every tool that records (`ac_tap`, `ac_swipe` and `ac_long_tap` with
+  `record`, `ac_do` and `ac_lab_observe` with `record`) judges the recording and the frame it took
+  before it sends or writes anything, with these codes and `record_frame_size_mismatch` for a
+  frame of another size than the recording already has; nothing is pressed first.
+- **Offline scenes of another size** (Workflow #392 DA-5cd, 0.12.67, as the train of DA-5ab and
+  DA-5cd leaves it; `contracts/display-adapter.md` section 12). `ac_recognize`, `ac_detect_page`,
+  `ac_current_page`, `ac_is_visible`, `ac_lab_observe` on a saved scene, `ac_tap_target` and
+  `ac_navigate` with `dry_run`, and the offline dry runs and waits of `ac_do`, `ac_ensure` and
+  `ac_wait`, take a scene of another size exactly as the live observation takes a frame of that
+  size, by the same function: a scene of the package's ratio, not smaller and in its orientation
+  (1600x900, 1920x1080, 3840x2160 for 1280x720), is reduced to the package's base, every rectangle
+  and point of the answer is the base's, and the answer names `frame_coordinates` in the base form
+  (`{space: "base", base_pixels, reduced_from, orientation, applies_to}`, `reduced_from` the
+  scene's own size). A scene of the base's size answers as before. Any other scene is refused
+  `lab_scene_size_unsupported` (`display_problem`, `frame_width`, `frame_height`, `base_width`,
+  `base_height`); a live capture the map cannot take is `display_map_unresolved` instead.
 - **Adoption** (Workflow #464 P1, 0.12.61; `contracts/standard-pack-authoring.md`).
   `ac_standard_pack_adopt` (`repo`, `record_id` or `package`, `decide`, or `held_reason` with an
   optional `held_reference`, `replace`, `state_dir`) makes a stopped recording's package, or any

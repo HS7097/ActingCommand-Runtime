@@ -113,6 +113,14 @@ pub struct LabRecording {
     /// to one an earlier build wrote.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub endings: Vec<RecordingEnding>,
+    /// Workflow #392 DA-5cd fix round 1 (`contracts/lab-recording.md`, "A recording's size"): the
+    /// base size the recording must have, written by `record start` (the installed command writes
+    /// the contract crate's `STANDARD_PACK_BASE_SIZE`); the first frame that enters the recording
+    /// is checked against it before it is stored. Absent on a recording started without one (made
+    /// before fix round 1, and the tests' fixtures), which is judged as before and is
+    /// byte-identical to one an earlier build wrote.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_size: Option<RecordSize>,
 }
 
 /// #463 R2 (`contracts/lab-recording.md`, "Endings"): a screen that ends the business another way
@@ -1550,6 +1558,9 @@ pub struct RecordStartOptions {
     pub locale: Option<String>,
     pub match_metric: Option<String>,
     pub template_threshold: Option<f64>,
+    /// Workflow #392 DA-5cd fix round 1: the base size written in the new recording's header
+    /// (`LabRecording::base_size`); `None` writes none.
+    pub base_size: Option<RecordSize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
