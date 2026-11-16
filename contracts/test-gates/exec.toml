@@ -3743,3 +3743,16 @@ tests = [
     "actingcommand-lab::lib::gate_463_s21c::s21c_a_recording_that_passes_has_every_check_complete_and_is_ready",
 ]
 incident = ["#463 S2-1c"]
+
+# #463 S2-1c, fix round 1 (0.12.68; register §1.443, "Fix round 1"; brief rd-1116/brief-463-s21c-fix1.md; the review of pull request #1788, its points 1 and 3 and its (h); contracts/lab-recording.md, "What a recording still lacks: record ready" and "Self-checks"): the failure a check stopped at is its last item, rendering is no stage of admission or the final package, a select's frame lists every unread slot, and the cases the review found untested. The bench of the row above, for the endings stopped with its package and taking two endings from frames (alpha, a colour mark, f0007; bravo, a colour mark and an OCR mark over a patch of a colour only its screen shows, f0008), read with a scripted OCR model that reads no text and fails on a frame showing that colour: step 4's stored frame and the first ending's damaged: the ending's item (no step) before step 4's, frames complete and every later check in checks_after, record stop refused record_frame_hash_mismatch on step 4's frame, the first it met (1); the first ending's mark expecting white and the second ending's OCR read failing: the first ending's record_step_self_mismatch, then the error, last; endings complete false with check_error, final_package in checks_after; record stop refused the first ending's (2); the answer of a final package that stopped, built from the checks' runs: one item with no step or details, final_package complete false with whole_package (3); both endings' marks expecting white: two endings items in the order taken, endings complete (4); step 2 with a sample (f0007) and a select of two slots marked without a model, read with the scripted model: four selects items, slot 00 and slot 01 on f0003 and on f0007, each with its name target, and record stop refused select_name_unread for slot 0 on f0003 (5); a pre-check's refusal whose details name frames and target: its item carries page and neither of them (6).
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-lab::lib::gate_463_s21c::s21c_fix1_failures_that_arrive_out_of_step_order_are_listed_by_step",
+    "actingcommand-lab::lib::gate_463_s21c::s21c_fix1_a_check_that_meets_an_error_says_check_error_and_lists_it_last",
+    "actingcommand-lab::lib::gate_463_s21c::s21c_fix1_a_final_package_that_stops_is_listed_with_whole_package",
+    "actingcommand-lab::lib::gate_463_s21c::s21c_fix1_the_endings_check_lists_every_ending_that_fails",
+    "actingcommand-lab::lib::gate_463_s21c::s21c_fix1_the_selects_check_lists_every_unread_slot_of_every_frame",
+    "actingcommand-lab::lib::gate_463_s21c::s21c_fix1_a_pre_check_item_never_carries_frames_or_target",
+]
+incident = ["#463 S2-1c"]

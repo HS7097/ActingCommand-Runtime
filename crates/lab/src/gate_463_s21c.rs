@@ -20,7 +20,34 @@
 // - `s21c_a_recording_that_passes_has_every_check_complete_and_is_ready`.
 // Frames are synthetic 160x90 screens (a square of one colour at the top left on gray); no Runtime,
 // no device; the tests read no clock and never sleep.
+//
+// Fix round 1 (brief rd-1116/brief-463-s21c-fix1.md; the review of pull request #1788, its (h)).
+// For the endings the recording is stopped with its package and takes two endings from frames (as
+// "Marking after stop" takes them): `alpha` (a magenta square, its colour mark, frame f0007) and
+// `bravo` (a cyan square, its colour mark and an OCR mark over a patch of the poison colour that
+// no other screen shows, frame f0008). The scripted OCR model reads nothing on any frame and fails
+// on a frame that shows the poison colour, as a model that cannot read fails.
+// - `s21c_fix1_failures_that_arrive_out_of_step_order_are_listed_by_step`: step 4's stored frame
+//   and the first ending's are damaged; `frames` meets step 4's first and lists the ending's first
+//   (it has no step), and `record stop` refuses step 4's, the first it met.
+// - `s21c_fix1_a_check_that_meets_an_error_says_check_error_and_lists_it_last`: the first ending's
+//   mark expects white and the second ending's OCR read fails: the first ending's item, then the
+//   error, last; `endings` is `complete: false` with `check_error`.
+// - `s21c_fix1_a_final_package_that_stops_is_listed_with_whole_package`: the answer of a final
+//   package that stopped (no recording reaches it once every check before it passed), built by
+//   hand.
+// - `s21c_fix1_the_endings_check_lists_every_ending_that_fails`: both endings' marks expect white.
+// - `s21c_fix1_the_selects_check_lists_every_unread_slot_of_every_frame`: step 2 takes a sample
+//   and a select of two slots; the scripted model reads no name: two items on each of its two
+//   frames, each naming the target that reads its slot's name.
+// - `s21c_fix1_a_pre_check_item_never_carries_frames_or_target`: a pre-check's refusal whose
+//   details name `frames` and `target` gives an item with neither.
 
+use crate::codes::{ReadyCheck, ReadyCheckStop, ReadyMissing};
+use crate::recording::crosscheck::{CheckFailure, CheckRun, Locus};
+use crate::recording::generate::Lack;
+use crate::recording::model::LabRecording;
+use crate::recording::ready::{check_items, check_runs, lack_items};
 use crate::recording::store::{old_record_path, recording_path};
 use crate::{
     AfterCapture, AttachFrameRequest, CapturedFrame, ClickEffect, ClickPlan, CommitClickRequest,
@@ -31,10 +58,15 @@ use crate::{
 };
 use actingcommand_contract::{InputFrameReference, LabError, LabResult};
 use actingcommand_device::{CaptureBackendName, Frame, PixelFormat};
+use actingcommand_recognition_pack::{
+    NnProviderRequest, NnProviderResult, OcrProviderRequest, OcrProviderResult, VisionProvider,
+    VisionProviderError, VisionProviderErrorCode,
+};
 use serde_json::{Value, json};
 use std::collections::VecDeque;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 use tempfile::TempDir;
 
@@ -67,16 +99,61 @@ const EVERY_CHECK: [&str; 7] = [
     "final_package",
 ];
 
+// Fix round 1: the endings' squares, the colour a broken mark expects, and the poison colour of
+// the second ending's text patch, which only its screen shows and on which the scripted OCR model
+// fails.
+const MAGENTA: [u8; 3] = [230, 20, 230];
+const CYAN: [u8; 3] = [20, 230, 230];
+const WHITE: [u8; 3] = [255, 255, 255];
+const POISON: [u8; 3] = [7, 7, 7];
+const ALPHA_KEY: &str = "neutral_task_alpha";
+const BRAVO_KEY: &str = "neutral_task_bravo";
+const ALPHA_MARK: &str = "ending/alpha";
+const BRAVO_MARK: &str = "ending/bravo";
+const TEXT_MARK: &str = "ending/text";
+/// The made-up OCR model the marks and the select name; only the scripted model ever reads.
+const MODEL_SHA256: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+const fn rect(x: i32, y: i32, width: i32, height: i32) -> RecordRect {
+    RecordRect {
+        x,
+        y,
+        width,
+        height,
+    }
+}
+
+/// The second ending's text patch, its OCR mark's region.
+const TEXT_AREA: RecordRect = rect(40, 40, 32, 16);
+/// The select's two slots and the regions their names are read in; the press at `POINT` is in
+/// slot 1.
+const SLOTS: [RecordRect; 2] = [rect(40, 30, 36, 36), rect(90, 30, 36, 36)];
+const NAMES: [RecordRect; 2] = [rect(42, 56, 32, 8), rect(92, 56, 32, 8)];
+
+// Whether `area` covers the pixel at `(x, y)`.
+fn covers(area: RecordRect, x: u32, y: u32) -> bool {
+    let (column, row) = (i64::from(x), i64::from(y));
+    column >= i64::from(area.x)
+        && row >= i64::from(area.y)
+        && column < i64::from(area.x) + i64::from(area.width)
+        && row < i64::from(area.y) + i64::from(area.height)
+}
+
 // The PNG of screen `index`: its square of colour at the top left on gray.
 fn screen(index: usize) -> Vec<u8> {
+    painted(COLORS[index], None)
+}
+
+// The PNG of a gray screen with a square of `square` at the top left and, when given, an area of
+// one colour.
+fn painted(square: [u8; 3], patch: Option<(RecordRect, [u8; 3])>) -> Vec<u8> {
     let mut pixels = Vec::with_capacity((WIDTH * HEIGHT * 3) as usize);
     for y in 0..HEIGHT {
         for x in 0..WIDTH {
-            pixels.extend(if x < 16 && y < 16 {
-                COLORS[index]
-            } else {
-                GRAY
-            });
+            let patched = patch
+                .filter(|(area, _)| covers(*area, x, y))
+                .map(|(_, color)| color);
+            pixels.extend(patched.unwrap_or(if x < 16 && y < 16 { square } else { GRAY }));
         }
     }
     Frame::from_pixels(
@@ -105,6 +182,66 @@ fn receipt() -> CommitClickRequest {
         failure: None,
         before: None,
         after: None,
+    }
+}
+
+/// Fix round 1: the scripted OCR model. It reads nothing (no text, no confidence) on any frame, and
+/// fails on a frame that shows the poison colour, as a model that cannot read fails.
+#[derive(Debug)]
+struct ScriptedOcr;
+
+impl VisionProvider for ScriptedOcr {
+    fn require_ocr_model(
+        &self,
+        _model_ref: &str,
+        _model_sha256: &str,
+    ) -> Result<(), VisionProviderError> {
+        Ok(())
+    }
+
+    fn require_nn_model(
+        &self,
+        _model_ref: &str,
+        _model_sha256: &str,
+    ) -> Result<(), VisionProviderError> {
+        Err(VisionProviderError::new(
+            VisionProviderErrorCode::Unavailable,
+            "no NN model in this fixture",
+        ))
+    }
+
+    fn read_text(
+        &self,
+        request: OcrProviderRequest<'_>,
+    ) -> Result<OcrProviderResult, VisionProviderError> {
+        if request
+            .frame
+            .rgb8_pixels
+            .chunks(3)
+            .any(|pixel| *pixel == POISON)
+        {
+            return Err(VisionProviderError::new(
+                VisionProviderErrorCode::Unavailable,
+                "the scripted model cannot read this frame",
+            ));
+        }
+        Ok(OcrProviderResult {
+            ppocr_diagnostics: Vec::new(),
+            text: String::new(),
+            blocks: Vec::new(),
+            confidence: None,
+            detection: None,
+        })
+    }
+
+    fn classify(
+        &self,
+        _request: NnProviderRequest<'_>,
+    ) -> Result<NnProviderResult, VisionProviderError> {
+        Err(VisionProviderError::new(
+            VisionProviderErrorCode::Unavailable,
+            "no NN model in this fixture",
+        ))
     }
 }
 
@@ -150,11 +287,12 @@ impl RecordFramePorts for Screens {
 }
 
 // A state directory with an active session of `INSTANCE` and its Lab recording, its game, server
-// and locale known, without an OCR model. The lock is held as one command holds it and dropped
-// before the directory.
+// and locale known, without an OCR model (`ocr`; fix round 1: `read`, the scripted OCR model). The
+// lock is held as one command holds it and dropped before the directory.
 struct Bench {
     lock: RecordingLock,
     ocr: LabOcr,
+    read: LabOcr,
     temp: TempDir,
 }
 
@@ -192,6 +330,7 @@ impl Bench {
         let bench = Self {
             lock,
             ocr: LabOcr::from_vision_root(&temp.path().join("no-vision")),
+            read: LabOcr::with_provider(Arc::new(ScriptedOcr)),
             temp,
         };
         for index in 0..3 {
@@ -276,12 +415,17 @@ impl Bench {
 
     // `record ready`, read as the command reads it: the instance's recording, no option.
     fn ready(&self) -> Value {
+        self.ready_with(&self.ocr)
+    }
+
+    // Fix round 1: `record ready` with the Lab's OCR `ocr`.
+    fn ready_with(&self, ocr: &LabOcr) -> Value {
         let outcome = record_ready(
             &self.state(),
             INSTANCE,
             None,
             &RecordStopOptions::default(),
-            &self.ocr,
+            ocr,
         )
         .unwrap_or_else(|error| {
             panic!(
@@ -294,16 +438,139 @@ impl Bench {
 
     // The refusal of `record stop --dry-run`.
     fn stop_refusal(&self) -> LabError {
+        self.stop_refusal_with(&self.ocr)
+    }
+
+    // Fix round 1: the refusal of `record stop --dry-run` with the Lab's OCR `ocr`.
+    fn stop_refusal_with(&self, ocr: &LabOcr) -> LabError {
         record_stop(
             &self.lock,
             &RecordStopOptions {
                 dry_run: true,
                 ..RecordStopOptions::default()
             },
-            &self.ocr,
+            ocr,
         )
         .map(|outcome| serde_json::to_value(&outcome.lab).expect("lab JSON"))
         .expect_err("record stop refuses")
+    }
+
+    // Fix round 1: the step table as the recording's file holds it.
+    fn recording(&self) -> Value {
+        let path = recording_path(&self.state(), RECORD_ID);
+        serde_json::from_slice(&fs::read(path).expect("step table")).expect("step table JSON")
+    }
+
+    // Fix round 1: the step table written back in place.
+    fn write_recording(&self, recording: &Value) {
+        fs::write(
+            recording_path(&self.state(), RECORD_ID),
+            serde_json::to_vec(recording).expect("step table JSON"),
+        )
+        .expect("step table");
+    }
+
+    // Fix round 1: the step table read as the Lab reads it.
+    fn stored(&self) -> LabRecording {
+        serde_json::from_value(self.recording()).expect("the step table as a recording")
+    }
+
+    // Fix round 1: `bytes` written as the caller's frame file `name`; its path.
+    fn file(&self, name: &str, bytes: &[u8]) -> String {
+        let path = self.temp.path().join(format!("{name}.png"));
+        fs::write(&path, bytes).expect("frame file");
+        path.display().to_string()
+    }
+
+    // Fix round 1: `record mark` of the request `value`, without an OCR model.
+    fn mark_request(&self, mut value: Value) {
+        value["schema_version"] = json!(LAB_RECORD_MARK_SCHEMA);
+        let request: MarkRequest = serde_json::from_value(value).expect("a record mark request");
+        record_mark(&self.lock, &request, false, &self.ocr).unwrap_or_else(|error| {
+            panic!(
+                "record mark: {}: {} {:?}",
+                error.code, error.message, error.details
+            )
+        });
+    }
+
+    // Fix round 1: the session file's status as the `record` command writes it.
+    fn session_status(&self, status: &str) {
+        let path = old_record_path(&self.state(), INSTANCE);
+        let mut session: Value =
+            serde_json::from_slice(&fs::read(&path).expect("session file")).expect("session");
+        session["status"] = json!(status);
+        fs::write(&path, serde_json::to_vec(&session).expect("session JSON"))
+            .expect("session file");
+    }
+
+    // Fix round 1: the recording of `marked`, stopped with its package (the session file stopped
+    // as the command leaves it), then the endings `alpha` (a magenta square and its colour mark,
+    // frame f0007) and `bravo` (a cyan square and its colour mark, and an OCR mark over its patch
+    // of the poison colour, frame f0008), taken from frames as "Marking after stop" takes them.
+    fn with_endings() -> Self {
+        let bench = Self::marked();
+        let stopped = record_stop(&bench.lock, &RecordStopOptions::default(), &bench.ocr)
+            .unwrap_or_else(|error| {
+                panic!(
+                    "record stop: {}: {} {:?}",
+                    error.code, error.message, error.details
+                )
+            });
+        assert_eq!(stopped.lab_status.as_deref(), Some("generated"));
+        bench.session_status("stopped");
+        let alpha = bench.file("ending_alpha", &painted(MAGENTA, None));
+        bench.mark_request(json!({"ending": {
+            "frame": alpha, "outcome_key": ALPHA_KEY, "page": "alpha",
+            "add": [{"id": ALPHA_MARK, "family": "color", "region": SQUARE}]
+        }}));
+        let bravo = bench.file("ending_bravo", &painted(CYAN, Some((TEXT_AREA, POISON))));
+        bench.mark_request(json!({"ending": {
+            "frame": bravo, "outcome_key": BRAVO_KEY, "page": "bravo",
+            "add": [
+                {"id": BRAVO_MARK, "family": "color", "region": SQUARE},
+                {"id": TEXT_MARK, "family": "ocr", "region": TEXT_AREA, "languages": ["en"],
+                 "timeout_ms": 1000, "match_mode": "exact", "expected": ["DONE"],
+                 "case_sensitive": false, "minimum_confidence": 0.8, "model_ref": "neutral-ocr",
+                 "model_sha256": MODEL_SHA256}
+            ]
+        }}));
+        bench
+    }
+
+    // Fix round 1: the colour mark `mark` of ending `ending` (0-based, in the order taken)
+    // expecting white, written into the step table in place.
+    fn break_ending_mark(&self, ending: usize, mark: &str) {
+        let mut recording = self.recording();
+        let entry = recording["endings"][ending]["marks"]
+            .as_array_mut()
+            .expect("the ending's marks")
+            .iter_mut()
+            .find(|entry| entry["id"] == mark)
+            .unwrap_or_else(|| panic!("no mark {mark}"));
+        entry["expected"] = json!(WHITE);
+        self.write_recording(&recording);
+    }
+
+    // Fix round 1: the stored frame `frame_id`, a step's or an ending's, overwritten with other
+    // bytes, as a damaged file holds them; its entry in the step table.
+    fn damage(&self, frame_id: &str) -> Value {
+        let recording = self.recording();
+        let frame = recording["steps"]
+            .as_array()
+            .into_iter()
+            .chain(recording["endings"].as_array())
+            .flatten()
+            .flat_map(|entry| entry["frames"].as_array().into_iter().flatten())
+            .find(|frame| frame["frame_id"] == frame_id)
+            .cloned()
+            .unwrap_or_else(|| panic!("no stored frame {frame_id}"));
+        fs::write(
+            frame["path"].as_str().expect("the frame's path"),
+            b"not the recorded frame",
+        )
+        .expect("the damaged frame");
+        frame
     }
 }
 
@@ -442,4 +709,270 @@ fn s21c_a_recording_that_passes_has_every_check_complete_and_is_ready() {
     assert_eq!(ready["missing_total"], 0, "{ready}");
     assert_eq!(ready["checks"], complete(&EVERY_CHECK), "{ready}");
     assert_eq!(ready["checks_after"], json!([]), "{ready}");
+}
+
+// Fix round 1, the review's (h) and (k): failures that do not arrive in step order. `frames` reads
+// the steps' frames before the endings' frames, so it meets step 4's damaged frame first and the
+// first ending's after it; the list sorts by step, items without a step first, so the ending's item
+// comes first. `record stop` refuses the one it met first, step 4's.
+#[test]
+fn s21c_fix1_failures_that_arrive_out_of_step_order_are_listed_by_step() {
+    let bench = Bench::with_endings();
+    let step_four = bench.damage("f0006");
+    bench.damage("f0007");
+
+    let ready = bench.ready();
+    assert_eq!(ready["status"], "draft", "{ready}");
+    assert_eq!(
+        ready["missing"],
+        json!([
+            {"order": 1, "step": null, "artifact_step": null, "frame_id": null,
+             "what": "frames", "code": "record_frame_hash_mismatch",
+             "details": {"outcome_key": ALPHA_KEY, "page": "ending_01_alpha",
+                         "frames": ["f0007"]}},
+            {"order": 2, "step": 4, "artifact_step": 4, "frame_id": null,
+             "what": "frames", "code": "record_frame_hash_mismatch",
+             "details": {"frames": ["f0006"]}}
+        ]),
+        "{ready}"
+    );
+    assert_eq!(ready["missing_total"], 2, "{ready}");
+    // Every later check reads every frame, so none ran.
+    assert_eq!(ready["checks"], complete(&EVERY_CHECK[..1]), "{ready}");
+    assert_eq!(ready["checks_after"], json!(EVERY_CHECK[1..]), "{ready}");
+
+    let error = bench.stop_refusal();
+    assert_eq!(
+        error.code, "record_frame_hash_mismatch",
+        "{}",
+        error.message
+    );
+    let details = error.details.clone().expect("details");
+    assert_eq!(details["expected_sha256"], step_four["sha256"], "{details}");
+}
+
+// Fix round 1, the review's (h) and its point 1: a check that met an error that is none of its
+// verdicts stops there and says `check_error`; the failure it stopped at is its last item, after
+// the failures it met before it. With the scripted OCR model the first ending's page (its mark
+// expecting white) does not match its own frame, and the second ending's OCR mark cannot be read on
+// its own frame.
+#[test]
+fn s21c_fix1_a_check_that_meets_an_error_says_check_error_and_lists_it_last() {
+    let bench = Bench::with_endings();
+    bench.break_ending_mark(0, ALPHA_MARK);
+
+    let ready = bench.ready_with(&bench.read);
+    assert_eq!(ready["status"], "draft", "{ready}");
+    assert_eq!(
+        ready["missing"],
+        json!([
+            {"order": 1, "step": null, "artifact_step": null, "frame_id": null,
+             "what": "endings", "code": "record_step_self_mismatch",
+             "details": {"outcome_key": ALPHA_KEY, "page": "ending_01_alpha",
+                         "frames": ["f0007"]}},
+            {"order": 2, "step": null, "artifact_step": null, "frame_id": null,
+             "what": "endings", "code": "record_artifact_admission_failed"}
+        ]),
+        "{ready}"
+    );
+    assert_eq!(
+        ready["checks"],
+        json!([
+            {"check": "frames", "complete": true},
+            {"check": "admission", "complete": true},
+            {"check": "first_decision", "complete": true},
+            {"check": "cross_check", "complete": true},
+            {"check": "endings", "complete": false, "reason": "check_error"},
+            {"check": "selects", "complete": true}
+        ]),
+        "{ready}"
+    );
+    assert_eq!(ready["checks_after"], json!(["final_package"]), "{ready}");
+
+    // `record stop` answers the first failure the endings met.
+    let error = bench.stop_refusal_with(&bench.read);
+    assert_eq!(error.code, "record_step_self_mismatch", "{}", error.message);
+    let details = error.details.clone().expect("details");
+    assert_eq!(details["outcome_key"], ALPHA_KEY, "{details}");
+    assert_eq!(details["frame_id"], "f0007", "{details}");
+}
+
+// Fix round 1, the review's (h): the final package's `whole_package`. The final package is built
+// of the plan, the frames and the crops every check before it passed, so no recording reaches its
+// refusal; its answer is built here from the checks' runs as `record ready` would hold them: every
+// check before it complete, and the final package stopped at its refusal, one item of the package
+// as a whole.
+#[test]
+fn s21c_fix1_a_final_package_that_stops_is_listed_with_whole_package() {
+    let recording = Bench::marked().stored();
+    let mut runs = ReadyCheck::ALL[..6]
+        .iter()
+        .map(|check| CheckRun {
+            check: *check,
+            failures: Vec::new(),
+            stopped: None,
+        })
+        .collect::<Vec<_>>();
+    runs.push(CheckRun {
+        check: ReadyCheck::FinalPackage,
+        failures: vec![CheckFailure {
+            locus: Locus::default(),
+            error: LabError::safety_blocked(
+                "record_artifact_admission_failed",
+                "the final package is not admitted",
+                &["session_record"],
+            )
+            .with_details(json!({"stage": "admission"})),
+        }],
+        stopped: Some(ReadyCheckStop::WholePackage),
+    });
+
+    let items = serde_json::to_value(check_items(&recording, &runs)).expect("items JSON");
+    assert_eq!(
+        items,
+        json!([
+            {"order": 1, "step": null, "artifact_step": null, "frame_id": null,
+             "what": "final_package", "code": "record_artifact_admission_failed"}
+        ])
+    );
+    let checks = serde_json::to_value(check_runs(&runs)).expect("checks JSON");
+    assert_eq!(
+        checks,
+        json!([
+            {"check": "frames", "complete": true},
+            {"check": "admission", "complete": true},
+            {"check": "first_decision", "complete": true},
+            {"check": "cross_check", "complete": true},
+            {"check": "endings", "complete": true},
+            {"check": "selects", "complete": true},
+            {"check": "final_package", "complete": false, "reason": "whole_package"}
+        ])
+    );
+}
+
+// Fix round 1, the review's (h): the endings check collects. Both endings' marks expect white: two
+// items, in the order the recording took the endings, the check complete; `record stop` answers
+// the first.
+#[test]
+fn s21c_fix1_the_endings_check_lists_every_ending_that_fails() {
+    let bench = Bench::with_endings();
+    bench.break_ending_mark(0, ALPHA_MARK);
+    bench.break_ending_mark(1, BRAVO_MARK);
+
+    let ready = bench.ready();
+    assert_eq!(ready["status"], "draft", "{ready}");
+    assert_eq!(
+        ready["missing"],
+        json!([
+            {"order": 1, "step": null, "artifact_step": null, "frame_id": null,
+             "what": "endings", "code": "record_step_self_mismatch",
+             "details": {"outcome_key": ALPHA_KEY, "page": "ending_01_alpha",
+                         "frames": ["f0007"]}},
+            {"order": 2, "step": null, "artifact_step": null, "frame_id": null,
+             "what": "endings", "code": "record_step_self_mismatch",
+             "details": {"outcome_key": BRAVO_KEY, "page": "ending_02_bravo",
+                         "frames": ["f0008"]}}
+        ]),
+        "{ready}"
+    );
+    assert_eq!(ready["checks"], complete(&EVERY_CHECK[..6]), "{ready}");
+    assert_eq!(ready["checks_after"], json!(["final_package"]), "{ready}");
+
+    let error = bench.stop_refusal();
+    assert_eq!(error.code, "record_step_self_mismatch", "{}", error.message);
+    let details = error.details.clone().expect("details");
+    assert_eq!(details["outcome_key"], ALPHA_KEY, "{details}");
+}
+
+// Fix round 1, the review's (h) and its point 3: the selects check collects, and lists every slot
+// of a frame whose name reads no known name. Step 2 takes a sample (f0007, its screen with one
+// pixel changed) and a select of two slots, marked without an OCR model; the scripted model reads
+// no name: two items on f0003 and two on f0007, each naming the target that reads its slot's name.
+// `record stop` answers the first, slot 0 on f0003.
+#[test]
+fn s21c_fix1_the_selects_check_lists_every_unread_slot_of_every_frame() {
+    let bench = Bench::marked();
+    let sample = bench.file(
+        "sample",
+        &painted(COLORS[1], Some((rect(150, 80, 1, 1), [61, 61, 61]))),
+    );
+    bench.mark_request(json!({"step": 2, "samples": [sample]}));
+    bench.mark_request(json!({"step": 2, "select": {
+        "slots": [{"rect": SLOTS[0], "name": NAMES[0]}, {"rect": SLOTS[1], "name": NAMES[1]}],
+        "read": {"languages": ["en"], "timeout_ms": 1000, "minimum_confidence_milli": 800,
+                 "model_ref": "neutral-ocr", "model_sha256": MODEL_SHA256},
+        "names": [{"id": "item_a", "aliases": ["ALPHA"]}, {"id": "item_b", "aliases": ["BRAVO"]}],
+        "match": {"max_distance": 1, "minimum_margin": 1},
+        "wanted": {"name": "list_item", "default": "item_b"}
+    }}));
+
+    let ready = bench.ready_with(&bench.read);
+    assert_eq!(ready["status"], "draft", "{ready}");
+    let item = |order: usize, frame: &str, slot: &str| {
+        json!({"order": order, "step": 2, "artifact_step": 2, "frame_id": "f0003",
+               "what": "selects", "code": "record_step_self_mismatch",
+               "details": {"page": "step_02", "frames": [frame],
+                           "target": format!("select/step_02/slot_{slot}")}})
+    };
+    assert_eq!(
+        ready["missing"],
+        json!([
+            item(1, "f0003", "00"),
+            item(2, "f0003", "01"),
+            item(3, "f0007", "00"),
+            item(4, "f0007", "01")
+        ]),
+        "{ready}"
+    );
+    assert_eq!(ready["checks"], complete(&EVERY_CHECK[..6]), "{ready}");
+    assert_eq!(ready["checks_after"], json!(["final_package"]), "{ready}");
+
+    let error = bench.stop_refusal_with(&bench.read);
+    assert_eq!(error.code, "record_step_self_mismatch", "{}", error.message);
+    let details = error.details.clone().expect("details");
+    assert_eq!(details["reason"], "select_name_unread", "{details}");
+    assert_eq!(details["frame_id"], "f0003", "{details}");
+    assert_eq!(details["slot"], 0, "{details}");
+}
+
+// Fix round 1, the review's (h): a pre-check's item never carries the members a self-check's item
+// has of its own (`frames`, `target`), whatever its refusal's details name; what a pre-check's
+// refusal says of its item (here `page`) it still carries.
+#[test]
+fn s21c_fix1_a_pre_check_item_never_carries_frames_or_target() {
+    let recording = Bench::marked().stored();
+    let lack = Lack {
+        what: ReadyMissing::PageRecognition,
+        step: Some((2, 2)),
+        error: LabError::safety_blocked(
+            "record_step_without_recognition",
+            "step 2 has no mark",
+            &["session_record"],
+        )
+        .with_details(json!({
+            "step": 2,
+            "record_index": 2,
+            "page": "step_02",
+            "frames": ["f0003"],
+            "target": "square_2"
+        })),
+        outcome_key: None,
+    };
+
+    let items = lack_items(&recording, &[lack]).unwrap_or_else(|error| {
+        panic!(
+            "the items: {}: {} {:?}",
+            error.code, error.message, error.details
+        )
+    });
+
+    assert_eq!(
+        serde_json::to_value(items).expect("items JSON"),
+        json!([
+            {"order": 1, "step": 2, "artifact_step": 2, "frame_id": "f0003",
+             "what": "page_recognition", "code": "record_step_without_recognition",
+             "hint": "record mark --step 2 --template <id>=x,y,w,h",
+             "details": {"page": "step_02"}}
+        ])
+    );
 }

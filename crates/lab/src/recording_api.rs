@@ -939,7 +939,9 @@ impl Runner {
 /// first decision, the cross-check, the endings and the selects read only the frames and the
 /// admitted package, so each runs whatever the others found; nothing runs after a failed frames or
 /// admission check, and the final package, built of what every check before it gave, only when
-/// none failed.
+/// none failed. Fix round 1: in `admission` and `final_package` rendering the package judges
+/// nothing, so an error there stops the check with `check_error`, as in every other check; only a
+/// refusal of their staged judgement stops it with `whole_package`.
 fn self_checks(
     plan: &Plan,
     ocr: &LabOcr,
@@ -956,8 +958,16 @@ fn self_checks(
         return Err(runner.into_failures());
     }
 
-    // First pass: admit the package, decide its first step and cross-check its pages.
-    let admitted = admission(plan, ocr, &crops);
+    // First pass: admit the package, decide its first step and cross-check its pages. Fix round
+    // 1: rendering the package judges nothing, so an error there is `check_error`; the kernel's
+    // admission and the evaluator are the staged judgement, `whole_package`.
+    let rendered = render(plan, None, &crops);
+    let Some(first_entries) =
+        runner.part(ReadyCheck::Admission, ReadyCheckStop::CheckError, rendered)
+    else {
+        return Err(runner.into_failures());
+    };
+    let admitted = admission(&first_entries, ocr);
     let Some((first_prepared, bundle)) = runner.part(
         ReadyCheck::Admission,
         ReadyCheckStop::WholePackage,
@@ -1056,7 +1066,17 @@ fn self_checks(
     );
     provenance.insert("cross_check".to_string(), checks.cross_check.clone());
 
-    let built = final_package(plan, ocr, &crops, &cache, evaluator, &provenance, &decision);
+    // Fix round 1: as in the first pass, rendering judges nothing (`check_error`); encoding,
+    // expanding, admitting and deciding again are the staged judgement (`whole_package`).
+    let rendered = render(plan, Some(&provenance), &crops);
+    let Some(final_entries) = runner.part(
+        ReadyCheck::FinalPackage,
+        ReadyCheckStop::CheckError,
+        rendered,
+    ) else {
+        return Err(runner.into_failures());
+    };
+    let built = final_package(final_entries, plan, ocr, &cache, evaluator, &decision);
     let Some(FinalPackage {
         entries,
         kind,
@@ -1082,16 +1102,15 @@ fn self_checks(
     })
 }
 
-/// Self-check `admission`, its first part: the package rendered and admitted by the kernel, and
-/// the bundle whose evaluator the later checks judge with; each stage reads the one before.
+/// Self-check `admission`, its staged judgement: the rendered package `entries` admitted by the
+/// kernel, and the bundle whose evaluator the later checks judge with; each stage reads the one
+/// before.
 fn admission(
-    plan: &Plan,
+    entries: &BTreeMap<String, Vec<u8>>,
     ocr: &LabOcr,
-    crops: &BTreeMap<String, Vec<u8>>,
 ) -> LabResult<(PreparedContainedTask, ExternallyVerifiedBundle)> {
-    let entries = render(plan, None, crops)?;
-    let prepared = admit(&entries, ocr)?;
-    let bundle = evaluator_bundle(&entries, ocr)?;
+    let prepared = admit(entries, ocr)?;
+    let bundle = evaluator_bundle(entries, ocr)?;
     Ok((prepared, bundle))
 }
 
@@ -1103,20 +1122,18 @@ struct FinalPackage {
     decision: FirstDecision,
 }
 
-/// Self-check `final_package`: the same content with the self-check results in its provenance
-/// (`provenance`), encoded, expanded again and admitted again, and its first decision the checked
-/// one (`decision`). Each stage reads the one before, so its first refusal ends it; its first
-/// decision decides as `record stop`'s does.
+/// Self-check `final_package`, its staged judgement: the same content rendered with the
+/// self-check results in its provenance (`entries`), encoded, expanded again and admitted again,
+/// and its first decision the checked one (`decision`). Each stage reads the one before, so its
+/// first refusal ends it; its first decision decides as `record stop`'s does.
 fn final_package(
+    entries: BTreeMap<String, Vec<u8>>,
     plan: &Plan,
     ocr: &LabOcr,
-    crops: &BTreeMap<String, Vec<u8>>,
     cache: &FrameCache,
     evaluator: &RecognitionEvaluator,
-    provenance: &Map<String, Value>,
     decision: &FirstDecision,
 ) -> LabResult<FinalPackage> {
-    let entries = render(plan, Some(provenance), crops)?;
     let kind = container_kind(&entries);
     let bytes = encode(&entries, kind)?;
     round_trip(&bytes, kind, &entries)?;

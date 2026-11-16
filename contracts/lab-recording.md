@@ -3239,16 +3239,23 @@ and, once no pre-check fails, with the self-checks' failures (#463 S2-1c):
   it, not read from the refusal: `frames` (the frames it failed on: a page that does not match its
   own frame, a page that passes on another screen's frames, a frame that cannot be read back),
   `page` (the page it is about), `target` (the mark a click follows, a template whose crop cannot
-  be read back) and `outcome_key` (an ending's failure, with the ending's `page`); its `step`,
-  `artifact_step` and `frame_id` are those of the step it is about (an ending's and a template's
-  have none); an item of the package as a whole (`admission`, `final_package`) has neither a step
-  nor `details`. No item carries a suggestion, a candidate box or a ready-made request: what
-  recognizes the page and where the press may land are the agent's to set.
+  be read back; fix round 1: the target that reads the name of a select's slot,
+  `select/step_ii/slot_kk`) and `outcome_key` (an ending's failure, with the ending's `page`); its
+  `step`, `artifact_step` and `frame_id` are those of the step it is about (an ending's and a
+  template's have none); an item of the package as a whole (`admission`, `final_package`), and
+  the error a check stopped at (`check_error`), has neither a step nor `details`. No item carries
+  a suggestion, a candidate box or a ready-made request: what recognizes the page and where the
+  press may land are the agent's to set.
 - **Order**: the recording's own items first (in the order the generator checks them), then by the
   step's serial number, each step's in the order the generator checks them. The self-checks' items
   (#463 S2-1c) come in the order the checks run; within a check by the step's serial number (items
   without a step first), then by the first frame they name (`f0009` before `f0010`), items of one
-  step and frame in the order the check met them.
+  step and frame in the order the check met them; fix round 1: the failure a check stopped at
+  (`complete: false`) is its last item, where it stopped. So the first item of a check is not
+  necessarily the failure `record stop` answers, which is the first the check met: `frames` reads
+  the steps' frames before an ending's frames and the template crops, so an ending's frame or a
+  crop that cannot be read back, which has no step, is listed before a step's frame `record stop`
+  refuses first.
 - **The words** (`what`, the closed vocabulary `ready_missing` of the outcome catalog, one word per
   pre-check and one cause per word):
 
@@ -3306,21 +3313,26 @@ and, once no pre-check fails, with the self-checks' failures (#463 S2-1c):
   item at most); `cross_check` each page on each of its own frames, each located-text guard on each
   frame, each optional page against each screen (item 7a) and the skip target against each
   optional step (item 7b); `endings` each ending's page on each of its own frames and against each
-  screen; `selects` each live frame of each select step. Once the cross-check failed, its arrival
-  gates and entry overlay, which only warn, are not evaluated. A check runs after a failed one when
-  it reads nothing the failed one gave: `first_decision`, `cross_check`, `endings` and `selects`
-  read only the frames and the admitted package, so each runs whatever the others found; nothing
-  runs after a failed `frames` or `admission`, and `final_package`, built of what every check
-  before it gave, runs only when none failed. `checks` names each check that ran, in the order
-  they ran, `{check, complete, reason?}`: `complete: true` when the failures `missing` lists of it
-  are all it has (none, or every one), `complete: false` with `reason` when it stopped at the last
-  of them, so that an empty rest is not read as "nothing more"; `reason` is a word of the closed
-  vocabulary `ready_check_stop`:
+  screen; `selects` each live frame of each select step (fix round 1: on a frame where slots read
+  no known name, each such slot, its item's `target` the target that reads the slot's name, so
+  that one read lists them all). An ending's page that passes on the frame of a select step after
+  whose press the run awaits the endings is listed by both `endings` (`record_ending_ambiguous`)
+  and `selects` (`self_test_error`, the kernel's `select_page_mismatch`): one cause, two items,
+  since each check runs. Once the cross-check failed, its arrival gates and entry overlay, which
+  only warn, are not evaluated. A check runs after a failed one when it reads nothing the failed
+  one gave: `first_decision`, `cross_check`, `endings` and `selects` read only the frames and the
+  admitted package, so each runs whatever the others found; nothing runs after a failed `frames`
+  or `admission`, and `final_package`, built of what every check before it gave, runs only when
+  none failed. `checks` names each check that ran, in the order they ran, `{check, complete,
+  reason?}`: `complete: true` when the failures `missing` lists of it are all it has (none, or
+  every one), `complete: false` with `reason` when it stopped at the last of them (its last item,
+  "Order" above), so that an empty rest is not read as "nothing more"; `reason` is a word of the
+  closed vocabulary `ready_check_stop`:
 
   | word | why the check stopped at its listed failure | checks |
   |---|---|---|
-  | `whole_package` | the check judges the generated package as one, in stages each built on the one before (rendered, admitted by the kernel, its evaluator; encoded, expanded, admitted and decided again): its first refusal leaves no stage after it to judge | `admission`, `final_package` |
-  | `check_error` | the check met an error that is none of its verdicts (a target the evaluator cannot evaluate, a frame it cannot take): what it would judge after it would be judged on no basis | `first_decision`, `cross_check`, `endings`, `selects` |
+  | `whole_package` | the check judges the generated package as one, in stages each built on the one before (admitted by the kernel, its evaluator; encoded, expanded, admitted and decided again): its first refusal leaves no stage after it to judge | `admission`, `final_package` |
+  | `check_error` | the check met an error that is none of its verdicts (a target the evaluator cannot evaluate, a frame it cannot take; fix round 1: in `admission` and `final_package`, a package that cannot be rendered, which judges nothing): what it would judge after it would be judged on no basis | `first_decision`, `cross_check`, `endings`, `selects`, `admission`, `final_package` |
 
   `checks_after` names the checks that did not run, in the order they run: all of them when a
   pre-check fails (`checks` is then empty), those a failed check left unrun (every later one after
@@ -3825,11 +3837,14 @@ target or ending it is about. Two kinds of failure end a check there too, and it
 (`checks[].complete: false`): admission (item 2) and the final package (item 1, and items 2 and 3
 again) judge the package as one, in stages each built on the one before, so their first refusal
 leaves no stage after it to judge (`whole_package`); and any check stops at an error that is none
-of its verdicts (`check_error`), since what it would judge after it would be judged on no basis.
-The first decision of a click that follows nothing, of a select and of a package with an
-application step judges one frame, so it has one failure at most. Once the cross-check failed, its
-arrival gates and entry overlay (items 4 and 5, warnings only) are not evaluated. No check decides
-otherwise than before, and the package generated is the same.
+of its verdicts (`check_error`), since what it would judge after it would be judged on no basis
+(fix round 1: in admission and the final package too, where rendering the package judges
+nothing; the failure a check stopped at is its last item). A select's frame on which slots read no
+known name is one failure per such slot (item 8). The first decision of a click that follows
+nothing, of a select and of a package with an application step judges one frame, so it has one
+failure at most. Once the cross-check failed, its arrival gates and entry overlay (items 4 and 5,
+warnings only) are not evaluated. No check decides otherwise than before, and the package
+generated is the same.
 
 ### Writing
 

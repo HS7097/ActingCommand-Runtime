@@ -100,7 +100,8 @@ impl Locus {
         self
     }
 
-    /// About the target `target`: a template's crop, the mark a click follows.
+    /// About the target `target`: a template's crop, the mark a click follows, (fix round 1) the
+    /// target that reads a select slot's name.
     pub(crate) fn with_target(mut self, target: &str) -> Self {
         self.target = Some(target.to_string());
         self
@@ -874,7 +875,9 @@ fn select_mismatch(
 /// frame's decisions are listed; any other frame is `record_step_self_mismatch`. Without an OCR
 /// model nothing is called and the step is undetermined. #463 S2-1c: each frame's decision is one
 /// judgement, its parts read from the one before; a frame that fails it is a failure `failures`
-/// meets (the step, the frame, its page), and under `record ready` the next frame is judged.
+/// meets (the step, the frame, its page), and under `record ready` the next frame is judged. Fix
+/// round 1: a frame on which slots read no known name is one failure per such slot (the target that
+/// reads its name), so that one read lists them all.
 pub(crate) fn select_checks(
     prepared: &PreparedContainedTask,
     plan: &Plan,
@@ -945,16 +948,20 @@ pub(crate) fn select_checks(
                     continue;
                 }
             };
-            if let Some((slot, cause)) = default.unread.first() {
-                failures.fail(
-                    on(),
-                    select_mismatch(
-                        step,
-                        frame,
-                        NAME_UNREAD,
-                        json!({"slot": slot, "cause": cause, "default": default.kind}),
-                    ),
-                )?;
+            // Fix round 1: every slot of the frame whose name reads no known name, each about the
+            // target that reads it; `record stop` answers the first, as before.
+            if !default.unread.is_empty() {
+                for (slot, cause) in &default.unread {
+                    failures.fail(
+                        on().with_target(&plan.select_slot_target_id(step, *slot as usize)),
+                        select_mismatch(
+                            step,
+                            frame,
+                            NAME_UNREAD,
+                            json!({"slot": slot, "cause": cause, "default": default.kind}),
+                        ),
+                    )?;
+                }
                 continue;
             }
             let pressed = match &override_document {

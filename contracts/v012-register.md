@@ -32059,7 +32059,7 @@ of both, with the coordinator's dispositions; for §1.436 and this section alike
   `da5_train_fix1_a_recorded_do_whose_frame_before_the_press_fails_presses_and_writes_nothing`. No
   code, word, key, member or revision is added.
 
-### 1.443 Slice #463 S2-1c (0.12.68): `record ready` lists every failure of each self-check, not only the first (Workflow #463; the owner asked on board #463 for one complete list of what a recording still lacks, as the work order's "Why" says; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1116/brief-463-s21c-selfchecks-list-all.md`, built on the branch of the train of #392 DA-5, #1780, at `b157951c`)
+### 1.443 Slice #463 S2-1c (0.12.68): `record ready` lists every failure of each self-check, not only the first (Workflow #463; the owner asked on board #463 for one complete list of what a recording still lacks, as the work order's "Why" says; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1116/brief-463-s21c-selfchecks-list-all.md`, begun on the branch of the train of #392 DA-5, #1780, at `b157951c`; it stands on main, into which that train was merged (`a91e657c`), and fix round 1 merged main `dc4c3622`)
 
 This section takes 1.443, the number the work order gives. It ships in 0.12.68.
 
@@ -32098,15 +32098,16 @@ first, and why one cannot go on):
 | check | before | now | why it cannot go on past a failure |
 |---|---|---|---|
 | `frames` | the first frame or crop it could not read back | every frame and every crop; any failure ends every later check, which reads every frame | — |
-| `admission` | the first refusal | the first refusal, `complete: false`, `whole_package` | rendered, admitted by the kernel, its evaluator: each stage built on the one before, and the kernel answers one refusal |
+| `admission` | the first refusal | the first refusal, `complete: false`, `whole_package` | admitted by the kernel, its evaluator: each stage built on the one before, and the kernel answers one refusal (fix round 1: rendering the package is no stage) |
 | `first_decision` | the first frame that failed | every live frame of step 1 a click that follows a mark is simulated on | a click that follows nothing, a select and a package with an application step judge one frame: one failure at most, the list complete |
 | `cross_check` | the first | every page on each of its own frames, every located-text guard on each frame, every optional page against each screen (7a) and the skip target against each optional step (7b); after a failure the arrival gates and the entry overlay, which only warn, are not evaluated | — |
 | `endings` | the first | every ending's page on each of its own frames and against each screen (`record_ending_ambiguous`, `ocr_alone_unchecked`) | — |
 | `selects` | the first | every live frame of every select step | within one frame each part reads the one before: one failure per frame |
 | `final_package` | the first refusal | the first refusal, `complete: false`, `whole_package` | encoded, expanded, admitted and decided again: each stage built on the one before |
 
-Any check but `frames`, `admission` and `final_package` stops at an error that is none of its
-verdicts (`check_error`): what it would judge after it would be judged on no basis.
+Any check but `frames` stops at an error that is none of its verdicts (`check_error`): what it
+would judge after it would be judged on no basis (fix round 1: `admission` and `final_package` too,
+where rendering the package judges nothing; before it, they named such an error `whole_package`).
 
 **Where it is built.**
 
@@ -32121,7 +32122,8 @@ verdicts (`check_error`): what it would judge after it would be judged on no bas
 **Codes and words.** No outcome code is added. One closed vocabulary is added,
 `ready_check_stop`, two words, one cause each, used by no outcome key: a member of a read that
 exits 0, it neither refuses nor warns. The one decision the slice adds reads a class
-(`runtime_unavailable`), as `record ready` did. The outcome-code index is regenerated.
+(`runtime_unavailable`), as `record ready` did. The outcome-code index lists codes, so it does not
+change (`ci/outcome_codes_index.py --check` finds it current).
 
 **Tests** (`crates/lab/src/gate_463_s21c.rs`, exec gate map "#463 S2-1c"; a recording made as stage
 one makes it, three taps through `record_press` with a fake Runtime on synthetic 160x90 screens,
@@ -32138,6 +32140,51 @@ changes, no test leaves a gate map.
 **What is not changed.** Any check's decision; what `record stop` refuses and with which code; the
 pre-checks' list; the package generated. No ledger record, configuration key, Runtime interface
 revision or outcome code.
+
+**Fix round 1** (coordinator work order `rd-1116/brief-463-s21c-fix1.md`; the independent review of
+pull request #1788 at `72f6289d`, its points that may change and its list of untested cases (h), with
+the coordinator's dispositions; the rulings are the coordinator's, not the owner's words).
+- *Where a stopped check's own item stands* (review, point 1). The failure a check stopped at
+  (`complete: false`) is its last item, after the failures it met before it, as "stopped at the
+  last of them" says; it no longer sorts first as an item without a step (`ready::check_items`).
+- *One cause per word* (review, (l)). In `admission` and `final_package` rendering the package
+  judges nothing: an error there stops the check with `check_error`, as in every other check;
+  `whole_package` is only a refusal of their staged judgement (admitted by the kernel, its
+  evaluator; encoded, expanded, admitted and decided again). `self_checks` renders before it calls
+  `admission` and `final_package`, which now take the rendered files. Under `record stop` the
+  refusal is the one it was.
+- *Every unreadable slot of a frame* (review, point 3). `select_checks` lists each slot of a frame
+  whose name reads no known name, one failure each, its `target` the target that reads that slot's
+  name (`Plan::select_slot_target_id`, `select/step_ii/slot_kk`), so one read of `record ready`
+  lists them all; `record stop` answers the first, as before.
+- *Point 4 kept.* An ending's page that passes on the frame of a select step after whose press the
+  run awaits the endings is listed by `endings` and by `selects`, one cause in two items; the
+  contract says so.
+- *Texts.* [lab-recording.md](lab-recording.md), "What a recording still lacks": a self-check
+  item's `target` and which items have no `details`; "Order" (the stopped failure last, and that the
+  first item of a check is not necessarily the failure `record stop` answers: `frames` reads the
+  steps' frames before an ending's frames and the crops, and lists those, without a step, first);
+  "The self-checks" (each unreadable slot, point 4, the table of `ready_check_stop`); and "Every
+  failure, for `record ready`". The MCP manual's sentence on `ac_record_ready` says it lists every
+  failure of each self-check. In this section the heading (what the branch stands on), the
+  sentence on the index, the `admission` row and the sentence after the table of the checks.
+- *Tests* (`gate_463_s21c.rs`, exec gate map row "#463 S2-1c, fix round 1"; no test adapted,
+  retired or re-recorded). For the endings the bench is stopped with its package and takes two
+  endings from frames (`alpha`, f0007; `bravo`, with an OCR mark over a patch of a colour only its
+  screen shows, f0008); a scripted OCR model reads no text and fails on a frame showing that
+  colour. `s21c_fix1_failures_that_arrive_out_of_step_order_are_listed_by_step` (step 4's and the
+  first ending's stored frames damaged: the ending's item first; `record stop` refuses step 4's, the
+  first it met), `s21c_fix1_a_check_that_meets_an_error_says_check_error_and_lists_it_last` (the
+  first ending's mark broken, the second ending's OCR read failing: the verdict, then the error,
+  `check_error`), `s21c_fix1_a_final_package_that_stops_is_listed_with_whole_package` (the answer
+  built from runs: the final package is built of the plan, frames and crops every earlier check
+  passed, so no recording reaches its refusal), `s21c_fix1_the_endings_check_lists_every_ending_that_fails`,
+  `s21c_fix1_the_selects_check_lists_every_unread_slot_of_every_frame` (step 2 with a sample and a
+  select of two slots: four items, each with its slot's target) and
+  `s21c_fix1_a_pre_check_item_never_carries_frames_or_target` (a pre-check's refusal whose details
+  name `frames` and `target`: its item has neither).
+- No code, word, key or member is added; no check decides otherwise; the package generated is the
+  same.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

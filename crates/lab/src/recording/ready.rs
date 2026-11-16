@@ -63,7 +63,8 @@ pub struct ReadyDetails {
     #[serde(skip_deserializing, skip_serializing_if = "Vec::is_empty")]
     pub frames: Vec<String>,
     /// #463 S2-1c: the target a self-check's failure is about: a template whose crop cannot be
-    /// read back, the mark a click follows. Never read from a pre-check's refusal.
+    /// read back, the mark a click follows; fix round 1: the target that reads the name of a
+    /// select's slot. Never read from a pre-check's refusal.
     #[serde(skip_deserializing, skip_serializing_if = "Option::is_none")]
     pub target: Option<String>,
     /// The serial number of the step after a stop (`effect_after_stop`).
@@ -418,11 +419,19 @@ pub(crate) fn lack_items(recording: &LabRecording, lacks: &[Lack]) -> LabResult<
 /// (`f0009` before `f0010`), failures of one step and frame in the order the check met them. An
 /// item names its step (the serial number and the package's number) and the frame the step's press
 /// happened on, as a pre-check's item does, and in its `details` the frames, the page or the target
-/// and the ending the failure is about; an item of the package as a whole names none.
+/// and the ending the failure is about; an item of the package as a whole names none. Fix round 1:
+/// the failure a check stopped at (its last, `CheckRun::stopped`) is its last item, where it
+/// stopped, after every failure it met before it.
 pub(crate) fn check_items(recording: &LabRecording, runs: &[CheckRun]) -> Vec<ReadyItem> {
     runs.iter()
         .flat_map(|run| {
-            let mut failures = run.failures.iter().collect::<Vec<&CheckFailure>>();
+            let judged = if run.stopped.is_some() {
+                run.failures.len().saturating_sub(1)
+            } else {
+                run.failures.len()
+            };
+            let (met, stop) = run.failures.split_at(judged);
+            let mut failures = met.iter().collect::<Vec<&CheckFailure>>();
             failures.sort_by_key(|failure| {
                 (
                     failure.locus.step.map(|(serial, _)| serial),
@@ -435,6 +444,7 @@ pub(crate) fn check_items(recording: &LabRecording, runs: &[CheckRun]) -> Vec<Re
             });
             failures
                 .into_iter()
+                .chain(stop)
                 .map(move |failure| (run.check, failure))
         })
         .enumerate()
