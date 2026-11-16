@@ -4116,3 +4116,21 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_458_close_isolates::close461_a_record_that_cannot_be_appended_at_a_failed_inputs_close_still_stops_the_runtime",
 ]
 incident = ["#461"]
+
+# Workflow #475 (0.12.67; register §1.432; contracts/read-session-resource-close.md, contracts/runtime-outcomes.md "Device and kernel failures", contracts/device-group.md row 7): a close refused because the key's lease had already lapsed isolates that instance on five more paths, the gate of #458 and #461 (gate_458_close_isolates; a test hook lets the lease lapse right before such a close asks its write authority; the lease sweep's expiry scan held; a manual Runtime clock; the fourth #461 test above also asserts that its fatal path keeps the owner as unconfirmed). Each place: the refusal isolates (health clean, only the instance whose session it is fenced with lease_expired, the refusal recorded once at the stage runtime_lifecycle_session_close naming the key's lease, the key handed to no one, the session closed once after the key's end, Y's direct run completed), and the record of the refused close made to fail (#458's test-only switch) stays fatal (ledger_failure at fence_instance_resources, fatal and Global, no instance fenced there). A failed policy run's hand-over of its key to its ladder (its capture failure's close met the lapse first, #456; the run returns its own capture_backend_operation_failed; the run's lease released once, never handed on; the ladder's claim queued only after the close) (1, 2); a pre-emption's hand-over of an idle lease (the claim answers queued, no grant before the close) (3, 4); an application command's preparation (the command fails lease_expired, no command sent) (5, 6); a backend switch's close of the kept session (backend_switch_refused, instance_fenced, caused by lease_expired; the registration keeps its backends) (7, 8); a member switch's close under the run's key in a device group of several (application_switch_failed at stop with lease_expired; the stopped member fenced; the key's expiry closes its session) (9, 10); a disconnect's owed close made before the self-check waiting in the queue is granted by the queue's own grant, no transfer (11)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_458_close_isolates::close475_a_failed_runs_hand_over_to_its_ladder_after_its_lease_lapsed_fences_only_its_instance",
+    "actingcommand-runtime-host::lib::tests::gate_458_close_isolates::close475_a_record_that_cannot_be_appended_at_a_runs_hand_over_to_its_ladder_still_stops_the_runtime",
+    "actingcommand-runtime-host::lib::tests::gate_458_close_isolates::close475_a_preemptions_hand_over_of_a_lapsed_lease_fences_only_its_instance",
+    "actingcommand-runtime-host::lib::tests::gate_458_close_isolates::close475_a_record_that_cannot_be_appended_at_a_preemptions_close_still_stops_the_runtime",
+    "actingcommand-runtime-host::lib::tests::gate_458_close_isolates::close475_an_application_command_whose_key_lapsed_before_its_preparation_fails_alone",
+    "actingcommand-runtime-host::lib::tests::gate_458_close_isolates::close475_a_record_that_cannot_be_appended_at_an_application_preparation_still_stops_the_runtime",
+    "actingcommand-runtime-host::lib::tests::gate_458_close_isolates::close475_a_backend_switch_whose_key_lapsed_before_its_close_is_refused_and_fences_only_its_instance",
+    "actingcommand-runtime-host::lib::tests::gate_458_close_isolates::close475_a_record_that_cannot_be_appended_at_a_backend_switchs_close_still_stops_the_runtime",
+    "actingcommand-runtime-host::lib::tests::gate_458_close_isolates::close475_a_member_switch_whose_key_lapsed_before_its_close_fences_only_the_stopped_member",
+    "actingcommand-runtime-host::lib::tests::gate_458_close_isolates::close475_a_record_that_cannot_be_appended_at_a_member_switchs_close_still_stops_the_runtime",
+    "actingcommand-runtime-host::lib::tests::gate_458_close_isolates::close475_a_disconnects_owed_close_is_made_before_the_waiting_claim_is_granted",
+]
+incident = ["#475"]

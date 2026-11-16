@@ -25,6 +25,12 @@
 //!   closes the session under it. Each refusal used to stop the Runtime (the second also kept the
 //!   owner as unconfirmed); now each fences the instance as #458's expiry does, and the close is
 //!   made once the lease has ended.
+//! - #475 (register §1.432): five more closes under a key whose lease lapsed before the sweep met
+//!   it (a failed run's hand-over to its ladder, a pre-emption's hand-over, an application
+//!   command's preparation, a backend switch, a member switch) used to stop the Runtime; now each
+//!   fences the instance whose session it is, the key goes to no one, and the key's end makes the
+//!   close. A test hook lets the lease lapse right before such a close asks its write authority,
+//!   as a device call that outlasts the lease lets it lapse there.
 //!
 //! Fixtures: X and Y alone on their devices, both capturing through the Nemu IPC (so each closes
 //! its session at every lease end), and LONE alone with no device configuration (it keeps its
@@ -37,15 +43,19 @@
 
 use super::gate_403::{assert_fence, fence_records, status_fence};
 use super::gate_411_a64::nemu_capture;
-use super::instance_workers::{all_events, phases};
+use super::instance_workers::{all_events, ladder_setup, phases};
 use super::*;
-use crate::codes::HostLocation;
+use crate::codes::{HostCode, HostLocation};
 use crate::host::{ContainedTaskCheckpointPoint, HostClaimForTest};
+use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::{
-    InstanceStuckRecovery, OwnerResourceDisposition, ResourceQuiescence, RuntimeLifecyclePhase,
-    RuntimePayload, SchedulingPauseReason, SchedulingPauseScope,
+    ConfigParameter, ConfigParameterSource, ConfigSettingChange, FactScalar, InstanceStuckRecovery,
+    LeasePayload, OwnerResourceDisposition, ResourceQuiescence, RuntimeConfigManifest,
+    RuntimeLifecyclePhase, RuntimePayload, SchedulerPayload, SchedulingPauseReason,
+    SchedulingPauseScope,
 };
-use actingcommand_scheduler::{ClaimKind, QueuedLease};
+use actingcommand_runtime_config::{CAPTURE_BACKEND, TOUCH_BACKEND, instance_key};
+use actingcommand_scheduler::{ClaimKind, DEFAULT_MAXIMUM_QUEUE_TIMEOUT_MS, QueuedLease};
 use serde_json::{Value, json};
 
 /// Alone on its device, on the Nemu IPC.
@@ -1671,7 +1681,8 @@ fn close461_a_record_that_cannot_be_appended_at_a_disconnects_close_still_stops_
 /// its client lease lapse while its write is in flight and then fails, and the record of the
 /// refused close that would fence X cannot be appended (#458's test-only switch). The Runtime
 /// holds that failure latched, `ledger_failure` at `fence_instance_resources`, fatal and Global;
-/// no instance is fenced.
+/// no instance is fenced. Workflow #475 (the review of #461's fix, item 3): on this fatal path the
+/// failed input's clean-up keeps the owner as unconfirmed, as it did before #461.
 #[test]
 fn close461_a_record_that_cannot_be_appended_at_a_failed_inputs_close_still_stops_the_runtime() {
     let fixture = Fixture::alone(&alone_ids(), false);
@@ -1702,6 +1713,1064 @@ fn close461_a_record_that_cannot_be_appended_at_a_failed_inputs_close_still_stop
         .expect("the Runtime latched the record's failure");
     assert_record_failure(&latched);
     assert!(fence_records(&all_events(&fixture.host)).is_empty());
+    assert!(
+        fixture
+            .host
+            .owner_retained_unconfirmed_for_test()
+            .expect("the owner's disposition"),
+        "the fatal path keeps the owner as unconfirmed"
+    );
     drop(scan);
     fixture.close_unchecked();
+}
+
+// ---- Workflow #475: five more closes under a key whose lease lapsed before the sweep met it.
+
+/// The policy instance whose run hands its key to its ladder (the fixture catalog's instance).
+const RUN: &str = POLICY_INSTANCE_ALIAS;
+/// The backends (touch, capture) X and Y register in the backend switch's fixture.
+const SWITCH_FROM: (&str, &str) = ("adb_shell_input", "adb");
+/// The backends the switch of X asks for.
+const SWITCH_TO: (&str, &str) = ("minitouch", "droidcast_raw");
+
+/// `lease_id` as a record's outcome names it.
+fn lease_value(lease_id: &LeaseId) -> Value {
+    serde_json::to_value(lease_id).expect("a lease id encodes")
+}
+
+/// The records of `event_type` in `events` linked to the lease `lease` names.
+fn lease_events<'a>(
+    events: &'a [PersistedEvent],
+    event_type: EventType,
+    lease: &Value,
+) -> Vec<&'a PersistedEvent> {
+    events
+        .iter()
+        .filter(|event| {
+            event.event_type() == event_type
+                && event
+                    .links()
+                    .lease_id()
+                    .is_some_and(|lease_id| lease_value(lease_id) == *lease)
+        })
+        .collect()
+}
+
+/// The transfers in `events` that handed on the lease `lease` names.
+fn handed_on_from<'a>(events: &'a [PersistedEvent], lease: &Value) -> Vec<&'a PersistedEvent> {
+    events
+        .iter()
+        .filter(|event| match event.payload() {
+            EventPayload::Lease(LeasePayload::Transferred(transfer)) => {
+                lease_value(&transfer.from_lease_id()) == *lease
+            }
+            _ => false,
+        })
+        .collect()
+}
+
+/// The refused session closes in `events` (`lease_expired` at the stage
+/// `runtime_lifecycle_session_close`) that name `instance`.
+fn session_close_refusals(events: &[PersistedEvent], instance: InstanceId) -> Vec<&PersistedEvent> {
+    failures(events, RuntimeErrorCode::LeaseExpired.as_str())
+        .into_iter()
+        .filter(|event| {
+            event.links().instance_id() == Some(&instance)
+                && failure_outcome(event)
+                    .value("stage")
+                    .and_then(Value::as_str)
+                    == Some(HostLocation::RuntimeLifecycleSessionClose.as_str())
+        })
+        .collect()
+}
+
+/// `instance`'s id as the configuration's keys spell it.
+fn id_text(instance: InstanceId) -> String {
+    match serde_json::to_value(instance).expect("an instance id encodes") {
+        Value::String(text) => text,
+        other => panic!("an instance id is a string: {other}"),
+    }
+}
+
+/// The file layer's two backend rows of `instance` (`SWITCH_FROM`, explicit, as actingd reports
+/// them), annotated by the configuration's key table (`gate_hs2.rs`'s manifest).
+fn switch_manifest(instance: InstanceId) -> RuntimeConfigManifest {
+    let mut parameters = [
+        (
+            instance_key(&id_text(instance), TOUCH_BACKEND),
+            SWITCH_FROM.0,
+        ),
+        (
+            instance_key(&id_text(instance), CAPTURE_BACKEND),
+            SWITCH_FROM.1,
+        ),
+    ]
+    .into_iter()
+    .map(|(key, value)| ConfigParameter {
+        key,
+        value: FactScalar::String(value.to_owned()),
+        source: ConfigParameterSource::Explicit,
+        settable: false,
+    })
+    .collect::<Vec<_>>();
+    actingcommand_runtime_config::annotate_settable(&mut parameters)
+        .expect("every key is in the key table");
+    RuntimeConfigManifest {
+        subsystems: Vec::new(),
+        parameters,
+    }
+}
+
+impl Fixture {
+    /// The members A and B of one device group of several, writing one session log, and Y alone
+    /// on its own device with no device configuration.
+    fn group_beside_y() -> Self {
+        let root = TempDir::new().expect("tempdir");
+        let ids = BTreeMap::from([(A, instance_id()), (B, instance_id()), (Y, instance_id())]);
+        let device = ids[A].min(ids[B]);
+        let states = [A, B, Y]
+            .into_iter()
+            .map(|alias| (alias, Arc::new(FakeState::default())))
+            .collect::<BTreeMap<_, _>>();
+        let log = DeviceSessionLog::default();
+        for member in [A, B] {
+            states[member].share_session_log(member, &log);
+            states[member]
+                .require_fenced_capture_close
+                .store(true, Ordering::Release);
+        }
+        *states[A]
+            .application_id
+            .lock()
+            .expect("fake application id") = Some("neutral.member.a".to_owned());
+        let clock = Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 0));
+        let config = config(&root)
+            .with_runtime_clock(clock.clone())
+            .with_stuck_recovery(stuck_recovery_off(&[A, B, Y]))
+            .with_device_keys(BTreeMap::from([(ids[A], device), (ids[B], device)]))
+            .with_device_group_names(BTreeMap::from([
+                (A.to_owned(), GROUP.to_owned()),
+                (B.to_owned(), GROUP.to_owned()),
+            ]));
+        let provider = FakeProvider::from_entries(
+            states
+                .iter()
+                .map(|(alias, state)| ((*alias).to_owned(), ids[alias], Arc::clone(state)))
+                .collect::<Vec<_>>(),
+        );
+        let host = RuntimeHost::start(config, Arc::new(provider)).expect("start the group's host");
+        Self {
+            host: Arc::new(host),
+            clock,
+            ids,
+            states,
+            log,
+            next_connection: AtomicU64::new(4_750),
+            root,
+        }
+    }
+
+    /// X and Y in #402 HS-2's shape (`gate_hs2.rs`): each alone on its device with a bound ADB
+    /// endpoint (the start prepares each and keeps its session), X's fake registered with the
+    /// backends `SWITCH_FROM` and the file layer's rows of X's two backend keys, on a manual
+    /// Runtime clock, stuck recovery off.
+    fn switching() -> Self {
+        let root = TempDir::new().expect("tempdir");
+        let ids = BTreeMap::from([(X, instance_id()), (Y, instance_id())]);
+        let states = [X, Y]
+            .into_iter()
+            .map(|alias| {
+                let state = Arc::new(FakeState::default());
+                state.observed_open.store(true, Ordering::Release);
+                (alias, state)
+            })
+            .collect::<BTreeMap<_, _>>();
+        *states[X].backends.lock().expect("fake backends") =
+            Some((SWITCH_FROM.0.to_owned(), SWITCH_FROM.1.to_owned()));
+        let provider = FakeProvider::from_entries(
+            states
+                .iter()
+                .map(|(alias, state)| ((*alias).to_owned(), ids[alias], Arc::clone(state)))
+                .collect::<Vec<_>>(),
+        )
+        .with_device_endpoints();
+        let clock = Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 0));
+        let config = config(&root)
+            .with_runtime_clock(clock.clone())
+            .with_stuck_recovery(stuck_recovery_off(&[X, Y]))
+            .with_config_manifest(switch_manifest(ids[X]));
+        let host = RuntimeHost::start(config, Arc::new(provider)).expect("start the switch's host");
+        Self {
+            host: Arc::new(host),
+            clock,
+            ids,
+            states,
+            log: DeviceSessionLog::default(),
+            next_connection: AtomicU64::new(4_751),
+            root,
+        }
+    }
+
+    /// `RUN`, the policy instance, and Y, both on the Nemu IPC (so each closes its session at
+    /// every lease end), with the ladder fixture's configuration (`ladder_setup`: stuck recovery as
+    /// shipped, the scheduled package as `RUN`'s startup package), on a manual Runtime clock; the
+    /// policy's configured identities are the two aliases, only `RUN` available to it. `RUN`'s
+    /// scheduled run, which binds a return-home package, is admitted: its context and request.
+    fn policy_run() -> (Self, Box<PolicyRunContext>, ContainedTaskRequest) {
+        let root = TempDir::new().expect("tempdir");
+        let (config, request) = ladder_setup(root.path());
+        let ids = BTreeMap::from([(RUN, instance_id()), (Y, instance_id())]);
+        let states = [RUN, Y]
+            .into_iter()
+            .map(|alias| (alias, Arc::new(FakeState::default())))
+            .collect::<BTreeMap<_, _>>();
+        states[RUN]
+            .physical_task_geometry
+            .store(true, Ordering::Release);
+        let provider = FakeProvider::from_entries(
+            states
+                .iter()
+                .map(|(alias, state)| ((*alias).to_owned(), ids[alias], Arc::clone(state)))
+                .collect::<Vec<_>>(),
+        );
+        let run = provider
+            .resolve(RUN)
+            .expect("the policy instance")
+            .with_configuration(nemu_capture("TESTSERIAL0001"));
+        let y = provider
+            .resolve(Y)
+            .expect("Y")
+            .with_configuration(nemu_capture("TESTSERIAL0002"));
+        let provider = provider.with_resolved_for(RUN, run).with_resolved_for(Y, y);
+        let mut facts = policy_facts();
+        let mut other = facts.instances[0].clone();
+        other.instance_id = Y.to_owned();
+        other.available = false;
+        facts.instances.push(other);
+        let clock = Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 0));
+        let host = RuntimeHost::start(
+            config
+                .with_runtime_clock(clock.clone())
+                .with_policy_inputs(PolicyInputSnapshot::new(facts.clone(), policy_resources())),
+            Arc::new(provider),
+        )
+        .expect("start the policy host");
+        let fixture = Self {
+            host: Arc::new(host),
+            clock,
+            ids,
+            states,
+            log: DeviceSessionLog::default(),
+            next_connection: AtomicU64::new(4_752),
+            root,
+        };
+        fixture.sample_capacity();
+        fixture
+            .host
+            .activate_policy_catalog(&policy_sources(1))
+            .expect("activate the policy catalog");
+        let cycle = fixture
+            .host
+            .evaluate_policy_cycle_with_test_inputs(
+                &facts,
+                &policy_resources(),
+                EvaluationTime {
+                    unix_ms: POLICY_NOW_UNIX_MS,
+                    monotonic_ms: POLICY_NOW_UNIX_MS,
+                },
+                7,
+                PolicyTrigger::FactsChanged,
+            )
+            .expect("evaluate the policy");
+        let evaluation = cycle.evaluation.as_ref().expect("a policy evaluation");
+        let intent = evaluation
+            .dispatch_intents
+            .iter()
+            .find(|intent| intent.instance_id == RUN)
+            .expect("the policy instance's dispatch intent")
+            .clone();
+        let reasons = evaluation
+            .reason_chains
+            .iter()
+            .find(|chain| chain.id == intent.reason_chain_id)
+            .expect("the intent's reason chain")
+            .clone();
+        record_policy_approval(&fixture.host, &intent);
+        let PolicyDispatchAdmission::Granted { context } = fixture
+            .host
+            .admit_scheduled_policy_dispatch(
+                &intent,
+                &reasons,
+                &policy_context(&fixture.host, &intent),
+                &request,
+            )
+            .expect("the policy admission")
+        else {
+            panic!("the policy instance's run is granted")
+        };
+        (fixture, context, request)
+    }
+
+    /// The next close of an instance's resources that finds a session to close lets every lease
+    /// the test holds lapse right before it asks its write authority (the Runtime clock moved past
+    /// them), as a device call that outlasts the lease lets it lapse there.
+    fn lapse_inside_the_next_close(&self) {
+        let clock = Arc::clone(&self.clock);
+        self.host
+            .run_before_next_resource_close_for_test(Box::new(move || clock.advance(LAPSE_MS)))
+            .expect("arm the lapse");
+    }
+
+    /// Only `alias` is fenced, with `lease_expired` as its cause (in the status and in one fence
+    /// record after `after`, which names it), and the refusal of its session's close is recorded
+    /// once after `after`, at the stage `runtime_lifecycle_session_close`, naming it: that record.
+    fn assert_fenced_by_one_refusal(&self, alias: &str, after: u64) -> PersistedEvent {
+        self.assert_only_fenced(alias, RuntimeErrorCode::LeaseExpired.as_str(), after);
+        let events = self.events_after(after);
+        let refusals = session_close_refusals(&events, self.ids[alias]);
+        let [refusal] = refusals.as_slice() else {
+            panic!("one record of the refused close: {refusals:#?}");
+        };
+        (*refusal).clone()
+    }
+
+    /// After `after`, the lease `lease` names was released once, never expired and never handed
+    /// on, and `alias`'s session was closed once, after that release: the close's sequence.
+    fn assert_released_then_closed_once(&self, alias: &str, after: u64, lease: &Value) -> u64 {
+        let events = self.events_after(after);
+        assert!(
+            lease_events(&events, EventType::LeaseExpired, lease).is_empty(),
+            "the lease is ended by its holder, never by the sweep"
+        );
+        assert!(
+            handed_on_from(&events, lease).is_empty(),
+            "the lease is handed to no one"
+        );
+        let releases = lease_events(&events, EventType::LeaseReleased, lease);
+        let [release] = releases.as_slice() else {
+            panic!("the lease is released once: {releases:#?}");
+        };
+        let closes = confirmed_closes(&events, self.ids[alias]);
+        assert!(
+            closes.len() == 1 && closes[0] > release.sequence(),
+            "{alias}'s session is closed once, after the lease ended: {closes:?}"
+        );
+        closes[0]
+    }
+
+    /// A client's claim of `alias` at high priority, which asks for the pre-emption of a lease
+    /// of normal priority that holds it: the request and what the host answered.
+    fn preempt(&self, alias: &str) -> (RuntimeRequest, RuntimeHostResult<RuntimeReceipt>) {
+        let holder = IdentifierIssuer::new()
+            .expect("issuer")
+            .mint_holder_id()
+            .expect("holder");
+        let request = self.request(RuntimeOperation::queue_lease(
+            alias,
+            holder,
+            LeaseQueuePolicy::new(LeasePriority::High, DEFAULT_MAXIMUM_QUEUE_TIMEOUT_MS)
+                .expect("queue policy"),
+        ));
+        let answered = self
+            .host
+            .process_request_for_test(&request, self.connection());
+        (request, answered)
+    }
+
+    /// A client's `launch` of `alias`'s application, on the command's own claim: the request and
+    /// what the host answered.
+    fn launch(&self, alias: &str) -> (RuntimeRequest, RuntimeHostResult<RuntimeReceipt>) {
+        let holder = IdentifierIssuer::new()
+            .expect("issuer")
+            .mint_holder_id()
+            .expect("holder");
+        let request = self.request(RuntimeOperation::ApplicationLifecycle {
+            instance_alias: alias.to_owned(),
+            holder_id: *holder.transport(),
+            action: ApplicationLifecycleAction::Launch,
+        });
+        let answered = self
+            .host
+            .process_request_for_test(&request, self.connection());
+        (request, answered)
+    }
+
+    /// The switch of `alias`'s backends to `SWITCH_TO`, as `actingctl config set` sends it: the
+    /// request and what the host answered.
+    fn switch_backends(&self, alias: &str) -> (RuntimeRequest, RuntimeHostResult<RuntimeReceipt>) {
+        let id = id_text(self.ids[alias]);
+        let change = |key: String, value: &str| ConfigSettingChange {
+            key,
+            value: Some(json!(value)),
+        };
+        let request = self.request(RuntimeOperation::ConfigureSettings {
+            changes: vec![
+                change(instance_key(&id, TOUCH_BACKEND), SWITCH_TO.0),
+                change(instance_key(&id, CAPTURE_BACKEND), SWITCH_TO.1),
+            ],
+            expected_version: None,
+        });
+        let answered = self
+            .host
+            .process_request_for_test(&request, self.connection());
+        (request, answered)
+    }
+
+    /// The Runtime holds the failure the test-only switch injects into the record of a refused
+    /// close latched (`ledger_failure` at `fence_instance_resources`, fatal and Global), and no
+    /// instance is fenced.
+    fn assert_record_failure_latched(&self) {
+        let latched = self
+            .host
+            .fatal_error()
+            .expect("runtime health")
+            .expect("the Runtime latched the record's failure");
+        assert_record_failure(&latched);
+        assert!(fence_records(&all_events(&self.host)).is_empty());
+    }
+}
+
+/// #475, the first place: a failed run's hand-over of its key to its ladder. `RUN`'s scheduled
+/// run binds a return-home package; its second capture fails (`capture_backend_operation_failed`,
+/// which the shipped trigger item `task_capture_backend` takes), and the run's lease lapses inside
+/// the close of that capture failure (the test's hook), before the run's end began, so the run has
+/// no end phase and #411 A64 does not take the lapse: that close is refused and fences `RUN`
+/// (#456). The run's failed end admits a ladder and hands it the key; the hand-over's close meets
+/// the lapsed lease too. The run returns its own failure, nonfatal; the Runtime's health stays
+/// clean; up to the run lease's end only `RUN` is fenced, by one fence record with
+/// `lease_expired`; the hand-over's refusal is recorded once after the run's terminal, naming
+/// `RUN`, the run's lease and the stage `runtime_lifecycle_session_close`; the run's lease is
+/// released once, never expired and never handed on; `RUN`'s session is closed after that
+/// release, and only after that close is the ladder's claim queued (high priority); Y then runs a
+/// direct run to its end. Before the fix the hand-over's refusal stopped the Runtime.
+#[test]
+fn close475_a_failed_runs_hand_over_to_its_ladder_after_its_lease_lapsed_fences_only_its_instance()
+{
+    let (fixture, context, request) = Fixture::policy_run();
+    let lease = lease_value(&context.lease_token().lease_id());
+    fixture.states[RUN]
+        .fail_capture_on
+        .store(2, Ordering::Release);
+    fixture.lapse_inside_the_next_close();
+    let scan = fixture
+        .host
+        .hold_lease_expiry_scan_for_test()
+        .expect("hold the lease sweep's expiry scan");
+    let mark = fixture.head();
+
+    let error = fixture
+        .host
+        .run_scheduled_contained_task(&context, &request)
+        .expect_err("the run fails");
+
+    assert!(!error.is_fatal(), "{error:?}");
+    assert_eq!(
+        error.code(),
+        SharedCode::CaptureBackendOperationFailed.as_str(),
+        "{error:?}"
+    );
+    fixture.assert_runtime_runs();
+    let events = fixture.events_after(mark);
+    let run_id = context.run_id();
+    let terminal = events
+        .iter()
+        .find(|event| {
+            event.event_type() == EventType::TaskFailed && event.links().run_id() == Some(&run_id)
+        })
+        .map(PersistedEvent::sequence)
+        .expect("the run's task.failed");
+    let releases = lease_events(&events, EventType::LeaseReleased, &lease);
+    let [released] = releases.as_slice() else {
+        panic!("the run's lease is released once: {releases:#?}");
+    };
+    let release = released.sequence();
+    assert!(
+        lease_events(&events, EventType::LeaseExpired, &lease).is_empty(),
+        "the run's own end ended its lease, never the sweep"
+    );
+    assert!(
+        handed_on_from(&events, &lease).is_empty(),
+        "the run's key is handed to no one"
+    );
+    let until_release = events
+        .iter()
+        .filter(|event| event.sequence() <= release)
+        .cloned()
+        .collect::<Vec<_>>();
+    let fences = fence_records(&until_release);
+    let [(fence, fence_outcome)] = fences.as_slice() else {
+        panic!("one fence record up to the run lease's end: {fences:#?}");
+    };
+    assert_eq!(fence.links().instance_id(), Some(&fixture.ids[RUN]));
+    assert_fence(
+        fence_outcome,
+        fixture.ids[RUN],
+        RuntimeErrorCode::LeaseExpired.as_str(),
+    );
+    let ended = events
+        .iter()
+        .filter(|event| event.sequence() > terminal)
+        .cloned()
+        .collect::<Vec<_>>();
+    let refusals = session_close_refusals(&ended, fixture.ids[RUN]);
+    let [refusal] = refusals.as_slice() else {
+        panic!("the hand-over's refusal is recorded once: {refusals:#?}");
+    };
+    assert!(
+        refusal.sequence() < release,
+        "refused before the lease ended"
+    );
+    assert_eq!(
+        failure_outcome(refusal).value("lease_id"),
+        Some(&lease),
+        "the refusal names the run's lease"
+    );
+    let close = confirmed_closes(&events, fixture.ids[RUN])
+        .into_iter()
+        .find(|sequence| *sequence > release)
+        .expect("the run's instance's session is closed after its lease ended");
+    let ladder_queued = events.iter().find(|event| {
+        event.links().instance_id() == Some(&fixture.ids[RUN])
+            && matches!(
+                event.payload(),
+                EventPayload::Scheduler(SchedulerPayload::Queued(queued))
+                    if queued.priority() == LeasePriority::High
+            )
+    });
+    assert!(
+        ladder_queued.is_some_and(|queued| queued.sequence() > close),
+        "the ladder's claim is queued only after the close: {ladder_queued:?}"
+    );
+    drop(scan);
+    fixture.assert_y_runs();
+    // The ladder climbs on its own and the fence stays: the Host close of them is not this test's
+    // subject.
+    fixture.close_unchecked();
+}
+
+/// #475, the first place, a failure of the Runtime itself stays fatal: as above, but once the run's
+/// terminal is written (its lease end's checkpoint) the record of a refused close cannot be
+/// appended (#458's test-only switch). The hand-over's refusal then fails with the record's
+/// failure, `ledger_failure` at `fence_instance_resources`, fatal and Global, which the run returns
+/// or the Runtime holds latched; nothing is fenced after the run's terminal (the capture failure's
+/// own close fenced `RUN` before it, as #456 does).
+#[test]
+fn close475_a_record_that_cannot_be_appended_at_a_runs_hand_over_to_its_ladder_still_stops_the_runtime()
+ {
+    let (fixture, context, request) = Fixture::policy_run();
+    fixture.states[RUN]
+        .fail_capture_on
+        .store(2, Ordering::Release);
+    fixture.lapse_inside_the_next_close();
+    let host = Arc::clone(&fixture.host);
+    let lease_end = fixture
+        .host
+        .run_at_leased_checkpoint_for_test(
+            ContainedTaskCheckpointPoint::FailedRunLeaseEnd,
+            fixture.ids[RUN],
+            context.lease_token().lease_id(),
+            move |_| {
+                host.fail_refused_close_record_for_test(true)
+                    .expect("the record's failure");
+            },
+        )
+        .expect("arm the run's lease end");
+    let scan = fixture
+        .host
+        .hold_lease_expiry_scan_for_test()
+        .expect("hold the lease sweep's expiry scan");
+    let mark = fixture.head();
+
+    let returned = fixture
+        .host
+        .run_scheduled_contained_task(&context, &request);
+
+    assert_eq!(lease_end.consumed(), 1, "the run reached its lease end");
+    let failure = match fixture.host.fatal_error().expect("runtime health") {
+        Some(latched) => latched,
+        None => returned.expect_err("the run returns the record's failure"),
+    };
+    assert_record_failure(&failure);
+    let events = fixture.events_after(mark);
+    let run_id = context.run_id();
+    let terminal = events
+        .iter()
+        .find(|event| {
+            event.event_type() == EventType::TaskFailed && event.links().run_id() == Some(&run_id)
+        })
+        .map(PersistedEvent::sequence)
+        .expect("the run's task.failed");
+    let ended = events
+        .iter()
+        .filter(|event| event.sequence() > terminal)
+        .cloned()
+        .collect::<Vec<_>>();
+    assert!(
+        fence_records(&ended).is_empty(),
+        "nothing is fenced at the hand-over"
+    );
+    drop(scan);
+    fixture.close_unchecked();
+}
+
+/// #475, the second place: a pre-emption's hand-over. X's observation opens X's session and a
+/// client's lease of X holds X; another client's claim of X at high priority asks for its
+/// pre-emption, and the idle lease is handed over at once (`promote_idle_preemption`); the lease
+/// lapses inside that hand-over's close (the test's hook). The claim answers `queued`: nothing
+/// was handed to it. The Runtime's health stays clean; X alone is fenced, with `lease_expired` as
+/// its cause; the refusal is recorded once, naming X, X's lease and the stage
+/// `runtime_lifecycle_session_close`; X's lease is released once (the pre-emption's end), never
+/// expired and never handed on; X's session is closed once after that, under a fenced close, and
+/// no grant of the claim precedes that close; Y then runs a direct run to its end. Before the fix
+/// the refusal stopped the Runtime.
+#[test]
+fn close475_a_preemptions_hand_over_of_a_lapsed_lease_fences_only_its_instance() {
+    let fixture = Fixture::alone(&alone_ids(), false);
+    let observed = fixture.observe(X).1;
+    assert_eq!(
+        observed.state(),
+        RuntimeReceiptState::Completed,
+        "{observed:?}"
+    );
+    let x_lease = fixture.acquire_on(X, fixture.connection());
+    fixture.sample_capacity();
+    fixture.lapse_inside_the_next_close();
+    let scan = fixture
+        .host
+        .hold_lease_expiry_scan_for_test()
+        .expect("hold the lease sweep's expiry scan");
+    let mark = fixture.head();
+
+    let (claim, answered) = fixture.preempt(X);
+
+    let answered = answered.expect("the claim's receipt");
+    assert_eq!(
+        answered.state(),
+        RuntimeReceiptState::Queued,
+        "{answered:?}"
+    );
+    fixture.assert_runtime_runs();
+    let refusal = fixture.assert_fenced_by_one_refusal(X, mark);
+    let lease = lease_value(&x_lease.lease_id());
+    assert_eq!(failure_outcome(&refusal).value("lease_id"), Some(&lease));
+    let close = fixture.assert_released_then_closed_once(X, mark, &lease);
+    assert_eq!(
+        fixture.states[X]
+            .unfenced_capture_close_count
+            .load(Ordering::Acquire),
+        0,
+        "under a fenced resource-close step"
+    );
+    let events = fixture.events_after(mark);
+    assert!(
+        events
+            .iter()
+            .filter(|event| event.links().request_id() == Some(&claim.request_id()))
+            .all(|event| event.event_type() != EventType::LeaseTransferred
+                && (event.event_type() != EventType::LeaseGranted || event.sequence() > close)),
+        "the claim is handed nothing, and no grant of it precedes X's close"
+    );
+    drop(scan);
+    fixture.assert_y_runs();
+    // The claim may still wait behind X's fence: the Host close of it is not this test's subject.
+    fixture.close_unchecked();
+}
+
+/// #475, the second place, a failure of the Runtime itself stays fatal: as above, with the record
+/// of the refused close made to fail (#458's test-only switch). The Runtime holds `ledger_failure`
+/// at `fence_instance_resources` latched, fatal and Global; no instance is fenced.
+#[test]
+fn close475_a_record_that_cannot_be_appended_at_a_preemptions_close_still_stops_the_runtime() {
+    let fixture = Fixture::alone(&alone_ids(), false);
+    let observed = fixture.observe(X).1;
+    assert_eq!(
+        observed.state(),
+        RuntimeReceiptState::Completed,
+        "{observed:?}"
+    );
+    let _held = fixture.acquire_on(X, fixture.connection());
+    fixture.sample_capacity();
+    fixture
+        .host
+        .fail_refused_close_record_for_test(true)
+        .expect("the record's failure");
+    fixture.lapse_inside_the_next_close();
+    let scan = fixture
+        .host
+        .hold_lease_expiry_scan_for_test()
+        .expect("hold the lease sweep's expiry scan");
+
+    let _answered = fixture.preempt(X);
+
+    fixture.assert_record_failure_latched();
+    drop(scan);
+    fixture.close_unchecked();
+}
+
+/// #475, the third place: an application command's preparation. X's observation opens X's
+/// session; a client's `launch` of X's application takes the command's own claim, and the claim
+/// lapses inside the preparation's close of X's session (the test's hook), before any command is
+/// sent. The command fails with the refusal as its own failure (`lease_expired`, not fatal) and
+/// no command reaches X's device; the Runtime's health stays clean; X alone is fenced, with
+/// `lease_expired` as its cause; the refusal is recorded once, under the command's request,
+/// naming X, the claim's lease and the stage `runtime_lifecycle_session_close`; the claim's lease
+/// is released once (the command's clean-up), never expired and never handed on; X's session is
+/// closed once after that; Y then runs a direct run to its end, and the host closes. Before the fix
+/// the refusal stopped the Runtime.
+#[test]
+fn close475_an_application_command_whose_key_lapsed_before_its_preparation_fails_alone() {
+    let fixture = Fixture::alone(&alone_ids(), false);
+    let observed = fixture.observe(X).1;
+    assert_eq!(
+        observed.state(),
+        RuntimeReceiptState::Completed,
+        "{observed:?}"
+    );
+    fixture.lapse_inside_the_next_close();
+    let scan = fixture
+        .host
+        .hold_lease_expiry_scan_for_test()
+        .expect("hold the lease sweep's expiry scan");
+    let mark = fixture.head();
+
+    let (command, answered) = fixture.launch(X);
+
+    let failed = answered.expect("the command's receipt");
+    assert_eq!(failed.state(), RuntimeReceiptState::Failed, "{failed:?}");
+    let projection = failed.error_projection().expect("the command's failure");
+    assert!(!projection.fatal, "{failed:?}");
+    assert_eq!(
+        projection.code,
+        RuntimeErrorCode::LeaseExpired,
+        "{failed:?}"
+    );
+    assert!(
+        fixture.states[X]
+            .application_actions
+            .lock()
+            .expect("fake application actions")
+            .is_empty(),
+        "no command reached X's device"
+    );
+    fixture.assert_runtime_runs();
+    let refusal = fixture.assert_fenced_by_one_refusal(X, mark);
+    assert_eq!(refusal.links().request_id(), Some(&command.request_id()));
+    let lease = failure_outcome(&refusal)
+        .value("lease_id")
+        .cloned()
+        .expect("the refusal names the command's lease");
+    fixture.assert_released_then_closed_once(X, mark, &lease);
+    drop(scan);
+    fixture.assert_y_runs();
+    fixture.close();
+}
+
+/// #475, the third place, a failure of the Runtime itself stays fatal: as above, with the record
+/// of the refused close made to fail (#458's test-only switch). The Runtime holds `ledger_failure`
+/// at `fence_instance_resources` latched, fatal and Global; no instance is fenced.
+#[test]
+fn close475_a_record_that_cannot_be_appended_at_an_application_preparation_still_stops_the_runtime()
+{
+    let fixture = Fixture::alone(&alone_ids(), false);
+    let observed = fixture.observe(X).1;
+    assert_eq!(
+        observed.state(),
+        RuntimeReceiptState::Completed,
+        "{observed:?}"
+    );
+    fixture
+        .host
+        .fail_refused_close_record_for_test(true)
+        .expect("the record's failure");
+    fixture.lapse_inside_the_next_close();
+    let scan = fixture
+        .host
+        .hold_lease_expiry_scan_for_test()
+        .expect("hold the lease sweep's expiry scan");
+
+    let _answered = fixture.launch(X);
+
+    fixture.assert_record_failure_latched();
+    drop(scan);
+    fixture.close_unchecked();
+}
+
+/// #475, the fourth place: the backend switch. X and Y in #402 HS-2's shape; X's observation keeps
+/// X's session; a switch of X's backends takes its claim, and the claim lapses inside the close of
+/// X's kept session (the test's hook), the switch's first device step. The switch is refused
+/// (`backend_switch_refused`, failed) with the problem `instance_fenced`, caused by the refusal
+/// (`lease_expired`), and X's registration keeps its backends; the Runtime's health stays clean;
+/// X alone is fenced, with `lease_expired` as its cause; the refusal is recorded once, under the
+/// switch's request, naming X, the claim's lease and the stage `runtime_lifecycle_session_close`;
+/// the claim's lease is released once (the switch's end of its key), never expired and never
+/// handed on; X's session is closed once after that; Y then runs a direct run to its end, and the
+/// host closes. Before the fix the refusal stopped the Runtime.
+#[test]
+fn close475_a_backend_switch_whose_key_lapsed_before_its_close_is_refused_and_fences_only_its_instance()
+ {
+    let fixture = Fixture::switching();
+    let observed = fixture.observe(X).1;
+    assert_eq!(
+        observed.state(),
+        RuntimeReceiptState::Completed,
+        "{observed:?}"
+    );
+    fixture.lapse_inside_the_next_close();
+    let scan = fixture
+        .host
+        .hold_lease_expiry_scan_for_test()
+        .expect("hold the lease sweep's expiry scan");
+    let mark = fixture.head();
+
+    let (switch, answered) = fixture.switch_backends(X);
+
+    let refused = answered.expect("the switch's receipt");
+    assert_eq!(refused.state(), RuntimeReceiptState::Failed, "{refused:?}");
+    assert_eq!(
+        refused.outcome().code().as_str(),
+        HostCode::BackendSwitchRefused.as_str(),
+        "{refused:?}"
+    );
+    let outcome = fixture
+        .host
+        .failure_outcome_for_test(switch.request_id())
+        .expect("refusal outcomes")
+        .expect("the switch was refused");
+    assert_eq!(
+        outcome
+            .value("backend_switch_problem")
+            .and_then(Value::as_str),
+        Some("instance_fenced"),
+        "{outcome:?}"
+    );
+    assert!(
+        outcome
+            .causes()
+            .iter()
+            .any(|link| link.outcome().code().as_str() == RuntimeErrorCode::LeaseExpired.as_str()),
+        "{outcome:?}"
+    );
+    assert!(
+        fixture.states[X]
+            .switches
+            .lock()
+            .expect("fake switches")
+            .is_empty(),
+        "X's registration keeps its backends"
+    );
+    fixture.assert_runtime_runs();
+    let refusal = fixture.assert_fenced_by_one_refusal(X, mark);
+    assert_eq!(refusal.links().request_id(), Some(&switch.request_id()));
+    let lease = failure_outcome(&refusal)
+        .value("lease_id")
+        .cloned()
+        .expect("the refusal names the switch's lease");
+    fixture.assert_released_then_closed_once(X, mark, &lease);
+    drop(scan);
+    fixture.assert_y_runs();
+    fixture.close();
+}
+
+/// #475, the fourth place, a failure of the Runtime itself stays fatal: as above, with the record
+/// of the refused close made to fail (#458's test-only switch). The Runtime holds `ledger_failure`
+/// at `fence_instance_resources` latched, fatal and Global; no instance is fenced.
+#[test]
+fn close475_a_record_that_cannot_be_appended_at_a_backend_switchs_close_still_stops_the_runtime() {
+    let fixture = Fixture::switching();
+    let observed = fixture.observe(X).1;
+    assert_eq!(
+        observed.state(),
+        RuntimeReceiptState::Completed,
+        "{observed:?}"
+    );
+    fixture
+        .host
+        .fail_refused_close_record_for_test(true)
+        .expect("the record's failure");
+    fixture.lapse_inside_the_next_close();
+    let scan = fixture
+        .host
+        .hold_lease_expiry_scan_for_test()
+        .expect("hold the lease sweep's expiry scan");
+
+    let _answered = fixture.switch_backends(X);
+
+    fixture.assert_record_failure_latched();
+    drop(scan);
+    fixture.close_unchecked();
+}
+
+/// #475, the fifth place: the member switch, in a device group of several (which no installation
+/// can configure today: the host is handed the group as the existing switch tests hand it). B's
+/// client lease holds the device; A's application is stopped under B's key, and B's lease lapses
+/// inside the close of the session the stop used (the test's hook). The stop fails
+/// `application_switch_failed` at its step `stop`, with `lease_expired` as its step's code; the
+/// Runtime's health stays clean; A alone is fenced (B and Y are not), with `lease_expired` as its
+/// cause; the refusal is recorded once, naming A, B's lease and the stage
+/// `runtime_lifecycle_session_close`. Then the key's end, one sweep tick, expires B's lapsed
+/// lease once, hands the device to no one and closes A's session once after it; Y then runs a
+/// direct run to its end. Before the fix the refusal stopped the Runtime.
+#[test]
+fn close475_a_member_switch_whose_key_lapsed_before_its_close_fences_only_the_stopped_member() {
+    let fixture = Fixture::group_beside_y();
+    let connection = fixture.connection();
+    let b_lease = fixture.acquire_on(B, connection);
+    fixture.lapse_inside_the_next_close();
+    let scan = fixture
+        .host
+        .hold_lease_expiry_scan_for_test()
+        .expect("hold the lease sweep's expiry scan");
+    let mark = fixture.head();
+
+    let failed = fixture
+        .host
+        .stop_member_application_for_test(&b_lease, connection, A)
+        .expect("no failure of the Runtime's own")
+        .expect_err("the refused close fails the stop");
+
+    assert_eq!(
+        failed.code(),
+        HostCode::ApplicationSwitchFailed.as_str(),
+        "{failed:?}"
+    );
+    let outcome = failed.outcome();
+    assert_eq!(
+        outcome.value("application_switch_step"),
+        Some(&json!("stop")),
+        "{outcome:?}"
+    );
+    assert_eq!(
+        outcome.value("failure_code"),
+        Some(&json!(RuntimeErrorCode::LeaseExpired.as_str())),
+        "{outcome:?}"
+    );
+    fixture.assert_runtime_runs();
+    let refusal = fixture.assert_fenced_by_one_refusal(A, mark);
+    assert_eq!(
+        failure_outcome(&refusal).value("lease_id"),
+        Some(&lease_value(&b_lease.lease_id()))
+    );
+    drop(scan);
+    fixture.tick();
+    fixture.assert_runtime_runs();
+    let events = fixture.events_after(mark);
+    let expiries = lease_records(&events, EventType::LeaseExpired, b_lease.lease_id());
+    let [expiry] = expiries.as_slice() else {
+        panic!("B's lease expired once: {expiries:#?}");
+    };
+    let closes = confirmed_closes(&events, fixture.ids[A]);
+    assert!(
+        closes.len() == 1 && closes[0] > expiry.sequence(),
+        "A's session is closed once, after B's lease ended: {closes:?}"
+    );
+    assert!(
+        !fixture.transferred_since(mark, A) && !fixture.transferred_since(mark, B),
+        "the device is handed to no one"
+    );
+    let log = fixture.sessions();
+    assert_eq!(open_backends(&log, A), 0, "A's session is closed: {log:?}");
+    fixture.assert_y_runs();
+    // A's fence stays: the Host close of it is not this test's subject.
+    fixture.close_unchecked();
+}
+
+/// #475, the fifth place, a failure of the Runtime itself stays fatal: as above, with the record
+/// of the refused close made to fail (#458's test-only switch). The stop returns that failure,
+/// `ledger_failure` at `fence_instance_resources`, fatal and Global; no instance is fenced.
+#[test]
+fn close475_a_record_that_cannot_be_appended_at_a_member_switchs_close_still_stops_the_runtime() {
+    let fixture = Fixture::group_beside_y();
+    let connection = fixture.connection();
+    let b_lease = fixture.acquire_on(B, connection);
+    fixture
+        .host
+        .fail_refused_close_record_for_test(true)
+        .expect("the record's failure");
+    fixture.lapse_inside_the_next_close();
+    let scan = fixture
+        .host
+        .hold_lease_expiry_scan_for_test()
+        .expect("hold the lease sweep's expiry scan");
+
+    let failure = fixture
+        .host
+        .stop_member_application_for_test(&b_lease, connection, A)
+        .expect_err("the stop returns the record's failure");
+
+    assert_record_failure(&failure);
+    assert!(fence_records(&all_events(&fixture.host)).is_empty());
+    drop(scan);
+    fixture.close_unchecked();
+}
+
+/// #475 (the review of #461's fix, item 3): while a close is owed the device is handed to no one,
+/// a claim waiting in the queue included. X's observation opens X's session, a client's lease of
+/// X holds X and a person's self-check of X waits behind it (a claim X's fence does not hold back);
+/// the lease lapses with the sweep's expiry scan held, and the client's connection closes. The
+/// connection's end returns no error and the Runtime's health stays clean; X alone is fenced, with
+/// `lease_expired` as its cause; the refusal is recorded once, naming X's lease; X's lease is
+/// released once, never expired and never handed on (no transfer to the waiting claim); X's
+/// session is closed once after that, and only then is the waiting claim granted, by the queue's
+/// own grant (admitted, granted).
+#[test]
+fn close475_a_disconnects_owed_close_is_made_before_the_waiting_claim_is_granted() {
+    let fixture = Fixture::alone(&alone_ids(), false);
+    let observed = fixture.observe(X).1;
+    assert_eq!(
+        observed.state(),
+        RuntimeReceiptState::Completed,
+        "{observed:?}"
+    );
+    let connection = fixture.connection();
+    let x_lease = fixture.acquire_on(X, connection);
+    let x_waiting = fixture.claim(X, ClaimKind::SelfCheck);
+    assert!(
+        x_waiting.queued.is_some() && x_waiting.granted.is_none(),
+        "X's self-check waits behind X's lease: {x_waiting:?}"
+    );
+    let scan = fixture
+        .host
+        .hold_lease_expiry_scan_for_test()
+        .expect("hold the lease sweep's expiry scan");
+    let mark = fixture.head();
+    fixture.lapse_past(&x_lease);
+
+    let ended = fixture.host.end_connection_for_test(connection);
+
+    assert!(ended.is_ok(), "the connection's end: {ended:?}");
+    fixture.assert_runtime_runs();
+    let refusal = fixture.assert_fenced_by_one_refusal(X, mark);
+    let lease = lease_value(&x_lease.lease_id());
+    assert_eq!(failure_outcome(&refusal).value("lease_id"), Some(&lease));
+    let close = fixture.assert_released_then_closed_once(X, mark, &lease);
+    let token = x_waiting
+        .wait_for_grant(GATE_WAIT)
+        .expect("the grant slot")
+        .expect("X's waiting claim is granted after X's close");
+    assert_eq!(token.instance_id(), fixture.ids[X]);
+    let events = fixture.events_after(mark);
+    assert!(
+        close < grant_of(&events, &x_waiting),
+        "X's session is closed before the waiting claim's lease.granted"
+    );
+    let types = events
+        .iter()
+        .filter(|event| event.links().request_id() == Some(&x_waiting.request.request_id()))
+        .map(PersistedEvent::event_type)
+        .collect::<Vec<_>>();
+    assert_events_in_order(
+        &types,
+        &[EventType::SchedulerAdmitted, EventType::LeaseGranted],
+    );
+    assert!(
+        !types.contains(&EventType::LeaseTransferred),
+        "no transfer handed the waiting claim the device: {types:?}"
+    );
+    fixture
+        .host
+        .release_host_claim_for_test(&x_waiting, &token)
+        .expect("the self-check's lease end");
+    drop(scan);
+    fixture.assert_y_runs();
+    fixture.close();
 }

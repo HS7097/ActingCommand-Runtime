@@ -18,7 +18,9 @@ pub(super) enum LeaseDeviceEnd {
     /// Workflow #461: a holder's own end of its lease through `end_lease_ordered` (a client's
     /// disconnect, a backend failure's end, as a failed input's), whose caller closes, once the
     /// lease has ended, a session whose close the lapsed lease refused
-    /// (`close_expired_lease_session_guarded`). Otherwise as `Keep`.
+    /// (`close_expired_lease_session_guarded`). Otherwise as `Keep`. Workflow #475: so a
+    /// pre-emption's end and its hand-over (`perform_transfer`), and a failed run's hand-over of
+    /// its key to its ladder (`hand_off_to_ladder`), which then hand the device to no one.
     HolderEnd,
     Expiry,
 }
@@ -44,8 +46,14 @@ impl HostShared {
         // lease (an input writes without the admission guard) closes nothing under that write.
         // The scheduler defers the expiry under the step (`cleanup_token_guarded`), and a later
         // sweep tick ends the lease once the write returned: no close is refused, nothing is
-        // recorded per tick, and nothing stops.
-        if end == LeaseDeviceEnd::Expiry && self.lease_step_active(token)? {
+        // recorded per tick, and nothing stops. Workflow #475 (the review of #461's fix): a
+        // holder's own end gives way too, defensively. `begin_resource_close` asks the lease's
+        // time before the step in flight, so its close under a lapsed lease with a write still in
+        // flight would be taken for a refused close and owed under that write; no path reaches it
+        // today (a connection's requests are answered one at a time).
+        if matches!(end, LeaseDeviceEnd::Expiry | LeaseDeviceEnd::HolderEnd)
+            && self.lease_step_active(token)?
+        {
             return Ok(());
         }
         let needs_close = self
@@ -474,8 +482,11 @@ impl HostShared {
     /// the multi-Nemu gate, a member of a device group of several) is refused so every time. Not
     /// during shutdown, as A64's fence is not. Workflow #461: the same refusal met before the sweep
     /// ended the lapsed lease, by a holder's own end of it (`LeaseDeviceEnd::HolderEnd`) and by the
-    /// close a failed input makes under its own lease (`finish_input_failure`).
-    fn expiry_close_refused(&self, error: &RuntimeHostError) -> bool {
+    /// close a failed input makes under its own lease (`finish_input_failure`). Workflow #475: and
+    /// by the closes made under a held key between its validation and its end: an application
+    /// command's preparation (`control_application_of`), a backend switch's
+    /// (`close_switch_session`) and a member switch's (`stop_member_application`).
+    pub(super) fn expiry_close_refused(&self, error: &RuntimeHostError) -> bool {
         self.refused_close_isolates()
             && !self.fatal.is_shutdown_requested()
             && error.operation() == HostLocation::BeginDestructiveResourceClose.as_str()
@@ -499,12 +510,29 @@ impl HostShared {
         error: RuntimeHostError,
         links: EventLinksDraft,
     ) -> RuntimeHostResult<()> {
+        self.fence_expired_close_of(token, token.instance_id(), error, links)
+    }
+
+    /// Workflow #475: [`Self::fence_expired_lease_close`] for the session of `instance_id`, whose
+    /// close under `token`'s lapsed lease was refused (`error`): the token's own instance, or
+    /// (Workflow #437 MAPP-2a) another member of its device group whose session a switch closes
+    /// under the key. That instance is fenced, the refusal recorded once per lease and instance,
+    /// and its close owed until `token`'s lease has ended (`close_expired_lease_session_guarded`).
+    pub(super) fn fence_expired_close_of(
+        &self,
+        token: &LeaseToken,
+        instance_id: InstanceId,
+        error: RuntimeHostError,
+        links: EventLinksDraft,
+    ) -> RuntimeHostResult<()> {
         let newly = lock(
             &self.expired_lease_closes,
             HostLocation::FenceInstanceResources,
         )?
-        .insert(token.lease_id());
-        self.fence_refused_close(token.instance_id(), error, links, newly)
+        .entry(token.lease_id())
+        .or_default()
+        .insert(instance_id);
+        self.fence_refused_close(instance_id, error, links, newly)
     }
 
     /// Workflows #456 and #458: a close of `instance_id`'s session that was refused before it
@@ -563,42 +591,46 @@ impl HostShared {
     /// own paths: a preparation (the fence's recovery ladder, its recheck, a person's self-check or
     /// resume), which closes a kept session before it opens. A failed close is recorded, and an
     /// unconfirmed one settled, by the close path; a fatal failure (the Runtime's own) is returned.
+    /// Workflow #475: every session the lease owes is closed so, the lease's own instance's or
+    /// another member's of its device group (`fence_expired_close_of`); the entry is taken once,
+    /// so no owed close is made twice and none is left behind by the lease's end.
     pub(super) fn close_expired_lease_session_guarded(
         &self,
         token: &LeaseToken,
         admission: &MutexGuard<'_, ()>,
     ) -> RuntimeHostResult<()> {
-        if !lock(
+        let Some(owed) = lock(
             &self.expired_lease_closes,
             HostLocation::FenceInstanceResources,
         )?
-        .remove(&token.lease_id())
-        {
+        .remove(&token.lease_id()) else {
             return Ok(());
-        }
-        let instance_id = token.instance_id();
-        if self.fatal.is_shutdown_requested()
-            || lock(&self.scheduler, HostLocation::ReadResourceCloseLease)?
-                .active_lease(instance_id)
-                .is_some()
-        {
-            return Ok(());
-        }
-        let links = EventLinksDraft::default()
-            .with_instance_id(self.events.issuer().issue_registered_instance(instance_id));
-        match self.close_session_ahead_while_guarded(instance_id, links.clone(), admission) {
-            Ok(_) => Ok(()),
-            Err(mut refused) if !refused.is_fatal() => {
-                refused.lifecycle.instance_id = Some(instance_id);
-                self.append_lifecycle_failure(
-                    RuntimeLifecycleFailureStage::SessionClose,
-                    RuntimeLifecycleFailure::Host(&refused),
-                    links,
-                    None,
-                )
+        };
+        for instance_id in owed {
+            if self.fatal.is_shutdown_requested()
+                || lock(&self.scheduler, HostLocation::ReadResourceCloseLease)?
+                    .active_lease(instance_id)
+                    .is_some()
+            {
+                continue;
             }
-            Err(error) => Err(error),
+            let links = EventLinksDraft::default()
+                .with_instance_id(self.events.issuer().issue_registered_instance(instance_id));
+            match self.close_session_ahead_while_guarded(instance_id, links.clone(), admission) {
+                Ok(_) => {}
+                Err(mut refused) if !refused.is_fatal() => {
+                    refused.lifecycle.instance_id = Some(instance_id);
+                    self.append_lifecycle_failure(
+                        RuntimeLifecycleFailureStage::SessionClose,
+                        RuntimeLifecycleFailure::Host(&refused),
+                        links,
+                        None,
+                    )?;
+                }
+                Err(error) => return Err(error),
+            }
         }
+        Ok(())
     }
 
     /// Workflow #458: whether `token` ended at its expiry with its session's close owed
@@ -613,7 +645,7 @@ impl HostShared {
             &self.expired_lease_closes,
             HostLocation::FenceInstanceResources,
         )?
-        .contains(&token.lease_id()))
+        .contains_key(&token.lease_id()))
     }
 
     /// Workflows #456, #458 and #461, test only: whether a refused close isolates its instance. A
@@ -950,6 +982,19 @@ impl HostShared {
         if !has_session {
             self.record_owner_resource_close()?;
             return Ok(Ok(()));
+        }
+        // Workflow #475, test only: a test's hook runs once here, before the close asks its write
+        // authority, as a device call that outlasts the lease lets it lapse there.
+        #[cfg(test)]
+        {
+            let hook = lock(
+                &self.resource_close_hook_for_test,
+                HostLocation::BeginDestructiveResourceClose,
+            )?
+            .take();
+            if let Some(hook) = hook {
+                hook();
+            }
         }
         let witness = Arc::new(
             lock(&self.scheduler, HostLocation::BeginDestructiveResourceClose)?

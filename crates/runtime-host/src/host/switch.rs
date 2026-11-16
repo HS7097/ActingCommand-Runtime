@@ -848,17 +848,37 @@ impl HostShared {
         // A member of a group of several keeps no session while another member holds the
         // device: the session the stop used is closed under the key, whatever the stop's result.
         // The close path records its own failure and settles an unconfirmed close.
-        let closed = {
+        let close_failure = {
             let instance_guard = self
                 .instance_guard(holder)
                 .map_err(|failure| *failure.error)?;
             let _admission = lock(&instance_guard, HostLocation::LockInstanceAdmission)?;
-            self.close_member_resources_result(token, member, connection_id, stop_links)
-                .map_err(|failure| *failure.error)?
+            match self.close_member_resources_result(
+                token,
+                member,
+                connection_id,
+                stop_links.clone(),
+            ) {
+                Ok(closed) => closed.err().map(|close_error| {
+                    RuntimeHostError::execution(HostLocation::CloseExecutionSession, &close_error)
+                }),
+                // Workflow #475 (`contracts/read-session-resource-close.md`): the run's key
+                // lapsed before this close, and the lapsed lease refused it before it began
+                // (`expiry_close_refused`). Nothing was closed. As at the lease's expiry (#458)
+                // the refusal is recorded once, fences the stopped member only and the close of
+                // its session is owed under the key (`fence_expired_close_of`), still under the
+                // device's admission guard; the key's end (the run's, or the expiry) hands the
+                // device to no one and makes that close once the lease has ended. The stop fails
+                // with the refusal as its close's failure (`application_switch_failed`, step
+                // `stop`). A failure of the Runtime itself in the fence stays fatal.
+                Err(refused) if self.expiry_close_refused(&refused.error) => {
+                    let refusal = (*refused.error).clone();
+                    self.fence_expired_close_of(token, member, *refused.error, stop_links)?;
+                    Some(refusal)
+                }
+                Err(failure) => return Err(*failure.error),
+            }
         };
-        let close_failure = closed.err().map(|close_error| {
-            RuntimeHostError::execution(HostLocation::CloseExecutionSession, &close_error)
-        });
         #[cfg(test)]
         let close_failure = close_failure.or_else(|| self.take_member_close_failure_for_test());
         match (stop_failure, close_failure) {

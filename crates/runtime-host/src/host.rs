@@ -2311,11 +2311,13 @@ impl RuntimeHost {
             mapp1c_off_for_test: AtomicBool::new(false),
             #[cfg(test)]
             mapp1d_off_for_test: AtomicBool::new(false),
-            expired_lease_closes: Mutex::new(BTreeSet::new()),
+            expired_lease_closes: Mutex::new(BTreeMap::new()),
             #[cfg(test)]
             close_isolates_off_for_test: AtomicBool::new(false),
             #[cfg(test)]
             refused_close_record_failure_for_test: AtomicBool::new(false),
+            #[cfg(test)]
+            resource_close_hook_for_test: Mutex::new(None),
             #[cfg(test)]
             monitor_loop_held_for_test: AtomicBool::new(false),
             fact_refresh_bindings,
@@ -4497,6 +4499,33 @@ impl RuntimeHost {
         requests::end_connection(shared, connection_id, None)
     }
 
+    /// Workflow #475, test builds: runs `hook` once in the next close of an instance's resources
+    /// that finds a session to close, before that close asks its write authority
+    /// (`begin_resource_close`), as a device call that outlasts a lease lets it lapse there.
+    #[cfg(test)]
+    pub(crate) fn run_before_next_resource_close_for_test(
+        &self,
+        hook: Box<dyn FnOnce() + Send>,
+    ) -> RuntimeHostResult<()> {
+        let location =
+            crate::codes::test_spellings::TestLocation::RunBeforeNextResourceCloseForTest;
+        *lock(
+            &self.shared_ref(location)?.resource_close_hook_for_test,
+            location,
+        )? = Some(hook);
+        Ok(())
+    }
+
+    /// Workflow #475, test builds: whether the owner is retained as unconfirmed
+    /// (`OwnerGuard::retain_unconfirmed`), which only the Runtime's own fatal paths do.
+    #[cfg(test)]
+    pub(crate) fn owner_retained_unconfirmed_for_test(&self) -> RuntimeHostResult<bool> {
+        let location = crate::codes::test_spellings::TestLocation::OwnerRetainedUnconfirmedForTest;
+        let disposition =
+            lock(&self.shared_ref(location)?.owner, location)?.retained_resource_disposition()?;
+        Ok(disposition == Some(actingcommand_contract::OwnerResourceDisposition::Unconfirmed))
+    }
+
     /// Workflow #458 fix round 1: whether the resident lease sweep's thread still runs.
     #[cfg(test)]
     pub(crate) fn sweep_thread_runs_for_test(&self) -> bool {
@@ -6520,17 +6549,23 @@ struct HostShared {
     mapp1d_off_for_test: AtomicBool,
     // Workflow #458: the leases whose close at their expiry met the lapsed lease and fenced the
     // instance, until the lease's end closes the session (`close_expired_lease_session_guarded`).
-    // A leaf lock. Memory only: a restart opens no session it would owe.
-    expired_lease_closes: Mutex<BTreeSet<LeaseId>>,
-    // Workflows #456, #458 and #461, test only: nothing of the slices applies while set (a refused
-    // close at a lease's expiry, at a holder's own end, in a failed input's clean-up or after a
-    // capture failure ends the Runtime), as before them.
+    // A leaf lock. Memory only: a restart opens no session it would owe. Workflow #475: by lease,
+    // the instances whose session it owes: its own, or another member of its device group whose
+    // session a switch closed under the key (`fence_expired_close_of`).
+    expired_lease_closes: Mutex<BTreeMap<LeaseId, BTreeSet<InstanceId>>>,
+    // Workflows #456, #458, #461 and #475, test only: nothing of the slices applies while set (a
+    // refused close at a lease's expiry, at a holder's own end, in a failed input's clean-up, under
+    // a held key or after a capture failure ends the Runtime), as before them.
     #[cfg(test)]
     close_isolates_off_for_test: AtomicBool,
     // Workflows #456 and #458, test only: while set, the record of a refused close that would
     // fence its instance cannot be appended (the ledger's failure, the Runtime's own).
     #[cfg(test)]
     refused_close_record_failure_for_test: AtomicBool,
+    // Workflow #475, test only: the hook the next close of an instance's resources that finds a
+    // session to close runs once, before it asks its write authority (`retire_instance_resources`).
+    #[cfg(test)]
+    resource_close_hook_for_test: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     // Workflow #437 MAPP-1d, test only: while set the resident monitor loop takes no probe, and a
     // test runs each round itself (`RuntimeHost::run_due_monitor_probe_for_test`).
     #[cfg(test)]

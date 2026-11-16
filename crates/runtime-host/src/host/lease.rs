@@ -954,10 +954,17 @@ impl HostShared {
         self.record_expired_queued(expired)
     }
 
+    /// Commits the prepared transfer: the receiver's `lease.transition_intent`, the end of the
+    /// holder's device use with `end`, `lease.transferred` and the grant to the queued claim; its
+    /// `lease.transferred`. Workflow #475: `None` when `end` is a holder's own end (a
+    /// pre-emption's hand-over) whose close met the lapsed lease and is owed
+    /// (`expired_close_owed`): nothing is transferred, the claim stays queued, and the caller
+    /// ends the lease handing the device to no one, which makes that close.
     pub(super) fn perform_transfer(
         &self,
         prepared: Box<PreparedLeaseTransfer>,
-    ) -> Result<PersistedEvent, RequestFailure> {
+        end: LeaseDeviceEnd,
+    ) -> Result<Option<PersistedEvent>, RequestFailure> {
         let from = prepared.from_token().clone();
         let to = prepared.to_token().clone();
         let queued_request_id = prepared.queued_request_id();
@@ -1021,8 +1028,13 @@ impl HostShared {
             ),
         )?;
         // Workflow #191 H: the device session stays with the instance across the transfer; a
-        // Ready transfer has no step in flight.
-        self.end_lease_device_use(&from, prepared.from_connection_id(), LeaseDeviceEnd::Keep)?;
+        // Ready transfer has no step in flight. Workflow #475: a pre-emption hands over a lease
+        // that may have lapsed under an input that outlasted it; a close that lapsed lease refuses
+        // fences the instance and is owed (#458, #461), and the device goes to no one.
+        self.end_lease_device_use(&from, prepared.from_connection_id(), end)?;
+        if end != LeaseDeviceEnd::Keep && self.expired_close_owed(&from)? {
+            return Ok(None);
+        }
         let transferred = self.append_event(
             EventSeverity::Info,
             EventSource::Scheduler,
@@ -1073,7 +1085,7 @@ impl HostShared {
             .map_err(RequestFailure::poison_without_terminal)?;
         self.persist_active_instances()
             .map_err(RequestFailure::poison_without_terminal)?;
-        Ok(transferred)
+        Ok(Some(transferred))
     }
 
     /// The caller holds the per-instance admission guard, so no lease mutation can invalidate the
@@ -1131,8 +1143,25 @@ impl HostShared {
                     return Ok(None);
                 }
                 let token = prepared.to_token().clone();
-                self.perform_transfer(prepared)
-                    .map(|event| Some((token, event)))
+                let from = prepared.from_token().clone();
+                let from_connection = prepared.from_connection_id();
+                match self.perform_transfer(prepared, LeaseDeviceEnd::HolderEnd)? {
+                    Some(event) => Ok(Some((token, event))),
+                    // Workflow #475: the idle holder's lease had lapsed and its close is owed;
+                    // the pre-emption ends it handing the device to no one, which makes the
+                    // close, and the claim waits in the queue (`cleanup_token_guarded`).
+                    None => {
+                        drop(order);
+                        self.cleanup_token_inner(
+                            &from,
+                            from_connection,
+                            LeaseReleaseReason::Preempted,
+                            None,
+                            Some(_admission),
+                        )?;
+                        Ok(None)
+                    }
+                }
             }
             TransferPreparation::Deferred | TransferPreparation::NoCandidate => Ok(None),
         }
@@ -1912,7 +1941,23 @@ impl HostShared {
                     )?;
                     return Ok(true);
                 }
-                self.perform_transfer(prepared).map(|_| true)
+                if self
+                    .perform_transfer(prepared, LeaseDeviceEnd::HolderEnd)?
+                    .is_none()
+                {
+                    // Workflow #475: the preempted lease lapsed under the work that outlasted it
+                    // and its close is owed; the pre-emption ends it handing the device to no
+                    // one, which makes the close, and the claim waits in the queue.
+                    drop(order);
+                    self.cleanup_token_inner(
+                        token,
+                        connection_id,
+                        LeaseReleaseReason::Preempted,
+                        None,
+                        Some(_admission),
+                    )?;
+                }
+                Ok(true)
             }
             TransferPreparation::Deferred => Err(RequestFailure::poison_without_terminal(
                 RuntimeHostError::fatal(
@@ -2019,7 +2064,7 @@ impl HostShared {
                 audit_endpoint(resolved.audit_endpoint()),
             ),
         )?;
-        self.perform_transfer(prepared)?;
+        self.perform_transfer(prepared, LeaseDeviceEnd::Keep)?;
         let released = self.append_event(
             EventSeverity::Info,
             EventSource::Scheduler,
@@ -2138,7 +2183,9 @@ impl HostShared {
     /// and `lease.released` under the run's own links (C1, C9). The hand-off bypasses the queue
     /// and capacity (Q-3 (1), C13). The caller holds the admission guard. Returns the ladder
     /// back when there is no key to hand on (the lease already ended, a destructive step is
-    /// open, or the gate closed since the admission).
+    /// open, or the gate closed since the admission), and (Workflow #475) when the run's lease
+    /// owes the close its lapsed lease refused: the key goes to no one, the caller's lease end
+    /// makes that close once, and the ladder then waits as a claim.
     fn hand_off_to_ladder(
         &self,
         token: &LeaseToken,
@@ -2151,8 +2198,20 @@ impl HostShared {
         let instance_id = token.instance_id();
         self.expire_queued_for_instance(instance_id)
             .map_err(|failure| *failure.error)?;
-        self.end_lease_device_use(token, connection_id, LeaseDeviceEnd::Keep)
+        // Workflow #475 (`contracts/read-session-resource-close.md`): the hand-over is the run's
+        // own end of its lease, which may meet the lease lapsed before the sweep did; a run whose
+        // lease lapsed before its end began has no end phase, so #411 A64 does not take the
+        // refusal. As at a backend failure's end (#461), a close the lapsed lease refuses is
+        // recorded once, fences this instance only and is owed (`fence_expired_lease_close`).
+        // Owed, from this end or from a close made under the lease before it (a failed input's),
+        // the key is handed to no one: the ladder is returned, the caller's lease end
+        // (`cleanup_token_guarded`, a backend failure's) makes the close once and clears the
+        // entry, and the ladder then waits as a claim, granted by the queue after that close.
+        self.end_lease_device_use(token, connection_id, LeaseDeviceEnd::HolderEnd)
             .map_err(|failure| *failure.error)?;
+        if self.expired_close_owed(token)? {
+            return Ok(Some(ladder));
+        }
         let claim_request = ladder.claim().clone();
         // ISO-5a (#419, ISO-M row B24): an invalid claim of this instance's ladder is an invariant
         // of this instance's data: its boundary fences the instance, never the Runtime.
@@ -2517,13 +2576,14 @@ impl HostShared {
         // client's disconnect and a backend failure's end are the holder's own end, which may
         // meet its lease lapsed before the sweep did; a close that lapsed lease refuses is then
         // owed as at the expiry, and made below once the lease has ended (`cleanup_token_guarded`).
+        // Workflow #475: so a pre-emption's end of the lease it took (`promote_idle_preemption`,
+        // `transfer_preempted_while_guarded`).
         let end = match reason {
             LeaseReleaseReason::Expired => LeaseDeviceEnd::Expiry,
-            LeaseReleaseReason::Disconnect | LeaseReleaseReason::BackendFailure => {
-                LeaseDeviceEnd::HolderEnd
-            }
+            LeaseReleaseReason::Disconnect
+            | LeaseReleaseReason::BackendFailure
+            | LeaseReleaseReason::Preempted => LeaseDeviceEnd::HolderEnd,
             LeaseReleaseReason::Explicit
-            | LeaseReleaseReason::Preempted
             | LeaseReleaseReason::HostShutdown
             | LeaseReleaseReason::InstancePaused
             | LeaseReleaseReason::ConnectionPrepared
@@ -2545,7 +2605,10 @@ impl HostShared {
         // Workflow #437 MAPP-1d: no hand-over while a member of several owes its lapsed close;
         // Workflow #458: nor while any instance owes the close its expiry's lapsed lease refused
         // (fix round 1: an instance alone too, whose transfer would close again under the lapsed
-        // lease); Workflow #461: nor at a holder's own end that owes it.
+        // lease); Workflow #461: nor at a holder's own end that owes it; Workflow #475: nor for a
+        // close the lease owes from a close under it made earlier (a switch, an application
+        // command's preparation, a pre-emption's hand-over, a failed run's hand-over to its
+        // ladder).
         let transfer_reason =
             if self.lapsed_close_owed_in_group(token)? || self.expired_close_owed(token)? {
                 None
@@ -2817,7 +2880,7 @@ impl HostShared {
             LeasePayloadDraft::transition_intent(action, audit_endpoint(resolved.audit_endpoint())),
         )
         .map_err(|failure| *failure.error)?;
-        self.perform_transfer(prepared)
+        self.perform_transfer(prepared, LeaseDeviceEnd::Keep)
             .map_err(|failure| *failure.error)?;
         #[cfg(test)]
         policy_crash_test_barrier("after_lease_transfer_before_release");
