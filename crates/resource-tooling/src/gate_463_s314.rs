@@ -4,8 +4,8 @@
 // `standard-pack status`"; the design rd-1115/pack-stage3-design.md §2.3 and §4.2 "S3-14";
 // coordinator work order rd-1116/brief-463-s314-pack-status.md): one read that says where each
 // pack of a game root stands. One installed game root of five packs, inside a made-up installation
-// (its installer's state file), and a state directory beside it holding trial records written by
-// the trial's own writer:
+// directory, and a state directory beside it holding trial records written by the trial's own
+// writer:
 // - `s314_a_held_pack_can_be_tried_and_its_hold_is_missing`: the held pack is admitted, stands
 //   `can_be_tried`, answers `enabled.state` `held`, and its only missing item is S2, failing
 //   `held`, with the hold's reason and reference as the schedule's entry writes them;
@@ -257,7 +257,7 @@ struct Fixture {
 }
 
 impl Fixture {
-    /// The installation `<temp>/installation` (its installer's state file `install\state.json`);
+    /// The installation `<temp>/installation`;
     /// its game root `packages/neutral` with the five packs, the three rules, the hold of [`HELD`]
     /// and the server's return-home package; and the state directory `<temp>/state` with three
     /// trial records the trial's writer writes: [`TRIED`]'s content passed at 1000 on the end it
@@ -266,7 +266,6 @@ impl Fixture {
     fn write() -> Self {
         let temp = TempDir::new().expect("temporary directory");
         let installation = temp.path().join("installation");
-        write_json(&installation.join("install").join("state.json"), &json!({}));
         let root = installation.join("packages").join(GAME);
         let mut listed = Vec::new();
         for package_id in [HOME, HELD, TRIED, PLACED, RUNS] {
