@@ -3181,9 +3181,29 @@ The answer:
               "hint": "record mark --step 3 --template <id>=x,y,w,h"}],
  "missing_total": 2,
  "warnings": [{"step": 1, "artifact_step": 1, "frame_id": "f0001", "what": "press_point_only"}],
+ "checks": [],
  "checks_after": ["frames", "admission", "first_decision", "cross_check", "endings", "selects",
                   "final_package"],
  "sources": {"game": "installation_config", "server": "installation_config", "locale": null}}
+```
+
+and, once no pre-check fails, with the self-checks' failures (#463 S2-1c):
+
+```json
+{"status": "draft", "record_id": "…", "session": "active",
+ "missing": [{"order": 1, "step": 2, "artifact_step": 2, "frame_id": "f0003", "what": "cross_check",
+              "code": "record_step_self_mismatch",
+              "details": {"page": "step_02", "frames": ["f0003"]}},
+             {"order": 2, "step": 4, "artifact_step": 4, "frame_id": null, "what": "cross_check",
+              "code": "record_step_self_mismatch",
+              "details": {"page": "step_04", "frames": ["f0006"]}}],
+ "missing_total": 2,
+ "warnings": [],
+ "checks": [{"check": "frames", "complete": true}, {"check": "admission", "complete": true},
+            {"check": "first_decision", "complete": true}, {"check": "cross_check", "complete": true},
+            {"check": "endings", "complete": true}, {"check": "selects", "complete": true}],
+ "checks_after": ["final_package"],
+ "sources": {"game": "recording", "server": "recording", "locale": "recording"}}
 ```
 
 - **`missing`**: every pre-check of `record stop` the recording fails, at once: the checks the
@@ -3215,11 +3235,20 @@ The answer:
   `locale`: every part not known), `effective_steps` (`too_few_steps`), `effect_steps` and `max`
   (`too_many_effects`). The refusal's `step` and `artifact_step` are the item's, and its
   `select_problem`, `ending_problem`, `transition` and `outcome` say again its word and its code.
-  A self-check's item has no `details`. No item carries a suggestion, a candidate box or a
-  ready-made request: what recognizes the page and where the press may land are the agent's to
-  set.
+  A self-check's item (#463 S2-1c) names in its `details` where its failure is, as the check met
+  it, not read from the refusal: `frames` (the frames it failed on: a page that does not match its
+  own frame, a page that passes on another screen's frames, a frame that cannot be read back),
+  `page` (the page it is about), `target` (the mark a click follows, a template whose crop cannot
+  be read back) and `outcome_key` (an ending's failure, with the ending's `page`); its `step`,
+  `artifact_step` and `frame_id` are those of the step it is about (an ending's and a template's
+  have none); an item of the package as a whole (`admission`, `final_package`) has neither a step
+  nor `details`. No item carries a suggestion, a candidate box or a ready-made request: what
+  recognizes the page and where the press may land are the agent's to set.
 - **Order**: the recording's own items first (in the order the generator checks them), then by the
-  step's serial number, each step's in the order the generator checks them.
+  step's serial number, each step's in the order the generator checks them. The self-checks' items
+  (#463 S2-1c) come in the order the checks run; within a check by the step's serial number (items
+  without a step first), then by the first frame they name (`f0009` before `f0010`), items of one
+  step and frame in the order the check met them.
 - **The words** (`what`, the closed vocabulary `ready_missing` of the outcome catalog, one word per
   pre-check and one cause per word):
 
