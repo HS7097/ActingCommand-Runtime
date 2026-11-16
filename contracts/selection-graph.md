@@ -1146,11 +1146,13 @@ session runs as a run's does to its coverage checks, then `Decide` (section Sele
 decides as the step does: the evaluator's abort, or the members evaluated once, and the
 unknown-instance rules. The result holds the session's account as `dry_run_scan` gives it, the
 decision, the unknown-instance check as the step's record carries it, and the chosen member when
-the decision selected one candidate and nothing blocks it; nothing returns, confirms or is
-pressed, and a failure before the decision is the error. A draft policy in place of the sealed one
-is checked as `dry_run_select` checks one and then as admission checks a scan's policy: its last
-tie-break key `candidate_id lowest_first`, else `contained_task_select_invalid` with the
-admission's detail.
+the decision selected one candidate and nothing blocks it (a selected candidate the scan holds no
+member for is `selection_evaluation_failed`, never a missing choice); nothing returns, confirms or
+is pressed, and a failure before the decision is the error. A draft policy in place of the sealed
+one is checked as `dry_run_select` checks one and then by every admission rule of a scan step that
+reads its policy, in admission's order: its last tie-break key `candidate_id lowest_first`, the
+mode `none_allowed` where the step declares `on_empty`, and the upper bound's inputs; else
+`contained_task_select_invalid` with the admission's detail.
 
 ## Judge step
 

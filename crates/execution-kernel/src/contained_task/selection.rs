@@ -428,11 +428,8 @@ pub(super) fn prepare_select_steps(
             None => single_identity_feature(layout),
         };
         if select.on_empty.is_some() {
-            if policy.selection.mode != SelectionMode::NoneAllowed {
-                return Err(failure(
-                    SELECT_INVALID,
-                    "on_empty mode=not_none_allowed".to_owned(),
-                ));
+            if let Some(detail) = on_empty_mode_refusal(&policy) {
+                return Err(failure(SELECT_INVALID, detail));
             }
             if !scheduled {
                 return Err(failure(
@@ -472,6 +469,18 @@ pub(super) fn prepare_select_steps(
         operation.prepared_select = Some(Box::new(prepared));
     }
     validate_expect_identities(program, control, evaluator)
+}
+
+/// Workflow #308 SEL-L4b (S0 §1.4 (a)): why admission refuses the policy of a select step that
+/// declares `on_empty`, if it does: only a `none_allowed` policy decides `empty`. Workflow #463
+/// K-R3a, fix round K-a: a dry run's draft in place of such a step's sealed document is held to
+/// it too (`dry_run_scan_decide`).
+pub(super) fn on_empty_mode_refusal(policy: &SelectionPolicy) -> Option<String> {
+    if policy.selection.mode == SelectionMode::NoneAllowed {
+        None
+    } else {
+        Some("on_empty mode=not_none_allowed".to_owned())
+    }
 }
 
 /// Workflow #404 FS-3: why admission refuses a step's `confirm: "track"` or `track_px`, if it

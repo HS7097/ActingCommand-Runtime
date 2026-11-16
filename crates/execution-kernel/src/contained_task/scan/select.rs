@@ -298,6 +298,16 @@ fn not_selected(decision: &SelectionDecision) -> ContainedTaskError {
     )
 }
 
+/// Workflow #463 K-R3a, fix round K-a: the decision selected `candidate_id`, and the scan has no
+/// member of that number: `selection_evaluation_failed` with the detail `Return` gives the same
+/// broken invariant.
+pub(in crate::contained_task) fn not_a_member(candidate_id: &str) -> ContainedTaskError {
+    ContainedTaskError::with_detail(
+        ExecutionKernelCode::SelectionEvaluationFailed.code(),
+        format!("selected candidate {candidate_id} is not a member"),
+    )
+}
+
 /// `selection_identity_unconfirmed` (S0 §2.7) at `Confirm`.
 fn identity_unconfirmed(
     expected: &str,
@@ -465,17 +475,19 @@ impl ScanSession<'_> {
     }
 
     /// Workflow #463 K-R3a: the first-seen index of the position whose member `Decide` numbered
-    /// `candidate_id` (`<layout>#NN`), when one is.
+    /// `candidate_id` (`<layout>#NN`). The decision selected it from the members `Decide`
+    /// numbered, so a candidate that is none of them is an invariant broken, not an answer
+    /// ([`not_a_member`]; the fix round K-a).
     pub(in crate::contained_task) fn member_position(
         &self,
         candidate_id: &str,
-    ) -> Result<Option<u32>, ContainedTaskError> {
-        Ok(self
-            .numbered_members()?
+    ) -> Result<u32, ContainedTaskError> {
+        self.numbered_members()?
             .into_iter()
             .enumerate()
             .find(|(number, _)| self.member_id(*number) == candidate_id)
-            .map(|(_, index)| self.positions[index].index))
+            .map(|(_, index)| self.positions[index].index)
+            .ok_or_else(|| not_a_member(candidate_id))
     }
 
     /// `Decide`'s evaluation (S0 §2.2, §2.6): the members, numbered `<layout>#NN` in first-seen

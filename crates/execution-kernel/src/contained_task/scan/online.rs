@@ -14,13 +14,14 @@
 //! (`single_touch_drag_with_pause_and_brake_v1`) and the page flip, a tap sampled in its
 //! rectangle; and the page checks of page-order evidence, judged on the latest frame.
 
+use super::select::not_a_member;
 use super::{
     ScanDeclaration, ScanDrag, ScanDragMotion, ScanDryRun, ScanDryRunDecided, ScanInput,
-    ScanReadInstance, ScanReading, ScanSession, ScanSource, u32_of,
+    ScanReadInstance, ScanReading, ScanSession, ScanSource, bound_inputs, u32_of,
 };
 use crate::codes::{ExecutionKernelCode, ExecutionKernelLocation};
 use crate::contained_task::RunTables;
-use crate::contained_task::selection::check_policy_override;
+use crate::contained_task::selection::{check_policy_override, on_empty_mode_refusal};
 use crate::contained_task::{
     ContainedTaskBoundaryTiming, ContainedTaskError, ContainedTaskGuardOutcome,
     ContainedTaskRunError, ContainedTaskRuntime, ContainedTaskTimingContext, ContainedTaskTrace,
@@ -729,8 +730,9 @@ pub fn replay_scan_with_tables(
 /// and a viewport settles once two captures agree, so a forward run of viewports v0 … vn is the
 /// sequence v0, v0, v1, v1, …, vn, vn). The scan is the step's own admitted `scan`. Its policy is
 /// the step's sealed document, or `policy_override`, checked as [`crate::dry_run_select`] checks
-/// one and then held to the one admission rule of a scan that reads the policy, its last
-/// tie-break key (`contained_task_select_invalid`, the admission's detail). The facts are
+/// one and then held to every admission rule of a scan step that reads the policy, by the
+/// functions admission calls (its last tie-break key, `on_empty`'s mode, the upper bound's
+/// inputs; `contained_task_select_invalid`, the admission's detail). The facts are
 /// `dry_run_select`'s: `snapshot` with `run_parameters` overlaid at `now_unix_ms`, with the rows
 /// of the record lists the evaluated policy declares; a document that declares a shared table
 /// finds none. The session runs as online up to its coverage checks, then decides as the step
@@ -744,7 +746,7 @@ pub fn dry_run_scan_decide(
     run_parameters: &crate::RunParameters,
     policy_override: Option<&SelectionPolicy>,
 ) -> Result<ScanDryRunDecided, ContainedTaskError> {
-    let prepared = task
+    let operation = task
         .program
         .operations
         .iter()
@@ -754,15 +756,13 @@ pub fn dry_run_scan_decide(
                 ExecutionKernelCode::ContainedTaskOperationMissing.code(),
                 operation_id,
             )
-        })?
-        .prepared_select
-        .as_deref()
-        .ok_or_else(|| {
-            ContainedTaskError::with_detail(
-                SELECT_INVALID.code(),
-                format!("operation={operation_id} is not a select step"),
-            )
         })?;
+    let prepared = operation.prepared_select.as_deref().ok_or_else(|| {
+        ContainedTaskError::with_detail(
+            SELECT_INVALID.code(),
+            format!("operation={operation_id} is not a select step"),
+        )
+    })?;
     let scan = prepared.scan().ok_or_else(|| {
         ContainedTaskError::with_detail(
             SELECT_INVALID.code(),
@@ -771,16 +771,32 @@ pub fn dry_run_scan_decide(
     })?;
     if let Some(policy) = policy_override {
         let layout = check_policy_override(task, prepared, policy)?;
-        if let Some(detail) = scan.admission_refusal(
-            layout,
-            Some(policy),
-            &task.evaluator,
-            (
-                task.control.resolution.width,
-                task.control.resolution.height,
-            ),
-            task.control.task_timeout().milliseconds,
-        ) {
+        // Fix round K-a: every admission rule of a scan step that reads its policy, in
+        // admission's order and with its details, each by the function admission calls: the
+        // scan's own (its last tie-break key), `on_empty`'s mode where the step declares
+        // `on_empty`, and the upper bound's inputs.
+        let refusal = scan
+            .admission_refusal(
+                layout,
+                Some(policy),
+                &task.evaluator,
+                (
+                    task.control.resolution.width,
+                    task.control.resolution.height,
+                ),
+                task.control.task_timeout().milliseconds,
+            )
+            .or_else(|| {
+                operation
+                    .on_empty_key()
+                    .and_then(|_| on_empty_mode_refusal(policy))
+            })
+            .or_else(|| {
+                bound_inputs(layout, policy, prepared.identity_feature())
+                    .err()
+                    .map(|detail| format!("upper_bound {detail}"))
+            });
+        if let Some(detail) = refusal {
             return Err(ContainedTaskError::with_detail(
                 SELECT_INVALID.code(),
                 format!("operation={operation_id} {detail}"),
@@ -813,12 +829,16 @@ pub fn dry_run_scan_decide(
                 (SelectionOutcome::Selected { .. }, [candidate_id])
                     if unknown_check.blocking == TaskSelectionBlocking::None =>
                 {
+                    // Fix round K-a: a selected candidate the scan holds no member for is an
+                    // invariant broken, never a missing choice.
                     let position = session.member_position(candidate_id)?;
-                    summary
+                    let member = summary
                         .members
                         .iter()
-                        .find(|member| Some(member.position_index) == position)
+                        .find(|member| member.position_index == position)
                         .cloned()
+                        .ok_or_else(|| not_a_member(candidate_id))?;
+                    Some(member)
                 }
                 _ => None,
             };

@@ -7,7 +7,9 @@
 // runs the session as online over the given frames to its coverage checks and decides as the step
 // does: the decision, the unknown-instance check and the chosen member; nothing returns, confirms or
 // is pressed. A draft policy in place of the sealed one is checked as `dry_run_select` checks one,
-// and its last tie-break key as admission checks a scan's policy.
+// and its last tie-break key as admission checks a scan's policy. The fix round K-a adds a scan
+// that stops early on the first viewport, the second kind of scan select, and a decision between
+// two members that chooses the second.
 //
 // Every expected value comes from those lines and the package below, never from the code. The
 // package is K1's card list (`gate_463_k1`, its scan run): the same six cards, card k a noise marker
@@ -253,9 +255,24 @@ fn card_scan() -> Value {
     })
 }
 
+// K1's scan with `early_stop` (fix round K-a): the scan of a select that knows the card it wants,
+// which may stop before the end of the list once no position it has not read could outrank its
+// best member (S0 §3.3).
+fn early_stop_scan() -> Value {
+    let mut scan = card_scan();
+    scan["early_stop"] = json!("upper_bound");
+    scan
+}
+
 // The policy `policy_id` over the cards: a card is a member when its identity is `wanted`, chosen
 // with the tie-break keys `tie_break`.
 fn policy(policy_id: &str, wanted: &str, tie_break: Value) -> Value {
+    policy_of(policy_id, &[wanted], tie_break)
+}
+
+// The policy `policy_id` over the cards: a card is a member when its identity is one of `wanted`,
+// chosen with the tie-break keys `tie_break`.
+fn policy_of(policy_id: &str, wanted: &[&str], tie_break: Value) -> Value {
     json!({
         "schema_version": "actingcommand.selection-policy.v1",
         "policy_id": policy_id,
@@ -271,7 +288,7 @@ fn policy(policy_id: &str, wanted: &str, tie_break: Value) -> Value {
         "gates": [{"gate_id": "wanted",
                    "predicate": {"kind": "string_in",
                                  "value": {"source": "field", "field": "member"},
-                                 "allowed": [wanted]},
+                                 "allowed": wanted},
                    "on_unknown": {"kind": "drop_candidate"}}],
         "scoring": [],
         "selection": {"mode": "none_allowed", "required_count": 1},
@@ -282,6 +299,13 @@ fn policy(policy_id: &str, wanted: &str, tie_break: Value) -> Value {
 // The last tie-break key a scan's policy must have: the lowest candidate ID first.
 fn lowest_id_last() -> Value {
     json!([{"kind": "candidate_id", "direction": "lowest_first"}])
+}
+
+// Fix round K-a: the highest candidate ID first, then the last key a scan's policy must have. Of
+// two members that score alike, the one numbered later in first-seen order is chosen.
+fn highest_id_first() -> Value {
+    json!([{"kind": "candidate_id", "direction": "highest_first"},
+           {"kind": "candidate_id", "direction": "lowest_first"}])
 }
 
 // A draft policy as the Lab hands one to the dry run.
@@ -303,9 +327,9 @@ fn bytes(value: &Value) -> Vec<u8> {
     serde_json::to_vec(value).expect("JSON bytes")
 }
 
-// K1's linear package of one select step `pick` over the card list's scan, from the list (the
-// entry) to the detail page, guarded by pixel (3, 0), whose sealed policy is `policy`.
-fn package(policy: &Value) -> Vec<u8> {
+// K1's linear package of one select step `pick` over the card list's scan `scan`, from the list
+// (the entry) to the detail page, guarded by pixel (3, 0), whose sealed policy is `policy`.
+fn package(policy: &Value, scan: Value) -> Vec<u8> {
     let control = json!({
         "schema_version": "Lab-1y.control.v2",
         "package_id": "neutral.linear.scan.decide",
@@ -336,7 +360,7 @@ fn package(policy: &Value) -> Vec<u8> {
                       "expected_rect": {"x": 3, "y": 0, "width": 1, "height": 1},
                       "color_probe": "guard/list"},
             "select": {"layout_id": "layout/cards", "policy": {"path": "policies/select.json"},
-                       "scan": card_scan()}
+                       "scan": scan}
         }]
     });
     let colour = |id: &str, x: u32, expected: [u8; 3]| {
@@ -391,9 +415,15 @@ fn package(policy: &Value) -> Vec<u8> {
 
 // The package with `policy` sealed, as contained task admission prepares it, with the card reader.
 fn admitted(policy: &Value) -> PreparedContainedTask {
+    admitted_scanning(policy, card_scan())
+}
+
+// The package with `policy` sealed and `pick` scanning with `scan`, as contained task admission
+// prepares it, with the card reader.
+fn admitted_scanning(policy: &Value, scan: Value) -> PreparedContainedTask {
     PreparedContainedTask::load_with_vision_provider(
         INSTANCE,
-        &package(policy),
+        &package(policy, scan),
         Arc::new(CardNames),
     )
     .unwrap_or_else(|error| panic!("the scan package: refused: {error}"))
@@ -413,7 +443,9 @@ fn snapshot() -> InstanceFactSnapshot {
     }
 }
 
-// The dry run of `pick` over `frames`, with the package's default run parameters.
+// The dry run of `pick` over `frames`, with what a run without a dispatch reads, as a recording's
+// self-check passes it (fix round K-a): the package's declared parameters and variables at their
+// defaults (it declares none of either).
 fn dry_run(
     task: &PreparedContainedTask,
     frames: Vec<Frame>,
@@ -424,7 +456,7 @@ fn dry_run(
         "pick",
         frames,
         (&snapshot(), NOW_UNIX_MS),
-        &task.default_run_parameters(),
+        &task.default_run_values(),
         policy_override,
     )
 }
@@ -614,4 +646,113 @@ fn kr3a_a_draft_policy_without_the_lowest_candidate_id_last_is_refused() {
         error.detail(),
         Some("operation=pick scan tie_break=last_not_candidate_id_lowest_first")
     );
+}
+
+// Fix round K-a, the second kind of scan select, which knows the card it wants: the scan declares
+// `early_stop`, the sealed policy wants `member-b`, card 1, which the first viewport already shows,
+// and the frames are that viewport alone, fed twice. Once it is read, no card is unknown and no
+// card not yet seen could outrank card 1 (every member scores 0, and the policy's first tie-break
+// key is the lowest candidate ID first), so the scan stops there: coverage `early_stopped` over the
+// one viewport at content offset 0, whose end mark is not shown; its four cards, three gated out;
+// the decision `selected` with the one member `layout/cards#00`, nothing unknown; the chosen member
+// card 1: position 1, fixed on viewport 0 at content row 22, `member-b`.
+#[test]
+fn kr3a_an_early_stop_scan_decides_on_the_first_viewport_showing_the_wanted_card() {
+    let task = admitted_scanning(
+        &policy("cards-wanted", "member-b", lowest_id_last()),
+        early_stop_scan(),
+    );
+
+    let decided = dry_run(&task, vec![viewport(0, None), viewport(0, None)], None)
+        .unwrap_or_else(|error| panic!("expected a decision, got {error}"));
+
+    assert_eq!(decided.scan.coverage, ScanCoverageState::EarlyStopped);
+    assert_eq!(
+        decided
+            .scan
+            .viewports
+            .iter()
+            .map(|viewport| (viewport.content_offset_px, viewport.end_check))
+            .collect::<Vec<_>>(),
+        [(0, false)]
+    );
+    assert_eq!(decided.scan.positions, 4);
+    assert_eq!(decided.scan.gated_out, ["member-a", "member-c", "member-d"]);
+    assert!(
+        matches!(
+            decided.decision.outcome,
+            SelectionOutcome::Selected { count: 1 }
+        ),
+        "{:?}",
+        decided.decision.outcome
+    );
+    assert_eq!(decided.decision.outcome_key, "card_selected");
+    assert_eq!(decided.decision.selected, ["layout/cards#00"]);
+    assert_eq!(decided.unknown_check, NOTHING_UNKNOWN);
+    let chosen = decided.chosen.expect("the chosen card");
+    assert_eq!(
+        (
+            chosen.identity.as_str(),
+            chosen.position_index,
+            chosen.fixed_viewport,
+            chosen.content_axis_px
+        ),
+        ("member-b", 1, 0, 22)
+    );
+    assert_eq!(decided.scan.members, [chosen]);
+}
+
+// Fix round K-a, two members: the sealed policy wants `member-b` and `member-e`, cards 1 and 4, and
+// ranks the highest candidate ID first. The scan covers the list over the two viewports; its
+// members, in position order, are card 1 (`layout/cards#00`, first seen on viewport 0) and card 4
+// (`layout/cards#01`, on viewport 1); the decision `selected` takes `layout/cards#01`, nothing
+// unknown; the chosen member is card 4, the second of the scan's members: position 4, fixed on
+// viewport 1 at content row 58, `member-e`.
+#[test]
+fn kr3a_of_two_members_the_one_the_policy_selects_is_chosen() {
+    let task = admitted(&policy_of(
+        "cards-two",
+        &["member-b", "member-e"],
+        highest_id_first(),
+    ));
+
+    let decided = dry_run(&task, forward_run(None), None)
+        .unwrap_or_else(|error| panic!("expected a decision, got {error}"));
+
+    assert_eq!(decided.scan.coverage, ScanCoverageState::Complete);
+    assert_eq!(decided.scan.positions, 6);
+    assert_eq!(
+        decided.scan.gated_out,
+        ["member-a", "member-c", "member-d", "member-f"]
+    );
+    assert_eq!(
+        decided
+            .scan
+            .members
+            .iter()
+            .map(|member| (member.identity.as_str(), member.position_index))
+            .collect::<Vec<_>>(),
+        [("member-b", 1), ("member-e", 4)]
+    );
+    assert!(
+        matches!(
+            decided.decision.outcome,
+            SelectionOutcome::Selected { count: 1 }
+        ),
+        "{:?}",
+        decided.decision.outcome
+    );
+    assert_eq!(decided.decision.selected, ["layout/cards#01"]);
+    assert_eq!(decided.unknown_check, NOTHING_UNKNOWN);
+    let chosen = decided.chosen.expect("the chosen card");
+    assert_eq!(
+        (
+            chosen.identity.as_str(),
+            chosen.position_index,
+            chosen.fixed_viewport,
+            chosen.content_axis_px
+        ),
+        ("member-e", 4, 1, 58)
+    );
+    assert_eq!(decided.scan.members.get(1), Some(&chosen));
 }
