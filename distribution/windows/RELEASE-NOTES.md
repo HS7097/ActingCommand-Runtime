@@ -9,6 +9,134 @@ Cargo.lock hash, Rust toolchain, target, build profile, Actions run/attempt and
 file identities are recorded in the accompanying `BUILD-MANIFEST.json`; the zip
 and artifact names bind the complete source SHA.
 
+## v0.12.66
+
+本版是 v0.12.65 之后的 2 次合并、3 张 PR：截图提速的并车 #1772（#463 S1-10 #1772 自己，带 S1-9 #1773）和直接合并的 #1774（#461）。车上除了两张的头和合并，有两个并车自己的提交：
+照 #1773 的审查给 S1-9 那一节契约补三句（放租约失败报在哪、一台几个应用时占住的是整台、两个时刻不再含放租约的时间），登记 §1.429、§1.430 各补一句点名这趟车。
+内容是：Lab 截的每一张图不再在账本里白等约 0.72 秒；录下的一下按把租约拿到点后的截图做完再放；租约已过期、关会话被拒时，又有三条路只围住那一台，不再停掉整个 Runtime。
+**生产上跑的是 v0.12.65（2026-11-16 13:14 起，经 Lab 救急模块部署）**：一台实例在跑调度的例行任务，其余实例暂停着、模拟器关着。从 v0.12.65 装本版：
+**Lab 救急模块的 `deploy` 和 `actingctl install` 两面都能装，不用任何标志，没有 `ledger_verify`，`defaults_diff` 没有一行，没有新文件**。接口一个没动，配置键没加，结果码没加。
+**本版改了 Runtime 自己的程序**（前三版只改了 Lab）：账本和宿主各有三个文件的生产代码改了（见「配置」），没有新的记录、格式或修订。**退回 v0.12.65 一直开着**，退回之前不必先做什么。
+
+- **为什么有这一版**：v0.12.64（03:32）和 v0.12.65（13:18）上线后都在一台真机实例上走了录制（看板 #463）：录下的一下按之后只留下两张已经停稳的帧，第一张在按下后约 2.2 到 2.6 秒，
+  下一张再隔约 0.9 秒，过渡画面一张都没有。生产账本上读出两笔：
+  - **v0.12.65 说明里「每一张……都固定多花约 0.72 秒，花在哪一步还没查到」这一句要改：查到了，花在账本收钉上**。Lab 截的每一张图，从 `artifact.pin_recorded` 到 `capture.completed`
+    都隔 720 到 755 毫秒（会话冷热都一样），同一台、同一天调度运行的截图只隔 1 毫秒。截图的线程把钉交给账本后同步等写入端答复；写入端收下理由是 `Lab` 的钉之前要问
+    「触发它的那条记录和 Lab 有没有关系」（`crates/ledger/src/global/retention.rs` 785–791），而这一问每次都把整部账本的 Lab 关系（每个 Lab 锚点的请求号、关联号，再加上点名它们的全部运行）
+    读一遍（`history.rs` 409–418），写入端没有缓存，Lab 的历史越长越慢。调度运行的钉理由是 `explicit`，不问这一句。
+  - 按下后第一张多花约 1.6 秒重开会话：按下用的租约一放，同机有两台以上登记的实例用 Nemu 时（多 Nemu 闸门，`crates/runtime-host/src/host/resource_close.rs` 115–155），会话就关了。
+  - 第三片：读 #458 的修法时看出，还有几条路会因为一台实例的租约过期而停掉整个 Runtime（看板 #461）。
+
+- **在用的安装在部署时和以后碰到的**（逐条核过代码）：
+  - **Lab 截的图都快了，不只录制的按下**（S1-10）。钉的理由是 `Lab` 的，是请求信封为 (Lab, Lab) 的截图（`crates/runtime-host/src/host/frame_retention.rs` 104–112）。`actinglab` 开的每一条连接都是
+    （`apps/actinglab/src/main.rs` 435–469），所以从命令行跑的 `capture`、`frame`、`observe --capture`、`do --capture`，录制的按前、按后截图，以及两个 MCP 服务器经 `actinglab` 子进程做的
+    （Lab 的 MCP 服务器调试、创作模块的行，例如 `ac_lab_observe`、`ac_do`；第一代的 `ac_lab_observe`、`ac_lab_do` 和录制工具）都快了。**Lab 的 MCP 服务器在自己进程里服务的核心行
+    （例如 `ac_frame`）和第一代的 `ac_observe` 不在其中**：它们用 (Cli, Cli) 信封连（`crates/lab-ops/src/front.rs` 103、115–133，`apps/actinglab-mcp/src/runtime.rs` 77–78，
+    `apps/actingctl/src/mcp/runtime.rs` 261–265），钉的理由是 `explicit`，原来就不卡，本版对它们不变。研读估计两片合起来点后每张约 0.1 秒（0.09 到 0.11）：**这是预计，部署以后量一次**。
+  - **录下的一下按占住这一台的队列，直到点后的截图做完**（S1-9）：从按下到点后最后一张，最长是点后的等待和上限（`after_ms + still_max_ms`，默认 100 + 5000 毫秒）再加一张截图
+    （帧失效重试那一次再多一张截图和一次状态读）。录制自己的按住本来就把调度挡在外面。命令持着租约时续租；命令被杀，连接一断，Runtime 就收回租约。
+  - **下一下按之前那一张又是冷的**：租约一放，多 Nemu 闸门下会话照旧关，所以下一下按之前那张截图要重开会话，约 1.6 到 1.7 秒（v0.12.64 真机上第一下按之前那张重开用了 1682 毫秒）。
+    v0.12.65 上这张是热的，因为前一下按的点后截图已经把会话重开了。等的地方从按下之后（挡住了过渡）挪到下一下按之前（只是让智能体多等）。
+  - **#461：平常什么都碰不到**（租约一般在到期之前就放了）。碰到「租约已过期、关会话被拒」的三条路：客户端断开连接、输入做到一半租约过期随后失败、后端故障的收尾（运行或应用命令失败后的收尾）。
+    原来整个 Runtime 停；现在只围住那一台，原因词 `lease_expired`，记录和 #458（v0.12.60 起）在过期那条路上写的一样：`runtime.failed`（阶段 `runtime_lifecycle_session_close`，点名租约）、
+    `instance_resources_fenced`、`lease.released`。欠的那次关会话在租约结束后补一次，期间设备不交给任何人，别的实例照常派单；失败的输入只答它自己的失败，不再把所有者记成「未确认」。
+    围栏照旧只有自检通过的准备才解（围栏自己的复查，默认每 5 分钟一次、最多 12 次；人做的恢复、自检、模拟器启动或重启；恢复阶梯的重新准备；`host/resource_fence.rs` 19–22、622–657）；
+    客户端的租约和输入算人手的活，默认（`recovery_ladder.rules.direct_runs` 为 `exempt`）这样的围栏立刻等人，调度运行的后端故障收尾交给恢复阶梯。**仍然致命的**是 Runtime 自己的故障：
+    正在停机、拒绝的记录写不进、锁中毒、没有围栏能接、补关时出致命错、结束租约的那几条记录写不进、步骤状态不一致（`resource_close.rs` 72–82、478–483、534–546、600，`lease.rs` 2767–2785）。
+
+- **改了什么**（账本、Lab、宿主）：
+  - **账本：收 Lab 的钉先按索引点查**（S1-10，§1.430）。写入端答「这条记录和 Lab 有没有关系」时，先看有没有 Lab 锚点（来源 `lab` 或类型 `lab.request` 的记录）在它之前点名它的请求号或关联号：
+    先查同一批里还没存的，再用 `ledger_links_request`、`ledger_links_correlation` 两个索引查已存的（一条语句、最多一行；`crates/ledger/src/global/history.rs` 426–452，`sqlite.rs` 5037–5069）。
+    命中就答「有关」；没命中照旧整读，认只靠运行相关的记录。「有关」本来就是请求号、关联号、运行三种取或，点查证明的是前两种之一，所以每一条的答案都和原来一样（独立审查在 12000 个
+    随机例上比过，没有一处不同）。保留规则另外三处问同一句的地方（封存范围里的记录、逐出意图受不受 Lab 保护、逐出关闭的冲突）也先点查，决定不变。两个索引从第一版 SQLite 账本结构起
+    就有（`sqlite/schema.sql` 26–27），清理器早就点名用它们。这条检查护着的东西（Lab 的钉只落在 Lab 的范围里）一点没松。
+  - **Lab：录下的一下按把租约拿到点后截图做完**（S1-9，§1.429）。`tap`、`swipe`、`long-tap` 带 `--record` 时，输入代理连同租约归整次按下：第一次输入时取，帧失效重试那一次用同一个，
+    点后截图期间一直拿着，`record_press` 答完以后放，什么结果都放（`apps/actinglab/src/commands/device_commands.rs` 856–868、1020–1043）。点后某张截图失败：已截的先记下再放；按下结果不明、
+    输入被拒：不截点后的图，立即放。`input_outcome.close_stage`（失败时加 `close_error`）照旧说放得怎样，放之后才填；按已发出、录制随后报错时，放失败只写在那个错误细节的 `input_outcome` 里。
+    按下的 `executed_at_unix_ms` 和 `waited_ms` 的起点改在放租约之前取，不再含放租约（多 Nemu 闸门下就是关会话）的时间。不变的：先截图、再按在这一帧上；只按 Runtime 自己截的帧
+    （持着租约时，持有者自己的不带键只读观察照常收，帧仍算观察者的）；不带 `--record` 的按和 `session app … --record`；步骤表的结构（`contracts/lab-recording.md`「The lease of a recorded press」）。
+  - **宿主：租约过期后关会话被拒，又有三条路只围住那一台**（#461，§1.431）。客户端断开（`end_connection`，`crates/runtime-host/src/host/requests.rs` 1325，是 `connection_boundary` 末尾原样拆出来的）
+    和后端故障的收尾在 `end_lease_ordered` 里传新的 `HolderEnd`（`host/lease.rs` 2520–2531），`close_instance_resources` 把它接到 #458 的 `fence_expired_lease_close` 上
+    （`host/resource_close.rs` 322–329）；欠着关会话时不移交（`lease.rs` 2549–2554），租约结束后在同一把准入锁下关一次（`cleanup_token_guarded`，2482–2496）。失败的输入在
+    `finish_input_failure` 里碰到这个拒绝，照样隔离、记下欠账（`resource_close.rs` 1259–1279）；输入自己的租约结束时再碰到它，不再多记，结束后关一次。认这个拒绝要操作名和码两样都对上
+    （`begin_destructive_resource_close` 的 `lease_expired`，`resource_close.rs` 478–483），不会误抓别的错误。
+
+- **部署和退路**：照 v0.12.65 那次的做法，用在线 v0.12.65 留下的那份 `actinglab` 跑 `release stage`、`deploy <提交> --plan` 预看、`deploy <提交> --detach` 实做，再用 `op status` 看结果。
+  救急模块（`crates/lab-rescue`）自 v0.12.65 一行没改。部署以后 `op status` 的 `mcp_servers_on_old_images` 照旧列出还跑在改名放到一边的旧映像上的 MCP 服务进程：本版没改工具、
+  没删请求种类，旧进程照样能用。
+  - **退路**：回 v0.12.65 用留着的 v0.12.65 那份 `actingctl install`（`install undo`、`install resume`、`install release-hold`）或救急模块的退回：账本的修订和记录种类都没变，回退门放行。
+
+- **已知的限度**（各片审查和验收记录列的，逐条核过）：
+  - **每一下按之前那张仍要重开会话**（约 1.6 到 1.7 秒）。要去掉它得改「同机两台以上用 Nemu 时每次租约结束都关会话」那条规矩（#191 H），本版没动。
+  - 一台模拟器上几个应用成组的成员，录制的按下照旧被拒：按之前那张截图在租约之外截，这样的成员上一次不带键的观察结束时就关会话，按下点名的那一帧随之没了，输入被拒
+    `input_frame_unavailable`（`host/observation.rs` 272–279，`host/resource_close.rs` 765 起的 `close_keyless_session_of_group`，`host/input.rs` 132–147）。今天碰不到：构建在装载时就拒
+    每一个多成员的组（`several_members_unsupported`，`apps/actingd/src/config/device_group.rs` 293、381）。
+  - **还有五处同一种拒绝照旧停掉整个 Runtime**（看板 #475）：跑到一半交给恢复阶梯（`hand_off_to_ladder`，`host/lease.rs` 2154）、抢占后的移交（`perform_transfer`，1025）、
+    应用命令的准备（`host/input.rs` 716–740）、后端切换（`host/backend_switch.rs` 421）、成员切换（`host/switch.rs` 856）；最后一处只在一台几个应用时走得到，今天哪个安装都配不出来。
+  - S1-10 审查提的两条测试没做：只靠关联号命中的用例、给新语句的查询计划检查。没命中只是退回整读：慢，不会错。理由是 `Lab`、触发记录却和 Lab 无关的钉照旧被致命拒绝
+    （`artifact_pin_reason_conflict`），写入端结束、Runtime 停（`retention.rs` 785–791）：只在宿主自己构造钉出错时才会这样，本版没碰这条路。
+  - 三片都没在真机上跑过；点后每张多快、钉有没有命中，部署以后读一次账本才知道。
+
+配置：按代码、`distribution/windows/component-interfaces.json` 和 `contracts/component-interfaces.md` 核过，一个没动：
+
+- 接口：`actingd-config` [5, 33]、`install-selection` [1, 1]、`install-control` [0, 0]、`ledger` [3, 8]、`runtime-client` [3, 9]、`package` [3, 15]、`runtime-outcomes` [1, 1]
+  （`component-interfaces.json` 4–10，`contracts/component-interfaces.md` 自 v0.12.65 没改）。本版不写新的记录、成员或文件格式：S1-10 只改写入端怎么答，S1-9 只改租约放的时刻，
+  #461 写的是 #458 早就写的那几种记录，所以没有该升没升的修订。
+- **Runtime 改了的文件**：账本 `crates/ledger/src/global/` 的生产代码三个：`history.rs`（点查，和它在 `lab_related` 里的位置）、`sqlite.rs`（点查语句 `LAB_ANCHOR_NAMING`、`read_lab_anchor_names`）、
+  `storage.rs`（存储接口的新方法 `lab_anchor_names`；只在测试里编的内存存储也实现了）；`global.rs` 只多了测试里才编的计数器 `with_lab_relations_reads`；测试是 `tests.rs` 和新的
+  `tests/gate_463_s110.rs`。宿主 `crates/runtime-host/src/` 的生产代码三个：`host/lease.rs`、`host/resource_close.rs`、`host/requests.rs`；`host.rs` 只多了测试入口 `end_connection_for_test`
+  （只在测试里编）和注释，`codes.rs` 只多了测试里才有的拼写；测试是 `tests.rs`（注释）和 `tests/gate_458_close_isolates.rs`。Lab 是 `apps/actinglab/src/commands/device_commands.rs`，
+  测试 `apps/actinglab/tests/runtime_input_proxy.rs`。`crates/execution-kernel`、`crates/policy`、`crates/runtime-client`、`crates/actingcommand-contract`、`crates/runtime-config`、`crates/lab`、
+  `crates/lab-ops`、`crates/lab-rescue`、`crates/resource-tooling`、`apps/actingd` 和两个 MCP 服务器一个文件没改。
+- 配置键：没有加的、没有去掉的；`actingd.defaults.json` 一字没改，sha256 仍是 `e14b0ced7040a6d05046edddd9b0c8ee95a53de4b65d69fcc7d9dae17a433343`；两个配置模板和
+  `apps/actingd/src/config/manifest.rs` 没改。
+- 结果码：一个没加，没有 `retired`。3977 个码（在用 3889，`retired` 88），1764 个位置、31 个分片；键 681，词表 258，词 1999；在用码按类别 error 3379、warning 156、info 212、success 125、
+  fatal 17；审阅定稿的在用码 154 个：都和 v0.12.65 一样。#461 用的是 #458 的原因词 `lease_expired` 和它的码。本版的发布文件 `contracts/outcome-codes/released/0.12.66.json`：0 个码、
+  0 个位置；索引由脚本生成，仍是 32 个文件，核过是最新的。
+- Lab 的操作表（190 行）、命令清单（46 个顶层分派臂、106 条命令）、Lab 的 MCP 服务器（Windows 上 163 个工具）、第一代 MCP 服务器（46 个工具）都没变。README 两种语言只把工具表标题
+  改成 v0.12.66。两个压缩包的文件表不变（`.github/workflows/windows-remote-build.yml` 没改）：没有新文件、没有去掉的文件。
+- 不稳定表仍是 FLK-08、FLK-10、FLK-14、FLK-15、FLK-16（`ci/flaky-tests.toml`，本版没动）。
+
+升级与退回（救急模块部署、退回、撤销那几条路，`crates/lab-rescue` 自 v0.12.65 一行没改，v0.12.65 说明里引的行号对本版也对；`actinglab deploy` 和 `actingctl install` 走的都是它）：
+
+- **v0.12.65 的安装工具装本版：两面都能装，不用任何标志。** 两个构建清单的 `interfaces` 和 v0.12.65 的一字不差，计划的每条边和 v0.12.65 那次一样：`ledger` 两边 [3, 8]，`one_way` 不触发，
+  `ledger_verify` 为 false（`install/plan.rs` 924）；`installer_knows_keys` 过；`defaults_diff`（583–607）没有一行；文件计划里没有 `new`；`package` 的 `bundle_max_in_next` 照旧每个游戏一条
+  `pack_declaration_unknown` 警告，不挡。
+- **本版第一次启动多写的**：没有。点查只读；#461 只改租约结束那几条路；`config.selection` 的默认值哈希不变。v0.12.65 的配置文件照收；`standard-pack check` 没改，对今天的根答法相同。
+- **退回 v0.12.65**：回退门（`install/update.rs` 390–447）只放行这次部署替换掉的 v0.12.65；第 1 部分的边都过；第 2 部分用 v0.12.65 自己的 `actingledger events` 读部署以来的每一页：
+  本版的 Runtime 不写 v0.12.65 不认识的记录，过。
+  - 本版设下的围栏：围栏和欠着的关会话都只在内存里（`crates/runtime-host/src/host.rs` 6477–6479、6521–6524）；退回要停下 Runtime，v0.12.65 起来时每一台照常准备、自检，没有围栏带过去。
+    账本里那几条记录（带 `lease_expired` 的 `runtime.failed`、`instance_resources_fenced`、`lease.released`）是 #458 自 v0.12.60 起在过期那条路上就写的同样记录，v0.12.65 照读。
+  - 录制：S1-9 没改步骤表和清单的结构，只把两个时刻的起点挪到放租约之前；在本版上开始的录制在 v0.12.65 上照常结束、放开。
+  - **这些都不让安装的状态或日志对 v0.12.65 读不了。**
+
+配对：
+
+- **控制台 UI**（UI main `41600540` 钉 Runtime v0.12.63 `3581a8af`，`Cargo.toml` 41–46）：它钉的六个库里本版只改了账本，改的是写入端内部（新东西都是 `pub(super)` 或只在测试里编），
+  它离线读账本用的那一面一字没变；契约库、客户端、配置、内核、取证库自 v0.12.65 没改，接口一个没动，所以本版没有东西碰到它，下一次钉也不因本版多改什么。认录制按住
+  （`lab-record-<毫秒>`）的改动在控制台仓开着的 PR #182 里，读的时候还没合进 main（main 的 `crates/acui-app/src/ledger/resume.rs` 63–81 只认救急模块的词），账本窗口照旧把录制的按住
+  当成「别的工具设的」暂停。
+- **部署工具包**（这次走 Lab 的行）：两个构建清单的 `speaks` 和 v0.12.65 相同（`actingd-config` [5, 33]、`install-selection` [1, 1]、`install-control` [0, 0]、`ledger` [3, 8]、`runtime-client` [3, 9]、
+  `package` [3, 15]、`runtime-outcomes` [1, 1]）；默认值文件的哈希不变；`git diff --stat v0.12.65 <提交> -- apps/actingd/src/config/manifest.rs distribution/windows/actingd.defaults.json`
+  什么都不打印；不过的边没有，警告照旧是每个游戏一条 `package` 的 `bundle_max_in_next`；没有新文件、没有去掉的文件；运行中的 `actingctl.exe`（MCP 服务）、`actinglab-mcp.exe` 和做计划的
+  `actinglab` 改名放到一边，别的跑着的程序文件挡住，和 v0.12.65 一样；`standard-pack check` 不出新的警告码；启动日志不多一行。
+- **热放置工具包**：本版没有让它变的东西：`place`、`standard-pack check`、`actingctl` 都没改。重钉要换的照旧只是构建值；`actingd_config` 5,33 和默认值哈希不变。
+- **两个 MCP 服务器**：工具一个没增减、一行没改；经 `actinglab` 子进程做的截图快了，`ac_frame` 和第一代的 `ac_observe` 不变（见上）。
+
+运行上的变化：
+
+- 从 v0.12.65 部署，经 Lab 的 `release stage`、`deploy`、`op status`：不用标志，没有 `ledger_verify`，`defaults_diff` 没有行，没有新文件。
+- Lab 截的图不再在账本里卡约 0.72 秒；录下的一下按之后预计约 0.1 秒一张（部署以后量）。
+- 录下的一下按占住这一台到点后截图做完（默认最长约 5.1 秒再加一张）；下一下按之前那张要等约 1.7 秒重开会话。
+- 租约已过期、关会话被拒，在客户端断开、输入失败、后端故障收尾这三条路上只围住那一台；还有五处照旧会停（#475）。
+- 退回 v0.12.65 一直开着，退回之前不必先做什么。
+
+本版合并的 PR：
+
+- #1772 S1-10（登记 §1.430，同时是截图提速的并车）、#1773 S1-9（§1.429）：门行 `#463 S1-10`（`gate_463_s110`，7 条）、`#463 S1-9`（`runtime_input_proxy` 的 `s19_*`，4 条）；
+  并车补了 S1-9 契约的三句和登记的两句。
+- #1774 #461（§1.431）：门行 `#461`（`gate_458_close_isolates` 的 `close461_*`，4 条）。
+
 ## v0.12.65
 
 本版是 v0.12.64 之后的 2 次合并、5 张 PR，都是 #463 制包的：并车 #1766（S2-1 #1766 自己，带 S2-13 #1765、S2-5 #1768、S3-11 #1767）和直接合并的 #1770（S1-8）。车上除了各张的头和合并，

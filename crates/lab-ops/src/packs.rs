@@ -426,39 +426,42 @@ pub fn read_with_tables(
     read_answer(installation, config, query, true)
 }
 
+/// #463 S2-1b: the game and server the selected configuration `config` binds one instance to, for
+/// actinglab's `record ready` and `record stop` in an installation: the configured instance
+/// `selector` names (its alias, `instance_id` or ADB port, as [`read`] selects one) and the row of
+/// `policy.facts.instances` whose `instance_id` is its alias, the place the Runtime's scheduler
+/// workbench reads them from. `None` when no configured instance answers the selector, or no row
+/// binds the one that does. The configuration is read and decoded as [`read`] reads it (by the
+/// one function both call), and refused as it refuses one that cannot be; nothing else of it is
+/// kept.
+pub fn instance_binding(
+    installation: Option<&InstalledProcess>,
+    config: &Path,
+    selector: &str,
+) -> Result<Option<StandardPackBinding>, PacksError> {
+    let (_, file) = read_config(installation, config)?;
+    let Ok(instance) = select(&file.instances, selector) else {
+        return Ok(None);
+    };
+    Ok(file
+        .policy
+        .iter()
+        .filter_map(|policy| policy.facts.as_ref())
+        .flat_map(|facts| &facts.instances)
+        .find(|row| row.instance_id == instance.alias)
+        .map(|row| StandardPackBinding {
+            game_id: row.game_id.clone(),
+            server_id: row.server_id.clone(),
+        }))
+}
+
 fn read_answer(
     installation: Option<&InstalledProcess>,
     config: &Path,
     query: &Query<'_>,
     tables: bool,
 ) -> Result<Answer, PacksError> {
-    let unreadable = |path: &Path, cause: Outcome| {
-        PacksError(
-            Outcome::new(SharedCode::ConfigReadFailed)
-                .path(path)
-                .caused_by(cause),
-        )
-    };
-    let config = std::path::absolute(config)
-        .map_err(|error| unreadable(config, Outcome::from_io_error(&error, IoOp::Absolute)))?;
-    let bytes = match installation {
-        Some(selected) => selected
-            .config_bytes()
-            .map_err(|error| unreadable(&config, Outcome::new(error.code())))?,
-        None => fs::read(&config)
-            .map_err(|error| unreadable(&config, Outcome::from_io_error(&error, IoOp::Read)))?,
-    };
-    let file = serde_json::from_slice::<ConfigFile>(&bytes).map_err(|error| {
-        PacksError(
-            Outcome::new(SharedCode::ConfigDecodeFailed)
-                .path(&config)
-                .caused_by(
-                    Outcome::new(ContractCode::ForeignDataError)
-                        .raw_source(RawSource::Json)
-                        .raw_text(error.to_string()),
-                ),
-        )
-    })?;
+    let (config, file) = read_config(installation, config)?;
     let selected = match query.instance {
         Some(selector) => vec![select(&file.instances, selector)?],
         None => file.instances.iter().collect(),
@@ -489,6 +492,45 @@ fn read_answer(
         },
         warnings: rows.warnings,
     })
+}
+
+/// The selected configuration `config`, made absolute, and the parts of it this module reads
+/// ([`ConfigFile`]): read through `installation`'s checked read when there is an install
+/// selection, as actingd reads it. A configuration that cannot be read is `config_read_failed`,
+/// one that does not decode `config_decode_failed` (ruling Q6), each with the configuration's
+/// `path` and the failure beneath it as its cause.
+fn read_config(
+    installation: Option<&InstalledProcess>,
+    config: &Path,
+) -> Result<(PathBuf, ConfigFile), PacksError> {
+    let unreadable = |path: &Path, cause: Outcome| {
+        PacksError(
+            Outcome::new(SharedCode::ConfigReadFailed)
+                .path(path)
+                .caused_by(cause),
+        )
+    };
+    let config = std::path::absolute(config)
+        .map_err(|error| unreadable(config, Outcome::from_io_error(&error, IoOp::Absolute)))?;
+    let bytes = match installation {
+        Some(selected) => selected
+            .config_bytes()
+            .map_err(|error| unreadable(&config, Outcome::new(error.code())))?,
+        None => fs::read(&config)
+            .map_err(|error| unreadable(&config, Outcome::from_io_error(&error, IoOp::Read)))?,
+    };
+    let file = serde_json::from_slice::<ConfigFile>(&bytes).map_err(|error| {
+        PacksError(
+            Outcome::new(SharedCode::ConfigDecodeFailed)
+                .path(&config)
+                .caused_by(
+                    Outcome::new(ContractCode::ForeignDataError)
+                        .raw_source(RawSource::Json)
+                        .raw_text(error.to_string()),
+                ),
+        )
+    })?;
+    Ok((config, file))
 }
 
 /// The system clock in Unix milliseconds; a clock before 1970 is `system_clock_invalid`.
