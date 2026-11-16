@@ -23,10 +23,18 @@
 // list to done (`back`, guarded by the mark). The runs play scripted frames on the kernel's
 // scripted clock (EXEC-I4): the device shows `screens[n]` after `n` inputs, each segment's last
 // frame repeating.
+//
+// Fix round 1 (`rd-1116/brief-463-kp1-fix1.md`, after the independent review of `ec64249f`): the
+// product loads every package of the source layout (a pack directory, an installed pack, a
+// recorded package) through the source parser, which takes a key step now. The same path is built
+// in that layout, loaded by the product's entry (`PreparedContainedTask::load_content_entries`),
+// admitted and run; and the key goes out bound to the frame the runtime committed, which a device
+// that commits every frame as the host does (`FramedDevice`, as `gate_hs4`'s) keeps.
 
+use super::tests::admission_deadline;
 use super::tests::scripted::{ScriptedFrame, ScriptedRuntime};
 use super::*;
-use actingcommand_contract::package_edge_holds;
+use actingcommand_contract::{IdentifierIssuer, InputFrameReference, package_edge_holds};
 use actingcommand_device::CaptureBackendName;
 use serde_json::{Value, json};
 use std::io::{Cursor, Write};
@@ -287,22 +295,207 @@ fn timing(error: &ContainedTaskError) -> Option<(TaskTimingScope, TaskTimingStag
         .map(|failure| (failure.scope, failure.stage, failure.limit_ms))
 }
 
+// Fix round 1: the scripted device behind a runtime that commits every frame it captures, as the
+// host does (`gate_hs4`'s): each capture gets a frame reference of its own, which
+// `committed_input_frame` answers with its context. It keeps each input with the frame reference
+// the kernel bound it to and the number of frames captured before it; every other answer is the
+// scripted runtime's.
+struct FramedDevice {
+    script: ScriptedRuntime,
+    ids: IdentifierIssuer,
+    captured: Vec<InputFrameReference>,
+    inputs: Vec<(InputAction, Option<InputFrameReference>, usize)>,
+}
+
+impl FramedDevice {
+    fn new(screens: Vec<Vec<ScriptedFrame>>) -> Self {
+        Self {
+            script: ScriptedRuntime::new(screens),
+            ids: IdentifierIssuer::new().expect("identifier issuer"),
+            captured: Vec::new(),
+            inputs: Vec::new(),
+        }
+    }
+
+    // Of a run of the base path (`open`'s tap, then `back`'s key): the key is the second input and
+    // names a frame the runtime committed after the tap and before the key, a frame of the list,
+    // the page its guard passed on. A key bound to no frame, or to the tap's frame, fails here.
+    fn assert_key_bound_to_the_lists_frame(&self, case: &str) {
+        let [(_, _, tapped), (key, bound, keyed)] = self.inputs.as_slice() else {
+            panic!("{case}: two inputs, got {:?}", self.inputs);
+        };
+        assert_eq!(key, &StepKey::Back.action(), "{case}");
+        let bound = bound.unwrap_or_else(|| panic!("{case}: the key names no frame"));
+        assert!(
+            self.captured[*tapped..*keyed].contains(&bound),
+            "{case}: the key names {bound:?}, not a frame captured after the tap: {:?}",
+            self.captured
+        );
+    }
+}
+
+impl ContainedTaskRuntime for FramedDevice {
+    type Error = &'static str;
+
+    fn capture(&mut self) -> Result<ObservedFrame, Self::Error> {
+        let mut observed = self.script.capture()?;
+        let frame_id = *self
+            .ids
+            .mint_frame_id()
+            .map_err(|_| "a frame id")?
+            .transport();
+        let reference = InputFrameReference {
+            frame_id,
+            width: observed.frame.width,
+            height: observed.frame.height,
+        };
+        observed.input_reference = Some(reference);
+        self.captured.push(reference);
+        Ok(observed)
+    }
+
+    fn committed_input_frame(
+        &mut self,
+        reference: InputFrameReference,
+    ) -> Result<Option<InputFrameContext>, Self::Error> {
+        if self.captured.contains(&reference) {
+            Ok(Some(InputFrameContext::for_test(reference)))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn input(
+        &mut self,
+        action: InputAction,
+        frame: Option<InputFrameContext>,
+    ) -> Result<(), Self::Error> {
+        self.inputs.push((
+            action.clone(),
+            frame.as_ref().map(InputFrameContext::reference),
+            self.captured.len(),
+        ));
+        self.script.input(action, frame)
+    }
+
+    fn key_input_support(&mut self, key: StepKey) -> Result<KeyInputSupport, Self::Error> {
+        self.script.key_input_support(key)
+    }
+
+    fn record(&mut self, trace: ContainedTaskTrace) -> Result<(), Self::Error> {
+        self.script.record(trace)
+    }
+
+    fn sampling_supported(&self) -> bool {
+        self.script.sampling_supported()
+    }
+
+    fn step_pacing(&mut self) -> Result<StepPacing, Self::Error> {
+        self.script.step_pacing()
+    }
+
+    fn step_action_gap(&mut self) -> Result<Duration, Self::Error> {
+        self.script.step_action_gap()
+    }
+
+    fn is_bookkeeping_failure(error: &Self::Error) -> bool {
+        <ScriptedRuntime as ContainedTaskRuntime>::is_bookkeeping_failure(error)
+    }
+
+    fn monotonic_now(&mut self) -> Instant {
+        self.script.monotonic_now()
+    }
+
+    fn pause(&mut self, duration: Duration) {
+        self.script.pause(duration);
+    }
+}
+
+// Fix round 1: the base path in the source layout, the content table of a pack directory, an
+// installed pack and a recorded package: the control declaration of two steps, the resource list
+// and the one task, whose recognition the source parser derives from the task's colour probes
+// (pixel 0 the page, pixel 1 the guard mark) and page rules. `open` taps from home into the list;
+// `back`, guarded by the mark on the list, presses the key `word` to done.
+fn source_entries(word: &str) -> BTreeMap<String, Vec<u8>> {
+    let probe = |id: &str, x: u32, expected: [u8; 3]| {
+        json!({"id": id,
+               "region": {"mode": "rect", "rect": {"x": x, "y": 0, "width": 1, "height": 1}},
+               "expected": expected})
+    };
+    let mut back = key_step(word, "list", "done");
+    back["guard"] = json!({"page_id": "list", "target_id": "guard_ready",
+                           "expected_rect": {"x": 1, "y": 0, "width": 1, "height": 1},
+                           "color_probe": "guard_ready"});
+    let task = json!({
+        "schema_version": "0.9",
+        "task_id": "task",
+        "game": "neutral",
+        "server_scope": ["test"],
+        "locale": "en-US",
+        "goal": "KP-1 fixture",
+        "coordinate_space": {"width": WIDTH, "height": 1},
+        "defaults": {"template_threshold": 0.9, "color_max_distance": 0.0},
+        "color_probes": [
+            probe("page_home", 0, HOME),
+            probe("page_list", 0, LIST),
+            probe("page_done", 0, DONE),
+            probe("guard_ready", 1, GREEN)
+        ],
+        "page_rules": {
+            "home": {"required": ["page_home"]},
+            "list": {"required": ["page_list"]},
+            "done": {"required": ["page_done"]}
+        },
+        "entry_page": "home",
+        "target_page": "done",
+        "max_steps": 2,
+        "operations": [tap("open", "home", "list"), back]
+    });
+    [
+        ("control.json", control(2)),
+        (
+            "resources/operations/resources.json",
+            json!({"schema_version": "1.0", "resources": [], "resource_count": 0}),
+        ),
+        ("resources/operations/task/task.json", task),
+    ]
+    .into_iter()
+    .map(|(path, value)| (path.to_owned(), bytes(&value)))
+    .collect()
+}
+
+// Fix round 1: the source package of `word`, as the product's entry admits it, or its refusal.
+fn load_source(word: &str) -> Result<PreparedContainedTask, ContainedTaskError> {
+    PreparedContainedTask::load_content_entries(
+        "neutral.instance",
+        source_entries(word),
+        None,
+        admission_deadline(),
+    )
+}
+
 // A package whose second step is the back key: after `open`'s tap the list shows with the mark,
 // `back`'s guard passes on that frame and its key goes out once, the input `Key` with Android's back
 // code `4`, its intent naming the guard that passed; done comes and the run is Completed on it
 // after both steps. The runtime was asked once whether its input sends the back key. On a list
 // without the mark the guard refuses the step (`contained_task_guard_refused`): no key goes out and
-// `back` writes no intent.
+// `back` writes no intent. Fix round 1 (the review: this test passed with a key sent without its
+// frame): the run is on a device that commits every frame as the host does, and the key names a
+// frame committed after the tap and before the key, the list's.
 #[test]
 fn kp1_a_back_key_step_sends_one_key_after_its_guard_and_goes_on_to_the_next_page() {
     let prepared = admitted("a key step", &path_task(key_step("back", "list", "done")));
 
-    let (result, device) = run(&prepared, ScriptedRuntime::new(path_screens()));
-    let outcome = result.unwrap_or_else(|error| panic!("expected a normal end, got {error:?}"));
+    let mut framed = FramedDevice::new(path_screens());
+    let outcome = prepared
+        .run(&mut framed)
+        .unwrap_or_else(|error| panic!("expected a normal end, got {error:?}"));
+    framed.assert_key_bound_to_the_lists_frame("a key step");
+    let device = &framed.script;
 
     assert_eq!(outcome, completed(DONE_PAGE, 2));
     assert_eq!(
-        finished(&device),
+        finished(device),
         [(0, "open", LIST_PAGE), (1, "back", DONE_PAGE)]
     );
     assert_eq!(device.inputs().len(), 2, "{:?}", device.inputs());
@@ -312,8 +505,8 @@ fn kp1_a_back_key_step_sends_one_key_after_its_guard_and_goes_on_to_the_next_pag
             key: "4".to_owned()
         }
     );
-    assert_eq!(intents(&device), ["open", "back"]);
-    let (action, guard) = intent_of(&device, "back").expect("back's effect intent");
+    assert_eq!(intents(device), ["open", "back"]);
+    let (action, guard) = intent_of(device, "back").expect("back's effect intent");
     assert_eq!(action, &device.inputs()[1]);
     assert_eq!(
         guard,
@@ -325,14 +518,14 @@ fn kp1_a_back_key_step_sends_one_key_after_its_guard_and_goes_on_to_the_next_pag
     );
     assert_eq!(device.key_input_asks(), &[StepKey::Back]);
 
-    let (result, device) = run(
+    let (result, unmarked) = run(
         &prepared,
         ScriptedRuntime::new(vec![vec![screen(HOME, false)], vec![screen(LIST, false)]]),
     );
     let error = failed("the list without the mark", result);
     assert_eq!(error.code().as_str(), GUARD_REFUSED, "{error}");
-    assert_eq!(device.inputs().len(), 1, "{:?}", device.inputs());
-    assert_eq!(intents(&device), ["open"]);
+    assert_eq!(unmarked.inputs().len(), 1, "{:?}", unmarked.inputs());
+    assert_eq!(intents(&unmarked), ["open"]);
 }
 
 // After the key the list stays (the key was not taken): `back`'s arrival on done runs out and, as
@@ -531,4 +724,63 @@ fn kp1_the_offline_first_decision_names_the_key_step() {
         }
         other => panic!("expected the key step's press, got {other:?}"),
     }
+}
+
+// Fix round 1, the gate in the product's form (the review's first point: every path the product
+// loads a package by goes through the source parser, which refused a step without a click): the
+// base path in the source layout, as a pack directory, an installed pack and a recorded package
+// hold it, is admitted by the product's entry (`load_content_entries`: the declaration gate, the
+// source parser, kernel admission). Run on a device that commits every frame as the host does,
+// `open`'s tap shows the list with the mark, `back`'s guard passes there (its declared guard, the
+// page canonical, the target `guard_ready`, a colour target) and its key goes out once, the input
+// `Key` `4`, bound to a frame committed after the tap, and its intent names the guard that passed;
+// done comes and the run is Completed on it after both steps, the runtime asked once for the back
+// key. The same package whose key word is `home` is refused at admission
+// (`contained_task_linear_invalid`, `reason=key_unknown operation=back`).
+#[test]
+fn kp1_fix1_a_source_package_with_a_key_step_is_admitted_by_the_products_entry_and_runs() {
+    let prepared =
+        load_source("back").unwrap_or_else(|error| panic!("the source package: refused: {error}"));
+
+    let mut framed = FramedDevice::new(path_screens());
+    let outcome = prepared
+        .run(&mut framed)
+        .unwrap_or_else(|error| panic!("expected a normal end, got {error:?}"));
+
+    assert_eq!(outcome.outcome, TaskOutcome::Success);
+    assert_eq!(outcome.final_page.as_deref(), Some(DONE_PAGE));
+    assert_eq!(outcome.executed_steps, 2);
+    framed.assert_key_bound_to_the_lists_frame("the source package");
+    let device = &framed.script;
+    assert_eq!(
+        finished(device),
+        [(0, "open", LIST_PAGE), (1, "back", DONE_PAGE)]
+    );
+    assert_eq!(intents(device), ["open", "back"]);
+    let (action, guard) = intent_of(device, "back").expect("back's effect intent");
+    assert_eq!(
+        action,
+        &InputAction::Key {
+            key: "4".to_owned()
+        }
+    );
+    assert_eq!(
+        guard,
+        &ContainedTaskGuardOutcome::Passed {
+            page_label: LIST_PAGE.to_owned(),
+            target_id: "guard_ready".to_owned(),
+            target_kind: "color".to_owned(),
+        }
+    );
+    assert_eq!(device.key_input_asks(), &[StepKey::Back]);
+
+    let error = load_source("home")
+        .err()
+        .unwrap_or_else(|| panic!("the word home: admitted"));
+    assert_eq!(error.code().as_str(), LINEAR_INVALID, "{error}");
+    assert_eq!(
+        error.detail(),
+        Some("reason=key_unknown operation=back"),
+        "{error}"
+    );
 }

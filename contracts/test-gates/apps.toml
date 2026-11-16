@@ -2475,3 +2475,12 @@ tests = [
     "actingcommand-actinglab-mcp::serve_calls::da5ab_the_mcp_front_answers_the_command_lines_base_coordinates",
 ]
 incident = ["#392 DA-5ab"]
+
+# Workflow #463 KP-1 fix round 1 (0.12.69; register §1.448; brief rd-1116/brief-463-kp1-fix1.md, its second and third points; contracts/resource-verify.md, "The package revision"; contracts/component-interfaces.md, the package row 17; contracts/linear-steps.md, "Key steps", "The source layout"): the revision table learns row 17; over zip entries that need 15 (an ending page of a linear_steps pack in another pack), an operation's key (an object) in a pack whose control.json execution_mode is linear_steps needs 17, the same key step in a navigable_route pack and a click step of a linear_steps pack stay 15; and on a pack directory whose linear_steps task has a key step (open, a trusted tap, then back, the back key guarded by a colour probe), actinglab package check answers exit 0, admitted with its package_id, and actinglab package bundle exit 0, written, the pack's task copied into packs/<package_id>/ with the key step as declared
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::tests::gate_464_p2::p2_revision_17_key_step_of_a_linear_steps_pack_only",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_463_kp1::kp1_fix1_package_check_and_package_bundle_take_a_pack_with_a_key_step",
+]
+incident = ["#463 KP-1"]

@@ -573,11 +573,35 @@ offline simulation) refuses nothing there, and its input path answers for each k
 for any input. Every run of a package asks for its own key steps, a layer the host runs before the
 task (a prerequisite, return-home or entry recovery package) on the run's instance too. The code's
 class is `declaration_error` ([runtime-outcomes.md](runtime-outcomes.md): a package and what the
-run uses that do not fit, decided before any frame, the same on every run); a scheduled run that
-ends with it is rerun only ([policy-suspension.md](policy-suspension.md), "Which failures
-accumulate") and fails the same way until the instance's input or the package changes.
+run uses that do not fit, decided before any frame, the same on every run).
+
+**A scheduled task whose package has a key step, on such an instance** (fix round 1; the
+coordinator's ruling: this behaviour stays as it is in this slice, since changing what accumulates
+toward a pause is no fix-round change). Every evaluation that dispatches the task starts a run that
+is refused there: what a person sees is the run's failure with `contained_task_linear_key_unsupported`
+and its `pack_operation_id`, at each attempt, with no input sent. The policy retries the task after
+its retry backoff, as after any recoverable failure, and nothing else follows: the code is not on
+the list that accumulates toward a pause ([policy-suspension.md](policy-suspension.md), "Which
+failures accumulate"), and no default trigger of the recovery ladder names it or its class
+(`distribution/windows/actingd.defaults.json`). So the task is not paused, `actingd suspended` does
+not list it, and it keeps being retried and failing the same way until the instance's input or the
+package changes. Only a task whose own failure policy pauses on a first failure (a task marked
+sensitive, for one) is paused, as it is for any failure.
 
 A task without a key step is admitted, run and recorded as before, and asks nothing.
+
+**The source layout.** Since fix round 1 the source parser
+(`crates/pack-containment/src/source/mod.rs`), through which the product loads every package of
+the source layout (a pack directory, a source `.zip` or `.json` container, an installed pack under
+`packs/<package_id>/`, a package that `record stop` generates; `package check`, `package
+preflight`, `package bundle`, `standard-pack check`, `adopt` and `trial`, and every run), takes a
+key step: an operation that declares `key` keeps its declared `guard` (its page made canonical, as
+every guard's), gets no click and keeps its `key` and every other member as declared, into the task
+the kernel admits; the derived navigation and its page operations leave it out, as they leave out a
+select step, and its primitive carries its `key`. The parser judges nothing of the step's form:
+every rule above (the word, an effect beside it, the guard, a retry, the mode) is admission's
+alone, so the two cannot disagree. A step without `key` takes the parser's path it took before,
+byte for byte.
 
 ## Loading pages
 
@@ -1337,11 +1361,14 @@ A build before Workflow #463 KP-1 (below 0.12.69) refuses a key step before `Pac
 declaration gate does not know the member (`resource_declaration_invalid`, `UnknownField` at
 `/operations/<i>/key`). A bundle whose packs declare one declares `package` [17, 17], which the
 `package` edge of an earlier installer (its range ending below 17) refuses before it places
-anything ([component-interfaces.md](component-interfaces.md), the `package` row 17). That 17 is
-written by the resource repository's packaging; the Lab's `standard-pack build` does not count a key
-step in its revision table ([resource-verify.md](resource-verify.md), "The `package` revision"), and
-nothing checks the 17 when a bundle is placed or a package is admitted, so an earlier installer
+anything ([component-interfaces.md](component-interfaces.md), the `package` row 17). That 17 too is
+written by the resource repository's packaging and, since KP-1's fix round 1, computed by
+`standard-pack build` for a bundle it builds (its revision table counts an operation's `key` in a
+`linear_steps` pack as 17, [resource-verify.md](resource-verify.md), "The `package` revision"),
+and checked by nothing when a bundle is placed or a package is admitted, so an earlier installer
 places such a bundle that declares less, and an earlier Runtime refuses its package at every run.
+This build (0.12.69 and later) takes a key step in every form a package comes in, the source
+layout included ("Key steps", "The source layout").
 
 ## Tools
 
@@ -1360,8 +1387,12 @@ with an application operation is always
 refused, `application_effect_requires_assigned_application` with no capture, provided the frame
 list is not empty (an empty list is `offline_fixture_missing` before the interpreter). `package build --execution-mode linear_steps`,
 `lab run` and the Lab capability listing accept the mode; a built package is admitted by the
-rules above (Workflow #463 KP-1: `package build`'s source parser does not take a key step yet; it
-asks a click of every step that is no application, wait or list reading step). `lab run` passes `transition` and `optional` through unread, ignores
+rules above (Workflow #463 KP-1 fix round 1: the source parser of `package build` takes a key step
+as "Key steps", "The source layout" says, and leaves its form to admission). `package validate`
+of an assembled archive checks the package's format only (its coverage answers `task_prepare`
+`not_run`): its declaration gate takes `key` of the right shape with any word, and the word is
+judged where the task is prepared (`package check`, `package preflight`, every run:
+`key_unknown`). `lab run` passes `transition` and `optional` through unread, ignores
 `prerequisite_package_id` and runs no prerequisite package; the offline simulation runs the
 package alone, without the gate. `record stop` (`lab-recording.md`, "Package generation")
 generates a linear package from a Lab recording and admits it by these rules, without a vision

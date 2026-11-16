@@ -30,7 +30,9 @@
 //!   parser resolves the anchor (fix round 2: [`masked_templates`], [`layout_anchor_masked`]).
 //!   Revisions 13 and 14 (Workflow #463 K1 and V1, after the train 0.12.61a): an operation's
 //!   `select` in a `linear_steps` pack, 13, read where the kernel's admission reads it; a pack's
-//!   `control.json` `variables`, 14, read as `place` reads it.
+//!   `control.json` `variables`, 14, read as `place` reads it. Revision 17 (Workflow #463 KP-1
+//!   fix round 1): an operation's `key` in a `linear_steps` pack, a key step, read where the
+//!   kernel's admission reads it.
 //! - **A `linear_steps` package's ending page**, 15 (Workflow #463 K2, after the train 0.12.61c;
 //!   Workflow #464 P2b): a terminal page of the `scheduling_outcome` of the pack's entry task that
 //!   is none of its target pages and none of its `on_empty` pages, read from the pack's
@@ -217,11 +219,11 @@ const fn when(
     }
 }
 
-/// The members of the bundle's files that the `package` rows 4 to 11, 13 and 14 and the register
-/// sections they cite, and the B train's sections, put into a revision: each with its file, its
-/// place, what it holds, its condition and its revision (`contracts/resource-verify.md`, "The
-/// `package` revision", lists them with their sources).
-const ROWS: [Row; 45] = [
+/// The members of the bundle's files that the `package` rows 4 to 11, 13, 14 and 17 and the
+/// register sections they cite, and the B train's sections, put into a revision: each with its
+/// file, its place, what it holds, its condition and its revision (`contracts/resource-verify.md`,
+/// "The `package` revision", lists them with their sources).
+const ROWS: [Row; 46] = [
     // 4, Workflow #411 B15 (register §1.110 B15-10, §1.111): a `scheduling_outcome` mapping's
     // `remedy`, `control.json`'s `provides`.
     row(TASK, "remedy", Place::Under("mappings"), 4),
@@ -392,6 +394,22 @@ const ROWS: [Row; 45] = [
     // (`check_variables_declared`: `variable_undeclared` below 14); what they declare is the
     // check's.
     row(CONTROL, "variables", Place::Top, VARIABLES_PACKAGE_REVISION),
+    // 17, Workflow #463 KP-1 (§1.448, fix round 1; contracts/linear-steps.md, "Key steps"): a key
+    // step of a `linear_steps` task, an operation whose effect is `key`, found where the kernel's
+    // admission finds it, as row 13 finds a select step: in a pack whose control's
+    // `execution_mode` is `linear_steps`, the member `key` of an element of the task's
+    // `operations`, holding the step's key, an object (`TaskOperation.key`, an `Option` that an
+    // absent member or `null` leaves empty; `TaskProgram::validate_linear` takes `click`,
+    // `application`, `select` and `key` of `(None, None, None, Some(_))` as `LinearEffect::Key`).
+    // A key in a page-graph task is refused by every build, so it needs nothing here.
+    Row {
+        files: TASK,
+        name: "key",
+        place: Place::Under("operations"),
+        holds: Holds::Object,
+        condition: Condition::LinearSteps,
+        revision: 17,
+    },
 ];
 
 /// What the rows read of the document they walk.

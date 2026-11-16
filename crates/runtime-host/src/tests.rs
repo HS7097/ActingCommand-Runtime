@@ -267,6 +267,9 @@ mod gate_463_k1;
 // Workflow #463 K2 (0.12.61; register §1.380): a linear run that ends on an ending page gets that
 // page's mapping's key from the host's scheduling disposition.
 mod gate_463_k2;
+// Workflow #463 KP-1 (0.12.69; register §1.448, fix round 1): a linear run with a key step on an
+// instance whose input sends no key is refused with its own code, with no input and no intent.
+mod gate_463_kp1;
 // Workflow #463 V2 (0.12.61; register §1.382): a dispatch hands its run the value set on the
 // application for its package's variable, a start reads it again, and a value not applied is
 // warned once.

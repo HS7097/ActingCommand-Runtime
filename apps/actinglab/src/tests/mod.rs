@@ -237,6 +237,10 @@ mod gate_463_s310;
 // business end and records it; `--collect` reads an end later.
 #[path = "gate_463_s311.rs"]
 mod gate_463_s311;
+// Workflow #463 KP-1 fix round 1: `package check` and `package bundle` take a pack directory whose
+// `linear_steps` task has a key step.
+#[path = "gate_463_kp1.rs"]
+mod gate_463_kp1;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
 use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{

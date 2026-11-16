@@ -796,11 +796,12 @@ fn interrupt(entry: &Value) -> Entry {
     )
 }
 
-/// Entries whose content needs exactly `revision`, 3 to 11, 13 or 14: nothing for 3, else one
+/// Entries whose content needs exactly `revision`, 3 to 11, 13, 14 or 15: nothing for 3, else one
 /// member of a row of that revision in [`BASE_PACK`] (11 and 10 by root and pack files the rows
 /// name; 13 by a select step of a `linear_steps` pack; 14, Workflow #464 P2b, by a control's
-/// `variables`, for row 15). No content needs 12 since `goals.json` needs 14 ("Revisions 13 and
-/// 14").
+/// `variables`, for row 15; 15, Workflow #463 KP-1 fix round 1, by an ending page of a
+/// `linear_steps` pack, for row 17). No content needs 12 since `goals.json` needs 14 ("Revisions
+/// 13 and 14").
 fn base(revision: u64) -> Vec<Entry> {
     let pack = |path: &str| format!("packs/{BASE_PACK}/{path}");
     let base_task = |value: Value| json_entry(pack(TASK_FILE), &value);
@@ -829,6 +830,22 @@ fn base(revision: u64) -> Vec<Entry> {
             base_task(json!({"operations": [{"select": {}}]})),
         ],
         14 => vec![json_entry(pack("control.json"), &json!({"variables": []}))],
+        15 => vec![
+            json_entry(
+                pack("control.json"),
+                &json!({"execution_mode": "linear_steps", "game": "neutral",
+                        "entry_task_id": "task"}),
+            ),
+            base_task(json!({
+                "target_page": "target",
+                "operations": [{"id": "press", "from": "start", "to": "target", "click": {}}],
+                "scheduling_outcome": {"mappings": [{
+                    "outcome_key": "key_0",
+                    "effect": "no_designated_effect",
+                    "terminal_pages": ["ending"]
+                }]}
+            })),
+        ],
         _ => panic!("no base for revision {revision}"),
     }
 }
@@ -1727,5 +1744,29 @@ fn p2_a_select_step_variables_and_an_ending_declare_15() {
         revision_of(3, &bundle(&["target", "list"])),
         14,
         "a select step and variables, no ending"
+    );
+}
+
+// Row 17 (Workflow #463 KP-1 fix round 1, register §1.448; contracts/component-interfaces.md, the
+// `package` row 17; 16 is Workflow #477 PC-1's): an operation whose effect is `key` in a pack whose
+// control names `linear_steps`, as the kernel's admission finds it, needs 17 over entries that need
+// 15 (an ending page of a `linear_steps` pack in another pack); the same key step in a
+// `navigable_route` pack (which every build refuses), and a `linear_steps` pack whose operation is
+// a click, stay at 15. So `standard-pack build` declares [17, 17] for a bundle whose pack has a key
+// step, which the `package` edge of an installer whose range ends below 17 refuses.
+#[test]
+fn p2_revision_17_key_step_of_a_linear_steps_pack_only() {
+    let linear = control(&json!({"execution_mode": "linear_steps"}));
+    let key = operation(&json!({"id": "back", "from": "list", "key": {"key": "back"}}));
+    assert_row_over(
+        15,
+        17,
+        &[linear.clone(), key.clone()],
+        &[control(&json!({"execution_mode": "navigable_route"})), key],
+    );
+    assert_eq!(
+        revision_of(15, &[linear, operation(&json!({"click": {}}))]),
+        15,
+        "a click step of a linear_steps pack"
     );
 }

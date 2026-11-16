@@ -4202,3 +4202,11 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_392_da5ab::da5ab_fix1_a_declared_operation_on_a_device_five_quarters_the_base_sends_nothing",
 ]
 incident = ["#392 DA-5ab"]
+
+# Workflow #463 KP-1 fix round 1 (0.12.69; register §1.448; brief rd-1116/brief-463-kp1-fix1.md, the independent review's host test; contracts/linear-steps.md, "Key steps", "A key the instance's input does not send"): a linear_steps source package whose second step back presses the back key, run directly through the host on a device instance whose capability table says input.key unsupported (the registry's form for an input other than MaaTouch), ends Failed with contained_task_linear_key_unsupported, its receipt and its one failed terminal naming pack_operation_id back; the device took no input, and the ledger holds no input record (InputIntent, InputCommitted, InputFailed) and no EffectIntent
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_463_kp1::kp1_fix1_an_input_without_the_key_refuses_the_run_with_no_input_and_no_intent",
+]
+incident = ["#463 KP-1"]

@@ -32684,18 +32684,20 @@ decision exhaustively.
 | `would_press_key` (status of the offline first decision) | the first effect is a key step's press | none | none |
 
 The catalog fragment `contracts/outcome-codes/execution-kernel.json` gains the code, with its
-texts; the outcome code index is regenerated (its `--check` reads "is current"). A scheduled run
-that ends with the code is rerun only ([policy-suspension.md](policy-suspension.md), "Which failures
-accumulate"): it is not on the list that accumulates, and its class decides nothing there.
+texts; the outcome code index is regenerated (its `--check` reads "is current"). A scheduled task
+whose package has a key step, on an instance whose input sends no key, is refused at every attempt:
+each dispatch is a run that fails with the code before anything is sent, which is what a person
+sees, and the task is retried after its retry backoff. The code is not on the list that accumulates
+toward a pause ([policy-suspension.md](policy-suspension.md), "Which failures accumulate") and no
+default recovery trigger names it or its class, so the task is not paused and keeps being retried
+until the instance's input or the package changes (fix round 1 says so in the contract and the
+catalog; the coordinator's ruling leaves the behaviour as it is in this slice).
 
 **Not in this slice** (the coordinator's rulings on the takeover): the foreground gate and the
 capability table are KB-1's, so this slice reads what a backend declares for `input.key` and
-changes nothing of the device crate's backends, the table or the gate. The source parser of
-`package build` (`crates/pack-containment/src/source/mod.rs`) still asks a click of every step that
-is no application, wait or list reading step, so it does not build a key step, and the revision
-table of the Lab's `standard-pack build` (`apps/actinglab/src/resource_verify/revision.rs`) does not
-count one (as it counted no ending before §1.385): follow-ups for the recording side (KR-1) and
-the Lab.
+changes nothing of the device crate's backends, the table or the gate. The recording side (an agent
+putting the step into a recording) is KR-1's. The source parser and the Lab's revision table, which
+the first build left as follow-ups, take the key step since fix round 1 (below).
 
 **Interface: `package` 17**, by row 13's reasoning ([component-interfaces.md](component-interfaces.md),
 "What a range means": a bundle's maximum is the revision its packs need). Every Runtime before this
@@ -32706,10 +32708,10 @@ stops reading an older pack), so the Runtime declares `package` [3, 17]
 (`distribution/windows/component-interfaces.json`; the row 17, which names 16 as Workflow #477
 PC-1's). A pack without a key step keeps its revision; a bundle whose packs declare one declares
 [17, 17], which the `package` edge of an earlier installer refuses in the plan, before the hold and
-any write. Nobody checks the 17: it is written by the resource repository's packaging, `place` asks
-it of no bundle and the Runtime does not check a package's declared range at admission, so an
-earlier installer places such a bundle that declares less and an earlier Runtime refuses its
-package at every run. `ledger`, `runtime-client`, `actingd-config` and `runtime-outcomes` do not
+any write. Nobody checks the 17: it is written by the resource repository's packaging and (since
+fix round 1) by the Lab's `standard-pack build`, `place` asks it of no bundle and the Runtime does
+not check a package's declared range at admission, so an earlier installer places such a bundle
+that declares less and an earlier Runtime refuses its package at every run. `ledger`, `runtime-client`, `actingd-config` and `runtime-outcomes` do not
 move: a key step's records are a click's (`EffectIntent` with the action `Key`, its key written
 `[redacted]` as every key input's is, and `EffectCompleted`), with no new record type, member or
 enum value.
@@ -32751,8 +32753,61 @@ keeps each question. Adapted because the requirement changes what they pin (the 
 range), names kept: the rescue module's
 `install::gate_463_v1::v1_the_build_declares_package_through_revision_14` holds [3, 17] and 14
 within it (its gate row in `apps.toml` gains the incident `#463 KP-1`), and the architecture pin
-`the_runtime_declares_each_v0120_interface_revision_once` and its comment. The host's `key_input_support` has no test of its own (the work order names the kernel's
-tests). No golden changes; no test leaves the gate map.
+`the_runtime_declares_each_v0120_interface_revision_once` and its comment. The host's
+`key_input_support` had no test of its own in the first build (fix round 1 adds it). No golden
+changes; no test leaves the gate map.
+
+**Fix round 1** (coordinator work order `rd-1116/brief-463-kp1-fix1.md`, after the independent
+review of `ec64249f`; main `dc4c3622`, the merge of the parent #437 G1, merged in; the rules are the
+coordinator's rulings).
+- *The product's own loading path.* Every path the product loads a package by (a pack directory, a
+  source `.zip` or `.json` container, an installed pack under `packs/<package_id>/`, a package
+  `record stop` generates; so `package check`, `package preflight`, `package bundle`,
+  `standard-pack check`, `adopt`, `trial` and every run) goes through the source parser
+  (`crates/pack-containment/src/source/mod.rs`), which asked a click of the key step, so the first
+  build's key step worked only in an assembled archive. Now one predicate, `is_key_step` (the
+  operation declares `key`), decides in each place: `validate_click_shape` returns for it;
+  `operation_effect` answers it first, with no click, its declared guard made canonical as every
+  guard is (none where it declares none) and no application or select; `canonical_task` neither
+  adds nor removes a click for it and keeps its `key`; `build_primitives` gives its primitive its
+  `key`; the derived navigation and its page operations leave it out, as a select step. The parser
+  judges nothing of the step's form (its word, an effect beside it, its guard, a retry, its mode):
+  every rule is admission's alone (`TaskOperation::validate`, `TaskProgram::validate_linear`), so
+  the two agree by construction. A step without `key` takes each branch it took, byte for byte.
+- *A built bundle declares its revision.* The Lab's revision table
+  (`apps/actinglab/src/resource_verify/revision.rs`) gains row 17: the member `key` holding an
+  object under `operations`, in a `linear_steps` pack only, found where the kernel's admission finds
+  it, as row 13 finds a select step. So `standard-pack build` declares [17, 17] for a bundle whose
+  pack has a key step, which the `package` edge of an installer whose range ends below 17 refuses.
+- *The other places.* `package validate` of an assembled archive checks the format only (its
+  coverage answers `task_prepare` `not_run`), so it takes a key of the right shape with any word;
+  [linear-steps.md](linear-steps.md), "Tools", says so. The places that prepare the task judge it.
+- *Scheduled runs.* The behaviour stays (the coordinator's ruling: changing what accumulates toward
+  a pause is no fix-round change); [linear-steps.md](linear-steps.md), "Key steps", and the code's
+  `handling` say what a person sees, the run's failure with the code at each attempt, and that the
+  task keeps being retried and is not paused.
+- *Texts.* [linear-steps.md](linear-steps.md): "Key steps" (the scheduled task; "The source
+  layout"), "Older builds", "Tools"; [component-interfaces.md](component-interfaces.md), the
+  `package` row 17; [resource-verify.md](resource-verify.md), the table's row 17; this section's
+  "Codes and words", "Not in this slice" and "Interface". The outcome code index is regenerated.
+- *Tests.* Kernel `gate_463_kp1.rs` (exec gate "#463 KP-1"): the test (1) runs on a device that
+  commits every frame as the host does (`FramedDevice`, as `gate_hs4`'s) and asks that the key name
+  a frame committed after the tap and before the key (adapted: the review found it passed with a key
+  sent without its frame); `kp1_fix1_a_source_package_with_a_key_step_is_admitted_by_the_products_entry_and_runs`
+  (the same path in the source layout, admitted by `PreparedContainedTask::load_content_entries`
+  and Completed on done after two steps on that device, one `Key` `4` bound to a frame committed
+  after the tap, its intent naming the guard that passed; the word `home` refused at admission,
+  `key_unknown`). Host `tests/gate_463_kp1.rs` (host gate "#463 KP-1 fix round 1"):
+  `kp1_fix1_an_input_without_the_key_refuses_the_run_with_no_input_and_no_intent` (a direct run on
+  an instance whose capability table says `input.key` unsupported ends Failed with the code and
+  `pack_operation_id` `back` on its receipt and terminal; no input taken, no input record, no
+  effect intent). Lab (apps gate "#463 KP-1 fix round 1"):
+  `gate_464_p2::p2_revision_17_key_step_of_a_linear_steps_pack_only` (over entries that need 15,
+  whose base gains revision 15, a key step of a `linear_steps` pack needs 17, the same key step in a
+  `navigable_route` pack and a click step stay 15) and
+  `gate_463_kp1::kp1_fix1_package_check_and_package_bundle_take_a_pack_with_a_key_step` (on a pack
+  directory with a key step, `package check` admits it and `package bundle` writes it with the key
+  step as declared).
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
