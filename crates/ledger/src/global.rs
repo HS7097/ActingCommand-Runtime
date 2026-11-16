@@ -994,6 +994,9 @@ pub struct GlobalLedgerConfig {
     /// #422 LN-TUNE, tests: counts the rows the store read and authenticated for history reads.
     #[cfg(test)]
     history_rows_read: Option<Arc<std::sync::atomic::AtomicU64>>,
+    /// #463 S1-10, tests: counts the writer's reads of every Lab relation.
+    #[cfg(test)]
+    lab_relations_reads: Option<Arc<std::sync::atomic::AtomicU64>>,
     /// LN-9 (#422, LEAN-L §6): the paced background scrub (the failure plan's) and the database it
     /// reads on its own connection (the formal writer's); the writer has a scrub with both.
     scrub: Option<LedgerScrubPolicy>,
@@ -1058,6 +1061,8 @@ impl GlobalLedgerConfig {
             open_verify_tail_records: sqlite::DEFAULT_OPEN_VERIFY_TAIL_RECORDS,
             #[cfg(test)]
             history_rows_read: None,
+            #[cfg(test)]
+            lab_relations_reads: None,
             scrub: None,
             scrub_database: None,
             reader_threads: reader_pool::DEFAULT_READER_THREADS,
@@ -1190,6 +1195,17 @@ impl GlobalLedgerConfig {
         counter: Arc<std::sync::atomic::AtomicU64>,
     ) -> Self {
         self.history_rows_read = Some(counter);
+        self
+    }
+
+    /// #463 S1-10, tests: `counter` counts the writer's reads of every Lab relation, the read an
+    /// append's Lab relation makes when no Lab anchor names its record's request or correlation.
+    #[cfg(test)]
+    pub(crate) fn with_lab_relations_reads(
+        mut self,
+        counter: Arc<std::sync::atomic::AtomicU64>,
+    ) -> Self {
+        self.lab_relations_reads = Some(counter);
         self
     }
 
