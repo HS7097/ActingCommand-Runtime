@@ -150,6 +150,11 @@ mod gate_463_s310;
 #[cfg(test)]
 mod gate_463_s311;
 
+// Workflow #463 S3-12 (register §1.445): adoption names its offline review, shows the trial of
+// its content and warns before enabling.
+#[cfg(test)]
+mod gate_463_s312;
+
 mod maa_task_graph;
 // Workflow #444 NOTICES-3: a notices directory on disk, held to the contract crate's rules.
 mod notices_directory;
@@ -227,6 +232,8 @@ pub use codes::{TrialRecordProblem, TrialStatePlace};
 // word of a collected run that is not the trial's; fix round 2: the record of a run, whatever its
 // content.
 pub use codes::TrialCollectProblem;
+// Workflow #463 S3-12: the latest trial of an adopted content, as adopt's review answers it.
+pub use codes::TrialState;
 pub use standard_pack_trial::{
     CONTENT_PREFIX_DIGITS, MAX_AUTHORIZATION_BYTES, PACK_TRIAL_SCHEMA, PackTrialRecord,
     StandardPackTrialAnswer, StandardPackTrialRequest, TRIALS_DIRECTORY, TrialDeclaredEnd,

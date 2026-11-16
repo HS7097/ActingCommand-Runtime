@@ -367,12 +367,14 @@ its pools' valuations weigh in):
   ([scheduling/README.md](scheduling/README.md), "Pool Valuation", "A valuation written in the
   pack").
 - `"fixed_value_origin": "model"` says that the model's export wrote the number (`acmodel bindings
-  apply`, not built yet); without it the pack's own hand wrote it. Only `"model"` is a value, and
-  only beside `fixed_value_milli`. It decides nothing: only "Provenance" below reads it. (Workflow
-  #464 P1, the coordinator's ruling) Today no writer of `model` exists (the model's export writes
-  thresholds only), so no rule carries it and the Lab does not write it
-  ([standard-pack-authoring.md](standard-pack-authoring.md), "The value's origin"); the provenance
-  listing of `standard-pack check` therefore shows which values wait for the model.
+  apply`, by a value binding of the repository's `ours/model/bindings.json`); without it the pack's
+  own hand wrote it (registered in that file as a hand entry with its `status` and `ref`). Only
+  `"model"` is a value, and only beside `fixed_value_milli`. It decides nothing: only "Provenance"
+  below reads it. (Workflow #464 P1, the coordinator's ruling) The Lab never writes `model`
+  ([standard-pack-authoring.md](standard-pack-authoring.md), "The value's origin"); the model's
+  writer is `acmodel bindings apply` (Workflow #463 S3-12 corrected this sentence, which said that
+  no writer of `model` exists), and the provenance listing of `standard-pack check` shows which
+  values are the pack's and which the model's.
 - The rule requires `benefit_fixed_value` ("`requires`" above).
 
 **Provenance** (SCHED-C1a, since 0.12.52; the coordinator's point 6). So that a later model export

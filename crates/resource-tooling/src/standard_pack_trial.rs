@@ -648,11 +648,7 @@ fn read_tried_package(package: &Path) -> LabResult<TriedPackage> {
     let entries = Containment::new()
         .snapshot_content_directory(package, deadline)
         .map_err(|error| invalid(&error))?;
-    let content_hash = content_directory_digest(
-        entries
-            .iter()
-            .map(|(path, bytes)| (path.as_str(), *Sha256Hash::digest(bytes).as_bytes())),
-    );
+    let content_hash_prefix = content_hash_prefix_of(&entries);
     let prepared =
         PreparedContainedTask::load_content_entries(TRIAL_LABEL, entries.clone(), None, deadline)
             .map_err(|error| invalid(&error))?;
@@ -685,10 +681,27 @@ fn read_tried_package(package: &Path) -> LabResult<TriedPackage> {
     )?;
     Ok(TriedPackage {
         package_id,
-        content_hash_prefix: content_hash.chars().take(CONTENT_PREFIX_DIGITS).collect(),
+        content_hash_prefix,
         ends: declared_ends(&prepared, &task),
         variables,
     })
+}
+
+/// Workflow #463 S3-12: the content prefix of the package files `entries` (each by its
+/// `/`-separated path relative to the package directory, with its bytes): the first
+/// [`CONTENT_PREFIX_DIGITS`] hex digits of the contract crate's `content_directory_digest` of each
+/// file's SHA-256, what containment's `measure_content_hash` computes for a directory. A trial
+/// keeps it of the directory it reads, and adoption of the files it writes into
+/// `packs/<package_id>/`, so that both name one content alike.
+pub(crate) fn content_hash_prefix_of(entries: &BTreeMap<String, Vec<u8>>) -> String {
+    content_directory_digest(
+        entries
+            .iter()
+            .map(|(path, bytes)| (path.as_str(), *Sha256Hash::digest(bytes).as_bytes())),
+    )
+    .chars()
+    .take(CONTENT_PREFIX_DIGITS)
+    .collect()
 }
 
 /// The JSON of the file `relative` of the snapshot `entries` of the package `package`, a leading

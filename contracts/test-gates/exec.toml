@@ -3663,3 +3663,17 @@ tests = [
     "actingcommand-actinglab::bin:actinglab::tests::gate_463_s21b::s21b_a_packaged_recording_answers_what_its_package_holds",
 ]
 incident = ["#463 S2-1b"]
+
+# #463 S3-12 (0.12.68; register §1.445; brief rd-1116/brief-463-s312-adopt-trial-review.md; design rd-1115/pack-stage3-design.md §4.2 "S3-12"; contracts/standard-pack-authoring.md, "The trial and the two warnings"): standard-pack adopt on P1's made-up resource repository names its offline review recording_checked, answers the latest trial of the content it writes as the trial's records keep it and warns before enabling, refusing nothing more. A business adoption of a recording checked offline: review.recording_checked true and no member run_through in the answer; a recording whose cross-check was partly evaluated, as a business rule: adopt_refused recording_unreviewed as before, its details' review recording_checked false and no run_through, its message saying the recording was not checked offline (1); no trial record: review.trial none, no record, other_content false, no trial_not_read, its content_hash_prefix the one standard-pack trial's plan measures of the packs/<package_id> the adoption wrote, not_tried warned once with the package's id (2); a trial of that directory recorded by the trial's plan, its run's checks and its writer, ended normally on the package's key, then the package adopted again with --replace and no decision: trial passed, the same prefix, the record's authorization, at_unix_ms, request_id and end, matched absent, no not_tried (3); the same with a failed run: failed, the record's end, not_tried warned once (4); a passed trial of another content of the same package id (an older directory): under --dry-run, trial none, no record, other_content true, its prefix not the older one, not_tried warned once (5); a held first adoption by the held reason warns no enabling_needs_authorization, and a business decision that lifts that hold (--replace) warns it once with the package's id, the answer business with no held entry (6); a business rule with "pending" alone under --dry-run: waits_for_value answered and next exactly [{path ours/model/bindings.json, fixed_value {rule_id, value_binding {value "", file schedule.json, rule_id, path /fixed_value_milli}, hand_entry {rule_id, status "", ref ""}}}]; with its value: no waits_for_value and next [] (7). Adapted (gate "#464 P1", "#463 S3-4"): gate_464_p1's first adoption, its held class and S3-4's first held adoption assert review.recording_checked where they asserted review.run_through (the member is renamed; the rule is the same).
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-resource-tooling::lib::gate_463_s312::s312_the_review_names_the_offline_check_and_no_run_through",
+    "actingcommand-resource-tooling::lib::gate_463_s312::s312_without_a_record_the_trial_is_none_and_not_tried_is_warned",
+    "actingcommand-resource-tooling::lib::gate_463_s312::s312_a_passed_record_of_this_content_answers_passed_and_not_tried_is_gone",
+    "actingcommand-resource-tooling::lib::gate_463_s312::s312_a_failed_record_of_this_content_answers_failed_and_not_tried_stays",
+    "actingcommand-resource-tooling::lib::gate_463_s312::s312_a_record_of_other_content_answers_none_and_says_so",
+    "actingcommand-resource-tooling::lib::gate_463_s312::s312_a_decision_that_lifts_a_hold_warns_that_enabling_needs_authorization",
+    "actingcommand-resource-tooling::lib::gate_463_s312::s312_next_names_bindings_json_only_when_the_rule_has_no_value",
+]
+incident = ["#463 S3-12"]

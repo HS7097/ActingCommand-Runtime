@@ -10777,6 +10777,25 @@
           "description": "Fix round 2: the run was sent by hand on another channel than the Lab's (origin cli or ui); a trial's run is sent on the Lab's channel."
         }
       }
+    },
+    "trial_state": {
+      "description": "The latest trial of the content standard-pack adopt writes, as the trial records of its state directory keep it, the member review.trial.state of its answer (Workflow #463 S3-12, contracts/standard-pack-authoring.md \"The trial and the two warnings\", since 0.12.68).",
+      "review": "pending",
+      "source": {
+        "file": "crates/resource-tooling/src/codes.rs",
+        "enum": "TrialState"
+      },
+      "tokens": {
+        "passed": {
+          "description": "The latest record of this content is of a run that ended normally, on the end the trial expected when it named one (matched not false)."
+        },
+        "failed": {
+          "description": "The latest record of this content is of a run that failed or was cancelled, or that ended normally on another end than the one the trial expected (matched false)."
+        },
+        "none": {
+          "description": "No record of this content is on record; a record of another content of the same package counts for nothing (other_content says whether there is one)."
+        }
+      }
     }
   },
   "domains": {
@@ -13698,6 +13717,9 @@
       "display-adapter"
     ],
     "trial_": [
+      "resource-tooling"
+    ],
+    "enabling_": [
       "resource-tooling"
     ]
   },

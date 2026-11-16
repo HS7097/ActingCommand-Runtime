@@ -211,6 +211,32 @@ actingcommand_contract::outcome_codes! {
         /// `request_id`, `run_state`) and its terminal names no failure code; its record is written
         /// and the command fails as for a failed run.
         TrialEndUncoded => "trial_end_uncoded": error / none,
+        // Workflow #463 S3-12: what `actinglab standard-pack adopt` says before a package is
+        // enabled (contracts/standard-pack-authoring.md, "The trial and the two warnings"). Both
+        // ride in the adoption's `warnings` and refuse nothing.
+        /// Warning (Workflow #463 S3-12): the decision adopts the package in a class that runs
+        /// (business or maintenance), lifting its hold where it had one, so the placement that
+        /// enables it asks for `--authorization` and for `--enables` naming it (key `package_id`).
+        EnablingNeedsAuthorization => "enabling_needs_authorization": warning / none,
+        /// Warning (Workflow #463 S3-12): no passed trial of the content the adoption writes is on
+        /// record in its state directory (key `package_id`; the review's `trial` says what is).
+        NotTried => "not_tried": warning / none,
+    }
+}
+
+actingcommand_contract::outcome_vocabulary! {
+    /// Workflow #463 S3-12: the latest trial of the content an adoption writes, as the trial
+    /// records keep it (vocabulary `trial_state`, the member `review.trial.state` of `standard-pack
+    /// adopt`).
+    pub enum TrialState: "trial_state" {
+        /// The latest record of this content is of a run that ended normally, on the end the trial
+        /// expected when it named one.
+        Passed => "passed",
+        /// The latest record of this content is of a run that failed or was cancelled, or that
+        /// ended normally on another end than the one the trial expected.
+        Failed => "failed",
+        /// No record of this content is on record.
+        NoRecord => "none",
     }
 }
 

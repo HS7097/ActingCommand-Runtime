@@ -31580,6 +31580,115 @@ their words; a plain press that reads the instance's status first on every insta
 Nemu-input instance at the cost of one capture (one more when the frame was lost before the press),
 and that is still sent, without a frame, when the status cannot be read.
 
+### 1.445 Slice #463 S3-12 (0.12.68): adoption shows the trial, names the offline review as what it is, and warns before enabling (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, and her rules that a package not run through on a real device stays held and that nothing is enabled without her explicit authorization; the design `rd-1115/pack-stage3-design.md`, §4.2 "S3-12", §2.1 "Missing" items 2 and 4, §2.2 "The value's source", §2.3 and §2.4; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1116/brief-463-s312-adopt-trial-review.md`, read on main `40abd08b`)
+
+This section takes 1.445, the number the work order gives; the numbers between §1.435 and it
+belong to slices dispatched with it. It ships in 0.12.68.
+
+**Why.** Adoption's answer had a member `review.run_through` that sounds as if the package had
+been run; it only meant that the recording passed its offline checks (ruling 2 on #464). An agent
+that adopts could not see whether this very content was ever tried on a real application, though
+`standard-pack trial` (§1.417, §1.418) keeps a record of every trial. So "checked offline" and
+"tried on a device" are told apart by name, the latest trial of this content is shown, and the two
+things the owner's rules require before a pack may run are said at adoption, as warnings, not at
+the moment the placement refuses ([standard-pack-authoring.md](standard-pack-authoring.md), "The
+trial and the two warnings").
+
+**The rule.**
+- *The name.* `review.run_through` is `review.recording_checked`: the same rule (a recording's
+  provenance, the cross-check `passed`, the first decision evaluated, no step needing review), the
+  same refusal `recording_unreviewed` for a class other than `held`; its message says that the
+  recording was not checked offline and that such a class needs one. No member of the old name is
+  left (the owner's rule: the newest is the standard).
+- *The trial.* `review.trial` is the latest trial record of the content the adoption writes into
+  `packs/<package_id>/` (under `--dry-run`, would write), among the records of the package in the
+  state directory the adoption is given (`--state-dir`, actinglab's session directory by default,
+  the trial's own default): `state` `passed`, `failed` or `none` (the new vocabulary
+  `trial_state`), `content_hash_prefix`, `record` (`authorization`, `at_unix_ms`, `request_id`,
+  `end`, and `matched` when the trial named its expected end; absent with `none`) and
+  `other_content` (a record of another content of the same package id is there; it counts for
+  nothing). A trial passed when its run ended normally and, when it named an expected end, on that
+  end. The records are read by the trial's own reader (`trial_records`, the module's reader that
+  `latest_trial_record` calls); the content is named by the trial's own content prefix, the first
+  12 hex digits of the contract crate's `content_directory_digest` of each file's SHA-256, computed
+  by one function of the trial's module (`content_hash_prefix_of`, split out of the plan's reading,
+  which now calls it) over the files adoption writes, which are exactly the files of
+  `packs/<package_id>/` a trial of that directory reads.
+- *Two warnings*, appended to `warnings`, refuse nothing: `enabling_needs_authorization` when a
+  decision gives a class that runs (`business` or `maintenance`), lifting a hold where there was
+  one (the placement asks for `--authorization` and `--enables` naming the package, §1.409); not for
+  a held decision or an adoption without a decision. `not_tried` while no record of this content
+  passed.
+- *`next`* names `ours/model/bindings.json` while the adopted rule has no value yet (it writes no
+  `fixed_value_milli` and `waits_for_value` is answered), whether the checkout holds that file or
+  not: `fixed_value` holds the rule's id, a `value_binding` `{value: "", file: "schedule.json",
+  rule_id, path: "/fixed_value_milli"}` (the entry the model's writer `acmodel bindings apply`
+  writes the model's value by, with `fixed_value_origin: "model"`) and a `hand_entry` `{rule_id,
+  status: "", ref: ""}` (the entry that registers a number written by hand), blank where adopt
+  cannot know the text. Every item of `next` is now `{path}` (a list of texts before), the
+  bindings item with `fixed_value` too.
+
+**Where the design and the code differ.** The design's §4.2 lists `NEXT_FILES` as three items;
+on main it is two (`docs/PACKS.md`, the census row) beside the regression directory, and
+`bindings.json` is not added to it: it is named on another condition (the rule's value, not
+whether the checkout holds the file). The design names `review.trial` with `passed`, `failed` and
+`none` only; this slice adds `review.trial_not_read` (`outcome`, `text`) for a reader that refuses
+the package's records, as §1.412 added `readiness_not_judged`, rather than a new refusal of
+adopt (the brief: its refusals' codes do not change), and `not_tried` is then not warned, since
+whether the content was tried is not known. The design's stale sentences on the model's writer
+(`standard-pack-authoring.md`, "The value's origin"; `standard-pack-schedule.md`, "The fixed
+value") are corrected: the writer is `acmodel bindings apply` (the model's repository,
+`model/contracts/formats.md`, "A value's rule" and "A value written by hand").
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The review, the trial, the warnings, `next` | `crates/resource-tooling/src/adopt.rs`: `RecordingReview::recording_checked`, `trial`, `trial_not_read`; `AdoptTrial`, `AdoptTrialRecord`, `TrialNotRead`; `adopted_trial`; `AdoptNext`, `NextFixedValue`, `NextValueBinding`, `NextHandEntry`; `next_items`; the refusal's message |
+| The content prefix | `crates/resource-tooling/src/standard_pack_trial.rs`: `content_hash_prefix_of`, which the plan's `read_tried_package` and adoption call |
+| Codes and words | `crates/resource-tooling/src/codes.rs`: `EnablingNeedsAuthorization`, `NotTried`, `TrialState`; [outcome-codes/resource-tooling.json](outcome-codes/resource-tooling.json) (the two codes; `adopt_refused`'s text of `recording_unreviewed`); [outcome-codes/catalog.json](outcome-codes/catalog.json) (the vocabulary `trial_state`, the domain `enabling_`); the index regenerated |
+| Texts | [standard-pack-authoring.md](standard-pack-authoring.md): `--state-dir`, "The value's origin", "The checks", "What it writes", "`--dry-run`", "The answer" and its part "The trial and the two warnings"; [standard-pack-schedule.md](standard-pack-schedule.md), "The fixed value"; [lab-operations.json](lab-operations.json), the row `standard-pack adopt` (`state_dir`'s note, `output`, `notes`). The MCP manual names no `run_through` and is not changed |
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| S312-1 | `review.recording_checked` in place of `review.run_through` | Lab answer member renamed | S3-12 | `adopt.rs` | the same rule and refusal |
+| S312-2 | `review.trial` (`state`, `content_hash_prefix`, `record?`, `other_content`), `review.trial_not_read` | Lab answer members | S3-12 | `adopt.rs` | read only; the trial's record and store unchanged |
+| S312-3 | `enabling_needs_authorization`, `not_tried` | outcome codes, warning, class none | S3-12 | `adopt.rs` | key `package_id` (required); exit 0 |
+| S312-4 | `trial_state` (`passed`, `failed`, `none`) | closed vocabulary (no key) | S3-12 | `codes.rs` | the member `review.trial.state` |
+| S312-5 | `next` items `{path, fixed_value?}` | Lab answer member's shape | S3-12 | `adopt.rs` | a list of texts before |
+
+**Codes and words.** Two codes, both warnings (category `warning`, class `none`), riding in the
+answer's `warnings` of an adoption that succeeds, exit 0: `enabling_needs_authorization` (a
+decision of a class that runs; the placement will ask for an authorization and the package named)
+and `not_tried` (no passed trial of the content written is on record). One vocabulary, `trial_state`,
+three words of one member, used by no key. The domain `enabling_` is the resource tooling's. No
+decision reads a code or a word: a trial passed is read from its record's `end.outcome` and
+`matched`; the warnings are written, not read.
+
+**Tests** (`crates/resource-tooling/src/gate_463_s312.rs`, exec gate map "#463 S3-12"; P1's
+made-up repository, the trial's own plan, checks and writer for the records, no Runtime, no clock):
+`s312_the_review_names_the_offline_check_and_no_run_through`,
+`s312_without_a_record_the_trial_is_none_and_not_tried_is_warned` (the prefix is the one the
+trial's plan measures of the directory written),
+`s312_a_passed_record_of_this_content_answers_passed_and_not_tried_is_gone`,
+`s312_a_failed_record_of_this_content_answers_failed_and_not_tried_stays`,
+`s312_a_record_of_other_content_answers_none_and_says_so` (under `--dry-run`),
+`s312_a_decision_that_lifts_a_hold_warns_that_enabling_needs_authorization` and
+`s312_next_names_bindings_json_only_when_the_rule_has_no_value` (under `--dry-run`). Adapted:
+`gate_464_p1`'s `p1_a_first_adoption_writes_the_pack_directory_the_rule_and_the_requires_words`,
+`p1_the_held_and_the_maintenance_classes` and
+`s34_a_first_adoption_by_the_held_reason_writes_what_the_held_document_writes` assert
+`recording_checked` where they asserted `run_through` (the member is renamed, the rule is the
+same). No golden changes; no test leaves a gate map.
+
+**What is not changed.** What adoption checks, writes and refuses (the codes of its refusals);
+the trial's record, its writer, its reader and its store; readiness. Nothing here starts a trial,
+lifts a hold or enables a package.
+
+**At deploy.** Nothing to configure. An agent that adopts sees `recording_checked` where it saw
+`run_through`, the latest trial of the content it adopted, the two warnings, and where a value is
+registered.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
