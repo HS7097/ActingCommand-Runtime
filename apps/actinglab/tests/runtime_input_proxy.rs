@@ -58,6 +58,8 @@ struct FakeState {
     // #463 S1-1 fix round 3: the device reports another application than the assigned one in the
     // foreground, so the Runtime denies a pointer input (`application_not_foreground`).
     foreground_other: AtomicBool,
+    // #463 S1-9: the capture of this number (when not zero) fails in the backend.
+    capture_fails_at: AtomicUsize,
 }
 
 // Test plan E-3 G11 (§3.10): a manual Runtime clock. It moves only when a capture (or a wait of
@@ -2104,6 +2106,11 @@ struct FakeCapture {
 impl CaptureBackend for FakeCapture {
     fn capture(&mut self) -> DeviceResult<Frame> {
         let captured = self.state.captures.fetch_add(1, Ordering::AcqRel) + 1;
+        if captured == self.state.capture_fails_at.load(Ordering::Acquire) {
+            return Err(actingcommand_device::DeviceError::transient(
+                "the fake capture backend failed the capture",
+            ));
+        }
         let home_from = self.state.home_from_capture.load(Ordering::Acquire);
         if home_from > 0 && captured >= home_from {
             self.state
@@ -5666,4 +5673,381 @@ fn s17_fix_a_press_whose_hold_read_fails_is_made_and_says_so() {
         "{pressed}"
     );
     assert_eq!(state.taps.load(Ordering::Acquire), 1);
+}
+
+/// #463 S1-9 (`contracts/lab-recording.md`, "The lease of a recorded press"): `record start` of the
+/// recording `record_s11` (its step table read by `s11_recorded`) while nothing listens, so that
+/// the fake Runtime host started after it holds only what the press asks of it.
+fn s19_record_start(config: &Path, runtime_root: &Path, local: &Path) {
+    let started = run_actinglab_json(
+        config,
+        runtime_root,
+        local,
+        [
+            "--json",
+            "--instance",
+            "node.a",
+            "record",
+            "start",
+            "--task-id",
+            "neutral_task",
+            "--record-id",
+            "record_s11",
+        ],
+    );
+    assert_eq!(started["hold"]["state"], "none", "{started}");
+}
+
+/// #463 S1-9: what the fake Runtime host of `runtime_root` recorded of a recorded press, in its
+/// ledger's order, from its first capture on (the capture before the press is the first thing a
+/// recorded press asks of the Runtime): each capture completed (`capture`) or failed
+/// (`capture_failed`), each lease granted (`lease`) and released (`release`), and each input's
+/// intent (`input`; an input the Runtime denies records none).
+fn s19_press_wire(runtime_root: &Path) -> Vec<&'static str> {
+    let client = s17_client(runtime_root);
+    let events = client
+        .query_events(EventQuery::default(), ProjectionProfile::Forensic)
+        .expect("Runtime events");
+    events
+        .iter()
+        .filter_map(|event| match event.event_type {
+            EventType::CaptureCompleted => Some("capture"),
+            EventType::CaptureFailed => Some("capture_failed"),
+            EventType::LeaseGranted => Some("lease"),
+            EventType::LeaseReleased => Some("release"),
+            EventType::InputIntent => Some("input"),
+            _ => None,
+        })
+        .skip_while(|kind| *kind != "capture")
+        .collect()
+}
+
+/// #463 S1-9 (`contracts/lab-recording.md`, "The lease of a recorded press"): `tap 0 0 --record
+/// --after-ms 0 --interval-ms 50 --still-ms 50` on an instance whose input is the emulator's own
+/// (it presses only on a frame the Runtime captured), on a screen that does not change, so that
+/// two captures follow the press and the second is still: the press's requests on the fake Runtime
+/// host are the capture before it, one lease, the input, the two captures after it, and the
+/// lease's release after the last of them; the answer's input outcome says the release succeeded.
+#[test]
+fn s19_a_recorded_press_releases_its_lease_after_the_last_capture_after_it() {
+    let root = TempDir::new().expect("tempdir");
+    let runtime_root = root.path().join("runtime");
+    let local = root.path().join("local");
+    let config = root.path().join("actinglab.json");
+    fs::write(&config, "{}").expect("write config");
+    s19_record_start(&config, &runtime_root, &local);
+    let state = Arc::new(FakeState::default());
+    state.nemu_input.store(true, Ordering::Release);
+    let host = l3_host(&runtime_root, &state, b"lab-s19-lease-through-captures");
+
+    let tapped = run_actinglab_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "--instance",
+            "node.a",
+            "tap",
+            "0",
+            "0",
+            "--record",
+            "--after-ms",
+            "0",
+            "--interval-ms",
+            "50",
+            "--still-ms",
+            "50",
+        ],
+    );
+    let wire = s19_press_wire(&runtime_root);
+    host.close().expect("close host");
+
+    assert_eq!(tapped["record"]["status"], "press_recorded", "{tapped}");
+    assert_eq!(tapped["record"]["after"]["captures"], 2, "{tapped}");
+    assert_eq!(tapped["record"]["after"]["still"], true, "{tapped}");
+    assert_eq!(
+        tapped["input_outcome"]["input_stage"], "committed",
+        "{tapped}"
+    );
+    assert_eq!(
+        tapped["input_outcome"]["close_stage"], "succeeded",
+        "{tapped}"
+    );
+    assert_eq!(state.taps.load(Ordering::Acquire), 1);
+    assert_eq!(state.captures.load(Ordering::Acquire), 3);
+    assert_eq!(
+        wire,
+        ["capture", "lease", "input", "capture", "capture", "release"],
+        "{wire:?}"
+    );
+}
+
+/// #463 S1-9: `tap 0 0 --record --after-ms 0 --interval-ms 50 --still-ms 1000` whose second capture
+/// after the press fails in the backend: the capture taken after the press is recorded (the
+/// press's `after_frame` f0002, `after_capture` of one capture, unfinished), the command answers
+/// the capture's own error as before (its details' `after` `{after_ms: 0, taken: true, captures:
+/// 1}`, `record` with that frame after), and the lease, held through both captures, is released
+/// after the failed one; the answer's input outcome says the release succeeded.
+#[test]
+fn s19_a_capture_after_the_press_that_fails_is_recorded_and_the_lease_released() {
+    let root = TempDir::new().expect("tempdir");
+    let runtime_root = root.path().join("runtime");
+    let local = root.path().join("local");
+    let config = root.path().join("actinglab.json");
+    fs::write(&config, "{}").expect("write config");
+    s19_record_start(&config, &runtime_root, &local);
+    let state = Arc::new(FakeState::default());
+    // The capture before the press (1), the first after it (2), the second after it (3).
+    state.capture_fails_at.store(3, Ordering::Release);
+    let host = l3_host(&runtime_root, &state, b"lab-s19-capture-after-fails");
+
+    let (_, failed) = run_actinglab_failure_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "--instance",
+            "node.a",
+            "tap",
+            "0",
+            "0",
+            "--record",
+            "--after-ms",
+            "0",
+            "--interval-ms",
+            "50",
+            "--still-ms",
+            "1000",
+        ],
+    );
+    let wire = s19_press_wire(&runtime_root);
+    host.close().expect("close host");
+
+    assert_eq!(
+        failed["details"]["after"],
+        json!({"after_ms": 0, "taken": true, "captures": 1}),
+        "{failed}"
+    );
+    let after = &failed["details"]["record"]["after"];
+    assert_eq!(after["frame_id"], "f0002", "{failed}");
+    assert_eq!(after["captures"], 1, "{failed}");
+    assert_eq!(after["unfinished"], true, "{failed}");
+    assert_eq!(
+        failed["details"]["input_outcome"]["close_stage"], "succeeded",
+        "{failed}"
+    );
+    assert_eq!(state.taps.load(Ordering::Acquire), 1);
+    assert_eq!(state.captures.load(Ordering::Acquire), 3);
+    assert_eq!(
+        wire,
+        [
+            "capture",
+            "lease",
+            "input",
+            "capture",
+            "capture_failed",
+            "release"
+        ],
+        "{wire:?}"
+    );
+    let recording = s11_recorded(&local);
+    let execution = &recording["steps"][0]["click"]["execution"];
+    assert_eq!(execution["after_frame"], "f0002", "{recording}");
+    assert_eq!(execution["after_capture"]["captures"], 1, "{recording}");
+    assert_eq!(
+        execution["after_capture"]["unfinished"], true,
+        "{recording}"
+    );
+}
+
+/// #463 S1-9: `tap 0 0 --record` that fails, on a fake Runtime host over `state` in a new temporary
+/// root, its recording started while nothing listened: the command's failure, and the press's
+/// requests on the host (`s19_press_wire`).
+fn s19_failed_tap(state: &Arc<FakeState>, label: &[u8]) -> (Value, Vec<&'static str>) {
+    let root = TempDir::new().expect("tempdir");
+    let runtime_root = root.path().join("runtime");
+    let local = root.path().join("local");
+    let config = root.path().join("actinglab.json");
+    fs::write(&config, "{}").expect("write config");
+    s19_record_start(&config, &runtime_root, &local);
+    let host = l3_host(&runtime_root, state, label);
+    let (_, failed) = run_actinglab_failure_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "--instance",
+            "node.a",
+            "tap",
+            "0",
+            "0",
+            "--record",
+        ],
+    );
+    let wire = s19_press_wire(&runtime_root);
+    host.close().expect("close host");
+    (failed, wire)
+}
+
+/// #463 S1-9: a press that no capture follows releases its lease at once. The fake backend fails
+/// the tap (`record_click_indeterminate`): the capture before it, one lease, the input and the
+/// lease's end right after it (a backend failure of an input ends its lease on the Runtime's side,
+/// so the command's release finds it ended, as it did before), no capture after. The Runtime
+/// denies the input for another application in the foreground (`device_error`, nothing sent): the
+/// capture before it, one lease and the command's release of it, and the refusal's input outcome
+/// says the release succeeded.
+#[test]
+fn s19_a_press_that_no_capture_follows_releases_its_lease_at_once() {
+    let state = Arc::new(FakeState::default());
+    state.tap_fails.store(true, Ordering::Release);
+    let (failed, wire) = s19_failed_tap(&state, b"lab-s19-indeterminate-press");
+    assert_eq!(
+        failed["outcome"]["code"], "record_click_indeterminate",
+        "{failed}"
+    );
+    assert_eq!(state.captures.load(Ordering::Acquire), 1);
+    assert_eq!(wire, ["capture", "lease", "input", "release"], "{wire:?}");
+
+    let state = Arc::new(FakeState::default());
+    state.foreground_other.store(true, Ordering::Release);
+    let (failed, wire) = s19_failed_tap(&state, b"lab-s19-refused-input");
+    assert_eq!(failed["outcome"]["code"], "device_error", "{failed}");
+    assert_eq!(
+        failed["details"]["input_outcome"]["close_stage"], "succeeded",
+        "{failed}"
+    );
+    assert_eq!(state.captures.load(Ordering::Acquire), 1);
+    assert_eq!(state.taps.load(Ordering::Acquire), 0);
+    assert_eq!(wire, ["capture", "lease", "release"], "{wire:?}");
+}
+
+/// #463 S1-9: a loopback relay in front of the fake host of `runtime_root`, built as
+/// `s17_relay_dropping` builds one, that relays every connection both ways; before it relays its
+/// `observed`th accepted connection (0 the first) it takes one keyless observation of `node.a`
+/// through `client`, a client connected to the host before the relay, and then lets that client
+/// go, so that the observers' frame the Runtime holds is no longer the one the command captured
+/// before that connection; `taken` says the observation completed.
+fn s19_relay_observing(
+    runtime_root: &Path,
+    observed: usize,
+    client: RuntimeClient,
+    taken: Arc<AtomicBool>,
+) {
+    let info_path = runtime_root.join("runtime-info.json");
+    let mut info: Value =
+        serde_json::from_slice(&fs::read(&info_path).expect("the host's runtime-info"))
+            .expect("the host's runtime-info JSON");
+    let host = format!(
+        "{}:{}",
+        info["host"].as_str().expect("the host's address"),
+        info["port"].as_u64().expect("the host's port")
+    );
+    let relay = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("the relay's listener");
+    info["port"] = json!(relay.local_addr().expect("the relay's address").port());
+    fs::write(
+        &info_path,
+        serde_json::to_vec(&info).expect("the relay's runtime-info JSON"),
+    )
+    .expect("the relay's runtime-info");
+    let mut runtime = Some(client);
+    thread::spawn(move || {
+        for (index, accepted) in relay.incoming().enumerate() {
+            let Ok(command) = accepted else {
+                return;
+            };
+            if index == observed
+                && let Some(observer) = runtime.take()
+                && observer.observe_readonly("node.a").is_ok()
+            {
+                taken.store(true, Ordering::Release);
+            }
+            let Ok(upstream) = std::net::TcpStream::connect(&host) else {
+                return;
+            };
+            let (Ok(command_reader), Ok(upstream_reader)) =
+                (command.try_clone(), upstream.try_clone())
+            else {
+                return;
+            };
+            thread::spawn(move || s17_relay_pipe(command_reader, upstream));
+            thread::spawn(move || s17_relay_pipe(upstream_reader, command));
+        }
+    });
+}
+
+/// #463 S1-9: the one retry of "When the frame is gone before the press" keeps the press's one
+/// lease. Behind a relay that, before it relays the command's third connection (the capture before
+/// the press, the status read, then the press's lease), takes a keyless observation of the
+/// instance, the Runtime no longer holds the frame the first input names and denies it
+/// (`input_frame_unavailable`, no intent); the command captures once more and sends the press again
+/// through the same proxy, under the same lease. The press's requests: the command's capture, the
+/// relay's, one lease, the second capture, one input, the capture after it and the lease's release;
+/// one tap; the answer's `record.before.captured_twice`.
+#[test]
+fn s19_the_retry_after_input_frame_unavailable_keeps_the_one_lease() {
+    let root = TempDir::new().expect("tempdir");
+    let runtime_root = root.path().join("runtime");
+    let local = root.path().join("local");
+    let config = root.path().join("actinglab.json");
+    fs::write(&config, "{}").expect("write config");
+    s19_record_start(&config, &runtime_root, &local);
+    let state = Arc::new(FakeState::default());
+    let host = l3_host(&runtime_root, &state, b"lab-s19-retry-one-lease");
+    let taken = Arc::new(AtomicBool::new(false));
+    // The command's connections: the capture before the press (0), the status read (1), the
+    // press's lease (2), the second capture, the second status read, the capture after it.
+    s19_relay_observing(
+        &runtime_root,
+        2,
+        s17_client(&runtime_root),
+        Arc::clone(&taken),
+    );
+
+    let tapped = run_actinglab_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "--instance",
+            "node.a",
+            "tap",
+            "0",
+            "0",
+            "--record",
+            "--after-ms",
+            "0",
+            "--still-ms",
+            "0",
+        ],
+    );
+    let wire = s19_press_wire(&runtime_root);
+    host.close().expect("close host");
+
+    assert!(
+        taken.load(Ordering::Acquire),
+        "the relay's observation completed"
+    );
+    assert_eq!(tapped["record"]["status"], "press_recorded", "{tapped}");
+    assert_eq!(
+        tapped["record"]["before"]["captured_twice"], true,
+        "{tapped}"
+    );
+    assert_eq!(tapped["record"]["before"]["frame_id"], "f0002", "{tapped}");
+    assert_eq!(
+        tapped["input_outcome"]["close_stage"], "succeeded",
+        "{tapped}"
+    );
+    assert_eq!(state.taps.load(Ordering::Acquire), 1);
+    assert_eq!(state.captures.load(Ordering::Acquire), 4);
+    assert_eq!(
+        wire,
+        [
+            "capture", "capture", "lease", "capture", "input", "capture", "release"
+        ],
+        "{wire:?}"
+    );
 }
