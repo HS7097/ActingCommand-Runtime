@@ -457,13 +457,18 @@ naming this file.
   one per step with a press and a page, on the frame its press was sent on, one for the final
   screen and one per ending, each a black canvas with the regions every recognition target of the
   package reads pasted where they are, never a whole frame. Its last self-check, `cases`, runs
-  each on the package first: a case that fails is not written and the stop refuses
-  `record_case_failed` (`regression_problem`, most often `page_conflict`: two pages of the package
-  pass on one recorded screen), nothing written; `ac_record_ready` lists every failing case (`what`
-  `cases`, with the case's id and the runner's failed checks in `details`). The answer's
+  each on the package first: a real miss (the page not recognised on its scene, a target it
+  expects failing) is not written and the stop refuses `record_case_failed`
+  (`regression_problem`), nothing written; `ac_record_ready` lists every such case (`what`
+  `cases`, with the case's id and the runner's failed checks in `details`). A page recognised
+  beside another page of the package is no miss (a linear run waits for each step's own page): the
+  case is written without `expect.observe`, its page's targets alone, and both tools name it with
+  the warning `record_case_page_ambiguous` and the other pages (a page with no target gives no
+  case, the warning saying so). The answer's
   `lab.cases` names the directory, `counts` by kind, the `ids`, `not_proven` (a case run in part,
   with the runner's reasons, `ocr_unavailable` without an OCR model), `warnings`
-  (`record_case_bare_canvas`: its page is also what the bare canvas answers) and `limits`
+  (`record_case_page_ambiguous`; `record_case_bare_canvas`: its page is also what the bare canvas
+  answers) and `limits`
   `["self_agreement"]`: the cases were made from the frames the package was built from and say
   nothing about screens it did not meet. A regeneration replaces the set whole and keeps the
   earlier one beside it; `dry_run` writes nothing and lists what would be.

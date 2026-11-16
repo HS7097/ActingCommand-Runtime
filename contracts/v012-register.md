@@ -33204,9 +33204,21 @@ that a case written is one that passed on the package it came with.
   written; `partial`, `not_run`: written and named in `not_proven` with the runner's reasons. The
   bare canvas is run once per package as a case expecting no page; a case whose page it answers is
   written with the warning `record_case_bare_canvas`.
+- *A page recognised beside another page is no miss* (the coordinator's ruling after the first
+  round, below; R2's ruling 4, §1.384, is its precedent: the usual ending's page passing on an
+  ending's frames is no refusal). A linear run never asks which page of the whole package a screen
+  is; each step waits for its own page. (1) A real miss refuses `record_case_failed`: the case's
+  page not recognised on its scene (`page_mismatch`, or a `page_conflict` among which it is not), a
+  target it expects failing (`target_mismatch`), or any other failed check. (2) `page_conflict` with
+  the case's page among `matched_pages`: the case is made again without `expect.observe`, its
+  `expect.recognize` entries alone, run again in that form (failing then is a real miss) and
+  written; `record stop` and `record ready` name it with the warning `record_case_page_ambiguous`
+  (`other_pages`, `written: true`), exit 0. (3) Such a page with no target to recognise gives no
+  case (it would declare nothing): the same warning, `written: false`.
 - *The self-check `cases`* is the last (`ReadyCheck::Cases`, after `final_package`, whose package
-  it reads): `record stop` refuses its first failing case `record_case_failed`, nothing written;
-  `record ready` lists every failing case (`what` `cases`, `details.case`, `details.checks`).
+  it reads): `record stop` refuses its first real miss `record_case_failed`, nothing written;
+  `record ready` lists every real miss (`what` `cases`, `details.case`, `details.checks`) and names
+  each ambiguous case among its warnings.
 - *The write*: at `record stop` and its regeneration, `lab/out/<package_id>.cases/<case id>/`
   (`case.json`, `scene.png`), the set written whole into `<package_id>.cases.part-<unix_ms>`, an
   existing set set aside as `<package_id>.cases.old-<unix_ms>` and kept, then renamed into place;
@@ -33218,12 +33230,12 @@ that a case written is one that passed on the package it came with.
 
 | Part | Where |
 |---|---|
-| The cases | `crates/lab/src/recording/cases.rs` (new): `regression_cases(plan, entries, cache, ocr, failures) -> LabResult<CaseSet>`, `CaseSet::files`, `CaseSet::answer`, `cases_dir_name`; the scene's regions from the admitted package's declared targets (`read_regions`), the bare canvas (`bare_canvas_pages`), the refusal (`case_failed`) |
+| The cases | `crates/lab/src/recording/cases.rs` (new): `regression_cases(plan, entries, cache, ocr, failures) -> LabResult<CaseSet>`, `CaseSet::files`, `CaseSet::answer`, `CaseSet::ambiguity_warnings`, `cases_dir_name`; the scene's regions from the admitted package's declared targets (`read_regions`; the coordinator accepted this over the kernel's private `contained_task::recognized_target_region`, which answers the rectangle an evaluation used and needs a text-recognition model for an OCR target), the bare canvas (`bare_canvas_pages`), the ambiguity (`others_matched`, `expectation`), the refusal (`case_failed`) |
 | The run | `crates/lab/src/regression_case.rs` unchanged: `run_regression_case_on_bundle` is called on every case and once on the bare canvas |
-| The order of the checks | `crates/lab/src/recording_api.rs`: `self_checks` runs the checks before `cases` (`package_checks`, the earlier body, returning `PackageChecked` with the frames read back) and then `cases` through the same `Runner`; `Checked{package, cases}`; `generate_and_write` writes the set after the package (`container::replace_dir_in_place`) and answers `lab.cases`; `package_without_cases` (`cfg(test)`) for the byte-for-byte test |
+| The order of the checks | `crates/lab/src/recording_api.rs`: `self_checks` runs the checks before `cases` (`package_checks`, the earlier body, returning `PackageChecked` with the frames read back) and then `cases` through the same `Runner`; `Checked{package, cases}`; `SelfCheckFailures::warnings` (the ambiguity warnings beside a real miss); `ready_of` adds the ambiguity warnings to `record ready`'s; `generate_and_write` writes the set after the package (`container::replace_dir_in_place`) and answers `lab.cases`; `package_without_cases` (`cfg(test)`) for the byte-for-byte test |
 | The write | `crates/lab/src/recording/container.rs`: `replace_dir_in_place` (as `replace_in_place` for a file), `free_name` (the free `<name>.<kind>-<unix_ms>` that `set_aside_name` now calls), `write_new_file` |
 | The failures' place | `crates/lab/src/recording/crosscheck.rs`: `Locus::case`, `Locus::checks`, `Locus::with_case`; `crates/lab/src/recording/ready.rs`: `ReadyDetails::case`, `ReadyDetails::checks` (never read from a pre-check's refusal) |
-| The words | `crates/lab/src/codes.rs`: `ReadyCheck::Cases`, `LabCode::RecordCaseFailed`, `LabCode::RecordCaseBareCanvas`, `CaseLimit`; `crates/actingcommand-contract/src/outcome/keys.rs`: the key `regression_problem` |
+| The words | `crates/lab/src/codes.rs`: `ReadyCheck::Cases`, `LabCode::RecordCaseFailed`, `LabCode::RecordCasePageAmbiguous`, `LabCode::RecordCaseBareCanvas`, `CaseLimit`; `crates/actingcommand-contract/src/outcome/keys.rs`: the key `regression_problem` |
 | Texts | [lab-recording.md](lab-recording.md): item 10 of "Self-checks", the new "Regression cases written with the package", "Writing", "Output", "Error codes", and in "What a recording still lacks" the two examples, the self-checks, `checks_after`, a self-check item's `details` and the row `ready`; [resource-regression-case.md](resource-regression-case.md): what a case the Runtime writes holds; the rows `record stop` and `record ready` of [lab-operations.json](lab-operations.json) (`output`, `notes`; no `help` changes); `apps/actinglab-mcp/MANUAL.md`, section 8 |
 
 **Codes and words.**
@@ -33231,14 +33243,16 @@ that a case written is one that passed on the package it came with.
 | Word | What it says | Refuses, warns or informs | Exit |
 |---|---|---|---|
 | `cases` (`ready_check`) | the self-check of the regression cases, the last | informs | |
-| `record_case_failed` (lab, error, `regression_problem` required) | a regression case made from the recording does not pass on the package generated | refuses `record stop`; an item of `record ready` | 3 (`record ready` exits 0) |
+| `record_case_failed` (lab, error, `regression_problem` required) | a regression case made from the recording misses on the package generated: its page not recognised, a target it expects failing, another check failing | refuses `record stop`; an item of `record ready` | 3 (`record ready` exits 0) |
+| `record_case_page_ambiguous` (lab, warning, no values) | a case's page is recognised on its scene, but so is another page of the package: written without `observe` (or, with no target, not written) | warns (`lab.cases.warnings`, `record ready`'s `warnings`) | 0 |
 | `record_case_bare_canvas` (lab, warning, no values) | a case's page is also a page the bare canvas answers | warns (`lab.cases.warnings`) | 0 |
 | `self_agreement` (`case_limit`, new closed vocabulary) | the cases were made from the frames the package was built from | informs (`lab.cases.limits`) | 0 |
 | key `regression_problem` (`vocab:regression_problem`) | the word of a failing case's first failed check, in `record_case_failed`'s values | | |
 
 A case not proven is named with the runner's own reasons (`regression_not_run`: `ocr_unavailable`,
-`frames_required`): no new word. The decision the slice adds reads the verdict word of
-`regression_verdict`, no code. The outcome-code index is regenerated.
+`frames_required`): no new word. The decisions the slice adds read the verdict word of
+`regression_verdict` and the word `page_conflict` of `regression_problem`, no code. The
+outcome-code index is regenerated.
 
 **Tests** (`crates/lab/src/gate_463_s210.rs`, exec gate map "#463 S2-10"; recordings made as stage
 one makes them, synthetic 160x90 screens, colour marks, no OCR model, no clock): five cases from
@@ -33246,10 +33260,15 @@ three steps, the final screen and an ending, each in the contract's form and pas
 the written package (1); the package byte for byte the one the checks before `cases` build (2); no
 scene holds a pixel no target reads, no scene-rule warning (3); a page told apart by another page's
 forbidden target passes (4); the dry run writes nothing and lists five, the regeneration replaces
-the set and keeps the old one (5); two failing cases listed by `record ready`, `record stop`
-refusing the first and writing nothing (6); an OCR page without a model, written and not proven
-with `ocr_unavailable` (7); a black square's page, written with `record_case_bare_canvas` (8); a
-dropped middle step has no case and each `source` is exactly the recording and the step (9).
+the set and keeps the old one (5); two real misses (pages recognised on their frames by text a
+scripted OCR model reads only where the frame shows a marker no region holds) listed by `record
+ready` with `page_mismatch` and `target_mismatch`, `record stop` refusing the first and writing
+nothing (6); an OCR page without a model, written and not proven with `ocr_unavailable` (7); a black
+square's page, written with `record_case_bare_canvas` (8); a dropped middle step has no case and
+each `source` is exactly the recording and the step (9); a later page also matching an earlier
+screen: that case written without `observe`, passing, named `record_case_page_ambiguous` with the
+other page by `record stop` and `record ready` (10); one real miss refused, its page check
+`page_mismatch` with no page recognised (11).
 Adapted, as the requirement changes what they pin (the eighth check in `checks` and
 `checks_after`): `EVERY_CHECK` of `gate_463_s21`, `gate_463_s21c`, `gate_463_s26` and actinglab's
 `gate_463_s21b`; the
@@ -33261,13 +33280,18 @@ judgement, order and code; RC-1's reader and runner; every stored frame. Nothing
 a choice or a value, and no image is reviewed or refused for its content. No ledger record,
 configuration key or Runtime interface revision.
 
-**Found while building** (for the coordinator). The case's page detection evaluates every page of
-the package, and the cross-check never did: it judges each page on its own frames, and a later
-page that passes on the screen before its step only warns (`arrival_unconfirmed`), the usual
-ending's page on an ending's frames too (`ending_usual_insensitive`). A recording whose earlier
-page's marks also hold on a later recorded screen (a colour mark on a background the screens share,
-as several gates' fixtures mark the first page) makes that screen's case a `page_conflict`, so
-`record stop` now refuses such a recording, as the work order rules for any failing case.
+**The coordinator's ruling after the first round** (on the slice's report of `00c7547a`). The first
+round refused every failing case, as the work order said, and its report put first what that meant:
+the case's page detection evaluates every page of the package, the cross-check never did (it judges
+each page on its own frames, and a later page passing on the screen before its step only warns,
+`arrival_unconfirmed`, the usual ending's page on an ending's frames too,
+`ending_usual_insensitive`), so every recording whose earlier page's marks also hold on a later
+recorded screen (several gates' fixtures among them, R2's and S2-6's) would have been refused. The
+ruling: a linear package's run never asks "which page of the whole package is this", so that
+another page also matches is no defect of the package (R2's ruling 4 stands); only a real miss
+refuses, and an ambiguous case is written without `observe` with the warning
+`record_case_page_ambiguous` (the rule above). No fixture or expectation of another gate was changed
+for the refusal, so none is restored; the eighth check stays in the lists that name the checks.
 
 **At deploy.** Nothing to configure.
 

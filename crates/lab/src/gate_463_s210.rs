@@ -7,7 +7,12 @@
 // `record_press` with a fake Runtime, its captures taking the scripted screens and the caller's clock
 // moving only by its waits; three taps give four steps whose live frames are f0001, f0003, f0005 and
 // f0006), then marked with colour marks. Frames are synthetic 160x90 screens of gray with squares of
-// one colour; no Runtime, no device, no OCR model; the tests read no clock and never sleep.
+// one colour; no Runtime, no device; no OCR model but in tests 6 and 11, whose scripted model reads
+// its text only on a frame that shows the marker colour anywhere, a model that looks outside the
+// region the package declares; the tests read no clock and never sleep. The coordinator's ruling
+// after the first round (R2's ruling 4 as precedent): a page recognised beside another page of the
+// package is no miss, the case is written without `expect.observe` and named
+// `record_case_page_ambiguous`; only a real miss refuses.
 // - `s210_three_steps_and_an_ending_write_five_cases_that_pass_read_from_disk` (1): the stop writes
 //   four cases, the ending taken after it a fifth on the regeneration; each in the contract's form,
 //   each passing when read from disk and run by `run_regression_case` on the written package.
@@ -20,12 +25,18 @@
 //   on step 1's screen but forbids step 3's blue mark, which only steps 1 and 3 show; step 1's case
 //   holds that mark's region and passes.
 // - `s210_the_dry_run_writes_nothing_and_lists_five_and_a_regeneration_replaces_the_cases` (5).
-// - `s210_cases_that_fail_are_listed_by_record_ready_and_refuse_record_stop` (6): screens 1 and 2
-//   differ only where no target reads, so on each both pages pass: two failing cases, both listed by
-//   `record ready`; `record stop` refuses the first and writes no case.
+// - `s210_cases_whose_page_is_not_recognised_are_listed_and_refuse_record_stop` (6, adjusted to the
+//   ruling): steps 2 and 3 are recognised by text the scripted model reads only on a frame showing
+//   the marker, which their screens show where no target reads: on the scenes their pages are not
+//   recognised: two misses, both listed by `record ready`; `record stop` refuses the first and writes
+//   no case.
 // - `s210_a_page_that_needs_text_recognition_is_written_and_named_not_proven` (7).
 // - `s210_a_page_the_bare_canvas_answers_is_written_with_the_warning` (8): step 2's square is black.
 // - `s210_a_dropped_middle_step_has_no_case_and_a_source_names_no_path` (9).
+// - `s210_a_later_page_matching_an_earlier_screen_writes_the_case_without_observe` (10): step 2's
+//   mark holds on step 1's screen too: step 1's case is written without `observe`, passes, and
+//   `record stop` and `record ready` name it with the other page.
+// - `s210_an_expected_page_not_recognised_refuses_record_stop` (11): one such miss, its checks.
 
 use crate::recording::generate::{
     DEFAULT_APPLICATION_ARRIVAL_TIMEOUT_MS, DEFAULT_ARRIVAL_TIMEOUT_MS, StopSettings,
@@ -47,10 +58,15 @@ use actingcommand_pack_containment::{
     ContainmentLimits, ContentContainer, expand_content_container,
 };
 use actingcommand_recognition::Scene;
+use actingcommand_recognition_pack::{
+    NnProviderRequest, NnProviderResult, OcrProviderRequest, OcrProviderResult,
+    OcrProviderTextBlock, VisionProvider, VisionProviderError, VisionProviderErrorCode,
+};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 use tempfile::TempDir;
 
@@ -69,9 +85,9 @@ const BLUE: [u8; 3] = [20, 20, 230];
 const YELLOW: [u8; 3] = [230, 230, 20];
 const MAGENTA: [u8; 3] = [230, 20, 230];
 const CYAN: [u8; 3] = [20, 230, 230];
-const WHITE: [u8; 3] = [255, 255, 255];
 const BLACK: [u8; 3] = [0, 0, 0];
-/// The colour test 3 paints every pixel of a screen that no target reads.
+/// The colour test 3 paints every pixel of a screen that no target reads, and tests 6 and 11 show
+/// where no target reads, the colour `MarkerOcr` reads by.
 const MARKER: [u8; 3] = [201, 13, 177];
 /// The ending taken after the stop, and its mark.
 const ALPHA_KEY: &str = "neutral_task_alpha";
@@ -101,9 +117,9 @@ const SQUARE: RecordRect = rect(0, 0, 16, 16);
 /// Test 4's second and third squares.
 const SECOND: RecordRect = rect(32, 0, 16, 16);
 const THIRD: RecordRect = rect(64, 0, 16, 16);
-/// A square no target reads (test 6).
+/// A square no target reads, where tests 6 and 11 show the marker colour.
 const UNREAD: RecordRect = rect(100, 40, 16, 16);
-/// Test 7's OCR mark's region.
+/// The OCR marks' region (tests 6, 7 and 11).
 const TEXT_AREA: RecordRect = rect(40, 40, 32, 16);
 /// The point each tap presses, on no square.
 const POINT: RecordPoint = RecordPoint { x: 130, y: 70 };
@@ -226,9 +242,78 @@ impl RecordFramePorts for Screens {
     }
 }
 
+/// Tests 6 and 11's scripted OCR model: it reads `TEXT` in the requested region, at confidence
+/// 0.9, only on a frame that shows the marker colour anywhere, and nothing on any other frame: a
+/// model that looks outside the region the package declares for its target.
+#[derive(Debug)]
+struct MarkerOcr;
+
+impl VisionProvider for MarkerOcr {
+    fn require_ocr_model(
+        &self,
+        _model_ref: &str,
+        _model_sha256: &str,
+    ) -> Result<(), VisionProviderError> {
+        Ok(())
+    }
+
+    fn require_nn_model(
+        &self,
+        _model_ref: &str,
+        _model_sha256: &str,
+    ) -> Result<(), VisionProviderError> {
+        Err(VisionProviderError::new(
+            VisionProviderErrorCode::Unavailable,
+            "no NN model in this fixture",
+        ))
+    }
+
+    fn read_text(
+        &self,
+        request: OcrProviderRequest<'_>,
+    ) -> Result<OcrProviderResult, VisionProviderError> {
+        let shows_marker = request
+            .frame
+            .rgb8_pixels
+            .chunks(3)
+            .any(|pixel| *pixel == MARKER);
+        let blocks = if shows_marker {
+            vec![OcrProviderTextBlock {
+                text: "TEXT".to_owned(),
+                rect: request.region,
+                confidence: Some(0.9),
+            }]
+        } else {
+            Vec::new()
+        };
+        let text = blocks
+            .iter()
+            .map(|block| block.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        Ok(OcrProviderResult {
+            ppocr_diagnostics: Vec::new(),
+            text,
+            confidence: shows_marker.then_some(0.9),
+            blocks,
+            detection: None,
+        })
+    }
+
+    fn classify(
+        &self,
+        _request: NnProviderRequest<'_>,
+    ) -> Result<NnProviderResult, VisionProviderError> {
+        Err(VisionProviderError::new(
+            VisionProviderErrorCode::Unavailable,
+            "no NN model in this fixture",
+        ))
+    }
+}
+
 // A state directory with an active session of `INSTANCE` and its Lab recording, its game, server
-// and locale known, without an OCR model. The lock is held as one command holds it and dropped
-// before the directory.
+// and locale known, without an OCR model (or, `Bench::reading`, with the scripted one). The lock is
+// held as one command holds it and dropped before the directory.
 struct Bench {
     lock: RecordingLock,
     ocr: LabOcr,
@@ -237,6 +322,15 @@ struct Bench {
 
 impl Bench {
     fn new() -> Self {
+        Self::with_ocr(None)
+    }
+
+    // Tests 6 and 11: a bench whose Lab reads text with `MarkerOcr`.
+    fn reading() -> Self {
+        Self::with_ocr(Some(LabOcr::with_provider(Arc::new(MarkerOcr))))
+    }
+
+    fn with_ocr(ocr: Option<LabOcr>) -> Self {
         let temp = TempDir::new().expect("temporary directory");
         let state = temp.path().join("state");
         fs::create_dir_all(&state).expect("state directory");
@@ -244,7 +338,7 @@ impl Bench {
             .expect("recording lock");
         let bench = Self {
             lock,
-            ocr: LabOcr::from_vision_root(&temp.path().join("no-vision")),
+            ocr: ocr.unwrap_or_else(|| LabOcr::from_vision_root(&temp.path().join("no-vision"))),
             temp,
         };
         bench.header("active");
@@ -264,11 +358,15 @@ impl Bench {
     // The recording of `screens`: one tap on each screen but the last, the screen after it one
     // capture later.
     fn recorded(screens: &[Vec<u8>]) -> Self {
-        let bench = Self::new();
+        Self::new().pressing(screens)
+    }
+
+    // This bench with one tap on each of `screens` but the last.
+    fn pressing(self, screens: &[Vec<u8>]) -> Self {
         for pair in screens.windows(2) {
-            bench.press(vec![pair[0].clone(), pair[1].clone()]);
+            self.press(vec![pair[0].clone(), pair[1].clone()]);
         }
-        bench
+        self
     }
 
     fn state(&self) -> PathBuf {
@@ -795,20 +893,43 @@ fn s210_the_dry_run_writes_nothing_and_lists_five_and_a_regeneration_replaces_th
     );
 }
 
-// The work order's test 6: screens 1 and 2 show the same red square and differ only in a square no
-// target reads, so step 1's page and step 2's page both pass on each of them: a page told apart
-// only by pixels outside every region. The cases of steps 1 and 2 fail (`page_conflict`): `record
-// ready` lists both as failures of the self-check `cases`, the last, every check complete;
-// `record stop` refuses the first, `record_case_failed`, and writes no case and no package.
+// The recording of tests 6 and 11, with the scripted OCR model: four screens of a red, a green, a
+// blue and a yellow square; each of `reading` (2, 3) shows the marker colour where no target reads,
+// and its step's page requires, beside its square, an OCR mark the scripted model reads only on a
+// frame that shows the marker. The cross-check passes on the frames; on a case's scene, which holds
+// only the regions the package declares, the marker is gone and the page is not recognised.
+fn reading_recording(reading: &[u32]) -> Bench {
+    let screens = [RED, GREEN, BLUE, YELLOW]
+        .into_iter()
+        .zip(1_u32..)
+        .map(|(square, step)| {
+            if reading.contains(&step) {
+                screen(&[(SQUARE, square), (UNREAD, MARKER)])
+            } else {
+                screen(&[(SQUARE, square)])
+            }
+        })
+        .collect::<Vec<_>>();
+    let bench = Bench::reading().pressing(&screens);
+    for step in 1..=4_u32 {
+        let mut marks = vec![color(&format!("square_{step}"), SQUARE)];
+        if reading.contains(&step) {
+            marks.push(ocr(&format!("text_{step}"), TEXT_AREA));
+        }
+        bench.marked(json!({"step": step, "add": marks}));
+    }
+    bench
+}
+
+// The work order's test 6, adjusted to the coordinator's ruling: steps 2 and 3 are recognised on
+// their frames by text the scripted model reads only where the frame shows the marker, which no
+// region of the package holds: on their cases' scenes their pages are not recognised (a real miss,
+// `page_mismatch`, and the text target `target_mismatch`). `record ready` lists both as failures of
+// the self-check `cases`, the last, every check complete; `record stop` refuses the first,
+// `record_case_failed`, and writes no case and no package.
 #[test]
-fn s210_cases_that_fail_are_listed_by_record_ready_and_refuse_record_stop() {
-    let bench = Bench::recorded(&[
-        screen(&[(SQUARE, RED), (UNREAD, WHITE)]),
-        screen(&[(SQUARE, RED), (UNREAD, BLACK)]),
-        screen(&[(SQUARE, GREEN)]),
-        screen(&[(SQUARE, YELLOW)]),
-    ]);
-    bench.squares(4);
+fn s210_cases_whose_page_is_not_recognised_are_listed_and_refuse_record_stop() {
+    let bench = reading_recording(&[2, 3]);
 
     let ready = bench.ready();
     assert_eq!(ready["status"], "draft", "{ready}");
@@ -817,7 +938,7 @@ fn s210_cases_that_fail_are_listed_by_record_ready_and_refuse_record_stop() {
         .as_array()
         .expect("missing")
         .iter()
-        .zip([(1, "f0001", "step_01"), (2, "f0003", "step_02")])
+        .zip([(2, "f0003", "step_02"), (3, "f0005", "step_03")])
     {
         assert_eq!(item["what"], "cases", "{item}");
         assert_eq!(item["code"], LabCode::RecordCaseFailed.as_str(), "{item}");
@@ -829,19 +950,21 @@ fn s210_cases_that_fail_are_listed_by_record_ready_and_refuse_record_stop() {
         assert_eq!(details["page"], case, "{item}");
         assert_eq!(details["frames"], json!([frame]), "{item}");
         let checks = details["checks"].as_array().expect("checks");
-        assert_eq!(checks.len(), 1, "{item}");
+        assert_eq!(checks.len(), 2, "{item}");
         assert_eq!(checks[0]["at"], "/expect/observe/page", "{item}");
         assert_eq!(checks[0]["result"], "failed", "{item}");
-        assert_eq!(checks[0]["problem"], "page_conflict", "{item}");
-        let matched = checks[0]["page"]["matched_pages"]
-            .as_array()
-            .expect("matched pages")
-            .iter()
-            .filter_map(Value::as_str)
-            .collect::<BTreeSet<_>>();
+        assert_eq!(checks[0]["problem"], "page_mismatch", "{item}");
         assert_eq!(
-            matched,
-            BTreeSet::from(["neutral/step_01", "neutral/step_02"]),
+            checks[0]["page"]["expected"],
+            format!("neutral/{case}"),
+            "{item}"
+        );
+        assert!(checks[0]["page"]["recognized"].is_null(), "{item}");
+        assert_eq!(checks[1]["at"], "/expect/recognize/1", "{item}");
+        assert_eq!(checks[1]["problem"], "target_mismatch", "{item}");
+        assert_eq!(
+            checks[1]["target"],
+            json!({"target": format!("text_{step}"), "expected": true, "recognized": false}),
             "{item}"
         );
     }
@@ -867,16 +990,16 @@ fn s210_cases_that_fail_are_listed_by_record_ready_and_refuse_record_stop() {
         error.message
     );
     let details = error.details.expect("details");
-    assert_eq!(details["case"], "step_01", "{details}");
-    assert_eq!(details["step"], 1, "{details}");
-    assert_eq!(details["frame_id"], "f0001", "{details}");
+    assert_eq!(details["case"], "step_02", "{details}");
+    assert_eq!(details["step"], 2, "{details}");
+    assert_eq!(details["frame_id"], "f0003", "{details}");
     assert_eq!(details["verdict"], "failed", "{details}");
     assert_eq!(
-        details["checks"][0]["problem"], "page_conflict",
+        details["checks"][0]["problem"], "page_mismatch",
         "{details}"
     );
     assert_eq!(
-        details["outcome"]["values"]["regression_problem"], "page_conflict",
+        details["outcome"]["values"]["regression_problem"], "page_mismatch",
         "{details}"
     );
     assert!(
@@ -992,4 +1115,129 @@ fn s210_a_dropped_middle_step_has_no_case_and_a_source_names_no_path() {
         let case = case_of(&cases[id].0);
         assert_eq!(case["source"], source, "{id}: {case}");
     }
+}
+
+// The warnings `record_case_page_ambiguous` among `warnings`, a list of `record stop`'s
+// `lab.cases.warnings` or of `record ready`'s `warnings`.
+fn ambiguity_of(warnings: &Value) -> Vec<Value> {
+    warnings
+        .as_array()
+        .unwrap_or_else(|| panic!("no warnings in {warnings}"))
+        .iter()
+        .filter(|warning| warning["code"] == LabCode::RecordCasePageAmbiguous.as_str())
+        .cloned()
+        .collect()
+}
+
+// The coordinator's ruling after the first round (R2's ruling 4 as precedent): step 2's page, a
+// green square beside step 1's red one, also passes on step 1's screen (today's cross-check warns
+// `arrival_unconfirmed` for it and refuses nothing). Step 1's case is no miss: it is written without
+// `expect.observe`, with step 1's page's target alone, passes when read from disk, and `record
+// stop` and `record ready` name it with `record_case_page_ambiguous`, the other page beside it.
+// Step 2's case, on whose screen step 1's page does not pass, keeps its `observe`.
+#[test]
+fn s210_a_later_page_matching_an_earlier_screen_writes_the_case_without_observe() {
+    let bench = Bench::recorded(&[
+        screen(&[(SQUARE, RED), (SECOND, GREEN)]),
+        screen(&[(SQUARE, BLUE), (SECOND, GREEN)]),
+        screen(&[(SQUARE, GREEN)]),
+        screen(&[(SQUARE, YELLOW)]),
+    ]);
+    bench.marked(json!({"step": 1, "add": [color("square_1", SQUARE)]}));
+    bench.marked(json!({"step": 2, "add": [color("green_2", SECOND)]}));
+    bench.marked(json!({"step": 3, "add": [color("square_3", SQUARE)]}));
+    bench.marked(json!({"step": 4, "add": [color("square_4", SQUARE)]}));
+    let expected = json!({
+        "code": LabCode::RecordCasePageAmbiguous.as_str(),
+        "case": "step_01",
+        "page": "neutral/step_01",
+        "other_pages": ["neutral/step_02"],
+        "written": true
+    });
+    let named = |warnings: &Value| {
+        ambiguity_of(warnings)
+            .into_iter()
+            .map(|mut warning| {
+                warning
+                    .as_object_mut()
+                    .expect("a warning")
+                    .remove("message")
+                    .expect("its message");
+                warning
+            })
+            .collect::<Vec<_>>()
+    };
+
+    let ready = bench.ready();
+    assert_eq!(ready["status"], "ready", "{ready}");
+    assert_eq!(ready["missing"], json!([]), "{ready}");
+    assert_eq!(named(&ready["warnings"]), [expected.clone()], "{ready}");
+
+    let lab = bench.stopped(false);
+    assert_eq!(lab["lab_status"], "generated", "{lab}");
+    let answer = &lab["cases"];
+    assert_eq!(
+        answer["ids"],
+        json!(["step_01", "step_02", "step_03", "final"]),
+        "{answer}"
+    );
+    assert_eq!(named(&answer["warnings"]), [expected], "{answer}");
+    let package = bench.package(&lab);
+    let cases = written_cases(&cases_dir(&lab));
+    let (case_json, scene) = &cases["step_01"];
+    let case = case_of(case_json);
+    assert_eq!(
+        case["expect"],
+        json!({"recognize": [{"target": "square_1", "passed": true}]}),
+        "{case}"
+    );
+    let verdict = run_regression_case(&package, case_json, scene, &bench.ocr);
+    assert_eq!(verdict.verdict, RegressionVerdict::Passed, "{verdict:?}");
+    let second = case_of(&cases["step_02"].0);
+    assert_eq!(
+        second["expect"]["observe"]["page"], "neutral/step_02",
+        "{second}"
+    );
+}
+
+// The coordinator's ruling after the first round, its first point: step 2's page is recognised on
+// its frame by text the scripted model reads only where the frame shows the marker, which no region
+// of the package holds; on its case's scene the page is not recognised at all. `record stop`
+// refuses `record_case_failed` with `page_mismatch`, the page expected and none recognised, its
+// text target failing too; nothing is written and the recording stays active.
+#[test]
+fn s210_an_expected_page_not_recognised_refuses_record_stop() {
+    let bench = reading_recording(&[2]);
+    let error = bench.stop(false).expect_err("a page not recognised");
+    assert_eq!(
+        error.code,
+        LabCode::RecordCaseFailed.as_str(),
+        "{}",
+        error.message
+    );
+    let details = error.details.expect("details");
+    assert_eq!(details["case"], "step_02", "{details}");
+    assert_eq!(details["page"], "step_02", "{details}");
+    assert_eq!(
+        details["outcome"]["values"]["regression_problem"], "page_mismatch",
+        "{details}"
+    );
+    let checks = details["checks"].as_array().expect("checks");
+    assert_eq!(checks.len(), 2, "{details}");
+    assert_eq!(checks[0]["problem"], "page_mismatch", "{details}");
+    assert_eq!(
+        checks[0]["page"],
+        json!({"expected": "neutral/step_02", "recognized": null}),
+        "{details}"
+    );
+    assert_eq!(checks[1]["problem"], "target_mismatch", "{details}");
+    assert!(
+        !bench.out().join(format!("{PACKAGE_ID}.cases")).exists(),
+        "a case was written"
+    );
+    let recording: Value = serde_json::from_slice(
+        &fs::read(recording_path(&bench.state(), RECORD_ID)).expect("step table"),
+    )
+    .expect("step table JSON");
+    assert_eq!(recording["status"], "active", "{recording}");
 }

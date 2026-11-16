@@ -58,7 +58,10 @@ cases written with the package") names in `source` only its recording and where 
 `{record_id, step}` (the step's serial number), `{record_id, final: true}` or `{record_id, ending}`
 (the ending's key), never a path of the machine, an instance, an account or a time. Its `id` is
 `step_<nn>`, `final` or `ending_<outcome_key>`; it expects its page (`expect.observe.page`) and
-every target that page requires to pass (`expect.recognize`), and nothing else.
+every target that page requires to pass (`expect.recognize`), and nothing else; or, when its page is
+recognised on its scene beside another page of the package (`page_conflict` among whose pages its
+page is, which a linear run never asks), every such target alone, without `expect.observe`, named
+where it is written with the warning `record_case_page_ambiguous`.
 
 `scene_sha256` is, in this contract, the SHA-256 of the scene file's bytes, and a scene whose
 bytes have another is a failure of the case. The value of cases written before this contract was
@@ -110,7 +113,8 @@ directory that is not there is `package_missing`, any other refusal `package_ref
    pastes, on a black canvas (`[0, 0, 0]`) of the recording's size, the regions every recognition
    target of the whole package reads, as the admitted package declares them (a template's search
    region and its colour check's, a colour or colour digest probe's region, an OCR or NN target's
-   region), where they are in the frame, each rectangle once with the targets that read it as its
+   region; a check, a value test and a click-only target none of their own; [lab-recording.md](lab-recording.md),
+   "Regression cases written with the package"), where they are in the frame, each rectangle once with the targets that read it as its
    `content`; not only the targets of the case's page, so that a page told apart from this one by
    a target it forbids sees that target's region as on the frame. Never a whole frame. A page that
    the bare canvas answers too (a dark colour, for one) is named where the case is written (the

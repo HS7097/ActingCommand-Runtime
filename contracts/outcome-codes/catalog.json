@@ -2886,7 +2886,7 @@
     },
     "regression_problem": {
       "type": "vocab:regression_problem",
-      "description": "The word of the first failed check of a regression case record stop made from a recording for the package it generated, which does not pass on that package (record_case_failed; #463 S2-10, since 0.12.69); every failed check of the case is in the refusal's details."
+      "description": "The word of the first failed check of a regression case record stop made from a recording for the package it generated, which misses on that package (record_case_failed; #463 S2-10, since 0.12.69); every failed check of the case is in the refusal's details."
     }
   },
   "vocabularies": {

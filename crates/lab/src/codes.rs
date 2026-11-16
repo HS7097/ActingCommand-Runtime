@@ -108,12 +108,19 @@ actingcommand_contract::outcome_codes! {
         /// the case still runs.
         CaseMemberUnknown => "case_member_unknown": warning / none,
         /// Error. #463 S2-10: a regression case `record stop` made from the recording for the
-        /// package it generated does not pass on that package when the one runner of the case
-        /// contract runs it (key `regression_problem`: the word of its first failed check); the
-        /// case is not written and `record stop` refuses as at any self-check's failure, nothing
-        /// written (exit 3; actinglab details `case`, `page`, `frame_id`, `step` and
-        /// `artifact_step` or `outcome_key`, `verdict`, `checks`).
+        /// package it generated misses on that package when the one runner of the case contract
+        /// runs it: its page is not recognised on its scene, a target it expects fails, or another
+        /// check fails, never only because another page matches too (key `regression_problem`:
+        /// the word of its first failed check); the case is not written and `record stop` refuses
+        /// as at any self-check's failure, nothing written (exit 3; actinglab details `case`,
+        /// `page`, `frame_id`, `step` and `artifact_step` or `outcome_key`, `verdict`, `checks`).
         RecordCaseFailed => "record_case_failed": error / none,
+        /// Warning. #463 S2-10, the coordinator's ruling after the first round (R2's ruling 4 as
+        /// precedent): a regression case's page is recognised on its scene, but so is another page
+        /// of the package, which a linear run never asks; the case is written without
+        /// `expect.observe`, its page's targets alone, or, when its page requires no target, not
+        /// written. `record stop` and `record ready` name it, with the other pages.
+        RecordCasePageAmbiguous => "record_case_page_ambiguous": warning / none,
         /// Warning. #463 S2-10: the page a regression case `record stop` wrote expects is also a
         /// page the bare canvas answers, the canvas with no patch at all, so the case proves
         /// nothing of its page; it is written and named.

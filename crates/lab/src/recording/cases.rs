@@ -21,6 +21,13 @@
 //!   not written; `passed` is written; `partial` and `not_run` are written and named with the
 //!   runner's reasons. The bare canvas, with no patch at all, is run once per package: a case whose
 //!   page it answers too is written and named with the warning `record_case_bare_canvas`.
+//! - **Ambiguity is no miss** (the coordinator's ruling after the first round, R2's ruling 4 as its
+//!   precedent): a linear run never asks which page of the whole package a screen is, each step
+//!   waits for its own page. When the runner answers `page_conflict` and the case's page is among
+//!   the pages matched, the case is made again without `expect.observe`, its page's targets alone,
+//!   and run again in that form before it is written (failing then is a miss); a page that requires
+//!   no target gives no case. Either way the warning `record_case_page_ambiguous` names it and the
+//!   other pages, in `record stop`'s answer and in `record ready`'s.
 //!
 //! Nothing here writes a file: `record stop` writes the set ([`CaseSet::files`]) beside the package,
 //! and `record ready` lists the failures.
@@ -32,7 +39,9 @@ use super::model::{RecordSize, RecordedFrame};
 use super::ready::press_frame;
 use super::store::{blocked, hex_sha256, invalid, with_details};
 use crate::LabOcr;
-use crate::codes::{CaseLimit, LabCode, RegressionNotRun, RegressionResult, RegressionVerdict};
+use crate::codes::{
+    CaseLimit, LabCode, RegressionNotRun, RegressionProblem, RegressionResult, RegressionVerdict,
+};
 use crate::regression_case::{
     REGRESSION_CASE_FILE, REGRESSION_CASE_SCHEMA, RegressionCaseVerdict, RegressionCheck,
     run_regression_case_on_bundle,
@@ -65,6 +74,16 @@ const SELF_AGREEMENT_TEXT: &str = "These cases were made from the frames this pa
 const BARE_CANVAS_MESSAGE: &str = "The page this case expects is also what the package's page \
     detection answers on the bare canvas, with no patch at all: the case proves nothing of its \
     page. Give the page a mark of a bright or textured area of its own screen to make it prove it.";
+/// The text of the warning `record_case_page_ambiguous` of a case written without `observe`.
+const AMBIGUOUS_MESSAGE: &str = "This case's page is recognised on its screen, but so are the \
+    other pages named here: a linear run waits for each step's own page and never asks which page \
+    of the package a screen is, so the case is written without expect.observe, with its page's \
+    targets alone, which it passes. To make it prove its page too, tell the screens apart with a \
+    mark of this screen or a forbidden mark on the other page.";
+/// The text of the warning `record_case_page_ambiguous` of a case that is not written.
+const AMBIGUOUS_UNWRITTEN_MESSAGE: &str = "This case's page is recognised on its screen, but so \
+    are the other pages named here, and the page requires no recognition target: without \
+    expect.observe the case would declare nothing, so it is not written.";
 
 /// What a case is made from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -88,16 +107,44 @@ pub(crate) struct WrittenCase {
 
 /// The cases of a package that its run did not fail, in the order the recording gives them (the
 /// steps in path order, the final screen, the endings in the order taken); the cases among them
-/// that did not prove everything (`partial`, `not_run`) with the runner's reasons; and the
-/// bare-canvas warnings.
+/// that did not prove everything (`partial`, `not_run`) with the runner's reasons; the warnings of
+/// the cases in that order (`record_case_page_ambiguous`, `record_case_bare_canvas`); and the
+/// ambiguity warnings alone, which `record ready` names too.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct CaseSet {
     cases: Vec<WrittenCase>,
     not_proven: Vec<Value>,
     warnings: Vec<Value>,
+    ambiguous: Vec<Value>,
 }
 
 impl CaseSet {
+    /// The warnings `record_case_page_ambiguous`, in the order of the cases, which `record ready`
+    /// names as `record stop` does.
+    pub(crate) fn ambiguity_warnings(&self) -> &[Value] {
+        &self.ambiguous
+    }
+
+    /// The warning `record_case_page_ambiguous` of the case `id`, whose page `page` is recognised
+    /// on its scene beside the pages `others`; `written` whether the case is written.
+    fn warn_ambiguous(&mut self, id: &str, page: &str, others: &[String], written: bool) {
+        let message = if written {
+            AMBIGUOUS_MESSAGE
+        } else {
+            AMBIGUOUS_UNWRITTEN_MESSAGE
+        };
+        let warning = json!({
+            "code": LabCode::RecordCasePageAmbiguous.as_str(),
+            "case": id,
+            "page": page,
+            "other_pages": others,
+            "written": written,
+            "message": message
+        });
+        self.ambiguous.push(warning.clone());
+        self.warnings.push(warning);
+    }
+
     /// Every file of the cases' directory, `/`-separated below it: `<id>/case.json` and
     /// `<id>/scene.png` of each case.
     pub(crate) fn files(&self) -> Vec<(String, Vec<u8>)> {
@@ -188,7 +235,9 @@ struct Source<'p> {
 /// writes), on the recording's frames `cache`, each run by [`run_regression_case_on_bundle`] with
 /// `ocr`. A case whose verdict is `failed` is a failure `failures` meets (the step or the ending,
 /// the frame, the page, the case and its failed checks) and is not in the set; under `record ready`
-/// the next case is still made and run.
+/// the next case is still made and run. A page recognised beside another page of the package is no
+/// failure ([`others_matched`]): the case is made again without `observe` and run again, and the
+/// warning `record_case_page_ambiguous` names it.
 pub(crate) fn regression_cases(
     plan: &Plan,
     entries: &BTreeMap<String, Vec<u8>>,
@@ -222,29 +271,34 @@ pub(crate) fn regression_cases(
             )
         })?;
         let scene = scene_of(loaded, &regions, plan.size)?;
-        let mut expect = Map::new();
-        expect.insert("observe".to_string(), json!({"page": page}));
-        if !source.targets.is_empty() {
-            expect.insert(
-                "recognize".to_string(),
-                Value::Array(
-                    source
-                        .targets
-                        .iter()
-                        .map(|target| json!({"target": target, "passed": true}))
-                        .collect(),
-                ),
-            );
-        }
-        let document = case_document(
+        let mut document = case_document(
             plan,
             &source.id,
             &source.source,
             &regions,
             &scene,
-            Value::Object(expect),
+            expectation(Some(page.as_str()), &source.targets),
         )?;
-        let verdict = run_regression_case_on_bundle(bundle, &document, &scene, ocr);
+        let mut verdict = run_regression_case_on_bundle(bundle, &document, &scene, ocr);
+        // The coordinator's ruling (R2's ruling 4 as precedent): another page matching beside the
+        // case's own is no miss. The case is made again with its page's targets alone and run again
+        // in that form; a page that requires no target gives no case.
+        let others = others_matched(&verdict, &page);
+        if let Some(others) = &others {
+            if source.targets.is_empty() {
+                set.warn_ambiguous(&source.id, &page, others, false);
+                continue;
+            }
+            document = case_document(
+                plan,
+                &source.id,
+                &source.source,
+                &regions,
+                &scene,
+                expectation(None, &source.targets),
+            )?;
+            verdict = run_regression_case_on_bundle(bundle, &document, &scene, ocr);
+        }
         match verdict.verdict {
             RegressionVerdict::Failed => {
                 let failed = verdict
@@ -265,6 +319,9 @@ pub(crate) fn regression_cases(
                     "reasons": not_run_reasons(&verdict)
                 }));
             }
+        }
+        if let Some(others) = &others {
+            set.warn_ambiguous(&source.id, &page, others, true);
         }
         if bare.contains(&page) {
             set.warnings.push(json!({
@@ -593,6 +650,46 @@ fn bare_canvas_pages(
         .filter_map(|check| check.page.as_ref())
         .flat_map(|page| page.recognized.iter().chain(&page.matched_pages).cloned())
         .collect())
+}
+
+/// `expect` of a case: its page (`observe.page`), when given, and every target its page requires
+/// to pass (`recognize`), when there is one.
+fn expectation(page: Option<&str>, targets: &[String]) -> Value {
+    let mut expect = Map::new();
+    if let Some(page) = page {
+        expect.insert("observe".to_string(), json!({"page": page}));
+    }
+    if !targets.is_empty() {
+        expect.insert(
+            "recognize".to_string(),
+            Value::Array(
+                targets
+                    .iter()
+                    .map(|target| json!({"target": target, "passed": true}))
+                    .collect(),
+            ),
+        );
+    }
+    Value::Object(expect)
+}
+
+/// The coordinator's ruling after the first round: the other pages the runner matched beside the
+/// case's page `page`, when its page check failed by a conflict (`page_conflict`, a word of
+/// `regression_problem`) among whose pages `page` is; `None` otherwise (the page not recognised is a
+/// miss).
+fn others_matched(verdict: &RegressionCaseVerdict, page: &str) -> Option<Vec<String>> {
+    verdict.checks.iter().find_map(|check| {
+        let matched = &check.page.as_ref()?.matched_pages;
+        (check.problem == Some(RegressionProblem::PageConflict)
+            && matched.iter().any(|other| other == page))
+        .then(|| {
+            matched
+                .iter()
+                .filter(|other| *other != page)
+                .cloned()
+                .collect()
+        })
+    })
 }
 
 /// The runner's reasons, each once, for the checks of `verdict` that did not run.

@@ -468,6 +468,9 @@ fn ready_of(
         Survey::Planned(plan) => match self_checks(&plan, ocr, Failures::every()) {
             Ok(checked) => {
                 warnings.extend(generator_warnings(&checked.package.warnings)?);
+                // #463 S2-10: a case's page recognised beside another page, as `record stop`
+                // names it.
+                warnings.extend(generator_warnings(checked.cases.ambiguity_warnings())?);
                 (Vec::new(), every_check_complete(), Vec::new())
             }
             Err(failed) => {
@@ -476,6 +479,7 @@ fn ready_of(
                     return Err(error);
                 }
                 warnings.extend(generator_warnings(&plan.warnings)?);
+                warnings.extend(generator_warnings(&failed.warnings)?);
                 (
                     check_items(recording, &failed.ran),
                     check_runs(&failed.ran),
@@ -888,6 +892,9 @@ struct PackageChecked {
 struct SelfCheckFailures {
     ran: Vec<CheckRun>,
     not_run: Vec<ReadyCheck>,
+    /// #463 S2-10: the warnings `record_case_page_ambiguous` of the cases that did not fail, when
+    /// the check `cases` ran to its end and another case failed; `record ready` names them.
+    warnings: Vec<Value>,
 }
 
 impl SelfCheckFailures {
@@ -1000,6 +1007,7 @@ impl Runner {
         SelfCheckFailures {
             ran: self.ran,
             not_run,
+            warnings: Vec::new(),
         }
     }
 }
@@ -1040,7 +1048,10 @@ fn self_checks(
         return Err(runner.into_failures());
     };
     if runner.failed() {
-        return Err(runner.into_failures());
+        // `record ready` lists every failing case and names the ambiguity of the others.
+        let mut failed = runner.into_failures();
+        failed.warnings = cases.ambiguity_warnings().to_vec();
+        return Err(failed);
     }
     Ok(Checked { package, cases })
 }
