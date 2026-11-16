@@ -282,10 +282,12 @@ actingcommand_contract::outcome_vocabulary! {
         /// More steps have an effect than a package holds (`record_too_many_steps`).
         TooManyEffects => "too_many_effects",
         /// The package's game is known neither from `record stop` nor from the recording nor from
-        /// the instance configuration (`record_locale_missing`).
+        /// the Lab's instance configuration nor (#463 S2-1b) from the configuration of the
+        /// installation the program runs from (`record_locale_missing`).
         Game => "game",
         /// The package's server is known neither from `record stop` nor from the recording nor
-        /// from the instance configuration (`record_locale_missing`).
+        /// from the Lab's instance configuration nor (#463 S2-1b) from the configuration of the
+        /// installation the program runs from (`record_locale_missing`).
         Server => "server",
         /// The package's locale is known neither from `record stop` nor from the recording
         /// (`record_locale_missing`).
@@ -381,5 +383,25 @@ actingcommand_contract::outcome_vocabulary! {
         /// A step's press is a single recorded point with no press region set: the package would
         /// press that exact pixel.
         PressPointOnly => "press_point_only",
+    }
+}
+
+// #463 S2-1b: where the package's game, server and locale `record ready` answers with came from
+// (`sources`), the place `record stop` takes each from when it builds.
+actingcommand_contract::outcome_vocabulary! {
+    /// Where a part of the package's identity came from (`ready_source`).
+    pub enum ReadySource: "ready_source" {
+        /// The command line of `record ready` or `record stop`: `--game`, `--server` (actinglab's
+        /// global options) or `--locale`.
+        CommandLine => "command_line",
+        /// What the recording holds: given at `record start`, or, on a stopped recording marked
+        /// again, what its package was generated with.
+        Recording => "recording",
+        /// The Lab's instance configuration: the instance's `game` or `server` in actinglab's own
+        /// configuration (game and server only).
+        LabConfig => "lab_config",
+        /// The configuration of the installation the program runs from: the instance's row of
+        /// `policy.facts.instances` (game and server only).
+        InstallationConfig => "installation_config",
     }
 }
