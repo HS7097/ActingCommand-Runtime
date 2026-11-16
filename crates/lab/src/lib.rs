@@ -16,6 +16,9 @@
 
 mod codes;
 mod context;
+// Workflow #392 DA-5cd: an offline scene that is a pure scale of its package, and a recording made
+// on a display that is not the base size.
+mod display_base;
 mod drive;
 mod drive_api;
 mod env_api;
@@ -90,6 +93,11 @@ mod gate_463_s25_boxes;
 // #463 S2-5: boxes on a draft stage one recorded, its captures before a press as base images.
 #[cfg(test)]
 mod gate_463_s25_draft;
+// Workflow #392 DA-5ab fix round 1: a recording takes from a Lab operation only what it can take;
+// the train of DA-5ab and DA-5cd (R4): every recording path judges the recording and the frame it
+// took before it sends or writes anything.
+#[cfg(test)]
+mod gate_392_da5ab;
 mod lab_run;
 mod lab_run_api;
 mod ledger_port;
@@ -115,6 +123,10 @@ mod touch;
 
 pub use codes::LabCode;
 pub use context::*;
+pub use display_base::{
+    RECORDING_BASE_SIZE, frames_in_base, is_base_size, package_base, record_display_not_base,
+    scene_in_base, scene_png,
+};
 pub use drive::*;
 pub use drive_api::*;
 pub use env_api::*;
@@ -189,6 +201,11 @@ pub use actingcommand_execution_kernel::{
     RunTableFailure, RunTables, replay_contained_task_with_tables, replay_scan_with_tables,
     simulate_contained_task_with_tables,
 };
+// Workflow #392 DA-5ab: a Runtime frame the Lab's client observes, on its package's base by the
+// frame gate's own map and resample, and the map its input leaves under (`DisplayMap::send_input`,
+// with the adapter's box and refusal), for actinglab's `--capture` forms and its frame files.
+pub use actingcommand_display_adapter::{DisplayMap, InputSendError, Rect as DisplayRect};
+pub use actingcommand_execution_kernel::{LabBaseScene, lab_display_map, lab_scene_on_base};
 
 pub struct Lab<P: LabPorts> {
     ports: P,

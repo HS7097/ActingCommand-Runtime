@@ -2401,6 +2401,45 @@ fn task_geometry_request_failure(
     }
 }
 
+/// Workflow #392 DA-3 (DA-5ab: a Lab operation's input too): an input the display map does not
+/// send (`DisplayMap::send_input`), as the request's failure; nothing was sent.
+/// `display_map_unresolved` with its `display_problem`, `stage` and the frame's and the base's
+/// sizes; `display_map_stale` at `display_input_map`; a point outside the device frame or its box,
+/// `contained_task_input_out_of_bounds`.
+pub(super) fn input_send_failure(
+    error: actingcommand_display_adapter::InputSendError,
+) -> RequestFailure {
+    use actingcommand_display_adapter::{DisplayCode, DisplayLocation, InputSendError};
+    let refused = match error {
+        InputSendError::Unresolved(refusal) => RuntimeHostError::request(
+            DisplayCode::MapUnresolved,
+            HostLocation::ValidateTaskGeometryInput,
+            RuntimeErrorCode::BackendOperationFailed,
+        )
+        .with_outcome_values(|outcome| {
+            outcome
+                .display_problem(refusal.problem)
+                .stage(refusal.stage)
+                .frame_width(refusal.frame.width())
+                .frame_height(refusal.frame.height())
+                .base_width(refusal.base.width())
+                .base_height(refusal.base.height())
+        }),
+        InputSendError::Stale(_) => RuntimeHostError::request(
+            DisplayCode::MapStale,
+            HostLocation::ValidateTaskGeometryInput,
+            RuntimeErrorCode::BackendOperationFailed,
+        )
+        .with_outcome_values(|outcome| outcome.stage(DisplayLocation::InputMap)),
+        InputSendError::OutOfBounds => RuntimeHostError::request(
+            ExecutionKernelCode::ContainedTaskInputOutOfBounds.code(),
+            HostLocation::ValidateTaskGeometryInput,
+            RuntimeErrorCode::BackendOperationFailed,
+        ),
+    };
+    task_geometry_request_failure(refused, None)
+}
+
 impl RuntimeContainedTask<'_> {
     /// Workflow #428 S168-LB1a (LB1-5b): whether the list `joined`, read whole, is larger than one
     /// observation holds, measured on the record the run's end would publish for it: its instance,
@@ -2963,57 +3002,14 @@ impl RuntimeContainedTask<'_> {
         action: &InputAction,
         decided: Option<actingcommand_contract::InputFrameReference>,
     ) -> Result<InputAction, RequestFailure> {
-        use actingcommand_display_adapter::{
-            DisplayCode, DisplayLocation, DisplayMapUnresolved, InputCoordinates, InputMapError,
-        };
         let boxes = self.input_boxes.take().unwrap_or_default();
-        let unresolved = |refusal: DisplayMapUnresolved| {
-            task_geometry_request_failure(
-                RuntimeHostError::request(
-                    DisplayCode::MapUnresolved,
-                    HostLocation::ValidateTaskGeometryInput,
-                    RuntimeErrorCode::BackendOperationFailed,
-                )
-                .with_outcome_values(|outcome| {
-                    outcome
-                        .display_problem(refusal.problem)
-                        .stage(refusal.stage)
-                        .frame_width(refusal.frame.width())
-                        .frame_height(refusal.frame.height())
-                        .base_width(refusal.base.width())
-                        .base_height(refusal.base.height())
-                }),
-                None,
-            )
-        };
-        map.admit_input(action).map_err(unresolved)?;
-        if let Some(decided) =
-            decided.and_then(|frame| CaptureExtent::new(frame.width, frame.height))
-        {
-            map.current_for(decided).map_err(|_| {
-                task_geometry_request_failure(
-                    RuntimeHostError::request(
-                        DisplayCode::MapStale,
-                        HostLocation::ValidateTaskGeometryInput,
-                        RuntimeErrorCode::BackendOperationFailed,
-                    )
-                    .with_outcome_values(|outcome| outcome.stage(DisplayLocation::InputMap)),
-                    None,
-                )
-            })?;
-        }
-        map.device_input(action, &boxes, InputCoordinates::Display)
-            .map_err(|error| match error {
-                InputMapError::Unresolved(refusal) => unresolved(refusal),
-                InputMapError::OutOfBounds => task_geometry_request_failure(
-                    RuntimeHostError::request(
-                        ExecutionKernelCode::ContainedTaskInputOutOfBounds.code(),
-                        HostLocation::ValidateTaskGeometryInput,
-                        RuntimeErrorCode::BackendOperationFailed,
-                    ),
-                    None,
-                ),
-            })
+        // Workflow #392 DA-5ab: the exit a Lab operation's input takes too.
+        map.send_input(
+            action,
+            &boxes,
+            decided.and_then(|frame| CaptureExtent::new(frame.width, frame.height)),
+        )
+        .map_err(input_send_failure)
     }
 
     fn recheck_task_geometry(

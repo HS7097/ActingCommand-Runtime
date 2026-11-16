@@ -131,6 +131,45 @@ itself is never in the answer. Both members are kept by Min and count toward its
 budget. `--preview` under the global `--dry-run` is refused like `--with-frame`
 (`dry_run_unsupported`).
 
+Workflow #392 DA-5ab (0.12.67; [display-adapter.md](display-adapter.md) section 11): the Runtime
+brings every frame of an online observation (its transaction's frames, and each further
+transaction of a candidate layout's series) to the package's base, the coordinate space of its
+projection, by the frame gate's own map and resample, and evaluates and projects there; a frame
+of the base's size is used as it is, byte for byte. Each frame of a transaction must still have
+the device size of its current frame (`recognition_sample_geometry_changed`; for a further
+transaction, `candidate_sample_page_or_geometry_changed`). The projection's frame identity is the
+device frame's artifact hash at the base's size: a verifier reads the device frame by that hash
+from the capture's artifact (the observation's `frame`, whose width and height are the device's),
+builds the map from the device size and the base, the projection's width and height (the identity
+or a pure scale, no declaration, no producer geometry), and finds that its scale frame is the
+projection's size; the RGB8 hash is that of the scale frame (the device frame resampled once under
+that map, area average). A frame the map cannot take (another ratio `layout_undeclared`, a frame
+smaller than the base `scale_below_base`, the other orientation `orientation_mismatch`) fails the
+observation with `display_map_unresolved` at `display_map_build` and the frame's and the base's
+sizes, the code a run gives the same frame, never `observation_projection_failed`. With
+`--capture`, `frame_coordinates` on such a display is `{space: "base", base_pixels: [width,
+height], reduced_from: [device width, device height], orientation, applies_to}`, and the
+`--with-frame` file and `--preview` are of the frame brought to the base.
+
+DA-5ab fix round 1. *The client's check.* `ContainedPageObservation::validate` (the receipt's,
+and a Lab operation record's for each of its projections) takes a projection frame that is the
+observation's frame itself, or of that frame's ratio, no larger and with no side of zero: what a
+pure scale of the display adapter brings that frame to. It knows the two sizes and not the
+package, so it cannot know the package's base: any base of the frame's ratio no larger than the
+frame passes (640×360 on a 1280×720 frame, as a package of that base would project it), and so
+does a scale whose presses the adapter does not send (5/4: the observation stands, a press is
+refused at its input). That the projection is the package's base, and its RGB8 hash, a verifier
+establishes from the device frame and the package as above. *A recording.* `observe --capture
+--record` is refused on such a display. The train of DA-5ab and DA-5cd (its rule R4;
+[lab-recording.md](lab-recording.md), "A recording's size"): before anything is captured, the
+recording is judged as `record stop` judges it (`record_size_not_base`), and, after the Runtime
+observed, its device frame is judged as a frame that enters the recording, before the frame file
+or the recording is written (`record_display_not_base` when the recording has no frame yet,
+`record_frame_size_mismatch` with details `{frame, expected: the recording's size, actual: the
+device frame}` when the display changed during the recording); the observation's debug terminal
+is then `rejected`. (DA-5ab's fix round 1 judged both against the package's base,
+`record_frame_size_mismatch`.)
+
 0.12.28 LAB-SMALL (offline `observe`; `observe --capture` where named):
 - #411 B47: a candidate layout of the recognised page whose feature needs an OCR
   or NN provider the Tools do not hold (`candidate_feature_provider_missing`)
