@@ -925,6 +925,14 @@ tests = [
 ]
 incident = ["#463 S3-3"]
 
+# Workflow #437 G1 fix round 2 (0.12.67; register §1.433; brief rd-1116/brief-437-g1-fix3.md; contracts/component-interfaces.md, the runtime-client row 10; contracts/runtime-interface.md, RuntimeInstanceStatus.device_held): the status member device_held {device_group_wait: close_unconfirmed, alias} round-trips in its instance's row of a Status result, and a row without it has no device_held key; an unknown member of it and a word other than close_unconfirmed are refused
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-contract::lib::runtime::tests::g1_status_device_held_round_trips_and_is_strict",
+]
+incident = ["#437 G1"]
+
 # Workflow #392 DA-5ab fix round 1 (0.12.67; register §1.436; contracts/display-adapter.md section 11, "The projection's frame"; the coordinator's work order of 11-16 after the review of pull request #1780, point 2): the client's check of an observation's projection frame (ContainedPageObservation::validate) takes the device frame itself and the device frame reduced to a base of its ratio no larger than it (1920x1080 and 3840x2160 to 1280x720, 3x3 to 2x2, 1600x900 to 1280x720, 1280x720 to 640x360: it cannot know the package's base); it refuses a frame with a side of zero (0x0 on 0x0 too), a frame larger than the device frame and a frame of another ratio
 [[gate]]
 coverage = "Y"

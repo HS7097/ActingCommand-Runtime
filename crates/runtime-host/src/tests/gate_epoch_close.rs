@@ -18,7 +18,7 @@ use actingcommand_contract::{
     PriorEpochScope, RuntimePayload, RuntimeSubscriptionRequest, SubscriptionCursor,
     UnprovenReason,
 };
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read};
 
 const GATE_WAIT: Duration = Duration::from_secs(120);
 pub(super) const ALIAS: &str = "node.a";
@@ -316,9 +316,18 @@ fn crash_mid_run_child(filler: usize, anchored: bool) -> CrashedRun {
         .env(UNANCHORED_ENV, if anchored { "0" } else { "1" })
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .spawn()
         .expect("spawn the crash child");
+    // The child's error output (its panic, if it fails before its crash point) is read to its end
+    // beside it, so a child that exits early names why (#437 G1 train, fix round 1: the job's log
+    // showed only the exit code).
+    let errors = child.stderr.take().expect("the crash child's error output");
+    let error_text = thread::spawn(move || {
+        let mut text = String::new();
+        let _ = BufReader::new(errors).read_to_string(&mut text);
+        text
+    });
     // The child's output is read to its end; the crash point is signalled the moment its line
     // arrives, and the end of the output before it means the child exited early.
     let output = child.stdout.take().expect("the crash child's output");
@@ -337,7 +346,8 @@ fn crash_mid_run_child(filler: usize, anchored: bool) -> CrashedRun {
         Ok(()) => {}
         Err(mpsc::RecvTimeoutError::Disconnected) => {
             let status = child.wait().expect("the crash child's exit status");
-            panic!("the crash child exited before its crash point: {status}");
+            let errors = error_text.join().unwrap_or_default();
+            panic!("the crash child exited before its crash point: {status}; its errors: {errors}");
         }
         Err(mpsc::RecvTimeoutError::Timeout) => {
             child.kill().expect("kill the timed-out child");

@@ -156,6 +156,7 @@ The rule is decided by the requester kind of the instance's one queue (`ClaimKin
 | Emulator autostart (`autostart` claim: the daemon start's, also after a watchdog start; the emulator watch's restart of a configured emulator it found stopped; IDLE-1's wake after `stop_emulator`) | Held: no key, no emulator start; it stays queued with a bounded wait. The watch's polls go on (a status read starts nothing) and it requests no second claim while one waits, so its restart counts once | Starts the emulator; the startup package follows |
 | IDLE-1's idle action and wake | No action starts (as under a scheduling pause); a wake due inside the blackout queues its claims, which wait as above | The wake's claims are granted; the action is planned again |
 | A #403 fence's periodic recheck (a self-check the Runtime queues) | Not queued | Due again at once |
+| The start preparation a member of a device group of several owes once another member's hold of the device has ended (Workflow #437 G1, [device-group.md](device-group.md) "A failure stays where it belongs": a self-check claim the lease sweep queues) | Not queued; the member stays owed | Queued at the first lease sweep tick after it on an idle device |
 | Instance monitor probe | Takes no frame; a failed take is not recorded | Probes again when due |
 
 A lost connection is not handled: a failed startup or connection preparation inside a blackout

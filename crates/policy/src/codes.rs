@@ -380,6 +380,9 @@ actingcommand_contract::outcome_vocabulary! {
         PlayerHold => "player_hold",
         /// The other member is fenced.
         Fenced => "fenced",
+        /// Workflow #437 G1 (since 0.12.67): the other member is fenced with its close not
+        /// confirmed, and the device is held for it until its fence is lifted.
+        CloseUnconfirmed => "close_unconfirmed",
     }
 }
 // ---- Workflow #437 MAPP-1: end ----

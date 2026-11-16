@@ -3125,3 +3125,66 @@ fn a4_contained_task_results_name_their_end_task_result() {
         cancelled
     );
 }
+
+/// Workflow #437 G1 fix round 2 (register §1.433; `runtime-client` 10): the status member
+/// `device_held` round-trips in its instance's row of a `Status` result, and a row without it has
+/// no `device_held` key; an unknown member of it, and a word other than `close_unconfirmed`, are
+/// refused.
+#[test]
+fn g1_status_device_held_round_trips_and_is_strict() {
+    let ids = issuer();
+    let owner_epoch = *ids.mint_owner_epoch().expect("owner epoch").transport();
+    let instance = |alias: &str| {
+        RuntimeInstanceStatus::new(
+            alias,
+            *ids.mint_instance_id().expect("instance id").transport(),
+            false,
+            0,
+            false,
+            false,
+            false,
+        )
+        .expect("instance status")
+    };
+    let held = InstanceDeviceHeld {
+        device_group_wait: DeviceHeldWait::CloseUnconfirmed,
+        alias: "node.a".to_owned(),
+    };
+    let status = RuntimeControlPlaneStatus::new(
+        owner_epoch,
+        vec![
+            instance("node.a"),
+            instance("node.b").with_device_held(Some(held.clone())),
+        ],
+    )
+    .expect("status");
+    let result = RuntimeResult::Status { status };
+    let encoded = serde_json::to_value(&result).expect("status encodes");
+    let decoded: RuntimeResult = serde_json::from_value(encoded.clone()).expect("status decodes");
+    assert_eq!(decoded, result);
+    let rows = encoded["status"]["instances"]
+        .as_array()
+        .expect("instance rows");
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0]["instance_alias"], serde_json::json!("node.a"));
+    assert!(rows[0].get("device_held").is_none(), "{encoded}");
+    assert_eq!(rows[1]["instance_alias"], serde_json::json!("node.b"));
+    assert_eq!(
+        rows[1]["device_held"],
+        serde_json::json!({"device_group_wait": "close_unconfirmed", "alias": "node.a"})
+    );
+    let RuntimeResult::Status { status } = decoded else {
+        panic!("a status result");
+    };
+    status.validate().expect("status validates");
+    assert_eq!(status.instances()[0].device_held(), None);
+    assert_eq!(status.instances()[1].device_held(), Some(&held));
+
+    let mut unknown = encoded.clone();
+    unknown["status"]["instances"][1]["device_held"]["unknown_member"] = serde_json::json!(1);
+    assert!(serde_json::from_value::<RuntimeResult>(unknown).is_err());
+    let mut word = encoded;
+    word["status"]["instances"][1]["device_held"]["device_group_wait"] =
+        serde_json::json!("fenced");
+    assert!(serde_json::from_value::<RuntimeResult>(word).is_err());
+}
