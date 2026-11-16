@@ -23,16 +23,38 @@
 //   `tap 0 0 --record` (`record_press`) is refused `record_size_not_base` before anything is
 //   captured or sent: the fake capture and the press are never called, and the recording's files
 //   are byte for byte as they were.
+// The train's fix round 1 (coordinator work order rd-1116/brief-392-train-lab-fix1.md; the two
+// reviews of the train at `2ff33cb3`): `tap 0 0 --record` (`record_press`) against a fake Runtime
+// whose captures are frames of the sizes the test gives, with the reference of each:
+// - `da5_train_fix1_a_first_frame_the_recording_would_refuse_is_refused_before_the_press`: a
+//   recording whose header names no base size and that holds no frame, a capture of 1920x1080: it
+//   would be the recording's first frame and the recording would then be one `record stop`
+//   refuses, so it is refused `record_display_not_base` with its size and the base size, after the
+//   one capture and before anything is stored: the press is never called and the recording's files
+//   are byte for byte as they were.
+// - `da5_train_fix1_the_retry_of_a_recorded_press_judges_the_recording_again_before_it_sends`: a
+//   recording whose header names the base size, its first frame 1280x720 and its open step marked;
+//   the press is refused because the Runtime no longer holds its frame (nothing sent), and the
+//   recording's header has meanwhile been changed by hand to frames of 1920x1080: the retry judges
+//   the recording again before it captures, `record_size_not_base`, so the press is called once,
+//   one capture is taken, and nothing is written after the change.
+// - `da5_train_fix1_a_frame_not_stored_is_checked_against_a_recording_with_a_base`: a recording
+//   whose header names the base size, its first frame 1280x720 and its open step marked, so the
+//   frame before the press is not stored: a capture of 1920x1080 is refused
+//   `record_frame_size_mismatch` (the recording's 1280x720 expected, 1920x1080 actual), the press
+//   is never called and the recording's files are as they were.
 // Frames are synthetic; no Runtime, no device, no clock read by the tests; the session header is
 // written as `record start` writes it.
 
-use crate::recording::store::{lab_dir, old_record_path};
+use crate::recording::store::{
+    LabFile, lab_dir, load_lab, old_record_path, read_old_record, save_recording,
+};
 use crate::{
     AfterCapture, AttachFrameRequest, CapturedFrame, ClickPlan, CommitClickRequest,
     LAB_RECORD_MARK_SCHEMA, LabOcr, MarkFamily, MarkRequest, MarkSpec, PlanClickRequest,
     PointPress, RECORDING_BASE_SIZE, RecordFramePorts, RecordPoint, RecordPressRequest, RecordRect,
     RecordSize, RecordStartOptions, RecordingLock, record_attach_frame, record_frame_check,
-    record_mark, record_press, record_size_check, record_start,
+    record_mark, record_press, record_press_frame_unavailable, record_size_check, record_start,
 };
 use actingcommand_contract::{InputFrameReference, LabError, LabResult};
 use actingcommand_device::{CaptureBackendName, Frame, PixelFormat};
@@ -101,21 +123,10 @@ impl Bench {
 
     /// A device frame of `width` x `height`, as `capture --record` attaches it.
     fn attach(&self, width: u32, height: u32) {
-        let pixels = (0..width * height).flat_map(|_| [200_u8, 40, 40]).collect();
-        let png = Frame::from_pixels(
-            width,
-            height,
-            pixels,
-            PixelFormat::Rgb8,
-            CaptureBackendName::FixtureSimulation,
-        )
-        .expect("fixture frame")
-        .encode_png_fast()
-        .expect("fixture PNG");
         record_attach_frame(
             &self.lock,
             AttachFrameRequest {
-                png,
+                png: frame_png(width, height),
                 source: "lab_capture".to_owned(),
                 runtime_artifact: None,
                 capture_backend: Some("adb_screencap".to_owned()),
@@ -151,6 +162,21 @@ impl Bench {
     fn files(&self) -> Vec<(String, Vec<u8>)> {
         files_under(&lab_dir(&self.state(), RECORD_ID))
     }
+}
+
+/// The PNG of a synthetic device frame of `width` x `height`, one colour throughout.
+fn frame_png(width: u32, height: u32) -> Vec<u8> {
+    let pixels = (0..width * height).flat_map(|_| [200_u8, 40, 40]).collect();
+    Frame::from_pixels(
+        width,
+        height,
+        pixels,
+        PixelFormat::Rgb8,
+        CaptureBackendName::FixtureSimulation,
+    )
+    .expect("fixture frame")
+    .encode_png_fast()
+    .expect("fixture PNG")
 }
 
 /// Every file under `dir`, by its `/`-separated path relative to it, with its bytes, in name order.
@@ -303,6 +329,205 @@ fn da5_train_a_recorded_press_on_a_recording_not_at_the_base_sends_nothing() {
         log.borrow().is_empty(),
         "nothing captured or sent: {:?}",
         log.borrow()
+    );
+    assert_eq!(bench.files(), before, "nothing written");
+}
+
+/// The train's fix round 1: the fake Runtime of a recorded press that is reached. Each capture is a
+/// frame of the next size of `sizes` (the last again once they run out), with the reference of the
+/// frame it committed, of that size; each capture and wait is logged.
+struct Captures<'a> {
+    sizes: Vec<(u32, u32)>,
+    taken: usize,
+    log: &'a RefCell<Vec<String>>,
+}
+
+impl RecordFramePorts for Captures<'_> {
+    fn wait(&mut self, duration: Duration) {
+        self.log
+            .borrow_mut()
+            .push(format!("wait {}", duration.as_millis()));
+    }
+
+    fn capture(&mut self) -> LabResult<CapturedFrame> {
+        self.log.borrow_mut().push("capture".to_owned());
+        let last = self.sizes.len().saturating_sub(1);
+        let (width, height) = self.sizes[self.taken.min(last)];
+        self.taken += 1;
+        Ok(CapturedFrame {
+            frame: AttachFrameRequest {
+                png: frame_png(width, height),
+                source: "lab_capture".to_owned(),
+                runtime_artifact: None,
+                capture_backend: Some("adb_screencap".to_owned()),
+                freshness: None,
+            },
+            input_frame: Some(InputFrameReference {
+                frame_id: serde_json::from_value(json!(format!("frame_{:032x}", self.taken)))
+                    .expect("a frame id"),
+                width,
+                height,
+            }),
+        })
+    }
+
+    fn elapsed(&mut self) -> Duration {
+        Duration::ZERO
+    }
+}
+
+/// `tap 0 0 --record`, with no wait and no stillness test after the press.
+fn tap_at_origin() -> RecordPressRequest {
+    RecordPressRequest {
+        click: PlanClickRequest::default(),
+        point_press: Some(PointPress::Tap {
+            point: RecordPoint { x: 0, y: 0 },
+        }),
+        after: AfterCapture {
+            still_ms: Some(0),
+            ..AfterCapture::for_press(Some(0))
+        },
+    }
+}
+
+/// The recording's header changed by hand, as no command writes it, so that it says its frames
+/// are of `size`: the step table loaded as the Lab loads it and written back as the Lab writes it.
+fn change_frames_size(state: &Path, size: RecordSize) {
+    let header = read_old_record(state, INSTANCE)
+        .expect("the session header")
+        .expect("a session header");
+    let LabFile::Ready(mut recording) = load_lab(state, &header).expect("the step table") else {
+        panic!("the step table does not load");
+    };
+    recording.coordinate_space = Some(size);
+    save_recording(state, &recording).expect("the step table written");
+}
+
+#[test]
+fn da5_train_fix1_a_first_frame_the_recording_would_refuse_is_refused_before_the_press() {
+    let bench = Bench::new(None);
+    let before = bench.files();
+    let log = RefCell::new(Vec::new());
+    let mut ports = Captures {
+        sizes: vec![(1920, 1080)],
+        taken: 0,
+        log: &log,
+    };
+    let mut press =
+        |_plan: &ClickPlan, _frame: InputFrameReference| -> LabResult<CommitClickRequest> {
+            log.borrow_mut().push("press".to_owned());
+            Err(LabError::device("the test's fake Runtime presses nothing"))
+        };
+    let refused = record_press(&bench.lock, &tap_at_origin(), &mut press, &mut ports)
+        .expect_err("a first frame that would make a recording record stop refuses");
+    assert_eq!(
+        refused.code, "record_display_not_base",
+        "{}",
+        refused.message
+    );
+    assert_eq!(
+        values(&refused),
+        not_base_values(1920, 1080),
+        "{}",
+        refused.message
+    );
+    assert_eq!(
+        *log.borrow(),
+        ["capture"],
+        "one capture, and the press never called"
+    );
+    assert_eq!(bench.files(), before, "nothing stored or written");
+}
+
+#[test]
+fn da5_train_fix1_the_retry_of_a_recorded_press_judges_the_recording_again_before_it_sends() {
+    let bench = Bench::new(Some(RECORDING_BASE_SIZE));
+    bench.attach(1280, 720);
+    bench.mark_step_one();
+    let state = bench.state();
+    let log = RefCell::new(Vec::new());
+    let changed = RefCell::new(None);
+    let mut ports = Captures {
+        sizes: vec![(1280, 720)],
+        taken: 0,
+        log: &log,
+    };
+    // The Runtime no longer holds the frame the press names, so nothing was sent; meanwhile the
+    // recording's header was changed by hand to frames of 1920x1080, not the base size its header
+    // names.
+    let mut press =
+        |_plan: &ClickPlan, _frame: InputFrameReference| -> LabResult<CommitClickRequest> {
+            log.borrow_mut().push("press".to_owned());
+            change_frames_size(
+                &state,
+                RecordSize {
+                    width: 1920,
+                    height: 1080,
+                },
+            );
+            *changed.borrow_mut() = Some(bench.files());
+            Err(record_press_frame_unavailable(LabError::device(
+                "the test's fake Runtime no longer holds the frame the press names",
+            )))
+        };
+    let refused = record_press(&bench.lock, &tap_at_origin(), &mut press, &mut ports)
+        .expect_err("the retry on a recording no longer at the base size");
+    assert_eq!(refused.code, "record_size_not_base", "{}", refused.message);
+    assert_eq!(
+        values(&refused),
+        not_base_values(1920, 1080),
+        "{}",
+        refused.message
+    );
+    assert_eq!(
+        *log.borrow(),
+        ["capture", "press"],
+        "the press called once, and the retry judged the recording before it captured"
+    );
+    let changed = changed.borrow().clone().expect("the press was called");
+    assert_eq!(bench.files(), changed, "nothing written after the change");
+}
+
+#[test]
+fn da5_train_fix1_a_frame_not_stored_is_checked_against_a_recording_with_a_base() {
+    let bench = Bench::new(Some(RECORDING_BASE_SIZE));
+    bench.attach(1280, 720);
+    // The open step is marked, so the frame before the press is not stored.
+    bench.mark_step_one();
+    let before = bench.files();
+    let log = RefCell::new(Vec::new());
+    let mut ports = Captures {
+        sizes: vec![(1920, 1080)],
+        taken: 0,
+        log: &log,
+    };
+    let mut press =
+        |_plan: &ClickPlan, _frame: InputFrameReference| -> LabResult<CommitClickRequest> {
+            log.borrow_mut().push("press".to_owned());
+            Err(LabError::device("the test's fake Runtime presses nothing"))
+        };
+    let refused = record_press(&bench.lock, &tap_at_origin(), &mut press, &mut ports)
+        .expect_err("a frame of another size than the recording");
+    assert_eq!(
+        refused.code, "record_frame_size_mismatch",
+        "{}",
+        refused.message
+    );
+    let details = refused.details.clone().unwrap_or(Value::Null);
+    assert_eq!(
+        details["expected"],
+        json!({"width": 1280, "height": 720}),
+        "{details}"
+    );
+    assert_eq!(
+        details["actual"],
+        json!({"width": 1920, "height": 1080}),
+        "{details}"
+    );
+    assert_eq!(
+        *log.borrow(),
+        ["capture"],
+        "one capture, and the press never called"
     );
     assert_eq!(bench.files(), before, "nothing written");
 }
