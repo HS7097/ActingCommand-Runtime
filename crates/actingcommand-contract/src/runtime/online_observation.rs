@@ -284,6 +284,25 @@ pub struct ContainedPageObservation {
     pub projection_event_id: EventId,
 }
 
+/// Workflow #392 DA-5ab (`contracts/display-adapter.md` section 11; fix round 1): whether an
+/// observation's projection frame of `projected` size (width, height) is its device frame of
+/// `device` size as the Runtime observes it: never a frame with a side of zero; the frame itself;
+/// or the frame reduced to a package's base by a map the display adapter builds for it without a
+/// declaration, a pure scale: the base of the frame's ratio, the scale at least 1 (no larger than
+/// the frame), whose scale frame is exactly that size. The check knows the two sizes and not the
+/// package: it cannot know the package's base, so it takes any base of the frame's ratio no larger
+/// than the frame, and a scale whose presses the adapter does not send (5/4: the observation stands,
+/// a press is refused at its input) as well.
+pub(super) fn reduced_to(device: (u32, u32), projected: (u32, u32)) -> bool {
+    projected.0 > 0
+        && projected.1 > 0
+        && (device == projected
+            || (device.0 >= projected.0
+                && device.1 >= projected.1
+                && u64::from(device.0) * u64::from(projected.1)
+                    == u64::from(device.1) * u64::from(projected.0)))
+}
+
 impl ContainedPageObservation {
     pub fn validate(&self) -> RuntimeContractResult<()> {
         self.frame.validate()?;
@@ -302,8 +321,10 @@ impl ContainedPageObservation {
             || self.projection.frame.kind != crate::page_projection::FrameKind::Artifact
             || self.frame.artifact().sha256.strip_prefix("sha256:")
                 != Some(self.projection.frame.sha256.as_str())
-            || self.projection.frame.width != self.frame.width()
-            || self.projection.frame.height != self.frame.height()
+            || !reduced_to(
+                (self.frame.width(), self.frame.height()),
+                (self.projection.frame.width, self.projection.frame.height),
+            )
             || (self.status == PageObservationStatus::Recognized) != self.projection.matched
             || self.projection.state
                 != match self.status {

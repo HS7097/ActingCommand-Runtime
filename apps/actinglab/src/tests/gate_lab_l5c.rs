@@ -15,6 +15,31 @@
 // pixel 0 shows the page, pixel 1 the button or not, pixel 2 the capture's number. Every expected
 // value comes from those requirement lines. Packages are synthetic and neutral; the declared
 // interval is 1 ms.
+// Workflow #392 DA-5cd (register §1.437; `contracts/display-adapter.md` section 12): the client
+// forms that press nothing decide on a capture that is a pure scale of the package's coordinate
+// space as on the package's own size. The fake screen then shows its 3x1 frame enlarged by 3
+// (nearest neighbour, 9x3), which the Lab reduces back to 3x1 exactly.
+// The train of DA-5ab and DA-5cd (register §1.436 and §1.437, "Train"; rules R1 and R2) rewrote
+// the three to what the one path answers: a capture is reduced once, by DA-5ab's live path, and an
+// answer about a reduced capture names `frame_coordinates` in the base form (`{space: base,
+// base_pixels: [3, 1], reduced_from: [9, 3], orientation, applies_to}`) in place of DA-5cd's own
+// member; the 3x1 capture's answers are as before.
+// - `da5cd_do_capture_dry_run_plans_on_a_scaled_capture`: `do --capture --dry-run` plans the same
+//   page, guard evaluation and click on the 9x3 capture as on the 3x1 one; the 3x1 one states the
+//   frame's own `{device_pixels: [3, 1], ...}`, the 9x3 one the base form.
+// - `da5cd_ensure_capture_dry_run_plans_on_a_scaled_capture`: `ensure --capture --dry-run` plans the
+//   same route from the same page; the 9x3 capture's answer names the base form, the 3x1 one's no
+//   `frame_coordinates`.
+// - `da5cd_wait_capture_arrives_on_a_scaled_capture`: `wait --capture --page` arrives on the same
+//   page; likewise.
+// The train's fix round 1 (coordinator work order rd-1116/brief-392-train-lab-fix1.md; review A,
+// (h)): the three assert, each on its own, that `reduced_from` is the device's size (the fake's 9x3
+// capture) and `base_pixels` the base (3x1), so that a frame reduced a second time fails them; and
+// `da5_train_fix1_a_live_form_and_a_stored_image_each_answer_their_own_refusal`: the 3x1 frame
+// against a package whose base is 6x2 (a frame smaller than the base): `do --capture --dry-run`
+// and `wait --capture` refuse the capture `display_map_unresolved` (`scale_below_base` in its
+// details) and press nothing; the same frame as a stored image to `detect-page` is refused
+// `lab_scene_size_unsupported` with `scale_below_base`.
 
 use super::*;
 use actingcommand_contract::{
@@ -45,9 +70,17 @@ struct FakeScreen {
     script: Mutex<Vec<([u8; 3], [u8; 3])>>,
     captures: AtomicUsize,
     taps: AtomicUsize,
+    /// Workflow #392 DA-5cd: the factor each 3x1 frame is enlarged by (nearest neighbour), 0 and 1
+    /// none.
+    scale: AtomicUsize,
 }
 
 impl FakeScreen {
+    /// Workflow #392 DA-5cd: every capture from now on enlarged `factor` times.
+    fn enlarge(&self, factor: usize) {
+        self.scale.store(factor, Ordering::SeqCst);
+    }
+
     /// Shows `screens` from the next capture on, the counts starting from zero again.
     fn show(&self, screens: &[([u8; 3], [u8; 3])]) {
         *self.script.lock().expect("screen script") = screens.to_vec();
@@ -80,10 +113,17 @@ impl CaptureBackend for FakeCapture {
                 .unwrap_or((BLANK, BLANK))
         };
         let marker = (number % 256) as u8;
+        // Workflow #392 DA-5cd: each pixel a `scale` x `scale` block.
+        let scale = self.screen.scale.load(Ordering::SeqCst).max(1);
+        let pixels = [page, button, [marker; 3]];
+        let row = (0..3 * scale)
+            .flat_map(|x| pixels[x / scale])
+            .collect::<Vec<u8>>();
+        let size = u32::try_from(scale).expect("a small factor");
         Frame::from_pixels(
-            3,
-            1,
-            [page, button, [marker; 3]].concat(),
+            3 * size,
+            size,
+            row.repeat(scale),
             PixelFormat::Rgb8,
             CaptureBackendName::AdbScreencap,
         )
@@ -279,6 +319,12 @@ impl Lab {
     /// `ui/button` on pixel 1, and the route `open_page_a`, which taps the button. With
     /// `consensus` the entry page's target needs its colour on 2 of 3 frames, 1 ms apart.
     fn package(&self, name: &str, consensus: bool) -> String {
+        self.package_at(name, consensus, (3, 1))
+    }
+
+    /// [`Lab::package`] whose coordinate space (its base) is `base` (width, height) instead of the
+    /// fake screen's 3x1 (Workflow #392 DA-5, the train's fix round 1).
+    fn package_at(&self, name: &str, consensus: bool, base: (u32, u32)) -> String {
         let colour = |id: &str, x: i32, expected: [u8; 3]| {
             json!({"type": "color", "id": id,
                    "region": {"x": x, "y": 0, "width": 1, "height": 1}, "expected": expected})
@@ -289,7 +335,7 @@ impl Lab {
             "schema_version": "0.7",
             "game": "neutral",
             "server": "test",
-            "coordinate_space": {"width": 3, "height": 1},
+            "coordinate_space": {"width": base.0, "height": base.1},
             "defaults": {"color_max_distance": 0.0},
             "targets": [
                 colour("page/entry_page", 0, ENTRY),
@@ -321,7 +367,7 @@ impl Lab {
                     "game": "neutral",
                     "server_scope": ["test"],
                     "goal": "neutral fixture",
-                    "coordinate_space": {"width": 3, "height": 1},
+                    "coordinate_space": {"width": base.0, "height": base.1},
                     "entry_page": "entry_page",
                     "target_page": "page_a",
                     "operations": [{
@@ -627,5 +673,216 @@ fn l5c_a_package_without_consensus_captures_one_frame_as_before() {
     assert_eq!(ensured["page"], PAGE_A_PAGE, "{ensured}");
     assert_eq!(lab.screen.taps(), 1, "{ensured}");
     assert_eq!(lab.screen.captures(), 3, "{ensured}");
+    lab.close();
+}
+
+/// Workflow #392 DA-5, the train (R2): `frame_coordinates` of the 9x3 capture reduced to the
+/// package's 3x1 base, in the base form.
+fn da5_train_reduced_coordinates() -> Value {
+    json!({
+        "space": "base",
+        "base_pixels": [3, 1],
+        "reduced_from": [9, 3],
+        "orientation": "landscape",
+        "applies_to": ["tap", "tap_rect", "swipe"]
+    })
+}
+
+/// Workflow #392 DA-5cd: the answer of `words` on the entry page with its button, captured at the
+/// package's size and enlarged 3 times: the two answers; nothing pressed. Adapted by the train of
+/// DA-5 (R1, R2): the capture is reduced once, on DA-5ab's path, and the enlarged capture's answer
+/// names `frame_coordinates` in the base form.
+fn da5cd_answers(lab: &Lab, words: &[&str], package: &str) -> (Value, Value) {
+    let mut answers = Vec::new();
+    for factor in [1, 3] {
+        lab.screen.enlarge(factor);
+        lab.screen.show(&[(ENTRY, BUTTON)]);
+        let answer = data(&lab.run(words, package), &format!("{words:?} x{factor}"));
+        assert_eq!(lab.screen.taps(), 0, "{words:?} x{factor}: {answer}");
+        answers.push(answer);
+    }
+    let scaled = answers.pop().expect("the enlarged capture's answer");
+    let base = answers.pop().expect("the package size's answer");
+    assert_eq!(
+        scaled["frame_coordinates"],
+        da5_train_reduced_coordinates(),
+        "{words:?}: {scaled}"
+    );
+    // The train's fix round 1 (review A, (h)): the capture is reduced once, from the device's size
+    // (the fake's 9x3 capture) to the package's base (3x1). `reduced_from` names the device's size
+    // and `base_pixels` the base: an answer whose frame was reduced again, from a frame already
+    // reduced, would name the base as the size it was reduced from, or none.
+    assert_eq!(
+        scaled["frame_coordinates"]["reduced_from"],
+        json!([9, 3]),
+        "{words:?}: the device's size: {scaled}"
+    );
+    assert_eq!(
+        scaled["frame_coordinates"]["base_pixels"],
+        json!([3, 1]),
+        "{words:?}: the base: {scaled}"
+    );
+    (base, scaled)
+}
+
+/// Workflow #392 DA-5cd: `do --capture --dry-run` plans on the 9x3 capture as on the 3x1 one. The
+/// train of DA-5 (R2): the 3x1 capture's answer states the frame's own `frame_coordinates`, as
+/// before; the 9x3 one's the base form.
+#[test]
+fn da5cd_do_capture_dry_run_plans_on_a_scaled_capture() {
+    let lab = Lab::new();
+    let package = lab.package("single.zip", false);
+    let (base, scaled) = da5cd_answers(&lab, &["do", "ui/button", "--dry-run"], &package);
+    assert_eq!(base["state"], "planned", "{base}");
+    assert_eq!(base["page"], ENTRY_PAGE, "{base}");
+    assert_eq!(
+        base["frame_coordinates"],
+        json!({
+            "device_pixels": [3, 1],
+            "orientation": "landscape",
+            "applies_to": ["tap", "tap_rect", "swipe"]
+        }),
+        "{base}"
+    );
+    for member in ["state", "page", "actual_click"] {
+        assert_eq!(scaled[member], base[member], "{member}: {scaled}");
+    }
+    assert_eq!(
+        scaled["guard_result"]["evaluation"], base["guard_result"]["evaluation"],
+        "{scaled}"
+    );
+    lab.close();
+}
+
+/// Workflow #392 DA-5cd: `ensure --capture --dry-run` plans the same route on the 9x3 capture. The
+/// train of DA-5 (R2): the 3x1 capture's answer states no `frame_coordinates`, as before.
+#[test]
+fn da5cd_ensure_capture_dry_run_plans_on_a_scaled_capture() {
+    let lab = Lab::new();
+    let package = lab.package("single.zip", false);
+    let (base, scaled) = da5cd_answers(
+        &lab,
+        &["ensure", "--to", PAGE_A_PAGE, "--dry-run"],
+        &package,
+    );
+    assert_eq!(base["state"], "planned", "{base}");
+    assert_eq!(base["page"], ENTRY_PAGE, "{base}");
+    assert!(base.get("frame_coordinates").is_none(), "{base}");
+    for member in ["state", "page", "to", "route", "executed"] {
+        assert_eq!(scaled[member], base[member], "{member}: {scaled}");
+    }
+    lab.close();
+}
+
+/// Workflow #392 DA-5cd: `wait --capture --page` arrives on the same page on the 9x3 capture. The
+/// train of DA-5 (R2): the 3x1 capture's answer states no `frame_coordinates`, as before.
+#[test]
+fn da5cd_wait_capture_arrives_on_a_scaled_capture() {
+    let lab = Lab::new();
+    let package = lab.package("single.zip", false);
+    let (base, scaled) = da5cd_answers(
+        &lab,
+        &[
+            "wait",
+            "--page",
+            ENTRY_PAGE,
+            "--timeout-ms",
+            "10000",
+            "--poll-ms",
+            "1",
+        ],
+        &package,
+    );
+    assert_eq!(base["state"], "arrived", "{base}");
+    assert!(base.get("frame_coordinates").is_none(), "{base}");
+    for member in ["state", "page", "matched"] {
+        assert_eq!(scaled[member], base[member], "{member}: {scaled}");
+    }
+    lab.close();
+}
+
+/// Workflow #392 DA-5, the train's fix round 1 (review A, (h); the train's rule R3: two refusals of
+/// a size, one cause each): the fake screen's 3x1 frame against a package whose base is 6x2, a
+/// frame smaller than the base. The live forms `do --capture --dry-run` and `wait --capture` refuse
+/// the Runtime's capture `display_map_unresolved`, the word `scale_below_base` in its details, never
+/// `lab_scene_size_unsupported`, and press nothing; the same frame given as a stored image to
+/// `detect-page` is refused `lab_scene_size_unsupported` with the word `scale_below_base`, never
+/// `display_map_unresolved`.
+#[test]
+fn da5_train_fix1_a_live_form_and_a_stored_image_each_answer_their_own_refusal() {
+    let lab = Lab::new();
+    let package = lab.package_at("double.zip", false, (6, 2));
+    for words in [
+        &["do", "ui/button", "--dry-run"][..],
+        &[
+            "wait",
+            "--page",
+            ENTRY_PAGE,
+            "--timeout-ms",
+            "10000",
+            "--poll-ms",
+            "1",
+        ][..],
+    ] {
+        lab.screen.show(&[(ENTRY, BUTTON)]);
+        let result = lab.run(words, &package);
+        let shown = result.envelope_json();
+        let error = result
+            .envelope
+            .error
+            .as_ref()
+            .unwrap_or_else(|| panic!("{words:?} on the live frame was not refused: {shown}"));
+        assert_eq!(error.code, "display_map_unresolved", "{words:?}: {shown}");
+        let details = error.details.clone().unwrap_or(Value::Null);
+        assert_eq!(
+            details["display_problem"], "scale_below_base",
+            "{words:?}: {shown}"
+        );
+        assert_eq!(lab.screen.taps(), 0, "{words:?}: nothing pressed: {shown}");
+    }
+
+    // The same 3x1 frame as a stored image.
+    let stored = lab.files.path().join("stored-3x1.png");
+    let png = Frame::from_pixels(
+        3,
+        1,
+        [ENTRY, BUTTON, BLANK].concat(),
+        PixelFormat::Rgb8,
+        CaptureBackendName::FixtureSimulation,
+    )
+    .expect("the stored frame")
+    .encode_png_fast()
+    .expect("its PNG");
+    fs::write(&stored, png).expect("write the stored image");
+    let stored = stored.display().to_string();
+    let result = run_cli(
+        vec![
+            "--json",
+            "detect-page",
+            "--scene",
+            stored.as_str(),
+            "--zip",
+            package.as_str(),
+        ],
+        true,
+    );
+    let shown = result.envelope_json();
+    let error = result
+        .envelope
+        .error
+        .as_ref()
+        .unwrap_or_else(|| panic!("the stored image was not refused: {shown}"));
+    assert_eq!(error.code, "lab_scene_size_unsupported", "{shown}");
+    let details = error.details.clone().unwrap_or(Value::Null);
+    // `detect-page` carries the refusal's details inside its trace's.
+    let named = if details.get("blocked_error").is_some() {
+        &details["details"]
+    } else {
+        &details
+    };
+    assert_eq!(
+        named["outcome"]["values"]["display_problem"], "scale_below_base",
+        "{shown}"
+    );
     lab.close();
 }

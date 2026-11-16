@@ -6834,3 +6834,7 @@ mod gate_434_lab6s1a;
 // Workflow #434 LAB-6S1b: `validate()` judges no request by its origin.
 #[cfg(test)]
 mod gate_434_lab6s1b;
+
+// Workflow #392 DA-5ab fix round 1: the check of an observation's projection frame.
+#[cfg(test)]
+mod gate_392_da5ab;

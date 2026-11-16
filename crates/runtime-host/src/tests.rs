@@ -499,6 +499,8 @@ mod gate_392_da3;
 // Workflow #392 DA-3b: a vertical-brake drag under a scale, sent as a drag with a pause and a
 // brake.
 mod gate_392_da3b;
+// Workflow #392 DA-5ab: the Lab's presses in the package's base on a display that maps to it.
+mod gate_392_da5ab;
 mod gate_398_rd1a;
 mod gate_398_rd1b;
 // Workflow #398 RD-2: a handset's wired device link through the host.
