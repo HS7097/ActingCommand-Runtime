@@ -32612,7 +32612,7 @@ of both, with the coordinator's dispositions; for §1.436 and this section alike
   `da5_train_fix1_a_recorded_do_whose_frame_before_the_press_fails_presses_and_writes_nothing`. No
   code, word, key, member or revision is added.
 
-### 1.447 Slice #463 KB-1 (0.12.69): an emulator instance can send the back key (Workflow #463; the owner's ruling on board #463 of the night of 11-15 that a package made from a recording may hold a step that presses the back key, which the agent adds after recording; the read-only study `rd-1116/report-463-key-step-study.md` and the coordinator's rulings at its end and of 11-16 evening, not the owner's words; coordinator work order `rd-1116/brief-463-kb1-nemu-key.md`; first stacked on #1778 at `c7eaabaf`, since fix round 1 on main at `dc4c3622`, #1778 merged)
+### 1.447 Slice #463 KB-1 (0.12.69): an emulator instance can send the back key (Workflow #463; the owner's ruling on board #463 of the night of 11-15 that a package made from a recording may hold a step that presses the back key, which the agent adds after recording; the read-only study `rd-1116/report-463-key-step-study.md` and the coordinator's rulings at its end and of 11-16 evening, not the owner's words; coordinator work order `rd-1116/brief-463-kb1-nemu-key.md`; first stacked on #1778 at `c7eaabaf`, since fix round 1 on main at `3a17b927`, #1778 merged)
 
 This section takes 1.447, the number the work order gives. It ships in 0.12.69. The package's key
 step (KP-1) and the recording's (KR-1) are other slices; this one makes the key go out.
