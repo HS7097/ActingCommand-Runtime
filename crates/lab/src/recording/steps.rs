@@ -45,7 +45,7 @@ use super::store::{
 };
 use crate::LabOcr;
 use crate::codes::{DropProblem, LabCode, OptionalAfterProblem, SelectProblem};
-use crate::display_base::admit_recording_frame;
+use crate::display_base::{RECORDING_BASE_SIZE, admit_recording_frame};
 use crate::recording_api::{change_digest, unchanged_for};
 use actingcommand_contract::outcome::{Detail, Outcome};
 use actingcommand_contract::{
@@ -137,7 +137,10 @@ pub(crate) fn new_recording(
 }
 
 /// The active recording of the lock's instance; a v0.9.0 session without a Lab recording
-/// gets one lazily, with the default settings.
+/// gets one lazily, with the default settings. Workflow #392 DA-5, the train's fix round 1 (review
+/// B): such a recording's header names the base size, as a new recording's does
+/// (`RECORDING_BASE_SIZE`, what the installed `record start` writes), so that its first frame is
+/// checked against it.
 pub(crate) fn open_session(lock: &RecordingLock) -> LabResult<Session> {
     open_session_with(lock, false)
 }
@@ -218,7 +221,14 @@ fn open_session_with(lock: &RecordingLock, allow_stopped: bool) -> LabResult<Ses
                 return Err(lab_unavailable("task_id_invalid_for_lab_package"));
             }
             (
-                new_recording(&old, default_recording_defaults(), None, None, None, None),
+                new_recording(
+                    &old,
+                    default_recording_defaults(),
+                    None,
+                    None,
+                    None,
+                    Some(RECORDING_BASE_SIZE),
+                ),
                 true,
             )
         }

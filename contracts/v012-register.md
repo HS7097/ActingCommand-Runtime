@@ -31710,9 +31710,6 @@ nothing here touches the run's frame gate or the run's input; main merged in bef
   --capture --record`, closed by this slice; the device commands' and `session app`'s `--record`
   record the device's frames and pixels. The code stays `record_frame_size_mismatch` this round;
   the train that joins DA-5cd unifies it with that slice's code.
-- *`device.action`.* The client form of `do` that sends its own tap (`run_runtime_do`) answers
-  `device.action` with the point sent to the device and, on a mapped display, `device.base_action`
-  with the base point.
 - *The stale comment.* `crates/display-adapter/src/codes.rs` on `input_scale_unsupported` no longer
   says a Lab declared operation is refused.
 - *Tests.* `crates/runtime-host/src/tests/gate_392_da5ab.rs`:
@@ -31743,7 +31740,8 @@ nothing here touches the run's frame gate or the run's input; main merged in bef
 **Train** (coordinator work order `rd-1116/brief-392-train-lab-display.md`; the train of DA-5ab and
 DA-5cd in pull request #1780, which carries this section's head `8ee87579` and §1.437's `7010e74e`,
 merged in that order on main `03258b33`, then made one by the coordinator's rulings R1 to R5, not
-the owner's words). What it changed of this section, with §1.437 (DA-5cd):
+the owner's words; main `40abd08b` (with §1.435, LW-1) was merged in after that, before the push).
+What it changed of this section, with §1.437 (DA-5cd):
 - *One rule for a stored image (R1).* DA-5cd's stored scenes take this section's function:
   `actingcommand_lab::scene_in_base` calls the kernel's `lab_scene_on_base`, and DA-5cd's own
   `DisplayMap::build`, `admit_input` and `resample_pixels` sequence is gone. A Runtime capture of the
@@ -31785,6 +31783,10 @@ the owner's words). What it changed of this section, with §1.437 (DA-5cd):
   [contained-page-observation.md](contained-page-observation.md), the MCP manual's "Coordinates",
   the server's instructions and `actingctl`'s two descriptions; the text of `display_map_unresolved`
   says a stored image is refused `lab_scene_size_unsupported` instead (the index regenerated).
+- *The train's fix round 1* is written down once, in §1.437 ("Train, fix round 1"): for this
+  section, the client form's unreachable branch that sent its own tap (`device.action`,
+  `device.base_action`) is removed, and the frame before a recorded `do` takes its size from the
+  Runtime's observation.
 
 ### 1.437 Slice #392 DA-5cd (0.12.67): offline recognition takes a scene that is a pure scale of its package; a recording is refused on a display that is not the base size (Workflow #392; the owner's decision 203 on board #392, one set of packages at the base size and a converter; the real check of 11-16 on board #392 (decision 204) and the read-only study `rd-1116/report-392-lab-on-mapped-display-study.md`, its answers to questions 2 to 4, its slices (b) and (c), its doubt 4 and the coordinator's disposition at its end; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1116/brief-392-da5cd-offline-scale-and-record-refusal.md`, built on main `23161b3a`)
 
@@ -31946,12 +31948,17 @@ requests.
 **At deploy.** Nothing to do. An offline answer about a reduced frame carries `scaled_from`; a
 `record start` on an instance whose last task ran at another size than 1280×720 is refused until
 the display is set back and a task has run on it; a recording started on this build takes a first
-frame of 1280×720 only. A recording made on an earlier build reads as before.
+frame of 1280×720 only. A recording made on an earlier build reads as before. The way back (the
+train's fix round 1): a recording's header this build writes names `base_size`, and 0.12.66 cannot
+read it (its reader of `recording.json` is strict and refuses a member it does not know), so after a
+way back to 0.12.66 a recording begun on this build cannot be read there. No recording is left open
+across the deployment: stop or archive every recording before it.
 
 **Train** (coordinator work order `rd-1116/brief-392-train-lab-display.md`; the train of DA-5ab and
 DA-5cd in pull request #1780, which carries §1.436's head `8ee87579` and this section's `7010e74e`,
 merged in that order on main `03258b33`, then made one by the coordinator's rulings R1 to R5, not
-the owner's words). What it changed of this section, with §1.436 (DA-5ab):
+the owner's words; main `40abd08b` (with §1.435, LW-1) was merged in after that, before the push).
+What it changed of this section, with §1.436 (DA-5ab):
 - *One rule for a stored image (R1).* A stored scene is judged, reduced and answered exactly as a
   frame of its size is by DA-5ab's live observation, by the same function: `scene_in_base` and
   `frames_in_base` (`crates/lab/src/display_base.rs`) call the kernel's `lab_scene_on_base` (its
@@ -31996,6 +32003,61 @@ the owner's words). What it changed of this section, with §1.436 (DA-5ab):
   the MCP manual, both READMEs, the catalog's texts of `lab_scene_size_unsupported`,
   `record_display_not_base` and `record_size_not_base` (the index regenerated). No code, word, key,
   member or revision is added by the train.
+
+**Train, fix round 1** (coordinator work order `rd-1116/brief-392-train-lab-fix1.md`; the two
+independent reviews of the train at `2ff33cb3`, review B's one must-fix and the "may change" points
+of both, with the coordinator's dispositions; for §1.436 and this section alike).
+- *The first frame of a recording without a base in its header* (review B's must-fix). Such a
+  recording (one begun on 0.12.66 and still open, or one the Lab re-created) took the first frame of
+  a press on a display that is not the base size as it came, the press was sent, and only the frame
+  after it was refused `record_size_not_base`: the device had moved and the recording could never
+  become a package. Now `record_before_frame` (`tap`, `swipe` and `long-tap --record`, `session app
+  --record`), before it stores a frame that would be the recording's first, judges the recording as
+  if it already had that frame's size, by the one judgement (`recording_not_base`, through
+  `admit_pressed_first_frame` in `crates/lab/src/display_base.rs`): one it would refuse is refused
+  `record_display_not_base` with the frame's size and the base size, nothing stored, nothing sent.
+  Only the paths that press: a frame attached by `capture --record` or `observe --capture --record`
+  is judged as before. *Its source:* a recording the Lab re-creates because the session's header
+  exists and `recording.json` does not (`recording/steps.rs`, `open_session_with`) writes the base
+  size in its header, as the installed `record start` writes it (`RECORDING_BASE_SIZE`).
+- *The frame before a recorded `do`* (review B, (l)). It stays (nothing is sent before the
+  display's size is known), but its width and height are the ones the Runtime's observation answers,
+  in the reference of the frame it committed (`observe_runtime_frame_reference`, as §1.435's plain
+  press takes it): the frame is no longer read back, decoded, encoded and decoded again. A capture
+  that fails is `device_error`, nothing pressed or written. The `do` row of
+  `contracts/lab-operations.json` names `ObserveReadonly` among its requests.
+- *Unreachable code* (review A, (e)). `run_do` turns `do --capture` without `--dry-run` to the Lab
+  operation before it reaches `run_runtime_do`, so that function's branch that sent its own tap
+  (`device.action`, `device.base_action`, §1.436's fix round 1) was never reached: it is removed,
+  with its `dry_run` parameter (one caller, in the same file), and §1.436's sentence that described
+  it. [contained-lab-operation.md](contained-lab-operation.md) and
+  [display-adapter.md](display-adapter.md) section 11 say that no client form of `do` sends its own
+  tap.
+- *Texts.* `contracts/lab-operations.json`: the rows `record stop` and `record ready` name
+  `record_size_not_base`, and the rows `ensure` and `wait` (with `actinglab`'s own command contract,
+  their `output_fields`) `frame_coordinates`; this section's "At deploy" says what a way back to
+  0.12.66 cannot read; both "Train" paragraphs name main `40abd08b`; both READMEs say that live
+  `observe` and `do` speak the base coordinates on a mapped display and lose the sentence that a
+  scaled frame sends no input before DA-3; the catalog's text of `lab_scene_size_unsupported`,
+  [actinglab-capabilities.md](actinglab-capabilities.md) and display-adapter.md section 12 say its
+  exit 1 on actinglab's own line and through `serve --stdio --front mcp`, as the `record_*` codes
+  say theirs; the catalog's text of `record_display_not_base` and
+  [lab-recording.md](lab-recording.md), "A recording's size", say the first-frame judgement above
+  (the index regenerated).
+- *Tests* (gate map `exec.toml`, the row "Workflow #392 DA-5, the train's fix round 1"; no test
+  retired): in `crates/lab/src/gate_392_da5ab.rs`,
+  `da5_train_fix1_a_first_frame_the_recording_would_refuse_is_refused_before_the_press` (the gate
+  test of the must-fix: no base, no frame, a capture of 1920x1080: the press never called, the
+  files unchanged), `da5_train_fix1_the_retry_of_a_recorded_press_judges_the_recording_again_before_it_sends`
+  and `da5_train_fix1_a_frame_not_stored_is_checked_against_a_recording_with_a_base`; in
+  `apps/actinglab/src/tests/gate_392_da5cd.rs`,
+  `da5_train_fix1_a_stored_image_of_the_other_orientation_is_refused_with_its_word` and
+  `da5_train_fix1_session_app_record_on_a_display_that_is_not_the_base_sends_nothing`; in
+  `gate_lab_l5c.rs`, `da5_train_fix1_a_live_form_and_a_stored_image_each_answer_their_own_refusal`,
+  and its three `da5cd_` tests adapted to assert `reduced_from` (the device's size) and
+  `base_pixels` (the base) each on its own; in `apps/actinglab/tests/runtime_input_proxy.rs`,
+  `da5_train_fix1_a_recorded_do_whose_frame_before_the_press_fails_presses_and_writes_nothing`. No
+  code, word, key, member or revision is added.
 
 ### 1.440 Slice #463 S2-7 (0.12.68): a page transition from frames the recording stored; a press before the last that changed nothing can be dropped (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making, stage two of which turns the recorded material into a package offline, and her ruling of the night of 11-15 that the tool hands back the material and the agent decides; the design's table B1.5, its rows "these frames are a loading screen between two steps" and "this press did nothing"; the rules below are the coordinator's in the work order, not the owner's words; coordinator work order `rd-1116/brief-463-s27-transitions.md`, built on the branch of pull request #1780 at `2ff33cb3`)
 

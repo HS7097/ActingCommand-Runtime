@@ -32,6 +32,14 @@
 //   `frame_coordinates`.
 // - `da5cd_wait_capture_arrives_on_a_scaled_capture`: `wait --capture --page` arrives on the same
 //   page; likewise.
+// The train's fix round 1 (coordinator work order rd-1116/brief-392-train-lab-fix1.md; review A,
+// (h)): the three assert, each on its own, that `reduced_from` is the device's size (the fake's 9x3
+// capture) and `base_pixels` the base (3x1), so that a frame reduced a second time fails them; and
+// `da5_train_fix1_a_live_form_and_a_stored_image_each_answer_their_own_refusal`: the 3x1 frame
+// against a package whose base is 6x2 (a frame smaller than the base): `do --capture --dry-run`
+// and `wait --capture` refuse the capture `display_map_unresolved` (`scale_below_base` in its
+// details) and press nothing; the same frame as a stored image to `detect-page` is refused
+// `lab_scene_size_unsupported` with `scale_below_base`.
 
 use super::*;
 use actingcommand_contract::{
@@ -311,6 +319,12 @@ impl Lab {
     /// `ui/button` on pixel 1, and the route `open_page_a`, which taps the button. With
     /// `consensus` the entry page's target needs its colour on 2 of 3 frames, 1 ms apart.
     fn package(&self, name: &str, consensus: bool) -> String {
+        self.package_at(name, consensus, (3, 1))
+    }
+
+    /// [`Lab::package`] whose coordinate space (its base) is `base` (width, height) instead of the
+    /// fake screen's 3x1 (Workflow #392 DA-5, the train's fix round 1).
+    fn package_at(&self, name: &str, consensus: bool, base: (u32, u32)) -> String {
         let colour = |id: &str, x: i32, expected: [u8; 3]| {
             json!({"type": "color", "id": id,
                    "region": {"x": x, "y": 0, "width": 1, "height": 1}, "expected": expected})
@@ -321,7 +335,7 @@ impl Lab {
             "schema_version": "0.7",
             "game": "neutral",
             "server": "test",
-            "coordinate_space": {"width": 3, "height": 1},
+            "coordinate_space": {"width": base.0, "height": base.1},
             "defaults": {"color_max_distance": 0.0},
             "targets": [
                 colour("page/entry_page", 0, ENTRY),
@@ -353,7 +367,7 @@ impl Lab {
                     "game": "neutral",
                     "server_scope": ["test"],
                     "goal": "neutral fixture",
-                    "coordinate_space": {"width": 3, "height": 1},
+                    "coordinate_space": {"width": base.0, "height": base.1},
                     "entry_page": "entry_page",
                     "target_page": "page_a",
                     "operations": [{
@@ -694,6 +708,20 @@ fn da5cd_answers(lab: &Lab, words: &[&str], package: &str) -> (Value, Value) {
         da5_train_reduced_coordinates(),
         "{words:?}: {scaled}"
     );
+    // The train's fix round 1 (review A, (h)): the capture is reduced once, from the device's size
+    // (the fake's 9x3 capture) to the package's base (3x1). `reduced_from` names the device's size
+    // and `base_pixels` the base: an answer whose frame was reduced again, from a frame already
+    // reduced, would name the base as the size it was reduced from, or none.
+    assert_eq!(
+        scaled["frame_coordinates"]["reduced_from"],
+        json!([9, 3]),
+        "{words:?}: the device's size: {scaled}"
+    );
+    assert_eq!(
+        scaled["frame_coordinates"]["base_pixels"],
+        json!([3, 1]),
+        "{words:?}: the base: {scaled}"
+    );
     (base, scaled)
 }
 
@@ -770,5 +798,91 @@ fn da5cd_wait_capture_arrives_on_a_scaled_capture() {
     for member in ["state", "page", "matched"] {
         assert_eq!(scaled[member], base[member], "{member}: {scaled}");
     }
+    lab.close();
+}
+
+/// Workflow #392 DA-5, the train's fix round 1 (review A, (h); the train's rule R3: two refusals of
+/// a size, one cause each): the fake screen's 3x1 frame against a package whose base is 6x2, a
+/// frame smaller than the base. The live forms `do --capture --dry-run` and `wait --capture` refuse
+/// the Runtime's capture `display_map_unresolved`, the word `scale_below_base` in its details, never
+/// `lab_scene_size_unsupported`, and press nothing; the same frame given as a stored image to
+/// `detect-page` is refused `lab_scene_size_unsupported` with the word `scale_below_base`, never
+/// `display_map_unresolved`.
+#[test]
+fn da5_train_fix1_a_live_form_and_a_stored_image_each_answer_their_own_refusal() {
+    let lab = Lab::new();
+    let package = lab.package_at("double.zip", false, (6, 2));
+    for words in [
+        &["do", "ui/button", "--dry-run"][..],
+        &[
+            "wait",
+            "--page",
+            ENTRY_PAGE,
+            "--timeout-ms",
+            "10000",
+            "--poll-ms",
+            "1",
+        ][..],
+    ] {
+        lab.screen.show(&[(ENTRY, BUTTON)]);
+        let result = lab.run(words, &package);
+        let shown = result.envelope_json();
+        let error = result
+            .envelope
+            .error
+            .as_ref()
+            .unwrap_or_else(|| panic!("{words:?} on the live frame was not refused: {shown}"));
+        assert_eq!(error.code, "display_map_unresolved", "{words:?}: {shown}");
+        let details = error.details.clone().unwrap_or(Value::Null);
+        assert_eq!(
+            details["display_problem"], "scale_below_base",
+            "{words:?}: {shown}"
+        );
+        assert_eq!(lab.screen.taps(), 0, "{words:?}: nothing pressed: {shown}");
+    }
+
+    // The same 3x1 frame as a stored image.
+    let stored = lab.files.path().join("stored-3x1.png");
+    let png = Frame::from_pixels(
+        3,
+        1,
+        [ENTRY, BUTTON, BLANK].concat(),
+        PixelFormat::Rgb8,
+        CaptureBackendName::FixtureSimulation,
+    )
+    .expect("the stored frame")
+    .encode_png_fast()
+    .expect("its PNG");
+    fs::write(&stored, png).expect("write the stored image");
+    let stored = stored.display().to_string();
+    let result = run_cli(
+        vec![
+            "--json",
+            "detect-page",
+            "--scene",
+            stored.as_str(),
+            "--zip",
+            package.as_str(),
+        ],
+        true,
+    );
+    let shown = result.envelope_json();
+    let error = result
+        .envelope
+        .error
+        .as_ref()
+        .unwrap_or_else(|| panic!("the stored image was not refused: {shown}"));
+    assert_eq!(error.code, "lab_scene_size_unsupported", "{shown}");
+    let details = error.details.clone().unwrap_or(Value::Null);
+    // `detect-page` carries the refusal's details inside its trace's.
+    let named = if details.get("blocked_error").is_some() {
+        &details["details"]
+    } else {
+        &details
+    };
+    assert_eq!(
+        named["outcome"]["values"]["display_problem"], "scale_below_base",
+        "{shown}"
+    );
     lab.close();
 }
