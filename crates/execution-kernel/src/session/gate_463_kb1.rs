@@ -98,6 +98,7 @@ impl InputBackend for KeyRecorder {
 }
 
 /// A scheduler-shaped step witness for driving the input directly.
+#[cfg(test)]
 fn step_witness() -> FencedWrite {
     let issuer = actingcommand_contract::IdentifierIssuer::new().expect("ids");
     actingcommand_contract::issue_fenced_write(

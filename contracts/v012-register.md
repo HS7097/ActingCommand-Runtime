@@ -32869,7 +32869,14 @@ train read where they meet, and changed (no program behaviour but the one code b
 
 Changed, not added, because the correction changes what it pins:
 `kb1_fix1_adb_shell_input_refuses_another_key_before_its_intent` (its three keys are denied
-`input_key_unsupported`; its gate row says so). The train's own test is §1.448's.
+`input_key_unsupported`; its gate row says so). The train's own test is §1.448's. Fix round 1 of
+the train (coordinator work order `rd-1116/brief-463-train-key-fix1.md`, after the train's review)
+marks the step witness of `crates/execution-kernel/src/session/gate_463_kb1.rs` and of
+`crates/runtime-host/src/provider/gate_463_kb1.rs` `#[cfg(test)]`, as the kernel's `tests.rs` marks
+its own, since the architecture guard `fenced_close_requires_scheduler_witness` reads an unmarked
+function of a gate file as production code that calls the scheduler's witness bridge; no behaviour,
+code or assertion changes, and nothing else the train added or changed trips that guard or its
+neighbours.
 
 ### 1.448 Slice #463 KP-1 (0.12.69): a linear package step that presses the back key (Workflow #463; the owner's ruling on board #463 that the back key is not recorded while playing and that the agent adds such a step in stage two or three; the read-only study `rd-1116/report-463-key-step-study.md`, sections (c), (e) and the slice KP-1 of (f), with the coordinator's rulings at its end; the rules below are the coordinator's rulings in the work order and on the takeover, not the owner's words; coordinator work order `rd-1116/brief-463-kp1-linear-key-step.md`, built on the branch of Workflow #437 G1, §1.433)
 
@@ -33118,7 +33125,16 @@ naming `back`, nothing captured, nothing sent, and no capture, input or effect-i
 reached: no fake provider opens a Nemu session (a `NemuSessionBackends` holds the vendor library's
 own session, which only the library opens), so below the host the key reaches the fake device as a
 plain key; the session's hand-over with its frame, the registry's wrapper and the worker's key down
-and key up on the scripted library stay KB-1's tests (§1.447).
+and key up on the scripted library stay KB-1's tests (§1.447). Fix round 1 of the train
+(coordinator work order `rd-1116/brief-463-train-key-fix1.md`, after the train's review; no
+behaviour changes) writes two facts of today's code into [linear-steps.md](linear-steps.md), "Key
+steps", and the catalog's description of `contained_task_linear_key_unsupported`: a scheduled run
+that ends with the code is retried after the first back-off step every time, its pair not paused
+and no recovery ladder started, and on a library without the two key calls every attempt really
+performs the steps before the key step; the outcome code index, regenerated, does not change (its
+row shows the description's start only), and the derived
+navigation and its page operations, which leave a key step out, are said to do so here and in the
+contract already.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

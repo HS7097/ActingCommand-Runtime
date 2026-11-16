@@ -609,7 +609,10 @@ built without opening the emulator's library, so on an installation whose librar
 calls the run starts: the key step's guard passes, its effect intent is written, and the key is
 refused when it is sent, before any call of the library, as the input capability's denial. The
 run then ends failed with `nemu_input_capability_unsupported`, the input's own record saying its
-effect `not_performed`; nothing is recorded as indeterminate and the step is not tried again.
+effect `not_performed`; nothing is recorded as indeterminate and the step is not tried again. On
+such an installation every attempt of the run (each run of the package there, each dispatch of a
+scheduled task) really performs the steps before the key step, their inputs sent to the device,
+before its key is refused.
 
 **A scheduled task whose package has a key step, on such an instance** (fix round 1; the
 coordinator's ruling: this behaviour stays as it is in this slice, since changing what accumulates
@@ -622,7 +625,13 @@ failures accumulate"), and no default trigger of the recovery ladder names it or
 (`distribution/windows/actingd.defaults.json`). So the task is not paused, `actingd suspended` does
 not list it, and it keeps being retried and failing the same way until the instance's input or the
 package changes. Only a task whose own failure policy pauses on a first failure (a task marked
-sensitive, for one) is paused, as it is for any failure.
+sensitive, for one) is paused, as it is for any failure. Because the code does not accumulate, the
+failure identity of each such run is new at its dispatch (`failure_accumulates`,
+`crates/runtime-host/src/failure_identity.rs`), so the policy counts every one of them as the first
+of its kind (`crates/runtime-host/src/policy_control.rs`): while the task's
+`on_failure.retry_limit` is at least 1 it is retried after the first back-off step every time
+(`on_failure.retry_backoff_ms`, never doubled), its pair is not paused and no recovery ladder
+starts.
 
 A task without a key step is admitted, run and recorded as before, and asks nothing.
 
