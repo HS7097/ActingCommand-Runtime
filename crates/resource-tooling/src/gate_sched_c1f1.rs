@@ -106,6 +106,8 @@ fn answer(report: ScheduleReport) -> Value {
         models: Vec::new(),
         // Workflow #463 V1: the answer's struct gained this member.
         variable_provenance: None,
+        // Workflow #477 PC-1: the answer's struct gained this member.
+        catalog: crate::StandardPackCatalogReport::absent(GAME, Path::new("root")),
     })
     .expect("the answer")
 }

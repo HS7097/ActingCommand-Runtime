@@ -86,6 +86,15 @@ actingcommand_contract::outcome_codes! {
         /// `base_height`: the base size); nothing is written (exit 3; actinglab's own line exits
         /// 1).
         RecordSizeNotBase => "record_size_not_base": error / none,
+        /// Error. #463 S2-7: a page transition names by its frame id (`frame_id`,
+        /// `sample_frame_ids`) a frame this recording does not hold; nothing is written (exit 3;
+        /// actinglab details `step`, `frame_id`).
+        RecordFrameUnknown => "record_frame_unknown": error / none,
+        /// Error. #463 S2-7: `drop_step` names a step before the last whose stored frames show a
+        /// change at its press or do not hold what the comparison needs (key `drop_problem`: why;
+        /// fix round 1, key `drop_comparison`: which comparison showed the change); nothing is
+        /// written (exit 3; actinglab details `step`).
+        RecordDropUnproven => "record_drop_unproven": error / none,
     }
 }
 
@@ -180,6 +189,21 @@ actingcommand_contract::outcome_vocabulary! {
         NoSelect => "no_select",
         /// #463 R2 fix 1: the `on_empty` key is the outcome key of an ending of the recording.
         OnEmptyKeyOfEnding => "on_empty_key_of_ending",
+        /// #463 S2-6: `record stop` meets a step marked as holding a choice that no select refines
+        /// yet: it knows no names, so no package is generated.
+        ChoiceNotRefined => "choice_not_refined",
+        /// #463 S2-6 fix round 1: a request's `choice: false` names a step that is not marked as
+        /// holding a choice, so there is nothing to take off.
+        NoChoice => "no_choice",
+        /// #463 stage two, train, fix round: `drop_step` names a step that holds a choice (marked
+        /// as holding one, or refined by a select), the last step too: its press may have chosen
+        /// the item already selected, which changes nothing on the screen and still matters to a
+        /// run handed another value; the choice is withdrawn first.
+        DropOfChoice => "drop_of_choice",
+        /// #463 stage two, train, fix round: `to_transition` names a step that holds a choice: a
+        /// page transition holds none, so the conversion would lose it; the choice is withdrawn
+        /// first.
+        TransitionOfChoice => "transition_of_choice",
     }
 }
 
@@ -350,6 +374,9 @@ actingcommand_contract::outcome_vocabulary! {
         /// Workflow #392 DA-5cd fix round 1: the recording holds frames that are not the base size
         /// (`record_size_not_base`).
         SizeNotBase => "size_not_base",
+        /// #463 S2-6: a step marked as holding a choice that no select refines yet
+        /// (`record_select_invalid`, `choice_not_refined`).
+        SelectUnrefined => "select_unrefined",
     }
 }
 
@@ -374,6 +401,20 @@ actingcommand_contract::outcome_vocabulary! {
         Selects => "selects",
         /// The final package: encoded, expanded again, admitted again, and the same first decision.
         FinalPackage => "final_package",
+    }
+}
+
+// #463 S2-1c: why a self-check `record ready` ran stopped at a failure short of its end, so that the
+// failures it lists may not be all it has (`checks[].reason`).
+actingcommand_contract::outcome_vocabulary! {
+    /// Why a self-check stopped short of its end (`ready_check_stop`).
+    pub enum ReadyCheckStop: "ready_check_stop" {
+        /// The check judges the generated package as one, in stages each built on the one before
+        /// (`admission`, `final_package`): its first refusal leaves no stage after it to judge.
+        WholePackage => "whole_package",
+        /// The check met an error that is none of its verdicts (a target the evaluator cannot
+        /// evaluate, a stored frame it cannot decode): what it would judge after it is not judged.
+        CheckError => "check_error",
     }
 }
 
@@ -404,5 +445,40 @@ actingcommand_contract::outcome_vocabulary! {
         /// The configuration of the installation the program runs from: the instance's row of
         /// `policy.facts.instances` (game and server only).
         InstallationConfig => "installation_config",
+    }
+}
+
+// #463 S2-7: why `drop_step` does not drop a step before the last: the stored frames do not hold
+// what the comparison needs, or they show a change (fix round 1: they contradict that its press
+// changed nothing; the tool refuses only that).
+actingcommand_contract::outcome_vocabulary! {
+    /// Why a step before the last cannot be dropped (`drop_problem`).
+    pub enum DropProblem: "drop_problem" {
+        /// The step has no press on record with the stored frame it was sent on and the stored
+        /// frame after it (no click performed by `tap`, `swipe` or `long-tap --record`, a press
+        /// sent on a capture that was not stored, an application operation), or a frame the
+        /// comparison needs is not on record.
+        FramesNotRecorded => "frames_not_recorded",
+        /// The stored frames show a change: the frame after the press differs from the frame
+        /// before it by more than the frame-change bound, by one of the two comparisons
+        /// (`drop_comparison`).
+        ScreenChanged => "screen_changed",
+        /// The stored frames show a change: the next step's frame before its press differs from
+        /// the frame before this press by more than the frame-change bound, by one of the two
+        /// comparisons (`drop_comparison`).
+        NextScreenDiffers => "next_screen_differs",
+    }
+}
+
+// #463 S2-7 fix round 1 (the coordinator's ruling R1): which of the two comparisons of two stored
+// frames showed the change that `drop_step` refuses a step before the last for.
+actingcommand_contract::outcome_vocabulary! {
+    /// Which comparison showed a change (`drop_comparison`).
+    pub enum DropComparison: "drop_comparison" {
+        /// The whole frame, by the frame-change measure.
+        Frame => "frame",
+        /// The neighbourhood of the press (its rectangle grown by one cell of the whole-frame
+        /// measure's grid on every side, clamped to the frame), by the same measure.
+        PressRegion => "press_region",
     }
 }

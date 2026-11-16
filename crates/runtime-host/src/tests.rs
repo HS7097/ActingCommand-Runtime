@@ -274,6 +274,10 @@ mod gate_463_v2;
 // Workflow #463 V3 (0.12.61; register §1.383): an application's goals read and set by name
 // (`GoalView`, `EditGoal`).
 mod gate_463_v3;
+// Workflow #463 S3-8 (0.12.68; register §1.444): a direct run's request gives values for its
+// package's variables, judged before its admission as a dispatch judges one, overlaid as a
+// dispatch's are.
+mod gate_463_s38;
 // Workflow #469 H2 (0.12.62; register §1.398): a paused pair's `policy_task_paused` says why it
 // was paused (`pause_cause`) and with which failure (`failure_code`), live, after a restart and in
 // `actingd suspended`; a backoff names the failure it follows.

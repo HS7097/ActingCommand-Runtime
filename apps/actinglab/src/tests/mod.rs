@@ -213,6 +213,10 @@ mod gate_463_s213;
 // them and, in an installation, the instance's game and server from its configuration.
 #[path = "gate_463_s21b.rs"]
 mod gate_463_s21b;
+// #463 S2-2 fix round 1: `record review` refuses a dry run that would write its previews before
+// the recording is read, and reads the package's game, server and locale as `record ready` does.
+#[path = "gate_463_s22.rs"]
+mod gate_463_s22;
 // Workflow #464 P2: `standard-pack build` builds a game's standard pack from one commit on the
 // steps of `resource verify`, whose report is as before.
 #[path = "gate_464_p2.rs"]
@@ -237,6 +241,14 @@ mod gate_463_s310;
 // business end and records it; `--collect` reads an end later.
 #[path = "gate_463_s311.rs"]
 mod gate_463_s311;
+// Workflow #463 S3-9: `run start --variable <name>=<json>`, read by the one parser of
+// `--variable`, sends the values in the run's request.
+#[path = "gate_463_s38.rs"]
+mod gate_463_s38;
+// Workflow #477 PC-1: `standard-pack catalog`, the writer of a game root's `pack-catalog.json`, on
+// the command line and through `serve --stdio`.
+#[path = "gate_477_pc1.rs"]
+mod gate_477_pc1;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
 use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{

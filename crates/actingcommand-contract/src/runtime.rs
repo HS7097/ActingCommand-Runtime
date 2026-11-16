@@ -98,6 +98,8 @@ pub use goals::*;
 // (Workflow #463 V3, since 0.12.61): the request kinds `GoalView` and `EditGoal` with their results
 // (`goals.rs`), declared [3, 9]. Revision 10 (Workflow #437 G1 fix round 2, since 0.12.67): the
 // status member `RuntimeInstanceStatus.device_held` (`InstanceDeviceHeld`), declared [3, 10].
+// Revision 11 (Workflow #463 S3-8, since 0.12.68): the request member
+// `ContainedTaskRequest.variables`, declared [3, 11].
 pub const RUNTIME_REQUEST_SCHEMA_VERSION: &str = "actingcommand.runtime.request.v4";
 pub const RUNTIME_RECEIPT_SCHEMA_VERSION: &str = "actingcommand.runtime.receipt.v2";
 pub const RUNTIME_INFO_SCHEMA_VERSION: &str = "actingcommand.runtime.info.v1";
@@ -2822,6 +2824,14 @@ pub struct ContainedTaskRequest {
     recovery: Option<ContainedTaskRecoveryBinding>,
     #[serde(default = "default_contained_task_response_deadline_ms")]
     response_deadline_ms: u64,
+    /// Workflow #463 S3-8 (register §1.444, since 0.12.68; `runtime-client` 11;
+    /// `contracts/runtime-interface.md`, "The variable values of a contained run"): the values a
+    /// direct run reads for variables its package declares, by name (`{name: json}`), each judged
+    /// by the host before the run's admission as a dispatch judges a value; a variable not named
+    /// reads its default. Absent when empty, so a request without values serializes, and is
+    /// answered, as before.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    variables: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
 const fn default_contained_task_response_deadline_ms() -> u64 {
@@ -2837,6 +2847,7 @@ impl ContainedTaskRequest {
             package_path: package_path.into(),
             recovery: None,
             response_deadline_ms: Self::DEFAULT_RESPONSE_DEADLINE_MS,
+            variables: std::collections::BTreeMap::new(),
         };
         request.validate()?;
         Ok(request)
@@ -2857,6 +2868,23 @@ impl ContainedTaskRequest {
         if !(1..=Self::MAX_RESPONSE_DEADLINE_MS).contains(&self.response_deadline_ms) {
             return Err(RuntimeContractError::new(
                 RuntimeContractCode::InvalidContainedTaskResponseDeadline,
+            ));
+        }
+        // Workflow #463 S3-8: at most as many values as a package can declare variables, each
+        // under a name of a variable's form (1 to 64 bytes of `[a-z][a-z0-9_]*`); the host judges
+        // the rest against the package.
+        if self.variables.len() > crate::MAX_PACKAGE_VARIABLES {
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InvalidContainedTaskVariableCount,
+            ));
+        }
+        if !self
+            .variables
+            .keys()
+            .all(|name| crate::remedy_token_valid(name))
+        {
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InvalidContainedTaskVariableName,
             ));
         }
         Ok(())
@@ -2891,6 +2919,24 @@ impl ContainedTaskRequest {
         self.validate()?;
         Ok(self)
     }
+
+    /// Workflow #463 S3-8: the values the run is to read for variables of its package, by name;
+    /// empty for a run that reads every default.
+    pub const fn variables(&self) -> &std::collections::BTreeMap<String, serde_json::Value> {
+        &self.variables
+    }
+
+    /// Workflow #463 S3-8: this request with the values `variables`, by name; more than
+    /// [`crate::MAX_PACKAGE_VARIABLES`] of them are `invalid_contained_task_variable_count`, a
+    /// name outside a variable's form `invalid_contained_task_variable_name`.
+    pub fn with_variables(
+        mut self,
+        variables: std::collections::BTreeMap<String, serde_json::Value>,
+    ) -> RuntimeContractResult<Self> {
+        self.variables = variables;
+        self.validate()?;
+        Ok(self)
+    }
 }
 
 impl fmt::Debug for ContainedTaskRequest {
@@ -2900,6 +2946,7 @@ impl fmt::Debug for ContainedTaskRequest {
             .field("package_path", &"<redacted-path>")
             .field("recovery", &self.recovery)
             .field("response_deadline_ms", &self.response_deadline_ms)
+            .field("variables", &self.variables)
             .finish()
     }
 }
@@ -6838,3 +6885,7 @@ mod gate_434_lab6s1b;
 // Workflow #392 DA-5ab fix round 1: the check of an observation's projection frame.
 #[cfg(test)]
 mod gate_392_da5ab;
+
+// Workflow #463 S3-8: the request member `ContainedTaskRequest.variables` (`runtime-client` 11).
+#[cfg(test)]
+mod gate_463_s38;

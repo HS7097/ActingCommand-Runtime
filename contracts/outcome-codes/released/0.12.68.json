@@ -1,0 +1,8 @@
+{
+  "schema_version": "actingcommand.outcome-codes.release.v2",
+  "release": "0.12.68",
+  "codes": {
+    "trial_variables_not_carried": {"category": "error", "ladder_class": "none", "review": "pending", "status": "retired", "values": {"package_id": {"type": "name", "required": true}, "variable_name": {"type": "token", "required": true}}}
+  },
+  "locations": {}
+}

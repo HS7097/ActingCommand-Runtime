@@ -274,36 +274,12 @@ impl ReplayArgs {
 /// `<name>=<json>` (no `=`, an empty name, or a right side that is no JSON) is `not_recognised`,
 /// and a name given twice is `repeated`, as `--parameter`'s. Workflow #463 S3-10 fix round 2: the
 /// one parser of `--variable`, which `standard-pack trial` calls too; `command` is the command its
-/// messages name.
+/// messages name. Workflow #463 S3-9: the parser itself is `lab_ops::core_ops::parse_variables`,
+/// which `run start` reads its `--variable` with too; here its refusal is this command line's.
 pub(crate) fn given_variables(flags: &FlagArgs, command: &str) -> CliOutcome<Vec<(String, Value)>> {
-    let mut given: Vec<(String, Value)> = Vec::new();
-    for text in flags.values("--variable") {
-        if text == "true" || text.trim().is_empty() {
-            return Err(variable_refusal(
-                "value_missing",
-                format!("{command} takes --variable <name>=<json>"),
-            ));
-        }
-        let Some((name, value)) = text.split_once('=').and_then(|(name, json)| {
-            let value = serde_json::from_str::<Value>(json).ok()?;
-            (!name.is_empty()).then_some((name, value))
-        }) else {
-            return Err(variable_refusal(
-                "not_recognised",
-                format!("--variable {text} is not <name>=<json>"),
-            ));
-        };
-        if given.iter().any(|(given, _)| given == name) {
-            return Err(variable_refusal(
-                "repeated",
-                format!(
-                    "{command} takes --variable {name} once; a repeated variable is refused, never last-wins"
-                ),
-            ));
-        }
-        given.push((name.to_owned(), value));
-    }
-    Ok(given)
+    let texts = flags.values("--variable");
+    actingcommand_lab_ops::core_ops::parse_variables(command, texts.iter().map(String::as_str))
+        .map_err(|refusal| variable_refusal(refusal.problem.as_str(), refusal.message))
 }
 
 /// Workflow #463 V2: a refused `--variable`, as [`parameter_refusal`] refuses `--parameter`:

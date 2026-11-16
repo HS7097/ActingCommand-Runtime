@@ -25,7 +25,12 @@
 //!   templates directory the zip no longer carries, `retire`. The notices directory is one item
 //!   of kind `notices`, placed first; the loading templates directory one item of kind `loading`,
 //!   placed after the packs and before the root files. The plan id is `plan-` and the first 16
-//!   hex digits of the SHA-256 of the canonical plan document.
+//!   hex digits of the SHA-256 of the canonical plan document. Workflow #477 PC-1 (register
+//!   §1.438): the root file `pack-catalog.json` is placed last and set aside when a later zip
+//!   carries none; its business part is read as every reader reads it (the contract crate's reader
+//!   against the zip's `bundle.json` and `schedule.json`), a wrong one refused like a root file;
+//!   `ui.json`, which no program reads any more, is no root file of a zip, and an installed one is
+//!   set aside by every placement.
 //! - **The packages that enter or leave scheduling** (Workflow #463 S3-1, read only): the plan
 //!   classifies the packages of the bundle's game on the installed game root and on the zip's
 //!   root with the contract crate's own functions ([`standard_pack_maintenance_packages`],
@@ -119,16 +124,17 @@ use actingcommand_contract::outcome::{CauseRelation, IoOp, Outcome};
 use actingcommand_contract::{
     BundleIndex, BundleMaintenance, BundleRevisionNeed, InterruptThen, LOADING_PREFIX,
     LoadingTarget, MAX_NOTICE_FILE_BYTES, MaintenanceUse, NavigationRole, NoticeBound, NoticeEntry,
-    NoticeIssue, RESERVED_TABLES_DIRECTORY, STANDARD_PACK_BUNDLE_FILE,
+    NoticeIssue, RESERVED_TABLES_DIRECTORY, STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_CATALOG_FILE,
     STANDARD_PACK_DISPLAY_LAYOUT_FILE, STANDARD_PACK_GOALS_FILE, STANDARD_PACK_INTERRUPTS_FILE,
     STANDARD_PACK_LOADING_DIRECTORY, STANDARD_PACK_LOADING_FILE, STANDARD_PACK_NAVIGATION_FILE,
-    STANDARD_PACK_NOTICES_DIRECTORY, STANDARD_PACK_PAGES_FILE, STANDARD_PACK_SCHEDULE_FILE,
-    STANDARD_PACK_UI_FILE, StandardPackProblem, StandardPackRegistry, StandardPackRoot,
+    STANDARD_PACK_NOTICES_DIRECTORY, STANDARD_PACK_PAGES_FILE, STANDARD_PACK_RETIRED_UI_FILE,
+    STANDARD_PACK_SCHEDULE_FILE, StandardPackProblem, StandardPackRegistry, StandardPackRoot,
     StandardPackRootBytes, StandardPackRootIssue, StandardPackSchedule, check_notice_listing,
     check_notice_pack_ids, check_notice_size, check_notice_text, classify_standard_pack_packages,
     control_declares_variables, notice_relative_path, package_edge_holds,
-    parse_standard_pack_loading, parse_standard_pack_schedule, read_standard_pack_root,
-    standard_pack_maintenance_packages, validate_standard_pack_schedule_references,
+    parse_standard_pack_catalog, parse_standard_pack_loading, parse_standard_pack_schedule,
+    read_standard_pack_root, standard_pack_maintenance_packages, standard_pack_schedule_pools,
+    validate_standard_pack_schedule_references,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -173,9 +179,12 @@ const PREREQUISITE_ROLE: &str = "prerequisite";
 const LAB_PROGRAM: &str = "actinglab.exe";
 /// The root files a bundle zip may carry, in the order they are placed: `bundle.json` first (the
 /// others name its packs), the files the Runtime's readers open, `applications.json`,
-/// `schedule.json` (its rules name packs the placed `bundle.json` lists) and (Workflow #455 G-R1,
-/// `package` 12; version 2 at `package` 14 since Workflow #463 V1 fix round 3) `goals.json` last
-/// (its entries name the schedule's pools and rules and the variables of the bundle's packs).
+/// `schedule.json` (its rules name packs the placed `bundle.json` lists), (Workflow #455 G-R1,
+/// `package` 12; version 2 at `package` 14 since Workflow #463 V1 fix round 3) `goals.json` (its
+/// entries name the schedule's pools and rules and the variables of the bundle's packs) and
+/// (Workflow #477 PC-1, no revision: the Runtime reads no member of it) `pack-catalog.json` last
+/// (its entries name the bundle's packs and the schedule's pools). `ui.json` is none of them since
+/// PC-1: a zip that carries it is refused as a member no layout knows.
 const ROOT_FILES: [&str; 10] = [
     STANDARD_PACK_BUNDLE_FILE,
     STANDARD_PACK_PAGES_FILE,
@@ -183,18 +192,21 @@ const ROOT_FILES: [&str; 10] = [
     STANDARD_PACK_NAVIGATION_FILE,
     STANDARD_PACK_DISPLAY_LAYOUT_FILE,
     STANDARD_PACK_LOADING_FILE,
-    STANDARD_PACK_UI_FILE,
     APPLICATIONS_FILE,
     STANDARD_PACK_SCHEDULE_FILE,
     STANDARD_PACK_GOALS_FILE,
+    STANDARD_PACK_CATALOG_FILE,
 ];
-/// The root files the Runtime's readers open, set aside when the new zip no longer carries them
-/// (the Runtime would read them against the new registry), in this order; (Workflow #455 G-R1)
-/// `goals.json` first, whose entries the Tools' check holds to the placed root.
-const RETIRED_WHEN_ABSENT: [&str; 8] = [
+/// The root files the Runtime's readers open and those the Tools read beside them, set aside when
+/// the new zip no longer carries them (they would be read against the new registry), in this
+/// order: (Workflow #477 PC-1) `pack-catalog.json` first, then (Workflow #455 G-R1) `goals.json`,
+/// whose entries the Tools' check holds to the placed root; PC-1: `ui.json`, which no zip carries
+/// any more, is set aside by every placement of a root that still holds it.
+const RETIRED_WHEN_ABSENT: [&str; 9] = [
+    STANDARD_PACK_CATALOG_FILE,
     STANDARD_PACK_GOALS_FILE,
     STANDARD_PACK_SCHEDULE_FILE,
-    STANDARD_PACK_UI_FILE,
+    STANDARD_PACK_RETIRED_UI_FILE,
     STANDARD_PACK_LOADING_FILE,
     STANDARD_PACK_DISPLAY_LAYOUT_FILE,
     STANDARD_PACK_NAVIGATION_FILE,
@@ -969,6 +981,40 @@ fn check_variables_declared<'a>(
     Ok(())
 }
 
+/// Workflow #477 PC-1 (register §1.438; contracts/pack-catalog.md): the `pack-catalog.json` of the
+/// bundle `zip` of `game` (`catalog`, its bytes), read by the contract crate's reader against the
+/// zip's `registry` and the pools the zip's `schedule.json` (`schedule`, its bytes) declares (none
+/// without it; not judged when the reader refuses that file, which the placement's post check
+/// refuses). Its first error refuses the placement before anything is held or written,
+/// `pack_invalid` caused by `standard_pack_root_invalid` at its pointer, as a root file every
+/// reader refuses; its display defects refuse nothing (`standard-pack check`, the post check,
+/// reports them).
+fn check_catalog(
+    zip: &Path,
+    game: &str,
+    catalog: &[u8],
+    registry: &StandardPackRegistry,
+    schedule: Option<&[u8]>,
+) -> Result<(), Outcome> {
+    let pools = match schedule {
+        None => Some(BTreeSet::new()),
+        Some(bytes) => parse_standard_pack_schedule(bytes)
+            .ok()
+            .map(|schedule| standard_pack_schedule_pools(&schedule)),
+    };
+    match parse_standard_pack_catalog(catalog, game, registry, pools.as_ref()) {
+        Ok(_) => Ok(()),
+        Err(issues) => {
+            let whole = StandardPackRootIssue {
+                file: STANDARD_PACK_CATALOG_FILE,
+                problem: StandardPackProblem::Malformed,
+                pointer: String::new(),
+            };
+            Err(root_refusal(zip, game, issues.first().unwrap_or(&whole)))
+        }
+    }
+}
+
 /// `pack_invalid` of the bundle `zip` of `game` for a root file's problem `issue`, caused by
 /// `standard_pack_root_invalid` with `path` the file below the zip, its problem and its pointer.
 fn root_refusal(zip: &Path, game: &str, issue: &StandardPackRootIssue) -> Outcome {
@@ -1593,6 +1639,18 @@ pub(crate) fn plan(
         &game,
     )
     .map_err(|issue| root_refusal(&zip, &game, &issue))?;
+    // Workflow #477 PC-1: the package declaration's business part, as every reader checks it.
+    if let Some(catalog) = bytes_of(STANDARD_PACK_CATALOG_FILE)
+        && let Some(root) = zip_root.as_ref()
+    {
+        check_catalog(
+            &zip,
+            &game,
+            catalog,
+            &root.registry,
+            bytes_of(STANDARD_PACK_SCHEDULE_FILE),
+        )?;
+    }
     // Each pack: its files as `bundle.json` counts them, its `control.json` among them.
     for pack in &bundle.packs {
         let listed = pack_members.get(&pack.package_id);

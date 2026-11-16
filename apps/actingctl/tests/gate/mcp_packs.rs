@@ -346,11 +346,14 @@ fn gate_packs_and_ac_packs_list_the_standard_pack_tables() {
 
 /// Workflow #429 R-11 (register §1.240; work order `rd-1031/brief-r11.md`, test 6): with a
 /// composer-mode configuration, `actingctl packs` and `ac_packs` answer the same rows and the same
-/// warnings. A game root's valid `ui.json` is its row's `ui` as written with its `display`; each
-/// composed row carries the tasks that run its package (`task_ids`), whether the package is
-/// irreversible as its `control.json` `provides` says, and its game's `ui.json` entry (`ui`) and
-/// `display`. A refused `ui.json` adds one `standard_pack_root_invalid` warning per violation, at
-/// its pointer, and its game's rows are listed as without the file.
+/// warnings. Each composed row carries the tasks that run its package (`task_ids`) and whether the
+/// package is irreversible as its `control.json` `provides` says. Workflow #477 PC-1 (register
+/// §1.438; adapted: the display comes from `pack-catalog.json`, which replaced `ui.json`): a game
+/// root's catalog whose business part keeps every rule gives its game `ui` (the display part,
+/// `{groups, packs}`), `display` and `index`, and each composed row of the game its package's
+/// display (`ui`), the game's `display` and its package's business part (`catalog`). A catalog
+/// wrong in its business part adds one `standard_pack_root_invalid` warning per error, at its
+/// pointer, and its game's rows are listed as without the file.
 #[test]
 fn gate_r11_packs_and_ac_packs_answer_the_same_ui_irreversible_and_task_ids() {
     use crate::standard_pack_schedule::{bundle, rule, schedule, write_json};
@@ -397,26 +400,33 @@ fn gate_r11_packs_and_ac_packs_answer_the_same_ui_irreversible_and_task_ids() {
         GAME_B,
         &[("fixture.three", GAMMA, json!({"package_id": GAMMA}))],
     );
-    let ui_a = json!({
-        "schema_version": "actingcommand.ui.v1",
-        "game": GAME_A,
-        "groups": [{"id": "group_a", "title": {"en": "Group A"}}],
-        "packs": [{"package_id": ALPHA, "title": {"en": "Alpha"},
-                   "summary": {"en": "The first neutral package."},
-                   "group": "group_a", "risk": ["word_one"]}],
-        "display": {"aspect_ratios": ["16:9"], "safe_area": "declared_word"}
-    });
-    write_json(&packages.join(GAME_A).join("ui.json"), &ui_a);
-    // An unregistered package with a parameter no package declares.
+    let alpha_display = json!({"package_id": ALPHA, "title": {"en": "Alpha"},
+                               "summary": {"en": "The first neutral package."},
+                               "group": "group_a", "risk": ["word_one"]});
+    let groups = json!([{"id": "group_a", "title": {"en": "Group A"}}]);
+    let display = json!({"aspect_ratios": ["16:9"], "safe_area": "declared_word"});
+    let mut alpha_entry = alpha_display.clone();
+    alpha_entry["consumes"] = json!([]);
+    alpha_entry["produces"] = json!([]);
     write_json(
-        &packages.join(GAME_B).join("ui.json"),
+        &packages.join(GAME_A).join("pack-catalog.json"),
         &json!({
-            "schema_version": "actingcommand.ui.v1",
+            "schema_version": "actingcommand.pack-catalog.v1",
+            "game": GAME_A,
+            "groups": groups,
+            "display": display,
+            "packs": [alpha_entry]
+        }),
+    );
+    // A package the bundle does not register.
+    write_json(
+        &packages.join(GAME_B).join("pack-catalog.json"),
+        &json!({
+            "schema_version": "actingcommand.pack-catalog.v1",
             "game": GAME_B,
-            "groups": [],
             "packs": [{"package_id": "fixture.absent", "title": {"en": "Absent"},
                        "summary": {"en": "Not in the bundle."},
-                       "parameters": {"level": {"label": {"en": "Level"}}}}]
+                       "consumes": [], "produces": []}]
         }),
     );
     fs::write(
@@ -463,10 +473,11 @@ fn gate_r11_packs_and_ac_packs_answer_the_same_ui_irreversible_and_task_ids() {
         })
     };
     let mut alpha = row(GAME_A, ALPHA, json!(["fixture.one"]), true);
-    alpha["ui"] = ui_a["packs"][0].clone();
-    alpha["display"] = ui_a["display"].clone();
+    alpha["ui"] = alpha_display.clone();
+    alpha["display"] = display.clone();
+    alpha["catalog"] = json!({"consumes": [], "produces": []});
     let mut beta = row(GAME_A, BETA, json!(["fixture.two"]), false);
-    beta["display"] = ui_a["display"].clone();
+    beta["display"] = display.clone();
     let gamma = row(
         GAME_B,
         GAMMA,
@@ -477,12 +488,19 @@ fn gate_r11_packs_and_ac_packs_answer_the_same_ui_irreversible_and_task_ids() {
     assert_eq!(
         cli["standard_packs"]["games"],
         json!([
-            {"game": GAME_A, "tables": [], "ui": ui_a, "display": ui_a["display"]},
+            {"game": GAME_A, "tables": [],
+             "ui": {"groups": groups, "packs": [alpha_display]},
+             "display": display,
+             "index": {"producing": {}, "consuming": {}}},
             {"game": GAME_B, "tables": []}
         ]),
         "{cli}"
     );
-    let refused = packages.join(GAME_B).join("ui.json").display().to_string();
+    let refused = packages
+        .join(GAME_B)
+        .join("pack-catalog.json")
+        .display()
+        .to_string();
     let warning = |problem: &str, pointer: &str| {
         json!({
             "game": GAME_B,
@@ -507,16 +525,10 @@ fn gate_r11_packs_and_ac_packs_answer_the_same_ui_irreversible_and_task_ids() {
         .unwrap_or_default();
     assert_eq!(
         warnings,
-        vec![
-            (
-                json!("standard_pack_root_invalid"),
-                warning("package_not_listed", "/packs/0/package_id"),
-            ),
-            (
-                json!("standard_pack_root_invalid"),
-                warning("ui_parameter_undeclared", "/packs/0/parameters/level"),
-            ),
-        ],
+        vec![(
+            json!("standard_pack_root_invalid"),
+            warning("package_not_listed", "/packs/0/package_id"),
+        )],
         "{cli}"
     );
 }

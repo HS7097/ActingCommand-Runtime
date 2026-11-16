@@ -91,7 +91,8 @@ crate::outcome_vocabulary! {
         BundleInvalid => "bundle_invalid",
         /// The game root holds `interrupts.json`, `navigation.json`, `pages.json`, (Workflow
         /// #392 DA-4) `display-layout.json`, (Workflow #357 DB-1) a `tables/` directory or, for
-        /// the readers of `ui.json` (Workflow #429 R-11), `ui.json` but no `bundle.json`.
+        /// the readers of `pack-catalog.json` (Workflow #477 PC-1), `pack-catalog.json` but no
+        /// `bundle.json`.
         BundleMissing => "bundle_missing",
         /// The game root holds `interrupts.json` or `navigation.json` but no `pages.json`.
         PagesMissing => "pages_missing",
@@ -169,18 +170,23 @@ crate::outcome_vocabulary! {
         /// Workflow #392 DA-4: `display-layout.json` breaks one of its rules: its
         /// `correction.radius_px` is above 64 (model 392 v1.2 §4.1).
         DisplayLayoutInvalid => "display_layout_invalid",
-        /// Workflow #429 R-11 (since 0.12.36): `ui.json` is larger than 256 KiB, or one of its
-        /// lists, maps, words or texts is outside its limit.
-        UiOutOfLimits => "ui_out_of_limits",
-        /// R-11: `ui.json` lists a group id, a pack's `package_id`, a risk word of one pack or an
-        /// aspect ratio twice.
-        UiDuplicate => "ui_duplicate",
-        /// R-11: a pack's `group` in `ui.json` is not an id of its `groups`.
-        UiGroupUnknown => "ui_group_unknown",
-        /// R-11: a name under a pack's `parameters` in `ui.json` is not a parameter the package
-        /// declares. Workflow #463 V1 superseded R-10: a package's variables carry their own
-        /// texts, so `parameters` names nothing and every name is this word.
-        UiParameterUndeclared => "ui_parameter_undeclared",
+        /// Workflow #477 PC-1 (since 0.12.68; [`crate::standard_pack_catalog`]): `pack-catalog.json`
+        /// is larger than 1 MiB, or one of its lists, texts, locales, words or pool ids is outside
+        /// its limit (an error in the business part and the file as a whole, a warning in the
+        /// display part). It replaced R-11's `ui_out_of_limits` with the file it was of.
+        CatalogOutOfLimits => "catalog_out_of_limits",
+        /// PC-1: `pack-catalog.json` lists a `package_id` twice or a pool twice on one side of an
+        /// entry (errors), or a group id, a risk word of one package or an aspect ratio twice
+        /// (warnings).
+        CatalogDuplicate => "catalog_duplicate",
+        /// PC-1: a pool of a package's `consumes` or `produces` is not a pool the game root's
+        /// `schedule.json` declares (an error).
+        CatalogPoolUndeclared => "catalog_pool_undeclared",
+        /// PC-1: a package's `group` is not an id of the file's `groups` (a warning).
+        CatalogGroupUnknown => "catalog_group_unknown",
+        /// PC-1: a group without `title`, or a package that writes a display member without
+        /// `title` or `summary` (a warning).
+        CatalogTextMissing => "catalog_text_missing",
         /// Workflow #407 LOAD-1 (since 0.12.37): a target of `loading.json` or of a pack's loading
         /// copy has an id that is not `loading/<name>` or that the file declares twice, or a
         /// template target's `template` is not `loading/<file>.png`.
@@ -375,8 +381,8 @@ crate::outcome_vocabulary! {
 pub struct StandardPackRootIssue {
     /// One of [`STANDARD_PACK_BUNDLE_FILE`], [`STANDARD_PACK_PAGES_FILE`],
     /// [`STANDARD_PACK_INTERRUPTS_FILE`], [`STANDARD_PACK_NAVIGATION_FILE`], (Workflow #392
-    /// DA-4) [`crate::STANDARD_PACK_DISPLAY_LAYOUT_FILE`], (Workflow #429 R-11)
-    /// [`crate::STANDARD_PACK_UI_FILE`], (Workflow #407 LOAD-1)
+    /// DA-4) [`crate::STANDARD_PACK_DISPLAY_LAYOUT_FILE`], (Workflow #477 PC-1)
+    /// [`crate::STANDARD_PACK_CATALOG_FILE`], (Workflow #407 LOAD-1)
     /// [`crate::STANDARD_PACK_LOADING_FILE`] and a pack's [`crate::PACK_LOADING_FILE`], or
     /// (Workflow #455 G-R1) [`crate::STANDARD_PACK_GOALS_FILE`].
     pub file: &'static str,

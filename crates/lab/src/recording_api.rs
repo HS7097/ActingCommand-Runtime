@@ -5,7 +5,7 @@
 //! `record_status` only reads.
 
 use crate::LabOcr;
-use crate::codes::{LabCode, ReadyCheck, ReadySource};
+use crate::codes::{LabCode, ReadyCheck, ReadyCheckStop, ReadySource};
 use crate::display_base::{admit_pressed_first_frame, admit_recording_frame, recording_not_base};
 use crate::recording::archive::{ARCHIVED, latest_manifest, read_recording};
 use crate::recording::boxes::{expanded_add, validate_boxes, with_press_click};
@@ -14,8 +14,9 @@ use crate::recording::container::{
     write_lab_dir,
 };
 use crate::recording::crosscheck::{
-    CrossCheck, EndingChecks, FirstDecision, FrameCache, SelectChecks, admit, cross_check,
-    ending_checks, evaluator_bundle, first_decision, round_trip, select_checks,
+    CheckFailure, CheckRun, CrossCheck, EndingChecks, Failures, FirstDecision, FrameCache, Locus,
+    SelectChecks, admit, cross_check, ending_checks, evaluator_bundle, first_decision, round_trip,
+    select_checks,
 };
 use crate::recording::ending::{remove_ending, validate_ending_request};
 use crate::recording::generate::{
@@ -39,17 +40,18 @@ use crate::recording::model::{
     TransitionSpec, TransitionView,
 };
 use crate::recording::ready::{
-    Known, ReadyOptionConflict, ReadySources, ReadyWarningItem, RecordReadyOutcome, check_item,
-    generator_warnings, known, lack_items, packaged, point_press_warnings, ready_outcome,
-    with_size_item,
+    Known, ReadyOptionConflict, ReadySources, ReadyWarningItem, RecordReadyOutcome, check_items,
+    check_runs, every_check_complete, generator_warnings, known, lack_items, packaged,
+    point_press_warnings, ready_outcome, with_size_item,
 };
+use crate::recording::review::{RecordReviewOutcome, RecordReviewRequest, review_outcome};
 use crate::recording::select::{not_evaluated_id, validate_select_request};
 use crate::recording::steps::{
     Arrival, ArrivalMode, FrameMeta, Session, application_action, application_with_click,
     apply_ending, apply_marks, apply_optional_after, apply_step_action, apply_transition, arrive,
     arrive_after_press, check_device_arrival, commit_application, commit_click,
-    default_recording_defaults, effective_indices, has_marks, lab_unavailable, live_primary,
-    name_after_frame, new_recording, not_active, note_after_capture, open_session,
+    default_recording_defaults, effective_indices, effective_step, has_marks, lab_unavailable,
+    live_primary, name_after_frame, new_recording, not_active, note_after_capture, open_session,
     open_session_for_marks, open_step, path_order, plan_application, plan_click, plan_press,
     remove_inserted, save, step_ref, stopped_change, to_json,
 };
@@ -65,10 +67,12 @@ use crate::recording::{
 use actingcommand_contract::{
     InputAction, InputFrameReference, LabError, LabErrorClass, LabResult,
 };
+use actingcommand_execution_kernel::{ExternallyVerifiedBundle, PreparedContainedTask};
 use actingcommand_pack_containment::ContentContainer;
 use actingcommand_recognition::color_digest::{
     ColorDigest, FRAME_CHANGE_MAX_MILLI, frame_change_digest, frame_change_milli,
 };
+use actingcommand_recognition_pack::RecognitionEvaluator;
 use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -394,11 +398,12 @@ fn regeneration_settings(
 /// `record status` reads (the instance's, by its session header) or the one `record_id` names
 /// (active, archived or stopped). Every pre-check of the generator it fails (`generate::survey`,
 /// with the options `record stop` would take from `options`); when it fails none, the self-checks
-/// `record stop` runs (`self_checks`), on the package it would generate, written nowhere, and the
-/// refusal of the first that refuses. A recording that is stopped with its package and unchanged
-/// since is `packaged`, and nothing is checked again. A refusal that is no pre-check of the
-/// recording, and a failure to read the state (its class `runtime_unavailable`), are the
-/// command's own. #463 S2-1b: `options` hold what `record stop` would hold: the game, server and
+/// `record stop` runs (`self_checks`), on the package it would generate, written nowhere, and
+/// (#463 S2-1c) every failure each finds, each check saying whether its list is all it has
+/// (`checks`; a check that cannot go on past a failure stops there). A recording that is stopped
+/// with its package and unchanged since is `packaged`, and nothing is checked again. A refusal
+/// that is no pre-check of the recording, and a failure to read the state (its class
+/// `runtime_unavailable`), are the command's own. #463 S2-1b: `options` hold what `record stop` would hold: the game, server and
 /// locale the command line gives `record ready`, and the Lab's and the installation's
 /// configuration's game and server; the answer's `sources` says where each part came from. None
 /// of them is written on the recording. Fix round 1: a packaged recording answers what its package
@@ -413,14 +418,27 @@ pub fn record_ready(
     ocr: &LabOcr,
 ) -> LabResult<RecordReadyOutcome> {
     let (recording, session) = ready_recording(state_dir, instance, record_id)?;
-    let mut warnings = point_press_warnings(&recording);
-    if let Some(artifact) = recording.artifact.as_ref().filter(|_| packaged(&recording)) {
+    ready_of(&recording, session, options, ocr)
+}
+
+/// #463 S2-2: the answer of `record ready` for `recording`, read by [`ready_recording`], its
+/// session's state `session`: the body of [`record_ready`], so that `record review` takes each
+/// step's items from this one function, on the recording it reads once.
+fn ready_of(
+    recording: &LabRecording,
+    session: String,
+    options: &RecordStopOptions,
+    ocr: &LabOcr,
+) -> LabResult<RecordReadyOutcome> {
+    let mut warnings = point_press_warnings(recording);
+    if let Some(artifact) = recording.artifact.as_ref().filter(|_| packaged(recording)) {
         warnings.extend(option_conflict_warnings(artifact, options)?);
         return Ok(ready_outcome(
-            &recording,
+            recording,
             session,
             Vec::new(),
             warnings,
+            Vec::new(),
             &[],
             package_sources(artifact),
         ));
@@ -429,47 +447,80 @@ pub fn record_ready(
     // `record stop` does.
     let (settings, sources) = match &recording.artifact {
         Some(artifact) if recording.status == "stopped" => regeneration_settings(artifact, options),
-        _ => stop_settings(&recording, options),
+        _ => stop_settings(recording, options),
     };
     // Workflow #392 DA-5cd: a recording whose frames are not the base size is listed first (fix
     // round 1: `size_not_base`, `record_size_not_base`); `record stop` refuses it before its
     // self-checks, so none of them runs.
-    let not_base = recording_not_base(&recording);
-    let (missing, checks_after) = match survey(&recording, &settings)? {
-        Survey::Lacking(lacks) => (lack_items(&recording, &lacks)?, ReadyCheck::ALL.to_vec()),
-        Survey::Planned(_) if not_base.is_some() => (Vec::new(), ReadyCheck::ALL.to_vec()),
-        Survey::Planned(plan) => match self_checks(&plan, ocr) {
+    let not_base = recording_not_base(recording);
+    let (missing, checks, checks_after) = match survey(recording, &settings)? {
+        Survey::Lacking(lacks) => (
+            lack_items(recording, &lacks)?,
+            Vec::new(),
+            ReadyCheck::ALL.to_vec(),
+        ),
+        Survey::Planned(_) if not_base.is_some() => {
+            (Vec::new(), Vec::new(), ReadyCheck::ALL.to_vec())
+        }
+        // #463 S2-1c: every failure of each self-check, each check that can go on past one going
+        // on, and each check that ran saying whether its list is all it has.
+        Survey::Planned(plan) => match self_checks(&plan, ocr, Failures::every()) {
             Ok(checked) => {
                 warnings.extend(generator_warnings(&checked.warnings)?);
-                (Vec::new(), Vec::new())
+                (Vec::new(), every_check_complete(), Vec::new())
             }
-            // The state could not be read: no check refused, and the command answers it.
-            Err(failure) if failure.error.class == LabErrorClass::RuntimeUnavailable => {
-                return Err(failure.error);
-            }
-            Err(failure) => {
+            Err(failed) => {
+                // The state could not be read: no check refused, and the command answers it.
+                if let Some(error) = failed.unreadable() {
+                    return Err(error);
+                }
                 warnings.extend(generator_warnings(&plan.warnings)?);
-                let after = ReadyCheck::ALL
-                    .iter()
-                    .copied()
-                    .skip_while(|check| *check != failure.check)
-                    .skip(1)
-                    .collect::<Vec<_>>();
                 (
-                    vec![check_item(&recording, failure.check, &failure.error)],
-                    after,
+                    check_items(recording, &failed.ran),
+                    check_runs(&failed.ran),
+                    failed.not_run,
                 )
             }
         },
     };
     Ok(ready_outcome(
-        &recording,
+        recording,
         session,
         with_size_item(not_base.as_ref(), missing),
         warnings,
+        checks,
         &checks_after,
         sources,
     ))
+}
+
+/// #463 S2-2 (`contracts/lab-recording.md`, "Reviewing a recording step by step: `record
+/// review`"): `record review [--record-id <id>] [--step <k>] [--no-preview]`, each effective step
+/// of the recording `record ready` reads (the instance's, or the active, archived or stopped one
+/// `request.record_id` names; [`ready_recording`]), or the one `request.step` names, as the screen
+/// before, the press and the screen after, as the step table holds them, with its items of `record
+/// ready` (the answer of [`ready_of`], the one function `record ready` answers with, given
+/// `options` as `record ready` is given them). Offline, under no lock; nothing recorded is written:
+/// unless `request.no_preview`, the previews are written under the recording's `lab/preview/`
+/// (`review::review_outcome`). A step that does not exist, is dropped or was converted is
+/// `record_step_not_found`; a stored frame a preview is drawn on whose bytes do not match its
+/// sha256 is `record_frame_hash_mismatch`, and then no preview is written. Fix round 1: `options`
+/// are the game, server and locale the command line gives `record review` as it gives them `record
+/// ready`, so that a recording without a locale of its own is reviewed with its self-checks run;
+/// a frame whose file is not there is answered without a path and named in `frame_file_missing`.
+pub fn record_review(
+    state_dir: &Path,
+    instance: &str,
+    request: &RecordReviewRequest,
+    options: &RecordStopOptions,
+    ocr: &LabOcr,
+) -> LabResult<RecordReviewOutcome> {
+    let (recording, session) = ready_recording(state_dir, instance, request.record_id.as_deref())?;
+    if let Some(step) = request.step {
+        effective_step(&recording, step)?;
+    }
+    let ready = ready_of(&recording, session, options, ocr)?;
+    review_outcome(state_dir, &recording, ready, request)
 }
 
 /// #463 S2-1: the recording `record ready` reads and its session's state as `record status` says
@@ -552,7 +603,7 @@ fn generate_and_write(
         endings,
         warnings,
         final_decision,
-    } = self_checks(&plan, ocr).map_err(|failure| failure.error)?;
+    } = self_checks(&plan, ocr, Failures::first()).map_err(SelfCheckFailures::into_refusal)?;
 
     let ext = extension(kind);
     // Workflow #336 PKG-S5 (M-PKG v1.1 §3.5, D9): the package is `<package_id>.<ext>`, and a
@@ -797,51 +848,234 @@ struct Checked {
     final_decision: FirstDecision,
 }
 
-/// #463 S2-1: the self-check that refused, by its name, and its refusal.
-struct SelfCheckFailure {
-    check: ReadyCheck,
-    error: LabError,
+/// #463 S2-1c: the self-checks that did not all pass: every check that ran, in the order they ran,
+/// with the failures it met (under `record stop` the one refusal), and the checks that did not run,
+/// in the order they run.
+struct SelfCheckFailures {
+    ran: Vec<CheckRun>,
+    not_run: Vec<ReadyCheck>,
 }
 
-/// #463 S2-1: a refusal of the self-check `check`.
-fn failed(check: ReadyCheck) -> impl FnOnce(LabError) -> SelfCheckFailure {
-    move |error| SelfCheckFailure { check, error }
+impl SelfCheckFailures {
+    /// The refusal `record stop` answers: the first failure of the first check that met one, under
+    /// its mode the only one.
+    fn into_refusal(self) -> LabError {
+        self.ran
+            .into_iter()
+            .flat_map(|run| run.failures)
+            .next()
+            .map_or_else(
+                || {
+                    invalid(
+                        "validation_failed",
+                        "the self-checks failed without a refusal",
+                    )
+                },
+                |failure| failure.error,
+            )
+    }
+
+    /// A failure to read the state (its class `runtime_unavailable`), which is no check's refusal:
+    /// the command answers it.
+    fn unreadable(&self) -> Option<LabError> {
+        self.ran
+            .iter()
+            .flat_map(|run| &run.failures)
+            .find(|failure| failure.error.class == LabErrorClass::RuntimeUnavailable)
+            .map(|failure| failure.error.clone())
+    }
+}
+
+/// #463 S2-1c: the self-checks as they run: the failures the running check meets, and every check
+/// that ran.
+struct Runner {
+    failures: Failures,
+    ran: Vec<CheckRun>,
+}
+
+impl Runner {
+    const fn new(failures: Failures) -> Self {
+        Self {
+            failures,
+            ran: Vec::new(),
+        }
+    }
+
+    /// A part of `check` that gave `outcome`: its value; or, when it gave an error (under `record
+    /// stop` its first failure, under `record ready` one it cannot go on past), `None`, and `check`
+    /// ran and stopped there for the reason `stop`, that error its last failure.
+    fn part<T>(
+        &mut self,
+        check: ReadyCheck,
+        stop: ReadyCheckStop,
+        outcome: LabResult<T>,
+    ) -> Option<T> {
+        match outcome {
+            Ok(value) => Some(value),
+            Err(error) => {
+                let mut failures = self.failures.take();
+                failures.push(CheckFailure {
+                    locus: Locus::default(),
+                    error,
+                });
+                self.ran.push(CheckRun {
+                    check,
+                    failures,
+                    stopped: Some(stop),
+                });
+                None
+            }
+        }
+    }
+
+    /// The last part of `check`: [`Self::part`]; when it gave its value, `check` ran to its end,
+    /// with every failure it met.
+    fn last<T>(
+        &mut self,
+        check: ReadyCheck,
+        stop: ReadyCheckStop,
+        outcome: LabResult<T>,
+    ) -> Option<T> {
+        let value = self.part(check, stop, outcome)?;
+        let failures = self.failures.take();
+        self.ran.push(CheckRun {
+            check,
+            failures,
+            stopped: None,
+        });
+        Some(value)
+    }
+
+    /// Whether a check that ran met a failure.
+    fn failed(&self) -> bool {
+        self.ran.iter().any(|run| !run.failures.is_empty())
+    }
+
+    /// Whether the checks end here: under `record stop` a check's first failure is the refusal.
+    fn ends(&self) -> bool {
+        !self.failures.collects() && self.failed()
+    }
+
+    /// The checks that ran and those that did not.
+    fn into_failures(self) -> SelfCheckFailures {
+        let not_run = ReadyCheck::ALL
+            .iter()
+            .copied()
+            .filter(|check| self.ran.iter().all(|run| run.check != *check))
+            .collect();
+        SelfCheckFailures {
+            ran: self.ran,
+            not_run,
+        }
+    }
 }
 
 /// The self-checks of the package `plan` generates (section 4.6), in memory, in the order they
 /// run: its stored frames and crops read back, admission and the evaluator, the first decision,
 /// the cross-check, the endings, the selects, and the final package encoded, expanded, admitted
-/// and decided again. Each stops at its first refusal, and the first refusal ends them: a later
-/// check reads what an earlier one gave. Nothing is written. #463 S2-1: `record stop` and `record
-/// ready` both run them here; the failure names the check that refused.
-fn self_checks(plan: &Plan, ocr: &LabOcr) -> Result<Checked, SelfCheckFailure> {
-    let (cache, crops) = load_package_inputs(plan).map_err(failed(ReadyCheck::Frames))?;
+/// and decided again. Nothing is written. #463 S2-1: `record stop` and `record ready` both run
+/// them here. #463 S2-1c: `failures` says how a check meets a failure. Under `record stop`
+/// (`Failures::first`) the first failure of the first check that meets one ends them all and is
+/// the refusal, as before. Under `record ready` (`Failures::every`) each check lists every failure
+/// it meets, and a check runs after a failed one when it reads nothing the failed one gave: the
+/// first decision, the cross-check, the endings and the selects read only the frames and the
+/// admitted package, so each runs whatever the others found; nothing runs after a failed frames or
+/// admission check, and the final package, built of what every check before it gave, only when
+/// none failed. Fix round 1: in `admission` and `final_package` rendering the package judges
+/// nothing, so an error there stops the check with `check_error`, as in every other check; only a
+/// refusal of their staged judgement stops it with `whole_package`.
+fn self_checks(
+    plan: &Plan,
+    ocr: &LabOcr,
+    failures: Failures,
+) -> Result<Checked, SelfCheckFailures> {
+    let mut runner = Runner::new(failures);
+    let inputs = load_package_inputs(plan, &mut runner.failures);
+    let Some((cache, crops)) = runner.last(ReadyCheck::Frames, ReadyCheckStop::CheckError, inputs)
+    else {
+        return Err(runner.into_failures());
+    };
+    // Every later check reads every frame.
+    if runner.failed() {
+        return Err(runner.into_failures());
+    }
 
-    // First pass: admit the package, decide its first step and cross-check its pages.
-    let first_entries = render(plan, None, &crops).map_err(failed(ReadyCheck::Admission))?;
-    let first_prepared = admit(&first_entries, ocr).map_err(failed(ReadyCheck::Admission))?;
-    let bundle = evaluator_bundle(&first_entries, ocr).map_err(failed(ReadyCheck::Admission))?;
+    // First pass: admit the package, decide its first step and cross-check its pages. Fix round
+    // 1: rendering the package judges nothing, so an error there is `check_error`; the kernel's
+    // admission and the evaluator are the staged judgement, `whole_package`.
+    let rendered = render(plan, None, &crops);
+    let Some(first_entries) =
+        runner.part(ReadyCheck::Admission, ReadyCheckStop::CheckError, rendered)
+    else {
+        return Err(runner.into_failures());
+    };
+    let admitted = admission(&first_entries, ocr);
+    let Some((first_prepared, bundle)) = runner.part(
+        ReadyCheck::Admission,
+        ReadyCheckStop::WholePackage,
+        admitted,
+    ) else {
+        return Err(runner.into_failures());
+    };
     let evaluator = bundle.loaded_bundle().evaluator().ok_or_else(|| {
-        failed(ReadyCheck::Admission)(
-            LabError::safety_blocked(
-                "record_artifact_admission_failed",
-                "the admitted package has no recognition evaluator",
-                &["session_record"],
-            )
-            .with_details(json!({"stage": "evaluator"})),
+        LabError::safety_blocked(
+            "record_artifact_admission_failed",
+            "the admitted package has no recognition evaluator",
+            &["session_record"],
         )
-    })?;
+        .with_details(json!({"stage": "evaluator"}))
+    });
+    let Some(evaluator) = runner.last(
+        ReadyCheck::Admission,
+        ReadyCheckStop::WholePackage,
+        evaluator,
+    ) else {
+        return Err(runner.into_failures());
+    };
     // Workflow #396 REC-4: the evaluator gives the box a followed template matches on a frame.
-    let decision = first_decision(&first_prepared, plan, &cache, ocr, evaluator)
-        .map_err(failed(ReadyCheck::FirstDecision))?;
-    let mut checks =
-        cross_check(plan, evaluator, &cache, ocr).map_err(failed(ReadyCheck::CrossCheck))?;
+    let decision = first_decision(
+        &first_prepared,
+        plan,
+        &cache,
+        ocr,
+        evaluator,
+        &mut runner.failures,
+    );
+    let decision = runner.last(
+        ReadyCheck::FirstDecision,
+        ReadyCheckStop::CheckError,
+        decision,
+    );
+    if runner.ends() {
+        return Err(runner.into_failures());
+    }
+    let checks = cross_check(plan, evaluator, &cache, ocr, &mut runner.failures);
+    let checks = runner.last(ReadyCheck::CrossCheck, ReadyCheckStop::CheckError, checks);
+    if runner.ends() {
+        return Err(runner.into_failures());
+    }
     // #463 R2, self-check item 9, before item 8: every ending's page passes on its own frames and
     // on no frame of a screen the run may show instead (an ending page that passes on a select
     // step's frames before its last press is the ending's refusal, not the select's); the result
     // is part of the cross-check, present only when the recording has an ending.
-    let endings =
-        ending_checks(plan, evaluator, &cache, ocr).map_err(failed(ReadyCheck::Endings))?;
+    let endings = ending_checks(plan, evaluator, &cache, ocr, &mut runner.failures);
+    let endings = runner.last(ReadyCheck::Endings, ReadyCheckStop::CheckError, endings);
+    if runner.ends() {
+        return Err(runner.into_failures());
+    }
+    // #463 R1, self-check item 8: every select step decides on its own frames as recorded; the
+    // result is part of the cross-check, present only when the package has a select step.
+    let selects = select_checks(&first_prepared, plan, &cache, ocr, &mut runner.failures);
+    let selects = runner.last(ReadyCheck::Selects, ReadyCheckStop::CheckError, selects);
+    // The final package is built of what every check before it gave.
+    let (Some(decision), Some(mut checks), Some(endings), Some(selects)) =
+        (decision, checks, endings, selects)
+    else {
+        return Err(runner.into_failures());
+    };
+    if runner.failed() {
+        return Err(runner.into_failures());
+    }
     if let Some(cross) = checks.cross_check.as_object_mut()
         && !endings.endings.is_empty()
     {
@@ -850,10 +1084,6 @@ fn self_checks(plan: &Plan, ocr: &LabOcr) -> Result<Checked, SelfCheckFailure> {
             cross.insert("status".to_string(), json!("partially_evaluated"));
         }
     }
-    // #463 R1, self-check item 8: every select step decides on its own frames as recorded; the
-    // result is part of the cross-check, present only when the package has a select step.
-    let selects =
-        select_checks(&first_prepared, plan, &cache, ocr).map_err(failed(ReadyCheck::Selects))?;
     if let Some(cross) = checks.cross_check.as_object_mut()
         && !selects.selects.is_empty()
     {
@@ -878,30 +1108,30 @@ fn self_checks(plan: &Plan, ocr: &LabOcr) -> Result<Checked, SelfCheckFailure> {
     );
     provenance.insert("cross_check".to_string(), checks.cross_check.clone());
 
-    // Final package: the same content with the self-check results in its provenance, encoded,
-    // expanded again and admitted again.
-    let entries =
-        render(plan, Some(&provenance), &crops).map_err(failed(ReadyCheck::FinalPackage))?;
-    let kind = container_kind(&entries);
-    let bytes = encode(&entries, kind).map_err(failed(ReadyCheck::FinalPackage))?;
-    round_trip(&bytes, kind, &entries).map_err(failed(ReadyCheck::FinalPackage))?;
-    let prepared = admit(&entries, ocr).map_err(failed(ReadyCheck::FinalPackage))?;
-    let final_decision = first_decision(&prepared, plan, &cache, ocr, evaluator)
-        .map_err(failed(ReadyCheck::FinalPackage))?;
-    if final_decision.value != decision.value {
-        return Err(failed(ReadyCheck::FinalPackage)(
-            LabError::safety_blocked(
-                "record_artifact_admission_failed",
-                "the first decision of the final package differs from the checked one",
-                &["session_record"],
-            )
-            .with_details(json!({
-                "stage": "first_decision",
-                "checked": decision.value,
-                "final": final_decision.value
-            })),
-        ));
-    }
+    // Fix round 1: as in the first pass, rendering judges nothing (`check_error`); encoding,
+    // expanding, admitting and deciding again are the staged judgement (`whole_package`).
+    let rendered = render(plan, Some(&provenance), &crops);
+    let Some(final_entries) = runner.part(
+        ReadyCheck::FinalPackage,
+        ReadyCheckStop::CheckError,
+        rendered,
+    ) else {
+        return Err(runner.into_failures());
+    };
+    let built = final_package(final_entries, plan, ocr, &cache, evaluator, &decision);
+    let Some(FinalPackage {
+        entries,
+        kind,
+        bytes,
+        decision: final_decision,
+    }) = runner.last(
+        ReadyCheck::FinalPackage,
+        ReadyCheckStop::WholePackage,
+        built,
+    )
+    else {
+        return Err(runner.into_failures());
+    };
     Ok(Checked {
         entries,
         kind,
@@ -914,9 +1144,78 @@ fn self_checks(plan: &Plan, ocr: &LabOcr) -> Result<Checked, SelfCheckFailure> {
     })
 }
 
+/// Self-check `admission`, its staged judgement: the rendered package `entries` admitted by the
+/// kernel, and the bundle whose evaluator the later checks judge with; each stage reads the one
+/// before.
+fn admission(
+    entries: &BTreeMap<String, Vec<u8>>,
+    ocr: &LabOcr,
+) -> LabResult<(PreparedContainedTask, ExternallyVerifiedBundle)> {
+    let prepared = admit(entries, ocr)?;
+    let bundle = evaluator_bundle(entries, ocr)?;
+    Ok((prepared, bundle))
+}
+
+/// What self-check `final_package` built when it passed.
+struct FinalPackage {
+    entries: BTreeMap<String, Vec<u8>>,
+    kind: ContentContainer,
+    bytes: Vec<u8>,
+    decision: FirstDecision,
+}
+
+/// Self-check `final_package`, its staged judgement: the same content rendered with the
+/// self-check results in its provenance (`entries`), encoded, expanded again and admitted again,
+/// and its first decision the checked one (`decision`). Each stage reads the one before, so its
+/// first refusal ends it; its first decision decides as `record stop`'s does.
+fn final_package(
+    entries: BTreeMap<String, Vec<u8>>,
+    plan: &Plan,
+    ocr: &LabOcr,
+    cache: &FrameCache,
+    evaluator: &RecognitionEvaluator,
+    decision: &FirstDecision,
+) -> LabResult<FinalPackage> {
+    let kind = container_kind(&entries);
+    let bytes = encode(&entries, kind)?;
+    round_trip(&bytes, kind, &entries)?;
+    let prepared = admit(&entries, ocr)?;
+    let final_decision = first_decision(
+        &prepared,
+        plan,
+        cache,
+        ocr,
+        evaluator,
+        &mut Failures::first(),
+    )?;
+    if final_decision.value != decision.value {
+        return Err(LabError::safety_blocked(
+            "record_artifact_admission_failed",
+            "the first decision of the final package differs from the checked one",
+            &["session_record"],
+        )
+        .with_details(json!({
+            "stage": "first_decision",
+            "checked": decision.value,
+            "final": final_decision.value
+        })));
+    }
+    Ok(FinalPackage {
+        entries,
+        kind,
+        bytes,
+        decision: final_decision,
+    })
+}
+
 /// Section 4.1 item 7: every live frame and template crop is read back after its sha256
-/// check, and every frame has the recording's size.
-fn load_package_inputs(plan: &Plan) -> LabResult<(FrameCache, BTreeMap<String, Vec<u8>>)> {
+/// check, and every frame has the recording's size. #463 S2-1c: each frame and each crop is one
+/// judgement; one that fails is a failure `failures` meets (the step or the ending and the frame,
+/// or the template), and under `record ready` the next is read.
+fn load_package_inputs(
+    plan: &Plan,
+    failures: &mut Failures,
+) -> LabResult<(FrameCache, BTreeMap<String, Vec<u8>>)> {
     let mut cache = FrameCache::new();
     for step in &plan.steps {
         for frame in step
@@ -927,31 +1226,55 @@ fn load_package_inputs(plan: &Plan) -> LabResult<(FrameCache, BTreeMap<String, V
             if cache.contains_key(&frame.sha256) {
                 continue;
             }
-            let loaded = read_stored_frame(frame)?;
-            check_frame_size(Some(plan.size), &loaded, &frame.frame_id)?;
-            cache.insert(frame.sha256.clone(), loaded);
+            match read_package_frame(plan, frame) {
+                Ok(loaded) => {
+                    cache.insert(frame.sha256.clone(), loaded);
+                }
+                Err(error) => failures.fail(Locus::on_step(step).with_frame(frame), error)?,
+            }
         }
     }
     // #463 R2: and every live frame of an ending.
-    for frame in plan.endings.iter().flat_map(|ending| ending.live_frames()) {
-        if cache.contains_key(&frame.sha256) {
-            continue;
+    for ending in &plan.endings {
+        for frame in ending.live_frames() {
+            if cache.contains_key(&frame.sha256) {
+                continue;
+            }
+            match read_package_frame(plan, frame) {
+                Ok(loaded) => {
+                    cache.insert(frame.sha256.clone(), loaded);
+                }
+                Err(error) => failures.fail(Locus::on_ending(ending).with_frame(frame), error)?,
+            }
         }
-        let loaded = read_stored_frame(frame)?;
-        check_frame_size(Some(plan.size), &loaded, &frame.frame_id)?;
-        cache.insert(frame.sha256.clone(), loaded);
     }
     let mut crops = BTreeMap::new();
     for (id, _asset) in plan.template_assets() {
-        let crop = plan
-            .mark(&id)?
-            .crop
-            .as_ref()
-            .ok_or_else(|| LabError::usage(format!("template '{id}' has no crop")))?;
-        let bytes = read_verified(Path::new(&crop.path), &crop.sha256)?;
-        crops.insert(id, bytes);
+        match read_crop(plan, &id) {
+            Ok(bytes) => {
+                crops.insert(id, bytes);
+            }
+            Err(error) => failures.fail(Locus::default().with_target(&id), error)?,
+        }
     }
     Ok((cache, crops))
+}
+
+/// A live frame of the package read back after its sha256 check, of the recording's size.
+fn read_package_frame(plan: &Plan, frame: &RecordedFrame) -> LabResult<LoadedFrame> {
+    let loaded = read_stored_frame(frame)?;
+    check_frame_size(Some(plan.size), &loaded, &frame.frame_id)?;
+    Ok(loaded)
+}
+
+/// The crop of the template mark `id`, read back after its sha256 check.
+fn read_crop(plan: &Plan, id: &str) -> LabResult<Vec<u8>> {
+    let crop = plan
+        .mark(id)?
+        .crop
+        .as_ref()
+        .ok_or_else(|| LabError::usage(format!("template '{id}' has no crop")))?;
+    read_verified(Path::new(&crop.path), &crop.sha256)
 }
 
 /// `lab_dir_status` of a written package: `replaced` when a file of its name was there (D9),
@@ -1455,6 +1778,7 @@ fn validate_mark_request(request: &MarkRequest) -> LabResult<()> {
         || request.application.is_some()
         || request.select.is_some()
         || request.clear_select
+        || request.choice.is_some()
         || page_rule;
     if request.step_action.is_some() {
         if marks_or_click
@@ -1478,6 +1802,7 @@ fn validate_mark_request(request: &MarkRequest) -> LabResult<()> {
             || request.application.is_some()
             || request.select.is_some()
             || request.clear_select
+            || request.choice.is_some()
         {
             return Err(invalid(
                 "record_transition_has_click",
@@ -1634,6 +1959,7 @@ fn mark_session(
         ending: None,
         removed_ending: None,
         boxes: Vec::new(),
+        choice: None,
     };
     // #463 R2: an ending of the stopped recording, taken from its frame or given up; it is no
     // step, so the answer names none.
@@ -1710,6 +2036,8 @@ fn mark_session(
         outcome.step_state = Some(step_state(recorded));
         // #463 R1: the step's select with its self-test.
         outcome.select = recorded.select.clone();
+        // #463 S2-6: the step's choice mark.
+        outcome.choice = recorded.choice.clone();
     }
     Ok(outcome)
 }
@@ -3258,8 +3586,9 @@ fn transition_view(transition: &StepTransition) -> TransitionView {
     }
 }
 
-/// `declared` (no outcome yet), `executed` (Performed) or `indeterminate`.
-fn click_outcome(click: &StepClick) -> &'static str {
+/// `declared` (no outcome yet), `executed` (Performed) or `indeterminate`. #463 S2-2: `record
+/// review` names a press's outcome with it too.
+pub(crate) fn click_outcome(click: &StepClick) -> &'static str {
     match &click.execution {
         None => "declared",
         Some(execution) if execution.effect == "performed" => "executed",
@@ -3358,6 +3687,8 @@ fn step_view(step: &RecordingStep, effective: &[u32]) -> StepView {
         anchor: step.anchor.clone(),
         // #463 R1: where an agent reads the select it declares again to change its default.
         select: step.select.clone(),
+        // #463 S2-6: the choice mark, refined when the step has a select too.
+        choice: step.choice.clone(),
         inserted_after: step.inserted_after,
     }
 }

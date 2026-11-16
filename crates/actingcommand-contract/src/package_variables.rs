@@ -39,13 +39,13 @@
 //! the Runtime's table without a composed standard pack all call it.
 
 use crate::standard_pack::{StandardPackProblem, StandardPackRootIssue};
+use crate::standard_pack_catalog::{MAX_PACK_CATALOG_TITLE_BYTES, at};
 use crate::standard_pack_goals::{
     Check, DeclaredGoal, GoalBlock, GoalOption, GoalText, GoalTimeUnit, GoalType, GoalUnit,
     GoalVariable, IrreversiblePackages, MAX_GOAL_CHOICE_OPTIONS, MAX_GOAL_ENTRIES,
     MAX_GOAL_LIST_VALUES, MAX_GOAL_NAME_BYTES, MAX_GOAL_ORDERED_COUNT, MIN_GOAL_CHOICE_OPTIONS,
     StandardPackGoals, bounded,
 };
-use crate::standard_pack_ui::{MAX_PACK_UI_TITLE_BYTES, at};
 use crate::{
     FactScalar, FactValue, MAX_DESIGNATED_EFFECT_REPEATS, ProvidedCapability, remedy_token_valid,
 };
@@ -778,7 +778,7 @@ impl Check {
                 }
             },
             _ => self
-                .text(value, pointer, MAX_PACK_UI_TITLE_BYTES)
+                .text(value, pointer, MAX_PACK_CATALOG_TITLE_BYTES)
                 .map(GoalUnit::Text),
         }
     }
@@ -810,7 +810,11 @@ impl Check {
                 )
             });
             let title = option.get("title").and_then(|title| {
-                self.text(title, &at(&at_option, "title"), MAX_PACK_UI_TITLE_BYTES)
+                self.text(
+                    title,
+                    &at(&at_option, "title"),
+                    MAX_PACK_CATALOG_TITLE_BYTES,
+                )
             });
             match (value, title) {
                 (Some(value), Some(title)) => options.push(GoalOption { value, title }),

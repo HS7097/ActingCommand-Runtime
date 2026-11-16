@@ -48,6 +48,13 @@ and set or clear one value by its name, the Lab's rows `goals`, `goals get`, `go
 `goals clear` and `package variables` with their MCP tools, and the console's list taking both
 kinds.
 
+**Built in S3-8, S3-9** (Runtime 0.12.68, register §1.444; "Runs without a dispatch" below;
+[runtime-interface.md](runtime-interface.md), "The variable values of a contained run"): a direct
+run's request gives values (`ContainedTaskRequest.variables`, `runtime-client` 11), which the host
+judges before the run's admission as a dispatch judges a value and overlays where a dispatch's
+values are overlaid; actinglab's `run start` and `standard-pack trial` take
+`--variable <name>=<json>` and send them.
+
 **What does not apply is enforced at run time since V2.** "Does not apply" (a name the root check
 reports, "Shared names and the root check") is, in `actinglab standard-pack check`, a warning: the
 check only warns wherever it runs (its exit stays 0). The installer runs it: the post check of
@@ -69,12 +76,19 @@ root's accepted `goals.json` takes, which the Runtime's scheduler workbench read
 
 - **The console's goal page is not drawn.** V3 builds the requests the console's page sends and
   puts both on the console's list; the page itself is slice V5 (the console's repository).
-- **No live run without a dispatch takes a value.** A direct run and a Lab run read the defaults;
-  giving them values needs a member on a request (`ac_run_pack`, `--variable` on a run), which is
-  the next slice's, built on V3, with its `runtime-client` revision. Only the offline scan replay
-  takes `--variable`.
-- **No recording writes a variable.** Generating a variable from a recording's selection, and
-  editing its default after `record stop`, are slice V4.
+- **No other live run without a dispatch takes a value.** A run the host starts itself and a Lab
+  run read the defaults, and so does a direct run whose request gives none; since S3-8, S3-9 only a
+  direct run's request (`run start --variable`, `standard-pack trial --variable`, their MCP tools)
+  and the offline scan replay take values. actingctl's first-generation MCP server
+  (`ac_run_pack`) gives none. No run's answer or record lists the values it was given.
+- **A recording writes a variable for every select.** Since #463 S2-6 (0.12.68, register §1.442;
+  fix round 1, the coordinator's ruling R1; [lab-recording.md](lab-recording.md), "Selecting in a
+  list" and "The wanted value is a variable of the package") `record stop` declares one `ordered`
+  variable per select step, marked first as holding a choice or given whole, its name the select's
+  wanted name, its options the select's names and its default the select's default alone, the
+  order the recording holds, and that step's policy reads it through `keyed_fact`; a run handed no
+  value chooses what the constant of before chose. Editing the options and the texts after `record
+  stop` other than by declaring the select again is not built.
 - **No table-backed list** (`from_table`), no `table` type and no value-test operand that reads a
   variable: later slices, each with its own revision.
 
@@ -434,16 +448,45 @@ only: after a restart it may be written once more; no state file and no record k
 is refused and the run goes on with the default. A value applied in part (`keys_left_out`) is not
 warned.
 
-**Runs without a dispatch.** A direct run, a run the host starts itself, a Lab run and the
-offline replay read every variable at its default and record nothing, as parameters do
-(`default_run_values`). The Lab's scan replay (`actinglab replay --select <operation> --scan
+**Runs without a dispatch.** A direct run whose request gives no value (since S3-8 a direct run
+may be given values, below), a run the host starts itself, a Lab run and the offline replay read
+every variable at its default and record nothing, as parameters do (`default_run_values`). The
+Lab's scan replay (`actinglab replay --select <operation> --scan
 <file>`) takes `--variable <name>=<json>`, the counterpart of `--parameter`: the value replaces the
 variable's default when the declaration takes it exactly as given; a name the package does not
 declare, a value it does not take, or a right side that is no JSON is `validation_failed` naming
 `--variable` with `argument_problem` `not_recognised`, a name given twice `repeated`, and
-`--variable` without `--select` `conflicting`. No request gives a live run without a dispatch a
-value: that is the next slice, built on V3 ("Reading and setting a value by name" reads and sets
-the values a dispatch hands its run).
+`--variable` without `--select` `conflicting`.
+
+**A direct run given values** (Workflow #463 S3-8, S3-9, Runtime 0.12.68, register §1.444;
+`runtime-client` 11; [runtime-interface.md](runtime-interface.md), "The variable values of a
+contained run"). A direct run's request may carry `variables` (`{name: json}`, at most 16, each
+under a name of a variable's form). The host judges them in the run's preparation, before any
+record, claim or lease, each in the order of its name, with the dispatch's own pieces and no
+second judgement: a name the package does not declare is `run_variable_undeclared`; a variable
+that does not apply on the instance now, as the variable table a dispatch reads says it
+(`VariableTable::root_word` for the instance's game, "A variable that does not apply" above), is
+`run_variable_not_applying` with that word; a value is judged by `resolve_variable` as the
+application's stored entry set through the request's channel, and anything but the value taken
+whole (`set` and no word) is `run_variable_value_refused` with the judgement's word, an `ordered`
+value a dispatch would take in part (`keys_left_out`) included, as `EditGoal` refuses it; a
+judgement that gives neither the value nor a word, which cannot happen, is
+`run_variable_unjudged` (the 0.12.68 train's fix round). Each is Denied with `package_id` and
+`variable_name` (and `variable_problem`), and nothing runs. The
+values pass into the run's parameters by the line a dispatch's values pass through
+(`dispatched_variable_values`, `with_variables`), so the package reads each as
+`session.dispatch.parameter.<name>` with its kind's type, and a variable not given reads its
+default; a request without values reads every default, as before. A direct run records nothing of
+its values, as it records nothing of its parameters: its command record carries no parameters,
+and recording them would need a new ledger member, which S3-8 does not add. actinglab's `run
+start --variable <name>=<json>` (repeatable) reads the values with the scan replay's own parser
+(`lab_ops::core_ops::parse_variables`, one function for the three commands) before anything is
+sent (fix round 1: more than 16 of them are `--variable` `out_of_range`, the word of a count out
+of its range), and without `--variable` sends the request of revision 10 byte for byte;
+`standard-pack trial` sends the values its plan shows
+([standard-pack-trial.md](standard-pack-trial.md), "The run"). A Runtime below revision 11 cannot
+decode a request that carries values: it ends the connection, nothing runs, and the client reports
+the connection ended.
 
 **What the next slice reads** (fix round 2, for V3's view; no request, Lab row or view is added
 here). From memory, never from a file:
@@ -565,14 +608,22 @@ bundle without them keeps its revision, and the Runtime declares [3, 14] ([3, 15
   `goals_failure`), three optional fields of a `variable_values` record, and an in-process read of
   the workbench's state (`RuntimeHost::standard_pack_goal_roots`), no request. A build of 0.12.60
   reads the new codes as unknown spellings and the new fields as values it keeps in its map.
+- **`runtime-client` 11** (Workflow #463 S3-8, S3-9, Runtime 0.12.68,
+  [component-interfaces.md](component-interfaces.md), row 11): the request member
+  `ContainedTaskRequest.variables`. `min` stays 3: a request without it is the request of revision
+  10, and no answer changes. `package`, `ledger`, `actingd-config` and `runtime-outcomes` do not
+  move.
 
 ## What arrives later
 
 - **V3** (the Lab and the view), built in 0.12.61 ("Reading and setting a value by name",
   `runtime-client` 9): reading, setting and clearing a value per application through the Lab's
   command line and MCP, and the view. Not in it: the values a live run without a dispatch is
-  given, listed in the run's answer.
-- **V4** (the recording): a recording's selection generates its variable and the gate that reads
-  it; the default, the options and the texts can be edited after `record stop`.
+  given, which S3-8 and S3-9 add for a direct run in 0.12.68 ("A direct run given values"); no
+  run's answer lists them.
+- **V4** (the recording): built by #463 S2-6 and its fix round 1 (0.12.68, register §1.442, "What
+  is built now, and what is not" above): every select of a recording generates its variable and the
+  gate that reads it, and its default is changed after `record stop` by declaring the select again.
+  Still to come: editing the options and the texts after `record stop`.
 - **V5** (the console) shows and sets the variables on the goal page; **V6** moves the resource
   repositories' numbers and lists out of capability parameters into variables.
