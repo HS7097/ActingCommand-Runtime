@@ -2033,7 +2033,7 @@
         {"name": "min_ms", "form": "option", "type": "integer", "required": false},
         {"name": "max_ms", "form": "option", "type": "integer", "required": false},
         {"name": "replace_transition", "form": "switch", "type": "boolean", "required": false},
-        {"name": "drop_step", "form": "option", "type": "integer", "required": false},
+        {"name": "drop_step", "form": "option", "type": "integer", "required": false, "note": "the last effective step; #463 S2-7: or a step before it whose stored frames prove its press changed nothing (record_drop_unproven with drop_problem otherwise)"},
         {"name": "reopen_step", "form": "option", "type": "integer", "required": false},
         {"name": "close_step", "form": "switch", "type": "boolean", "required": false},
         {"name": "to_transition", "form": "option", "type": "integer", "required": false},
@@ -2064,7 +2064,8 @@
       "requests": [],
       "source": ["actinglab record mark", "actinglab session record mark", "MCP ac_record_mark"],
       "slice": "LAB-2",
-      "status": "planned"
+      "status": "planned",
+      "notes": "#463 S2-7 (0.12.68; contracts/lab-recording.md, Transitions, Steps, frames and remediation): the request form's page transition takes frame_id (in place of frame) and sample_frame_ids (beside samples), frames this recording already stored, read as stored with their sha256 checked and taken by the function that takes a file's frame, no file copied; one the recording does not hold is record_frame_unknown (exit 3, details step and frame_id), frame with frame_id validation_failed. drop_step on a step before the last effective one is taken when the stored frames prove its press changed nothing (its frame before and after it, and the next step's frame before its press, the same screen by the frame-change measure stage one calls a screen still by, at most 1500 milli); otherwise record_drop_unproven (exit 3) with drop_problem frames_not_recorded, screen_changed or next_screen_differs; the last effective step is dropped as before. The request form's step_action restore_step gives back a dropped step (record_step_not_found for a step that is no dropped step; record_mark_id_conflict or record_asset_name_conflict when another mark took one of its ids or asset names since). Exit 1 for every refusal on actinglab's own line and through serve --stdio --front mcp."
     },
     {
       "name": "record status",

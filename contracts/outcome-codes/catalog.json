@@ -2867,6 +2867,10 @@
     "trial_collect_problem": {
       "type": "vocab:trial_collect_problem",
       "description": "Why the run a trial's --collect names is not a trial's run: its facts do not name the trial's package or the instance the trial is for, or (fix round 2) do not show a run sent by hand on the Lab's channel (Workflow #463 S3-11, since 0.12.65)."
+    },
+    "drop_problem": {
+      "type": "vocab:drop_problem",
+      "description": "Why the stored frames of a Lab recording do not prove that the press of a step before the last changed nothing, so that record mark's drop_step does not drop it (#463 S2-7, since 0.12.68)."
     }
   },
   "vocabularies": {
@@ -10778,6 +10782,25 @@
         },
         "other_channel": {
           "description": "Fix round 2: the run was sent by hand on another channel than the Lab's (origin cli or ui); a trial's run is sent on the Lab's channel."
+        }
+      }
+    },
+    "drop_problem": {
+      "description": "Why the stored frames of a Lab recording do not prove that the press of a step before the last changed nothing, the value drop_problem of record_drop_unproven (#463 S2-7, contracts/lab-recording.md \"Steps, frames and remediation\", since 0.12.68). The measure is the one stage one calls a screen still by: frame_change_milli of the whole frame at most FRAME_CHANGE_MAX_MILLI (1500).",
+      "review": "pending",
+      "source": {
+        "file": "crates/lab/src/codes.rs",
+        "enum": "DropProblem"
+      },
+      "tokens": {
+        "frames_not_recorded": {
+          "description": "The step has no press on record with the stored frame it was sent on and the stored frame after it (no click performed by tap, swipe or long-tap --record, a press sent on a capture that was not stored, an application operation), or a frame the proof needs is not on record."
+        },
+        "screen_changed": {
+          "description": "The frame after the press differs from the frame before it by more than the frame-change bound."
+        },
+        "next_screen_differs": {
+          "description": "The next step's frame before its press differs from the frame before this press by more than the frame-change bound."
         }
       }
     }

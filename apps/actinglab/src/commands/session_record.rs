@@ -3718,6 +3718,9 @@ fn record_mark_request_from_flags(flags: &FlagArgs) -> CliOutcome<MarkRequest> {
                 add: std::mem::take(&mut request.add),
                 reuse: std::mem::take(&mut request.reuse),
                 timeout_ms,
+                // #463 S2-7: frames this recording stored are named in the request form only.
+                frame_id: None,
+                sample_frame_ids: Vec::new(),
             });
         }
         Some("window") => {

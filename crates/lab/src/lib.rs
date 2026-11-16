@@ -93,6 +93,10 @@ mod gate_463_s25_boxes;
 // #463 S2-5: boxes on a draft stage one recorded, its captures before a press as base images.
 #[cfg(test)]
 mod gate_463_s25_draft;
+// #463 S2-7: a page transition named by frames the recording stored; a press before the last that
+// changed nothing dropped, and given back.
+#[cfg(test)]
+mod gate_463_s27;
 // Workflow #392 DA-5ab fix round 1: a recording takes from a Lab operation only what it can take;
 // the train of DA-5ab and DA-5cd (R4): every recording path judges the recording and the frame it
 // took before it sends or writes anything.

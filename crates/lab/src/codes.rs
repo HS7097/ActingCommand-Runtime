@@ -86,6 +86,14 @@ actingcommand_contract::outcome_codes! {
         /// `base_height`: the base size); nothing is written (exit 3; actinglab's own line exits
         /// 1).
         RecordSizeNotBase => "record_size_not_base": error / none,
+        /// Error. #463 S2-7: a page transition names by its frame id (`frame_id`,
+        /// `sample_frame_ids`) a frame this recording does not hold; nothing is written (exit 3;
+        /// actinglab details `step`, `frame_id`).
+        RecordFrameUnknown => "record_frame_unknown": error / none,
+        /// Error. #463 S2-7: `drop_step` names a step before the last whose stored frames do not
+        /// prove that its press changed nothing (key `drop_problem`: why); nothing is written (exit
+        /// 3; actinglab details `step`).
+        RecordDropUnproven => "record_drop_unproven": error / none,
     }
 }
 
@@ -404,5 +412,24 @@ actingcommand_contract::outcome_vocabulary! {
         /// The configuration of the installation the program runs from: the instance's row of
         /// `policy.facts.instances` (game and server only).
         InstallationConfig => "installation_config",
+    }
+}
+
+// #463 S2-7: why the stored frames do not prove that the press of a step before the last changed
+// nothing, so that `drop_step` does not drop it.
+actingcommand_contract::outcome_vocabulary! {
+    /// Why a step before the last cannot be dropped (`drop_problem`).
+    pub enum DropProblem: "drop_problem" {
+        /// The step has no press on record with the stored frame it was sent on and the stored
+        /// frame after it (no click performed by `tap`, `swipe` or `long-tap --record`, a press
+        /// sent on a capture that was not stored, an application operation), or a frame the proof
+        /// needs is not on record.
+        FramesNotRecorded => "frames_not_recorded",
+        /// The frame after the press differs from the frame before it by more than the frame-change
+        /// bound.
+        ScreenChanged => "screen_changed",
+        /// The next step's frame before its press differs from the frame before this press by more
+        /// than the frame-change bound.
+        NextScreenDiffers => "next_screen_differs",
     }
 }

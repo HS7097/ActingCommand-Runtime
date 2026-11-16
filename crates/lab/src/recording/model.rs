@@ -1526,6 +1526,15 @@ pub enum TransitionSpec {
         reuse: Vec<String>,
         #[serde(default)]
         timeout_ms: Option<u64>,
+        /// #463 S2-7 (`contracts/lab-recording.md`, "Transitions"; request form only): the
+        /// transition's frame named by the id of a frame this recording stored, in place of
+        /// `frame`; absent on a request without it, which is then byte for byte what it was.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        frame_id: Option<String>,
+        /// #463 S2-7: further frames of the transition this recording stored, by their ids, beside
+        /// `samples`.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        sample_frame_ids: Vec<String>,
     },
     Window {
         min_ms: u64,
@@ -1540,6 +1549,9 @@ pub enum StepActionKind {
     ReopenStep,
     CloseStep,
     ToTransition,
+    /// #463 S2-7 (`contracts/lab-recording.md`, "Steps, frames and remediation"; request form
+    /// only): a step `drop_step` dropped is effective again, as it was before the drop.
+    RestoreStep,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

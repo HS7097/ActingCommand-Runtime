@@ -373,6 +373,19 @@ naming this file.
   `record`, `ac_do` and `ac_lab_observe` with `record`) judges the recording and the frame it took
   before it sends or writes anything, with these codes and `record_frame_size_mismatch` for a
   frame of another size than the recording already has; nothing is pressed first.
+  #463 S2-7 (0.12.68; `contracts/lab-recording.md`, "Transitions", "Steps, frames and
+  remediation"): in `request_json`, a page transition (`transition` `{"kind": "page", …}`) takes
+  `frame_id` in place of `frame` and `sample_frame_ids` beside `samples`: frames the recording
+  already stored, as `ac_record_frames` and `ac_record_status` list them (a loading screen stage
+  one captured between a press and the next step), read as stored with their sha256 checked; no
+  file is copied, and the package is the one the same image given as a file makes. An id the
+  recording does not hold is `record_frame_unknown`. `drop_step` (`step_action` `{"kind":
+  "drop_step", "step": n}`, or the row's `drop_step`) takes a step before the last when the stored
+  frames prove its press changed nothing (the frame after it, and the frame the next step was
+  pressed on, are the frame before it by the frame-change measure stage one calls a screen still
+  by); otherwise `record_drop_unproven` with `drop_problem` `frames_not_recorded`,
+  `screen_changed` or `next_screen_differs`. `{"kind": "restore_step", "step": n}` gives a
+  dropped step back. Nothing is proposed: the agent names the frame and the step.
 - **Offline scenes of another size** (Workflow #392 DA-5cd, 0.12.67, as the train of DA-5ab and
   DA-5cd leaves it; `contracts/display-adapter.md` section 12). `ac_recognize`, `ac_detect_page`,
   `ac_current_page`, `ac_is_visible`, `ac_lab_observe` on a saved scene, `ac_tap_target` and

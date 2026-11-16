@@ -44,9 +44,10 @@ use super::store::{
     write_content_addressed,
 };
 use crate::LabOcr;
-use crate::codes::{LabCode, OptionalAfterProblem, SelectProblem};
+use crate::codes::{DropProblem, LabCode, OptionalAfterProblem, SelectProblem};
 use crate::display_base::admit_recording_frame;
 use crate::recording_api::{change_digest, unchanged_for};
+use actingcommand_contract::outcome::{Detail, Outcome};
 use actingcommand_contract::{
     InputSamplingEvidence, LabError, LabResult, SEGMENTED_SWIPE_BRAKE_DISTANCE_PX,
 };
@@ -4048,7 +4049,7 @@ pub(crate) fn apply_transition(
         marks: Vec::new(),
         reused: Vec::new(),
     };
-    let (frame, samples, add, reuse, timeout_ms) = match spec {
+    let (frame, frame_id, samples, sample_frame_ids, add, reuse, timeout_ms) = match spec {
         TransitionSpec::Clear => {
             step_mut(&mut session.recording, index)?.transition = None;
             return Ok(applied);
@@ -4068,16 +4069,39 @@ pub(crate) fn apply_transition(
             add,
             reuse,
             timeout_ms,
-        } => (frame, samples, add, reuse, *timeout_ms),
+            frame_id,
+            sample_frame_ids,
+        } => (
+            frame,
+            frame_id,
+            samples,
+            sample_frame_ids,
+            add,
+            reuse,
+            *timeout_ms,
+        ),
     };
     validate_page_transition_timeout(timeout_ms)?;
     refuse_existing(index, existing.as_ref(), request.replace_transition)?;
-    let frame_path = frame.as_ref().ok_or_else(|| {
-        invalid(
-            "validation_failed",
-            "a page transition needs --frame <png> of the intermediate screen",
-        )
-    })?;
+    // #463 S2-7: the frame is a file or a frame this recording stored, never both.
+    let given = match (frame, frame_id) {
+        (Some(path), None) => FrameGiven::File(path.as_str()),
+        (None, Some(stored)) => FrameGiven::Stored(stored.as_str()),
+        (Some(_), Some(_)) => {
+            return Err(invalid(
+                "validation_failed",
+                "a page transition takes its frame as a PNG file (frame) or as a frame this \
+                 recording stored (frame_id), not both",
+            ));
+        }
+        (None, None) => {
+            return Err(invalid(
+                "validation_failed",
+                "a page transition needs --frame <png> of the intermediate screen, or (request \
+                 form) frame_id, a frame this recording stored",
+            ));
+        }
+    };
     if add.is_empty() && reuse.is_empty() {
         return Err(invalid(
             "validation_failed",
@@ -4090,18 +4114,22 @@ pub(crate) fn apply_transition(
         }
         _ => BTreeSet::new(),
     };
-    let local = FrameMeta::local();
-    let loaded = read_frame_file(frame_path)?;
-    let primary = admit_frame(session, loaded, "transition", &local, frame_path)?;
+    let primary = transition_frame(session, given, "transition", index)?;
     let mut frames = vec![primary.clone()];
-    for path in samples {
-        let loaded = read_frame_file(path)?;
-        frames.push(admit_frame(
+    let given_samples = samples
+        .iter()
+        .map(|path| FrameGiven::File(path.as_str()))
+        .chain(
+            sample_frame_ids
+                .iter()
+                .map(|stored| FrameGiven::Stored(stored.as_str())),
+        );
+    for sample in given_samples {
+        frames.push(transition_frame(
             session,
-            loaded,
+            sample,
             "transition_sample",
-            &local,
-            path,
+            index,
         )?);
     }
     let mut batch = MarkBatch {
@@ -4160,6 +4188,99 @@ fn refuse_existing(index: u32, existing: Option<&StepTransition>, replace: bool)
     }
 }
 
+/// #463 S2-7 (`contracts/lab-recording.md`, "Transitions"): where a frame of a page transition
+/// comes from: a PNG file (`frame`, `samples`), or a frame this recording stored, named by its id
+/// (`frame_id`, `sample_frame_ids`; the request form only).
+#[derive(Clone, Copy)]
+enum FrameGiven<'a> {
+    File(&'a str),
+    Stored(&'a str),
+}
+
+/// #463 S2-7: a frame of the page transition of step `step` in `role`, the one place a file and a
+/// stored frame meet. A file is read and decoded; a stored frame is found by its id
+/// ([`stored_frame`]; `record_frame_unknown` when the recording holds none of that id) and read back
+/// as stored, its sha256 checked (`record_frame_hash_mismatch`). Both are admitted by
+/// [`admit_frame`], with every check a file-given frame takes (the recording's base size, its
+/// size). A stored frame's entry is its own content-addressed file, the same path and sha256 (no
+/// copy is written, the file being there), with a frame id of its own and the stored frame's
+/// provenance, `source: "recording_frame"`.
+fn transition_frame(
+    session: &mut Session,
+    given: FrameGiven<'_>,
+    role: &str,
+    step: u32,
+) -> LabResult<RecordedFrame> {
+    match given {
+        FrameGiven::File(path) => {
+            let loaded = read_frame_file(path)?;
+            admit_frame(session, loaded, role, &FrameMeta::local(), path)
+        }
+        FrameGiven::Stored(frame_id) => {
+            let stored = stored_frame(&session.recording, frame_id)
+                .cloned()
+                .ok_or_else(|| frame_unknown(frame_id, step))?;
+            let loaded = read_stored_frame(&stored)?;
+            let RecordedFrame {
+                runtime_artifact,
+                capture_backend,
+                freshness,
+                scaled_from,
+                ..
+            } = stored;
+            let meta = FrameMeta {
+                source: RECORDING_FRAME_SOURCE.to_owned(),
+                runtime_artifact,
+                capture_backend,
+                freshness,
+            };
+            let label = format!("frame {frame_id}");
+            let mut entry = admit_frame(session, loaded, role, &meta, &label)?;
+            entry.scaled_from = scaled_from;
+            Ok(entry)
+        }
+    }
+}
+
+/// #463 S2-7: the frame `frame_id` this recording stored, wherever it is listed: a frame of a step
+/// (of any step, a superseded frame too), of a step's page transition, or of an ending; `None` when
+/// the recording holds no frame of that id.
+fn stored_frame<'r>(recording: &'r LabRecording, frame_id: &str) -> Option<&'r RecordedFrame> {
+    recording
+        .steps
+        .iter()
+        .flat_map(|step| {
+            let transition_frames = match &step.transition {
+                Some(StepTransition::Page { frames, .. }) => frames.as_slice(),
+                _ => &[][..],
+            };
+            step.frames.iter().chain(transition_frames)
+        })
+        .chain(
+            recording
+                .endings
+                .iter()
+                .flat_map(|ending| ending.frames.iter()),
+        )
+        .find(|frame| frame.frame_id == frame_id)
+}
+
+/// #463 S2-7: `record_frame_unknown`: the page transition of step `step` names by its id a frame
+/// the recording does not hold.
+fn frame_unknown(frame_id: &str, step: u32) -> LabError {
+    with_details(
+        blocked(
+            LabCode::RecordFrameUnknown.as_str(),
+            format!(
+                "the page transition of step {step} names frame {frame_id}, which this recording \
+                 does not hold; record status and record frames --step <k> list its frames; \
+                 nothing was written"
+            ),
+        ),
+        json!({"step": step, "frame_id": frame_id}),
+    )
+}
+
 fn step_not_last(index: u32, last: Option<u32>) -> LabError {
     with_details(
         blocked(
@@ -4173,7 +4294,8 @@ fn step_not_last(index: u32, last: Option<u32>) -> LabError {
     )
 }
 
-/// The step a `--drop-step`/`--reopen-step` names: effective and the last effective one.
+/// The step a `--reopen-step` names: effective and the last effective one. (#463 S2-7: `--drop-step`
+/// takes a step before the last too, `press_changed_nothing`.)
 fn last_named(recording: &LabRecording, step: Option<u32>, flag: &str) -> LabResult<u32> {
     let index =
         step.ok_or_else(|| invalid("validation_failed", format!("{flag} needs the step number")))?;
@@ -4195,7 +4317,15 @@ pub(crate) fn apply_step_action(
     let recording = &mut session.recording;
     match action.kind {
         StepActionKind::DropStep => {
-            let index = last_named(recording, action.step, "--drop-step")?;
+            let index = action
+                .step
+                .ok_or_else(|| invalid("validation_failed", "--drop-step needs the step number"))?;
+            effective_step(recording, index)?;
+            // #463 S2-7: a step before the last effective one is dropped only when the frames stage
+            // one stored prove that its press changed nothing; the last one as before.
+            if last_effective(recording) != Some(index) {
+                press_changed_nothing(recording, index)?;
+            }
             let step = effective_step(recording, index)?;
             let ids = step
                 .marks
@@ -4285,7 +4415,212 @@ pub(crate) fn apply_step_action(
             to_transition(recording, index)?;
             Ok(("step_converted_to_transition", index))
         }
+        StepActionKind::RestoreStep => {
+            let index = action.step.ok_or_else(|| {
+                invalid("validation_failed", "restore_step needs the step number")
+            })?;
+            restore_step(recording, index)?;
+            Ok(("step_restored", index))
+        }
     }
+}
+
+/// #463 S2-7 (`contracts/lab-recording.md`, "Steps, frames and remediation"): whether the frames
+/// stage one stored prove that the press of step `index`, an effective step before the last, changed
+/// nothing. Its press is on record with the stored frame it was sent on (`before_frame`) and the
+/// stored frame after it (`after_frame`): a click performed by the command that made it (`tap`,
+/// `swipe`, `long-tap --record`) and sent on that stored frame. The frame after it is the same
+/// screen as the frame before it, and so is the frame the next effective step's press was sent on
+/// ([`screen_before`]). Two frames are the same screen by the one measure and bound stage one calls
+/// a screen still by ([`frame_unchanged`]: `frame_change_milli` of the whole frame at most
+/// `FRAME_CHANGE_MAX_MILLI`). Every frame is read back with its sha256 checked. Anything else is
+/// `record_drop_unproven` with its `drop_problem`; nothing is proposed.
+fn press_changed_nothing(recording: &LabRecording, index: u32) -> LabResult<()> {
+    let step = effective_step(recording, index)?;
+    let press = step
+        .click
+        .as_ref()
+        .filter(|click| click.executed())
+        .and_then(|click| click.execution.as_ref())
+        .filter(|execution| !execution.sent_on_unstored_capture);
+    let before_id = press.and_then(|execution| execution.before_frame.as_deref());
+    let after_id = press.and_then(|execution| execution.after_frame.as_deref());
+    let next = effective_indices(recording)
+        .into_iter()
+        .skip_while(|other| *other != index)
+        .nth(1);
+    let next_before = next
+        .and_then(|serial| step_ref(recording, serial))
+        .and_then(screen_before);
+    let known = json!({
+        "before_frame": before_id,
+        "after_frame": after_id,
+        "next_step": next,
+        "next_before_frame": next_before
+    });
+    let (Some(before), Some(after), Some(next_frame)) = (
+        before_id.and_then(|frame_id| stored_frame(recording, frame_id)),
+        after_id.and_then(|frame_id| stored_frame(recording, frame_id)),
+        next_before.and_then(|frame_id| stored_frame(recording, frame_id)),
+    ) else {
+        return Err(drop_unproven(
+            DropProblem::FramesNotRecorded,
+            index,
+            format!(
+                "step {index} is not the last effective step, and the frames this recording stored \
+                 cannot prove that its press changed nothing: the press is not on record with the \
+                 stored frame it was sent on and the stored frame after it (as tap, swipe and \
+                 long-tap --record record a press), or the next step has no frame; nothing was \
+                 written"
+            ),
+            known,
+        ));
+    };
+    let before_digest = stored_digest(before)?;
+    let (unchanged, milli) = frame_unchanged(&before_digest, &stored_digest(after)?)?;
+    if !unchanged {
+        return Err(drop_unproven(
+            DropProblem::ScreenChanged,
+            index,
+            format!(
+                "the press of step {index} changed the screen: the frame after it ({}) differs \
+                 from the frame before it ({}) by {milli} milli, more than the frame-change bound; \
+                 a step before the last is dropped only when its press changed nothing; nothing \
+                 was written",
+                after.frame_id, before.frame_id
+            ),
+            with_change(known, milli),
+        ));
+    }
+    let (unchanged, milli) = frame_unchanged(&before_digest, &stored_digest(next_frame)?)?;
+    if !unchanged {
+        return Err(drop_unproven(
+            DropProblem::NextScreenDiffers,
+            index,
+            format!(
+                "after the press of step {index} the next step starts on another screen: the \
+                 frame its press was sent on ({}) differs from the frame before this press ({}) by \
+                 {milli} milli, more than the frame-change bound, so the press changed something; \
+                 nothing was written",
+                next_frame.frame_id, before.frame_id
+            ),
+            with_change(known, milli),
+        ));
+    }
+    Ok(())
+}
+
+/// #463 S2-7: the frame a step was pressed on, as the step table records it (its click's or its
+/// application operation's `before_frame`), else its live primary frame: the screen a run meets the
+/// step on.
+fn screen_before(step: &RecordingStep) -> Option<&str> {
+    step.click
+        .as_ref()
+        .and_then(|click| click.execution.as_ref())
+        .and_then(|execution| execution.before_frame.as_deref())
+        .or_else(|| {
+            step.application
+                .as_ref()
+                .and_then(|application| application.executed.as_ref())
+                .and_then(|executed| executed.before_frame.as_deref())
+        })
+        .or_else(|| live_primary(step).map(|frame| frame.frame_id.as_str()))
+}
+
+/// #463 S2-7: the frame-change digest ([`change_digest`], stage one's) of the stored frame `frame`,
+/// read back with its sha256 checked (`record_frame_hash_mismatch`).
+fn stored_digest(frame: &RecordedFrame) -> LabResult<ColorDigest> {
+    let loaded = read_stored_frame(frame)?;
+    change_digest(&loaded, &format!("frame {}", frame.frame_id))
+}
+
+/// #463 S2-7: `details` with the frame-change measure's value of the two frames compared.
+fn with_change(mut details: Value, milli: u32) -> Value {
+    if let Some(object) = details.as_object_mut() {
+        object.insert("frame_change_milli".to_owned(), json!(milli));
+    }
+    details
+}
+
+/// #463 S2-7: `record_drop_unproven` with why, for step `step`, its details carrying the outcome
+/// with `drop_problem` and the members of `extra`.
+fn drop_unproven(problem: DropProblem, step: u32, message: String, extra: Value) -> LabError {
+    let mut details = json!({
+        "step": step,
+        "drop_problem": problem.as_str(),
+        "outcome": Outcome::new(LabCode::RecordDropUnproven)
+            .drop_problem(problem)
+            .envelope(Detail::Full)
+    });
+    if let (Some(object), Some(extra)) = (details.as_object_mut(), extra.as_object()) {
+        for (name, value) in extra {
+            object.insert(name.clone(), value.clone());
+        }
+    }
+    with_details(
+        blocked(LabCode::RecordDropUnproven.as_str(), message),
+        details,
+    )
+}
+
+/// #463 S2-7 (`contracts/lab-recording.md`, "Steps, frames and remediation"): `restore_step` undoes
+/// `drop_step`: step `index`, a dropped step, is effective again and the step table is what it was
+/// before the drop. Its marks take their ids and template asset names back, so an id or an asset
+/// name another mark took since is refused as a new mark's is (`record_mark_id_conflict`,
+/// `record_asset_name_conflict`); a step that is no dropped step is `record_step_not_found`.
+fn restore_step(recording: &mut LabRecording, index: u32) -> LabResult<()> {
+    let step = step_ref(recording, index)
+        .filter(|step| step.dropped)
+        .ok_or_else(|| {
+            with_details(
+                blocked(
+                    "record_step_not_found",
+                    format!(
+                        "step {index} is no dropped step of the recording; restore_step gives back \
+                         a step drop_step dropped"
+                    ),
+                ),
+                json!({"step": index}),
+            )
+        })?;
+    let transition_marks = match &step.transition {
+        Some(StepTransition::Page { marks, .. }) => marks.as_slice(),
+        _ => &[][..],
+    };
+    let in_use = ids_in_use(recording, &BTreeSet::new());
+    let assets = template_assets(recording);
+    for mark in step.marks.iter().chain(transition_marks) {
+        if let Some(id) = mark.target_ids().into_iter().find(|id| in_use.contains(id)) {
+            return Err(with_details(
+                blocked(
+                    "record_mark_id_conflict",
+                    format!(
+                        "mark id '{id}' of step {index} is used in this recording since the step \
+                         was dropped; nothing was restored"
+                    ),
+                ),
+                json!({"id": id, "step": index}),
+            ));
+        }
+        if let Some(crop) = &mark.crop
+            && let Some(owner) = assets.get(&crop.asset)
+            && owner != &mark.id
+        {
+            return Err(with_details(
+                blocked(
+                    "record_asset_name_conflict",
+                    format!(
+                        "template '{}' of step {index} maps to {} which template '{owner}' uses \
+                         since the step was dropped; nothing was restored",
+                        mark.id, crop.asset
+                    ),
+                ),
+                json!({"id": mark.id, "asset": crop.asset, "existing": owner}),
+            ));
+        }
+    }
+    step_mut(recording, index)?.dropped = false;
+    Ok(())
 }
 
 fn to_transition_invalid(index: u32, reason: &str) -> LabError {

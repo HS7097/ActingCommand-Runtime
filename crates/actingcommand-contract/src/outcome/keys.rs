@@ -880,4 +880,8 @@ outcome_keys! {
     // ---- Workflow #463 S3-11 (the run of `actinglab standard-pack trial`): why a run `--collect`
     // names is not a run of the trial; kept in codes mode. ----
     trial_collect_problem: vocab(trial_collect_problem),
+    // ---- #463 S2-7 (`record mark`'s `drop_step` on a step before the last,
+    // contracts/lab-recording.md "Steps, frames and remediation"): why the stored frames do not
+    // prove that its press changed nothing. ----
+    drop_problem: vocab(drop_problem),
 }

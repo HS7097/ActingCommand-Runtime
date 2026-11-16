@@ -31997,6 +31997,95 @@ the owner's words). What it changed of this section, with §1.436 (DA-5ab):
   `record_display_not_base` and `record_size_not_base` (the index regenerated). No code, word, key,
   member or revision is added by the train.
 
+### 1.440 Slice #463 S2-7 (0.12.68): a page transition from frames the recording stored; a press before the last that changed nothing can be dropped (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making, stage two of which turns the recorded material into a package offline, and her ruling of the night of 11-15 that the tool hands back the material and the agent decides; the design's table B1.5, its rows "these frames are a loading screen between two steps" and "this press did nothing"; the rules below are the coordinator's in the work order, not the owner's words; coordinator work order `rd-1116/brief-463-s27-transitions.md`, built on the branch of pull request #1780 at `2ff33cb3`)
+
+This section takes 1.440, the number the work order gives; it stands on pull request #1780 (§1.436,
+§1.437 and their train) and ships in 0.12.68. [lab-recording.md](lab-recording.md), "Transitions"
+and "Steps, frames and remediation", is its contract.
+
+**A transition from stored frames.** A `record mark` request's page transition takes `frame_id` in
+place of `frame`, and `sample_frame_ids` beside `samples`: frames the recording already stored
+(any step's frame, a superseded one included, a page transition's or an ending's), such as the
+loading screen stage one captured between a press and the next step. The request form only; the
+command line's `--transition page` takes files as before. A named frame is found by its id
+(`steps.rs`, `stored_frame`), read back as stored with its sha256 checked, and then taken by
+`admit_frame`, the function that takes a file's frame, with every check of it; the one place the
+two forms meet is `transition_frame`. Its entry in the transition is the stored file itself (the
+same path and sha256: the content-addressed write finds the file there and writes nothing), with a
+frame id of its own, the stored frame's provenance and `source: "recording_frame"`, the word S2-5
+gave a stored frame a step takes as its sample. The package is the one the same image given as a
+file makes: the generator names a transition's frames by their sha256 alone. A file-given transition
+is taken as before, by the same calls.
+
+**A press before the last that changed nothing.** `--drop-step n` (`step_action` `drop_step`)
+takes an effective step before the last one when the stored frames prove that its press changed
+nothing (`steps.rs`, `press_changed_nothing`): its press is on record with the stored frame it was
+sent on and the stored frame after it (`before_frame`, `after_frame`, performed, not
+`sent_on_unstored_capture`); the frame after it is the same screen as the frame before it; and the
+frame the next effective step was pressed on (its press's `before_frame`, else its live primary
+frame) is the same screen too. "The same screen" is the measure and bound by which stage one calls
+a screen still, not a second threshold: `frame_unchanged` (`steps.rs`, S2-5's), which asks
+`unchanged_for` (`recording_api.rs`, the after loop's) of `frame_change_milli` and
+`FRAME_CHANGE_MAX_MILLI`, 1500 (`crates/recognition/src/color_digest.rs`). The step is then dropped
+as the last step is (kept in the file, `dropped: true`); the generator, which numbers the effective
+steps wherever a dropped one stands, leaves it out: the step before it presses and the run waits for
+the page of the step after it, the screen that press led to. The last effective step is dropped as
+before, by the same code and without the proof; before this slice a step before the last was
+`record_step_not_last`.
+
+**Undoing a drop.** The work order says the middle drop "can be undone as the existing drop can";
+no operation undid a drop (a dropped step is no effective step, so `--reopen-step` and every other
+operation refuse it `record_step_not_found`). The request form's `step_action` `restore_step`
+(`StepActionKind::RestoreStep`) is that undo, for any dropped step: it is effective again and the
+step table is what it was before the drop but for `updated_at_unix_ms`; an id or a template asset
+name of its marks that another mark took since is refused as a new mark's is
+(`record_mark_id_conflict`, `record_asset_name_conflict`), and a step that is no dropped step is
+`record_step_not_found`; nothing is written then.
+
+**`record ready`.** Unchanged: it reads the effective steps, so a dropped step before the last is
+read as a dropped last step is (no item names it, the steps after it carry their package numbers
+without it); no state or word is added. `record review` is not on this branch.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| S27-1 | `transition.frame_id`, `transition.sample_frame_ids` of `actingcommand.lab-record-mark.v1` | request members, absent unless given | S2-7 | `crates/lab` `model.rs` `TransitionSpec::Page` | the request form only; a request without them is byte for byte what it was |
+| S27-2 | `step_action.kind` `restore_step` | request word | S2-7 | `crates/lab` `model.rs` `StepActionKind` | the request form only |
+| S27-3 | a page transition's frame entry taken from a stored frame | values of existing members | S2-7 | `crates/lab` `steps.rs` | `source: "recording_frame"`, the stored file's path and sha256 |
+
+**Codes and words.**
+
+| Name | Kind | Refuses or warns | Exit | Who reads it |
+|---|---|---|---|---|
+| `record_frame_unknown` (`lab`, error / none; no value; actinglab details `step`, `frame_id`) | new code | refuses a page transition whose `frame_id` or `sample_frame_ids` entry the recording does not hold; nothing written | 3 (safety class); 1 on actinglab's own line and through `serve --stdio --front mcp`, as every refusal there | the agent marking a draft, through the request form or `ac_record_mark` |
+| `record_drop_unproven` (`lab`, error / none; value `drop_problem`, required; actinglab details `step`, `before_frame`, `after_frame`, `next_step`, `next_before_frame`, `frame_change_milli` where known) | new code | refuses `drop_step` on a step before the last whose stored frames do not prove its press changed nothing; nothing written | 3; 1 as above | the agent marking a draft |
+| `drop_problem` (key, `vocab:drop_problem`) and its vocabulary: `frames_not_recorded`, `screen_changed`, `next_screen_differs` | new key, new vocabulary (`crates/lab/src/codes.rs`, `DropProblem`) | the value of `record_drop_unproven` | — | the same agent: which of the three the frames show |
+
+A stored frame whose file no longer holds its sha256 is `record_frame_hash_mismatch`, as every
+stored frame read back. The index is regenerated.
+
+**What is not added.** No record member, schema, ledger revision, interface revision, configuration
+key, command-line flag or MCP parameter; the table changes the `record mark` row's `notes` and its
+`drop_step` note. The generator, `record ready` and stage one's recording are unchanged.
+
+**Tests** (`crates/lab/src/gate_463_s27.rs`; gate map `contracts/test-gates/exec.toml`, the row
+"#463 S2-7"; 160x90 screens, each of its own gray with a square of noise, the presses recorded by
+`record_press` with a fake Runtime): `s27_a_transition_from_a_stored_frame_writes_the_package_a_file_writes`
+(the loading capture named by its id is the transition's frame, the stored file itself, no frame
+file added; `record stop` writes the package the same image given as a file writes, but for the
+generation time); `s27_a_frame_id_the_recording_does_not_hold_is_refused` (as the frame and as a
+sample, nothing written); `s27_a_stored_frame_whose_file_no_longer_holds_its_bytes_is_refused`
+(`record_frame_hash_mismatch`, nothing written); `s27_a_middle_press_that_changed_nothing_is_dropped_renumbered_and_restored`
+(dropped; `restore_step` gives back every file and the step table but for its update time; dropped
+again, the package's steps 1 to 3 are the recorded steps 1, 3 and 4);
+`s27_a_middle_press_whose_screen_after_differs_is_refused` (`screen_changed`, the measure above the
+bound); `s27_a_middle_press_after_which_the_next_step_starts_elsewhere_is_refused`
+(`next_screen_differs`). The last step's drop is pinned, unchanged, by `gate_449_rec_arch`'s
+`s15_fix2_dropped_and_converted_steps_are_listed_and_not_in_the_material`. No test is adapted or
+retired.
+
+**At deploy.** Nothing to configure. An agent can name a stored loading frame as a transition's
+frame and drop a press that did nothing; everything else is as before.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

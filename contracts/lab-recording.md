@@ -24,7 +24,10 @@ rectangle and no carrier package ("Recording while playing"). #463 S1-7: a recor
 instance: `record start` pauses the instance's scheduling with a reason of its own and the end of
 the recording resumes only that pause ("A recording holds its instance"). #463 S2-1: `record ready`
 lists at once everything a recording still lacks before `record stop` can make its package, and its
-state ("What a recording still lacks: `record ready`").
+state ("What a recording still lacks: `record ready`"). #463 S2-7: a page transition may name frames
+the recording already stored in place of files, and a press before the last whose stored frames
+prove it changed nothing can be dropped, and given back ("Transitions", "Steps, frames and
+remediation").
 
 The recording state lives in the Lab state directory. Nothing in this document writes to
 the Runtime ledger; the clicks and application operations themselves are executed by the
@@ -282,8 +285,20 @@ operation:
 ```
 
 The other step operations are `{"kind":"reopen_step","step":n}`, `{"kind":"close_step"}` and
-`{"kind":"to_transition","step":n}`. Unknown fields are refused at every level of the request
-(`validation_failed`, exit 2).
+`{"kind":"to_transition","step":n}`, and (#463 S2-7, the request form only)
+`{"kind":"restore_step","step":n}`, which gives back a step `drop_step` dropped. Unknown fields are
+refused at every level of the request (`validation_failed`, exit 2).
+
+#463 S2-7 (the request form only): a page transition whose frame is a frame the recording already
+stored, named by its frame id (`record status` and `record frames` list them), here the loading
+screen stage one captured after the press of step 3:
+
+```json
+{"schema_version":"actingcommand.lab-record-mark.v1","step":3,
+ "transition":{"kind":"page","frame_id":"f0007","sample_frame_ids":[],
+   "add":[{"id":"load/bar","family":"color","region":{"x":600,"y":358,"width":8,"height":4}}],
+   "reuse":[],"timeout_ms":null}}
+```
 
 A click that follows a template mark, and a template mark with factors, a mask and a margin of
 uniqueness (Workflow #396 REC-4, see "Following a template"):
@@ -1400,10 +1415,41 @@ arrival: `record mark --frame` without `--step` then targets that open step exac
   different primary frame is refused (`record_step_frame_conflict`).
 - Without an open step and without `--frame`, `record mark` refuses with
   `record_step_frame_missing`.
-- Remediation acts on the last effective step only (`record_step_not_last`) and deletes no
-  file:
+- Remediation acts on the last effective step only (`record_step_not_last`; #463 S2-7: but for
+  `--drop-step` on a step whose press changed nothing, below) and deletes no file:
   - `--drop-step n` marks step n `dropped`; its marks free their ids; the previous step is
     unchanged. A mark of step n reused by another step is refused (`record_mark_in_use`).
+  - #463 S2-7 (0.12.68; [v012-register.md](v012-register.md) §1.440; stage two of package making on
+    board #463, "this press did nothing"): `--drop-step n` also takes an effective step n before the
+    last one when the frames the recording stored prove that its press changed nothing. The proof,
+    all of it from the step table and the stored frames, nothing proposed: step n's press is on
+    record with the stored frame it was sent on and the stored frame after it, as `tap`, `swipe` and
+    `long-tap --record` record a press ("Recording while playing": its execution's `before_frame`
+    and `after_frame`, performed, not `sent_on_unstored_capture`); the frame after it is the same
+    screen as the frame before it; and the frame the next effective step was pressed on (its
+    press's `before_frame`, or, without a press on record, its live primary frame) is the same
+    screen as the frame before step n's press. Two frames are the same screen by the one measure
+    and bound by which stage one calls a screen still ("The screen after"): `frame_change_milli`
+    of the whole frame at most `FRAME_CHANGE_MAX_MILLI`, 1500 ([color-digest.md](color-digest.md)),
+    the function the after loop asks. Every frame is read back with its sha256 checked
+    (`record_frame_hash_mismatch`). Then step n is dropped as the last step is: it stays in the file
+    with its frames and its press, `dropped: true`; `record stop` leaves it out and numbers the
+    effective steps again, so the step before it presses, and the run waits for the page of the
+    step after it, which is the screen that press led to. Otherwise `record_drop_unproven` (exit 3,
+    `details{step, drop_problem, outcome, before_frame, after_frame, next_step,
+    next_before_frame, frame_change_milli?}`) and nothing is written: `drop_problem`
+    `frames_not_recorded` (no press on record with those two stored frames: a press of `do
+    --capture --record`, an application operation, a declared or indeterminate click, a press sent
+    on a capture that was not stored; or a frame the proof names is not on record),
+    `screen_changed` (the frame after the press differs from the frame before it, with the
+    measure's value) or `next_screen_differs` (the next step was pressed on another screen, with
+    the measure's value). The last effective step is dropped as before, without the proof.
+  - #463 S2-7: the request form's `{"kind":"restore_step","step":n}` undoes a drop: step n, a
+    dropped step, is effective again, and the step table is what it was before the drop but for
+    `updated_at_unix_ms`. Its marks take their ids and template asset names back: one another mark
+    took since is refused as a new mark's is (`record_mark_id_conflict`,
+    `record_asset_name_conflict`) and nothing is written; a step that is no dropped step is
+    `record_step_not_found`.
   - `--reopen-step n` moves the recorded click outcome into `click.attempts[]` and opens
     the step again; the click can be executed again or replaced.
   - `--close-step` closes the open step that has a declared click (not executed, or with an
@@ -1433,7 +1479,19 @@ next step
 - `--transition page`: the frame, samples and marks of the same command belong to the
   transition. Every page declaration, a replacement included, needs `--frame` and at least
   one mark; a transition is changed by declaring it again whole with
-  `--replace-transition`, never piecemeal. Its marks follow
+  `--replace-transition`, never piecemeal. #463 S2-7 (0.12.68, the request form only): in place
+  of `frame`, `frame_id` names a frame the recording already stored (the frames stage one stored
+  between a step's press and the next step's frame, or any frame of a step, superseded ones
+  included, of a page transition or of an ending), and `sample_frame_ids` more of them beside
+  `samples`. A named frame is read as stored, its sha256 checked (`record_frame_hash_mismatch`),
+  and then taken by the one function that takes a file's frame, with every check of it (the
+  recording's size, "A recording's size"); its entry in the transition is the stored file itself,
+  the same path and sha256 (nothing is copied), with a frame id of its own and the stored frame's
+  provenance, `source: "recording_frame"`; the frame stays where it was stored. The samples are
+  taken in order, the files first. `record stop` generates the transition as from the same image
+  given as a file: the same package. `frame` with `frame_id`, or neither, is `validation_failed`
+  (exit 2); a `frame_id` or a `sample_frame_ids` entry the recording does not hold is
+  `record_frame_unknown` (exit 3, `details{step, frame_id}`); nothing is written. Its marks follow
   the step rules and share the id space, but they are not marks of any step: they cannot
   be a click source or guard. A click in the same command is `record_transition_has_click`
   (exit 2). `--transition-timeout-ms` is 1..1800000.
@@ -3211,6 +3269,10 @@ The answer:
   set.
 - **Order**: the recording's own items first (in the order the generator checks them), then by the
   step's serial number, each step's in the order the generator checks them.
+- **A dropped or converted step** (#463 S2-7) is no effective step wherever it stands: a step
+  before the last that `--drop-step` dropped is read as a dropped last step is, so no item or
+  warning names it and the steps after it carry their package numbers (`artifact_step`) counted
+  without it. No state or word is added for it; `record status` lists it with `dropped`.
 - **The words** (`what`, the closed vocabulary `ready_missing` of the outcome catalog, one word per
   pre-check and one cause per word):
 

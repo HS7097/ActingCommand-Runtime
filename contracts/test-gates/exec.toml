@@ -3718,3 +3718,16 @@ tests = [
     "actingcommand-actinglab::runtime_input_proxy::da5_train_recorded_do_and_observe_after_the_display_changed_send_and_write_nothing",
 ]
 incident = ["#392 DA-5"]
+
+# #463 S2-7 (0.12.68; register §1.440; brief rd-1116/brief-463-s27-transitions.md; design rd-1115/pack-stage12-design.md, table B1.5 and row S2-7 of B5; contracts/lab-recording.md, "Transitions", "Steps, frames and remediation"): a page transition named by frames the recording stored, and a press before the last that changed nothing dropped. On 160x90 recordings stage one made (record_press with a fake Runtime and the caller's clock moving by its waits), screens each of its own gray with a square of noise, without an OCR model: a first press whose screen after took two captures (a loading screen, then the second screen) and a second press, the three steps marked with a page and a template: the loading capture named by its frame id is the transition's frame (role transition, source recording_frame, the stored path and sha256, a frame id of its own), no frame file is added and the stored frame stays as it was; record stop writes the package the same image given as a PNG file to the same recording writes, but for the generation time, its first operation with a page transition (1); a frame id the recording does not hold, as the frame and as a sample, is record_frame_unknown with step 1 and frame_id, nothing written (2); the loading capture's stored file holding other bytes is record_frame_hash_mismatch, nothing written (3); three presses, the second where it changes nothing (its frames before and after it and the third press's frame before it the second screen), steps 1, 3 and 4 marked: drop_step of step 2 is step_dropped, step 2 dropped with its frames as recorded; restore_step is step_restored and gives back every file and the step table but for updated_at_unix_ms; dropped again, record stop writes two operations and the steps 1 to 3 over the recorded steps 1, 3 and 4 (4); drop_step of a press that changed the screen is record_drop_unproven with drop_problem screen_changed (its outcome carrying the same word), its before and after frames and frame_change_milli above 1500, nothing written (5); drop_step of a press whose screen after is its screen before, after which the next press was sent on another screen, is record_drop_unproven with next_screen_differs, next_step 2, the next press's frame and the measure above 1500, nothing written (6). The last step's drop as before: gate_449_rec_arch's s15_fix2_dropped_and_converted_steps_are_listed_and_not_in_the_material, registered with its slice and unchanged.
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-lab::lib::gate_463_s27::s27_a_transition_from_a_stored_frame_writes_the_package_a_file_writes",
+    "actingcommand-lab::lib::gate_463_s27::s27_a_frame_id_the_recording_does_not_hold_is_refused",
+    "actingcommand-lab::lib::gate_463_s27::s27_a_stored_frame_whose_file_no_longer_holds_its_bytes_is_refused",
+    "actingcommand-lab::lib::gate_463_s27::s27_a_middle_press_that_changed_nothing_is_dropped_renumbered_and_restored",
+    "actingcommand-lab::lib::gate_463_s27::s27_a_middle_press_whose_screen_after_differs_is_refused",
+    "actingcommand-lab::lib::gate_463_s27::s27_a_middle_press_after_which_the_next_step_starts_elsewhere_is_refused",
+]
+incident = ["#463 S2-7"]
