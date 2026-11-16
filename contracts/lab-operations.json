@@ -2110,7 +2110,7 @@
       "source": ["actinglab record stop", "actinglab session record stop", "MCP ac_record_stop"],
       "slice": "LAB-2",
       "status": "planned",
-      "notes": "#463 S1-7 (contracts/lab-recording.md, A recording holds its instance): once a stop that is no dry run has ended the recording, the recording's own pause is found by its reason in one status read and resumed by the pause the status shows (its owner epoch and revision), another party's never; a refused stop sends nothing and keeps the hold; a release that fails or no Runtime answering keeps it: the stop stands and the answer is the release's failure with hold kept and (fix round 2, 0.12.64) next.release, record stop again, which can release only the recording's own pause"
+      "notes": "#463 S1-7 (contracts/lab-recording.md, A recording holds its instance): once a stop that is no dry run has ended the recording, the recording's own pause is found by its reason in one status read and resumed by the pause the status shows (its owner epoch and revision), another party's never; a refused stop sends nothing and keeps the hold; a release that fails or no Runtime answering keeps it: the stop stands and the answer is the release's failure with hold kept and (fix round 2, 0.12.64) next.release, record stop again, which can release only the recording's own pause. #463 S2-1b (0.12.67): without game and server, after what the recording holds and the Lab's instance configuration, the instance's row of policy.facts.instances in the configuration of the installation the program runs from gives them, as record ready reads them; a given one and the recording's always win; fix round 1: the row gives both or neither (the other one only when its value of the one given is that one), and the configuration is opened only when the others do not give both"
     },
     {
       "name": "record candidates",
@@ -2282,10 +2282,13 @@
       "params": [
         {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: actinglab's default instance; on the command line only --instance <x> (actinglab's own command reads no positional instance)"},
         {"name": "record_id", "form": "option", "type": "string", "required": false, "note": "a recording of the instance named by its record_id, active, archived or stopped; absent: the one its session header names, which record status reads"},
-        {"name": "state_dir", "form": "option", "type": "dir", "required": false, "note": "the recording session directory; default actinglab's"}
+        {"name": "state_dir", "form": "option", "type": "dir", "required": false, "note": "the recording session directory; default actinglab's"},
+        {"name": "game", "form": "option", "type": "string", "required": false, "note": "actinglab's global --game; #463 S2-1b: the package's game as record stop takes it, read and refused as record stop reads and refuses it; this read checks with it and writes it nowhere, so record stop still needs it"},
+        {"name": "server", "form": "option", "type": "string", "required": false, "note": "actinglab's global --server; #463 S2-1b: the package's server, as game"},
+        {"name": "locale", "form": "option", "type": "string", "required": false, "note": "#463 S2-1b: the package's locale, as game"}
       ],
       "help": "Lists everything a recording still lacks before record stop can make its package, and the recording's state; it only reads, under no lock.",
-      "output": "status (material, draft, ready or packaged), record_id, session, missing[{order, step, artifact_step, frame_id, what, code, hint?}], missing_total, warnings, checks_after",
+      "output": "status (material, draft, ready or packaged), record_id, session, missing[{order, step, artifact_step, frame_id, what, code, hint?}], missing_total, warnings, checks_after, sources{game, server, locale}",
       "writes": false,
       "irreversible": false,
       "runtime": "offline",
@@ -2295,7 +2298,7 @@
       "new": "#463",
       "slice": "463-S21",
       "status": "planned",
-      "notes": "#463 S2-1 (0.12.65; contracts/lab-recording.md, What a recording still lacks: record ready): every pre-check of record stop the recording fails, at once, each with its word (what) and the code record stop answers for it; once none fails, the self-checks record stop runs, on the package it would generate, written nowhere, and the refusal of the first that refuses; record stop answers the first failed pre-check as before, with details.missing_total and details.hint record ready. The first-generation MCP server (actingctl mcp-serve) has no such tool"
+      "notes": "#463 S2-1 (0.12.65; contracts/lab-recording.md, What a recording still lacks: record ready): every pre-check of record stop the recording fails, at once, each with its word (what) and the code record stop answers for it; once none fails, the self-checks record stop runs, on the package it would generate, written nowhere, and the refusal of the first that refuses; record stop answers the first failed pre-check as before, with details.missing_total and details.hint record ready. The first-generation MCP server (actingctl mcp-serve) has no such tool. #463 S2-1b (0.12.67): game, server and locale are taken as record stop takes them: the one given, else what the recording holds, else (game and server) the Lab's instance configuration, else (game and server) the instance's row of policy.facts.instances in the configuration of the installation the program runs from (none outside an installation, or where that configuration cannot be read or binds no such instance: the part is missing, nothing is refused); sources names where each came from, a word of ready_source (command_line, recording, lab_config, installation_config) or null when it is not known; the hint of a missing one names both ways: record ready with it to check, record stop with it to build. Fix round 1: the row gives both or neither (the other one only when its value of the one given is that one), the configuration opened only when the others do not give both; a packaged recording's sources name what its package holds, and a given part with another value is the warning record_stop_option_conflict {code, field, recorded, given}, the refusal record stop would give it"
     },
     {
       "name": "record frames",

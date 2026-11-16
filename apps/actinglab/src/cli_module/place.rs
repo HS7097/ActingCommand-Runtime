@@ -48,16 +48,18 @@ pub(crate) fn place() -> Place {
 /// In test builds the place a test set (`super::authoring::test_place`), as `record draft` reads
 /// it.
 pub(crate) fn installation_state_root() -> Option<Result<PathBuf, Outcome>> {
-    #[cfg(test)]
-    if let Some(program) = super::authoring::test_place::program() {
-        return state_root_of(locate::installed_location_from(&program, None));
-    }
-    state_root_of(locate::installed_location())
+    installation_location().map(|found| found.map(|location| location.state_root))
 }
 
-/// The state root of `located`, `None` outside any installation.
-fn state_root_of(located: Result<Option<Location>, Outcome>) -> Option<Result<PathBuf, Outcome>> {
-    located
-        .transpose()
-        .map(|found| found.map(|location| location.state_root))
+/// #463 S2-1b: the location of the installation this process runs from (its root, its selection,
+/// its selected configuration and its state root), as [`installation_state_root`] locates it, the
+/// variable aside: `None` when the program runs from no installation, else the location or why it
+/// could not be located. In test builds the place a test set (`super::authoring::test_place`).
+/// `record ready` and `record stop` read the instance's game and server from its configuration.
+pub(crate) fn installation_location() -> Option<Result<Location, Outcome>> {
+    #[cfg(test)]
+    if let Some(program) = super::authoring::test_place::program() {
+        return locate::installed_location_from(&program, None).transpose();
+    }
+    locate::installed_location().transpose()
 }

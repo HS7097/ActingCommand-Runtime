@@ -269,13 +269,26 @@ naming this file.
   (`lab.session_header`).
   `ac_record_reopen` makes an archived recording active again, so that `ac_record_mark` and
   `ac_record_stop` can build its package later. #463 S2-1 (0.12.65; `contracts/lab-recording.md`,
-  "What a recording still lacks"): `ac_record_ready` (`record_id`, `state_dir`) lists at once
+  "What a recording still lacks"): `ac_record_ready` (`record_id`, `game`, `server`, `locale`,
+  `state_dir`) lists at once
   everything a recording (the instance's, or the active, archived or stopped one `record_id`
   names) still lacks before `ac_record_stop` can make its package: every pre-check it fails, each
   with its word (`what`) and the code `ac_record_stop` would answer, or, once none fails, the
   refusal of a self-check; and its state, `material`, `draft`, `ready` or `packaged`. It only
   reads, under no lock, also while another call holds the recording; it opens no Runtime
-  connection and neither pauses nor releases the instance. #463 L1 (0.12.60;
+  connection and neither pauses nor releases the instance. #463 S2-1b (0.12.67): it also takes
+  `game`, `server` and `locale` as `ac_record_stop` takes them (one out of its form is refused as
+  there, `validation_failed`); each part is the one given, else what the recording holds, else
+  (game and server) the Lab's instance configuration, else (game and server) the instance's row of
+  `policy.facts.instances` in the configuration of the installation the program runs from, which
+  `ac_record_stop` reads too; that row gives both game and server or neither (when the others give
+  one of the two, the row gives the other only if it holds the same value for the given one; the
+  configuration is opened only when the others do not give both); `sources` names where each came
+  from (`command_line`, `recording`, `lab_config`, `installation_config`, or `null` when not known,
+  then it is missing). It writes none of them on the recording: give `ac_record_stop` the ones you
+  gave it. On a packaged recording `sources` names what its package holds, and a given part with
+  another value is the warning `record_stop_option_conflict` (`{code, field, recorded, given}`),
+  which `ac_record_stop` would refuse. #463 L1 (0.12.60;
   `contracts/lab-recording.md`, "One call per step"): `ac_do` with `capture` and `record` records a
   whole step in one call:
   `mark_request_json` (or `mark_request`, a file) is the `record mark` request of the open step,
