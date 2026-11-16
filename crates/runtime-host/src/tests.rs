@@ -246,6 +246,7 @@ mod gate_mapp1d;
 // before it began, at a lease's expiry or after a keyless observation's capture failure, fences
 // that instance only; the Runtime runs on. Workflow #461 (0.12.66; register §1.431): so at a
 // client's disconnect and after a failed input, whose lease lapsed before the sweep met it.
+// Workflow #475 (0.12.67; register §1.432): so at five more closes under a lapsed key.
 mod gate_458_close_isolates;
 // Workflow #437 G1 (0.12.67; register §1.433): an unconfirmed close of one member holds the
 // device for it until its fence is lifted, and a member's own performance wait leaves the

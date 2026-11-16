@@ -31212,6 +31212,190 @@ path under the input's request), `instance_resources_fenced`, and the lease's `l
 a failed input answers its own failure. A self-check, a resume or the fence's recheck lifts the
 fence.
 
+### 1.432 Fix #475 (0.12.67): a close refused because the key's lease had already lapsed isolates the instance on five more paths (Workflow #475, found by the independent review of #461's fix by reading, never seen on an installation; the rule of board #419, [runtime-outcomes.md](runtime-outcomes.md), "Failure scope"; the models are #458's fix, §1.364, and #461's, §1.431; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1116/brief-475-refused-close-isolates-five.md`, read on main `8eb03787`)
+
+This section takes 1.432, the number the work order gives: §1.431 is the highest on main
+`8eb03787` (§1.429 and §1.430, #463 S1-9 and S1-10, were merged after it), and §1.433 and
+§1.434 belong to two slices being built. It ships in 0.12.67.
+
+**The five places, established by reading.** Each closes a session under a held key after the
+key was validated, and before the key's end; a key whose lease lapsed meanwhile (a device call
+that outlasted it, the sweep's expiry left behind by its `try_lock`) has the close refused by
+`begin_resource_close` (`lease_expired`), and each place took that refusal as fatal:
+
+- *A failed run's hand-over of its key to its ladder* (`hand_off_to_ladder`, `host/lease.rs`):
+  the run's lease end with `Keep`. A run whose lease lapsed before its end began enters no end
+  phase (`enter_run_end_phase`), so #411 A64 does not take the refusal. The hand-over also never
+  passed through the lease end that clears the owed closes (`cleanup_token_guarded`), so a close
+  owed by the run's lease from before (a failed input's under #461) was left behind and the key
+  handed on with the session open.
+- *A pre-emption's hand-over* (`perform_transfer`, from `promote_idle_preemption` and
+  `transfer_preempted_while_guarded`): the holder's device end with `Keep`, under a lease that may
+  have lapsed under the input that outlasted it; and the pre-emption's own end of that lease when
+  capacity holds the transfer back (`LeaseReleaseReason::Preempted`, `Keep`).
+- *An application command's preparation* (`prepare_application_resources_result` in
+  `control_application_of`, `host/input.rs`), whose `Err` poisoned the command.
+- *A backend switch* (`close_switch_session`, `host/backend_switch.rs`): the kept session's close
+  at step 3.2 and the candidate's at the restore, whose `Err` poisoned the switch.
+- *A member switch* (`stop_member_application`, `host/switch.rs`): the close of the stopped
+  member's session under the run's key. Reached only by a device group of several members, which
+  no installation can configure today (the load refuses it).
+
+**The cure.** Recognition is #458's and #461's, unchanged (`expiry_close_refused`: operation
+`begin_destructive_resource_close` and code `lease_expired`, not during shutdown). Each refusal is
+recorded once, fences the instance whose session it is with `lease_expired` as its cause, and owes
+its close under the key's lease (`fence_expired_lease_close`, `fence_expired_close_of`); the key is
+handed to no one (`end_lease_ordered` names no transfer while a close is owed, as before); the
+key's end, whichever it is, makes every owed close once under the session close ahead, still under
+the device's admission guard, and clears the entry (`close_expired_lease_session_guarded`).
+
+| Place | What changes | What the caller sees |
+|---|---|---|
+| Hand-over to the ladder | `hand_off_to_ladder` ends the device use with `HolderEnd`; when the lease owes a close (this refusal, or one before it) it returns the ladder without a hand-over | The run returns its own failure. The caller's lease end (a backend failure's, `cleanup_token_guarded`) releases the key, makes the close and clears the entry; the ladder then waits as a claim (`enqueue_ladder_claim`) and the queue grants it after the close, as when no key is left to hand on |
+| Pre-emption | `perform_transfer` takes the device end (`HolderEnd` from the two pre-emptions, `Keep` from a release's and a lease end's transfer, unchanged) and answers `None` when the close is owed; the two pre-emptions then end the lease (`Preempted`, which `end_lease_ordered` now maps to `HolderEnd`) | The claim that was to receive the device stays queued (`queued`); it is granted by the queue once the close is made and its gate lets it. A pre-emption at an input's start still refuses the input (`transfer_not_safe`), as for a transfer |
+| Application preparation | The refusal is fenced and owed for the instance whose application the command drives (the key's own, or a member under MAPP-2a) | The command fails with a refusal of its own, `lease_expired` at `prepare_application_resources` naming the key's lease, not fatal (fix round 1: the refusal the close met is fatal as the close path builds it and is not handed on), before its step and without a command sent, as a lapsed key at its step does; so does a member switch's stop whose preparation meets it; its own clean-up, the run's or the ladder's end, or the expiry, makes the close |
+| Backend switch | The refusal is fenced and owed; `release_switch_key` ends an owed key as a backend failure's end instead of a release (which the lapsed lease would refuse), and a ladder the restore admitted then waits as a claim | `backend_switch_refused` (failed) with `instance_fenced`, caused by `lease_expired`; the registration keeps its backends |
+| Member switch | The refusal fences the stopped member and owes the close of its session under the run's key | `application_switch_failed` at its step `stop`, with `lease_expired` as its step's code (its own failure code and cooldown, as before; since fix round 1 its cause is a refusal of its own at `close_execution_session`, not fatal); the run's end or the expiry closes the member's session |
+
+The owed closes are now kept by lease and instance (`expired_lease_closes`,
+`BTreeMap<LeaseId, BTreeSet<InstanceId>>`), so a lease of one member may owe another member's
+close; memory only, as before.
+
+**The review's three small items.** A holder's own end (`HolderEnd`) gives way while a write is
+in flight on the lease, as the expiry's end does (`end_lease_device_use`): `begin_resource_close`
+asks the lease's time before the step, so a close under a lapsed lease with a write in flight would
+be owed under that write; no path reaches it today. A test proves that a claim waiting in the
+queue is not handed the device while the close is owed, and #461's fourth test asserts what its
+fatal path does with the owner (fix round 2: it retains none, below).
+[runtime-outcomes.md](runtime-outcomes.md) says "before the lease sweep meets it" where it said
+"before the lease's expiry".
+
+**Which failures stay fatal.** As the two fixes kept them: a refusal during shutdown, a refusal no
+fence may take, and the Runtime's own failures in these paths (the refusal's record, a lock, the
+owner's journal, an identifier, an invariant of the scheduler). The hand-over returns them into
+the run's lease end, the pre-emptions and the application command into their request (a poison
+the request's boundary latches), the backend switch into its request, the member switch to its
+caller.
+
+**Nothing changes when the lease has not expired.** `HolderEnd` differs from `Keep` only where a
+close is refused `lease_expired` at `begin_destructive_resource_close`, which the scheduler
+answers only for a lease whose time is over, and, by the defensive line above, when a write is in
+flight on the lease (where every one of these places failed before as well, a Ready transfer has
+no step in flight, and a run's hand-over has none). An owed close exists only after such a
+refusal, so `expired_close_owed` is false for every lease whose time is not over, and the new
+branches of the application command, the backend switch and the member switch are reached only by
+that refusal. The receiver's `lease.transition_intent` of a pre-emption whose hand-over is so
+abandoned stays recorded; nothing reads it as a transfer.
+
+**Tests.** In `crates/runtime-host/src/tests/gate_458_close_isolates.rs` (gate map `host.toml`,
+the row "Workflow #475"); a test-only hook (`RuntimeHost::run_before_next_resource_close_for_test`,
+test spelling `run_before_next_resource_close_for_test`) lets the lease lapse right before the
+next close that finds a session asks its write authority, and the lease sweep's expiry scan is
+held:
+`close475_a_failed_runs_hand_over_to_its_ladder_after_its_lease_lapsed_fences_only_its_instance`,
+`close475_a_record_that_cannot_be_appended_at_a_runs_hand_over_to_its_ladder_still_stops_the_runtime`,
+`close475_a_preemptions_hand_over_of_a_lapsed_lease_fences_only_its_instance`,
+`close475_a_record_that_cannot_be_appended_at_a_preemptions_close_still_stops_the_runtime`,
+`close475_an_application_command_whose_key_lapsed_before_its_preparation_fails_alone`,
+`close475_a_record_that_cannot_be_appended_at_an_application_preparation_still_stops_the_runtime`,
+`close475_a_backend_switch_whose_key_lapsed_before_its_close_is_refused_and_fences_only_its_instance`,
+`close475_a_record_that_cannot_be_appended_at_a_backend_switchs_close_still_stops_the_runtime`,
+`close475_a_member_switch_whose_key_lapsed_before_its_close_fences_only_the_stopped_member`,
+`close475_a_record_that_cannot_be_appended_at_a_member_switchs_close_still_stops_the_runtime`
+and `close475_a_disconnects_owed_close_is_made_before_the_waiting_claim_is_granted`. The
+hand-over's run fails a capture whose own close meets the lapse first and fences the instance
+(#456), so that test counts the hand-over's refusal after the run's terminal, and its fatal test
+asserts that nothing is fenced from there on. `close461_a_record_that_cannot_be_appended_at_a_failed_inputs_close_still_stops_the_runtime`
+gains one assertion (since fix round 2: the owner not retained as unconfirmed, read through the
+test-only `RuntimeHost::owner_retained_unconfirmed_for_test`); no other existing test is adapted
+or retired.
+
+**What is not added.** No outcome code, value key, word, configuration key, record type, payload
+member, fact, wire shape, interface revision or ledger revision. The test-only switch
+`close_isolates_off_for_test` turns these paths off as well.
+
+**Fix round 1** (coordinator work order `rd-1116/brief-475-fix2.md`, after the independent review
+of pull request #1777; the coordinator's rulings; the pull request's first CI run, read once, had
+its host tests still running). (1) The application preparation was not cured: the refusal its
+close met is built by `retire_instance_resources` through
+`RequestFailure::poison_without_terminal`, which marks it fatal (`into_fatal`), so its clone in
+`ActionFailure::scheduler` poisoned the command (`poison_runtime`), its untagged fatal scope is
+Global, no fence took it, and the request's boundary latched the Runtime after the instance was
+fenced. The command now answers a refusal of its own, the scheduler's `lease_expired` at
+`prepare_application_resources` naming the key's lease, built as its step's refusal is, not
+fatal. A member switch's stop is that same command (`control_member_application`), so its
+preparation answers the same way, and the switch's close of the stopped member hands on such a
+refusal of its own too (at `close_execution_session`). No other place of this fix hands the error
+on: the hand-over and the pre-emptions fence and owe it inside their lease end and return nothing
+of it, and the backend switch hands on only its outcome, which carries the code's category, not
+the error's fatality. (2) An owed close of an instance whose device a lease holds when the owing
+lease's end comes to make it (`close_expired_lease_session_guarded`) was passed over and forgotten
+with the entry; no path reaches it today (the owing end hands the device to no one, under the
+admission guard). Of the work order's two answers this round takes the second, as #458 records a
+refusal of that close it cannot act on: only a holder of the owed instance's own key still takes
+the session over (the session is the instance's, Workflow #191 H, and that holder's lease end or
+preparation closes it); under any other member's lease the close is tried, the session close ahead
+refuses the held device (`lease_busy`, not fatal), and that refusal is recorded once (stage
+`runtime_lifecycle_session_close`, naming the instance) and leaves the session to the fenced
+instance's own paths (its recovery ladder, the fence's recheck, a person's self-check or resume),
+each of which closes a kept session before it opens, while the fence keeps the instance out of
+policy dispatch and visible as fenced. The first answer, keeping the entry owed, would keep it
+under a lease that has ended, which no later end takes. (3) The closes a connection preparation
+makes under a held key (`prepare_connection_attempt` with `PreparationLease::Held`,
+`host/resource_close.rs` near 1915, the retained session's close before the opens, and 2013, the
+close after a failed open or outside the multi-Nemu gate) meet the same refusal and keep it fatal;
+they are not changed here and are stated so in
+[read-session-resource-close.md](read-session-resource-close.md). The preparation reports its close
+as a kernel result into its self-check, and its callers (a person's self-check on an operator
+claim, an emulator control, the recovery ladder's preparation, the emulator watch's recognition, a
+backend switch's candidate and restored backends) end the lapsed key by a release or a hand-over
+to a ladder, which the lapsed lease refuses, so the cure changes each caller's key end besides the
+recognition: a later slice the coordinator files. (4) Tests: the first test asserts that
+`hand_off_to_ladder` itself withheld the key once (a test-only count,
+`RuntimeHost::ladder_hand_offs_withheld_for_test`, test spelling
+`ladder_hand_offs_withheld_for_test`; a ladder that waits in the queue writes the same records);
+new are `close475_a_preemption_at_an_inputs_end_whose_lease_lapsed_fences_only_its_instance` (the
+pre-emption a reset's write in flight deferred, made at the reset's end,
+`transfer_preempted_while_guarded`) and
+`close475_a_backend_switchs_restore_whose_key_lapsed_before_its_close_fences_only_its_instance`
+(the restore after a refused commit, `restore_backends`), in the row "Workflow #475" of the gate
+map. (5) The texts: this section's numbers (§1.429 and §1.430 are #463 S1-9 and S1-10) and the
+table's rows for the application preparation and the member switch. No outcome code, word or key
+is added.
+
+**Fix round 2** (coordinator work order `rd-1116/brief-475-fix3.md`, after the pull request's CI
+run on the head of fix round 1, `15c9d98a`, failed one host test; the coordinator's rulings). The
+assertion this section added to
+`close461_a_record_that_cannot_be_appended_at_a_failed_inputs_close_still_stops_the_runtime` (the
+owner kept unconfirmed) stated what the program never did, on main as here: the review of #461 had
+read `finish_input_failure`'s `Err` arm as keeping the owner on that path. It does not. The
+failure there is the ledger's own (the refusal's record cannot be appended), and
+`append_lifecycle_failure` hands a ledger failure back instead of recording it (`host/lifecycle.rs`,
+the return of a `ledger_failure` before the record is built), so the arm's `?` on its record of the
+clean-up's failure (`host/resource_close.rs:1345-1350` at this fix's head) returns it before the
+arm's `retain_unconfirmed` (`:1351`) and its own latch. The input's poison reaches the request's
+boundary, whose `contain_failure` latches it (`latch_failure`) and retains nothing. Main at
+`8eb03787` (#461) has the same lines (`:1292-1299`), and no round of this fix changed them, nor
+`append_lifecycle_failure`: the arm keeps the owner for a failure it can record (the refusal itself
+before #461; today a refusal during shutdown, or one no fence may take). The test-only reader reads
+the owner's retention (`OwnerGuard::retained_resource_disposition`, set only by
+`retain_unconfirmed` and never undone) after the input's request has returned and before the
+host's own close, so its moment was not the cause. Of the work order's three answers it is the
+second: the assertion now states that the owner is not retained as unconfirmed, beside what the
+test already asserted (the ledger's failure latched, no instance fenced); the refused close began
+nothing, so no device step is left half done (§1.431, "The owner on the input's path"). The
+sentence of [read-session-resource-close.md](read-session-resource-close.md) that said the failed
+input's clean-up then keeps the owner, which §1.431's "Which failures stay fatal" says of the
+Runtime's own failures as well, is true except for a failure of the ledger itself; the contract
+now says so, and this section's two sentences on that assertion are corrected. No program
+behaviour, other test, outcome code, word or key changes. Main is merged locally afterwards.
+
+**At deploy.** Nothing to do. What an operator sees when it happens: the Runtime keeps running;
+the instance's row shows its resource fence with `lease_expired` as its cause; the ledger holds
+the refusal's `runtime.failed` record (stage `runtime_lifecycle_session_close`, naming the key's
+lease), `instance_resources_fenced`, the key's end and the session's close; the caller answers its
+own failure as the table says. A self-check, a resume or the fence's recheck lifts the fence.
+
 ### 1.433 Slice #437 G1 (0.12.67): an unconfirmed close holds the device for its member, and a member's own wait leaves the queue to the others (Workflow #437; [device-group.md](device-group.md), "A failure stays where it belongs", "Device-level actions", row 7, "One queue, one worker, one lease per device" and "Release."; the two items of "Before the load accepts a group of several" that MAPP-1d and its review found, §1.359; the owner's request of 11-16 on board #437 to start testing several applications on one device; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1116/brief-437-g1-device-hold.md`, read on main `8eb03787`)
 
 This section takes 1.433, the number the work order gives: §1.431 is the highest on main

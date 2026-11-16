@@ -2746,6 +2746,14 @@ pub(crate) mod test_spellings {
             // Workflow #461: a test ends a client's connection as its thread does once its stream
             // is gone.
             EndConnectionForTest => "end_connection_for_test",
+            // Workflow #475: a test runs a hook before the next close of an instance's resources
+            // asks its write authority.
+            RunBeforeNextResourceCloseForTest => "run_before_next_resource_close_for_test",
+            // Workflow #475: a test reads whether the owner is retained as unconfirmed.
+            OwnerRetainedUnconfirmedForTest => "owner_retained_unconfirmed_for_test",
+            // Workflow #475 fix round 1: a test reads how many hand-overs to a ladder withheld the
+            // key for an owed close.
+            LadderHandOffsWithheldForTest => "ladder_hand_offs_withheld_for_test",
             // #411 A51: a test latches a condition in the Runtime's fatal state.
             MarkRuntimeFatalForTest => "mark_runtime_fatal_for_test",
             ObserveTestPerformanceControl => "observe_test_performance_control",
