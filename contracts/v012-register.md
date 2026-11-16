@@ -27866,11 +27866,12 @@ as gate_463_u1 makes a run's budget end fail: no fixture makes them fail otherwi
 **At deploy.** Nothing to do; a pair that ran before starts its break-in at its first run on this
 build that began its package.
 
-### 1.392 Slice #463 K-R3a (0.12.62): the kernel's offline dry run of a scan select as far as its decision (Workflow #463; the owner's rule on board #463 that every package but a complex looping battle is recorded, never written by hand, and the owner's rule that what stands in a list is chosen by what is read, never by its position; the design note `rd-1115/463-r3-scan-design.md`, section 3.1 and its row K-R3a of section 8, which the coordinator accepted; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-r3-first-slices.md`, read on main `d32d4d6c`)
+### 1.392 Slice #463 K-R3a (0.12.69): the kernel's offline dry run of a scan select as far as its decision (Workflow #463; the owner's rule on board #463 that every package but a complex looping battle is recorded, never written by hand, and the owner's rule that what stands in a list is chosen by what is read, never by its position; the design note `rd-1115/463-r3-scan-design.md`, section 3.1 and its row K-R3a of section 8, which the coordinator accepted; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-r3-first-slices.md`, read on main `d32d4d6c`)
 
-1.392 is the number the coordinator gave this slice; main `d32d4d6c` holds the sections up to
-§1.385, and the numbers between, and 1.393, belong to slices dispatched with this one. The slice
-ships in 0.12.62 (release 0.12.61 is cut without it).
+1.392 is the number the coordinator gave this slice when it was cut from main `d32d4d6c`, which
+held the sections up to §1.385; main `ff74c80c` (release 0.12.68) leaves it free, and the section
+stands between §1.389 and §1.395 in the order of the numbers. The slice ships in 0.12.69 (releases
+0.12.61 to 0.12.68 were cut without it).
 
 **What it is.** A recording can choose in a list that scrolls only if the Lab can test, on the
 frames it recorded, what the kernel's scan select would decide there (slice R3b). The kernel had
