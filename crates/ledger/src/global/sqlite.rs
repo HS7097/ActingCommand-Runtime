@@ -1829,6 +1829,13 @@ impl DurableStorage for SqliteStorage {
         read_lab_relations(&connection, through, seed)
     }
 
+    fn lab_anchor_names(&self, keys: &LabKeys, through: u64) -> GlobalLedgerResult<bool> {
+        let connection = self
+            .database
+            .connection(LedgerLocation::ReadSqliteSnapshot.location())?;
+        read_lab_anchor_names(&connection, keys, through)
+    }
+
     fn scope_extents(&self, (from, through): (u64, u64)) -> GlobalLedgerResult<Vec<ScopeExtent>> {
         let connection = self
             .database
@@ -5020,6 +5027,45 @@ fn read_lab_relations(
         relations.runs.insert(id_from_text(&text)?);
     }
     Ok(relations)
+}
+
+/// #463 S1-10: one row when a Lab anchor of `read_lab_relations` (by source `?4` or type `?5`)
+/// at or before `?3` names the request `?1` or the correlation `?2`, none otherwise. Each half
+/// is driven by its link index (`ledger_links_request`, `ledger_links_correlation`) and reads the
+/// rows of that one id through `?3` with their records by sequence; the unary `+` keeps the
+/// source and type indexes out, as the frame cleaner's Lab terms do.
+const LAB_ANCHOR_NAMING: &str = "SELECT 1 FROM ledger_links nl INDEXED BY ledger_links_request CROSS JOIN ledger_events n ON n.sequence=nl.sequence WHERE nl.request_id=?1 AND nl.sequence<=?3 AND (+n.origin_source=?4 OR +n.event_type=?5) UNION ALL SELECT 1 FROM ledger_links nl INDEXED BY ledger_links_correlation CROSS JOIN ledger_events n ON n.sequence=nl.sequence WHERE nl.correlation_id=?2 AND nl.sequence<=?3 AND (+n.origin_source=?4 OR +n.event_type=?5) LIMIT 1";
+
+/// #463 S1-10: whether a committed Lab anchor through `through` names the request or the
+/// correlation of `keys` (`LAB_ANCHOR_NAMING`, the ids as the link rows store them; an id `keys`
+/// lacks is bound NULL and names nothing). It answers `read_lab_relations`'s first two relations
+/// for that one request and correlation, without its read of every anchor and run.
+fn read_lab_anchor_names(
+    connection: &Connection,
+    keys: &LabKeys,
+    through: u64,
+) -> GlobalLedgerResult<bool> {
+    if keys.request.is_none() && keys.correlation.is_none() {
+        return Ok(false);
+    }
+    let stored = |id: Option<String>| id.map_or(SqlValue::Null, SqlValue::Text);
+    let request = keys.request.as_ref().map(views::key).transpose()?;
+    let correlation = keys.correlation.as_ref().map(views::key).transpose()?;
+    let rows = read_rows_bound(
+        connection,
+        LAB_ANCHOR_NAMING,
+        &[
+            stored(request),
+            stored(correlation),
+            SqlValue::Integer(encode(through)),
+            SqlValue::Text(views::key(LAB_ANCHOR_SOURCE)?),
+            SqlValue::Text(views::key(LAB_ANCHOR_TYPE)?),
+        ],
+        None,
+        &mut 0,
+        false,
+    )?;
+    Ok(!rows.is_empty())
 }
 
 /// The text of each one-column row.

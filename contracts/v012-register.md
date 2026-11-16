@@ -30972,6 +30972,54 @@ variable wherever the program runs; an installation's state root without the var
 installation whose state root cannot be located refused, never the default; `record start` from an
 installation without the variable holding its instance on a scripted Runtime (`hold.state` `own`).
 
+### 1.430 Slice #463 S1-10 (0.12.66): a Lab pin's admission looks its trigger up by index first (Workflow #463; production 0.12.64, the coordinator's reading of the ledger after two taps recorded with the Lab; read-only study `rd-1116/report-post-store-stall-study.md`; coordinator work order `rd-1116/brief-463-s110-lab-pin-point-lookup.md`)
+
+This section follows §1.428, the highest on main when it was written; §1.429 is another slice's.
+It ships in 0.12.66.
+
+**What production showed.** On 0.12.64 every read-only observation the Lab sent took 720 to 755 ms
+between its frame's `artifact.pin_recorded` and its `capture.completed`, with a cold capture
+session and with a warm one, while a scheduled run's capture on the same instance and day took
+1 ms between the same two records. The pin of a Lab observation has the reason `lab`, a run's
+`explicit`.
+
+**The cause.** The observing thread appends the pin and waits for the writer's answer. Before the
+writer admits a pin whose reason is `Lab`, retention asks whether the pin's trigger record is
+related to the Lab (refused `artifact_pin_reason_conflict` otherwise: a Lab pin lands only inside
+the Lab's range, which the frame cleaner's statement L and the Lab's unpin rely on). The writer
+answered by reading the Lab relations of the whole ledger (`read_lab_relations`: the request and
+the correlation of every Lab anchor, then the run of every link row naming one of them), with no
+cache on its side: RB-1 (§1.194 LNWS-6) gave the reader pool an index of them, not the writer. That
+read grows with the Lab's history.
+
+**The change.** The writer's answer first looks whether a Lab anchor (a record of the source `lab`
+or of the type `lab.request`) at or before the record being checked names the trigger's request or
+its correlation: among the records staged in the batch, then among the stored ones through the
+link indexes `ledger_links_request` and `ledger_links_correlation` (one statement of at most one
+row; the in-memory test store answers from its anchor index). A hit answers "related" at once; a
+miss reads every Lab relation as before, which also covers a record related by its run alone.
+"Related" is the disjunction of the request, the correlation and the run relations, and a hit is
+one of the first two at the same position, so the answer is the whole read's in every case. A Lab
+observation's own `lab.request` names its request, so a Lab observation's pin always hits. The
+other questions retention puts to the writer's history (a record in a sealed scope, an eviction
+intent's Lab protection) take the same lookup first.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| S110-1 | the writer's Lab relation of a record (a Lab pin's trigger, a record in a sealed scope, an eviction intent's frame) | Runtime-internal behaviour (no key, code, format, table or index) (ledger gate row "#463 S1-10") | S1-10 | — | first the Lab anchors that name the record's request or correlation, staged or stored (`ledger_links_request`, `ledger_links_correlation`); a hit answers related, a miss reads every Lab relation as before; the answer is the whole read's in every case |
+
+**What does not change.** No answer, no record, no format, no ledger contract, no interface
+revision, no configuration key, no outcome code or word; the reader pool's index of RB-1 is as it
+was. At deploy nothing is configured.
+
+**Gate** (`contracts/test-gates/ledger.toml`, `gate_463_s110`): on the SQLite store and on the
+in-memory store, a Lab pin whose trigger's request an anchor names is admitted without reading every
+Lab relation (T1); one whose trigger is related only through its run is admitted by one such read
+(T2); one whose trigger nothing relates is refused `artifact_pin_reason_conflict`, fatal, as before
+(T3); on the SQLite store, an anchor staged in one batch with the trigger and the pin admits it
+without that read (T4). The reads are counted through `GlobalLedgerConfig::with_lab_relations_reads`,
+which exists in test builds only.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
