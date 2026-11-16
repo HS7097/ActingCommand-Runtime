@@ -569,9 +569,10 @@ resolves it, holds the input to the foreground gate and sends it on the instance
 with the step's committed frame to the input (`key_in_frame`, through the registry's diagnostic
 wrapper), whose worker presses it only on that frame (`press_key`: the frame's fence, the deadline,
 one key down and one key up with the vendor's code), and the host refuses a key without a frame
-there (`nemu_input_frame_required`). The key a step sends, `4`, is the device layer's own spelling
-of the back key (`DeviceKey::android_code`, which `DeviceKey::named` takes), so no input that sends
-the back key refuses a step's key for its spelling.
+there (`nemu_input_frame_required`). The key a step sends, `4`, is the device layer's own code of
+the back key in decimal digits (`DeviceKey::android_code`, the number 4, whose digits
+`DeviceKey::named` takes), so no input that sends the back key refuses a step's key for its
+spelling.
 
 **The foreground gate.** A key passes the gate a tap passes
 ([application-lifecycle.md](application-lifecycle.md), "The foreground gate"): on a physical

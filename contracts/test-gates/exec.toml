@@ -3946,3 +3946,11 @@ tests = [
     "actingcommand-execution-kernel::lib::contained_task::gate_463_kp1::kp1_fix1_a_source_package_with_a_key_step_is_admitted_by_the_products_entry_and_runs",
 ]
 incident = ["#463 KP-1"]
+
+# Workflow #463, the key train, round 2 (0.12.69; register §1.447, "Train", round 2; brief rd-1116/brief-01269-key-train-round2.md, point 1): the device layer's one answer for the back key, DeviceKey::android_code, is the number 4, whose decimal digits are the key a package's key step sends (StepKey::input_key); MaaTouch's key command carries the key as it is given, so that key step's back key is the line k 4 o, then the commit c. The other spellings stay pinned where they were: the kernel's input Key 4 (gate "#463 KP-1"), the vendor's code 158 on the Nemu input for back, 4 and KEYCODE_BACK (gate "#463 KB-1"), and one input keyevent KEYCODE_BACK on adb_shell_input for the same three (gate "#463 KB-1")
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-device::lib::maatouch::tests::train_key_round2_maatouch_writes_the_back_key_of_a_key_step_as_k_4_o",
+]
+incident = ["#463 KP-1", "#463 KB-1"]

@@ -34312,6 +34312,34 @@ function of a gate file as production code that calls the scheduler's witness br
 code or assertion changes, and nothing else the train added or changed trips that guard or its
 neighbours.
 
+**Train, round 2** (coordinator work order `rd-1116/brief-01269-key-train-round2.md`; main after
+release 0.12.68, `ff74c80c`, merged into pull request #1791 first, by a merge commit that resolves
+its conflicts and changes nothing else; the rules are the coordinator's, not the owner's words). The
+outcome guard's rule G2 (`tools/outcome-guard`, `source.rs`: a function named `code`, `*_code`,
+`reason`, `*_reason`, `key`, `operation` or `stage` answers no string) refused
+`DeviceKey::android_code`, which answered the text `4`. It answers the number now (`u32`, 4,
+Android's `KeyEvent.KEYCODE_BACK`), and the places that need text make it from that one answer:
+`DeviceKey::named` compares a key with its decimal digits, beside its word and its name (the same
+three spellings, nothing more), and `StepKey::input_key` gives those digits as a `String` (it gave a
+`&'static str`), which `StepKey::action` and `StepKey::of_action` read. MaaTouch's key command
+carries a key as it is given, as before; its lines are built by one function now
+(`maatouch_key_lines`), so that a test reads them. The backends receive what they received: `Key`
+`4` from the kernel, 158 into the emulator's library, `KEYCODE_BACK` on `adb_shell_input`, `k 4 o`
+on `maatouch`. The capability table's row `input.key` (`capability_profile`) reads
+`DeviceKey::sent_alone_by` for the inputs that send the key vocabulary alone, beside `maatouch`, so
+it and the host's refusal of another key read one list (the review's second point); the row says
+what it said. Read against G2 to G5 in the members the guard scans (the device crate, the execution
+kernel, the source parser, the Runtime host; not the Lab's members, not test code): no function,
+constant or field the train adds is a getter of a code name that answers a string, a parameter or
+field of a code name that is a string, a `Result` whose error is a string, an `include!`, a
+`json!` key of a code, a location or a category, a construction of a code, or a literal of a
+registered name outside the registries. The test (exec gate "#463, the key train, round 2"):
+`maatouch::tests::train_key_round2_maatouch_writes_the_back_key_of_a_key_step_as_k_4_o` (the back
+key's code in decimal digits is `4`, and MaaTouch's lines for it are `k 4 o` and the commit); the
+kernel's `Key` `4`, the vendor's 158 and `KEYCODE_BACK` stay pinned by KP-1's and KB-1's tests.
+Adapted, not added: the train's test hands `DeviceKey::named` the `String` `StepKey::input_key` now
+gives.
+
 ### 1.448 Slice #463 KP-1 (0.12.69): a linear package step that presses the back key (Workflow #463; the owner's ruling on board #463 that the back key is not recorded while playing and that the agent adds such a step in stage two or three; the read-only study `rd-1116/report-463-key-step-study.md`, sections (c), (e) and the slice KP-1 of (f), with the coordinator's rulings at its end; the rules below are the coordinator's rulings in the work order and on the takeover, not the owner's words; coordinator work order `rd-1116/brief-463-kp1-linear-key-step.md`, built on the branch of Workflow #437 G1, §1.433)
 
 The coordinator gave this slice 1.448 and the `package` revision 17: 16 is Workflow #477 PC-1's,
@@ -34569,6 +34597,17 @@ performs the steps before the key step; the outcome code index, regenerated, doe
 row shows the description's start only), and the derived
 navigation and its page operations, which leave a key step out, are said to do so here and in the
 contract already.
+
+**Train, round 2** (coordinator work order `rd-1116/brief-01269-key-train-round2.md`; main after
+release 0.12.68, `ff74c80c`, merged first). Revision 16 of the package format is Workflow #477
+PC-1's (§1.438, a bundle that carries `pack-catalog.json`), so this section keeps 17: the build's
+declaration reads `package` [3, 17] beside S3-8's `runtime-client` [3, 11], the tests that pin it
+say so, and the rows 16 and 17 of [component-interfaces.md](component-interfaces.md) and
+[resource-verify.md](resource-verify.md) stand once each. Main's `place` asks nothing of 16 (its
+row 16 says so, and `crates/lab-rescue/src/install/place.rs` reads the catalog's business part and
+no revision of it), so row 17's sentence on what `place` asks (10 and 14, never 17) stays as it
+was. The key step's key is now made from the number `DeviceKey::android_code` (§1.447, "Train,
+round 2"); the string it gives is the one it gave.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

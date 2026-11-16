@@ -2544,13 +2544,13 @@ impl StepKey {
         }
     }
 
-    /// The key of the input request that presses it: Android's key code, the form the Lab's
-    /// `key back` sends (`KEYCODE_BACK`, 4) and MaaTouch's key command reads. Workflow #463, the
-    /// key train: the device layer's vocabulary decides the spelling
-    /// ([`actingcommand_device::DeviceKey::android_code`]), so the key a step sends is one its
-    /// `DeviceKey::named` takes.
-    pub const fn input_key(self) -> &'static str {
-        self.device_key().android_code()
+    /// The key of the input request that presses it: Android's key code in decimal digits, the
+    /// form the Lab's `key back` sends (`KEYCODE_BACK`, 4) and MaaTouch's key command reads.
+    /// Workflow #463, the key train: the device layer's vocabulary decides the spelling, made here
+    /// from its one answer, the number [`actingcommand_device::DeviceKey::android_code`], so the
+    /// key a step sends is one its `DeviceKey::named` takes.
+    pub fn input_key(self) -> String {
+        self.device_key().android_code().to_string()
     }
 
     /// Workflow #463, the key train: the device layer's key this key is
@@ -2569,7 +2569,7 @@ impl StepKey {
     /// The key `action` presses, when it presses one of the vocabulary's.
     pub fn of_action(action: &InputAction) -> Option<Self> {
         match action {
-            InputAction::Key { key } => Self::ALL.into_iter().find(|step| step.input_key() == key),
+            InputAction::Key { key } => Self::ALL.into_iter().find(|step| step.input_key() == *key),
             _ => None,
         }
     }
@@ -2577,7 +2577,7 @@ impl StepKey {
     /// The input action that presses it.
     pub fn action(self) -> InputAction {
         InputAction::Key {
-            key: self.input_key().to_owned(),
+            key: self.input_key(),
         }
     }
 }

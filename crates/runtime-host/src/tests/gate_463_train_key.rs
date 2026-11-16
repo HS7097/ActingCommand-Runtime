@@ -179,7 +179,7 @@ fn train_key_a_key_step_reaches_the_device_on_its_frame_or_is_refused_at_the_sta
     // One spelling: the kernel's back key is the one the device layer names, and the emulator's
     // input takes it on a frame.
     assert_eq!(
-        DeviceKey::named(StepKey::Back.input_key()),
+        DeviceKey::named(&StepKey::Back.input_key()),
         Some(DeviceKey::Back)
     );
     assert_eq!(

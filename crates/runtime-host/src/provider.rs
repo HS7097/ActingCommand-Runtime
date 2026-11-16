@@ -1293,7 +1293,9 @@ fn entry_capability_profile(
 /// (0.12.69): `input.key` is supported on `maatouch`, which sends every key it is given, and on
 /// `nemu_ipc` and `adb_shell_input`, which send the back key alone (`DeviceKey`), as their row's
 /// failure semantics say (the Nemu input only where its library has the key calls, which this path
-/// does not open); `minitouch` sends none. `input.text` stays `maatouch`'s alone.
+/// does not open); `minitouch` sends none. The key train's second round: the row reads the inputs
+/// that send the key vocabulary alone from `DeviceKey::sent_alone_by`, the list the host's refusal
+/// of another key reads, so the two cannot disagree. `input.text` stays `maatouch`'s alone.
 fn capability_profile(
     input: TouchBackendChoice,
     capture: CaptureBackendChoice,
@@ -1319,11 +1321,8 @@ fn capability_profile(
                 input.as_str(),
             ),
             EmulatorCapability::InputKey => (
-                matches!(
-                    input,
-                    TouchBackendChoice::MaaTouch | TouchBackendChoice::NemuIpc
-                        | TouchBackendChoice::AdbShellInput
-                ),
+                input == TouchBackendChoice::MaaTouch
+                    || actingcommand_device::DeviceKey::sent_alone_by(input),
                 input.as_str(),
             ),
             EmulatorCapability::InputText => (

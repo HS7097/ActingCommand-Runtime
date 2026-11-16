@@ -333,13 +333,15 @@ impl DeviceKey {
     pub const ALL: [Self; 1] = [Self::Back];
 
     /// The key an input request's `key` names: the word `back`, or the Android key event of the
-    /// back key as a client sends it today, its code `4` (actinglab's `key back`; a package's key
-    /// step, whose spelling is [`Self::android_code`]) or its name `KEYCODE_BACK`; `None` for every
-    /// other key.
+    /// back key as a client sends it today, its code `4` written in decimal digits (actinglab's
+    /// `key back`; a package's key step, whose spelling is made from [`Self::android_code`]) or
+    /// its name `KEYCODE_BACK`; `None` for every other key.
     pub fn named(key: &str) -> Option<Self> {
-        Self::ALL
-            .into_iter()
-            .find(|known| [known.word(), known.android_code(), known.android_name()].contains(&key))
+        Self::ALL.into_iter().find(|known| {
+            key == known.word()
+                || key == known.android_name()
+                || key == known.android_code().to_string()
+        })
     }
 
     /// The word of the vocabulary.
@@ -350,11 +352,15 @@ impl DeviceKey {
     }
 
     /// Workflow #463, the key train (register §1.447 and §1.448, "Train"): Android's key code of
-    /// the key, the spelling a package's key step sends (`StepKey::input_key` of the execution
-    /// kernel reads it here, so the two cannot disagree) and actinglab's `key back` sends.
-    pub const fn android_code(self) -> &'static str {
+    /// the key, a number (`KeyEvent.KEYCODE_BACK` is 4). Its decimal digits are the spelling a
+    /// package's key step sends (`StepKey::input_key` of the execution kernel makes it from this
+    /// answer, so the two cannot disagree), the one [`Self::named`] takes and the one actinglab's
+    /// `key back` sends; MaaTouch's key line carries them as it is given them (`k 4 o`). The key
+    /// train's second round: a number, not its text, so that no getter of a `*_code` answers a
+    /// string (the outcome guard's rule G2).
+    pub const fn android_code(self) -> u32 {
         match self {
-            Self::Back => "4",
+            Self::Back => 4,
         }
     }
 
