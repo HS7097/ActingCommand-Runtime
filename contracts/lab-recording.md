@@ -1799,8 +1799,14 @@ its instance").
   `close_error`) says what the release did, filled once it is done; a release that fails, a
   renewal of the lease that failed while it was held included, is a failure after a performed
   press ("The screen after"); beside any other error it is in that error's `input_outcome`, and in
-  its message as well when the error carried no input outcome. A press without
-  `--record` and `session app … --record` keep their leases as before.
+  its message as well when the error carried no input outcome. When the press was sent and the
+  recording then answered an error (an indeterminate press, a capture after the press that could
+  not be taken), a release that failed is reported only in that error's details'
+  `input_outcome` (`close_stage: "failed"` and `close_error`) and not in its message, which is the
+  recording's own. Since 0.12.66 the press's `executed_at_unix_ms` and the moment its `waited_ms`
+  counts from ("In `recording.json`") are taken after the input and before the release, so neither
+  includes the time the release takes any more (behind the multi-Nemu gate, a close of the device
+  session). A press without `--record` and `session app … --record` keep their leases as before.
   - *Why.* While two or more registered instances use Nemu, every lease end closes the instance's
     device session (the multi-Nemu gate, `keeps_device_session`,
     `crates/runtime-host/src/host/resource_close.rs`). When the lease was the press's alone, its
@@ -1815,10 +1821,14 @@ its instance").
     emulator's own still presses only on a frame the Runtime captured.
   - *What it costs others.* While the lease is held the instance's one queue is held: from the
     press to the end of the captures after it, at most `after_ms + still_max_ms` and one capture
-    more (with the one retry, its capture and status read more). The recording's own hold ("A
-    recording holds its instance") already keeps scheduling away. The command renews the lease
-    while it holds it; a command that is killed ends it with its connection, and a lease no longer
-    renewed ends at its time to live.
+    more (with the one retry, its capture and status read more). On a device that several
+    applications share (a member of a device group of several, `contracts/device-group.md`) the
+    lease holds the whole device for up to that bound: a keyless read-only observation of another
+    member is refused (`device_group_action_refused`), the monitor's probe of another member skips
+    its rounds, and a request queued behind the lease may wait out its own time. The recording's
+    own hold ("A recording holds its instance") already keeps scheduling away. The command renews
+    the lease while it holds it; a command that is killed ends it with its connection, and a lease
+    no longer renewed ends at its time to live.
   - *What it does not give.* When the lease is released at the end, the device session of an
     instance behind the multi-Nemu gate is closed again, so the capture before the *next* press
     opens it again; before 0.12.66 that capture found the session the captures after the previous
