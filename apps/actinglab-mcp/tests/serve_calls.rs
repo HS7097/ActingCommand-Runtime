@@ -2265,6 +2265,56 @@ fn assert_exported_whole(line: &Value, child_line: &Value, exports: &Path) {
     );
 }
 
+/// Workflow #392 DA-5ab (`contracts/display-adapter.md` section 11; the coordinator's work order
+/// of 11-16 on board #392, test "through the MCP front"): `ac_lab_observe` and `ac_do` answer the
+/// command line's own line, so on a display that maps to the package's base their
+/// `frame_coordinates` name the base space, its size and the device size the frame was reduced
+/// from, member for member as `actinglab` prints them (the command line's statement is pinned by
+/// `actingcommand-actinglab::bin:actinglab::lab2_cli::frame::tests::da5ab_frame_coordinates_name_the_base_and_the_device_size_it_was_reduced_from`),
+/// and the frame file the command line hands out.
+#[test]
+fn da5ab_the_mcp_front_answers_the_command_lines_base_coordinates() {
+    let temp = TempDir::new().expect("tempdir");
+    let base = TempDir::new().expect("tempdir");
+    let state = base.path().join("state");
+    let (program, log) = beside_a_made_up_child(base.path());
+    let statement = json!({
+        "space": "base",
+        "base_pixels": [1280, 720],
+        "reduced_from": [1920, 1080],
+        "orientation": "landscape",
+        "applies_to": ["tap", "tap_rect", "swipe"],
+    });
+    let line = json!({
+        "frame_coordinates": statement,
+        "frame_path": "neutral-base-frame.png",
+        "outcome": completed(),
+    });
+    can_answer(
+        &log,
+        "neutral.observe",
+        &json!({"exit_code": 0, "req_id": OBSERVE_REQ_ID, "line": line}),
+    );
+    can_answer(
+        &log,
+        "neutral.do",
+        &json!({"exit_code": 0, "req_id": DO_REQ_ID, "line": line}),
+    );
+
+    let mut server = Server::start(exporting_into(&program, &log, &state, temp.path()));
+    server.initialize();
+    let observe =
+        answered_as(&server.call_tool(2, LAB_OBSERVE, json!({"instance": "neutral.observe"})));
+    let act = answered_as(&server.call_tool(3, LAB_DO, json!({"instance": "neutral.do"})));
+    let status = server.finish();
+    assert_eq!(status.code(), Some(0), "exit at stdin EOF: {status}");
+
+    for (tool, answer) in [(LAB_OBSERVE, &observe), (LAB_DO, &act)] {
+        assert_eq!(answer["frame_coordinates"], statement, "{tool}: {answer}");
+        assert_eq!(answer["frame_path"], line["frame_path"], "{tool}: {answer}");
+    }
+}
+
 #[test]
 fn mcp_lab_overflow_rule() {
     let temp = TempDir::new().expect("tempdir");

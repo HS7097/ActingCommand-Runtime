@@ -50,9 +50,11 @@ actingcommand_contract::outcome_vocabulary! {
         /// number (3/2, 2, 5/2, 3, ...) except a vertical-brake drag, whose brake the contract
         /// holds at exactly 100 pixels while the map would change it; it refuses every input under
         /// any other pure scale, where a point on a box's edge can map outside the box's device
-        /// box, and a Lab declared operation's input on a frame of another size than its package.
-        /// Workflow #392 DA-3b sends the vertical-brake drag under those scales as a drag with a
-        /// pause and a brake, so the token no longer names it.
+        /// box. Workflow #392 DA-3b sends the vertical-brake drag under those scales as a drag
+        /// with a pause and a brake, so the token no longer names it. Workflow #392 DA-5ab: a Lab
+        /// operation's input (an element, coordinates or a declared operation) on a frame of
+        /// another size than its package leaves under that frame's map as a run's input does, so
+        /// the token names it only under such a scale (5/4), as a run's.
         InputScaleUnsupported => "input_scale_unsupported",
         /// Workflow #392 DA-2a: the game's declaration measures on the safe area and the frame's
         /// geometry has no insets: a handset that declares no device model (Workflow #392
