@@ -1313,6 +1313,20 @@ pub(super) fn connection_boundary(
         record_failure(&mut failure, Err(append_error));
     }
     drop(stream);
+    end_connection(&shared, connection_id, failure)
+}
+
+/// The end of the client connection `connection_id` once its stream is gone
+/// (`connection_boundary`; Workflow #461's gate runs it through
+/// `RuntimeHost::end_connection_for_test`): the connection's queued claims and leases are cleaned
+/// up (`cleanup_connection`, a disconnect, or a shutdown's end while the Runtime stops), the
+/// clean-up's failure is recorded beside `failure`, the connection's own failure, and a fatal one
+/// is latched and returned.
+pub(super) fn end_connection(
+    shared: &HostShared,
+    connection_id: ConnectionId,
+    mut failure: Option<RuntimeHostError>,
+) -> RuntimeHostResult<()> {
     let reason = if shared.fatal.is_shutdown_requested() {
         LeaseReleaseReason::HostShutdown
     } else {

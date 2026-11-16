@@ -2476,7 +2476,9 @@ impl HostShared {
     /// (`fence_expired_lease_close`; that end handed the device to no one, whatever instance it
     /// serves), the instance's session, closed still under the guard under a session close ahead
     /// (`close_expired_lease_session_guarded`), before the claim that waits first is granted;
-    /// nothing is owed for any other lease end.
+    /// Workflow #461: so for a lease whose close a disconnect or a backend failure's end met
+    /// lapsed, or whose failed input's close met it (`finish_input_failure`); nothing is owed for
+    /// any other lease end.
     fn cleanup_token_guarded(
         &self,
         token: &LeaseToken,
@@ -2511,11 +2513,21 @@ impl HostShared {
         self.expire_queued_for_instance(token.instance_id())
             .map_err(|failure| *failure.error)?;
         // Workflow #191 H: every lease end keeps the instance's session, a HostShutdown too (the
-        // Host close's second pass closes it under a dedicated close lease).
-        let end = if reason == LeaseReleaseReason::Expired {
-            LeaseDeviceEnd::Expiry
-        } else {
-            LeaseDeviceEnd::Keep
+        // Host close's second pass closes it under a dedicated close lease). Workflow #461: a
+        // client's disconnect and a backend failure's end are the holder's own end, which may
+        // meet its lease lapsed before the sweep did; a close that lapsed lease refuses is then
+        // owed as at the expiry, and made below once the lease has ended (`cleanup_token_guarded`).
+        let end = match reason {
+            LeaseReleaseReason::Expired => LeaseDeviceEnd::Expiry,
+            LeaseReleaseReason::Disconnect | LeaseReleaseReason::BackendFailure => {
+                LeaseDeviceEnd::HolderEnd
+            }
+            LeaseReleaseReason::Explicit
+            | LeaseReleaseReason::Preempted
+            | LeaseReleaseReason::HostShutdown
+            | LeaseReleaseReason::InstancePaused
+            | LeaseReleaseReason::ConnectionPrepared
+            | LeaseReleaseReason::SessionClosed => LeaseDeviceEnd::Keep,
         };
         self.end_lease_device_use(token, connection_id, end)
             .map_err(|failure| *failure.error)?;
@@ -2533,7 +2545,7 @@ impl HostShared {
         // Workflow #437 MAPP-1d: no hand-over while a member of several owes its lapsed close;
         // Workflow #458: nor while any instance owes the close its expiry's lapsed lease refused
         // (fix round 1: an instance alone too, whose transfer would close again under the lapsed
-        // lease).
+        // lease); Workflow #461: nor at a holder's own end that owes it.
         let transfer_reason =
             if self.lapsed_close_owed_in_group(token)? || self.expired_close_owed(token)? {
                 None
