@@ -2326,6 +2326,29 @@
       "notes": "#463 S2-13 (0.12.65; contracts/lab-recording.md, The frames around a press): no lock is taken and nothing is written; no image is decoded, compared or copied. The sequence is every frame the step table stores under a step, its page transition's and superseded ones included, in the order they entered the step table, which their frame ids number: a frame captured from the device enters when it is captured, a frame attached from a file (a mark's sample, a page transition's frame, an offline frame, a step inserted after the stop) when it is attached, and its time is that moment, not the moment its screen was captured; with the frame the press was sent on the sides are the frames before and after it, without one but with the press's time (an application operation's: its completed receipt's) those recorded at or before it and after it, with neither those stored under the steps numbered below the step and the rest. Paths are absolute, as the archive's manifest names the files; a missing file is listed with path null and named in the warning frame_file_missing; a press sent on a capture that was not stored names the stored frame and the warning press_frame_not_stored, and its after are the frames after that one recorded after the press's time"
     },
     {
+      "name": "record review",
+      "module": "authoring",
+      "params": [
+        {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: actinglab's default instance; on the command line only --instance <x> (actinglab's own command reads no positional instance)"},
+        {"name": "record_id", "form": "option", "type": "string", "required": false, "note": "a recording of the instance by its id, active, archived or stopped; absent: the one its session header names, the recording record ready reads"},
+        {"name": "step", "form": "option", "type": "integer", "required": false, "note": "the step's serial number, as record mark --step takes it: only that step is answered and previewed; one that does not exist, is dropped or was converted into a transition is record_step_not_found; absent: every effective step"},
+        {"name": "no_preview", "form": "switch", "type": "boolean", "required": false, "note": "no preview is written: every preview is null and no file is written"},
+        {"name": "state_dir", "form": "option", "type": "dir", "required": false, "note": "the recording session directory; default actinglab's"}
+      ],
+      "help": "Shows each step of a recording as the screen before, the press and the screen after, and writes previews with the press and boxes drawn.",
+      "output": "record_id, session, steps[{step, artifact_step, kind, before{frame_id, path, preview}?, press{point?, to_point?, duration_ms?, rect?, gesture?, application?, source, outcome}?, after{step, frame_id, path, preview, still?, waited_ms?}?, between[{frame_id, path}], marks, missing}], steps_total: how many effective steps the recording has, where steps may be cut",
+      "writes": true,
+      "irreversible": false,
+      "runtime": "offline",
+      "entries": ["lab"],
+      "requests": [],
+      "source": ["actinglab record review", "actinglab session record review", "MCP ac_record_review"],
+      "new": "#463",
+      "slice": "463-S22",
+      "status": "planned",
+      "notes": "#463 S2-2 (0.12.68; contracts/lab-recording.md, Reviewing a recording step by step: record review): offline, under no lock; nothing recorded is written. The recording is the one record ready reads; each effective step, or the one step names, as the step table holds it: before the frame the press happened on (its before_frame, else the step's live primary frame), press its click's region, gesture and execution or its application operation, after the frame its execution or receipt names with the still and waited_ms of its after_capture, between the frames stored between the two under the step after, marks its own marks, missing its items of record ready (the same function, given the game and server record ready takes without flags of its own). A member the step table does not hold is absent: it holds no note, no frame change and no list of the frames of the same screen. Without no_preview each screen's preview is written to the recording's lab/preview/ as s<nn>-before.png and s<nn>-after.png: a copy of the stored frame with the press (a cross and a ring for a tap, an arrow for a swipe, a ring for a long press) and the declared boxes drawn (recognize boxes green, the press box orange, other marks' regions blue; on the after copy the next step's), written through a temporary file and a rename once every frame drawn on matched its sha256 (otherwise record_frame_hash_mismatch and no preview is written); no stored frame is written and none carries a box. steps_total counts the effective steps, answered or not, so that a long recording is read one step at a time with step. Under actinglab's --dry-run the form without no_preview is refused dry_run_unsupported. The first-generation MCP server (actingctl mcp-serve) has no such tool"
+    },
+    {
       "name": "package check",
       "module": "authoring",
       "params": [

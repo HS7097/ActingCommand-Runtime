@@ -17,11 +17,12 @@ use actingcommand_lab::{
     ApplicationSpec, ArchiveCopyFrames, BoxSpec, BoxUse, ClickRetry, ClickSpec, EndingSpec,
     InstalledIdentity, InstalledRow, LAB_RECORD_MARK_SCHEMA, MarkFamily, MarkRequest, MarkSpec,
     OptionalAfterSpec, RecordArchiveOptions, RecordFramesRequest, RecordPoint, RecordRect,
-    RecordReopenOptions, RecordStartOptions, RecordStopOptions, RecordingHold, RecordingLock,
-    StepAction, StepActionKind, TemplateScalesSpec, TransitionSpec, parse_mark_request,
-    record_archive, record_archive_copy, record_archive_warnings, record_frames,
-    record_hold_status, record_instance_check, record_mark, record_ready, record_reopen,
-    record_start, record_start_defaults, record_status, record_stop, record_stop_close,
+    RecordReopenOptions, RecordReviewRequest, RecordStartOptions, RecordStopOptions, RecordingHold,
+    RecordingLock, StepAction, StepActionKind, TemplateScalesSpec, TransitionSpec,
+    parse_mark_request, record_archive, record_archive_copy, record_archive_warnings,
+    record_frames, record_hold_status, record_instance_check, record_mark, record_ready,
+    record_reopen, record_review, record_start, record_start_defaults, record_status, record_stop,
+    record_stop_close,
 };
 use actingcommand_recognition::{MatchMetric, Rect as RecognitionRect};
 use actingcommand_resource_tooling::canonical_locale;
@@ -416,6 +417,21 @@ pub(crate) const RECORD_FRAMES_READS: FlagReads = FlagReads {
     positionals: &[],
 };
 
+/// #463 S2-2: the flags `record review` reads: the recording named by its id (active, archived or
+/// stopped), the one step to answer and whether no preview is written.
+pub(crate) const RECORD_REVIEW_READS: FlagReads = FlagReads {
+    row: "record review",
+    parts: &[
+        &RECORD_SESSION_READS,
+        &ReadPart {
+            options: &["--record-id", "--step"],
+            switches: &["--no-preview"],
+            refused: &[],
+        },
+    ],
+    positionals: &[],
+};
+
 /// Workflow #434 LAB-5B3: the flags `record candidates` reads; its step id is also
 /// its first positional.
 pub(crate) const RECORD_CANDIDATES_READS: FlagReads = FlagReads {
@@ -554,6 +570,8 @@ fn record_reads(action: &str) -> Option<&'static FlagReads> {
         "ready" => &RECORD_READY_READS,
         // #463 S2-13.
         "frames" => &RECORD_FRAMES_READS,
+        // #463 S2-2.
+        "review" => &RECORD_REVIEW_READS,
         _ => return None,
     })
 }
@@ -621,7 +639,7 @@ fn run_session_record_inner(
     let action = args.first().map(String::as_str).ok_or_else(|| {
         CliError::usage(
             "session record requires \
-             start|status|stop|mark|step|candidates|amend|archive|reopen|ready|frames",
+             start|status|stop|mark|step|candidates|amend|archive|reopen|ready|frames|review",
         )
     })?;
     // Workflow #434 LAB-5B4: before anything is read or written.
@@ -631,8 +649,9 @@ fn run_session_record_inner(
         .map(Path::to_path_buf)
         .map(Ok)
         .unwrap_or_else(|| session_state_dir_from_flags(&flags))?;
-    // #463 S2-13: `record frames` writes nothing, not even the session directory.
-    if action != "frames" {
+    // #463 S2-13: `record frames` writes nothing, not even the session directory; #463 S2-2:
+    // `record review` writes its previews alone, in the recording's own directory.
+    if !matches!(action, "frames" | "review") {
         fs::create_dir_all(&state_dir).map_err(|err| {
             CliError::runtime_not_running(format!(
                 "failed to create session state dir {}: {err}",
@@ -802,6 +821,8 @@ fn run_session_record_inner(
         }
         // #463 S2-13: offline, without the recording lock.
         "frames" => run_record_frames(&flags, &state_dir, &instance_id),
+        // #463 S2-2: offline, without the recording lock; it writes its previews alone.
+        "review" => run_record_review(global, &config, &flags, &state_dir, &instance_id),
         "step" => {
             let Some(mut record) = read_json_file::<SessionRecordContext>(&record_path)? else {
                 return Err(CliError::safety_blocked(
@@ -3479,6 +3500,50 @@ fn frames_number<T: std::str::FromStr>(
             })
         })
         .transpose()
+}
+
+/// #463 S2-2 (`contracts/lab-recording.md`, "Reviewing a recording step by step: `record
+/// review`"): `record review [--record-id <id>] [--step <k>] [--no-preview]`, offline and without
+/// the recording lock: each effective step of the recording `record ready` reads, or the one
+/// `--step` names, as the screen before, the press and the screen after, with its items of `record
+/// ready` and, without `--no-preview`, a preview of each screen written under the recording's
+/// `lab/preview/` (`record_review`). `--step` is read as `record frames` reads it
+/// (`frames_number`). The items are those `record ready` answers given none of its own flags: the
+/// game and server of actinglab's global options, else the recording's, the Lab's and the
+/// installation's (`identity_options` of no flags). Under `--dry-run` the previews are files
+/// written, so the form without `--no-preview` is refused `dry_run_unsupported` before anything of
+/// the recording is read; with it nothing is written (`no_effect`). The answer is the Lab's.
+fn run_record_review(
+    global: &GlobalOptions,
+    config: &UserConfig,
+    flags: &FlagArgs,
+    state_dir: &Path,
+    instance_id: &str,
+) -> CliOutcome<Value> {
+    let no_preview = flags.bool("--no-preview");
+    if !no_preview {
+        crate::dry_run_gate::refuse(
+            global,
+            "record review",
+            Some("record review --no-preview"),
+            json!({"action": "review"}),
+        )?;
+    }
+    let request = RecordReviewRequest {
+        record_id: record_flag_value(flags, "--record-id")?,
+        step: frames_number(flags, "--step", "step")?,
+        no_preview,
+    };
+    let options = identity_options(global, config, &FlagArgs::default(), instance_id)?;
+    let outcome = record_review(
+        state_dir,
+        instance_id,
+        &request,
+        &options,
+        crate::offline_ocr::lab_ocr(),
+    )?;
+    serde_json::to_value(outcome)
+        .map_err(|error| CliError::usage(format!("failed to encode record review output: {error}")))
 }
 
 fn record_mark_request_from_flags(flags: &FlagArgs) -> CliOutcome<MarkRequest> {

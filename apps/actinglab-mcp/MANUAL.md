@@ -343,6 +343,19 @@ naming this file.
   `record_id`) lists the stored frames captured just before the frame a step's press was sent on
   and just after the press, with their paths, capture times and offsets from the press; it reads
   only and takes no lock.
+  #463 S2-2 (0.12.68; `contracts/lab-recording.md`, "Reviewing a recording step by step"):
+  `ac_record_review` (`record_id`, `step`, `no_preview`, `state_dir`) answers each step of the
+  recording `ac_record_ready` reads as the screen before (`before`), what was pressed (`press`) and
+  the screen after (`after`, with `still` and `waited_ms` where the step table holds them), the
+  frames stored between, the step's marks and its items of `ac_record_ready` (`missing`); a member
+  the step table does not hold is absent. Unless `no_preview`, it writes a preview of each screen
+  under the recording's `lab/preview/` (`s<nn>-before.png`, `s<nn>-after.png`, their absolute
+  paths in `preview`): a copy of the stored frame with the press and the step's boxes drawn
+  (recognize boxes green, the press box orange, other marks blue; on the screen after the next
+  step's). Nothing recorded changes and no stored frame carries a box; a frame whose bytes do not
+  match its sha256 is `record_frame_hash_mismatch` and no preview is written. It takes no lock.
+  `steps_total` counts every step: an answer over the budget is written whole to the export
+  directory (section 5); `step` answers one step, so read a long recording step by step.
   #463 S2-5 (0.12.65; `contracts/lab-recording.md`, "Drawing a box"): stage two marks a draft with
   boxes: `ac_record_mark` with `box` (`recognize=x1,y1:x2,y2` or `press=x1,y1:x2,y2`, two opposite
   corners in the frame's pixels; or `boxes` in `request_json`) on any step. A recognize box is a

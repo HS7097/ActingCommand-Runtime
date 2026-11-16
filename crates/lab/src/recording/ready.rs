@@ -282,8 +282,8 @@ fn stage_two_written(recording: &LabRecording) -> bool {
 /// The frame the press of `step` happened on, as stage one recorded it: its click's or its
 /// application operation's `before_frame`. Fix round 2: a click without an execution, whose press
 /// `--reopen-step` moved aside, names its last attempt's (an application operation moved aside
-/// keeps no frame).
-fn press_frame(step: &RecordingStep) -> Option<String> {
+/// keeps no frame). #463 S2-2: `record review` names a step's screen before by it.
+pub(crate) fn press_frame(step: &RecordingStep) -> Option<String> {
     step.click
         .as_ref()
         .and_then(|click| click.execution.as_ref().or_else(|| click.attempts.last()))
@@ -437,8 +437,9 @@ pub(crate) fn with_size_item(size: Option<&LabError>, missing: Vec<ReadyItem>) -
 }
 
 /// #463 stage two, train 1: whether `rect` is one pixel, the rectangle of a press recorded by its
-/// point until a press box (#463 S2-5) gives it a region.
-const fn one_pixel(rect: RecordRect) -> bool {
+/// point until a press box (#463 S2-5) gives it a region. #463 S2-2: `record review` draws a press
+/// region that is no such point.
+pub(crate) const fn one_pixel(rect: RecordRect) -> bool {
     rect.width == 1 && rect.height == 1
 }
 

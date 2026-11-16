@@ -24,7 +24,9 @@ rectangle and no carrier package ("Recording while playing"). #463 S1-7: a recor
 instance: `record start` pauses the instance's scheduling with a reason of its own and the end of
 the recording resumes only that pause ("A recording holds its instance"). #463 S2-1: `record ready`
 lists at once everything a recording still lacks before `record stop` can make its package, and its
-state ("What a recording still lacks: `record ready`").
+state ("What a recording still lacks: `record ready`"). #463 S2-2: `record review` answers each step
+as the screen before, the press and the screen after, and writes previews with the press and the
+boxes drawn on copies ("Reviewing a recording step by step: `record review`").
 
 The recording state lives in the Lab state directory. Nothing in this document writes to
 the Runtime ledger; the clicks and application operations themselves are executed by the
@@ -42,6 +44,7 @@ recording's hold is a scheduling pause the Runtime sets, lifts and records as ev
 <state>/record-artifacts/<record_id>/lab/crops/<sha256>.png  template crops, content-addressed
 <state>/record-artifacts/<record_id>/lab/out/<package_id>.<zip|json>  the package record stop generated
 <state>/record-artifacts/<record_id>/lab/archive-manifest-<n>.json      actingcommand.lab-recording-archive.v2 (Workflow #449; #463 S1-5: v1 on disk is read)
+<state>/record-artifacts/<record_id>/lab/preview/s<nn>-<before|after>.png  previews record review writes (#463 S2-2); nothing reads them
 ```
 
 `<instance>` and `<record_id>` use the file-stem rule of the `record` command: ASCII
@@ -2570,6 +2573,97 @@ every frame stored before that mark: on a recording marked after its presses it 
             "offset_ms": 104, "stored_under_step": 4}],
  "before_total": 4, "after_total": 12,
  "warnings": [{"code": "frame_file_missing", "frame_ids": ["f0009"]}]}
+```
+
+## Reviewing a recording step by step: `record review`
+
+```
+record review [--record-id <id>] [--step <k>] [--no-preview] [--state-dir <dir>]
+```
+
+#463 S2-2 (0.12.68; the owner approved the three-stage blueprint of package making on board #463:
+stage two turns the recorded material into a package offline, the tool hands back the material and
+the agent decides; her ruling there: a preview's boxes are rendered onto a copy, and the stored
+frames carry no box; the rules here are the coordinator's). Through the Lab's MCP server
+(`actinglab-mcp`) it is `ac_record_review` (`record_id`, `step`, `no_preview`, `state_dir`;
+[lab-operations.json](lab-operations.json), the row `record review`); today's server (`actingctl
+mcp-serve`) has no such tool.
+
+- **Which recording, which steps.** The recording `record ready` reads, found by the same function
+  (the instance's, or the active, archived or stopped one `--record-id` names; the same refusals),
+  read once. Every effective step in the order a run meets them, or with `--step <k>` the step of
+  that serial number alone (a step that does not exist, is dropped or was converted is
+  `record_step_not_found`, 3, before `record ready`'s checks run). `steps_total` is how many
+  effective steps the recording has, answered or not.
+- **It changes nothing recorded.** It takes no recording lock, reaches no Runtime and writes no
+  file of the recording but its previews: the step table, the frames, the crops, the manifests and
+  the session header keep their bytes. It does not create the session state directory.
+- **Each step**, as the step table holds it; a member the step table does not hold is absent,
+  never invented (it holds no note, no frame-change measure of a stored frame and no list of the
+  frames of the same screen, so the answer has none of them):
+  - `step` (the serial number `record mark --step` takes), `artifact_step` (its number in the
+    package), `kind` (as `record frames` and the archive's manifest name it: `tap`, `swipe`,
+    `long_press`, `application`, `none`, ...);
+  - `before`: the screen the press happened on, the press's `before_frame` as `record ready` names
+    it (a click's execution's, else its last attempt's, else the application operation's receipt's),
+    else, on a step without a press (the final screen), the step's live primary frame: `frame_id`,
+    `path` (the frame's file, absolute, as the manifest names it) and `preview` (the preview's
+    absolute path, or `null`); absent on a step without a frame (an entry launch);
+  - `press`: what was pressed: a click's `rect` (one pixel for a press recorded by its point, the
+    press box once one is drawn), `gesture`, and once performed its `point`, `to_point` (a swipe's
+    end; a long press's point again) and `duration_ms`; or an application operation's
+    `application` (its action); `source` (the click's, `point`, `swipe`, ..., or the operation's,
+    `executed` or `declared`) and `outcome` (`declared`, `executed` or `indeterminate`, as `record
+    status` names a click's); absent on a step without an effect;
+  - `after`: the frame the click's execution or the application operation's receipt names as its
+    `after_frame`: `step` (the step it is stored under, the next step), `frame_id`, `path`,
+    `preview`, and from its `after_capture` `still` (whether the captures after the press found the
+    screen still; absent when no stillness test ran) and `waited_ms`; absent where none is named;
+  - `between`: the frames stored between the screen before and the screen after, `{frame_id,
+    path}`, in the order they entered the step table: those of the step the screen after opened that
+    entered after the screen before (the captures of the press's after loop it did not name);
+  - `marks`: the step's own marks as stored (a recognize box is the template mark
+    `box/<nn>/<x>_<y>_<w>_<h>`; a press box is `press.rect`);
+  - `missing`: the step's items of `record ready`, as `record ready` answers them (the same
+    function on the same recording, given the game and the server `record ready` takes without
+    flags of its own: actinglab's global `--game` and `--server`, else the recording's, the Lab's
+    instance configuration's and the installation's).
+- **The previews.** Without `--no-preview`, each screen before and each screen after is written as
+  a PNG under the recording's `lab/preview/`, named by the step's serial number and the role:
+  `s<nn>-before.png`, `s<nn>-after.png` (two digits, more above 99), never under `frames/` or
+  `crops/`. A preview is a copy of the stored frame, decoded from its file once its bytes matched
+  their sha256, with drawn on it, by plain pixel writes: on the screen before every box the step
+  declares, each mark's region (a recognize box green `#00ff00`, every other mark blue `#00a0ff`)
+  and the press box (orange `#ff8000`: the click's region when it is no recorded point, and a
+  drag's end region when that is none either), two pixels thick inside the rectangle, then the
+  press in magenta `#ff00ff`: a cross and a ring at a tap's point, an arrow from a swipe's start to
+  its end, a ring at a long press's point, the ring's radius a fortieth of the frame's shorter side
+  and at least six pixels; on the screen after the boxes of the step it is stored under, and no
+  press. Every frame a preview is drawn on is read and its sha256 checked before any preview is
+  written: one whose bytes do not match is `record_frame_hash_mismatch` (3), as every read of a
+  stored frame answers it, and no preview is written. Each is written through a temporary file and
+  a rename, so that two reviews at once leave no torn file; a later review writes them again. The
+  boxes exist only on the previews: no stored frame is written.
+- **Through MCP and `--dry-run`.** A long recording's answer may outgrow the MCP server's budget:
+  it is then written whole to the server's export directory with `answer_exported`; `steps_total`
+  says how many steps there are, and `--step` reads them one at a time. Under actinglab's
+  `--dry-run`, `--no-preview` writes nothing (`no_effect`) and the form without it is refused
+  `dry_run_unsupported` before the recording is read, its alternative `record review --no-preview`.
+
+```json
+{"record_id": "…", "session": "active", "steps_total": 4,
+ "steps": [{"step": 1, "artifact_step": 1, "kind": "tap",
+            "before": {"frame_id": "f0001", "path": "…/lab/frames/<sha256>.png",
+                       "preview": "…/lab/preview/s01-before.png"},
+            "press": {"point": {"x": 28, "y": 28}, "rect": {"x": 28, "y": 28, "width": 1, "height": 1},
+                      "source": "point", "outcome": "executed"},
+            "after": {"step": 2, "frame_id": "f0004", "path": "…", "preview": "…/lab/preview/s01-after.png",
+                      "still": false, "waited_ms": 300},
+            "between": [{"frame_id": "f0002", "path": "…"}, {"frame_id": "f0003", "path": "…"}],
+            "marks": [],
+            "missing": [{"order": 1, "step": 1, "artifact_step": 1, "frame_id": "f0001",
+                         "what": "page_recognition", "code": "record_step_without_recognition",
+                         "hint": "record mark --step 1 --template <id>=x,y,w,h"}]}]}
 ```
 
 ## Optional steps

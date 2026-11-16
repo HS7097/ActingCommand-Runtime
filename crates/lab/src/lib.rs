@@ -87,6 +87,10 @@ mod gate_463_s21;
 // #463 S2-13: `record frames` lists the stored frames just before and just after one step's press.
 #[cfg(test)]
 mod gate_463_s213;
+// #463 S2-2: `record review` answers each step as the screen before, the press and the screen
+// after, and writes its previews.
+#[cfg(test)]
+mod gate_463_s22;
 // #463 S2-5: boxes drawn on a recording step, a region to recognize by and a region to press.
 #[cfg(test)]
 mod gate_463_s25_boxes;

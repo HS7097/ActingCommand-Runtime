@@ -3718,3 +3718,18 @@ tests = [
     "actingcommand-actinglab::runtime_input_proxy::da5_train_recorded_do_and_observe_after_the_display_changed_send_and_write_nothing",
 ]
 incident = ["#392 DA-5"]
+
+# #463 S2-2 (0.12.68; register §1.439; brief rd-1116/brief-463-s22-record-review.md; contracts/lab-recording.md, "Reviewing a recording step by step: `record review`"): record review answers each effective step of the recording record ready reads as the screen before, the press and the screen after, as the step table holds them, with its items of record ready, and writes previews, copies of the stored frames with the press and the declared boxes drawn, under the recording's lab/preview/. On S2-5's bench (record_press with a fake Runtime, 160x90 screens of gray with a square of noise, the caller's clock moving only by its waits): a tap whose captures after it take two other screens before the settled one (the bound reached, not still), a swipe, a long press and the final screen. Each step's before (the press's before_frame, the last step its live frame), press (the click's rect, source, gesture, point, end and duration, outcome executed) and after (the next step, the execution's after_frame, still and waited_ms of its after_capture), the tap's two captures between, paths to the frames' files, no note and no same_screen (1); step answers that step as the whole answer has it, steps_total 4, step 9 record_step_not_found (2); the previews are the seven files under lab/preview/ the answer names (s01-before.png to s04-before.png, s01-after.png to s03-after.png), each of its frame's size, every other file of the state directory byte for byte (3); no_preview: every preview null, no file written (4); on boxes drawn with record mark (step 1 a recognize and a press box over its button, step 3 a recognize box): the tap's point and the swipe's start in the press colour, the press box's and the recognize box's corners in their colours, the long press's ring at its radius, step 3's recognize box on step 2's screen after and no press on step 1's, the stored frame different at each such pixel and equal to the preview away from them, every frame file its recorded sha256 (5); each step's missing equals record ready's items of that step (6); after record archive, by the session header and by its id: session archived, the same steps (7); a frame file with another screen's bytes: record_frame_hash_mismatch, no file under lab/preview/, the file left as it was, and step 4, whose frame is intact, reviewed with its one preview (8). Adapted (gate "Workflow #434 LAB-5B4"): every_own_command_refuses_a_flag_it_does_not_read lists 34 own commands, record review after record frames.
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-lab::lib::gate_463_s22::s22_three_steps_answer_their_before_press_and_after",
+    "actingcommand-lab::lib::gate_463_s22::s22_step_answers_that_step_alone",
+    "actingcommand-lab::lib::gate_463_s22::s22_previews_are_written_under_lab_preview_and_nothing_recorded_changes",
+    "actingcommand-lab::lib::gate_463_s22::s22_no_preview_writes_no_file",
+    "actingcommand-lab::lib::gate_463_s22::s22_a_preview_shows_the_press_and_the_declared_boxes",
+    "actingcommand-lab::lib::gate_463_s22::s22_a_steps_missing_is_record_readys_items_for_that_step",
+    "actingcommand-lab::lib::gate_463_s22::s22_an_archived_recording_is_reviewed_the_same",
+    "actingcommand-lab::lib::gate_463_s22::s22_a_frame_that_no_longer_matches_its_sha256_is_refused_and_no_preview_is_written",
+]
+incident = ["#463 S2-2"]

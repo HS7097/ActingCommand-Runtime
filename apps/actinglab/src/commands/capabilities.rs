@@ -157,6 +157,9 @@ pub(crate) fn command_capabilities() -> Vec<Value> {
             ["offline", "read_only"],
             "available",
         ),
+        // #463 S2-2: each step as the screen before, the press and the screen after; it writes its
+        // previews alone.
+        command_cap("session record review", ["offline"], "available"),
         command_cap("record", ["offline"], "available"),
         command_cap("record start", ["offline", "runtime_optional"], "available"),
         command_cap("record status", ["offline"], "available"),
@@ -178,6 +181,8 @@ pub(crate) fn command_capabilities() -> Vec<Value> {
         command_cap("record ready", ["offline", "read_only"], "available"),
         // #463 S2-13.
         command_cap("record frames", ["offline", "read_only"], "available"),
+        // #463 S2-2.
+        command_cap("record review", ["offline"], "available"),
         command_cap("capture --record", ["device"], "available"),
         command_cap("session capture --record", ["device"], "available"),
         command_cap("session app --record", ["device"], "available"),

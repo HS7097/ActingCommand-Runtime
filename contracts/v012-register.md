@@ -31997,6 +31997,77 @@ the owner's words). What it changed of this section, with §1.436 (DA-5ab):
   `record_display_not_base` and `record_size_not_base` (the index regenerated). No code, word, key,
   member or revision is added by the train.
 
+### 1.439 Slice #463 S2-2 (0.12.68): `record review` answers each step of a recording as the screen before, the press and the screen after, with rendered previews (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making, whose stage two turns the recorded material into a package offline, and her rulings of the night of 11-15 there: the tool hands back the material and the agent decides, and a preview's boxes are rendered onto a copy while the stored frames carry no box; the design `rd-1115/pack-stage12-design.md`, B1.2 and B1.6, the row S2-2 of B5, of which `shared`, `suggestions` and `candidates` are not built; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1116/brief-463-s22-record-review.md`, stacked on the Lab display train, #1780, at its head `2ff33cb3d3`)
+
+The coordinator gave this slice 1.439. It stands on the train of DA-5ab and DA-5cd (§1.436,
+§1.437, #1780) and ships in 0.12.68.
+
+**Why.** An agent saw a recording only as the step table (`record status`) and single frames on
+request (`record frames`, §1.426). This read lays each step out as the screen before, where the
+press went and the screen after, with the step's marks and its items of `record ready` (§1.425),
+and draws the press and the declared boxes on copies of the stored frames
+([lab-recording.md](lab-recording.md), "Reviewing a recording step by step: `record review`").
+
+**Established by reading** (the code's facts where the work order or the design said otherwise).
+- *What the step table holds.* A step holds no note (the design's S1-6 notes were not built), no
+  frame-change measure of a stored frame (stage one's after loop compares digests in memory and
+  stores none) and no list of the frames of the same screen (S2-5 measures a capture against the
+  step's live frame when a box is drawn, and stores the result nowhere). The work order's rule, a
+  member the step table does not hold is absent, never invented, decides: the answer has no `note`,
+  no `same_screen` and no change on a frame `between`.
+- *`runtime: none`.* As §1.426 found, the table's word is `offline`; the row says `offline`.
+- *The cut for MCP's budget.* `record frames` marks no cut: its sides are bounded by its request
+  and counted (`before_total`, `after_total`), and a child's success over the budget is written
+  whole to the export (`answer_exported`; no row of the server's `LAB_ROWS` keeps parts of it).
+  This read does the same: `steps` beside `steps_total`, `--step` for one step; the MCP server is
+  not changed.
+- *No drawing crate.* The design proposed `imageproc`; the work order adds no dependency (no
+  `cargo` here, so the lock file cannot be regenerated). The previews are drawn by plain pixel
+  writes on the frame `Frame::from_png` decodes and encoded with `Frame::encode_png_fast`, the
+  device crate's, which the Lab already uses for its crops.
+- *The screen before of a step without a press* (the final screen) is its live primary frame; a
+  press's is its `before_frame` as `record ready` names it (`ready::press_frame`).
+
+**What it builds.**
+
+| Part | Where |
+|---|---|
+| The read | `record_review` (`crates/lab/src/recording_api.rs`), which reads the recording with `ready_recording` and takes `record ready`'s answer from `ready_of`, the body of `record_ready` moved into a function of its own (`record_ready` calls it, its answer unchanged); `review_outcome`, `RecordReviewRequest`, `RecordReviewOutcome` and its parts (`crates/lab/src/recording/review.rs`, new); `around::sequence_of` and `Stored`, `ready::press_frame` and `one_pixel`, `recording_api::click_outcome` are `pub(crate)` |
+| The previews | `crates/lab/src/recording/preview.rs` (new): `render`, its colours and `press_radius`; written with `store::write_atomic` after `store::read_verified` of every frame drawn on |
+| The command | `record review` and `session record review`: `RECORD_REVIEW_READS`, the dispatch (no lock, no session directory created), `run_record_review` (`--step` read by `frames_number`, the options by `identity_options` of no flags, the dry-run refusal) (`apps/actinglab/src/commands/session_record.rs`) |
+| The registers | `own_flags::READ_LIST_ROWS` and `reads`, `engine::COMMANDS`, `words::BUILT_SLICES` and the Lab's MCP server's `ACTINGLAB_SLICES` (slice `463-S22`), the capability entries `record review` and `session record review` and their dry-run declarations (mixed: `--no-preview` `no_effect`, without it `dry_run_unsupported`) |
+| The table | the row `record review` (authoring, `runtime: offline`, `writes: true`, `help` 136 bytes), so that the Lab's MCP server offers `ac_record_review`; today's server (`actingctl mcp-serve`) gets nothing |
+| Texts | [lab-recording.md](lab-recording.md), "Reviewing a recording step by step: `record review`" (new), its file list and its opening; [actinglab-dry-run.md](actinglab-dry-run.md), the `record` row; `apps/actinglab-mcp/MANUAL.md`, "Recordings" |
+
+**Codes and words.** None is added and no fragment changes. A frame drawn on whose bytes do not
+match its sha256 is `record_frame_hash_mismatch` (3), as every read of a stored frame answers it,
+and then no preview is written; a step that does not exist, is dropped or was converted is
+`record_step_not_found` (3); no recording to read is `record_session_not_active`,
+`record_lab_unavailable` or `record_instance_mismatch`, as `record ready` answers; a preview that
+cannot be decoded or encoded is `record_frame_unreadable`, as a crop's is. No decision reads a
+code.
+
+**Tests.** `crates/lab/src/gate_463_s22.rs` (exec gate map "#463 S2-2"; S2-5's bench, no
+Runtime, no clock read): each step's before, press and after as the step table holds them, the
+tap's two captures between, no `note` and no `same_screen`; `step` answering one step as the whole
+answer has it and `record_step_not_found`; the seven previews under `lab/preview/` the answer names,
+each of its frame's size, every other file byte for byte; `--no-preview` writing no file; the
+pixels of the press and of a press box's and a recognize box's outline, the next step's box on the
+screen after, the stored frames unchanged; each step's `missing` equal to `record ready`'s items of
+that step; an archived recording reviewed the same, by the session header and by its id; a frame
+file with other bytes refused with no preview written, and the intact step reviewed alone.
+Adapted, as the requirement changes what it pins: `apps/actinglab/src/tests/gate_434_lab5b4.rs`,
+whose list of the own commands that refuse an unknown flag is held equal to `READ_LIST_ROWS` and
+the unrowed lists (34 now, `record review` after `record frames`). No test leaves the gate map.
+
+**What is not changed.** Any recorded file; the step table's format; `record ready`'s answer;
+`record stop`'s decisions and the generator; the recording lock; today's MCP server.
+
+**At deploy.** Nothing to configure. Recordings already on disk are read as they are: a press an
+earlier build recorded without `before_frame` or `after_frame` answers the step's live frame as its
+screen before and no screen after. Through MCP the tool is `ac_record_review` of the Lab's MCP
+server (`actinglab-mcp`).
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

@@ -119,10 +119,11 @@ pub struct RecordFramesWarning {
     pub frame_ids: Vec<String>,
 }
 
-/// One frame of the sequence and the step it is stored under.
-struct Stored<'a> {
-    frame: &'a RecordedFrame,
-    step: u32,
+/// One frame of the sequence and the step it is stored under. #463 S2-2: `record review` reads the
+/// same sequence.
+pub(crate) struct Stored<'a> {
+    pub(crate) frame: &'a RecordedFrame,
+    pub(crate) step: u32,
 }
 
 /// What the step table holds of a step's press.
@@ -323,7 +324,7 @@ fn press_record(step: &RecordingStep) -> Pressed<'_> {
 
 /// Every frame the step table stores under a step, its page transition's too, in the order of its
 /// frame ids' numbers, each with its step.
-fn sequence_of(recording: &LabRecording) -> Vec<Stored<'_>> {
+pub(crate) fn sequence_of(recording: &LabRecording) -> Vec<Stored<'_>> {
     let mut sequence = Vec::new();
     for step in &recording.steps {
         let transition = match &step.transition {

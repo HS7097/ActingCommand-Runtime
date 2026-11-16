@@ -90,9 +90,11 @@ pub(crate) fn instructions(budget_s: u64) -> String {
 /// Workflow #463 S3-10 (`PACK-TRIAL`): its row `standard-pack trial`, through a `serve` child.
 /// #463 S2-1: its row `record ready` (`ac_record_ready`), through a `serve` child.
 /// #463 S2-13: its row `record frames` (`ac_record_frames`), through a `serve` child.
-pub(crate) const ACTINGLAB_SLICES: [&str; 14] = [
+/// #463 S2-2: its row `record review` (`ac_record_review`), through a `serve` child.
+pub(crate) const ACTINGLAB_SLICES: [&str; 15] = [
     "463-S2-13",
     "463-S21",
+    "463-S22",
     "463-V3",
     "464-P3",
     "LAB-1",
