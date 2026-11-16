@@ -21,23 +21,44 @@
 //   the display read alone (nothing asked of the scheduling, so the instance is not held), and the
 //   session directory holds nothing but the recording lock's own files.
 // - `da5cd_record_start_on_a_display_of_the_base_size_starts_as_before`: at 1280x720 the start
-//   holds the instance with its own pause as before, its answer naming the display.
+//   holds the instance with its own pause as before, its answer naming the display the Runtime
+//   last observed and when (fix round 1: `display_last_observed`).
 // - `da5cd_a_recording_of_another_display_is_listed_refused_and_still_read`: a recording whose
-//   frames are 1920x1080 (as one made on such a display before this slice): `record ready` lists
-//   `display_not_base` first, `record stop` refuses it `record_display_not_base` and writes
-//   nothing, `record status` reads it and `record archive` archives it.
+//   header names no base size (a unit test's `record start` writes none) and whose frames are
+//   1920x1080 (as one made on such a display before this slice): fix round 1, the code
+//   `record_size_not_base`: `record ready` lists `size_not_base` first, `record stop` refuses it
+//   and writes nothing, a frame added to it is refused, `record status` reads it and `record
+//   archive` archives it.
+// Fix round 1 (coordinator work order rd-1116/brief-392-da5cd-fix2.md; review rd-1116/review-1781.md,
+// its sections (a), (b), (f) and (g)):
+// - `da5cd_fix1_record_start_writes_the_base_size_and_checks_the_first_frame`: `record start`
+//   with the installed base size (this thread's test switch set to `RECORDING_BASE_SIZE`) and no
+//   Runtime, so no display is known: the recording's header names `base_size` 1280x720 and no
+//   size; a first frame of another aspect (2400x1080), one smaller than the base (640x360) and one
+//   of 1920x1080 are each refused `record_display_not_base` with its size and the base size, the
+//   recording's files byte for byte as they were; a frame of 1280x720 then opens step 1 and the
+//   recording takes its size.
+// - `da5cd_fix1_detect_page_tap_target_and_navigate_carry_their_values_through_mcp`: through
+//   `serve --stdio --front mcp`, the refusal `lab_scene_size_unsupported` of `detect-page`,
+//   `tap-target` with `dry_run` and `navigate` with `dry_run` on a scene of another ratio carries
+//   its values on the line (exit 1, as every refusal of actinglab's own line).
 // Synthetic neutral packages and frames, temporary roots, a scripted Runtime on loopback; no
 // device, no clock, no sleep.
 
 use super::gate_434_lab5b4::{Isolated, printed};
 use super::gate_463_s17::{INSTANCE, Place, RECORD_ID, instance, operations, paused, status, wire};
 use super::*;
+use crate::cli_module::{self, serve};
+use crate::commands::session_record::recording_base_for_tests;
 use actingcommand_contract::{
     DISPLAY_FRAME_EXTENT_FACT_KEY, FactContent, FactRecord, FactScalar, FactScope, FactValue,
-    InstanceFactView, RuntimeRequest, RuntimeResult, RuntimeStateSource,
+    InstanceFactView, LabResult, RuntimeRequest, RuntimeResult, RuntimeStateSource,
 };
 use actingcommand_device::{CaptureBackendName, Frame, PixelFormat};
-use actingcommand_lab::{AttachFrameRequest, RecordingLock, record_attach_frame};
+use actingcommand_lab::{
+    AttachFrameOutcome, AttachFrameRequest, RECORDING_BASE_SIZE, RecordingLock, record_attach_frame,
+};
+use actingcommand_lab_ops::initiator::ENVIRONMENT_VARIABLE;
 use actingcommand_runtime_client::test_support::{
     ScriptedAnswer, ScriptedConnection, ScriptedRuntime,
 };
@@ -594,8 +615,8 @@ fn da5cd_record_start_on_a_display_of_the_base_size_starts_as_before() {
     assert_eq!(started["lab_recording"]["status"], "active", "{started}");
     assert_eq!(started["hold"]["state"], "own", "{started}");
     assert_eq!(
-        started["display_extent"],
-        json!({"width": 1280, "height": 720}),
+        started["display_last_observed"],
+        json!({"width": 1280, "height": 720, "observed_at_unix_ms": 1}),
         "{started}"
     );
     assert!(record.unscripted.is_empty(), "a connection beyond the one");
@@ -647,76 +668,87 @@ fn files_under(dir: &Path) -> Vec<(String, Vec<u8>)> {
     files
 }
 
+/// A frame of `width` x `height` whose every pixel is the entry page's colour, as a PNG.
+fn solid_png(width: u32, height: u32) -> Vec<u8> {
+    let pixels = (0..width * height).flat_map(|_| ENTRY).collect();
+    Frame::from_pixels(
+        width,
+        height,
+        pixels,
+        PixelFormat::Rgb8,
+        CaptureBackendName::FixtureSimulation,
+    )
+    .expect("a fixture frame")
+    .encode_png_fast()
+    .expect("its PNG")
+}
+
+/// `png` added, as a Runtime observation, to the active recording of `INSTANCE` in the session
+/// directory `state`, under the recording lock, which is released when it answers.
+fn attach(state: &str, png: Vec<u8>) -> LabResult<AttachFrameOutcome> {
+    let lock = RecordingLock::acquire(Path::new(state), INSTANCE, "gate_392_da5cd", "Lab-CLI")
+        .expect("recording lock");
+    record_attach_frame(
+        &lock,
+        AttachFrameRequest {
+            png,
+            source: "runtime_observation".to_owned(),
+            runtime_artifact: None,
+            capture_backend: None,
+            freshness: None,
+        },
+    )
+}
+
 #[test]
 fn da5cd_a_recording_of_another_display_is_listed_refused_and_still_read() {
     let _guard = env_lock();
     let isolated = Isolated::new();
     let state = isolated.path("session");
-    // Started while nothing listens: no display is known, and the recording takes its first
-    // frame's size, as one made before this slice took it.
+    // Started while nothing listens: no display is known, and (a unit test's `record start` writes
+    // no base size) the recording takes its first frame's size, as one made before this slice took
+    // it.
     let (code, started) = record(
         &state,
         "start",
         &["--task-id", "neutral_task", "--record-id", "rec_1080"],
     );
     assert_eq!(code, 0, "{started}");
-    assert_eq!(started["display_extent"], Value::Null, "{started}");
-    {
-        let lock = RecordingLock::acquire(Path::new(&state), INSTANCE, "gate_392_da5cd", "Lab-CLI")
-            .expect("recording lock");
-        let mut pixels = Vec::new();
-        for _ in 0..1920 * 1080 {
-            pixels.extend(ENTRY);
-        }
-        let png = Frame::from_pixels(
-            1920,
-            1080,
-            pixels,
-            PixelFormat::Rgb8,
-            CaptureBackendName::FixtureSimulation,
-        )
-        .expect("a 1920x1080 frame")
-        .encode_png_fast()
-        .expect("its PNG");
-        record_attach_frame(
-            &lock,
-            AttachFrameRequest {
-                png,
-                source: "runtime_observation".to_owned(),
-                runtime_artifact: None,
-                capture_backend: None,
-                freshness: None,
-            },
-        )
+    assert_eq!(started["display_last_observed"], Value::Null, "{started}");
+    attach(&state, solid_png(1920, 1080))
         .unwrap_or_else(|error| panic!("frame: {}: {}", error.code, error.message));
-    }
     let dir = Path::new(&state)
         .join("record-artifacts")
         .join("rec_1080")
         .join("lab");
     let before = files_under(&dir);
+    let values =
+        json!({"frame_width": 1920, "frame_height": 1080, "base_width": 1280, "base_height": 720});
 
     let (code, ready) = record(&state, "ready", &[]);
     assert_eq!(code, 0, "{ready}");
     assert_eq!(ready["missing"][0]["order"], 1, "{ready}");
-    assert_eq!(ready["missing"][0]["what"], "display_not_base", "{ready}");
+    assert_eq!(ready["missing"][0]["what"], "size_not_base", "{ready}");
     assert_eq!(
-        ready["missing"][0]["code"], "record_display_not_base",
+        ready["missing"][0]["code"], "record_size_not_base",
         "{ready}"
     );
 
     let (code, stopped) = record(&state, "stop", &[]);
     assert_eq!(code, 1, "{stopped}");
     assert_eq!(
-        stopped["outcome"]["code"], "record_display_not_base",
+        stopped["outcome"]["code"], "record_size_not_base",
         "{stopped}"
     );
-    assert_eq!(
-        stopped["outcome"]["values"],
-        json!({"frame_width": 1920, "frame_height": 1080, "base_width": 1280, "base_height": 720}),
-        "{stopped}"
-    );
+    assert_eq!(stopped["outcome"]["values"], values, "{stopped}");
     assert_eq!(files_under(&dir), before, "record stop wrote nothing");
+
+    // Fix round 1: a frame added to such a recording is refused before it is stored.
+    let added = attach(&state, solid_png(1920, 1080)).expect_err("a frame added to it");
+    assert_eq!(added.code, "record_size_not_base", "{}", added.message);
+    let details = added.details.clone().unwrap_or(Value::Null);
+    assert_eq!(details["outcome"]["values"], values, "{details}");
+    assert_eq!(files_under(&dir), before, "the refused frame wrote nothing");
 
     let (code, shown) = record(&state, "status", &[]);
     assert_eq!(code, 0, "{shown}");
@@ -731,4 +763,160 @@ fn da5cd_a_recording_of_another_display_is_listed_refused_and_still_read() {
     assert_eq!(code, 0, "{archived}");
     assert_eq!(archived["status"], "archived", "{archived}");
     assert_eq!(archived["lab"]["manifest"]["written"], true, "{archived}");
+}
+
+// ---- Fix round 1: the base size in the recording's header, checked at its first frame ----
+
+/// The recording `rec_base`'s header (`recording.json`) under the session directory `state`.
+fn base_header(state: &str) -> Value {
+    let path = Path::new(state)
+        .join("record-artifacts")
+        .join("rec_base")
+        .join("lab")
+        .join("recording.json");
+    serde_json::from_slice(&fs::read(&path).expect("the recording")).expect("its JSON")
+}
+
+#[test]
+fn da5cd_fix1_record_start_writes_the_base_size_and_checks_the_first_frame() {
+    let _guard = env_lock();
+    let isolated = Isolated::new();
+    // The installed `record start` writes `RECORDING_BASE_SIZE`; a unit test's writes it only when
+    // its thread says so.
+    let _base = recording_base_for_tests::set(RECORDING_BASE_SIZE);
+    let state = isolated.path("session");
+    // Nothing listens: no display is known, and the start goes on.
+    let (code, started) = record(
+        &state,
+        "start",
+        &["--task-id", "neutral_task", "--record-id", "rec_base"],
+    );
+    assert_eq!(code, 0, "{started}");
+    assert_eq!(started["display_last_observed"], Value::Null, "{started}");
+    let header = base_header(&state);
+    assert_eq!(
+        header["base_size"],
+        json!({"width": 1280, "height": 720}),
+        "{header}"
+    );
+    assert_eq!(header["coordinate_space"], Value::Null, "{header}");
+    let dir = Path::new(&state)
+        .join("record-artifacts")
+        .join("rec_base")
+        .join("lab");
+    let before = files_under(&dir);
+
+    // Another aspect, smaller than the base size, and 1920x1080 with no display known: each first
+    // frame refused before anything of it is kept.
+    for (width, height) in [(2400, 1080), (640, 360), (1920, 1080)] {
+        let refused = attach(&state, solid_png(width, height))
+            .expect_err("a first frame that is not the base size");
+        assert_eq!(
+            refused.code, "record_display_not_base",
+            "{width}x{height}: {}",
+            refused.message
+        );
+        let details = refused.details.clone().unwrap_or(Value::Null);
+        assert_eq!(
+            details["outcome"]["values"],
+            json!({
+                "frame_width": width,
+                "frame_height": height,
+                "base_width": 1280,
+                "base_height": 720
+            }),
+            "{width}x{height}: {details}"
+        );
+        assert_eq!(
+            details["display"],
+            json!({"width": width, "height": height}),
+            "{width}x{height}: {details}"
+        );
+        assert_eq!(
+            files_under(&dir),
+            before,
+            "{width}x{height}: no frame, no step, the header as it was"
+        );
+    }
+
+    // The base size: the frame opens step 1 and the recording takes its size.
+    let accepted = attach(&state, solid_png(1280, 720))
+        .unwrap_or_else(|error| panic!("1280x720: {}: {}", error.code, error.message));
+    assert_eq!((accepted.step, accepted.step_opened), (1, true));
+    let header = base_header(&state);
+    assert_eq!(
+        header["coordinate_space"],
+        json!({"width": 1280, "height": 720}),
+        "{header}"
+    );
+    assert_eq!(
+        header["base_size"],
+        json!({"width": 1280, "height": 720}),
+        "{header}"
+    );
+    assert_eq!(
+        header["steps"].as_array().map(Vec::len),
+        Some(1),
+        "{header}"
+    );
+}
+
+#[test]
+fn da5cd_fix1_detect_page_tap_target_and_navigate_carry_their_values_through_mcp() {
+    let context = Offline::new();
+    unsafe {
+        env::remove_var(ENVIRONMENT_VARIABLE);
+    }
+    // A scene of another ratio than the package's 8x4.
+    let scene = context.scene(8, 6);
+    let package = context.package.as_str();
+    let requests = [
+        json!({"op": "detect-page", "params": {"scene": [scene], "zip": package}}),
+        json!({"op": "tap-target", "params": {
+            "target": "ui/free", "dry_run": true, "scene": scene, "zip": package
+        }}),
+        json!({"op": "navigate", "params": {
+            "to": PAGE_A_PAGE, "dry_run": true, "scene": scene, "zip": package
+        }}),
+    ];
+    let table = cli_module::table().expect("the operation table");
+    let input = requests
+        .iter()
+        .map(|request| format!("{request}\n"))
+        .collect::<String>();
+    let mut output = Vec::new();
+    let mut developer = Vec::new();
+    serve::serve_as(
+        table,
+        Some(serve::Front::Mcp),
+        input.as_bytes(),
+        &mut output,
+        &mut developer,
+    )
+    .expect("the loop ends");
+    let printed = String::from_utf8(output).expect("UTF-8 lines");
+    let lines = printed.lines().collect::<Vec<_>>();
+    assert_eq!(lines.len(), requests.len(), "one line each: {printed}");
+    for (text, request) in lines.iter().zip(&requests) {
+        let envelope = serde_json::from_str::<Value>(text)
+            .unwrap_or_else(|error| panic!("one JSON line ({error}): {text}"));
+        // actinglab's own line exits 1 for every refusal; the envelope says so.
+        assert_eq!(envelope["exit_code"], 1, "{request}: {envelope}");
+        let outcome = &envelope["line"]["outcome"];
+        assert_eq!(
+            outcome["code"], "lab_scene_size_unsupported",
+            "{request}: {envelope}"
+        );
+        assert_eq!(
+            outcome["values"],
+            json!({
+                "display_problem": "layout_undeclared",
+                "frame_width": 8,
+                "frame_height": 6,
+                "base_width": BASE.0,
+                "base_height": BASE.1
+            }),
+            "{request}: {envelope}"
+        );
+    }
 }

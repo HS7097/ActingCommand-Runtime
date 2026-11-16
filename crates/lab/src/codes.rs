@@ -70,12 +70,21 @@ actingcommand_contract::outcome_codes! {
         /// `display_problem`: why, `frame_width`, `frame_height`: the scene's size, `base_width`,
         /// `base_height`: the package's); nothing is evaluated (exit 2).
         LabSceneSizeUnsupported => "lab_scene_size_unsupported": error / none,
-        /// Error. Workflow #392 DA-5cd: `record start` on an instance whose display the Runtime
-        /// knows at another size than the base size, or `record stop` of a recording whose frames
-        /// show a larger display of the base size's ratio (keys `frame_width`, `frame_height`: the
-        /// display's size, `base_width`, `base_height`: the base size); nothing is written, and a
-        /// refused start holds nothing (exit 3).
+        /// Error. Workflow #392 DA-5cd: this instance's display is not the base size: `record
+        /// start` on an instance whose display the Runtime last observed at another size than the
+        /// base size, or (fix round 1) the first frame of a recording whose header names a base
+        /// size, of another size (keys `frame_width`, `frame_height`: the display's size,
+        /// `base_width`, `base_height`: the base size); nothing was recorded, nothing is written,
+        /// and a refused start holds nothing (exit 3; actinglab's own line exits 1).
         RecordDisplayNotBase => "record_display_not_base": error / none,
+        /// Error. Workflow #392 DA-5cd fix round 1: this recording holds frames that are not the
+        /// base size (a header that names a base size: frames of any other size; one that names
+        /// none: frames of a larger display of the base size's ratio): `record stop` makes no
+        /// package of it, `record ready` lists it (`size_not_base`) and a frame added to it is not
+        /// stored (keys `frame_width`, `frame_height`: the frames' size, `base_width`,
+        /// `base_height`: the base size); nothing is written (exit 3; actinglab's own line exits
+        /// 1).
+        RecordSizeNotBase => "record_size_not_base": error / none,
     }
 }
 
@@ -335,10 +344,9 @@ actingcommand_contract::outcome_vocabulary! {
         /// An ending's page reuses a mark that is no mark of an effective step
         /// (`record_mark_rejected`, `reuse_source_missing`).
         EndingMarkMissing => "ending_mark_missing",
-        /// Workflow #392 DA-5cd: the recording's frames show a larger display of the base size's
-        /// ratio, a recording made on a display that is not the base size
-        /// (`record_display_not_base`).
-        DisplayNotBase => "display_not_base",
+        /// Workflow #392 DA-5cd fix round 1: the recording holds frames that are not the base size
+        /// (`record_size_not_base`).
+        SizeNotBase => "size_not_base",
     }
 }
 

@@ -40,12 +40,12 @@ use super::session_record::{SessionRecordContext, with_archive_context};
 use crate::{CliError, CliOutcome, runtime_state_root, write_json_file_atomic};
 use actingcommand_contract::{
     DISPLAY_FRAME_EXTENT_FACT_KEY, FactContent, FactScalar, FactScope, FactValue,
-    RUNTIME_INFO_FILE, RuntimeInfo, STANDARD_PACK_BASE_SIZE, SchedulingPauseReason,
+    RUNTIME_INFO_FILE, RuntimeInfo, SchedulingPauseReason,
 };
 use actingcommand_lab::{
     LAB_RECORDING_WARNING_HOLD_UNREAD, LAB_RECORDING_WARNING_INSTANCE_NOT_HELD,
     LAB_RECORDING_WARNING_NO_RUNTIME_LISTENING, LAB_RECORDING_WARNING_REPLACED_HEADER_UNREAD,
-    RecordingHold, RecordingHoldFound, RecordingHoldView,
+    RECORDING_BASE_SIZE, RecordSize, RecordingHold, RecordingHoldFound, RecordingHoldView,
 };
 use actingcommand_lab_ops::scheduling::{self, RecordingHoldReleased};
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig, RuntimeClientError};
@@ -234,10 +234,12 @@ fn pause_unsettled(instance: &str, hold: Option<&RecordingHold>, mut error: CliE
 /// A header that cannot be written fails the start with the hold in its details.
 ///
 /// Workflow #392 DA-5cd (`contracts/lab-recording.md`, "A recording's size"): on a connection,
-/// before the status read, the instance's display as the Runtime knows it ([`known_display`]); a
-/// display of another size than the base size fails the start `record_display_not_base` before
-/// anything is written or paused. Answers the `hold` member and the display the start met
-/// (`display_extent`: `{width, height}`, `null` when the Runtime knows none or nothing listens).
+/// before the status read, the instance's display as the Runtime last observed it
+/// ([`last_observed_display`]); a display of another size than the base size fails the start
+/// `record_display_not_base` before anything is written or paused. Fix round 1: an early warning,
+/// not the guard (the recording's first frame is checked against the base size its header names).
+/// Answers the `hold` member and the display the Runtime last observed (`display_last_observed`:
+/// `{width, height, observed_at_unix_ms}`, `null` when it observed none or nothing listens).
 pub(super) fn take(
     path: &Path,
     record: &mut SessionRecordContext,
@@ -265,17 +267,21 @@ pub(super) fn take(
         }
         Reached::NotHandshaken(error) => return Err(started_nothing(&instance, &reason, error)),
     };
-    let display = known_display(&client, &instance)
+    let observed = last_observed_display(&client, &instance)
         .map_err(|error| started_nothing(&instance, &reason, error))?;
-    let display_extent = match display {
-        Some((width, height)) if !actingcommand_lab::is_base_size(width, height) => {
+    let display_last_observed = match observed {
+        Some(seen) if !actingcommand_lab::is_base_size(seen.size.width, seen.size.height) => {
             return Err(started_nothing(
                 &instance,
                 &reason,
-                display_not_base(&instance, width, height),
+                display_not_base(&instance, seen.size),
             ));
         }
-        Some((width, height)) => json!({"width": width, "height": height}),
+        Some(seen) => json!({
+            "width": seen.size.width,
+            "height": seen.size.height,
+            "observed_at_unix_ms": seen.observed_at_unix_ms
+        }),
         None => Value::Null,
     };
     let shown = scheduling::instance_pause_reason(&client, &instance).map_err(|error| {
@@ -291,7 +297,10 @@ pub(super) fn take(
             replaced,
         );
         write_header(path, record)?;
-        return Ok((start_answer(record.hold.as_ref(), replaced), display_extent));
+        return Ok((
+            start_answer(record.hold.as_ref(), replaced),
+            display_last_observed,
+        ));
     }
     // Fix round 2: the header names the own hold before the pause is sent, so that a start killed
     // or timed out in the pause's drain leaves a header whose end releases the pause by its reason.
@@ -301,7 +310,7 @@ pub(super) fn take(
     match scheduling::pause_for_recording(&client, &instance, own) {
         Ok(paused) => {
             answer["paused"] = json!(paused);
-            Ok((answer, display_extent))
+            Ok((answer, display_last_observed))
         }
         Err(error) if scheduling::pause_refused(&error) => {
             let refused = started_nothing(
@@ -331,14 +340,26 @@ pub(super) fn take(
     }
 }
 
+/// Workflow #392 DA-5cd fix round 1: the display the Runtime last observed for an instance, the
+/// size of the first frame of the latest contained task run on it, and when it observed it. It is
+/// not the display now: a display changed since is observed only when a task runs on it again.
+struct LastObserved {
+    size: RecordSize,
+    observed_at_unix_ms: u64,
+}
+
 /// Workflow #392 DA-5cd (`contracts/lab-recording.md`, "A recording's size"): the display of
-/// `instance` as the Runtime already knows it, its `display.frame_extent` fact (the device frame
+/// `instance` as the Runtime last observed it, its `display.frame_extent` fact (the device frame
 /// the instance's latest contained task saw, `contracts/instance-fact-store.md`, "Display facts"),
-/// read from the Runtime's memory on `client` with no device step; `None` when the Runtime holds
-/// none for it (no contained task has run on the device, or the instance has no device). A read
-/// the Runtime refuses fails as the start's status read fails; a fact of another shape than its
-/// one row `{width, height}` fails the start (`device_error`).
-fn known_display(client: &RuntimeClient, instance: &str) -> CliOutcome<Option<(u32, u32)>> {
+/// with the fact's `observed_at_unix_ms` (fix round 1), read from the Runtime's memory on `client`
+/// with no device step; `None` when the Runtime holds none for it (no contained task has run on
+/// the device, or the instance has no device). A read the Runtime refuses fails as the start's
+/// status read fails; a fact of another shape than its one row `{width, height}` fails the start
+/// (`device_error`).
+fn last_observed_display(
+    client: &RuntimeClient,
+    instance: &str,
+) -> CliOutcome<Option<LastObserved>> {
     let read = client
         .instance_fact_snapshot_by_prefix(instance, Some(DISPLAY_FRAME_EXTENT_FACT_KEY))
         .map_err(crate::runtime_slice_cli::map_runtime_error)?;
@@ -362,27 +383,43 @@ fn known_display(client: &RuntimeClient, instance: &str) -> CliOutcome<Option<(u
         },
         _ => None,
     };
-    extent.map(Some).ok_or_else(|| {
+    let (width, height) = extent.ok_or_else(|| {
         CliError::device(format!(
             "the Runtime's {DISPLAY_FRAME_EXTENT_FACT_KEY} fact of {instance} is no one row \
              {{width, height}}"
         ))
-    })
+    })?;
+    Ok(Some(LastObserved {
+        size: RecordSize { width, height },
+        observed_at_unix_ms: record.observed_at_unix_ms,
+    }))
 }
 
 /// Workflow #392 DA-5cd: `record_display_not_base` of a start on `instance`, whose display the
-/// Runtime knows at `width` x `height`.
-fn display_not_base(instance: &str, width: u32, height: u32) -> CliError {
-    let base = STANDARD_PACK_BASE_SIZE;
+/// Runtime last observed at `display`. Fix round 1: the text says what to do on an instance whose
+/// scheduling is paused, where no task runs to observe a display changed since, and that the
+/// recording's first frame is checked in any case.
+fn display_not_base(instance: &str, display: RecordSize) -> CliError {
+    let base = RECORDING_BASE_SIZE;
     actingcommand_lab::record_display_not_base(
-        width,
-        height,
+        display,
+        base,
         format!(
-            "the display of {instance} is {width}x{height}, as the first frame of its latest \
-             task showed it, and a recording is made at the base size {}x{} that every standard \
-             package declares; set the instance's display to {}x{}, run a task on it so that the \
-             Runtime records the display again, and start again",
-            base.width, base.height, base.width, base.height
+            "the Runtime last observed the display of {instance} at {}x{}, in the first frame of \
+             the latest task run on it, and a recording is made at the base size {}x{} that every \
+             standard package declares: record on an instance whose display is {}x{}. If this \
+             display was set to {}x{} since, the Runtime observes it only when a task runs on the \
+             instance again, and an instance whose scheduling is paused runs none: resume its \
+             scheduling until a task has run, or start the recording on another instance at the \
+             base size. The recording's first frame is checked against the base size in any case",
+            display.width,
+            display.height,
+            base.width,
+            base.height,
+            base.width,
+            base.height,
+            base.width,
+            base.height
         ),
     )
 }

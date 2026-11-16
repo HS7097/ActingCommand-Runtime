@@ -119,7 +119,8 @@ mod touch;
 pub use codes::LabCode;
 pub use context::*;
 pub use display_base::{
-    frames_in_base, is_base_size, package_base, record_display_not_base, scene_in_base, scene_png,
+    RECORDING_BASE_SIZE, frames_in_base, is_base_size, package_base, record_display_not_base,
+    scene_in_base, scene_png,
 };
 pub use drive::*;
 pub use drive_api::*;

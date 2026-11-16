@@ -331,14 +331,12 @@ pub(crate) fn check_item(
     }
 }
 
-/// Workflow #392 DA-5cd: `missing` with, first when `display` is the refusal of a recording made on
-/// a display that is not the base size, its item (an item of the whole recording, `what`
-/// `display_not_base`, `code` the one `record stop` answers), the others numbered after it.
-pub(crate) fn with_display_item(
-    display: Option<&LabError>,
-    missing: Vec<ReadyItem>,
-) -> Vec<ReadyItem> {
-    let Some(refusal) = display else {
+/// Workflow #392 DA-5cd: `missing` with, first when `size` is the refusal of a recording whose
+/// frames are not the base size, its item (an item of the whole recording; fix round 1: `what`
+/// `size_not_base`, `code` the one `record stop` answers, `record_size_not_base`), the others
+/// numbered after it.
+pub(crate) fn with_size_item(size: Option<&LabError>, missing: Vec<ReadyItem>) -> Vec<ReadyItem> {
+    let Some(refusal) = size else {
         return missing;
     };
     let item = ReadyItem {
@@ -346,7 +344,7 @@ pub(crate) fn with_display_item(
         step: None,
         artifact_step: None,
         frame_id: None,
-        what: ReadyMissing::DisplayNotBase.as_str().to_string(),
+        what: ReadyMissing::SizeNotBase.as_str().to_string(),
         code: refusal.code.clone(),
         hint: None,
         details: ReadyDetails::default(),

@@ -13,11 +13,15 @@
 //!   point in it is in the coordinate space. Any other scene is refused with
 //!   `lab_scene_size_unsupported`, the adapter's word for why in `display_problem`.
 //! - **Recordings.** A recording is made at the base size (`STANDARD_PACK_BASE_SIZE`): the refusal
-//!   `record_display_not_base` of `record start` on a display of another size, and of `record stop`
-//!   for a recording whose frames show a larger display of the base size's ratio.
+//!   `record_display_not_base` (this instance's display is not the base size) of `record start` on
+//!   a display the Runtime last observed at another size and (fix round 1) of the first frame of a
+//!   recording whose header names the base size, a frame of another size; and `record_size_not_base`
+//!   (this recording holds frames that are not the base size) of `record stop`, `record ready`'s
+//!   item and a frame added to such a recording.
 
 use crate::SceneExtentResponse;
 use crate::codes::LabCode;
+use crate::recording::model::{LabRecording, RecordSize};
 use actingcommand_contract::outcome::{Detail, Outcome};
 use actingcommand_contract::{
     CaptureExtent, DisplayMapKind, InputAction, LabError, LabErrorClass, LabResult,
@@ -168,6 +172,13 @@ fn scene_refused(problem: DisplayProblem, given: CaptureExtent, base: CaptureExt
     }))
 }
 
+/// Workflow #392 DA-5cd fix round 1: the base size `STANDARD_PACK_BASE_SIZE` as a recording's
+/// header names it (`LabRecording::base_size`), the size the installed `record start` writes.
+pub const RECORDING_BASE_SIZE: RecordSize = RecordSize {
+    width: STANDARD_PACK_BASE_SIZE.width,
+    height: STANDARD_PACK_BASE_SIZE.height,
+};
+
 /// The base size as the display adapter takes it.
 fn base_extent() -> Option<CaptureExtent> {
     CaptureExtent::new(
@@ -206,23 +217,128 @@ pub(crate) fn larger_display_of_base_ratio(width: u32, height: u32) -> bool {
     DisplayMap::build(base, observation, None).is_ok_and(|map| map.kind() == DisplayMapKind::Scale)
 }
 
-/// `record_display_not_base` for a display of `width` x `height` (exit 3), `message` saying what
-/// was refused; its details name the display and the base size and carry the outcome.
-pub fn record_display_not_base(width: u32, height: u32, message: impl Into<String>) -> LabError {
-    let base = STANDARD_PACK_BASE_SIZE;
-    LabError::safety_blocked(
-        LabCode::RecordDisplayNotBase.as_str(),
-        message,
-        &["display_size"],
+/// `record_display_not_base` (this instance's display is not the base size; nothing was recorded)
+/// for a display of `display`'s size and the base size `base`, `message` saying what was refused:
+/// raised by `record start` from the display the Runtime last observed, and (fix round 1) by the
+/// first frame of a recording whose header names `base`. Its details name the display and the base
+/// size, each `{width, height}`, and carry the outcome (values `frame_width`, `frame_height`,
+/// `base_width`, `base_height`).
+pub fn record_display_not_base(
+    display: RecordSize,
+    base: RecordSize,
+    message: impl Into<String>,
+) -> LabError {
+    not_base(
+        LabCode::RecordDisplayNotBase,
+        ("display", "display_size"),
+        display,
+        base,
+        message.into(),
     )
-    .with_details(json!({
-        "display": {"width": width, "height": height},
+}
+
+/// Workflow #392 DA-5cd fix round 1: `record_size_not_base` (this recording holds frames that are
+/// not the base size) for a recording whose frames are `frames`' size, judged against the base size
+/// `base`, `message` saying what was refused. Its details name the frames' size (`frames`) and the
+/// base size (`base`), each `{width, height}`, and carry the outcome, with the values of
+/// [`record_display_not_base`].
+fn record_size_not_base(frames: RecordSize, base: RecordSize, message: String) -> LabError {
+    not_base(
+        LabCode::RecordSizeNotBase,
+        ("frames", "recording_size"),
+        frames,
+        base,
+        message,
+    )
+}
+
+/// The refusal `refusal` of a size `given` that is not the base size `base`: `member` names the
+/// details' member of `given`, `blocked_by` what it is blocked by.
+fn not_base(
+    refusal: LabCode,
+    (member, blocked_by): (&str, &str),
+    given: RecordSize,
+    base: RecordSize,
+    message: String,
+) -> LabError {
+    LabError::safety_blocked(refusal.as_str(), message, &[blocked_by]).with_details(json!({
+        member: {"width": given.width, "height": given.height},
         "base": {"width": base.width, "height": base.height},
-        "outcome": Outcome::new(LabCode::RecordDisplayNotBase)
-            .frame_width(width)
-            .frame_height(height)
+        "outcome": Outcome::new(refusal)
+            .frame_width(given.width)
+            .frame_height(given.height)
             .base_width(base.width)
             .base_height(base.height)
             .envelope(Detail::Full),
     }))
+}
+
+/// Workflow #392 DA-5cd fix round 1 (`contracts/lab-recording.md`, "A recording's size"): the
+/// refusal `record_size_not_base` of a recording whose frames are not the base size: with a base
+/// size in its header (`LabRecording::base_size`, written by `record start`), frames of any other
+/// size; without one (a recording started before fix round 1, and the tests' fixtures), frames that
+/// show a larger display of the base size's ratio ([`larger_display_of_base_ratio`], the judgement
+/// of the slice's first round), judged against `STANDARD_PACK_BASE_SIZE`. `None` for a recording
+/// without a frame and for every other. `record stop` refuses it, `record ready` lists it, and a
+/// frame is not added to it.
+pub(crate) fn recording_not_base(recording: &LabRecording) -> Option<LabError> {
+    let size = recording.coordinate_space?;
+    let refused = match recording.base_size {
+        Some(base) => size != base,
+        None => larger_display_of_base_ratio(size.width, size.height),
+    };
+    refused.then(|| {
+        let base = recording.base_size.unwrap_or(RECORDING_BASE_SIZE);
+        record_size_not_base(
+            size,
+            base,
+            format!(
+                "the recording {} holds frames of {}x{}, not the base size {}x{}: it makes no \
+                 package, nothing of it is converted and no frame is added to it; record status, \
+                 record frames and record archive read it. Archive it with record archive and \
+                 record the task again on an instance whose display is {}x{}",
+                recording.record_id,
+                size.width,
+                size.height,
+                base.width,
+                base.height,
+                base.width,
+                base.height
+            ),
+        )
+    })
+}
+
+/// Workflow #392 DA-5cd fix round 1 (`contracts/lab-recording.md`, "A recording's size"): whether
+/// a frame of `given` size enters `recording`, checked before anything of it is kept. Its first
+/// frame (the recording has no size yet) of another size than the base size its header names is
+/// refused `record_display_not_base`; every frame of a recording whose frames are not the base size
+/// ([`recording_not_base`]) is refused `record_size_not_base`. A first frame of a recording whose
+/// header names no base size enters as before, and the recording takes its size.
+pub(crate) fn admit_recording_frame(recording: &LabRecording, given: RecordSize) -> LabResult<()> {
+    match (recording.coordinate_space, recording.base_size) {
+        (None, Some(base)) if given != base => Err(record_display_not_base(
+            given,
+            base,
+            format!(
+                "the first frame of the recording {} is {}x{} and the recording is made at the \
+                 base size {}x{} its start wrote: the display of {} is not the base size. Nothing \
+                 was recorded and the recording is as it was; record on an instance whose display \
+                 is {}x{} (set this one's display to it, or use another), then take the frame again",
+                recording.record_id,
+                given.width,
+                given.height,
+                base.width,
+                base.height,
+                recording.instance,
+                base.width,
+                base.height
+            ),
+        )),
+        (None, _) => Ok(()),
+        (Some(_), _) => match recording_not_base(recording) {
+            Some(refusal) => Err(refusal),
+            None => Ok(()),
+        },
+    }
 }

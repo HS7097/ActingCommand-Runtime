@@ -237,9 +237,28 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.67",
-      "description": "Workflow #392 DA-5cd: a Lab recording is made at the base size (STANDARD_PACK_BASE_SIZE, 1280x720, the coordinate_space every standard package declares). record start refuses an instance whose display the Runtime knows (its display.frame_extent fact, the device frame of the instance's latest contained task) at another size, before anything is written and before anything is asked of the scheduling, so the instance is not held; record stop (and its dry run) refuses a recording whose frames show a larger display of the base size's ratio (a pure scale the display adapter maps onto it, such as 1920x1080 or 3840x2160), made on such a display before record start refused it, before anything is planned or written, and converts nothing; record ready lists such a recording first as missing display_not_base. frame_width and frame_height are the display's size (the recording's frames' size at record stop), base_width and base_height the base size (exit 3; actinglab details display and base, each {width, height}).",
-      "common_causes": "The instance's display is 1920x1080, 3840x2160 or another size than 1280x720; the display was changed back to 1280x720 but no task has run on it since, so the Runtime still knows the earlier display; a recording made on a larger display before this release.",
-      "handling": "Set the instance's display to the base size, run a task on it so that the Runtime records the display again, and start the recording again. A recording made on another display builds no package: record the task again at the base size, or keep the recording as material with record archive; record status, record frames and record archive read it as before."
+      "description": "Workflow #392 DA-5cd: this instance's display is not the base size, so nothing was recorded. A Lab recording is made at the base size (STANDARD_PACK_BASE_SIZE, 1280x720, the coordinate_space every standard package declares). record start refuses an instance whose display the Runtime last observed (its display.frame_extent fact, the first frame of the latest contained task run on it) at another size, before anything is written and before anything is asked of the scheduling, so the instance is not held; that is an early warning (fix round 1): record start writes the base size in the recording's header (base_size), and the first frame that enters the recording is checked against it before it is stored: a frame of another size (another aspect, smaller or larger, whether or not the Runtime knew the display) is refused with nothing written, no frame, no step and the header as it was, and the recording stays active as it was. frame_width and frame_height are the display's size (the frame's at the first frame), base_width and base_height the base size (exit 3; actinglab's own line, and serve --stdio --front mcp, exit 1 for every refusal; actinglab details display and base, each {width, height}).",
+      "common_causes": "The instance's display is 1920x1080, 3840x2160, a handset's 2400x1080, a portrait display or another size than 1280x720; at record start, the display was set back to 1280x720 but no task has run on the instance since (an instance whose scheduling is paused runs none), so the Runtime still knows the earlier display.",
+      "handling": "Record on an instance whose display is the base size: set this instance's display to 1280x720, or use another instance at that size. When record start refused a display that was set back since, the Runtime observes it only when a task runs on the instance: resume its scheduling until a task has run, then start again, or start on another instance at the base size. After a refused first frame the recording is as it was: take the frame again once the display is the base size."
+    },
+    "record_size_not_base": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "lab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "frame_width": "required",
+        "frame_height": "required",
+        "base_width": "required",
+        "base_height": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.67",
+      "description": "Workflow #392 DA-5cd fix round 1: this recording holds frames that are not the base size: a recording whose header names a base size (base_size, written by record start) and whose frames are of any other size, or one whose header names none (started before fix round 1) and whose frames show a larger display of the base size's ratio (a pure scale the display adapter maps onto it, such as 1920x1080 or 3840x2160). record stop (its dry run and the regeneration of a stopped recording marked again too) refuses it before anything is planned or written, the recording and its session staying active and the hold kept, and converts nothing; record ready lists it first as missing size_not_base and runs no self-check; a frame added to it (a recorded step's, a sample's, a transition's, an ending's) is refused before it is stored. frame_width and frame_height are the recording's frames' size, base_width and base_height the base size (exit 3; actinglab's own line, and serve --stdio --front mcp, exit 1 for every refusal; actinglab details frames and base, each {width, height}).",
+      "common_causes": "A recording made on a display that is not the base size before this release, or a recording file changed by hand.",
+      "handling": "Archive the recording with record archive (record status, record frames and record archive read it as before) and record the task again on an instance whose display is the base size, 1280x720."
     }
   },
   "locations": {

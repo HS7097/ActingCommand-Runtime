@@ -528,15 +528,20 @@ its presses on such a display are DA-5ab's and are not in this section.
   package declares today, 1280×720. Nothing a package, a game root or its `display-layout.json`
   declares names a base of its own, so it has one named home, the contract crate's
   `STANDARD_PACK_BASE_SIZE`. A recording is made at the base size ([lab-recording.md](lab-recording.md),
-  "A recording's size"): `record start` reads the instance's display as the Runtime already knows
+  "A recording's size"): `record start` reads the instance's display as the Runtime last observed
   it (its `display.frame_extent` fact, [instance-fact-store.md](instance-fact-store.md), "Display
   facts", one read from memory with no device step) and refuses a display of another size,
-  `record_display_not_base`, before anything is written or paused; `record stop` refuses a
-  recording whose frames show a larger display of the base size's ratio (a pure scale the adapter
-  maps onto it), made before this slice, with the same code, and converts nothing.
+  `record_display_not_base`, before anything is written or paused. That is an early warning; the
+  guard (fix round 1) is the recording's header: `record start` writes the base size in it
+  (`base_size`), and the first frame that enters the recording is checked against it before it is
+  stored, a frame of any other size refused `record_display_not_base` with nothing written. `record
+  stop` refuses a recording whose frames are not the base size, `record_size_not_base` (fix round 1:
+  a header that names a base size, frames of any other size; one that names none, made before,
+  frames of a larger display of the base size's ratio, a pure scale the adapter maps onto it), and
+  converts nothing.
 - **Still open.** Converting such a recording, or recording on a scaled display in base
   coordinates (its frames reduced as they arrive, its presses mapped by section 10), is not done:
   the study behind this slice proposes it as the larger form of its slice (c), and the recording's
   refusal stands until the owner orders it. A display the Runtime does not know (no contained task
-  has run on the device, or nothing listens) starts a recording as before, its size its first
-  frame's.
+  has run on the device, or nothing listens) no longer starts a recording of another size: the
+  start goes on, and the first frame is refused unless it is the base size (fix round 1).

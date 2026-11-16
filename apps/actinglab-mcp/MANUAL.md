@@ -276,13 +276,16 @@ naming this file.
   boxes, and a later `record archive` lists the box as the press's `rect`.
   Workflow #392 DA-5cd (0.12.67; `contracts/lab-recording.md`, "A recording's size"): a recording
   is made at the base size, 1280x720. `ac_record_start` first reads the instance's display as the
-  Runtime knows it (the device frame of its latest task) and refuses one of another size,
+  Runtime last observed it (the device frame of its latest task) and refuses one of another size,
   `record_display_not_base` with `frame_width`, `frame_height`, `base_width` and `base_height`,
-  before anything is written or paused; its answer names `display_extent` (`null` when the display
-  is not known). `ac_record_stop` refuses a recording whose frames show a larger display of that
-  ratio (1920x1080, 3840x2160) with the same code and converts nothing; `ac_record_ready` lists it
-  first as `display_not_base`; `ac_record_status`, `ac_record_frames` and `ac_record_archive` read
-  it as before.
+  before anything is written or paused; its answer names `display_last_observed` (`{width,
+  height, observed_at_unix_ms}`, not the display now; `null` when none was observed). That is an
+  early warning: the start writes the base size in the recording's header, and the recording's
+  first frame of any other size is refused `record_display_not_base` before it is stored, nothing
+  written. `ac_record_stop` refuses a recording whose frames are not the base size,
+  `record_size_not_base`, and converts nothing; `ac_record_ready` lists it first as
+  `size_not_base`, a frame added to it is refused with the same code, and `ac_record_status`,
+  `ac_record_frames` and `ac_record_archive` read it as before: archive it and record again.
 - **Offline scenes of another size** (Workflow #392 DA-5cd, 0.12.67;
   `contracts/display-adapter.md` section 11). `ac_recognize`, `ac_detect_page`, `ac_current_page`,
   `ac_is_visible`, `ac_lab_observe` on a saved scene, `ac_tap_target` and `ac_navigate` with

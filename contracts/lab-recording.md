@@ -178,10 +178,12 @@ answers `hold{state, reason?, taken_over?, paused?, warnings?, runtime_error?, r
 it waits as the pause waits, up to 335 s; a pause the Runtime refuses starts nothing ("A recording
 holds its instance").
 
-Workflow #392 DA-5cd: before that, it reads the instance's display as the Runtime knows it and
-refuses one of another size than the base size 1280×720, `record_display_not_base`, before
-anything is written or paused; it answers `display_extent` (`{width, height}`, or `null` when the
-display is not known) ("A recording's size").
+Workflow #392 DA-5cd: before that, it reads the instance's display as the Runtime last observed it
+and refuses one of another size than the base size 1280×720, `record_display_not_base`, before
+anything is written or paused; it answers `display_last_observed` (`{width, height,
+observed_at_unix_ms}`, or `null` when no display was observed). Fix round 1: it writes the base
+size in the recording's header (`base_size`), and the recording's first frame is checked against
+it ("A recording's size").
 
 ### record mark
 
@@ -2190,35 +2192,65 @@ a recording of that size: its presses were sent in device pixels, its boxes cut 
 smaller instance.
 
 - **`record start`.** On its connection to the Runtime, before the status read and before
-  anything is written, the start reads the instance's display as the Runtime already knows it: one
+  anything is written, the start reads the instance's display as the Runtime last observed it: one
   `InstanceFactSnapshot` of the key `display.frame_extent`
   ([instance-fact-store.md](instance-fact-store.md), "Display facts"), the device frame the first
-  frame of the instance's latest contained task showed. It is read from the Runtime's memory and
-  asks nothing of the device, so it adds no device step; a read the Runtime refuses fails the start
-  as a refused status read does, and a fact of another shape than one row `{width, height}` fails
-  it `device_error`. A display of another size than the base size is refused
-  `record_display_not_base` (exit 3; values `frame_width`, `frame_height` the display's size,
-  `base_width`, `base_height` the base size; details `display` and `base`, each `{width, height}`),
-  and nothing is asked of the scheduling, so the instance is not held; no session header and no
-  recording are written (the session directory holds only the recording lock's own files, which
-  every state-writing record command takes first). The answer of a start that goes on names
-  `display_extent`: `{width, height}` when the Runtime knows the display, `null` when it knows none
-  (no contained task has run on the device, or the instance has none) or nothing listens. The fact
-  is the latest task's: after the display is changed, a task run on the instance records it again
-  before a recording is started.
-- **A display the Runtime does not know.** The start goes on as before (`display_extent` `null`),
-  and the recording takes its first frame's size.
-- **A recording made on another display** (before this slice, or while the display was unknown):
-  one whose frames show a larger display of the base size's ratio, a pure scale the display
-  adapter maps onto the base size (1920×1080, 2560×1440, 3840×2160, …). `record ready` lists it
-  first as missing `display_not_base` (an item of the whole recording, `code`
-  `record_display_not_base`) and runs no self-check; `record stop` (and its dry run) refuses it with
-  `record_display_not_base` before anything is planned or written, the recording and its session
-  staying active and its hold kept; nothing is converted. `record status`, `record frames` and
-  `record archive` read it as they read every recording. A stopped recording whose package was
-  written before and that was not marked again is `packaged` and copied as before. A recording of
-  another ratio or smaller than the base size is not refused: it is no display of the base size's
-  ratio, and its package keeps the coordinate space of its own frames.
+  frame of the latest contained task run on the instance showed. It is read from the Runtime's
+  memory and asks nothing of the device, so it adds no device step; a read the Runtime refuses
+  fails the start as a refused status read does, and a fact of another shape than one row `{width,
+  height}` fails it `device_error`. A display of another size than the base size is refused
+  `record_display_not_base` (exit 3; actinglab's own line, and `serve --stdio --front mcp`, exit 1
+  for every refusal; values `frame_width`, `frame_height` the display's size, `base_width`,
+  `base_height` the base size; details `display` and `base`, each `{width, height}`), and nothing
+  is asked of the scheduling, so the instance is not held; no session header and no recording are
+  written (the session directory holds only the recording lock's own files, which every
+  state-writing record command takes first). The answer of a start that goes on names
+  `display_last_observed` (fix round 1; `display_extent` before it): `{width, height,
+  observed_at_unix_ms}`, the display the Runtime last observed and when (the fact's
+  `observed_at_unix_ms`), not the display now; `null` when the Runtime observed none (no contained
+  task has run on the device, or the instance has none) or nothing listens. **This check is an
+  early warning, not the guard** (fix round 1): the observation is the latest task's, so a display
+  changed since is unknown to it, and it is skipped where nothing listens; the guard is the first
+  frame's check below. A start refused for a display that was set to the base size since needs a
+  task to run on the instance before the Runtime observes it again; an instance whose scheduling is
+  paused runs none, so its scheduling is resumed until a task has run, or the recording is started
+  on another instance at the base size. The refusal's text says so.
+- **The base size in the recording's header** (fix round 1). `record start` writes the base size
+  the recording must have in the recording's header, `recording.json`'s `base_size` (`{width,
+  height}`; the installed command writes `STANDARD_PACK_BASE_SIZE`, the Lab's
+  `RECORDING_BASE_SIZE`). It is a member added with a default and absent when not written, so a
+  recording started before fix round 1 reads as before and is byte for byte what it was; the Lab's
+  own test fixtures and actinglab's unit tests start recordings without it.
+- **The first frame is checked.** The first frame that enters a recording whose header names a
+  base size (any frame while the recording has no size yet: a capture before a press or an
+  application operation, `capture --record`, `observe --capture --record`, `record mark --frame`)
+  is checked against it before anything of it is kept: another size (another aspect, smaller,
+  larger, whether or not the Runtime knew the display) is refused `record_display_not_base`, with
+  the frame's size as `frame_width`, `frame_height`, and nothing is written: no frame, no step, the
+  header as it was; the recording stays active as it was, and nothing was pressed. A frame of the
+  base size enters, and the recording takes its size. A recording whose header names no base size
+  takes its first frame's size, as before.
+- **A recording whose frames are not the base size** (`record_size_not_base`, fix round 1; before
+  it this was `record_display_not_base`): a recording whose header names a base size and whose
+  frames are of any other size, or one whose header names none (started before fix round 1) and
+  whose frames show a larger display of the base size's ratio, a pure scale the display adapter
+  maps onto the base size (1920×1080, 2560×1440, 3840×2160, …). `record ready` lists it first as
+  missing `size_not_base` (an item of the whole recording, `code` `record_size_not_base`) and runs no
+  self-check; `record stop` (its dry run, and the regeneration of a stopped recording marked again)
+  refuses it with `record_size_not_base` before anything is planned or written, the recording and
+  its session staying active and its hold kept; a frame added to it is refused with the same code
+  before it is stored; nothing is converted. `record status`, `record frames` and `record archive`
+  read it as they read every recording: archive it and record again on a display of the base size.
+  A stopped recording whose package was written before and that was not marked again is `packaged`
+  and copied as before. A recording whose header names no base size and whose frames are of another
+  ratio or smaller than the base size (the Lab's own test recordings) is not refused: it is no
+  display of the base size's ratio, and its package keeps the coordinate space of its own frames.
+- **Two codes, two causes.** `record_display_not_base`: this instance's display is not the base
+  size (`record start`, the first frame); nothing was recorded; record on an instance whose display
+  is the base size. `record_size_not_base`: this recording holds frames that are not the base size
+  (`record stop`, `record ready`'s item, a frame added to it); archive it and record again on a
+  display of the base size. Both refuse; exit 3 on a `--via` line (the envelope), 1 on actinglab's
+  own line and through `serve --stdio --front mcp`.
 - **Still open.** Converting such a recording, or recording on a scaled display in base
   coordinates (its frames reduced as they arrive, its presses mapped as a run maps them); the
   refusal stands until the owner orders that.

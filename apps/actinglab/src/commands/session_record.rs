@@ -683,8 +683,8 @@ fn run_session_record_inner(
             // recording holds its instance; fix round 2: `take` writes the session header naming
             // the hold before it asks the Runtime to pause, and puts it back when the Runtime
             // refuses the pause. Workflow #392 DA-5cd ("A recording's size"): before both, it
-            // refuses a display the Runtime knows at another size than the base size.
-            let (mut hold_answer, display_extent) = record_hold::take(
+            // refuses a display the Runtime last observed at another size than the base size.
+            let (mut hold_answer, display_last_observed) = record_hold::take(
                 &record_path,
                 &mut record,
                 replaced
@@ -712,7 +712,7 @@ fn run_session_record_inner(
                 "record_flag_state_dir": flag_state_dir,
                 "record_flag_reachable": reachable,
                 "hold": hold_answer,
-                "display_extent": display_extent
+                "display_last_observed": display_last_observed
             }))
         }
         "status" => Ok(json!({
@@ -2851,7 +2851,58 @@ fn record_start_lab_options(
         locale,
         match_metric: record_flag_value(flags, "--metric")?,
         template_threshold,
+        base_size: recording_base(),
     })
+}
+
+/// Workflow #392 DA-5cd fix round 1 (`contracts/lab-recording.md`, "A recording's size"): the base
+/// size `record start` writes in the recording's header, `STANDARD_PACK_BASE_SIZE`; the first frame
+/// that enters the recording is checked against it.
+#[cfg(not(test))]
+fn recording_base() -> Option<actingcommand_lab::RecordSize> {
+    Some(actingcommand_lab::RECORDING_BASE_SIZE)
+}
+
+/// Test-only: the base size the unit tests' `record start` writes, the one this thread set
+/// ([`recording_base_for_tests`]), none by default: a recording of the unit tests' small frames
+/// keeps the judgement of a recording whose header names no base size, and a test of the installed
+/// value sets `RECORDING_BASE_SIZE`. The program the integration tests run writes the installed
+/// value.
+#[cfg(test)]
+fn recording_base() -> Option<actingcommand_lab::RecordSize> {
+    recording_base_for_tests::get()
+}
+
+/// Test-only (Workflow #392 DA-5cd fix round 1): the base size this thread's `record start` writes
+/// in a recording's header, none until a test sets one.
+#[cfg(test)]
+pub(crate) mod recording_base_for_tests {
+    use actingcommand_lab::RecordSize;
+    use std::cell::Cell;
+
+    thread_local! {
+        static BASE: Cell<Option<RecordSize>> = const { Cell::new(None) };
+    }
+
+    /// This thread's `record start` writes `base` until the answer drops.
+    pub(crate) fn set(base: RecordSize) -> Reset {
+        BASE.with(|cell| cell.set(Some(base)));
+        Reset
+    }
+
+    /// What this thread's `record start` writes.
+    pub(super) fn get() -> Option<RecordSize> {
+        BASE.with(Cell::get)
+    }
+
+    /// Writes none again when it drops.
+    pub(crate) struct Reset;
+
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            BASE.with(|cell| cell.set(None));
+        }
+    }
 }
 
 pub(crate) const RECORD_STOP_FLAGS: &[&str] = &[
