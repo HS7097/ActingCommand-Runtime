@@ -469,8 +469,10 @@ that does not apply on the instance now, as the variable table a dispatch reads 
 `run_variable_not_applying` with that word; a value is judged by `resolve_variable` as the
 application's stored entry set through the request's channel, and anything but the value taken
 whole (`set` and no word) is `run_variable_value_refused` with the judgement's word, an `ordered`
-value a dispatch would take in part (`keys_left_out`) included, as `EditGoal` refuses it. Each is
-Denied with `package_id` and `variable_name` (and `variable_problem`), and nothing runs. The
+value a dispatch would take in part (`keys_left_out`) included, as `EditGoal` refuses it; a
+judgement that gives neither the value nor a word, which cannot happen, is
+`run_variable_unjudged` (the 0.12.68 train's fix round). Each is Denied with `package_id` and
+`variable_name` (and `variable_problem`), and nothing runs. The
 values pass into the run's parameters by the line a dispatch's values pass through
 (`dispatched_variable_values`, `with_variables`), so the package reads each as
 `session.dispatch.parameter.<name>` with its kind's type, and a variable not given reads its

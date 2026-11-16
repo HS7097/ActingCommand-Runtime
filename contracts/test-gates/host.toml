@@ -4223,3 +4223,11 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_463_s38::s38_fix1_seventeen_values_in_a_raw_request_are_refused_at_the_door",
 ]
 incident = ["#463 S3-8"]
+
+# The 0.12.68 train, fix round (#463 S3-8 and stage two joined in pull request #1789; register §1.444, "Fix round of the 0.12.68 train"; brief rd-1116/brief-train-01268-fix1.md, point 4; the review of the train, rd-1116/review-train-01268.md, whose host tests of an ordered value were refusals only; contracts/runtime-interface.md, "The variable values of a contained run"): on the fixture of the row "Workflow #463 S3-8", the package declaring one ordered variable as stage two's record stop writes a choice (list_item, its options item_a and item_b titled under the package's locale, min_count 1, max_count 2, default ["item_b"]), which applies in the game root: a direct run given ["item_b", "item_a"], allowed and not in the options' order, completes after its one tap, and its snapshots hold session.dispatch.parameter.list_item as the rows {key item_b, rank 1} and {key item_a, rank 2}
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_463_s38::train_01268_fix1_an_allowed_order_of_a_generated_choice_is_what_the_package_reads",
+]
+incident = ["#463 0.12.68 train"]

@@ -683,7 +683,11 @@ name, each refusal Denied with `invalid_request`, the package's `package_id` and
    request's channel at the Runtime's clock): `run_variable_value_refused` with the judgement's
    word as `variable_problem` (`not_an_option`, `out_of_range`, `off_step`, `type_changed`,
    `key_repeated`, `keys_removed`, `count_out_of_range`, or `keys_left_out` for an `ordered` value
-   a dispatch would take in part).
+   a dispatch would take in part);
+4. a judgement that gives neither the value nor a word, which cannot happen (for an entry whose
+   setter is known and a variable that applies, `resolve_variable` answers the value or the default
+   with its word): `run_variable_unjudged` (the 0.12.68 train's fix round), this run alone refused
+   and the Runtime going on.
 
 **The overlay.** The values pass into the run's parameters where a dispatch's values pass
 (`execute_contained_task_with_lease`: `dispatched_variable_values` and `with_variables`, one

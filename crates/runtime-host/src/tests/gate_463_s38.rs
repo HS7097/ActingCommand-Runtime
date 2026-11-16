@@ -41,6 +41,13 @@
 //   `variables` holds seventeen values, one more than a package can declare variables, written as
 //   raw JSON past the contract's own constructor: Denied `invalid_contained_task_variable_count`
 //   by the contract's check of the request at the door.
+// Fix round of the 0.12.68 train (rd-1116/brief-train-01268-fix1.md, point 4; the review of the
+// train, which found only refusals of an `ordered` value here):
+// - `train_01268_fix1_an_allowed_order_of_a_generated_choice_is_what_the_package_reads`: the
+//   package declares one `ordered` variable as stage two's `record stop` writes a choice
+//   (`list_item`, the options `item_a` and `item_b`, one or two of them, default `["item_b"]`),
+//   which applies; `["item_b", "item_a"]`, allowed and not in the options' order, is accepted: the
+//   run completes after its one tap and its snapshots hold the two keys in that order.
 
 use super::gate_442_rem1::write_package;
 use super::gate_rl1b::{
@@ -48,10 +55,12 @@ use super::gate_rl1b::{
 };
 use super::*;
 use actingcommand_contract::{
-    FactContent, FactValue, InstanceFactContext, InstanceFactSnapshot, MAX_PACKAGE_VARIABLES,
+    FactContent, FactScalar, FactValue, InstanceFactContext, InstanceFactSnapshot,
+    MAX_PACKAGE_VARIABLES, ORDERED_VARIABLE_KEY_COLUMN, ORDERED_VARIABLE_RANK_COLUMN,
     VariableProblem,
 };
 use serde_json::{Value, json};
+use std::collections::BTreeMap;
 use std::fs;
 
 const TASK: &str = "fixture.s38";
@@ -59,6 +68,8 @@ const INSTANCE: &str = POLICY_INSTANCE_ALIAS;
 const RESULT: [u8; 3] = [255, 255, 255];
 const HOME: [u8; 3] = [255, 0, 0];
 const PICK_KEY: &str = "session.dispatch.parameter.pick";
+// The fix round of the 0.12.68 train: the record a run reads `list_item` from.
+const LIST_ITEM_KEY: &str = "session.dispatch.parameter.list_item";
 
 // ---- The game root.
 
@@ -104,6 +115,30 @@ fn place_with_goals_taking_pick(packs: &Path) {
 // Fix round 1: [`place_game_root`], the package declaring [`variables_with_order`].
 fn place_with_order(packs: &Path) {
     place_game_root_declaring(packs, variables_with_order());
+}
+
+// The fix round of the 0.12.68 train: the one variable of a package stage two generates from a
+// recording with a choice (`choice_variable_json`, as the train's test of the trial's plan writes
+// it): `ordered`, its texts under the package's locale, one to two of its two options, the recorded
+// option its default.
+fn generated_choice() -> Value {
+    let title = |text: &str| json!({"en-US": text});
+    json!([{
+        "name": "list_item",
+        "type": "ordered",
+        "title": title("list_item"),
+        "options": [{"value": "item_a", "title": title("ALPHA")},
+                    {"value": "item_b", "title": title("BRAVO")}],
+        "min_count": 1,
+        "max_count": 2,
+        "default": ["item_b"]
+    }])
+}
+
+// The fix round of the 0.12.68 train: [`place_game_root`], the package declaring
+// [`generated_choice`] alone.
+fn place_with_generated_choice(packs: &Path) {
+    place_game_root_declaring(packs, generated_choice());
 }
 
 // The game root of [`place_game_root`], its package's control declaration declaring `declared`.
@@ -347,6 +382,12 @@ impl Scene {
 // The value of `session.dispatch.parameter.pick` in a snapshot overlaid with what the host's last
 // run read (`None` when it holds none): what the run's snapshots hold.
 fn overlaid_pick(scene: &Scene) -> Option<FactValue> {
+    overlaid(scene, PICK_KEY)
+}
+
+// The value of the record `key` in a snapshot overlaid with what the host's last run read (`None`
+// when it holds none); the fix round of the 0.12.68 train reads `list_item` by it too.
+fn overlaid(scene: &Scene, key: &str) -> Option<FactValue> {
     let runs = scene
         .host
         .run_parameters_for_test()
@@ -366,7 +407,7 @@ fn overlaid_pick(scene: &Scene) -> Option<FactValue> {
     snapshot
         .records
         .iter()
-        .find(|record| record.key == PICK_KEY)
+        .find(|record| record.key == key)
         .map(|record| match &record.content {
             FactContent::Inline { value } => value.clone(),
             other => panic!("an overlay record is inline: {other:?}"),
@@ -557,6 +598,44 @@ fn s38_fix1_seventeen_values_in_a_raw_request_are_refused_at_the_door() {
         "invalid_contained_task_variable_count",
         &[],
         counted,
+    );
+    scene.close();
+}
+
+// The fix round of the 0.12.68 train: a value of a generated choice's `ordered` variable that its
+// declaration allows, not in the options' own order, is accepted, and the run reads it in its order:
+// one row per key, `rank` from 1.
+#[test]
+fn train_01268_fix1_an_allowed_order_of_a_generated_choice_is_what_the_package_reads() {
+    let scene = Scene::with(place_with_generated_choice);
+    assert_eq!(scene.root_word("list_item"), None, "list_item applies");
+    let taps = scene.taps();
+    let receipt = scene.run(&[("list_item", json!(["item_b", "item_a"]))]);
+    assert_eq!(
+        receipt.state(),
+        RuntimeReceiptState::Completed,
+        "{receipt:?}"
+    );
+    assert_eq!(scene.taps(), taps + 1, "the run's one tap");
+    let row = |key: &str, rank: i64| {
+        BTreeMap::from([
+            (
+                ORDERED_VARIABLE_KEY_COLUMN.to_owned(),
+                FactScalar::String(key.to_owned()),
+            ),
+            (
+                ORDERED_VARIABLE_RANK_COLUMN.to_owned(),
+                FactScalar::Integer(rank),
+            ),
+        ])
+    };
+    assert_eq!(
+        overlaid(&scene, LIST_ITEM_KEY),
+        Some(FactValue::RecordList(vec![
+            row("item_b", 1),
+            row("item_a", 2)
+        ])),
+        "the given value is overlaid in its own order"
     );
     scene.close();
 }
