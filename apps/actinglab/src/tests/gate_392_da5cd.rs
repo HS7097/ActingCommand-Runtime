@@ -55,6 +55,19 @@
 //   the entry page and names `frame_coordinates` in the base form, `reduced_from` [10, 5].
 // - `da5_train_a_stored_five_quarters_scene_is_taken_by_a_dry_run`: `ensure --dry-run` to `page_a`
 //   on the same 10x5 scene plans its route from the entry page, with the same `frame_coordinates`.
+// The train's fix round 1 (coordinator work order rd-1116/brief-392-train-lab-fix1.md; the two
+// reviews of the train at `2ff33cb3`):
+// - `da5_train_fix1_a_stored_image_of_the_other_orientation_is_refused_with_its_word`: the 8x4
+//   package's frame turned to 4x8, given to `detect-page` and to offline `observe`, is refused
+//   `lab_scene_size_unsupported` (exit 2) with the frame gate's word `orientation_mismatch`, the
+//   scene's size and the package's.
+// - `da5_train_fix1_session_app_record_on_a_display_that_is_not_the_base_sends_nothing`: a
+//   recording whose header names the base size 1280x720, and one whose header names none, each
+//   with its application entry step (`session app launch --record`, no frame) and no frame: `session
+//   app restart --record` on a fake Runtime whose captures are 1920x1080 takes the screen before
+//   the operation, the recording's first frame, and is refused `record_display_not_base` with that
+//   size and the base size, before the operation is sent: one capture, no operation, the
+//   recording's files byte for byte as they were.
 // Synthetic neutral packages and frames, temporary roots, a scripted Runtime on loopback; no
 // device, no clock, no sleep.
 
@@ -63,20 +76,26 @@ use super::gate_463_s17::{INSTANCE, Place, RECORD_ID, instance, operations, paus
 use super::*;
 use crate::cli_module::{self, serve};
 use crate::commands::session_record::recording_base_for_tests;
+use crate::session_management::{Operated, record_application_operation};
 use actingcommand_contract::{
     DISPLAY_FRAME_EXTENT_FACT_KEY, FactContent, FactRecord, FactScalar, FactScope, FactValue,
-    InstanceFactView, LabResult, RuntimeRequest, RuntimeResult, RuntimeStateSource,
+    InputFrameReference, InstanceFactView, LabResult, RuntimeRequest, RuntimeResult,
+    RuntimeStateSource,
 };
 use actingcommand_device::{CaptureBackendName, Frame, PixelFormat};
 use actingcommand_lab::{
-    AttachFrameOutcome, AttachFrameRequest, RECORDING_BASE_SIZE, RecordingLock, record_attach_frame,
+    AfterCapture, ApplicationExecution, ApplicationPlan, AttachFrameOutcome, AttachFrameRequest,
+    CapturedFrame, PlanApplicationRequest, RECORDING_BASE_SIZE, RecordFramePorts,
+    RecordStartOptions, RecordingLock, record_attach_frame, record_start,
 };
 use actingcommand_lab_ops::initiator::ENVIRONMENT_VARIABLE;
 use actingcommand_runtime_client::test_support::{
     ScriptedAnswer, ScriptedConnection, ScriptedRuntime,
 };
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::io::{Cursor, Write};
+use std::time::Duration;
 use zip::{ZipWriter, write::FileOptions};
 
 /// The operation of `record start`'s read of the instance's display, as the wire spells it.
@@ -1032,5 +1051,168 @@ fn da5cd_fix1_detect_page_tap_target_and_navigate_carry_their_values_through_mcp
             }),
             "{request}: {envelope}"
         );
+    }
+}
+
+// ---- The train's fix round 1 ----
+
+#[test]
+fn da5_train_fix1_a_stored_image_of_the_other_orientation_is_refused_with_its_word() {
+    let context = Offline::new();
+    for words in [&["detect-page"][..], &["observe", "--pretty"][..]] {
+        refused(&context, words, 4, 8, "orientation_mismatch");
+    }
+}
+
+/// The train's fix round 1: the fake Runtime of `session app <verb> --record` on a display of
+/// `size`: each capture a frame of that size, with the reference of the frame it committed; each
+/// capture and wait logged.
+struct DisplayOf<'a> {
+    size: (u32, u32),
+    taken: usize,
+    log: &'a RefCell<Vec<String>>,
+}
+
+impl RecordFramePorts for DisplayOf<'_> {
+    fn wait(&mut self, duration: Duration) {
+        self.log
+            .borrow_mut()
+            .push(format!("wait {}", duration.as_millis()));
+    }
+
+    fn capture(&mut self) -> LabResult<CapturedFrame> {
+        self.log.borrow_mut().push("capture".to_owned());
+        self.taken += 1;
+        let (width, height) = self.size;
+        Ok(CapturedFrame {
+            frame: AttachFrameRequest {
+                png: solid_png(width, height),
+                source: "lab_capture".to_owned(),
+                runtime_artifact: None,
+                capture_backend: Some("adb_screencap".to_owned()),
+                freshness: None,
+            },
+            input_frame: Some(InputFrameReference {
+                frame_id: serde_json::from_value(json!(format!("frame_{:032x}", self.taken)))
+                    .expect("a frame id"),
+                width,
+                height,
+            }),
+        })
+    }
+
+    fn elapsed(&mut self) -> Duration {
+        Duration::ZERO
+    }
+}
+
+/// The completed receipt of the application operation `verb`, as `session app` hands it to the
+/// recording, with the plain command's answer.
+fn operated(verb: &str) -> Operated {
+    Operated {
+        execution: ApplicationExecution {
+            request_id: "request-da5-fix1".to_owned(),
+            correlation_id: "request-da5-fix1-correlation".to_owned(),
+            action_id: "request-da5-fix1-action".to_owned(),
+            receipt_state: "completed".to_owned(),
+            application_event_ids: vec!["event-da5-fix1".to_owned()],
+            before_frame: None,
+            after_frame: None,
+            after_capture: None,
+            executed_at_unix_ms: None,
+        },
+        data: json!({"status": "completed", "action": verb}),
+    }
+}
+
+#[test]
+fn da5_train_fix1_session_app_record_on_a_display_that_is_not_the_base_sends_nothing() {
+    const RECORD: &str = "rec_app";
+    for base in [Some(RECORDING_BASE_SIZE), None] {
+        let temp = TempDir::new().expect("temporary directory");
+        let state = temp.path().join("session");
+        fs::create_dir_all(&state).expect("session directory");
+        fs::write(
+            state.join(format!("record-{INSTANCE}.json")),
+            serde_json::to_vec(&json!({
+                "record_id": RECORD,
+                "task_id": "neutral_task",
+                "instance": INSTANCE,
+                "status": "active",
+                "started_at_unix_ms": 1_700_000_000_000_u64
+            }))
+            .expect("session JSON"),
+        )
+        .expect("session header");
+        let lock = RecordingLock::acquire(&state, INSTANCE, "gate_392_da5cd", "Lab-CLI")
+            .expect("recording lock");
+        record_start(
+            &lock,
+            &RecordStartOptions {
+                game: Some("neutral".to_owned()),
+                server: Some("test".to_owned()),
+                locale: Some("en-US".to_owned()),
+                base_size: base,
+                ..RecordStartOptions::default()
+            },
+        )
+        .expect("record start");
+        let log = RefCell::new(Vec::new());
+        let display = || DisplayOf {
+            size: (1920, 1080),
+            taken: 0,
+            log: &log,
+        };
+        // `session app launch --record` on the empty recording: the application entry step, with
+        // no screen before or after it; no device is asked.
+        record_application_operation(
+            &lock,
+            &PlanApplicationRequest {
+                verb: "launch".to_owned(),
+            },
+            &AfterCapture::for_application(None),
+            || Ok(display()),
+            |plan: &ApplicationPlan| {
+                log.borrow_mut().push(format!("operate {}", plan.step));
+                Ok(operated("launch"))
+            },
+        )
+        .unwrap_or_else(|error| panic!("{base:?}: launch: {}: {}", error.code, error.message));
+        assert_eq!(*log.borrow(), ["operate 1"], "{base:?}");
+        log.borrow_mut().clear();
+        let dir = state.join("record-artifacts").join(RECORD).join("lab");
+        let before = files_under(&dir);
+
+        // `session app restart --record`: the screen before it is the recording's first frame.
+        let refused = record_application_operation(
+            &lock,
+            &PlanApplicationRequest {
+                verb: "restart".to_owned(),
+            },
+            &AfterCapture::for_application(None),
+            || Ok(display()),
+            |plan: &ApplicationPlan| {
+                log.borrow_mut().push(format!("operate {}", plan.step));
+                Ok(operated("restart"))
+            },
+        )
+        .expect_err("an operation whose screen before is not the base size");
+        assert_eq!(
+            refused.code, "record_display_not_base",
+            "{base:?}: {}",
+            refused.message
+        );
+        let details = refused.details.clone().unwrap_or(Value::Null);
+        assert_eq!(
+            details["outcome"]["values"],
+            json!({"frame_width": 1920, "frame_height": 1080, "base_width": 1280, "base_height": 720}),
+            "{base:?}: {details}"
+        );
+        assert_eq!(
+            *log.borrow(),
+            ["capture"],
+            "{base:?}: one capture, and the operation never sent"
+        );
+        assert_eq!(files_under(&dir), before, "{base:?}: nothing written");
     }
 }

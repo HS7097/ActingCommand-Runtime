@@ -568,9 +568,10 @@ nothing changes, byte for byte.
   [width, height], reduced_from: [device width, device height], orientation, applies_to}`; on a
   display of the base's size it is `{device_pixels, orientation, applies_to}` as before. The frame
   files and the previews an operation hands out (`observe --with-frame`, `--preview`, the after
-  attachment's `frame_path` and `preview`) are the frames brought to the base. A client form's
-  `device.action` (the `--capture` form that sends its tap itself) is the point sent to the device;
-  on a mapped display `device.base_action` beside it is that point in the base (fix round 1). The
+  attachment's `frame_path` and `preview`) are the frames brought to the base. No client form of
+  `do` sends its tap itself: `do --capture` without `--dry-run` is always the Lab operation, and `do
+  --capture --dry-run` sends nothing (fix round 1 described a client form's `device.action` and
+  `device.base_action`; that form was never reached, and the train's fix round 1 removed it). The
   MCP front's `ac_lab_observe` and `ac_do` answer the command line's line, and the first-generation
   server's `ac_lab_observe` and `ac_lab_do` (actingctl) say the same in their descriptions (fix
   round 1). The train: `FrameCoordinates` (the kernel's) builds both forms, for these answers and
@@ -604,7 +605,8 @@ presses on such a display are section 11's.
   answer that stated no `frame_coordinates` before states them for a reduced scene only, and
   offline `observe` and `do`, which state them for every scene, state the base form for a reduced
   one; `observe --with-frame` writes the reduced frame. Any other scene is refused before anything
-  is evaluated, `lab_scene_size_unsupported` (exit 2), its values the gate's word `display_problem`
+  is evaluated, `lab_scene_size_unsupported` (exit 2 on a `--via` line; actinglab's own line and
+  `serve --stdio --front mcp` exit 1 for every refusal), its values the gate's word `display_problem`
   (`layout_undeclared` another ratio, `scale_below_base` a scene smaller than the package,
   `orientation_mismatch` the package's other orientation), the scene's size (`frame_width`,
   `frame_height`) and the package's (`base_width`, `base_height`). Two refusals of a size, one cause
@@ -631,7 +633,12 @@ presses on such a display are section 11's.
   the frame it took as a frame that enters the recording, whether or not it stores it: `tap`,
   `swipe` and `long-tap --record` and `session app --record` before they capture (also when the
   open step is marked, so that the frame before the press is not stored) and the frame before the
-  press; `do --capture --record` the frame it captures through the Runtime before its press;
+  press (the train's fix round 1: a frame that would be the recording's first is judged, before it
+  is stored, as if the recording already had its size, so that a recording whose header names no
+  base size takes no first frame `record stop` would refuse: `record_display_not_base`, nothing
+  sent; and a recording the Lab re-creates writes the base size in its header); `do --capture
+  --record` the frame it captures through the Runtime before its press (its size as the Runtime's
+  observation answers it);
   `observe --capture --record` before it captures and the Runtime's frame after it observed (section
   11, "Presses"). Three codes, one cause each: `record_display_not_base`, this instance's display
   is not the base size and the recording has no frame yet (`record start`, by the display last
