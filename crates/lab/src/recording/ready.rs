@@ -12,12 +12,17 @@
 //!
 //! Fix round 2: an item carries what its refusal's details say ([`ReadyDetails`]), and the
 //! warnings are typed ([`ReadyWarningItem`]), with the JSON they had.
+//!
+//! #463 S2-1b: the read takes the package's game, server and locale as `record stop` takes them
+//! (its options, then the recording, then for game and server the Lab's instance configuration,
+//! then the configuration of the installation the program runs from), and says where each came
+//! from ([`ReadySources`]); it writes none of them on the recording.
 
 use super::generate::{Lack, effective_steps};
 use super::model::{LabRecording, OpaqueJson, RecordRect, RecordingStep};
 use super::steps::{POINT_SOURCE, SWIPE_SOURCE};
 use super::store::invalid;
-use crate::codes::{ReadyCheck, ReadyMissing, ReadyWarning};
+use crate::codes::{ReadyCheck, ReadyMissing, ReadySource, ReadyWarning};
 use actingcommand_contract::{LabError, LabResult};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -148,6 +153,45 @@ pub struct RecordReadyOutcome {
     pub warnings: Vec<ReadyWarningItem>,
     /// The self-checks that did not run, in the order they run; empty when every one ran.
     pub checks_after: Vec<String>,
+    /// #463 S2-1b: where the package's game, server and locale this answer took came from.
+    pub sources: ReadySources,
+}
+
+/// #463 S2-1b: where each part of the package's identity `record ready` took came from, a word of
+/// `ready_source` (`command_line`, `recording`, `lab_config`, `installation_config`); `None`
+/// (`null`) for a part that is not known, which `missing` then lists.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct ReadySources {
+    pub game: Option<String>,
+    pub server: Option<String>,
+    pub locale: Option<String>,
+}
+
+impl ReadySources {
+    /// The words of where the game, the server and the locale came from.
+    pub(crate) fn of(
+        game: Option<ReadySource>,
+        server: Option<ReadySource>,
+        locale: Option<ReadySource>,
+    ) -> Self {
+        let word = |source: Option<ReadySource>| source.map(|source| source.as_str().to_string());
+        Self {
+            game: word(game),
+            server: word(server),
+            locale: word(locale),
+        }
+    }
+}
+
+/// #463 S2-1b: the first of `candidates` (a value where its place holds one, and that place) that
+/// is known, as its value and its place; `(None, None)` when none is.
+pub(crate) fn known(
+    candidates: &[(Option<&String>, ReadySource)],
+) -> (Option<String>, Option<ReadySource>) {
+    candidates
+        .iter()
+        .find_map(|&(value, source)| value.map(|value| (value.clone(), source)))
+        .unzip()
 }
 
 /// The state of a recording, by the recording alone.
@@ -235,13 +279,20 @@ fn press_frame_of(recording: &LabRecording, serial: u32) -> Option<String> {
         .and_then(press_frame)
 }
 
-/// The one command that settles `what` on the step `step`, where there is one.
+/// The one command that settles `what` on the step `step`, where there is one. #463 S2-1b: a part
+/// of the package's identity is settled two ways, both named: given to `record ready`, which only
+/// checks with it and writes nothing, and given to `record stop`, which builds with it.
 fn hint(what: ReadyMissing, step: Option<u32>) -> Option<String> {
+    let identity = |flag: &str| {
+        Some(format!(
+            "record ready {flag} to check, record stop {flag} to build"
+        ))
+    };
     let step = step.map_or_else(|| "<k>".to_string(), |step| step.to_string());
     match what {
-        ReadyMissing::Game => Some("record stop --game <g>".to_string()),
-        ReadyMissing::Server => Some("record stop --server <s>".to_string()),
-        ReadyMissing::Locale => Some("record stop --locale <l>".to_string()),
+        ReadyMissing::Game => identity("--game <g>"),
+        ReadyMissing::Server => identity("--server <s>"),
+        ReadyMissing::Locale => identity("--locale <l>"),
         ReadyMissing::PageRecognition => {
             Some(format!("record mark --step {step} --template <id>=x,y,w,h"))
         }
@@ -371,13 +422,15 @@ pub(crate) fn generator_warnings(warnings: &[Value]) -> LabResult<Vec<ReadyWarni
 
 /// The answer for `recording` and its session's state `session`. A recording that is not
 /// [`packaged`] is `material` while stage two wrote nothing on it, otherwise `ready` when nothing
-/// is `missing` and `draft` when something is.
+/// is `missing` and `draft` when something is. #463 S2-1b: `sources`, where the package's game,
+/// server and locale came from.
 pub(crate) fn ready_outcome(
     recording: &LabRecording,
     session: String,
     missing: Vec<ReadyItem>,
     warnings: Vec<ReadyWarningItem>,
     checks_after: &[ReadyCheck],
+    sources: ReadySources,
 ) -> RecordReadyOutcome {
     let state = if packaged(recording) {
         ReadyState::Packaged
@@ -399,5 +452,6 @@ pub(crate) fn ready_outcome(
             .iter()
             .map(|check| check.as_str().to_string())
             .collect(),
+        sources,
     }
 }

@@ -221,8 +221,9 @@ pub struct RecordingArtifact {
 }
 
 /// `record stop` options (Workflow #336 L4). Game, server and locale are canonical; the
-/// explicit ones win over the recording's, which win over the `default_*` ones (the
-/// instance configuration).
+/// explicit ones win over the recording's, which win over the `default_*` ones (the Lab's
+/// instance configuration), which (#463 S2-1b) win over the `installed_*` ones (the configuration
+/// of the installation the program runs from). `record ready` reads with the same options.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct RecordStopOptions {
     pub lab_dir: Option<String>,
@@ -233,6 +234,10 @@ pub struct RecordStopOptions {
     pub locale: Option<String>,
     pub default_game: Option<String>,
     pub default_server: Option<String>,
+    /// #463 S2-1b: the game and server the configuration of the installation the program runs
+    /// from binds the instance to (its row of `policy.facts.instances`), last of all.
+    pub installed_game: Option<String>,
+    pub installed_server: Option<String>,
     pub timeout_ms: Option<u64>,
     pub arrival_timeout_ms: Option<u64>,
     pub application_arrival_timeout_ms: Option<u64>,

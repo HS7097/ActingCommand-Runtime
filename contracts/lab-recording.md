@@ -2924,16 +2924,16 @@ Makes an archived recording of the instance its active recording again:
 ## What a recording still lacks: `record ready`
 
 ```
-record ready [--record-id <id>] [--state-dir <dir>]
+record ready [--record-id <id>] [--game <g>] [--server <s>] [--locale <l>] [--state-dir <dir>]
 ```
 
 #463 S2-1 (0.12.65; the owner approved the three-stage blueprint of package making on board #463:
 stage two turns the recorded material into a package offline; the rules here are the
 coordinator's). `record stop` refuses at the first pre-check a recording fails ("Pre-checks"), so an
 agent would learn what a recording lacks one refusal at a time; `record ready` lists all of it at
-once. Through the Lab's MCP server (`actinglab-mcp`) it is `ac_record_ready` (`record_id`,
-`state_dir`; [lab-operations.json](lab-operations.json), the row `record ready`); today's server
-(`actingctl mcp-serve`) has no such tool.
+once. Through the Lab's MCP server (`actinglab-mcp`) it is `ac_record_ready` (`record_id`, `game`,
+`server`, `locale`, `state_dir`; [lab-operations.json](lab-operations.json), the row `record
+ready`); today's server (`actingctl mcp-serve`) has no such tool.
 
 - **Which recording.** The one `record status` reads: the recording the instance's session header
   names, archived or not; or, with `--record-id`, that recording: the header's, or one the header no
@@ -2953,20 +2953,50 @@ once. Through the Lab's MCP server (`actinglab-mcp`) it is `ac_record_ready` (`r
   `--requires`) is no pre-check of the recording: it is the command's own refusal, as `record stop`
   answers it, when the recording fails no pre-check the generator makes before it; when it fails
   one, the option is passed over and every pre-check is listed (fix round 2).
+- **The package's game, server and locale** (#463 S2-1b, 0.12.67; the coordinator's rulings, after
+  stage two was walked on an installed instance: there the instance's game and server are in the
+  Runtime's configuration, not in the Lab's, so `record ready` never reached `ready`). `record
+  ready` takes `--game`, `--server` (actinglab's global options) and `--locale` as `record stop`
+  takes them: the same parameters, each canonical, and one out of its form refused as `record
+  stop` refuses it (`validation_failed`, 2). Each part is taken from the first of these places that
+  holds it, the order `record stop` builds with ("Pre-checks"):
+
+  | place | `sources` word | game | server | locale |
+  |---|---|---|---|---|
+  | the command line: `--game`, `--server`, `--locale` | `command_line` | yes | yes | yes |
+  | what the recording holds: given at `record start`; on a stopped recording marked again, what its package was generated with | `recording` | yes | yes | yes |
+  | the Lab's instance configuration (the instance's `game`, `server` in actinglab's own configuration) | `lab_config` | yes | yes | no |
+  | the configuration of the installation the program runs from: the instance's row of `policy.facts.instances` (its `game_id`, `server_id`), the instance located as `packs` locates it (alias, `instance_id` or ADB port) | `installation_config` | yes | yes | no |
+
+  The installation is located as the CLI module's rows locate it ("A recording holds its
+  instance", #463 S1-8), whatever `ACTINGCOMMAND_RUNTIME_STATE_ROOT` says; on a stopped recording
+  marked again only the first two places count, as for `record stop`. Outside an installation,
+  and where the installation cannot be located, its configuration cannot be read, names no such
+  instance or row, or names a value out of its form, the part is not known: it stays missing, and
+  nothing is refused (`record ready` is an answer about the recording). Nothing else of the
+  configuration is read, printed or logged. The locale has no configured place: it is missing
+  unless the command line or the recording gives it. **`record ready` writes none of them on the
+  recording**: a later `record stop` still needs every part the command line gave `record ready`
+  and the recording does not hold. `sources` (`{game, server, locale}`) names, for each part, the
+  place it came from, a word of the closed vocabulary `ready_source` of the outcome catalog, or
+  `null` when no place holds it (then `missing` lists it).
 
 The answer:
 
 ```json
 {"status": "draft", "record_id": "…", "session": "active",
  "missing": [{"order": 1, "step": null, "artifact_step": null, "frame_id": null, "what": "locale",
-              "code": "record_locale_missing", "hint": "record stop --locale <l>"},
+              "code": "record_locale_missing",
+              "hint": "record ready --locale <l> to check, record stop --locale <l> to build",
+              "details": {"missing": ["locale"]}},
              {"order": 2, "step": 3, "artifact_step": 3, "frame_id": "f0006",
               "what": "page_recognition", "code": "record_step_without_recognition",
               "hint": "record mark --step 3 --template <id>=x,y,w,h"}],
  "missing_total": 2,
  "warnings": [{"step": 1, "artifact_step": 1, "frame_id": "f0001", "what": "press_point_only"}],
  "checks_after": ["frames", "admission", "first_decision", "cross_check", "endings", "selects",
-                  "final_package"]}
+                  "final_package"],
+ "sources": {"game": "installation_config", "server": "installation_config", "locale": null}}
 ```
 
 - **`missing`**: every pre-check of `record stop` the recording fails, at once: the checks the
@@ -2984,8 +3014,9 @@ The answer:
   archive manifest's `material`); on a step whose press `record mark --reopen-step` moved aside
   (its click has no execution), the frame of its click's last attempt, the press so moved (fix
   round 2; an application operation moved aside keeps no frame, so `null`); `what`, its word;
-  `code`, the code `record stop` answers for it; `hint` where one command settles it (`record
-  stop --game <g>`, `--server <s>`, `--locale <l>`; `record mark --step k --template
+  `code`, the code `record stop` answers for it; `hint` where one command settles it (#463 S2-1b:
+  for `game`, `server` and `locale` both ways, `record ready --game <g> to check, record stop
+  --game <g> to build`, and so for `--server <s>` and `--locale <l>`; `record mark --step k --template
   <id>=x,y,w,h` for a step without a mark; `record mark --step k --not-optional` for an optional
   step in a place it cannot be), absent otherwise; and `details` (fix round 2), what the
   refusal's `details` say beside the item's own members, so that two items of one word are told
@@ -3168,7 +3199,7 @@ order of its serial numbers. The rows below count steps by these numbers; where 
 | step n only recognizes | `record_final_step_has_click` (3) |
 | every step but the application entry step has a mark; every page transition has a mark | `record_step_without_recognition` (3) |
 | at most 1000 steps with an effect | `record_too_many_steps` (3) |
-| game, server and locale are known: the stop options, else the recording (`record start`), else (game and server) the instance configuration | `record_locale_missing` (2) |
+| game, server and locale are known: the stop options, else the recording (`record start`), else (game and server) the instance configuration, else (game and server; #463 S2-1b) the instance's row of `policy.facts.instances` in the configuration of the installation the program runs from, as `record ready` reads them ("What a recording still lacks: `record ready`") | `record_locale_missing` (2) |
 | `--package-id` (default `<game>.<server>.<task_id>`) is not empty, at most 256 bytes, without control characters | `validation_failed` (2) |
 | `--requires`: not empty, at most 256 bytes, without control characters, not this package's id, and not on a package whose step 1 is an application entry (`details.reason`: `prerequisite_id_invalid`, `prerequisite_self`, `application_entry`) | `record_requires_invalid` (2) |
 | after a `stop` step the next effect is a `launch` or `restart` | `record_step_after_stop_invalid` (3) |

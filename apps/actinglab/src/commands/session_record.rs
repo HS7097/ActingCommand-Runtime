@@ -385,13 +385,15 @@ pub(crate) const RECORD_REOPEN_READS: FlagReads = FlagReads {
 };
 
 /// #463 S2-1: the flags `record ready` reads: the recording named by its id (active, archived or
-/// stopped), else the one the instance's session names.
+/// stopped), else the one the instance's session names. #463 S2-1b: and the package's game, server
+/// and locale as `record stop` reads them (`--game` and `--server` are actinglab's global options),
+/// which it checks with and writes nowhere.
 pub(crate) const RECORD_READY_READS: FlagReads = FlagReads {
     row: "record ready",
     parts: &[
         &RECORD_SESSION_READS,
         &ReadPart {
-            options: &["--record-id"],
+            options: &["--record-id", "--game", "--server", "--locale"],
             switches: &[],
             refused: &[],
         },
@@ -782,8 +784,9 @@ fn run_session_record_inner(
         "reopen" => run_record_reopen(&flags, &record_path, held_record_lock(&record_lock)?),
         // #463 S2-1: what the recording still lacks before `record stop` can make its package;
         // offline, under no lock (`record_action_lock` takes none for it), writing nothing.
+        // #463 S2-1b: with the game, server and locale `record stop` would take.
         "ready" => {
-            let options = record_ready_options(&config, &instance_id)?;
+            let options = identity_options(global, &config, &flags, &instance_id)?;
             let ready = record_ready(
                 &state_dir,
                 &instance_id,
@@ -2902,7 +2905,32 @@ fn record_stop_options(
             })
             .transpose()
     };
-    let instance = config.instances.get(instance_id);
+    let identity = identity_options(global, config, flags, instance_id)?;
+    Ok(RecordStopOptions {
+        lab_dir: record_flag_value(flags, "--lab-dir")?,
+        package_id: record_flag_value(flags, "--package-id")?,
+        requires: record_flag_value(flags, "--requires")?,
+        timeout_ms: millis("--timeout-ms")?,
+        arrival_timeout_ms: millis("--arrival-timeout-ms")?,
+        application_arrival_timeout_ms: millis("--application-arrival-timeout-ms")?,
+        dry_run: global.dry_run || record_flag_switch(flags, "--dry-run")?,
+        ..identity
+    })
+}
+
+/// #463 S2-1b: the options that name the package's game, server and locale, read alike by `record
+/// stop` and by `record ready` (which checks with them and writes none of them): `--game` and
+/// `--server` (actinglab's global options) and `--locale` as given, each canonical, one out of its
+/// form refused `validation_failed` (exit 2) on both commands; the Lab's instance configuration's
+/// game and server (`default_*`); and the game and server the installation the program runs from
+/// binds the instance to (`installed_*`, [`installed_identity`]). The recording's own come between
+/// the given ones and the Lab's (`record stop`'s settings).
+fn identity_options(
+    global: &GlobalOptions,
+    config: &UserConfig,
+    flags: &FlagArgs,
+    instance_id: &str,
+) -> CliOutcome<RecordStopOptions> {
     let game = record_flag_value(flags, "--game")?
         .or_else(|| global.game.clone())
         .map(|game| canonical_game(&game))
@@ -2911,6 +2939,10 @@ fn record_stop_options(
         .or_else(|| global.server.clone())
         .map(|server| canonical_server(&server))
         .transpose()?;
+    let locale = record_flag_value(flags, "--locale")?
+        .map(|locale| canonical_locale(&locale))
+        .transpose()?;
+    let instance = config.instances.get(instance_id);
     let default_game = instance
         .and_then(|instance| instance.game.clone())
         .map(|game| canonical_game(&game))
@@ -2919,40 +2951,42 @@ fn record_stop_options(
         .and_then(|instance| instance.server.clone())
         .map(|server| canonical_server(&server))
         .transpose()?;
+    let (installed_game, installed_server) = installed_identity(instance_id);
     Ok(RecordStopOptions {
-        lab_dir: record_flag_value(flags, "--lab-dir")?,
-        package_id: record_flag_value(flags, "--package-id")?,
-        requires: record_flag_value(flags, "--requires")?,
         game,
         server,
-        locale: record_flag_value(flags, "--locale")?
-            .map(|locale| canonical_locale(&locale))
-            .transpose()?,
+        locale,
         default_game,
         default_server,
-        timeout_ms: millis("--timeout-ms")?,
-        arrival_timeout_ms: millis("--arrival-timeout-ms")?,
-        application_arrival_timeout_ms: millis("--application-arrival-timeout-ms")?,
-        dry_run: global.dry_run || record_flag_switch(flags, "--dry-run")?,
+        installed_game,
+        installed_server,
+        ..RecordStopOptions::default()
     })
 }
 
-/// #463 S2-1: the options `record ready` reads the recording with, those of `record stop` given
-/// none: the instance configuration's game and server, which `record stop` takes when neither its
-/// flags nor the recording give them.
-fn record_ready_options(config: &UserConfig, instance_id: &str) -> CliOutcome<RecordStopOptions> {
-    let instance = config.instances.get(instance_id);
-    Ok(RecordStopOptions {
-        default_game: instance
-            .and_then(|instance| instance.game.clone())
-            .map(|game| canonical_game(&game))
-            .transpose()?,
-        default_server: instance
-            .and_then(|instance| instance.server.clone())
-            .map(|server| canonical_server(&server))
-            .transpose()?,
-        ..RecordStopOptions::default()
-    })
+/// #463 S2-1b: the game and server the configuration of the installation this program runs from
+/// binds the instance `instance_id` to: located as the CLI module's rows locate the installation
+/// (`cli_module::place::installation_location`), its selected configuration read by the reader of
+/// `actinglab`'s and MCP's `packs` (`lab_ops::packs::instance_binding`, the instance's row of
+/// `policy.facts.instances`), each value canonical. Outside an installation, or where the
+/// installation cannot be located, its configuration cannot be read, names no such instance or
+/// row, or names a value out of its form, the part is not known, as it was before: nothing is
+/// refused, and nothing of the configuration is printed or logged.
+fn installed_identity(instance_id: &str) -> (Option<String>, Option<String>) {
+    let Some(Ok(location)) = crate::cli_module::place::installation_location() else {
+        return (None, None);
+    };
+    let Ok(Some(binding)) = actingcommand_lab_ops::packs::instance_binding(
+        location.installation.as_ref(),
+        &location.config,
+        instance_id,
+    ) else {
+        return (None, None);
+    };
+    (
+        canonical_game(&binding.game_id).ok(),
+        canonical_server(&binding.server_id).ok(),
+    )
 }
 
 /// A single-valued flag with a value: given twice or without a value is a usage error.
