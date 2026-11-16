@@ -373,9 +373,12 @@ its boundary's, and keeps the kernel's code and severity. A kernel code on the G
 - a session close refused before it began for a reason of the instance's own key fences that
   instance as an unconfirmed close does, and the Runtime goes on (Runtime 0.12.60): at a
   lease's expiry, the refusal by the lapsed lease (`lease_expired`; #411 A64 for a run's lease in
-  its end phase, Workflow #458 for every other lease), the same refusal met before the lease's
-  expiry at a client's disconnect, at a backend failure's lease end and in a failed input's
-  clean-up (Workflow #461, Runtime 0.12.66), and after a capture failure, its close
+  its end phase, Workflow #458 for every other lease), the same refusal met before the lease
+  sweep meets it at a client's disconnect, at a backend failure's lease end and in a failed
+  input's clean-up (Workflow #461, Runtime 0.12.66), and at a failed run's hand-over of its key
+  to its ladder, at a pre-emption's hand-over or end of the lease, in an application command's
+  preparation, in a backend switch and in a member switch (Workflow #475, Runtime 0.12.67), and
+  after a capture failure, its close
   lease refused by the takeover cooldown, a queued claim the routine gate holds back or a lapsed
   lease (Workflow #456; [read-session-resource-close.md](read-session-resource-close.md)). A
   failure of the Runtime itself in those paths (a record, a lock, the owner's journal) stays

@@ -1569,6 +1569,16 @@ fn overview_result() -> Value {
                         "queued": {"type": "integer"},
                         "pause": {"type": "object"},
                         "resource_fence": {"type": "object"},
+                        // Workflow #437 G1 (fix rounds 1 and 2): the device held for another
+                        // member's unconfirmed close, the status member as the Runtime answers it.
+                        "device_held": {
+                            "type": "object",
+                            "properties": {
+                                "device_group_wait": {"enum": ["close_unconfirmed"]},
+                                "alias": {"type": "string"},
+                            },
+                            "required": ["device_group_wait", "alias"],
+                        },
                         // #411 A35-S5: the recovery ladder while it holds instead of climbing.
                         "ladder_busy_hold": {
                             "type": "object",

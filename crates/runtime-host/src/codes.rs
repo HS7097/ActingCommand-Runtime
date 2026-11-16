@@ -1637,6 +1637,15 @@ actingcommand_contract::outcome_codes! {
         /// the package the step concerned; the step's failure is its cause).
         ApplicationSwitchFailed => "application_switch_failed": error / none,
         // ---- Workflow #437 MAPP-2a: end
+        // ---- Workflow #437 G1 (`contracts/device-group.md`, "A failure stays where it belongs"): begin
+        /// Error. A request of a member of a device group of several that asks for the device (a
+        /// client's lease, a Lab operation, a direct run, an input or application command, a
+        /// self-check, a resume, a backend switch, the member's own connection preparation) while
+        /// another member of the device is fenced (Workflow #403): the device is held for that
+        /// member's unconfirmed close until a preparation of it whose self-check passes lifts the
+        /// fence. Nothing was granted (keys `alias` the fenced member).
+        DeviceHeldForMemberClose => "device_held_for_member_close": error / none,
+        // ---- Workflow #437 G1: end
     }
 }
 
@@ -2592,6 +2601,18 @@ actingcommand_contract::outcome_locations! {
         // Workflow #437 MAPP-2a: the switch that brings a member of a device group of several to
         // the front before its run, and its parts.
         SwitchApplication => "switch_application",
+        // Workflow #437 G1 fix round 2: the lease sweep's step that queues the start preparation
+        // of a member the device's hold refused (its list of such members, the member's pause, the
+        // device's state, its mark as queued), the claim's queueing and lease time, the settlement
+        // of a claim the queue refused, and the preparation on the member's worker.
+        ListHeldStartPreparations => "list_held_start_preparations",
+        ReadHeldStartPreparationPause => "read_held_start_preparation_pause",
+        ReadHeldStartPreparationDevice => "read_held_start_preparation_device",
+        MarkHeldStartPreparationQueued => "mark_held_start_preparation_queued",
+        QueueHeldStartPreparation => "queue_held_start_preparation",
+        ReadHeldStartPreparationClaimTtl => "read_held_start_preparation_claim_ttl",
+        SettleHeldStartPreparation => "settle_held_start_preparation",
+        RunHeldStartPreparation => "run_held_start_preparation",
     }
 }
 
@@ -2725,6 +2746,14 @@ pub(crate) mod test_spellings {
             // Workflow #461: a test ends a client's connection as its thread does once its stream
             // is gone.
             EndConnectionForTest => "end_connection_for_test",
+            // Workflow #475: a test runs a hook before the next close of an instance's resources
+            // asks its write authority.
+            RunBeforeNextResourceCloseForTest => "run_before_next_resource_close_for_test",
+            // Workflow #475: a test reads whether the owner is retained as unconfirmed.
+            OwnerRetainedUnconfirmedForTest => "owner_retained_unconfirmed_for_test",
+            // Workflow #475 fix round 1: a test reads how many hand-overs to a ladder withheld the
+            // key for an owed close.
+            LadderHandOffsWithheldForTest => "ladder_hand_offs_withheld_for_test",
             // #411 A51: a test latches a condition in the Runtime's fatal state.
             MarkRuntimeFatalForTest => "mark_runtime_fatal_for_test",
             ObserveTestPerformanceControl => "observe_test_performance_control",

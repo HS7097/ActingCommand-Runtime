@@ -543,6 +543,23 @@ impl HostShared {
             Ok((instance.clone(), resolved))
         })
         .collect::<Result<Vec<_>, RequestFailure>>()?;
+        // Workflow #437 G1 fix round 1 (`contracts/device-group.md`, "A failure stays where it
+        // belongs"): the member each member's device is held for (its alias), read from the fences
+        // before the scheduler lock; an instance alone on its device has none.
+        let aliases = instances
+            .iter()
+            .map(|(instance, _)| (instance.instance_id(), instance.instance_alias.clone()))
+            .collect::<BTreeMap<_, _>>();
+        let mut device_holds = BTreeMap::new();
+        for instance_id in aliases.keys() {
+            if let Some(alias) = self
+                .device_held_for(*instance_id)
+                .map_err(RequestFailure::poison_without_terminal)?
+                .and_then(|fenced| aliases.get(&fenced))
+            {
+                device_holds.insert(*instance_id, alias.clone());
+            }
+        }
         let scheduler = lock(&self.scheduler, HostLocation::ReadRuntimeStatusScheduler)?;
         let mut projected = Vec::with_capacity(instances.len());
         for (instance, resolved) in instances {
@@ -570,6 +587,12 @@ impl HostShared {
             let game_id = configured_games.get(&instance.instance_alias).cloned();
             let pause = scheduling_pause.instance_state(&instance.instance_alias);
             let resource_fence = resource_fences.get(&instance_id).cloned();
+            let device_held = device_holds.remove(&instance_id).map(|alias| {
+                actingcommand_contract::InstanceDeviceHeld {
+                    device_group_wait: actingcommand_contract::DeviceHeldWait::CloseUnconfirmed,
+                    alias,
+                }
+            });
             // Workflow #390 九处-1: the emulator as the Runtime last read it.
             let emulator_state = instance.emulator_state;
             let ladder_busy_hold = ladder_busy_holds.get(&instance_id).copied();
@@ -603,6 +626,7 @@ impl HostShared {
                 .map(|status| {
                     status
                         .with_resource_fence(resource_fence)
+                        .with_device_held(device_held)
                         .with_emulator_state(emulator_state)
                         .with_ladder_busy_hold(ladder_busy_hold)
                         .with_activity(activity)
