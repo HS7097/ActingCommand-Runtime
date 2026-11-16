@@ -183,6 +183,12 @@ pub(super) fn help_data() -> Value {
             "standard-pack adopt": crate::standard_pack_cli::adopt_options(),
             // Workflow #464 P3.
             "standard-pack ready": crate::standard_pack_cli::ready_options(),
+            // Workflow #463 S3-10.
+            "standard-pack trial": crate::standard_pack_cli::trial_options(),
+            // Workflow #463 S3-14.
+            "standard-pack status": crate::standard_pack_cli::status_options(),
+            // Workflow #477 PC-1.
+            "standard-pack catalog": crate::standard_pack_cli::catalog_options(),
             // Workflow #463 V3.
             "package variables": crate::package_cli::variables_options(),
             "package fmt": [

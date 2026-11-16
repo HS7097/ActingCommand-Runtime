@@ -913,8 +913,8 @@ actinglab new <new_root> --build <kept build dir or verified release dir> [--new
     leaves no live configuration: `undo` (which then reads the file the swap kept, the input
     `backup`) puts it back, while `resume` cannot load the root (`config_unreadable`), a known
     limit of every `config_replace` that a later slice lifts. With a Runtime answering, the
-    candidate, its commit and its answer are as before: no entry gains the member. Not on the
-    production root before LAB-7 ("Journals across versions").
+    candidate, its commit and its answer are as before: no entry gains the member. Kept off the
+    production root until 0.12.62 ("Journals across versions").
   - **Taking it back**: `config restore <backup>` puts the kept file back by the same path. Its
     post-start checks judge the pauses from before the restore, so the instance it removes shows
     as a `pauses` failure (the hold's pause on it is not restored): it ends `post_check_failed`
@@ -1071,7 +1071,10 @@ the rescue face:
   `--known-pause`, `--ack-guard`, `--ui-confirmed` and `--via` are refused
   (`actingctl_usage_invalid`, `argument_problem` `unknown`). `deploy`, `rollback`, `config replace`
   and `place` plan and apply in one call under the writer lock; `--plan` (a switch) answers the
-  plan only. A one-way ledger edge is journalled `one_way: true` instead of acknowledged.
+  plan only. A one-way ledger edge is journalled `one_way: true` instead of acknowledged. `place`'s
+  `--authorization` and `--enables` (Workflow #463 S3-2, since 0.12.64; "The authorization a
+  placement names", below) are statements of the caller that the tool records, not confirmations
+  it asks for.
 - **Every pause is known.** A hold takes every pause it finds on an affected instance as known,
   keeps it and lists it; a global pause too is kept and listed (the `foreign_pauses` row notes it)
   and the stop goes on. The hold's reason is the module's `lab-<operation>-<unix ms>` unless the
@@ -1108,7 +1111,8 @@ the rescue face:
   manual start, the watchdog's own, a reboot's) restores each persisted pause at revision 1 with
   its reason (`crates/runtime-host/src/host/scheduling_pause.rs`, `restore_scheduling_pauses`);
   only an installer-held start (actingd's `--install-held`, which neither `actingctl install` nor
-  the module passes) keeps the pauses its transition restored. So the module matches the reason
+  the module passed, and which Workflow #434 LAB-6S4a deleted in 0.12.63) kept the pauses its
+  transition restored; since 0.12.63 every start restores them so. So the module matches the reason
   and the alias across epochs, and resumes by the epoch and revision the running Runtime shows. A
   start of the module whose readiness was never seen (it timed out and was left running) or whose
   status could not be read therefore leaves no dead end.
@@ -1226,7 +1230,17 @@ the rescue face:
   `package` maximum of 14 at least (`pack_invalid`, `variable_undeclared` at
   `<zip>\interfaces.json` with the first such pack's `package_id`, in the plan), and (fix round 3,
   `goals.json` version 2, the only version this build reads) a zip that carries `goals.json`
-  declares 14 at least (`goal_undeclared`, as before at 12);
+  declares 14 at least (`goal_undeclared`, as before at 12); from 0.12.68 (Workflow #477 PC-1,
+  [pack-catalog.md](pack-catalog.md); fix round 1: a zip that carries it declares `package` 16,
+  which an installer of 0.12.67 or earlier refuses at its `package` edge, and this `place` asks no
+  revision of it) the package declaration `pack-catalog.json` is the last root file of the layout, placed with
+  its SHA-256 as its item's digest and, when the zip no longer carries it, set aside as
+  `pack-catalog.json.old-<ms>` as the other root files are; a zip whose `pack-catalog.json` is
+  wrong in its business part against the zip's `bundle.json` and `schedule.json` is refused
+  `pack_invalid` caused by `standard_pack_root_invalid` (the file's error at its pointer), in the
+  plan, before the hold; `ui.json`, which `pack-catalog.json` replaced, is no root file of the
+  layout any more: a zip that carries it is refused as a member no layout knows, and every
+  placement sets an installed one aside as `ui.json.old-<ms>`;
   `alive [--wait]`
   is the watchdog's status of the root; `instance add <alias> …` (Workflow #421 INST-5, first
   slice; "Configuration, instances, packs and a fresh root", "Instances, the first slice") composes
@@ -1336,11 +1350,159 @@ the rescue face:
     does, as `install undo` or `install resume` (`owner_lock_held`, `runtime_running`,
     `processes_unreadable`); no status read comes first there, so a running Runtime is
     `owner_lock_held`. The `undo` and the `resume` of a placement begun with a Runtime are
-    unchanged.
+    unchanged. The `undo` of a placement, with a Runtime or without one, asks for no
+    authorization (Workflow #463 S3-2, since 0.12.64, does not change it): it restores the content
+    the placement replaced, so a package the placement made leave scheduling is scheduled again,
+    and no record says under which authorization.
 
   The answer's steps are `plan` and `place`, with no `schedule`. While the operation is unfinished
   the watchdog stands aside (`pack_place` is off row 7a″'s pass list), so no Runtime starts on a
   half-placed game root; the next start reads the placed game root.
+- **The packages a placement makes enter or leave scheduling** (Workflow #463 S3-1, since
+  0.12.64; register §1.408; the coordinator's rulings on board #463, not the owner's words). A
+  placement is the act that enables: once a game root is placed, the workbench composes it and
+  dispatches every package a rule names and no hold keeps back. So the plan of `place` (its
+  `--plan` answer and the answer's step `plan`) says which packages enter or leave scheduling,
+  in its member `schedule_changes`, before anything is placed. It is read only: the plan
+  document, the plan id, the items and every check are as before, and nothing a placement writes
+  reads it.
+  - **The classification.** The packages of the bundle's game are classified on the installed
+    game root (`<standard_packs.root>\<game>` as it is: `bundle.json`, `pages.json`,
+    `interrupts.json`, `navigation.json` and `display-layout.json` read as every reader reads
+    them, the bundle's `maintenance` entries, and `schedule.json`; since fix round 2 each file
+    read as readiness reads a game root's file, at most 32 MiB) and on the zip's root (the same
+    files of the zip), each by the contract crate's own `standard_pack_maintenance_packages` and
+    `classify_standard_pack_packages`, the functions readiness calls. A side is **composed** when
+    its root holds a `schedule.json` that the contract crate's reader and the composer's own
+    reference check (`validate_standard_pack_schedule_references`: every rule's and every held
+    entry's package is a package of the root, every `server` a server of one) both take: the
+    workbench leaves a game root without `schedule.json` out of its composition, and a game whose
+    file its composer refuses keeps the rules of the active generation, which the plan does not
+    read ([standard-pack-schedule.md](standard-pack-schedule.md), "Unload", "Last good rules").
+  - **A package's part** on one side, `{state, reason?, reference?, roles?}`: `state` is
+    `scheduled` (named by a rule and not held), `held` (with the entry's `reason` and, when
+    written, its `reference`), `maintenance_role` (a role only), `unclassified` (in no set),
+    `absent` (not listed by that root's `bundle.json`: a game's first root, a pack the zip no
+    longer carries) or `unread` (below); on a root without `schedule.json` it is what the root
+    files say (`maintenance_role` or `unclassified`). `roles`, present only when there is one,
+    names the supporting parts the root files give it, in readiness's words (the vocabulary
+    `readiness_role`, [standard-pack-schedule.md](standard-pack-schedule.md), "Readiness"), each
+    found by calling `standard_pack_maintenance_packages` on the entries of one use, or on one
+    list, alone, and (since fix round 3) the plan's own word `prerequisite`, which is not one of
+    readiness's words: a layer of a prerequisite chain (below). The plan lists them in this
+    order: `startup`, `return_home`, `recognition` (the uses of its `bundle.json` `maintenance`
+    entry), `features` (`pages.json`), `edge`, `chain` (the edges and the recovery chain of
+    `navigation.json`), `handler`, `then_run` (the handlers and the `then.run` packages of
+    `interrupts.json`), `prerequisite`. A package held or scheduled that has a role is `held` or
+    `scheduled` with its `roles`; a package used only as a prerequisite keeps the state the
+    classification gives it (`unclassified`, say) with the role `prerequisite`.
+  - **The prerequisite chains** (since fix round 3). A pack's `control.json` may name, in
+    `prerequisite_package_id`, the package the host runs as a layer of the pack's runs
+    ([linear-steps.md](linear-steps.md), "Prerequisite packages"; the Lab's recorder writes it
+    from `requires`). On each side, from each package that is scheduled or holds one of
+    readiness's words, the plan follows that member as the host resolves it when a run is
+    prepared: the member of the `control.json` in the package's directory that the side's
+    registry (its `bundle.json`) gives, the package it names looked up in the same registry,
+    then that package's own, at most three layers (the execution kernel's
+    `MAX_PREREQUISITE_DEPTH`; the host refuses a fourth). Each layer reached holds the role
+    `prerequisite`; a package that holds only that role starts no chain of its own. A layer the
+    side's registry does not list, or one already in the chain, ends the chain and counts
+    nothing: the host refuses that run at preparation, which is another check's refusal, and the
+    plan says nothing of it; so does a `control.json` that is no JSON object or whose member is no
+    string (the package's admission refuses it). In that case, and with a fourth layer, the host
+    refuses the whole run while the plan still counts the package that starts the chain and the
+    layers before its end as used, so the lists hold more than what runs, as for a root the
+    composer would refuse (below). The installed side's `control.json` is read as
+    its root files are (at most 32 MiB), the zip's from its member
+    `packs/<directory>/control.json`. The rescue module does not link the host or the execution
+    kernel, and the contract crate has no reader of the member, so the plan reads it itself, with
+    the zip reader and the bounded file read it uses for the root files.
+  - **`packages`**: each package whose part or pack content changes, or that one of the lists
+    names, by package id, `{package_id, before, after, content?}`; `content` is the state of its
+    pack item (`new`, `replace`, `unchanged`), absent for a pack the zip no longer carries (its
+    folder stays in place; only `bundle.json` stops listing it).
+  - **`enters`** lists the packages that, by the schedule, the root files and the prerequisite
+    chains of the two sides, will be dispatched or used after the placement and were not before:
+    the sorted package ids `scheduled` after and not before, or holding a role after that they
+    did not hold before (`prerequisite` included), whichever root file or chain the role comes
+    from. Only a composed side counts: on a side that is not composed, and on an installed side
+    that could not be read, no package counts as scheduled or as holding a role, for `enters`,
+    `leaves` and `content_only` alike. So a lifted hold enters; a package that becomes the
+    prerequisite of a scheduled one enters, and the prerequisite of a held one does not; on a
+    game's first root, and over an installed root without `schedule.json`, every package the zip
+    schedules or gives a role enters; a zip without `schedule.json` makes nothing enter. A
+    package of a server to which no instance is bound is listed like any other: binding an
+    instance later needs no placement, so the authorization covers it now. The plan does not run
+    the composer: a root the composer would refuse for another reason than the reader's and the
+    reference check's (in its `read_game`: a member whose subsystem `requires` does not name, a
+    subsystem this Runtime does not name, a member only the composer writes, a `limited` that is
+    not `true` or sits on a maintenance rule, a realization, limited or fixed-value mark on a
+    rule of a maintenance-role package, a timeline event that invalidates the application update
+    fact; after it: a package another game's rules already name or an id two composed items
+    share, `rule_id_conflict`, and the compile of the joined catalog) is counted as composed, so
+    the lists then say more than will happen; for a game bound to an instance the placement's own
+    post check fails in that case (the composer leaves out a game no instance is bound to, and the
+    post check does not judge it), and a placement made while a Runtime runs keeps its hold. **`leaves`**: `scheduled` before
+    and not after, a role it held before and does not after (so every package used before leaves
+    when the zip carries no `schedule.json`, and a prerequisite leaves with the last package
+    whose chain reached it), or no longer carried by the zip (also one never scheduled).
+    **`content_only`**: a package the scheduler uses before and after in the same way and whose
+    pack is replaced (one used only as a prerequisite too). A package may enter and leave at once
+    (it loses its rule and gains a role). The plan of a bundle that changes nothing lists nothing
+    in any of the four.
+  - **`unread`**, present only when a side could not be read: `[{root, failure}]`, `root`
+    `installed` or `bundle`, the failure as a warning (`{outcome}`). A file of the installed root
+    that cannot be read, or one larger than the bound (`foreign_os_error`; `io_kind`
+    `file_too_large` for the bound; since fix round 3 a pack's `control.json` too, one the pack's
+    directory does not hold naming no prerequisite), or root files the reader refuses
+    (`standard_pack_root_invalid` at the file, its problem and pointer) leave every package of
+    that side `unread` without roles; a `schedule.json` that the reader or the composer's
+    reference check refuses
+    (`standard_pack_root_invalid` at that file, its problem and pointer; the plan itself checks
+    neither side's) leaves each package of that side `unread` with its roles. The zip's side is
+    unread only through its `schedule.json`: the plan refuses a zip whose other root files the
+    reader refuses. An unread installed side counts nothing before, so every package scheduled
+    or holding a role after enters, and `leaves` and `content_only` are not complete. With the
+    zip's side unread the answer carries `packages` and `unread` and none of the three lists:
+    what the scheduler uses after the placement is not known. Nothing is refused for it.
+- **The authorization a placement names** (Workflow #463 S3-2, since 0.12.64; register §1.409;
+  the coordinator's rulings on board #463, not the owner's words). The owner's rule is that
+  nothing enters normal scheduling without her explicit authorization, and the placement is the
+  act that enables. So a placement whose plan changes something names the authorization it acts
+  under and, one by one, the packages it enables; `place --plan` and the placement of a plan
+  that changes nothing (every item `unchanged`) need neither and read neither.
+  - **The parameters.** `--authorization <reference>`: the reference of the authorization (a
+    board comment's address, say), non-blank, at most 1024 bytes, no control character.
+    `--enables <package_id>`, repeated: every package of the plan's `enters`, once each (since
+    S3-1's fix round 3 also a package used only as a layer of the prerequisite chain of a
+    package scheduled or holding one of readiness's words), and absent when nothing enters. There is no default, no variable and no
+    switch that places without them.
+  - **The checks**, after the plan and before the hold, any pause and any write, once for both
+    paths (with a Runtime and while it is stopped), in this order, each refusal with `plan_id`
+    and `game`: no `--authorization`, or a blank one, is `install_command_refused`
+    `place_authorization_missing`; one longer than 1024 bytes or holding a control character
+    `actingctl_usage_invalid` (`unusable`, `--authorization`); a plan that answers no `enters`
+    (the zip's side unread: its `schedule.json` refused by the reader or the composer's reference
+    check, so the plan carries `packages` and `unread` and none of the three lists)
+    `place_enables_unknown`, the plan's `schedule_changes` beside the outcome, whose `unread` names
+    the refusal (`standard_pack_root_invalid` at the file): the packages the placement would
+    enable cannot be named. The plan alone decides this; the check reads only its answer. The
+    zip's other root files are refused `pack_invalid` in the plan already; an installed game root
+    that cannot be read refuses nothing, since a placement is how a broken root is repaired: it
+    counts nothing before, so its `enters` are every package scheduled or holding a role after.
+    Last, `--enables`, sorted, not exactly the plan's `enters` (a name missing, one too many, one
+    given twice, or any when nothing enters) is `place_enables_mismatch`, the answer's `expected`
+    (`enters`) and `given` (`--enables`), each sorted, beside the outcome. A caller without a
+    reference learns that first.
+  - **The record.** The `pack_place` journal's `inputs` gain `authorization` (the reference as
+    given) and `enabled` (the sorted list of the packages the placement enables, `[]` when none),
+    with a Runtime and without one; `op status <op>` shows them with the journal. A journal
+    an earlier build began has neither member: it loads and is resumed and undone as before, and
+    its authorization reads as not recorded, never as an empty one.
+  - **What the tool does not do.** It records an authorization and grants none: it does not judge
+    the reference, and never supplies one. `--enables` is the caller's statement that it knows
+    which packages it is enabling; the plan's `enters` is what the tool holds it to. A plan that
+    lists `enters` is not an authorization, and neither is a passed check.
 - **`vision manifest --provider cpu|directml` and `vision check`** (Workflow #453 S7, since
   0.12.60; register §1.355; [vision-model-folders.md](vision-model-folders.md), "The manifest";
   the coordinator's rulings on board #453, not the owner's words). Two read-only rows, `runtime`
@@ -1463,8 +1625,8 @@ the rescue face:
     `.abandoned-<ms2>`. Nothing is deleted, and no file the manifest does not name and no other
     folder under `models\` is touched. `leftovers` lists no item of a vision root, as it lists
     none of a game root.
-  - It falls under the operating rule until LAB-7 ("Journals across versions" below): not used on
-    the production root.
+  - Until 0.12.62 it fell under the operating rule that kept the module's rows off the production
+    root ("Journals across versions" below).
 - **`state-root claim [--new-identity]`** (Workflow #453 S12, since 0.12.60; register §1.368;
   [state-root-installation.md](state-root-installation.md), "Handing a state root over"; the
   coordinator's rulings on board #453, not the owner's words). `writes`, `irreversible`, `runtime`
@@ -1516,11 +1678,18 @@ the rescue face:
   `vision_place` and its step `vision_file`, which a build before 0.12.60 does not read either):
   the testing phase keeps no old-version compatibility
   (Alice, 2026-10-11). `actingctl install` writes its journals byte for byte as before, and this
-  build reads the older ones. **Operational rule until LAB-7:** production keeps deploying through
-  `actingctl install` (the coordinator's deploy kit); the module's `deploy`, `rollback`, `place`,
-  `config replace` and (Workflow #453 S9) `vision place` are not used on the production root, so
-  no journal an older installer cannot read appears there. Workflow #453 S12: nor is its
-  `state-root claim`, until LAB-7.
+  build reads the older ones. **Operational rule until LAB-7** (lifted in 0.12.62): until 0.12.62
+  production deployed through `actingctl install` (the coordinator's deploy kit) and kept the
+  module's `deploy`, `rollback`, `place`, `config replace`, (Workflow #453 S9) `vision place` and
+  (Workflow #453 S12) `state-root claim` off the production root, so that no journal an older
+  installer cannot read appeared there. The owner's ruling of 2026-11-15 keeps nothing compatible
+  with earlier builds, so that reason is gone: only the build a deploy replaces must read the
+  module's journals, and that build (v0.12.61 for 0.12.62) reads every kind above, its
+  `actingctl install` being the module's own code (`crates/lab-rescue`). Since 0.12.62 production
+  deploys through the module (`release stage`, `deploy`, `op status`, run from the live build's
+  kept `actinglab`), with `actingctl install` of the build it replaced as the way back
+  (`install resume`, `install undo`, `install release-hold`); the rule keeps no row of the module
+  off the production root any more.
 
 ## Interface checks
 
@@ -3147,6 +3316,14 @@ the fragment registers, names the command.
   running at its deadline) and `install_caveat` `fingerprints_discontinuous` (`path` the kept
   record), which only this row answers; the existing `owner_lock_held`, `runtime_running` and `processes_unreadable`
   for its stopped rule; no code or key is new.
+- **Workflow #463 S3-2** (since 0.12.64; "The Lab's rescue module", "The authorization a
+  placement names"): `install_refusal` `place_authorization_missing`, `place_enables_mismatch`
+  (the answer's `expected` and `given`, not values) and `place_enables_unknown` (no cause is
+  attached: why the lists cannot be stated is in the plan's `schedule_changes` beside the outcome,
+  whose `unread` names the refusal, `standard_pack_root_invalid` at the file), each with `plan_id`
+  and `game`, which only `install_pack_place` answers, each before the hold and any write; the
+  existing `actingctl_usage_invalid` (`unusable`, `wrong_type`) for a malformed `--authorization`
+  or `--enables`; no code, location or key is new.
 - **`install_caveat`, INST-2**: `start_stalled`, `stop_terminal_unconfirmed`,
   `runs_not_continued`.
 - **`install_refusal`**: `not_single_location`, `layout_ab_unsupported`, `not_adopted`,

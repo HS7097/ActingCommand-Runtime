@@ -35,7 +35,7 @@ pub(crate) enum Line {
 
 /// The command of every row actinglab's own command serves: the row's name, the command's words
 /// and how the row's command line reaches it.
-pub(crate) const COMMANDS: [(&str, &[&str], Line); 67] = [
+pub(crate) const COMMANDS: [(&str, &[&str], Line); 73] = [
     ("app launch", &["session", "app", "launch"], Line::Declared),
     (
         "app restart",
@@ -103,6 +103,12 @@ pub(crate) const COMMANDS: [(&str, &[&str], Line); 67] = [
     // Workflow #449 REC-ARCH: a recording ended as material only, and reopened later.
     ("record archive", &["record", "archive"], Line::AsWritten),
     ("record reopen", &["record", "reopen"], Line::AsWritten),
+    // #463 S2-1: everything a recording still lacks before `record stop` can make its package.
+    ("record ready", &["record", "ready"], Line::AsWritten),
+    // #463 S2-13: the stored frames around one step's press; it only reads.
+    ("record frames", &["record", "frames"], Line::AsWritten),
+    // #463 S2-2: each step as the screen before, the press and the screen after, with previews.
+    ("record review", &["record", "review"], Line::AsWritten),
     ("package check", &["package", "check"], Line::AsWritten),
     (
         "package preflight",
@@ -172,6 +178,25 @@ pub(crate) const COMMANDS: [(&str, &[&str], Line); 67] = [
     (
         "standard-pack ready",
         &["standard-pack", "ready"],
+        Line::AsWritten,
+    ),
+    // Workflow #463 S3-10: the plan of a trial on a real application; Workflow #463 S3-11:
+    // without `--plan`, its one run.
+    (
+        "standard-pack trial",
+        &["standard-pack", "trial"],
+        Line::AsWritten,
+    ),
+    // Workflow #463 S3-14: where each pack of a game root stands; it only reads.
+    (
+        "standard-pack status",
+        &["standard-pack", "status"],
+        Line::AsWritten,
+    ),
+    // Workflow #477 PC-1: the writer of a game root's `pack-catalog.json`.
+    (
+        "standard-pack catalog",
+        &["standard-pack", "catalog"],
         Line::AsWritten,
     ),
     (

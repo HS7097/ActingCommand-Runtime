@@ -662,6 +662,10 @@
       "type": "vocab:ending_against",
       "description": "The recorded screen an ending's page passes on that it must not pass on (#463 R2, record stop's self-check item 9)."
     },
+    "optional_after_problem": {
+      "type": "vocab:optional_after_problem",
+      "description": "Why an optional step a stopped Lab recording inserts after the effect of one of its steps, a pop-up after which the path goes on (#463 R4), cannot be inserted or given up."
+    },
     "unknown_reason": {
       "type": "vocab:unknown_reason",
       "description": "Why an input a selection document reads could not be read as a known value."
@@ -1805,6 +1809,14 @@
       "type": "list<name>",
       "description": "Package ids a standard-pack registry lost since it was last read."
     },
+    "catalog_side": {
+      "type": "vocab:catalog_side",
+      "description": "The side of a package's business part in a game root's pack-catalog.json a pool stands on (Workflow #477 PC-1)."
+    },
+    "catalog_difference": {
+      "type": "vocab:catalog_difference",
+      "description": "Which of a game root's pack-catalog.json and schedule.json lacks a pool a package consumes or produces (Workflow #477 PC-1)."
+    },
     "schedule_sha256": {
       "type": "hash",
       "description": "The sha256 of the schedule.json of a standard-pack game root the scheduler workbench composed (ROUT-L RL-1b)."
@@ -2831,6 +2843,46 @@
     "report_output_root": {
       "type": "vocab:report_output_root",
       "description": "The root a refused output directory of a problem report lies in (Workflow #467 RPT-1, since 0.12.61)."
+    },
+    "confirmation_problem": {
+      "type": "vocab:confirmation_problem",
+      "description": "What the program saw where the confirmation of the page a step awaits ended, or the declared error page a run stood on: one word per situation it tells apart there, beside the code and never in its detail text (Workflow #469 V0, since 0.12.62)."
+    },
+    "guard_problem": {
+      "type": "vocab:guard_problem",
+      "description": "Why an operation's guard refused its input (Workflow #469 V0, since 0.12.62)."
+    },
+    "availability_source": {
+      "type": "vocab:availability_source",
+      "description": "Who withdrew an application's availability, read from the source of the active session.instance.available record that withdrew it (Workflow #469 V0, since 0.12.62)."
+    },
+    "pause_cause": {
+      "type": "vocab:pause_cause",
+      "description": "Why a failure paused its task on the application, in the settlement's own order (Workflow #469 V0, since 0.12.62)."
+    },
+    "break_in_problem": {
+      "type": "vocab:break_in_problem",
+      "description": "What of a scheduled run's break-in could not be established before the run executed: the package's content or the pair's break-in record (Workflow #463 U1b fix round 3, since 0.12.63)."
+    },
+    "trial_state_place": {
+      "type": "vocab:trial_state_place",
+      "description": "Where a state directory refused for trial records lies: a repository or an installed root (Workflow #463 S3-10, since 0.12.64)."
+    },
+    "trial_record_problem": {
+      "type": "vocab:trial_record_problem",
+      "description": "Why a file of a trial record's name is not read as that record: the read failed, it is too large, it does not decode, or it is not the record its name says (Workflow #463 S3-10 fix round 2, since 0.12.64)."
+    },
+    "trial_collect_problem": {
+      "type": "vocab:trial_collect_problem",
+      "description": "Why the run a trial's --collect names is not a trial's run: its facts do not name the trial's package or the instance the trial is for, or (fix round 2) do not show a run sent by hand on the Lab's channel (Workflow #463 S3-11, since 0.12.65)."
+    },
+    "drop_problem": {
+      "type": "vocab:drop_problem",
+      "description": "Why record mark's drop_step does not drop a step before the last of a Lab recording: the stored frames do not hold what the comparison needs, or they show a change at its press (#463 S2-7, since 0.12.68; fix round 1: the tool refuses only what the stored frames contradict, whether the press mattered is the agent's judgement)."
+    },
+    "drop_comparison": {
+      "type": "vocab:drop_comparison",
+      "description": "Which of the two comparisons of two stored frames showed the change for which record mark's drop_step refuses a step before the last (record_drop_unproven with drop_problem screen_changed or next_screen_differs): the whole frame or the neighbourhood of the press (#463 S2-7 fix round 1, since 0.12.68)."
     }
   },
   "vocabularies": {
@@ -5156,6 +5208,18 @@
         },
         "on_empty_key_of_ending": {
           "description": "The on_empty key is the outcome key of an ending of the recording (#463 R2 fix 1)."
+        },
+        "choice_not_refined": {
+          "description": "record stop meets a step marked as holding a choice that no select refines yet: it knows no names, so no package is generated (#463 S2-6)."
+        },
+        "no_choice": {
+          "description": "A request's choice false names a step that is not marked as holding a choice, so there is nothing to take off (#463 S2-6 fix round 1)."
+        },
+        "drop_of_choice": {
+          "description": "drop_step names a step that holds a choice (marked as holding one, or refined by a select), the last step too: its press may have chosen the item already selected, which changes nothing on the screen and still matters to a run handed another value; the choice is withdrawn first (#463 stage two, train, fix round)."
+        },
+        "transition_of_choice": {
+          "description": "to_transition names a step that holds a choice (marked as holding one, or refined by a select): a page transition holds none, so the conversion would lose it; the choice is withdrawn first (#463 stage two, train, fix round)."
         }
       }
     },
@@ -5213,6 +5277,228 @@
         },
         "other_ending": {
           "description": "The frames of another ending of the recording."
+        }
+      }
+    },
+    "optional_after_problem": {
+      "description": "Why an optional step a stopped Lab recording inserts after the effect of one of its steps, a pop-up after which the path goes on (#463 R4), cannot be inserted or given up.",
+      "source": {
+        "file": "crates/lab/src/codes.rs",
+        "enum": "OptionalAfterProblem"
+      },
+      "tokens": {
+        "recording_active": {
+          "description": "The recording is active: a step is inserted after record stop, which generated the package of the recorded path first."
+        },
+        "with_other_change": {
+          "description": "The request names another change beside optional_after or remove_inserted, or both of these."
+        },
+        "step_unknown": {
+          "description": "optional_after.step names no step of the recording (none, a dropped or a converted one)."
+        },
+        "step_last": {
+          "description": "optional_after.step names the last step: every run ends on its page, after which nothing is pressed."
+        },
+        "step_application": {
+          "description": "optional_after.step names a step whose effect is an application operation."
+        },
+        "no_marks": {
+          "description": "The inserted step adds and reuses no mark, so its page would recognize nothing."
+        },
+        "no_click": {
+          "description": "The inserted step declares no click, so nothing would close its pop-up."
+        },
+        "clears_optional": {
+          "description": "The request clears optional on an inserted step: a step never recorded on the path stays optional."
+        },
+        "not_inserted": {
+          "description": "remove_inserted names no inserted step of the recording that is not given up yet."
+        }
+      }
+    },
+    "ready_missing": {
+      "description": "One pre-check of record stop that a Lab recording fails, as record ready lists it in missing[].what (#463 S2-1): one word per pre-check, one cause per word; record stop answers its code.",
+      "source": {
+        "file": "crates/lab/src/codes.rs",
+        "enum": "ReadyMissing"
+      },
+      "tokens": {
+        "too_few_steps": {
+          "description": "The recording has fewer than two effective steps (record_no_steps)."
+        },
+        "application_entry_not_first": {
+          "description": "A step after the first is an application entry step, which has no frame (record_application_entry_not_first)."
+        },
+        "effect_missing": {
+          "description": "A step before the last has no effect: no click, select or application operation (record_step_click_missing)."
+        },
+        "final_has_effect": {
+          "description": "The last step has an effect; it only recognizes the screen the package arrives at (record_final_step_has_click)."
+        },
+        "page_recognition": {
+          "description": "A step but the application entry step has no own or reused mark (record_step_without_recognition)."
+        },
+        "transition_recognition": {
+          "description": "A step's page transition has no own or reused mark (record_step_without_recognition with transition page)."
+        },
+        "too_many_effects": {
+          "description": "More steps have an effect than a package holds (record_too_many_steps)."
+        },
+        "game": {
+          "description": "The package's game is known neither from record stop nor from the recording nor from the Lab's instance configuration nor (#463 S2-1b) from the configuration of the installation the program runs from (record_locale_missing)."
+        },
+        "server": {
+          "description": "The package's server is known neither from record stop nor from the recording nor from the Lab's instance configuration nor (#463 S2-1b) from the configuration of the installation the program runs from (record_locale_missing)."
+        },
+        "locale": {
+          "description": "The package's locale is known neither from record stop nor from the recording (record_locale_missing)."
+        },
+        "effect_after_stop": {
+          "description": "After a step that stops the application the next effect is no launch or restart (record_step_after_stop_invalid)."
+        },
+        "reused_mark_missing": {
+          "description": "A step's page or its page transition reuses a mark that is no mark of an effective step (record_mark_rejected, reuse_source_missing)."
+        },
+        "forbidden_mark_missing": {
+          "description": "A step forbids a mark that is no mark of an effective step (record_mark_rejected, forbidden_source_missing)."
+        },
+        "anchor_not_own_template": {
+          "description": "A step's anchor is no own template mark of it (record_mark_rejected, anchor_invalid)."
+        },
+        "application_without_home": {
+          "description": "The last launch or restart is followed by no step that is the main interface (record_application_without_home)."
+        },
+        "optional_first_step": {
+          "description": "The first step is optional (record_optional_first_step)."
+        },
+        "optional_final_step": {
+          "description": "The last step is optional (record_optional_final_step)."
+        },
+        "optional_application": {
+          "description": "An application step is optional (record_optional_application)."
+        },
+        "optional_restart_home": {
+          "description": "The main interface after the last launch or restart is optional (record_optional_restart_segment_end)."
+        },
+        "select_optional": {
+          "description": "A select step is optional (record_select_invalid, on_optional_step)."
+        },
+        "select_retry": {
+          "description": "A select step's click declares a retry (record_select_invalid, with_retry)."
+        },
+        "select_gesture": {
+          "description": "A select step's click declares a gesture (record_select_invalid, with_gesture)."
+        },
+        "select_follow": {
+          "description": "A select step's click follows a mark (record_select_invalid, with_follow)."
+        },
+        "select_key_reserved": {
+          "description": "A select step's on_empty key is the usual ending's (record_select_invalid, on_empty_key_reserved)."
+        },
+        "select_key_taken": {
+          "description": "A select step's on_empty key is another select step's (record_select_invalid, on_empty_key_taken)."
+        },
+        "select_wanted_taken": {
+          "description": "A select step's wanted name is another select step's (record_select_invalid, wanted_name_taken)."
+        },
+        "ending_key_reserved": {
+          "description": "An ending's outcome key is the usual ending's (record_ending_invalid, key_reserved)."
+        },
+        "ending_key_of_select": {
+          "description": "An ending's outcome key is a select step's on_empty key (record_ending_invalid, key_of_select)."
+        },
+        "ending_key_taken": {
+          "description": "An ending's outcome key is another ending's (record_ending_invalid, key_exists)."
+        },
+        "ending_page_taken": {
+          "description": "An ending's page name is another ending's (record_ending_invalid, page_exists)."
+        },
+        "ending_mark_missing": {
+          "description": "An ending's page reuses a mark that is no mark of an effective step (record_mark_rejected, reuse_source_missing)."
+        },
+        "size_not_base": {
+          "description": "Workflow #392 DA-5cd fix round 1: the recording holds frames that are not the base size (record_size_not_base)."
+        },
+        "select_unrefined": {
+          "description": "#463 S2-6: a step marked as holding a choice that no select refines yet (record_select_invalid, choice_not_refined)."
+        }
+      }
+    },
+    "ready_check": {
+      "description": "One self-check of record stop, in the order they run, as record ready names it in checks_after and in the what of a self-check's refusal (#463 S2-1).",
+      "source": {
+        "file": "crates/lab/src/codes.rs",
+        "enum": "ReadyCheck"
+      },
+      "tokens": {
+        "frames": {
+          "description": "Every live frame and template crop is read back with its recorded sha256 and the recording's size."
+        },
+        "admission": {
+          "description": "The generated package is admitted by the kernel and gives its evaluator."
+        },
+        "first_decision": {
+          "description": "The offline simulation of the package's first step on its recorded frames."
+        },
+        "cross_check": {
+          "description": "Every page on its own frames, the guards on located text, the optional steps, the arrival gates and the entry overlay."
+        },
+        "endings": {
+          "description": "Every ending's page on its own frames and on the screens a run may show instead."
+        },
+        "selects": {
+          "description": "Every select step's decisions on its own frames."
+        },
+        "final_package": {
+          "description": "The final package: encoded, expanded again, admitted again, and the same first decision."
+        }
+      }
+    },
+    "ready_warning": {
+      "description": "A warning of record ready, never blocking (#463 S2-1).",
+      "source": {
+        "file": "crates/lab/src/codes.rs",
+        "enum": "ReadyWarning"
+      },
+      "tokens": {
+        "press_point_only": {
+          "description": "A step's press is a single recorded point with no press region set: the package would press that exact pixel."
+        }
+      }
+    },
+    "ready_source": {
+      "description": "Where a part of the package's identity (its game, server or locale) that record ready answers with came from, as record stop takes it, in sources (#463 S2-1b).",
+      "source": {
+        "file": "crates/lab/src/codes.rs",
+        "enum": "ReadySource"
+      },
+      "tokens": {
+        "command_line": {
+          "description": "The command line of record ready or record stop: --game, --server (actinglab's global options) or --locale."
+        },
+        "recording": {
+          "description": "What the recording holds: given at record start, or, on a stopped recording marked again, what its package was generated with."
+        },
+        "lab_config": {
+          "description": "The Lab's instance configuration: the instance's game or server in actinglab's own configuration (game and server only)."
+        },
+        "installation_config": {
+          "description": "The configuration of the installation the program runs from: the instance's row of policy.facts.instances (game and server only)."
+        }
+      }
+    },
+    "ready_check_stop": {
+      "description": "Why a self-check record ready ran stopped at a failure short of its end, so that the failures missing lists of it may not be all it has, in checks[].reason (#463 S2-1c).",
+      "source": {
+        "file": "crates/lab/src/codes.rs",
+        "enum": "ReadyCheckStop"
+      },
+      "tokens": {
+        "whole_package": {
+          "description": "The check judges the generated package as one, in stages each built on the one before (admission, final_package): its first refusal leaves no stage after it to judge."
+        },
+        "check_error": {
+          "description": "The check met an error that is none of its verdicts (a target the evaluator cannot evaluate, a stored frame it cannot decode): what it would judge after it is not judged."
         }
       }
     },
@@ -6746,7 +7032,7 @@
       }
     },
     "standard_pack_problem": {
-      "description": "What is wrong with a standard-pack root file (Workflow #373 NAV-6), table file (Workflow #357 DB-1), pack's loading copy (Workflow #407 LOAD-1), bundle's notices directory (Workflow #444 NOTICES-1) or the variables a game root's packages declare (Workflow #463 V1).",
+      "description": "What is wrong with a standard-pack root file (Workflow #373 NAV-6), table file (Workflow #357 DB-1), pack's loading copy (Workflow #407 LOAD-1), bundle's notices directory (Workflow #444 NOTICES-1), the variables a game root's packages declare (Workflow #463 V1) or a game root's pack-catalog.json (Workflow #477 PC-1).",
       "tokens": {
         "malformed": {
           "description": "The file is not JSON of the file's shape and version; for a table, not canonical JSON either (a floating point number, an unsafe integer or a duplicate key)."
@@ -6758,7 +7044,7 @@
           "description": "bundle.json breaks the bundle index rules."
         },
         "bundle_missing": {
-          "description": "The game root holds interrupts.json, navigation.json, pages.json, (Workflow #392 DA-4) display-layout.json, (Workflow #357 DB-1) a tables directory or, for the readers of ui.json (Workflow #429 R-11, since 0.12.36), ui.json but no bundle.json."
+          "description": "The game root holds interrupts.json, navigation.json, pages.json, (Workflow #392 DA-4) display-layout.json, (Workflow #357 DB-1) a tables directory or, for the readers of pack-catalog.json (Workflow #477 PC-1, since 0.12.68; before it of ui.json, Workflow #429 R-11), pack-catalog.json but no bundle.json."
         },
         "pages_missing": {
           "description": "The game root holds interrupts.json or navigation.json but no pages.json."
@@ -6856,17 +7142,20 @@
         "display_layout_invalid": {
           "description": "display-layout.json breaks one of its rules: its correction.radius_px is above 64 (Workflow #392 DA-4, model 392 v1.2 section 4.1)."
         },
-        "ui_out_of_limits": {
-          "description": "ui.json is larger than 256 KiB, or one of its lists, maps, words or texts is outside its limit (Workflow #429 R-11, since 0.12.36)."
+        "catalog_out_of_limits": {
+          "description": "pack-catalog.json is larger than 1 MiB, or one of its lists, texts, locales, words, pool ids or amounts is outside its limit, at the pointer of what exceeds: an error in the business part and of the file as a whole, a warning in the display part (Workflow #477 PC-1, since 0.12.68). It replaced ui_out_of_limits of ui.json (Workflow #429 R-11), which no program reads any more."
         },
-        "ui_duplicate": {
-          "description": "ui.json lists a group id, a pack's package_id, a risk word of one pack or an aspect ratio twice (Workflow #429 R-11, since 0.12.36)."
+        "catalog_duplicate": {
+          "description": "pack-catalog.json lists a package_id twice or a pool twice on one side of an entry (errors), or a group id, a risk word of one package or an aspect ratio twice (warnings), at the later one (Workflow #477 PC-1, since 0.12.68). It replaced ui_duplicate of ui.json."
         },
-        "ui_group_unknown": {
-          "description": "A pack's group in ui.json is not an id of its groups (Workflow #429 R-11, since 0.12.36)."
+        "catalog_pool_undeclared": {
+          "description": "A pool of a package's consumes or produces in pack-catalog.json is not a pool the game root's schedule.json declares, or the root has no schedule.json (an error; Workflow #477 PC-1, since 0.12.68)."
         },
-        "ui_parameter_undeclared": {
-          "description": "A name under a pack's parameters in ui.json is not a parameter the package declares (Workflow #429 R-11, since 0.12.36); Workflow #463 V1 superseded R-10: a package's variables carry their own texts, so parameters names nothing and every name is this word."
+        "catalog_group_unknown": {
+          "description": "A package's group in pack-catalog.json is not an id of its groups (a warning: the package shows with its id; Workflow #477 PC-1, since 0.12.68). It replaced ui_group_unknown of ui.json."
+        },
+        "catalog_text_missing": {
+          "description": "A group of pack-catalog.json without title, or a package entry that writes a display member without title or summary (a warning: the package shows with its id; Workflow #477 PC-1, since 0.12.68). ui_parameter_undeclared of ui.json went with that file: the catalog has no parameters member, a package's variables carry their own texts."
         },
         "loading_target_invalid": {
           "description": "A target of loading.json or of a pack's loading copy has an id that is not loading/<name> or that the file declares twice, or a template target's template is not loading/<file>.png (Workflow #407 LOAD-1, since 0.12.37)."
@@ -6981,6 +7270,28 @@
         },
         "variable_undeclared": {
           "description": "A bundle zip whose packs declare variables in their control.json declares a package interface maximum below 14. Refused by the installer's place at interfaces.json (Workflow #463 V1 fix round 1, since 0.12.61)."
+        }
+      }
+    },
+    "catalog_side": {
+      "description": "The side of a package's business part in a game root's pack-catalog.json (Workflow #477 PC-1).",
+      "tokens": {
+        "consumes": {
+          "description": "The pools the package spends when it runs."
+        },
+        "produces": {
+          "description": "The pools the package earns when it runs."
+        }
+      }
+    },
+    "catalog_difference": {
+      "description": "Which of a game root's two files lacks a pool a package consumes or produces (Workflow #477 PC-1).",
+      "tokens": {
+        "catalog_lacks": {
+          "description": "A rule of the package in schedule.json names the pool on that side and the package's entry in pack-catalog.json does not list it."
+        },
+        "schedule_lacks": {
+          "description": "The package's entry in pack-catalog.json lists the pool on that side and no rule of the package in schedule.json names it there."
         }
       }
     },
@@ -8146,6 +8457,15 @@
         },
         "state_root_claim_unanswered": {
           "description": "The Lab's rescue module's state-root claim got no report from the live build's actingd claim-state-root (contracts/state-root-installation.md, \"Handing a state root over\"): it did not run (the child's failure as the caused_by link), printed no report (a build before 0.12.60 refuses the subcommand as a start's arguments: foreign_other_error with the exit code and stderr), or was still running at install.child.check_config_timeout_ms and was left running (pid and config_key). path is the state root. Whether actingd handed the state root over is then not known: run the row again once no actingd runs; a hand-over that was done answers that nothing changed. (Workflow #453 S12, since 0.12.60)"
+        },
+        "place_authorization_missing": {
+          "description": "The Lab's rescue module's place of a plan that changes something names no authorization: --authorization is absent or blank (contracts/install-cli.md, \"The authorization a placement names\"). plan_id and game name the plan. Only --plan and a plan that changes nothing need none; the tool records a reference and grants nothing, so it never supplies one. Refused after the plan and before the hold: nothing was paused or written, no journal begun. (Workflow #463 S3-2, since 0.12.64)"
+        },
+        "place_enables_mismatch": {
+          "description": "The Lab's rescue module's place: the packages --enables names are not exactly the plan's enters, the packages the placement makes enter scheduling (a name missing, a name too many, or one given twice; --enables given when nothing enters). The answer's expected (enters) and given (--enables), each sorted, say which; plan_id and game name the plan. Compared after the authorization is found. Refused before the hold: nothing was paused or written, no journal begun. (Workflow #463 S3-2, since 0.12.64)"
+        },
+        "place_enables_unknown": {
+          "description": "The Lab's rescue module's place: the plan answers no enters because it could not read the zip's side (its schedule.json, refused by the contract crate's reader or by the composer's reference check), so the packages the placement would enable cannot be named and no --enables can match them; the answer carries the plan's schedule_changes beside the outcome, whose unread names that refusal (standard_pack_root_invalid at the file), and plan_id and game name the plan. A zip whose other root files the reader refuses is refused pack_invalid earlier, in the plan; an installed game root that cannot be read refuses nothing (a placement is how it is repaired). Refused before the hold: nothing was paused or written, no journal begun. (Workflow #463 S3-2, since 0.12.64)"
         }
       }
     },
@@ -9237,7 +9557,7 @@
           "description": "The map moves regions (a translation, or a frame cropped from its display), which this Runtime does not map yet: translations and crops come with Workflow #392 DA-2b. The kernel's frame gate refuses the frame and the run ends with no input."
         },
         "input_scale_unsupported": {
-          "description": "The frame's map is not the plain identity (a pure scale) and the input side does not map the input to the device frame: the host sends nothing and the run ends. Until Workflow #392 DA-3 every input under a pure scale; from DA-3 every input under a pure scale whose double is not a whole number (a point on a box's edge could map outside the box's device box) and a Lab declared operation's input on a frame of another size than its package, whose map the Lab cannot know. From DA-3 until Workflow #392 DA-3b also a vertical-brake drag under any scale, whose brake the contract holds at exactly 100 pixels while the map would change it; DA-3b sends that drag as a drag with a pause and a brake."
+          "description": "The frame's map is not the plain identity (a pure scale) and the input side does not map the input to the device frame: the host sends nothing and the run ends. Until Workflow #392 DA-3 every input under a pure scale; from DA-3 every input under a pure scale whose double is not a whole number (a point on a box's edge could map outside the box's device box); from DA-3 until Workflow #392 DA-5ab also every input of a Lab declared operation on a frame of another size than its package, which DA-5ab sends under the frame's map as a run's input, so that a Lab operation's input too is refused only under such a scale. From DA-3 until Workflow #392 DA-3b also a vertical-brake drag under any scale, whose brake the contract holds at exactly 100 pixels while the map would change it; DA-3b sends that drag as a drag with a pause and a brake."
         },
         "safe_area_unavailable": {
           "description": "The game's display declaration measures on the safe area and the frame's geometry has no insets: a handset that declares no device model (Workflow #392 DA-4b-D: no capture backend reads a cutout; an emulator's insets are 0): the value of contained_task_geometry_unavailable, and of display_map_unresolved where a frame reaches the kernel's gate without the host's check."
@@ -9689,6 +10009,9 @@
         },
         "fenced": {
           "description": "The other member is fenced; its fence holds the whole group until it is lifted."
+        },
+        "close_unconfirmed": {
+          "description": "Since 0.12.67 (Workflow #437 G1): the other member is fenced for resources of its own whose state could not be confirmed (a close, an ADB check's clean-up or a contained failure left them so), and the device is held for it: no other member is given the device until its fence is lifted. It comes before fenced."
         }
       }
     },
@@ -10290,6 +10613,388 @@
         },
         "no_schedule": {
           "description": "Fix round 2: the application's game has no standard pack root with schedule.json (the standard-pack root holds no game root for it, or its game root holds no schedule.json), so there is nothing to check: the composed catalog holds no rule and no pool of the game, no run reads a goal of it, and the page answers no_schedule. No name can be set or cleared, a resource goal that needs no declaration neither (no pool of the game is one the application can target), and nothing is stored; asking again does not help until the game root holds schedule.json."
+        }
+      }
+    },
+    "confirmation_problem": {
+      "description": "What the program saw where the confirmation of the page a step awaits ended, or the declared error page a run stood on, the value confirmation_problem of page_confirmation_failed, contained_task_step_unconfirmed, contained_task_error_page_reached, contained_task_linear_unrecorded_screen and contained_task_requires_scheduler: one word per situation the kernel already tells apart there. It stands beside the code in the outcome's values and never in its detail text, so the failure identity, the streak and the frame rules stay as they are; for one code the program does the same next whichever word it carries (Workflow #469 V0, the owner's option A on board #469, since 0.12.62; the kernel slices set it).",
+      "review": "pending",
+      "source": {
+        "file": "crates/execution-kernel/src/codes.rs",
+        "enum": "ConfirmationProblem"
+      },
+      "tokens": {
+        "input_not_taken": {
+          "description": "The program saw the step's own page at the end of the confirmation after the input and had seen no other page since the input (a linear step judges the frames in between, a page-graph step only the last frame): the input did not take; check its target and the gap before it."
+        },
+        "returned_to_own_page": {
+          "description": "After the input the screen showed something else and was the step's own page again at the end: the input took and the screen came back; open the run's frames to see what was shown in between."
+        },
+        "awaited_page_late": {
+          "description": "The awaited page appeared only after the confirmation wait: raise the step's timeout or check what slows the page."
+        },
+        "other_page_shown": {
+          "description": "The screen settled on another page the package declares: declare that page as a destination or an interrupt."
+        },
+        "loading_page_shown": {
+          "description": "The screen settled on a declared loading page: give the step more time or turn loading handling on."
+        },
+        "transition_shown": {
+          "description": "The screen was still a loading transition when the wait ended."
+        },
+        "interrupt_shown": {
+          "description": "A shared interrupt page was on screen and was not handled: check the interrupt's handling."
+        },
+        "screen_moving": {
+          "description": "No declared page appeared and the screen kept changing: the step's timeout may be too short."
+        },
+        "unrecorded_screen": {
+          "description": "The screen settled on a page the package never recorded: record that page in the package."
+        },
+        "nothing_recognised": {
+          "description": "The last frame matched no declared page; open the run's frames to see what it showed."
+        },
+        "screen_still": {
+          "description": "The screen stayed unchanged until the still limit: the input most likely did nothing."
+        },
+        "final_state_unmet": {
+          "description": "The awaited page was on screen at the end but the state the step declares for it did not hold: check the step's final-state target and what the page showed."
+        },
+        "wait_max_reached": {
+          "description": "The wait step's own page stayed on screen until its max_ms ran out and the awaited page did not come: raise max_ms or declare on_timeout."
+        },
+        "loading_limit": {
+          "description": "The wait ended on its loading allowance while the screen was still loading."
+        },
+        "error_page": {
+          "description": "The step reached a page the package declares as an error page."
+        },
+        "error_page_no_exit": {
+          "description": "The run stood on a declared error page and no operation of the page leads away from it."
+        },
+        "deadline_reached": {
+          "description": "The task's time ran out before the screen could be judged."
+        },
+        "check_failed": {
+          "description": "The final look at the screen failed (capture or recognition); read the run's records."
+        },
+        "neither_page": {
+          "description": "On the retry, neither the awaited page nor the step's own page appeared."
+        },
+        "unjudged_layer_run": {
+          "description": "The screen was not judged after the wait: the run is a layer's (a prerequisite, return-home, navigation or recovery run) or one the host started, not the task's own; open the run's frames."
+        },
+        "unjudged_restart_segment": {
+          "description": "The screen was not judged after the wait: the step ran inside an application restart; open the run's frames."
+        },
+        "unjudged_consensus": {
+          "description": "The screen was not judged after the wait: the package declares sample consensus; open the run's frames."
+        },
+        "unjudged_application_entry": {
+          "description": "The screen was not judged after the wait: the step is an application entry; open the run's frames."
+        },
+        "unjudged_time_short": {
+          "description": "The screen was not judged after the wait: too little of the task's time was left (under twice the step timeout); open the run's frames."
+        }
+      }
+    },
+    "guard_problem": {
+      "description": "Why an operation's guard refused its input, the value guard_problem of contained_task_guard_refused, with failure_code beside target_not_passed when the target's failure has a code: one word per situation. The program does the same next whichever word it is (Workflow #469 V0, the owner's option A on board #469, since 0.12.62; the kernel slices set it).",
+      "review": "pending",
+      "source": {
+        "file": "crates/execution-kernel/src/codes.rs",
+        "enum": "GuardProblem"
+      },
+      "tokens": {
+        "page_mismatch": {
+          "description": "The input was refused: the screen is not the page the operation's guard expects."
+        },
+        "target_not_passed": {
+          "description": "The input was refused: the guard's target did not pass on its page (see failure_code)."
+        },
+        "page_moved": {
+          "description": "The page changed during the wait before a trusted-coordinate input."
+        }
+      }
+    },
+    "availability_source": {
+      "description": "Who withdrew an application's availability, the value availability_source of instance_unavailable, read from the source of the active session.instance.available record that withdrew it and from the application's configured seed, with device_link_state or device_hold beside device_link and device_state. An application the configuration marks unavailable reads configured whichever publisher wrote the record that holds false, the self-check gate's withdrawal included (with no record holding false it reads facts_missing); self_check covers a self-check that failed, one not recorded yet (a failed preparation step included) or no longer valid, and a resource fence, which the gate withdraws under the same source. The application is held back at placement whichever word it is (Workflow #469 V0, the owner's option A on board #469, since 0.12.62; the host slice sets it).",
+      "review": "pending",
+      "source": {
+        "file": "crates/runtime-host/src/codes.rs",
+        "enum": "AvailabilitySource"
+      },
+      "tokens": {
+        "configured": {
+          "description": "The configuration marks this application unavailable."
+        },
+        "self_check": {
+          "description": "The device self-check has not passed (or the instance is fenced): see the instance's self-check and fence."
+        },
+        "device_link": {
+          "description": "The handset's cable link is not connected (see device_link_state)."
+        },
+        "device_state": {
+          "description": "The handset is locked, too hot, low on battery or in use (see device_hold)."
+        },
+        "other_publisher": {
+          "description": "Another publisher marked the application unavailable."
+        },
+        "facts_missing": {
+          "description": "The instance's facts are missing or unreadable."
+        }
+      }
+    },
+    "pause_cause": {
+      "description": "Why a failure paused its task on the application, the value pause_cause of policy_task_paused, with failure_code the failure's code, chosen in the settlement's own order: a severe failure first, then a sensitive task, then the streak, then on_failure. The pair stays paused until its lift whichever word it is (Workflow #469 V0, the owner's option A on board #469, since 0.12.62; the host slice sets it).",
+      "review": "pending",
+      "source": {
+        "file": "crates/runtime-host/src/codes.rs",
+        "enum": "PauseCause"
+      },
+      "tokens": {
+        "severe_failure": {
+          "description": "The failure is one that pauses its task at the first occurrence. The pause lifts when the package changes; there is no manual lift."
+        },
+        "unrecorded_screen": {
+          "description": "The package met a screen it never recorded. The pause lifts when the package changes; there is no manual lift."
+        },
+        "runtime_budget_exceeded": {
+          "description": "The run took longer than its runtime budget. The pause lifts when the package changes; there is no manual lift."
+        },
+        "interrupted_again": {
+          "description": "The run was cut short by the Runtime's own end twice in a row (the restart lifts only the first). The pause lifts when the package changes; there is no manual lift."
+        },
+        "sensitive_task": {
+          "description": "A task marked sensitive failed; it pauses at once. The pause lifts when the package changes; there is no manual lift."
+        },
+        "repeated_failure": {
+          "description": "The same failure repeated up to the task's threshold. The pause lifts when the package changes; there is no manual lift."
+        },
+        "retries_exhausted": {
+          "description": "The task used up its retries and is set to pause on failure. The pause lifts when the package changes; there is no manual lift."
+        }
+      }
+    },
+    "break_in_problem": {
+      "description": "What of a scheduled run's break-in could not be established before the run executed, the value break_in_problem of policy_break_in_unread, whose caused_by link is the failure behind it. The run is judged outside its break-in whichever word it is (Workflow #463 U1b fix round 3, contracts/policy-suspension.md \"Only during a package's break-in\", since 0.12.63).",
+      "review": "pending",
+      "source": {
+        "file": "crates/runtime-host/src/codes.rs",
+        "enum": "BreakInProblem"
+      },
+      "tokens": {
+        "content_unmeasured": {
+          "description": "The package's content was not measured when the run was prepared: the containment could not measure the package (caused_by its code when its refusal names one), or the Runtime clock, scheduling.suspension.lift_check_min_interval_ms or the lift checks' memory of the measurements could not be read. The run counts in no break-in."
+        },
+        "record_unread": {
+          "description": "The pair's break-in could not be judged before the run executed: the decision memory does not hold the run's dispatch, or scheduling.suspension.break_in_runs, scheduling.suspension.break_in_ms or the Runtime clock could not be read. The run counts as any run of its content does."
+        }
+      }
+    },
+    "trial_state_place": {
+      "description": "Where a state directory refused for trial records lies, the value trial_state_place of trial_state_dir_refused (Workflow #463 S3-10, contracts/standard-pack-trial.md \"The record\", since 0.12.64).",
+      "review": "pending",
+      "source": {
+        "file": "crates/resource-tooling/src/codes.rs",
+        "enum": "TrialStatePlace"
+      },
+      "tokens": {
+        "repository": {
+          "description": "It is, or lies inside, a Git work tree: a directory along its path holds .git."
+        },
+        "installed_root": {
+          "description": "It is, or lies inside, an installed root: a directory along its path whose install\\state.json is a file, the installer's own state file in both layouts (contracts/install-cli.md, fix round 2)."
+        }
+      }
+    },
+    "trial_record_problem": {
+      "description": "Why a file of a trial record's name is not read as that record, the value trial_record_problem of trial_record_unreadable (Workflow #463 S3-10 fix round 2, contracts/standard-pack-trial.md \"The record\", since 0.12.64).",
+      "review": "pending",
+      "source": {
+        "file": "crates/resource-tooling/src/codes.rs",
+        "enum": "TrialRecordProblem"
+      },
+      "tokens": {
+        "read_failed": {
+          "description": "The operating system refused to open or read the file, or to list its directory; its refusal is the cause."
+        },
+        "too_large": {
+          "description": "The file is larger than 1 MiB, the most a record is read up to."
+        },
+        "undecodable": {
+          "description": "The file does not decode as actingcommand.pack-trial.v1; the decoder's refusal is the cause."
+        },
+        "name_mismatch": {
+          "description": "The file decodes, but is not the record of the package, the content and the time its name says."
+        }
+      }
+    },
+    "trial_collect_problem": {
+      "description": "Why the run a trial's --collect names is not a run of the trial, the value trial_collect_problem of trial_collect_mismatch (Workflow #463 S3-11, contracts/standard-pack-trial.md \"Reading the end later\", since 0.12.65).",
+      "review": "pending",
+      "source": {
+        "file": "crates/resource-tooling/src/codes.rs",
+        "enum": "TrialCollectProblem"
+      },
+      "tokens": {
+        "other_package": {
+          "description": "The run's facts do not name the trial's package as the package it admitted: they name another one, or none."
+        },
+        "other_instance": {
+          "description": "The run's facts do not name the instance the trial is for: they name another one, or none."
+        },
+        "scheduled": {
+          "description": "Fix round 2: the run is the scheduler's (dispatch scheduled); a trial's run is sent by hand."
+        },
+        "origin_unknown": {
+          "description": "Fix round 2: the run's facts hold no record of its request's origin (dispatch unknown), so whether it was sent by hand is not known."
+        },
+        "other_channel": {
+          "description": "Fix round 2: the run was sent by hand on another channel than the Lab's (origin cli or ui); a trial's run is sent on the Lab's channel."
+        }
+      }
+    },
+    "trial_run_unconfirmed": {
+      "description": "What the answer of a trial's run knows of a run the Runtime confirmed nothing of, the member next.unconfirmed, said in the place of the line that reads the end later (next.collect), which such a run may never have (Workflow #463 S3-8, S3-9 fix round 1, contracts/standard-pack-trial.md \"The run\", since 0.12.68).",
+      "review": "pending",
+      "source": {
+        "file": "crates/resource-tooling/src/codes.rs",
+        "enum": "TrialRunUnconfirmed"
+      },
+      "tokens": {
+        "no_receipt": {
+          "description": "The run's request was written and the connection that carried it ended before any of its receipt came back: the Runtime confirmed nothing of the run, and whether it was accepted or started is not known. A Runtime below runtime-client revision 11 ends the connection so on a run with values, running nothing; one that stopped while the run was in it ends it too. No record is written."
+        }
+      }
+    },
+    "trial_state": {
+      "description": "The latest trial of a content as the trial records of the state directory keep it, the state of the one summary of a content's trials: the member review.trial.state of standard-pack adopt (Workflow #463 S3-12, contracts/standard-pack-authoring.md \"The trial and the two warnings\") and trial.state of standard-pack status (S3-14, contracts/standard-pack-schedule.md \"Where a pack stands\"); each record judged as contracts/standard-pack-trial.md \"The record\" defines a trial that passed (the train of S3-12 and S3-14, since 0.12.68).",
+      "review": "pending",
+      "source": {
+        "file": "crates/resource-tooling/src/codes.rs",
+        "enum": "TrialState"
+      },
+      "tokens": {
+        "passed": {
+          "description": "The latest record of this content passed, as contracts/standard-pack-trial.md \"The record\" defines it: its run ended on an end the package declares (end.outcome success) and, when the trial was given an expectation (--expect), on that end (matched not false)."
+        },
+        "failed": {
+          "description": "The latest record of this content did not pass: its run failed or was cancelled, or ended normally on another end than the one the trial expected (matched false). passed_on_record says whether an earlier record of it passed."
+        },
+        "none": {
+          "description": "No record of this content is on record; a record of another content of the same package counts for nothing (other_content says whether there is one)."
+        }
+      }
+    },
+    "stage_state": {
+      "description": "Where a pack stands in stage three of package making, the member stage_state of standard-pack status and the counts stage_states, saying only what the row knows (Workflow #463 S3-14 and the train of S3-12 and S3-14, contracts/standard-pack-schedule.md \"Where a pack stands\", since 0.12.68).",
+      "review": "pending",
+      "source": {
+        "file": "crates/resource-tooling/src/codes.rs",
+        "enum": "StageState"
+      },
+      "tokens": {
+        "not_admitted": {
+          "description": "Its readiness item S1 does not hold: the Runtime's loader, or standard-pack check, refuses its admission."
+        },
+        "not_judged": {
+          "description": "The train of S3-12 and S3-14: admitted, and the composer refuses the root's schedule.json (enabled.state not_judged); the Runtime keeps the last schedule it accepted, which this root does not tell."
+        },
+        "can_be_tried": {
+          "description": "Admitted, and nothing of the root's accepted schedule.json enables it: it is held (enabled.state held) or no rule names it (not_placed)."
+        },
+        "supporting": {
+          "description": "The train of S3-12 and S3-14: admitted, and it plays a supporting part a root file gives it, used by other packs' runs, and no rule names it (enabled.state not_scheduled)."
+        },
+        "enabled": {
+          "description": "Admitted, and a rule of the root's schedule.json enables it (enabled.state enabled)."
+        }
+      }
+    },
+    "enabled_state": {
+      "description": "Whether the root's schedule.json enables a pack, judged from the classification its readiness item S2 reads, the member enabled.state of standard-pack status and the counts enabled_states (Workflow #463 S3-14, contracts/standard-pack-schedule.md \"Where a pack stands\", since 0.12.68).",
+      "review": "pending",
+      "source": {
+        "file": "crates/resource-tooling/src/codes.rs",
+        "enum": "EnabledState"
+      },
+      "tokens": {
+        "enabled": {
+          "description": "A rule names it and it is not held: the scheduler dispatches it by that rule, whatever supporting part it plays beside."
+        },
+        "held": {
+          "description": "schedule.json holds it, and no root file gives it a supporting part."
+        },
+        "not_placed": {
+          "description": "No rule names it, it is not held and no root file gives it a supporting part, or the root holds no schedule.json: nothing places it into scheduling."
+        },
+        "not_scheduled": {
+          "description": "It plays a supporting part a root file gives it and no rule dispatches it (the readiness's not_scheduled)."
+        },
+        "not_judged": {
+          "description": "The composer refuses the root's schedule.json, so no rule is classified (S2 composition_refused); the Runtime keeps the last schedule it accepted, which this root does not tell."
+        }
+      }
+    },
+    "pack_authorization": {
+      "description": "What standard-pack status says of the authorization a pack was enabled under, the member enabled.authorization (Workflow #463 S3-14, contracts/standard-pack-schedule.md \"Where a pack stands\", since 0.12.68).",
+      "review": "pending",
+      "source": {
+        "file": "crates/resource-tooling/src/codes.rs",
+        "enum": "PackAuthorization"
+      },
+      "tokens": {
+        "not_recorded": {
+          "description": "No placement journal read names the pack; enabled.authorization_unrecorded says why. The tool never infers an authorization."
+        }
+      }
+    },
+    "authorization_unrecorded": {
+      "description": "Why standard-pack status records no authorization for a pack, the member enabled.authorization_unrecorded (Workflow #463 S3-14, contracts/standard-pack-schedule.md \"Where a pack stands\", since 0.12.68).",
+      "review": "pending",
+      "source": {
+        "file": "crates/resource-tooling/src/codes.rs",
+        "enum": "AuthorizationUnrecorded"
+      },
+      "tokens": {
+        "journals_not_read": {
+          "description": "The placement journals were not read: their reader is private to the Lab's rescue module (install::journal, pub(crate)), and that crate is built for Windows only (the train of S3-12 and S3-14). A later slice reads them."
+        }
+      }
+    },
+    "drop_problem": {
+      "description": "Why record mark's drop_step does not drop a step before the last of a Lab recording, the value drop_problem of record_drop_unproven (#463 S2-7, contracts/lab-recording.md \"Steps, frames and remediation\", since 0.12.68): the stored frames do not hold what the comparison needs, or they show a change. Fix round 1: two frames are the same screen when two comparisons hold, the whole frame and the neighbourhood of the press (its rectangle grown by one cell of the whole-frame grid on every side), each by the measure stage one calls a screen still by, frame_change_milli at most FRAME_CHANGE_MAX_MILLI (1500); a change smaller than that measure sees is not seen, and whether the press mattered is the agent's judgement.",
+      "review": "pending",
+      "source": {
+        "file": "crates/lab/src/codes.rs",
+        "enum": "DropProblem"
+      },
+      "tokens": {
+        "frames_not_recorded": {
+          "description": "The step has no press on record with the stored frame it was sent on and the stored frame after it (no click performed by tap, swipe or long-tap --record, a press sent on a capture that was not stored, an application operation), or a frame the comparison needs is not on record."
+        },
+        "screen_changed": {
+          "description": "The stored frames show a change: the frame after the press differs from the frame before it by more than the frame-change bound, by one of the two comparisons (drop_comparison)."
+        },
+        "next_screen_differs": {
+          "description": "The stored frames show a change: the next step's frame before its press differs from the frame before this press by more than the frame-change bound, by one of the two comparisons (drop_comparison)."
+        }
+      }
+    },
+    "drop_comparison": {
+      "description": "Which of the two comparisons of two stored frames showed the change for which record mark's drop_step refuses a step before the last, the value drop_comparison of record_drop_unproven beside drop_problem screen_changed or next_screen_differs (#463 S2-7 fix round 1, contracts/lab-recording.md \"Steps, frames and remediation\", since 0.12.68). The whole frame is compared first.",
+      "review": "pending",
+      "source": {
+        "file": "crates/lab/src/codes.rs",
+        "enum": "DropComparison"
+      },
+      "tokens": {
+        "frame": {
+          "description": "The whole frame, by the frame-change measure (a grid of 16 by 9 cells over the frame, the mean colour of each cell)."
+        },
+        "press_region": {
+          "description": "The neighbourhood of the press: its rectangle (a point is a rectangle of one pixel, a swipe the rectangle spanned by its two ends) grown on every side by one cell of the whole-frame grid at the recording's size and clamped to the frame, by the same measure over that region."
         }
       }
     }
@@ -13211,6 +13916,12 @@
     ],
     "display_": [
       "display-adapter"
+    ],
+    "trial_": [
+      "resource-tooling"
+    ],
+    "enabling_": [
+      "resource-tooling"
     ]
   },
   "fragments": {

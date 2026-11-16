@@ -60,6 +60,41 @@ actingcommand_contract::outcome_codes! {
         /// end on it there; nothing is written (exit 3; actinglab details `outcome_key`, `page`,
         /// `frames`).
         RecordEndingAmbiguous => "record_ending_ambiguous": error / none,
+        /// Error. #463 R4: an optional step a stopped recording inserts after the effect of one of
+        /// its steps (`record mark --optional-after`, a request's `optional_after`), or gives up
+        /// (`remove_inserted`), cannot be inserted or given up (key `optional_after_problem`:
+        /// why); the command is refused and nothing is written (exit 3; actinglab details `step`).
+        RecordOptionalAfterInvalid => "record_optional_after_invalid": error / none,
+        /// Error. Workflow #392 DA-5cd: an offline scene, a stored image, cannot be brought to its
+        /// package's `coordinate_space` by the frame gate the Lab's live observation uses (the
+        /// train of DA-5; keys `display_problem`: the gate's word for why, `frame_width`,
+        /// `frame_height`: the scene's size, `base_width`, `base_height`: the package's); nothing
+        /// is evaluated (exit 2).
+        LabSceneSizeUnsupported => "lab_scene_size_unsupported": error / none,
+        /// Error. Workflow #392 DA-5cd: this instance's display is not the base size: `record
+        /// start` on an instance whose display the Runtime last observed at another size than the
+        /// base size, or (fix round 1) the first frame of a recording whose header names a base
+        /// size, of another size (keys `frame_width`, `frame_height`: the display's size,
+        /// `base_width`, `base_height`: the base size); nothing was recorded, nothing is written,
+        /// and a refused start holds nothing (exit 3; actinglab's own line exits 1).
+        RecordDisplayNotBase => "record_display_not_base": error / none,
+        /// Error. Workflow #392 DA-5cd fix round 1: this recording holds frames that are not the
+        /// base size (a header that names a base size: frames of any other size; one that names
+        /// none: frames of a larger display of the base size's ratio): `record stop` makes no
+        /// package of it, `record ready` lists it (`size_not_base`) and a frame added to it is not
+        /// stored (keys `frame_width`, `frame_height`: the frames' size, `base_width`,
+        /// `base_height`: the base size); nothing is written (exit 3; actinglab's own line exits
+        /// 1).
+        RecordSizeNotBase => "record_size_not_base": error / none,
+        /// Error. #463 S2-7: a page transition names by its frame id (`frame_id`,
+        /// `sample_frame_ids`) a frame this recording does not hold; nothing is written (exit 3;
+        /// actinglab details `step`, `frame_id`).
+        RecordFrameUnknown => "record_frame_unknown": error / none,
+        /// Error. #463 S2-7: `drop_step` names a step before the last whose stored frames show a
+        /// change at its press or do not hold what the comparison needs (key `drop_problem`: why;
+        /// fix round 1, key `drop_comparison`: which comparison showed the change); nothing is
+        /// written (exit 3; actinglab details `step`).
+        RecordDropUnproven => "record_drop_unproven": error / none,
     }
 }
 
@@ -154,6 +189,21 @@ actingcommand_contract::outcome_vocabulary! {
         NoSelect => "no_select",
         /// #463 R2 fix 1: the `on_empty` key is the outcome key of an ending of the recording.
         OnEmptyKeyOfEnding => "on_empty_key_of_ending",
+        /// #463 S2-6: `record stop` meets a step marked as holding a choice that no select refines
+        /// yet: it knows no names, so no package is generated.
+        ChoiceNotRefined => "choice_not_refined",
+        /// #463 S2-6 fix round 1: a request's `choice: false` names a step that is not marked as
+        /// holding a choice, so there is nothing to take off.
+        NoChoice => "no_choice",
+        /// #463 stage two, train, fix round: `drop_step` names a step that holds a choice (marked
+        /// as holding one, or refined by a select), the last step too: its press may have chosen
+        /// the item already selected, which changes nothing on the screen and still matters to a
+        /// run handed another value; the choice is withdrawn first.
+        DropOfChoice => "drop_of_choice",
+        /// #463 stage two, train, fix round: `to_transition` names a step that holds a choice: a
+        /// page transition holds none, so the conversion would lose it; the choice is withdrawn
+        /// first.
+        TransitionOfChoice => "transition_of_choice",
     }
 }
 
@@ -198,5 +248,237 @@ actingcommand_contract::outcome_vocabulary! {
         Usual => "usual",
         /// The frames of another ending of the recording.
         OtherEnding => "other_ending",
+    }
+}
+
+// #463 R4: why an optional step a stopped recording inserts after one of its steps cannot be
+// inserted or given up.
+actingcommand_contract::outcome_vocabulary! {
+    /// Why an optional step inserted after the stop cannot hold (`optional_after_problem`).
+    pub enum OptionalAfterProblem: "optional_after_problem" {
+        /// The recording is active: a step is inserted after `record stop`, which generated the
+        /// package of the recorded path first.
+        RecordingActive => "recording_active",
+        /// The request names another change beside `optional_after` or `remove_inserted`, or both
+        /// of these.
+        WithOtherChange => "with_other_change",
+        /// `optional_after.step` names no step of the recording (none, a dropped or a converted
+        /// one).
+        StepUnknown => "step_unknown",
+        /// `optional_after.step` names the last step: every run ends on its page, after which
+        /// nothing is pressed.
+        StepLast => "step_last",
+        /// `optional_after.step` names a step whose effect is an application operation.
+        StepApplication => "step_application",
+        /// The inserted step adds and reuses no mark, so its page would recognize nothing.
+        NoMarks => "no_marks",
+        /// The inserted step declares no click, so nothing would close its pop-up.
+        NoClick => "no_click",
+        /// The request clears `optional` on an inserted step: a step never recorded on the path
+        /// stays optional.
+        ClearsOptional => "clears_optional",
+        /// `remove_inserted` names no inserted step of the recording that is not given up yet.
+        NotInserted => "not_inserted",
+    }
+}
+
+// #463 S2-1: what a recording still lacks before `record stop` can make its package, one word per
+// pre-check of the generator and one cause per word (`record ready`'s `missing[].what`).
+actingcommand_contract::outcome_vocabulary! {
+    /// One pre-check of `record stop` that a recording fails (`ready_missing`).
+    pub enum ReadyMissing: "ready_missing" {
+        /// The recording has fewer than two effective steps (`record_no_steps`).
+        TooFewSteps => "too_few_steps",
+        /// A step after the first is an application entry step, which has no frame
+        /// (`record_application_entry_not_first`).
+        ApplicationEntryNotFirst => "application_entry_not_first",
+        /// A step before the last has no effect: no click, select or application operation
+        /// (`record_step_click_missing`).
+        EffectMissing => "effect_missing",
+        /// The last step has an effect; it only recognizes the screen the package arrives at
+        /// (`record_final_step_has_click`).
+        FinalHasEffect => "final_has_effect",
+        /// A step but the application entry step has no own or reused mark
+        /// (`record_step_without_recognition`).
+        PageRecognition => "page_recognition",
+        /// A step's page transition has no own or reused mark (`record_step_without_recognition`
+        /// with `transition: "page"`).
+        TransitionRecognition => "transition_recognition",
+        /// More steps have an effect than a package holds (`record_too_many_steps`).
+        TooManyEffects => "too_many_effects",
+        /// The package's game is known neither from `record stop` nor from the recording nor from
+        /// the Lab's instance configuration nor (#463 S2-1b) from the configuration of the
+        /// installation the program runs from (`record_locale_missing`).
+        Game => "game",
+        /// The package's server is known neither from `record stop` nor from the recording nor
+        /// from the Lab's instance configuration nor (#463 S2-1b) from the configuration of the
+        /// installation the program runs from (`record_locale_missing`).
+        Server => "server",
+        /// The package's locale is known neither from `record stop` nor from the recording
+        /// (`record_locale_missing`).
+        Locale => "locale",
+        /// After a step that stops the application the next effect is no launch or restart
+        /// (`record_step_after_stop_invalid`).
+        EffectAfterStop => "effect_after_stop",
+        /// A step's page or its page transition reuses a mark that is no mark of an effective step
+        /// (`record_mark_rejected`, `reuse_source_missing`).
+        ReusedMarkMissing => "reused_mark_missing",
+        /// A step forbids a mark that is no mark of an effective step (`record_mark_rejected`,
+        /// `forbidden_source_missing`).
+        ForbiddenMarkMissing => "forbidden_mark_missing",
+        /// A step's anchor is no own template mark of it (`record_mark_rejected`,
+        /// `anchor_invalid`).
+        AnchorNotOwnTemplate => "anchor_not_own_template",
+        /// The last launch or restart is followed by no step that is the main interface
+        /// (`record_application_without_home`).
+        ApplicationWithoutHome => "application_without_home",
+        /// The first step is optional (`record_optional_first_step`).
+        OptionalFirstStep => "optional_first_step",
+        /// The last step is optional (`record_optional_final_step`).
+        OptionalFinalStep => "optional_final_step",
+        /// An application step is optional (`record_optional_application`).
+        OptionalApplication => "optional_application",
+        /// The main interface after the last launch or restart is optional
+        /// (`record_optional_restart_segment_end`).
+        OptionalRestartHome => "optional_restart_home",
+        /// A select step is optional (`record_select_invalid`, `on_optional_step`).
+        SelectOptional => "select_optional",
+        /// A select step's click declares a retry (`record_select_invalid`, `with_retry`).
+        SelectRetry => "select_retry",
+        /// A select step's click declares a gesture (`record_select_invalid`, `with_gesture`).
+        SelectGesture => "select_gesture",
+        /// A select step's click follows a mark (`record_select_invalid`, `with_follow`).
+        SelectFollow => "select_follow",
+        /// A select step's `on_empty` key is the usual ending's (`record_select_invalid`,
+        /// `on_empty_key_reserved`).
+        SelectKeyReserved => "select_key_reserved",
+        /// A select step's `on_empty` key is another select step's (`record_select_invalid`,
+        /// `on_empty_key_taken`).
+        SelectKeyTaken => "select_key_taken",
+        /// A select step's wanted name is another select step's (`record_select_invalid`,
+        /// `wanted_name_taken`).
+        SelectWantedTaken => "select_wanted_taken",
+        /// An ending's outcome key is the usual ending's (`record_ending_invalid`,
+        /// `key_reserved`).
+        EndingKeyReserved => "ending_key_reserved",
+        /// An ending's outcome key is a select step's `on_empty` key (`record_ending_invalid`,
+        /// `key_of_select`).
+        EndingKeyOfSelect => "ending_key_of_select",
+        /// An ending's outcome key is another ending's (`record_ending_invalid`, `key_exists`).
+        EndingKeyTaken => "ending_key_taken",
+        /// An ending's page name is another ending's (`record_ending_invalid`, `page_exists`).
+        EndingPageTaken => "ending_page_taken",
+        /// An ending's page reuses a mark that is no mark of an effective step
+        /// (`record_mark_rejected`, `reuse_source_missing`).
+        EndingMarkMissing => "ending_mark_missing",
+        /// Workflow #392 DA-5cd fix round 1: the recording holds frames that are not the base size
+        /// (`record_size_not_base`).
+        SizeNotBase => "size_not_base",
+        /// #463 S2-6: a step marked as holding a choice that no select refines yet
+        /// (`record_select_invalid`, `choice_not_refined`).
+        SelectUnrefined => "select_unrefined",
+    }
+}
+
+// #463 S2-1: the self-checks `record stop` runs once its pre-checks pass, in the order they run
+// (`record ready`'s `checks_after`, and the `what` of a self-check's failure).
+actingcommand_contract::outcome_vocabulary! {
+    /// One self-check of `record stop` (`ready_check`).
+    pub enum ReadyCheck: "ready_check" {
+        /// Every live frame and template crop is read back with its recorded sha256 and the
+        /// recording's size.
+        Frames => "frames",
+        /// The generated package is admitted by the kernel and gives its evaluator.
+        Admission => "admission",
+        /// The offline simulation of the package's first step on its recorded frames.
+        FirstDecision => "first_decision",
+        /// Every page on its own frames, the guards on located text, the optional steps, the
+        /// arrival gates and the entry overlay.
+        CrossCheck => "cross_check",
+        /// Every ending's page on its own frames and on the screens a run may show instead.
+        Endings => "endings",
+        /// Every select step's decisions on its own frames.
+        Selects => "selects",
+        /// The final package: encoded, expanded again, admitted again, and the same first decision.
+        FinalPackage => "final_package",
+    }
+}
+
+// #463 S2-1c: why a self-check `record ready` ran stopped at a failure short of its end, so that the
+// failures it lists may not be all it has (`checks[].reason`).
+actingcommand_contract::outcome_vocabulary! {
+    /// Why a self-check stopped short of its end (`ready_check_stop`).
+    pub enum ReadyCheckStop: "ready_check_stop" {
+        /// The check judges the generated package as one, in stages each built on the one before
+        /// (`admission`, `final_package`): its first refusal leaves no stage after it to judge.
+        WholePackage => "whole_package",
+        /// The check met an error that is none of its verdicts (a target the evaluator cannot
+        /// evaluate, a stored frame it cannot decode): what it would judge after it is not judged.
+        CheckError => "check_error",
+    }
+}
+
+// #463 S2-1: what `record ready` warns of, never blocking (`warnings[].what`).
+actingcommand_contract::outcome_vocabulary! {
+    /// A warning of `record ready` (`ready_warning`).
+    pub enum ReadyWarning: "ready_warning" {
+        /// A step's press is a single recorded point with no press region set: the package would
+        /// press that exact pixel.
+        PressPointOnly => "press_point_only",
+    }
+}
+
+// #463 S2-1b: where the package's game, server and locale `record ready` answers with came from
+// (`sources`), the place `record stop` takes each from when it builds.
+actingcommand_contract::outcome_vocabulary! {
+    /// Where a part of the package's identity came from (`ready_source`).
+    pub enum ReadySource: "ready_source" {
+        /// The command line of `record ready` or `record stop`: `--game`, `--server` (actinglab's
+        /// global options) or `--locale`.
+        CommandLine => "command_line",
+        /// What the recording holds: given at `record start`, or, on a stopped recording marked
+        /// again, what its package was generated with.
+        Recording => "recording",
+        /// The Lab's instance configuration: the instance's `game` or `server` in actinglab's own
+        /// configuration (game and server only).
+        LabConfig => "lab_config",
+        /// The configuration of the installation the program runs from: the instance's row of
+        /// `policy.facts.instances` (game and server only).
+        InstallationConfig => "installation_config",
+    }
+}
+
+// #463 S2-7: why `drop_step` does not drop a step before the last: the stored frames do not hold
+// what the comparison needs, or they show a change (fix round 1: they contradict that its press
+// changed nothing; the tool refuses only that).
+actingcommand_contract::outcome_vocabulary! {
+    /// Why a step before the last cannot be dropped (`drop_problem`).
+    pub enum DropProblem: "drop_problem" {
+        /// The step has no press on record with the stored frame it was sent on and the stored
+        /// frame after it (no click performed by `tap`, `swipe` or `long-tap --record`, a press
+        /// sent on a capture that was not stored, an application operation), or a frame the
+        /// comparison needs is not on record.
+        FramesNotRecorded => "frames_not_recorded",
+        /// The stored frames show a change: the frame after the press differs from the frame
+        /// before it by more than the frame-change bound, by one of the two comparisons
+        /// (`drop_comparison`).
+        ScreenChanged => "screen_changed",
+        /// The stored frames show a change: the next step's frame before its press differs from
+        /// the frame before this press by more than the frame-change bound, by one of the two
+        /// comparisons (`drop_comparison`).
+        NextScreenDiffers => "next_screen_differs",
+    }
+}
+
+// #463 S2-7 fix round 1 (the coordinator's ruling R1): which of the two comparisons of two stored
+// frames showed the change that `drop_step` refuses a step before the last for.
+actingcommand_contract::outcome_vocabulary! {
+    /// Which comparison showed a change (`drop_comparison`).
+    pub enum DropComparison: "drop_comparison" {
+        /// The whole frame, by the frame-change measure.
+        Frame => "frame",
+        /// The neighbourhood of the press (its rectangle grown by one cell of the whole-frame
+        /// measure's grid on every side, clamped to the frame), by the same measure.
+        PressRegion => "press_region",
     }
 }

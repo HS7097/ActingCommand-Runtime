@@ -1257,15 +1257,18 @@ cap. The first candidate is taken.
   index is taken, and the next candidate is taken on the same frame. The evaluation is recorded
   as a guard evaluation is, with the diagnostic phase `when` ([Task diagnostic
   stream](task-diagnostic-stream.md)); one that does not conclude ends the run with
-  `contained_task_recognition_failed`.
+  `contained_task_recognition_failed`, or, when the vision provider failed or answered
+  invalidly, with `contained_task_vision_provider_failed` (#469 D4b, since 0.12.63), with the same
+  detail.
 - **`on_guard_refused: next_candidate`.** When the click's guard refuses
   (`contained_task_guard_refused`) on its step's frame at the step's first attempt, before any
   input of the step, the step finishes on the frame's page without an input (a `StepFinished`
   with no `EffectIntent`), stays counted in the run's executed steps, and the next candidate is
   taken on the same frame as the next step. A guard that could not be evaluated
-  (`contained_task_guard_evaluation_failed`), a sampling timeout (observe-only retries), a refusal
-  on a later attempt and a refusal of an input recheck (Workflow #390 EXEC-2) keep the operation's
-  failure decision.
+  (`contained_task_guard_evaluation_failed`, or `contained_task_vision_provider_failed` when the
+  vision provider failed or answered invalidly, #469 D4b, since 0.12.63), a sampling timeout
+  (observe-only retries), a refusal on a later attempt and a refusal of an input recheck (Workflow
+  #390 EXEC-2) keep the operation's failure decision.
 - A candidate passed over in either way is not taken again on that frame; the next frame of the
   run starts the page's candidates again.
 - **No candidate left.** When every candidate of the page was passed over on the frame, the run
@@ -1324,7 +1327,8 @@ admits them by code.
   registered reason (a plain miss); a composite fails definitely when its members' definite fails
   decide it (one of `all_of`, every one of `any_of`). A page mismatch, `value_test_unresolved` and
   every other registered reason, a guard that could not be evaluated
-  (`contained_task_guard_evaluation_failed`), a sampling timeout, a refusal on a later attempt or
+  (`contained_task_guard_evaluation_failed`, or `contained_task_vision_provider_failed` for a
+  failure of the vision provider, #469 D4b), a sampling timeout, a refusal on a later attempt or
   by an input recheck, and another member failing alone keep the operation's failure decision.
   The failing member is read from the guard target's evaluation, never from a developer detail.
   It adds no code and no record.
@@ -1378,15 +1382,17 @@ destination, and infers no click and no guard for a wait step; a wait step is no
     clock (Q9: paced like every kernel wait, bounded by the task deadline), and restarts the away
     clock from zero.
   - A frame on an error page fails the run with `contained_task_error_page_reached`, as a
-    confirmation does.
+    confirmation does (Workflow #469 K2: `confirmation_problem` `error_page`).
   - A frame of neither (another page, or none) is offered to the shared interrupt pages first; a
     handled one pauses both clocks. Otherwise it runs the away clock: `expect_after.timeout_ms`,
     else the step timeout. The away clock running out fails the run with
     `contained_task_step_unconfirmed` (`pack_operation_id`, `page_ids` the destinations, `attempts`
-    1, `page_id` the last frame's page when it matched one).
+    1, `page_id` the last frame's page when it matched one; Workflow #469 K2: and the
+    `confirmation_problem` of a page-graph confirmation, [linear-steps.md](linear-steps.md)).
   - `max_ms` reached on `from` ends the run there: with `on_timeout`, Completed on `from` with that
     key as its scheduling outcome, the step finishing on `from` (a keyed end); without it,
-    `contained_task_step_unconfirmed` with `page_id` the wait page.
+    `contained_task_step_unconfirmed` with `page_id` the wait page (Workflow #469 K2: and
+    `confirmation_problem` `wait_max_reached`).
   - The task deadline gives `contained_task_timeout`, as everywhere.
 - **A wait page.** In the confirmation of a `click`, `application` or `select` step, frames on the
   wait page pause the confirmation clock, as a handled shared interrupt does, up to `max_ms` of

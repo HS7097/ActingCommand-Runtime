@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use super::host_claims::HostClaimWork;
 use super::lease::HostClaim;
 use super::policy_dispatch::scheduling_resume_selfcheck;
 use super::recovery_ladder::PendingRecoveryLadder;
@@ -15,6 +16,13 @@ use actingcommand_scheduler::codes::SchedulerCode;
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum LeaseDeviceEnd {
     Keep,
+    /// Workflow #461: a holder's own end of its lease through `end_lease_ordered` (a client's
+    /// disconnect, a backend failure's end, as a failed input's), whose caller closes, once the
+    /// lease has ended, a session whose close the lapsed lease refused
+    /// (`close_expired_lease_session_guarded`). Otherwise as `Keep`. Workflow #475: so a
+    /// pre-emption's end and its hand-over (`perform_transfer`), and a failed run's hand-over of
+    /// its key to its ladder (`hand_off_to_ladder`), which then hand the device to no one.
+    HolderEnd,
     Expiry,
 }
 
@@ -39,8 +47,14 @@ impl HostShared {
         // lease (an input writes without the admission guard) closes nothing under that write.
         // The scheduler defers the expiry under the step (`cleanup_token_guarded`), and a later
         // sweep tick ends the lease once the write returned: no close is refused, nothing is
-        // recorded per tick, and nothing stops.
-        if end == LeaseDeviceEnd::Expiry && self.lease_step_active(token)? {
+        // recorded per tick, and nothing stops. Workflow #475 (the review of #461's fix): a
+        // holder's own end gives way too, defensively. `begin_resource_close` asks the lease's
+        // time before the step in flight, so its close under a lapsed lease with a write still in
+        // flight would be taken for a refused close and owed under that write; no path reaches it
+        // today (a connection's requests are answered one at a time).
+        if matches!(end, LeaseDeviceEnd::Expiry | LeaseDeviceEnd::HolderEnd)
+            && self.lease_step_active(token)?
+        {
             return Ok(());
         }
         let needs_close = self
@@ -314,9 +328,13 @@ impl HostShared {
                 {
                     return self.fence_lapsed_lease_close(token, failure, links);
                 }
-                // Workflow #458: any other lease's expiry whose close its lapsed lease refused.
-                if end == LeaseDeviceEnd::Expiry && self.expiry_close_refused(&failure.error) {
-                    return self.fence_expired_lease_close(token, failure, links);
+                // Workflow #458: any other lease's expiry whose close its lapsed lease refused;
+                // Workflow #461: so a holder's own end of its lapsed lease (a client's disconnect,
+                // a backend failure's end), before the sweep met it.
+                if end != LeaseDeviceEnd::Keep && self.expiry_close_refused(&failure.error) {
+                    return self
+                        .fence_expired_lease_close(token, *failure.error, links)
+                        .map_err(RequestFailure::poison_without_terminal);
                 }
                 // ISO-5a (#419, ISO-M row B18): a holder's own end that finds its lease already
                 // ended has nothing of it to close.
@@ -447,8 +465,10 @@ impl HostShared {
             )
             .map_err(RequestFailure::poison_without_terminal)?;
         }
+        // Workflow #437 G1: a refused close fences as an unconfirmed one, but leaves the session to
+        // the close that follows.
         match self
-            .settle_unconfirmed_resources(&error, Some(instance_id), links)
+            .settle_refused_close(&error, Some(instance_id), links)
             .map_err(RequestFailure::poison_without_terminal)?
         {
             UnconfirmedResources::Fenced(_) => Ok(()),
@@ -463,8 +483,13 @@ impl HostShared {
     /// `lease_expired`). The lease sweep and an acquire that meets a due lease end only a lease
     /// whose time is over, so a close they must make (a session that needs it, an instance outside
     /// the multi-Nemu gate, a member of a device group of several) is refused so every time. Not
-    /// during shutdown, as A64's fence is not.
-    fn expiry_close_refused(&self, error: &RuntimeHostError) -> bool {
+    /// during shutdown, as A64's fence is not. Workflow #461: the same refusal met before the sweep
+    /// ended the lapsed lease, by a holder's own end of it (`LeaseDeviceEnd::HolderEnd`) and by the
+    /// close a failed input makes under its own lease (`finish_input_failure`). Workflow #475: and
+    /// by the closes made under a held key between its validation and its end: an application
+    /// command's preparation (`control_application_of`), a backend switch's
+    /// (`close_switch_session`) and a member switch's (`stop_member_application`).
+    pub(super) fn expiry_close_refused(&self, error: &RuntimeHostError) -> bool {
         self.refused_close_isolates()
             && !self.fatal.is_shutdown_requested()
             && error.operation() == HostLocation::BeginDestructiveResourceClose.as_str()
@@ -478,20 +503,39 @@ impl HostShared {
     /// the lease; its stage is the session close), the instance is fenced by it, the close is owed
     /// (`expired_lease_closes`) and the lease end goes on. Once the lease has ended, still under
     /// the instance's admission guard, `close_expired_lease_session_guarded` closes the session.
-    /// Where no fence may take the instance the lease end fails as before.
+    /// Where no fence may take the instance the lease end fails as before. Workflow #461: so for
+    /// the refusal `error` met by a holder's own end of the lapsed lease, and by a failed input's
+    /// close under it (`finish_input_failure`), whose own lease end, met again by the refusal, then
+    /// records nothing more.
     fn fence_expired_lease_close(
         &self,
         token: &LeaseToken,
-        failure: RequestFailure,
+        error: RuntimeHostError,
         links: EventLinksDraft,
-    ) -> Result<(), RequestFailure> {
+    ) -> RuntimeHostResult<()> {
+        self.fence_expired_close_of(token, token.instance_id(), error, links)
+    }
+
+    /// Workflow #475: [`Self::fence_expired_lease_close`] for the session of `instance_id`, whose
+    /// close under `token`'s lapsed lease was refused (`error`): the token's own instance, or
+    /// (Workflow #437 MAPP-2a) another member of its device group whose session a switch closes
+    /// under the key. That instance is fenced, the refusal recorded once per lease and instance,
+    /// and its close owed until `token`'s lease has ended (`close_expired_lease_session_guarded`).
+    pub(super) fn fence_expired_close_of(
+        &self,
+        token: &LeaseToken,
+        instance_id: InstanceId,
+        error: RuntimeHostError,
+        links: EventLinksDraft,
+    ) -> RuntimeHostResult<()> {
         let newly = lock(
             &self.expired_lease_closes,
             HostLocation::FenceInstanceResources,
         )?
-        .insert(token.lease_id());
-        self.fence_refused_close(token.instance_id(), *failure.error, links, newly)
-            .map_err(RequestFailure::poison_without_terminal)
+        .entry(token.lease_id())
+        .or_default()
+        .insert(instance_id);
+        self.fence_refused_close(instance_id, error, links, newly)
     }
 
     /// Workflows #456 and #458: a close of `instance_id`'s session that was refused before it
@@ -526,7 +570,8 @@ impl HostShared {
                 None,
             )?;
         }
-        match self.settle_unconfirmed_resources(&error, Some(instance_id), links)? {
+        // Workflow #437 G1: as at `fence_lapsed_lease_close`.
+        match self.settle_refused_close(&error, Some(instance_id), links)? {
             UnconfirmedResources::Fenced(_) => Ok(()),
             UnconfirmedResources::Confirmed | UnconfirmedResources::Retained => {
                 Err(error.into_fatal())
@@ -535,7 +580,9 @@ impl HostShared {
     }
 
     /// Workflow #458: the session the close at `token`'s expiry left open because it met the
-    /// lapsed lease (`fence_expired_lease_close`), closed once the lease has ended. The caller
+    /// lapsed lease (`fence_expired_lease_close`; Workflow #461: or the close at a holder's own end
+    /// of the lapsed lease, or a failed input's close under it), closed once the lease has ended,
+    /// whichever end ended it (the expiry, a disconnect, a backend failure's end). The caller
     /// holds the instance's admission guard. Nothing is closed when no close is owed, during
     /// shutdown (the Host close's second pass closes it), or when a holder took the instance's key
     /// on (the session is its, and its lease end or its preparation closes it). The expiry handed
@@ -548,67 +595,80 @@ impl HostShared {
     /// own paths: a preparation (the fence's recovery ladder, its recheck, a person's self-check or
     /// resume), which closes a kept session before it opens. A failed close is recorded, and an
     /// unconfirmed one settled, by the close path; a fatal failure (the Runtime's own) is returned.
+    /// Workflow #475: every session the lease owes is closed so, the lease's own instance's or
+    /// another member's of its device group (`fence_expired_close_of`); the entry is taken once,
+    /// so no owed close is made twice and none is left behind by the lease's end. Fix round 1:
+    /// only a holder of the owed instance's own key takes its session over (the session is the
+    /// instance's, Workflow #191 H, and that holder's lease end or preparation closes it). A
+    /// device that a lease of another member holds (no path reaches it today: the owing lease's
+    /// end hands the device to no one, under the guard) passes nothing over silently: the close
+    /// is tried, the session close ahead refuses the held device (`lease_busy`, not fatal), and
+    /// that refusal is recorded once below and leaves the session to the fenced member's own
+    /// paths, as every refusal of that close does.
     pub(super) fn close_expired_lease_session_guarded(
         &self,
         token: &LeaseToken,
         admission: &MutexGuard<'_, ()>,
     ) -> RuntimeHostResult<()> {
-        if !lock(
+        let Some(owed) = lock(
             &self.expired_lease_closes,
             HostLocation::FenceInstanceResources,
         )?
-        .remove(&token.lease_id())
-        {
+        .remove(&token.lease_id()) else {
             return Ok(());
-        }
-        let instance_id = token.instance_id();
-        if self.fatal.is_shutdown_requested()
-            || lock(&self.scheduler, HostLocation::ReadResourceCloseLease)?
-                .active_lease(instance_id)
-                .is_some()
-        {
-            return Ok(());
-        }
-        let links = EventLinksDraft::default()
-            .with_instance_id(self.events.issuer().issue_registered_instance(instance_id));
-        match self.close_session_ahead_while_guarded(instance_id, links.clone(), admission) {
-            Ok(_) => Ok(()),
-            Err(mut refused) if !refused.is_fatal() => {
-                refused.lifecycle.instance_id = Some(instance_id);
-                self.append_lifecycle_failure(
-                    RuntimeLifecycleFailureStage::SessionClose,
-                    RuntimeLifecycleFailure::Host(&refused),
-                    links,
-                    None,
-                )
+        };
+        for instance_id in owed {
+            if self.fatal.is_shutdown_requested()
+                || lock(&self.scheduler, HostLocation::ReadResourceCloseLease)?
+                    .active_lease(instance_id)
+                    .is_some_and(|active| active.token().instance_id() == instance_id)
+            {
+                continue;
             }
-            Err(error) => Err(error),
+            let links = EventLinksDraft::default()
+                .with_instance_id(self.events.issuer().issue_registered_instance(instance_id));
+            match self.close_session_ahead_while_guarded(instance_id, links.clone(), admission) {
+                Ok(_) => {}
+                Err(mut refused) if !refused.is_fatal() => {
+                    refused.lifecycle.instance_id = Some(instance_id);
+                    self.append_lifecycle_failure(
+                        RuntimeLifecycleFailureStage::SessionClose,
+                        RuntimeLifecycleFailure::Host(&refused),
+                        links,
+                        None,
+                    )?;
+                }
+                Err(error) => return Err(error),
+            }
         }
+        Ok(())
     }
 
     /// Workflow #458: whether `token` ended at its expiry with its session's close owed
-    /// (`fence_expired_lease_close`). Such a lease end hands the device to no one, an instance
-    /// alone on its device as a member of several (fix round 1: handed on, the key went to a
-    /// claim of the same instance with the session open, and that transfer's own close met the
-    /// lapsed lease again), and the session is closed under a session close ahead before any
-    /// waiting claim is granted (`close_expired_lease_session_guarded`).
+    /// (`fence_expired_lease_close`; Workflow #461: or at a holder's own end, a disconnect or a
+    /// backend failure's end, or after a failed input). Such a lease end hands the device to no
+    /// one, an instance alone on its device as a member of several (fix round 1: handed on, the
+    /// key went to a claim of the same instance with the session open, and that transfer's own
+    /// close met the lapsed lease again), and the session is closed under a session close ahead
+    /// before any waiting claim is granted (`close_expired_lease_session_guarded`).
     pub(super) fn expired_close_owed(&self, token: &LeaseToken) -> RuntimeHostResult<bool> {
         Ok(lock(
             &self.expired_lease_closes,
             HostLocation::FenceInstanceResources,
         )?
-        .contains(&token.lease_id()))
+        .contains_key(&token.lease_id()))
     }
 
-    /// Workflows #456 and #458, test only: whether a refused close isolates its instance. A test
-    /// turns it off (`RuntimeHost::close_isolates_off_for_test`), and then nothing of the two
-    /// slices applies: the refusals end the Runtime as before.
+    /// Workflows #456, #458, #461 and #475, test only: whether a refused close isolates its
+    /// instance. A test turns it off (`RuntimeHost::close_isolates_off_for_test`), and then
+    /// nothing of the slices applies: the refusals end the Runtime as before.
     #[cfg(test)]
     fn refused_close_isolates(&self) -> bool {
         !self.close_isolates_off_for_test.load(Ordering::Acquire)
     }
 
-    /// Workflows #456 and #458: a refused close of one instance's session isolates that instance.
+    /// Workflows #456, #458, #461 and #475: a refused close of one instance's session isolates
+    /// that instance.
     #[cfg(not(test))]
     fn refused_close_isolates(&self) -> bool {
         true
@@ -934,6 +994,19 @@ impl HostShared {
             self.record_owner_resource_close()?;
             return Ok(Ok(()));
         }
+        // Workflow #475, test only: a test's hook runs once here, before the close asks its write
+        // authority, as a device call that outlasts the lease lets it lapse there.
+        #[cfg(test)]
+        {
+            let hook = lock(
+                &self.resource_close_hook_for_test,
+                HostLocation::BeginDestructiveResourceClose,
+            )?
+            .take();
+            if let Some(hook) = hook {
+                hook();
+            }
+        }
         let witness = Arc::new(
             lock(&self.scheduler, HostLocation::BeginDestructiveResourceClose)?
                 .begin_resource_close(token, connection_id, self.monotonic_ms()?)
@@ -1242,8 +1315,23 @@ impl HostShared {
             let _admission = lock(&instance_guard, HostLocation::LockInstanceAdmission)?;
             self.finish_destructive_input(step, connection_id)
                 .map_err(|failure| *failure.error)?;
-            self.close_instance_resources_result(token, connection_id, links.clone())
-                .map_err(|failure| *failure.error)
+            match self.close_instance_resources_result(token, connection_id, links.clone()) {
+                Ok(closed) => Ok(closed),
+                // Workflow #461 (`contracts/read-session-resource-close.md`): the input's lease
+                // lapsed while the input was under way, and the lapsed lease refused this close
+                // before it began (`expiry_close_refused`). Nothing was closed. As at the lease's
+                // expiry (#458), the refusal is recorded once, it fences this instance only and
+                // the close is owed (`fence_expired_lease_close`), still under the admission
+                // guard; the lease's end (the input's own release, or the expiry) closes the
+                // session once the lease has ended (`close_expired_lease_session_guarded`). No
+                // owner is retained and nothing is latched: the input fails with its own failure.
+                // A failure of the Runtime itself in the fence (its record) is returned, and stays
+                // fatal below.
+                Err(refused) if self.expiry_close_refused(&refused.error) => self
+                    .fence_expired_lease_close(token, *refused.error, links.clone())
+                    .map(Ok),
+                Err(failure) => Err(*failure.error),
+            }
         })();
         match close_result {
             Ok(Ok(())) => Ok(primary),
@@ -1389,10 +1477,9 @@ impl HostShared {
     /// (`lease_cooldown`) is prepared once more after the first pass, once that cooldown ended;
     /// every takeover cooldown ends at the same deadline (the scheduler's start plus
     /// `takeover_cooldown_ms`), which bounds the whole wait. A second refusal is recorded like
-    /// the first and is a failed self-check (`lease_cooldown`).
-    /// INST-1 (Workflow #390): an install start settles the self-checks of every prepared
-    /// instance once all are prepared (`settle_install_selfchecks`); one unreachable device
-    /// leaves only its instance unavailable, and only a start that reached no device ends.
+    /// the first and is a failed self-check (`lease_cooldown`). One unreachable device leaves only
+    /// its instance unavailable (Workflow #434 LAB-6S4a: the held start's verdict over every
+    /// prepared instance, INST-1, went with the held start).
     pub(super) fn prepare_physical_instances_on_start(&self) -> RuntimeHostResult<()> {
         let instances = lock(
             &self.registered_instances,
@@ -1403,7 +1490,6 @@ impl HostShared {
         .map(|instance| (instance.instance_alias.clone(), instance.instance_id))
         .collect::<Vec<_>>();
         let mut cooling = Vec::new();
-        let mut checks = Vec::new();
         for (instance_alias, instance_id) in instances {
             self.check_install_preparation()?;
             self.withhold_policy_instance_availability(instance_id)?;
@@ -1417,56 +1503,376 @@ impl HostShared {
             }) {
                 continue;
             }
-            match self.prepare_physical_instance_on_start(&instance_alias, instance_id)? {
-                (_, Some(cooldown_until)) => {
-                    cooling.push((instance_alias, instance_id, cooldown_until));
-                }
-                (check, None) => checks.push((instance_id, check)),
+            if let (_, Some(cooldown_until)) =
+                self.prepare_physical_instance_on_start(&instance_alias, instance_id)?
+            {
+                cooling.push((instance_alias, instance_id, cooldown_until));
             }
         }
         for (instance_alias, instance_id, cooldown_until) in cooling {
             let wait_ms = cooldown_until.saturating_sub(self.monotonic_ms()?);
             thread::sleep(Duration::from_millis(wait_ms));
             self.check_install_preparation()?;
-            let (check, _) =
-                self.prepare_physical_instance_on_start(&instance_alias, instance_id)?;
-            checks.push((instance_id, check));
+            self.prepare_physical_instance_on_start(&instance_alias, instance_id)?;
         }
-        self.settle_install_selfchecks(&checks)
+        Ok(())
     }
 
     /// One start preparation of `instance_id` under its admission guard. Returns its self-check
     /// and the monotonic deadline of the takeover cooldown that refused its preparation lease,
     /// if one did (the self-check then fails with `lease_cooldown`).
-    fn prepare_physical_instance_on_start(
+    pub(super) fn prepare_physical_instance_on_start(
         &self,
         instance_alias: &str,
         instance_id: InstanceId,
     ) -> RuntimeHostResult<(SchedulingResumeSelfCheck, Option<u64>)> {
-        let links = self
-            .events
-            .system_links()?
-            .with_instance_id(self.events.issuer().issue_registered_instance(instance_id));
         let instance_guard = self
             .instance_guard(instance_id)
             .map_err(|failure| *failure.error)?;
         let admission = lock(&instance_guard, HostLocation::LockInstanceAdmission)?;
+        let prepared =
+            self.prepare_physical_instance_while_guarded(instance_alias, instance_id, &admission)?;
+        Ok((prepared.selfcheck, prepared.cooldown_until))
+    }
+
+    /// [`Self::prepare_physical_instance_on_start`] once the caller holds the instance's
+    /// admission guard (`admission`): the start's preparation on its dedicated lease.
+    fn prepare_physical_instance_while_guarded(
+        &self,
+        instance_alias: &str,
+        instance_id: InstanceId,
+        admission: &MutexGuard<'_, ()>,
+    ) -> RuntimeHostResult<PreparationAttempt> {
+        let links = self
+            .events
+            .system_links()?
+            .with_instance_id(self.events.issuer().issue_registered_instance(instance_id));
         // Workflow #429 R-0b (register §1.238): the start's self-check shows while it prepares
         // the instance on its dedicated lease; no request names it.
         let _activity = self.begin_instance_activity(
             instance_id,
             super::instance_activity::ActivityStart::Selfcheck { request_id: None },
         )?;
-        let prepared = self.prepare_instance_connection_with_cooldown(
+        self.prepare_instance_connection_with_cooldown(
             instance_alias,
             instance_id,
             links,
-            &admission,
+            admission,
             actingcommand_contract::RecoveryTriggerStage::StartupPreparation,
             PreparationLease::Dedicated(ClaimKind::DaemonStartPreparation),
             EmulatorStatusRead::Skip,
-        )?;
-        Ok((prepared.selfcheck, prepared.cooldown_until))
+        )
+    }
+
+    /// Workflow #437 G1 fix rounds 1 and 2 (`contracts/device-group.md`, "A failure stays where
+    /// it belongs"): the lease sweep's step for each member of a device group of several whose
+    /// start preparation the device's hold refused (`device_held_for_member_close`, recorded once
+    /// as that preparation's failure, which left the member unavailable). Once the fence that held
+    /// the device is lifted and the device is idle, it only queues, for each such member, one
+    /// self-check claim of the Runtime's own (`queue_held_start_preparation`), as a fence's
+    /// recheck is queued (`queue_fence_recheck`); the member's worker makes the start's
+    /// preparation on that claim's key (`run_held_start_preparation`), so the sweep waits for no
+    /// device step (Workflow #369 Q-8). A member is passed over while another member's fence
+    /// holds its device, while its scheduling is paused with a released pause (as the start
+    /// passes it over; its resume prepares it), inside a blackout of the member (a preparation the
+    /// Runtime starts on its own, as a recheck: `scheduling-blackout.md`, "Complete silence") and
+    /// while the device is not idle; it stays owed and is looked at again at the next tick. A
+    /// member whose claim waits or runs is not queued again, and a member owes nothing once a
+    /// preparation of it is granted its key or lease. Memory only: a restart prepares every
+    /// member. The train's fix round 1: idle is no lease on the device, no takeover cooldown and
+    /// no entry of its queue that is eligible now by the scheduler's own judgement
+    /// (`SeedScheduler::eligible_count`, the predicate of `first_eligible` and of the queue's
+    /// grant), each entry by its own member's gate as the pump reads them (`device_gates`, before
+    /// the scheduler's lock): an entry parked behind its own member's closed gate (another
+    /// member's routine claim behind its own pause or blackout) keeps no preparation back, and one
+    /// that waits eligible does, so the claim is queued only when it is the device's next work.
+    pub(super) fn queue_members_after_device_hold(&self) -> RuntimeHostResult<()> {
+        if self.fatal.is_shutdown_requested() {
+            return Ok(());
+        }
+        let owed = lock(
+            &self.start_preparations_held,
+            HostLocation::ListHeldStartPreparations,
+        )?
+        .iter()
+        .filter(|(_, held)| !held.queued)
+        .map(|(instance_id, held)| (*instance_id, held.instance_alias.clone()))
+        .collect::<Vec<_>>();
+        for (instance_id, instance_alias) in owed {
+            if self.device_held_for(instance_id)?.is_some() {
+                continue;
+            }
+            let released = lock(
+                &self.scheduling_pause,
+                HostLocation::ReadHeldStartPreparationPause,
+            )?
+            .instance_state(&instance_alias)
+            .is_some_and(|pause| {
+                pause.stage == actingcommand_contract::InstancePauseStage::Released
+            });
+            if released
+                || self
+                    .blackout_covering(instance_id, &instance_alias)?
+                    .is_some()
+            {
+                continue;
+            }
+            let gates = self.device_gates(instance_id)?;
+            let gate = |member: InstanceId| gates.gate_of(member);
+            let now_monotonic_ms = self.monotonic_ms()?;
+            let idle = {
+                let scheduler = lock(
+                    &self.scheduler,
+                    HostLocation::ReadHeldStartPreparationDevice,
+                )?;
+                scheduler.active_lease(instance_id).is_none()
+                    && scheduler.eligible_count(instance_id, gate, now_monotonic_ms) == 0
+                    && !scheduler.cooldown_active(instance_id, now_monotonic_ms)
+            };
+            if !idle {
+                continue;
+            }
+            let marked = match lock(
+                &self.start_preparations_held,
+                HostLocation::MarkHeldStartPreparationQueued,
+            )?
+            .get_mut(&instance_id)
+            {
+                Some(held) if !held.queued => {
+                    held.queued = true;
+                    true
+                }
+                _ => false,
+            };
+            if marked {
+                self.queue_held_start_preparation(instance_id, &instance_alias)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Workflow #437 G1 fix round 2: queues the start's preparation of `instance_id` on one
+    /// self-check claim of the Runtime's own (a minted holder on the Runtime's fixed connection,
+    /// the scheduler's lease time), as `queue_fence_recheck` queues a recheck (no new claim kind):
+    /// granted at once or later in its place by the device's queue, it goes to the member's worker
+    /// (`HostClaimWork::HeldStartPreparation`, a payload of its own: a recheck's runs only for a
+    /// fence's wait for a person, which the member has not, and a link's restore reports to the
+    /// handset link machine). A claim the queue refuses is recorded once (`runtime.failed`, stage
+    /// `operation_cleanup`) and settles what the member owes by the refusal's own code: refused
+    /// `device_held_for_member_close` (a self-check claim is an operator's, refused at once while
+    /// another member's fence holds the device again), the member stays owed and is queued once
+    /// that fence is lifted; refused otherwise, it owes nothing more and stays unavailable until a
+    /// person's self-check or resume, as after a failed preparation. Only a failure the Runtime
+    /// does not survive is returned.
+    fn queue_held_start_preparation(
+        &self,
+        instance_id: InstanceId,
+        instance_alias: &str,
+    ) -> RuntimeHostResult<()> {
+        let resolved = lock(
+            &self.registered_instances,
+            HostLocation::QueueHeldStartPreparation,
+        )?
+        .get(&instance_id)
+        .cloned()
+        .ok_or_else(|| {
+            RuntimeHostError::fatal(
+                HostCode::RuntimeInstanceRegistryIncomplete,
+                HostLocation::QueueHeldStartPreparation,
+                RuntimeErrorCode::RuntimeHalted,
+            )
+        })?;
+        let issuer = self.events.issuer();
+        let holder_id = *issuer
+            .mint_holder_id()
+            .map_err(|_| runtime_identifier_error())?
+            .transport();
+        let causation_id = issuer
+            .mint_causation_id()
+            .map_err(|_| runtime_identifier_error())?;
+        let (actor, source) = scheduled_request_transport_origin(resolved.provenance());
+        let request = RuntimeRequest::new(
+            issuer
+                .mint_request_id()
+                .map_err(|_| runtime_identifier_error())?,
+            issuer
+                .mint_correlation_id()
+                .map_err(|_| runtime_identifier_error())?,
+            Some(causation_id),
+            actor,
+            source,
+            unix_ms_now()?,
+            RuntimeOperation::AcquireLease {
+                instance_alias: instance_alias.to_owned(),
+                holder_id,
+            },
+        )
+        .map_err(|_| {
+            RuntimeHostError::fatal(
+                HostCode::HostKeyRequestInvalid,
+                HostLocation::QueueHeldStartPreparation,
+                RuntimeErrorCode::RuntimeHalted,
+            )
+        })?;
+        let connection_id =
+            ConnectionId::new(STARTUP_PACKAGE_CONNECTION_VALUE).map_err(|error| {
+                RuntimeHostError::scheduler(HostLocation::QueueHeldStartPreparation, &error)
+            })?;
+        let lease_ttl_ms = lock(
+            &self.scheduler,
+            HostLocation::ReadHeldStartPreparationClaimTtl,
+        )?
+        .config()
+        .lease_ttl_ms;
+        let links = self
+            .events
+            .system_links()?
+            .with_instance_id(issuer.issue_registered_instance(instance_id))
+            .with_causation_id(causation_id);
+        let queued = self.request_host_claim_work(
+            HostClaim {
+                request: &request,
+                instance_alias,
+                holder_id,
+                connection_id,
+                kind: ClaimKind::SelfCheck,
+                priority: actingcommand_contract::LeasePriority::Normal,
+                lease_ttl_ms,
+            },
+            HostClaimWork::HeldStartPreparation(PendingHeldStartPreparation {
+                instance_alias: instance_alias.to_owned(),
+                instance_id,
+                links: links.clone(),
+            }),
+        );
+        match queued {
+            Ok(()) => Ok(()),
+            Err(failure) if failure.poison_runtime || failure.error.is_fatal() => {
+                Err(*failure.error)
+            }
+            Err(failure) => {
+                self.append_lifecycle_failure(
+                    RuntimeLifecycleFailureStage::OperationCleanup,
+                    RuntimeLifecycleFailure::Host(&failure.error),
+                    links,
+                    None,
+                )?;
+                // The train's fix round 1: decided from the refusal's own code, not from a second
+                // read of the hold: refused for another member's hold that came back between the
+                // step's read and the claim, the member stays owed; any other refusal settles it.
+                let held_again =
+                    failure.error.code() == HostCode::DeviceHeldForMemberClose.as_str();
+                let mut owed = lock(
+                    &self.start_preparations_held,
+                    HostLocation::SettleHeldStartPreparation,
+                )?;
+                if held_again {
+                    if let Some(held) = owed.get_mut(&instance_id) {
+                        held.queued = false;
+                    }
+                } else {
+                    owed.remove(&instance_id);
+                }
+                Ok(())
+            }
+        }
+    }
+
+    /// Workflow #437 G1 fix round 2: a granted claim of [`Self::queue_held_start_preparation`] on
+    /// the member's worker: the start's preparation (stage `startup_preparation`, no emulator
+    /// status read first, as the start makes it) under the device's admission guard on the
+    /// claim's key, then the key's release, to the ladder a failed preparation admitted when it
+    /// admitted one (as a link's restore releases it). A member that owes no preparation any more
+    /// (a person's self-check or resume prepared it while the claim waited), or whose scheduling
+    /// is now paused with a released pause (it stays owed, and the sweep passes it over), runs
+    /// nothing and releases the key. A failed preparation is recorded as every preparation is
+    /// (`instance_preparation_finished` with its failure, the failing step's `runtime.failed`) and
+    /// leaves the member unavailable; nothing queues it again (its ladder, a person's self-check or
+    /// resume, or a restart prepares it). Only a fatal failure is returned.
+    pub(super) fn run_held_start_preparation(
+        &self,
+        pending: &PendingHeldStartPreparation,
+        key: super::host_claims::HostKey,
+    ) -> RuntimeHostResult<()> {
+        let instance_id = pending.instance_id;
+        let released = lock(
+            &self.scheduling_pause,
+            HostLocation::RunHeldStartPreparation,
+        )?
+        .instance_state(&pending.instance_alias)
+        .is_some_and(|pause| pause.stage == actingcommand_contract::InstancePauseStage::Released);
+        let owed = match lock(
+            &self.start_preparations_held,
+            HostLocation::RunHeldStartPreparation,
+        )?
+        .get_mut(&instance_id)
+        {
+            Some(held) if held.queued && released => {
+                held.queued = false;
+                false
+            }
+            Some(held) => held.queued,
+            None => false,
+        };
+        if !owed {
+            return self.release_host_key(&key);
+        }
+        let validated = key.request.validate().map_err(|_| {
+            RuntimeHostError::fatal(
+                HostCode::HostKeyRequestInvalid,
+                HostLocation::RunHeldStartPreparation,
+                RuntimeErrorCode::RuntimeHalted,
+            )
+        })?;
+        let links = self
+            .events
+            .request_links(&validated, Some(instance_id), None, None);
+        let instance_guard = self
+            .instance_guard(instance_id)
+            .map_err(|failure| *failure.error)?;
+        let prepared = {
+            let admission = lock(&instance_guard, HostLocation::RunHeldStartPreparation)?;
+            // Workflow #429 R-0b: the preparation shows as a self-check with its claim's request.
+            let _activity = self.begin_instance_activity(
+                instance_id,
+                super::instance_activity::ActivityStart::Selfcheck {
+                    request_id: Some(key.request.request_id()),
+                },
+            )?;
+            self.prepare_instance_connection_with_cooldown(
+                &pending.instance_alias,
+                instance_id,
+                links,
+                &admission,
+                actingcommand_contract::RecoveryTriggerStage::StartupPreparation,
+                PreparationLease::Held {
+                    token: &key.token,
+                    connection_id: key.connection_id,
+                },
+                EmulatorStatusRead::Skip,
+            )?
+        };
+        match prepared.ladder {
+            Some(ladder) => match self.release_to_preparation_ladder(
+                &validated,
+                key.request.request_id(),
+                &key.token,
+                key.connection_id,
+                ladder,
+            ) {
+                Ok(()) => Ok(()),
+                Err(failure) if failure.poison_runtime || failure.error.is_fatal() => {
+                    Err(*failure.error)
+                }
+                Err(failure) => self.append_lifecycle_failure(
+                    RuntimeLifecycleFailureStage::OperationCleanup,
+                    RuntimeLifecycleFailure::Host(&failure.error),
+                    pending.links.clone(),
+                    None,
+                ),
+            },
+            None => self.release_host_key(&key),
+        }
     }
 
     /// Trigger (d): `SelfCheckInstance` — the operator's manual reconnect and self-check of one
@@ -1784,16 +2190,45 @@ impl HostShared {
                 token,
                 connection_id,
             } => Ok((token.clone(), connection_id)),
-            PreparationLease::Dedicated(kind) => self
-                .grant_dedicated_instance_lease(
-                    instance_id,
-                    CONNECTION_PREPARATION_CONNECTION_VALUE,
-                    kind,
-                )
-                .map(|(token, connection_id, _)| (token, connection_id)),
+            // Workflow #437 G1: a member whose device is held for another member's unconfirmed
+            // close opens nothing: its preparation's own lease is refused, naming that member.
+            // Fix rounds 1 and 2: the member is owed that preparation, which the lease sweep
+            // queues once the hold has ended (`queue_members_after_device_hold`); a member whose
+            // claim is queued already keeps it.
+            PreparationLease::Dedicated(kind) => match self.device_held_error(instance_id)? {
+                Some(held) => {
+                    lock(
+                        &self.start_preparations_held,
+                        HostLocation::PrepareInstanceConnection,
+                    )?
+                    .entry(instance_id)
+                    .or_insert_with(|| HeldStartPreparation {
+                        instance_alias: instance_alias.to_owned(),
+                        queued: false,
+                    });
+                    Err(held)
+                }
+                None => self
+                    .grant_dedicated_instance_lease(
+                        instance_id,
+                        CONNECTION_PREPARATION_CONNECTION_VALUE,
+                        kind,
+                    )
+                    .map(|(token, connection_id, _)| (token, connection_id)),
+            },
         };
         let (token, connection_id) = match granted {
-            Ok(granted) => granted,
+            // Workflow #437 G1 fix round 1: a preparation of the instance runs (fix round 2: its
+            // queued one on its claim's key too), so it owes none the device's hold refused
+            // before.
+            Ok(granted) => {
+                lock(
+                    &self.start_preparations_held,
+                    HostLocation::PrepareInstanceConnection,
+                )?
+                .remove(&instance_id);
+                granted
+            }
             Err(error) if error.is_fatal() => return Err(error),
             Err(error) => {
                 let failure_code = error.code();
@@ -1860,7 +2295,8 @@ impl HostShared {
                         instance_alias,
                         self.mark_resources_in_use()?,
                         frame_store.memory_budget(),
-                        self.install_preparation_deadline()?,
+                        // Workflow #434 LAB-6S4a: only a held start's release bounded the opens.
+                        None,
                     )),
                 }
             }
@@ -2146,8 +2582,11 @@ impl RuntimeHost {
         Ok(())
     }
 
-    /// Workflows #456 and #458: turns the two slices off (`true`) or on again: while off, a
-    /// refused close at a lease's expiry or after a capture failure ends the Runtime, as before.
+    /// Workflows #456, #458, #461 and #475: turns the slices off (`true`) or on again: while off,
+    /// a refused close at a lease's expiry, at a holder's own end, in a failed input's clean-up,
+    /// after a capture failure or on #475's five paths under a lapsed key (its hand-over to its
+    /// ladder, a pre-emption's hand-over, an application command's preparation, a backend switch,
+    /// a member switch's close) ends the Runtime, as before.
     pub(crate) fn close_isolates_off_for_test(&self, off: bool) -> RuntimeHostResult<()> {
         let location = crate::codes::test_spellings::TestLocation::CloseIsolatesOffForTest;
         self.shared_ref(location)?
@@ -2247,4 +2686,25 @@ pub(super) enum PreparationLease<'a> {
         token: &'a LeaseToken,
         connection_id: ConnectionId,
     },
+}
+
+/// Workflow #437 G1 fix rounds 1 and 2 (`contracts/device-group.md`, "A failure stays where it
+/// belongs"): a member of a device group of several whose start preparation the device's hold for
+/// another member's unconfirmed close refused, owed that preparation until one of it is granted
+/// its key or lease (memory only).
+pub(super) struct HeldStartPreparation {
+    instance_alias: String,
+    /// Its self-check claim waits in the device's queue or runs on the member's worker
+    /// (`HostShared::queue_held_start_preparation`): the lease sweep queues no other.
+    queued: bool,
+}
+
+/// Workflow #437 G1 fix round 2: the start's preparation of a member the device's hold refused,
+/// queued on a self-check claim of the Runtime's own (no new claim kind) and made on that claim's
+/// key by the member's worker (`HostShared::run_held_start_preparation`).
+pub(super) struct PendingHeldStartPreparation {
+    pub(super) instance_alias: String,
+    pub(super) instance_id: InstanceId,
+    /// The member and the claim's causation: what a worker failure is recorded under.
+    pub(super) links: EventLinksDraft,
 }

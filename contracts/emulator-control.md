@@ -414,7 +414,22 @@ Every request is recorded intent -> result, all linked to the instance:
    operation: control_instance}`, typed tokens only, where `stage` is the typed step
    (`mumu_manager_control_exit`, `_control_errcode`, `_launch_error`, `_wait_timeout`, `_run`,
    `_timeout`, `_path`, an `info` reader stage, `emulator_control_binding`,
-   `emulator_control_support`).
+   `emulator_control_support`). Workflow #469 H3 (since 0.12.62;
+   [v012-register.md](v012-register.md) §1.399): an `emulator_control_failed` outcome also
+   carries that stage as its value `stage` (a location) and, when the failure carries a device
+   diagnostic, that category as its value `device_category` (vocabulary `device_category`); a
+   failure without a device diagnostic carries `stage` at the default `mumu_manager_control` and
+   no `device_category` (its detail keeps the default category `child_exit`, which no device
+   observed). The receipt carries both values, and so does a settled timeout's `caused_by` link
+   (the failure's outcome whole). This record gains only `device_category`: its `stage` stays
+   `runtime_lifecycle_operation_cleanup`, the lifecycle stage the host writes into the `stage` of
+   every `runtime.failed` record. A reader who needs the device stage reads the receipt. The
+   other codes of a provider control failure (`emulator_control_wait_timeout`,
+   `emulator_control_unavailable`, `emulator_control_unsupported`) carry neither. The detail, the
+   stop-result table and a restart's wrapping are unchanged: a failed restart's `caused_by` link
+   is a newly built outcome of the failing phase's code and operation alone (item 5), so it
+   carries neither value; the stage that phase failed at stays in the restart record's primary
+   detail.
 5. A failed restart records one `command.rejected` (action `emulator.instance.restart`, the
    receipt terminal) and one `runtime.failed`, after its Start phase when one ran (coordinator
    answer D2); a failed phase records nothing of its own. For `emulator_restart_stop_failed` and
@@ -605,14 +620,57 @@ of the instance, which fails only that run, #411 A7; with the capture self-check
 `return_home` and `application_restart` rungs are skipped `capture_unavailable`, so the climb
 reaches the emulator restart); exclusions `contained_task_prerequisite_*` and
 `contained_task_return_home_entry_unmatched` (the gate codes of `contracts/linear-steps.md`,
-"Prerequisite packages" and "Return-home fallback").
+"Prerequisite packages" and "Return-home fallback"), and `device_link_lost` (Workflow #398
+RD-2, the coordinator's ruling on model-398 §16 item 5: a cable is not something the ladder can
+fix).
 `contained_task_navigation_entry_unconfirmed` is not excluded (Workflow #373 NAV-5, wave-17
 acceptance ruling 7, in place of M-373 §9.4's proposal): the page list says the run reached its
 entry and the package's own check says it did not, so the Runtime does not know where it is,
 which is the ladder's job, as for `contained_task_page_unknown`; it starts the ladder by
 `pack_logic`. So does `contained_task_linear_unrecorded_screen` (Workflow #463 U1, class
 `pack_logic_mismatch`, the owner's ruling on board #463), as `page_confirmation_failed` does; its
-scheduled run also pauses its pair ([policy-suspension.md](policy-suspension.md)).
+scheduled run also pauses its pair ([policy-suspension.md](policy-suspension.md)). A failure of the
+vision provider while a run evaluates a page (Workflow #387 D1c-G) or a step's guard, an
+operation's `when` or an expected identity (#469 D4b, since 0.12.63; the owner's approval on board
+#469) ends the run with `contained_task_vision_provider_failed`, class `environment_fault`: it
+starts no ladder at the task stage, and `stability_burst` counts it (direction ①, below). A real
+evaluation error there keeps its class-4 code (`contained_task_recognition_failed`,
+`contained_task_guard_evaluation_failed`) and starts the ladder by `pack_logic`. For the guard,
+the `when` and the identity, everything else that changes is what a page evaluation's provider
+failure already does (register §1.401 names the same places; `crates/runtime-host/src/host/`
+unless named): (1) at the scheduled run's failed lease end (`ladder_at_lease_end`,
+`recovery_ladder.rs`) no item matches at `task`, so no ladder is admitted, the run's key is
+released, not handed on, and no cool-down window opens either (one opens only when an item matches
+under `cooldown_opens_on` `triggered`, `admit_or_suppress_ladder`, or when an admitted ladder gets
+the key under `admitted`, `climb_recovery_ladder`); (2) direction ① counts the run's terminal
+record (`count_stability_record`): the third such failure of one instance within 600 000 ms is a
+`stability_burst`, whose ladder climbs from its return-home rung; (3) a guard that fails so on a
+retry attempt whose failure decision asks for recovery (`refuse_before_input`,
+`crates/execution-kernel/src/contained_task/observation_window.rs`) still ends the run with
+`contained_task_requires_scheduler`, its `failure_code` the provider code (`requires_scheduler`),
+and a select step's confirmation guard that fails so writes its confirmation record
+(`guard_failed`, `confirm` in `contained_task/selection.rs` and `contained_task/scan/select.rs`)
+with the provider code as its outcome; (4) a return-home rung's run that ends so is not held on
+the busy-screen probe (`climb_screen_gate`, `busy.screen.classes`); (5) a guard's provider failure
+pins no `GuardRejection` frame (`execute_contained_task_with_lease`, `contained_task.rs`); (6) the
+task geometry recheck (`recheck_task_geometry`) does not run after a `when`'s or an identity's;
+(7) in the return-home entry layer (`run_preflighted_contained_task`) and the prerequisite layer
+(`gate_layer`, `close_open`, `prerequisite.rs`) a `when` or an identity that fails so takes the
+branch of a failure that is not a recognition failure: the layer's facts are written by the
+entry-fact writer (`record_entry_fact`), which first checks that the run is still active
+(`ensure_active`: a write at the very moment of a deadline, a cancellation or a pause is refused
+with that end's own code), and the layer's error carries its code only, without the kernel's
+detail text (`fail_contained_task_entry`, `layer_task_failure`), so the main package's terminal
+record has no native detail for it and its failure identity's key has no `operation=` fragment
+(`failure_detail_fingerprint`, `crates/runtime-host/src/failure_identity.rs`), as for a page
+evaluation's provider failure; (8) the policy settles it under the provider code, in the same
+streak as a page evaluation's provider failure (`same_error`, `policy_control.rs`), rerun only, its
+count staying 1 ([policy-suspension.md](policy-suspension.md), "Every other failure is rerun
+only"); (9) while the provider stays down, what stops the package is the burst (the default: three
+such failures of one instance in ten minutes start the ladder from its return-home rung) and its
+own `on_failure`, whose `retry_limit` and `escalation_threshold` pause it only at `retry_limit` 0
+(then `action` decides) or `escalation_threshold` 1, since the count stays 1. Before, the first such
+failure started the ladder at once.
 
 - **Task stage.** A scheduled (policy) contained task run on a physical instance whose
   `task.failed` terminal's outcome code (ledger revision 3; the relayed spelling's `raw_code`
@@ -864,8 +922,9 @@ within `host_claims.renewal_slack_ms` of a step's bound is not renewed:
   the window; each attempt writes its own `instance_preparation_finished`, makes the ladder's
   holding check and renews the key to the window's end. The instance admission guard is held
   across Stop, Start and the first attempt, and released while waiting. The waits stop at the
-  next poll on shutdown (`recovery_ladder_shutdown_requested`), an install drain
-  (`recovery_ladder_drain_requested`), a scheduling pause or a capacity refusal
+  next poll on shutdown (`recovery_ladder_shutdown_requested`; a shutdown accepted while the
+  holding check runs, `recovery_ladder_drain_requested`, which an install drain raised until
+  0.12.62), a scheduling pause or a capacity refusal
   (`recovery_admission_denied`) or a lost key (`recovery_ladder_key_lost`). Not ready within the
   window fails the rung `recovery_environment_not_ready`, or `recovery_android_not_booted` when
   the boot check never passed and so no preparation ran. The ladder runs on its instance's
@@ -911,9 +970,11 @@ that ends with `contained_task_application_update_required` (a shared interrupt 
 at warning with the same outcome, climbing no further. An old client is cured by no restart, so
 the emulator is not restarted for it; the instance's `health.application.update_required` is
 true and its store update task runs ([scheduling-blackout.md](scheduling-blackout.md), position
-4a). This rule stays in code (as below; no configuration key). The code's ladder class is `none`,
-so no default trigger item opens a ladder for it, and a startup package that ends with it opens
-none either (a startup package never does).
+4a). This rule stays in code (as below; no configuration key): it reads the code, not its class.
+The code's ladder class is `planned_stop` (since 0.12.62, Workflow #469 D4a: the package declares
+the page and the run stops on purpose), which no default trigger item names, so no default
+trigger item opens a ladder for it, and a startup package that ends with it opens none either (a
+startup package never does).
 
 **Busy ends (#411 B37, slice A35-S1; coordinator decisions Q1 to Q3 of 2026-10-21).** A rung's
 package run that completes `success` on a `scheduling_outcome` mapping its package marks `busy`
@@ -1077,9 +1138,9 @@ own at error. Once a ladder holds the key (Workflow #369 H-3, ruling Q8), every 
 every control step, every readiness poll, every busy-hold poll (#411 B37) and the settle gate's
 probe (#411 A35) checks that it
 still holds the key and that no
-scheduling pause or capacity refusal (`recovery_admission_denied`), install drain
-(`recovery_ladder_drain_requested`) or shutdown (`recovery_ladder_shutdown_requested`)
-intervenes; a key it no longer holds is `recovery_ladder_key_lost` (its continuation is
+scheduling pause or capacity refusal (`recovery_admission_denied`) or shutdown
+(`recovery_ladder_shutdown_requested`; one accepted while the check runs is
+`recovery_ladder_drain_requested`, which an install drain raised until 0.12.62) intervenes; a key it no longer holds is `recovery_ladder_key_lost` (its continuation is
 cancelled). Such an interruption fails the current rung (`recovery_ladder_interrupted`, caused
 by that reason) and ends the ladder `exhausted` at warning, followed by its one release. A
 superseded preparation trigger records `preparation_superseded`; these two reasons use

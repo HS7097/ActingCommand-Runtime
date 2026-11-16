@@ -94,8 +94,13 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   the member `start_paused` of an instance entry; revisions 5 to 30 are still read, so [5, 31].
 ///   Workflow #437 ORD-1c (0.12.60, register §1.373) raises it to 32: the member
 ///   `device_group.max_queue_wait_ms` of the `scheduling` section; revisions 5 to 31 are still
-///   read, so [5, 32].
-/// - `install-control` stays [0, 1] (model-378 §16 A-7; U-4 raises it in 0.12.x).
+///   read, so [5, 32]. Workflow #463 U1b (0.12.63, register §1.389) raises it to 33: the members
+///   `suspension.break_in_runs` and `suspension.break_in_ms` of the `scheduling` section; revisions
+///   5 to 32 are still read, so [5, 33].
+/// - `install-control` was [0, 1] (model-378 §16 A-7). Workflow #434 LAB-6S4a (0.12.63, register
+///   §1.287, "Slice LAB-6S4a") lowers it to [0, 0]: the request kind `InstallTransition` and
+///   actingd's `--install-held` start, which revision 1 named, are gone; an installer that speaks
+///   [0, 1] meets [0, 0] and takes its cold path (revision 0).
 /// - `install-selection` is unchanged (model-378 §10).
 /// - `ledger` [3, 3]: SQLite format 2, `actingcommand.event.v3`; format 1 is refused. Workflow
 ///   #411 BT-LR (register §1.153) raises `max` to 4 once for the 0.12.x B train (Alice
@@ -142,7 +147,10 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   3) version 2 of `goals.json`, which a bundle that carries it declares with 14; a pack without
 ///   them keeps its revision, so [3, 14]. Workflow #463 K2 (0.12.61, register §1.380) raises it to
 ///   15: a `linear_steps` task's ending pages, which every Runtime before it refuses at admission
-///   (`reason=terminal_page`); a pack without one keeps its revision, so [3, 15].
+///   (`reason=terminal_page`); a pack without one keeps its revision, so [3, 15]. Workflow #477
+///   PC-1 fix round 1 (0.12.68, register §1.438) raises it to 16: a bundle zip's root file
+///   `pack-catalog.json`, which no reader of the Runtime opens and which an installer before it
+///   refuses as a member it does not know; a bundle without it keeps its revision, so [3, 16].
 /// - `runtime-client` [2, 2]: request v4, receipt v2; requests v1 to v3 are refused. Workflow
 ///   #429 R-0 (0.12.30, register §1.213) raises `max` to 3: the workbench's request kinds and
 ///   members; every revision-2 request is still answered as before, so [2, 3]. Workflow #429
@@ -164,15 +172,21 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   `BindChannel`, `ChannelBound` and the receipt; a client of 3 to 7 neither sends nor receives
 ///   it, so [3, 8]. Workflow #463 V3 (0.12.61, register §1.383) raises `max` to 9: the request
 ///   kinds `GoalView` and `EditGoal` with their results; every earlier request is answered as
-///   before and no answer of an earlier kind changes, so [3, 9].
+///   before and no answer of an earlier kind changes, so [3, 9]. Workflow #437 G1 fix round 2
+///   (0.12.67, register §1.433) raises `max` to 10: the status member `device_held`, which a
+///   reader whose `max` is below 10 refuses (the status denies unknown members); no installation
+///   can fill it while the load refuses every device group of several, so `min` stays: [3, 10].
+///   Workflow #463 S3-8 (0.12.68, register §1.444) raises `max` to 11: the request member
+///   `ContainedTaskRequest.variables`, which a Runtime of 10 or lower cannot decode; a request
+///   without it serializes and is answered as before and no answer changes, so [3, 11].
 /// - `runtime-outcomes` [1, 1]: the new interface of model-378 §10.
 const V0120: &[(&str, [u64; 2])] = &[
-    ("actingd-config", [5, 32]),
-    ("install-control", [0, 1]),
+    ("actingd-config", [5, 33]),
+    ("install-control", [0, 0]),
     ("install-selection", [1, 1]),
     ("ledger", [3, 8]),
-    ("package", [3, 15]),
-    ("runtime-client", [3, 9]),
+    ("package", [3, 16]),
+    ("runtime-client", [3, 11]),
     ("runtime-outcomes", [1, 1]),
 ];
 

@@ -561,7 +561,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "An immediate try for an instance met a holder, or an eligible waiting entry that nobody may jump (Workflow #369). A Lab operation's refusal names who is in the way, before any frame or input: holder_kind is the holder's kind on a held instance, or the waiting entry's kind on a free one, where queue_position is that entry's position. A client AcquireLease and the Runtime's dedicated leases are refused with this code too. Registered once in the contract (A2a D3); the host and the scheduler emit it.",
+      "description": "An immediate try for an instance met a holder, or an eligible waiting entry that nobody may jump (Workflow #369). A Lab operation's refusal names who is in the way, before any frame or input: holder_kind is the holder's kind on a held instance, or the waiting entry's kind on a free one, where queue_position is that entry's position. A client AcquireLease and the Runtime's dedicated leases are refused with this code too. Registered once in the contract (A2a D3); the host and the scheduler emit it. Workflow #469 V0: a Runtime client reads it, as lease_cooldown, as a transient failure after which another input backend may be tried (is_fallback_eligible).",
       "common_causes": "Another client, a scheduled run, a stuck-recovery ladder or an operator request holds the instance or waits for it.",
       "handling": "Nothing ran. Retry once the instance is free; actingctl status shows lease_active and queued_request_count."
     },
@@ -584,7 +584,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The Runtime's wire error code (receipt projection `code`): lease cooldown.",
+      "description": "The Runtime's wire error code (receipt projection `code`): lease cooldown. Workflow #469 V0: the scheduler refuses a lease or an immediate try while the instance is in its lease cool-down (the projection carries retry_after_ms); nothing ran. A Runtime client reads it, as lease_busy, as a transient failure after which another input backend may be tried (is_fallback_eligible).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -1158,7 +1158,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The Runtime refused a governance identity card: governance client not allowed.",
+      "description": "Kept for records written before 0.12.63, and raised by nothing since (Workflow #434 LAB-6S4a: DeclareGovernanceIdentity went): the verdict of a governance.identity_declared record that such a build wrote may carry it. The Runtime refused a governance identity card: governance client not allowed.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -1178,7 +1178,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The Runtime refused a governance identity card: governance instance unknown.",
+      "description": "Kept for records written before 0.12.63, and raised by nothing since (Workflow #434 LAB-6S4a: DeclareGovernanceIdentity went): the verdict of a governance.identity_declared record that such a build wrote may carry it. The Runtime refused a governance identity card: governance instance unknown.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -1198,7 +1198,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The Runtime refused a governance identity card: governance identity already declared.",
+      "description": "Kept for records written before 0.12.63, and raised by nothing since (Workflow #434 LAB-6S4a: DeclareGovernanceIdentity went): the verdict of a governance.identity_declared record that such a build wrote may carry it. The Runtime refused a governance identity card: governance identity already declared.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -2027,7 +2027,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A code several owners emit with one meaning (contract-owned, A2 train): a contained task's stability termination stopped because the screen stayed unchanged for the declared number of consecutive steps.",
+      "description": "A code several owners emit with one meaning (contract-owned, A2 train): a contained task's stability termination stopped because the screen stayed unchanged for the declared number of consecutive steps. Workflow #469 V0: no run ends with this code: it names the reason of the stability termination, and the run completes (a success).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -2047,7 +2047,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A code several owners emit with one meaning (contract-owned, A2a D3): contained task guard evaluation failed.",
+      "description": "A code several owners emit with one meaning (contract-owned, A2a D3): contained task guard evaluation failed. A step's guard target could not be evaluated: its evaluation ended in an error that is not the vision provider's (for example a text read that refused to conclude, or a unique template search past its limit); the detail is the evaluation's error, with the code of an evaluation that refused to conclude as its cause= token. A failure of the vision provider at the guard is contained_task_vision_provider_failed instead (#469 D4b, since 0.12.63). An operation's when target whose evaluation ended in such an error ends the run with this code too, in place of contained_task_recognition_failed, when the host cannot archive that evaluation's PP-OCR reports and the Runtime runs on (the archive failure ends only that run, beside this code); a failure of the vision provider there is contained_task_vision_provider_failed. A scheduled run that ends with it starts the default recovery ladder (trigger pack_logic).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -2107,8 +2107,8 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A recognition evaluation of a contained task ended in an error that is not the vision provider's: a page evaluation of its frame, or the evaluation of a when, select, scan or expected identity target.",
-      "common_causes": "An evaluation returned an error rather than a match or no match: an OCR region that does not resolve on the frame, a text read that refuses to conclude, a target kind the pack cannot evaluate, or no vision provider for it. A failure of the provider itself is contained_task_vision_provider_failed instead.",
+      "description": "A recognition evaluation of a contained task ended in an error: a page evaluation of its frame, or the evaluation of a when, select, scan or expected identity target. At a page evaluation, a when and an expected identity the error is not the vision provider's: a failure of the provider there is contained_task_vision_provider_failed (Workflow #387 D1c-G; at the when and the identity #469 D4b, since 0.12.63). Where a select's or a scan's evaluation ends with this code, it does so whatever failed, the provider included.",
+      "common_causes": "An evaluation returned an error rather than a match or no match: an OCR region that does not resolve on the frame, a text read that refuses to conclude, a target kind the pack cannot evaluate, or no vision provider for it. A failure of the provider itself is contained_task_vision_provider_failed instead, except at a select's or a scan's evaluation.",
       "handling": "Read the failing target and its cause in the run's task diagnostic records (the overlay of actingctl run evidence --run-id <run_id>, read with ac_material); the target's declaration is the pack author's to fix. A scheduled run's failure starts the default recovery ladder (trigger pack_logic) for the instance."
     },
     "current_page_unknown": {
@@ -2526,9 +2526,10 @@
         "request_id": "optional"
       },
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "A code several owners emit with one meaning (contract-owned, A2a D3): invalid governance origin.",
+      "retired_in": "0.12.63",
+      "description": "Retired (Workflow #434 LAB-6S4a): DeclareGovernanceIdentity and RecordApprovalDecision went, and with them the host's check of a card's origin. Was: A code several owners emit with one meaning (contract-owned, A2a D3): invalid governance origin.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -2893,8 +2894,8 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A code several owners emit with one meaning (contract-owned, A2a D3): nemu input frame required.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "common_causes": "A tap, a long tap, a swipe or a segmented drag sent without a frame reference to an instance whose input is the emulator's own interface (touch_backend nemu_ipc), which presses only on a frame the Runtime captured and committed.",
+      "handling": "Nothing was sent. Send the press with the reference of a frame the Runtime captured: actinglab's tap, swipe and long-tap capture one first on such an instance since Workflow #434 LW-1 (0.12.67), as a recorded press and do with capture always did; a client of its own captures (ObserveReadonly) and names that frame."
     },
     "ocr_field_low_confidence": {
       "category": "error",
@@ -5497,9 +5498,10 @@
         "request_id": "optional"
       },
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: invalid approval decision.",
+      "retired_in": "0.12.63",
+      "description": "Retired (Workflow #434 LAB-6S4a): The request kind RecordApprovalDecision is gone, so no approval decision of a request is validated. Was: Runtime contract validation refused a value: invalid approval decision.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -6141,11 +6143,12 @@
         "request_id": "optional"
       },
       "review": "settled",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "A receipt that carries an install transition status is not in state completed, so it breaks the receipt contract.",
+      "retired_in": "0.12.63",
+      "description": "Retired (Workflow #434 LAB-6S4a): The request kind InstallTransition is gone, so no transition receipt is validated. Was: A receipt that carries an install transition status is not in state completed, so it breaks the receipt contract.",
       "common_causes": "A Runtime and a client of incompatible releases, or a defect.",
-      "handling": "Use a client of the same release as the Runtime; report it with both builds."
+      "handling": "None in 0.12.63 and later: the code is no longer emitted."
     },
     "invalid_scheduling_pause_receipt": {
       "category": "error",
@@ -8881,11 +8884,12 @@
         "request_id": "optional"
       },
       "review": "settled",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "A held start's previous ticket names another transition than the held start itself; the previous Runtime's drained transition and the new start must share one transition_id.",
+      "retired_in": "0.12.63",
+      "description": "Retired (Workflow #434 LAB-6S4a): The request kind InstallTransition and its status are gone, so no previous transition is compared. Was: A held start's previous ticket names another transition than the held start itself; the previous Runtime's drained transition and the new start must share one transition_id.",
       "common_causes": "An installer that mixes the identities of two transitions.",
-      "handling": "Start the held Runtime with the ticket of the transition that drained the previous one."
+      "handling": "None in 0.12.63 and later: the code is no longer emitted."
     },
     "invalid_install_transition_status": {
       "category": "error",
@@ -8901,11 +8905,12 @@
         "request_id": "optional"
       },
       "review": "settled",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "An install transition status breaks its rules: admission_closed disagrees with the phase, or the failure code is empty, longer than 128 bytes or not a code spelling.",
+      "retired_in": "0.12.63",
+      "description": "Retired (Workflow #434 LAB-6S4a): The request kind InstallTransition and its status are gone. Was: An install transition status breaks its rules: admission_closed disagrees with the phase, or the failure code is empty, longer than 128 bytes or not a code spelling.",
       "common_causes": "A Runtime and a client of incompatible releases, or a defect.",
-      "handling": "Report it with the builds; use a client of the same release as the Runtime."
+      "handling": "None in 0.12.63 and later: the code is no longer emitted."
     },
     "invalid_install_timeout": {
       "category": "error",
@@ -8921,11 +8926,12 @@
         "request_id": "optional"
       },
       "review": "settled",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "An install transition timeout is 0 or above 600000 ms.",
+      "retired_in": "0.12.63",
+      "description": "Retired (Workflow #434 LAB-6S4a): The request kind InstallTransition and its actions are gone, so no timeout of one is read. Was: An install transition timeout is 0 or above 600000 ms.",
       "common_causes": "A timeout written in seconds, or a caller of another release.",
-      "handling": "Pass timeout_ms from 1 to 600000."
+      "handling": "None in 0.12.63 and later: the code is no longer emitted."
     },
     "invalid_install_transition_id": {
       "category": "error",
@@ -8941,11 +8947,12 @@
         "request_id": "optional"
       },
       "review": "settled",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "An install transition id is empty, longer than 128 bytes, or holds a character other than ASCII letters, digits, '-' and '_'.",
+      "retired_in": "0.12.63",
+      "description": "Retired (Workflow #434 LAB-6S4a): The request kind InstallTransition and its actions are gone, so no transition id is read. Was: An install transition id is empty, longer than 128 bytes, or holds a character other than ASCII letters, digits, '-' and '_'.",
       "common_causes": "An installer of another release, or a hand-written action.",
-      "handling": "Use a transition id of 1 to 128 ASCII letters, digits, '-' or '_'."
+      "handling": "None in 0.12.63 and later: the code is no longer emitted."
     },
     "selection_record_too_large": {
       "category": "error",
@@ -16016,7 +16023,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A code several owners emit with one meaning (contract-owned, A2a D3): policy settlement interrupted.",
+      "description": "A code several owners emit with one meaning (contract-owned, A2a D3): policy settlement interrupted. Workflow #469 V0: a scheduled run the Runtime's own end (or its stop before the run started) cut short is settled with this code, severe, so it pauses its task on the application; by this code's name, the restart lifts that pause when it is the first in a row (interruption_lifted_by_restart, contracts/policy-suspension.md), and a second in a row stays paused until the package changes. Its class none says nothing of this.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -16296,7 +16303,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A code several owners emit with one meaning (contract-owned, A2 train): a contained task's stability termination stopped because it reached its declared maximum number of steps.",
+      "description": "A code several owners emit with one meaning (contract-owned, A2 train): a contained task's stability termination stopped because it reached its declared maximum number of steps. Workflow #469 V0: no run ends with this code: it names the reason of the stability termination, and the run fails with contained_task_step_budget_exhausted (the run's step budget, max_steps).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -16645,11 +16652,12 @@
       "uncertain": false,
       "values": {},
       "review": "settled",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "The receipt of an InstallTransition request completed: the Runtime performed the action and reports the transition's status (one success code per request kind).",
+      "retired_in": "0.12.63",
+      "description": "Retired (Workflow #434 LAB-6S4a): The request kind InstallTransition is gone, so no receipt carries this code. Was: The receipt of an InstallTransition request completed: the Runtime performed the action and reports the transition's status (one success code per request kind).",
       "common_causes": "An install transition action the Runtime accepted.",
-      "handling": "None."
+      "handling": "None in 0.12.63 and later: the code is no longer emitted."
     },
     "request_status_completed": {
       "category": "success",
@@ -17177,9 +17185,10 @@
       "uncertain": false,
       "values": {},
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "A completed receipt of a DeclareGovernanceIdentity request: the Runtime did what the request asked. Workflow #378 A4: one success code per request kind.",
+      "retired_in": "0.12.63",
+      "description": "Retired (Workflow #434 LAB-6S4a): The request kind DeclareGovernanceIdentity is gone, so no receipt carries this code. Was: A completed receipt of a DeclareGovernanceIdentity request: the Runtime did what the request asked. Workflow #378 A4: one success code per request kind.",
       "common_causes": "The request succeeded.",
       "handling": "Nothing to do; the result carries the answer."
     },
@@ -17191,9 +17200,10 @@
       "uncertain": false,
       "values": {},
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "A completed receipt of a RecordApprovalDecision request: the Runtime did what the request asked. Workflow #378 A4: one success code per request kind.",
+      "retired_in": "0.12.63",
+      "description": "Retired (Workflow #434 LAB-6S4a): The request kind RecordApprovalDecision is gone, so no receipt carries this code. Was: A completed receipt of a RecordApprovalDecision request: the Runtime did what the request asked. Workflow #378 A4: one success code per request kind.",
       "common_causes": "The request succeeded.",
       "handling": "Nothing to do; the result carries the answer."
     },
@@ -17397,7 +17407,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.13",
-      "description": "A package of a standard-pack game root's bundle is neither maintenance-role by the root files, named by a rule of the root's schedule.json, nor held (ROUT-L RL-1a, contracts/standard-pack-schedule.md). It is not scheduled; the rest of the game is. The policy composer finds it; check-config, the Runtime and actinglab standard-pack check report it once per game, package and schedule.json.",
+      "description": "A package of a standard-pack game root's bundle is neither maintenance-role by the root files, named by a rule of the root's schedule.json, nor held (ROUT-L RL-1a, contracts/standard-pack-schedule.md). It is not scheduled; the rest of the game is. The policy composer finds it; check-config, the Runtime and actinglab standard-pack check report it once per game, package and schedule.json. Workflow #469 V0: although a warning, actinglab standard-pack adopt refuses an adoption whose package comes out with it (adopt_refused, adopt_problem rule_refused).",
       "common_causes": "A package was added to the bundle without a rule or a held entry, or its rule was removed.",
       "handling": "Add a rule that names the package, or a held entry with its reason, to the game root's schedule.json."
     },
@@ -17513,6 +17523,192 @@
       "common_causes": "The package's directory is missing, unreadable or incomplete (a held package left half made, a package registered but not placed yet), its control.json or another file the package reader opens breaks its rules (a capability marked irreversible without its parameters), or one of its files was locked for a moment while it was replaced.",
       "handling": "Fix or place the package again; the next workbench check that sees one of its declaration files change reads the root again and the marks follow the declarations."
     },
+    "standard_pack_catalog_absent": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "game": "required",
+        "path": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.68",
+      "description": "A standard-pack game root holds no pack-catalog.json, the root's one declaration of what each package is to a person and what it consumes and produces (Workflow #477 PC-1, register section 1.438; contracts/pack-catalog.md). Not a defect: a root's declaration is written over time. actinglab standard-pack check gives it as its answer's catalog.note (path the file it looked for); the root is checked, composed, built and placed as without the file, and actingctl packs shows the root's packages by their ids.",
+      "common_causes": "The root was made before the file existed, or nobody has run actinglab standard-pack catalog on it yet.",
+      "handling": "Run actinglab standard-pack catalog --root <the resource repository's checkout> --plan, read the document it would write, then run it without --plan and commit the file it writes at the checkout's root."
+    },
+    "standard_pack_catalog_coverage": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "game": "required",
+        "path": "required",
+        "count": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.68",
+      "description": "How many packages a standard-pack game root's bundle.json registers that its pack-catalog.json (path) lists no entry for (count, 0 when it lists every one; Workflow #477 PC-1, contracts/pack-catalog.md). actinglab standard-pack check gives it as its answer's catalog.note, beside catalog.unlisted, the packages without an entry in the registry's order. Not a defect: such a package runs as before and shows by its id.",
+      "common_causes": "Packages added to bundle.json after the file was last written.",
+      "handling": "Run actinglab standard-pack catalog --root <the resource repository's checkout>: it adds an entry for each package without one and keeps every entry already written."
+    },
+    "standard_pack_catalog_display_invalid": {
+      "category": "warning",
+      "ladder_class": "declaration_error",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "game": "required",
+        "path": "required",
+        "standard_pack_problem": "required",
+        "json_pointer": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.68",
+      "description": "A defect of the display part of a standard-pack game root's pack-catalog.json (path), at its json_pointer: a group or package text missing (catalog_text_missing), a group a package names that the file does not declare (catalog_group_unknown), a group id, risk word or aspect ratio written twice (catalog_duplicate), a text, word, locale or list outside its limit (catalog_out_of_limits), or a display member of the wrong shape or (fix round 1) a member a group or display does not know (malformed) (Workflow #477 PC-1, contracts/pack-catalog.md). A warning only: the defective group, package display or game display is left out, so that package shows by its id; nothing is refused and every package runs as before. actingctl packs (and ac_packs), actinglab standard-pack check and standard-pack catalog report it, once per defect in the file's order.",
+      "common_causes": "A display member written by hand: a title or summary left out, a group renamed in one place only, a text over its limit, a member misspelt in a group or in display.",
+      "handling": "Correct the display part at the pointer; the business part and the scheduler are not affected meanwhile."
+    },
+    "standard_pack_catalog_left_out": {
+      "category": "warning",
+      "ladder_class": "declaration_error",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "game": "required",
+        "path": "required",
+        "standard_pack_problem": "required",
+        "json_pointer": "required",
+        "package_id": "required",
+        "pool_id": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.68",
+      "description": "actinglab standard-pack catalog left out of the pack-catalog.json it writes (path) something the game root's existing file holds and the root no longer declares (Workflow #477 PC-1 fix round 1, contracts/pack-catalog.md \"Who writes it\"), by the reader's word: the entry of a package the root's bundle.json does not register (package_not_listed; package_id, json_pointer the entry's package_id in the existing file), or a pool of a kept entry the root's schedule.json does not declare (catalog_pool_undeclared; package_id, pool_id, json_pointer the pool's pool_id in the existing file). A warning: the line goes on and writes, or with --plan answers, the file without it; its answer lists the same in removed or dropped. Once per thing left out, in the existing file's order, after the display defects and before the differences from schedule.json.",
+      "common_causes": "A package removed from the root's packs, or a pool removed or renamed in schedule.json, after the file was last written.",
+      "handling": "Nothing is needed when the package or the pool is gone on purpose. Otherwise restore it in the root (the package directory under packs, the pool in schedule.json) and run the line again; an entry or pool left out is not kept anywhere else."
+    },
+    "standard_pack_catalog_schedule_differs": {
+      "category": "warning",
+      "ladder_class": "declaration_error",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "game": "required",
+        "package_id": "required",
+        "pool_id": "required",
+        "catalog_side": "required",
+        "catalog_difference": "required",
+        "task_id": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.68",
+      "description": "A pool a package of a standard-pack game root consumes or produces (catalog_side) that one of the root's two files lacks (catalog_difference): a rule of the package in schedule.json (task_id) names it on that side and the package's entry in pack-catalog.json does not list it (catalog_lacks), or the entry lists it and no rule of the package names it there (schedule_lacks) (Workflow #477 PC-1, contracts/pack-catalog.md). A consistency hint only: nothing reads the business part to schedule yet, the root is composed and runs as before. actinglab standard-pack check and standard-pack catalog report it, entry by entry in the file's order, consumes before produces: catalog_lacks once per rule and pool, then schedule_lacks once per pool; a package without an entry is not compared.",
+      "common_causes": "A rule changed after the entry was written, or an entry written by hand that names a pool its rules do not touch.",
+      "handling": "Bring the entry and the rules to agree: correct the entry's consumes or produces, or the rule; standard-pack catalog never overwrites an entry already written."
+    },
+    "standard_pack_catalog_root_refused": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "path": "required",
+        "install_root": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.68",
+      "description": "actinglab standard-pack catalog refuses the game root at path because it lies inside the installation at install_root (Workflow #477 PC-1, contracts/pack-catalog.md \"Who writes it\"): the writer writes a resource repository's checkout or (as before fix round 1) a built game root outside an installation only; an installed root takes pack-catalog.json through standard-pack build and the installer's place. The line is refused (an error, class usage_validation) before the root's files are read, and nothing is written.",
+      "common_causes": "--root names the installed standard-pack root instead of the repository's working copy.",
+      "handling": "Run the writer on the working copy of the root, build the bundle and place it."
+    },
+    "standard_pack_catalog_write_failed": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "path": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.68",
+      "description": "actinglab standard-pack catalog could not write pack-catalog.json at path (Workflow #477 PC-1): writing its .part beside it or renaming that over it failed, the operating system's error the cause (caused_by, with the .part's path). The file in place is as it was; a .part may be left beside it. The line is refused (an error); since fix round 1 its class is device_instance, as the Lab's other local write failures (exit status 4 on the command line), not usage_validation: the line was right, the machine could not carry it out.",
+      "common_causes": "The root's directory is read-only, the disk is full, or another program holds the file open.",
+      "handling": "Free the file or the disk and run the line again; it writes the same bytes."
+    },
+    "standard_pack_ui_retired": {
+      "category": "warning",
+      "ladder_class": "declaration_error",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "game": "required",
+        "path": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.68",
+      "description": "A standard-pack game root still holds ui.json (path), which no program reads any more: pack-catalog.json replaced it, its display part holding what ui.json held (Workflow #477 PC-1, contracts/pack-catalog.md). actingctl packs (and ac_packs), actinglab standard-pack check, standard-pack catalog and standard-pack build report it once per root; build does not carry the file, and the installer's place sets an installed one aside like any root file a bundle no longer carries.",
+      "common_causes": "A root written before 0.12.68.",
+      "handling": "Run actinglab standard-pack catalog --root <the resource repository's checkout>, which takes each new entry's display from ui.json, check the result, then remove ui.json from the checkout in the same change."
+    },
     "standard_pack_root_invalid": {
       "category": "error",
       "ladder_class": "declaration_error",
@@ -17539,7 +17735,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A standard-pack root file (bundle.json, pages.json, interrupts.json, navigation.json or, Workflow #392 DA-4, display-layout.json of one game root) breaks its shape, a limit or a reference (Workflow #373 NAV-6). The Runtime records it at startup and refuses, in preparation, a run that needs the root; check-config lists it; the resource tools share the same check. A broken root never stops the Runtime. Workflow #429 R-11 (since 0.12.36): a game root's optional ui.json, which only actingctl packs and ac_packs read, is checked by the same contract crate; each violation of a refused ui.json is one such warning there, at its json_pointer, and never breaks the root or changes a row. Workflow #407 LOAD-1 (since 0.12.37): a game's loading.json and a pack's loading copy are checked by the same contract crate; actinglab package loading, package bundle --loading and actinglab standard-pack check refuse with it, one issue per violation in details.issues, and with package_id when the issue is a pack's (a pack's coordinate space, a page or target id it declares itself, a stale copy). Workflow #407 LOAD-2 (since 0.12.37): no Runtime component reads loading.json; the pack loader compiles a pack's copy and refuses one that breaks a rule against its pack with this code, with game and package_id from the pack's control, path the file inside the pack (resources/loading.json, or a stray file below resources/loading/) and json_pointer in the copy; Lab and the contained-task admission carry it as the refusal's code. Workflow #444 NOTICES-1 (since 0.12.58): the rules of a bundle's notices directory are stated once by the contract crate (standard_pack_notices); a refusal by them is this code with path the member it names (notices/<path>, the directory notices for its count or its total, bundle.json with package_id for a pack named like it), json_pointer empty, standard_pack_problem one of the notice_ words and, where the rule has a bound, limit_count and count or limit_bytes and actual_bytes. No program checks the directory before NOTICES-2 (the installer's place) and NOTICES-3 (package bundle --notices, standard-pack check, resource verify).",
+      "description": "A standard-pack root file (bundle.json, pages.json, interrupts.json, navigation.json or, Workflow #392 DA-4, display-layout.json of one game root) breaks its shape, a limit or a reference (Workflow #373 NAV-6). The Runtime records it at startup and refuses, in preparation, a run that needs the root; check-config lists it; the resource tools share the same check. A broken root never stops the Runtime. Workflow #429 R-11 (since 0.12.36): a game root's optional ui.json, which only actingctl packs and ac_packs read, is checked by the same contract crate; each violation of a refused ui.json is one such warning there, at its json_pointer, and never breaks the root or changes a row. Workflow #477 PC-1 (since 0.12.68): pack-catalog.json replaced ui.json, and nothing reads ui.json any more (standard_pack_ui_retired); an error of the catalog's business part or of the file as a whole (malformed, game_mismatch, package_not_listed, catalog_duplicate, catalog_pool_undeclared, catalog_out_of_limits) is this code at its json_pointer: actingctl packs gives one warning per error and lists the root as without the file, actinglab standard-pack check and standard-pack catalog refuse with the first, standard-pack build fails its step with each, and the installer's place refuses the bundle (install_command_refused pack_invalid, this code its cause); a defect of the display part is standard_pack_catalog_display_invalid instead. PC-1 fix round 1: standard-pack catalog also refuses a rule of schedule.json that names a pool schedule.json does not declare, when its package is to get a new entry: path schedule.json, catalog_pool_undeclared at the rule's /rules/<i>/<side>/<j>/pool_id. Workflow #407 LOAD-1 (since 0.12.37): a game's loading.json and a pack's loading copy are checked by the same contract crate; actinglab package loading, package bundle --loading and actinglab standard-pack check refuse with it, one issue per violation in details.issues, and with package_id when the issue is a pack's (a pack's coordinate space, a page or target id it declares itself, a stale copy). Workflow #407 LOAD-2 (since 0.12.37): no Runtime component reads loading.json; the pack loader compiles a pack's copy and refuses one that breaks a rule against its pack with this code, with game and package_id from the pack's control, path the file inside the pack (resources/loading.json, or a stray file below resources/loading/) and json_pointer in the copy; Lab and the contained-task admission carry it as the refusal's code. Workflow #444 NOTICES-1 (since 0.12.58): the rules of a bundle's notices directory are stated once by the contract crate (standard_pack_notices); a refusal by them is this code with path the member it names (notices/<path>, the directory notices for its count or its total, bundle.json with package_id for a pack named like it), json_pointer empty, standard_pack_problem one of the notice_ words and, where the rule has a bound, limit_count and count or limit_bytes and actual_bytes. No program checks the directory before NOTICES-2 (the installer's place) and NOTICES-3 (package bundle --notices, standard-pack check, resource verify).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -18153,6 +18349,46 @@
       "description": "A completed receipt of an EditGoal request (Workflow #463 V3, runtime-client 9): one value of an application's goal page was set or cleared by its name and the application's session.resource_targets record published as one fact.published (or, replayed, the record already held it); the result names the record's version after the edit and that event. Workflow #378 A4: one success code per request kind.",
       "common_causes": "The request succeeded.",
       "handling": "Nothing to do; send the result's version as the next edit's expected_version."
+    },
+    "invalid_contained_task_variable_count": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.68",
+      "description": "Runtime contract validation refused a value (Workflow #463 S3-8, runtime-client 11): a contained task request's variables holds more values than a package can declare variables (16). A client does not build such a request; the Runtime refuses one it receives before reading its package, and nothing runs.",
+      "common_causes": "A request written by hand with more than 16 values; actinglab run start answers more than 16 --variable as --variable not_recognised before anything is sent.",
+      "handling": "Give at most one value per variable the package declares (actinglab package variables --package <dir> lists them)."
+    },
+    "invalid_contained_task_variable_name": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.68",
+      "description": "Runtime contract validation refused a value (Workflow #463 S3-8, runtime-client 11): a contained task request's variables gives a value under a name outside a variable's form (1 to 64 bytes of [a-z][a-z0-9_]*), which no package can declare. A client does not build such a request; the Runtime refuses one it receives before reading its package, and nothing runs.",
+      "common_causes": "A request written by hand with such a name; actinglab run start answers such a --variable as --variable not_recognised before anything is sent.",
+      "handling": "Give each value under the name the package's control.json declares (actinglab package variables --package <dir> lists them)."
     }
   },
   "locations": {

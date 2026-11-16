@@ -132,10 +132,12 @@ actingcommand_contract::outcome_codes! {
         // #412 Lab B-3 S1: the kernel's refusals of a declared operation a Lab operation names
         // (keys `pack_operation_id`, and `lab_operation_problem` for the unsupported one), and a
         // declared operation's first frame on another page than its own (keys
-        // `pack_operation_id`, `page_id`, `page_ids`).
+        // `pack_operation_id`, `page_id`, `page_ids`). Workflow #469 V0 (register §1.386): the
+        // page mismatch's class is `pack_logic_mismatch`, the screen differing from the
+        // declaration; only a Lab operation raises it, and its failure reaches no ladder trigger.
         ContainedTaskDeclaredOperationUnknown => "contained_task_declared_operation_unknown": error / none,
         ContainedTaskDeclaredOperationUnsupported => "contained_task_declared_operation_unsupported": error / none,
-        ContainedTaskDeclaredOperationPageMismatch => "contained_task_declared_operation_page_mismatch": error / none,
+        ContainedTaskDeclaredOperationPageMismatch => "contained_task_declared_operation_page_mismatch": error / pack_logic_mismatch,
         ContainedTaskStepUnconfirmed => "contained_task_step_unconfirmed": error / pack_logic_mismatch,
         ContainedTaskErrorPageReached => "contained_task_error_page_reached": error / pack_logic_mismatch,
         ContainedTaskLinearIntermediateUnobserved => "contained_task_linear_intermediate_unobserved": error / pack_logic_mismatch,
@@ -267,8 +269,9 @@ actingcommand_contract::outcome_codes! {
         /// Error. Admission refused a task whose declared sampling exceeds the smaller of its
         /// step and task timeouts (keys `required_ms`, `limit_ms`, and `pack_operation_id`
         /// when one operation exceeds it; SR-1 emits it in place of the running
-        /// `recognition_sample_budget_insufficient`).
-        RecognitionSampleBudgetInvalid => "recognition_sample_budget_invalid": error / budget_or_permission,
+        /// `recognition_sample_budget_insufficient`). Workflow #469 V0 (register §1.386): its class
+        /// is `declaration_error`, decided from the declarations without looking at the screen.
+        RecognitionSampleBudgetInvalid => "recognition_sample_budget_invalid": error / declaration_error,
         /// Warning. A run recognised a page its task declares as the sign of a locked feature
         /// and stopped there, with no input (keys `fact_key`, `page_id`; SR-5b).
         ContainedTaskFeatureLocked => "contained_task_feature_locked": warning / planned_stop,
@@ -423,5 +426,84 @@ actingcommand_contract::outcome_vocabulary! {
         Left => "left",
         /// A transition frame after the input's allowance was spent.
         LimitReached => "limit_reached",
+    }
+}
+
+actingcommand_contract::outcome_vocabulary! {
+    /// Workflow #469 V0 (vocabulary `confirmation_problem`, since 0.12.62; register §1.386): what
+    /// the program saw where the confirmation of the page a step awaits ended, or the error page
+    /// a run stood on, the value of `page_confirmation_failed`, `contained_task_step_unconfirmed`,
+    /// `contained_task_error_page_reached`, `contained_task_linear_unrecorded_screen` and
+    /// `contained_task_requires_scheduler`. One word per situation the kernel already tells apart
+    /// there; it goes into the outcome's values, never into the detail text, so the failure
+    /// identity and the streak stay as they are. The kernel slices set it.
+    pub enum ConfirmationProblem: "confirmation_problem" {
+        /// The program saw the step's own page at the end of the confirmation after the input and
+        /// had seen no other page since the input (a linear step judges the frames in between, a
+        /// page-graph step only the last frame).
+        InputNotTaken => "input_not_taken",
+        /// After the input the screen showed something else and was the step's own page (the
+        /// page the input was sent from) again at the end (Workflow #469 K1 fix round 2).
+        ReturnedToOwnPage => "returned_to_own_page",
+        /// The awaited page appeared only after the confirmation wait.
+        AwaitedPageLate => "awaited_page_late",
+        /// The screen settled on another page the package declares.
+        OtherPageShown => "other_page_shown",
+        /// The screen settled on a declared loading page.
+        LoadingPageShown => "loading_page_shown",
+        /// The screen was still a loading transition when the wait ended.
+        TransitionShown => "transition_shown",
+        /// A shared interrupt page was on screen and was not handled.
+        InterruptShown => "interrupt_shown",
+        /// No declared page appeared and the screen kept changing.
+        ScreenMoving => "screen_moving",
+        /// The screen settled on a page the package never recorded.
+        UnrecordedScreen => "unrecorded_screen",
+        /// The last frame matched no declared page (page graph).
+        NothingRecognised => "nothing_recognised",
+        /// The screen stayed unchanged until the still limit (page graph).
+        ScreenStill => "screen_still",
+        /// The awaited page was on screen at the end, but the state the step declares for it did
+        /// not hold (page graph, Workflow #469 K2 fix round 2).
+        FinalStateUnmet => "final_state_unmet",
+        /// A wait step's own page stayed on screen until its `max_ms` ran out (page graph,
+        /// Workflow #469 K2 fix round 2).
+        WaitMaxReached => "wait_max_reached",
+        /// The wait ended on its loading allowance.
+        LoadingLimit => "loading_limit",
+        /// The step reached a page the package declares as an error page.
+        ErrorPage => "error_page",
+        /// The run stood on a declared error page that no operation of the page leaves.
+        ErrorPageNoExit => "error_page_no_exit",
+        /// The task's time ran out before the screen could be judged.
+        DeadlineReached => "deadline_reached",
+        /// The final look at the screen failed.
+        CheckFailed => "check_failed",
+        /// On the retry, neither the awaited page nor the step's own page appeared.
+        NeitherPage => "neither_page",
+        /// Not judged: the run is a layer's or the host's, not the task's own.
+        UnjudgedLayerRun => "unjudged_layer_run",
+        /// Not judged: the step ran inside an application restart.
+        UnjudgedRestartSegment => "unjudged_restart_segment",
+        /// Not judged: the package declares sample consensus.
+        UnjudgedConsensus => "unjudged_consensus",
+        /// Not judged: the step is an application entry.
+        UnjudgedApplicationEntry => "unjudged_application_entry",
+        /// Not judged: too little of the task's time was left.
+        UnjudgedTimeShort => "unjudged_time_short",
+    }
+}
+
+actingcommand_contract::outcome_vocabulary! {
+    /// Workflow #469 V0 (vocabulary `guard_problem`, since 0.12.62; register §1.386): why an
+    /// operation's guard refused its input, the value of `contained_task_guard_refused`. The
+    /// kernel slices set it.
+    pub enum GuardProblem: "guard_problem" {
+        /// The frame's page is not the page the guard expects.
+        PageMismatch => "page_mismatch",
+        /// The page is right and the guard's target did not pass on it.
+        TargetNotPassed => "target_not_passed",
+        /// The page changed during the wait before a trusted-coordinate input.
+        PageMoved => "page_moved",
     }
 }

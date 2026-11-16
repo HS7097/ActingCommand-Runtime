@@ -11,7 +11,9 @@
 //!   (`--record-id`, its `lab/out/<package_id>.<zip|json>`) or any content directory or container
 //!   (`--package`); the decision document `actingcommand.pack-decision.v1` ([`Decision`]), which
 //!   holds only what the Lab cannot know and is required on a first adoption; the Lab's state
-//!   directory, which holds the recordings, the kept copies and the check trees.
+//!   directory, which holds the recordings, the kept copies and the check trees. Workflow #463
+//!   S3-4: or, in place of a document, a held decision's reason and reference
+//!   ([`AdoptDecision::Held`]), which are that document of the class `held` and are read as it is.
 //! - **The checks**, every one before the first write, in this order: the repository, no leftover
 //!   of an interrupted call; the recording; the package, admitted as `package preflight` admits
 //!   it, its game and server those of `applications.json`; its `package_id` a directory name and
@@ -20,17 +22,17 @@
 //!   ([`AdoptWorktree`]); the decision, and one role for the package (no business rule beside a
 //!   role another root file gives, no maintenance role by its uses alone beside its business
 //!   rule, without a decision no two roles in the files adopt writes); the review (a class other
-//!   than `held` needs a package run through); no absolute local path in the package's text; the
-//!   root files it must change in their canonical form; then the tree as it would be written, laid
-//!   out in the checkout's own marked check tree `<state>/adopt-check/<checkout>/` (never through
-//!   a link), bundled by `package bundle` with every root file the repository holds, its installed
-//!   layout checked by `standard-pack check`, both composing the schedule with one instance per
-//!   server; every outcome key the compiled schedule reads of the rule (the policy crate's
-//!   `referenced_outcome_keys`: rules, pools, activity targets) and every outcome key the rule
-//!   reads of another task declared by the package of the task read; last, a business rule's value
-//!   (none only for a follower of a chain, never `pending` for one). Each refusal is
-//!   `adopt_refused` naming the check, its member or its pointer, and writes nothing in the
-//!   repository.
+//!   than `held` needs a recording checked offline); no absolute local path in the package's
+//!   text; the root files it must change in their canonical form; then the tree as it would be
+//!   written, laid out in the checkout's own marked check tree `<state>/adopt-check/<checkout>/`
+//!   (never through a link), bundled by `package bundle` with every root file the repository
+//!   holds, its installed layout checked by `standard-pack check`, both composing the schedule
+//!   with one instance per server; every outcome key the compiled schedule reads of the rule (the
+//!   policy crate's `referenced_outcome_keys`: rules, pools, activity targets) and every outcome
+//!   key the rule reads of another task declared by the package of the task read; last, a
+//!   business rule's value (none only for a follower of a chain, never `pending` for one). Each
+//!   refusal is `adopt_refused` naming the check, its member or its pointer, and writes nothing in
+//!   the repository.
 //! - **What is derived** ([`derive`]): every rule member the decision does not give, each answered
 //!   with its value and where it came from (`package`, `file`, `neutral`, `neutral_floor`), so that
 //!   nothing is chosen silently; `feedback_stop` only from the package's own declared keys, never
@@ -73,16 +75,30 @@
 //!   written.
 //! - **`--dry-run`** runs every check, the check tree included, and writes nothing in the
 //!   repository and keeps no copy.
+//! - **The offline review and the trial** (Workflow #463 S3-12, register §1.445): the review's
+//!   `recording_checked` (named `run_through` before) says that the recording was checked offline,
+//!   nothing of a run on a device; `review.trial` is the latest trial record of the content the
+//!   adoption writes (`passed`, `failed` or `none`), read by the trial's own reader from the state
+//!   directory and matched by the trial's own content prefix. Two warnings refuse nothing:
+//!   `enabling_needs_authorization` for a decision of a class that runs, `not_tried` while no
+//!   passed trial of the content is on record. `next` names `ours/model/bindings.json` with the
+//!   rule's two ways to a value while the adopted rule has none. The train of S3-12 and S3-14
+//!   (register §1.445, "Train"): `review.trial` is the trial module's one summary
+//!   (`trial_summary`, with `passed_on_record`), each record judged by `PackTrialRecord::passed`,
+//!   which the status row answers too.
 
 use crate::codes::{AdoptProblem, ResourceToolingCode};
 use crate::package_directory::PACK_DEADLINE;
 use crate::standard_pack_check::{check_standard_pack_root_with_catalog, root_issue_outcome};
+use crate::standard_pack_trial::{
+    TrialNotRead, TrialSummary, cause_of, content_hash_prefix_of, trial_summary,
+};
 use crate::{
-    PackageBundleRequest, StandardPackCheckRequest, StandardPackCheckResponse,
-    StandardPackRootFiles, package_bundle,
+    PackReadiness, PackageBundleRequest, StandardPackCheckRequest, StandardPackCheckResponse,
+    StandardPackReadyRequest, StandardPackRootFiles, judge_standard_pack_readiness, package_bundle,
 };
 use actingcommand_contract::codes::SharedCode;
-use actingcommand_contract::outcome::{Detail, IoOp, Outcome, OutcomeEnvelope};
+use actingcommand_contract::outcome::{Detail, IoOp, Outcome};
 use actingcommand_contract::{
     BundleMaintenance, LabError, LabErrorClass, LabResult, MaintenanceUse,
     SCHEDULE_RULE_FIXED_VALUE_MEMBER, SCHEDULE_RULE_FIXED_VALUE_ORIGIN_MEMBER,
@@ -246,6 +262,12 @@ const NEUTRAL_CONFIDENCE_MILLI: u64 = 1_000;
 /// The repository's own items adopt does not write, each named when the checkout holds it.
 const NEXT_FILES: [&str; 2] = ["docs/PACKS.md", "ours/coverage/business-v1.csv"];
 const REGRESSION_DIRECTORY: &str = "regression";
+/// Workflow #463 S3-12: where a rule's fixed value is registered, relative to `--repo` (the model's
+/// `acmodel.bindings.v1`): by a value binding, which the model's writer `acmodel bindings apply`
+/// writes into the rule with `fixed_value_origin: "model"`, or by a hand entry of a number written
+/// by hand. Named in `next` whenever the adopted rule has no value yet, whether the checkout holds
+/// it or not.
+const BINDINGS_FILE: &str = "ours/model/bindings.json";
 
 /// Where the package to adopt comes from.
 #[derive(Debug, Clone)]
@@ -257,14 +279,30 @@ pub enum AdoptSource {
     Package(PathBuf),
 }
 
+/// Where the adoption's decision comes from (Workflow #463 S3-4).
+#[derive(Debug, Clone)]
+pub enum AdoptDecision {
+    /// `--decide <decision.json>`: the decision document at this path.
+    Document(PathBuf),
+    /// `--held-reason <text> [--held-reference <text>]`: exactly the decision `{schema_version,
+    /// class: "held", held: {reason, reference?}}`, built as that document and read by the
+    /// reader of a document, so that every check and every byte written is the document's.
+    Held {
+        /// The held entry's `reason` text (the name is the one the decision's reader uses for
+        /// it; the outcome guard keeps the word `reason` for typed reasons).
+        rationale: String,
+        reference: Option<String>,
+    },
+}
+
 /// Workflow #464 P1: `actinglab standard-pack adopt --repo <checkout> (--record-id <id> |
-/// --package <path>) [--decide <decision.json>] [--replace] [--state-dir <dir>]` under the
-/// global `--dry-run`.
+/// --package <path>) [--decide <decision.json> | --held-reason <text> [--held-reference <text>]]
+/// [--replace] [--state-dir <dir>]` under the global `--dry-run`.
 #[derive(Debug, Clone)]
 pub struct StandardPackAdoptRequest {
     pub repo: PathBuf,
     pub source: AdoptSource,
-    pub decision: Option<PathBuf>,
+    pub decision: Option<AdoptDecision>,
     pub replace: bool,
     pub dry_run: bool,
     /// The Lab's state directory: the recordings, the kept copies and the check trees.
@@ -425,9 +463,9 @@ pub enum AdoptCoverage {
 }
 
 /// What the package's provenance says of its recording (ruling 2 on #464: a recording counts as
-/// run through when its cross-check passed, its first decision was evaluated and no step needs
-/// review).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+/// checked offline when its cross-check passed, its first decision was evaluated and no step needs
+/// review), and (Workflow #463 S3-12) what the trial records say of the content adopted.
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct RecordingReview {
     /// The entry task's provenance is a recording's (`source` `lab_record`).
     pub recorded: bool,
@@ -441,7 +479,79 @@ pub struct RecordingReview {
     pub first_decision_evaluated: bool,
     /// The steps whose click the recording marked `needs_review`, by their step number.
     pub steps_needing_review: Vec<u64>,
-    pub run_through: bool,
+    /// Workflow #463 S3-12 (the rule of ruling 2 on #464, named for what it is): the recording was
+    /// checked offline, a recording's, its cross-check passed, its first decision evaluated and no
+    /// step needing review. It says nothing of a run on a device; that is [`Self::trial`].
+    pub recording_checked: bool,
+    /// Workflow #463 S3-12: the trials of the content this adoption writes on record in the state
+    /// directory; absent only beside [`Self::trial_not_read`]. The train of S3-12 and S3-14
+    /// (ruling R2): the trial module's one summary, which the status row answers too.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trial: Option<TrialSummary>,
+    /// Workflow #463 S3-12: why the trial records of the package were not read; absent otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trial_not_read: Option<TrialNotRead>,
+}
+
+/// One of the repository's own items adopt does not write, by its path relative to `--repo`.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct AdoptNext {
+    pub path: String,
+    /// Workflow #463 S3-12: for `ours/model/bindings.json`, how the adopted rule's fixed value
+    /// gets there; absent for every other item.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fixed_value: Option<NextFixedValue>,
+}
+
+/// Workflow #463 S3-12: the two ways a fixed value of the adopted rule is registered in
+/// `ours/model/bindings.json`, each the entry as that file writes it, the texts adopt cannot know
+/// left blank.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct NextFixedValue {
+    /// The adopted rule.
+    pub rule_id: String,
+    /// An entry of `bindings`: the model's writer `acmodel bindings apply` writes the value of the
+    /// model's `exports.json` it names (`value`, blank) into the rule's `fixed_value_milli`, with
+    /// `fixed_value_origin: "model"`.
+    pub value_binding: NextValueBinding,
+    /// An entry of `hand`: registers a number written by hand into the rule's
+    /// `fixed_value_milli` (adopt `--replace --decide` with `{fixed_value_milli, origin: "pack"}`),
+    /// how it was had (`status`) and where it comes from (`ref`), both blank.
+    pub hand_entry: NextHandEntry,
+}
+
+/// Workflow #463 S3-12: a value binding of `bindings.json`, `{value, file, rule_id, path}`.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct NextValueBinding {
+    /// The id of a value of the model's `exports.json`: blank, the model's to name.
+    pub value: String,
+    /// `schedule.json`.
+    pub file: String,
+    pub rule_id: String,
+    /// `/fixed_value_milli`.
+    pub path: String,
+}
+
+/// Workflow #463 S3-12: a hand entry of `bindings.json`, `{rule_id, status, ref}`.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct NextHandEntry {
+    pub rule_id: String,
+    /// How the number was had: blank, the writer's to say.
+    pub status: String,
+    /// Where it comes from (the member `ref`): blank, the writer's to say.
+    #[serde(rename = "ref")]
+    pub reference: String,
+}
+
+/// Workflow #463 S3-5: the readiness function refused the check tree's game root (or answered no
+/// row of the adopted pack), so the pack's readiness was not judged; the adoption is the same
+/// without it.
+#[derive(Debug, Clone, Serialize)]
+pub struct ReadinessNotJudged {
+    /// The function's refusal, with its code as the function answered it.
+    pub outcome: Outcome,
+    /// The same in words.
+    pub text: String,
 }
 
 /// The answer of `standard-pack adopt`.
@@ -510,9 +620,21 @@ pub struct StandardPackAdoptResponse {
     /// The checkout's check tree, `<state>/adopt-check/<checkout>/`, kept until the next call on
     /// the checkout empties it.
     pub check_tree: String,
+    /// Workflow #463 S3-5: the adopted pack's row of the readiness of the check tree's game root
+    /// `installed/<game>/`, as the readiness function answers it there with no installation (the
+    /// row `standard-pack ready` answers for that root), judged after every check passed, under
+    /// `--dry-run` too; absent only beside `readiness_not_judged`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub readiness: Option<PackReadiness>,
+    /// Workflow #463 S3-5: why the readiness was not judged, when the readiness function refused
+    /// the check tree's game root or answered no row of the pack; absent otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub readiness_not_judged: Option<ReadinessNotJudged>,
     /// The repository's own items adopt does not write (a regression case, the census row, the
-    /// catalog section), each by its path when the checkout holds it.
-    pub next: Vec<String>,
+    /// catalog section), each by its path when the checkout holds it; Workflow #463 S3-12: and
+    /// `ours/model/bindings.json` with the two ways of the rule's value when the adopted rule has
+    /// no value yet.
+    pub next: Vec<AdoptNext>,
 }
 
 /// Workflow #464 P1: `actinglab standard-pack adopt` (module doc).
@@ -657,9 +779,20 @@ pub fn standard_pack_adopt(
         }
     }
 
-    // The decision; without one, the class of the earlier adoption.
+    // The decision; without one, the class of the earlier adoption. Workflow #463 S3-4: a held
+    // decision's two texts are that document, handed to the document's own reader.
     let decision = match &request.decision {
-        Some(path) => Some(Decision::read(&absolute(path)?, &root.schedule)?),
+        Some(AdoptDecision::Document(path)) => {
+            Some(Decision::read(&absolute(path)?, &root.schedule)?)
+        }
+        Some(AdoptDecision::Held {
+            rationale,
+            reference,
+        }) => Some(Decision::of_document(
+            held_document(rationale, reference.as_deref()),
+            Path::new(""),
+            &root.schedule,
+        )?),
         None => None,
     };
     let class = match (
@@ -671,7 +804,9 @@ pub fn standard_pack_adopt(
         (None, None) => {
             return Err(refused(
                 adopt(AdoptProblem::DecisionInvalid).json_pointer(""),
-                "a first adoption needs --decide <decision.json>".to_owned(),
+                "a first adoption needs --decide <decision.json>, or --held-reason <text> to \
+                 adopt the package as held"
+                    .to_owned(),
             ));
         }
     };
@@ -732,18 +867,35 @@ pub fn standard_pack_adopt(
         ));
     }
 
-    // The review (ruling 2): a class other than `held` needs a package run through.
+    // The review (ruling 2): a class other than `held` needs a recording checked offline.
+    // Workflow #463 S3-12: and the latest trial of the content this adoption writes, read from the
+    // trial records of the state directory, which the trial keeps by the same content prefix; it
+    // refuses nothing. The train of S3-12 and S3-14 (rulings R1, R2): the trial module's one
+    // summary, and `not_tried` while no record of this content passed.
     let mut review = package.review();
     if review.record_id.is_none() {
         review.record_id = record_id;
     }
-    if class != AdoptClass::Held && !review.run_through {
+    let content = content_hash_prefix_of(&package.files);
+    let not_tried = match trial_summary(&state, &package_id, &content) {
+        Ok(trial) => {
+            let untried = !trial.passed_on_record;
+            review.trial = Some(trial);
+            untried
+        }
+        Err(not_read) => {
+            review.trial_not_read = Some(not_read);
+            false
+        }
+    };
+    if class != AdoptClass::Held && !review.recording_checked {
         let outcome = named_package(adopt(AdoptProblem::RecordingUnreviewed), &package_id);
         return Err(refused(
             outcome.clone(),
             format!(
-                "{package_id} is not run through (cross-check {:?}, first decision evaluated \
-                 {}, steps needing review {:?}); adopt it as held",
+                "the recording of {package_id} was not checked offline (cross-check {:?}, first \
+                 decision evaluated {}, steps needing review {:?}); a class other than held needs \
+                 a recording checked offline: adopt it as held",
                 review.cross_check, review.first_decision_evaluated, review.steps_needing_review
             ),
         )
@@ -879,7 +1031,31 @@ pub fn standard_pack_adopt(
         (Some(rule), Some(_), None) => value_wait(rule, &root.schedule.pools),
         _ => None,
     };
-    let warnings = all_warnings(&check);
+    // Workflow #463 S3-12: the rule has no value yet when it writes no fixed value and the
+    // evaluator holds it until a value is given; `next` then names where its value is registered.
+    let unvalued_rule = match (&plan.rule, &waits_for_value) {
+        (Some(rule), Some(_)) if !rule.contains_key(SCHEDULE_RULE_FIXED_VALUE_MEMBER) => rule_id,
+        _ => None,
+    };
+    let mut warnings = all_warnings(&check);
+    // Workflow #463 S3-12: the two things the owner's rules require before a pack runs, said at
+    // adoption and never refused: a decision of a class that runs is enabled only by a placement
+    // under a named authorization, and a content no trial passed is not tried.
+    if decision
+        .as_ref()
+        .is_some_and(|decision| decision.class != AdoptClass::Held)
+    {
+        warnings.push(named_package(
+            Outcome::new(ResourceToolingCode::EnablingNeedsAuthorization),
+            &package_id,
+        ));
+    }
+    if not_tried {
+        warnings.push(named_package(
+            Outcome::new(ResourceToolingCode::NotTried),
+            &package_id,
+        ));
+    }
 
     // What it writes, in the order it renames it into place.
     let mut changed = vec![pack_relative.clone()];
@@ -918,6 +1094,13 @@ pub fn standard_pack_adopt(
             moved.map(|path| path.display().to_string()),
         )
     };
+    // Workflow #463 S3-5: every check passed (a refused adoption answers no readiness); the
+    // adopted pack's readiness on the game root the check tree laid out, by the same path under
+    // `--dry-run`. It changes nothing of the adoption.
+    let (readiness, readiness_not_judged) = match adopted_readiness(&check.installed, &package_id) {
+        Ok(row) => (Some(row), None),
+        Err(why) => (None, Some(why)),
+    };
     Ok(StandardPackAdoptResponse {
         status: if request.dry_run {
             "validated".to_owned()
@@ -951,7 +1134,42 @@ pub fn standard_pack_adopt(
         would_write,
         kept,
         check_tree: check.tree.display().to_string(),
-        next: next_items(&repo, &root.game),
+        readiness,
+        readiness_not_judged,
+        next: next_items(&repo, &root.game, unvalued_rule.as_deref()),
+    })
+}
+
+/// Workflow #463 S3-5: the row of the adopted pack `package_id` of the readiness of the check
+/// tree's game root `installed` (`<tree>/installed/<game>/`), judged by the readiness function,
+/// called as it is, with no installation, so `ready_to_place` at best. When that function refuses
+/// the root, or answers no row of the pack (the function's own `package_invalid`, "is no package
+/// of the bundle"), why it was not judged: the refusal's outcome and the same in words.
+fn adopted_readiness(
+    installed: &Path,
+    package_id: &str,
+) -> Result<PackReadiness, ReadinessNotJudged> {
+    let not_judged = |error: &LabError| ReadinessNotJudged {
+        outcome: cause_of(error),
+        text: format!(
+            "the readiness of {package_id} was not judged on the check tree's game root {}: \
+             {error}; the adoption is answered without it",
+            installed.display()
+        ),
+    };
+    judge_standard_pack_readiness(&StandardPackReadyRequest {
+        root: installed.to_path_buf(),
+        declared_package: None,
+        installation: None,
+    })
+    .map_err(|error| not_judged(&error))?
+    .packs
+    .into_iter()
+    .find(|pack| pack.package_id == package_id)
+    .ok_or_else(|| {
+        not_judged(&LabError::package_invalid(format!(
+            "{package_id} is no package of the bundle"
+        )))
     })
 }
 
@@ -1158,8 +1376,9 @@ fn interrupted(repo: &Path, leftovers: &[String]) -> String {
     said.push(finish);
     said.push(format!(
         "to run that adoption again instead: move the root .part files out of the checkout; {}; \
-         then run adopt with --replace and the --decide that call was given, if any, which writes \
-         the package's one role from the root files as they are; to undo it: move the root .part \
+         then run adopt with --replace and the decision that call was given (--decide, or \
+         --held-reason, with --held-reference when that call had one), if any, which writes the \
+         package's one role from the root files as they are; to undo it: move the root .part \
          files out, put packs/<package_id> back as it was, and restore with the version control \
          a root file that call renamed (to its last commit: a change not committed before that \
          call is not in it)",
@@ -1410,7 +1629,7 @@ impl Package {
         self.task.as_ref()?.get("provenance")
     }
 
-    /// What the entry task's provenance says of the recording.
+    /// What the entry task's provenance says of the recording; the trial is the caller's to read.
     fn review(&self) -> RecordingReview {
         let provenance = self.provenance();
         let recorded = provenance
@@ -1456,7 +1675,7 @@ impl Package {
             })
             .unwrap_or_default();
         let first_decision_evaluated = recorded && !not_evaluated && !application;
-        let run_through = first_decision_evaluated
+        let recording_checked = first_decision_evaluated
             && cross_check.as_deref() == Some(CROSS_CHECK_PASSED)
             && steps_needing_review.is_empty();
         RecordingReview {
@@ -1465,7 +1684,9 @@ impl Package {
             cross_check,
             first_decision_evaluated,
             steps_needing_review,
-            run_through,
+            recording_checked,
+            trial: None,
+            trial_not_read: None,
         }
     }
 
@@ -1704,9 +1925,11 @@ impl Existing {
                     "{pack} is there and {file} gives {package_id} a maintenance role, while \
                      schedule.json holds no rule or held entry of it and maintenance.json no \
                      entry of it for its server: the directory belongs to the pack by {file}. \
-                     Adopt takes such a package with --decide of the class held (its hold beside \
-                     that role) or maintenance (a rule by its trigger, or a maintenance.json \
-                     entry by its uses), never business, which is refused beside that role. \
+                     Adopt takes such a package with a decision of the class held (its hold \
+                     beside that role: --held-reason <text> [--held-reference <text>], or \
+                     --decide) or maintenance (--decide: a rule by its trigger, or a \
+                     maintenance.json entry by its uses), never business, which is refused beside \
+                     that role. \
                      {committed}; then, with it absent, run adopt without --replace, or, with it \
                      committed, run adopt with --replace; {replace}; nothing was written"
                 ),
@@ -1717,8 +1940,9 @@ impl Existing {
                      adoption of it was interrupted after it put that directory in place and \
                      before it wrote the root files, or the directory was put there by hand. \
                      {committed}; then, with it absent, run adopt without --replace with \
-                     --decide, as a first adoption, or, with it committed, run adopt with \
-                     --replace and --decide; {replace}; nothing was written"
+                     --decide or --held-reason, as a first adoption, or, with it committed, run \
+                     adopt with --replace and --decide or --held-reason; {replace}; nothing was \
+                     written"
                 ),
             };
         }
@@ -1799,7 +2023,8 @@ impl Existing {
                  directory with changes, and moves a committed one only to a state directory on \
                  the checkout's volume), so nothing comes before: to finish that adoption, run \
                  adopt again with --replace, this --state-dir and the decision that call was given \
-                 (--decide), which writes one role. To undo it: put {pack} back as it was before \
+                 (--decide, or --held-reason, with --held-reference when that call had one), which \
+                 writes one role. To undo it: put {pack} back as it was before \
                  that call (absent, or as its earlier commit) and restore schedule.json and \
                  maintenance.json with the version control. Nothing was written"
             ),
@@ -1845,6 +2070,18 @@ impl Decision {
             fs::read(path).map_err(|error| invalid("", &format!("{}: {error}", path.display())))?;
         let document = serde_json::from_slice::<Value>(strip_bom(&bytes))
             .map_err(|error| invalid("", &format!("not JSON: {error}")))?;
+        Self::of_document(document, path, schedule)
+    }
+
+    /// The document `document` read from `path`, checked on its own and against the file's pools.
+    /// Workflow #463 S3-4: also a document the call built ([`held_document`]), whose `path` is
+    /// empty, as no file was read.
+    fn of_document(
+        document: Value,
+        path: &Path,
+        schedule: &StandardPackSchedule,
+    ) -> LabResult<Self> {
+        let invalid = |pointer: &str, message: &str| decision_invalid(path, pointer, message);
         let Value::Object(document) = document else {
             return Err(invalid("", "the decision is no JSON object"));
         };
@@ -1975,6 +2212,22 @@ impl Decision {
     fn invalid(&self, pointer: &str, message: &str) -> LabError {
         decision_invalid(&self.path, pointer, message)
     }
+}
+
+/// Workflow #463 S3-4: the decision document `{schema_version, class: "held", held: {reason,
+/// reference?}}` of `--held-reason` and `--held-reference`, which [`Decision::of_document`] reads
+/// as it reads a document given by its path; the texts as given, so that its reader checks them.
+fn held_document(rationale: &str, reference: Option<&str>) -> Value {
+    let mut held = Map::new();
+    held.insert(HELD_REASON.to_owned(), json!(rationale));
+    if let Some(reference) = reference {
+        held.insert(HELD_REFERENCE.to_owned(), json!(reference));
+    }
+    let mut document = Map::new();
+    document.insert(SCHEMA_VERSION.to_owned(), json!(PACK_DECISION_SCHEMA));
+    document.insert("class".to_owned(), json!("held"));
+    document.insert(HELD.to_owned(), Value::Object(held));
+    Value::Object(document)
 }
 
 /// `value`: `"pending"`, or `{fixed_value_milli, origin?}` whose origin, when written, is `pack`.
@@ -2313,7 +2566,9 @@ impl Plan {
             let decision = inputs.decision.ok_or_else(|| {
                 refused(
                     adopt(AdoptProblem::DecisionInvalid).json_pointer(""),
-                    "a first adoption needs --decide <decision.json>".to_owned(),
+                    "a first adoption needs --decide <decision.json>, or --held-reason <text> \
+                     to adopt the package as held"
+                        .to_owned(),
                 )
             })?;
             let rule_id = decision
@@ -3546,6 +3801,9 @@ fn value_wait(rule: &Map<String, Value>, pools: &[ScheduleItem]) -> Option<Value
 /// The check tree and what its checks answered.
 struct Checked {
     tree: PathBuf,
+    /// Workflow #463 S3-5: its game root `installed/<game>/`, the bundle's installed layout the
+    /// check read.
+    installed: PathBuf,
     answer: StandardPackCheckResponse,
     /// The bundle's warnings, which the check of the installed layout does not repeat (the
     /// recognition packages its maintenance declarations leave undeclared).
@@ -3931,11 +4189,13 @@ fn check_tree(inputs: &CheckInputs<'_>) -> LabResult<Checked> {
             copy_tree(&source, &installed.join(&name))?;
         }
     }
-    let (answer, compiled) =
-        check_standard_pack_root_with_catalog(StandardPackCheckRequest { root: installed })
-            .map_err(|error| composed(error, &tree))?;
+    let (answer, compiled) = check_standard_pack_root_with_catalog(StandardPackCheckRequest {
+        root: installed.clone(),
+    })
+    .map_err(|error| composed(error, &tree))?;
     Ok(Checked {
         tree,
+        installed,
         answer,
         bundle_warnings: bundle.warnings,
         compiled,
@@ -4178,8 +4438,9 @@ fn unchanged(
         format!(
             "written or moved before: {listed:?}; nothing is removed: compare with the version \
              control; move the root .part files this call wrote out of the checkout; {}; then run \
-             adopt again with --replace and this call's --decide, if any, which reads the root \
-             files as they are now",
+             adopt again with --replace and this call's decision (--decide, or --held-reason, with \
+             --held-reference when this call had one), if any, which reads the root files as they \
+             are now",
             new_directory_step(pack, "this call")
         )
     };
@@ -4203,15 +4464,40 @@ fn noted(mut error: LabError, note: &str) -> LabError {
 }
 
 /// The repository's own items adopt does not write, each by its path when the checkout holds it.
-fn next_items(repo: &Path, game: &str) -> Vec<String> {
+/// Workflow #463 S3-12: then, when the adopted rule `unvalued_rule` has no value yet,
+/// `ours/model/bindings.json` with the two ways its value is registered there.
+fn next_items(repo: &Path, game: &str, unvalued_rule: Option<&str>) -> Vec<AdoptNext> {
+    let item = |path: String| AdoptNext {
+        path,
+        fixed_value: None,
+    };
     let mut next = Vec::new();
     if repo.join(REGRESSION_DIRECTORY).is_dir() {
-        next.push(format!("{REGRESSION_DIRECTORY}/{game}/"));
+        next.push(item(format!("{REGRESSION_DIRECTORY}/{game}/")));
     }
     for file in NEXT_FILES {
         if repo.join(file).is_file() {
-            next.push(file.to_owned());
+            next.push(item(file.to_owned()));
         }
+    }
+    if let Some(rule_id) = unvalued_rule {
+        next.push(AdoptNext {
+            path: BINDINGS_FILE.to_owned(),
+            fixed_value: Some(NextFixedValue {
+                rule_id: rule_id.to_owned(),
+                value_binding: NextValueBinding {
+                    value: String::new(),
+                    file: STANDARD_PACK_SCHEDULE_FILE.to_owned(),
+                    rule_id: rule_id.to_owned(),
+                    path: format!("/{SCHEDULE_RULE_FIXED_VALUE_MEMBER}"),
+                },
+                hand_entry: NextHandEntry {
+                    rule_id: rule_id.to_owned(),
+                    status: String::new(),
+                    reference: String::new(),
+                },
+            }),
+        });
     }
     next
 }
@@ -4496,17 +4782,6 @@ fn bounded_text(text: &str) -> bool {
 
 fn text_value<'a>(outcome: &'a Outcome, key: &str) -> Option<&'a str> {
     outcome.value(key).and_then(Value::as_str)
-}
-
-/// The outcome a Lab error carries in its details, else the outcome of its code.
-fn cause_of(error: &LabError) -> Outcome {
-    error
-        .details
-        .as_ref()
-        .and_then(|details| details.get("outcome"))
-        .and_then(|outcome| serde_json::from_value::<OutcomeEnvelope>(outcome.clone()).ok())
-        .map(OutcomeEnvelope::into_outcome)
-        .unwrap_or_else(|| Outcome::relayed(&error.code))
 }
 
 fn adopt(problem: AdoptProblem) -> Outcome {

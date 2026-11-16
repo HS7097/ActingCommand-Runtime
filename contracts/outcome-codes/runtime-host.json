@@ -111,11 +111,12 @@
         "request_id": "optional"
       },
       "review": "settled",
-      "status": "active",
+      "status": "retired",
       "since": "0.11.6",
-      "description": "A held start (actingd --install-held) received no release before its deadline; the transition fails with admission closed and the start ends with it. The operation is install_transition.",
+      "retired_in": "0.12.63",
+      "description": "Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path that emitted this code; a record that carries it stays readable. Was: A held start (actingd --install-held) received no release before its deadline; the transition fails with admission closed and the start ends with it. The operation is install_transition.",
       "common_causes": "The installer stopped, timed out or lost its connection before it released the new Runtime.",
-      "handling": "Let the installer finish or roll back; the previous Runtime is started again by the installer or the watchdog."
+      "handling": "None in 0.12.63 and later: the code is no longer emitted."
     },
     "install_startup_shut_down": {
       "category": "info",
@@ -131,11 +132,12 @@
         "request_id": "optional"
       },
       "review": "settled",
-      "status": "active",
+      "status": "retired",
       "since": "0.11.6",
-      "description": "A held start (actingd --install-held) ended because a shutdown request for its owner was accepted before it was released; the operation is install_transition. It is a requested stop: actingd ends with runtime_stopped and this code as its caused_by link, the transition reads failed with this failure_code, and the watchdog takes the close as formal and never restarts it.",
+      "retired_in": "0.12.63",
+      "description": "Retired (Workflow #434 LAB-6S4a): actingd's held start went, and a shutdown request sent while a start prepares is refused runtime_shutdown_denied (runtime_busy), so no accepted shutdown can stop a start and nothing emits this code; a record that carries it stays readable. Was: A held start (actingd --install-held) ended because a shutdown request for its owner was accepted before it was released; the operation is install_transition. It is a requested stop: actingd ends with runtime_stopped and this code as its caused_by link, the transition reads failed with this failure_code, and the watchdog takes the close as formal and never restarts it.",
       "common_causes": "An installer, the console or actingctl request-shutdown stopped an owner that waited for its release.",
-      "handling": "None is needed; start the Runtime again, or let the installer start it, when it should run."
+      "handling": "None in 0.12.63 and later: the code is no longer emitted."
     },
     "install_startup_stopped": {
       "category": "error",
@@ -401,11 +403,12 @@
         "request_id": "optional"
       },
       "review": "settled",
-      "status": "active",
+      "status": "retired",
       "since": "0.11.6",
-      "description": "A released start did not finish preparing before its release deadline; the transition fails with admission closed and the start ends with it. The operation is install_transition.",
+      "retired_in": "0.12.63",
+      "description": "Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path that emitted this code; a record that carries it stays readable. Was: A released start did not finish preparing before its release deadline; the transition fails with admission closed and the start ends with it. The operation is install_transition.",
       "common_causes": "A slow preparation, such as the startup recovery of a long ledger or slow devices, against a short release timeout.",
-      "handling": "Release again with a longer timeout; check the start's log for the slow step."
+      "handling": "None in 0.12.63 and later: the code is no longer emitted."
     },
     "strategic_evidence_unavailable": {
       "category": "error",
@@ -826,11 +829,12 @@
         "request_id": "optional"
       },
       "review": "settled",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "An install start (a held start released by the installer) went on although the daemon-start preparation self-check of this instance (instance_id) failed, because at least one other prepared instance passed (INST-1). The instance stays unavailable, as after a failed self-check at a normal start, until a later self-check passes.",
+      "retired_in": "0.12.63",
+      "description": "Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path that emitted this code; a record that carries it stays readable. Was: An install start (a held start released by the installer) went on although the daemon-start preparation self-check of this instance (instance_id) failed, because at least one other prepared instance passed (INST-1). The instance stays unavailable, as after a failed self-check at a normal start, until a later self-check passes.",
       "common_causes": "The instance's device did not answer while the new build prepared it.",
-      "handling": "Bring the device back, then run actingctl selfcheck for the instance."
+      "handling": "None in 0.12.63 and later: the code is no longer emitted."
     },
     "instance_resources_fenced": {
       "category": "error",
@@ -1683,7 +1687,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The Runtime host reports application foreground unknown.",
+      "description": "The Runtime host reports application foreground unknown. Workflow #469 V0: it is on the policy's always-severe list (is_severe_policy_failure), so a scheduled run that ends with it pauses its task on the application at the first failure, whatever its class says.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -1923,9 +1927,10 @@
         "request_id": "optional"
       },
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "The Runtime host reports approval replay conflict.",
+      "retired_in": "0.12.63",
+      "description": "Retired (Workflow #434 LAB-6S4a): RecordApprovalDecision went; approvals come only from the configuration's transcription, which never emits this code; a record that carries it stays readable. Was: The Runtime host reports approval replay conflict.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -1943,9 +1948,10 @@
         "request_id": "optional"
       },
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "The Runtime host reports approval replay payload mismatch.",
+      "retired_in": "0.12.63",
+      "description": "Retired (Workflow #434 LAB-6S4a): RecordApprovalDecision went; approvals come only from the configuration's transcription, which never emits this code; a record that carries it stays readable. Was: The Runtime host reports approval replay payload mismatch.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -6339,6 +6345,8 @@
         "elapsed_ms": "optional",
         "exit_code": "optional",
         "process_started": "optional",
+        "stage": "optional",
+        "device_category": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
@@ -6348,7 +6356,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The Runtime host reports emulator control failed.",
+      "description": "The Runtime host reports emulator control failed. Workflow #469 V0 (since 0.12.62): stage, when present, is the step of the emulator control the failure arose at, and device_category the device diagnostic's category. Workflow #469 H3 (since 0.12.62): every provider control failure built under this code carries stage, the step its primary detail records (a MuMuManager step: the control command's exit, error envelope or launch error; the tool's run, timeout or path; an info reader stage; without a device diagnostic the default mumu_manager_control), and device_category when the failure carries a device diagnostic. The receipt and a settled timeout's cause carry both; the ledger's runtime.failed record gains only device_category, its stage stays the lifecycle stage runtime_lifecycle_operation_cleanup, so a reader who needs the device stage reads the receipt. The cause a failed restart wraps is a newly built outcome and carries neither.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -7595,9 +7603,10 @@
         "request_id": "optional"
       },
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "The Runtime host reports governance authority required.",
+      "retired_in": "0.12.63",
+      "description": "Retired (Workflow #434 LAB-6S4a): DeclareGovernanceIdentity and RecordApprovalDecision went, and with them every path that emitted this code; a record that carries it stays readable. Was: The Runtime host reports governance authority required.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -7615,9 +7624,10 @@
         "request_id": "optional"
       },
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "The Runtime host reports governance connection state conflict.",
+      "retired_in": "0.12.63",
+      "description": "Retired (Workflow #434 LAB-6S4a): DeclareGovernanceIdentity and RecordApprovalDecision went, and with them every path that emitted this code; a record that carries it stays readable. Was: The Runtime host reports governance connection state conflict.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -7795,9 +7805,10 @@
         "request_id": "optional"
       },
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "The Runtime host reports install abort state invalid.",
+      "retired_in": "0.12.63",
+      "description": "Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path that emitted this code; a record that carries it stays readable. Was: The Runtime host reports install abort state invalid.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -7815,9 +7826,10 @@
         "request_id": "optional"
       },
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "The Runtime host reports install fact clock overflow.",
+      "retired_in": "0.12.63",
+      "description": "Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path that emitted this code; a record that carries it stays readable. Was: The Runtime host reports install fact clock overflow.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -7835,9 +7847,10 @@
         "request_id": "optional"
       },
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "The Runtime host reports install fact field invalid.",
+      "retired_in": "0.12.63",
+      "description": "Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path that emitted this code; a record that carries it stays readable. Was: The Runtime host reports install fact field invalid.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -7855,9 +7868,10 @@
         "request_id": "optional"
       },
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "The Runtime host reports install identity encode failed.",
+      "retired_in": "0.12.63",
+      "description": "Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path that emitted this code; a record that carries it stays readable. Was: The Runtime host reports install identity encode failed.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -7875,9 +7889,10 @@
         "request_id": "optional"
       },
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "The Runtime host reports install identity required.",
+      "retired_in": "0.12.63",
+      "description": "Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path that emitted this code; a record that carries it stays readable. Was: The Runtime host reports install identity required.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -7895,9 +7910,10 @@
         "request_id": "optional"
       },
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "The Runtime host reports install not drained.",
+      "retired_in": "0.12.63",
+      "description": "Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path that emitted this code; a record that carries it stays readable. Was: The Runtime host reports install not drained.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -7915,9 +7931,10 @@
         "request_id": "optional"
       },
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "The Runtime host reports install owner mismatch.",
+      "retired_in": "0.12.63",
+      "description": "Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path that emitted this code; a record that carries it stays readable. Was: The Runtime host reports install owner mismatch.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -7935,9 +7952,10 @@
         "request_id": "optional"
       },
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "The Runtime host reports install owner stopping.",
+      "retired_in": "0.12.63",
+      "description": "Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path that emitted this code; a record that carries it stays readable. Was: The Runtime host reports install owner stopping.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -7955,9 +7973,10 @@
         "request_id": "optional"
       },
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "The Runtime host reports install pause scope mismatch.",
+      "retired_in": "0.12.63",
+      "description": "Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path that emitted this code; a record that carries it stays readable. Was: The Runtime host reports install pause scope mismatch.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -7975,9 +7994,10 @@
         "request_id": "optional"
       },
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "The Runtime host reports install preparation not authorized.",
+      "retired_in": "0.12.63",
+      "description": "Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path that emitted this code; a record that carries it stays readable. Was: The Runtime host reports install preparation not authorized.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -7995,11 +8015,12 @@
         "request_id": "optional"
       },
       "review": "settled",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "An install start (a held start released by the installer) whose daemon-start preparation self-checks all failed: at least one instance was prepared and none passed, so the new build reached no device. The start ends under this code during install_transition and the transition fails (INST-1).",
+      "retired_in": "0.12.63",
+      "description": "Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path that emitted this code; a record that carries it stays readable. Was: An install start (a held start released by the installer) whose daemon-start preparation self-checks all failed: at least one instance was prepared and none passed, so the new build reached no device. The start ends under this code during install_transition and the transition fails (INST-1).",
       "common_causes": "Every device stopped or unreachable while the new build prepared, or a new build that cannot capture or touch on this machine.",
-      "handling": "Bring the devices back and run the installation again; when they answer and it still fails, roll back to the previous build."
+      "handling": "None in 0.12.63 and later: the code is no longer emitted."
     },
     "install_previous_drain_unverified": {
       "category": "error",
@@ -8015,9 +8036,10 @@
         "request_id": "optional"
       },
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "The Runtime host reports install previous drain unverified.",
+      "retired_in": "0.12.63",
+      "description": "Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path that emitted this code; a record that carries it stays readable. Was: The Runtime host reports install previous drain unverified.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -8035,9 +8057,10 @@
         "request_id": "optional"
       },
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "The Runtime host reports install previous owner invalid.",
+      "retired_in": "0.12.63",
+      "description": "Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path that emitted this code; a record that carries it stays readable. Was: The Runtime host reports install previous owner invalid.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -8055,9 +8078,10 @@
         "request_id": "optional"
       },
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "The Runtime host reports install previous pause identity mismatch.",
+      "retired_in": "0.12.63",
+      "description": "Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path that emitted this code; a record that carries it stays readable. Was: The Runtime host reports install previous pause identity mismatch.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -8075,9 +8099,10 @@
         "request_id": "optional"
       },
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "The Runtime host reports install previous pause identity missing.",
+      "retired_in": "0.12.63",
+      "description": "Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path that emitted this code; a record that carries it stays readable. Was: The Runtime host reports install previous pause identity missing.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -8095,9 +8120,10 @@
         "request_id": "optional"
       },
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "The Runtime host reports install previous pause not settled.",
+      "retired_in": "0.12.63",
+      "description": "Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path that emitted this code; a record that carries it stays readable. Was: The Runtime host reports install previous pause not settled.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -8115,9 +8141,10 @@
         "request_id": "optional"
       },
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "The Runtime host reports install previous pause revision invalid.",
+      "retired_in": "0.12.63",
+      "description": "Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path that emitted this code; a record that carries it stays readable. Was: The Runtime host reports install previous pause revision invalid.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -8135,9 +8162,10 @@
         "request_id": "optional"
       },
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "The Runtime host reports install previous pause scope invalid.",
+      "retired_in": "0.12.63",
+      "description": "Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path that emitted this code; a record that carries it stays readable. Was: The Runtime host reports install previous pause scope invalid.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -8155,9 +8183,10 @@
         "request_id": "optional"
       },
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "The Runtime host reports install previous pause time invalid.",
+      "retired_in": "0.12.63",
+      "description": "Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path that emitted this code; a record that carries it stays readable. Was: The Runtime host reports install previous pause time invalid.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -8175,9 +8204,10 @@
         "request_id": "optional"
       },
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "The Runtime host reports install previous pauses invalid.",
+      "retired_in": "0.12.63",
+      "description": "Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path that emitted this code; a record that carries it stays readable. Was: The Runtime host reports install previous pauses invalid.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -8195,9 +8225,10 @@
         "request_id": "optional"
       },
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "The Runtime host reports install previous pauses missing.",
+      "retired_in": "0.12.63",
+      "description": "Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path that emitted this code; a record that carries it stays readable. Was: The Runtime host reports install previous pauses missing.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -8215,9 +8246,10 @@
         "request_id": "optional"
       },
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "The Runtime host reports install previous shutdown unverified.",
+      "retired_in": "0.12.63",
+      "description": "Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path that emitted this code; a record that carries it stays readable. Was: The Runtime host reports install previous shutdown unverified.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -8235,9 +8267,10 @@
         "request_id": "optional"
       },
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "The Runtime host reports install previous transition invalid.",
+      "retired_in": "0.12.63",
+      "description": "Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path that emitted this code; a record that carries it stays readable. Was: The Runtime host reports install previous transition invalid.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -8255,9 +8288,10 @@
         "request_id": "optional"
       },
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "The Runtime host reports install previous transition missing.",
+      "retired_in": "0.12.63",
+      "description": "Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path that emitted this code; a record that carries it stays readable. Was: The Runtime host reports install previous transition missing.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -8275,9 +8309,10 @@
         "request_id": "optional"
       },
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "The Runtime host reports install previous verification timeout.",
+      "retired_in": "0.12.63",
+      "description": "Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path that emitted this code; a record that carries it stays readable. Was: The Runtime host reports install previous verification timeout.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -8295,9 +8330,10 @@
         "request_id": "optional"
       },
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "The Runtime host reports install release state invalid.",
+      "retired_in": "0.12.63",
+      "description": "Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path that emitted this code; a record that carries it stays readable. Was: The Runtime host reports install release state invalid.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -8315,9 +8351,10 @@
         "request_id": "optional"
       },
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "The Runtime host reports install ticket mismatch.",
+      "retired_in": "0.12.63",
+      "description": "Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path that emitted this code; a record that carries it stays readable. Was: The Runtime host reports install ticket mismatch.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -8335,9 +8372,10 @@
         "request_id": "optional"
       },
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "The Runtime host reports install transition conflict.",
+      "retired_in": "0.12.63",
+      "description": "Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path that emitted this code; a record that carries it stays readable. Was: The Runtime host reports install transition conflict.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -8355,9 +8393,10 @@
         "request_id": "optional"
       },
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "The Runtime host reports install transition unknown.",
+      "retired_in": "0.12.63",
+      "description": "Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path that emitted this code; a record that carries it stays readable. Was: The Runtime host reports install transition unknown.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -10148,8 +10187,8 @@
       "status": "active",
       "since": "0.12.0",
       "description": "The Runtime host reports nemu input capability unsupported.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "common_causes": "A key or a text sent to an instance whose input is the emulator's own interface (touch_backend nemu_ipc), which performs taps, long taps, swipes, the segmented drags and the reset, and no key and no text (the instance's capability table says input.key and input.text unsupported).",
+      "handling": "Nothing was sent. Press the screen's own control instead: a tap, or do with capture on the package's element; the Runtime has no other way to send a key on such an instance (its recovery ladder sends none: a recovery package's presses, an application restart, an emulator restart). An instance whose touch_backend is maatouch sends keys and text (Workflow #434 LW-1)."
     },
     "nemu_input_deadline_overflow": {
       "category": "error",
@@ -12252,6 +12291,30 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "policy_break_in_unread": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "break_in_problem": "required",
+        "failure_code": "optional",
+        "instance_id": "required",
+        "task_id": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.63",
+      "description": "Workflow #463 U1b fix rounds 2 and 3 (contracts/policy-suspension.md, \"Only during a package's break-in\"): the break-in of a scheduled run of a linear_steps package could not be established before the run executed, for its pair (task_id, the catalog task; instance_id, the instance alias); break_in_problem says which half: content_unmeasured, the package's content was not measured when the run was prepared (the containment could not measure the package, or the Runtime clock, scheduling.suspension.lift_check_min_interval_ms or the lift checks' memory could not be read), or record_unread, the pair's break-in could not be judged (the decision memory does not hold the run's dispatch, or the two scheduling.suspension.break_in_ keys or the Runtime clock could not be read). The run is not ended for it: it goes on as a run outside its break-in, so a linear step's closing decision that finds a screen the package never recorded ends it with page_confirmation_failed (confirmation_problem unrecorded_screen) and the pair is not paused at the first occurrence; a run whose content was not measured counts in no break-in. Recorded once per such run as a Warning runtime.failed with the run's links (operation run_scheduled_contained_task); failure_code is the failure's code when the catalog registers it, and the failure is the caused_by link. It refuses nothing and ends no process.",
+      "common_causes": "content_unmeasured: a package being replaced or unreadable while the run was prepared (caused_by the containment's code), or a defect of the Runtime's own state (the lift checks' memory left broken by another thread, a clock or a configuration value that could not be read). record_unread: a defect of the Runtime's own state (a dispatch the decision memory does not hold, a clock or a configuration value that could not be read); it does not come from the package or the device.",
+      "handling": "Report it with break_in_problem, the caused_by link and the run: the run itself was judged as outside its break-in. A later run measures the content and reads the break-in again; if content_unmeasured repeats with a containment code, check the package's files at its location; if either repeats without one, the Runtime's state is broken and a restart of the Runtime is due."
+    },
     "policy_budget_counter_overflow": {
       "category": "error",
       "ladder_class": "none",
@@ -13847,6 +13910,7 @@
       "layer": "host",
       "uncertain": false,
       "values": {
+        "failure_code": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
@@ -13856,7 +13920,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The Runtime host reports policy retry backoff active.",
+      "description": "The Runtime host reports policy retry backoff active. Workflow #469 V0 (since 0.12.62): failure_code, when present, is the code of the failure the task's backoff follows.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -14767,6 +14831,8 @@
       "layer": "host",
       "uncertain": false,
       "values": {
+        "pause_cause": "optional",
+        "failure_code": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
@@ -14776,7 +14842,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The Runtime host reports policy task paused.",
+      "description": "The Runtime host reports policy task paused. Workflow #469 V0 (since 0.12.62): pause_cause, when present, says why the failure paused the task, and failure_code is that failure's code.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -16476,7 +16542,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The Runtime host reports recovery readiness adb unconfirmed.",
+      "description": "The Runtime host reports recovery readiness adb unconfirmed. Workflow #469 V0: it is on the policy's always-severe list (is_severe_policy_failure), so a scheduled run that ends with it pauses its task on the application at the first failure, whatever its class says.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -19942,7 +20008,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A stuck-recovery rung ended because an install drain began while the ladder held its instance.",
+      "description": "A stuck-recovery rung ended because the Runtime's admission was stopping at the ladder's holding check while the ladder held its instance: a Runtime shutdown was accepted after the check read the shutdown request and before it read the admission (Workflow #434 LAB-6S4a, 0.12.63: the install drain that raised it until 0.12.62 went with InstallTransition; a shutdown the check sees first is recovery_ladder_shutdown_requested).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -20072,11 +20138,12 @@
         "request_id": "optional"
       },
       "review": "settled",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "An install transition's drain did not finish before its deadline: the transition aborts and admission reopens on the old owner. The operation is install_transition; the status reports phase aborted with this failure code.",
+      "retired_in": "0.12.63",
+      "description": "Retired (Workflow #434 LAB-6S4a): The installer's transition (InstallTransition, install-control [0, 0]) and actingd's held start went, and with them every path that emitted this code; a record that carries it stays readable. Was: An install transition's drain did not finish before its deadline: the transition aborts and admission reopens on the old owner. The operation is install_transition; the status reports phase aborted with this failure code.",
       "common_causes": "Work in flight that takes longer than the drain's timeout.",
-      "handling": "Wait until running work finishes, or begin the transition again with a longer timeout."
+      "handling": "None in 0.12.63 and later: the code is no longer emitted."
     },
     "dispatch_paused_global": {
       "category": "info",
@@ -20504,9 +20571,10 @@
         "transition_id": "required"
       },
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "UpgradeState enter succeeded (#389 U-4): the Runtime closed admission, drained, recorded its scheduling pause, accepted its own close while the requesting connection was still open, and closes with the upgrade-state marker on its owner-journal close record.",
+      "retired_in": "0.12.63",
+      "description": "Retired (Workflow #434 LAB-6S4a): UpgradeState and UpgradeStateStatus went; they answered not_implemented and never emitted this code. Was: UpgradeState enter succeeded (#389 U-4): the Runtime closed admission, drained, recorded its scheduling pause, accepted its own close while the requesting connection was still open, and closes with the upgrade-state marker on its owner-journal close record.",
       "common_causes": "acsetup entered the upgrade state before it replaces or restarts the Runtime.",
       "handling": "Nothing to repair. The installer goes on; if it fails after this point, the watchdog, when its task is registered, starts the selected generation again once the installer has released install\\writer.lock."
     },
@@ -20520,9 +20588,10 @@
         "transition_id": "required"
       },
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "UpgradeState cancel took effect while the transition was still draining: admission reopened, the transition is recorded as aborted and the Runtime keeps running.",
+      "retired_in": "0.12.63",
+      "description": "Retired (Workflow #434 LAB-6S4a): UpgradeState and UpgradeStateStatus went; they answered not_implemented and never emitted this code. Was: UpgradeState cancel took effect while the transition was still draining: admission reopened, the transition is recorded as aborted and the Runtime keeps running.",
       "common_causes": "An interrupted installer run again, or a person or a script withdrew the upgrade.",
       "handling": "Nothing to repair."
     },
@@ -20536,9 +20605,10 @@
         "transition_id": "required"
       },
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "UpgradeState leave succeeded: the Runtime that acsetup started with --install-held prepared its provider, restored the pause recorded by the transition and opened admission.",
+      "retired_in": "0.12.63",
+      "description": "Retired (Workflow #434 LAB-6S4a): UpgradeState and UpgradeStateStatus went; they answered not_implemented and never emitted this code. Was: UpgradeState leave succeeded: the Runtime that acsetup started with --install-held prepared its provider, restored the pause recorded by the transition and opened admission.",
       "common_causes": "acsetup released the Runtime it started held, after it checked the process id and the request id.",
       "handling": "Nothing to repair."
     },
@@ -20557,9 +20627,10 @@
         "request_id": "optional"
       },
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "The connection that sent UpgradeState enter closed before the Runtime accepted its own close. The Runtime handles it as cancel: admission reopens, the transition is recorded as aborted with this code as its failure_code, and the Runtime keeps running. No request receives this code as its reply.",
+      "retired_in": "0.12.63",
+      "description": "Retired (Workflow #434 LAB-6S4a): UpgradeState and UpgradeStateStatus went; they answered not_implemented and never emitted this code. Was: The connection that sent UpgradeState enter closed before the Runtime accepted its own close. The Runtime handles it as cancel: admission reopens, the transition is recorded as aborted with this code as its failure_code, and the Runtime keeps running. No request receives this code as its reply.",
       "common_causes": "The installer process ended or was killed while the Runtime was draining.",
       "handling": "Run the installer again; the Runtime is unchanged and running."
     },
@@ -20578,9 +20649,10 @@
         "request_id": "optional"
       },
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "The reply to an UpgradeState enter that was still waiting for the drain when an UpgradeState cancel withdrew the transition. The Runtime keeps running.",
+      "retired_in": "0.12.63",
+      "description": "Retired (Workflow #434 LAB-6S4a): UpgradeState and UpgradeStateStatus went; they answered not_implemented and never emitted this code. Was: The reply to an UpgradeState enter that was still waiting for the drain when an UpgradeState cancel withdrew the transition. The Runtime keeps running.",
       "common_causes": "A second installer run or a script sent cancel during the drain.",
       "handling": "Nothing to repair; enter the upgrade state again when the upgrade should go on."
     },
@@ -21276,7 +21348,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.28",
-      "description": "A shared interrupt page whose interrupts.json entry declares limit_cause environment was seen once more than its max_per_run (Workflow #411 B43): the standard pack's data says the page keeps coming back because of the game's network or servers, not because the pack no longer matches. The run ends with no further input. A scheduled run's failure is rerun only: it never accumulates toward a pause of its task pair; the ladder configuration decides what follows.",
+      "description": "A shared interrupt page whose interrupts.json entry declares limit_cause environment was seen once more than its max_per_run (Workflow #411 B43): the standard pack's data says the page keeps coming back because of the game's network or servers, not because the pack no longer matches. The run ends with no further input. A scheduled run's failure is rerun only: it never accumulates toward a pause of its task pair; the ladder configuration decides what follows. Workflow #469 V0: by this code's name, the failure identity takes it out of the contained_task_interrupt_ prefix that accumulates (its identity still names the standard pack's data, but it is rerun only, in every scope); no default trigger item reads its class (budget_or_permission).",
       "common_causes": "The game's network or its servers stayed unavailable (for example during a maintenance) while the run was handling the page.",
       "handling": "TBD"
     },
@@ -21899,7 +21971,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "Performance pacing ended a policy run to be rerun: it reached its wall-clock ceiling after pacing lengthened it (yield_cause wall_ceiling) or was preempted while held (preempted). Its cancellation reason is PerformanceYield; the run settles as a condition termination and is owed a rerun (Workflow #385 PERF §7.4). Registered by SH-1; P-k and P-h emit it.",
+      "description": "Performance pacing ended a policy run to be rerun: it reached its wall-clock ceiling after pacing lengthened it (yield_cause wall_ceiling) or was preempted while held (preempted). Its cancellation reason is PerformanceYield; the run settles as a condition termination and is owed a rerun (Workflow #385 PERF §7.4). Registered by SH-1 for P-k and P-h to emit. Workflow #469 V0: not raised yet: no site of this build raises it, since no run's control asks for a performance yield (one that held it would be invalid state, contained_task_cancellation_state_invalid); its category is decided before 0.13.0.",
       "common_causes": "The host stayed slow long enough for a lengthened run to reach its ceiling, or the instance was paused by its share while the run was held.",
       "handling": "Nothing to repair for one occurrence; the run is rerun."
     },
@@ -21922,7 +21994,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A policy run was held at its pace checkpoint longer than the hold limit (timeout_ms) and ended; its cancellation reason is PerformanceYield, it is owed a rerun, and the recovery ladder may start once performance releases the instance (Workflow #385 PERF §7.4, M387 §3.7). Registered by SH-1; P-h emits it.",
+      "description": "A policy run was held at its pace checkpoint longer than the hold limit (timeout_ms) and ended; its cancellation reason is PerformanceYield, it is owed a rerun, and the recovery ladder may start once performance releases the instance (Workflow #385 PERF §7.4, M387 §3.7). Registered by SH-1 for P-h to emit. Workflow #469 V0: not raised yet: no site of this build raises it, since no run's control asks for a performance yield (one that held it would be invalid state, contained_task_cancellation_state_invalid); its category is decided before 0.13.0.",
       "common_causes": "The host stayed in the deepest pacing stage longer than the hold limit.",
       "handling": "Nothing to repair for one occurrence; the run is rerun."
     },
@@ -21964,7 +22036,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A run, or a climbing recovery ladder, ended because the handset's wired device link left device (#398 R1 RD-2, model-398 section 4.4, 4.5): the device failure the run met is its caused_by link and no input follows. The default recovery_ladder.exclude_codes lists it: a cable is not something the ladder can fix.",
+      "description": "A run, or a climbing recovery ladder, ended because the handset's wired device link left device (#398 R1 RD-2, model-398 section 4.4, 4.5): the device failure the run met is its caused_by link and no input follows. The default recovery_ladder.exclude_codes lists it: a cable is not something the ladder can fix. Workflow #469 V0: being excluded, it starts no ladder at any stage and is not counted toward the warning burst, whatever its class (environment_fault); a climbing ladder's rung that ends with it ends the climb interrupted, by this code's name (is_hold_interruption).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -23227,7 +23299,7 @@
     },
     "contained_task_application_update_required": {
       "category": "warning",
-      "ladder_class": "none",
+      "ladder_class": "planned_stop",
       "owner": "runtime-host",
       "layer": "host",
       "uncertain": false,
@@ -23242,7 +23314,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.30",
-      "description": "UPD-1 (contracts/package-reference.md, Shared interrupt pages): a shared interrupt page whose interrupts.json entry declares result application_update_required (page_id) ended the run after its handler (then end_run), or after its handler failed short of fatal (UPD-1 fix round 1: the failure is linked as related): the game says its client must be updated. The run ends with no further input, and before its terminal the Runtime records the instance fact health.application.update_required true, which holds every other task of the instance until a store_update package's run succeeds there. A scheduled run ends by a condition under the default scheduling.rerun.condition_codes (no streak, counts given back, its rerun owed after the update); it never accumulates toward a pause. Its ladder class is none, so no default trigger opens a recovery ladder; a ladder rung's package run that ends with it stops the ladder (recovery_ladder_interrupted). A startup package that ends with it is a runtime.failed warning.",
+      "description": "UPD-1 (contracts/package-reference.md, Shared interrupt pages): a shared interrupt page whose interrupts.json entry declares result application_update_required (page_id) ended the run after its handler (then end_run), or after its handler failed short of fatal (UPD-1 fix round 1: the failure is linked as related): the game says its client must be updated. The run ends with no further input, and before its terminal the Runtime records the instance fact health.application.update_required true, which holds every other task of the instance until a store_update package's run succeeds there. A scheduled run ends by a condition under the default scheduling.rerun.condition_codes (no streak, counts given back, its rerun owed after the update); it never accumulates toward a pause. Its ladder class is planned_stop (#469 D4a, since 0.12.62): the package declares the page and the run stops on purpose, so the errors view's run-recovery grouping counts its record as no failure. No default trigger item matches it, so no default trigger opens a recovery ladder; a ladder rung's package run that ends with it stops the ladder (recovery_ladder_interrupted), by its code. A startup package that ends with it is a runtime.failed warning.",
       "common_causes": "The game released a client version that the installed one may no longer connect with.",
       "handling": "None when the game root's schedule.json has a rule for its store_update package: that rule runs on the fact and its success clears the fact. Otherwise update the client by hand and run the store update package directly (ac_run_pack); its success clears the fact."
     },
@@ -23708,6 +23780,117 @@
       "description": "The switch that brings a member of a device group of several to the front before its run failed at one of its steps (Workflow #437 MAPP-2a, contracts/device-group.md \"The switch before a run\"): alias is the member to run, application_switch_step the step, failure_code the step's own code and application_id the package the step concerned (the member's own for foreground_read, startup_package and lease_renewal, the stopped member's for stop). The step's failure is its cause. The switch reads the package in front through the member's registration, stops another member's application under the run's key with that member's records, and runs the member's startup package on the run's key, which it hands back to the run unrenewed; since 0.12.60 (MAPP-2d) the run then renews its lease to its own response deadline and the heartbeat reserve before its task (step lease_renewal). In 0.12.59 the switch has no caller: no run goes through it and nothing settles a run with this code; an instance alone on its device never meets it.",
       "common_causes": "Several applications declared on one device (device_group in instances[]): the device's ADB query did not answer, the application in front could not be force-stopped, the member's startup package did not reach its home page, the run's key had too little time left for the startup package to start, or the run's lease was lost before its renewal after the startup package.",
       "handling": "Read the step and its cause. For foreground_read, check the emulator's ADB connection. For stop, check the stopped member's application and its records. For startup_package, run the member's startup package by hand and check that it reaches its home page within its response deadline. For lease_renewal, read the lease's records (actingctl status shows the device's holder): the member's application is at its home and the task is tried again after the member's switch cooldown."
+    },
+    "device_held_for_member_close": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "alias": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.67",
+      "description": "A request of a member of a device group of several that asks for the device was refused because another member of the device is fenced for resources of its own whose state could not be confirmed (a close, an ADB check's clean-up or a contained failure left them so; Workflow #437 G1, contracts/device-group.md \"A failure stays where it belongs\"; Workflow #403): alias is that fenced member. The device is held for it and given to no other member until a preparation of that member whose self-check passes lifts its fence. The request asked for the device at once or as a person's or a client's work: a client's AcquireLease, a Lab operation, a policy dispatch admitted in the same moment, a direct run, an input or application command, a self-check, a resume, a backend switch (as the cause of backend_switch_refused instance_busy), or the member's own connection preparation at the start (recorded once as that preparation's failure, which leaves the member unavailable; since the G1 fix rounds the lease sweep queues that preparation once the fence is lifted, on an idle device (no lease, no takeover cooldown, no queued entry eligible now), as a self-check claim of the Runtime's own that the device's worker makes on its key). It is refused with scheduler.denied under the request, projected as lease_busy; nothing was granted and nothing ran. A claim of the member that already waited in the device's queue, a client's QueueLease and the Runtime's own routine and internal claims (a ladder, a startup package, an autostart) wait in their places instead, and are granted once the fence is lifted; the start preparation the lease sweep queues is a self-check claim, of the operator's class whoever asks for it, so asked while the device is held it is refused at once with this code and its member stays owed; so does an operator's claim that met the device's admission guard taken, and when its wait ends while the device is still held, its lease_queue_expired names this code as its cause. A fence whose close was refused before it began and then confirmed holds nothing of the kind, nor does a fence whose resources were confirmed. An instance alone on its device, the fenced member itself and a member whose own fence holds the device too never meet it.",
+      "common_causes": "Several applications declared on one device (device_group in instances[]), and the close of another application's session could not be confirmed, so that application is fenced: its fence waits for its ladder, its recheck or a person.",
+      "handling": "Nothing was performed. Lift the fence of the member alias names: run its self-check (actingctl selfcheck), or resume it; actingctl status shows its resource_fence, and each held member's device_held. Then ask again."
+    },
+    "run_variable_undeclared": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "package_id": "required",
+        "variable_name": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.68",
+      "description": "A direct run (RunContainedTask; actinglab run start --variable, standard-pack trial --variable) gives a value under the name variable_name, and its package package_id declares no variable of that name (Workflow #463 S3-8, contracts/runtime-interface.md \"The variable values of a contained run\"). Denied in the run's preparation, after its package was read and before any record, claim or lease: nothing ran.",
+      "common_causes": "A name written otherwise than the package's control.json declares it, or a value meant for another package.",
+      "handling": "Read the package's variables (actinglab package variables --package <dir>) and give each value under its declared name."
+    },
+    "run_variable_value_refused": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "package_id": "required",
+        "variable_name": "required",
+        "variable_problem": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.68",
+      "description": "A direct run gives a value of the variable variable_name of its package package_id that the variable does not take whole: the dispatch's own judgement of a value (the policy crate's resolve_variable, the function a dispatch resolves a stored value by) answers variable_problem (not_an_option, out_of_range, off_step, type_changed, keys_removed, count_out_of_range, key_repeated, or keys_left_out for an ordered value it would take in part) (Workflow #463 S3-8). Denied in the run's preparation, before any record, claim or lease: nothing ran.",
+      "common_causes": "A choice that is none of the options, a number outside the range or off its step, a value of another type, an ordered list with a key twice, keys not offered, or too few or too many keys.",
+      "handling": "Give a value the declaration takes (actinglab package variables --package <dir> shows each variable's options, range, step and counts)."
+    },
+    "run_variable_not_applying": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "package_id": "required",
+        "variable_name": "required",
+        "variable_problem": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.68",
+      "description": "A direct run gives a value of the variable variable_name of its package package_id, and the variable does not apply in the instance's game root now, as the variable table a dispatch reads says it (VariableTable::root_word): variable_problem is the root's word (declaration_conflict, goal_name_conflict, irreversible_by_root, package_unreadable, name_out_of_limits, cap_range, goals_unreadable, or root_unchecked while no check judges the game's root, an instance the configuration binds to no game included) (Workflow #463 S3-8). A dispatch hands such a variable no value from outside. Denied in the run's preparation, before any record, claim or lease: nothing ran.",
+      "common_causes": "Packages of the game root that declare the name otherwise, a goals.json entry that takes the name, a package of the root that counts as able to do something irreversible, a game root that failed its check, or a game without a standard pack root.",
+      "handling": "Read why in standard-pack check --root <game root> (or goals <inst>, which names the cause); run without the value, which reads the default, or repair the root first."
+    },
+    "run_variable_unjudged": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "package_id": "required",
+        "variable_name": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.68",
+      "description": "A direct run gives a value of the variable variable_name of its package package_id, the variable applies on the instance, and the dispatch's own judgement of the value (the policy crate's resolve_variable, the value as the application's stored entry set through the request's channel) gave neither the value taken nor a word, which cannot happen: given an entry whose setter is known and a variable that applies, that judgement answers the value (set) or the default with its word (Workflow #463 S3-8; the fix round of the 0.12.68 train). Denied in the run's preparation, before any record, claim or lease: nothing ran, and the Runtime and its other instances go on.",
+      "common_causes": "A defect of the Runtime: a change of resolve_variable that answers a given value with its default and no word.",
+      "handling": "Nothing was performed. Report it with the package and the variable's name; until it is fixed, run without the value, which reads the default."
     }
   },
   "locations": {
@@ -30872,6 +31055,78 @@
       "status": "active",
       "since": "0.12.53",
       "description": "A Runtime host operation (#428 SCHED-C1d): a record of the tagged program fact host.capped_episodes, after an evaluated cycle that changed a capped episode and once by a start that found the fact."
+    },
+    "list_held_start_preparations": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.67",
+      "description": "A Runtime host operation (Workflow #437 G1 fix round 2): the lease sweep's read of the members of a device group of several whose start preparation the device's hold for another member's unconfirmed close refused and whose preparation is not queued yet."
+    },
+    "read_held_start_preparation_pause": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.67",
+      "description": "A Runtime host operation (Workflow #437 G1 fix round 2): the lease sweep's read of whether such a member's scheduling is paused with a released pause, which passes it over as the start does."
+    },
+    "read_held_start_preparation_device": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.67",
+      "description": "A Runtime host operation (Workflow #437 G1 fix round 2): the lease sweep's read of whether such a member's device is idle (no lease holds it, no takeover cooldown runs and, since the train's fix round 1, no entry of its queue is eligible now, each by its own member's gate) before it queues the member's start preparation."
+    },
+    "mark_held_start_preparation_queued": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.67",
+      "description": "A Runtime host operation (Workflow #437 G1 fix round 2): the lease sweep marks such a member's start preparation as queued, so that no second claim of it is queued while one waits or runs."
+    },
+    "queue_held_start_preparation": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.67",
+      "description": "A Runtime host operation (Workflow #437 G1 fix round 2): the lease sweep queues such a member's start preparation on one self-check claim of the Runtime's own on the device's queue, which the member's worker runs once it is granted."
+    },
+    "read_held_start_preparation_claim_ttl": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.67",
+      "description": "A Runtime host operation (Workflow #437 G1 fix round 2): the read of the scheduler's lease time for the self-check claim of such a member's start preparation."
+    },
+    "settle_held_start_preparation": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.67",
+      "description": "A Runtime host operation (Workflow #437 G1 fix round 2): after the device's queue refused the self-check claim of such a member's start preparation, the member is owed it again when the refusal is device_held_for_member_close (another member's fence holds the device again; since the train's fix round 1 read from the refusal's own code), and owes nothing more otherwise."
+    },
+    "run_held_start_preparation": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.67",
+      "description": "A Runtime host operation (Workflow #437 G1 fix round 2): such a member's start preparation on its self-check claim's key on the device's worker, under the device's admission guard, and the key's release; a member that owes none any more, or whose pause is released, runs nothing."
+    },
+    "check_run_variables": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.68",
+      "description": "A Runtime host operation or stage: check a direct run's given variable values against its package's declaration and the variable table a dispatch reads, in its preparation, before any record, claim or lease (Workflow #463 S3-8)."
     }
   }
 }

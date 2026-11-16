@@ -258,7 +258,6 @@ coverage = "Y"
 tests = [
     "actingcommand-runtime-host::lib::tests::approvals::approval_decision_is_authoritative_target_bound_and_revocable",
     "actingcommand-runtime-host::lib::tests::approvals::approval_history_compacts_without_losing_durable_target_identity",
-    "actingcommand-runtime-host::lib::tests::approvals::governance_authority_requires_an_accepted_identity_card_and_is_connection_bound",
     "actingcommand-runtime-host::lib::tests::approvals::historical_agent_approval_poisoning_is_fatal_during_recovery",
     "actingcommand-runtime-host::lib::tests::approvals::catalog_lineage_switch_and_rollbacks_replay_with_reapprovals",
     "actingcommand-runtime-host::lib::tests::approvals::catalog_rollback_then_forward_again_keeps_the_later_approval",
@@ -438,16 +437,6 @@ tests = [
 ]
 incident = ["#394"]
 
-# An install start with one unreachable device: only that instance is unavailable and the start goes on; a start that reached no device still ends
-[[gate]]
-key = "49"
-coverage = "Y"
-tests = [
-    "actingcommand-runtime-host::lib::tests::gate_381a::gate_one_unreachable_device_leaves_only_its_instance_unavailable_and_the_start_goes_on",
-    "actingcommand-runtime-host::lib::tests::gate_381a::gate_a_held_start_that_reaches_no_device_still_ends_under_the_selfcheck_failure",
-]
-incident = ["#71", "#390 D-01"]
-
 # An unconfirmed close fences only its instance: the others run, a ladder re-preparation that passes lifts the fence, an unproven ladder or a manual fence waits for a person, and a shared fatal still ends the Runtime
 [[gate]]
 key = "50"
@@ -498,6 +487,7 @@ tests = [
 incident = ["#411"]
 
 # UPD-1a (0.12.30; design rd-1029/design-upd1.md §2, §3, §5, §9 rows A1 to A10; Alice's rulings 95 and 96 of 2026-10-29; register §1.215): a shared interrupt page whose interrupts.json entry declares result application_update_required ends a run after its handler with contained_task_application_update_required (warning, ladder class none, page_id), the instance fact health.application.update_required published true before the terminal; a scheduled run ends by a condition under the shipped scheduling.rerun.condition_codes (refunded, count 1, no streak, no immediate rerun) and starts no ladder; a startup package ends so with one runtime.failed at Warning and no ladder; a ladder's application restart that meets the dialog stops the ladder (recovery_ladder_interrupted, exhausted at Warning, no emulator restart); a store update package's successful run clears the fact before its terminal, a failed one keeps it; a start seeds false once and keeps a record already there; a client's publication of the key is refused application_update_key_reserved with nothing appended; result is read only with then end_run (interrupt_result_invalid at /interrupts/<i>/result, another value or type malformed) by the shared static check; fix round 1 (review M2, the coordinator's decision): a handler of such a page that fails short of fatal is still recorded failed with its own code, and the run still ends with contained_task_application_update_required, the handler's failure its related link, the fact true before the terminal
+# Since 0.12.62 (Workflow #469 D4a, register §1.400) the ladder class of contained_task_application_update_required is planned_stop, no longer none; upd1_a9 asserts planned_stop.
 [[gate]]
 coverage = "Y"
 tests = [
@@ -984,16 +974,6 @@ tests = [
 ]
 incident = ["#390 O-03", "#390 O-04", "#390 O-05"]
 
-# Workflow #378 SHUT-FU: an idle Runtime drained right after ready accepts the installer's commit-shutdown that meets another connection's lifecycle work in flight (the commit waits for it, as a shutdown request does since train 11, instead of answering install_not_drained), and a Runtime whose lease is still held refuses the commit at once with install_not_drained without waiting for the work in flight
-[[gate]]
-key = "73"
-coverage = "Y"
-tests = [
-    "actingcommand-runtime-host::lib::tests::gate_378_shutfu::shutfu_an_idle_runtime_accepts_the_install_commit_shutdown_right_after_ready",
-    "actingcommand-runtime-host::lib::tests::gate_378_shutfu::shutfu_a_runtime_holding_a_lease_refuses_the_install_commit_shutdown_at_once",
-]
-incident = ["#378 SHUT-FU"]
-
 # A previous owner whose last record still declares resources in use is released only when its process is gone: no running process has the pid, or the running one was created more than 2 s after the recorded start (one prior_epoch_owner_released_by_exit fact and the daemon line); alive or undecided keeps owner_resource_unconfirmed with the probe's finding (Workflow #382 H-5 G18, injected probe)
 [[gate]]
 key = "3"
@@ -1004,16 +984,6 @@ tests = [
     "actingcommand-runtime-host::lib::owner::tests::owner_protocol_unconfirmed_blocks_automatic_takeover",
 ]
 incident = ["#382 H-5 G18"]
-
-# During an install drain a subscription is Denied RuntimeUnavailable, not fatal, and the Runtime stays healthy; is_lifecycle_draining follows the drain and is false after an Abort, when the same cursor subscribes again (#376; Workflow #382 H-5 G4)
-[[gate]]
-key = "10"
-coverage = "Y"
-tests = [
-    "actingcommand-runtime-host::lib::tests::gate_382_h5::gate_a_subscription_during_an_install_drain_is_refused_and_resumes_from_its_cursor_after_abort",
-    "actingcommand-runtime-host::lib::tests::gate_382_h5::gate_a_subscription_resumes_from_its_cursor_after_the_drain_times_out_on_the_manual_clock",
-]
-incident = ["#382 H-5 G4"]
 
 # SUB-LAG-1 (#419; brief rd-1031/brief-sub-lag-1.md; register §1.261; since 0.12.37): a SubscribeEvents request whose subscriber falls behind (more client actions committed right after its subscription registered than its live queue holds) is answered `failed`, not fatal: `subscription_lagged` over `runtime_unavailable` with `operation` receive_runtime_subscription, `host_halted` false, `ledger_sequence` and `resume_after_sequence` (the request's cursor when nothing was delivered); nothing latches and no stop is requested; the writer keeps committing, a status is answered and another subscription reads the next event; asked in codes mode the failure keeps `resume_after_sequence`, and subscribing again from it reads on right after it with every action recorded during the lag, in order
 [[gate]]
@@ -1034,15 +1004,13 @@ tests = [
 ]
 incident = ["#382 H-4 G8"]
 
-# A ladder wait ends on an install drain, a shutdown or a pause: the waiting rung fails with the interruption, the climb ends exhausted at Warning and the ladder releases its key once (#369 H-3; Workflow #382 H-4 G9)
+# A ladder wait ends on a shutdown or a pause: the waiting rung fails with the interruption, the climb ends exhausted at Warning and the ladder releases its key once (#369 H-3; Workflow #382 H-4 G9; the install drain's rows left with the install transition, Workflow #434 LAB-6S4a)
 [[gate]]
 key = "22"
 coverage = "Y"
 tests = [
-    "actingcommand-runtime-host::lib::tests::gate_382_h4::gate_an_install_drain_during_the_readiness_wait_fails_rung_three_and_releases_once",
     "actingcommand-runtime-host::lib::tests::gate_382_h4::gate_a_shutdown_during_the_readiness_wait_fails_rung_three_and_releases_once",
     "actingcommand-runtime-host::lib::tests::instance_workers::a_pause_during_the_readiness_wait_ends_the_climb_at_warning_with_one_release",
-    "actingcommand-runtime-host::lib::tests::gate_382_h4::gate_on_the_manual_clock_an_install_drain_ends_the_readiness_wait_at_its_next_poll",
     "actingcommand-runtime-host::lib::tests::gate_382_h4::gate_on_the_manual_clock_a_shutdown_ends_the_readiness_wait_at_its_next_poll",
 ]
 incident = ["#382 H-4 G9"]
@@ -1565,40 +1533,6 @@ tests = [
 ]
 incident = ["#385 PM-CFG"]
 
-# The install drain flow by phase on the manual Runtime clock (test plan v2.2 §3.10 H-1-rest, HOST-I2; inventory-host G3): BeginDrain closes admission and drains, Drained when idle, and CommitShutdown is taken from Drained only; Abort only from Draining or Drained, reopening admission; ticket, owner and phase mismatches are refused under their registered codes, change neither phase nor admission and record exactly one lifecycle failure, not performed (#352); a held owner takes only its Release and is Released, admission open, once preparation finished (Workflow #382 H-1 G3)
-[[gate]]
-key = "7"
-coverage = "Y"
-tests = [
-    "actingcommand-runtime-host::lib::tests::gate_382_h1::gate_h1_g3_a_drain_answers_each_action_by_its_phase_and_times_out_on_the_manual_clock",
-    "actingcommand-runtime-host::lib::tests::gate_382_h1::gate_h1_g3_a_held_start_answers_each_action_by_its_phase_and_opens_when_released",
-]
-incident = ["#382 H-1"]
-
-# The install deadlines read the Runtime clock (HOST-I2): drain_timeout aborts the drain and reopens admission; held_timeout and release_timeout fail the start with admission closed and exactly one lifecycle failure, the start ending under that code (Workflow #381 A R5′; Workflow #382 H-1 G1 and G3)
-[[gate]]
-key = "8"
-coverage = "Y"
-tests = [
-    "actingcommand-runtime-host::lib::tests::gate_382_h1::gate_h1_g1_a_release_held_at_preparing_fails_closed_once_the_clock_passes_its_deadline",
-    "actingcommand-runtime-host::lib::tests::gate_382_h1::gate_h1_g3_a_drain_answers_each_action_by_its_phase_and_times_out_on_the_manual_clock",
-    "actingcommand-runtime-host::lib::tests::gate_382_h1::gate_h1_g3_a_held_start_fails_closed_once_the_clock_passes_its_held_deadline",
-]
-incident = ["#381 A", "#382 H-1"]
-
-# The held start (HOST-I3): the Release receipt comes while preparation is held, an undeclared Query while preparing completes and appends nothing, a latched failure stops the start under install_startup_stopped with its cause, a held or release timeout ends the start under its own code, and a release is Released once preparation finished (Workflow #381 A R2, R3′, R5′; #672; Workflow #382 H-1 G1 and G3)
-[[gate]]
-key = "9"
-coverage = "Y"
-tests = [
-    "actingcommand-runtime-host::lib::tests::gate_382_h1::gate_h1_g1_a_release_held_at_preparing_fails_closed_once_the_clock_passes_its_deadline",
-    "actingcommand-runtime-host::lib::tests::gate_382_h1::gate_h1_g3_a_held_start_answers_each_action_by_its_phase_and_opens_when_released",
-    "actingcommand-runtime-host::lib::tests::gate_381a::gate_undeclared_query_while_preparing_completes_and_leaves_the_ledger_head",
-    "actingcommand-runtime-host::lib::tests::gate_381a::gate_latched_failure_while_preparing_stops_the_start_under_its_own_code_with_the_cause",
-    "actingcommand-runtime-host::lib::tests::gate_381a::gate_a_release_that_times_out_ends_the_start_under_release_timeout",
-    "actingcommand-runtime-host::lib::tests::gate_381a::gate_a_held_start_whose_deadline_passes_ends_under_held_timeout",
-]
-incident = ["#381 A", "#382 H-1"]
 # Workflow #373 NAV-5 (model M-373 v1.1 §4.4, §5, §8.2, §8.3, §8.5, §9; register §1.84): the entry gate's full-match routing: navigation.json read and checked with the root (N5-1), the fewest-hops route by the edges' order (N5-2), navigation in place of the return-home fallback and after a declared prerequisite (N5-3, N5-4), the recovery chain, ambiguity and its exhaustion (N5-5 to N5-7), unconfirmed hops and the locate limit (N5-8), an unlisted entry (N5-9), unfit edge packages (N5-10), an unconfirmed arrival (N5-11), the entry check's frame reused (N5-12), an interrupt page first (N5-14), task.page (N5-15), the step limit (N5-16), no navigation in host runs and layers (N5-17), the failure identity's n and g segments, their accumulation and lift (N5-18), direct and scheduled runs alike (N5-19), the run's server only (N5-20)
 [[gate]]
 key = "97"
@@ -2964,13 +2898,13 @@ tests = [
 ]
 incident = ["#392 DA-3"]
 
-# Workflow #392 DA-3 fix 1 (work order point 1; contracts/display-adapter.md section 10, "The Lab's declared operations"): a Lab declared operation of a 16x9 package tapping (1, 0) sends the literal tap on a 16x9 device and is confirmed; on a 32x18 device it fails at its input with display_map_unresolved (input_scale_unsupported at display_input_map, frame 32x18, base 16x9), its attempt keeps the base tap and never reached its input, and the device received nothing
+# Workflow #392 DA-3 fix 1 (work order point 1), adapted by DA-5ab (0.12.67; register §1.436; contracts/display-adapter.md section 11, which replaces DA-3's refusal of a Lab declared operation's input on a frame of another size): a Lab declared operation of a 16x9 package tapping (1, 0) sends the literal tap on a 16x9 device; on a 48x27 device, three times the package, the kernel recognises its page on the reduced frame and the device receives the tap (3, 0); either way the operation is confirmed and its attempt keeps the base tap
 [[gate]]
 coverage = "Y"
 tests = [
-    "actingcommand-runtime-host::lib::tests::gate_392_da3::da3_fix1_a_lab_declared_operation_sends_its_base_point_only_on_a_frame_of_its_package",
+    "actingcommand-runtime-host::lib::tests::gate_392_da3::da3_fix1_a_lab_declared_operation_sends_its_base_point_under_its_frames_map",
 ]
-incident = ["#392 DA-3"]
+incident = ["#392 DA-3", "#392 DA-5ab"]
 
 # Workflow #392 DA-3 fix 1 (work order point 2; contracts/display-adapter.md section 10, "The task evidence"): the task evidence of the three-input run on a 16x9, a 32x18 and a 48x27 device relates each of its three inputs linked to its step's effect intent, with no source_mismatch
 [[gate]]
@@ -3833,16 +3767,15 @@ tests = [
 ]
 incident = ["#434 LAB-6S1a"]
 
-# Workflow #434 LAB-6S1b (0.12.58; register §1.287, "Slice LAB-6S1b"; brief rd-1113/brief-lab6s1b.md; contracts/lab-two-entries.md §2.4): RuntimeRequest::validate judges no request by its origin. A (Lab, Lab) connection's global and instance pause are taken as a (Cli, Cli) connection's (completed, revision 1, the connection's channel on the receipt: lab for the Lab), held with their reason (the instance's released), restored by a restart, and resumed from the same envelope, after which no pause is held. The host's own checks of the kinds LAB-6S4a deletes still refuse: a governance identity card from (Lab, Lab), (Agent, Adapter) or (Ui, Ui) is invalid_governance_origin; an approval decision from (Lab, Lab), (Agent, Adapter), (Cli, Cli) or (User, Ui) on a connection without an accepted card is governance_authority_required (since LAB-6S3 the cards' and the approvals' connections are bound to cli first: on ui the door refuses both kinds before the host's own check); an install transition's drain from (Lab, Lab) on such a connection is install_identity_required, and the Runtime stays healthy. The list-reading key test of S168-4 and the receipt test of #378 A4 keep their names: the first now sends the key from (Cli, Cli), (User, Ui) and (Lab, Lab) too, the second refuses an envelope outside the client set
+# Workflow #434 LAB-6S1b (0.12.58; register §1.287, "Slice LAB-6S1b"; brief rd-1113/brief-lab6s1b.md; contracts/lab-two-entries.md §2.4): RuntimeRequest::validate judges no request by its origin. A (Lab, Lab) connection's global and instance pause are taken as a (Cli, Cli) connection's (completed, revision 1, the connection's channel on the receipt: lab for the Lab), held with their reason (the instance's released), restored by a restart, and resumed from the same envelope, after which no pause is held. The host's own checks of the kinds LAB-6S4a deletes (the governance identity card's origin, the approval's accepted card, the install transition's identity) went with those kinds in Workflow #434 LAB-6S4a (0.12.63). The list-reading key test of S168-4 and the receipt test of #378 A4 keep their names: the first now sends the key from (Cli, Cli), (User, Ui) and (Lab, Lab) too, the second refuses an envelope outside the client set
 [[gate]]
 coverage = "Y"
 tests = [
     "actingcommand-runtime-host::lib::tests::gate_434_lab6s1b::lab6s1b_a_lab_connections_pause_and_resume_are_taken_and_recorded_as_the_clis",
-    "actingcommand-runtime-host::lib::tests::gate_434_lab6s1b::lab6s1b_the_hosts_own_checks_of_the_governance_and_install_kinds_still_refuse",
 ]
 incident = ["#434 LAB-6S1b"]
 
-# Workflow #434 LAB-6S3 (0.12.58; register §1.287, "Slice LAB-6S3"; brief rd-1113/brief-lab6s3.md; contracts/lab-two-entries.md §2.3 step 5, §2.6, §3): the ui part of gate_two_entries and ui_settings_within_tiers. For every kind of RuntimeOperationKind::ALL the ui channel takes it exactly when it is a handshake kind (Health, BindChannel) or on the list of §3, which ui_allows is (the identity card is refused; since Workflow #455 T1-R, 0.12.60, register §1.351, the list holds ApplyResourceTargets, and the test's list was adapted), every kind the released console sends and the two its next release adds are taken, and every kind names a registered location as the refusal's operation. On a connection bound ui by BindChannel and on one bound by its first (User, Ui) request, Status is taken; LoadPack is Denied channel_request_refused (channel ui, operation load_pack, no config_key) with one command.rejected of channel ui whose outcome is the refusal; UpgradeStateStatus is refused with no record; DebugPackage, a read that records, is refused and recorded like a write. For every key of the key table ui may change it exactly when its tier is daily or advanced and its row settable; the console's eleven keys are among them, an instance's stuck_recovery, mumu_root, lab_module_debugging and an unknown key are not. On ui a request naming an allowed key then a refused one is refused naming the refused one (config_key, in the receipt and the record) and applies nothing (the settings' version stays, no override), a clear of the refused key and an unknown key are refused, the same request on cli completes, and a clear of an allowed key on ui completes. The eleven keys, set and cleared on ui, are not refused and are answered as on cli. On lab, cli, mcp and an unbound connection LoadPack and UpgradeStateStatus answer not_implemented with no record, the stuck_recovery change completes and an unknown key is config_key_unknown
+# Workflow #434 LAB-6S3 (0.12.58; register §1.287, "Slice LAB-6S3"; brief rd-1113/brief-lab6s3.md; contracts/lab-two-entries.md §2.3 step 5, §2.6, §3): the ui part of gate_two_entries and ui_settings_within_tiers. For every kind of RuntimeOperationKind::ALL the ui channel takes it exactly when it is a handshake kind (Health, BindChannel) or on the list of §3, which ui_allows is (the identity card is refused; since Workflow #455 T1-R, 0.12.60, register §1.351, the list holds ApplyResourceTargets, and the test's list was adapted), every kind the released console sends and the two its next release adds are taken, and every kind names a registered location as the refusal's operation. On a connection bound ui by BindChannel and on one bound by its first (User, Ui) request, Status is taken; LoadPack is Denied channel_request_refused (channel ui, operation load_pack, no config_key) with one command.rejected of channel ui whose outcome is the refusal; ProjectPolicyInputIdentity (UpgradeStateStatus until Workflow #434 LAB-6S4a deleted it) is refused with no record; DebugPackage, a read that records, is refused and recorded like a write. For every key of the key table ui may change it exactly when its tier is daily or advanced and its row settable; the console's eleven keys are among them, an instance's stuck_recovery, mumu_root, lab_module_debugging and an unknown key are not. On ui a request naming an allowed key then a refused one is refused naming the refused one (config_key, in the receipt and the record) and applies nothing (the settings' version stays, no override), a clear of the refused key and an unknown key are refused, the same request on cli completes, and a clear of an allowed key on ui completes. The eleven keys, set and cleared on ui, are not refused and are answered as on cli. On lab, cli, mcp and an unbound connection LoadPack and UnloadPack (UpgradeStateStatus until Workflow #434 LAB-6S4a) answer not_implemented with no record, the stuck_recovery change completes and an unknown key is config_key_unknown
 [[gate]]
 coverage = "Y"
 tests = [
@@ -3867,6 +3800,14 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_434_lab6s2m::lab6s2m_the_ui_gate_never_judges_a_mapped_connection",
 ]
 incident = ["#434 LAB-6S2-M"]
+
+# Workflow #434 LAB-6S4a (0.12.63; register §1.287, "Slice LAB-6S4a"; brief rd-1115/brief-434-lab6s4a-five-kinds.md; contracts/runtime-interface.md, "Old Runtimes"): the five request kinds are gone, so a request whose operation carries one of their tags as 0.12.61 spelled them (install_transition, declare_governance_identity, record_approval_decision, upgrade_state, upgrade_state_status) is an unknown operation tag. The contract decodes none of the five; on the test host, each on a connection that Health answered first, gets no receipt and its connection is dropped, one runtime.failed record per request with outcome runtime_protocol_invalid at the request's decoding (operation runtime_request_decode_failed); the Runtime latches nothing and a new connection's Health completes. No clock is read (fixed submission times)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_434_lab6s4a::lab6s4a_an_unknown_operation_tag_is_refused_undecoded_and_the_runtime_goes_on",
+]
+incident = ["#434 LAB-6S4a"]
 
 # Workflow #453 S11 (0.12.60; register §1.358; brief rd-1114/brief-453-s11-state-root-record.md; contracts/state-root-installation.md): the state root remembers its installation. Temporary state roots and installation roots (a folder whose install folder holds the installer's state.json), the start fixture. The first start of an installation without an identity on a state root an earlier release left unrecorded mints install\identity.json (schema actingcommand.installation-identity.v1, 32 lowercase hexadecimal digits, minted_by this process) and writes installation.json (schema actingcommand.state-root-installation.v1, the same number, claimed_by this process, the claiming start's owner epoch, build_commit null): the install folder gains exactly identity.json and the state root exactly installation.json; the tagged runtime fact host.state_root_installation is recorded once, one row with claimed_at_unix_ms, claimed_by_pid and claimed_by_owner_epoch and never the number, and the start's state_root_claimed (info, path the state root) once; a restart passes with no state_root_claimed and changes neither file nor the file lists. Another installation's record refuses the start state_root_installation_mismatch (fatal, path the state root, at_unix_ms the record's claim time, the text naming another installation) with the owner journal, the state root and the install folder byte for byte as before; a record while the installation has no identity file refuses the same (the text naming the missing identity file) and mints nothing. A record that is not JSON, a record of another schema_version and an identity file that is not JSON each refuse state_root_installation_record_invalid, the file as path and foreign_data_error as the caused_by link, with nothing written. A record written between the check and the claim refuses state_root_installation_mismatch at record_state_root_installation, the owner journal holding the start's opened and closed records of one epoch and the state root nothing more. A moved installation root (its files copied to another path) passes and claims nothing. A start without an installation root leaves what main 691c20f5's start and close of the fixture leave, written out from that build's code: the state root's entries exactly ledger, owner.lock, policy, release-blobs, runtime-state.key and runtime-state.sqlite (SQLite's -wal and -shm aside), no runtime fact before its start record, one runtime.started and no runtime.takeover; an installation folder beside it gets no identity, the ledger no host.state_root_installation and the host no state_root_claimed. actingd unlock-owner and a ledger maintenance backup from an installation root refuse another installation's record state_root_installation_mismatch with nothing written and no backup made; on an unrecorded state root of an installation without an identity neither mints nor claims. Fix round 1 (brief rd-1114/brief-1700-fix1.md): a bare ledger maintenance verify from an installation root takes the owner too and refuses another installation's record state_root_installation_mismatch, the owner journal and every file byte for byte as before and nothing minted; a record written between the check and the claim while the installation has no identity file refuses state_root_installation_mismatch at record_state_root_installation (the text naming the missing identity file), mints nothing and closes the start's epoch; a start that placed the record and failed right after its claim (a test hook) leaves the record and no fact, the next start records host.state_root_installation once from the record (observed at its claimed_at_unix_ms, its claimed_at_unix_ms, claimed_by_pid and claimed_by_owner_epoch) with no state_root_claimed, and a third start records nothing; an identity file another configuration placed between the mint and the placement (a test hook) is kept byte for byte, no part file is left, and the record carries its number. Fix round 2 (the coordinator's ruling of 11-14): with the hard link made to fail (unsupported, a test-only hook) a placement falls back to an exclusive create of the file, its bytes read back equal to the document written and no part file left, and a second placement answers that it placed nothing and leaves the file byte for byte; a start whose every hard link fails keeps the identity another configuration placed first (the fallback's create finds it), records its number, places the record by the fallback, writes state_root_claimed and the fact once and leaves no part file
 [[gate]]
@@ -4066,3 +4007,227 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_463_v2::v2_fix3_a_dispatched_package_of_a_root_not_read_since_the_start_is_warned",
 ]
 incident = ["#463 V2"]
+
+# Workflow #469 K1 (0.12.62; register §1.395; brief rd-1115/brief-469-word-slices.md; contracts/linear-steps.md, "What the program saw"; contracts/policy-suspension.md, "Failure identity"), the host's half, on U1's package and fake device and a manual clock: the swallowed tap under the recommended on_failure fails page_confirmation_failed after two taps, its policy record's outcome carrying confirmation_problem input_not_taken, its failure identity's base the code and its key the one of the code, the scope main, the step open and detail′ of operation=open attempts=2 after_page=<unrecognized> hit_error_page=false transition=none, counted once and retried; the retry fails the same way with the same word, its identity the first one byte for byte, counted twice, the pair paused (1); the screen of neither page under continue without retry: contained_task_linear_unrecorded_screen after one tap, the policy record carrying unrecorded_screen, the identity's base and key those of the code and the detail alone, counted once, the pair paused at once (2)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_469_k1::k1_a_swallowed_tap_s_word_leaves_the_failure_identity_and_the_streak_as_they_are",
+    "actingcommand-runtime-host::lib::tests::gate_469_k1::k1_an_unrecorded_screen_s_word_leaves_its_failure_identity_as_it_is",
+]
+incident = ["#469 K1"]
+
+# Workflow #469 K2 (0.12.62; register §1.396; brief rd-1115/brief-469-word-slices.md, item 2; design rd-1115/status-codes-a-design.md, Part 2, the three facts), the host's half: two identical scheduled page-graph step failures, the screen on the step's own page after every tap, carry confirmation_problem input_not_taken on their settled outcomes and not in their native detail; each identity's base is the code and its key the one of the scope main, the step and the native detail's fragments; the second keeps the first's identity and counts 2 (1)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_390_exec3::k2_a_page_graph_step_s_word_leaves_its_identity_and_its_streak_as_they_were",
+]
+incident = ["#469 K2"]
+
+# Workflow #469 H2 (0.12.62; register §1.398; brief rd-1115/brief-469-word-slices.md, fix round rd-1115/brief-469-h2-fix2.md; design rd-1115/status-codes-a-design.md, place 4; contracts/policy-suspension.md, "Why a pair is paused"), the host's half, on a manual clock and the budget fixture's one task, each run a fresh start of the host on the root, its dispatch admitted and settled through record_policy_dispatch_outcome: one fixture per pause_cause word (a severe failure: severe_failure; contained_task_linear_unrecorded_screen, severe: unrecorded_screen; a recoverable failure over the 300 s runtime budget, rewritten to policy_runtime_budget_exceeded: runtime_budget_exceeded; policy_settlement_interrupted twice in a row: interrupted_again; a sensitive task's recoverable failure: sensitive_task; the same recoverable failure twice under escalation_threshold 2: repeated_failure; on_failure pause with retry_limit 0: retries_exhausted) and one fixture with two causes at once (a sensitive task's recoverable failure over the runtime budget, rewritten severe, the record both sensitive and severe: runtime_budget_exceeded, the settlement's order): the paused run's record keeps the input's failure identity byte for byte and the expected counts, and the pair's streak in its latest L7 value record serializes byte for byte as the one built from the record's own members (no pause_cause in it); the pair's policy_task_paused reason at its next due evaluation carries pause_cause and the record's failure_code, its detail naming neither, live, on the root's next start (after one run its seeding second start, which replays the settlement; after two runs a loading start) and on the start after that, a loading start as every restart of an installation is (LN-4: the streak loaded from its value record without the word, the word given back from the dispatch journal), the kind of both starts asserted from their StartReport tagged_state; the closed root's actingd suspended row carries the same pause_cause, the failure's code and the count; and a recoverable failure with retries left: policy_retry_backoff_active carries the failure's code as failure_code and no pause_cause, its detail not naming the code, live, on the root's second start (seed) and on its third (load), the kind of each asserted the same way
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_469_h2::h2_a_severe_failure_pauses_with_severe_failure",
+    "actingcommand-runtime-host::lib::tests::gate_469_h2::h2_an_unrecorded_screen_pauses_with_unrecorded_screen",
+    "actingcommand-runtime-host::lib::tests::gate_469_h2::h2_a_run_over_its_runtime_budget_pauses_with_runtime_budget_exceeded",
+    "actingcommand-runtime-host::lib::tests::gate_469_h2::h2_a_second_interrupted_settlement_in_a_row_pauses_with_interrupted_again",
+    "actingcommand-runtime-host::lib::tests::gate_469_h2::h2_a_sensitive_task_s_failure_pauses_with_sensitive_task",
+    "actingcommand-runtime-host::lib::tests::gate_469_h2::h2_a_sensitive_task_over_its_runtime_budget_pauses_with_runtime_budget_exceeded",
+    "actingcommand-runtime-host::lib::tests::gate_469_h2::h2_the_same_failure_up_to_the_threshold_pauses_with_repeated_failure",
+    "actingcommand-runtime-host::lib::tests::gate_469_h2::h2_a_task_out_of_retries_set_to_pause_pauses_with_retries_exhausted",
+    "actingcommand-runtime-host::lib::tests::gate_469_h2::h2_a_backoff_names_the_failure_it_follows",
+]
+incident = ["#469 H2"]
+
+# Workflow #469 D4a (0.12.62; register §1.400; brief rd-1115/brief-469-d4-owner-four.md; the owner's approval on board #469; contracts/application-lifecycle.md, "The handset start gate", and contracts/emulator-control.md, "The game's update dialog"): device_locked and contained_task_application_update_required are of the ladder class planned_stop and the ladder does with them what it did. device_locked, as device_thermal_hold, device_battery_low and device_in_use: a rung whose entry it holds is skipped device_not_ready (the skip reads the code), no trigger item of the defaults matches it at any stage, and three of its warnings on one instance within the window register no burst. The update dialog met by the application restart's startup package after a pack_logic ladder opened: the rung fails with the code, the ladder ends exhausted at Warning with recovery_ladder_interrupted, no emulator restart rung, no other ladder (UPD-1 A4's run)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::host::recovery_ladder::tests::d4a_a_locked_device_still_skips_its_rung_device_not_ready_and_starts_no_ladder",
+    "actingcommand-runtime-host::lib::tests::gate_373_nav6::d4a_the_update_dialog_is_a_planned_stop_and_still_ends_the_ladder_at_its_rung",
+]
+incident = ["#469 D4a"]
+
+# Workflow #469 H1 (0.12.62; register §1.397; brief rd-1115/brief-469-word-slices.md; contracts/instance-fact-store.md, "Who withdrew it"), on the fixture instance with one task due at 10:00 UTC, the production evaluation path on a manual clock: the task's instance_unavailable reason on the cycle's decision carries exactly the word, its detail text the evaluator's, and the not-run explanation's candidate and not-running rows the same why, for availability_source configured (the configured seed false), self_check (the self-check gate's withdrawal), device_link with device_link_state absent, device_state with device_hold thermal (each through its publisher), other_publisher (another detector's false) and facts_missing (a record holding a string; policy_instance_fact_missing still on the decision) (1-6); after a restart the same seed record gives the same word (7); a word that changes while the code stays keeps the row's since_unix_ms, and the held record past the threshold starts at the first unavailable evaluation under gate_code instance_unavailable, its caused_by the row's why with the word (8); fix round 2: an instance the self-check gates (a bound device endpoint) configured unavailable, its availability withdrawn under backend_selfcheck:unchecked, reads configured at the evaluation and after a restart, from the same record (9)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_469_h1::h1_an_application_its_configuration_marks_unavailable_says_configured",
+    "actingcommand-runtime-host::lib::tests::gate_469_h1::h1_an_application_the_self_check_gate_withdrew_says_self_check",
+    "actingcommand-runtime-host::lib::tests::gate_469_h1::h1_an_application_its_device_link_withdrew_says_device_link_and_the_state",
+    "actingcommand-runtime-host::lib::tests::gate_469_h1::h1_an_application_its_device_state_withdrew_says_device_state_and_the_hold",
+    "actingcommand-runtime-host::lib::tests::gate_469_h1::h1_an_application_another_publisher_withdrew_says_other_publisher",
+    "actingcommand-runtime-host::lib::tests::gate_469_h1::h1_an_application_whose_availability_cannot_be_read_says_facts_missing",
+    "actingcommand-runtime-host::lib::tests::gate_469_h1::h1_after_a_restart_the_same_record_gives_the_same_word",
+    "actingcommand-runtime-host::lib::tests::gate_469_h1::h1_a_changed_word_keeps_the_row_s_since_and_its_held_record",
+    "actingcommand-runtime-host::lib::tests::gate_469_h1::h1_fix2_a_gated_application_its_configuration_marks_unavailable_says_configured",
+]
+incident = ["#469 H1"]
+
+# Workflow #469 H3 (0.12.62; register §1.399; brief rd-1115/brief-469-word-slices.md; contracts/emulator-control.md, "Event shape", item 4): one discovery-bound instance on the scripted emulator controller, an operator start and then a stop the controller fails at one stage of each family it gives: the receipt is emulator_control_failed with stage and device_category (mumu_manager_control_exit and child_exit, mumu_manager_run and backend_launch, mumu_manager_control_errcode and response); the control's one runtime.failed record is emulator_control_failed with the same device_category and the lifecycle stage runtime_lifecycle_operation_cleanup as stage (the host's lifecycle record writes its stage over every failure's; a reader who needs the device stage reads the receipt), keeps elapsed_ms, exit_code and device_process_present, and its primary detail is the same category and stage, mumu_manager and control_instance (1-3); on the building function and a hand-made failure: without a device diagnostic stage mumu_manager_control and no device_category as values, mumu_manager_control and child_exit in the detail (4); the expired readiness wait, the binding refusal and the unsupported provider carry neither value (5)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_469_h3::h3_a_control_whose_vendor_command_exited_says_its_stage_and_child_exit",
+    "actingcommand-runtime-host::lib::tests::gate_469_h3::h3_a_control_whose_tool_could_not_run_says_its_stage_and_backend_launch",
+    "actingcommand-runtime-host::lib::tests::gate_469_h3::h3_a_control_the_vendor_refused_says_its_stage_and_response",
+    "actingcommand-runtime-host::lib::host::emulator_instance::gate_469_h3::h3_a_control_failure_without_a_diagnostic_says_the_default_stage_and_no_category",
+    "actingcommand-runtime-host::lib::host::emulator_instance::gate_469_h3::h3_the_other_codes_of_a_provider_control_failure_carry_no_stage_value",
+]
+incident = ["#469 H3"]
+
+# Workflow #463 U1b (0.12.63; register §1.389; briefs rd-1115/brief-463-u1b-break-in.md and rd-1115/brief-463-u1b-fix2.md; contracts/policy-suspension.md, "A failure that pauses at its first occurrence"; contracts/linear-steps.md, "A screen the package never recorded"), on the manual clock and a fake device, gate_463_u1's linear_steps package of one tap from home to list attempted twice, the fixture catalog's task hourly under the recommended on_failure, the expected runtime off: inside the break-in (one settled run of two, an hour of an hour and a half) the run on a screen the package never recorded fails contained_task_linear_unrecorded_screen after one tap, its pair paused at once (paused_task, severe), the recorded failure carrying confirmation_problem unrecorded_screen and the pause pause_cause unrecorded_screen with the code as failure_code, the failure the break-in's second run, its content and first time kept (1); after it (two settled runs, two hours), on a device instance, the same screen fails page_confirmation_failed after one tap with no page_ids and with confirmation_problem unrecorded_screen on its recorded failure and its terminal, both naming a Failure pin's frame as artifact_id, recoverable, retry_scheduled, consecutive 1, and after the ladder the pair is not paused (2); two runs of two but two hours of three, and two hours of an hour and a half but two runs of three, still get the dedicated code and the pause (3); a run whose swallowed tap fails and settles by a condition, and a run stopped at its checkpoint on a device instance (contained_task_cancelled), leave the break-in as it was (4); the package changed in place starts a new break-in: the dedicated code, the pause, the new content's first run (5); fix round 2: a restart between the first and the second run, the root's second start a seeding start and its third a loading start (each asserted from its StartReport tagged_state), keeps the break-in as written on both and counts on, and the screen after the second run fails page_confirmation_failed (6); a direct run on a device instance past the break-in fails the dedicated code, its receipt naming its one Failure pin's frame (7); fix round 2: the two keys rendered from the shipped defaults file are 20 and 604800000, source default, settable, and with them in the manifest, ConfigureSettings of break_in_runs 1 and break_in_ms 1000 after one settled run makes the next run's screen fail page_confirmation_failed, retry_scheduled (8); fix round 3 (rd-1115/brief-463-u1b-fix3.md): the package declaring a prerequisite package the game root of neutral lists, after one settled success a run on a screen neither knows fails in that layer (its EntryRecoveryFailed, role prerequisite; no PackageAdmitted, no input) and leaves the break-in as it was (9); a content the preparation cannot measure and a pair's break-in that cannot be read (each failed once at that read by a test hook) each record one policy_break_in_unread with break_in_problem content_unmeasured or record_unread, task_id and instance_id, the run going on outside its break-in (page_confirmation_failed after one tap, retry_scheduled), the first counting nothing and the second counting as its content's second run (10); actingd suspended's break_ins row with two runs and one second needed: one run of two, in_break_in true; after a seeding restart and a second run an hour later, two of two, since_first_ms at least a second and reaching past the second run, in_break_in false, its content and first time the decision memory's (11)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_463_u1b::u1b_t1_inside_the_break_in_the_code_pauses_its_pair_at_once",
+    "actingcommand-runtime-host::lib::tests::gate_463_u1b::u1b_t2_after_the_break_in_the_same_screen_is_an_ordinary_failure_naming_its_frame",
+    "actingcommand-runtime-host::lib::tests::gate_463_u1b::u1b_t3_one_of_the_two_reached_is_still_inside",
+    "actingcommand-runtime-host::lib::tests::gate_463_u1b::u1b_t4_a_condition_end_and_a_stop_count_nothing",
+    "actingcommand-runtime-host::lib::tests::gate_463_u1b::u1b_t5_a_new_content_starts_a_new_break_in",
+    "actingcommand-runtime-host::lib::tests::gate_463_u1b::u1b_t6_a_restart_keeps_the_count_and_the_first_time",
+    "actingcommand-runtime-host::lib::tests::gate_463_u1b::u1b_t7_a_direct_run_after_the_break_in_keeps_the_dedicated_code",
+    "actingcommand-runtime-host::lib::tests::gate_463_u1b::u1b_t8_the_keys_set_while_running_count_from_the_next_run",
+    "actingcommand-runtime-host::lib::tests::gate_463_u1b::u1b_t9_a_run_whose_prerequisite_layer_failed_counts_nothing",
+    "actingcommand-runtime-host::lib::tests::gate_463_u1b::u1b_t10_a_break_in_that_cannot_be_established_warns_and_the_run_goes_on",
+    "actingcommand-runtime-host::lib::tests::gate_463_u1b::u1b_t11_actingd_suspended_lists_the_break_in_before_and_after_it_ends",
+]
+incident = ["#463 U1b"]
+
+# Workflow #469 D4b (0.12.63; register §1.401; brief rd-1115/brief-469-d4-owner-four.md; the owner's approval on board #469; contracts/emulator-control.md, "Triggers" and direction ①): contained_task_vision_provider_failed, which a vision provider failure at a guard, a when or an expected identity now ends a run with, is of the ladder class environment_fault; under the defaults no trigger item matches it at the task stage (no ladder at once), the stability_burst item matches it by class at stability_warnings, and three of its failures on one instance within the window register one burst of that item; contained_task_guard_evaluation_failed and contained_task_recognition_failed, which a real evaluation error still ends with, match pack_logic by class at the task stage and three of each register no burst. Fix round 2, the run level (modelled on the page row of gate_387_d1cg): a scheduled run on the ladder fixture's physical instance of a package with colour pages whose located OCR target a scripted provider reads at claim's guard or at open's when: a provider that fails ends the run with contained_task_vision_provider_failed, no ladder claim holds or waits for the instance, the run's lease hands its key to no ladder, no ladder starts at the task stage, and the run's task.failed is what direction ① counts (its instance link, warning severity or worse, a code of the class environment_fault); a read that cannot conclude while the provider answered ends it with contained_task_guard_evaluation_failed (the guard) or contained_task_recognition_failed (the when), the lease end hands the key to the ladder, and one ladder starts at the task stage for the run with that failure code, by pack_logic, matched by the class pack_logic_mismatch
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::host::recovery_ladder::tests::d4b_a_vision_provider_failure_counts_toward_the_burst_and_starts_no_ladder_at_once",
+    "actingcommand-runtime-host::lib::tests::gate_469_d4b::d4b_a_provider_failure_at_a_guard_or_a_when_starts_no_ladder_and_counts_toward_the_burst",
+    "actingcommand-runtime-host::lib::tests::gate_469_d4b::d4b_a_real_evaluation_error_at_a_guard_or_a_when_still_starts_the_ladder_at_once",
+]
+incident = ["#469 D4b"]
+
+# Workflow #461 (0.12.66; register §1.431; contracts/read-session-resource-close.md, contracts/runtime-outcomes.md "Device and kernel failures", contracts/device-group.md row 7): a close refused because the lease had already lapsed isolates that instance on two more paths, the gate of #456 and #458 (the fixture of gate_458_close_isolates: X and Y alone on their devices both on the Nemu IPC, the multi-Nemu gate, a manual Runtime clock, stuck recovery off; the lease sweep's expiry scan held, so the holder's own end, not the sweep, meets the lapsed lease). X's observation opens its session and a client's lease of X lapses with it open; the client's connection then closes and its end (end_connection, as the connection's thread runs it): no error, health clean, X alone fenced with lease_expired as its cause (one fence record naming X), the refusal recorded once naming X, X's lease and the stage runtime_lifecycle_session_close, X's lease released once by the disconnect and never expired, X's session closed once after that under a fenced close, then Y's direct run dispatched and completed (1); a safe reset under X's client lease lets the lease lapse while its write is in flight and then fails, its resources confirmed: the input fails backend_operation_failed, health clean, X alone fenced with lease_expired, the refusal recorded once under the input's request naming X, its lease and the stage, X's lease released once by the input's own end and never expired, X's session closed once after that under a fenced close whose record keeps no owner unconfirmed, Y's direct run completed and the host closes (2); with the record of the refused close made to fail (#458's test-only switch, the ledger's failure), the connection's end returns ledger_failure at fence_instance_resources, fatal and Global, which the Runtime holds latched, no instance fenced (3); the same switch on the failed input's path: the Runtime holds ledger_failure at fence_instance_resources latched, fatal and Global, no instance fenced (4)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_458_close_isolates::close461_a_disconnect_after_its_lease_lapsed_fences_only_its_instance_and_the_runtime_runs",
+    "actingcommand-runtime-host::lib::tests::gate_458_close_isolates::close461_an_input_whose_lease_lapsed_under_it_fails_alone_and_keeps_no_owner_unconfirmed",
+    "actingcommand-runtime-host::lib::tests::gate_458_close_isolates::close461_a_record_that_cannot_be_appended_at_a_disconnects_close_still_stops_the_runtime",
+    "actingcommand-runtime-host::lib::tests::gate_458_close_isolates::close461_a_record_that_cannot_be_appended_at_a_failed_inputs_close_still_stops_the_runtime",
+]
+incident = ["#461"]
+
+# Workflow #475 (0.12.67; register §1.432; contracts/read-session-resource-close.md, contracts/runtime-outcomes.md "Device and kernel failures", contracts/device-group.md row 7): a close refused because the key's lease had already lapsed isolates that instance on five more paths, the gate of #458 and #461 (gate_458_close_isolates; a test hook lets the lease lapse right before such a close asks its write authority; the lease sweep's expiry scan held; a manual Runtime clock; the fourth #461 test above also asserts that its fatal path keeps the owner as unconfirmed). Each place: the refusal isolates (health clean, only the instance whose session it is fenced with lease_expired, the refusal recorded once at the stage runtime_lifecycle_session_close naming the key's lease, the key handed to no one, the session closed once after the key's end, Y's direct run completed), and the record of the refused close made to fail (#458's test-only switch) stays fatal (ledger_failure at fence_instance_resources, fatal and Global, no instance fenced there). A failed policy run's hand-over of its key to its ladder (its capture failure's close met the lapse first, #456; the run returns its own capture_backend_operation_failed; the run's lease released once, never handed on; the ladder's claim queued only after the close) (1, 2); a pre-emption's hand-over of an idle lease (the claim answers queued, no grant before the close) (3, 4); an application command's preparation (the command fails lease_expired, no command sent) (5, 6); a backend switch's close of the kept session (backend_switch_refused, instance_fenced, caused by lease_expired; the registration keeps its backends) (7, 8); a member switch's close under the run's key in a device group of several (application_switch_failed at stop with lease_expired; the stopped member fenced; the key's expiry closes its session) (9, 10); a disconnect's owed close made before the self-check waiting in the queue is granted by the queue's own grant, no transfer (11). Fix round 1: the first test also asserts that the hand-over itself (hand_off_to_ladder) withheld the key once (a test-only count; a ladder waiting in the queue writes the same records); a pre-emption at an input's end (transfer_preempted_while_guarded: the claim queued with its pre-emption requested while a reset's write is in flight; the reset completes; the claim is handed nothing) (12); a backend switch's restore after a refused commit (host_config_overrides_persist_failed with the restore's lease_expired among its links; the refusal after the switch's first close; the session closed once after the key's end) (13)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_458_close_isolates::close475_a_failed_runs_hand_over_to_its_ladder_after_its_lease_lapsed_fences_only_its_instance",
+    "actingcommand-runtime-host::lib::tests::gate_458_close_isolates::close475_a_record_that_cannot_be_appended_at_a_runs_hand_over_to_its_ladder_still_stops_the_runtime",
+    "actingcommand-runtime-host::lib::tests::gate_458_close_isolates::close475_a_preemptions_hand_over_of_a_lapsed_lease_fences_only_its_instance",
+    "actingcommand-runtime-host::lib::tests::gate_458_close_isolates::close475_a_record_that_cannot_be_appended_at_a_preemptions_close_still_stops_the_runtime",
+    "actingcommand-runtime-host::lib::tests::gate_458_close_isolates::close475_an_application_command_whose_key_lapsed_before_its_preparation_fails_alone",
+    "actingcommand-runtime-host::lib::tests::gate_458_close_isolates::close475_a_record_that_cannot_be_appended_at_an_application_preparation_still_stops_the_runtime",
+    "actingcommand-runtime-host::lib::tests::gate_458_close_isolates::close475_a_backend_switch_whose_key_lapsed_before_its_close_is_refused_and_fences_only_its_instance",
+    "actingcommand-runtime-host::lib::tests::gate_458_close_isolates::close475_a_record_that_cannot_be_appended_at_a_backend_switchs_close_still_stops_the_runtime",
+    "actingcommand-runtime-host::lib::tests::gate_458_close_isolates::close475_a_member_switch_whose_key_lapsed_before_its_close_fences_only_the_stopped_member",
+    "actingcommand-runtime-host::lib::tests::gate_458_close_isolates::close475_a_record_that_cannot_be_appended_at_a_member_switchs_close_still_stops_the_runtime",
+    "actingcommand-runtime-host::lib::tests::gate_458_close_isolates::close475_a_disconnects_owed_close_is_made_before_the_waiting_claim_is_granted",
+    "actingcommand-runtime-host::lib::tests::gate_458_close_isolates::close475_a_preemption_at_an_inputs_end_whose_lease_lapsed_fences_only_its_instance",
+    "actingcommand-runtime-host::lib::tests::gate_458_close_isolates::close475_a_backend_switchs_restore_whose_key_lapsed_before_its_close_fences_only_its_instance",
+]
+incident = ["#475"]
+
+# Workflow #437 G1 (0.12.67; register §1.433; contracts/device-group.md, "A failure stays where it belongs", "Device-level actions", row 7, "One queue, one worker, one lease per device"): the two items of "Release." before the load accepts a group of several, on MAPP-1d's fixture (A and B one device group writing one session log, C alone, a manual Runtime clock, stuck recovery off, the resident monitor loop held). A's direct run lets its lease lapse while B's claim waits, its session close is unconfirmed, A is fenced and keeps its close lease, which then lapses: the end hands the device to no one, B's claim waits first in its place and nothing of B is granted, B's dispatch waits device_group_waiting close_unconfirmed naming A while A keeps its own code, and B's direct run is refused device_held_for_member_close naming A with nothing captured (1); then A's own self-check passes and lifts A's fence, and B's claim is handed the device in its place under its own request, queued once only, and at no step are two members' sessions open (2); A fenced for an unconfirmed close: B's keyless observation is refused device_group_action_refused observe_readonly and captures nothing, B's monitor probe is not made twice and B's monitor state is unchanged and still due (3); a client's lease of B is refused device_held_for_member_close naming A, B's queued lease waits in its place, a person's lease of A is granted and its end hands the device to no one (4); C alone fenced for an unconfirmed close: a person's lease of C is granted and its end hands C's key to C's own waiting claim (5); the read of the device's hold failing as a poisoned lock leaves the Runtime fatal, runtime_state_poisoned (6); A's startup claim held by A's performance suspension, or A's ladder claim waiting for performance release, stays first while B's later claim is granted by the queue's own grant during B's observation's guard drop, and once A is released and B's lease ends A's claim is granted next (7, 8); C alone with its first claim withheld by its suspension grants nothing, not even the claim behind it, and once released its first claim is granted first (9). Fix round 1: in (1) only the unconfirmed session close ahead can hold the device, the refused close holding nothing; A's lapsed run lease whose session close ahead is confirmed: A is fenced but holds nothing, B's claim is granted, B's dispatch waits fenced (not close_unconfirmed), B's status row names no hold, and after B's release a new lease of B is granted (10); A's run ends on its own lease and that end's close is unconfirmed: the end hands the device to no one, B's claim waits in its place, B's lease is refused device_held_for_member_close naming A, and B's status row carries device_held close_unconfirmed naming A, A's and C's none (11); B's start preparation refused device_held_for_member_close while A is fenced is not made again while A's fence stands, and once A's self-check lifts it the lease sweep's step makes it again, once, and it passes; B's lease is then granted (12); a real policy cycle with A fenced for an unconfirmed close dispatches nothing to B, whose task's last reason is device_group_waiting close_unconfirmed naming A (13). Fix round 2 (brief rd-1116/brief-437-g1-fix3.md): in (10) the run's end met the lapsed lease (no lease of A's run holds the device after the end work's sweep tick, and A's run does not complete); in (12) B's refused start preparation is recorded once and two runs of the sweep's step while A's fence stands queue and prepare nothing, and once A's fence is lifted the step queues one self-check claim of the Runtime's own for B, B's worker prepares B on its key once and it passes, the key is released, and the step queues nothing more. Train with #475 (brief rd-1116/brief-train-host-475-g1.md; fix round 2's item 3, which had no test): a person's lease of A holds the device and a person's self-check of B waits for it in the device's queue; A is then fenced for an unconfirmed close; at its bound B's self-check is refused lease_queue_expired whose one caused_by link is device_held_for_member_close naming A, B was never granted and its entry has left the queue (14). Train, fix round 1 (brief rd-1116/brief-train-host-fix1.md): in (10) the run's receipt is lease_mismatch (its own lease end met the lease the sweep had ended) and the lease A's run was granted has one lease.expired record; in (12) B's start preparation is recorded under its claim's request, which was asked for and granted the device (the worker's links, not the sweep's); in (14) first the opposite case on a host of its own (no member fenced, A's lease holds the device: B's expiry carries holder_kind client_lease and no caused_by of device_held_for_member_close), then A's lease is released after A is fenced, so B's expiry carries no holder_kind and only the hold kept it waiting; another member's startup claim parked behind its own pause does not keep the held start preparation back: A paused with its startup claim queued, A fenced for an unconfirmed close, B's start preparation refused, A's self-check lifts the fence, and the lease sweep's step queues B's preparation, which B's worker makes once under its claim's request and passes, nothing more is queued and A's claim still waits, never granted (15)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_437_g1::g1_a_members_unconfirmed_close_keeps_the_device_from_the_other_member_after_its_close_lease",
+    "actingcommand-runtime-host::lib::tests::gate_437_g1::g1_once_the_fence_is_lifted_the_claim_that_waited_is_granted_in_its_place",
+    "actingcommand-runtime-host::lib::tests::gate_437_g1::g1_another_members_observation_and_probe_meet_the_fenced_device_as_another_members_lease",
+    "actingcommand-runtime-host::lib::tests::gate_437_g1::g1_a_manual_operation_on_the_other_member_is_refused_naming_the_fenced_member",
+    "actingcommand-runtime-host::lib::tests::gate_437_g1::g1_an_instance_alone_with_its_close_unconfirmed_is_as_before",
+    "actingcommand-runtime-host::lib::tests::gate_437_g1::g1_a_failure_of_the_runtimes_own_on_the_device_hold_is_still_fatal",
+    "actingcommand-runtime-host::lib::tests::gate_437_g1::g1_a_members_claim_its_directive_withholds_stays_first_while_the_other_members_is_granted",
+    "actingcommand-runtime-host::lib::tests::gate_437_g1::g1_a_members_ladder_waiting_for_release_stays_first_while_the_other_members_is_granted",
+    "actingcommand-runtime-host::lib::tests::gate_437_g1::g1_an_instance_alones_withheld_candidate_still_grants_nothing",
+    "actingcommand-runtime-host::lib::tests::gate_437_g1::g1_a_refused_close_whose_session_close_ahead_is_confirmed_holds_the_device_for_no_one",
+    "actingcommand-runtime-host::lib::tests::gate_437_g1::g1_an_ordinary_lease_end_whose_close_is_unconfirmed_hands_the_device_to_no_one",
+    "actingcommand-runtime-host::lib::tests::gate_437_g1::g1_a_member_whose_start_preparation_the_hold_refused_is_prepared_again_once_the_fence_is_lifted",
+    "actingcommand-runtime-host::lib::tests::gate_437_g1::g1_a_policy_cycle_dispatches_nothing_to_the_other_member_while_the_device_is_held",
+    "actingcommand-runtime-host::lib::tests::gate_437_g1::g1_an_operator_claim_that_waits_out_its_bound_while_the_device_is_held_names_the_fenced_member",
+    "actingcommand-runtime-host::lib::tests::gate_437_g1::g1_another_members_claim_parked_behind_its_own_pause_leaves_the_held_preparation_queued",
+]
+incident = ["#437 G1"]
+
+# Workflow #392 DA-5ab (0.12.67; register §1.436; contracts/display-adapter.md section 11; the coordinator's work order of 11-16 on board #392, test "observation"): the Lab's online observation of a 96x64 package on frames three and one and a half times its base, made from the base frame by nearest neighbour (its features on whole 2x2 blocks, so the area average gives it back): the same page, the same rectangle of its element and the same projection, on a projection frame of the base's size naming the device frame's artifact, and the RGB8 hash of the base frame; on the base frame the frame is observed as it is (the projection's frame is the identity given, the RGB8 hash that of the frame's own pixels)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::tests::gate_392_da5ab::da5ab_an_observation_on_a_frame_three_and_one_and_a_half_times_the_base_sees_the_base",
+]
+incident = ["#392 DA-5ab"]
+
+# Workflow #392 DA-5ab (0.12.67; register §1.436; test "a display of another aspect, and one smaller than the base"): the Lab's online observation of a frame of another ratio, of one half the base and of the other orientation is refused with the code a run gives the same frame, display_map_unresolved with layout_undeclared, scale_below_base and orientation_mismatch at display_map_build and the frame's and the base's sizes, never observation_projection_failed
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::tests::gate_392_da5ab::da5ab_a_frame_of_another_ratio_or_smaller_than_the_base_is_the_runs_refusal",
+]
+incident = ["#392 DA-5ab"]
+
+# Workflow #392 DA-5ab (0.12.67; register §1.436; test "presses"): on a 1920x1080 device a Lab operation of a 1280x720 package sends the base point (640, 360) as (960, 540), the base column 1279 as 1919 and the swipe (0, 0) to (1279, 719) as (0, 0) to (1919, 1079) over 300 ms, its records keeping the base inputs and its projections of the base's size; at the adapter's one exit (DisplayMap::send_input), every point of a rectangle drawn in it leaves inside the rectangle's inward device box at round_half_up(v · 3/2), and an input decided on a frame of another size is display_map_stale
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_392_da5ab::da5ab_a_lab_press_on_a_device_three_halves_the_base_leaves_at_its_device_point",
+    "actingcommand-display-adapter::lib::gate_392_da5ab::da5ab_an_input_in_base_coordinates_leaves_at_three_halves_inside_its_device_box",
+]
+incident = ["#392 DA-5ab"]
+
+# Workflow #392 DA-5ab (0.12.67; register §1.436; test "presses", a ratio of 5/4): on a 1600x900 device a Lab operation of a 1280x720 package observes its page and fails at its input with display_map_unresolved (input_scale_unsupported at display_input_map, frame 1600x900, base 1280x720), nothing sent; at the adapter's one exit every input at 5/4 is that refusal
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_392_da5ab::da5ab_a_lab_press_on_a_device_five_quarters_the_base_sends_nothing",
+    "actingcommand-display-adapter::lib::gate_392_da5ab::da5ab_an_input_at_five_quarters_is_refused_before_anything_is_converted",
+]
+incident = ["#392 DA-5ab"]
+
+# Workflow #392 DA-5ab fix round 1 (0.12.67; register §1.436; the coordinator's work order of 11-16 after the review of pull request #1780, point 5): on a 1920x1080 device, a 1280x720 package's element, the navigation edge of page_a drawn in the box (101, 50, 21, 11), is pressed at its projection's point (111, 55), the record keeping that geometry and the base input and its projection of the base's size, and the device receives (167, 83), inside the box's inward device box (152, 75) to (183, 91), exclusive (1); a declared operation whose click is that box draws its point in it from a seed (its draw's source region that box, the attempt's tap in it) and is confirmed, and the device receives the point at round_half_up(v · 3/2), inside the same device box (2); on a 1600x900 device the declared operation of the 1280x720 package (op_a, the tap (1, 0)) fails at its input with display_map_unresolved (input_scale_unsupported at display_input_map, frame 1600x900, base 1280x720), end failed, its attempt keeping the base tap and never reaching its input, nothing sent (3)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_392_da5ab::da5ab_fix1_an_element_at_three_halves_leaves_inside_its_device_box",
+    "actingcommand-runtime-host::lib::tests::gate_392_da5ab::da5ab_fix1_a_declared_operations_drawn_box_at_three_halves_leaves_inside_its_device_box",
+    "actingcommand-runtime-host::lib::tests::gate_392_da5ab::da5ab_fix1_a_declared_operation_on_a_device_five_quarters_the_base_sends_nothing",
+]
+incident = ["#392 DA-5ab"]
+
+# Workflow #463 S3-8 (0.12.68; register §1.444; brief rd-1116/brief-463-s38-run-variables.md; contracts/runtime-interface.md, "The variable values of a contained run"; contracts/package-variables.md, "Runs without a dispatch"): a direct run's request gives values for its package's variables (ContainedTaskRequest.variables). The host in composer mode over one game root (gate_463_v2's, the package going from home to result in one tap and declaring the choice pick, item_a or item_b, default item_b), a manual Runtime clock, one fake instance on a physical provider whose display is observed, one policy evaluation first so that the workbench judges the root (pick applies in the game), each run on a connection of its own: pick given item_a completes after its one tap and its snapshots are overlaid with session.dispatch.parameter.pick item_a (1); item_z is Denied run_variable_value_refused with package_id, variable_name pick and variable_problem not_an_option, nothing pressed and no run reaching its execution (2); a value under a name the package does not declare is Denied run_variable_undeclared with package_id and variable_name, nothing pressed and no run reaching its execution (3); no value: the run completes and reads the default item_b (4)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_463_s38::s38_host_a_given_value_is_what_the_package_reads",
+    "actingcommand-runtime-host::lib::tests::gate_463_s38::s38_host_a_value_the_variable_does_not_take_is_refused_before_admission",
+    "actingcommand-runtime-host::lib::tests::gate_463_s38::s38_host_an_undeclared_name_is_refused",
+    "actingcommand-runtime-host::lib::tests::gate_463_s38::s38_host_without_values_the_run_reads_the_defaults",
+]
+incident = ["#463 S3-8"]
+
+# Workflow #463 S3-8, fix round 1 (0.12.68; register §1.444, "Fix round 1"; brief rd-1116/brief-463-s38-fix1.md; the review of #1789, its section (h); contracts/package-variables.md, "Runs without a dispatch"; contracts/runtime-interface.md, "The variable values of a contained run"): the refusals no test reached, each Denied with nothing pressed, no run reaching its execution and no task.package_admitted more in the ledger than before the run, on the fixture of the row "Workflow #463 S3-8". The root's goals.json uses the name pick for a heading, so pick does not apply in the game root (goal_name_conflict, as the workbench's table says): item_a is run_variable_not_applying with package_id, variable_name pick and variable_problem goal_name_conflict (1); the package also declares order (ordered, options item_a and item_b, 0 to 2 keys), which applies: ["item_a", "item_z"], which the variable would take in part, is run_variable_value_refused with variable_name order and variable_problem keys_left_out (2); a request frame whose variables hold seventeen values, written as raw JSON past the contract's constructor, is Denied at the door invalid_contained_task_variable_count (3). Adapted (row "Workflow #463 S3-8"): its tests 2 and 3 also assert the ledger's admissions unchanged
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_463_s38::s38_fix1_a_variable_that_does_not_apply_is_refused_before_admission",
+    "actingcommand-runtime-host::lib::tests::gate_463_s38::s38_fix1_a_value_taken_only_in_part_is_refused",
+    "actingcommand-runtime-host::lib::tests::gate_463_s38::s38_fix1_seventeen_values_in_a_raw_request_are_refused_at_the_door",
+]
+incident = ["#463 S3-8"]
+
+# The 0.12.68 train, fix round (#463 S3-8 and stage two joined in pull request #1789; register §1.444, "Fix round of the 0.12.68 train"; brief rd-1116/brief-train-01268-fix1.md, point 4; the review of the train, rd-1116/review-train-01268.md, whose host tests of an ordered value were refusals only; contracts/runtime-interface.md, "The variable values of a contained run"): on the fixture of the row "Workflow #463 S3-8", the package declaring one ordered variable as stage two's record stop writes a choice (list_item, its options item_a and item_b titled under the package's locale, min_count 1, max_count 2, default ["item_b"]), which applies in the game root: a direct run given ["item_b", "item_a"], allowed and not in the options' order, completes after its one tap, and its snapshots hold session.dispatch.parameter.list_item as the rows {key item_b, rank 1} and {key item_a, rank 2}
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_463_s38::train_01268_fix1_an_allowed_order_of_a_generated_choice_is_what_the_package_reads",
+]
+incident = ["#463 0.12.68 train"]

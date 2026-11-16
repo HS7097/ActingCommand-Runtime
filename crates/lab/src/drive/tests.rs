@@ -89,6 +89,47 @@ fn tap_target_real_execution_uses_input_port() {
     );
 }
 
+/// Workflow #434 LW-1 (register §1.435; the coordinator's correction of item 1 of its work order):
+/// `tap-target` and `navigate` without a dry run and without the capture actinglab refuses are
+/// refused before anything is read or pressed, `validation_failed`, and the refusal says that the
+/// command only plans on a saved scene and names what presses a package's target on an instance
+/// (`do --capture` with the target, an element, or a point) or routes one (`ensure --capture`).
+#[test]
+fn lw1_tap_target_and_navigate_without_a_dry_run_name_what_presses() {
+    let fixture = Fixture::new();
+    let mut lab = fixture.lab();
+    let mut request = fixture.tap_request(red_scene(), false);
+    request.capture_requested = false;
+    let mut tap_ledger = ledger("tap-target");
+    let error = lab
+        .tap_target(request, &mut tap_ledger)
+        .expect_err("tap-target only plans");
+    assert_eq!(error.code, "validation_failed", "{}", error.message);
+    for named in [
+        "saved scene",
+        "presses nothing",
+        "do --capture",
+        "--tap x,y",
+    ] {
+        assert!(error.message.contains(named), "{named}: {}", error.message);
+    }
+
+    let mut request = fixture.navigate_request();
+    request.dry_run = false;
+    let mut navigate_ledger = ledger("navigate");
+    let error = lab
+        .navigate(request, &mut navigate_ledger)
+        .expect_err("navigate only plans");
+    assert_eq!(error.code, "validation_failed", "{}", error.message);
+    for named in ["saved scene", "presses nothing", "ensure --capture"] {
+        assert!(error.message.contains(named), "{named}: {}", error.message);
+    }
+    assert!(
+        fixture.actions.lock().expect("actions").is_empty(),
+        "nothing pressed"
+    );
+}
+
 #[test]
 fn absolute_coordinate_derivation_preserves_existing_translation() {
     let derived = derive_absolute_coordinate_rect_from_match(

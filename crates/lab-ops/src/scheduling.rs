@@ -10,10 +10,22 @@
 //!   it read (`SchedulingPauseExpectation`);
 //! - `offset` (`actingctl task-offset`): one manual priority offset through the ordinary fact
 //!   publication, `PublishFacts` (Workflow #308 slice 4a-2).
+//!
+//! #463 S1-7 (`contracts/lab-recording.md`, "A recording holds its instance"): the hold of a
+//! recording, which the Lab's `record` commands take and release through these: `record start`
+//! reads the pause the instance shows ([`instance_pause_reason`]) and, when it shows none, writes
+//! its session header naming its own hold and then pauses the instance's scheduling as `pause`
+//! does ([`pause_for_recording`]; fix round 2: the header first, so that a start that is killed in
+//! the drain leaves a header that names the pause); a pause the Runtime refused left no pause
+//! ([`pause_refused`]). The end of the recording resumes only the pause that shows its reason,
+//! found by that reason as the rescue module's `release_own` finds its own
+//! ([`release_recording_hold`]), and each `--record` press or application operation reads whether
+//! the instance is held ([`instance_scheduling_paused`]).
 
 use actingcommand_contract::{
-    EventId, FactObservation, FactRecord, FactScope, OwnerEpoch, RuntimeResult, SanitizationError,
-    SchedulingPauseExpectation, SchedulingPauseReason, SchedulingPauseScope,
+    EventId, FactObservation, FactRecord, FactScope, InstancePauseState, OwnerEpoch,
+    RuntimeControlPlaneStatus, RuntimeResult, SanitizationError, SchedulingPauseExpectation,
+    SchedulingPauseReason, SchedulingPauseScope,
 };
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientError};
 use serde::Serialize;
@@ -29,6 +41,9 @@ pub const CLI_DRAIN_TIMEOUT_MS: u64 = 60_000;
 pub const MCP_PAUSE_REASON: &str = "mcp.pause";
 pub const MCP_DRAIN_TIMEOUT_S: u64 = 60;
 pub const MCP_MAX_DRAIN_TIMEOUT_S: u64 = 600;
+/// The drain of the Lab's `pause` row when none is given (the operation table's `drain` default,
+/// 300 s); #463 S1-7: a recording's hold waits as that pause waits.
+pub const LAB_PAUSE_DRAIN_TIMEOUT_MS: u64 = 300_000;
 /// `source_detector` of the priority offsets `offset` publishes.
 const TASK_OFFSET_DETECTOR: &str = "actingctl.task-offset";
 
@@ -40,13 +55,8 @@ pub fn pause_scope(instance_alias: Option<String>) -> SchedulingPauseScope {
     }
 }
 
-/// The instance a scope names; `None` for the global scope.
-pub fn scope_alias(scope: &SchedulingPauseScope) -> Option<&str> {
-    match scope {
-        SchedulingPauseScope::Instance { instance_alias } => Some(instance_alias.as_str()),
-        SchedulingPauseScope::Global => None,
-    }
-}
+// Workflow #434 LAB-6S4a (0.12.63): `scope_alias`, the instance MCP's provenance and its jobs
+// named, went with the provenance before a write.
 
 /// `pause`: scheduling paused on `scope` for `reason`, an instance's runs drained within
 /// `drain_timeout_ms`; the Runtime's result.
@@ -84,6 +94,104 @@ pub fn resume_expected(
 /// MCP's answer of a resume: `{resumed}`.
 pub fn resumed_answer(resumed: &RuntimeResult) -> Value {
     json!({"resumed": resumed})
+}
+
+/// #463 S1-7: `record start`'s status read on `client`: the reason of the pause it shows on the
+/// instance `alias`, or none. A status the Runtime refuses, or does not answer, is the error.
+pub fn instance_pause_reason(
+    client: &RuntimeClient,
+    alias: &str,
+) -> Result<Option<SchedulingPauseReason>, RuntimeClientError> {
+    let status = client.status()?;
+    Ok(instance_pause(&status, alias).map(|pause| pause.pause_reason.clone()))
+}
+
+/// #463 S1-7: `record start`'s pause of the instance `alias` on `client` for the recording's own
+/// reason `hold`, as the `pause` row pauses it, with that row's drain
+/// ([`LAB_PAUSE_DRAIN_TIMEOUT_MS`]): the answer waits as that pause waits (a run in flight drained,
+/// or stopped at its next checkpoint after the drain; the client waits for the receipt the drain,
+/// the pause's checkpoint grace and its IO timeout). The Runtime's result.
+pub fn pause_for_recording(
+    client: &RuntimeClient,
+    alias: &str,
+    hold: SchedulingPauseReason,
+) -> Result<RuntimeResult, RuntimeClientError> {
+    pause(
+        client,
+        pause_scope(Some(alias.to_owned())),
+        hold,
+        LAB_PAUSE_DRAIN_TIMEOUT_MS,
+    )
+}
+
+/// #463 S1-7 fix round 2: whether the failure `error` of a pause is the Runtime's refusal, a
+/// receipt that says no pause was made: the Runtime's own receipt of the pause arrived and carries
+/// the failure (the client keeps such a receipt as the received one). By the pause's rules
+/// (`contracts/scheduling-pause.md`) a refused pause changes nothing, and a stage that fails fails
+/// the request as a whole and lifts the gate it closed. Every other failure (the connection lost,
+/// the wait for the receipt ended, a receipt that did not match the request) leaves it unknown
+/// whether the pause was made.
+pub fn pause_refused(error: &RuntimeClientError) -> bool {
+    error.received_receipt().is_some()
+}
+
+/// #463 S1-7: what the release of a recording's own hold did.
+#[derive(Debug)]
+pub enum RecordingHoldReleased {
+    /// The instance's pause that showed the hold's reason was resumed by the pause it showed: the
+    /// Runtime's result.
+    Resumed(Box<RuntimeResult>),
+    /// No pause of the instance showed the hold's reason: the reason of the pause it showed
+    /// instead (another party's), or none. Nothing was sent.
+    Gone(Option<SchedulingPauseReason>),
+}
+
+/// #463 S1-7: the release of the recording's own hold `hold` on the instance `alias`, as the
+/// rescue module's `release_own` releases its own: one status read; only the instance's pause
+/// that shows exactly `hold` is resumed, by the pause it shows now (that owner epoch, that
+/// revision: the Runtime's restore numbers every pause anew, so a remembered revision is not
+/// enough); a pause with another reason, or none, is left as it is. A status or resume the
+/// Runtime refuses, or does not answer, is the error: the hold stays.
+pub fn release_recording_hold(
+    client: &RuntimeClient,
+    alias: &str,
+    hold: &SchedulingPauseReason,
+) -> Result<RecordingHoldReleased, RuntimeClientError> {
+    let status = client.status()?;
+    let shown = instance_pause(&status, alias);
+    let Some(pause) = shown.filter(|pause| pause.pause_reason == *hold) else {
+        return Ok(RecordingHoldReleased::Gone(
+            shown.map(|pause| pause.pause_reason.clone()),
+        ));
+    };
+    let expected = SchedulingPauseExpectation {
+        owner_epoch: status.owner_epoch(),
+        revision: pause.revision,
+    };
+    resume_expected(client, pause_scope(Some(alias.to_owned())), expected)
+        .map(|resumed| RecordingHoldReleased::Resumed(Box::new(resumed)))
+}
+
+/// #463 S1-7: whether one status read shows the scheduling of the instance `alias` paused: its
+/// own pause, or the global pause.
+pub fn instance_scheduling_paused(
+    client: &RuntimeClient,
+    alias: &str,
+) -> Result<bool, RuntimeClientError> {
+    let status = client.status()?;
+    Ok(status.scheduling_pause().is_some() || instance_pause(&status, alias).is_some())
+}
+
+/// The pause the status `status` shows on the instance `alias`, if any.
+fn instance_pause<'a>(
+    status: &'a RuntimeControlPlaneStatus,
+    alias: &str,
+) -> Option<&'a InstancePauseState> {
+    status
+        .instances()
+        .iter()
+        .find(|instance| instance.instance_alias() == alias)
+        .and_then(|instance| instance.pause())
 }
 
 /// Why `offset` published nothing.

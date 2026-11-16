@@ -919,3 +919,113 @@ fn a24_failure_burst_window_does_not_depend_on_arrival_order() {
         );
     }
 }
+
+// Workflow #469 D4a (0.12.62; register §1.400; the owner's approval on board #469): `device_locked`
+// is of the ladder class `planned_stop`, as the host's three other holds of a handset's start gate
+// are, and the ladder does with it what it did: a rung whose entry it holds is skipped
+// `device_not_ready` as theirs is (the skip reads the code), no trigger item of the defaults matches
+// it at any stage, and three of its warnings on one instance within the window register no burst.
+#[test]
+fn d4a_a_locked_device_still_skips_its_rung_device_not_ready_and_starts_no_ladder() {
+    use actingcommand_contract::outcome::LadderClass;
+
+    let locked = actingcommand_device::codes::DeviceStateCode::DeviceLocked.as_str();
+    for hold in [
+        locked,
+        crate::codes::DeviceStateHostCode::ThermalHold.as_str(),
+        crate::codes::DeviceStateHostCode::BatteryLow.as_str(),
+        crate::codes::DeviceStateHostCode::InUse.as_str(),
+    ] {
+        assert_eq!(
+            ladder_class_of(hold),
+            Some(LadderClass::PlannedStop),
+            "{hold}"
+        );
+        assert_eq!(
+            recovery_entry_skip(hold),
+            Some(RecoveryRungSkipReason::DeviceNotReady),
+            "{hold}"
+        );
+    }
+    let defaults = ladder(serde_json::json!({}));
+    // Every stage of the seven, the recovery preparation's, the resource fence's and a drill's
+    // included.
+    for stage in RecoveryTriggerStage::ALL {
+        assert_eq!(
+            defaults.classify(stage, locked),
+            TriggerVerdict::Unmatched,
+            "{stage:?}"
+        );
+    }
+    let node = instance();
+    let three = [1_000, 2_000, 3_000].map(|at_unix_ms| CountedRecord {
+        severity: EventSeverity::Warning,
+        ..record(node, at_unix_ms, locked)
+    });
+    assert!(bursts(defaults, &three).is_empty(), "three locked warnings");
+}
+
+// Workflow #469 D4b (0.12.63; register §1.401; the owner's approval on board #469): a vision
+// provider failure met while the kernel evaluates a guard, a `when` or an expected identity now
+// ends its run with `contained_task_vision_provider_failed` (as one met at a page evaluation
+// does), of the ladder class `environment_fault`. Under the defaults no item matches it at the task
+// stage, so its failed run starts no ladder at once, and the default `stability_burst` counts it:
+// three such failed runs on one instance within the window register one burst. The two codes such
+// a failure ended with before, which a real evaluation error still ends with
+// (`contained_task_guard_evaluation_failed`, `contained_task_recognition_failed`, class
+// `pack_logic_mismatch`), start a ladder at once by `pack_logic` and register no burst.
+#[test]
+fn d4b_a_vision_provider_failure_counts_toward_the_burst_and_starts_no_ladder_at_once() {
+    use actingcommand_contract::codes::SharedCode;
+    use actingcommand_contract::outcome::LadderClass;
+    use actingcommand_execution_kernel::ExecutionKernelCode;
+
+    let provider = ExecutionKernelCode::ContainedTaskVisionProviderFailed.as_str();
+    let defaults = ladder(serde_json::json!({}));
+    let node = instance();
+    let three = |spelling: &'static str| {
+        [1_000, 2_000, 3_000].map(|at_unix_ms| record(node, at_unix_ms, spelling))
+    };
+    assert_eq!(
+        ladder_class_of(provider),
+        Some(LadderClass::EnvironmentFault)
+    );
+    assert_eq!(
+        defaults.classify(RecoveryTriggerStage::Task, provider),
+        TriggerVerdict::Unmatched,
+        "no ladder at once"
+    );
+    match defaults.classify(RecoveryTriggerStage::StabilityWarnings, provider) {
+        TriggerVerdict::Matched { item, by } => {
+            assert_eq!(item.id, "stability_burst");
+            assert_eq!(by, MatchedBy::Class(LadderClass::EnvironmentFault));
+        }
+        other => panic!("no burst item counts the provider failure: {other:?}"),
+    }
+    let counted = bursts(Arc::clone(&defaults), &three(provider));
+    let [burst] = counted.as_slice() else {
+        panic!("one burst: {}", counted.len());
+    };
+    assert_eq!(burst.instance_id, node);
+    assert_eq!(burst.config.triggers[burst.item].id, "stability_burst");
+    for evaluation in [
+        SharedCode::ContainedTaskGuardEvaluationFailed.as_str(),
+        SharedCode::ContainedTaskRecognitionFailed.as_str(),
+    ] {
+        match defaults.classify(RecoveryTriggerStage::Task, evaluation) {
+            TriggerVerdict::Matched { item, by } => {
+                assert_eq!(item.id, "pack_logic", "{evaluation}");
+                assert_eq!(
+                    by,
+                    MatchedBy::Class(LadderClass::PackLogicMismatch),
+                    "{evaluation}"
+                );
+            }
+            other => panic!("{evaluation} does not reach pack_logic: {other:?}"),
+        }
+        assert!(
+            bursts(Arc::clone(&defaults), &three(evaluation)).is_empty(),
+            "{evaluation} registered a burst"
+        );
+    }
+}

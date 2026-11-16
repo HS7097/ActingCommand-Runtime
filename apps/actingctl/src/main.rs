@@ -61,7 +61,7 @@ mod cli_line;
 use actingcommand_lab_ops::scheduling::{self, OffsetFailure, pause_scope};
 use actingcommand_lab_ops::wait::{Waited, wait_at_most};
 use actingcommand_lab_ops::{
-    configure, emulators, fact_publish, frames, shutdown, targets, wake_test, with_cause,
+    configure, emulators, fact_publish, frames, shutdown, targets, wake_test,
 };
 // Read by the MCP server only, and `schedule` only by its tests.
 #[cfg(all(test, feature = "mcp"))]
@@ -69,9 +69,6 @@ use actingcommand_lab_ops::schedule;
 #[cfg(feature = "mcp")]
 use actingcommand_lab_ops::{apps, lab_child, material, material_export, run_show};
 
-// Test-only: Workflow #381 A, the install-transition run budget (test plan A-2 G2a).
-#[cfg(test)]
-mod gate_381a;
 // Test-only: Workflow #382 A-1 (test plan v2.2 §3.7), the CLI grammar (G10) and
 // `request-shutdown --wait` (G11), in-process.
 #[cfg(test)]
@@ -80,15 +77,15 @@ mod gate_382_a1;
 // `Lab-CLI` and keeps its envelope of 0.12.58.
 #[cfg(test)]
 mod gate_434_lab6s2b2;
-// Test-only: Workflow #381 A, the held Runtime start and the provider without instances, mounted
-// once for the whole binary (mcp::tests::gate_387_d1b; `crates/watchdog` mounts it for its own
-// gates since Workflow #434 LAB-4).
-#[cfg(test)]
-#[allow(dead_code)]
-#[path = "../../../tests/support/held_runtime.rs"]
-mod held_runtime;
+// Test-only: the provider without instances, mounted once for the whole binary
+// (mcp::tests::gate_387_d1b; `crates/watchdog` mounts it for its own gates since Workflow #434
+// LAB-4; the held Runtime start it also held went with Workflow #434 LAB-6S4a).
 #[cfg(feature = "mcp")]
 mod mcp;
+#[cfg(test)]
+#[allow(dead_code)]
+#[path = "../../../tests/support/no_instance_runtime.rs"]
+mod no_instance_runtime;
 // Workflow #434 LAB-3 (contracts/lab-two-entries.md §7; register §1.287, "Slice LAB-3"): `install`
 // (Workflow #421 INST-1, the command-line installer of a single-location root, with `mcp-entry`),
 // `start` and `restart` (Workflow #389 MCP-10) and `agent-channel` (Workflow #432 AGT-T1) live in
@@ -98,7 +95,9 @@ mod mcp;
 #[cfg(windows)]
 use actingcommand_lab_rescue::{agent_channel, install, runtime_start};
 // Workflow #434 LAB-1b: the shutdown wait lives in `crates/lab-ops`; this gives its failure as
-// `ActingctlError::ShutdownWait` to `request-shutdown` and `install-transition`.
+// `ActingctlError::ShutdownWait` to the G11 gate (Workflow #434 LAB-6S4a: `install-transition`,
+// its one product caller, is gone).
+#[cfg(test)]
 mod shutdown_wait;
 // Workflow #434 LAB-4 (register §1.287, "Slice LAB-4"): the watchdog is `crates/watchdog`, which
 // actingwatch.exe runs too; `watchdog …` runs it from there with the same output, codes and
@@ -115,9 +114,8 @@ use actingcommand_contract::outcome::Category;
 use actingcommand_contract::outcome::{Detail, IoOp, Outcome};
 use actingcommand_contract::{
     CaptureSequenceSpec, ConfigSettingChange, ContainedTaskRecoveryBinding, ContainedTaskRequest,
-    CorrelationId, EmulatorInstanceAction, EventActor, EventSource, InstallTransitionAction,
-    InstallTransitionPhase, RequestId, RuntimeMonitorPolicy, RuntimeReceipt, RuntimeReceiptState,
-    RuntimeResult, SanitizationError,
+    CorrelationId, EmulatorInstanceAction, EventActor, EventSource, RequestId,
+    RuntimeMonitorPolicy, RuntimeReceiptState, SanitizationError,
 };
 use actingcommand_lab_ops::codes::{ActingctlCode, ArgumentProblem};
 use actingcommand_lab_ops::initiator::Initiator;
@@ -131,16 +129,16 @@ use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// The developer text of `actingctl_usage_invalid`.
-const USAGE: &str = "usage: actingctl <observe|reset|status [--config]|config set <key>=<json>...|config clear <key>...|facts (--program|--instance <alias|instance_id|ADB port>) [--key-prefix <prefix>]|request-shutdown|install-transition --action-json <json>|monitor-status|perf-status [--instance <alias|instance_id|ADB port>]|fact-refresh [--instance <alias|instance_id|ADB port>]|schedule [--instance <alias|instance_id|ADB port>]|monitor-set|monitor-clear|emulator <status|start|stop|restart|discover>|stream|task-run|task-offset <task_id> <offset_milli>|pause [--reason <code>] [--drain-timeout-ms <n>]|resume|selfcheck <alias>|ladder-drill --instance <alias|instance_id|ADB port> [--device]|agent-wake-test --to <channel> [--instance <alias>] [--wait-s <seconds>]> --state-root <path> [--instance <id>] [--program] [--wait <seconds>] [--package <locator> [--recovery-package <locator>]]\nusage: actingctl watchdog <status|run-once [--from-task]|install|uninstall> --root <install root>";
+const USAGE: &str = "usage: actingctl <observe|reset|status [--config]|config set <key>=<json>...|config clear <key>...|facts (--program|--instance <alias|instance_id|ADB port>) [--key-prefix <prefix>]|request-shutdown|monitor-status|perf-status [--instance <alias|instance_id|ADB port>]|fact-refresh [--instance <alias|instance_id|ADB port>]|schedule [--instance <alias|instance_id|ADB port>]|monitor-set|monitor-clear|emulator <status|start|stop|restart|discover>|stream|task-run|task-offset <task_id> <offset_milli>|pause [--reason <code>] [--drain-timeout-ms <n>]|resume|selfcheck <alias>|ladder-drill --instance <alias|instance_id|ADB port> [--device]|agent-wake-test --to <channel> [--instance <alias>] [--wait-s <seconds>]> --state-root <path> [--instance <id>] [--program] [--wait <seconds>] [--package <locator> [--recovery-package <locator>]]\nusage: actingctl watchdog <status|run-once [--from-task]|install|uninstall> --root <install root>";
 /// The developer text of an `ACTINGCOMMAND_DETAIL` the CLI does not know.
 const DETAIL_USAGE: &str = "ACTINGCOMMAND_DETAIL takes codes or full";
 /// The member a result that is not a JSON object goes under.
 const RESULT_MEMBER: &str = "result";
-/// Upper bound for `--wait <seconds>` (`request-shutdown`, `install-transition`; Workflow #389
-/// MCP-21: `emulator start|stop|restart` and `task-run`).
+/// Upper bound for `--wait <seconds>` (`request-shutdown`; Workflow #389 MCP-21: `emulator
+/// start|stop|restart` and `task-run`).
 const MAX_WAIT_SECONDS: u64 = 3600;
 /// Workflow #434 LAB-6S2-B2 (`contracts/lab-two-entries.md` §2.4, §4.2; register §1.287, "Slice
 /// LAB-6S2-B2"; the coordinator's rulings of 2026-11-13 on board #434, not the owner's words):
@@ -374,59 +372,20 @@ fn print_agent_channel(answer: agent_channel::Answer) -> ExitCode {
     }
 }
 
-/// Workflow #381 A R1′, R2: how one `install-transition` run talks to the Runtime.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct InstallTransitionRun {
-    /// The deadline of the whole run, counted from its start; no exchange waits past it.
-    budget: Option<Duration>,
-    /// The I/O timeout of one exchange.
-    exchange_timeout: Duration,
-    /// Whether the run declares its governance identity before the action.
-    declares_identity: bool,
-}
-
-/// Workflow #381 A R1′ (review M2): one deadline for each run, not one per exchange. Query,
-/// Release, BeginDrain and Abort take at most 60 s in all; CommitShutdown's exchanges take at
-/// most 10 s, so that with the `--wait 60` acsetup adds they stay inside acsetup's 75 s.
-const INSTALL_TRANSITION_RUN_BUDGET: Duration = Duration::from_secs(60);
-const INSTALL_COMMIT_EXCHANGE_BUDGET: Duration = Duration::from_secs(10);
-
-fn install_transition_run(action: &InstallTransitionAction) -> InstallTransitionRun {
-    let budget = match action {
-        InstallTransitionAction::CommitShutdown { .. } => INSTALL_COMMIT_EXCHANGE_BUDGET,
-        _ => INSTALL_TRANSITION_RUN_BUDGET,
-    };
-    InstallTransitionRun {
-        budget: Some(budget),
-        exchange_timeout: budget,
-        // Workflow #381 A R2: the read-only Query declares no identity, so it appends nothing.
-        declares_identity: !matches!(action, InstallTransitionAction::Query { .. }),
-    }
-}
-
-/// Workflow #381 A R1′: the client configuration of one run. An install-transition run gets its
-/// budget as the exchange timeout and as one deadline counted from `started`. Workflow #434
-/// LAB-6S2-B2: the Lab channel with this program's word ([`WORD`]), where it was the CLI channel,
-/// and the envelope of 0.12.58 ([`Command::origin`]: (Cli, Cli), or (Agent, Adapter) for
-/// `agent-publish-facts` and `agent-apply-resource-targets`).
-fn client_config(state_root: &Path, command: &Command, started: Instant) -> RuntimeClientConfig {
+/// The client configuration of one run. Workflow #434 LAB-6S2-B2: the Lab channel with this
+/// program's word ([`WORD`]), where it was the CLI channel, and the envelope of 0.12.58
+/// ([`Command::origin`]: (Cli, Cli), or (Agent, Adapter) for `agent-publish-facts` and
+/// `agent-apply-resource-targets`). Workflow #434 LAB-6S4a (0.12.63): `install-transition`, the
+/// one command whose run had its own budget, is gone.
+fn client_config(state_root: &Path, command: &Command) -> RuntimeClientConfig {
     let (actor, source) = command.origin();
-    let config = RuntimeClientConfig::new(
+    RuntimeClientConfig::new(
         state_root,
         actingcommand_runtime_client::RuntimeChannel::Lab,
         actor,
         source,
     )
-    .with_initiator(WORD.word());
-    let Command::InstallTransition { action } = command else {
-        return config;
-    };
-    let run = install_transition_run(action);
-    let config = config.with_io_timeout(run.exchange_timeout);
-    match run.budget {
-        Some(budget) => config.with_deadline(started + budget),
-        None => config,
-    }
+    .with_initiator(WORD.word())
 }
 
 /// One subcommand's result line (Workflow #378 A5): the result's members, its top outcome, and
@@ -449,7 +408,6 @@ impl Done {
 }
 
 fn run(arguments: Vec<OsString>, detail: Detail) -> Result<Done, ActingctlError> {
-    let started = Instant::now();
     let Invocation {
         state_root,
         instance,
@@ -482,11 +440,7 @@ fn run(arguments: Vec<OsString>, detail: Detail) -> Result<Done, ActingctlError>
         }
         _ => None,
     };
-    let install_run = match &command {
-        Command::InstallTransition { action } => Some(install_transition_run(action)),
-        _ => None,
-    };
-    let config = client_config(&state_root, &command, started);
+    let config = client_config(&state_root, &command);
     // Model §7.1: `ACTINGCOMMAND_DETAIL=codes` reaches the receipts the line prints, too.
     let config = match detail {
         Detail::Codes => config.with_detail(Detail::Codes),
@@ -564,32 +518,6 @@ fn run(arguments: Vec<OsString>, detail: Detail) -> Result<Done, ActingctlError>
                 result.insert("shutdown".to_owned(), shutdown);
             }
             Ok(Done::new(result, Outcome::new(success)))
-        }
-        Command::InstallTransition { action } => {
-            if install_run.is_some_and(|install_run| install_run.declares_identity) {
-                client
-                    .declare_governance_identity(&actingcommand_contract::GovernanceIdentityCard {
-                        client: "actingctl".to_owned(),
-                        client_version: Some(env!("CARGO_PKG_VERSION").to_owned()),
-                        instance: None,
-                    })
-                    .map_err(ActingctlError::Runtime)?;
-            }
-            let transition_id = action_transition_id(&action).to_owned();
-            let receipt = client
-                .install_transition(action)
-                .map_err(ActingctlError::Runtime)?;
-            let mut result = members([member("receipt", &receipt)?]);
-            if let Some(wait) = wait {
-                let target = client.runtime_info().shutdown_target();
-                drop(client);
-                let shutdown = shutdown_wait::wait_for_shutdown(&state_root, &target, wait)?;
-                result.insert("shutdown".to_owned(), shutdown);
-            }
-            Ok(Done::new(
-                result,
-                install_transition_outcome(&receipt, &transition_id),
-            ))
         }
         Command::Reset => reported(
             &client
@@ -970,40 +898,6 @@ fn result_members(
         .map_err(ActingctlError::Output)
 }
 
-/// The transition an install-transition action names.
-fn action_transition_id(action: &InstallTransitionAction) -> &str {
-    match action {
-        InstallTransitionAction::BeginDrain { transition_id, .. }
-        | InstallTransitionAction::Query { transition_id } => transition_id,
-        InstallTransitionAction::Abort { ticket }
-        | InstallTransitionAction::CommitShutdown { ticket }
-        | InstallTransitionAction::Release { ticket, .. } => &ticket.transition_id,
-    }
-}
-
-/// Model §7.3: the outcome of an install transition's receipt. A reported phase `failed` or
-/// `aborted` is `install_transition_failed` / `install_transition_aborted` (error), caused by
-/// the transition's failure code when it carries one; any other phase is
-/// `install_transition_reported`. A commit's receipt (the accepted shutdown) reports no phase,
-/// only the transition the action named.
-fn install_transition_outcome(receipt: &RuntimeReceipt, transition_id: &str) -> Outcome {
-    let Some(RuntimeResult::InstallTransition { status }) = receipt.result() else {
-        return Outcome::new(ActingctlCode::InstallTransitionReported).transition_id(transition_id);
-    };
-    let (code, ended) = match status.phase {
-        InstallTransitionPhase::Failed => (ActingctlCode::InstallTransitionFailed, true),
-        InstallTransitionPhase::Aborted => (ActingctlCode::InstallTransitionAborted, true),
-        _ => (ActingctlCode::InstallTransitionReported, false),
-    };
-    let outcome = Outcome::new(code)
-        .transition_id(&status.ticket.transition_id)
-        .phase(status.phase);
-    match status.failure_code.as_deref() {
-        Some(spelling) if ended => with_cause(outcome, Outcome::relayed(spelling)),
-        _ => outcome,
-    }
-}
-
 /// `task-run`: a package path as the Runtime opens it.
 fn canonical_package(path: PathBuf) -> Result<PathBuf, ActingctlError> {
     match std::fs::canonicalize(&path) {
@@ -1065,9 +959,6 @@ enum Command {
         offset_milli: i64,
     },
     RequestShutdown,
-    InstallTransition {
-        action: actingcommand_contract::InstallTransitionAction,
-    },
     Observe,
     Reset,
     Status,
@@ -1179,7 +1070,6 @@ impl Invocation {
         let mut record_file = None;
         let mut policy_file = None;
         let mut wait = None;
-        let mut install_action = None;
         let mut pause_reason = None;
         let mut drain_timeout_ms = None;
         // Workflow #390 DRILL-1: `ladder-drill --device` acts on the device.
@@ -1243,16 +1133,6 @@ impl Invocation {
                 }
                 "--policy-file" => {
                     policy_file = Some(PathBuf::from(require_value(&arguments, &mut index)?));
-                }
-                "--action-json" => {
-                    let json = require_text(&arguments, &mut index)?;
-                    if json.len() > 4096 {
-                        return Err(ActingctlError::Usage);
-                    }
-                    let action: actingcommand_contract::InstallTransitionAction =
-                        serde_json::from_str(&json).map_err(|_| ActingctlError::Usage)?;
-                    action.validate().map_err(|_| ActingctlError::Usage)?;
-                    install_action = Some(action);
                 }
                 "--wait" => {
                     let seconds = require_u64(&arguments, &mut index)?;
@@ -1349,18 +1229,6 @@ impl Invocation {
                 }
             }
             "request-shutdown" => Command::RequestShutdown,
-            "install-transition" => {
-                let action = install_action.ok_or(ActingctlError::Usage)?;
-                if wait.is_some()
-                    && !matches!(
-                        action,
-                        actingcommand_contract::InstallTransitionAction::CommitShutdown { .. }
-                    )
-                {
-                    return Err(ActingctlError::Usage);
-                }
-                Command::InstallTransition { action }
-            }
             "reset" => Command::Reset,
             "observe" => Command::Observe,
             "status" if config => Command::StatusConfig,
@@ -1469,7 +1337,6 @@ impl Command {
             Self::TaskOffset { .. } => ActingctlCode::TaskOffsetPublished,
             Self::RequestShutdown if waits => ActingctlCode::RuntimeShutdownCompleted,
             Self::RequestShutdown => ActingctlCode::RuntimeShutdownRequested,
-            Self::InstallTransition { .. } => ActingctlCode::InstallTransitionReported,
             Self::Observe => ActingctlCode::InstanceObserved,
             Self::Reset => ActingctlCode::InstanceResetDone,
             Self::Status => ActingctlCode::RuntimeStatusReported,
@@ -1520,7 +1387,6 @@ impl Command {
                 | Self::ScheduleExplanation
                 | Self::EmulatorDiscover
                 | Self::RequestShutdown
-                | Self::InstallTransition { .. }
                 | Self::AgentPublishFacts { .. }
                 | Self::AgentApplyResourceTargets { .. }
                 | Self::SelfCheck { .. }
@@ -1550,7 +1416,6 @@ fn flags_of(command: &str, action: Option<&str>) -> Option<&'static [&'static st
             &["--state-root", "--instance"]
         }
         "request-shutdown" => &["--state-root", "--wait"],
-        "install-transition" => &["--state-root", "--action-json", "--wait"],
         "status" => &["--state-root", "--config"],
         // Workflow #385 P-m: the shadow measurement's status, every row or one instance's.
         "perf-status" => &["--state-root", "--instance"],
@@ -1996,7 +1861,7 @@ mod tests {
     /// Runtime client failure is the client's outcome unchanged.
     #[test]
     fn every_command_has_its_success_code_and_every_failure_its_code() {
-        let commands: [(&[&str], &str); 28] = [
+        let commands: [(&[&str], &str); 27] = [
             (
                 &["agent-publish-facts", "--record-file", "observation.json"],
                 "agent_facts_published",
@@ -2017,14 +1882,6 @@ mod tests {
             (
                 &["request-shutdown", "--wait", "60"],
                 "runtime_shutdown_completed",
-            ),
-            (
-                &[
-                    "install-transition",
-                    "--action-json",
-                    r#"{"action":"query","transition_id":"transition-a5"}"#,
-                ],
-                "install_transition_reported",
             ),
             (
                 &["observe", "--instance", "neutral.instance"],

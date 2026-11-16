@@ -695,6 +695,13 @@ impl EffectiveConfig {
         scheduling::lift_check_min_interval_ms(&|key: &str| self.value_or_shipped(key))
     }
 
+    /// Workflow #463 U1b: `scheduling.suspension.break_in_runs` and
+    /// `scheduling.suspension.break_in_ms` in effect: a pair's break-in of one package content
+    /// lasts at least that many settled runs and at least that many milliseconds since the first.
+    pub fn break_in(&self) -> Result<(u32, u64), ConfigFailure> {
+        scheduling::break_in(&|key: &str| self.value_or_shipped(key))
+    }
+
     /// Workflow #427-A: `scheduling.parallel.enabled` in effect, read by actingd at the start of
     /// every policy round: whether the round hands its admitted scheduled runs to the instance
     /// workers.

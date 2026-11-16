@@ -247,8 +247,9 @@ actinglab [--json] standard-pack build --repo <checkout> --source-repository <ow
   runs them as before, so its report is the same for the same input. The build differs in five
   things only:
   - the checkout's read paths are every input its bundle carries: besides those of "Clean" above,
-    `schedule.json`, `display-layout.json`, `loading.json`, `goals.json`, `ui.json` and every file
-    under `loading/`, `notices/` and `tables/`, each the committed blob and none an ignored file;
+    `schedule.json`, `display-layout.json`, `loading.json`, `goals.json`, `pack-catalog.json`
+    (Workflow #477 PC-1; `ui.json` before it) and every file under `loading/`, `notices/` and
+    `tables/`, each the committed blob and none an ignored file;
   - `package bundle` is given `goals.json` too when the repository holds it (`--goals`);
   - the repository's tables, `tables/<table_id>.json` at its root, read as the Runtime reads a game
     root's tables (`read_standard_pack_tables`; a refused table fails the `bundle` step with its
@@ -257,14 +258,18 @@ actinglab [--json] standard-pack build --repo <checkout> --source-repository <ow
     `bundle.json` lists them in `tables`, in file name order (the index member an updater reads,
     [package-reference.md](package-reference.md)); without a table the zip's `bundle.json` is the
     one `package bundle` wrote;
-  - (fix round 1) the repository's `ui.json`, a root file of the standard package root
+  - (fix round 1, `ui.json`; since Workflow #477 PC-1, 0.12.68, [pack-catalog.md](pack-catalog.md))
+    the repository's `pack-catalog.json`, a root file of the standard package root
     ([package-reference.md](package-reference.md), "Standard package root") that `place` places
     and sets aside when a zip carries none, goes into the zip's root byte for byte, and into the
-    installed root, when its reader `parse_standard_pack_ui` takes it against the zip's
-    `bundle.json`; each violation of a refused file fails the `bundle` step as
-    `standard_pack_root_invalid` (`game`, `path`, `standard_pack_problem`, `json_pointer`) and the
-    file is not carried. `package bundle` still has no flag for it: the build adds it to the zip,
-    as it adds the tables;
+    installed root, when its reader `parse_standard_pack_catalog` takes its business part against
+    the zip's `bundle.json` and the pools the repository's `schedule.json` declares; each error of
+    a refused file fails the `bundle` step as `standard_pack_root_invalid` (`game`, `path`,
+    `standard_pack_problem`, `json_pointer`) and the file is not carried; its display defects are
+    the installed root's check's warnings. A repository that still holds `ui.json` gets the
+    `bundle` step's warning `standard_pack_ui_retired`, and the zip never carries that file.
+    `package bundle` still has no flag for the catalog: the build adds it to the zip, as it adds
+    the tables;
   - `interfaces.json` declares the `package` revision the zip's content needs ("The `package`
     revision" below), not resource verify's 3 or 10.
 - **Clean, and bound to its commit.** The `checkout` precondition refuses a tree with a change, an
@@ -287,7 +292,7 @@ actinglab [--json] standard-pack build --repo <checkout> --source-repository <ow
   way can leave the zip, or the zip and `SHA256SUMS`, under their final names without `build.json`.
   `build.json` is the mark of a complete build: it is there only beside the other two, and a reader
   takes a directory without it as incomplete. For a commit whose repository holds no
-  `goals.json`, no table and no `ui.json` and whose packs need no revision above 3, the zip is
+  `goals.json`, no table and no `pack-catalog.json` and whose packs need no revision above 3, the zip is
   `resource verify`'s zip of that commit, byte for byte.
 - **Steps that did not all pass** write no product: `resource_build_failed`
   (`failed_step_count`), caused by the steps' outcome (`resource_verify_failed` with each failed
@@ -299,7 +304,45 @@ actinglab [--json] standard-pack build --repo <checkout> --source-repository <ow
   caused by the OS failure); the files already written stay.
 - **The answer** (exit 0, the CLI module's line, its members flat): `build` (the document of
   `build.json`), `out`, `files` (`zip`, `sums`, `build`, `work`, absolute paths) and `steps` (each
-  step as the report lists it).
+  step as the report lists it); and (#463 S3-7, since 0.12.63; register
+  [v012-register.md](v012-register.md) §1.414) `readiness`, `warnings` and `next`:
+  - **`readiness`** is the readiness of the installed root the `bundle` step laid out and checked,
+    `<out>/work/installed/<game>/`. The build keeps that root after a successful build, in every
+    case: the step makes it, nothing of the build deletes, and a build whose steps all passed has
+    laid it out. It is judged by the resource tooling's one function,
+    `judge_standard_pack_readiness`, called, not copied, as `standard-pack ready --root` calls it on
+    that root: no installation and no declared `package` range handed in. So the answer is that
+    row's answer for that root ([standard-pack-schedule.md](standard-pack-schedule.md),
+    "Readiness"): `installation` `not_read`, the five installation items `not_judged`
+    (`installation_not_read`), I3 an information line, and each pack `waiting` with every reason,
+    `ready_to_place` or `not_scheduled`, never `dispatchable`.
+  - It is judged once the product is written, while the root exists, and changes nothing of the
+    build's success. A root the function refuses (one no longer there, unreadable, or refused by
+    the structure check) is not judged: `readiness` is then absent and `readiness_refused` is the
+    function's refusal in the envelope's error form (`code`, `message`, `blocked_by`, `details`;
+    its code one of the function's own), and the build still exits 0. No readiness is ever
+    answered that was not computed.
+  - **`warnings`** (fix round 2), present only when not empty, each `{outcome}` as the Lab's
+    answers carry a warning: beside such a refusal exactly one, `resource_build_readiness_refused`
+    (warning; `path` the installed root), caused by the refusal's own code, so that a reader of
+    the answer's outcome and warnings sees it. Its developer line is the program's form, `WARN
+    actinglab: resource_build_readiness_refused path=<root> [caused_by: <code>] <message>`, on
+    stderr.
+  - The readiness of a real game makes the answer large: through the Lab's MCP server an answer
+    above its budget is exported whole to a file by that server's overflow rule
+    ([lab-two-entries.md](lab-two-entries.md) §9.3, "The Lab overflow rule") and never cut.
+  - **`next.place`** is the placement's plan of the files written as the words of the Lab's
+    command line after the program's name, as every `next` of the Lab holds a command (fix round
+    2): `["place", "<zip>", "--sums", "<SHA256SUMS>", "--plan"]`, the two paths those of `files`,
+    as the build wrote them, for the `actinglab` of the installation the bundle is to be placed
+    into (`place` acts on the root of the `actinglab.exe` that runs it:
+    [install-cli.md](install-cli.md), "The Lab's rescue module"). It is the plan's line only: a
+    placement is an act under the owner's authorization, and no answer hands out the line that
+    places.
+  - **`build.json` carries none of them.** Readiness is a judgement of a root at a moment, which any
+    reader can ask for again (`standard-pack ready --root`); the file records the build. Its
+    members, its schema `actingcommand.standard-pack-build.v1` and the capability's `build_schema`
+    stay as they are.
 - **Refusals** as `resource verify`'s: global `--dry-run` `dry_run_unsupported`, after flag parsing
   only, with no alternative; the device, Runtime and instance options
   `offline_device_scope_forbidden`; any other flag, a flag twice, a flag without its value, a
@@ -333,8 +376,9 @@ actinglab [--json] standard-pack build --repo <checkout> --source-repository <ow
 root, in byte order), `root_directories` (its directories but `packs`, in byte order) and `packs`
 (its `bundle.json` packs in their order, without `path`) are read back from the zip written, whose
 name, SHA-256 (the one `SHA256SUMS` names) and size `zip` gives; `commit` and `tree` are the
-checkout's, `executable_sha256` the `tools` step's. It has no readiness member: whether a pack is
-ready to be dispatched is judged by another slice's function, which a later slice adds here.
+checkout's, `executable_sha256` the `tools` step's. It has no readiness member: (#463 S3-7) the
+build's answer carries the readiness of its installed root and the next command ("The answer"
+above), and the file does not.
 
 ### The `package` revision
 
@@ -392,6 +436,7 @@ as an element of its array.
 | 14 | control | `variables` of the document, whatever it holds, as the installer's `place` reads it (`variable_undeclared` below 14) | V1, §1.378; [package-variables.md](package-variables.md) |
 | 14 | root | `goals.json`, by its presence at the zip's root, as `place` reads it (`goal_undeclared` below 14), whatever version it holds | G-R1, §1.356 (12, version 1); V1 fix round 3, §1.378 (14, version 2) |
 | 15 | control and its entry task | an ending page, in a pack whose `control.json` `execution_mode` is `linear_steps` only: a page of a `terminal_pages` under `mappings` of the `scheduling_outcome` of the task file of the control's `entry_task_id` (`resources/operations/<entry_task_id>/task.json`, the package's program; no other task file of the pack) that is none of that task's `target_page` (one page or a set) and none of the `from` of its `operations` whose `select` holds an `on_empty` (absent or `null`, none), each page compared with the prefix `<game>/`, the control's `game`, taken off where it is written. That is the kernel's own test of an admitted package (`PreparedContainedTask::declares_linear_endings`, `canonical_page_anchor`), a reader private to the kernel crate, which actinglab does not depend on, so the table reads the same members | K2, §1.380; [linear-steps.md](linear-steps.md), "Endings"; P2b, §1.385 |
+| 16 | root | `pack-catalog.json`, by its presence at the zip's root (`CATALOG_PACKAGE_REVISION`), so that an installer that knows no such root file refuses the zip at its `package` edge; `place` asks nothing of it | PC-1 fix round 1, §1.438; [pack-catalog.md](pack-catalog.md), "Interface" |
 
 Revisions 13 and 14 (after the train 0.12.61a; register §1.376): no content needs 12 any more.
 Revision 12 brought version 1 of `goals.json`, which this build reads no more; revision 14 brought
@@ -408,7 +453,8 @@ nothing admits. A terminal page in a task file that is not the entry task's need
 admission reads it as the package's program.
 
 Nothing else needs a revision: a game root's `tables/` (row 6: no member of a pack reads them),
-`ui.json` (§1.240: no revision), the other root files and every other file of a pack need 3. A
+`ui.json` (§1.240; no zip carries it since §1.438), the other root files and every other file of a
+pack need 3. A
 member is found by its name, its file and its place, not by the declaration reader, and where an
 older member of the same name exists, by the value or the condition that tells them apart. Fix
 round 2: a member the table counts under a holder is matched by the name of its direct holder

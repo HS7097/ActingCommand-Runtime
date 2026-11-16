@@ -272,14 +272,21 @@ pub enum ClaimGate {
         routine_held: bool,
         autostart: bool,
     },
+    /// Workflow #437 G1 (`contracts/device-group.md`, "A failure stays where it belongs"): the
+    /// device of a member of a device group of several is held for another member's unconfirmed
+    /// close (that member is fenced): every entry of this member waits, whatever its kind, but a
+    /// holder-owned continuation, which only the device's current holder queues.
+    DeviceHeld,
 }
 
 impl ClaimGate {
     /// Whether a scheduling pause (or what the caller reads as one) holds the routine entries.
+    /// Workflow #437 G1: a device held for another member holds them too.
     pub const fn routine_held(self) -> bool {
         matches!(
             self,
             Self::RoutineHeld
+                | Self::DeviceHeld
                 | Self::Silenced {
                     routine_held: true,
                     ..
@@ -315,6 +322,7 @@ impl ClaimGate {
                     || matches!(kind, ClaimKind::StartupPackage)
                     || (autostart && matches!(kind, ClaimKind::Autostart))
             }
+            Self::DeviceHeld => !kind.holder_owned(),
         }
     }
 
@@ -361,6 +369,15 @@ pub struct ClaimRequest {
     pub kind: ClaimKind,
     pub priority: LeasePriority,
     pub lease_ttl_ms: u64,
+}
+
+/// Workflow #437 G1: one entry the queue's grant may give a free device
+/// ([`SeedScheduler::grant_candidates`]): its request, the member it serves and its kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct QueuedCandidate {
+    pub request_id: RequestId,
+    pub instance_id: InstanceId,
+    pub kind: ClaimKind,
 }
 
 /// The deadline of an internal claim: never (`scheduler.queued` forbids only 0).
@@ -1477,7 +1494,12 @@ impl SeedScheduler {
                     retry_after_ms: cooldown_until - now_monotonic_ms,
                 });
             }
-            if immediate_allowed && !entry_ahead {
+            // Workflow #437 G1: a member whose device is held for another member
+            // (`ClaimGate::DeviceHeld`) waits queued, in its place, from the first moment.
+            if immediate_allowed
+                && !entry_ahead
+                && !gate.gate_of(instance_id).holds(ClaimKind::ClientLease)
+            {
                 let lease_ttl_ms = self.config.lease_ttl_ms;
                 let preparation = self.prepare_acquire_with_policy(
                     request_id,
@@ -1638,6 +1660,74 @@ impl SeedScheduler {
             return Ok(None);
         };
         let entry = state.queue[position].clone();
+        self.prepare_grant_of_entry(entry, now_monotonic_ms)
+            .map(Some)
+    }
+
+    /// Workflow #437 G1 (`contracts/device-group.md`, "One queue, one worker, one lease per
+    /// device"): the entries the queue's grant may give a free device now, out of its takeover
+    /// cooldown, in the queue's order (priority, then arrival), each by its own member's gate:
+    /// the host passes over an entry its own member's performance directive or ladder wait holds
+    /// and grants the first it lets through. Empty when the device is held or in its cooldown.
+    pub fn grant_candidates(
+        &self,
+        instance_id: InstanceId,
+        gate: impl MemberGates,
+        now_monotonic_ms: u64,
+    ) -> Vec<QueuedCandidate> {
+        let Some(state) = self.instances.get(&self.device(instance_id)) else {
+            return Vec::new();
+        };
+        if state.lease.is_some() || state.cooldown_until_monotonic_ms > now_monotonic_ms {
+            return Vec::new();
+        }
+        state
+            .queue
+            .iter()
+            .filter(|entry| entry.eligible(&gate, now_monotonic_ms))
+            .map(|entry| QueuedCandidate {
+                request_id: entry.request_id,
+                instance_id: entry.instance_id,
+                kind: entry.kind,
+            })
+            .collect()
+    }
+
+    /// Workflow #437 G1: [`Self::prepare_queued_grant`] of the entry of `request_id`, the one the
+    /// host chose from [`Self::grant_candidates`] under the same gates and clock reading: prepared
+    /// only while the device is free and out of its takeover cooldown and that entry still waits,
+    /// eligible; `None` otherwise. The token names the member the entry serves.
+    pub fn prepare_queued_grant_of(
+        &mut self,
+        instance_id: InstanceId,
+        request_id: RequestId,
+        gate: impl MemberGates,
+        now_monotonic_ms: u64,
+    ) -> SchedulerResult<Option<PreparedLease>> {
+        let Some(state) = self.instances.get(&self.device(instance_id)) else {
+            return Ok(None);
+        };
+        if state.lease.is_some() || state.cooldown_until_monotonic_ms > now_monotonic_ms {
+            return Ok(None);
+        }
+        let Some(entry) = state
+            .queue
+            .iter()
+            .find(|entry| entry.request_id == request_id && entry.eligible(&gate, now_monotonic_ms))
+            .cloned()
+        else {
+            return Ok(None);
+        };
+        self.prepare_grant_of_entry(entry, now_monotonic_ms)
+            .map(Some)
+    }
+
+    /// The queue's grant of `entry`, with that entry's TTL.
+    fn prepare_grant_of_entry(
+        &mut self,
+        entry: QueueEntry,
+        now_monotonic_ms: u64,
+    ) -> SchedulerResult<PreparedLease> {
         let expires_at_monotonic_ms = self.expiry_from_ttl(now_monotonic_ms, entry.lease_ttl_ms)?;
         let lease_id = *self
             .lease_issuer
@@ -1652,7 +1742,7 @@ impl SeedScheduler {
             expires_at_monotonic_ms,
         )
         .map_err(|_| SchedulerError::InvalidConfig)?;
-        Ok(Some(PreparedLease {
+        Ok(PreparedLease {
             token,
             connection_id: entry.connection_id,
             acquire_request_id: entry.request_id,
@@ -1661,7 +1751,7 @@ impl SeedScheduler {
             kind: entry.kind,
             from_queue: true,
             closes_ahead: false,
-        }))
+        })
     }
 
     /// Workflow #369 Q-2: the queued entries of `instance_id` in grant order. Workflow #437

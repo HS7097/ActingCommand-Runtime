@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::{
-    ApprovalTarget, ArtifactIssuePolicy, ArtifactKind, ArtifactLinksDraft, ArtifactProducer,
+    ArtifactIssuePolicy, ArtifactKind, ArtifactLinksDraft, ArtifactProducer,
     ArtifactRedactionState, ArtifactStoreIssuer, AuditInput, ClientActionKind, EventDraft,
     EventLinksDraft, EventOrigin, EventPayloadDraft, EventSeverity, EventType, IdentifierIssuer,
     LeasePayloadDraft, OriginModule, RetentionClass, RuntimeMonitorState, RuntimePayloadDraft,
@@ -1894,8 +1894,9 @@ fn c4_operations_round_trip_without_generic_payloads() {
     );
 }
 
+// Workflow #434 LAB-6S4a (0.12.63): the approval request is gone; the client action stays.
 #[test]
-fn client_action_and_approval_operations_are_closed_typed_contracts() {
+fn client_action_operations_are_closed_typed_contracts() {
     let client_action = ClientActionRecord::new(
         "overview",
         "refresh",
@@ -1904,32 +1905,21 @@ fn client_action_and_approval_operations_are_closed_typed_contracts() {
         None,
     )
     .expect("client action");
-    let approval = ApprovalDecisionRecord::new(
-        "approval:fixture-a",
-        ApprovalDisposition::Approved,
-        ApprovalTarget::Catalog {
-            catalog_hash: format!("sha256:{}", "a".repeat(64)),
-            catalog_version: 1,
-        },
-        crate::ApprovalReasonCode::new("user_confirmed").expect("approval reason"),
-    )
-    .expect("approval");
-    for request in [
-        request(RuntimeOperation::RecordClientAction {
-            action: client_action,
-        }),
-        governance_request(RuntimeOperation::RecordApprovalDecision { decision: approval }),
-    ] {
-        let encoded = serde_json::to_value(&request).expect("request JSON");
-        let decoded = serde_json::from_value::<RuntimeRequest>(encoded.clone())
-            .expect("typed interaction request");
-        decoded.validate().expect("valid interaction request");
-        let mut smuggled = encoded;
-        smuggled["operation"]["raw_text"] = serde_json::json!("secret");
-        assert!(serde_json::from_value::<RuntimeRequest>(smuggled).is_err());
-    }
+    let request = request(RuntimeOperation::RecordClientAction {
+        action: client_action,
+    });
+    let encoded = serde_json::to_value(&request).expect("request JSON");
+    let decoded = serde_json::from_value::<RuntimeRequest>(encoded.clone())
+        .expect("typed interaction request");
+    decoded.validate().expect("valid interaction request");
+    let mut smuggled = encoded;
+    smuggled["operation"]["raw_text"] = serde_json::json!("secret");
+    assert!(serde_json::from_value::<RuntimeRequest>(smuggled).is_err());
 }
 
+// Workflow #434 LAB-6S4a (0.12.63): the request that declared the card is gone; the card stays
+// the shape of the `governance.identity_declared` records a ledger holds, and its own check is
+// what reading such a record runs.
 #[test]
 fn governance_identity_cards_require_a_valid_card() {
     let card = GovernanceIdentityCard {
@@ -1937,13 +1927,7 @@ fn governance_identity_cards_require_a_valid_card() {
         client_version: Some("1.2.3".to_owned()),
         instance: None,
     };
-    let operation = RuntimeOperation::DeclareGovernanceIdentity { card: card.clone() };
-    governance_request(operation.clone())
-        .validate()
-        .expect("person governance identity");
-    request(operation)
-        .validate()
-        .expect("operator governance identity");
+    card.validate().expect("valid governance identity card");
 
     for (invalid, code) in [
         (
@@ -1969,7 +1953,7 @@ fn governance_identity_cards_require_a_valid_card() {
         ),
     ] {
         assert_eq!(
-            RuntimeOperation::DeclareGovernanceIdentity { card: invalid }
+            invalid
                 .validate()
                 .expect_err("invalid governance identity card")
                 .code()
@@ -2784,8 +2768,6 @@ fn a4_each_request_kind_that_completes_has_its_own_success_code() {
         Kind::PollQueuedLease,
         Kind::CancelQueuedLease,
         Kind::ObserveContainedPage,
-        Kind::UpgradeState,
-        Kind::UpgradeStateStatus,
         Kind::LoadPack,
         Kind::UnloadPack,
         // Workflow #429 R-0: refused `not_implemented` until their slices add the behaviour
@@ -3142,4 +3124,67 @@ fn a4_contained_task_results_name_their_end_task_result() {
             .expect("cancellation status decodes"),
         cancelled
     );
+}
+
+/// Workflow #437 G1 fix round 2 (register §1.433; `runtime-client` 10): the status member
+/// `device_held` round-trips in its instance's row of a `Status` result, and a row without it has
+/// no `device_held` key; an unknown member of it, and a word other than `close_unconfirmed`, are
+/// refused.
+#[test]
+fn g1_status_device_held_round_trips_and_is_strict() {
+    let ids = issuer();
+    let owner_epoch = *ids.mint_owner_epoch().expect("owner epoch").transport();
+    let instance = |alias: &str| {
+        RuntimeInstanceStatus::new(
+            alias,
+            *ids.mint_instance_id().expect("instance id").transport(),
+            false,
+            0,
+            false,
+            false,
+            false,
+        )
+        .expect("instance status")
+    };
+    let held = InstanceDeviceHeld {
+        device_group_wait: DeviceHeldWait::CloseUnconfirmed,
+        alias: "node.a".to_owned(),
+    };
+    let status = RuntimeControlPlaneStatus::new(
+        owner_epoch,
+        vec![
+            instance("node.a"),
+            instance("node.b").with_device_held(Some(held.clone())),
+        ],
+    )
+    .expect("status");
+    let result = RuntimeResult::Status { status };
+    let encoded = serde_json::to_value(&result).expect("status encodes");
+    let decoded: RuntimeResult = serde_json::from_value(encoded.clone()).expect("status decodes");
+    assert_eq!(decoded, result);
+    let rows = encoded["status"]["instances"]
+        .as_array()
+        .expect("instance rows");
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0]["instance_alias"], serde_json::json!("node.a"));
+    assert!(rows[0].get("device_held").is_none(), "{encoded}");
+    assert_eq!(rows[1]["instance_alias"], serde_json::json!("node.b"));
+    assert_eq!(
+        rows[1]["device_held"],
+        serde_json::json!({"device_group_wait": "close_unconfirmed", "alias": "node.a"})
+    );
+    let RuntimeResult::Status { status } = decoded else {
+        panic!("a status result");
+    };
+    status.validate().expect("status validates");
+    assert_eq!(status.instances()[0].device_held(), None);
+    assert_eq!(status.instances()[1].device_held(), Some(&held));
+
+    let mut unknown = encoded.clone();
+    unknown["status"]["instances"][1]["device_held"]["unknown_member"] = serde_json::json!(1);
+    assert!(serde_json::from_value::<RuntimeResult>(unknown).is_err());
+    let mut word = encoded;
+    word["status"]["instances"][1]["device_held"]["device_group_wait"] =
+        serde_json::json!("fenced");
+    assert!(serde_json::from_value::<RuntimeResult>(word).is_err());
 }

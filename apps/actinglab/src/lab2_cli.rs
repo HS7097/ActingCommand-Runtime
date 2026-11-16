@@ -69,6 +69,11 @@ pub(super) struct Lab2Scene {
     /// #411 Lab L3: the Runtime frame the scene was captured as, which an input planned on it
     /// names (`input_with_frame`); none for a scene file.
     input_frame: Option<InputFrameReference>,
+    /// Workflow #392 DA-5ab: the device size (width, height) the Runtime frames were reduced
+    /// from to the package's base ([`on_package_base`]); `None` when the frames are the device's
+    /// own (a display of the base's size). The train of DA-5: also the size a stored scene was
+    /// reduced from ([`in_package_base`]), by the same function.
+    reduced_from: Option<(u32, u32)>,
 }
 
 impl Lab2Scene {
@@ -78,6 +83,41 @@ impl Lab2Scene {
             .iter()
             .chain(std::iter::once(&self.scene))
             .collect()
+    }
+}
+
+/// Workflow #392 DA-5cd (`contracts/display-adapter.md` section 12): `loaded`'s frames, read from
+/// scene files, on the package's base. The train of DA-5 (R1): each judged, reduced and answered as
+/// a frame of its size the live observation captures is, by the same function
+/// (`actingcommand_lab::scene_in_base`, the kernel's `lab_scene_on_base`): a frame of the base's
+/// size as it is; one the live observation brings to the base reduced to it, the frame's PNG then
+/// the reduced frame's, and the size the current frame was reduced from kept (`reduced_from`); any
+/// other refused `lab_scene_size_unsupported` before anything is evaluated. Only the offline frames
+/// are taken so: a Runtime capture is reduced once, on DA-5ab's path ([`on_package_base`]).
+fn in_package_base(loaded: Lab2Scene, evaluator: &RecognitionEvaluator) -> CliOutcome<Lab2Scene> {
+    let base = actingcommand_lab::package_base(evaluator);
+    let device = (loaded.scene.width(), loaded.scene.height());
+    let (scene, coordinates) = actingcommand_lab::scene_in_base(base, loaded.scene)?;
+    let (samples, _) = actingcommand_lab::frames_in_base(base, loaded.samples)?;
+    let (png, reduced_from) = match coordinates {
+        Some(_) => (Some(actingcommand_lab::scene_png(&scene)?), Some(device)),
+        None => (loaded.png, None),
+    };
+    Ok(Lab2Scene {
+        scene,
+        samples,
+        png,
+        reduced_from,
+        ..loaded
+    })
+}
+
+/// Workflow #392 DA-5, the train (R2): an answer about `scene` that states no `frame_coordinates`
+/// of its own states them when its frames were reduced to the package's base, in the base form
+/// ([`scene_coordinates`]); on a frame of the base's size it is as it was.
+fn attach_reduced_coordinates(payload: &mut Value, scene: &Lab2Scene) {
+    if scene.reduced_from.is_some() {
+        payload["frame_coordinates"] = scene_coordinates(scene);
     }
 }
 
@@ -287,9 +327,9 @@ pub(crate) fn run_observe(global: &GlobalOptions, args: &[String]) -> CliOutcome
     if let Some((path, _)) = &frame_png {
         payload["frame_path"] = json!(path.display().to_string());
     }
-    // Workflow #410 item 1: the scene's coordinate system, and its preview when asked.
-    payload["frame_coordinates"] =
-        frame::coordinates(loaded_scene.scene.width(), loaded_scene.scene.height());
+    // Workflow #410 item 1: the scene's coordinate system, and its preview when asked. Workflow
+    // #392 DA-5, the train (R2): a scene reduced to the package's base states the base form.
+    payload["frame_coordinates"] = scene_coordinates(&loaded_scene);
     if flags.bool("--preview") {
         payload["preview"] = frame::scene_preview(&loaded_scene.scene, loaded_scene.png.as_deref());
     }
@@ -424,6 +464,15 @@ fn run_runtime_observe(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<V
             return super::contained_resources::finish_package_use(Err(error), reader.close());
         }
     };
+    // Workflow #392 DA-5ab fix round 1: the observation speaks its package's base. The train of
+    // DA-5 (R4): before anything is captured, the one judgement `record stop` makes of the
+    // recording; a recording whose frames are not the base size is refused
+    // (`record_size_not_base`), as the recorded press refuses it.
+    if let Some(lock) = record_lock.as_ref()
+        && let Err(error) = actingcommand_lab::record_size_check(lock)
+    {
+        return super::contained_resources::finish_package_use(Err(error), reader.close());
+    }
     let session = begin_runtime_debug_session()?;
     start_runtime_debug_operation(&session, RuntimeDebugOperation::Observe)?;
     let result = (|| -> CliOutcome<Value> {
@@ -465,6 +514,37 @@ fn run_runtime_observe(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<V
             }
         };
         let observed = verified.observation();
+        // Workflow #392 DA-5ab fix round 1 (`contracts/display-adapter.md` section 11): a recorded
+        // observation on a display of another size than the base would put the device's frame
+        // into the recording beside an answer in the base. The train of DA-5 (R4): the Runtime's
+        // frame is judged as a frame that enters the recording is, before the frame file or the
+        // recording is written (`record_display_not_base` for a recording without a frame,
+        // `record_size_not_base`, `record_frame_size_mismatch` when the display changed during
+        // the recording); the observation's terminal is then `rejected`, as a failed `do` closes
+        // its own (`finish_runtime_debug_result`).
+        if let Some(lock) = record_lock.as_ref()
+            && let Err(refused) = actingcommand_lab::record_frame_check(
+                lock,
+                (observed.frame.width(), observed.frame.height()),
+                "the Runtime observation's frame",
+            )
+        {
+            session
+                .record_event(RuntimeDebugEvent::rejected(
+                    RuntimeDebugOperation::Observe,
+                    EffectDisposition::NotPerformed,
+                    actingcommand_contract::outcome::Outcome::relayed(&refused.code)
+                        .code()
+                        .clone(),
+                ))
+                .map_err(|ledger| {
+                    CliError::device(format!(
+                        "{}; Runtime terminal ledger append failed: {ledger}",
+                        refused.message
+                    ))
+                })?;
+            return Err(refused);
+        }
         let mut payload = json!({
             "req_id": verified.receipt().request_id(),
             "state": observed.status,
@@ -490,11 +570,25 @@ fn run_runtime_observe(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<V
             payload["frame_path"] = json!(path.display().to_string());
         }
         // Workflow #410 item 1: the captured frame's coordinate system, and its preview when
-        // asked.
+        // asked. Workflow #392 DA-5ab: on a display of another size than the package's base (its
+        // projection's frame), the base space the frame was reduced to, and the reduced frame for
+        // the frame file and the preview.
+        let base = (
+            observed.projection.frame.width,
+            observed.projection.frame.height,
+        );
         payload["frame_coordinates"] =
-            frame::coordinates(observed.frame.width(), observed.frame.height());
-        if flags.bool("--preview") {
-            payload["preview"] = frame::preview(verified.png());
+            frame::observed_coordinates(base, (observed.frame.width(), observed.frame.height()));
+        let handed_out = if frame_file.is_some() || flags.bool("--preview") {
+            Some(
+                frame::handed_out_png(&observed.frame, verified.png(), Some(base))
+                    .map_err(CliError::device)?,
+            )
+        } else {
+            None
+        };
+        if let (true, Some(png)) = (flags.bool("--preview"), &handed_out) {
+            payload["preview"] = frame::preview(png);
         }
         // LAB-OBS-1 (register §1.228): the observation stands whatever page it matched, so its
         // terminal is `completed`, as do, ensure and wait close an answer that stands
@@ -537,19 +631,23 @@ fn run_runtime_observe(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<V
             })?;
         }
         // #411 A69 (P60): an answer that cannot be given writes no frame file.
-        if let Some(path) = &frame_file {
-            write_frame(path, verified.png())?;
+        if let (Some(path), Some(png)) = (&frame_file, &handed_out) {
+            write_frame(path, png)?;
         }
         Ok(projected)
     })();
     super::contained_resources::finish_package_use(result, reader.close())
 }
 
+/// `do --capture --dry-run`, the client form of `do` on Runtime captures: it plans on the frame set
+/// and sends nothing. Workflow #392 DA-5, the train's fix round 1 (review A, (e)): `do --capture`
+/// without `--dry-run` is always the Lab operation (`run_do` turns to it before this form), so this
+/// form never presses; its branch that sent its own tap (`device.action`, `device.base_action`)
+/// was never reached and is gone, with the flag that chose it.
 fn run_runtime_do(
     flags: &FlagArgs,
     target: &str,
     instance: &str,
-    dry_run: bool,
     allow_destructive: bool,
     draw: Option<DriveDraw>,
 ) -> CliOutcome<Value> {
@@ -604,44 +702,15 @@ fn run_runtime_do(
         }
         // Workflow #406 T4: with a seed, the point is drawn in the box.
         let (point, sampling) = do_press_point(draw.as_ref(), actual_click.rect, target)?;
-        let (action_id, device) = if dry_run {
-            (Value::Null, json!({"executed": false, "mode": "dry_run"}))
-        } else {
-            let action_id = execute_runtime_debug_input(
-                &session,
-                instance,
-                InputAction::Tap {
-                    x: point.x,
-                    y: point.y,
-                },
-                loaded_scene.input_frame,
-            )?;
-            (
-                serde_json::to_value(action_id)
-                    .map_err(|error| CliError::device(error.to_string()))?,
-                json!({
-                    "executed": true,
-                    "backend": "runtime_proxy",
-                    "authority": "runtime_execution_kernel",
-                    "action": {"type": "tap", "x": point.x, "y": point.y}
-                }),
-            )
-        };
-        let after = if dry_run {
-            before
-        } else {
-            let after_scene = load_runtime_lab2_frames(&session, instance, &evaluator)?;
-            detect_current_page_over(&evaluator, &detector, &after_scene.frames())?
-        };
         let mut payload = json!({
             "req_id": session.correlation_id(),
             "reco_id": Value::Null,
-            "action_id": action_id,
-            "state": if dry_run { "planned" } else { "sent" },
+            "action_id": Value::Null,
+            "state": "planned",
             "instance": instance,
-            "executed": !dry_run,
+            "executed": false,
             "target": target,
-            "page": after.page,
+            "page": before.page,
             "frame_age_ms": loaded_scene.frame_age_ms,
             "backend": loaded_scene.backend,
             "actual_click": {
@@ -657,14 +726,12 @@ fn run_runtime_do(
                 "passed": true,
                 "evaluation": target_eval_json(&evaluation)
             },
-            "observation": page_detection_json(&after),
-            "device": device,
-            "arbitration": runtime_scheduler_projection(!dry_run),
-            // Workflow #410 item 1: the coordinate system of the frame the click was planned on.
-            "frame_coordinates": frame::coordinates(
-                loaded_scene.scene.width(),
-                loaded_scene.scene.height(),
-            ),
+            "observation": page_detection_json(&before),
+            "device": {"executed": false, "mode": "dry_run"},
+            "arbitration": runtime_scheduler_projection(false),
+            // Workflow #410 item 1: the coordinate system of the frame the click was planned on
+            // (Workflow #392 DA-5ab: the package's base on a display of another size).
+            "frame_coordinates": scene_coordinates(&loaded_scene),
         });
         // #411 Lab L5c: as offline `do` reports its frames (B-2 R4), only for a package that
         // declares target consensus.
@@ -736,7 +803,7 @@ fn run_runtime_ensure(
         let scene = load_runtime_lab2_frames(&session, instance, &evaluator)?;
         let start = detect_current_page_over(&evaluator, &detector, &scene.frames())?;
         if start.matched && start.page == target_page {
-            return Ok(json!({
+            let mut payload = json!({
                 "req_id": session.correlation_id(),
                 "state": "already_at_target",
                 "instance": instance,
@@ -747,7 +814,9 @@ fn run_runtime_ensure(
                 "frame_age_ms": scene.frame_age_ms,
                 "backend": scene.backend,
                 "arbitration": runtime_scheduler_projection(false),
-            }));
+            });
+            attach_reduced_coordinates(&mut payload, &scene);
+            return Ok(payload);
         }
         if !start.matched {
             return Err(CliError::safety_blocked(
@@ -776,7 +845,7 @@ fn run_runtime_ensure(
         }
         let route_json = route.iter().map(navigation_edge_json).collect::<Vec<_>>();
         if dry_run {
-            return Ok(json!({
+            let mut payload = json!({
                 "req_id": session.correlation_id(),
                 "state": "planned",
                 "instance": instance,
@@ -787,7 +856,9 @@ fn run_runtime_ensure(
                 "frame_age_ms": scene.frame_age_ms,
                 "backend": scene.backend,
                 "arbitration": runtime_scheduler_projection(false),
-            }));
+            });
+            attach_reduced_coordinates(&mut payload, &scene);
+            return Ok(payload);
         }
 
         let step_timeout = parse_optional_duration_ms(flags, "--step-timeout-ms", 5_000)?;
@@ -926,7 +997,13 @@ fn execute_runtime_navigation_route(
                 &frame_regions,
             )?;
         }
-        let runtime_action = runtime_input_action(&input)?;
+        // Workflow #392 DA-5ab: the route's input is in the package's base; on a display of
+        // another size it leaves under the guard frame's map, or nothing is sent.
+        let runtime_action = sent_on_scene(
+            &guard_scene,
+            runtime_input_action(&input)?,
+            &semantic_boxes(&input),
+        )?;
         // #411 Lab L3: the input names the frame its guard was decided on, which a Nemu-input
         // instance requires (as online `do` passes its before frame).
         let action_id = execute_runtime_debug_input(
@@ -1094,7 +1171,7 @@ fn runtime_wait_for_page(
         let scene = load_runtime_lab2_frames(session, instance, evaluator)?;
         let outcome = detect_current_page_over(evaluator, detector, &scene.frames())?;
         if outcome.matched && outcome.page == page {
-            return Ok(json!({
+            let mut payload = json!({
                 "req_id": session.correlation_id(),
                 "wf_id": session.correlation_id(),
                 "state": "arrived",
@@ -1103,7 +1180,9 @@ fn runtime_wait_for_page(
                 "elapsed_ms": started.elapsed().as_millis() as u64,
                 "frame_age_ms": scene.frame_age_ms,
                 "backend": scene.backend
-            }));
+            });
+            attach_reduced_coordinates(&mut payload, &scene);
+            return Ok(payload);
         }
         if started.elapsed() >= timeout {
             return Err(CliError::safety_blocked(
@@ -1151,7 +1230,7 @@ fn runtime_wait_for_stable_target(
         let next_scene = load_runtime_lab2_frames(session, instance, evaluator)?;
         let current = evaluate_target_over(evaluator, &next_scene.frames(), target)?;
         if actingcommand_lab::target_evaluations_stable_for_wait(&previous, &current) {
-            return Ok(json!({
+            let mut payload = json!({
                 "req_id": session.correlation_id(),
                 "wf_id": session.correlation_id(),
                 "state": "stable",
@@ -1160,7 +1239,9 @@ fn runtime_wait_for_stable_target(
                 "frame_age_ms": next_scene.frame_age_ms,
                 "backend": next_scene.backend,
                 "evaluation": target_eval_json(&current)
-            }));
+            });
+            attach_reduced_coordinates(&mut payload, &next_scene);
+            return Ok(payload);
         }
         if started.elapsed() >= timeout {
             return Err(CliError::safety_blocked(
@@ -1201,7 +1282,127 @@ fn load_runtime_lab2_frames(
         evaluator.target_sample_interval_ms(),
     )
     .ok_or_else(|| CliError::package_invalid("target consensus frame count out of range"))?;
-    capture_runtime_frame_set(session, instance, plan, &mut thread::sleep)
+    let captured = capture_runtime_frame_set(session, instance, plan, &mut thread::sleep)?;
+    on_package_base(captured, evaluator)
+}
+
+/// Workflow #392 DA-5ab (`contracts/display-adapter.md` section 11): a `--capture` client form's
+/// frame set on its package's base, as the Runtime brings a Lab operation's frames there: each
+/// frame by the frame gate's own map and resample (`lab_scene_on_base`). On a display of the
+/// base's size the set is as it was; otherwise every frame is reduced and the device size is kept
+/// (`reduced_from`) for the form's input ([`sent_on_scene`]). A display the map cannot take is
+/// refused with the run's code for it and its values in `details`, before anything is decided.
+fn on_package_base(
+    mut loaded: Lab2Scene,
+    evaluator: &RecognitionEvaluator,
+) -> CliOutcome<Lab2Scene> {
+    let Some(space) = evaluator.pack().coordinate_space else {
+        return Ok(loaded);
+    };
+    let base = (space.width, space.height);
+    let device = (loaded.scene.width(), loaded.scene.height());
+    if device == base {
+        return Ok(loaded);
+    }
+    let reduce = |scene: &Scene| -> CliOutcome<Scene> {
+        match actingcommand_lab::lab_scene_on_base(base, scene) {
+            Ok(Some(reduced)) => Ok(reduced.scene),
+            Ok(None) => Ok(scene.clone()),
+            Err(error) => Err(CliError::new(
+                ErrorKind::DeviceInstance,
+                error.code().as_str(),
+                format!(
+                    "the Runtime's frame of {}x{} does not map onto the package's base of {}x{}",
+                    device.0, device.1, base.0, base.1
+                ),
+                &["device"],
+            )
+            .with_details(Value::Object(error.outcome().values().clone()))),
+        }
+    };
+    loaded.scene = reduce(&loaded.scene)?;
+    loaded.samples = loaded
+        .samples
+        .iter()
+        .map(reduce)
+        .collect::<CliOutcome<Vec<_>>>()?;
+    loaded.reduced_from = Some(device);
+    Ok(loaded)
+}
+
+/// Workflow #392 DA-5ab: `frame_coordinates` of a `--capture` client form's frame set: its
+/// package's base, reduced from the device's size on a display of another size.
+fn scene_coordinates(scene: &Lab2Scene) -> Value {
+    let base = (scene.scene.width(), scene.scene.height());
+    frame::observed_coordinates(base, scene.reduced_from.unwrap_or(base))
+}
+
+/// Workflow #392 DA-5ab: the input a `--capture` client form sends for `action`, made in its
+/// package's base on `scene`'s frame set and drawn in `boxes` (base pixels): `action` itself on a
+/// display of the base's size; otherwise under the frame's map through the run's own exit
+/// (`DisplayMap::send_input`), or refused with the run's code for it and its values in `details`,
+/// and nothing is sent.
+fn sent_on_scene(
+    scene: &Lab2Scene,
+    action: InputAction,
+    boxes: &[actingcommand_lab::DisplayRect],
+) -> CliOutcome<InputAction> {
+    let Some(device) = scene.reduced_from else {
+        return Ok(action);
+    };
+    let base = (scene.scene.width(), scene.scene.height());
+    let refused = |outcome: actingcommand_contract::outcome::Outcome| {
+        CliError::new(
+            ErrorKind::DeviceInstance,
+            outcome.code().as_str().to_owned(),
+            format!(
+                "the input does not leave for the device of {}x{} under the map of the \
+                 package's base of {}x{}; nothing was sent",
+                device.0, device.1, base.0, base.1
+            ),
+            &["device"],
+        )
+        .with_details(Value::Object(outcome.values().clone()))
+    };
+    let map = actingcommand_lab::lab_display_map(base, device)
+        .map_err(|error| refused(error.outcome()))?;
+    map.send_input(
+        &action,
+        boxes,
+        scene.input_frame.as_ref().and_then(|frame| {
+            actingcommand_contract::CaptureExtent::new(frame.width, frame.height)
+        }),
+    )
+    .map_err(|error| match error {
+        actingcommand_lab::InputSendError::Unresolved(refusal) => refused(refusal.outcome()),
+        actingcommand_lab::InputSendError::Stale(stale) => refused(stale.outcome()),
+        actingcommand_lab::InputSendError::OutOfBounds => CliError::device(format!(
+            "a point of the input lies outside the device frame of {}x{}; nothing was sent",
+            device.0, device.1
+        )),
+    })
+}
+
+/// Workflow #392 DA-5ab: the boxes (base pixels) a semantic input was drawn in: a tap's one, a
+/// drag's press and end.
+fn semantic_boxes(input: &SemanticInput) -> Vec<actingcommand_lab::DisplayRect> {
+    match input {
+        SemanticInput::Tap { rect, .. } => vec![pack_box(*rect)],
+        SemanticInput::Drag {
+            from_rect, to_rect, ..
+        } => vec![pack_box(*from_rect), pack_box(*to_rect)],
+        SemanticInput::TargetCenter { .. } | SemanticInput::TargetOffset { .. } => Vec::new(),
+    }
+}
+
+/// A package rectangle as the display adapter's box.
+fn pack_box(rect: PackRect) -> actingcommand_lab::DisplayRect {
+    actingcommand_lab::DisplayRect::new(
+        i64::from(rect.x),
+        i64::from(rect.y),
+        i64::from(rect.width),
+        i64::from(rect.height),
+    )
 }
 
 /// #411 Lab L5c: `plan`'s frames, each a read-only Runtime capture of its own, `pause` waiting
@@ -1348,17 +1549,9 @@ fn load_runtime_lab2_scene(
     let png = frame.original_png.clone();
     let scene = scene_from_frame(&frame)?;
     // #411 Lab L3: the frame reference the Runtime committed for this observation, as the host
-    // names an online `do`'s before frame.
-    let input_frame =
-        observation
-            .artifact()
-            .frame_id()
-            .copied()
-            .map(|frame_id| InputFrameReference {
-                frame_id,
-                width: observation.width(),
-                height: observation.height(),
-            });
+    // names an online `do`'s before frame (#463 S1-1 fix round 2: the one function the device
+    // commands' `--record` builds theirs with).
+    let input_frame = runtime_capture_backend::input_frame_reference(observation);
     let loaded = Lab2Scene {
         scene,
         samples: Vec::new(),
@@ -1371,6 +1564,7 @@ fn load_runtime_lab2_scene(
         frame_age_ms,
         png,
         input_frame,
+        reduced_from: None,
     };
     Ok((loaded, receipt))
 }
@@ -2028,8 +2222,10 @@ pub(crate) fn run_do(global: &GlobalOptions, args: &[String]) -> CliOutcome<Valu
     // Workflow #406 T4 (plan Q20): with `--seed`, the point `do` plans in its target's box is
     // drawn; without it, the box's centre.
     let draw = super::lab_draw::press_draw(super::lab_draw::seed_flag(&flags)?)?;
+    // `--capture` here is `--capture --dry-run`: without `--dry-run` it turned to the Lab operation
+    // above.
     if flags.bool("--capture") {
-        return run_runtime_do(&flags, &target, &instance, dry_run, allow_destructive, draw);
+        return run_runtime_do(&flags, &target, &instance, allow_destructive, draw);
     }
     let result = (|| -> CliOutcome<Value> {
         let resources =
@@ -2122,11 +2318,9 @@ pub(crate) fn run_do(global: &GlobalOptions, args: &[String]) -> CliOutcome<Valu
             "observation": page_detection_json(&after),
             "device": device,
             "arbitration": isolated_offline_projection(),
-            // Workflow #410 item 1: the scene's coordinate system, which the planned click uses.
-            "frame_coordinates": frame::coordinates(
-                loaded_scene.scene.width(),
-                loaded_scene.scene.height(),
-            ),
+            // Workflow #410 item 1: the scene's coordinate system, which the planned click uses
+            // (Workflow #392 DA-5, the train: the base form on a scene reduced to the base).
+            "frame_coordinates": scene_coordinates(&loaded_scene),
         });
         if let Some(coverage) = offline_recognition_coverage(&evaluator, frames.len()) {
             payload["recognition_coverage"] = coverage;
@@ -2186,6 +2380,7 @@ pub(crate) fn run_ensure(global: &GlobalOptions, args: &[String]) -> CliOutcome<
                 "backend": scene.backend,
                 "arbitration": isolated_offline_projection(),
             });
+            attach_reduced_coordinates(&mut payload, &scene);
             attach_env_resolved(&mut payload, &env_resolved);
             // Workflow #428 LAB-OCR-DL: the deadline the switch raised the OCR inference to.
             return super::offline_ocr::with_ocr_deadline(payload, ocr_deadline_max);
@@ -2231,6 +2426,7 @@ pub(crate) fn run_ensure(global: &GlobalOptions, args: &[String]) -> CliOutcome<
             "backend": scene.backend,
             "arbitration": isolated_offline_projection(),
         });
+        attach_reduced_coordinates(&mut payload, &scene);
         attach_env_resolved(&mut payload, &env_resolved);
         super::offline_ocr::with_ocr_deadline(payload, ocr_deadline_max)
     })();
@@ -2565,7 +2761,16 @@ fn lab2_command_contracts() -> Vec<Lab2CommandContract> {
                 "--seed <u64> (with --capture, not --dry-run: draw the point of each box the route presses from this seed; without it each box's centre)",
                 "--test-capture-delay-ms <ms> (test-only scene delay)",
             ],
-            output_fields: &["req_id", "state", "page", "to", "route", "steps", "ledger"],
+            output_fields: &[
+                "req_id",
+                "state",
+                "page",
+                "to",
+                "route",
+                "steps",
+                "frame_coordinates",
+                "ledger",
+            ],
             requires_lease: true,
         },
         Lab2CommandContract {
@@ -2588,6 +2793,7 @@ fn lab2_command_contracts() -> Vec<Lab2CommandContract> {
                 "page",
                 "target",
                 "elapsed_ms",
+                "frame_coordinates",
                 "ledger",
             ],
             requires_lease: false,
@@ -2628,7 +2834,7 @@ fn lab2_command_contracts() -> Vec<Lab2CommandContract> {
         },
         Lab2CommandContract {
             name: "record start",
-            summary: "start a recording session and its Lab recording",
+            summary: "start a recording session and its Lab recording, holding the instance: its scheduling paused through the Runtime with the recording's own reason (#463 S1-7)",
             required: &["--task-id <id>"],
             optional: &[
                 "--locale <locale>",
@@ -2647,6 +2853,7 @@ fn lab2_command_contracts() -> Vec<Lab2CommandContract> {
                 "lab_recording",
                 "record_flag_state_dir",
                 "record_flag_reachable",
+                "hold",
             ],
             requires_lease: false,
         },
@@ -2693,6 +2900,9 @@ fn lab2_command_contracts() -> Vec<Lab2CommandContract> {
                 "--ending",
                 "--outcome-key <key>",
                 "--remove-ending <key>",
+                "--optional-after <k>",
+                "--remove-inserted <n>",
+                "--box <recognize|press>=x1,y1:x2,y2",
                 "--dry-run",
                 "--state-dir <dir>",
             ],
@@ -2715,7 +2925,7 @@ fn lab2_command_contracts() -> Vec<Lab2CommandContract> {
         },
         Lab2CommandContract {
             name: "record stop",
-            summary: "stop the recording session and generate its linear-steps package",
+            summary: "stop the recording session and generate its linear-steps package, then resume the recording's own scheduling pause (#463 S1-7)",
             required: &[],
             optional: &[
                 "--lab-dir <dir>",
@@ -2730,15 +2940,15 @@ fn lab2_command_contracts() -> Vec<Lab2CommandContract> {
                 "--dry-run",
                 "--state-dir <dir>",
             ],
-            output_fields: &["status", "dry_run", "record", "path", "lab"],
+            output_fields: &["status", "dry_run", "record", "path", "lab", "hold"],
             requires_lease: false,
         },
         Lab2CommandContract {
             name: "record status",
-            summary: "show the recording session and its Lab recording steps",
+            summary: "show the recording session, its Lab recording steps and what it holds",
             required: &[],
             optional: &["--state-dir <dir>"],
-            output_fields: &["status", "instance", "record", "path", "lab"],
+            output_fields: &["status", "instance", "record", "path", "lab", "hold"],
             requires_lease: false,
         },
         Lab2CommandContract {
@@ -2947,23 +3157,29 @@ fn load_lab2_scene(
                 "offline Lab-2 CLI verbs require --scene <png>",
             ));
         };
-        return Ok(Lab2Scene {
-            scene,
-            samples: frames.into_iter().map(|(_, scene)| scene).collect(),
-            backend: if test_delay.is_some() {
-                "test_stub_capture".to_string()
-            } else {
-                "scene_file".to_string()
+        // Workflow #392 DA-5cd: a pure scale of the package's coordinate space is reduced to it;
+        // the train of DA-5: as the live observation reduces a frame of its size.
+        return in_package_base(
+            Lab2Scene {
+                scene,
+                samples: frames.into_iter().map(|(_, scene)| scene).collect(),
+                backend: if test_delay.is_some() {
+                    "test_stub_capture".to_string()
+                } else {
+                    "scene_file".to_string()
+                },
+                source: json!({
+                    "kind": if test_delay.is_some() { "test_stub_capture" } else { "scene" },
+                    "path": scene_path.display().to_string(),
+                    "delay_ms": test_delay.map(|delay| delay.as_millis() as u64)
+                }),
+                frame_age_ms: 0,
+                png: Some(png),
+                input_frame: None,
+                reduced_from: None,
             },
-            source: json!({
-                "kind": if test_delay.is_some() { "test_stub_capture" } else { "scene" },
-                "path": scene_path.display().to_string(),
-                "delay_ms": test_delay.map(|delay| delay.as_millis() as u64)
-            }),
-            frame_age_ms: 0,
-            png: Some(png),
-            input_frame: None,
-        });
+            evaluator,
+        );
     }
     Err(CliError::usage(
         "offline Lab-2 CLI verbs require --scene <png>; use --capture for Runtime-backed mode",
@@ -3144,7 +3360,7 @@ fn wait_for_page(
         let scene = load_lab2_scene(global, flags, evaluator)?;
         let outcome = detect_current_page_over(evaluator, detector, &scene.frames())?;
         if outcome.matched && outcome.page == page {
-            return Ok(json!({
+            let mut payload = json!({
                 "req_id": ids.req_id,
                 "wf_id": ids.wf_id,
                 "state": "arrived",
@@ -3153,7 +3369,9 @@ fn wait_for_page(
                 "elapsed_ms": started.elapsed().as_millis() as u64,
                 "frame_age_ms": scene.frame_age_ms,
                 "backend": scene.backend
-            }));
+            });
+            attach_reduced_coordinates(&mut payload, &scene);
+            return Ok(payload);
         }
         if started.elapsed() >= timing.timeout {
             let details = lab2_error_payload_for_flags(
@@ -3207,7 +3425,7 @@ fn wait_for_stable_target(
         let next_scene = load_lab2_scene(global, flags, evaluator)?;
         let current = evaluate_target_over(evaluator, &next_scene.frames(), target)?;
         if actingcommand_lab::target_evaluations_stable_for_wait(&previous, &current) {
-            return Ok(json!({
+            let mut payload = json!({
                 "req_id": ids.req_id,
                 "wf_id": ids.wf_id,
                 "state": "stable",
@@ -3216,7 +3434,9 @@ fn wait_for_stable_target(
                 "frame_age_ms": next_scene.frame_age_ms,
                 "backend": next_scene.backend,
                 "evaluation": target_eval_json(&current)
-            }));
+            });
+            attach_reduced_coordinates(&mut payload, &next_scene);
+            return Ok(payload);
         }
         if started.elapsed() >= timing.timeout {
             let details = lab2_error_details_for_flags(

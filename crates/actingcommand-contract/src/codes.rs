@@ -124,7 +124,9 @@ crate::outcome_codes! {
         RequestQueued => "request_queued": info / none,
         RequestCancelled => "request_cancelled": info / none,
         HealthCompleted => "request_health_completed": success / none,
-        InstallTransitionCompleted => "request_install_transition_completed": success / none,
+        // Workflow #434 LAB-6S4a: `request_install_transition_completed`,
+        // `request_declare_governance_identity_completed` and
+        // `request_record_approval_decision_completed` are retired in 0.12.63 with their kinds.
         StatusCompleted => "request_status_completed": success / none,
         ProjectInterfaceCompleted => "request_project_interface_completed": success / none,
         ProjectPolicyInputIdentityCompleted => "request_project_policy_input_identity_completed": success / none,
@@ -162,8 +164,6 @@ crate::outcome_codes! {
         RecordDebugEventCompleted => "request_record_debug_event_completed": success / none,
         ReleaseLabPinCompleted => "request_release_lab_pin_completed": success / none,
         RecordClientActionCompleted => "request_record_client_action_completed": success / none,
-        DeclareGovernanceIdentityCompleted => "request_declare_governance_identity_completed": success / none,
-        RecordApprovalDecisionCompleted => "request_record_approval_decision_completed": success / none,
         StartAgentSessionCompleted => "request_start_agent_session_completed": success / none,
         ResumeAgentSessionCompleted => "request_resume_agent_session_completed": success / none,
         AgentSessionStatusCompleted => "request_agent_session_status_completed": success / none,
@@ -213,7 +213,9 @@ crate::outcome_codes! {
 
 crate::outcome_codes! {
     /// Why the Runtime refused a governance identity card (Workflow #318 cfg4): the
-    /// `governance.identity_declared` verdict and the Denied receipt's host code carry it.
+    /// `governance.identity_declared` verdict carries it. Workflow #434 LAB-6S4a (0.12.63): no
+    /// card is declared any more, so nothing raises these; they stay for the records written
+    /// before.
     #[derive(serde::Serialize, serde::Deserialize)]
     pub enum GovernanceIdentityRefusal {
         #[serde(rename = "governance_client_not_allowed")]
@@ -351,7 +353,8 @@ crate::outcome_codes! {
         InvalidCapacityThresholds => "invalid_capacity_thresholds": error / none,
         InvalidCapturePolicy => "invalid_capture_policy": error / none,
         InvalidGovernanceIdentityCard => "invalid_governance_identity_card": error / none,
-        InvalidGovernanceOrigin => "invalid_governance_origin": error / none,
+        // Workflow #434 LAB-6S4a: `invalid_governance_origin` is retired in 0.12.63 with the
+        // host's check of the identity card, which alone emitted it.
         InvalidInstanceAlias => "invalid_instance_alias": error / none,
         InvalidJson => "invalid_json": error / none,
         InvalidLabPinReleaseTarget => "invalid_lab_pin_release_target": error / none,
@@ -488,6 +491,39 @@ crate::outcome_codes! {
         // irreversible until it reads (keys `game`, `package_id`). The policy composer finds
         // it; the Runtime's workbench records it once and the resource tools report it.
         StandardPackPackageUnreadable => "standard_pack_package_unreadable": warning / declaration_error,
+        // Workflow #477 PC-1 (register §1.438; contracts/pack-catalog.md): a game root without
+        // `pack-catalog.json`, a note of `standard-pack check` (keys `game`, `path`); not a
+        // defect, a root's declaration being written over time.
+        StandardPackCatalogAbsent => "standard_pack_catalog_absent": info / none,
+        // PC-1: how many packages of a game root's `bundle.json` its `pack-catalog.json` lists no
+        // entry for, a note of `standard-pack check` (keys `game`, `path`, `count`); the list is
+        // the answer's.
+        StandardPackCatalogCoverage => "standard_pack_catalog_coverage": info / none,
+        // PC-1: a defect of the display part of a game root's `pack-catalog.json` (keys `game`,
+        // `path`, `standard_pack_problem`, `json_pointer`); the package shows with its id and
+        // everything runs. `packs`, `standard-pack check` and `standard-pack catalog` report it.
+        StandardPackCatalogDisplayInvalid => "standard_pack_catalog_display_invalid": warning / declaration_error,
+        // PC-1 fix round 1: `standard-pack catalog` left out of the file it writes something the
+        // root no longer declares (keys `game`, `path`, `standard_pack_problem`
+        // `package_not_listed` for an entry or `catalog_pool_undeclared` for a pool, `json_pointer`
+        // in the existing file, `package_id`; `pool_id` for a pool); the answer's `removed` or
+        // `dropped` lists it too.
+        StandardPackCatalogLeftOut => "standard_pack_catalog_left_out": warning / declaration_error,
+        // PC-1: a pool a package consumes or produces that one of the two files lacks: a rule of
+        // the package in `schedule.json` names it and the package's entry does not list it, or
+        // the reverse (keys `game`, `package_id`, `pool_id`, `catalog_side`,
+        // `catalog_difference`; `task_id` the rule when one names it).
+        StandardPackCatalogScheduleDiffers => "standard_pack_catalog_schedule_differs": warning / declaration_error,
+        // PC-1: `standard-pack catalog` refuses a root that lies inside an installation (keys
+        // `path`, `install_root`): an installed root takes the file through the build and
+        // `place`.
+        StandardPackCatalogRootRefused => "standard_pack_catalog_root_refused": error / none,
+        // PC-1: `standard-pack catalog` could not write `pack-catalog.json` (key `path`); the OS
+        // error is the cause, and the file in place is as it was.
+        StandardPackCatalogWriteFailed => "standard_pack_catalog_write_failed": error / none,
+        // PC-1: a game root still holds `ui.json`, which no program reads any more; its content
+        // belongs in the display part of `pack-catalog.json` (keys `game`, `path`).
+        StandardPackUiRetired => "standard_pack_ui_retired": warning / declaration_error,
         // Workflow #373 NAV-6: a standard-pack root file breaks its shape, a limit or a
         // reference (keys `game`, `path`, `standard_pack_problem`, `json_pointer`). The Runtime's
         // root reader and check-config report it; the resource tools share the same check.
@@ -575,6 +611,12 @@ crate::outcome_codes! {
         InvalidContainedTaskRecoveryPath => "invalid_contained_task_recovery_path": error / none,
         InvalidContainedTaskPath => "invalid_contained_task_path": error / none,
         InvalidContainedTaskResponseDeadline => "invalid_contained_task_response_deadline": error / none,
+        // Workflow #463 S3-8: a contained task request's `variables` with more values than a
+        // package can declare variables (16).
+        InvalidContainedTaskVariableCount => "invalid_contained_task_variable_count": error / none,
+        // Workflow #463 S3-8: a contained task request's `variables` with a value under a name
+        // outside a variable's form.
+        InvalidContainedTaskVariableName => "invalid_contained_task_variable_name": error / none,
         InvalidEvidenceOutputPath => "invalid_evidence_output_path": error / none,
         InvalidEvidenceZipCount => "invalid_evidence_zip_count": error / none,
         InvalidEvidenceScreenshotCounts => "invalid_evidence_screenshot_counts": error / none,
@@ -599,7 +641,8 @@ crate::outcome_codes! {
         InvalidSignatureMatchRequest => "invalid_signature_match_request": error / none,
         InvalidSignatureRegistration => "invalid_signature_registration": error / none,
         InvalidClientAction => "invalid_client_action": error / none,
-        InvalidApprovalDecision => "invalid_approval_decision": error / none,
+        // Workflow #434 LAB-6S4a: `invalid_approval_decision` is retired in 0.12.63 with
+        // `RecordApprovalDecision`, whose shape check alone emitted it.
         InvalidAgentResponse => "invalid_agent_response": error / none,
         InvalidCatalogProposal => "invalid_catalog_proposal": error / none,
         InvalidRuntimeMonitorPolicy => "invalid_runtime_monitor_policy": error / none,
@@ -627,7 +670,7 @@ crate::outcome_codes! {
         InvalidMaterialReadReceipt => "invalid_material_read_receipt": error / none,
         InvalidSignatureReceipt => "invalid_signature_receipt": error / none,
         InvalidShutdownReceipt => "invalid_shutdown_receipt": error / none,
-        InvalidInstallTransitionReceipt => "invalid_install_transition_receipt": error / none,
+        // Workflow #434 LAB-6S4a: `invalid_install_transition_receipt` is retired in 0.12.63.
         InvalidSchedulingPauseReceipt => "invalid_scheduling_pause_receipt": error / none,
         InvalidInstanceSelfcheckReceipt => "invalid_instance_selfcheck_receipt": error / none,
         InvalidProjectInterfaceResponse => "invalid_project_interface_response": error / none,
@@ -766,10 +809,10 @@ crate::outcome_codes! {
         InstallMemberIdentityInvalid => "install_member_identity_invalid": error / none,
         InstallMemberPairingMismatch => "install_member_pairing_mismatch": error / none,
         InstallSlotDocumentInvalid => "install_slot_document_invalid": error / none,
-        InstallPreviousTransitionMismatch => "install_previous_transition_mismatch": error / none,
-        InvalidInstallTransitionStatus => "invalid_install_transition_status": error / none,
-        InvalidInstallTimeout => "invalid_install_timeout": error / none,
-        InvalidInstallTransitionId => "invalid_install_transition_id": error / none,
+        // Workflow #434 LAB-6S4a: `install_previous_transition_mismatch`,
+        // `invalid_install_transition_status`, `invalid_install_timeout` and
+        // `invalid_install_transition_id` are retired in 0.12.63 with the installer's transition
+        // and the held start.
         InstallSlotLockMissing => "install_slot_lock_missing": error / none,
         InstallSlotLockOpenFailed => "install_slot_lock_open_failed": error / none,
         InstallSlotInUse => "install_slot_in_use": error / none,

@@ -64,7 +64,7 @@ Inside a running actingd, `runtime-host` calls the ledger in exactly four ways (
 | # | Call | Who holds it | Where it may appear |
 |---|---|---|---|
 | 1 | **Capture interface**: a trait in `actingcommand-contract`, implemented by `crates/ledger`, handed to the host at start | only the host function `capture` | every gate calls `capture` |
-| 2 | **Flush barrier**: wait until one captured record is committed; writes nothing | the three call sites | before business opens at start (§12 step 10); the receipt of an install control (G3 `host.install_transition`, G15 release/state/catalog transitions); before the exception read X6 |
+| 2 | **Flush barrier**: wait until one captured record is committed; writes nothing | the three call sites | before business opens at start (§12 step 10); the receipt of an install control (G3 `host.install_transition`, gone since Workflow #434 LAB-6S4a, 0.12.63; G15 release/state/catalog transitions); before the exception read X6 |
 | 3 | **Exception reads** X1–X4, X6 (§11.6) and the view functions (material read) | their call sites | startup, request idempotency across restarts, material read |
 | 4 | **Watermark tier read**: the capture queue's current tier (0 below tier 1, then 1–3), lock-free, no I/O | only the performance controller's pressure read (`ledger_backlog`) | added by PERF slice P-s, ships with or after AO-6, `mode` stays `observe` |
 
@@ -208,7 +208,7 @@ durable class (FULL sync, may be tagged); *observation* records are today's obse
 |---|---|---|---|---|
 | G1 | fan-out point `emit` (`host/facts.rs:511-557`) | every event it emits and the `fact.invalidated` it derives, the recovery ladder's records included (`append_event_raw`) | by type | AO-3 |
 | G2 | instance store entry `InstanceFactStore::apply` (`host/facts.rs:196-374`, `:86-167`) | `fact.published` / `fact.invalidated` with (lineage, revision), publisher, scope; add/subtract changes carry the value after the change | decision | AO-3 |
-| G3 | workbench entry (`runtime_facts.rs:586-646`, `:799-853`, `:237-345`; install transition `installation.rs:245-344`) | `runtime.fact_recorded` / `runtime.fact_invalidated` with revision, `host.install_transition` included (its receipt waits for the commit) | decision; instance-scoped self-check records observation | AO-3, AO-4 |
+| G3 | workbench entry (`runtime_facts.rs:586-646`, `:799-853`, `:237-345`; install transition `installation.rs:245-344`, gone since Workflow #434 LAB-6S4a, 0.12.63) | `runtime.fact_recorded` / `runtime.fact_invalidated` with revision, `host.install_transition` included until then (its receipt waited for the commit; since then a start only invalidates what an older ledger holds of it) | decision; instance-scoped self-check records observation | AO-3, AO-4 |
 | G4 | scheduling queue and leases (`lease.rs` grant/transfer/release/expiry/renewal; queue admit/deny; hand-off) | `scheduler.queued/admitted/denied`, hand-off, `lease.transition_intent` and results | decision | AO-4 |
 | G5 | policy decisions (`PolicyHost` evaluation, refusals, clock-slot fates; dispatch intent and result `policy_dispatch.rs:1416`, `:1471`; value records §11.3) | non-intent `policy.*`, `policy.dispatch_intent` and result, `policy.control_state_recorded`, `policy.activity_state_recorded`, `policy.fact_refresh_transition` | decision | AO-4 |
 | G6 | input and application (`input.rs:182-195` inside the gate; intents `:172`/`:197`; application `:500`/`:510`) | `input.intent` → `input.committed/failed` and their invalidations; `application.intent` → result | decision, never waited on | AO-4 |
@@ -275,7 +275,7 @@ close, fatal and install in a running actingd are all copied by gates.
 |---|---|
 | the last fatal record while the capture pipeline itself is failing | capture never refuses; the fatal record is queued and sealed into the dump by the ledger (§9.2); when even the dump cannot be written, the last word goes to stderr and the fallback log through the start-refusal writer, and the next start writes a tail gap |
 | acsetup install steps while actingd is not running (cold path) | acsetup does not write the ledger (`component-interfaces.md`: only actingd writes `ledger`); the steps run later inside a started actingd and go through G15. Checked by AO-0 on the UI repository's `main` `8060ba5`: `crates/acui-setup` does not depend on `actingcommand-ledger` and calls no ledger write; only the console's `acui-source` reads the ledger |
-| install inside a running actingd | G3 (`host.install_transition`) and G15 (release, state migration, catalog), receipts after the commit |
+| install inside a running actingd | G3 (`host.install_transition`, gone since Workflow #434 LAB-6S4a, 0.12.63) and G15 (release, state migration, catalog), receipts after the commit |
 | refusals before the ledger opens (invalid configuration, `perf_config_invalid`, …) | stderr and exit 1 as today; there is no ledger yet |
 | the ledger's own records | produced by the ledger module, not requested by the Runtime body: dump import, tail and single-record gaps, the sealed dump's `runtime.failed`, probe findings, the self-sealed snapshot, retention and material eviction, and the records the ledger drafts when start triggers it (prior-epoch imports and scope closes, startup eviction recovery; Appendix A.8, M3) |
 
@@ -733,8 +733,13 @@ CREATE TABLE ledger_index (
   window they count in (the `window_id` of the task's activity profile), failure streak
   (split as the execution record's failure is since Workflow #378 A2-P: `failure_code` and
   `failure_identity` = the failure identity, format v2, Workflow #336 / M-PKG §3.4, and
-  `paused_on` rebuilt from it — no package digest is stored), retry round, dispatch clock, and
-  `condition_reruns` `{failure_code, count, expires_at_unix_ms}`.
+  `paused_on` rebuilt from it — no package digest is stored), retry round, dispatch clock,
+  `condition_reruns` `{failure_code, count, expires_at_unix_ms}`, and (Workflow #463 U1b, since
+  0.12.63, register §1.389) `break_in` `{content_hash, runs, first_settled_at_unix_ms}`, the
+  pair's break-in of its `linear_steps` package's content ([policy-suspension.md](policy-suspension.md),
+  "Only during a package's break-in"), absent until a run that counts in it settles. It is the
+  one member no dispatch record holds (a success does not name the content it ran), so a replay
+  of the dispatch records takes it from the pair's latest record (§11.5, "Without the marker").
 - Every change of an (instance, activity profile)'s activity state emits one
   `policy.activity_state_recorded` through G5 with its complete state: the daily count with its
   day key, the window count and the window's runtime with their `window_id`, and
@@ -882,6 +887,11 @@ time L that D2 needs (D2 A-7) is the end of step 7.
   - Without the marker, the start replays once, as today:
     - the decision memory counts nothing as recorded, so the start's reconciliation writes one
       `policy.control_state_recorded` and one `policy.activity_state_recorded` per key;
+    - Workflow #463 U1b fix round 2 (since 0.12.63): the replay of the dispatch records rebuilds
+      no pair's `break_in` (§11.3), so each pair's is taken from the latest
+      `policy.control_state_recorded` the `decision_memory/` rows name (one index read, as the
+      load's), and the records the seeding writes carry it; a re-alignment before the seeding
+      (`refresh_dispatches` of a start that loaded nothing) does the same;
     - the monitor registry records its import again when no `monitor_import` row names it (a
       replay of the same import changes nothing), then one applied change of every alias whose
       state moved since the import;
@@ -1785,7 +1795,7 @@ Legend:
 | 138 | `rh/host/input.rs:790` | `safe_reset` | `append_request_lifecycle` | cli.command / lab.request / ui.action, command.received, command.validated | A | G14 | decision | input reset request (`input.rs:731` reads `command.validated`) |
 | 139 | `rh/host/input.rs:926` | `application_lifecycle` | `append_request_lifecycle` | cli.command / lab.request / ui.action, command.received, command.validated | A | G14 | decision | application lifecycle request |
 | 140 | `rh/host/installation.rs:274` | `shutdown_under_gate` | `append_event` | runtime.lifecycle_observed `shutdown_request` | A | G16 | decision | read by the hot-install proof (`installation.rs:1044`, X2); receipt sequence |
-| 141 | `rh/host/installation.rs:335` | `record_install_value` | `record_runtime_fact_with_event` | runtime.fact_recorded (`host.install_transition` / install pauses) | A | G3 | decision | Runtime scope; install G3 (receipt waits, §6.2) |
+| 141 | `rh/host/installation.rs:335` | `record_install_value` | `record_runtime_fact_with_event` | runtime.fact_recorded (`host.install_transition` / install pauses) | A | G3 | decision | Runtime scope; install G3 (receipt waits, §6.2); gone since Workflow #434 LAB-6S4a, 0.12.63 with the installer's transition |
 | 142 | `rh/host/installation.rs:428` | `install_refusal` | `append_lifecycle_failure` | runtime.failed (lifecycle failure) | B | G16 | decision | install refusal (install stage) |
 | 143 | `rh/host/installation.rs:655` | `tick_install_under_gate` | `append_lifecycle_failure` | runtime.failed (lifecycle failure) | B | G16 | decision | install tick failure |
 | 144 | `rh/host/installation.rs:711` | `initialize_installation` | `invalidate_runtime_fact` | runtime.fact_invalidated (install transition / pauses, `runtime_takeover`) | A | G3 | decision | Runtime scope; SU |

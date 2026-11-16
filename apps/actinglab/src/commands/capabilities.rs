@@ -61,6 +61,21 @@ pub(crate) fn command_capabilities() -> Vec<Value> {
         command_cap("standard-pack adopt", ["offline"], "available"),
         // Workflow #464 P3: the readiness of every pack of a game root; reads only.
         command_cap("standard-pack ready", ["offline", "read_only"], "available"),
+        // Workflow #463 S3-10: the plan of a trial on a real application, offline; Workflow #463
+        // S3-11: without `--plan`, its one run through the running Runtime on a device.
+        command_cap(
+            "standard-pack trial",
+            ["offline", "running_runtime", "device"],
+            "available",
+        ),
+        // Workflow #463 S3-14: where each pack of a game root stands; reads only.
+        command_cap(
+            "standard-pack status",
+            ["offline", "read_only"],
+            "available",
+        ),
+        // Workflow #477 PC-1: writes a game root's `pack-catalog.json` from what it declares.
+        command_cap("standard-pack catalog", ["offline"], "available"),
         command_cap("package fmt", ["offline"], "available"),
         command_cap("package edit", ["offline"], "available"),
         // Workflow #463 V3: what one package's control declaration declares; reads only.
@@ -112,29 +127,70 @@ pub(crate) fn command_capabilities() -> Vec<Value> {
         command_cap("session recover", ["device"], "available"),
         command_cap("session recover --stale-capture", ["device"], "available"),
         command_cap("session record", ["offline"], "available"),
-        command_cap("session record start", ["offline"], "available"),
+        // #463 S1-7 (0.12.64; `contracts/lab-recording.md`, "A recording holds its instance"):
+        // `record start` pauses the instance's scheduling through the Runtime when one listens,
+        // and `record stop` and `record archive` resume the recording's own pause; with nothing
+        // listening they work offline (`runtime_optional`, as `device_optional` says of a device).
+        command_cap(
+            "session record start",
+            ["offline", "runtime_optional"],
+            "available",
+        ),
         command_cap("session record status", ["offline"], "available"),
-        command_cap("session record stop", ["offline"], "available"),
+        command_cap(
+            "session record stop",
+            ["offline", "runtime_optional"],
+            "available",
+        ),
         command_cap("session record mark", ["offline"], "available"),
         command_cap("session record step", ["offline", "device"], "available"),
         command_cap("session record candidates", ["offline"], "available"),
         command_cap("session record amend", ["offline"], "available"),
         // Workflow #449 REC-ARCH: a recording ended as material only, and reopened later.
-        command_cap("session record archive", ["offline"], "available"),
+        command_cap(
+            "session record archive",
+            ["offline", "runtime_optional"],
+            "available",
+        ),
         command_cap("session record reopen", ["offline"], "available"),
+        // #463 S2-1: what a recording still lacks; it reads under no lock and writes nothing.
+        command_cap(
+            "session record ready",
+            ["offline", "read_only"],
+            "available",
+        ),
+        // #463 S2-13: the stored frames around one step's press; it only reads.
+        command_cap(
+            "session record frames",
+            ["offline", "read_only"],
+            "available",
+        ),
+        // #463 S2-2: each step as the screen before, the press and the screen after; it writes its
+        // previews alone.
+        command_cap("session record review", ["offline"], "available"),
         command_cap("record", ["offline"], "available"),
-        command_cap("record start", ["offline"], "available"),
+        command_cap("record start", ["offline", "runtime_optional"], "available"),
         command_cap("record status", ["offline"], "available"),
-        command_cap("record stop", ["offline"], "available"),
+        command_cap("record stop", ["offline", "runtime_optional"], "available"),
         command_cap("record mark", ["offline"], "available"),
         command_cap("record step", ["offline", "device"], "available"),
         command_cap("record candidates", ["offline"], "available"),
         command_cap("record amend", ["offline"], "available"),
         // Workflow #434 LAB-5G4c: the binding draft of a `record stop` answer; it changes nothing.
         command_cap("record draft", ["offline", "read_only"], "available"),
-        // Workflow #449 REC-ARCH.
-        command_cap("record archive", ["offline"], "available"),
+        // Workflow #449 REC-ARCH; #463 S1-7: the archive resumes the recording's own pause.
+        command_cap(
+            "record archive",
+            ["offline", "runtime_optional"],
+            "available",
+        ),
         command_cap("record reopen", ["offline"], "available"),
+        // #463 S2-1.
+        command_cap("record ready", ["offline", "read_only"], "available"),
+        // #463 S2-13.
+        command_cap("record frames", ["offline", "read_only"], "available"),
+        // #463 S2-2.
+        command_cap("record review", ["offline"], "available"),
         command_cap("capture --record", ["device"], "available"),
         command_cap("session capture --record", ["device"], "available"),
         command_cap("session app --record", ["device"], "available"),
@@ -149,11 +205,19 @@ pub(crate) fn command_capabilities() -> Vec<Value> {
             ["running_runtime", "device", "lab_lease"],
             "available",
         ),
+        // #463 S1-1: a press recorded by the command that makes it (its dry run is refused,
+        // `dry_run_gate`); the needs are the command's own.
+        command_cap("tap --record", ["device"], "available"),
+        command_cap("swipe --record", ["device"], "available"),
+        command_cap("long-tap --record", ["device"], "available"),
         command_cap("current-page", ["device"], "available"),
         command_cap("is-visible", ["device"], "available"),
         command_cap("locate", ["device"], "available"),
-        command_cap("tap-target", ["device"], "available"),
-        command_cap("navigate", ["device"], "available"),
+        // Workflow #434 LW-1 fix round 1 (register §1.435): they only plan, on a saved frame
+        // (`--scene` with `--dry-run`), and press nothing; `do --capture` and `ensure --capture`
+        // press.
+        command_cap("tap-target", ["offline", "read_only"], "available"),
+        command_cap("navigate", ["offline", "read_only"], "available"),
         command_cap("stream", ["device"], "available"),
         command_cap("lab validate", ["offline"], "available"),
         command_cap("lab run", ["device"], "available"),
@@ -331,7 +395,7 @@ pub(crate) fn session_layer_capability_contract() -> Value {
             },
             "control": {
                 "requires_lease": true,
-                "examples": ["tap", "swipe", "long-tap", "key", "text", "stream --input-relay", "stream --input-event <action,args>", "stream --relay-event <action,args>", "session app launch", "session app stop", "session app force-stop", "session app restart", "session instance app launch", "session instance app stop", "session instance app force-stop", "session instance app restart", "tap-target", "navigate", "recover except --stale-capture", "do --capture --record", "session app <launch|restart|stop|force-stop> --record", "session instance app <launch|restart|stop|force-stop> --record"]
+                "examples": ["tap", "swipe", "long-tap", "key", "text", "stream --input-relay", "stream --input-event <action,args>", "stream --relay-event <action,args>", "session app launch", "session app stop", "session app force-stop", "session app restart", "session instance app launch", "session instance app stop", "session instance app force-stop", "session instance app restart", "recover except --stale-capture", "do --capture --record", "session app <launch|restart|stop|force-stop> --record", "session instance app <launch|restart|stop|force-stop> --record"]
             }
         },
         "safety": {

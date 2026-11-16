@@ -385,6 +385,32 @@ than high, `portrait` when higher than wide, `square` otherwise; and `--tap`,
 counted from the top-left pixel. The statement is kept short because Min keeps
 it whole and `observe`'s Min answer still targets 1 KiB (the soft limit).
 
+Workflow #392 DA-5ab (0.12.67; [display-adapter.md](display-adapter.md) section 11): those
+coordinates are the package's base space, the coordinate space of its projection. On a display of
+the base's size that is the device's own pixels, and the statement is as above, byte for byte. On
+a display that maps to the base (a pure scale, such as 1920×1080 or 3840×2160 for a 1280×720
+package) every frame an operation observes is brought to the base before it is evaluated, every
+rectangle and point of the answer is in the base, and `--tap`, `--tap-rect`, `--swipe`, an
+element's press and a declared operation's input are taken in the base and sent to the device
+through the run's own exit (`DisplayMap::send_input`); the statement is then `frame_coordinates
+{space: "base", base_pixels: [width, height], reduced_from: [device width, device height],
+orientation, applies_to}`. A ratio the input side does not send under (a pure scale whose double
+is not a whole number, such as 5/4) refuses the operation at `input`, `display_map_unresolved`
+(`input_scale_unsupported`), with nothing sent. The `frame_path` and `preview` an operation hands
+out are the frames brought to the base; the device frame stays the capture's artifact in the
+Runtime's ledger, named by the answer's frame references. No client form of `do` sends its tap
+itself: `do --capture` without `--dry-run` is always this Lab operation, and `do --capture
+--dry-run` plans on the Runtime's frames and sends nothing (its `device` is `{executed: false, mode:
+"dry_run"}`). (Fix round 1 had a client form answer `device.action` and `device.base_action`; that
+form was never reached, and the train's fix round 1 removed it.) The train of DA-5ab and DA-5cd (its rule R4; [lab-recording.md](lab-recording.md), "A recording's
+size"): `do --capture --record` judges the recording as `record stop` judges it
+(`record_size_not_base`) and one frame it captures through the Runtime before its press as a frame
+that enters the recording (`record_display_not_base` for a recording without a frame,
+`record_frame_size_mismatch` when the display changed during the recording), and `observe
+--capture --record` the recording before it captures and its device frame after it observed, each
+refused before anything is pressed or written (display-adapter.md section 11); so neither records
+on a display that is not the recording's size.
+
 After an action the online form attaches its result by default, so the caller
 needs no extra observation. Whenever the operation has an after frame (also in a
 failure's details), the answer carries `after_attachment`:

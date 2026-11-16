@@ -969,3 +969,26 @@ tests = [
     "actingcommand-ledger-forensics::lib::input_pairing::tests::da3b_a_mismatched_vertical_brake_step_is_still_reported",
 ]
 incident = ["#392 DA-3b"]
+
+# Workflow #469 D4a (0.12.62; register §1.400; brief rd-1115/brief-469-d4-owner-four.md; the owner's approval on board #469; contracts/global-ledger-query.md, the paragraph on run_recovery): device_locked and contained_task_application_update_required are warnings of the ladder class planned_stop in the catalog this build embeds, so the errors view's run-recovery grouping counts no record of theirs as a failure of its run: a run whose task.failed terminal and runtime.failed carry either code has no group, both records stay warnings and rows of the page in the Errors view, and a warning of the class none appended to the same run is listed alone with missing_relation, unknown; on a formal root, each page checked against the in-memory indexes' page of the same records
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::tests::gate_429_rg_stop::d4a_t1_a_locked_device_s_records_are_no_failure_of_their_run",
+    "actingcommand-ledger::lib::global::tests::gate_429_rg_stop::d4a_t2_an_application_update_s_records_are_no_failure_of_their_run",
+]
+incident = ["#469 D4a"]
+
+# Workflow #463 S1-10 (0.12.66; register §1.430; brief rd-1116/brief-463-s110-lab-pin-point-lookup.md): before the writer admits a pin whose reason is lab it asks whether the trigger record is related to the Lab; it looks first whether a Lab anchor, stored (the link indexes of the request and the correlation) or staged in the batch, names the trigger's request or correlation, and reads every Lab relation only when none does, with the same answer. On the SQLite store and on the in-memory store: a Lab pin whose trigger's request an anchor names is admitted and every Lab relation is not read (T1, counted through the test-only GlobalLedgerConfig::with_lab_relations_reads); a Lab pin whose trigger is related only through its run is admitted by one read of every Lab relation (T2); a Lab pin whose trigger nothing relates is refused artifact_pin_reason_conflict, fatal, after one such read, as before (T3). On the SQLite store an anchor staged in one batch with the trigger and the pin, neither stored when the pin is checked, admits it without that read (T4)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::tests::gate_463_s110::s110_t1_sqlite_a_lab_pin_whose_trigger_request_an_anchor_names_reads_no_full_relations",
+    "actingcommand-ledger::lib::global::tests::gate_463_s110::s110_t1_memory_a_lab_pin_whose_trigger_request_an_anchor_names_reads_no_full_relations",
+    "actingcommand-ledger::lib::global::tests::gate_463_s110::s110_t2_sqlite_a_lab_pin_related_only_through_its_run_is_admitted_by_the_full_read",
+    "actingcommand-ledger::lib::global::tests::gate_463_s110::s110_t2_memory_a_lab_pin_related_only_through_its_run_is_admitted_by_the_full_read",
+    "actingcommand-ledger::lib::global::tests::gate_463_s110::s110_t3_sqlite_a_lab_pin_whose_trigger_nothing_relates_is_refused_as_before",
+    "actingcommand-ledger::lib::global::tests::gate_463_s110::s110_t3_memory_a_lab_pin_whose_trigger_nothing_relates_is_refused_as_before",
+    "actingcommand-ledger::lib::global::tests::gate_463_s110::s110_t4_an_anchor_staged_with_its_trigger_and_the_pin_admits_it_without_the_full_read",
+]
+incident = ["#463 S1-10"]

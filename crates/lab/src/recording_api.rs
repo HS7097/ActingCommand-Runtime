@@ -5,40 +5,55 @@
 //! `record_status` only reads.
 
 use crate::LabOcr;
-use crate::recording::archive::ARCHIVED;
+use crate::codes::{LabCode, ReadyCheck, ReadyCheckStop, ReadySource};
+use crate::display_base::{admit_pressed_first_frame, admit_recording_frame, recording_not_base};
+use crate::recording::archive::{ARCHIVED, latest_manifest, read_recording};
+use crate::recording::boxes::{expanded_add, validate_boxes, with_press_click};
 use crate::recording::container::{
     container_kind, encode, extension, file_name, preflight_lab_dir, replace_in_place,
     write_lab_dir,
 };
 use crate::recording::crosscheck::{
-    FrameCache, admit, cross_check, ending_checks, evaluator_bundle, first_decision, round_trip,
+    CheckFailure, CheckRun, CrossCheck, EndingChecks, Failures, FirstDecision, FrameCache, Locus,
+    SelectChecks, admit, cross_check, ending_checks, evaluator_bundle, first_decision, round_trip,
     select_checks,
 };
 use crate::recording::ending::{remove_ending, validate_ending_request};
 use crate::recording::generate::{
-    DEFAULT_APPLICATION_ARRIVAL_TIMEOUT_MS, DEFAULT_ARRIVAL_TIMEOUT_MS, Plan, StopSettings,
-    application_steps_summary, optional_steps_summary, plan as generate_plan, render,
+    DEFAULT_APPLICATION_ARRIVAL_TIMEOUT_MS, DEFAULT_ARRIVAL_TIMEOUT_MS, Plan, StopSettings, Survey,
+    application_steps_summary, optional_steps_summary, plan as generate_plan, render, survey,
     transitions_summary, validate_timeout_option,
 };
+use crate::recording::inserted::validate_optional_after_request;
 use crate::recording::marks::{declares_mark, match_metric};
 use crate::recording::model::{
-    ApplicationPlan, AttachFrameOutcome, AttachFrameRequest, ClickEffect, ClickPlan, ClickView,
-    CommitApplicationOutcome, CommitApplicationRequest, CommitClickOutcome, CommitClickRequest,
-    FrameView, LAB_RECORD_MARK_SCHEMA, LAB_RECORDING_MAX_NEXT_FRAME_MS,
+    AfterCapture, AfterCaptureRecord, AfterFrame, ApplicationPlan, AttachFrameOutcome,
+    AttachFrameRequest, BeforeCapture, BeforeFrame, CapturedFrame, ClickEffect, ClickGesture,
+    ClickPlan, ClickView, CommitApplicationOutcome, CommitApplicationRequest, CommitClickOutcome,
+    CommitClickRequest, FrameView, LAB_RECORD_MARK_SCHEMA, LAB_RECORDING_MAX_NEXT_FRAME_MS,
     LAB_RECORDING_MAX_SETTLE_MS, LabRecording, LabRecordingStart, LabStatus, LabStatusView,
     MarkOutcome, MarkRequest, MarkStatusView, MarkView, NextFrameOutcome, OpaqueJson,
-    PlanApplicationRequest, PlanClickRequest, RecordStartOptions, RecordStepOutcome,
-    RecordStepRequest, RecordStopOptions, RecordStopOutcome, RecordedFrame, RecordedMark,
-    RecordingArtifact, RecordingDefaults, RecordingStep, SelfTestStatus, StepClick,
-    StepOptionalView, StepStateView, StepTransition, StepView, TransitionSpec, TransitionView,
+    PlanApplicationRequest, PlanClickRequest, RecordPressOutcome, RecordPressRequest, RecordSize,
+    RecordStartOptions, RecordStepOutcome, RecordStepRequest, RecordStopOptions, RecordStopOutcome,
+    RecordedFrame, RecordedMark, RecordingArtifact, RecordingDefaults, RecordingStep,
+    SelfTestStatus, StepClick, StepOptionalView, StepStateView, StepTransition, StepView,
+    TransitionSpec, TransitionView,
 };
+use crate::recording::ready::{
+    Known, ReadyOptionConflict, ReadySources, ReadyWarningItem, RecordReadyOutcome, check_items,
+    check_runs, every_check_complete, generator_warnings, known, lack_items, packaged,
+    point_press_warnings, ready_outcome, with_size_item,
+};
+use crate::recording::review::{RecordReviewOutcome, RecordReviewRequest, review_outcome};
 use crate::recording::select::{not_evaluated_id, validate_select_request};
 use crate::recording::steps::{
-    ArrivalMode, FrameMeta, Session, application_action, application_with_click, apply_ending,
-    apply_marks, apply_step_action, apply_transition, arrive, check_device_arrival,
-    commit_application, commit_click, default_recording_defaults, effective_indices, new_recording,
-    not_active, open_session, open_session_for_marks, open_step, plan_application, plan_click,
-    save, stopped_change, to_json,
+    Arrival, ArrivalMode, FrameMeta, Session, application_action, application_with_click,
+    apply_ending, apply_marks, apply_optional_after, apply_step_action, apply_transition, arrive,
+    arrive_after_press, check_device_arrival, commit_application, commit_click,
+    default_recording_defaults, effective_indices, effective_step, has_marks, lab_unavailable,
+    live_primary, name_after_frame, new_recording, not_active, note_after_capture, open_session,
+    open_session_for_marks, open_step, path_order, plan_application, plan_click, plan_press,
+    remove_inserted, save, step_ref, stopped_change, to_json,
 };
 use crate::recording::store::{
     LabFile, OldRecordView, blocked, create_recording, invalid, lab_dir, load_lab, now_unix_ms,
@@ -47,9 +62,17 @@ use crate::recording::store::{
 };
 use crate::recording::{
     RecordingLock,
-    frames::{check_frame_size, decode_frame, read_stored_frame},
+    frames::{LoadedFrame, check_frame_size, check_size, decode_frame, read_stored_frame},
 };
-use actingcommand_contract::{LabError, LabErrorClass, LabResult};
+use actingcommand_contract::{
+    InputAction, InputFrameReference, LabError, LabErrorClass, LabResult,
+};
+use actingcommand_execution_kernel::{ExternallyVerifiedBundle, PreparedContainedTask};
+use actingcommand_pack_containment::ContentContainer;
+use actingcommand_recognition::color_digest::{
+    ColorDigest, FRAME_CHANGE_MAX_MILLI, frame_change_digest, frame_change_milli,
+};
+use actingcommand_recognition_pack::RecognitionEvaluator;
 use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -101,12 +124,15 @@ pub fn record_start(
     if lab_dir(state_dir, &old.record_id).exists() {
         return Ok(unavailable("record_id_reused"));
     }
+    // Workflow #392 DA-5cd fix round 1: the header names the base size the options give, the size
+    // its first frame must have.
     let recording = new_recording(
         &old,
         defaults.clone(),
         options.game.clone(),
         options.server.clone(),
         options.locale.clone(),
+        options.base_size,
     );
     create_recording(state_dir, &recording)?;
     Ok(LabRecordingStart {
@@ -136,9 +162,10 @@ pub fn record_status(state_dir: &Path, instance: &str) -> LabResult<Option<LabSt
         LabFile::Unavailable(reason) => Ok(unavailable(reason)),
         LabFile::Ready(recording) => {
             let numbers = effective_indices(&recording);
-            let steps = recording
-                .steps
-                .iter()
+            // #463 R4: the steps in the order they run, a step inserted after the stop in its
+            // place.
+            let steps = path_order(&recording)
+                .into_iter()
                 .map(|step| step_view(step, &numbers))
                 .collect();
             // Workflow #449 REC-ARCH: an archived recording's session is ended; its step table,
@@ -214,10 +241,10 @@ pub fn record_stop(
             // Workflow #390 LAB-2: marked again after its package was generated, the recording
             // generates its package again.
             Some(artifact) if recording.amended_at_unix_ms.is_some() => {
-                let settings = regeneration_settings(artifact, options);
+                let settings = regeneration_settings(artifact, options).0;
                 generate_and_write(state_dir, &old, &recording, &settings, options, ocr, true)
             }
-            Some(artifact) => stop_already_generated(&recording, artifact, options),
+            Some(artifact) => stop_already_generated(state_dir, &recording, artifact, options),
             None => Ok(none),
         };
     }
@@ -230,18 +257,75 @@ pub fn record_stop(
     if recording.steps.is_empty() {
         return Ok(none);
     }
+    let settings = stop_settings(&recording, options).0;
+    generate_and_write(state_dir, &old, &recording, &settings, options, ocr, false)
+}
+
+/// #463 S2-1b, fix round 1: the package's game and server of an active recording, each with the
+/// place it came from, decided by this one function for `record stop` and `record ready`. Each is
+/// the first that `record stop` gives, the recording holds or the Lab's instance configuration
+/// (`default_*`) gives. Then the instance's row of the installation's configuration
+/// (`installed`) counts only whole: its reader is called only when those do not give both; when
+/// they give neither, the row gives both; when they give one, the row gives the other only if its
+/// value of the given one is that one; otherwise nothing is taken from it and the part stays
+/// missing.
+fn package_identity(recording: &LabRecording, options: &RecordStopOptions) -> (Known, Known) {
+    let game = known(&[
+        (options.game.as_ref(), ReadySource::CommandLine),
+        (recording.game.as_ref(), ReadySource::Recording),
+        (options.default_game.as_ref(), ReadySource::LabConfig),
+    ]);
+    let server = known(&[
+        (options.server.as_ref(), ReadySource::CommandLine),
+        (recording.server.as_ref(), ReadySource::Recording),
+        (options.default_server.as_ref(), ReadySource::LabConfig),
+    ]);
+    if game.0.is_some() && server.0.is_some() {
+        return (game, server);
+    }
+    let Some(row) = options.installed.read() else {
+        return (game, server);
+    };
+    // The row agrees with the part that is given (none is given: it agrees).
+    let agrees = game.0.as_ref().is_none_or(|given| *given == row.game)
+        && server.0.as_ref().is_none_or(|given| *given == row.server);
+    if !agrees {
+        return (game, server);
+    }
+    let installed = |value: String| (Some(value), Some(ReadySource::InstallationConfig));
+    (
+        if game.0.is_some() {
+            game
+        } else {
+            installed(row.game)
+        },
+        if server.0.is_some() {
+            server
+        } else {
+            installed(row.server)
+        },
+    )
+}
+
+/// The generation options of an active recording: each option `record stop` gives, otherwise the
+/// recording's game, server and locale, otherwise (game and server) the Lab's instance
+/// configuration's (`default_*`), otherwise (#463 S2-1b) the installation's configuration's row,
+/// taken whole or not at all ([`package_identity`], fix round 1), and the default arrival
+/// timeouts; with where the game, the server and the locale came from. #463 S2-1: `record ready`
+/// reads them too.
+fn stop_settings(
+    recording: &LabRecording,
+    options: &RecordStopOptions,
+) -> (StopSettings, ReadySources) {
+    let ((game, game_source), (server, server_source)) = package_identity(recording, options);
+    let (locale, locale_source) = known(&[
+        (options.locale.as_ref(), ReadySource::CommandLine),
+        (recording.locale.as_ref(), ReadySource::Recording),
+    ]);
     let settings = StopSettings {
-        game: options
-            .game
-            .clone()
-            .or_else(|| recording.game.clone())
-            .or_else(|| options.default_game.clone()),
-        server: options
-            .server
-            .clone()
-            .or_else(|| recording.server.clone())
-            .or_else(|| options.default_server.clone()),
-        locale: options.locale.clone().or_else(|| recording.locale.clone()),
+        game,
+        server,
+        locale,
         package_id: options.package_id.clone(),
         requires: options.requires.clone(),
         timeout_ms: options.timeout_ms,
@@ -252,21 +336,38 @@ pub fn record_stop(
             .application_arrival_timeout_ms
             .unwrap_or(DEFAULT_APPLICATION_ARRIVAL_TIMEOUT_MS),
     };
-    generate_and_write(state_dir, &old, &recording, &settings, options, ocr, false)
+    (
+        settings,
+        ReadySources::of(game_source, server_source, locale_source),
+    )
 }
 
 /// Workflow #390 LAB-2: the generation options of a stopped recording marked again: each option
 /// `record stop` gives, otherwise the value its package was generated with. The task timeout is
 /// computed again unless `--timeout-ms` gives it, since the marks may have changed the steps'
-/// effects and transitions it is computed from; `--lab-dir` is written only when given.
+/// effects and transitions it is computed from; `--lab-dir` is written only when given. #463
+/// S2-1b: with where the game, the server and the locale came from, the package's values being
+/// what the recording holds.
 fn regeneration_settings(
     artifact: &RecordingArtifact,
     options: &RecordStopOptions,
-) -> StopSettings {
-    StopSettings {
-        game: options.game.clone().or_else(|| artifact.game.clone()),
-        server: options.server.clone().or_else(|| artifact.server.clone()),
-        locale: options.locale.clone().or_else(|| artifact.locale.clone()),
+) -> (StopSettings, ReadySources) {
+    let (game, game_source) = known(&[
+        (options.game.as_ref(), ReadySource::CommandLine),
+        (artifact.game.as_ref(), ReadySource::Recording),
+    ]);
+    let (server, server_source) = known(&[
+        (options.server.as_ref(), ReadySource::CommandLine),
+        (artifact.server.as_ref(), ReadySource::Recording),
+    ]);
+    let (locale, locale_source) = known(&[
+        (options.locale.as_ref(), ReadySource::CommandLine),
+        (artifact.locale.as_ref(), ReadySource::Recording),
+    ]);
+    let settings = StopSettings {
+        game,
+        server,
+        locale,
         package_id: options
             .package_id
             .clone()
@@ -284,7 +385,195 @@ fn regeneration_settings(
             .application_arrival_timeout_ms
             .or(artifact.application_arrival_timeout_ms)
             .unwrap_or(DEFAULT_APPLICATION_ARRIVAL_TIMEOUT_MS),
+    };
+    (
+        settings,
+        ReadySources::of(game_source, server_source, locale_source),
+    )
+}
+
+/// #463 S2-1 (`contracts/lab-recording.md`, "What a recording still lacks: `record ready`"):
+/// `record ready [--record-id <id>]`, everything the recording still lacks before `record stop` can
+/// make its package, in one read: offline, under no lock, writing nothing. The recording is the one
+/// `record status` reads (the instance's, by its session header) or the one `record_id` names
+/// (active, archived or stopped). Every pre-check of the generator it fails (`generate::survey`,
+/// with the options `record stop` would take from `options`); when it fails none, the self-checks
+/// `record stop` runs (`self_checks`), on the package it would generate, written nowhere, and
+/// (#463 S2-1c) every failure each finds, each check saying whether its list is all it has
+/// (`checks`; a check that cannot go on past a failure stops there). A recording that is stopped
+/// with its package and unchanged since is `packaged`, and nothing is checked again. A refusal
+/// that is no pre-check of the recording, and a failure to read the state (its class
+/// `runtime_unavailable`), are the command's own. #463 S2-1b: `options` hold what `record stop` would hold: the game, server and
+/// locale the command line gives `record ready`, and the Lab's and the installation's
+/// configuration's game and server; the answer's `sources` says where each part came from. None
+/// of them is written on the recording. Fix round 1: a packaged recording answers what its package
+/// holds (`sources`), and each given part that is not its package's is the warning
+/// `record_stop_option_conflict` ([`option_conflict_warnings`]), the refusal `record stop` would
+/// give it.
+pub fn record_ready(
+    state_dir: &Path,
+    instance: &str,
+    record_id: Option<&str>,
+    options: &RecordStopOptions,
+    ocr: &LabOcr,
+) -> LabResult<RecordReadyOutcome> {
+    let (recording, session) = ready_recording(state_dir, instance, record_id)?;
+    ready_of(&recording, session, options, ocr)
+}
+
+/// #463 S2-2: the answer of `record ready` for `recording`, read by [`ready_recording`], its
+/// session's state `session`: the body of [`record_ready`], so that `record review` takes each
+/// step's items from this one function, on the recording it reads once.
+fn ready_of(
+    recording: &LabRecording,
+    session: String,
+    options: &RecordStopOptions,
+    ocr: &LabOcr,
+) -> LabResult<RecordReadyOutcome> {
+    let mut warnings = point_press_warnings(recording);
+    if let Some(artifact) = recording.artifact.as_ref().filter(|_| packaged(recording)) {
+        warnings.extend(option_conflict_warnings(artifact, options)?);
+        return Ok(ready_outcome(
+            recording,
+            session,
+            Vec::new(),
+            warnings,
+            Vec::new(),
+            &[],
+            package_sources(artifact),
+        ));
     }
+    // A stopped recording marked again generates with what its package was generated with, as
+    // `record stop` does.
+    let (settings, sources) = match &recording.artifact {
+        Some(artifact) if recording.status == "stopped" => regeneration_settings(artifact, options),
+        _ => stop_settings(recording, options),
+    };
+    // Workflow #392 DA-5cd: a recording whose frames are not the base size is listed first (fix
+    // round 1: `size_not_base`, `record_size_not_base`); `record stop` refuses it before its
+    // self-checks, so none of them runs.
+    let not_base = recording_not_base(recording);
+    let (missing, checks, checks_after) = match survey(recording, &settings)? {
+        Survey::Lacking(lacks) => (
+            lack_items(recording, &lacks)?,
+            Vec::new(),
+            ReadyCheck::ALL.to_vec(),
+        ),
+        Survey::Planned(_) if not_base.is_some() => {
+            (Vec::new(), Vec::new(), ReadyCheck::ALL.to_vec())
+        }
+        // #463 S2-1c: every failure of each self-check, each check that can go on past one going
+        // on, and each check that ran saying whether its list is all it has.
+        Survey::Planned(plan) => match self_checks(&plan, ocr, Failures::every()) {
+            Ok(checked) => {
+                warnings.extend(generator_warnings(&checked.warnings)?);
+                (Vec::new(), every_check_complete(), Vec::new())
+            }
+            Err(failed) => {
+                // The state could not be read: no check refused, and the command answers it.
+                if let Some(error) = failed.unreadable() {
+                    return Err(error);
+                }
+                warnings.extend(generator_warnings(&plan.warnings)?);
+                (
+                    check_items(recording, &failed.ran),
+                    check_runs(&failed.ran),
+                    failed.not_run,
+                )
+            }
+        },
+    };
+    Ok(ready_outcome(
+        recording,
+        session,
+        with_size_item(not_base.as_ref(), missing),
+        warnings,
+        checks,
+        &checks_after,
+        sources,
+    ))
+}
+
+/// #463 S2-2 (`contracts/lab-recording.md`, "Reviewing a recording step by step: `record
+/// review`"): `record review [--record-id <id>] [--step <k>] [--no-preview]`, each effective step
+/// of the recording `record ready` reads (the instance's, or the active, archived or stopped one
+/// `request.record_id` names; [`ready_recording`]), or the one `request.step` names, as the screen
+/// before, the press and the screen after, as the step table holds them, with its items of `record
+/// ready` (the answer of [`ready_of`], the one function `record ready` answers with, given
+/// `options` as `record ready` is given them). Offline, under no lock; nothing recorded is written:
+/// unless `request.no_preview`, the previews are written under the recording's `lab/preview/`
+/// (`review::review_outcome`). A step that does not exist, is dropped or was converted is
+/// `record_step_not_found`; a stored frame a preview is drawn on whose bytes do not match its
+/// sha256 is `record_frame_hash_mismatch`, and then no preview is written. Fix round 1: `options`
+/// are the game, server and locale the command line gives `record review` as it gives them `record
+/// ready`, so that a recording without a locale of its own is reviewed with its self-checks run;
+/// a frame whose file is not there is answered without a path and named in `frame_file_missing`.
+pub fn record_review(
+    state_dir: &Path,
+    instance: &str,
+    request: &RecordReviewRequest,
+    options: &RecordStopOptions,
+    ocr: &LabOcr,
+) -> LabResult<RecordReviewOutcome> {
+    let (recording, session) = ready_recording(state_dir, instance, request.record_id.as_deref())?;
+    if let Some(step) = request.step {
+        effective_step(&recording, step)?;
+    }
+    let ready = ready_of(&recording, session, options, ocr)?;
+    review_outcome(state_dir, &recording, ready, request)
+}
+
+/// #463 S2-1: the recording `record ready` reads and its session's state as `record status` says
+/// it. Without `record_id`, or with the one the instance's session header names, the recording
+/// the header names (`archived` when the header is, otherwise the step table's status); with
+/// another, the step table of that id, which must be the instance's (`record_instance_mismatch`):
+/// `archived` when it is active and its directory holds a manifest (a later `record start`
+/// replaced its header), otherwise its status. No recording is `record_session_not_active`; a
+/// header whose Lab recording is missing or unreadable, or an id no step table has,
+/// `record_lab_unavailable` with its reason.
+fn ready_recording(
+    state_dir: &Path,
+    instance: &str,
+    record_id: Option<&str>,
+) -> LabResult<(LabRecording, String)> {
+    let header = read_old_record(state_dir, instance)?;
+    if let Some(old) = header
+        .as_ref()
+        .filter(|old| record_id.is_none_or(|id| id == old.record_id))
+    {
+        let recording = match load_lab(state_dir, old)? {
+            LabFile::Ready(recording) => *recording,
+            LabFile::Missing => return Err(lab_unavailable("lab_recording_missing")),
+            LabFile::Unavailable(reason) => return Err(lab_unavailable(reason)),
+        };
+        let session = if old.status == ARCHIVED {
+            ARCHIVED.to_string()
+        } else {
+            recording.status.clone()
+        };
+        return Ok((recording, session));
+    }
+    let Some(record_id) = record_id else {
+        return Err(with_details(
+            not_active(format!(
+                "instance {instance} has no recording; name one with --record-id"
+            )),
+            json!({"instance": instance}),
+        ));
+    };
+    let Some(recording) = read_recording(state_dir, record_id)? else {
+        return Err(lab_unavailable("lab_recording_missing")
+            .with_details(json!({"reason": "lab_recording_missing", "record_id": record_id})));
+    };
+    record_instance_check(&recording.instance, instance)?;
+    let archived =
+        recording.status == "active" && latest_manifest(&lab_dir(state_dir, record_id))?.is_some();
+    let session = if archived {
+        ARCHIVED.to_string()
+    } else {
+        recording.status.clone()
+    };
+    Ok((recording, session))
 }
 
 /// Generates, checks and writes the package of `recording` with `settings` (section 4); with
@@ -299,84 +588,22 @@ fn generate_and_write(
     ocr: &LabOcr,
     regenerate: bool,
 ) -> LabResult<RecordStopOutcome> {
+    // Workflow #392 DA-5cd: a recording whose frames are not the base size builds no package
+    // (fix round 1: `record_size_not_base`), before anything is planned or written.
+    if let Some(refusal) = recording_not_base(recording) {
+        return Err(refusal);
+    }
     let plan = generate_plan(recording, settings)?;
-    let (cache, crops) = load_package_inputs(&plan)?;
-
-    // First pass: admit the package, decide its first step and cross-check its pages.
-    let first_entries = render(&plan, None, &crops)?;
-    let first_prepared = admit(&first_entries, ocr)?;
-    let bundle = evaluator_bundle(&first_entries, ocr)?;
-    let evaluator = bundle.loaded_bundle().evaluator().ok_or_else(|| {
-        LabError::safety_blocked(
-            "record_artifact_admission_failed",
-            "the admitted package has no recognition evaluator",
-            &["session_record"],
-        )
-        .with_details(json!({"stage": "evaluator"}))
-    })?;
-    // Workflow #396 REC-4: the evaluator gives the box a followed template matches on a frame.
-    let decision = first_decision(&first_prepared, &plan, &cache, ocr, evaluator)?;
-    let mut checks = cross_check(&plan, evaluator, &cache, ocr)?;
-    // #463 R2, self-check item 9, before item 8: every ending's page passes on its own frames and
-    // on no frame of a screen the run may show instead (an ending page that passes on a select
-    // step's frames before its last press is the ending's refusal, not the select's); the result
-    // is part of the cross-check, present only when the recording has an ending.
-    let endings = ending_checks(&plan, evaluator, &cache, ocr)?;
-    if let Some(cross) = checks.cross_check.as_object_mut()
-        && !endings.endings.is_empty()
-    {
-        cross.insert("endings".to_string(), json!(endings.endings));
-        if endings.partial {
-            cross.insert("status".to_string(), json!("partially_evaluated"));
-        }
-    }
-    // #463 R1, self-check item 8: every select step decides on its own frames as recorded; the
-    // result is part of the cross-check, present only when the package has a select step.
-    let selects = select_checks(&first_prepared, &plan, &cache, ocr)?;
-    if let Some(cross) = checks.cross_check.as_object_mut()
-        && !selects.selects.is_empty()
-    {
-        cross.insert("selects".to_string(), json!(selects.selects));
-        if !selects.not_evaluated.is_empty() {
-            cross.insert(
-                "selects_not_evaluated".to_string(),
-                json!(selects.not_evaluated),
-            );
-            cross.insert("status".to_string(), json!("partially_evaluated"));
-        }
-    }
-    let mut warnings = plan.warnings.clone();
-    warnings.extend(decision.warning.clone());
-    warnings.extend(checks.warnings.clone());
-    warnings.extend(endings.warnings.clone());
-    let mut provenance = Map::new();
-    provenance.insert("warnings".to_string(), json!(warnings));
-    provenance.insert(
-        "arrival_by_time_window".to_string(),
-        json!(checks.arrival_by_time_window),
-    );
-    provenance.insert("cross_check".to_string(), checks.cross_check.clone());
-
-    // Final package: the same content with the self-check results in its provenance, encoded,
-    // expanded again and admitted again.
-    let entries = render(&plan, Some(&provenance), &crops)?;
-    let kind = container_kind(&entries);
-    let bytes = encode(&entries, kind)?;
-    round_trip(&bytes, kind, &entries)?;
-    let prepared = admit(&entries, ocr)?;
-    let final_decision = first_decision(&prepared, &plan, &cache, ocr, evaluator)?;
-    if final_decision.value != decision.value {
-        return Err(LabError::safety_blocked(
-            "record_artifact_admission_failed",
-            "the first decision of the final package differs from the checked one",
-            &["session_record"],
-        )
-        .with_details(json!({
-            "stage": "first_decision",
-            "checked": decision.value,
-            "final": final_decision.value
-        })));
-    }
+    let Checked {
+        entries,
+        kind,
+        bytes,
+        checks,
+        selects,
+        endings,
+        warnings,
+        final_decision,
+    } = self_checks(&plan, ocr, Failures::first()).map_err(SelfCheckFailures::into_refusal)?;
 
     let ext = extension(kind);
     // Workflow #336 PKG-S5 (M-PKG v1.1 §3.5, D9): the package is `<package_id>.<ext>`, and a
@@ -391,6 +618,8 @@ fn generate_and_write(
         .map(|dir| preflight_lab_dir(Path::new(dir), &file_name))
         .transpose()?;
     let mut written = Vec::new();
+    // #464 P4: the outputs an earlier stop wrote, set aside and kept.
+    let mut kept = Vec::new();
     let lab_dir_status = if options.dry_run {
         None
     } else {
@@ -399,12 +628,13 @@ fn generate_and_write(
                 state_io(format!("failed to create {}: {error}", parent.display()))
             })?;
         }
-        replace_in_place(&copy_path, &bytes, &mut written)?;
+        replace_in_place(&copy_path, &bytes, &mut written, &mut kept)?;
         match &lab_dir_plan {
             Some(dir_plan) => Some(written_status(write_lab_dir(
                 dir_plan,
                 &bytes,
                 &mut written,
+                &mut kept,
             )?)),
             None => None,
         }
@@ -503,6 +733,9 @@ fn generate_and_write(
             ),
         );
         lab.insert("written_files".to_string(), json!(written));
+        if !kept.is_empty() {
+            lab.insert("kept".to_string(), json!(kept));
+        }
     }
     lab.insert("byte_count".to_string(), json!(bytes.len()));
     lab.insert(
@@ -589,6 +822,10 @@ fn generate_and_write(
         registry_entry_example(&plan.package_id, &plan.game, &plan.server, &plan.task_id),
     );
     lab.insert(
+        "adoption_example".to_string(),
+        adoption_example(&recording.record_id, state_dir),
+    );
+    lab.insert(
         "binding_requires".to_string(),
         json!(binding_requires(&plan)),
     );
@@ -598,9 +835,387 @@ fn generate_and_write(
     })
 }
 
+/// What `record stop`'s self-checks leave when every one passed: the final package, encoded, and
+/// the results its answer prints.
+struct Checked {
+    entries: BTreeMap<String, Vec<u8>>,
+    kind: ContentContainer,
+    bytes: Vec<u8>,
+    checks: CrossCheck,
+    selects: SelectChecks,
+    endings: EndingChecks,
+    warnings: Vec<Value>,
+    final_decision: FirstDecision,
+}
+
+/// #463 S2-1c: the self-checks that did not all pass: every check that ran, in the order they ran,
+/// with the failures it met (under `record stop` the one refusal), and the checks that did not run,
+/// in the order they run.
+struct SelfCheckFailures {
+    ran: Vec<CheckRun>,
+    not_run: Vec<ReadyCheck>,
+}
+
+impl SelfCheckFailures {
+    /// The refusal `record stop` answers: the first failure of the first check that met one, under
+    /// its mode the only one.
+    fn into_refusal(self) -> LabError {
+        self.ran
+            .into_iter()
+            .flat_map(|run| run.failures)
+            .next()
+            .map_or_else(
+                || {
+                    invalid(
+                        "validation_failed",
+                        "the self-checks failed without a refusal",
+                    )
+                },
+                |failure| failure.error,
+            )
+    }
+
+    /// A failure to read the state (its class `runtime_unavailable`), which is no check's refusal:
+    /// the command answers it.
+    fn unreadable(&self) -> Option<LabError> {
+        self.ran
+            .iter()
+            .flat_map(|run| &run.failures)
+            .find(|failure| failure.error.class == LabErrorClass::RuntimeUnavailable)
+            .map(|failure| failure.error.clone())
+    }
+}
+
+/// #463 S2-1c: the self-checks as they run: the failures the running check meets, and every check
+/// that ran.
+struct Runner {
+    failures: Failures,
+    ran: Vec<CheckRun>,
+}
+
+impl Runner {
+    const fn new(failures: Failures) -> Self {
+        Self {
+            failures,
+            ran: Vec::new(),
+        }
+    }
+
+    /// A part of `check` that gave `outcome`: its value; or, when it gave an error (under `record
+    /// stop` its first failure, under `record ready` one it cannot go on past), `None`, and `check`
+    /// ran and stopped there for the reason `stop`, that error its last failure.
+    fn part<T>(
+        &mut self,
+        check: ReadyCheck,
+        stop: ReadyCheckStop,
+        outcome: LabResult<T>,
+    ) -> Option<T> {
+        match outcome {
+            Ok(value) => Some(value),
+            Err(error) => {
+                let mut failures = self.failures.take();
+                failures.push(CheckFailure {
+                    locus: Locus::default(),
+                    error,
+                });
+                self.ran.push(CheckRun {
+                    check,
+                    failures,
+                    stopped: Some(stop),
+                });
+                None
+            }
+        }
+    }
+
+    /// The last part of `check`: [`Self::part`]; when it gave its value, `check` ran to its end,
+    /// with every failure it met.
+    fn last<T>(
+        &mut self,
+        check: ReadyCheck,
+        stop: ReadyCheckStop,
+        outcome: LabResult<T>,
+    ) -> Option<T> {
+        let value = self.part(check, stop, outcome)?;
+        let failures = self.failures.take();
+        self.ran.push(CheckRun {
+            check,
+            failures,
+            stopped: None,
+        });
+        Some(value)
+    }
+
+    /// Whether a check that ran met a failure.
+    fn failed(&self) -> bool {
+        self.ran.iter().any(|run| !run.failures.is_empty())
+    }
+
+    /// Whether the checks end here: under `record stop` a check's first failure is the refusal.
+    fn ends(&self) -> bool {
+        !self.failures.collects() && self.failed()
+    }
+
+    /// The checks that ran and those that did not.
+    fn into_failures(self) -> SelfCheckFailures {
+        let not_run = ReadyCheck::ALL
+            .iter()
+            .copied()
+            .filter(|check| self.ran.iter().all(|run| run.check != *check))
+            .collect();
+        SelfCheckFailures {
+            ran: self.ran,
+            not_run,
+        }
+    }
+}
+
+/// The self-checks of the package `plan` generates (section 4.6), in memory, in the order they
+/// run: its stored frames and crops read back, admission and the evaluator, the first decision,
+/// the cross-check, the endings, the selects, and the final package encoded, expanded, admitted
+/// and decided again. Nothing is written. #463 S2-1: `record stop` and `record ready` both run
+/// them here. #463 S2-1c: `failures` says how a check meets a failure. Under `record stop`
+/// (`Failures::first`) the first failure of the first check that meets one ends them all and is
+/// the refusal, as before. Under `record ready` (`Failures::every`) each check lists every failure
+/// it meets, and a check runs after a failed one when it reads nothing the failed one gave: the
+/// first decision, the cross-check, the endings and the selects read only the frames and the
+/// admitted package, so each runs whatever the others found; nothing runs after a failed frames or
+/// admission check, and the final package, built of what every check before it gave, only when
+/// none failed. Fix round 1: in `admission` and `final_package` rendering the package judges
+/// nothing, so an error there stops the check with `check_error`, as in every other check; only a
+/// refusal of their staged judgement stops it with `whole_package`.
+fn self_checks(
+    plan: &Plan,
+    ocr: &LabOcr,
+    failures: Failures,
+) -> Result<Checked, SelfCheckFailures> {
+    let mut runner = Runner::new(failures);
+    let inputs = load_package_inputs(plan, &mut runner.failures);
+    let Some((cache, crops)) = runner.last(ReadyCheck::Frames, ReadyCheckStop::CheckError, inputs)
+    else {
+        return Err(runner.into_failures());
+    };
+    // Every later check reads every frame.
+    if runner.failed() {
+        return Err(runner.into_failures());
+    }
+
+    // First pass: admit the package, decide its first step and cross-check its pages. Fix round
+    // 1: rendering the package judges nothing, so an error there is `check_error`; the kernel's
+    // admission and the evaluator are the staged judgement, `whole_package`.
+    let rendered = render(plan, None, &crops);
+    let Some(first_entries) =
+        runner.part(ReadyCheck::Admission, ReadyCheckStop::CheckError, rendered)
+    else {
+        return Err(runner.into_failures());
+    };
+    let admitted = admission(&first_entries, ocr);
+    let Some((first_prepared, bundle)) = runner.part(
+        ReadyCheck::Admission,
+        ReadyCheckStop::WholePackage,
+        admitted,
+    ) else {
+        return Err(runner.into_failures());
+    };
+    let evaluator = bundle.loaded_bundle().evaluator().ok_or_else(|| {
+        LabError::safety_blocked(
+            "record_artifact_admission_failed",
+            "the admitted package has no recognition evaluator",
+            &["session_record"],
+        )
+        .with_details(json!({"stage": "evaluator"}))
+    });
+    let Some(evaluator) = runner.last(
+        ReadyCheck::Admission,
+        ReadyCheckStop::WholePackage,
+        evaluator,
+    ) else {
+        return Err(runner.into_failures());
+    };
+    // Workflow #396 REC-4: the evaluator gives the box a followed template matches on a frame.
+    let decision = first_decision(
+        &first_prepared,
+        plan,
+        &cache,
+        ocr,
+        evaluator,
+        &mut runner.failures,
+    );
+    let decision = runner.last(
+        ReadyCheck::FirstDecision,
+        ReadyCheckStop::CheckError,
+        decision,
+    );
+    if runner.ends() {
+        return Err(runner.into_failures());
+    }
+    let checks = cross_check(plan, evaluator, &cache, ocr, &mut runner.failures);
+    let checks = runner.last(ReadyCheck::CrossCheck, ReadyCheckStop::CheckError, checks);
+    if runner.ends() {
+        return Err(runner.into_failures());
+    }
+    // #463 R2, self-check item 9, before item 8: every ending's page passes on its own frames and
+    // on no frame of a screen the run may show instead (an ending page that passes on a select
+    // step's frames before its last press is the ending's refusal, not the select's); the result
+    // is part of the cross-check, present only when the recording has an ending.
+    let endings = ending_checks(plan, evaluator, &cache, ocr, &mut runner.failures);
+    let endings = runner.last(ReadyCheck::Endings, ReadyCheckStop::CheckError, endings);
+    if runner.ends() {
+        return Err(runner.into_failures());
+    }
+    // #463 R1, self-check item 8: every select step decides on its own frames as recorded; the
+    // result is part of the cross-check, present only when the package has a select step.
+    let selects = select_checks(&first_prepared, plan, &cache, ocr, &mut runner.failures);
+    let selects = runner.last(ReadyCheck::Selects, ReadyCheckStop::CheckError, selects);
+    // The final package is built of what every check before it gave.
+    let (Some(decision), Some(mut checks), Some(endings), Some(selects)) =
+        (decision, checks, endings, selects)
+    else {
+        return Err(runner.into_failures());
+    };
+    if runner.failed() {
+        return Err(runner.into_failures());
+    }
+    if let Some(cross) = checks.cross_check.as_object_mut()
+        && !endings.endings.is_empty()
+    {
+        cross.insert("endings".to_string(), json!(endings.endings));
+        if endings.partial {
+            cross.insert("status".to_string(), json!("partially_evaluated"));
+        }
+    }
+    if let Some(cross) = checks.cross_check.as_object_mut()
+        && !selects.selects.is_empty()
+    {
+        cross.insert("selects".to_string(), json!(selects.selects));
+        if !selects.not_evaluated.is_empty() {
+            cross.insert(
+                "selects_not_evaluated".to_string(),
+                json!(selects.not_evaluated),
+            );
+            cross.insert("status".to_string(), json!("partially_evaluated"));
+        }
+    }
+    let mut warnings = plan.warnings.clone();
+    warnings.extend(decision.warning.clone());
+    warnings.extend(checks.warnings.clone());
+    warnings.extend(endings.warnings.clone());
+    let mut provenance = Map::new();
+    provenance.insert("warnings".to_string(), json!(warnings));
+    provenance.insert(
+        "arrival_by_time_window".to_string(),
+        json!(checks.arrival_by_time_window),
+    );
+    provenance.insert("cross_check".to_string(), checks.cross_check.clone());
+
+    // Fix round 1: as in the first pass, rendering judges nothing (`check_error`); encoding,
+    // expanding, admitting and deciding again are the staged judgement (`whole_package`).
+    let rendered = render(plan, Some(&provenance), &crops);
+    let Some(final_entries) = runner.part(
+        ReadyCheck::FinalPackage,
+        ReadyCheckStop::CheckError,
+        rendered,
+    ) else {
+        return Err(runner.into_failures());
+    };
+    let built = final_package(final_entries, plan, ocr, &cache, evaluator, &decision);
+    let Some(FinalPackage {
+        entries,
+        kind,
+        bytes,
+        decision: final_decision,
+    }) = runner.last(
+        ReadyCheck::FinalPackage,
+        ReadyCheckStop::WholePackage,
+        built,
+    )
+    else {
+        return Err(runner.into_failures());
+    };
+    Ok(Checked {
+        entries,
+        kind,
+        bytes,
+        checks,
+        selects,
+        endings,
+        warnings,
+        final_decision,
+    })
+}
+
+/// Self-check `admission`, its staged judgement: the rendered package `entries` admitted by the
+/// kernel, and the bundle whose evaluator the later checks judge with; each stage reads the one
+/// before.
+fn admission(
+    entries: &BTreeMap<String, Vec<u8>>,
+    ocr: &LabOcr,
+) -> LabResult<(PreparedContainedTask, ExternallyVerifiedBundle)> {
+    let prepared = admit(entries, ocr)?;
+    let bundle = evaluator_bundle(entries, ocr)?;
+    Ok((prepared, bundle))
+}
+
+/// What self-check `final_package` built when it passed.
+struct FinalPackage {
+    entries: BTreeMap<String, Vec<u8>>,
+    kind: ContentContainer,
+    bytes: Vec<u8>,
+    decision: FirstDecision,
+}
+
+/// Self-check `final_package`, its staged judgement: the same content rendered with the
+/// self-check results in its provenance (`entries`), encoded, expanded again and admitted again,
+/// and its first decision the checked one (`decision`). Each stage reads the one before, so its
+/// first refusal ends it; its first decision decides as `record stop`'s does.
+fn final_package(
+    entries: BTreeMap<String, Vec<u8>>,
+    plan: &Plan,
+    ocr: &LabOcr,
+    cache: &FrameCache,
+    evaluator: &RecognitionEvaluator,
+    decision: &FirstDecision,
+) -> LabResult<FinalPackage> {
+    let kind = container_kind(&entries);
+    let bytes = encode(&entries, kind)?;
+    round_trip(&bytes, kind, &entries)?;
+    let prepared = admit(&entries, ocr)?;
+    let final_decision = first_decision(
+        &prepared,
+        plan,
+        cache,
+        ocr,
+        evaluator,
+        &mut Failures::first(),
+    )?;
+    if final_decision.value != decision.value {
+        return Err(LabError::safety_blocked(
+            "record_artifact_admission_failed",
+            "the first decision of the final package differs from the checked one",
+            &["session_record"],
+        )
+        .with_details(json!({
+            "stage": "first_decision",
+            "checked": decision.value,
+            "final": final_decision.value
+        })));
+    }
+    Ok(FinalPackage {
+        entries,
+        kind,
+        bytes,
+        decision: final_decision,
+    })
+}
+
 /// Section 4.1 item 7: every live frame and template crop is read back after its sha256
-/// check, and every frame has the recording's size.
-fn load_package_inputs(plan: &Plan) -> LabResult<(FrameCache, BTreeMap<String, Vec<u8>>)> {
+/// check, and every frame has the recording's size. #463 S2-1c: each frame and each crop is one
+/// judgement; one that fails is a failure `failures` meets (the step or the ending and the frame,
+/// or the template), and under `record ready` the next is read.
+fn load_package_inputs(
+    plan: &Plan,
+    failures: &mut Failures,
+) -> LabResult<(FrameCache, BTreeMap<String, Vec<u8>>)> {
     let mut cache = FrameCache::new();
     for step in &plan.steps {
         for frame in step
@@ -611,31 +1226,55 @@ fn load_package_inputs(plan: &Plan) -> LabResult<(FrameCache, BTreeMap<String, V
             if cache.contains_key(&frame.sha256) {
                 continue;
             }
-            let loaded = read_stored_frame(frame)?;
-            check_frame_size(Some(plan.size), &loaded, &frame.frame_id)?;
-            cache.insert(frame.sha256.clone(), loaded);
+            match read_package_frame(plan, frame) {
+                Ok(loaded) => {
+                    cache.insert(frame.sha256.clone(), loaded);
+                }
+                Err(error) => failures.fail(Locus::on_step(step).with_frame(frame), error)?,
+            }
         }
     }
     // #463 R2: and every live frame of an ending.
-    for frame in plan.endings.iter().flat_map(|ending| ending.live_frames()) {
-        if cache.contains_key(&frame.sha256) {
-            continue;
+    for ending in &plan.endings {
+        for frame in ending.live_frames() {
+            if cache.contains_key(&frame.sha256) {
+                continue;
+            }
+            match read_package_frame(plan, frame) {
+                Ok(loaded) => {
+                    cache.insert(frame.sha256.clone(), loaded);
+                }
+                Err(error) => failures.fail(Locus::on_ending(ending).with_frame(frame), error)?,
+            }
         }
-        let loaded = read_stored_frame(frame)?;
-        check_frame_size(Some(plan.size), &loaded, &frame.frame_id)?;
-        cache.insert(frame.sha256.clone(), loaded);
     }
     let mut crops = BTreeMap::new();
     for (id, _asset) in plan.template_assets() {
-        let crop = plan
-            .mark(&id)?
-            .crop
-            .as_ref()
-            .ok_or_else(|| LabError::usage(format!("template '{id}' has no crop")))?;
-        let bytes = read_verified(Path::new(&crop.path), &crop.sha256)?;
-        crops.insert(id, bytes);
+        match read_crop(plan, &id) {
+            Ok(bytes) => {
+                crops.insert(id, bytes);
+            }
+            Err(error) => failures.fail(Locus::default().with_target(&id), error)?,
+        }
     }
     Ok((cache, crops))
+}
+
+/// A live frame of the package read back after its sha256 check, of the recording's size.
+fn read_package_frame(plan: &Plan, frame: &RecordedFrame) -> LabResult<LoadedFrame> {
+    let loaded = read_stored_frame(frame)?;
+    check_frame_size(Some(plan.size), &loaded, &frame.frame_id)?;
+    Ok(loaded)
+}
+
+/// The crop of the template mark `id`, read back after its sha256 check.
+fn read_crop(plan: &Plan, id: &str) -> LabResult<Vec<u8>> {
+    let crop = plan
+        .mark(id)?
+        .crop
+        .as_ref()
+        .ok_or_else(|| LabError::usage(format!("template '{id}' has no crop")))?;
+    read_verified(Path::new(&crop.path), &crop.sha256)
 }
 
 /// `lab_dir_status` of a written package: `replaced` when a file of its name was there (D9),
@@ -715,6 +1354,29 @@ fn insert_binding(
             "escalation_threshold": 2
         }),
     );
+}
+
+/// #464 P4 (`contracts/lab-recording.md`, "Output"; `contracts/standard-pack-authoring.md`, "The
+/// decision document"): how the package becomes a member of its game's standard pack: the
+/// `standard-pack adopt` line for this recording (its record id and its state directory, what the
+/// recording knows; the checkout and the decision file are the caller's) and the skeleton of the
+/// decision it takes. Fix round 2 (the owner's rule: a package not yet run through on a real device
+/// is registered and stays held): a decision of the class `held` whose `held.reason` is left
+/// blank, and nothing else; adopt accepts it once the caller fills in the reason, and refuses a
+/// blank one.
+fn adoption_example(record_id: &str, state_dir: &Path) -> Value {
+    json!({
+        "command": format!(
+            "actinglab standard-pack adopt --repo <checkout> --record-id {record_id} --state-dir \
+             \"{}\" --decide <decision.json>",
+            absolute_display(state_dir)
+        ),
+        "decision": {
+            "schema_version": "actingcommand.pack-decision.v1",
+            "class": "held",
+            "held": {"reason": ""}
+        }
+    })
 }
 
 /// What a binding of the package also needs (section 4.8 with a15, a20 and R24).
@@ -820,15 +1482,83 @@ fn binding_requires(plan: &Plan) -> Vec<String> {
     items
 }
 
+/// The code of a generation option given to a stopped recording with a value other than the one
+/// its package was generated with: `record stop`'s refusal, and (#463 S2-1b fix round 1) `record
+/// ready`'s warning on a packaged recording.
+const OPTION_CONFLICT: &str = "record_stop_option_conflict";
+
 /// A stopped recording is not generated again: a generation option given with a value other
 /// than the one its package was generated with is `record_stop_option_conflict` (exit 3)
 /// instead of being ignored; an equal value is accepted. A value the package did not record
-/// (a package generated before the field existed) cannot be equal and conflicts too.
+/// (a package generated before the field existed) cannot be equal and conflicts too. The first
+/// conflict [`option_conflicts`] finds is refused.
 fn refuse_option_conflict(
     recording: &LabRecording,
     artifact: &RecordingArtifact,
     options: &RecordStopOptions,
 ) -> LabResult<()> {
+    let Some((field, recorded, given)) = option_conflicts(artifact, options).into_iter().next()
+    else {
+        return Ok(());
+    };
+    Err(LabError::safety_blocked(
+        OPTION_CONFLICT,
+        format!(
+            "the package of recording {} was generated with {field} {}; the given {field} \
+             {given} would need a new package, and a stopped recording is not generated again; \
+             nothing was written",
+            recording.record_id,
+            recorded
+                .as_ref()
+                .map_or_else(|| "unrecorded".to_string(), Value::to_string)
+        ),
+        &["session_record"],
+    )
+    .with_details(json!({"field": field, "recorded": recorded, "given": given})))
+}
+
+/// #463 S2-1b fix round 1: what [`refuse_option_conflict`] holds against a stopped recording's
+/// package, for `record ready` on a packaged recording: each generation option given with a value
+/// other than the one the package was generated with, in the order `record stop` checks them, as a
+/// warning whose members are the code and the details `record stop` would refuse the first with.
+fn option_conflict_warnings(
+    artifact: &RecordingArtifact,
+    options: &RecordStopOptions,
+) -> LabResult<Vec<ReadyWarningItem>> {
+    option_conflicts(artifact, options)
+        .into_iter()
+        .map(|(field, recorded, given)| {
+            Ok(ReadyWarningItem::OptionConflict(ReadyOptionConflict {
+                code: OPTION_CONFLICT.to_string(),
+                field: field.to_string(),
+                recorded: recorded
+                    .as_ref()
+                    .map(OpaqueJson::from_serializable)
+                    .transpose()?,
+                given: OpaqueJson::from_serializable(&given)?,
+            }))
+        })
+        .collect()
+}
+
+/// #463 S2-1b fix round 1: where the parts of a packaged recording's identity are, for `record
+/// ready`: `recording` for each part its package holds.
+fn package_sources(artifact: &RecordingArtifact) -> ReadySources {
+    let held = |part: Option<&String>| part.map(|_| ReadySource::Recording);
+    ReadySources::of(
+        held(artifact.game.as_ref()),
+        held(artifact.server.as_ref()),
+        held(artifact.locale.as_ref()),
+    )
+}
+
+/// Each generation option `options` gives with a value other than the one `artifact`'s package
+/// was generated with, in the order `record stop` checks them: its field, the value the package
+/// recorded (`None` when it recorded none, which no given value equals) and the given one.
+fn option_conflicts(
+    artifact: &RecordingArtifact,
+    options: &RecordStopOptions,
+) -> Vec<(&'static str, Option<Value>, Value)> {
     let text = |value: &Option<String>| value.as_ref().map(|value| json!(value));
     let number = |value: Option<u64>| value.map(|value| json!(value));
     let fields = [
@@ -856,34 +1586,19 @@ fn refuse_option_conflict(
             number(artifact.application_arrival_timeout_ms),
         ),
     ];
-    for (field, given, recorded) in fields {
-        let Some(given) = given else {
-            continue;
-        };
-        if recorded.as_ref() == Some(&given) {
-            continue;
-        }
-        return Err(LabError::safety_blocked(
-            "record_stop_option_conflict",
-            format!(
-                "the package of recording {} was generated with {field} {}; the given {field} \
-                 {given} would need a new package, and a stopped recording is not generated \
-                 again; nothing was written",
-                recording.record_id,
-                recorded
-                    .as_ref()
-                    .map_or_else(|| "unrecorded".to_string(), Value::to_string)
-            ),
-            &["session_record"],
-        )
-        .with_details(json!({"field": field, "recorded": recorded, "given": given})));
-    }
-    Ok(())
+    fields
+        .into_iter()
+        .filter_map(|(field, given, recorded)| {
+            let given = given?;
+            (recorded.as_ref() != Some(&given)).then_some((field, recorded, given))
+        })
+        .collect()
 }
 
 /// `record stop` on a stopped recording with a package: with `--lab-dir` the package is copied
 /// there again (section 4.7 steps 2 and 4); nothing is generated.
 fn stop_already_generated(
+    state_dir: &Path,
     recording: &LabRecording,
     artifact: &RecordingArtifact,
     options: &RecordStopOptions,
@@ -920,6 +1635,7 @@ fn stop_already_generated(
         .map(|dir| preflight_lab_dir(Path::new(dir), &file_name))
         .transpose()?;
     let mut written = Vec::new();
+    let mut kept = Vec::new();
     let lab_dir_status = match &lab_dir_plan {
         None => None,
         Some(dir_plan) if options.dry_run => Some(if dir_plan.replaces {
@@ -931,6 +1647,7 @@ fn stop_already_generated(
             dir_plan,
             &bytes,
             &mut written,
+            &mut kept,
         )?)),
     };
     let package_path = lab_dir_plan.as_ref().map_or_else(
@@ -963,6 +1680,9 @@ fn stop_already_generated(
         ),
     );
     lab.insert("written_files".to_string(), json!(written));
+    if !kept.is_empty() {
+        lab.insert("kept".to_string(), json!(kept));
+    }
     lab.insert("byte_count".to_string(), json!(artifact.byte_count));
     lab.insert(
         "generated_at_unix_ms".to_string(),
@@ -980,6 +1700,10 @@ fn stop_already_generated(
             artifact.server.as_deref().unwrap_or("<server>"),
             &recording.task_id,
         ),
+    );
+    lab.insert(
+        "adoption_example".to_string(),
+        adoption_example(&recording.record_id, state_dir),
     );
     Ok(RecordStopOutcome {
         lab_status: Some("already_generated".to_string()),
@@ -1017,6 +1741,13 @@ fn validate_mark_request(request: &MarkRequest) -> LabResult<()> {
     if request.ending.is_some() || request.remove_ending.is_some() {
         return validate_ending_request(request);
     }
+    // #463 R4: so does an optional step inserted after the stop, or one to give up.
+    if request.optional_after.is_some() || request.remove_inserted.is_some() {
+        return validate_optional_after_request(request);
+    }
+    // #463 S2-5: boxes are members of a step: never beside a step operation or a transition, one
+    // press box beside no click, each recognize box once.
+    validate_boxes(request)?;
     if let Some(page) = &request.page
         && !page_name_valid(page)
     {
@@ -1047,6 +1778,7 @@ fn validate_mark_request(request: &MarkRequest) -> LabResult<()> {
         || request.application.is_some()
         || request.select.is_some()
         || request.clear_select
+        || request.choice.is_some()
         || page_rule;
     if request.step_action.is_some() {
         if marks_or_click
@@ -1070,6 +1802,7 @@ fn validate_mark_request(request: &MarkRequest) -> LabResult<()> {
             || request.application.is_some()
             || request.select.is_some()
             || request.clear_select
+            || request.choice.is_some()
         {
             return Err(invalid(
                 "record_transition_has_click",
@@ -1113,11 +1846,13 @@ fn validate_mark_request(request: &MarkRequest) -> LabResult<()> {
         }
     }
     // #463 R1: a select is the step's one effect, beside no click, retry, optional step or
-    // application operation, and keeps its shape.
-    validate_select_request(request)?;
+    // application operation, and keeps its shape. #463 S2-5: a press box is the step's click for
+    // these rules.
+    let pressed = with_press_click(request);
+    validate_select_request(&pressed)?;
     if let Some(application) = &request.application {
         application_action(&application.action)?;
-        if request.click.is_some() || request.click_guard.is_some() || request.retry.is_some() {
+        if pressed.click.is_some() || request.click_guard.is_some() || request.retry.is_some() {
             return Err(application_with_click(request.step));
         }
     }
@@ -1223,6 +1958,8 @@ fn mark_session(
         select: None,
         ending: None,
         removed_ending: None,
+        boxes: Vec::new(),
+        choice: None,
     };
     // #463 R2: an ending of the stopped recording, taken from its frame or given up; it is no
     // step, so the answer names none.
@@ -1250,6 +1987,24 @@ fn mark_session(
         let (status, step) = apply_step_action(session, action)?;
         outcome.status = status.to_string();
         step
+    } else if let Some(spec) = &request.optional_after {
+        // #463 R4: an optional step inserted after a step of the stopped recording, from a frame;
+        // its step state names the recorded step it runs after.
+        let applied = apply_optional_after(session, spec, ocr)?;
+        if !dry_run {
+            outcome.status = "optional_step_inserted".to_string();
+        }
+        outcome.frame = applied.frame;
+        outcome.samples = applied.samples;
+        outcome.marks = applied.added;
+        outcome.reused = applied.reused;
+        applied.step
+    } else if let Some(index) = request.remove_inserted {
+        remove_inserted(session, index)?;
+        if !dry_run {
+            outcome.status = "optional_step_removed".to_string();
+        }
+        index
     } else if let Some(spec) = &request.transition {
         let applied = apply_transition(session, request, spec, ocr)?;
         outcome.marks = applied.marks;
@@ -1265,6 +2020,7 @@ fn mark_session(
         outcome.reused = applied.reused;
         outcome.removed = applied.removed;
         outcome.forbidden = applied.forbidden;
+        outcome.boxes = applied.boxes;
         applied.step
     };
     outcome.step = Some(step);
@@ -1280,6 +2036,8 @@ fn mark_session(
         outcome.step_state = Some(step_state(recorded));
         // #463 R1: the step's select with its self-test.
         outcome.select = recorded.select.clone();
+        // #463 S2-6: the step's choice mark.
+        outcome.choice = recorded.choice.clone();
     }
     Ok(outcome)
 }
@@ -1307,31 +2065,110 @@ pub fn record_frame_preflight(lock: &RecordingLock) -> LabResult<()> {
     check_device_arrival(&session.recording)
 }
 
+/// Workflow #392 DA-5, the train of DA-5ab and DA-5cd (its rule R4; `contracts/lab-recording.md`,
+/// "A recording's size"; `contracts/display-adapter.md` sections 11 and 12): nothing is sent before
+/// the recording is known to take it. The one judgement `record stop` makes of a recording
+/// (`recording_not_base`), asked before anything goes to the device by `do --capture --record`
+/// before its press and by `observe --capture --record` before its capture (`tap`, `swipe` and
+/// `long-tap --record` and `session app --record` ask it in [`record_before_frame`]): a recording
+/// whose frames are not the base size is refused `record_size_not_base`, nothing written. Any
+/// other recording passes. It replaces DA-5ab's check of the recording's size against the Lab
+/// operation's package base (`record_frame_size_mismatch`).
+pub fn record_size_check(lock: &RecordingLock) -> LabResult<()> {
+    let session = open_session(lock)?;
+    match recording_not_base(&session.recording) {
+        Some(refusal) => Err(refusal),
+        None => Ok(()),
+    }
+}
+
+/// Workflow #392 DA-5, the train (R4): a frame of `width` x `height` (`label` names it) that a
+/// recording path took before it sends or writes anything, judged as a frame that enters the
+/// recording is, whether or not it will be stored: [`admit_recording_frame`] (the recording's
+/// first frame of another size than the base its header names `record_display_not_base`; a frame
+/// of a recording whose frames are not the base size `record_size_not_base`), then the recording's
+/// own size (`record_frame_size_mismatch`: the display changed during the recording). `do
+/// --capture --record` asks it of the frame it captures before its press, and `observe --capture
+/// --record` of the Runtime frame it observed, before its frame file or the recording is written.
+/// Nothing is written. It replaces DA-5ab's check of the observed frame against the package's base.
+pub fn record_frame_check(
+    lock: &RecordingLock,
+    (width, height): (u32, u32),
+    label: &str,
+) -> LabResult<()> {
+    let session = open_session(lock)?;
+    let size = RecordSize { width, height };
+    admit_recording_frame(&session.recording, size)?;
+    check_size(session.recording.coordinate_space, size, label)
+}
+
 /// Records a frame from `capture --record` or `observe --capture --record`.
 pub fn record_attach_frame(
     lock: &RecordingLock,
     request: AttachFrameRequest,
 ) -> LabResult<AttachFrameOutcome> {
     let mut session = open_session(lock)?;
-    let label = format!("{} frame", request.source);
-    let loaded = decode_frame(request.png, &label)?;
-    let meta = FrameMeta {
-        source: request.source,
-        runtime_artifact: request.runtime_artifact,
-        capture_backend: request.capture_backend,
-        freshness: request.freshness,
-    };
-    let arrival = arrive(&mut session, loaded, ArrivalMode::Device, &meta, &label)?;
+    let device = DeviceFrame::decode(request)?;
+    let arrival = arrive(
+        &mut session,
+        device.loaded,
+        ArrivalMode::Device,
+        &device.meta,
+        &device.label,
+    )?;
     save(&mut session)?;
-    Ok(AttachFrameOutcome {
+    Ok(frame_recorded(
+        &session.recording,
+        arrival.opened,
+        arrival.closed_step,
+        arrival.step,
+        arrival.frame,
+    ))
+}
+
+/// A device frame decoded as `capture --record`'s is, with its provenance, before it arrives.
+struct DeviceFrame {
+    loaded: LoadedFrame,
+    meta: FrameMeta,
+    label: String,
+}
+
+impl DeviceFrame {
+    fn decode(request: AttachFrameRequest) -> LabResult<Self> {
+        let label = format!("{} frame", request.source);
+        let loaded = decode_frame(request.png, &label)?;
+        Ok(Self {
+            loaded,
+            meta: FrameMeta {
+                source: request.source,
+                runtime_artifact: request.runtime_artifact,
+                capture_backend: request.capture_backend,
+                freshness: request.freshness,
+            },
+            label,
+        })
+    }
+}
+
+/// The answer of frames that arrived as `capture --record`'s do: what the first of them opened
+/// (`step_opened`) and closed (`closed_step`), and the step and frame of the last; one frame is
+/// both.
+fn frame_recorded(
+    recording: &LabRecording,
+    step_opened: bool,
+    closed_step: Option<u32>,
+    step: u32,
+    frame: RecordedFrame,
+) -> AttachFrameOutcome {
+    AttachFrameOutcome {
         status: "frame_recorded".to_string(),
-        record_id: session.recording.record_id.clone(),
-        record_started_at_unix_ms: session.recording.record_started_at_unix_ms,
-        step: arrival.step,
-        step_opened: arrival.opened,
-        frame: arrival.frame,
-        closed_step: arrival.closed_step,
-    })
+        record_id: recording.record_id.clone(),
+        record_started_at_unix_ms: recording.record_started_at_unix_ms,
+        step,
+        step_opened,
+        frame,
+        closed_step,
+    }
 }
 
 /// Before `do --capture --record` presses anything: the step, rectangle and point.
@@ -1348,15 +2185,45 @@ pub fn record_commit_click(
     plan: &ClickPlan,
     request: &CommitClickRequest,
 ) -> LabResult<CommitClickOutcome> {
+    let outcome = commit_recorded(lock, plan, request, false, false)?;
+    if request.effect == ClickEffect::Indeterminate {
+        return Err(click_indeterminate(plan.step, to_json(&outcome)));
+    }
+    if request.has_failure {
+        return Err(click_performed_with_failure(plan.step, to_json(&outcome)));
+    }
+    Ok(outcome)
+}
+
+/// The Runtime outcome of a planned click recorded on its step, or
+/// `record_append_failed_after_input` when it could not be recorded; #463 S1-1: with
+/// `names_frames`, a press recorded by the command that makes it (`commit_click`), whose status is
+/// `press_recorded` or `press_indeterminate` where `do --capture --record`'s is `click_recorded` or
+/// `click_indeterminate`. Fix round 3: `sent_on_unstored_capture`, handed to `commit_click`, when
+/// such a press was sent on a capture its command did not store.
+fn commit_recorded(
+    lock: &RecordingLock,
+    plan: &ClickPlan,
+    request: &CommitClickRequest,
+    names_frames: bool,
+    sent_on_unstored_capture: bool,
+) -> LabResult<CommitClickOutcome> {
     let recorded = (|| -> LabResult<CommitClickOutcome> {
         let mut session = open_session(lock)?;
-        let (click, performed) = commit_click(&mut session.recording, plan, request)?;
+        let (click, performed) = commit_click(
+            &mut session.recording,
+            plan,
+            request,
+            names_frames,
+            sent_on_unstored_capture,
+        )?;
         save(&mut session)?;
         Ok(CommitClickOutcome {
-            status: if performed {
-                "click_recorded"
-            } else {
-                "click_indeterminate"
+            status: match (names_frames, performed) {
+                (false, true) => "click_recorded",
+                (false, false) => "click_indeterminate",
+                (true, true) => "press_recorded",
+                (true, false) => "press_indeterminate",
             }
             .to_string(),
             record_id: session.recording.record_id.clone(),
@@ -1370,7 +2237,7 @@ pub fn record_commit_click(
         ClickEffect::Performed => "performed",
         ClickEffect::Indeterminate => "indeterminate",
     };
-    let outcome = recorded.map_err(|error| {
+    recorded.map_err(|error| {
         let cause = json!({
             "code": error.code,
             "message": error.message,
@@ -1386,35 +2253,38 @@ pub fn record_commit_click(
             &["session_record"],
         )
         .with_details(json!({"plan": to_json(plan), "effect": effect, "cause": cause}))
-    })?;
-    if request.effect == ClickEffect::Indeterminate {
-        return Err(LabError::new(
-            LabErrorClass::DeviceInstance,
-            "record_click_indeterminate",
-            format!(
-                "the click of step {} has an indeterminate outcome; it is recorded and the step \
-                 stays open; check the screen, then `record mark --reopen-step {}` to retry or \
-                 `record mark --close-step` to accept it",
-                plan.step, plan.step
-            ),
-            &["device"],
-        )
-        .with_details(json!({"record": to_json(&outcome)})));
-    }
-    if request.has_failure {
-        return Err(LabError::new(
-            LabErrorClass::DeviceInstance,
-            "record_click_performed_with_failure",
-            format!(
-                "the click of step {} was performed but the operation reported a failure; it is \
-                 recorded, the step is closed and marked needs_review",
-                plan.step
-            ),
-            &["device"],
-        )
-        .with_details(json!({"record": to_json(&outcome)})));
-    }
-    Ok(outcome)
+    })
+}
+
+/// The press of `step` has an indeterminate outcome: recorded, its step open, exit 4; `record` is
+/// what was recorded.
+fn click_indeterminate(step: u32, record: Value) -> LabError {
+    LabError::new(
+        LabErrorClass::DeviceInstance,
+        "record_click_indeterminate",
+        format!(
+            "the click of step {step} has an indeterminate outcome; it is recorded and the step \
+             stays open; check the screen, then `record mark --reopen-step {step}` to retry or \
+             `record mark --close-step` to accept it"
+        ),
+        &["device"],
+    )
+    .with_details(json!({"record": record}))
+}
+
+/// The press of `step` was performed and the operation reported a failure: recorded, its step
+/// closed and marked `needs_review`, exit 4; `record` is what was recorded.
+fn click_performed_with_failure(step: u32, record: Value) -> LabError {
+    LabError::new(
+        LabErrorClass::DeviceInstance,
+        "record_click_performed_with_failure",
+        format!(
+            "the click of step {step} was performed but the operation reported a failure; it is \
+             recorded, the step is closed and marked needs_review"
+        ),
+        &["device"],
+    )
+    .with_details(json!({"record": record}))
 }
 
 /// The `actingcommand.lab-record-mark.v1` request in `text`, as `record mark --request` and
@@ -1669,9 +2539,10 @@ fn repeat_without_mark(
         && match error.code.as_str() {
             "record_click_exists" => step.declares_click,
             "record_mark_id_conflict" => {
-                !request.add.is_empty()
-                    && request
-                        .add
+                // #463 S2-5: a recognize box is the template mark it stands for on the open step.
+                let add = expanded_add(request, step.index);
+                !add.is_empty()
+                    && add
                         .iter()
                         .all(|spec| step.marks.iter().any(|mark| declares_mark(spec, mark)))
             }
@@ -1807,6 +2678,775 @@ fn with_detail(mut error: LabError, name: &str, value: Option<Value>) -> LabErro
     };
     details.insert(name.to_owned(), value);
     error.with_details(Value::Object(details))
+}
+
+/// #463 S1-1 (`contracts/lab-recording.md`, "Recording while playing"): what recording a press by
+/// the command that makes it asks of its caller beside the press: the caller's clock and one frame
+/// through the Runtime, as `capture --record` takes it (a part of what [`RecordStepPorts`] asks,
+/// and, #463 S1-2, the clock's readings). actinglab gives the Runtime's; a test gives fakes.
+pub trait RecordFramePorts {
+    /// Waits `duration` on the caller's clock.
+    fn wait(&mut self, duration: Duration);
+
+    /// Takes one frame through the Runtime, as `capture --record` takes it; fix round 2: with the
+    /// reference of the frame the Runtime committed for it, which a press planned on it names.
+    fn capture(&mut self) -> LabResult<CapturedFrame>;
+
+    /// #463 S1-2: the time on the caller's clock, since an origin of the caller's (only the
+    /// difference of two readings is used): when each capture after a press starts, so that the
+    /// next starts `interval_ms` after it, or at once when it took longer.
+    fn elapsed(&mut self) -> Duration;
+}
+
+/// #463 S1-1: the frame a press is sent on, under the recording lock. Fix round 2: every press
+/// recorded by the command that makes it is sent on a frame captured immediately before it, so
+/// one frame is always taken here, and what is kept of it depends on the open step:
+/// - no step open (a new recording, or the frame after the previous press could not be taken):
+///   it arrives as `capture --record`'s does and opens the step the press is planned on;
+/// - an open step without marks: it arrives as `capture --record`'s does on that step, so it is
+///   the step's live primary frame and the older one stays, superseded;
+/// - an open step with marks (made on its stored frame): it is not stored, and the stored frame
+///   stands; it must be of the recording's size (`record_frame_size_mismatch`), so that a point
+///   inside the recording's frames is a pixel of it.
+///
+/// A capture whose observation carries no frame id cannot be pressed on: `device_error`, before
+/// anything of it is stored. Answers the Runtime's reference of the frame, which the press is sent
+/// with, and its arrival (`None` when it was not stored).
+///
+/// Workflow #392 DA-5, the train (R4; `contracts/lab-recording.md`, "A recording's size"): first,
+/// before anything is captured, the one judgement `record stop` makes of the recording
+/// ([`record_size_check`]'s): a recording whose frames are not the base size is refused
+/// `record_size_not_base` and nothing is captured, sent or written, whether the open step is marked
+/// (its frame before the press then not stored) or not. A frame that is stored is judged as every
+/// frame that enters the recording (`admit_frame`); one that is not, against the recording's size.
+/// The train's fix round 1 (review B's must-fix): a frame that would be the recording's first is
+/// judged before it is stored as if the recording already had its size
+/// (`admit_pressed_first_frame`, `record_display_not_base`), so that a recording whose header names
+/// no base size takes no first frame `record stop` would refuse and no press is sent on one.
+pub fn record_before_frame(
+    lock: &RecordingLock,
+    ports: &mut impl RecordFramePorts,
+) -> LabResult<BeforeCapture> {
+    let session = open_session(lock)?;
+    let recording = &session.recording;
+    if let Some(refusal) = recording_not_base(recording) {
+        return Err(refusal);
+    }
+    let stores =
+        open_step(recording).is_none_or(|index| !step_ref(recording, index).is_some_and(has_marks));
+    let captured = ports.capture()?;
+    // The fix round after the train's review: this frame is taken before a press or (#463 S1-3) an
+    // application operation, and the texts name both.
+    let input_frame = captured.input_frame.ok_or_else(|| {
+        LabError::device(
+            "the Runtime's capture before the press or application operation carries no frame \
+             id, so nothing can name the frame it is planned on; nothing was pressed, sent or \
+             recorded",
+        )
+    })?;
+    let label = "the frame before the press or application operation";
+    if stores {
+        if recording.coordinate_space.is_none() {
+            let first = decode_frame(captured.frame.png.clone(), label)?;
+            admit_pressed_first_frame(recording, first.size())?;
+        }
+        let arrived = record_attach_frame(lock, captured.frame)?;
+        return Ok(BeforeCapture {
+            input_frame,
+            arrived: Some(arrived),
+        });
+    }
+    check_frame_size(
+        recording.coordinate_space,
+        &decode_frame(captured.frame.png, label)?,
+        label,
+    )?;
+    Ok(BeforeCapture {
+        input_frame,
+        arrived: None,
+    })
+}
+
+/// #463 S1-2 (`contracts/lab-recording.md`, "Recording while playing"): the time from the start of
+/// one capture after a press to the start of the next when none is given (`--interval-ms`), and
+/// its range.
+const AFTER_INTERVAL_MS: u64 = 100;
+const AFTER_MIN_INTERVAL_MS: u64 = 20;
+const AFTER_MAX_INTERVAL_MS: u64 = 1_000;
+
+/// #463 S1-2: how long the captures after a press must show one screen when none is given
+/// (`--still-ms`; 0: no stillness test), and the most it may be.
+const AFTER_STILL_MS: u64 = 300;
+const AFTER_MAX_STILL_MS: u64 = 5_000;
+
+/// #463 S1-2: the most intervals the bound of the stillness test may hold (`still_max_ms /
+/// interval_ms`), so that a press takes at most one capture more than this after it.
+const AFTER_MAX_INTERVALS: u64 = 120;
+
+/// #463 S1-2: the warning of the answer's `record.warnings` when the stillness test reached its
+/// bound without a still screen.
+const AFTER_NOT_STILL: &str = "after_not_still";
+
+/// #463 S1-2 and #463 S1-3 (the train of stage one, which joins S1-2's captures after a press with
+/// S1-3's application operations): how the screen after an effect is to be taken, checked before
+/// anything is captured, pressed or sent: the wait `after_ms` 0 to 60000, `interval_ms` 20 to 1000,
+/// `still_ms` 0 to 5000 and `still_max_ms` 0 to 60000 (`validation_failed`, `details{argument,
+/// reason: "range", value, min, max}`), and at most 120 intervals in the bound: `still_max_ms` at
+/// most 120 times `interval_ms`, a range that depends on the interval (fix round 3:
+/// `details{argument: "still_max_ms", reason: "range", value, min: 0, max: 120 times interval_ms,
+/// interval_ms}`), so that an effect takes at most 121 captures after it. The fix round after the
+/// train's review: one function checks the four, `after_ms` with the keys of the other three.
+/// [`record_press`] checks a press's so, [`record_after_frame`] the screen after it is handed, and
+/// `session app <verb> --record` its operation's before it sends the operation.
+pub fn record_after_capture_check(after: &AfterCapture) -> LabResult<()> {
+    let interval_ms = after.interval_ms.unwrap_or(AFTER_INTERVAL_MS);
+    for (argument, flag, value, min, max) in [
+        (
+            "after_ms",
+            "--after-ms",
+            after.after_ms,
+            0,
+            LAB_RECORDING_MAX_NEXT_FRAME_MS,
+        ),
+        (
+            "interval_ms",
+            "--interval-ms",
+            interval_ms,
+            AFTER_MIN_INTERVAL_MS,
+            AFTER_MAX_INTERVAL_MS,
+        ),
+        (
+            "still_ms",
+            "--still-ms",
+            after.still_ms.unwrap_or(AFTER_STILL_MS),
+            0,
+            AFTER_MAX_STILL_MS,
+        ),
+        (
+            "still_max_ms",
+            "--still-max-ms",
+            after.still_max_ms,
+            0,
+            LAB_RECORDING_MAX_NEXT_FRAME_MS,
+        ),
+    ] {
+        if !(min..=max).contains(&value) {
+            return Err(LabError::usage(format!(
+                "{flag} (MCP {argument}) must be in {min}..={max}, got {value}"
+            ))
+            .with_details(json!({
+                "argument": argument,
+                "reason": "range",
+                "value": value,
+                "min": min,
+                "max": max
+            })));
+        }
+    }
+    let max = AFTER_MAX_INTERVALS * interval_ms;
+    if after.still_max_ms > max {
+        return Err(LabError::usage(format!(
+            "--still-max-ms (MCP still_max_ms) must be in 0..={max} at --interval-ms (MCP \
+             interval_ms) {interval_ms}, at most {AFTER_MAX_INTERVALS} intervals, so that a press \
+             or an application operation takes at most {} captures after it; got {}",
+            AFTER_MAX_INTERVALS + 1,
+            after.still_max_ms
+        ))
+        .with_details(json!({
+            "argument": "still_max_ms",
+            "reason": "range",
+            "value": after.still_max_ms,
+            "min": 0,
+            "max": max,
+            "interval_ms": interval_ms
+        })));
+    }
+    Ok(())
+}
+
+/// #463 S1-2: the words an answer's `record.warnings` holds for how the screen after its effect was
+/// taken (`record`): `after_not_still` when the stillness test reached its bound without a still
+/// screen, none otherwise. #463 S1-3 (the train of stage one): a press's answer ([`record_press`])
+/// and an application operation's (`session app <verb> --record`) read them here.
+pub fn record_after_warnings(record: &AfterCaptureRecord) -> Vec<String> {
+    if record.still == Some(false) {
+        vec![AFTER_NOT_STILL.to_owned()]
+    } else {
+        Vec::new()
+    }
+}
+
+/// #463 S1-2: the frame-change digest of a whole frame (`frame_change_digest`, called as the
+/// kernel's still waits call it); a frame it cannot digest is `record_frame_unreadable`. #463 S2-5:
+/// `record mark` digests a step's live frame and its captures with it too (`steps.rs`).
+pub(crate) fn change_digest(frame: &LoadedFrame, label: &str) -> LabResult<ColorDigest> {
+    frame_change_digest(&frame.scene, None).map_err(|error| {
+        invalid(
+            "record_frame_unreadable",
+            format!("failed to digest {label} for the frame-change measure: {error}"),
+        )
+    })
+}
+
+/// #463 S1-2 (fix round 3, the coordinator's ruling: "still" does not depend on how long a capture
+/// takes): whether the screen has not changed for at least `still_for`. `taken` holds the start
+/// and digest of each capture, oldest first; its last is the newest. The run is the newest and the
+/// unbroken run of captures before it that each differ from the newest by at most the Runtime's
+/// one frame-change bound (`frame_change_milli` at most `FRAME_CHANGE_MAX_MILLI`); the screen is
+/// still when the run holds at least one earlier capture and the newest started at least
+/// `still_for` after the run's first. Digests that cannot be compared are
+/// `record_frame_unreadable`. #463 S2-5: `record mark` asks it whether a capture of a step shows
+/// the state of its live frame (`steps.rs`, `frame_unchanged`).
+pub(crate) fn unchanged_for(
+    taken: &[(Duration, ColorDigest)],
+    still_for: Duration,
+) -> LabResult<bool> {
+    let Some(((newest_start, newest), earlier)) = taken.split_last() else {
+        return Ok(false);
+    };
+    for (start, digest) in earlier.iter().rev() {
+        let milli = frame_change_milli(digest, newest).map_err(|error| {
+            invalid(
+                "record_frame_unreadable",
+                format!("failed to compare two frames by the frame-change measure: {error}"),
+            )
+        })?;
+        if milli > FRAME_CHANGE_MAX_MILLI {
+            return Ok(false);
+        }
+        if newest_start.saturating_sub(*start) >= still_for {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// #463 S1-2: one capture of the screen after a press, arrived on `session` as a capture of the
+/// press's after loop (`arrive_after_press`), with its frame-change digest when the loop tests
+/// stillness (`digests`). The loop writes its captures when it ends and reads none of them again,
+/// so their decoded pixels leave the session's cache (its pending writes keep the PNG).
+fn take_after_capture(
+    session: &mut Session,
+    ports: &mut impl RecordFramePorts,
+    digests: bool,
+) -> LabResult<(Arrival, Option<ColorDigest>)> {
+    let device = DeviceFrame::decode(ports.capture()?.frame)?;
+    let digest = if digests {
+        Some(change_digest(&device.loaded, &device.label)?)
+    } else {
+        None
+    };
+    let arrival = arrive_after_press(session, device.loaded, &device.meta, &device.label)?;
+    session.cache.remove(&arrival.frame.sha256);
+    Ok((arrival, digest))
+}
+
+/// Whole milliseconds of `duration`.
+fn whole_ms(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+}
+
+/// #463 S1-2: the timing of an after loop, its defaults filled in: from the start of one capture
+/// to the start of the next (`interval_ms`), how long the screen must not change (`still_ms`), the
+/// bound after the first capture (`still_max_ms`), and (fix round 3) the most captures the loop
+/// takes, `1 + still_max_ms / interval_ms`, whatever the caller's clock says.
+struct AfterTiming {
+    interval: Duration,
+    still_for: Duration,
+    bound: Duration,
+    most: u32,
+}
+
+/// #463 S1-2: what an after loop has taken so far: when its first capture started, the start,
+/// step and frame of the last, how many, and the start and frame-change digest of each (when the
+/// loop tests stillness), oldest first.
+struct AfterLoop {
+    first_start: Duration,
+    last: (Duration, u32, RecordedFrame),
+    captures: u32,
+    digests: Vec<(Duration, ColorDigest)>,
+}
+
+/// #463 S1-2: the captures after the first, until the screen is still (`true`) or the bound is
+/// reached (`false`): each starts `interval` after the start of the one before it, or at once when
+/// that one took longer; the loop ends when the screen has not changed for `still_for`
+/// ([`unchanged_for`]), when the next capture would start more than `bound` after the first, or
+/// (fix round 3) when `most` were taken, so that a caller's clock that does not advance never holds
+/// it. A capture that cannot be taken or compared answers its error, and `taken` keeps every
+/// capture that arrived before it.
+fn capture_until_still(
+    session: &mut Session,
+    ports: &mut impl RecordFramePorts,
+    timing: &AfterTiming,
+    taken: &mut AfterLoop,
+) -> LabResult<bool> {
+    loop {
+        let now = ports.elapsed();
+        let next = (taken.last.0 + timing.interval).max(now);
+        if taken.captures >= timing.most || next.saturating_sub(taken.first_start) > timing.bound {
+            return Ok(false);
+        }
+        if next > now {
+            ports.wait(next - now);
+        }
+        let start = ports.elapsed();
+        let (arrival, digest) = take_after_capture(session, ports, true)?;
+        taken.captures += 1;
+        taken.last = (start, arrival.step, arrival.frame);
+        taken.digests.extend(digest.map(|digest| (start, digest)));
+        if unchanged_for(&taken.digests, timing.still_for)? {
+            return Ok(true);
+        }
+    }
+}
+
+/// #463 S1-2: what an after loop kept: the answer of its last capture's arrival, how the screen
+/// after was taken, and (fix round 3) the error of a capture after the first that could not be
+/// taken (`stopped_by`): the loop did not finish (`record.unfinished`). The fix round after the
+/// train's review: public, the typed result [`record_after_frame`] answers, so that `session app
+/// <verb> --record` builds the operation as recorded from it as [`record_press`] builds a press;
+/// `stopped_by` is the capture's own error as `after_loop_stopped` words it (the captures after
+/// the effect stopped, what was kept, its details beginning with `after: {after_ms, taken: true,
+/// captures}`), to be answered once what the loop kept is recorded.
+#[derive(Debug)]
+pub struct AfterTaken {
+    pub frame: AttachFrameOutcome,
+    pub record: AfterCaptureRecord,
+    pub stopped_by: Option<LabError>,
+}
+
+/// The fix round after the train's review: what the screen after is taken after, the noun the
+/// texts of [`capture_after`] name it by.
+#[derive(Debug, Clone, Copy)]
+enum AfterEffect {
+    /// A press, `tap`, `swipe` or `long-tap --record` ([`record_press`]).
+    Press,
+    /// #463 S1-3: an application operation, `session app <verb> --record`
+    /// ([`record_after_frame`]).
+    Application,
+}
+
+impl AfterEffect {
+    const fn noun(self) -> &'static str {
+        match self {
+            Self::Press => "press",
+            Self::Application => "application operation",
+        }
+    }
+}
+
+/// #463 S1-3 (the train of stage one): the screen after a performed application operation, under
+/// the recording lock, the after loop of a press (`capture_after`; [`record_press`] runs it for a
+/// press itself). The fix round after the train's review: it answers the loop's typed result,
+/// [`AfterTaken`], whatever the loop kept, its `stopped_by` the error of a capture after the first
+/// that stopped it (worded for an application operation); `Err` when nothing was kept: the four
+/// parameters out of their ranges (checked first, [`record_after_capture_check`]) or a first
+/// capture that could not be taken.
+pub fn record_after_frame(
+    lock: &RecordingLock,
+    ports: &mut impl RecordFramePorts,
+    after: &AfterCapture,
+) -> LabResult<AfterTaken> {
+    capture_after(lock, ports, after, AfterEffect::Application)
+}
+
+/// #463 S1-1: the frame after a performed press, under the recording lock. #463 S1-2
+/// (`contracts/lab-recording.md`, "Recording while playing"): the parameters are checked first
+/// (fix round 3: here too, so that the bound holds wherever the loop is entered; the fix round
+/// after the train's review: the four, [`record_after_capture_check`]), then the screen is captured
+/// until it is still, on the caller's clock
+/// (`RecordFramePorts::elapsed` and `wait`): the first capture starts `after_ms` after the press,
+/// then one every `interval_ms` (default 100), counted from the start of one capture to the start
+/// of the next (one that took longer is followed at once). Fix round 3: the screen is still when it
+/// has not changed for at least `still_ms` (default 300), however long a capture takes: the newest
+/// capture and the unbroken run of captures before it that each differ from it by at most the
+/// Runtime's one frame-change bound hold at least one earlier capture, and the newest started at
+/// least `still_ms` after the run's first (`unchanged_for`). The loop ends at the first still
+/// capture (`still` true), or when the next capture would start more than `still_max_ms` after the
+/// first or `1 + still_max_ms / interval_ms` captures were taken (`still` false); with `still_ms`
+/// 0 the first capture ends it untested (`still` `None`). Before the first capture the recording
+/// must take a device frame, as `capture --record`'s; every capture arrives as one: the first opens
+/// the next step, each later one supersedes the one before it (a capture of the same bytes is the
+/// same file, its own entry), and the last is that step's live primary frame. When the loop ends,
+/// the press's execution names the last as its `after_frame` (the one write, `name_after_frame`)
+/// and keeps `after_capture {after_ms, interval_ms, still_ms, still_max_ms, still, waited_ms,
+/// captures, kept}` (`waited_ms` from the press to the start of the last capture, `kept` the
+/// captures beside it), all written at once. A first capture that fails answers its own error and
+/// stores nothing. Fix round 3: a later capture that fails ends the loop unfinished: what it took
+/// is written as above, `after_capture` with `still` `None` and `unfinished` true, and the
+/// capture's own error is kept for the caller to answer, its details beginning with `after:
+/// {after_ms, taken: true, captures}` ([`after_loop_stopped`], naming `effect`). What the loop
+/// kept, and that error (`AfterTaken::stopped_by`); `Err` when nothing was kept.
+fn capture_after(
+    lock: &RecordingLock,
+    ports: &mut impl RecordFramePorts,
+    after: &AfterCapture,
+    effect: AfterEffect,
+) -> LabResult<AfterTaken> {
+    record_after_capture_check(after)?;
+    let interval_ms = after.interval_ms.unwrap_or(AFTER_INTERVAL_MS);
+    let still_ms = after.still_ms.unwrap_or(AFTER_STILL_MS);
+    let timing = AfterTiming {
+        interval: Duration::from_millis(interval_ms),
+        still_for: Duration::from_millis(still_ms),
+        bound: Duration::from_millis(after.still_max_ms),
+        most: u32::try_from(1 + after.still_max_ms / interval_ms).unwrap_or(u32::MAX),
+    };
+    let pressed_at = ports.elapsed();
+    ports.wait(Duration::from_millis(after.after_ms));
+    let mut session = open_session(lock)?;
+    check_device_arrival(&session.recording)?;
+    let first_start = ports.elapsed();
+    let (first, first_digest) = take_after_capture(&mut session, ports, still_ms > 0)?;
+    let pressed = first.pressed_step.ok_or_else(|| {
+        blocked(
+            "record_step_not_found",
+            format!(
+                "the frame after the {} opened step {} but is the after frame of no press or \
+                 application operation recorded by its command",
+                effect.noun(),
+                first.step
+            ),
+        )
+    })?;
+    let (opened, closed_step) = (first.opened, first.closed_step);
+    let mut taken = AfterLoop {
+        first_start,
+        last: (first_start, first.step, first.frame),
+        captures: 1,
+        digests: first_digest
+            .map(|digest| (first_start, digest))
+            .into_iter()
+            .collect(),
+    };
+    let (still, stopped_by) = if still_ms == 0 {
+        (None, None)
+    } else {
+        match capture_until_still(&mut session, ports, &timing, &mut taken) {
+            Ok(still) => (Some(still), None),
+            Err(error) => (None, Some(error)),
+        }
+    };
+    let AfterLoop {
+        last: (last_start, step, frame),
+        captures,
+        ..
+    } = taken;
+    let record = AfterCaptureRecord {
+        after_ms: after.after_ms,
+        interval_ms: Some(interval_ms),
+        still_ms: Some(still_ms),
+        still_max_ms: after.still_max_ms,
+        still,
+        waited_ms: whole_ms(last_start.saturating_sub(pressed_at)),
+        captures,
+        kept: captures - 1,
+        unfinished: stopped_by.is_some(),
+    };
+    name_after_frame(&mut session.recording, pressed, &frame.frame_id)?;
+    note_after_capture(&mut session.recording, pressed, &record)?;
+    save(&mut session)?;
+    let stopped_by = stopped_by.map(|error| after_loop_stopped(error, &record, effect));
+    Ok(AfterTaken {
+        frame: frame_recorded(&session.recording, opened, closed_step, step, frame),
+        record,
+        stopped_by,
+    })
+}
+
+/// #463 S1-2 fix round 3: the error of an after loop that a capture after its first stopped: the
+/// capture's own code and class, its message saying that the captures after the effect (the fix
+/// round after the train's review: the press or the application operation, `effect`) stopped
+/// there and that the captures taken before it are kept, the last the frame after, its details
+/// beginning with `after: {after_ms, taken: true, captures}`, then the capture's own members.
+fn after_loop_stopped(
+    mut error: LabError,
+    record: &AfterCaptureRecord,
+    effect: AfterEffect,
+) -> LabError {
+    error.message = format!(
+        "{}; the captures after the {} stopped there: the {} taken before it are kept, the last \
+         its frame after, and the loop did not finish (after_capture.unfinished)",
+        error.message,
+        effect.noun(),
+        record.captures
+    );
+    with_leading_details(
+        error,
+        [(
+            "after",
+            json!({
+                "after_ms": record.after_ms,
+                "taken": true,
+                "captures": record.captures
+            }),
+        )],
+    )
+}
+
+/// #463 S1-1 (`contracts/lab-recording.md`, "Recording while playing"): `tap`, `swipe` or
+/// `long-tap --record`, a press recorded by the command that makes it, under the recording lock.
+/// In order: the wait's bound (`validation_failed`, `details{argument: "after_ms", reason:
+/// "range"}`); on an open step, the press planned on it as it stands, so that every refusal of
+/// the step or the point comes before anything is captured; the frame the press is sent on
+/// ([`record_before_frame`], fix round 2: always captured, immediately before the press); the
+/// press planned on the open step (`plan_press`: a tap or a long press declares a box of one pixel
+/// at its point, a swipe is today's recorded swipe; every refusal before anything is pressed); the
+/// press sent once through `press` with the Runtime's reference of that frame, whose `Err` (not
+/// performed) is answered as it is and records no press (the capture before it stays as it was
+/// kept); fix round 3: except one `Err` marked [`record_press_frame_unavailable`] (the Runtime no
+/// longer held the frame, nothing was sent), after which the frame is captured once more as the
+/// first was (a stored first one superseded by the second; on a step with marks neither stored),
+/// the press planned again and sent once more with the new reference, its answer's
+/// `before.captured_twice`, and a second `Err` of any kind answered as it is, unmarked; its outcome
+/// recorded, the execution naming the frame before (and `sent_on_unstored_capture` when that
+/// capture was not stored); then, only after a press performed without a failure, the frame after
+/// (`capture_after`). An indeterminate press is `record_click_indeterminate` and a press
+/// performed with a failure `record_click_performed_with_failure`, each with the press as recorded
+/// in `record` and no frame after. A frame after that cannot be taken answers its own error and
+/// the press and its closed step stand: its details begin with `record` (the press as recorded)
+/// and `after: {after_ms, taken: false}`. #463 S1-2: with the wait's bound, the rest of how the
+/// screen after is taken ([`record_after_capture_check`]); a stillness test that reached its bound
+/// without a still screen puts `after_not_still` in the answer's `warnings`. Fix round 3: a capture
+/// after the first that cannot be taken leaves the captures taken before it kept and recorded (the
+/// last the frame after, `after_capture.unfinished`) and answers its own error, its details
+/// beginning with `record` and `after: {after_ms, taken: true, captures}`.
+pub fn record_press(
+    lock: &RecordingLock,
+    request: &RecordPressRequest,
+    press: &mut impl FnMut(&ClickPlan, InputFrameReference) -> LabResult<CommitClickRequest>,
+    ports: &mut impl RecordFramePorts,
+) -> LabResult<RecordPressOutcome> {
+    let after_ms = request.after.after_ms;
+    // The train of stage one: S1-1's check of the wait and S1-2's of the rest, in that order, in
+    // the one function `session app <verb> --record` calls too (the fix round after the train's
+    // review: one check of the four).
+    record_after_capture_check(&request.after)?;
+    {
+        let session = open_session(lock)?;
+        if open_step(&session.recording).is_some() {
+            plan_press(&session.recording, &request.click, request.point_press)?;
+        }
+    }
+    let taken = record_before_frame(lock, ports)?;
+    let (plan, before) = planned_press(lock, request, taken.arrived.is_some(), false)?;
+    let (plan, before, pressed) = match press(&plan, taken.input_frame) {
+        // Fix round 3: the Runtime no longer held the frame the press named, and nothing was
+        // sent: one capture more, as the first was taken, and the press sent once more on it.
+        // A second refusal of any kind is answered as it is.
+        Err(refusal) if press_frame_was_unavailable(&refusal) => {
+            let again = record_before_frame(lock, ports)?;
+            let (plan, before) = planned_press(lock, request, again.arrived.is_some(), true)?;
+            let pressed = press(&plan, again.input_frame).map_err(without_frame_unavailable)?;
+            (plan, before, pressed)
+        }
+        answered => (plan, before, answered?),
+    };
+    let click = commit_recorded(lock, &plan, &pressed, true, before.sent_on_unstored_capture)?;
+    let mut outcome = RecordPressOutcome {
+        click,
+        before,
+        after: None,
+        warnings: Vec::new(),
+    };
+    if pressed.effect == ClickEffect::Indeterminate {
+        return Err(click_indeterminate(plan.step, to_json(&outcome)));
+    }
+    if pressed.has_failure {
+        return Err(click_performed_with_failure(plan.step, to_json(&outcome)));
+    }
+    let AfterTaken {
+        frame,
+        record,
+        stopped_by,
+    } = capture_after(lock, ports, &request.after, AfterEffect::Press)
+        .map_err(|error| after_frame_failed(error, &outcome, after_ms))?;
+    // #463 S1-2: a stillness test that reached its bound without a still screen says so.
+    outcome.warnings.extend(record_after_warnings(&record));
+    // The click as recorded now: its execution names the frame after it and how it was taken.
+    if let Some(execution) = outcome.click.click.execution.as_mut() {
+        execution.after_frame = Some(frame.frame.frame_id.clone());
+        execution.after_capture = Some(record.clone());
+    }
+    outcome.after = Some(AfterFrame {
+        step: frame.step,
+        frame_id: frame.frame.frame_id,
+        path: frame.frame.path,
+        sha256: frame.frame.sha256,
+        record,
+    });
+    // #463 S1-2 fix round 3: a capture after the first that failed is answered, loud, once what
+    // the loop took is kept and recorded.
+    match stopped_by {
+        None => Ok(outcome),
+        Some(error) => Err(after_loop_stopped_press(error, &outcome)),
+    }
+}
+
+/// #463 S1-1: the press of [`record_press`] planned on the open step after the capture before it,
+/// and the frame it is committed on, the step's live primary frame (`before`): `stored` when that
+/// capture was stored (the command captured the frame `before` names; otherwise the press is sent
+/// on a capture that was not stored); fix round 3: `captured_twice` when that capture is the
+/// second, taken after the Runtime no longer held the frame of the first.
+fn planned_press(
+    lock: &RecordingLock,
+    request: &RecordPressRequest,
+    stored: bool,
+    captured_twice: bool,
+) -> LabResult<(ClickPlan, BeforeFrame)> {
+    let session = open_session(lock)?;
+    let plan = plan_press(&session.recording, &request.click, request.point_press)?;
+    let before = session
+        .recording
+        .steps
+        .iter()
+        .find(|step| step.index == plan.step)
+        .and_then(live_primary)
+        .map(|frame| BeforeFrame {
+            frame_id: frame.frame_id.clone(),
+            path: frame.path.clone(),
+            sha256: frame.sha256.clone(),
+            refreshed: stored,
+            sent_on_unstored_capture: !stored,
+            captured_twice,
+        })
+        .ok_or_else(|| {
+            blocked(
+                "record_step_frame_missing",
+                format!(
+                    "step {} has no frame to press on; record its frame with capture --record \
+                     first",
+                    plan.step
+                ),
+            )
+        })?;
+    Ok((plan, before))
+}
+
+/// #463 S1-1 fix round 3: the member of a press's refusal that [`record_press_frame_unavailable`]
+/// adds, and that [`record_press`] reads and takes away again before anything is answered.
+const PRESS_FRAME_UNAVAILABLE: &str = "press_frame_unavailable";
+
+/// #463 S1-1 fix round 3 (`contracts/lab-recording.md`, "Recording while playing"): `refusal`, the
+/// `Err` of [`record_press`]'s `press` when the Runtime refused the input before sending anything
+/// because it no longer held the frame the input names (the caller tells that refusal from every
+/// other, in one place, by what its Runtime client hands it), marked so that `record_press`
+/// captures once more and sends the press again on the new capture, once. The mark is a member of
+/// the details (object details keep theirs; others move to `details`, as `with_detail` moves
+/// them), and never reaches an answer.
+pub fn record_press_frame_unavailable(refusal: LabError) -> LabError {
+    with_detail(refusal, PRESS_FRAME_UNAVAILABLE, Some(Value::Bool(true)))
+}
+
+/// Whether `refusal` carries the mark of [`record_press_frame_unavailable`].
+fn press_frame_was_unavailable(refusal: &LabError) -> bool {
+    matches!(
+        refusal
+            .details
+            .as_ref()
+            .and_then(|details| details.get(PRESS_FRAME_UNAVAILABLE)),
+        Some(Value::Bool(true))
+    )
+}
+
+/// `refusal` as its caller answered it, without the mark of [`record_press_frame_unavailable`]:
+/// the member taken from its details, and details that held nothing else none.
+fn without_frame_unavailable(mut refusal: LabError) -> LabError {
+    let emptied = match refusal.details.as_mut() {
+        Some(Value::Object(details)) => {
+            details.remove(PRESS_FRAME_UNAVAILABLE).is_some() && details.is_empty()
+        }
+        _ => false,
+    };
+    if emptied {
+        refusal.details = None;
+    }
+    refusal
+}
+
+/// #463 S1-1: the input `tap`, `swipe` or `long-tap --record` sends for a planned press, as the
+/// kernel presses the click the recording generates for it: a tap at its point; a long press as
+/// one long tap at its point over its duration; a drag (a recorded swipe) as one swipe from its
+/// point to its end point over its duration. No such plan carries another gesture: one would be
+/// `record_gesture_execution_unsupported`, as `do --capture --record` refuses it.
+pub fn record_press_input(plan: &ClickPlan) -> LabResult<InputAction> {
+    match (plan.gesture, plan.to_point) {
+        (None, _) => Ok(InputAction::Tap {
+            x: plan.point.x,
+            y: plan.point.y,
+        }),
+        (Some(ClickGesture::LongPress { duration_ms }), _) => Ok(InputAction::LongTap {
+            x: plan.point.x,
+            y: plan.point.y,
+            duration_ms,
+        }),
+        (Some(ClickGesture::Drag { duration_ms, .. }), Some(to)) => Ok(InputAction::Swipe {
+            x1: plan.point.x,
+            y1: plan.point.y,
+            x2: to.x,
+            y2: to.y,
+            duration_ms,
+        }),
+        (Some(ClickGesture::Drag { .. }), None) => Err(LabError::usage(format!(
+            "the planned drag of step {} names no end point",
+            plan.step
+        ))),
+        (
+            Some(
+                gesture @ (ClickGesture::SingleTouchDragWithVerticalBrakeV1 { .. }
+                | ClickGesture::SingleTouchPathDragV1 { .. }),
+            ),
+            _,
+        ) => Err(LabError::safety_blocked(
+            LabCode::RecordGestureExecutionUnsupported.as_str(),
+            format!(
+                "the {} of step {} is not pressed by a device command",
+                gesture.kind(),
+                plan.step
+            ),
+            &["session_record"],
+        )
+        .with_details(json!({"step": plan.step, "gesture": gesture}))),
+    }
+}
+
+/// #463 S1-1: the error of a frame after a press that could not be taken (#463 S1-2: nothing of
+/// the after loop was kept): the capture's own code and class, its message saying that the press
+/// stands, its details beginning with `record` (the press as recorded) and `after: {after_ms,
+/// taken: false}`, then the capture's own members.
+fn after_frame_failed(
+    mut error: LabError,
+    outcome: &RecordPressOutcome,
+    after_ms: u64,
+) -> LabError {
+    error.message = format!(
+        "{}; the press of step {} was performed and recorded and the step is closed: take the \
+         screen after it with capture --record (MCP: ac_lab_observe with capture and record), do \
+         not press again",
+        error.message, outcome.click.step
+    );
+    with_leading_details(
+        error,
+        [
+            ("record", to_json(outcome)),
+            ("after", json!({"after_ms": after_ms, "taken": false})),
+        ],
+    )
+}
+
+/// #463 S1-2 fix round 3: the error of a press whose after loop a capture after its first stopped
+/// ([`after_loop_stopped`]): its message also saying that the press stands, its details beginning
+/// with `record` (the press as recorded, its after frame the last capture taken, `after_capture`
+/// with `unfinished`), then `after: {after_ms, taken: true, captures}` and the capture's own
+/// members.
+fn after_loop_stopped_press(mut error: LabError, outcome: &RecordPressOutcome) -> LabError {
+    error.message = format!(
+        "{}; the press of step {} was performed and recorded and the step is closed: take a later \
+         screen with capture --record (MCP: ac_lab_observe with capture and record) when one is \
+         needed, do not press again",
+        error.message, outcome.click.step
+    );
+    with_leading_details(error, [("record", to_json(outcome))])
 }
 
 /// Before `session app <verb> --record` sends anything: the step the application operation
@@ -1946,8 +3586,9 @@ fn transition_view(transition: &StepTransition) -> TransitionView {
     }
 }
 
-/// `declared` (no outcome yet), `executed` (Performed) or `indeterminate`.
-fn click_outcome(click: &StepClick) -> &'static str {
+/// `declared` (no outcome yet), `executed` (Performed) or `indeterminate`. #463 S2-2: `record
+/// review` names a press's outcome with it too.
+pub(crate) fn click_outcome(click: &StepClick) -> &'static str {
     match &click.execution {
         None => "declared",
         Some(execution) if execution.effect == "performed" => "executed",
@@ -1980,6 +3621,7 @@ fn step_state(step: &RecordingStep) -> StepStateView {
         optional: optional_view(step),
         forbidden: step.forbidden.clone(),
         anchor: step.anchor.clone(),
+        inserted_after: step.inserted_after,
     }
 }
 
@@ -2045,5 +3687,8 @@ fn step_view(step: &RecordingStep, effective: &[u32]) -> StepView {
         anchor: step.anchor.clone(),
         // #463 R1: where an agent reads the select it declares again to change its default.
         select: step.select.clone(),
+        // #463 S2-6: the choice mark, refined when the step has a select too.
+        choice: step.choice.clone(),
+        inserted_after: step.inserted_after,
     }
 }

@@ -2,7 +2,7 @@
 
 //! Runtime-owned failure, activity-window, and loop-budget state.
 
-use crate::codes::{HostCode, HostLocation};
+use crate::codes::{HostCode, HostLocation, PauseCause};
 use crate::error::spelled;
 use crate::failure_identity::FailureIdentity;
 use crate::suspension_lift::{PausedPackages, SuspensionLiftView};
@@ -11,8 +11,8 @@ use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::{Code, CodeStr, Location, Outcome};
 use actingcommand_contract::{
     MAX_POLICY_CONTROL_STATE_DAYS, PerformanceContext, PolicyActivitySample,
-    PolicyActivityStateRecord, PolicyAdmissionRecord, PolicyBudgetDenial, PolicyBudgetDimension,
-    PolicyBudgetReceipt, PolicyConditionReruns, PolicyConditionSettlement,
+    PolicyActivityStateRecord, PolicyAdmissionRecord, PolicyBreakInRecord, PolicyBudgetDenial,
+    PolicyBudgetDimension, PolicyBudgetReceipt, PolicyConditionReruns, PolicyConditionSettlement,
     PolicyControlStateRecord, PolicyDailyCount, PolicyDispatchClockRecord,
     PolicyExecutionEventData, PolicyExecutionOutcome, PolicyFailureClass, PolicyFailureDisposition,
     PolicyFailureRecord, PolicyFailureStreakRecord, PolicyJournalDispatchRecord,
@@ -27,6 +27,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 const MILLIS_PER_MINUTE: i128 = 60_000;
 const MILLIS_PER_DAY: i128 = 24 * 60 * MILLIS_PER_MINUTE;
+/// Workflow #469 H2: the kernel's code of a linear step on a screen its package never recorded
+/// (Workflow #463 U1), which pauses its pair at the first failure.
+const LINEAR_UNRECORDED_SCREEN: Code =
+    actingcommand_execution_kernel::ExecutionKernelCode::ContainedTaskLinearUnrecordedScreen.code();
 
 /// Workflow #361 M6, review P5: whether a paused failure is the first interrupted settlement
 /// of its pair in a row (`policy_settlement_interrupted`, recorded by the startup
@@ -34,6 +38,43 @@ const MILLIS_PER_DAY: i128 = 24 * 60 * MILLIS_PER_MINUTE;
 /// is rebuilt by replay, so nothing persisted changes.
 pub(crate) fn interruption_lifted_by_restart(failure_code: &CodeStr, consecutive: u16) -> bool {
     *failure_code == SharedCode::PolicySettlementInterrupted.code() && consecutive == 1
+}
+
+/// Workflow #469 H2 (register §1.398; `contracts/policy-suspension.md`, "Why a pair is paused"):
+/// why the settlement that wrote `failure` paused its pair, read from the execution record's own
+/// members in the settlement's own order: a severe original class first, then a sensitive task,
+/// then a streak that reached its threshold (the class the settlement made effective), then
+/// `on_failure` `pause` after the retries. Of a severe failure, the three sources the record names
+/// by its outcome have their own word (the policy's runtime-budget rewrite, an interrupted
+/// settlement, a screen the package never recorded); any other is `severe_failure`. `None` for a
+/// failure that did not pause its pair. The word only describes the pause, which nothing reads to
+/// decide: the live settlement, a replay and `actingd suspended` all take it from here, and it is
+/// never part of a record, a failure identity or a streak's comparison.
+pub(crate) fn pause_cause(failure: &PolicyFailureRecord) -> Option<PauseCause> {
+    if failure.disposition != PolicyFailureDisposition::PausedTask {
+        return None;
+    }
+    let cause = if failure.original_class == PolicyFailureClass::Severe {
+        if failure
+            .outcome
+            .is(actingcommand_contract::POLICY_RUNTIME_BUDGET_EXCEEDED)
+        {
+            PauseCause::RuntimeBudgetExceeded
+        } else if failure.outcome.is(SharedCode::PolicySettlementInterrupted) {
+            PauseCause::InterruptedAgain
+        } else if failure.outcome.is(LINEAR_UNRECORDED_SCREEN) {
+            PauseCause::UnrecordedScreen
+        } else {
+            PauseCause::SevereFailure
+        }
+    } else if failure.sensitive {
+        PauseCause::SensitiveTask
+    } else if failure.effective_class == PolicyFailureClass::Severe {
+        PauseCause::RepeatedFailure
+    } else {
+        PauseCause::RetriesExhausted
+    };
+    Some(cause)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -204,6 +245,31 @@ struct FailureStreak {
     /// PKG-S3: the packages and content hashes its failure identity names (none without one).
     /// Memory only; replay rebuilds it from the execution record alone.
     paused_on: Option<PausedPackages>,
+    /// Workflow #469 H2 (register §1.398): set only while the pair is paused: why its settlement
+    /// paused it ([`pause_cause`] of the execution record), the `pause_cause` of the pause's
+    /// `policy_task_paused`. Memory only: a settlement and a replay set it from the execution
+    /// record, and a streak a value record loaded takes it from its dispatch's execution record
+    /// ([`PolicyControlState::restore_pause_causes`]). Never compared: two failures are the same
+    /// error by their code, identity and class alone.
+    pause_cause: Option<PauseCause>,
+}
+
+impl FailureStreak {
+    /// Workflow #469 H2 (register §1.398): `outcome` (a `policy_task_paused` or
+    /// `policy_retry_backoff_active` of this streak) with the streak's failure code as
+    /// `failure_code` (a registered code; a relayed spelling the catalog does not register is
+    /// left out) and, for a pause, its `pause_cause`. Values only: the detail text and the
+    /// outcome's code, operation and links stay as they were.
+    fn reason_values(&self, outcome: Outcome) -> Outcome {
+        let outcome = match self.failure_code.registered() {
+            Some(code) => outcome.failure_code(code),
+            None => outcome,
+        };
+        match self.pause_cause {
+            Some(cause) => outcome.pause_cause(cause),
+            None => outcome,
+        }
+    }
 }
 
 /// The normal admission that opened a retry round. Rebuilt in ledger order, never from
@@ -253,6 +319,35 @@ pub(crate) struct PolicyControlState {
     /// from the execution record's `condition`, so a replay rebuilds it; any other settlement of
     /// the pair removes it. At most one per pair.
     condition_reruns: BTreeMap<(String, String), PolicyConditionReruns>,
+    /// Workflow #463 U1b (register §1.389): per (task, instance), the pair's break-in for the
+    /// content of its `linear_steps` package: that content, its runs settled as a success or a
+    /// failure, and when the first of them settled. Set only by a live settlement that knows the
+    /// content its run was prepared with ([`Self::note_break_in_run`]); kept in the pair's value
+    /// record, so a loading start loads it and a replay of dispatch events keeps it as loaded. No
+    /// dispatch record holds it (a success does not name the content it ran), so a replay that
+    /// rebuilds the decision memory from the dispatch records alone (a seeding start) takes it
+    /// from the pairs' latest value records ([`Self::restore_break_ins`]).
+    break_ins: BTreeMap<(String, String), PolicyBreakInRecord>,
+}
+
+/// Workflow #463 U1b: whether a pair whose break-in is `break_in` and whose present run was
+/// prepared with `content` (`None`: not measured) is past its break-in at `now_unix_ms`: the same
+/// content, at least `runs` runs of it settled and at least `ms` passed since the first of them.
+/// Anything else (no break-in yet, another content, an unmeasured content) is inside.
+pub(crate) fn break_in_over(
+    break_in: Option<&PolicyBreakInRecord>,
+    content: Option<&str>,
+    (runs, ms): (u32, u64),
+    now_unix_ms: u64,
+) -> bool {
+    match (break_in, content) {
+        (Some(break_in), Some(content)) => {
+            break_in.content_hash == content
+                && break_in.runs >= runs
+                && now_unix_ms.saturating_sub(break_in.first_settled_at_unix_ms) >= ms
+        }
+        _ => false,
+    }
 }
 
 /// Workflow #422 LN-3: one value record of the decision memory, with its key's complete state
@@ -332,6 +427,11 @@ impl PolicyControlState {
             .chain(dispatches.keys().map(|(task, instance)| (task, instance)))
             .chain(
                 self.condition_reruns
+                    .keys()
+                    .map(|(task, instance)| (task, instance)),
+            )
+            .chain(
+                self.break_ins
                     .keys()
                     .map(|(task, instance)| (task, instance)),
             )
@@ -435,7 +535,60 @@ impl PolicyControlState {
             condition_reruns: self.condition_reruns.get(&pair).cloned(),
             failure_settled: self.failure_settled.get(&pair).copied(),
             dispatches: Vec::new(),
+            break_in: self.break_ins.get(&pair).cloned(),
         }
+    }
+
+    /// Workflow #463 U1b: the pair's break-in, if one of its runs of a measured `linear_steps`
+    /// package has settled.
+    pub(crate) fn break_in(
+        &self,
+        task_id: &str,
+        instance_id: &str,
+    ) -> Option<&PolicyBreakInRecord> {
+        self.break_ins
+            .get(&(task_id.to_owned(), instance_id.to_owned()))
+    }
+
+    /// Workflow #463 U1b (`contracts/policy-suspension.md`, "A failure that pauses at its first
+    /// occurrence"): a run of the pair prepared with the package content `content` settled, as a
+    /// success or a failure (never a stop or a condition end; the caller decides), at
+    /// `settled_at_unix_ms`. The same content counts one more run; another content starts a new
+    /// break-in with this run as its first.
+    pub(crate) fn note_break_in_run(
+        &mut self,
+        task_id: &str,
+        instance_id: &str,
+        content: &str,
+        settled_at_unix_ms: u64,
+    ) {
+        let pair = (task_id.to_owned(), instance_id.to_owned());
+        match self.break_ins.get_mut(&pair) {
+            Some(break_in) if break_in.content_hash == content => {
+                break_in.runs = break_in.runs.saturating_add(1);
+            }
+            _ => {
+                self.break_ins.insert(
+                    pair,
+                    PolicyBreakInRecord {
+                        content_hash: content.to_owned(),
+                        runs: 1,
+                        first_settled_at_unix_ms: settled_at_unix_ms,
+                    },
+                );
+            }
+        }
+    }
+
+    /// Workflow #463 U1b fix round 2 (`contracts/ledger-observer.md` §11.5, "Without the
+    /// marker"): the pairs' break-ins as their latest value records hold them (`recorded`, by
+    /// (task, instance)), for a decision memory rebuilt from the dispatch records alone, which
+    /// hold none. Nothing else of the state changes.
+    pub(crate) fn restore_break_ins(
+        &mut self,
+        recorded: BTreeMap<(String, String), PolicyBreakInRecord>,
+    ) {
+        self.break_ins = recorded;
     }
 
     /// Workflow #422 LN-3 (register L7, L14): applies one value record; the record replaces its
@@ -494,6 +647,10 @@ impl PolicyControlState {
                                             streak.failure_identity.as_deref(),
                                         )
                                     }),
+                                // Workflow #469 H2: the value record does not keep what the
+                                // cause is read from; `restore_pause_causes` reads it from the
+                                // streak's execution record.
+                                pause_cause: None,
                             },
                         );
                     }
@@ -517,6 +674,15 @@ impl PolicyControlState {
                     }
                     None => {
                         self.condition_reruns.remove(&pair);
+                    }
+                }
+                // Workflow #463 U1b: the pair's break-in as its latest settlement wrote it.
+                match &state.break_in {
+                    Some(break_in) => {
+                        self.break_ins.insert(pair.clone(), break_in.clone());
+                    }
+                    None => {
+                        self.break_ins.remove(&pair);
                     }
                 }
                 match &state.retry_round {
@@ -581,6 +747,37 @@ impl PolicyControlState {
             }
         }
         Ok(())
+    }
+
+    /// Workflow #469 H2 (register §1.398): gives each paused streak that has no pause cause (one
+    /// a value record loaded, [`Self::apply_value_record`]) the cause of its dispatch's execution
+    /// record, which `execution_of` finds by the streak's decision id: the value record keeps the
+    /// streak but not what the cause is read from (whether the task is sensitive, the class the
+    /// settlement made effective). The record must name the streak's failure (its code, identity
+    /// and class); a streak whose record is not found or names another failure keeps none. Only
+    /// the cause changes, which nothing reads to decide.
+    pub(crate) fn restore_pause_causes<'a>(
+        &mut self,
+        execution_of: impl Fn(&str) -> Option<&'a PolicyExecutionEventData>,
+    ) {
+        for streak in self.failure_streaks.values_mut() {
+            if streak.disposition != PolicyFailureDisposition::PausedTask
+                || streak.pause_cause.is_some()
+            {
+                continue;
+            }
+            let Some(PolicyExecutionOutcome::Failed { failure }) =
+                execution_of(&streak.decision_id).map(|execution| &execution.outcome)
+            else {
+                continue;
+            };
+            if scheduled_failure_code_str(&failure.outcome) == streak.failure_code
+                && failure.failure_identity == streak.failure_identity
+                && failure.original_class == streak.class
+            {
+                streak.pause_cause = pause_cause(failure);
+            }
+        }
     }
 
     #[cfg(test)]
@@ -709,11 +906,13 @@ impl PolicyControlState {
                 }
                 // A package the lift check could not measure keeps the pause and is reported
                 // as a note of it (M-PKG D18).
+                // Workflow #469 H2: the pause carries why it paused and the failure's code.
                 return Err(unmeasured.into_iter().fold(
                     request(
                         HostCode::PolicyTaskPaused,
                         HostLocation::ReservePolicyBudget,
-                    ),
+                    )
+                    .with_outcome_values(|outcome| failure.reason_values(outcome)),
                     RuntimeHostError::with_note,
                 ));
             }
@@ -721,10 +920,12 @@ impl PolicyControlState {
                 .retry_at_unix_ms
                 .is_some_and(|retry_at| now_unix_ms < retry_at)
             {
+                // Workflow #469 H2: the backoff carries the code of the failure it follows.
                 return Err(request(
                     HostCode::PolicyRetryBackoffActive,
                     HostLocation::ReservePolicyBudget,
-                ));
+                )
+                .with_outcome_values(|outcome| failure.reason_values(outcome)));
             }
         }
         Ok(())
@@ -1715,6 +1916,9 @@ impl PolicyControlState {
                         retry_at_unix_ms: failure.retry_at_unix_ms,
                         decision_id: data.decision_id.clone(),
                         paused_on,
+                        // Workflow #469 H2: why the settlement paused the pair, from the record
+                        // it wrote, so a replay sets the same word.
+                        pause_cause: pause_cause(failure),
                     },
                 );
             }

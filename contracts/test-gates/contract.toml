@@ -51,14 +51,12 @@ tests = [
 ]
 incident = []
 
-# Install-control inputs: selection slot, generation and provider; admission per phase; the 600 s bound
+# Install-control inputs: selection slot, generation and provider (the transition's admission per phase and its 600 s bound left with the transition, Workflow #434 LAB-6S4a)
 [[gate]]
 key = "K8"
 coverage = "Y"
 tests = [
     "actingcommand-contract::gate::c1::install_control::gate_install_selection_refuses_a_slot_generation_or_provider_mismatch",
-    "actingcommand-contract::gate::c1::install_control::gate_install_status_admission_is_closed_except_when_released_or_aborted",
-    "actingcommand-contract::gate::c1::install_control::gate_install_timeouts_accept_600000_ms_and_refuse_600001_ms",
 ]
 incident = ["#382 C-1"]
 
@@ -331,7 +329,6 @@ tests = [
     "actingcommand-runtime-client::lib::tests::gate_c1::gate_failures_after_send_without_a_projection_are_uncertain",
     "actingcommand-runtime-client::lib::tests::gate_c1::gate_a_failure_chained_to_an_after_send_failure_is_uncertain",
     "actingcommand-runtime-client::lib::tests::gate_c1::gate_settled_failures_are_not_uncertain",
-    "actingcommand-runtime-client::lib::tests::gate_c2::gate_an_install_transition_whose_receipt_never_came_is_unconfirmed_uncertain_and_sent_once",
 ]
 incident = ["#382 C-1"]
 
@@ -489,7 +486,6 @@ key = "A3"
 coverage = "Y"
 tests = [
     "actingcommand-actinglab-architecture::workspace_guards::b3_every_runtime_operation_has_an_explicit_origin_category",
-    "actingcommand-actinglab-architecture::workspace_guards::b3_governance_origin_is_person_or_operator_and_approval_needs_an_accepted_connection",
     "actingcommand-actinglab-architecture::workspace_guards::b5_forensic_read_chain_reaches_no_write_entry",
 ]
 incident = []
@@ -593,17 +589,6 @@ coverage = "Y"
 tests = [
     "actingcommand-runtime-client::lib::tests::gate_c2::gate_a_client_latches_on_fatal_and_transport_failures_and_never_on_a_non_fatal_rejection",
     "actingcommand-runtime-client::lib::tests::gate_c2::gate_an_input_whose_receipt_never_came_latches_with_its_request_context_and_is_sent_once",
-]
-incident = ["#382 C-2"]
-
-# Install-transition receipt matching (#382 C-2 G4, ScriptedRuntime): a missing receipt is unconfirmed and uncertain and the request is never sent again; another transition or ticket is unexpected; CommitShutdown takes its ShutdownAccepted, Release its own ticket
-[[gate]]
-key = "R4"
-coverage = "Y"
-tests = [
-    "actingcommand-runtime-client::lib::tests::gate_c2::gate_an_install_transition_whose_receipt_never_came_is_unconfirmed_uncertain_and_sent_once",
-    "actingcommand-runtime-client::lib::tests::gate_c2::gate_an_install_transition_receipt_for_another_transition_or_ticket_is_unexpected",
-    "actingcommand-runtime-client::lib::tests::gate_c2::gate_commit_shutdown_takes_its_shutdown_and_release_its_own_ticket",
 ]
 incident = ["#382 C-2"]
 
@@ -869,7 +854,7 @@ tests = [
 ]
 incident = ["#434 LAB-6S1a"]
 
-# Workflow #434 LAB-6S1b (0.12.58; register §1.287, "Slice LAB-6S1b"; brief rd-1113/brief-lab6s1b.md; contracts/lab-two-entries.md §2.4): RuntimeRequest::validate judges no request by its origin. A request of each family of deleted origin gate (shutdown, install transition, authoring, signatures, debugging, governance, emulator control, discovery, self-check, drill, pause and resume, the agent wake test, fact publication of a family with and without the origin exception, the agent dispatcher's kinds, the player hold) is built and validated from each envelope of the client set, the ones its gate refused included, and validates again read back off the wire; an envelope outside the client set is still invalid_client_origin and an observation that mixes two key families still fact_origin_mixed, from every client envelope. What the retired row K6 held beside its origin gates stays here: a debug event and a pin release are strict and round-trip, and a governance identity card is refused by its own rules. The architecture guard (row A3) holds that no branch of validate() names an actor or a source and the one origin predicate it reads is valid_client_origin
+# Workflow #434 LAB-6S1b (0.12.58; register §1.287, "Slice LAB-6S1b"; brief rd-1113/brief-lab6s1b.md; contracts/lab-two-entries.md §2.4): RuntimeRequest::validate judges no request by its origin. A request of each family of deleted origin gate (shutdown, authoring, signatures, debugging, emulator control, discovery, self-check, drill, pause and resume, the agent wake test, fact publication of a family with and without the origin exception, the agent dispatcher's kinds, the player hold; the install transition and the governance kinds left with their kinds in Workflow #434 LAB-6S4a) is built and validated from each envelope of the client set, the ones its gate refused included, and validates again read back off the wire; an envelope outside the client set is still invalid_client_origin and an observation that mixes two key families still fact_origin_mixed, from every client envelope. What the retired row K6 held beside its origin gates stays here: a debug event and a pin release are strict and round-trip, and a governance identity card is refused by its own rules. The architecture guard (row A3) holds that no branch of validate() names an actor or a source and the one origin predicate it reads is valid_client_origin
 [[gate]]
 coverage = "Y"
 tests = [
@@ -923,3 +908,52 @@ tests = [
     "actingcommand-contract::lib::standard_pack_goals::tests::v1_a_version_1_document_is_refused_goal_version_retired",
 ]
 incident = ["#463 V1"]
+
+# Workflow #469 F1 (0.12.62; register §1.387; brief rd-1115/brief-469-f1-run-reads.md; contracts/runtime-state-observation.md, "Contained-run queries"), on the ScriptedRuntime ledger of the run-status gates (R7): the terminal of a run's status, brief and full, carries what codes mode keeps of its terminal outcome's values as failure_values: of contained_task_deadline_exceeded with receipt_state failed, lease_id (an id) and retry_after_ms (a duration), {receipt_state: failed} alone, in the struct and in the status's JSON; a succeeded terminal without an outcome, and a failed one whose outcome carries only values codes mode drops (request_id, host_halted), have no member, and their terminal's JSON text is the text of the members it had before, in their order
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-client::lib::tests::gate_c2::f1_a_run_terminal_carries_the_values_codes_mode_keeps_of_its_outcome",
+]
+incident = ["#469 F1"]
+
+# Workflow #463 S3-3 (0.12.63; register §1.410; brief rd-1115/brief-463-s33-outcome-key.md; contracts/runtime-state-observation.md, "Contained-run queries"), on the ScriptedRuntime ledger of the run-status gates (R7): the terminal of a run's status, brief and full, names the business end the run finished on as outcome_key, the key of the mapping the host wrote on its terminal fact (scheduling_disposition): a run completed on its target page answers the target mapping's key (task_done), one completed on an ending page the ending's key (task_short), in the struct and in the status's JSON, with the page it finished on; a failed run, a cancelled run and a completed run of a package without mappings (no disposition on the terminal) have no outcome_key, in the struct or in the JSON
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-client::lib::tests::gate_c2::s3_3_a_run_terminal_names_the_outcome_key_of_the_end_it_finished_on",
+]
+incident = ["#463 S3-3"]
+
+# Workflow #437 G1 fix round 2 (0.12.67; register §1.433; brief rd-1116/brief-437-g1-fix3.md; contracts/component-interfaces.md, the runtime-client row 10; contracts/runtime-interface.md, RuntimeInstanceStatus.device_held): the status member device_held {device_group_wait: close_unconfirmed, alias} round-trips in its instance's row of a Status result, and a row without it has no device_held key; an unknown member of it and a word other than close_unconfirmed are refused
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-contract::lib::runtime::tests::g1_status_device_held_round_trips_and_is_strict",
+]
+incident = ["#437 G1"]
+
+# Workflow #392 DA-5ab fix round 1 (0.12.67; register §1.436; contracts/display-adapter.md section 11, "The projection's frame"; the coordinator's work order of 11-16 after the review of pull request #1780, point 2): the client's check of an observation's projection frame (ContainedPageObservation::validate) takes the device frame itself and the device frame reduced to a base of its ratio no larger than it (1920x1080 and 3840x2160 to 1280x720, 3x3 to 2x2, 1600x900 to 1280x720, 1280x720 to 640x360: it cannot know the package's base); it refuses a frame with a side of zero (0x0 on 0x0 too), a frame larger than the device frame and a frame of another ratio
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-contract::lib::runtime::gate_392_da5ab::da5ab_fix1_a_projection_frame_is_its_device_frame_or_that_frame_reduced_by_a_pure_scale",
+]
+incident = ["#392 DA-5ab"]
+
+# Workflow #463 S3-8 (0.12.68; register §1.444; brief rd-1116/brief-463-s38-run-variables.md with the coordinator's ruling 1 of its take-over, rd-1116/brief-463-continue.md; contracts/runtime-interface.md, "The variable values of a contained run"; contracts/component-interfaces.md, the runtime-client row 11): ContainedTaskRequest's member variables ({name: json}). A request built as a run start without --variable builds it, and the same request given no values, encode byte for byte alike with no variables member, alone and in the run's envelope, and revision 10's encoding decodes into that request; values of the four kinds of a variable round-trip under variables by name, alone and in the run's envelope, and validate; sixteen values and names of 1 and 64 bytes pass; seventeen values are invalid_contained_task_variable_count, through with_variables and a decoded request's validate; an empty name and names outside [a-z][a-z0-9_]* or of 65 bytes are invalid_contained_task_variable_name, through with_variables, a decoded request's validate and the run's operation's validate alike
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-contract::lib::runtime::gate_463_s38::s38_a_request_without_values_is_todays_request_byte_for_byte",
+    "actingcommand-contract::lib::runtime::gate_463_s38::s38_a_request_with_values_round_trips",
+]
+incident = ["#463 S3-8"]
+
+# Workflow #463 S3-8, fix round 1 (0.12.68; register §1.444, "Fix round 1"; brief rd-1116/brief-463-s38-fix1.md; the review of #1789, its section (h); contracts/runtime-interface.md, "The variable values of a contained run"): a reader of the parent's revision refuses a request that carries the member. ContainedTaskRequest as revision 10 declared it (package_path, recovery with serde default, response_deadline_ms with its default, deny_unknown_fields, no variables) reads today's request without values member by member (the package path, no recovery, 120000), and refuses the request with one value, alone and as the run's envelope carries it, naming the unknown field variables
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-contract::lib::runtime::gate_463_s38::s38_fix1_a_reader_of_revision_ten_refuses_a_request_with_values",
+]
+incident = ["#463 S3-8"]

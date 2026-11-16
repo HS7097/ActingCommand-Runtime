@@ -15,7 +15,7 @@ use super::model::{LabRecording, MarkRequest, RecordingEnding};
 use super::select::{on_empty_key, on_empty_key_valid};
 use super::steps::Session;
 use super::store::{blocked, invalid, page_name_valid, with_details};
-use crate::codes::{EndingProblem, LabCode};
+use crate::codes::{EndingProblem, LabCode, ReadyMissing};
 use actingcommand_contract::outcome::{Detail, Outcome};
 use actingcommand_contract::{LabError, LabResult};
 use serde_json::{Value, json};
@@ -85,6 +85,13 @@ fn other_members(request: &MarkRequest) -> Vec<&'static str> {
         ("clear_anchor", request.clear_anchor),
         ("select", request.select.is_some()),
         ("clear_select", request.clear_select),
+        // #463 S2-5: a box marks a step or presses its click.
+        ("boxes", !request.boxes.is_empty()),
+        // #463 S2-6: a choice marks a step.
+        ("choice", request.choice.is_some()),
+        // #463 R4: an inserted optional step is no ending either.
+        ("optional_after", request.optional_after.is_some()),
+        ("remove_inserted", request.remove_inserted.is_some()),
         (
             "remove_ending",
             request.ending.is_some() && request.remove_ending.is_some(),
@@ -160,15 +167,17 @@ pub(crate) fn validate_ending_request(request: &MarkRequest) -> LabResult<()> {
 
 /// Why `key` cannot be the outcome key of an ending of `recording` (the ending at `own` itself
 /// excepted): the usual ending's `<task_id>_done` (`key_reserved`), the `on_empty` key of a select
-/// step (`key_of_select`), or another ending's (`key_exists`); `None` when it can.
+/// step (`key_of_select`), or another ending's (`key_exists`); `None` when it can. #463 S2-1: with
+/// the word `record ready` lists the cause with.
 pub(crate) fn ending_key_problem(
     recording: &LabRecording,
     key: &str,
     own: Option<usize>,
-) -> Option<(EndingProblem, String)> {
+) -> Option<(EndingProblem, ReadyMissing, String)> {
     if key == done_key(&recording.task_id) {
         return Some((
             EndingProblem::KeyReserved,
+            ReadyMissing::EndingKeyReserved,
             format!("the outcome key '{key}' is the key of the run's usual end"),
         ));
     }
@@ -184,6 +193,7 @@ pub(crate) fn ending_key_problem(
     {
         return Some((
             EndingProblem::KeyOfSelect,
+            ReadyMissing::EndingKeyOfSelect,
             format!(
                 "the outcome key '{key}' is the on_empty key of the select of step {}",
                 step.index
@@ -198,6 +208,7 @@ pub(crate) fn ending_key_problem(
         .map(|_| {
             (
                 EndingProblem::KeyExists,
+                ReadyMissing::EndingKeyTaken,
                 format!("the outcome key '{key}' is another ending's of the recording"),
             )
         })
@@ -206,16 +217,22 @@ pub(crate) fn ending_key_problem(
 /// The rules every ending of `recording` keeps where `record stop` generates the package, as
 /// `record mark` checks them when it takes one: its key is the usual ending's, a select step's
 /// (also a select declared after the ending) or another ending's, or its page name another
-/// ending's. Each is `record_ending_invalid` with its word.
-pub(crate) fn refuse_ending_rules(recording: &LabRecording) -> LabResult<()> {
+/// ending's. Each is `record_ending_invalid` with its word. #463 S2-1: every ending that breaks
+/// one, in the order of the endings and for each in the order above, with the word `record ready`
+/// lists it with; `record stop` answers the first.
+pub(crate) fn ending_rule_refusals(recording: &LabRecording) -> Vec<(ReadyMissing, LabError)> {
+    let mut refusals = Vec::new();
     for (position, ending) in recording.endings.iter().enumerate() {
         let key = ending.outcome_key.as_str();
-        if let Some((problem, message)) = ending_key_problem(recording, key, Some(position)) {
-            return Err(ending_invalid(
-                problem,
-                Some(key),
-                format!("{message}; give up the ending with record mark --remove-ending {key}"),
-                json!({}),
+        if let Some((problem, what, message)) = ending_key_problem(recording, key, Some(position)) {
+            refusals.push((
+                what,
+                ending_invalid(
+                    problem,
+                    Some(key),
+                    format!("{message}; give up the ending with record mark --remove-ending {key}"),
+                    json!({}),
+                ),
             ));
         }
         if let Some(page) = &ending.page
@@ -223,15 +240,18 @@ pub(crate) fn refuse_ending_rules(recording: &LabRecording) -> LabResult<()> {
                 .iter()
                 .any(|earlier| earlier.page.as_ref() == Some(page))
         {
-            return Err(ending_invalid(
-                EndingProblem::PageExists,
-                Some(key),
-                format!("the page name '{page}' of the ending '{key}' is another ending's"),
-                json!({"page": page}),
+            refusals.push((
+                ReadyMissing::EndingPageTaken,
+                ending_invalid(
+                    EndingProblem::PageExists,
+                    Some(key),
+                    format!("the page name '{page}' of the ending '{key}' is another ending's"),
+                    json!({"page": page}),
+                ),
             ));
         }
     }
-    Ok(())
+    refusals
 }
 
 /// The checks of a stopped recording's `session` that need no frame before it takes the ending
@@ -241,7 +261,7 @@ pub(crate) fn check_new_ending(session: &Session, key: &str, page: Option<&str>)
     if !session.stopped {
         return Err(recording_active(key));
     }
-    if let Some((problem, message)) = ending_key_problem(&session.recording, key, None) {
+    if let Some((problem, _, message)) = ending_key_problem(&session.recording, key, None) {
         return Err(ending_invalid(
             problem,
             Some(key),

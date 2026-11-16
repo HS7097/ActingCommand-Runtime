@@ -5,8 +5,9 @@
 //! and fix round 1 after the independent review): for every pack of one game root, what the
 //! scheduler can do with it, or every reason it waits. One function judges the thirteen items,
 //! [`judge_standard_pack_readiness`]; `actinglab standard-pack ready --root <game root>` answers
-//! it, and adopt's answer, the build's `build.json` and the placement plan are to call it with what
-//! each of them holds.
+//! it, and two answers call it as `ready --root` does: `standard-pack adopt`'s on the game root its
+//! check tree laid out (#463 S3-5) and `standard-pack build`'s on the installed root its steps laid
+//! out (#463 S3-7; `build.json` does not carry it). The placement plan does not call it yet.
 //!
 //! The game root is an installed one, `<standard_packs.root>/<game>/`, or a bundle laid out as one
 //! (`package bundle`'s output in a directory named as its game). Its root files are read by the one
@@ -58,11 +59,26 @@
 //! root holds and the installation's were not all judged. An item not judged never counts as
 //! holding. It reads the game root only: it writes nothing, starts nothing and reads no
 //! installation itself.
+//!
+//! Workflow #463 S3-6 (register §1.413): a pack's row says why it waits and what is wrong with it.
+//! A pack whose S2 fails `held` answers `held`, `{reason, reference?}` as the pack's `held` entry
+//! of `schedule.json` writes them (the shape of that entry and of adoption's decision), without
+//! `reference` where the entry writes none: text for a reader, carried as written and never
+//! evaluated; S2's outcome is what it was (`readiness_problem` `held`). And each row's `warnings`
+//! lists the warnings of `standard-pack check` that name the pack, in the check's order, by their
+//! `package_id`, else by a `path` that is the pack's directory or lies under it (the root check of
+//! the variables names the declaring pack's `control.json` and no package id); the answer's
+//! `warnings` lists every warning as before. Nothing the items decide changes.
+//!
+//! Workflow #463 S3-14 (register §1.446): `standard-pack status` calls the one function through
+//! [`judge_readiness_and_placement`], which answers the same readiness and, per pack, its directory
+//! and whether the game's `schedule.json` enables it, from the classification S2 read, in the same
+//! reading of the root. Nothing the items decide, and nothing the readiness answers, changes.
 
 use crate::StandardPackCheckRequest;
 use crate::codes::{
-    ReadinessItem, ReadinessProblem, ReadinessRole, ReadinessState, ReadinessUnjudged,
-    ResourceToolingCode,
+    EnabledState, ReadinessItem, ReadinessProblem, ReadinessRole, ReadinessState,
+    ReadinessUnjudged, ResourceToolingCode,
 };
 use crate::package_directory::PACK_DEADLINE;
 use crate::standard_pack_check::{
@@ -226,8 +242,31 @@ pub struct PackReadiness {
     /// parts, which other packs' runs use); absent when it plays none.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub roles: Vec<ReadinessRole>,
+    /// Workflow #463 S3-6 (fix round 2): the pack's hold as its `held` entry of `schedule.json`
+    /// writes it, present only when its S2 fails `held`; absent otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub held: Option<ReadinessHold>,
+    /// Workflow #463 S3-6: the warnings of `standard-pack check` that name the pack, in the
+    /// check's order (the answer's `warnings` lists them too): by their `package_id`, else by a
+    /// `path` that is the pack's directory or lies under it; absent when none does, as `roles`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<Outcome>,
     /// The thirteen items, S1 to S7, then I1 to I6.
     pub items: Vec<ReadinessAnswer>,
+}
+
+/// Workflow #463 S3-6 (fix round 2): a held pack's `{reason, reference?}`, the two texts of its
+/// `held` entry of `schedule.json` as written: text for a reader, never evaluated.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ReadinessHold {
+    /// The entry's `reason` (the member's name in the answer; the field takes the name the
+    /// schedule's own reader gives this text, as the outcome guard keeps `reason` for typed
+    /// reasons).
+    #[serde(rename = "reason")]
+    pub rationale: String,
+    /// The entry's `reference`; absent where it writes none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reference: Option<String>,
 }
 
 impl PackReadiness {
@@ -384,6 +423,28 @@ type Admitted = BTreeMap<String, Result<NavigationPackageDescriptor, Outcome>>;
 pub fn judge_standard_pack_readiness(
     request: &StandardPackReadyRequest,
 ) -> LabResult<StandardPackReadiness> {
+    judge_readiness_and_placement(request).map(|(readiness, _)| readiness)
+}
+
+/// Workflow #463 S3-14 (register §1.446): what `standard-pack status` reads of one pack beyond its
+/// row of the readiness: the pack's directory in the game root, as the registry names it, and
+/// whether the game's `schedule.json` enables it, judged from the classification S2 judged by
+/// ([`Context::enabled_state`]), never read a second time. The train of S3-12 and S3-14 (register
+/// §1.446, "Train", ruling R5): and its hold as the accepted file's `held` entry writes it
+/// ([`Context::hold_entry`]), whatever S2 answers, so that a held pack in a supporting role, whose
+/// S2 holds by its role and whose row of the readiness names no hold, shows it on its own row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PackPlacement {
+    pub(crate) directory: PathBuf,
+    pub(crate) enabled: EnabledState,
+    pub(crate) held: Option<ReadinessHold>,
+}
+
+/// Workflow #463 S3-14: [`judge_standard_pack_readiness`]'s answer, unchanged, and each pack's
+/// [`PackPlacement`] by package id, from the same reading of the root.
+pub(crate) fn judge_readiness_and_placement(
+    request: &StandardPackReadyRequest,
+) -> LabResult<(StandardPackReadiness, BTreeMap<String, PackPlacement>)> {
     let root = std::path::absolute(&request.root)
         .map_err(|error| LabError::usage(format!("{}: {error}", request.root.display())))?;
     if !fs::metadata(&root).is_ok_and(|metadata| metadata.is_dir()) {
@@ -407,6 +468,11 @@ pub fn judge_standard_pack_readiness(
             Ok(response) => (response.warnings, Vec::new()),
             Err(error) => (Vec::new(), check_refusals(&error, &checked.root)),
         };
+    // Workflow #463 S3-6: each warning with the pack it names, for that pack's row.
+    let named = warnings
+        .iter()
+        .map(|warning| CheckWarning::read(warning, &checked.root, &root))
+        .collect::<Vec<_>>();
     let installation = request.installation.as_ref();
     let revision_needs = revision_needs(&root, &game, &checked);
     let rules = Rules::of(&game, &checked, &root, installation)?;
@@ -438,8 +504,10 @@ pub fn judge_standard_pack_readiness(
         installation,
         admitted: &admitted,
         refusals: &refusals,
+        warnings: &named,
     };
     let mut packs = Vec::new();
+    let mut placements = BTreeMap::new();
     for (package_id, admission) in &admitted {
         let entry = checked.root.registry.get(package_id).ok_or_else(|| {
             LabError::package_invalid(format!("{package_id} is no package of the bundle"))
@@ -450,10 +518,18 @@ pub fn judge_standard_pack_readiness(
             admitted: admission,
         };
         packs.push(context.judge(&pack));
+        placements.insert(
+            package_id.clone(),
+            PackPlacement {
+                directory: root.join(&entry.directory),
+                enabled: context.enabled_state(package_id),
+                held: context.hold_entry(package_id),
+            },
+        );
     }
     context.hold_followers(&mut packs);
     let count = |state: ReadinessState| packs.iter().filter(|pack| pack.readiness == state).count();
-    Ok(StandardPackReadiness {
+    let readiness = StandardPackReadiness {
         root: root.display().to_string(),
         game,
         installation: if installation.is_some() {
@@ -467,7 +543,8 @@ pub fn judge_standard_pack_readiness(
         not_scheduled: count(ReadinessState::NotScheduled),
         warnings,
         packs,
-    })
+    };
+    Ok((readiness, placements))
 }
 
 /// The game root as every reader reads it, and its bundle's maintenance entries.
@@ -696,6 +773,43 @@ fn check_refusals(error: &LabError, root: &StandardPackRoot) -> Vec<CheckRefusal
         .collect()
 }
 
+/// Workflow #463 S3-6: one warning of `standard-pack check` and the pack it names.
+struct CheckWarning {
+    /// The pack it names; `None`: it names none, and only the answer's `warnings` lists it.
+    package_id: Option<String>,
+    outcome: Outcome,
+}
+
+impl CheckWarning {
+    /// The warning `outcome` of the game root `root` at `directory`: the pack its `package_id`
+    /// names, else the pack whose directory holds its `path` (the root check of the variables
+    /// names the declaring pack's `control.json` and no package id) or whose directory, as the
+    /// registry names it, its `path` is (fix round 2: the refusals' comparison,
+    /// [`CheckRefusal::read`]), else none.
+    fn read(outcome: &Outcome, root: &StandardPackRoot, directory: &Path) -> Self {
+        let text = |key: &str| outcome.value(key).and_then(serde_json::Value::as_str);
+        let package_id = text("package_id")
+            .filter(|package_id| root.registry.get(package_id).is_some())
+            .map(str::to_owned)
+            .or_else(|| {
+                let path = Path::new(text("path")?);
+                root.registry
+                    .package_ids()
+                    .find(|package_id| {
+                        root.registry.get(package_id).is_some_and(|entry| {
+                            Path::new(&entry.directory) == path
+                                || path.starts_with(directory.join(&entry.directory))
+                        })
+                    })
+                    .map(str::to_owned)
+            });
+        Self {
+            package_id,
+            outcome: outcome.clone(),
+        }
+    }
+}
+
 /// What the game's `schedule.json` gives the items S2, S3, S4 and I4.
 enum Rules {
     /// The game root holds no `schedule.json`: the game has no rules; the packages the root files
@@ -900,6 +1014,9 @@ struct Context<'a> {
     admitted: &'a Admitted,
     /// Fix round 1: the refusals of `standard-pack check`, empty when it accepted the root.
     refusals: &'a [CheckRefusal],
+    /// Workflow #463 S3-6: the warnings of `standard-pack check`, each with the pack it names,
+    /// empty when it refused the root.
+    warnings: &'a [CheckWarning],
 }
 
 /// The part `read` of `installation`, or why the item that needs it is not judged.
@@ -934,8 +1051,58 @@ impl Context<'_> {
             server: pack.server.to_owned(),
             readiness: self.answer(pack.package_id, &items),
             roles: self.roles(pack.package_id),
+            held: self.held(pack.package_id, &items),
+            warnings: self.warnings_of(pack.package_id),
             items,
         }
+    }
+
+    /// Workflow #463 S3-6 (fix round 2): the hold of the pack `package_id` as its `held` entry of
+    /// the composer-accepted `schedule.json` writes it, only when its S2 among `items` fails
+    /// `held` (the classification reads that list, whose package ids are distinct); `None`
+    /// otherwise. Its texts are copied as written and decide nothing.
+    fn held(&self, package_id: &str, items: &[ReadinessAnswer]) -> Option<ReadinessHold> {
+        let fails_held = items
+            .iter()
+            .find(|answer| answer.item == ReadinessItem::Classified)
+            .filter(|answer| answer.state == ItemState::Fails)
+            .and_then(|answer| answer.outcome.as_ref())
+            .and_then(|outcome| outcome.value("readiness_problem"))
+            .and_then(serde_json::Value::as_str)
+            == Some(ReadinessProblem::Held.as_str());
+        if !fails_held {
+            return None;
+        }
+        self.hold_entry(package_id)
+    }
+
+    /// The train of S3-12 and S3-14 (ruling R5): the hold of the pack `package_id` as its `held`
+    /// entry of the composer-accepted `schedule.json` writes it, whatever S2 answers; `None` when
+    /// the file holds it not, or the root holds no accepted file. [`Self::held`] answers it only
+    /// when S2 fails `held`.
+    fn hold_entry(&self, package_id: &str) -> Option<ReadinessHold> {
+        let Rules::Composed(rules) = self.rules else {
+            return None;
+        };
+        rules
+            .schedule
+            .held
+            .iter()
+            .find(|hold| hold.package_id == package_id)
+            .map(|hold| ReadinessHold {
+                rationale: hold.rationale.clone(),
+                reference: hold.reference.clone(),
+            })
+    }
+
+    /// Workflow #463 S3-6: the warnings of `standard-pack check` that name the pack `package_id`,
+    /// in the check's order.
+    fn warnings_of(&self, package_id: &str) -> Vec<Outcome> {
+        self.warnings
+            .iter()
+            .filter(|warning| warning.package_id.as_deref() == Some(package_id))
+            .map(|warning| warning.outcome.clone())
+            .collect()
     }
 
     /// Fix round 1: the four answers. `waiting` when an item fails or an item of the root does
@@ -973,6 +1140,23 @@ impl Context<'_> {
                 rules.maintenance.contains(package_id) && !rules.scheduled.contains(package_id)
             }
             Rules::Refused(_) => false,
+        }
+    }
+
+    /// Workflow #463 S3-14: whether the game's `schedule.json` enables the pack `package_id`, from
+    /// the classification S2 reads and in its order: `not_judged` when the composer refused the
+    /// file (S2 `composition_refused`; the Runtime then keeps the last schedule it accepted, which
+    /// this root does not tell); `enabled` when a rule names it and it is not held (S2 `scheduled`,
+    /// a supporting part beside it or not); `not_scheduled` for a supporting part no rule
+    /// dispatches ([`Self::supporting`], the readiness's own `not_scheduled`); `held` when it is
+    /// held; `not_placed` otherwise (no rule names it, or the root holds no `schedule.json`).
+    fn enabled_state(&self, package_id: &str) -> EnabledState {
+        match self.rules {
+            Rules::Refused(_) => EnabledState::NotJudged,
+            Rules::Composed(rules) if rules.scheduled.contains(package_id) => EnabledState::Enabled,
+            _ if self.supporting(package_id) => EnabledState::NotScheduled,
+            Rules::Composed(rules) if rules.held.contains(package_id) => EnabledState::Held,
+            Rules::Absent { .. } | Rules::Composed(_) => EnabledState::NotPlaced,
         }
     }
 

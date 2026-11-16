@@ -23,7 +23,8 @@ actingcommand_contract::outcome_codes! {
         OutputBudgetExceeded => "output_budget_exceeded": error / none,
         JobCapacityExhausted => "job_capacity_exhausted": error / none,
         JobStartFailed => "job_start_failed": error / none,
-        CallBudgetExhausted => "call_budget_exhausted": error / none,
+        // Workflow #469 D4a (since 0.12.62): a warning beside a result, never the top of one.
+        CallBudgetExhausted => "call_budget_exhausted": warning / none,
         HandleUnknown => "handle_unknown": error / none,
         SinceOutOfRange => "since_out_of_range": error / none,
         ErrorsQueryInvalid => "errors_query_invalid": error / none,
@@ -158,9 +159,8 @@ actingcommand_contract::outcome_codes! {
         TaskOffsetPublished => "task_offset_published": success / none,
         RuntimeShutdownRequested => "runtime_shutdown_requested": success / none,
         RuntimeShutdownCompleted => "runtime_shutdown_completed": success / none,
-        InstallTransitionReported => "install_transition_reported": success / none,
-        InstallTransitionFailed => "install_transition_failed": error / none,
-        InstallTransitionAborted => "install_transition_aborted": error / none,
+        // Workflow #434 LAB-6S4a: `install_transition_reported`, `install_transition_failed` and
+        // `install_transition_aborted` are retired in 0.12.63 with `actingctl install-transition`.
         InstanceResetDone => "instance_reset_done": success / none,
         InstanceObserved => "instance_observed": success / none,
         RuntimeStatusReported => "runtime_status_reported": success / none,
@@ -220,7 +220,8 @@ actingcommand_contract::outcome_codes! {
         McpFileTooLarge => "mcp_file_too_large": error / none,
         McpConfigProgramUnresolved => "mcp_config_program_unresolved": error / none,
         McpConfigProgramUnsupported => "mcp_config_program_unsupported": error / none,
-        McpIdentityCardRefused => "mcp_identity_card_refused": warning / none,
+        // Workflow #434 LAB-6S4a: `mcp_identity_card_refused` is retired in 0.12.63 with the
+        // identity card MCP declared before a write.
         WatchdogStartDue => "watchdog_start_due": info / none,
         WatchdogStartPending => "watchdog_start_pending": info / none,
         WatchdogOwnerLockUnanswered => "watchdog_owner_lock_unanswered": warning / none,
@@ -639,6 +640,15 @@ actingcommand_contract::outcome_vocabulary! {
         // from the live build's `actingd claim-state-root`: it did not run, printed none, or was
         // left running at its deadline.
         StateRootClaimUnanswered => "state_root_claim_unanswered",
+        // Workflow #463 S3-2 (since 0.12.64): the rescue module's `place` of a plan that changes
+        // something names no authorization (`--authorization` absent or blank); its `--enables`
+        // is not the plan's `enters` (the answer's `expected` and `given`); the plan answers no
+        // `enters` (the zip's side unread), so the packages the placement would enable cannot be
+        // named (the plan's `schedule_changes` beside it). Each before the hold and before any
+        // write.
+        PlaceAuthorizationMissing => "place_authorization_missing",
+        PlaceEnablesMismatch => "place_enables_mismatch",
+        PlaceEnablesUnknown => "place_enables_unknown",
     }
 }
 

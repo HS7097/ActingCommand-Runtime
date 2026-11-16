@@ -4,32 +4,39 @@
 //! operations. Everything is computed in memory and written once, atomically.
 
 use super::RecordingLock;
+use super::boxes::{
+    BoxMark, FRAME_CHANGED, RECORDING_FRAME_SOURCE, ScoredFrame, below_because, box_views,
+    call_frame, expanded_request, flat_boxes, made_box_marks, press_rect, stage_one_captures,
+};
 use super::ending::{ENDING_MARK_STEP, check_new_ending};
 use super::follow::{
-    FollowFrames, check_follow_declaration, check_follow_frames, check_located_follow_frames,
-    followed_template,
+    FollowFrames, LocatedClick, check_follow_declaration, check_follow_frames,
+    check_located_follow_frames, followed_template,
 };
 use super::frames::{
     LoadedFrame, check_frame_size, crop_store_path, frame_store_path, read_frame_file,
     read_stored_frame, rect_inside, scaled_to_recording,
 };
 use super::generate::{page_required, required_ids};
+use super::inserted::{optional_after_invalid, recording_active as inserted_recording_active};
 use super::marks::{
     EvalFrame, MarkRejection, derive_check, evaluate_mark, prepare_mark, validate_mark_id,
 };
 use super::model::{
-    ApplicationAttempt, ClickExecution, ClickFollow, ClickFollowForm, ClickGesture, ClickSpec,
-    EndingSpec, ForbiddenMarkView, LAB_RECORDING_DEFAULT_COLOR_MAX_DISTANCE,
+    ApplicationAttempt, BoxBecause, BoxFrameTaken, BoxView, ClickExecution, ClickFollow,
+    ClickFollowForm, ClickGesture, ClickSpec, EndingSpec, ForbiddenMarkView,
+    LAB_RECORD_MARK_SCHEMA, LAB_RECORDING_DEFAULT_COLOR_MAX_DISTANCE,
     LAB_RECORDING_DEFAULT_MATCH_METRIC, LAB_RECORDING_DEFAULT_SETTLE_MS,
     LAB_RECORDING_DEFAULT_TEMPLATE_THRESHOLD, LAB_RECORDING_MAX_GESTURE_MS, LAB_RECORDING_SCHEMA,
-    LabRecording, MarkFamily, MarkSpec, OpaqueJson, RecordPoint, RecordRect, RecordSize,
-    RecordedFrame, RecordedMark, RecordingDefaults, RecordingEnding, RecordingStep, SelfTestStatus,
-    StepApplication, StepClick, StepOptional, StepTransition, ValueTestRight, value_test_side_id,
+    LabRecording, MarkFamily, MarkRequest, MarkSpec, OpaqueJson, OptionalAfterSpec, RecordPoint,
+    RecordRect, RecordSize, RecordedFrame, RecordedMark, RecordingDefaults, RecordingEnding,
+    RecordingStep, SelfTestStatus, StepApplication, StepClick, StepOptional, StepSelect,
+    StepTransition, ValueTestRight, value_test_side_id,
 };
 use super::select::{
     OTHER_PAGE_PASSES, SELECT_REJECTION_ID, SELF_TEST_ERROR, SelectChecked, SelectFrame,
-    SelectProbe, check_select_rules, check_step_select, clear_select, declare_select, probe_marks,
-    select_invalid,
+    SelectProbe, apply_choice, check_select_rules, check_step_select, clear_select, declare_select,
+    probe_marks, select_invalid,
 };
 use super::store::{
     LabFile, OldRecordView, blocked, create_recording, invalid, lab_dir, load_lab, now_unix_ms,
@@ -37,15 +44,23 @@ use super::store::{
     write_content_addressed,
 };
 use crate::LabOcr;
-use crate::codes::{LabCode, SelectProblem};
+use crate::codes::{DropComparison, DropProblem, LabCode, OptionalAfterProblem, SelectProblem};
+use crate::display_base::{RECORDING_BASE_SIZE, admit_recording_frame};
+use crate::recording_api::{change_digest, unchanged_for};
+use actingcommand_contract::outcome::{Detail, Outcome};
 use actingcommand_contract::{
     InputSamplingEvidence, LabError, LabResult, SEGMENTED_SWIPE_BRAKE_DISTANCE_PX,
 };
 use actingcommand_execution_kernel::{DriveDraw, path_drag_bounds_hold, sampling_algorithm_name};
+use actingcommand_recognition::Rect;
+use actingcommand_recognition::color_digest::{
+    ColorDigest, FRAME_CHANGE_COLUMNS, FRAME_CHANGE_ROWS, frame_change_digest, frame_change_milli,
+};
 use actingcommand_recognition_pack::PackRect;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
+use std::time::Duration;
 
 pub(crate) const MAX_TRANSITION_MS: u64 = 1_800_000;
 
@@ -91,12 +106,15 @@ pub(crate) fn lab_unavailable(reason: &str) -> LabError {
     )
 }
 
+/// Workflow #392 DA-5cd fix round 1: `base_size` is the size its header names
+/// (`LabRecording::base_size`), the one its first frame must have.
 pub(crate) fn new_recording(
     old: &OldRecordView,
     defaults: RecordingDefaults,
     game: Option<String>,
     server: Option<String>,
     locale: Option<String>,
+    base_size: Option<RecordSize>,
 ) -> LabRecording {
     let now = now_unix_ms();
     LabRecording {
@@ -117,11 +135,15 @@ pub(crate) fn new_recording(
         artifact: None,
         amended_at_unix_ms: None,
         endings: Vec::new(),
+        base_size,
     }
 }
 
 /// The active recording of the lock's instance; a v0.9.0 session without a Lab recording
-/// gets one lazily, with the default settings.
+/// gets one lazily, with the default settings. Workflow #392 DA-5, the train's fix round 1 (review
+/// B): such a recording's header names the base size, as a new recording's does
+/// (`RECORDING_BASE_SIZE`, what the installed `record start` writes), so that its first frame is
+/// checked against it.
 pub(crate) fn open_session(lock: &RecordingLock) -> LabResult<Session> {
     open_session_with(lock, false)
 }
@@ -202,7 +224,14 @@ fn open_session_with(lock: &RecordingLock, allow_stopped: bool) -> LabResult<Ses
                 return Err(lab_unavailable("task_id_invalid_for_lab_package"));
             }
             (
-                new_recording(&old, default_recording_defaults(), None, None, None),
+                new_recording(
+                    &old,
+                    default_recording_defaults(),
+                    None,
+                    None,
+                    None,
+                    Some(RECORDING_BASE_SIZE),
+                ),
                 true,
             )
         }
@@ -270,15 +299,48 @@ fn attach_written(mut error: LabError, written: &[String]) -> LabError {
     error.with_details(details)
 }
 
-pub(crate) fn effective_indices(recording: &LabRecording) -> Vec<u32> {
-    let mut indices = recording
+/// #463 R4: the steps in the order a run meets them: the steps recorded on the path by their serial
+/// numbers, each followed by the steps a stopped recording inserted after it (`inserted_after`), by
+/// theirs. A recording without an inserted step is in serial order. An inserted step whose
+/// recorded step is not there comes last.
+pub(crate) fn path_order(recording: &LabRecording) -> Vec<&RecordingStep> {
+    let mut recorded = recording
         .steps
         .iter()
+        .filter(|step| step.inserted_after.is_none())
+        .collect::<Vec<_>>();
+    recorded.sort_by_key(|step| step.index);
+    let mut inserted = recording
+        .steps
+        .iter()
+        .filter(|step| step.inserted_after.is_some())
+        .collect::<Vec<_>>();
+    inserted.sort_by_key(|step| step.index);
+    let mut ordered = Vec::with_capacity(recording.steps.len());
+    for step in recorded {
+        ordered.push(step);
+        ordered.extend(
+            inserted
+                .iter()
+                .copied()
+                .filter(|other| other.inserted_after == Some(step.index)),
+        );
+    }
+    for step in inserted {
+        if !ordered.iter().any(|placed| placed.index == step.index) {
+            ordered.push(step);
+        }
+    }
+    ordered
+}
+
+/// The effective steps' serial numbers in the order a run meets them (#463 R4, [`path_order`]).
+pub(crate) fn effective_indices(recording: &LabRecording) -> Vec<u32> {
+    path_order(recording)
+        .into_iter()
         .filter(|step| step.is_effective())
         .map(|step| step.index)
-        .collect::<Vec<_>>();
-    indices.sort_unstable();
-    indices
+        .collect()
 }
 
 pub(crate) fn last_effective(recording: &LabRecording) -> Option<u32> {
@@ -312,7 +374,10 @@ fn step_not_found(index: u32) -> LabError {
     )
 }
 
-fn effective_step(recording: &LabRecording, index: u32) -> LabResult<&RecordingStep> {
+/// The step `index` while it is effective; `record_step_not_found` for a step that does not exist,
+/// is dropped or was converted into a transition. #463 S2-13: `record frames --step` addresses its
+/// step so too.
+pub(crate) fn effective_step(recording: &LabRecording, index: u32) -> LabResult<&RecordingStep> {
     step_ref(recording, index)
         .filter(|step| step.is_effective())
         .ok_or_else(|| step_not_found(index))
@@ -372,7 +437,12 @@ impl FrameMeta {
     }
 }
 
-/// Checks the size, queues the content-addressed write and keeps the decoded frame.
+/// Checks the size, queues the content-addressed write and keeps the decoded frame. Workflow #392
+/// DA-5cd fix round 1 (`contracts/lab-recording.md`, "A recording's size"): first, before
+/// anything of it is kept, the recording's size ([`admit_recording_frame`]): a first frame of
+/// another size than the base size the recording's header names is refused
+/// `record_display_not_base`, and every frame of a recording whose frames are not the base size
+/// `record_size_not_base`; the command then returns the refusal and writes nothing.
 fn admit_frame(
     session: &mut Session,
     loaded: LoadedFrame,
@@ -380,6 +450,7 @@ fn admit_frame(
     meta: &FrameMeta,
     label: &str,
 ) -> LabResult<RecordedFrame> {
+    admit_recording_frame(&session.recording, loaded.size())?;
     check_frame_size(session.recording.coordinate_space, &loaded, label)?;
     if session.recording.coordinate_space.is_none() {
         session.recording.coordinate_space = Some(loaded.size());
@@ -435,6 +506,10 @@ pub(crate) struct Arrival {
     pub(crate) opened: bool,
     pub(crate) closed_step: Option<u32>,
     pub(crate) frame: RecordedFrame,
+    /// #463 S1-1: the step of a press recorded by the command that makes it whose after frame this
+    /// frame became; #463 S1-2: or, for a capture of the press's after loop, whose after frame the
+    /// loop names when it ends ([`name_after_frame`]).
+    pub(crate) pressed_step: Option<u32>,
 }
 
 /// The sha256 of the step's live (not superseded) primary frame.
@@ -446,7 +521,97 @@ fn live_primary_sha(step: &RecordingStep) -> Option<String> {
         .map(|frame| frame.sha256.clone())
 }
 
-fn has_marks(step: &RecordingStep) -> bool {
+/// #463 S1-1: the step's live (not superseded) primary frame, the screen a press on it is
+/// committed on.
+pub(crate) fn live_primary(step: &RecordingStep) -> Option<&RecordedFrame> {
+    step.frames
+        .iter()
+        .rev()
+        .find(|frame| frame.role == "primary" && !frame.superseded)
+}
+
+/// #463 S1-1 (`contracts/lab-recording.md`, "Recording while playing"): a frame that opens a step
+/// is the after frame of the press of the step before it when that press was recorded by the
+/// command that makes it (its execution names its `before_frame`), was performed, and has no after
+/// frame yet. Returns that step. A press of `do --capture --record` names no `before_frame` and is
+/// left as it was. #463 S1-2: only the step; [`name_after_frame`] writes the frame. #463 S1-3: so
+/// is the step of an application operation whose completed receipt names its `before_frame`
+/// (`session app <verb> --record` on a step with a frame) and has no after frame yet, when the step
+/// has no click; the entry step, whose receipt names none, is left as it was.
+fn awaiting_after_frame(recording: &LabRecording) -> Option<u32> {
+    let index = last_effective(recording)?;
+    let step = step_ref(recording, index)?;
+    let awaiting = match (&step.click, &step.application) {
+        (Some(click), _) => {
+            click.executed()
+                && click.execution.as_ref().is_some_and(|execution| {
+                    execution.before_frame.is_some() && execution.after_frame.is_none()
+                })
+        }
+        (None, Some(application)) => application.executed.as_ref().is_some_and(|execution| {
+            execution.before_frame.is_some() && execution.after_frame.is_none()
+        }),
+        (None, None) => false,
+    };
+    awaiting.then_some(index)
+}
+
+/// #463 S1-2 (`contracts/lab-recording.md`, "Recording while playing"): the one place a press's
+/// `after_frame` is written: the press of step `index` names `frame_id`, the last capture of its
+/// own after loop when the loop ends (`record_after_frame`), or, when the loop stored nothing, the
+/// first frame that opens a step after it ([`arrive`]). #463 S1-3: on a step without a click, the
+/// completed receipt of its application operation names it so ([`after_members`]).
+pub(crate) fn name_after_frame(
+    recording: &mut LabRecording,
+    index: u32,
+    frame_id: &str,
+) -> LabResult<()> {
+    let (after_frame, _) = after_members(recording, index)?;
+    *after_frame = Some(frame_id.to_owned());
+    Ok(())
+}
+
+/// #463 S1-3 (the train of stage one, which joins S1-2's [`name_after_frame`] with S1-3's
+/// application steps): the `after_frame` and `after_capture` of the effect of step `index`: its
+/// click's execution when it has a click, else the completed receipt of its application operation;
+/// `record_step_not_found` when it has neither.
+fn after_members(
+    recording: &mut LabRecording,
+    index: u32,
+) -> LabResult<(
+    &mut Option<String>,
+    &mut Option<super::model::AfterCaptureRecord>,
+)> {
+    let step = step_mut(recording, index)?;
+    match (step.click.as_mut(), step.application.as_mut()) {
+        (Some(click), _) => click
+            .execution
+            .as_mut()
+            .map(|execution| (&mut execution.after_frame, &mut execution.after_capture)),
+        (None, Some(application)) => application
+            .executed
+            .as_mut()
+            .map(|execution| (&mut execution.after_frame, &mut execution.after_capture)),
+        (None, None) => None,
+    }
+    .ok_or_else(|| step_not_found(index))
+}
+
+/// #463 S1-1: how the frame after the press of step `index` was taken, on its execution; #463
+/// S1-3: or on the completed receipt of its application operation ([`after_members`]).
+pub(crate) fn note_after_capture(
+    recording: &mut LabRecording,
+    index: u32,
+    record: &super::model::AfterCaptureRecord,
+) -> LabResult<()> {
+    let (_, after_capture) = after_members(recording, index)?;
+    *after_capture = Some(record.clone());
+    Ok(())
+}
+
+/// Whether the step carries marks (its own or reused ones). #463 S1-1 fix round 2: the capture
+/// before a press on such an open step is not stored (`record_before_frame`).
+pub(crate) fn has_marks(step: &RecordingStep) -> bool {
     !step.marks.is_empty() || !step.reused.is_empty()
 }
 
@@ -591,6 +756,8 @@ fn new_step(index: u32, frames: Vec<RecordedFrame>) -> RecordingStep {
         forbidden: Vec::new(),
         anchor: None,
         select: None,
+        choice: None,
+        inserted_after: None,
         transition: None,
         closed: false,
         closed_by: None,
@@ -606,6 +773,30 @@ pub(crate) fn arrive(
     meta: &FrameMeta,
     label: &str,
 ) -> LabResult<Arrival> {
+    arrive_naming(session, loaded, mode, meta, label, true)
+}
+
+/// #463 S1-2 (`contracts/lab-recording.md`, "Recording while playing"): a capture of the after loop
+/// of a press recorded by the command that makes it arrives as a device frame does, without naming
+/// itself the press's `after_frame`: the loop names its last capture when it ends. Its `Arrival`
+/// still answers the press it follows (`pressed_step`).
+pub(crate) fn arrive_after_press(
+    session: &mut Session,
+    loaded: LoadedFrame,
+    meta: &FrameMeta,
+    label: &str,
+) -> LabResult<Arrival> {
+    arrive_naming(session, loaded, ArrivalMode::Device, meta, label, false)
+}
+
+fn arrive_naming(
+    session: &mut Session,
+    loaded: LoadedFrame,
+    mode: ArrivalMode,
+    meta: &FrameMeta,
+    label: &str,
+    names_after_frame: bool,
+) -> LabResult<Arrival> {
     let plan = plan_arrival(&session.recording, mode)?;
     let entry = admit_frame(session, loaded, "primary", meta, label)?;
     match plan {
@@ -620,6 +811,7 @@ pub(crate) fn arrive(
                 opened: false,
                 closed_step: None,
                 frame: entry,
+                pressed_step: None,
             })
         }
         ArrivalPlan::Open { close } => {
@@ -627,6 +819,10 @@ pub(crate) fn arrive(
                 let step = step_mut(&mut session.recording, index)?;
                 step.closed = true;
                 step.closed_by = Some(by.to_string());
+            }
+            let pressed_step = awaiting_after_frame(&session.recording);
+            if let Some(pressed) = pressed_step.filter(|_| names_after_frame) {
+                name_after_frame(&mut session.recording, pressed, &entry.frame_id)?;
             }
             let index = next_step_index(&session.recording)?;
             session
@@ -638,6 +834,7 @@ pub(crate) fn arrive(
                 opened: true,
                 closed_step: close.map(|(index, _)| index),
                 frame: entry,
+                pressed_step,
             })
         }
     }
@@ -915,31 +1112,8 @@ fn add_marks(
     let now = now_unix_ms();
     for spec in specs {
         validate_mark_id(&spec.id)?;
-        if !in_use.insert(spec.id.clone()) {
-            return Err(with_details(
-                blocked(
-                    "record_mark_id_conflict",
-                    format!("mark id '{}' is already used in this recording", spec.id),
-                ),
-                json!({"id": spec.id}),
-            ));
-        }
         // #411 Lab B-9: a value test's side targets share the package's id space.
-        for target_id in spec_target_ids(spec).into_iter().skip(1) {
-            if !in_use.insert(target_id.clone()) {
-                return Err(with_details(
-                    blocked(
-                        "record_mark_id_conflict",
-                        format!(
-                            "value test '{}' declares the OCR target '{target_id}', an id already \
-                             used in this recording",
-                            spec.id
-                        ),
-                    ),
-                    json!({"id": spec.id, "target_id": target_id}),
-                ));
-            }
-        }
+        claim_mark_ids(&mut in_use, &spec_target_ids(spec))?;
         let prepared = match prepare_mark(
             spec,
             primary,
@@ -959,21 +1133,7 @@ fn add_marks(
         // made, so that the answer of `record mark` carries the word the file does.
         mark.initiator.clone_from(&session.initiator);
         if let (Some(crop), Some(png)) = (mark.crop.as_mut(), prepared.crop_png) {
-            if let Some(owner) = assets.get(&crop.asset)
-                && owner != &spec.id
-            {
-                return Err(with_details(
-                    blocked(
-                        "record_asset_name_conflict",
-                        format!(
-                            "template '{}' maps to {} which template '{owner}' already uses",
-                            spec.id, crop.asset
-                        ),
-                    ),
-                    json!({"id": spec.id, "asset": crop.asset, "existing": owner}),
-                ));
-            }
-            assets.insert(crop.asset.clone(), spec.id.clone());
+            claim_asset_name(&mut assets, &spec.id, &crop.asset)?;
             crop.path = crop_store_path(&session.lab_dir, &crop.sha256)
                 .display()
                 .to_string();
@@ -982,6 +1142,61 @@ fn add_marks(
         batch.added_ids.insert(spec.id.clone());
         batch.own.push(mark);
     }
+    Ok(())
+}
+
+/// The one check of a mark's target ids entering the recording's id space `in_use`, claimed in
+/// order: `target_ids` holds the mark's id first, then (#411 Lab B-9) a value test's side target
+/// ids; one already in use is `record_mark_id_conflict`. #463 S2-7 fix round 1 (review (d)): its
+/// two callers are a new mark of `record mark` ([`add_marks`]) and a dropped step's mark given back
+/// ([`restore_step`]).
+fn claim_mark_ids(in_use: &mut BTreeSet<String>, target_ids: &[String]) -> LabResult<()> {
+    let Some((id, sides)) = target_ids.split_first() else {
+        return Ok(());
+    };
+    if !in_use.insert(id.clone()) {
+        return Err(with_details(
+            blocked(
+                "record_mark_id_conflict",
+                format!("mark id '{id}' is already used in this recording"),
+            ),
+            json!({"id": id}),
+        ));
+    }
+    for target_id in sides {
+        if !in_use.insert(target_id.clone()) {
+            return Err(with_details(
+                blocked(
+                    "record_mark_id_conflict",
+                    format!(
+                        "value test '{id}' declares the OCR target '{target_id}', an id already \
+                         used in this recording"
+                    ),
+                ),
+                json!({"id": id, "target_id": target_id}),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// The one check of a template mark's asset name: `assets` maps each asset name of the recording to
+/// the mark that has it; the name of another mark is `record_asset_name_conflict`, and the name is
+/// claimed for `id`. #463 S2-7 fix round 1 (review (d)): its two callers are [`add_marks`] and
+/// [`restore_step`].
+fn claim_asset_name(assets: &mut BTreeMap<String, String>, id: &str, asset: &str) -> LabResult<()> {
+    if let Some(owner) = assets.get(asset)
+        && owner.as_str() != id
+    {
+        return Err(with_details(
+            blocked(
+                "record_asset_name_conflict",
+                format!("template '{id}' maps to {asset} which template '{owner}' already uses"),
+            ),
+            json!({"id": id, "asset": asset, "existing": owner}),
+        ));
+    }
+    assets.insert(asset.to_owned(), id.to_owned());
     Ok(())
 }
 
@@ -1132,6 +1347,8 @@ pub(crate) struct MarkApplied {
     pub(crate) removed: Vec<String>,
     /// Workflow #390 LAB-2: the marks the step's page forbids, tested on its live frames.
     pub(crate) forbidden: Vec<ForbiddenMarkView>,
+    /// #463 S2-5: the request's boxes as the step took them.
+    pub(crate) boxes: Vec<BoxView>,
 }
 
 /// Workflow #390 LAB-2: the marks the step's page forbids after this command: the step's list
@@ -1428,6 +1645,11 @@ pub(crate) fn apply_marks(
             })?,
         },
     };
+    // #463 S2-5: the request's boxes as the members they stand for on the target step: each
+    // recognize box a template mark of its own id after the request's `add`, the press box the
+    // click's rectangle. Everything below is the request's own code for those members.
+    let expanded = expanded_request(request, target);
+    let request: &MarkRequest = &expanded;
     // The application entry step has no frame: only its effect can be declared on it.
     let frameless = step_ref(&session.recording, target)
         .filter(|step| live_primary_sha(step).is_none())
@@ -1440,7 +1662,8 @@ pub(crate) fn apply_marks(
         // #463 R1 fix 1: a select is never dropped here. On an application step it is the
         // declaration's `with_application` (one beside an application operation of the same
         // request was refused before); on any other step without a frame it needs one, as a mark.
-        if request.select.is_some()
+        // #463 S2-6: so is a choice marked there.
+        if (request.select.is_some() || request.choice == Some(true))
             && let Some(action) = &application
         {
             return Err(select_invalid(
@@ -1464,6 +1687,8 @@ pub(crate) fn apply_marks(
             || !request.forbid.is_empty()
             || request.anchor.is_some()
             || request.clear_anchor
+            || !request.boxes.is_empty()
+            || request.choice.is_some()
             || (request.application.is_none() && request.optional.is_none());
         if needs_frame {
             return Err(with_details(
@@ -1477,7 +1702,7 @@ pub(crate) fn apply_marks(
                 json!({"step": target}),
             ));
         }
-        apply_application(session, request, target, None)?;
+        apply_application(session, request, target)?;
         apply_optional(&mut session.recording, request, target)?;
         return Ok(MarkApplied {
             step: target,
@@ -1489,6 +1714,7 @@ pub(crate) fn apply_marks(
             reused: Vec::new(),
             removed: Vec::new(),
             forbidden: Vec::new(),
+            boxes: Vec::new(),
         });
     }
     if let Some(page) = &request.page {
@@ -1604,10 +1830,25 @@ pub(crate) fn apply_marks(
         .collect::<Vec<_>>();
     ensure_loaded(session, &live_existing)?;
     let released = removed.iter().cloned().collect::<BTreeSet<_>>();
+    // #463 S2-5: a recognize box of one gray value is refused before its mark is made
+    // (`box_flat`), so that it has that one reason.
+    let primary = session
+        .cache
+        .get(&primary_sha)
+        .ok_or_else(|| invalid("validation_failed", "primary frame was not loaded"))?;
+    let flat = flat_boxes(primary, &request.boxes, target)?;
+    let specs = request
+        .add
+        .iter()
+        .filter(|spec| !flat.iter().any(|rejection| rejection.id == spec.id))
+        .cloned()
+        .collect::<Vec<_>>();
+    let flat_count = flat.len();
+    rejections.extend(flat);
     add_marks(
         session,
         &mut batch,
-        &request.add,
+        &specs,
         &primary_sha,
         target,
         None,
@@ -1628,13 +1869,59 @@ pub(crate) fn apply_marks(
         &batch,
     )?;
 
-    // samples
+    // samples; #463 S2-5: beside recognize boxes, a sample of the request on which one of them is
+    // below its threshold is another state of the screen: not added, nothing of it stored, and
+    // listed in the answer. One on which every one reaches it is a sample as before.
+    let box_marks = made_box_marks(&request.boxes, target, &batch.own, &batch.new_crops);
     let mut samples = Vec::new();
-    for path in &request.samples {
+    let mut box_frames = Vec::new();
+    for (index, path) in request.samples.iter().enumerate() {
         let loaded = read_frame_file(path)?;
-        samples.push(admit_frame(session, loaded, "sample", &local, path)?);
+        let scores = if box_marks.is_empty() {
+            None
+        } else {
+            check_frame_size(session.recording.coordinate_space, &loaded, path)?;
+            let label = format!("sample {index}");
+            let frame = EvalFrame {
+                id: label.as_str(),
+                frame: &loaded,
+            };
+            match call_frame(&box_marks, &frame, &session.recording.defaults, ocr)? {
+                Ok(scores) => Some(scores),
+                Err(rejection) => {
+                    rejections.push(rejection);
+                    continue;
+                }
+            }
+        };
+        match scores {
+            Some(scores) if scores.below.is_some() => box_frames.push(ScoredFrame {
+                frame_id: None,
+                sample: Some(index),
+                superseded: None,
+                step: None,
+                taken: BoxFrameTaken::NotAdded,
+                because: below_because(&box_marks, &scores),
+                scores,
+            }),
+            scores => {
+                let admitted = admit_frame(session, loaded, "sample", &local, path)?;
+                if let Some(scores) = scores {
+                    box_frames.push(ScoredFrame {
+                        frame_id: Some(admitted.frame_id.clone()),
+                        sample: Some(index),
+                        superseded: None,
+                        step: None,
+                        taken: BoxFrameTaken::Added,
+                        because: None,
+                        scores,
+                    });
+                }
+                samples.push(admitted);
+            }
+        }
     }
-    let mut live = live_existing;
+    let mut live = live_existing.clone();
     live.extend(samples.iter().cloned());
 
     // effect: a click or an application operation; #463 R1: or a select, which declares the click
@@ -1645,87 +1932,97 @@ pub(crate) fn apply_marks(
         clear_select(step_mut(&mut session.recording, target)?)?;
     }
     if request.application.is_some() {
-        apply_application(session, request, target, Some(&batch))?;
+        apply_application(session, request, target)?;
     } else {
         select_fresh = declare_select(step_mut(&mut session.recording, target)?, request)?;
         apply_click(session, request, target, &batch)?;
     }
     apply_optional(&mut session.recording, request, target)?;
-    // #463 R1: a select step keeps its rules whatever this command changed.
+    // #463 S2-6: a choice marked first, or its mark taken off; the last step of a stopped
+    // recording holds none.
+    let final_of_stopped = session.stopped && last_effective(&session.recording) == Some(target);
+    apply_choice(
+        step_mut(&mut session.recording, target)?,
+        request,
+        final_of_stopped,
+    )?;
+    // #463 R1: a select step keeps its rules whatever this command changed; #463 S2-6: so does a
+    // step marked as holding a choice, which a select refines.
     check_select_rules(effective_step(&session.recording, target)?)?;
 
-    // self-test
+    // #463 S2-5: the step's page as this command leaves it, which the self-test below and the
+    // check of each capture stage one stored (fix round 2: one function, `page_check`) test.
+    let page = PageInputs {
+        target,
+        batch: &batch,
+        forbidden: &forbidden,
+        anchor: anchor.as_ref(),
+        select_fresh,
+    };
+    // #463 S2-5: beside recognize boxes, the captures stage one stored for this step before its
+    // press are frames of the action too: one whose whole frame has not changed from the step's
+    // live frame (fix round 2), on which every box reaches its threshold and on which the step's
+    // whole page holds becomes a sample; any other is listed and is no refusal.
+    if !box_marks.is_empty() && rejections.is_empty() {
+        let (admitted, scored) =
+            admit_captures(session, &box_marks, &page, &primary_sha, &live, ocr)?;
+        box_frames.extend(scored);
+        live.extend(admitted.iter().cloned());
+        samples.extend(admitted);
+    }
+
+    // self-test: the step's page on every live frame (`page_check`), the select's dry run only once
+    // nothing else was refused.
     let has_select = effective_step(&session.recording, target)?.select.is_some();
-    let total = batch.own.len() + batch.reused.len() + forbidden.len() + usize::from(has_select);
-    let result = evaluate_batch(session, &batch, &live, ocr)?;
-    // Workflow #396 REC-4: a click that follows a template holds on every live frame; #463 L2: so
-    // does one that follows a located-text mark, which gives the click its box.
-    let followed = follow_frames(session, &batch, &result, target, &live, ocr)?;
-    // Workflow #390 LAB-2: the anchor is a required own template mark, and no forbidden mark
-    // passes on a live frame of the step.
-    let anchor_problem = anchor_rejection(anchor.as_ref(), &result.own, &result.reused);
-    let (forbidden_views, forbidden_rejections) =
-        evaluate_forbidden(session, &forbidden, &live, ocr)?;
-    rejections.extend(result.rejections);
-    rejections.extend(followed.rejection);
-    rejections.extend(anchor_problem);
-    rejections.extend(forbidden_rejections);
-    // #463 R1: a select step's self-test, once every mark of its page holds: the kernel's dry run
-    // of the step as `record stop` generates it, on every live frame.
-    let mut select_update = None;
-    if rejections.is_empty()
-        && let Some(checked) = select_frames(
-            session,
-            SelectInputs {
-                target,
-                batch: &batch,
-                own: &result.own,
-                reused: &result.reused,
-                forbidden: &forbidden,
-                anchor: anchor.as_ref(),
-            },
-            &live,
-            select_fresh,
-            ocr,
-        )?
-    {
-        let SelectChecked {
-            select,
-            click_rect,
-            rejections: refused,
-        } = checked;
-        rejections.extend(refused);
-        select_update = Some((select, click_rect));
-    }
-    // #463 R1 fix 1: the pages of the other steps this mark knows must not pass on the select's
-    // frames, as the run's select needs its page to be the one that passes there; the pages of
-    // steps recorded later are `record stop`'s (self-check item 8).
-    if rejections.is_empty()
-        && select_update
-            .as_ref()
-            .is_some_and(|(select, _)| select.self_test.status == SelfTestStatus::Passed)
-    {
-        rejections.extend(other_pages_on_select_frames(session, target, &live, ocr)?);
-    }
+    let total = batch.own.len()
+        + batch.reused.len()
+        + forbidden.len()
+        + usize::from(has_select)
+        + flat_count;
+    let checked = page_check(session, &page, &live, !rejections.is_empty(), ocr)?;
+    rejections.extend(checked.refusals);
     if !rejections.is_empty() {
         return Err(rejected(&rejections, total));
     }
+    // #463 S2-5: each recognize box's score on every frame the step held before this command, then
+    // on the frames of the action, then on the live frames of the other steps where it reaches its
+    // threshold.
+    let boxes = if box_marks.is_empty() {
+        box_views(
+            &request.boxes,
+            target,
+            &[],
+            &[],
+            &session.recording.defaults,
+        )
+    } else {
+        let mut scored = scored_frames(session, &box_marks, &live_existing, ocr)?;
+        scored.extend(box_frames);
+        scored.extend(elsewhere_frames(session, &box_marks, target, ocr)?);
+        box_views(
+            &request.boxes,
+            target,
+            &box_marks,
+            &scored,
+            &session.recording.defaults,
+        )
+    };
     queue_crops(session, &batch);
-    let added = result
+    let added = checked
         .own
         .iter()
         .filter(|mark| batch.added_ids.contains(&mark.id))
         .cloned()
         .collect::<Vec<_>>();
     let step = step_mut(&mut session.recording, target)?;
-    step.marks = result.own;
+    step.marks = checked.own;
     step.reused = batch.reused;
     step.frames.extend(samples.iter().cloned());
     step.forbidden = forbidden;
     step.anchor = anchor;
     // #463 L2: a click that follows a located-text mark is the box the primary frame gives it;
     // fix 1: and it says whether its names were changed after its press.
-    if let (Some(located), Some(click)) = (followed.located, step.click.as_mut()) {
+    if let (Some(located), Some(click)) = (checked.located, step.click.as_mut()) {
         click.rect = located.rect;
         if let Some(follow) = click.follow.as_mut() {
             follow.offset = located.offset;
@@ -1734,7 +2031,7 @@ pub(crate) fn apply_marks(
     }
     // #463 R1: the select with its self-test, and its click the slot the pressed name selects on
     // the primary frame (kept as it was without an OCR model).
-    if let Some((select, click_rect)) = select_update {
+    if let Some((select, click_rect)) = checked.select {
         step.select = Some(select);
         if let (Some(rect), Some(click)) = (click_rect, step.click.as_mut()) {
             click.rect = rect;
@@ -1748,10 +2045,454 @@ pub(crate) fn apply_marks(
         frame: new_frame,
         samples,
         added,
-        reused: result.reused,
+        reused: checked.reused,
         removed,
-        forbidden: forbidden_views,
+        forbidden: checked.forbidden,
+        boxes,
     })
+}
+
+/// #463 S2-5: what the step's page is, as this command leaves it, for the check of a frame of the
+/// action: its target step, the batch with its new crops, the marks its page forbids, its anchor,
+/// and whether its select is declared by this command.
+struct PageInputs<'a> {
+    target: u32,
+    batch: &'a MarkBatch,
+    forbidden: &'a [String],
+    anchor: Option<&'a String>,
+    select_fresh: bool,
+}
+
+/// #463 S2-5 fix round 2: what the step's page, as this command leaves it, gives on `frames`: its
+/// own and reused marks with their self-tests, the click a followed located-text mark gives it,
+/// the forbidden marks' views, the select with its self-test and the click box it gives, and every
+/// refusal in the self-test's order.
+struct PageCheck {
+    own: Vec<RecordedMark>,
+    reused: Vec<RecordedMark>,
+    located: Option<LocatedClick>,
+    forbidden: Vec<ForbiddenMarkView>,
+    select: Option<(StepSelect, Option<RecordRect>)>,
+    refusals: Vec<MarkRejection>,
+}
+
+/// The mark-time self-test of the step's page `page` on `frames`, the one function that decides
+/// whether a page holds on frames (#463 S2-5 fix round 2: `apply_marks` runs it on the step's live
+/// frames, and the check of a capture stage one stored on those and the capture): every own and
+/// reused mark (`evaluate_batch`); Workflow #396 REC-4 and #463 L2: a click that follows a template
+/// or a located-text mark holds on every frame (`follow_frames`); Workflow #390 LAB-2: the anchor
+/// is a required own template mark and no forbidden mark passes (`anchor_rejection`,
+/// `evaluate_forbidden`); #463 R1: once nothing is refused, `refused_before` included (refusals the
+/// command met before its self-test), a select's dry run of the step as `record stop` generates it
+/// (`select_frames`), and #463 R1 fix 1, once that passed, the pages of the other steps this mark
+/// knows, which must not pass on the select's frames (`other_pages_on_select_frames`; the pages of
+/// steps recorded later are `record stop`'s, self-check item 8). The refusals are in that order;
+/// none when the whole page holds on every frame.
+fn page_check(
+    session: &Session,
+    page: &PageInputs<'_>,
+    frames: &[RecordedFrame],
+    refused_before: bool,
+    ocr: &LabOcr,
+) -> LabResult<PageCheck> {
+    let result = evaluate_batch(session, page.batch, frames, ocr)?;
+    let followed = follow_frames(session, page.batch, &result, page.target, frames, ocr)?;
+    let anchor = anchor_rejection(page.anchor, &result.own, &result.reused);
+    let (forbidden, forbidden_refusals) = evaluate_forbidden(session, page.forbidden, frames, ocr)?;
+    let BatchResult {
+        own,
+        reused,
+        rejections: mut refusals,
+    } = result;
+    refusals.extend(followed.rejection);
+    refusals.extend(anchor);
+    refusals.extend(forbidden_refusals);
+    let mut select = None;
+    if !refused_before
+        && refusals.is_empty()
+        && let Some(checked) = select_frames(
+            session,
+            SelectInputs {
+                target: page.target,
+                batch: page.batch,
+                own: &own,
+                reused: &reused,
+                forbidden: page.forbidden,
+                anchor: page.anchor,
+            },
+            frames,
+            page.select_fresh,
+            ocr,
+        )?
+    {
+        let SelectChecked {
+            select: checked_select,
+            click_rect,
+            rejections: refused,
+        } = checked;
+        refusals.extend(refused);
+        select = Some((checked_select, click_rect));
+    }
+    if !refused_before
+        && refusals.is_empty()
+        && select
+            .as_ref()
+            .is_some_and(|(made, _)| made.self_test.status == SelfTestStatus::Passed)
+    {
+        refusals.extend(other_pages_on_select_frames(
+            session,
+            page.target,
+            frames,
+            ocr,
+        )?);
+    }
+    Ok(PageCheck {
+        own,
+        reused,
+        located: followed.located,
+        forbidden,
+        select,
+        refusals,
+    })
+}
+
+/// #463 S2-5 fix round 2 (the coordinator's ruling: a base image is a frame of the same state of
+/// the screen): whether the capture whose frame-change digest is `capture` shows the state of the
+/// step's live frame (`live`), and the measure's value. Stage one calls two captures unchanged when
+/// the newer differs from the older by at most the Runtime's one frame-change bound
+/// (`frame_change_milli` of the whole frame at most `FRAME_CHANGE_MAX_MILLI`); its after loop asks
+/// [`unchanged_for`], which, given the two at one instant and no time to stand, decides exactly
+/// that, so it is asked here, the capture the older and the live frame the newer. Digests that
+/// cannot be compared are `record_frame_unreadable`, as there.
+fn frame_unchanged(capture: &ColorDigest, live: &ColorDigest) -> LabResult<(bool, u32)> {
+    let milli = frame_change_milli(capture, live).map_err(|error| {
+        invalid(
+            "record_frame_unreadable",
+            format!("failed to compare two frames by the frame-change measure: {error}"),
+        )
+    })?;
+    let unchanged = unchanged_for(
+        &[
+            (Duration::ZERO, capture.clone()),
+            (Duration::ZERO, live.clone()),
+        ],
+        Duration::ZERO,
+    )?;
+    Ok((unchanged, milli))
+}
+
+/// #463 S2-5: the captures stage one stored for step `page.target` before its press
+/// ([`stage_one_captures`]), each scored by the recognize boxes `marks`: one whose bytes are those
+/// of a live frame is that frame already (`own`). Fix round 2: of the others, first, one whose
+/// whole frame changed from the step's live primary frame (`primary_sha`) as stage one judges two
+/// captures changed ([`frame_unchanged`]) shows another state of the screen (`not_added`,
+/// `frame_changed` with the measure's value), whatever its scores; then one on which a box is below
+/// its threshold is another state of the screen (`not_added`, `below_threshold`); one on which
+/// every box reaches it becomes a sample when the step's whole page holds on the live frames `live`
+/// and it ([`page_check`]), and otherwise is `not_added` with the first refusal. A capture whose
+/// bytes are those of an earlier capture of the list is what that one became: `own` when it was
+/// added, else as it. Should two of them hold one by one and not together (a check whose `any_of`
+/// members pass on different frames), they are taken one after the other, as long as the page
+/// holds. Nothing here is a refusal of the command but a score that cannot be computed. A sample
+/// is the stored frame itself (same file, sha256 and provenance, `source: "recording_frame"`),
+/// with a frame id of its own; a capture that is not taken leaves the session's cache again.
+fn admit_captures(
+    session: &mut Session,
+    marks: &[BoxMark],
+    page: &PageInputs<'_>,
+    primary_sha: &str,
+    live: &[RecordedFrame],
+    ocr: &LabOcr,
+) -> LabResult<(Vec<RecordedFrame>, Vec<ScoredFrame>)> {
+    let captures = stage_one_captures(&session.recording, page.target);
+    if captures.is_empty() {
+        return Ok((Vec::new(), Vec::new()));
+    }
+    let live_digest = cached_digest(session, primary_sha, "the step's live frame")?;
+    let mut scored = Vec::new();
+    // The captures that hold, as the probes they were tested as, with their place in `scored`.
+    let mut chosen: Vec<(usize, RecordedFrame)> = Vec::new();
+    // The place in `scored` of the first capture of each sha256 that is no live frame, and the
+    // places of the later captures of the same bytes with the place of that first one.
+    let mut first_of: BTreeMap<String, usize> = BTreeMap::new();
+    let mut copies: Vec<(usize, usize)> = Vec::new();
+    let mut loaded_here = Vec::new();
+    for capture in captures {
+        if !session.cache.contains_key(&capture.sha256) {
+            let loaded = read_stored_frame(&capture)?;
+            session.cache.insert(capture.sha256.clone(), loaded);
+            loaded_here.push(capture.sha256.clone());
+        }
+        let scores = {
+            let loaded = session
+                .cache
+                .get(&capture.sha256)
+                .ok_or_else(|| invalid("validation_failed", "frame was not loaded"))?;
+            let frame = EvalFrame {
+                id: capture.frame_id.as_str(),
+                frame: loaded,
+            };
+            match call_frame(marks, &frame, &session.recording.defaults, ocr)? {
+                Ok(scores) => scores,
+                Err(rejection) => return Err(rejected(&[rejection], marks.len())),
+            }
+        };
+        let same = live
+            .iter()
+            .find(|frame| frame.sha256 == capture.sha256)
+            .map(|frame| frame.frame_id.clone());
+        let earlier = first_of.get(&capture.sha256).copied();
+        if same.is_none() && earlier.is_none() {
+            first_of.insert(capture.sha256.clone(), scored.len());
+        }
+        let (taken, because) = if same.is_some() {
+            (BoxFrameTaken::Own, None)
+        } else if let Some(origin) = earlier {
+            copies.push((scored.len(), origin));
+            (BoxFrameTaken::NotAdded, None)
+        } else {
+            let label = format!("capture {}", capture.frame_id);
+            let digest = cached_digest(session, &capture.sha256, &label)?;
+            let (unchanged, milli) = frame_unchanged(&digest, &live_digest)?;
+            if !unchanged {
+                (BoxFrameTaken::NotAdded, Some(changed_because(milli)))
+            } else if scores.below.is_some() {
+                (BoxFrameTaken::NotAdded, below_because(marks, &scores))
+            } else {
+                let probe = RecordedFrame {
+                    role: "sample".to_string(),
+                    superseded: false,
+                    ..capture.clone()
+                };
+                let frames = live
+                    .iter()
+                    .cloned()
+                    .chain(std::iter::once(probe.clone()))
+                    .collect::<Vec<_>>();
+                match page_check(session, page, &frames, false, ocr)?
+                    .refusals
+                    .first()
+                {
+                    None => {
+                        chosen.push((scored.len(), probe));
+                        (BoxFrameTaken::Added, None)
+                    }
+                    Some(refusal) => (BoxFrameTaken::NotAdded, Some(page_because(refusal))),
+                }
+            }
+        };
+        scored.push(ScoredFrame {
+            frame_id: same,
+            sample: None,
+            superseded: Some(capture.frame_id),
+            step: None,
+            taken,
+            because,
+            scores,
+        });
+    }
+    if chosen.len() > 1 {
+        let together = live
+            .iter()
+            .cloned()
+            .chain(chosen.iter().map(|(_, probe)| probe.clone()))
+            .collect::<Vec<_>>();
+        if !page_check(session, page, &together, false, ocr)?
+            .refusals
+            .is_empty()
+        {
+            let mut kept: Vec<(usize, RecordedFrame)> = Vec::new();
+            for (place, probe) in chosen {
+                let frames = live
+                    .iter()
+                    .cloned()
+                    .chain(kept.iter().map(|(_, held)| held.clone()))
+                    .chain(std::iter::once(probe.clone()))
+                    .collect::<Vec<_>>();
+                match page_check(session, page, &frames, false, ocr)?
+                    .refusals
+                    .first()
+                {
+                    None => kept.push((place, probe)),
+                    Some(refusal) => {
+                        if let Some(entry) = scored.get_mut(place) {
+                            entry.taken = BoxFrameTaken::NotAdded;
+                            entry.because = Some(page_because(refusal));
+                        }
+                    }
+                }
+            }
+            chosen = kept;
+        }
+    }
+    let mut admitted = Vec::new();
+    for (place, probe) in chosen {
+        let sample = recorded_sample(session, &probe)?;
+        if let Some(entry) = scored.get_mut(place) {
+            entry.frame_id = Some(sample.frame_id.clone());
+        }
+        admitted.push(sample);
+    }
+    // A capture of the same bytes as an earlier one is what that one became: the sample it was
+    // added as, a live frame now (`own`), or not added for the same reason.
+    for (place, origin) in copies {
+        let Some(first) = scored.get(origin) else {
+            continue;
+        };
+        let (taken, because, frame_id) = match first.taken {
+            BoxFrameTaken::Added => (BoxFrameTaken::Own, None, first.frame_id.clone()),
+            taken => (taken, first.because.clone(), None),
+        };
+        if let Some(entry) = scored.get_mut(place) {
+            entry.taken = taken;
+            entry.because = because;
+            entry.frame_id = frame_id;
+        }
+    }
+    for sha256 in loaded_here {
+        if !admitted.iter().any(|frame| frame.sha256 == sha256) {
+            session.cache.remove(&sha256);
+        }
+    }
+    Ok((admitted, scored))
+}
+
+/// #463 S2-5: why a frame of the action was not added because the step's page does not hold on
+/// it: the refusal's own reason and the mark it names.
+fn page_because(refusal: &MarkRejection) -> BoxBecause {
+    BoxBecause {
+        reason: refusal.reason.clone(),
+        mark: Some(refusal.id.clone()),
+        index: None,
+        frame_change_milli: None,
+    }
+}
+
+/// #463 S2-5 fix round 2: why a capture was not added because its whole frame changed from the
+/// step's live frame: `frame_changed`, with the measure's value; no mark is involved.
+fn changed_because(milli: u32) -> BoxBecause {
+    BoxBecause {
+        reason: FRAME_CHANGED.to_owned(),
+        mark: None,
+        index: None,
+        frame_change_milli: Some(milli),
+    }
+}
+
+/// #463 S2-5 fix round 2: the frame-change digest ([`change_digest`], stage one's) of the frame
+/// `sha256` the session holds decoded, named `label`.
+fn cached_digest(session: &Session, sha256: &str, label: &str) -> LabResult<ColorDigest> {
+    let loaded = session
+        .cache
+        .get(sha256)
+        .ok_or_else(|| invalid("validation_failed", format!("{label} was not loaded")))?;
+    change_digest(loaded, label)
+}
+
+/// #463 S2-5: a capture of the step admitted as its sample: the stored frame itself (its file,
+/// sha256, size and provenance), role `sample`, `source: "recording_frame"`, a frame id of its own
+/// and the time it was admitted. Its file is already in the recording's frame store, so nothing
+/// is written for it.
+fn recorded_sample(session: &mut Session, capture: &RecordedFrame) -> LabResult<RecordedFrame> {
+    let frame_id = format!("f{:04}", session.next_frame);
+    session.next_frame = session
+        .next_frame
+        .checked_add(1)
+        .ok_or_else(|| invalid("validation_failed", "frame id overflow"))?;
+    Ok(RecordedFrame {
+        frame_id,
+        role: "sample".to_string(),
+        source: RECORDING_FRAME_SOURCE.to_string(),
+        recorded_at_unix_ms: now_unix_ms(),
+        superseded: false,
+        ..capture.clone()
+    })
+}
+
+/// #463 S2-5: every recognize box's score on each frame the step held before this command (its
+/// own). The self-test passed on them, so a score that cannot be computed there is refused as it
+/// is.
+fn scored_frames(
+    session: &Session,
+    marks: &[BoxMark],
+    frames: &[RecordedFrame],
+    ocr: &LabOcr,
+) -> LabResult<Vec<ScoredFrame>> {
+    let mut scored = Vec::new();
+    for entry in frames {
+        let loaded = session
+            .cache
+            .get(&entry.sha256)
+            .ok_or_else(|| invalid("validation_failed", "frame was not loaded"))?;
+        let frame = EvalFrame {
+            id: entry.frame_id.as_str(),
+            frame: loaded,
+        };
+        let scores = match call_frame(marks, &frame, &session.recording.defaults, ocr)? {
+            Ok(scores) => scores,
+            Err(rejection) => return Err(rejected(&[rejection], marks.len())),
+        };
+        scored.push(ScoredFrame {
+            frame_id: Some(entry.frame_id.clone()),
+            sample: None,
+            superseded: None,
+            step: None,
+            taken: BoxFrameTaken::Own,
+            because: None,
+            scores,
+        });
+    }
+    Ok(scored)
+}
+
+/// #463 S2-5: the live frames of the other effective steps on which a recognize box of the
+/// request reaches its threshold (`elsewhere`): the box does not tell this step's screen from
+/// those. They are never samples of this step and are read from the frame store without being
+/// kept.
+fn elsewhere_frames(
+    session: &Session,
+    marks: &[BoxMark],
+    target: u32,
+    ocr: &LabOcr,
+) -> LabResult<Vec<ScoredFrame>> {
+    let mut scored = Vec::new();
+    for step in session
+        .recording
+        .steps
+        .iter()
+        .filter(|step| step.is_effective() && step.index != target)
+    {
+        for entry in step.frames.iter().filter(|frame| !frame.superseded) {
+            let read;
+            let loaded = match session.cache.get(&entry.sha256) {
+                Some(loaded) => loaded,
+                None => {
+                    read = read_stored_frame(entry)?;
+                    &read
+                }
+            };
+            let frame = EvalFrame {
+                id: entry.frame_id.as_str(),
+                frame: loaded,
+            };
+            let scores = match call_frame(marks, &frame, &session.recording.defaults, ocr)? {
+                Ok(scores) => scores,
+                Err(rejection) => return Err(rejected(&[rejection], marks.len())),
+            };
+            if scores.scores.iter().any(|score| score.reaches) {
+                scored.push(ScoredFrame {
+                    frame_id: Some(entry.frame_id.clone()),
+                    sample: None,
+                    superseded: None,
+                    step: Some(step.index),
+                    taken: BoxFrameTaken::Elsewhere,
+                    because: None,
+                    scores,
+                });
+            }
+        }
+    }
+    Ok(scored)
 }
 
 /// #463 R2: what `record mark --ending` took: the ending as the recording now holds it, its frames
@@ -1843,6 +2584,191 @@ pub(crate) fn apply_ending(
         frame,
         samples,
     })
+}
+
+/// #463 R4 (`contracts/lab-recording.md`, "Inserting an optional step after stop"): a stopped
+/// recording takes a pop-up a run met after the effect of step `spec.step` as an optional step,
+/// without recording again. Its frame and samples, files on the caller's machine, are admitted as an
+/// ending's are ([`apply_ending`]: one size, a pure scale converted with `scaled_from`,
+/// content-addressed in the recording); the step takes the next serial number and
+/// `inserted_after`, the recorded step it runs after (the step named, or the recorded step an
+/// inserted step named runs after, whose run it joins), and is closed as `--close-step` closes a
+/// step whose click was declared and never executed. Its page, marks, click and settle then go
+/// through the marks flow of `record mark --step <n>` ([`apply_marks`]), so every mark is
+/// self-tested on its frames and every rule of a click and an optional step holds. An active
+/// recording takes none (`recording_active`); the named step is a step of the recording
+/// (`step_unknown`), not its last step (`step_last`) and no application step (`step_application`).
+/// Returns the marks flow's result on the new step, its frame and samples as admitted.
+pub(crate) fn apply_optional_after(
+    session: &mut Session,
+    spec: &OptionalAfterSpec,
+    ocr: &LabOcr,
+) -> LabResult<MarkApplied> {
+    let named = spec.step;
+    if !session.stopped {
+        return Err(inserted_recording_active(named));
+    }
+    let Some(step) = step_ref(&session.recording, named).filter(|step| step.is_effective()) else {
+        return Err(optional_after_invalid(
+            OptionalAfterProblem::StepUnknown,
+            Some(named),
+            format!(
+                "step {named} is no step of the recording (none, or a dropped or converted one); \
+                 record status lists the steps in the order they run; nothing was written"
+            ),
+            json!({}),
+        ));
+    };
+    let after = step.inserted_after.unwrap_or(named);
+    let application = step
+        .application
+        .as_ref()
+        .map(|application| application.action.clone());
+    if last_effective(&session.recording) == Some(named) {
+        return Err(optional_after_invalid(
+            OptionalAfterProblem::StepLast,
+            Some(named),
+            format!(
+                "step {named} is the last step: every run ends on its page and presses nothing \
+                 after it; a screen after the last press is an ending (record mark --ending); \
+                 nothing was written"
+            ),
+            json!({}),
+        ));
+    }
+    if let Some(action) = application {
+        return Err(optional_after_invalid(
+            OptionalAfterProblem::StepApplication,
+            Some(named),
+            format!(
+                "step {named} is an application step ({action}); an optional step is inserted \
+                 after a press; nothing was written"
+            ),
+            json!({"application": action}),
+        ));
+    }
+    let local = FrameMeta::local();
+    let (loaded, scaled_from) = scaled_to_recording(
+        session.recording.coordinate_space,
+        read_frame_file(&spec.frame)?,
+        &spec.frame,
+    )?;
+    let mut frame = admit_frame(session, loaded, "primary", &local, &spec.frame)?;
+    frame.scaled_from = scaled_from;
+    let mut samples = Vec::new();
+    for path in &spec.samples {
+        let (loaded, scaled_from) = scaled_to_recording(
+            session.recording.coordinate_space,
+            read_frame_file(path)?,
+            path,
+        )?;
+        let mut sample = admit_frame(session, loaded, "sample", &local, path)?;
+        sample.scaled_from = scaled_from;
+        samples.push(sample);
+    }
+    let index = next_step_index(&session.recording)?;
+    let mut inserted = new_step(
+        index,
+        std::iter::once(frame.clone())
+            .chain(samples.iter().cloned())
+            .collect(),
+    );
+    inserted.inserted_after = Some(after);
+    inserted.closed = true;
+    inserted.closed_by = Some("author".to_string());
+    session.recording.steps.push(inserted);
+    let request = MarkRequest {
+        schema_version: LAB_RECORD_MARK_SCHEMA.to_string(),
+        step: Some(index),
+        page: spec.page.clone(),
+        add: spec.add.clone(),
+        reuse: spec.reuse.clone(),
+        click: spec.click.clone(),
+        optional: Some(true),
+        optional_settle_ms: spec.settle_ms,
+        ..MarkRequest::default()
+    };
+    let mut applied = apply_marks(session, &request, ocr)?;
+    applied.frame = Some(frame);
+    applied.samples = samples;
+    Ok(applied)
+}
+
+/// #463 R4: `record mark --remove-inserted <n>`: the stopped recording gives up its inserted
+/// optional step `n`, dropped as `--drop-step` drops a step: it stays in the file with its frames,
+/// its marks free their ids, and the next `record stop` generates the package without it. A step
+/// that is no inserted step, or one given up already, is `not_inserted`; a mark of it another step
+/// or an ending reuses, or another page forbids, is `record_mark_in_use`, as for `--drop-step`.
+pub(crate) fn remove_inserted(session: &mut Session, index: u32) -> LabResult<()> {
+    if !session.stopped {
+        return Err(inserted_recording_active(index));
+    }
+    let recording = &session.recording;
+    let Some(step) = step_ref(recording, index)
+        .filter(|step| step.is_effective() && step.inserted_after.is_some())
+    else {
+        return Err(not_inserted(recording, index));
+    };
+    let ids = step
+        .marks
+        .iter()
+        .map(|mark| mark.id.clone())
+        .collect::<BTreeSet<_>>();
+    let used_by_others = recording
+        .steps
+        .iter()
+        .filter(|other| other.is_effective() && other.index != index)
+        .flat_map(|other| {
+            let transition_reused = match &other.transition {
+                Some(StepTransition::Page { reused, .. }) => reused.as_slice(),
+                _ => &[][..],
+            };
+            other
+                .reused
+                .iter()
+                .chain(transition_reused)
+                .chain(&other.forbidden)
+        })
+        .chain(
+            recording
+                .endings
+                .iter()
+                .flat_map(|ending| ending.reused.iter()),
+        )
+        .filter(|id| ids.contains(*id))
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    if !used_by_others.is_empty() {
+        return Err(with_details(
+            blocked(
+                "record_mark_in_use",
+                format!("marks of step {index} are reused by other steps; nothing was written"),
+            ),
+            json!({"step": index, "marks": used_by_others}),
+        ));
+    }
+    step_mut(&mut session.recording, index)?.dropped = true;
+    Ok(())
+}
+
+/// #463 R4: `remove_inserted` naming no inserted step that is not given up yet: `not_inserted`,
+/// with the inserted steps there are.
+fn not_inserted(recording: &LabRecording, index: u32) -> LabError {
+    let inserted = recording
+        .steps
+        .iter()
+        .filter(|step| step.is_effective() && step.inserted_after.is_some())
+        .map(|step| step.index)
+        .collect::<Vec<_>>();
+    optional_after_invalid(
+        OptionalAfterProblem::NotInserted,
+        Some(index),
+        format!(
+            "step {index} is no inserted optional step of the recording, or it was given up \
+             already; nothing was written"
+        ),
+        json!({"inserted": inserted}),
+    )
 }
 
 /// #463 R1: the step a select's self-test probes, as this command leaves it: its target, the
@@ -2479,7 +3405,22 @@ fn apply_click(
             ));
         }
     }
-    if let Some((rect, source, from, follow, gesture)) = declared {
+    // #463 S2-5: a press box on a step whose click has an outcome on record does not declare a
+    // click: it gives a press recorded by the command that made it its rectangle
+    // ([`box_on_recorded_press`]).
+    let recorded_box = match (&declared, &step.click) {
+        (Some((rect, ..)), Some(click)) if press_rect(&request.boxes).is_some() => click
+            .execution
+            .as_ref()
+            .map(|execution| (*rect, execution.point)),
+        _ => None,
+    };
+    if let (Some(boxed), Some(click)) = (recorded_box, step.click.as_mut()) {
+        box_on_recorded_press(target, click, boxed, request.replace_click)?;
+        if let Some(retry) = &request.retry {
+            click.retry = Some(retry.clone());
+        }
+    } else if let Some((rect, source, from, follow, gesture)) = declared {
         step.application = None;
         let attempts = match &step.click {
             Some(existing) if existing.execution.is_some() => {
@@ -2587,6 +3528,95 @@ fn apply_click(
     }
     Ok(())
 }
+
+/// #463 S2-5 (`contracts/lab-recording.md`, "Drawing a box"): the press box `rect` on step
+/// `index`, whose click `click` has an outcome on record. A tap or a long press recorded by the
+/// command that made it (`source: "point"`, a box of one pixel at its point) takes the press box as
+/// its rectangle when the box holds the point it pressed; its source, gesture, execution (the
+/// point, the frames, the outcome) and every other member stay as recorded, and nothing is pressed
+/// again. A box that does not hold the point is `record_click_outside_step_rect` with
+/// `details{reason: "recorded_point_outside_box", step, point, box}`: the recorded press would not
+/// have been inside the region. A click whose rectangle is a box already (a box given before) takes
+/// another only with `--replace-click` (`record_click_exists`), as a declared click does. A
+/// recorded swipe keeps its ends: `record_click_rect_conflict`, as a press box beside a drag. Any
+/// other click with an outcome (a click `do --capture --record` executed on a declared rectangle,
+/// a select's) is today's `record_click_executed`. Nothing is written on a refusal.
+fn box_on_recorded_press(
+    index: u32,
+    click: &mut StepClick,
+    (rect, point): (RecordRect, RecordPoint),
+    replace: bool,
+) -> LabResult<()> {
+    if click.source == SWIPE_SOURCE {
+        return Err(with_details(
+            blocked(
+                "record_click_rect_conflict",
+                format!(
+                    "step {index} recorded a swipe, whose ends stay as recorded; a press box \
+                     declares a tap region and cannot be given to it; nothing was written"
+                ),
+            ),
+            json!({"step": index, "gesture": click.gesture, "box": rect}),
+        ));
+    }
+    if click.source != POINT_SOURCE {
+        return Err(with_details(
+            blocked(
+                "record_click_executed",
+                format!(
+                    "step {index} already has a click with an outcome on record; run `record \
+                     mark --reopen-step {index}` first"
+                ),
+            ),
+            json!({"step": index}),
+        ));
+    }
+    if !point_inside(point, rect) {
+        return Err(with_details(
+            blocked(
+                "record_click_outside_step_rect",
+                format!(
+                    "the press box {},{},{},{} does not hold the point {},{} step {index} \
+                     recorded, so the recorded press would not have been inside it; draw the box \
+                     around the point; nothing was written",
+                    rect.x, rect.y, rect.width, rect.height, point.x, point.y
+                ),
+            ),
+            json!({
+                "step": index,
+                "reason": RECORDED_POINT_OUTSIDE_BOX,
+                "point": point,
+                "box": rect
+            }),
+        ));
+    }
+    let unboxed = click.rect
+        == RecordRect {
+            x: point.x,
+            y: point.y,
+            width: 1,
+            height: 1,
+        };
+    if !unboxed && !replace {
+        return Err(with_details(
+            blocked(
+                "record_click_exists",
+                format!(
+                    "step {index}'s recorded press already has the press box {},{},{},{}; add \
+                     --replace-click (replace_click) to give it another",
+                    click.rect.x, click.rect.y, click.rect.width, click.rect.height
+                ),
+            ),
+            json!({"step": index, "rect": click.rect}),
+        ));
+    }
+    click.rect = rect;
+    Ok(())
+}
+
+/// #463 S2-5: the word of a press box that does not hold the point a recorded press pressed
+/// (`record_click_outside_step_rect`, `details.reason`).
+const RECORDED_POINT_OUTSIDE_BOX: &str = "recorded_point_outside_box";
 
 /// Workflow #396 REC-4: the rejection of a step whose click follows a template that does not
 /// hold on one of its live frames. #463 L2: for a click that follows a located-text mark, the
@@ -2878,21 +3908,10 @@ fn application_entry_invalid() -> LabError {
     blocked(
         "record_application_entry_invalid",
         "an application entry step can only be step 1. After the effect of the previous step, \
-         capture the arrival screen with capture --record and mark it, then execute or declare \
-         the application operation on that step; offline, give the arrival screen with --frame",
-    )
-}
-
-fn application_marks_missing(index: u32) -> LabError {
-    with_details(
-        blocked(
-            "record_application_step_marks_missing",
-            format!(
-                "step {index} has a frame but no marks; mark the screen the application \
-                 operation starts from first"
-            ),
-        ),
-        json!({"step": index}),
+         `session app <action> --record` captures the arrival screen itself before the \
+         operation; to declare the operation, capture the arrival screen with capture --record \
+         first, then declare it on that step (no mark is needed); offline, give the arrival \
+         screen with --frame",
     )
 }
 
@@ -2911,12 +3930,11 @@ fn application_mark_target(recording: &mut LabRecording) -> LabResult<(u32, bool
 }
 
 /// `record mark --application <action>`: the declared application operation becomes the
-/// step's effect. `batch` holds the step's marks after this command (none for the entry step).
+/// step's effect. #463 S1-3: an open step needs no marks for it (their check is `record stop`'s).
 fn apply_application(
     session: &mut Session,
     request: &super::model::MarkRequest,
     target: u32,
-    batch: Option<&MarkBatch>,
 ) -> LabResult<()> {
     let Some(spec) = &request.application else {
         return Ok(());
@@ -2933,13 +3951,6 @@ fn apply_application(
             ));
         }
         _ => {}
-    }
-    if let Some(batch) = batch
-        && !step.closed
-        && batch.own.is_empty()
-        && batch.reused.is_empty()
-    {
-        return Err(application_marks_missing(target));
     }
     let attempts = step
         .application
@@ -2973,6 +3984,22 @@ pub(crate) fn apply_optional(
 ) -> LabResult<()> {
     let first = effective_indices(recording).first() == Some(&target);
     let step = step_mut(recording, target)?;
+    // #463 R4: a step a stopped recording inserted was never recorded on the path; it stays
+    // optional, since a required step would make every run need its pop-up.
+    if request.optional == Some(false)
+        && let Some(after) = step.inserted_after
+    {
+        return Err(optional_after_invalid(
+            OptionalAfterProblem::ClearsOptional,
+            Some(target),
+            format!(
+                "step {target} was inserted after step {after} as an optional step and is never \
+                 recorded on the path, so it stays optional; give it up with record mark \
+                 --remove-inserted {target}; nothing was written"
+            ),
+            json!({"inserted_after": after}),
+        ));
+    }
     match request.optional {
         None => {}
         Some(false) => step.optional = None,
@@ -3065,7 +4092,7 @@ pub(crate) fn apply_transition(
         marks: Vec::new(),
         reused: Vec::new(),
     };
-    let (frame, samples, add, reuse, timeout_ms) = match spec {
+    let (frame, frame_id, samples, sample_frame_ids, add, reuse, timeout_ms) = match spec {
         TransitionSpec::Clear => {
             step_mut(&mut session.recording, index)?.transition = None;
             return Ok(applied);
@@ -3085,16 +4112,39 @@ pub(crate) fn apply_transition(
             add,
             reuse,
             timeout_ms,
-        } => (frame, samples, add, reuse, *timeout_ms),
+            frame_id,
+            sample_frame_ids,
+        } => (
+            frame,
+            frame_id,
+            samples,
+            sample_frame_ids,
+            add,
+            reuse,
+            *timeout_ms,
+        ),
     };
     validate_page_transition_timeout(timeout_ms)?;
     refuse_existing(index, existing.as_ref(), request.replace_transition)?;
-    let frame_path = frame.as_ref().ok_or_else(|| {
-        invalid(
-            "validation_failed",
-            "a page transition needs --frame <png> of the intermediate screen",
-        )
-    })?;
+    // #463 S2-7: the frame is a file or a frame this recording stored, never both.
+    let given = match (frame, frame_id) {
+        (Some(path), None) => FrameGiven::File(path.as_str()),
+        (None, Some(stored)) => FrameGiven::Stored(stored.as_str()),
+        (Some(_), Some(_)) => {
+            return Err(invalid(
+                "validation_failed",
+                "a page transition takes its frame as a PNG file (frame) or as a frame this \
+                 recording stored (frame_id), not both",
+            ));
+        }
+        (None, None) => {
+            return Err(invalid(
+                "validation_failed",
+                "a page transition needs --frame <png> of the intermediate screen, or (request \
+                 form) frame_id, a frame this recording stored",
+            ));
+        }
+    };
     if add.is_empty() && reuse.is_empty() {
         return Err(invalid(
             "validation_failed",
@@ -3107,18 +4157,22 @@ pub(crate) fn apply_transition(
         }
         _ => BTreeSet::new(),
     };
-    let local = FrameMeta::local();
-    let loaded = read_frame_file(frame_path)?;
-    let primary = admit_frame(session, loaded, "transition", &local, frame_path)?;
+    let primary = transition_frame(session, given, "transition", index)?;
     let mut frames = vec![primary.clone()];
-    for path in samples {
-        let loaded = read_frame_file(path)?;
-        frames.push(admit_frame(
+    let given_samples = samples
+        .iter()
+        .map(|path| FrameGiven::File(path.as_str()))
+        .chain(
+            sample_frame_ids
+                .iter()
+                .map(|stored| FrameGiven::Stored(stored.as_str())),
+        );
+    for sample in given_samples {
+        frames.push(transition_frame(
             session,
-            loaded,
+            sample,
             "transition_sample",
-            &local,
-            path,
+            index,
         )?);
     }
     let mut batch = MarkBatch {
@@ -3177,6 +4231,99 @@ fn refuse_existing(index: u32, existing: Option<&StepTransition>, replace: bool)
     }
 }
 
+/// #463 S2-7 (`contracts/lab-recording.md`, "Transitions"): where a frame of a page transition
+/// comes from: a PNG file (`frame`, `samples`), or a frame this recording stored, named by its id
+/// (`frame_id`, `sample_frame_ids`; the request form only).
+#[derive(Clone, Copy)]
+enum FrameGiven<'a> {
+    File(&'a str),
+    Stored(&'a str),
+}
+
+/// #463 S2-7: a frame of the page transition of step `step` in `role`, the one place a file and a
+/// stored frame meet. A file is read and decoded; a stored frame is found by its id
+/// ([`stored_frame`]; `record_frame_unknown` when the recording holds none of that id) and read back
+/// as stored, its sha256 checked (`record_frame_hash_mismatch`). Both are admitted by
+/// [`admit_frame`], with every check a file-given frame takes (the recording's base size, its
+/// size). A stored frame's entry is its own content-addressed file, the same path and sha256 (no
+/// copy is written, the file being there), with a frame id of its own and the stored frame's
+/// provenance, `source: "recording_frame"`.
+fn transition_frame(
+    session: &mut Session,
+    given: FrameGiven<'_>,
+    role: &str,
+    step: u32,
+) -> LabResult<RecordedFrame> {
+    match given {
+        FrameGiven::File(path) => {
+            let loaded = read_frame_file(path)?;
+            admit_frame(session, loaded, role, &FrameMeta::local(), path)
+        }
+        FrameGiven::Stored(frame_id) => {
+            let stored = stored_frame(&session.recording, frame_id)
+                .cloned()
+                .ok_or_else(|| frame_unknown(frame_id, step))?;
+            let loaded = read_stored_frame(&stored)?;
+            let RecordedFrame {
+                runtime_artifact,
+                capture_backend,
+                freshness,
+                scaled_from,
+                ..
+            } = stored;
+            let meta = FrameMeta {
+                source: RECORDING_FRAME_SOURCE.to_owned(),
+                runtime_artifact,
+                capture_backend,
+                freshness,
+            };
+            let label = format!("frame {frame_id}");
+            let mut entry = admit_frame(session, loaded, role, &meta, &label)?;
+            entry.scaled_from = scaled_from;
+            Ok(entry)
+        }
+    }
+}
+
+/// #463 S2-7: the frame `frame_id` this recording stored, wherever it is listed: a frame of a step
+/// (of any step, a superseded frame too), of a step's page transition, or of an ending; `None` when
+/// the recording holds no frame of that id.
+fn stored_frame<'r>(recording: &'r LabRecording, frame_id: &str) -> Option<&'r RecordedFrame> {
+    recording
+        .steps
+        .iter()
+        .flat_map(|step| {
+            let transition_frames = match &step.transition {
+                Some(StepTransition::Page { frames, .. }) => frames.as_slice(),
+                _ => &[][..],
+            };
+            step.frames.iter().chain(transition_frames)
+        })
+        .chain(
+            recording
+                .endings
+                .iter()
+                .flat_map(|ending| ending.frames.iter()),
+        )
+        .find(|frame| frame.frame_id == frame_id)
+}
+
+/// #463 S2-7: `record_frame_unknown`: the page transition of step `step` names by its id a frame
+/// the recording does not hold.
+fn frame_unknown(frame_id: &str, step: u32) -> LabError {
+    with_details(
+        blocked(
+            LabCode::RecordFrameUnknown.as_str(),
+            format!(
+                "the page transition of step {step} names frame {frame_id}, which this recording \
+                 does not hold; record status and record frames --step <k> list its frames; \
+                 nothing was written"
+            ),
+        ),
+        json!({"step": step, "frame_id": frame_id}),
+    )
+}
+
 fn step_not_last(index: u32, last: Option<u32>) -> LabError {
     with_details(
         blocked(
@@ -3190,7 +4337,8 @@ fn step_not_last(index: u32, last: Option<u32>) -> LabError {
     )
 }
 
-/// The step a `--drop-step`/`--reopen-step` names: effective and the last effective one.
+/// The step a `--reopen-step` names: effective and the last effective one. (#463 S2-7: `--drop-step`
+/// takes a step before the last too, `press_changed_nothing`.)
 fn last_named(recording: &LabRecording, step: Option<u32>, flag: &str) -> LabResult<u32> {
     let index =
         step.ok_or_else(|| invalid("validation_failed", format!("{flag} needs the step number")))?;
@@ -3212,7 +4360,20 @@ pub(crate) fn apply_step_action(
     let recording = &mut session.recording;
     match action.kind {
         StepActionKind::DropStep => {
-            let index = last_named(recording, action.step, "--drop-step")?;
+            let index = action
+                .step
+                .ok_or_else(|| invalid("validation_failed", "--drop-step needs the step number"))?;
+            // #463 stage two, train, fix round (the coordinator's ruling): a step that holds a
+            // choice is not dropped, the last one too, before its frames are compared.
+            if holds_choice(effective_step(recording, index)?) {
+                return Err(drop_of_choice(index));
+            }
+            // #463 S2-7: a step before the last effective one is dropped only when the frames stage
+            // one stored do not contradict that its press changed nothing (fix round 1: by two
+            // comparisons, `press_changed_nothing`); the last one as before.
+            if last_effective(recording) != Some(index) {
+                press_changed_nothing(recording, index)?;
+            }
             let step = effective_step(recording, index)?;
             let ids = step
                 .marks
@@ -3302,7 +4463,378 @@ pub(crate) fn apply_step_action(
             to_transition(recording, index)?;
             Ok(("step_converted_to_transition", index))
         }
+        StepActionKind::RestoreStep => {
+            let index = action.step.ok_or_else(|| {
+                invalid("validation_failed", "restore_step needs the step number")
+            })?;
+            restore_step(recording, index)?;
+            Ok(("step_restored", index))
+        }
     }
+}
+
+/// #463 S2-7 fix round 1 (the coordinator's ruling R1; `contracts/lab-recording.md`, "Steps,
+/// frames and remediation"): how far the neighbourhood of a press reaches beyond the press's
+/// rectangle on every side, in cells of the whole-frame measure's grid ([`FRAME_CHANGE_COLUMNS`] by
+/// [`FRAME_CHANGE_ROWS`]) at the size of the recording's frames: one cell, 80 by 80 pixels at
+/// 1280x720.
+const PRESS_REGION_MARGIN_CELLS: u32 = 1;
+
+/// #463 S2-7 (`contracts/lab-recording.md`, "Steps, frames and remediation"): whether the frames
+/// stage one stored contradict that the press of step `index`, an effective step before the last,
+/// changed nothing; the tool refuses only what they contradict, and whether the press mattered is
+/// the agent's judgement. Its press is on record with the stored frame it was sent on
+/// (`before_frame`) and the stored frame after it (`after_frame`): a click performed by the command
+/// that made it (`tap`, `swipe`, `long-tap --record`) and sent on that stored frame. The frame
+/// after it is the same screen as the frame before it, and so is the frame the next effective
+/// step's press was sent on ([`screen_before`]). Fix round 1: two frames are the same screen when
+/// both comparisons of [`changed_by`] hold, the whole frame and the neighbourhood of the press
+/// ([`press_region`]), each by the one measure and bound stage one calls a screen still by
+/// ([`frame_unchanged`]: `frame_change_milli` at most `FRAME_CHANGE_MAX_MILLI`); a change smaller
+/// than that measure sees is not seen. Every frame is read back with its sha256 checked. Anything
+/// else is `record_drop_unproven` with its `drop_problem` and, for a change the frames show, the
+/// `drop_comparison` that showed it; nothing is proposed.
+fn press_changed_nothing(recording: &LabRecording, index: u32) -> LabResult<()> {
+    let step = effective_step(recording, index)?;
+    let click = step.click.as_ref().filter(|declared| declared.executed());
+    let press = click
+        .and_then(|declared| declared.execution.as_ref())
+        .filter(|execution| !execution.sent_on_unstored_capture);
+    let before_id = press.and_then(|execution| execution.before_frame.as_deref());
+    let after_id = press.and_then(|execution| execution.after_frame.as_deref());
+    let next = effective_indices(recording)
+        .into_iter()
+        .skip_while(|other| *other != index)
+        .nth(1);
+    let next_before = next
+        .and_then(|serial| step_ref(recording, serial))
+        .and_then(screen_before);
+    let known = json!({
+        "before_frame": before_id,
+        "after_frame": after_id,
+        "next_step": next,
+        "next_before_frame": next_before
+    });
+    let (Some(click), Some(before), Some(after), Some(next_frame)) = (
+        click,
+        before_id.and_then(|frame_id| stored_frame(recording, frame_id)),
+        after_id.and_then(|frame_id| stored_frame(recording, frame_id)),
+        next_before.and_then(|frame_id| stored_frame(recording, frame_id)),
+    ) else {
+        return Err(drop_unproven(
+            DropProblem::FramesNotRecorded,
+            None,
+            index,
+            format!(
+                "step {index} is not the last effective step, and the frames this recording stored \
+                 do not hold what the comparison needs: the press is not on record with the stored \
+                 frame it was sent on and the stored frame after it (as tap, swipe and long-tap \
+                 --record record a press), or the next step has no frame; nothing was written"
+            ),
+            known,
+        ));
+    };
+    let region = press_region(pressed_rect(click), before.width, before.height);
+    let before_digests = stored_digests(before, region)?;
+    if let Some((comparison, milli)) = changed_by(&before_digests, &stored_digests(after, region)?)?
+    {
+        return Err(drop_unproven(
+            DropProblem::ScreenChanged,
+            Some(comparison),
+            index,
+            format!(
+                "the stored frames show a change at the press of step {index}: the frame after it \
+                 ({}) differs from the frame before it ({}) by {milli} milli, more than the \
+                 frame-change bound, over the whole frame or over the neighbourhood of the press \
+                 (details drop_comparison); a step before the last is dropped only when its stored \
+                 frames show no change; nothing was written",
+                after.frame_id, before.frame_id
+            ),
+            with_change(known, milli),
+        ));
+    }
+    if let Some((comparison, milli)) =
+        changed_by(&before_digests, &stored_digests(next_frame, region)?)?
+    {
+        return Err(drop_unproven(
+            DropProblem::NextScreenDiffers,
+            Some(comparison),
+            index,
+            format!(
+                "the stored frames show a change after the press of step {index}: the frame the \
+                 next step's press was sent on ({}) differs from the frame before this press ({}) \
+                 by {milli} milli, more than the frame-change bound, over the whole frame or over \
+                 the neighbourhood of this press (details drop_comparison); nothing was written",
+                next_frame.frame_id, before.frame_id
+            ),
+            with_change(known, milli),
+        ));
+    }
+    Ok(())
+}
+
+/// #463 S2-7 fix round 1 (the coordinator's ruling R1): the press's rectangle as the step table
+/// holds it: the click's rectangle (a press by its point holds a rectangle of one pixel there), and
+/// for a drag (a recorded swipe) the rectangle spanned by its two ends, the click's rectangle and
+/// its `to`.
+fn pressed_rect(click: &StepClick) -> RecordRect {
+    let Some(ClickGesture::Drag { to, .. }) = click.gesture else {
+        return click.rect;
+    };
+    let from = click.rect;
+    let left = from.x.min(to.x);
+    let top = from.y.min(to.y);
+    let right =
+        (i64::from(from.x) + i64::from(from.width)).max(i64::from(to.x) + i64::from(to.width));
+    let bottom =
+        (i64::from(from.y) + i64::from(from.height)).max(i64::from(to.y) + i64::from(to.height));
+    let side = |end: i64, start: i32| i32::try_from(end - i64::from(start)).unwrap_or(i32::MAX);
+    RecordRect {
+        x: left,
+        y: top,
+        width: side(right, left),
+        height: side(bottom, top),
+    }
+}
+
+/// #463 S2-7 fix round 1 (the coordinator's ruling R1): the neighbourhood of the press `rect` on
+/// frames of `width` by `height`: the rectangle grown on every side by
+/// [`PRESS_REGION_MARGIN_CELLS`] cells of the whole-frame measure's grid at that size (a cell is
+/// `width / FRAME_CHANGE_COLUMNS` by `height / FRAME_CHANGE_ROWS` pixels, rounded up), clamped to
+/// the frame.
+fn press_region(rect: RecordRect, width: u32, height: u32) -> Rect {
+    let margin = |side: u32, cells: u32| {
+        i64::from(
+            side.saturating_mul(PRESS_REGION_MARGIN_CELLS)
+                .div_ceil(cells),
+        )
+    };
+    let (margin_x, margin_y) = (
+        margin(width, FRAME_CHANGE_COLUMNS),
+        margin(height, FRAME_CHANGE_ROWS),
+    );
+    let left = (i64::from(rect.x) - margin_x).max(0);
+    let top = (i64::from(rect.y) - margin_y).max(0);
+    let right = (i64::from(rect.x) + i64::from(rect.width) + margin_x).min(i64::from(width));
+    let bottom = (i64::from(rect.y) + i64::from(rect.height) + margin_y).min(i64::from(height));
+    let field = |value: i64| i32::try_from(value).unwrap_or(i32::MAX);
+    Rect {
+        x: field(left),
+        y: field(top),
+        width: field(right - left),
+        height: field(bottom - top),
+    }
+}
+
+/// #463 S2-7 fix round 1: the two frame-change digests of one stored frame, of the whole frame and
+/// of the neighbourhood of the press.
+struct ScreenDigests {
+    whole: ColorDigest,
+    press: ColorDigest,
+}
+
+/// #463 S2-7 fix round 1 (the coordinator's ruling R1): the first of the two comparisons by which
+/// the frames of `older` and `newer` are not the same screen, with the measure's value: the whole
+/// frame (`frame`), then the neighbourhood of the press (`press_region`), each by
+/// [`frame_unchanged`], the one measure and bound stage one calls a screen still by; `None` when
+/// both hold.
+fn changed_by(
+    older: &ScreenDigests,
+    newer: &ScreenDigests,
+) -> LabResult<Option<(DropComparison, u32)>> {
+    for (comparison, old, new) in [
+        (DropComparison::Frame, &older.whole, &newer.whole),
+        (DropComparison::PressRegion, &older.press, &newer.press),
+    ] {
+        let (unchanged, milli) = frame_unchanged(old, new)?;
+        if !unchanged {
+            return Ok(Some((comparison, milli)));
+        }
+    }
+    Ok(None)
+}
+
+/// #463 S2-7: the frame a step was pressed on, as the step table records it (its click's or its
+/// application operation's `before_frame`), else its live primary frame: the screen a run meets the
+/// step on.
+fn screen_before(step: &RecordingStep) -> Option<&str> {
+    step.click
+        .as_ref()
+        .and_then(|click| click.execution.as_ref())
+        .and_then(|execution| execution.before_frame.as_deref())
+        .or_else(|| {
+            step.application
+                .as_ref()
+                .and_then(|application| application.executed.as_ref())
+                .and_then(|executed| executed.before_frame.as_deref())
+        })
+        .or_else(|| live_primary(step).map(|frame| frame.frame_id.as_str()))
+}
+
+/// #463 S2-7: the stored frame `frame` read back once with its sha256 checked
+/// (`record_frame_hash_mismatch`), and (fix round 1) its two frame-change digests: of the whole
+/// frame ([`change_digest`], stage one's) and of the neighbourhood of the press `region`, by the same
+/// measure over that region (`frame_change_digest`); a digest that cannot be made is
+/// `record_frame_unreadable`, as there.
+fn stored_digests(frame: &RecordedFrame, region: Rect) -> LabResult<ScreenDigests> {
+    let loaded = read_stored_frame(frame)?;
+    let label = format!("frame {}", frame.frame_id);
+    let whole = change_digest(&loaded, &label)?;
+    let press = frame_change_digest(&loaded.scene, Some(region)).map_err(|error| {
+        invalid(
+            "record_frame_unreadable",
+            format!(
+                "failed to digest the neighbourhood of the press on {label} for the frame-change \
+                 measure: {error}"
+            ),
+        )
+    })?;
+    Ok(ScreenDigests { whole, press })
+}
+
+/// #463 S2-7: `details` with the frame-change measure's value of the two frames compared.
+fn with_change(mut details: Value, milli: u32) -> Value {
+    if let Some(object) = details.as_object_mut() {
+        object.insert("frame_change_milli".to_owned(), json!(milli));
+    }
+    details
+}
+
+/// #463 S2-7: `record_drop_unproven` with why, for step `step`, its details carrying the outcome
+/// with `drop_problem` and the members of `extra`. Fix round 1: with the `drop_comparison` that
+/// showed a change (`comparison`), in the details and in the outcome.
+fn drop_unproven(
+    problem: DropProblem,
+    comparison: Option<DropComparison>,
+    step: u32,
+    message: String,
+    extra: Value,
+) -> LabError {
+    let mut outcome = Outcome::new(LabCode::RecordDropUnproven).drop_problem(problem);
+    if let Some(comparison) = comparison {
+        outcome = outcome.drop_comparison(comparison);
+    }
+    let mut details = json!({
+        "step": step,
+        "drop_problem": problem.as_str(),
+        "outcome": outcome.envelope(Detail::Full)
+    });
+    if let Some(object) = details.as_object_mut() {
+        if let Some(comparison) = comparison {
+            object.insert("drop_comparison".to_owned(), json!(comparison.as_str()));
+        }
+        if let Some(extra) = extra.as_object() {
+            for (name, value) in extra {
+                object.insert(name.clone(), value.clone());
+            }
+        }
+    }
+    with_details(
+        blocked(LabCode::RecordDropUnproven.as_str(), message),
+        details,
+    )
+}
+
+/// #463 S2-7 (`contracts/lab-recording.md`, "Steps, frames and remediation"): `restore_step` undoes
+/// `drop_step`: step `index`, a dropped step, is effective again and the step table is what it was
+/// before the drop, when nothing else changed in between. Its marks take their ids and template
+/// asset names back, so an id or an asset name another mark took since is refused as a new mark's
+/// is, by the one check `add_marks` makes ([`claim_mark_ids`]: `record_mark_id_conflict`;
+/// [`claim_asset_name`]: `record_asset_name_conflict`); fix round 1 (the coordinator's ruling R2,
+/// review (k)): a mark it reuses (on its page or its page transition) or forbids that is no longer a
+/// step mark of an effective step is refused as the mark path refuses a missing source,
+/// `record_mark_rejected` with `reuse_source_missing` or `forbidden_source_missing` for each, so
+/// that the fault is told here and not by the next command; a step that is no dropped step is
+/// `record_step_not_found`. Nothing is changed on a refusal.
+fn restore_step(recording: &mut LabRecording, index: u32) -> LabResult<()> {
+    let step = step_ref(recording, index)
+        .filter(|step| step.dropped)
+        .ok_or_else(|| {
+            with_details(
+                blocked(
+                    "record_step_not_found",
+                    format!(
+                        "step {index} is no dropped step of the recording; restore_step gives back \
+                         a step drop_step dropped"
+                    ),
+                ),
+                json!({"step": index}),
+            )
+        })?;
+    let (transition_marks, transition_reused) = match &step.transition {
+        Some(StepTransition::Page { marks, reused, .. }) => (marks.as_slice(), reused.as_slice()),
+        _ => (&[][..], &[][..]),
+    };
+    let mut in_use = ids_in_use(recording, &BTreeSet::new());
+    let mut assets = template_assets(recording);
+    for mark in step.marks.iter().chain(transition_marks) {
+        claim_mark_ids(&mut in_use, &mark.target_ids())?;
+        if let Some(crop) = &mark.crop {
+            claim_asset_name(&mut assets, &mark.id, &crop.asset)?;
+        }
+    }
+    let sources = step
+        .reused
+        .iter()
+        .chain(transition_reused)
+        .map(|id| (id, "reuse_source_missing"))
+        .chain(
+            step.forbidden
+                .iter()
+                .map(|id| (id, "forbidden_source_missing")),
+        )
+        .collect::<Vec<_>>();
+    let missing = sources
+        .iter()
+        .filter(|(id, _)| find_step_mark(recording, id).is_none())
+        .map(|(id, word)| MarkRejection::new(id, word, json!({})))
+        .collect::<Vec<_>>();
+    if !missing.is_empty() {
+        return Err(rejected(&missing, sources.len()));
+    }
+    step_mut(recording, index)?.dropped = false;
+    Ok(())
+}
+
+/// #463 stage two, train, fix round (`contracts/lab-recording.md`, "Steps, frames and
+/// remediation"): whether `step` holds a choice: marked as holding one (#463 S2-6) or refined by a
+/// select (#463 R1).
+fn holds_choice(step: &RecordingStep) -> bool {
+    step.choice.is_some() || step.select.is_some()
+}
+
+/// #463 stage two, train, fix round: `drop_step` names step `index`, which holds a choice (the
+/// coordinator's ruling: a press that chose the item already selected changes nothing on the
+/// screen and still matters to a run handed another value); nothing is written.
+fn drop_of_choice(index: u32) -> LabError {
+    select_invalid(
+        Some(index),
+        SelectProblem::DropOfChoice,
+        format!(
+            "step {index} holds a choice (it is marked as holding one, or a select refines it), and \
+             a step that holds a choice is not dropped: its press may have chosen the item already \
+             selected, which changes nothing on the screen and still matters to a run handed \
+             another value; to drop it, withdraw the choice first (record mark --step {index} with \
+             choice false where the step carries the mark, and clear_select where a select refines \
+             it), then drop the step; nothing was written"
+        ),
+    )
+}
+
+/// #463 stage two, train, fix round: `to_transition` names step `index`, which holds a choice; a
+/// page transition holds none, so the conversion would lose it; nothing is written.
+fn transition_of_choice(index: u32) -> LabError {
+    select_invalid(
+        Some(index),
+        SelectProblem::TransitionOfChoice,
+        format!(
+            "step {index} holds a choice (it is marked as holding one, or a select refines it), and \
+             a page transition holds no choice, so converting the step would lose it; withdraw the \
+             choice first (record mark --step {index} with choice false where the step carries the \
+             mark, and clear_select where a select refines it), then convert the step; nothing was \
+             written"
+        ),
+    )
 }
 
 fn to_transition_invalid(index: u32, reason: &str) -> LabError {
@@ -3358,6 +4890,11 @@ fn to_transition(recording: &mut LabRecording, index: u32) -> LabResult<()> {
     }
     if target.transition.is_some() {
         return Err(to_transition_invalid(index, "previous_step_has_transition"));
+    }
+    // #463 stage two, train, fix round: a step that holds a choice is not converted, after every
+    // other refusal of the conversion (a select step has its click, `step_has_effect` above).
+    if holds_choice(step) {
+        return Err(transition_of_choice(index));
     }
     let step = step_mut(recording, index)?;
     let mut frames = std::mem::take(&mut step.frames);
@@ -3560,13 +5097,21 @@ fn plan_swipe(
     let inside = recording
         .coordinate_space
         .is_some_and(|size| rect_inside(from, size) && rect_inside(to, size));
+    // #463 S1-1 fix round 2: the refusals name their argument and reason, as a tap's do
+    // (`plan_point`).
     if !inside {
         return Err(with_details(
             invalid(
                 "validation_failed",
                 "--swipe must start and end inside the frame",
             ),
-            json!({"step": index, "swipe_from": swipe.from, "swipe_to": swipe.to}),
+            json!({
+                "step": index,
+                "argument": "point",
+                "reason": "outside_frame",
+                "swipe_from": swipe.from,
+                "swipe_to": swipe.to
+            }),
         ));
     }
     if !(1..=LAB_RECORDING_MAX_GESTURE_MS).contains(&swipe.duration_ms) {
@@ -3575,7 +5120,12 @@ fn plan_swipe(
                 "validation_failed",
                 format!("--swipe must last 1..={LAB_RECORDING_MAX_GESTURE_MS} ms"),
             ),
-            json!({"step": index, "duration_ms": swipe.duration_ms}),
+            json!({
+                "step": index,
+                "argument": "duration_ms",
+                "reason": "duration_range",
+                "duration_ms": swipe.duration_ms
+            }),
         ));
     }
     Ok(super::model::ClickPlan {
@@ -3595,8 +5145,148 @@ fn plan_swipe(
     })
 }
 
-/// Workflow #449 REC-ARCH: the `source` of a click a recorded swipe declared.
-const SWIPE_SOURCE: &str = "swipe";
+/// Workflow #449 REC-ARCH: the `source` of a click a recorded swipe declared. #463 S2-1: `record
+/// ready` reads it as a press stage one recorded.
+pub(crate) const SWIPE_SOURCE: &str = "swipe";
+
+/// #463 S1-1: the `source` of a click a tap or a long press declared by its point. #463 S2-1:
+/// `record ready` reads it as a press stage one recorded.
+pub(crate) const POINT_SOURCE: &str = "point";
+
+/// #463 S1-1 (`contracts/lab-recording.md`, "Recording while playing"): the press of `tap`,
+/// `swipe` or `long-tap --record` on the open step, which must declare no effect. A tap or a long
+/// press declares a box of one pixel at its point ([`plan_point`]); a swipe is today's recorded
+/// swipe, planned by [`plan_click`] (a drag between boxes of one pixel at its two points,
+/// `source: "swipe"`). A step that declares an application operation is
+/// `record_step_effect_exists`, one whose click has an outcome on record `record_click_executed`,
+/// and one that declares a click without one `record_click_exists`: such a step is pressed with
+/// `do --capture --record`. Every refusal comes before anything is pressed.
+pub(crate) fn plan_press(
+    recording: &LabRecording,
+    click: &super::model::PlanClickRequest,
+    point_press: Option<super::model::PointPress>,
+) -> LabResult<super::model::ClickPlan> {
+    let index = open_step(recording).ok_or_else(|| {
+        blocked(
+            "record_step_frame_missing",
+            "there is no open step; record its frame with capture --record first",
+        )
+    })?;
+    let step = effective_step(recording, index)?;
+    if step.application.is_some() {
+        return Err(effect_exists(
+            index,
+            "application",
+            "a press needs a step of its own: execute the operation with `session app <action> \
+             --record` or close the step with `record mark --close-step`, then press",
+        ));
+    }
+    if let Some(declared) = &step.click {
+        if declared.execution.is_some() {
+            return Err(with_details(
+                blocked(
+                    "record_click_executed",
+                    format!(
+                        "the click of step {index} already has an outcome on record; run \
+                         `record mark --reopen-step {index}` to execute it again or \
+                         `record mark --close-step` to accept it"
+                    ),
+                ),
+                json!({"step": index}),
+            ));
+        }
+        return Err(with_details(
+            blocked(
+                "record_click_exists",
+                format!(
+                    "step {index} already declares a click; press it with `do --capture \
+                     --record`, or replace it first with `record mark --replace-click`; nothing \
+                     was pressed"
+                ),
+            ),
+            json!({"step": index}),
+        ));
+    }
+    match point_press {
+        Some(press) => plan_point(recording, index, press),
+        None => plan_click(recording, click),
+    }
+}
+
+/// #463 S1-1: a tap or a long press by its point on the open step `index`, which declares no
+/// effect: the box of one pixel at the point, `rect {x, y, 1, 1}`, `source: "point"`, rule
+/// `explicit`; a long press with `gesture{kind: "long_press", duration_ms}`, ending where it
+/// began. The point lies inside the frame and a long press lasts 1..=60000 ms, else
+/// `validation_failed` with `details{argument, reason}` (`point`, `outside_frame`;
+/// `duration_ms`, `duration_range`).
+fn plan_point(
+    recording: &LabRecording,
+    index: u32,
+    press: super::model::PointPress,
+) -> LabResult<super::model::ClickPlan> {
+    use super::model::PointPress;
+    let (point, gesture) = match press {
+        PointPress::Tap { point } => (point, None),
+        PointPress::LongPress { point, duration_ms } => {
+            (point, Some(ClickGesture::LongPress { duration_ms }))
+        }
+    };
+    let rect = RecordRect {
+        x: point.x,
+        y: point.y,
+        width: 1,
+        height: 1,
+    };
+    if !recording
+        .coordinate_space
+        .is_some_and(|size| rect_inside(rect, size))
+    {
+        return Err(with_details(
+            invalid(
+                "validation_failed",
+                format!(
+                    "the point {},{} must lie inside the frame of the recording",
+                    point.x, point.y
+                ),
+            ),
+            json!({
+                "step": index,
+                "argument": "point",
+                "reason": "outside_frame",
+                "point": point,
+                "coordinate_space": recording.coordinate_space
+            }),
+        ));
+    }
+    if let Some(gesture) = gesture
+        && !(1..=LAB_RECORDING_MAX_GESTURE_MS).contains(&gesture.duration_ms())
+    {
+        return Err(with_details(
+            invalid(
+                "validation_failed",
+                format!("a long press must last 1..={LAB_RECORDING_MAX_GESTURE_MS} ms"),
+            ),
+            json!({
+                "step": index,
+                "argument": "duration_ms",
+                "reason": "duration_range",
+                "duration_ms": gesture.duration_ms()
+            }),
+        ));
+    }
+    Ok(super::model::ClickPlan {
+        record_id: recording.record_id.clone(),
+        step: index,
+        rect,
+        point,
+        point_rule: "explicit".to_string(),
+        source: POINT_SOURCE.to_string(),
+        declares_click: true,
+        gesture,
+        to_point: gesture.map(|_| point),
+        sampling: None,
+    })
+}
 
 /// Workflow #406 T4: a recorded click's rectangle as a drawn box.
 fn pack_rect(rect: RecordRect) -> PackRect {
@@ -3785,11 +5475,18 @@ fn gesture_execution_unsupported(index: u32, gesture: ClickGesture) -> LabError 
     )
 }
 
-/// Records the Runtime outcome of a planned click on its step.
+/// Records the Runtime outcome of a planned click on its step. #463 S1-1: with `names_frames` (a
+/// press recorded by the command that makes it, `record_press`), the execution names the step's
+/// live primary frame as its `before_frame`, and the frame after it becomes its `after_frame`
+/// ([`name_after_frame`]); `do --capture --record` names none. Fix round 3: beside
+/// `before_frame`, `sent_on_unstored_capture` when such a press was sent on a capture its command
+/// did not store (`record_press` hands it; every other caller passes `false`).
 pub(crate) fn commit_click(
     recording: &mut LabRecording,
     plan: &super::model::ClickPlan,
     request: &super::model::CommitClickRequest,
+    names_frames: bool,
+    sent_on_unstored_capture: bool,
 ) -> LabResult<(StepClick, bool)> {
     use super::model::ClickEffect;
     if recording.record_id != plan.record_id || open_step(recording) != Some(plan.step) {
@@ -3803,6 +5500,11 @@ pub(crate) fn commit_click(
     }
     let now = now_unix_ms();
     let step = step_mut(recording, plan.step)?;
+    let before_frame = if names_frames {
+        live_primary(step).map(|frame| frame.frame_id.clone())
+    } else {
+        None
+    };
     if plan.declares_click {
         step.click = Some(StepClick {
             rect: plan.rect,
@@ -3844,6 +5546,10 @@ pub(crate) fn commit_click(
         to_point: plan.to_point,
         duration_ms: plan.gesture.map(ClickGesture::duration_ms),
         sampling: plan.sampling.clone(),
+        before_frame,
+        after_frame: None,
+        after_capture: None,
+        sent_on_unstored_capture,
     });
     if performed {
         click.needs_review = request.has_failure;
@@ -3863,9 +5569,9 @@ pub(crate) fn plan_application(
     request: &super::model::PlanApplicationRequest,
 ) -> LabResult<super::model::ApplicationPlan> {
     let action = application_action(&request.verb)?;
-    let hint = "one step has one effect: capture and mark the next screen with capture --record \
-                first, or replace a declared effect with `record mark --application <action> \
-                --replace-click`";
+    let hint = "one step has one effect: capture the next screen with capture --record first (no \
+                mark is needed), or replace a declared effect with `record mark --application \
+                <action> --replace-click`";
     let plan = |step: u32, opens_entry_step: bool| super::model::ApplicationPlan {
         record_id: recording.record_id.clone(),
         step,
@@ -3896,14 +5602,17 @@ pub(crate) fn plan_application(
         // The operation would land on an optional step (Workflow #339): refused before any
         // request, as `record mark --application` is.
         _ if step.optional.is_some() => Err(optional_application(index, action)),
-        (None, Some(_)) => Ok(plan(index, false)),
-        (None, None) if !has_marks(step) => Err(application_marks_missing(index)),
-        (None, None) => Ok(plan(index, false)),
+        // #463 S1-3: the open step's effect, its marks or none (their check is `record stop`'s).
+        (None, _) => Ok(plan(index, false)),
     }
 }
 
 /// Records the Runtime result of a planned application operation. Performed: the completed
-/// receipt is the step's executed effect and closes it (`closed_by:"application"`).
+/// receipt is the step's executed effect and closes it (`closed_by:"application"`); #463 S1-3: it
+/// names the step's live primary frame as its `before_frame` (none on the entry step), and its
+/// screen after becomes its `after_frame` ([`name_after_frame`]: the last capture of its after
+/// loop, or, when that loop stored nothing, the first frame that opens a step after it); #463
+/// S1-5: and it is stamped `executed_at_unix_ms`, on the clock a click's execution is stamped with.
 /// Indeterminate: the step declares the operation with one more attempt and stays open.
 /// Returns the step's application, whether it was opened and whether it was closed.
 pub(crate) fn commit_application(
@@ -3933,6 +5642,7 @@ pub(crate) fn commit_application(
         recording.steps.push(new_step(plan.step, Vec::new()));
     }
     let step = step_mut(recording, plan.step)?;
+    let before_frame = live_primary(step).map(|frame| frame.frame_id.clone());
     let application = step.application.get_or_insert_with(|| StepApplication {
         action: plan.action.clone(),
         cli_verb: plan.cli_verb.clone(),
@@ -3943,7 +5653,11 @@ pub(crate) fn commit_application(
     });
     let performed = match request {
         CommitApplicationRequest::Performed(execution) => {
-            application.executed = Some(execution.clone());
+            application.executed = Some(super::model::ApplicationExecution {
+                before_frame,
+                executed_at_unix_ms: Some(now_unix_ms()),
+                ..execution.clone()
+            });
             application.source = "executed".to_string();
             application.cli_verb = plan.cli_verb.clone();
             true

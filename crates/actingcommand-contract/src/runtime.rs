@@ -16,17 +16,16 @@ use crate::codes::{ReceiptCode, RuntimeContractCode, SharedCode};
 use crate::outcome::{Category, Code, Detail, Location, Outcome, OutcomeEnvelope};
 use crate::{
     ActionId, AgentSessionContext, AgentSessionId, AgentSessionResponse, AgentSessionStatus,
-    AgentWakeId, ApprovalDecisionRecord, ApprovalDisposition, ArtifactKind, ArtifactLinksDraft,
-    ArtifactMediaType, ArtifactRedactionState, CatalogProposal, CausationId, ClientActionRecord,
-    CorrelationId, EffectDisposition, EventActor, EventId, EventLinksDraft, EventQuery,
-    EventSource, EventType, EvidenceCompleteness, FactRecord, FactScope, FrameId, HolderId,
-    IdentifierIssuanceError, IdentifierIssuer, InstanceId, IssuedCausationId, IssuedCorrelationId,
-    IssuedFrameId, IssuedHolderId, IssuedRecognitionId, IssuedRequestId, IssuedRunId, IssuedTaskId,
-    LeaseId, OwnerEpoch, ProjectInterfaceRequest, ProjectInterfaceResponse,
-    ProjectedArtifactReference, ProjectedEvent, ProjectionProfile, ProposalPreview,
-    ProposalPromotion, RecognitionId, RecognitionVerdict, RequestId, ResourceAuthoringPhase, RunId,
-    RuntimeMonitorInstanceStatus, RuntimeMonitorPolicy, RuntimeMonitorRegistryStatus,
-    SubscriptionCursor, TaskOutcome,
+    AgentWakeId, ArtifactKind, ArtifactLinksDraft, ArtifactMediaType, ArtifactRedactionState,
+    CatalogProposal, CausationId, ClientActionRecord, CorrelationId, EffectDisposition, EventActor,
+    EventId, EventLinksDraft, EventQuery, EventSource, EventType, EvidenceCompleteness, FactRecord,
+    FactScope, FrameId, HolderId, IdentifierIssuanceError, IdentifierIssuer, InstanceId,
+    IssuedCausationId, IssuedCorrelationId, IssuedFrameId, IssuedHolderId, IssuedRecognitionId,
+    IssuedRequestId, IssuedRunId, IssuedTaskId, LeaseId, OwnerEpoch, ProjectInterfaceRequest,
+    ProjectInterfaceResponse, ProjectedArtifactReference, ProjectedEvent, ProjectionProfile,
+    ProposalPreview, ProposalPromotion, RecognitionId, RecognitionVerdict, RequestId,
+    ResourceAuthoringPhase, RunId, RuntimeMonitorInstanceStatus, RuntimeMonitorPolicy,
+    RuntimeMonitorRegistryStatus, SubscriptionCursor, TaskOutcome,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -97,7 +96,10 @@ pub use goals::*;
 // member, raises `min` to 4. Revision 8 (Workflow #434 LAB-6S1a, since 0.12.58): the optional
 // `initiator` of `BindChannel`, `ChannelBound` and the receipt, declared [3, 8]. Revision 9
 // (Workflow #463 V3, since 0.12.61): the request kinds `GoalView` and `EditGoal` with their results
-// (`goals.rs`), declared [3, 9].
+// (`goals.rs`), declared [3, 9]. Revision 10 (Workflow #437 G1 fix round 2, since 0.12.67): the
+// status member `RuntimeInstanceStatus.device_held` (`InstanceDeviceHeld`), declared [3, 10].
+// Revision 11 (Workflow #463 S3-8, since 0.12.68): the request member
+// `ContainedTaskRequest.variables`, declared [3, 11].
 pub const RUNTIME_REQUEST_SCHEMA_VERSION: &str = "actingcommand.runtime.request.v4";
 pub const RUNTIME_RECEIPT_SCHEMA_VERSION: &str = "actingcommand.runtime.receipt.v2";
 pub const RUNTIME_INFO_SCHEMA_VERSION: &str = "actingcommand.runtime.info.v1";
@@ -1651,6 +1653,11 @@ pub struct RuntimeInstanceStatus {
     /// self-check proves the close.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     resource_fence: Option<InstanceResourceFence>,
+    /// Workflow #437 G1 fix rounds 1 and 2 (register §1.433, `runtime-client` 10): the instance
+    /// is a member of a device group of several whose device is held for another member's
+    /// unconfirmed close; absent otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    device_held: Option<InstanceDeviceHeld>,
     /// Workflow #390 九处-1: the emulator's running state as the Runtime last read it; always
     /// answered, `{"state": "unknown"}` without a reading.
     #[serde(default)]
@@ -1741,6 +1748,29 @@ pub enum LadderBusyHoldKind {
     ScreenChanging,
 }
 
+/// Workflow #437 G1 fix round 1 (register §1.433; `contracts/device-group.md`, "A failure stays
+/// where it belongs"): why a member of a device group of several is given no device while another
+/// member's fence holds it. `device_group_wait` is the word the member's dispatch waits with
+/// (`device_group_waiting`), `alias` the member the device is held for. Memory only: read from the
+/// fences at the status read. Interface anchor `runtime-client` revision 10
+/// (contracts/component-interfaces.md): a reader of 9 or lower refuses a status that carries it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InstanceDeviceHeld {
+    pub device_group_wait: DeviceHeldWait,
+    pub alias: String,
+}
+
+/// The cause of an [`InstanceDeviceHeld`], spelled as the word of the vocabulary
+/// `device_group_wait` that the dispatch gives for it. `close_unconfirmed`: the other member's
+/// fence met an unconfirmed close of its own resources, and the device is held for it until that
+/// fence is lifted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeviceHeldWait {
+    CloseUnconfirmed,
+}
+
 impl RuntimeInstanceStatus {
     pub fn new(
         instance_alias: impl Into<String>,
@@ -1766,6 +1796,7 @@ impl RuntimeInstanceStatus {
             game_id: None,
             pause: None,
             resource_fence: None,
+            device_held: None,
             emulator_state: EmulatorRunningState::Unknown,
             ladder_busy_hold: None,
             activity: None,
@@ -1904,6 +1935,16 @@ impl RuntimeInstanceStatus {
 
     pub const fn resource_fence(&self) -> Option<&InstanceResourceFence> {
         self.resource_fence.as_ref()
+    }
+
+    /// Workflow #437 G1 fix round 1: this status with the member its device is held for.
+    pub fn with_device_held(mut self, device_held: Option<InstanceDeviceHeld>) -> Self {
+        self.device_held = device_held;
+        self
+    }
+
+    pub const fn device_held(&self) -> Option<&InstanceDeviceHeld> {
+        self.device_held.as_ref()
     }
 
     /// Workflow #390 九处-1: this status with the emulator's running state as the Runtime last
@@ -2783,6 +2824,14 @@ pub struct ContainedTaskRequest {
     recovery: Option<ContainedTaskRecoveryBinding>,
     #[serde(default = "default_contained_task_response_deadline_ms")]
     response_deadline_ms: u64,
+    /// Workflow #463 S3-8 (register §1.444, since 0.12.68; `runtime-client` 11;
+    /// `contracts/runtime-interface.md`, "The variable values of a contained run"): the values a
+    /// direct run reads for variables its package declares, by name (`{name: json}`), each judged
+    /// by the host before the run's admission as a dispatch judges a value; a variable not named
+    /// reads its default. Absent when empty, so a request without values serializes, and is
+    /// answered, as before.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    variables: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
 const fn default_contained_task_response_deadline_ms() -> u64 {
@@ -2798,6 +2847,7 @@ impl ContainedTaskRequest {
             package_path: package_path.into(),
             recovery: None,
             response_deadline_ms: Self::DEFAULT_RESPONSE_DEADLINE_MS,
+            variables: std::collections::BTreeMap::new(),
         };
         request.validate()?;
         Ok(request)
@@ -2818,6 +2868,23 @@ impl ContainedTaskRequest {
         if !(1..=Self::MAX_RESPONSE_DEADLINE_MS).contains(&self.response_deadline_ms) {
             return Err(RuntimeContractError::new(
                 RuntimeContractCode::InvalidContainedTaskResponseDeadline,
+            ));
+        }
+        // Workflow #463 S3-8: at most as many values as a package can declare variables, each
+        // under a name of a variable's form (1 to 64 bytes of `[a-z][a-z0-9_]*`); the host judges
+        // the rest against the package.
+        if self.variables.len() > crate::MAX_PACKAGE_VARIABLES {
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InvalidContainedTaskVariableCount,
+            ));
+        }
+        if !self
+            .variables
+            .keys()
+            .all(|name| crate::remedy_token_valid(name))
+        {
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InvalidContainedTaskVariableName,
             ));
         }
         Ok(())
@@ -2852,6 +2919,24 @@ impl ContainedTaskRequest {
         self.validate()?;
         Ok(self)
     }
+
+    /// Workflow #463 S3-8: the values the run is to read for variables of its package, by name;
+    /// empty for a run that reads every default.
+    pub const fn variables(&self) -> &std::collections::BTreeMap<String, serde_json::Value> {
+        &self.variables
+    }
+
+    /// Workflow #463 S3-8: this request with the values `variables`, by name; more than
+    /// [`crate::MAX_PACKAGE_VARIABLES`] of them are `invalid_contained_task_variable_count`, a
+    /// name outside a variable's form `invalid_contained_task_variable_name`.
+    pub fn with_variables(
+        mut self,
+        variables: std::collections::BTreeMap<String, serde_json::Value>,
+    ) -> RuntimeContractResult<Self> {
+        self.variables = variables;
+        self.validate()?;
+        Ok(self)
+    }
 }
 
 impl fmt::Debug for ContainedTaskRequest {
@@ -2861,6 +2946,7 @@ impl fmt::Debug for ContainedTaskRequest {
             .field("package_path", &"<redacted-path>")
             .field("recovery", &self.recovery)
             .field("response_deadline_ms", &self.response_deadline_ms)
+            .field("variables", &self.variables)
             .finish()
     }
 }
@@ -3795,10 +3881,6 @@ pub enum RuntimeOperation {
     RequestShutdown {
         target: RuntimeShutdownTarget,
     },
-    InstallTransition {
-        target: RuntimeShutdownTarget,
-        action: crate::InstallTransitionAction,
-    },
     Status,
     ProjectInterface {
         request: ProjectInterfaceRequest,
@@ -4023,14 +4105,6 @@ pub enum RuntimeOperation {
     RecordClientAction {
         action: ClientActionRecord,
     },
-    /// Declares who this connection is for governance writes (Workflow #318 cfg4). The
-    /// actor and source stay on the request envelope; the card never repeats them.
-    DeclareGovernanceIdentity {
-        card: GovernanceIdentityCard,
-    },
-    RecordApprovalDecision {
-        decision: ApprovalDecisionRecord,
-    },
     StartAgentSession {
         wake_id: AgentWakeId,
     },
@@ -4108,17 +4182,6 @@ pub enum RuntimeOperation {
         via: Option<ChannelVia>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         initiator: Option<DeclaredInitiator>,
-    },
-    /// The upgrade state (section 3.6, install-control revision 2; U-4): the installer's
-    /// instruction family for an upgrade. `target` is the Runtime it is meant for, as in
-    /// `InstallTransition`.
-    UpgradeState {
-        target: RuntimeShutdownTarget,
-        action: crate::UpgradeStateAction,
-    },
-    /// Reads the phase of one upgrade state from memory and records nothing (section 3.6; U-4).
-    UpgradeStateStatus {
-        transition_id: String,
     },
     /// Puts one package into the loaded-package table, in memory only (section 6; U-3).
     LoadPack {
@@ -4286,10 +4349,6 @@ impl RuntimeOperation {
     pub fn validate(&self) -> RuntimeContractResult<()> {
         match self {
             Self::RequestShutdown { target } => target.validate(),
-            Self::InstallTransition { target, action } => {
-                target.validate()?;
-                action.validate()
-            }
             Self::Health
             | Self::Status
             | Self::MonitorStatus
@@ -4351,10 +4410,6 @@ impl RuntimeOperation {
             Self::PublishFacts { observation } => observation
                 .validate()
                 .map_err(|error| RuntimeContractError::new(error.code())),
-            Self::DeclareGovernanceIdentity { card } => card.validate(),
-            Self::RecordApprovalDecision { decision } => decision.validate().map_err(|_| {
-                RuntimeContractError::new(RuntimeContractCode::InvalidApprovalDecision)
-            }),
             Self::StartAgentSession { .. }
             | Self::ResumeAgentSession { .. }
             | Self::AgentSessionStatus { .. } => Ok(()),
@@ -4561,13 +4616,6 @@ impl RuntimeOperation {
             // Workflow #389 U-1: the package entries' checks come with U-3's `pack_registry_`
             // codes.
             Self::LoadPack { .. } | Self::UnloadPack { .. } => Ok(()),
-            Self::UpgradeState { target, action } => {
-                target.validate()?;
-                action.validate()
-            }
-            Self::UpgradeStateStatus { transition_id } => {
-                crate::installation::validate_transition_id(transition_id)
-            }
         }
     }
 
@@ -4615,7 +4663,6 @@ impl fmt::Debug for RuntimeOperation {
         formatter.write_str(match self {
             Self::Health => "RuntimeOperation::Health",
             Self::RequestShutdown { .. } => "RuntimeOperation::RequestShutdown",
-            Self::InstallTransition { .. } => "RuntimeOperation::InstallTransition",
             Self::Status => "RuntimeOperation::Status",
             Self::ProjectInterface { .. } => {
                 "RuntimeOperation::ProjectInterface(<version-negotiation>)"
@@ -4695,12 +4742,6 @@ impl fmt::Debug for RuntimeOperation {
             Self::RecordClientAction { .. } => {
                 "RuntimeOperation::RecordClientAction(<typed-redacted-action>)"
             }
-            Self::DeclareGovernanceIdentity { .. } => {
-                "RuntimeOperation::DeclareGovernanceIdentity(<identity-card>)"
-            }
-            Self::RecordApprovalDecision { .. } => {
-                "RuntimeOperation::RecordApprovalDecision(<typed-approval>)"
-            }
             Self::StartAgentSession { .. } => "RuntimeOperation::StartAgentSession(<opaque-wake>)",
             Self::ResumeAgentSession { .. } => {
                 "RuntimeOperation::ResumeAgentSession(<opaque-session>)"
@@ -4728,8 +4769,6 @@ impl fmt::Debug for RuntimeOperation {
             Self::ResourceTargetView { .. } => "RuntimeOperation::ResourceTargetView(<redacted>)",
             Self::ConfigureSettings { .. } => "RuntimeOperation::ConfigureSettings(<redacted>)",
             Self::BindChannel { .. } => "RuntimeOperation::BindChannel(<channel>)",
-            Self::UpgradeState { .. } => "RuntimeOperation::UpgradeState(<transition>)",
-            Self::UpgradeStateStatus { .. } => "RuntimeOperation::UpgradeStateStatus(<transition>)",
             Self::LoadPack { .. } => "RuntimeOperation::LoadPack(<redacted>)",
             Self::UnloadPack { .. } => "RuntimeOperation::UnloadPack(<redacted>)",
             Self::RunInstanceTask { .. } => "RuntimeOperation::RunInstanceTask(<redacted>)",
@@ -4832,7 +4871,7 @@ impl RuntimeRequest {
         // transition, authoring, signatures, debugging, governance, emulator control, scheduling
         // pause, the agent wake test, fact publication by family, the agent dispatcher's kinds,
         // the player hold) are gone; the host's own checks of the governance and installation
-        // kinds stay with those kinds.
+        // kinds went with those kinds (Workflow #434 LAB-6S4a, 0.12.63).
         if !valid_client_origin(self.actor, self.source) {
             return Err(RuntimeContractError::new(
                 RuntimeContractCode::InvalidClientOrigin,
@@ -5382,9 +5421,6 @@ impl IdentifierIssuer {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RuntimeResult {
-    InstallTransition {
-        status: crate::InstallTransitionStatus,
-    },
     ShutdownAccepted {
         target: RuntimeShutdownTarget,
     },
@@ -5614,11 +5650,6 @@ pub enum RuntimeResult {
         release: Box<crate::LabPinReleaseResult>,
     },
     ClientActionRecorded,
-    GovernanceIdentityAccepted,
-    ApprovalDecisionRecorded {
-        approval_id: String,
-        disposition: ApprovalDisposition,
-    },
     AgentSessionOpened {
         context: Box<AgentSessionContext>,
     },
@@ -5673,16 +5704,6 @@ pub enum RuntimeResult {
         via: Option<ChannelVia>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         initiator: Option<Initiator>,
-    },
-    /// `UpgradeState`: the transition after the step, its ticket included (U-4). An accepted
-    /// `enter` answers drained, having accepted its own shutdown; `cancel` answers aborted;
-    /// `leave` answers released.
-    UpgradeState {
-        status: crate::InstallTransitionStatus,
-    },
-    /// `UpgradeStateStatus`: the transition's current phase (U-4).
-    UpgradeStateStatus {
-        status: crate::InstallTransitionStatus,
     },
     /// `LoadPack`: the entry now in the table (U-3). For a procedure binding,
     /// `named_by_catalog` says whether a task of the catalog names it: a binding no task names
@@ -6247,18 +6268,6 @@ impl RuntimeReceipt {
                     ));
                 }
             }
-            Some(RuntimeResult::InstallTransition { status }) => {
-                status.validate()?;
-                if self.state != RuntimeReceiptState::Completed {
-                    return Err(RuntimeContractError::new(
-                        RuntimeContractCode::InvalidInstallTransitionReceipt,
-                    ));
-                }
-            }
-            Some(
-                RuntimeResult::UpgradeState { status }
-                | RuntimeResult::UpgradeStateStatus { status },
-            ) => status.validate()?,
             Some(RuntimeResult::Status { status }) => status.validate()?,
             // Workflow #429 R-7a: a completed receipt whose result keeps its own shape.
             Some(RuntimeResult::PlayerHoldAcquired(acquired)) => {
@@ -6779,10 +6788,11 @@ pub fn validate_instance_alias(value: &str) -> RuntimeContractResult<()> {
 }
 
 /// A governance connection's declarative identity card (Workflow #318 cfg4): the connecting
-/// client says who it is instead of presenting a shared secret. The Runtime verifies the card
-/// against its governance policy and records every declaration, accepted or refused, as a
+/// client said who it was instead of presenting a shared secret. The Runtime verified the card
+/// against its governance policy and recorded every declaration, accepted or refused, as a
 /// `governance.identity_declared` event. Actor and source are the request envelope's and are
-/// never repeated here.
+/// never repeated here. Workflow #434 LAB-6S4a (0.12.63): the request that declared it is gone;
+/// the card stays as the shape of the records a ledger already holds.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GovernanceIdentityCard {
@@ -6832,15 +6842,6 @@ pub fn validate_governance_client(client: &str) -> RuntimeContractResult<()> {
     Ok(())
 }
 
-/// The origins that may declare a governance identity card: the person at the console
-/// (User, Ui) and the operator (Cli, Cli).
-pub const fn valid_governance_declaration_origin(actor: EventActor, source: EventSource) -> bool {
-    matches!(
-        (actor, source),
-        (EventActor::User, EventSource::Ui) | (EventActor::Cli, EventSource::Cli)
-    )
-}
-
 /// Bound of the configured game identifier a status instance carries (the scheduling
 /// identifier bound).
 const MAX_STATUS_GAME_ID_BYTES: usize = 128;
@@ -6880,3 +6881,11 @@ mod gate_434_lab6s1a;
 // Workflow #434 LAB-6S1b: `validate()` judges no request by its origin.
 #[cfg(test)]
 mod gate_434_lab6s1b;
+
+// Workflow #392 DA-5ab fix round 1: the check of an observation's projection frame.
+#[cfg(test)]
+mod gate_392_da5ab;
+
+// Workflow #463 S3-8: the request member `ContainedTaskRequest.variables` (`runtime-client` 11).
+#[cfg(test)]
+mod gate_463_s38;

@@ -58,7 +58,7 @@ An entry the declaration table does not list is `no_effect` when its status is `
 | `offline_device_scope_forbidden` | 2 | `package dry-run`, `replay` | none |
 | `resource_production_retired` | 2 | `package build-task/build-pack`, `resource convert`, `record build-task/promote/publish`, including `session record` aliases | none; unconditional retirement refusal |
 | `validation_failed` | 2 | `scheduling compile`, `scheduling timeline` | none |
-| `record_flag_unsupported` | 2 | `observe --capture --record`, `do --capture --record`, `session app --record`, `session instance app --record` | none |
+| `record_flag_unsupported` | 2 | `observe --capture --record`, `do --capture --record`, `session app --record`, `session instance app --record`, #463 S1-1: `tap --record`, `swipe --record`, `long-tap --record` | none |
 
 The `dry_run_unsupported` envelope:
 
@@ -146,7 +146,7 @@ refused form runs before it refuses; every other check runs only on a real invoc
 | `navigate` | preview | `executed_false` | |
 | `monitor` | no_effect | | retired |
 | `stream` | mixed | | `stream check`: no_effect; every other form, `--input-relay` included: preview, `capture_dry_run` |
-| `record` | mixed | | `start`, `step`, `amend`, and (Workflow #449 REC-ARCH) `archive` and `reopen`: refused, `dry_run_unsupported`, action name only, alternative `record status` (start, archive, reopen) or `record candidates` (step, amend); `status`, `candidates`: no_effect; `stop`, `mark`: preview, `dry_run`; `build-task`, `promote`, `publish`: refused, `resource_production_retired`; `draft` (`record` only, since Workflow #434 LAB-5G4c, its own entry `record draft`): no_effect, it changes nothing |
+| `record` | mixed | | `start`, `step`, `amend`, and (Workflow #449 REC-ARCH) `archive` and `reopen`: refused, `dry_run_unsupported`, action name only, alternative `record status` (start, archive, reopen) or `record candidates` (step, amend); `status`, `candidates`, (#463 S2-1, its own entries `record ready` and `session record ready`) `ready` and (#463 S2-13) `frames`: no_effect; (#463 S2-2, its own entries `record review` and `session record review`) `review`: mixed, `--no-preview` no_effect, without it refused, `dry_run_unsupported`, after the flags and before the recording is read, alternative `record review --no-preview` (its previews are files written); `stop`, `mark`: preview, `dry_run`; `build-task`, `promote`, `publish`: refused, `resource_production_retired`; `draft` (`record` only, since Workflow #434 LAB-5G4c, its own entry `record draft`): no_effect, it changes nothing |
 | `explain` | no_effect | | |
 | `config get` | no_effect | | |
 | `config set` | preview | `dry_run` | `validated`, `persisted: false` |
@@ -212,6 +212,9 @@ refused form runs before it refuses; every other check runs only on a real invoc
 | `standard-pack compose` | refused | `dry_run_unsupported` | flag parsing only (ROUT-L RL-1a: it writes a new directory); alternative `standard-pack check` |
 | `standard-pack build` | refused | `dry_run_unsupported` | flag parsing (Workflow #464 P2: it writes its product and its work into `--out`); no alternative |
 | `standard-pack ready` | no_effect | | reads a game root only (Workflow #464 P3) |
+| `standard-pack status` | no_effect | | reads a game root, its packs' directories, the trial records of the state directory and, with `--repo`, the checkout's packs only (Workflow #463 S3-14) |
+| `standard-pack trial` | mixed | | `--plan`: no_effect, it reads the package directory, `--root` and the state directory's place only, writes nothing and sends nothing (Workflow #463 S3-10); without `--plan` (the run, and `--collect`): refused, `dry_run_unsupported`, after the flags and before anything is read, alternative `standard-pack trial --plan` (Workflow #463 S3-11: the run sends one run and writes its record, `--collect` writes the record) |
+| `standard-pack catalog` | mixed | | `--plan`: no_effect, it reads the game root's `bundle.json`, `schedule.json`, `pack-catalog.json` and `ui.json` and answers the document it would write, writing nothing (Workflow #477 PC-1; fix round 1: of a resource repository's checkout it reads `applications.json` and `packs/` instead of `bundle.json` and makes the registry in a scratch directory of the system's temporary folder, removed again before it answers, a transient write); without `--plan`: refused, `dry_run_unsupported`, after the flags and before anything is read, alternative `standard-pack catalog --plan` (the line writes `pack-catalog.json`) |
 | `runtime reset` | refused | `dry_run_unsupported` | positional arguments, Runtime flags, `--state-root`, instance; no alternative; no capability entry |
 | `runtime observe` | no_effect | | |
 | `ledger show` | no_effect | | retired |
@@ -269,8 +272,10 @@ and its session alias likewise preview the mark changes with `dry_run: true`.
 
 `resource catalog` is `no_effect`: it reads the authoring catalog and its validation results.
 
-All six device recording forms declare `refused` and stop before recording locks, Runtime
-access or saved recording changes. `--dry-run` is recognized at every argv position.
+All nine device recording forms (#463 S1-1: the last three rows, each with its own capability
+entry since its fix round 2) declare `refused` and stop before recording locks, Runtime access or
+saved recording changes. `--dry-run` is recognized at
+every argv position.
 
 | Form | `dry_run_refusal_code` | Refusal owner |
 |---|---|---|
@@ -280,6 +285,9 @@ access or saved recording changes. `--dry-run` is recognized at every argv posit
 | `do --capture --record` | `record_flag_unsupported` | the shared record flag gate before dispatch |
 | `session app --record` | `record_flag_unsupported` | the shared record flag gate before dispatch |
 | `session instance app --record` | `record_flag_unsupported` | the shared record flag gate before dispatch |
+| `tap --record` | `record_flag_unsupported` | the shared record flag gate before dispatch |
+| `swipe --record` | `record_flag_unsupported` | the shared record flag gate before dispatch |
+| `long-tap --record` | `record_flag_unsupported` | the shared record flag gate before dispatch |
 
 ## Bootstrap and transient writes
 

@@ -1,29 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 //! G2, inventory key K8: the install-control inputs (Workflow #352 §4 and its I3 interface
-//! comment; `distribution/windows/INSTALL.md`, "A/B installation inputs and Host control").
-//! The requirement names no refusal code, so the rows assert only acceptance or refusal.
+//! comment; `distribution/windows/INSTALL.md`, "A/B installation inputs"). The requirement names no
+//! refusal code, so the rows assert only acceptance or refusal. Workflow #434 LAB-6S4a (0.12.63):
+//! the installer's transition and the held start are gone (`install-control` [0, 0]), and with
+//! them the rows of its phases and its 600 s bound; the selection's row stays.
 
-use actingcommand_contract::{
-    InstallHeldStartup, InstallSelection, InstallTransitionAction, InstallTransitionPhase,
-    InstallTransitionStatus,
-};
+use actingcommand_contract::InstallSelection;
 use serde_json::{Value, json};
-
-const TRANSITION_ID: &str = "transition-01";
-const REQUEST_ID: &str = "request_00000000000000000000000000000001";
-
-fn ticket() -> Value {
-    json!({
-        "target": {
-            "owner_epoch": "epoch_00000000000000000000000000000001",
-            "pid": 4242,
-            "started_at_unix_ms": 1_760_000_000_000_u64,
-        },
-        "transition_id": TRANSITION_ID,
-        "request_id": REQUEST_ID,
-    })
-}
 
 fn file(path: &str) -> Value {
     json!({ "path": path, "sha256": "0".repeat(64) })
@@ -67,87 +51,5 @@ fn gate_install_selection_refuses_a_slot_generation_or_provider_mismatch() {
         ),
     ] {
         assert!(InstallSelection::from_json(&bytes).is_err(), "{row}");
-    }
-}
-
-/// Workflow #352 L76-84: root admission is closed while draining, drained, held, preparing or
-/// failed, and open once released or aborted. No wildcard: a new phase must be classified here.
-fn admission_closed(phase: InstallTransitionPhase) -> bool {
-    match phase {
-        InstallTransitionPhase::Draining
-        | InstallTransitionPhase::Drained
-        | InstallTransitionPhase::Held
-        | InstallTransitionPhase::Preparing
-        | InstallTransitionPhase::Failed => true,
-        InstallTransitionPhase::Released | InstallTransitionPhase::Aborted => false,
-    }
-}
-
-fn status(phase: &str, admission_closed: bool) -> InstallTransitionStatus {
-    serde_json::from_value(json!({
-        "ticket": ticket(),
-        "phase": phase,
-        "admission_closed": admission_closed,
-        "timeout_ms": 60_000,
-    }))
-    .expect("decode the transition status")
-}
-
-#[test]
-fn gate_install_status_admission_is_closed_except_when_released_or_aborted() {
-    for (phase, wire) in [
-        (InstallTransitionPhase::Draining, "draining"),
-        (InstallTransitionPhase::Drained, "drained"),
-        (InstallTransitionPhase::Held, "held"),
-        (InstallTransitionPhase::Preparing, "preparing"),
-        (InstallTransitionPhase::Released, "released"),
-        (InstallTransitionPhase::Aborted, "aborted"),
-        (InstallTransitionPhase::Failed, "failed"),
-    ] {
-        let closed = admission_closed(phase);
-        let matching = status(wire, closed);
-        assert_eq!(matching.phase, phase, "{wire}");
-        assert!(
-            matching.validate().is_ok(),
-            "{wire} with admission_closed {closed} is accepted"
-        );
-        assert!(
-            status(wire, !closed).validate().is_err(),
-            "{wire} with admission_closed {} is refused",
-            !closed
-        );
-    }
-}
-
-#[test]
-fn gate_install_timeouts_accept_600000_ms_and_refuse_600001_ms() {
-    // INSTALL.md: drain, held and release deadlines are bounded at 600 seconds.
-    for (timeout_ms, accepted) in [(600_000_u64, true), (600_001, false)] {
-        let begin_drain: InstallTransitionAction = serde_json::from_value(json!({
-            "action": "begin_drain",
-            "transition_id": TRANSITION_ID,
-            "timeout_ms": timeout_ms,
-        }))
-        .expect("decode begin_drain");
-        let release: InstallTransitionAction = serde_json::from_value(json!({
-            "action": "release",
-            "ticket": ticket(),
-            "timeout_ms": timeout_ms,
-        }))
-        .expect("decode release");
-        let held: InstallHeldStartup = serde_json::from_value(json!({
-            "transition_id": TRANSITION_ID,
-            "request_id": REQUEST_ID,
-            "timeout_ms": timeout_ms,
-        }))
-        .expect("decode the held input");
-
-        assert_eq!(
-            begin_drain.validate().is_ok(),
-            accepted,
-            "begin_drain {timeout_ms}"
-        );
-        assert_eq!(release.validate().is_ok(), accepted, "release {timeout_ms}");
-        assert_eq!(held.validate().is_ok(), accepted, "held {timeout_ms}");
     }
 }

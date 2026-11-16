@@ -1070,6 +1070,12 @@ fn instance_row(
     if let Some(fence) = instance.resource_fence() {
         row.insert("resource_fence".to_owned(), json!(fence));
     }
+    // Workflow #437 G1 fix round 1: a member of a device group of several whose device is held
+    // for another member's unconfirmed close (`device_group_wait` `close_unconfirmed`, `alias` that
+    // member), the status member as the Runtime answers it.
+    if let Some(held) = instance.device_held() {
+        row.insert("device_held".to_owned(), json!(held));
+    }
     // #411 A35-S5: the instance's recovery ladder while it holds instead of climbing (what it
     // waits for, how long it has held, its limit), the status member as the Runtime answers it.
     if let Some(hold) = instance.ladder_busy_hold() {
@@ -1571,9 +1577,10 @@ fn parse(arguments: &[OsString]) -> Result<(PathBuf, Option<PathBuf>, OverviewRe
     ))
 }
 
-/// Workflow #434 LAB-5B1, test builds only: [`parse`]'s refusal of the words [`dispatch_within`]
+/// Workflow #434 LAB-5B1 (test builds and, since Workflow #434 LW-1, the feature `test-hooks`, for
+/// `core_ops::handed_refusal`): [`parse`]'s refusal of the words [`dispatch_within`]
 /// is given, if any.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-hooks"))]
 pub(crate) fn parse_refusal(arguments: &[OsString]) -> Option<Outcome> {
     parse(arguments).err().map(|failure| failure.outcome())
 }
@@ -2434,6 +2441,56 @@ mod tests {
         );
         for row in unread.as_array().expect("instance rows") {
             assert_eq!(row.get("not_running"), None, "{unread}");
+        }
+    }
+
+    // Workflow #469 D4a (0.12.62; register §1.400; the owner's approval on board #469):
+    // `call_budget_exhausted` is a warning. Where the overview writes it (a block, and the
+    // not-running rows, whose read the call budget left no time to start), it stands beside the
+    // overview's successful line: the line keeps `runtime_overview_reported`, exits 0 and has no
+    // developer line, so the Lab's MCP answers it with `isError` false, and each warning's envelope
+    // says `warning`.
+    #[test]
+    fn d4a_a_spent_call_budget_is_a_warning_beside_a_successful_answer() {
+        let spent = ActingctlCode::CallBudgetExhausted;
+        let warning_word = Category::Warning.as_str();
+        let mut result = Map::new();
+        let mut warnings = Vec::new();
+        budget_skipped(&mut result, Section::Performance, &mut warnings);
+        let mut rows = json!([{"alias": "neutral"}]);
+        not_running_skipped(&mut rows, &mut warnings);
+        let written = outcomes(&warnings);
+        assert_eq!(written.len(), 2, "{written:?}");
+        for warning in &written {
+            assert!(warning.is(spent), "{warning:?}");
+            assert_eq!(warning.category(), Category::Warning, "{warning:?}");
+        }
+        result.insert(
+            "warnings".to_owned(),
+            Value::Array(
+                written
+                    .iter()
+                    .map(|warning| cli_line::warning_value(warning, Detail::Full))
+                    .collect(),
+            ),
+        );
+        let exit = cli_line::success(
+            result,
+            &Outcome::new(ActingctlCode::RuntimeOverviewReported),
+        );
+        assert_eq!(exit.code, 0);
+        assert!(exit.developer.is_none(), "a success has no developer line");
+        let line = exit.line.expect("the line encodes");
+        assert_eq!(
+            line["outcome"]["code"],
+            ActingctlCode::RuntimeOverviewReported.as_str()
+        );
+        assert_eq!(line["performance_incomplete"], json!(true), "{line}");
+        let shown = line["warnings"].as_array().expect("the warnings");
+        assert_eq!(shown.len(), 2, "{line}");
+        for warning in shown {
+            assert_eq!(warning["outcome"]["code"], spent.as_str(), "{line}");
+            assert_eq!(warning["outcome"]["category"], warning_word, "{line}");
         }
     }
 }

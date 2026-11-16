@@ -77,6 +77,18 @@ A request's `detail` (`codes` or `full`), actingctl's `--detail` or `ACTINGCOMMA
 the MCP server option override the default. Daemon `OUTCOME` lines and logs are always full.
 Between Runtime modules outcomes always travel full.
 
+## Deciding from an outcome (Workflow #469 A-3, the owner's option A on board #469; for new code)
+
+**Decide by class or by word, never by name.** A new decision point (code that chooses what
+happens next from an outcome) reads the code's `category`, its `ladder_class`, or a value of a
+closed vocabulary that the outcome carries, and names no code one by one: no `==`, `.is(…)`,
+`matches!`, list, table or prefix of codes. Building, relaying, recording or printing a code is
+not a decision. Where neither the class nor a carried word separates the cases, the implementer
+stops and asks the coordinator, with the list of codes it wanted to write and what each would
+get; the answer is a new word, a new code with its own class, or a written exception that names
+the slice removing it. Existing comparisons stay until a slice moves them; a configuration key
+that lists codes is such a comparison and needs the same question.
+
 ## Surfaces and line formats
 
 | Surface | Form | Slice |
@@ -361,7 +373,12 @@ its boundary's, and keeps the kernel's code and severity. A kernel code on the G
 - a session close refused before it began for a reason of the instance's own key fences that
   instance as an unconfirmed close does, and the Runtime goes on (Runtime 0.12.60): at a
   lease's expiry, the refusal by the lapsed lease (`lease_expired`; #411 A64 for a run's lease in
-  its end phase, Workflow #458 for every other lease), and after a capture failure, its close
+  its end phase, Workflow #458 for every other lease), the same refusal met before the lease
+  sweep meets it at a client's disconnect, at a backend failure's lease end and in a failed
+  input's clean-up (Workflow #461, Runtime 0.12.66), and at a failed run's hand-over of its key
+  to its ladder, at a pre-emption's hand-over or end of the lease, in an application command's
+  preparation, in a backend switch and in a member switch (Workflow #475, Runtime 0.12.67), and
+  after a capture failure, its close
   lease refused by the takeover cooldown, a queued claim the routine gate holds back or a lapsed
   lease (Workflow #456; [read-session-resource-close.md](read-session-resource-close.md)). A
   failure of the Runtime itself in those paths (a record, a lock, the owner's journal) stays
@@ -424,13 +441,13 @@ the work fails with `instance_lock_poisoned` (error, ladder class `none`), an `I
 of that instance. A poisoned lock that every instance shares stays `Global`
 (`runtime_state_poisoned`).
 
-**The closed Global list** (`GLOBAL_CODES`; R0.3), 146 codes in ten families, plus every catalog
+**The closed Global list** (`GLOBAL_CODES`; R0.3), 142 codes in ten families, plus every catalog
 code of category `fatal` (family `CatalogFatal`):
 
 | Family | Codes | List |
 |---|---|---|
 | ledger: write, commit, integrity, format, dump, a failed append, the fact store out of step | 32 | `ledger_failure`, `agent_ledger_failure`, `monitor_ledger_failure`, `catalog_failure_fact_undurable`, `release_failure_fact_undurable`, `runtime_fact_store_desync`, `fact_store_sync_failed`, `fact_store_recovery_failed`, `runtime_fact_replay_failed`, `ledger_migration_required`, `ledger_write_failed`, `ledger_insert_incomplete`, `ledger_io`, `ledger_sqlite_failed`, `critical_event_not_durable`, `deferred_append_unconfirmed`, `writer_unavailable`, `writer_panicked`, `corrupt_ledger_record`, `corrupt_segment`, `ledger_record_mismatch`, `ledger_meta_mismatch`, `duplicate_event_id`, `state_database_corrupt` (#422 LN-9: what a full verification and the ledger's scrub find), `ledger_index_mismatch`, `ledger_tag_index_mismatch`, `sequence_discontinuity`, `sequence_exhausted`, `ledger_format_unsupported`, `ledger_format_marker_mismatch`, `ledger_dump_failed`, `ledger_dump_unsupported` |
-| configuration: actingd configuration, effective configuration, catalog, approvals | 36 | `invalid_runtime_host_config`, `invalid_runtime_config_manifest`, `agent_dispatcher_config_missing`, `policy_inputs_unconfigured`, `procedure_manifest_unconfigured`, `performance_config_invalid`, `performance_control_config_invalid`, `config_read_failed`, `config_decode_failed`, `effective_configuration_too_large`, `agent_dispatcher_config_invalid`, `invalid_capacity_thresholds`, `host_config_overrides_fact_invalid`, `host_config_overrides_persist_failed`, `host_config_value_type_invalid`, `catalog_compile_failed`, `catalog_manifest_invalid`, `catalog_pointer_invalid`, `catalog_generation_invalid`, `catalog_plan_generation_mismatch`, `catalog_migration_source_missing`, `catalog_state_create_failed`, `policy_catalog_mismatch`, `policy_catalog_approval_conflict`, `policy_catalog_unavailable`, `policy_catalog_compile_failed`, `policy_catalog_approval_invalid`, `approval_replay_conflict`, `approval_replay_payload_mismatch`, `approval_projection_query_failed`, `approval_projection_position_invalid`, `approval_projection_capacity_exceeded`, `approval_projection_order_invalid`, `approval_projection_origin_invalid`, `approval_projection_payload_mismatch`, `approval_projection_record_invalid` |
+| configuration: actingd configuration, effective configuration, catalog, approvals | 34 | `invalid_runtime_host_config`, `invalid_runtime_config_manifest`, `agent_dispatcher_config_missing`, `policy_inputs_unconfigured`, `procedure_manifest_unconfigured`, `performance_config_invalid`, `performance_control_config_invalid`, `config_read_failed`, `config_decode_failed`, `effective_configuration_too_large`, `agent_dispatcher_config_invalid`, `invalid_capacity_thresholds`, `host_config_overrides_fact_invalid`, `host_config_overrides_persist_failed`, `host_config_value_type_invalid`, `catalog_compile_failed`, `catalog_manifest_invalid`, `catalog_pointer_invalid`, `catalog_generation_invalid`, `catalog_plan_generation_mismatch`, `catalog_migration_source_missing`, `catalog_state_create_failed`, `policy_catalog_mismatch`, `policy_catalog_approval_conflict`, `policy_catalog_unavailable`, `policy_catalog_compile_failed`, `policy_catalog_approval_invalid`, `approval_projection_query_failed`, `approval_projection_position_invalid`, `approval_projection_capacity_exceeded`, `approval_projection_order_invalid`, `approval_projection_origin_invalid`, `approval_projection_payload_mismatch`, `approval_projection_record_invalid` |
 | the owner lock and the owner journal I/O | 15 | `owner_lock_failed`, `owner_file_open_failed`, `owner_file_missing`, `owner_write_failed`, `owner_sync_failed`, `owner_record_encode_failed`, `owner_revision_overflow`, `owner_epoch_issue_failed`, `owner_compaction_cleanup_failed`, `owner_compaction_rewrite_failed`, `owner_compaction_side_read_failed`, `owner_compaction_stage_failed`, `owner_unlock_failed`, `owner_seek_failed`, `owner_compaction_unrecoverable` |
 | identifier issuance | 14 | `runtime_identifier_issue_failed`, `event_issuer_failed`, `event_id_issue_failed`, `action_id_issue_failed`, `policy_identifier_issue_failed`, `monitor_probe_id_issue_failed`, `run_id_issue_failed`, `task_id_issue_failed`, `agent_wake_issue_failed`, `readonly_capability_issue_failed`, `lab_projection_id_issue_failed`, `lab_frame_id_issue_failed`, `lab_recognition_id_issue_failed`, `observation_recognition_id_issue_failed` |
 | an invalid or regressed clock | 9 | `system_clock_invalid`, `system_clock_overflow`, `monotonic_clock_regressed`, `monotonic_clock_overflow`, `policy_admission_clock_regressed`, `policy_admission_clock_overflow`, `policy_dispatch_clock_regressed`, `policy_execution_clock_regressed`, `clock_before_epoch` |
@@ -438,7 +455,7 @@ code of category `fatal` (family `CatalogFatal`):
 | the process: IPC listener, OS threads, state root, runtime information file | 21 | `runtime_bind_failed`, `runtime_listener_address_failed`, `runtime_listener_config_failed`, `runtime_socket_mode_failed`, `runtime_accept_failed`, `runtime_accept_spawn_failed`, `runtime_connection_spawn_failed`, `runtime_sweeper_spawn_failed`, `runtime_monitor_spawn_failed`, `runtime_performance_spawn_failed`, `runtime_pack_admission_spawn_failed`, `instance_worker_spawn_failed`, `execution_session_spawn_failed`, `runtime_thread_panicked`, `state_root_create_failed`, `state_root_inspect_failed`, `runtime_info_invalid`, `runtime_info_create_failed`, `runtime_info_write_failed`, `runtime_info_publish_failed`, `runtime_info_replace_failed` |
 | the scheduler's cross-instance invariants | 6 | `invalid_scheduler_config`, `invalid_connection_id`, `identifier_issuance_failed`, `lease_expiry_overflow`, `lease_queue_sequence_overflow`, `lease_step_sequence_overflow` |
 | the shared policy projection out of step with the ledger | 2 | `policy_admission_event_invalid`, `policy_state_ledger_incomplete` |
-| the installer's transitions | 4 | `runtime_component_not_prepared`, `runtime_component_already_prepared`, `install_abort_state_invalid`, `install_release_state_invalid` |
+| the installer's transitions | 2 | `runtime_component_not_prepared`, `runtime_component_already_prepared` (Workflow #434 LAB-6S4a, 0.12.63: `install_abort_state_invalid` and `install_release_state_invalid` retired with `InstallTransition`, and `approval_replay_conflict` and `approval_replay_payload_mismatch` of the configuration family with `RecordApprovalDecision`) |
 
 ## Open items
 

@@ -405,15 +405,18 @@ fn policy_context(host: &RuntimeHost, intent: &DispatchIntent) -> PolicyAdmissio
     }
 }
 
-fn record_policy_approval(host: &RuntimeHost, intent: &DispatchIntent) -> TerminalEvent {
-    record_policy_approval_disposition(host, intent, ApprovalDisposition::Approved)
+fn record_policy_approval(host: &RuntimeHost, intent: &DispatchIntent) {
+    record_policy_approval_disposition(host, intent, ApprovalDisposition::Approved);
 }
 
+// Workflow #434 LAB-6S4a (0.12.63): the approval request is gone; an approval is recorded by the
+// host's in-process transcription, the way actingd records the approvals its configuration
+// holds, which writes the same approval record (provenance (Governance, User, Ui)).
 fn record_policy_approval_disposition(
     host: &RuntimeHost,
     intent: &DispatchIntent,
     disposition: ApprovalDisposition,
-) -> TerminalEvent {
+) {
     let decision = ApprovalDecisionRecord::new(
         "approval:fixture-a",
         disposition,
@@ -424,33 +427,21 @@ fn record_policy_approval_disposition(
         actingcommand_contract::ApprovalReasonCode::new("user_confirmed").expect("approval reason"),
     )
     .expect("approval decision");
-    let mut client = TestClient::connect(host);
-    client.declare_governance_identity();
-    let request = client.governance_request(RuntimeOperation::RecordApprovalDecision { decision });
-    let receipt = client.send(&request);
-    assert_eq!(receipt.state(), RuntimeReceiptState::Completed);
-    assert!(matches!(
-        receipt.result(),
-        Some(RuntimeResult::ApprovalDecisionRecorded {
-            approval_id,
-            disposition: recorded,
-        }) if approval_id == "approval:fixture-a" && *recorded == disposition
-    ));
-    receipt.terminal().expect("approval terminal")
+    host.transcribe_configured_approval(&decision)
+        .expect("approval recorded");
 }
 
-fn record_target_approval(client: &mut TestClient, approval_id: &str, target: ApprovalTarget) {
-    client.declare_governance_identity();
+fn record_target_approval(host: &RuntimeHost, approval_id: &str, target: ApprovalTarget) {
     let decision = ApprovalDecisionRecord::new(
         approval_id,
         ApprovalDisposition::Approved,
         target,
-        actingcommand_contract::ApprovalReasonCode::new("proposal_reviewed").expect("approval reason"),
+        actingcommand_contract::ApprovalReasonCode::new("proposal_reviewed")
+            .expect("approval reason"),
     )
     .expect("proposal approval");
-    let request = client.governance_request(RuntimeOperation::RecordApprovalDecision { decision });
-    let receipt = client.send(&request);
-    assert_eq!(receipt.state(), RuntimeReceiptState::Completed);
+    host.transcribe_configured_approval(&decision)
+        .expect("proposal approval recorded");
 }
 
 fn mapped_policy_facts(outcome_key: &str, include_caller_outcome: bool) -> EvaluationFacts {

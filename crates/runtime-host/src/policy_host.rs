@@ -345,6 +345,70 @@ pub(crate) struct PolicyEvaluationContext<'a> {
     /// whole root (`standard_pack_variables`), read from memory as the cycle starts; `None`
     /// without one, where the remedy table's is read.
     pub(crate) standard_pack_variables: Option<&'a actingcommand_policy::VariableTable>,
+    /// Workflow #469 H1 (register §1.397): who withdrew the availability of each instance the
+    /// cycle's inputs projected unavailable, by alias, as the host read it from the record its
+    /// projection resolved; set on the evaluator's own `instance_unavailable` reasons before the
+    /// not-run explanation reads them.
+    pub(crate) availability_withdrawals: &'a AvailabilityWithdrawals,
+}
+
+/// Workflow #469 H1 (register §1.397; the design's place 3): who withdrew an application's
+/// availability, the word `availability_source` of `instance_unavailable`, with the handset's
+/// `device_link_state` beside `device_link` and its `device_hold` beside `device_state` when the
+/// record names one the vocabulary knows. The host reads it from the active
+/// `session.instance.available` record the projection resolved; it changes no decision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct AvailabilityWithdrawal {
+    pub(crate) source: crate::codes::AvailabilitySource,
+    pub(crate) device_link_state: Option<actingcommand_contract::DeviceLinkState>,
+    pub(crate) device_hold: Option<crate::codes::DeviceHold>,
+}
+
+impl AvailabilityWithdrawal {
+    /// `outcome` with the withdrawal's words added to its values.
+    fn words_on(self, outcome: Outcome) -> Outcome {
+        let outcome = outcome.availability_source(self.source);
+        let outcome = match self.device_link_state {
+            Some(state) => outcome.device_link_state(state),
+            None => outcome,
+        };
+        match self.device_hold {
+            Some(hold) => outcome.device_hold(hold),
+            None => outcome,
+        }
+    }
+}
+
+/// Workflow #469 H1: per instance alias the projection found unavailable, who withdrew it.
+pub(crate) type AvailabilityWithdrawals = BTreeMap<String, AvailabilityWithdrawal>;
+
+/// Workflow #469 H1 (register §1.397): sets each withdrawal's words on the `instance_unavailable`
+/// reasons of its instance's decisions, the evaluator's own reasons, values only: no reason is
+/// added or removed, no detail text and no other value changes, and nothing reads them to decide.
+fn set_availability_words(
+    evaluation: &mut PolicyEvaluation,
+    withdrawals: &AvailabilityWithdrawals,
+) {
+    if withdrawals.is_empty() {
+        return;
+    }
+    for decision in &mut evaluation.decisions {
+        let Some(withdrawal) = decision
+            .instance_id
+            .as_deref()
+            .and_then(|alias| withdrawals.get(alias))
+        else {
+            continue;
+        };
+        for reason in &mut decision.reasons {
+            if reason
+                .outcome
+                .is(actingcommand_policy::PolicyCode::InstanceUnavailable)
+            {
+                reason.outcome = withdrawal.words_on(reason.outcome.clone());
+            }
+        }
+    }
 }
 
 /// IDLE-3 (#447, register §1.332): the policy's own dispatches as an evaluation read its inputs,
@@ -2138,6 +2202,40 @@ fn load_decision_memory(ledger: &GlobalLedger) -> RuntimeHostResult<LoadedDecisi
     Ok(loaded)
 }
 
+/// Workflow #463 U1b fix round 2 (`contracts/ledger-observer.md` §11.5, "Without the marker"):
+/// each pair's break-in as the latest value record the index names for it holds it, by (task,
+/// instance); a pair whose record holds none is left out. A replay of the dispatch records
+/// rebuilds no break-in (a success does not name the content it ran), so a start that seeds and a
+/// re-alignment before the seeding take it from here, as a loading start loads it.
+fn recorded_break_ins(
+    ledger: &GlobalLedger,
+) -> RuntimeHostResult<BTreeMap<(String, String), actingcommand_contract::PolicyBreakInRecord>> {
+    let rows = crate::tagged_state::index_records(
+        ledger,
+        LedgerIndexRole::State,
+        &[DECISION_MEMORY_PREFIXES[0]],
+    )?;
+    let mut break_ins = BTreeMap::new();
+    for row in rows.records {
+        let EventPayload::Policy(PolicyPayload::ControlStateRecorded(payload)) =
+            row.event.payload()
+        else {
+            return Err(fatal(
+                HostCode::PolicyRecoveryFailed,
+                HostLocation::RecoverPolicyControl,
+            ));
+        };
+        let state = payload.state();
+        if let Some(break_in) = &state.break_in {
+            break_ins.insert(
+                (state.task_id.clone(), state.instance_id.clone()),
+                break_in.clone(),
+            );
+        }
+    }
+    Ok(break_ins)
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct DetectionQuotaState {
     windows: BTreeMap<(String, String), DetectionQuotaUsage>,
@@ -3382,6 +3480,49 @@ impl PolicyHost {
         crate::policy_control::runtime_budget_allowance_ms(&intent, admission)
     }
 
+    /// Workflow #463 U1b (`contracts/policy-suspension.md`, "A failure that pauses at its first
+    /// occurrence"): the break-in of the pair the dispatch `decision_id` dispatched to, as the
+    /// decision memory holds it.
+    pub(crate) fn pair_break_in(
+        &self,
+        decision_id: &str,
+    ) -> RuntimeHostResult<Option<actingcommand_contract::PolicyBreakInRecord>> {
+        let dispatch = self.seen_dispatches.get(decision_id).ok_or_else(|| {
+            fatal(
+                HostCode::PolicyDispatchUnknown,
+                HostLocation::RunScheduledContainedTask,
+            )
+        })?;
+        Ok(self
+            .control
+            .break_in(&dispatch.data.task_id, &dispatch.data.instance_id)
+            .cloned())
+    }
+
+    /// Workflow #463 U1b: the run of the dispatch `decision_id`, prepared with the package
+    /// content `content`, settled now as a success or a failure, at `settled_at_unix_ms`: its
+    /// pair's break-in counts it. The pair's next value record carries the change.
+    pub(crate) fn note_break_in_run(
+        &mut self,
+        decision_id: &str,
+        content: &str,
+        settled_at_unix_ms: u64,
+    ) -> RuntimeHostResult<()> {
+        let dispatch = self.seen_dispatches.get(decision_id).ok_or_else(|| {
+            fatal(
+                HostCode::PolicyDispatchUnknown,
+                HostLocation::RecordPolicyDispatchOutcome,
+            )
+        })?;
+        let (task_id, instance_id) = (
+            dispatch.data.task_id.clone(),
+            dispatch.data.instance_id.clone(),
+        );
+        self.control
+            .note_break_in_run(&task_id, &instance_id, content, settled_at_unix_ms);
+        Ok(())
+    }
+
     pub(crate) fn pending_dispatch_completions(&self) -> Vec<String> {
         self.seen_dispatches
             .iter()
@@ -3709,6 +3850,7 @@ impl PolicyHost {
             switch_cooldowns,
             dispatches_read,
             standard_pack_variables,
+            availability_withdrawals,
         } = context;
         let directive = self.cadence.observe(trigger, time.unix_ms)?;
         if directive.kind == PolicyRecomputeKind::Deferred {
@@ -4210,6 +4352,10 @@ impl PolicyHost {
         self.random_delays.retain_eligible(&evaluation);
         self.arbitration
             .extend(instance_arbitration_ranks(&evaluation));
+        // Workflow #469 H1 (register §1.397): who withdrew an unavailable instance's
+        // availability, on its decisions' `instance_unavailable` reasons, so the explanation below
+        // and its held records carry the word; every step above judged the evaluation without it.
+        set_availability_words(&mut evaluation, availability_withdrawals);
         // Workflow #386 SR-6b, MCP-19a (register §1.143): the not-run explanation of this
         // evaluation, before the host adds its notes to the decisions. SCH-M ED-2 (§3.4
         // "Visible"): each row with the duration its dispatch would reserve.
@@ -6209,6 +6355,10 @@ impl PolicyHost {
             )?;
         }
         journal.prune(None);
+        // Workflow #463 U1b fix round 2: the pairs' break-ins, which no dispatch record holds,
+        // from their latest value records (a root's second start seeds, so without this its
+        // break-ins were lost there and in every record the seeding wrote).
+        control.restore_break_ins(recorded_break_ins(ledger)?);
         self.pinned_dispatches = self.pinned_of(&journal.seen)?;
         self.seen_dispatches = journal.seen;
         self.dispatch_order = journal.order;
@@ -6275,6 +6425,14 @@ impl PolicyHost {
         self.dispatch_order = journal.order;
         self.pruned_pairs = journal.pruned;
         self.control = control;
+        // Workflow #469 H2 (register §1.398): a paused streak the value records loaded takes its
+        // pause cause from its dispatch's execution record, which the journal holds (it keeps a
+        // pair's latest admitted dispatches, the paused one among them).
+        let seen = &self.seen_dispatches;
+        self.control.restore_pause_causes(|decision_id| {
+            seen.get(decision_id)
+                .and_then(|dispatch| dispatch.execution.as_ref())
+        });
         Ok(())
     }
 

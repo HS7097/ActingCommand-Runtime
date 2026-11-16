@@ -73,8 +73,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// The member a result that is not a JSON object goes under (actingctl's `RESULT_MEMBER`).
 const RESULT_MEMBER: &str = "result";
-/// `pause`'s drain when none is given (the operation table's default).
-const DEFAULT_DRAIN: Duration = Duration::from_secs(300);
+/// `pause`'s drain when none is given (the operation table's default; #463 S1-7: a recording's
+/// hold waits the same, `scheduling::LAB_PAUSE_DRAIN_TIMEOUT_MS`).
+const DEFAULT_DRAIN: Duration = Duration::from_millis(scheduling::LAB_PAUSE_DRAIN_TIMEOUT_MS);
 /// Workflow #434 LAB-5B1: the rows whose steps other programs call with the parameters alone
 /// ([`stop_target`], [`pack_schedule_rows`], [`run_start_prepared`], [`material_read`]), which read
 /// them through that row's constant.
@@ -412,6 +413,44 @@ pub fn handed_words(
         root,
         Some(state_root),
     ))
+}
+
+/// Workflow #434 LW-1 (register §1.435): the refusal the parser of a handed command line gives
+/// `argv` (as [`handed_words`] or [`offline_words`] built it), if any, without running the command:
+/// its words and flags read as the command reads them before it connects, nothing connected, read
+/// or written (`inline`: `remedy set`'s rows go beside the words). A front's test walks every
+/// property of every tool of the core rows handed so through it. A command line no parser of this
+/// crate reads is refused as its first word, `unknown`, as [`answer`] refuses a word no command
+/// takes; an empty one `required`. Fix round 1: test builds and the feature `test-hooks` only (the
+/// MCP server's dev-dependency turns it on for its gate); a production build has none.
+#[cfg(any(test, feature = "test-hooks"))]
+pub fn handed_refusal(argv: &[OsString], inline: bool) -> Option<Outcome> {
+    let Some(first) = argv.first() else {
+        return Some(cli_line::usage_invalid(None, ArgumentProblem::Required));
+    };
+    let command = first.to_string_lossy();
+    match &*command {
+        "codes" => code_lookup::parse_refusal(argv),
+        capability_gap::COMMAND => capability_gap::parse_refusal(argv),
+        "packs" => packs::parse_refusal(argv),
+        "overview" => overview::parse_refusal(argv),
+        routine_summary::COMMAND => routine_summary::parse_refusal(argv),
+        events::COMMAND => events::cli_request(&argv[1..])
+            .err()
+            .map(|error| error.outcome()),
+        "runs" => run_list::parse_refusal(argv),
+        run_evidence::COMMAND => run_evidence::parse_refusal(argv),
+        "diagnose" => diagnose::parse_refusal(argv),
+        remedy::COMMAND => remedy::parse_refusal(argv, inline),
+        "observe" => observe_export::parse_refusal(argv),
+        perf_preset::COMMAND => perf_preset::parse_refusal(argv),
+        evidence_read::COMMAND => evidence_read::parse_refusal(argv),
+        devices::COMMAND => devices::parse_refusal(argv),
+        other => Some(cli_line::usage_invalid(
+            Some(other),
+            ArgumentProblem::Unknown,
+        )),
+    }
 }
 
 /// Workflow #434 LAB-5B1: the command line the row's constant `handed` gives for `params`: the
@@ -1122,14 +1161,97 @@ fn run_start(params: Params<'_>, client: &RuntimeClient) -> Result<Exit, Exit> {
     run_start_answer(&output)
 }
 
+/// Workflow #463 S3-9: why one `--variable` is refused, as the one parser of `--variable`
+/// ([`parse_variables`]) says it: the word of the vocabulary `argument_problem` and its text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VariableRefusal {
+    pub problem: ArgumentProblem,
+    pub message: String,
+}
+
+/// Workflow #463 S3-9 (`contracts/package-variables.md`, "Runs without a dispatch"): the
+/// `--variable <name>=<json>` values `texts` of the command `command`, in the order given: the one
+/// parser of `--variable`, which the scan replay, `standard-pack trial` and `run start` read with
+/// (Workflow #463 V2 wrote it for the scan replay; S3-9 moved it here). A value given without its
+/// value (blank, or the word `true` a flag without one leaves) is `value_missing`; one that is not
+/// `<name>=<json>` (no `=`, an empty name, or a right side that is no JSON) `not_recognised`; a
+/// name given twice `repeated`, never last-wins. What the name and the value may be is the
+/// package's to judge.
+pub fn parse_variables<'a>(
+    command: &str,
+    texts: impl IntoIterator<Item = &'a str>,
+) -> Result<Vec<(String, Value)>, VariableRefusal> {
+    let mut given: Vec<(String, Value)> = Vec::new();
+    for text in texts {
+        if text == "true" || text.trim().is_empty() {
+            return Err(VariableRefusal {
+                problem: ArgumentProblem::ValueMissing,
+                message: format!("{command} takes --variable <name>=<json>"),
+            });
+        }
+        let Some((name, value)) = text.split_once('=').and_then(|(name, json)| {
+            let value = serde_json::from_str::<Value>(json).ok()?;
+            (!name.is_empty()).then_some((name, value))
+        }) else {
+            return Err(VariableRefusal {
+                problem: ArgumentProblem::NotRecognised,
+                message: format!("--variable {text} is not <name>=<json>"),
+            });
+        };
+        if given.iter().any(|(given, _)| given == name) {
+            return Err(VariableRefusal {
+                problem: ArgumentProblem::Repeated,
+                message: format!(
+                    "{command} takes --variable {name} once; a repeated variable is refused, never \
+                     last-wins"
+                ),
+            });
+        }
+        given.push((name.to_owned(), value));
+    }
+    Ok(given)
+}
+
+/// Workflow #463 S3-9: the values `run start`'s `--variable` gives, by name, read by
+/// [`parse_variables`] before anything is sent; a refusal is `--variable` with its word. Fix round
+/// 1: more values than a package can declare variables
+/// ([`actingcommand_contract::MAX_PACKAGE_VARIABLES`]) are `--variable` `out_of_range`, the word
+/// of a count out of its range, before anything is read.
+fn run_variables(params: Params<'_>) -> Result<std::collections::BTreeMap<String, Value>, Exit> {
+    let texts = list_of(params, "variable").unwrap_or_default();
+    let given =
+        parse_variables(RUN_START, texts.iter().map(String::as_str)).map_err(|refusal| {
+            cli_line::failure(
+                &cli_line::usage_invalid(Some("--variable"), refusal.problem),
+                Some(refusal.message.as_str()),
+            )
+        })?;
+    if given.len() > actingcommand_contract::MAX_PACKAGE_VARIABLES {
+        let message = format!(
+            "{RUN_START} takes at most {} --variable values, as many as a package can declare \
+             variables; {} were given",
+            actingcommand_contract::MAX_PACKAGE_VARIABLES,
+            given.len()
+        );
+        return Err(cli_line::failure(
+            &cli_line::usage_invalid(Some("--variable"), ArgumentProblem::OutOfRange),
+            Some(message.as_str()),
+        ));
+    }
+    Ok(given.into_iter().collect())
+}
+
 /// Workflow #434 LAB-5G3: the instance `run start` names, resolved by one status read on
 /// `client`, and the run's request: the package, and its recovery package, by their paths made
 /// absolute, and the deadline (absent: the longest a run may have). `run start` reads them so
-/// before it runs or prepares the run, as before.
+/// before it runs or prepares the run, as before. Workflow #463 S3-9: and the values its
+/// `--variable` gives (`ContainedTaskRequest.variables`, `runtime-client` 11), read first: a
+/// refused one reads nothing of the Runtime; without one the request is as before.
 fn run_start_request(
     params: Params<'_>,
     client: &RuntimeClient,
 ) -> Result<(String, ContainedTaskRequest), Exit> {
+    let variables = run_variables(params)?;
     let alias = alias_of(client, required_text(params, "instance")?)?;
     let package = canonical(required_text(params, "package")?)?;
     let recovery = match text(params, "recovery") {
@@ -1149,6 +1271,15 @@ fn run_start_request(
         })
         .and_then(|request| request.with_response_deadline_ms(deadline))
         .map_err(|_| usage("<package>", ArgumentProblem::Unusable))?;
+    if variables.is_empty() {
+        return Ok((alias, request));
+    }
+    // A name outside a variable's form: the contract's own check of the request, before anything
+    // is sent (fix round 1: too many values are refused `out_of_range` before, by
+    // [`run_variables`]; the contract checks the count again).
+    let request = request
+        .with_variables(variables)
+        .map_err(|_| usage("--variable", ArgumentProblem::NotRecognised))?;
     Ok((alias, request))
 }
 

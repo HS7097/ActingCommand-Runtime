@@ -39,7 +39,7 @@ use super::{
     ContainedTaskTrace, PageObservation, PreparedContainedTask, TaskOperation, TaskProgram,
     machine_refusal,
 };
-use crate::codes::ExecutionKernelCode;
+use crate::codes::{ConfirmationProblem, ExecutionKernelCode};
 use crate::{OperationRunCap, RunDecisionError, RunDirective, RunMaxRunsEnd, RunStateMachine};
 use actingcommand_contract::TaskSchema;
 use actingcommand_contract::codes::SharedCode;
@@ -464,12 +464,18 @@ impl PreparedContainedTask {
                         .current_page()
                         .is_some_and(|page| self.program.is_error_page(&self.control, page)) =>
             {
+                // Workflow #469 K2 (register §1.396): the run stood on the error page, and no
+                // operation of the page leaves it.
+                let code = ExecutionKernelCode::ContainedTaskErrorPageReached.code();
                 return Err(ContainedTaskError::with_detail(
-                    ExecutionKernelCode::ContainedTaskErrorPageReached.code(),
+                    code,
                     format!(
                         "after_page={} hit_error_page=true",
                         machine.current_page().unwrap_or_default()
                     ),
+                )
+                .with_values(
+                    Outcome::new(code).confirmation_problem(ConfirmationProblem::ErrorPageNoExit),
                 )
                 .into());
             }
@@ -506,7 +512,9 @@ impl PreparedContainedTask {
     /// Workflow #390 EXEC-1: whether `operation`'s `when` holds on `scene`, the frame its step
     /// would start on; `true` without a `when`. The evaluation is recorded as every guard
     /// evaluation is, as a `When` evaluation; one that does not conclude ends the run with
-    /// `contained_task_recognition_failed`.
+    /// `contained_task_recognition_failed`, or (Workflow #469 D4b) with
+    /// `contained_task_vision_provider_failed` when the vision provider failed or answered
+    /// invalidly.
     pub(super) fn when_holds<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
@@ -535,7 +543,10 @@ impl PreparedContainedTask {
                 None => format!("operation={} when={target} {error}", operation.id),
             };
             ContainedTaskError::with_detail(
-                SharedCode::ContainedTaskRecognitionFailed.code(),
+                super::target_evaluation_failure_code(
+                    &error,
+                    SharedCode::ContainedTaskRecognitionFailed.code(),
+                ),
                 detail,
             )
         })?;

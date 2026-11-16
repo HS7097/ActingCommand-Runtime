@@ -183,6 +183,7 @@ impl ReadonlyRecognitionEngine {
                     .flatten(),
                 env_resolved: self.env_resolved.clone(),
                 recognition_coverage: recognition_coverage(&self.evaluator, frames.len()),
+                frame_coordinates: None,
             },
         )))
     }
@@ -295,6 +296,7 @@ impl ReadonlyRecognitionEngine {
                 .flatten(),
             env_resolved: self.env_resolved.clone(),
             recognition_coverage: recognition_coverage(&self.evaluator, frames.len()),
+            frame_coordinates: None,
         })
     }
 }
@@ -395,6 +397,7 @@ pub fn detect_current_page_frames(
             .flatten(),
         env_resolved,
         recognition_coverage: recognition_coverage(evaluator, frames.len()),
+        frame_coordinates: None,
     })
 }
 
@@ -563,6 +566,75 @@ pub struct RecognizeEvaluatedResponse {
     /// #411 Lab B-2: present when the pack declares target consensus.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recognition_coverage: Option<RecognitionCoverageResponse>,
+    /// Workflow #392 DA-5 (the train): present when the scene was reduced to the package's base,
+    /// in its base form ([`FrameCoordinates::Base`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frame_coordinates: Option<FrameCoordinates>,
+}
+
+/// Workflow #392 DA-5, the train of DA-5ab and DA-5cd (`contracts/display-adapter.md` sections 11
+/// and 12; Workflow #410 item 1): `frame_coordinates`, the coordinate system of the frame an answer
+/// was decided on, built here and nowhere else, in its two forms; `applies_to` names the `do`
+/// arguments that take coordinates in it.
+/// - [`Self::Device`], a frame as it is: `{device_pixels: [width, height], orientation,
+///   applies_to}`, byte for byte what `observe` and `do` answered before DA-5.
+/// - [`Self::Base`], a frame (a live capture or a stored image) reduced to its package's base:
+///   `{space: "base", base_pixels: [width, height], reduced_from: [width, height], orientation,
+///   applies_to}`; every rectangle and point of the answer is the base's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(untagged)]
+pub enum FrameCoordinates {
+    Device {
+        device_pixels: [u32; 2],
+        orientation: &'static str,
+        applies_to: [&'static str; 3],
+    },
+    Base {
+        space: &'static str,
+        base_pixels: [u32; 2],
+        reduced_from: [u32; 2],
+        orientation: &'static str,
+        applies_to: [&'static str; 3],
+    },
+}
+
+/// The `do` arguments whose coordinates are in an answer's [`FrameCoordinates`].
+const COORDINATE_INPUTS: [&str; 3] = ["tap", "tap_rect", "swipe"];
+
+impl FrameCoordinates {
+    /// A `width` x `height` frame as it is.
+    pub fn of_frame(width: u32, height: u32) -> Self {
+        Self::Device {
+            device_pixels: [width, height],
+            orientation: frame_orientation(width, height),
+            applies_to: COORDINATE_INPUTS,
+        }
+    }
+
+    /// A frame of `device` size (width, height) for a package of base `base`: the frame as it is
+    /// when it is the base's size ([`Self::of_frame`]), otherwise the frame reduced to the base
+    /// from `device`.
+    pub fn observed(base: (u32, u32), device: (u32, u32)) -> Self {
+        if base == device {
+            return Self::of_frame(device.0, device.1);
+        }
+        Self::Base {
+            space: "base",
+            base_pixels: [base.0, base.1],
+            reduced_from: [device.0, device.1],
+            orientation: frame_orientation(base.0, base.1),
+            applies_to: COORDINATE_INPUTS,
+        }
+    }
+}
+
+/// `landscape` when wider than high, `portrait` when higher than wide, `square` otherwise.
+fn frame_orientation(width: u32, height: u32) -> &'static str {
+    match width.cmp(&height) {
+        std::cmp::Ordering::Greater => "landscape",
+        std::cmp::Ordering::Less => "portrait",
+        std::cmp::Ordering::Equal => "square",
+    }
 }
 
 /// #411 Lab B-2: the frames an offline answer was given (`provided_frames`) and the most any
@@ -605,6 +677,10 @@ pub struct IsVisibleResponse {
     /// #411 Lab B-2: present when the pack declares target consensus.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recognition_coverage: Option<RecognitionCoverageResponse>,
+    /// Workflow #392 DA-5 (the train): present when the scene was reduced to the package's base,
+    /// in its base form ([`FrameCoordinates::Base`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frame_coordinates: Option<FrameCoordinates>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -626,6 +702,10 @@ pub struct PageDetectionResponse {
     /// #411 Lab B-2: present when the pack declares target consensus.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recognition_coverage: Option<RecognitionCoverageResponse>,
+    /// Workflow #392 DA-5 (the train): present when the scene was reduced to the package's base,
+    /// in its base form ([`FrameCoordinates::Base`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frame_coordinates: Option<FrameCoordinates>,
 }
 
 #[derive(Debug, Clone, Serialize)]

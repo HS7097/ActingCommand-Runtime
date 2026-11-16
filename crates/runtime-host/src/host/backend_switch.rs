@@ -418,7 +418,27 @@ impl HostShared {
         if !open {
             return Ok(Ok(()));
         }
-        match self.close_instance_resources_result(key.token, key.connection_id, links)? {
+        let closed =
+            match self.close_instance_resources_result(key.token, key.connection_id, links.clone())
+            {
+                Ok(closed) => closed,
+                // Workflow #475 (`contracts/read-session-resource-close.md`): the switch's key
+                // lapsed before this close, and the lapsed lease refused it before it began
+                // (`expiry_close_refused`). Nothing was closed. As at the lease's expiry (#458)
+                // the refusal is recorded once, fences this instance only and is owed
+                // (`fence_expired_lease_close`), still under the admission guard; the key's end
+                // (`release_switch_key`, a backend failure's) makes the close once the lease has
+                // ended. The switch answers it as a close that failed with the instance fenced
+                // (`instance_fenced`). A failure of the Runtime itself in the fence stays fatal.
+                Err(refused) if self.expiry_close_refused(&refused.error) => {
+                    let refusal = refused.error.outcome();
+                    self.fence_expired_close_of(key.token, instance_id, *refused.error, links)
+                        .map_err(RequestFailure::poison_without_terminal)?;
+                    return Ok(Err(refusal));
+                }
+                Err(failure) => return Err(failure),
+            };
+        match closed {
             Ok(()) => Ok(Ok(())),
             Err(close_error) => {
                 let failure =
@@ -530,12 +550,31 @@ impl HostShared {
     }
 
     /// Releases the switch's key, or hands it to the ladder the restore's preparation admitted
-    /// (Workflow #369 H-1).
+    /// (Workflow #369 H-1). Workflow #475: a key that owes the close its lapsed lease refused
+    /// (`close_switch_session`) is ended as a backend failure's end instead, which hands the
+    /// device to no one and makes that close once the lease has ended (`cleanup_token_guarded`);
+    /// a release would be refused, the lease having lapsed.
     fn release_switch_key(
         &self,
         key: &SwitchKey<'_, '_>,
         ladder: Option<PendingRecoveryLadder>,
     ) -> Result<(), RequestFailure> {
+        if self.expired_close_owed(key.token)? {
+            self.cleanup_token(
+                key.token,
+                key.connection_id,
+                LeaseReleaseReason::BackendFailure,
+            )
+            .map_err(RequestFailure::poison_without_terminal)?;
+            // A ladder the restore admitted then waits as a claim, as when no key is left to
+            // hand on.
+            return match ladder {
+                Some(ladder) => self
+                    .enqueue_ladder_claim(ladder)
+                    .map_err(RequestFailure::poison_without_terminal),
+                None => Ok(()),
+            };
+        }
         match ladder {
             Some(ladder) => self.release_to_preparation_ladder(
                 key.validated,

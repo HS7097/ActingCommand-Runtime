@@ -7,8 +7,8 @@
 #[path = "../../../../tests/support/emulator_controller.rs"]
 mod emulator_controller;
 #[allow(dead_code)]
-#[path = "../../../../tests/support/held_runtime.rs"]
-mod held_runtime;
+#[path = "../../../../tests/support/no_instance_runtime.rs"]
+mod no_instance_runtime;
 // Workflow #429 R-11: the neutral standard-pack game roots of `mcp_packs`.
 #[path = "../../../../tests/support/standard_pack_schedule.rs"]
 mod standard_pack_schedule;
@@ -22,7 +22,6 @@ mod emulator_wait;
 mod evidence_confirm_read;
 // Workflow #382 A1-FLAG: flags a subcommand does not take, flags given twice, stray words.
 mod flag_refusals;
-mod install_transition;
 // Workflow #434 LAB-5G1b: the operation layer's MCP front connects as `actingctl mcp-serve` does.
 mod lab5g1b_front_mcp;
 // Workflow #434 LAB-6S2-B2: actingctl and `mcp-serve` bind `lab` with their word.

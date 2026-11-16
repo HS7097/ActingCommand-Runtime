@@ -117,12 +117,18 @@ The identity prefix is everything before `~f`. At most 250 bytes (Workflow #373 
 **Content hash** (Workflow #336 PKG-S3, option 丙; M-PKG §3.3). A package's content hash is the
 `content-directory.v1` hash of the content table its path holds (a directory, a `.json` or a
 `.zip` content container), or the SHA-256 of the whole file for an assembled package ZIP (one
-holding `resources/manifest.json`). It has one use: a pause. It is measured in two places only,
-read-only: when a scheduled failure is settled (the main package at the path the run used and
-each layer at the path the run's standard-pack registry gave it, Workflow #373 NAV-3a; SR-3
-adds its suspension point) and at a lift check
-("Lifting"). Admission never computes or compares it, and it is stored only inside the failure
-identity.
+holding `resources/manifest.json`). It has two uses: a pause and (Workflow #463 U1b, since
+0.12.63) a pair's break-in. It is measured in three places only, read-only: when a scheduled
+failure is settled (the main package at the path the run used and each layer at the path the
+run's standard-pack registry gave it, Workflow #373 NAV-3a; SR-3 adds its suspension point), at a
+lift check ("Lifting"), and (U1b) when a scheduled run of a `linear_steps` main package is
+prepared, at the path the run reads it from ("A failure that pauses at its first occurrence"),
+through the lift checks' memory: a location measured within
+`scheduling.suspension.lift_check_min_interval_ms`, by a preparation or a lift check, is not
+measured again. For a package replaced inside that interval (fix round 3), until the interval ends
+its runs are judged and counted against the content measured before; the new content's break-in
+starts with the first measurement after it. Admission never computes or compares it; it is stored
+inside the failure identity and, as its first 12 hex digits, in the pair's break-in.
 
 Every other run writes no failure identity: a main package that was not admitted (its mode is
 unknown) and the startup reconciliation of an interrupted settlement.
@@ -262,13 +268,129 @@ starts at once), so under the default triggers it starts the stuck-recovery ladd
 consequences, and the order on the instance is the code, the pair's pause, the ladder, then the
 next due pair. Nothing else changes: the pause neither pauses nor fences the instance, no other
 pair's admission, order or timing moves, the next due pair is dispatched as before (its entry gate
-does what it did). Every other failure code follows `on_failure` exactly as before. No configuration key, ledger event type,
-enum value or persisted member is added: the rule is code, as UPD-1's is. A direct run of the
-package fails with the same code and pauses nothing. The pair shows in `actingd suspended` under
-`suspended` (`failure` with the code and its values, `artifact_id` among them, `previous` `null`,
-`effective_class` `severe`, `lifts_when` `content_hash_changes`), in `ac_diagnose` (its `suspended`
-rows and `failures_grouped` by the code), and in `ac_schedule` as a candidate row whose `why` is
-`policy_task_paused`.
+does what it did). Every other failure code follows `on_failure` exactly as before. U1 added no
+configuration key, ledger event type, enum value or persisted member: the rule is code, as
+UPD-1's is. A direct run of the package fails with the same code and pauses nothing.
+
+**Only during a package's break-in** (Workflow #463 U1b, since 0.12.63, register §1.389; the
+owner's ruling on board #463: the code and the pause at once only within a period after a package
+is first run, the ordinary failure handling otherwise; the numbers and the scope are the
+coordinator's proposal the owner agreed to). A scheduled run raises the code only while its pair
+(catalog task, instance) is in the break-in of the content of the package it runs:
+
+- **The content.** The main package's content hash (above, "Content hash"), its first 12 hex
+  digits as the failure identity's `m` segment writes them, read when a scheduled run of a
+  `linear_steps` main package is prepared, at the path the run reads it from, through the lift
+  checks' memory. A page-graph package has none and counts nothing (its run never meets that
+  verdict). A `linear_steps` package whose content is not measured then has none either (fix round
+  3): its run counts nothing and is judged as one outside its break-in ("A break-in that cannot be
+  read").
+- **The break-in.** It starts at the first run of that content on that pair that began its
+  package (its kernel run's `task.package_admitted` is recorded) and was settled as a success or
+  as a failure, counts every such run of the same content, and ends once both hold: at least
+  `scheduling.suspension.break_in_runs` such runs (default 20) and at least
+  `scheduling.suspension.break_in_ms` since the first of them settled (default 604 800 000 ms,
+  seven days). Neither starts nor counts it: a stopped run ("A stopped run"), a condition end
+  ("Condition termination and owed reruns"), and a run that never began its package (fix round
+  2: a refused preparation or outcome declaration, a failed switch before the run, a refusal of
+  the handset's start gate, a prerequisite layer of the run's entry gate that failed, an
+  interrupted settlement), which is no run of the package. A run
+  settled with another content starts a new break-in, that run its first. Both keys are settable
+  and read before each scheduled run executes, so a change counts from the next run
+  ([runtime-config.md](runtime-config.md)).
+- **The verdict.** Before a scheduled run executes, the host judges, on the Runtime clock, whether
+  its pair is past the break-in of the content the run was prepared with, and tells the run
+  which code a closing decision that finds a screen the package never recorded ends with
+  ([linear-steps.md](linear-steps.md), "A screen the package never recorded"). Inside, nothing
+  changes: this code with `confirmation_problem` `unrecorded_screen`, the pause at its first
+  occurrence with `pause_cause` `unrecorded_screen` ("Why a pair is paused"), the lift by a
+  content change. After it, the run ends with `page_confirmation_failed`, with that code's detail
+  and timing for the same end and the same word `confirmation_problem` `unrecorded_screen`, and
+  is settled as that code is (the ordinary repeat rule and `on_failure`; no pause at its first
+  occurrence unless the task is marked sensitive, as for any recoverable failure; a pause it
+  reaches says `repeated_failure`, `retries_exhausted` or `sensitive_task`; its ladder class is
+  the same); the closing decision is still made with the same conditions, and
+  the frame of the run's `Failure` pin, the decision's last, is still named as `artifact_id` on
+  the terminal, the receipt and the recorded failure. A direct run and a Lab run have no pair and
+  raise this code always.
+- **A break-in that cannot be read** (fix rounds 2 and 3). A run is never ended, and its
+  preparation never fails, because the host could not establish its break-in; every such failure
+  falls on one side: the run goes on as a run outside its break-in (the ordinary code above), and
+  before it executes the host records `policy_break_in_unread` (warning; a Warning
+  `runtime.failed` with the run's links, `task_id`, `instance_id`, the failure's code as
+  `failure_code` when registered and the failure as its `caused_by` link) with the required word
+  `break_in_problem`:
+  - `content_unmeasured`: the package's content was not measured when the run was prepared: the
+    containment could not measure the package (its code as `failure_code` when its refusal names
+    one), or the Runtime clock, `scheduling.suspension.lift_check_min_interval_ms` or the lift
+    checks' memory could not be read. The run counts in no break-in.
+  - `record_unread`: the pair's break-in could not be judged before the run executed: the two
+    keys, the pair's break-in in the decision memory (its dispatch not held) or the Runtime clock
+    could not be read. The run counts as any run of its content does.
+
+  What the Runtime treats as fatal wherever it meets it is no failure of the break-in and is not
+  softened here: a lock of the host's own run state that another thread left broken (the
+  scheduled runs' resolutions, the policy's state) and a failure to write that record end the run
+  and stop the Runtime, as they do at every other place.
+- **Where it is kept.** In the pair's value record `policy.control_state_recorded` (register L7),
+  the optional member `break_in: {content_hash, runs, first_settled_at_unix_ms}`, written by the
+  live settlement that counts a run; nothing else is persisted. A loading start loads it with the
+  rest of the decision memory; a seeding start ([ledger-observer.md](ledger-observer.md) §11.5,
+  "Without the marker": a root's second start, whose first wrote no marker), which rebuilds the
+  decision memory from the dispatch records, takes each pair's from its latest value record, since
+  no dispatch record holds it (fix round 2). A run a start's or an abandoned worker's
+  reconciliation settles has no preparation of this process and counts nothing.
+- **A package that ran before this build.** Its pair's records hold no break-in: the records
+  0.12.62 and earlier wrote do not say which content a successful run ran, so the Runtime cannot
+  tell content that has run for weeks from content changed yesterday. As built, such a pair is
+  inside its break-in from its first run on this build: from that run on, until it has settled
+  `scheduling.suspension.break_in_runs` runs (20) that began the package and
+  `scheduling.suspension.break_in_ms` (seven days) have passed since the first of them, a screen
+  the package never recorded ends its scheduled run with this code and pauses the pair at once,
+  until the package's content changes (a changed content starts a new break-in). While the pair
+  is paused it runs nothing, so its count does not grow; the seven days do pass. Once both are
+  reached, the same screen ends the run with `page_confirmation_failed` and the ordinary handling.
+- **Where a person sees it.** `actingd suspended`'s list `break_ins` (below).
+
+A pair paused by this code shows in `actingd suspended` under `suspended` (`failure` with the
+code and its values, `artifact_id` among them, `pause_cause` `unrecorded_screen`, `previous`
+`null`, `effective_class` `severe`, `lifts_when` `content_hash_changes`), in `ac_diagnose` (its
+`suspended` rows and `failures_grouped` by the code), and in `ac_schedule` as a candidate row
+whose `why` is `policy_task_paused`.
+
+## Why a pair is paused (Workflow #469 H2)
+
+Since 0.12.62 (register §1.398; the owner's option A on board #469). A paused pair's
+`policy_task_paused` carries `pause_cause`, the word of why its settlement paused it, and
+`failure_code`, the code of the failure it paused on (the record's failure code, "Replay"; left out
+for a relayed spelling the catalog does not register). A pair held by its retry backoff carries
+`failure_code` on `policy_retry_backoff_active` the same way, and no `pause_cause`. Both are values
+of the outcome only: the reason's detail, the record, its failure identity and the streak's
+comparison do not change, and nothing decides by them (when a pair is paused or lifted is as
+before). The word is read from the execution record the settlement wrote, in the settlement's own
+order, the first that holds:
+
+| `pause_cause` | When |
+|---|---|
+| `runtime_budget_exceeded` | the original class is `severe` and the failure is the runtime-budget rewrite `policy_runtime_budget_exceeded` |
+| `interrupted_again` | the original class is `severe` and the failure is `policy_settlement_interrupted` (only the second in a row holds the pair, "Lifting (R19)") |
+| `unrecorded_screen` | the original class is `severe` and the failure is `contained_task_linear_unrecorded_screen` ("A failure that pauses at its first occurrence") |
+| `severe_failure` | any other failure whose original class is `severe` |
+| `sensitive_task` | the task is `sensitive` |
+| `repeated_failure` | the effective class is `severe`: the streak reached `escalation_threshold` |
+| `retries_exhausted` | the effective class is `recoverable`: the retries are used up and `on_failure.action` is `pause` |
+
+The word is memory only, as the packages a pause is lifted against are: the live settlement and a
+replay set it from the record, and a start that loads the pair's streak from its value record
+(`ledger-observer.md` §11) takes it from the execution record of the streak's dispatch, which the
+dispatch journal holds; no persisted member is added. `actingd suspended` computes the same word
+from the same record for the pair's `suspended` row (`pause_cause`), and `ac_schedule`, the not-run
+rows of `ac_diagnose` and a `policy.dispatch_rejected` record show the outcome with its values.
+A pause carries no `pause_cause` when the dispatch journal holds no execution record of the
+streak's dispatch that names its failure, which can be on a start that loaded the streak: that
+start's journal holds the dispatches the pair's value record names, and once the pause was lifted,
+a run that a condition ended leaves the streak as it was ("Condition termination and owed reruns
+(Workflow #386 SR-2)", "Settlement") while the value record names that run, not the paused one.
 
 ## Settlement of an accumulating failure
 
@@ -415,7 +537,7 @@ only its registered names (`"detail":"codes"`).
  "suspended":[{"task_id":"...","instance_id":"...","procedure_ref":"...",
    "failure":{"code":"...","category":"error","values":{}},"failure_identity":"...",
    "run_failure":{"code":"...","category":"error","values":{}},"consecutive_same_error":2,
-   "effective_class":"severe","severity":"error",
+   "effective_class":"severe","pause_cause":"repeated_failure","severity":"error",
    "paused":{"execution_sequence":0,"observed_at_unix_ms":0,"decision_id":"...","run_id":"..."},
    "previous":{"execution_sequence":0,"disposition":"retry_scheduled","run_id":"..."},
    "step":{"scope":"main","operation_label":"..."},
@@ -471,7 +593,9 @@ only its registered names (`"detail":"codes"`).
   `suspended_frame_missing` (a frame is absent), `suspended_frame_unreadable` (caused by the
   artifact read's failure) or `png_invalid` (the decoder's text as its `foreign_data_error`
   link). `ccoeff_failure` (v1's `ccoeff_error`) is the `png_invalid` outcome of a correlation
-  coefficient that could not be computed, else `null`.
+  coefficient that could not be computed, else `null`. Workflow #469 H2 (since 0.12.62):
+  `pause_cause` is the word of why the execution paused the pair, from the execution record, as
+  the pair's `policy_task_paused` carries it ("Why a pair is paused").
 - `package`: the content hash prefixes the pause recorded (`paused_hash_prefix`, `x` when the
   settlement could not measure the package, `null` for a pause without a failure identity) and
   the ones measured now (`current_hash_prefix`, `null` when the package cannot be measured or
@@ -591,6 +715,22 @@ only its registered names (`"detail":"codes"`).
   - MCP `ac_diagnose` carries the diagnosed instance's entries as its `held` rows, with the same
     members, and marks `held_reported: true` on each `not_run` row whose instance, task and
     `since_unix_ms` an open entry names (its `instance_id`, `task_id` and `held_since_unix_ms`).
+
+- `break_ins` (Workflow #463 U1b, since 0.12.63; "A failure that pauses at its first
+  occurrence"): one entry per pair whose latest value record (`policy.control_state_recorded`)
+  carries a break-in, ordered by task, then instance: `task_id`, `instance_id`,
+  `content_hash_prefix` (the content it counts), `runs` of `runs_needed`,
+  `first_settled_at_unix_ms`, `since_first_ms` (the report's now less the first settlement,
+  `null` without one) of `ms_needed`, and `in_break_in`, `false` once both are reached. The
+  report's now (fix round 2) is the ledger's latest event, its head row, as `remedies` and `held`
+  take it: the report reads no clock of its own, and not the ledger's latest time, the maximum
+  over every row, which counts the rows the ledger stamps by the system clock (SR-2b-2 fix round 2),
+  while the first settlement is a time of the Runtime's clock. Of a stopped Runtime it is the time
+  of its last record, so a row can show a pair inside that the Runtime, judging on its own clock
+  at its next run, finds past its break-in. `runs_needed` and `ms_needed` are the two keys of
+  the configuration the report loads; a value set while the Runtime runs is not seen here. The
+  report measures no package: a changed package shows its new break-in from its first settled
+  run, when the Runtime starts it. A pair with no such record has no entry (it is inside).
 
 Every exit, usage errors included, prints that one stdout line, and the process exits by its
 outcome's category (Workflow #378 A6a): 0 for `suspended_reported`, whatever the report lists,

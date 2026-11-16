@@ -1227,7 +1227,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.61",
-      "description": "Workflow #464 P1 (contracts/standard-pack-authoring.md, \"The checks\"): actinglab standard-pack adopt refused before it wrote anything in the repository, adopt_problem naming the check: repository_invalid (entry the file of --repo that is missing or does not read: applications.json, maintenance.json, packs, schedule.json, or a .part of one an interrupted adoption left, the message naming every leftover and what to do; or, without a decision and with --replace, entry maintenance.json, json_pointer the package's entry and package_id, when schedule.json gives the package a held entry beside that entry: two roles, which only an adoption interrupted between its two renames leaves, the message saying what to do; a rule beside that entry is the package's one maintenance role, since the composer does not judge it), recording_not_current (path the recording's recording.json, member the member that is not as a stopped recording's last stop left it: schema_version, record_id, status, amended_at_unix_ms or artifact), package_invalid (path the package; the loader's refusal as the cause, or package_id when it names no directory packs/<package_id>), package_mismatch (member game or server: the package's is not applications.json's), pack_exists (entry packs/<package_id>, or json_pointer the rule or held entry of an earlier adoption without --replace, the message naming what the root files hold of the package and, when schedule.json and maintenance.json hold nothing of it beside its directory, naming the root file adopt does not write that gives it a role and what the call accepts for it, or saying that an adoption was interrupted before it wrote them, and what to do; entry packs/<package_id>.part an interrupted adoption left, the message naming every leftover and what to do; path a kept copy's place that is taken), pack_dirty (entry packs/<package_id>, count the paths with a change not committed, or the version control's failure as the cause), recording_unreviewed (package_id: the package is not run through, its cross-check not passed, its first decision not evaluated or a step needing review, and the class is not held; the refusal's details carry review), local_path (entry the package's file, json_pointer the string, which holds an absolute local path or the state directory), decision_invalid (path the decision document and json_pointer the member, or entry schedule.json and json_pointer in the file as it would be written for what the rule keeps: a member missing or wrong, a business rule without its value that is no follower of a chain, pending for a follower, the class business beside a maintenance role a root file adopt does not write gives the package, or a key the schedule as the check compiled it reads of the rule's own outcome (a composed rule's trigger or feedback_stop, a pool's observation, an activity target's measure), or a key the rule reads of another task's outcome, that the package of the task read does not declare, the message naming who reads by its id and the details carrying that package's declared_outcome_keys and, for another task, its task_id and package_id), value_origin_model (path the decision document, json_pointer /value/origin: the value names the origin model, which only the model's export writes; give the number with the origin pack, or pending), rule_refused (entry schedule.json, json_pointer the composer's pointer in the file as it would be written, the composer's refusal as the cause; or package_id when the adopted package comes out unclassified), root_file_not_canonical (entry schedule.json or maintenance.json, which adopt must change and which is not in the canonical form package fmt writes), replace_across_volumes (entry packs/<package_id>, path the kept copy's place: with --replace the state directory lies on another volume than the checkout, where the replaced directory cannot be moved, or the volume cannot be told, the failure as the cause; the message says to give a --state-dir on the checkout's volume, and a recording's package by --package), check_tree_unmarked (path the checkout's check tree under the state directory, which holds no marker the tool wrote: it is not the tool's own and is not touched), check_tree_busy (path the check tree, which another adoption of the checkout with the same state directory holds), check_tree_link (path the check tree's place, or a directory beside it named as one a call makes the tree whole in, which is a link, a symbolic link or a junction: nothing is cleared through it), business_rule_in_the_way (entry schedule.json, json_pointer /rules/<i> and package_id: a decision of the class maintenance by its uses alone meets the package's business rule, a rule the composer judges by its value, which adopt does not turn into a maintenance rule; the message names the rule's id). A refusal of package bundle or standard-pack check of the check tree other than these is answered as it is.",
+      "description": "Workflow #464 P1 (contracts/standard-pack-authoring.md, \"The checks\"): actinglab standard-pack adopt refused before it wrote anything in the repository, adopt_problem naming the check: repository_invalid (entry the file of --repo that is missing or does not read: applications.json, maintenance.json, packs, schedule.json, or a .part of one an interrupted adoption left, the message naming every leftover and what to do; or, without a decision and with --replace, entry maintenance.json, json_pointer the package's entry and package_id, when schedule.json gives the package a held entry beside that entry: two roles, which only an adoption interrupted between its two renames leaves, the message saying what to do; a rule beside that entry is the package's one maintenance role, since the composer does not judge it), recording_not_current (path the recording's recording.json, member the member that is not as a stopped recording's last stop left it: schema_version, record_id, status, amended_at_unix_ms or artifact), package_invalid (path the package; the loader's refusal as the cause, or package_id when it names no directory packs/<package_id>), package_mismatch (member game or server: the package's is not applications.json's), pack_exists (entry packs/<package_id>, or json_pointer the rule or held entry of an earlier adoption without --replace, the message naming what the root files hold of the package and, when schedule.json and maintenance.json hold nothing of it beside its directory, naming the root file adopt does not write that gives it a role and what the call accepts for it, or saying that an adoption was interrupted before it wrote them, and what to do; entry packs/<package_id>.part an interrupted adoption left, the message naming every leftover and what to do; path a kept copy's place that is taken), pack_dirty (entry packs/<package_id>, count the paths with a change not committed, or the version control's failure as the cause), recording_unreviewed (package_id: the package's recording was not checked offline, its cross-check not passed, its first decision not evaluated or a step needing review, and the class is not held; the refusal's details carry review, its member recording_checked false since Workflow #463 S3-12), local_path (entry the package's file, json_pointer the string, which holds an absolute local path or the state directory), decision_invalid (path the decision document and json_pointer the member, or entry schedule.json and json_pointer in the file as it would be written for what the rule keeps: a member missing or wrong, a business rule without its value that is no follower of a chain, pending for a follower, the class business beside a maintenance role a root file adopt does not write gives the package, or a key the schedule as the check compiled it reads of the rule's own outcome (a composed rule's trigger or feedback_stop, a pool's observation, an activity target's measure), or a key the rule reads of another task's outcome, that the package of the task read does not declare, the message naming who reads by its id and the details carrying that package's declared_outcome_keys and, for another task, its task_id and package_id), value_origin_model (path the decision document, json_pointer /value/origin: the value names the origin model, which only the model's export writes; give the number with the origin pack, or pending), rule_refused (entry schedule.json, json_pointer the composer's pointer in the file as it would be written, the composer's refusal as the cause; or package_id when the adopted package comes out unclassified), root_file_not_canonical (entry schedule.json or maintenance.json, which adopt must change and which is not in the canonical form package fmt writes), replace_across_volumes (entry packs/<package_id>, path the kept copy's place: with --replace the state directory lies on another volume than the checkout, where the replaced directory cannot be moved, or the volume cannot be told, the failure as the cause; the message says to give a --state-dir on the checkout's volume, and a recording's package by --package), check_tree_unmarked (path the checkout's check tree under the state directory, which holds no marker the tool wrote: it is not the tool's own and is not touched), check_tree_busy (path the check tree, which another adoption of the checkout with the same state directory holds), check_tree_link (path the check tree's place, or a directory beside it named as one a call makes the tree whole in, which is a link, a symbolic link or a junction: nothing is cleared through it), business_rule_in_the_way (entry schedule.json, json_pointer /rules/<i> and package_id: a decision of the class maintenance by its uses alone meets the package's business rule, a rule the composer judges by its value, which adopt does not turn into a maintenance rule; the message names the rule's id). A refusal of package bundle or standard-pack check of the check tree other than these is answered as it is.",
       "common_causes": "A decision document without a member the class needs, a package adopted before without --replace, a recording whose cross-check was only partly evaluated, a root file formatted by hand.",
       "handling": "Fix what the value names and run the adoption again; it wrote nothing. A root file that is not canonical is written in the canonical form once, in a commit of its own."
     },
@@ -1294,6 +1294,271 @@
       "description": "Workflow #464 P3 (contracts/standard-pack-schedule.md, Readiness): a readiness item of a pack that was not judged from what the readiness was given, readiness_unjudged saying why (installation_not_read: no installation was read; part_not_read; not_admitted; composition_refused; no_rule; server_not_told; package_undeclared; check_stopped), never guessed and never passed; or, item unrecorded_screen_code (I3) only, the information line no_revision_tells, which never makes a pack wait (the coordinator's ruling 3 on board #464). An item not judged never counts as holding: a pack whose root items all hold and none of whose items fails, with an installation item not judged, answers ready_to_place, not dispatchable (fix round 1).",
       "common_causes": "The readiness ran without an installation (actinglab standard-pack ready reads none), or a part of the installation was not read.",
       "handling": "Act on the item it depends on where there is one. An installation item is judged only where an installation's readings are handed to the function; today no caller hands them (actinglab standard-pack ready reads none, and the placement plan does not call the readiness yet, a follow-up), so judge it by hand: the configuration's instances (I1), the installer's package range (I2), check-config's subsystems (I4), actingd suspended (I5), vision check (I6)."
+    },
+    "trial_state_dir_refused": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "resource-tooling",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "path": "required",
+        "trial_state_place": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.64",
+      "description": "Workflow #463 S3-10 (contracts/standard-pack-trial.md, \"The record\"): the state directory (path) where actinglab standard-pack trial keeps its records is, or lies inside, an installed root or a repository (trial_state_place says which: a directory along its path whose install\\state.json is a file, the installer's own state file, or one that holds .git). Trial records are Lab authoring state, kept beside the recordings. The plan and the record's writer both refuse it; nothing was written or sent. A check of the path that the operating system refuses is foreign_os_error, never passed.",
+      "common_causes": "--state-dir points into the installation root, or into a resource repository's checkout (recordings accept a state directory there; trial records do not).",
+      "handling": "Give a --state-dir outside every installation and repository, or leave it out for actinglab's own."
+    },
+    "trial_record_exists": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "resource-tooling",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "path": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.64",
+      "description": "Workflow #463 S3-10 fix round 2 (contracts/standard-pack-trial.md, \"The record\"): a trial record of that name, or the .part of one, is there already (path, the file that is there) and is never replaced: the writer writes a record under its name with .part added, a file created anew, and links it to its name, which fails when the name is taken (fix round 3: or, where the link cannot be made, creates the name exclusively, which fails the same way). Nothing was replaced or removed; when the link or the exclusive create found the record there, the .part this call wrote is left beside it. Workflow #463 S3-11 fix round 2: before the writer, standard-pack trial looks for a record of the run it records among the package's records (trial_record_of_run); one there, whatever content it names, is this code with path that record, and nothing is written: a run has one record. The answer then carries no next (the run is recorded); a refusal of the writer carries next, the line that records the run later.",
+      "common_causes": "A second --collect of a run already recorded (the package directory changed since or not), two trials of one content recorded in the same millisecond, or a .part an interrupted write left.",
+      "handling": "Look at the file the path names: a record there is kept, and a .part an interrupted write left may be moved away by hand; then, when the run has no record yet, write it again with the answer's next line."
+    },
+    "trial_record_write_failed": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "resource-tooling",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "path": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.64",
+      "description": "Workflow #463 S3-10 (contracts/standard-pack-trial.md, \"The record\"): the operating system refused a step of writing a trial record (path, the file or directory it refused; its refusal, with io_op, as the cause), and no record was written: making the directory, creating the record's .part, writing it (io_op write) or flushing it (io_op sync); or, fix round 3, where the hard link of the .part to the record's name was refused for another reason than the name being taken (a file system without hard links), the exclusive create of the record's name that stands in for the link, or writing or flushing that file, the link's refusal then a note link. After such a failure the writer removes the files it created anew (its .part, and the record's file of an exclusive create), so that writing the record again is not blocked by them; one whose removal the operating system refuses too is left, named by a cleanup link (foreign_os_error, io_op remove, path the file left). A record of that name already there is trial_record_exists instead; a .part left once the record is in place is the warning trial_record_part_left, beside a written record.",
+      "common_causes": "A full disk, a folder without the right to write, or another program holding the file.",
+      "handling": "Read the cause, free the place or give a --state-dir where actinglab may write, move away a file a cleanup link names, and write the record again."
+    },
+    "trial_record_unreadable": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "resource-tooling",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "path": "required",
+        "trial_record_problem": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.64",
+      "description": "Workflow #463 S3-10 (contracts/standard-pack-trial.md, \"The record\"): a file of a trial record's name (<content12>-<ms>.json) under <state>/trials/<package_id>/, or that directory, is not read as the record its name says, and trial_record_problem says why (fix round 2): read_failed (the operating system refused to open, read or list it; its refusal as the cause), too_large (larger than 1 MiB), undecodable (no actingcommand.pack-trial.v1 document; the decoder's refusal as the cause) or name_mismatch (a record, but not of the package, the content and the time its name says). The reader answers no record of that package rather than pass over one.",
+      "common_causes": "A record edited or copied by hand, or a file of another program under the trials directory.",
+      "handling": "Look at the file the path names; restore or move it away, then read again."
+    },
+    "trial_record_part_left": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "resource-tooling",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "path": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.64",
+      "description": "Workflow #463 S3-10 fix round 3 (contracts/standard-pack-trial.md, \"The record\"): a trial record is written and in place, but the .part its write created (path) is left beside it: the operating system refused to remove it (its refusal, with io_op remove, as the cause). The writer answers success, the record's path with the .part as its member part_left and this warning in warnings; the record is whole and is read as written, and the reader takes no .part for a record.",
+      "common_causes": "Another program (a virus scanner, an indexer, a backup tool) held the .part open when the writer removed it.",
+      "handling": "Nothing is lost: the record is in place. Move the .part the path names away by hand once nothing holds it."
+    },
+    "trial_authorization_missing": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "resource-tooling",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "package_id": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.65",
+      "description": "Workflow #463 S3-11 (contracts/standard-pack-trial.md, \"The run\"): actinglab standard-pack trial was asked for its run (no --plan) of the package package_id without --authorization, the reference of the owner's authorization a trial on a real application is sent under. The plan's own refusals came first; nothing was sent and nothing was written. A plan needs no authorization.",
+      "common_causes": "The trial was asked for before the owner's authorization was recorded, or the line left out --authorization.",
+      "handling": "Give --authorization <reference> (the board comment that holds the owner's word), or ask for the plan alone with --plan."
+    },
+    "trial_irreversible_unacknowledged": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "resource-tooling",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "package_id": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.65",
+      "description": "Workflow #463 S3-11 (contracts/standard-pack-trial.md, \"The run\"): the irreversible mark, judged over the root --root names, flags the package package_id (a capability of the root marked irreversible that it provides or its remedies list, a package the root does not register, or a root with an unreadable package), and its run was asked for without --irreversible. Nothing was sent and nothing was written. Without --root the mark is not judged and refuses nothing.",
+      "common_causes": "A package whose run may do something that cannot be undone, tried without acknowledging it.",
+      "handling": "Read the plan's irreversible_basis; when the owner's authorization covers it, give --irreversible."
+    },
+    "trial_variables_not_carried": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "resource-tooling",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "package_id": "required",
+        "variable_name": "required"
+      },
+      "review": "pending",
+      "status": "retired",
+      "since": "0.12.65",
+      "retired_in": "0.12.68",
+      "description": "Retired (Workflow #463 S3-8, S3-9): a direct run carries the values --variable gives (ContainedTaskRequest.variables, runtime-client 11), so the trial's run sends them and nothing refuses a --variable for this cause. Was: Workflow #463 S3-11 (contracts/standard-pack-trial.md, \"The run\"): the run of the package package_id was asked for with --variable (variable_name, the first given), and a direct run carries no variable value yet: it runs every declared default. Nothing was sent and nothing was written. The plan keeps showing the values given, judged by their declarations.",
+      "common_causes": "A trial of a non-default choice, which a direct run could not make before 0.12.68.",
+      "handling": "None in 0.12.68 and later: the code is no longer emitted."
+    },
+    "trial_end_unexpected": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "resource-tooling",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "package_id": "required",
+        "outcome_key": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.65",
+      "description": "Workflow #463 S3-11 (contracts/standard-pack-trial.md, \"The end\"): the trial's run of the package package_id ended normally on another end than the one --expect named: outcome_key is the key of the end it reached (absent when its terminal names none). The business ended another way, which is what a trial is for: the command succeeds, exit 0, with matched false, and the record keeps the end. It rides in the answer's warnings.",
+      "common_causes": "An ending page (not enough of something, nothing left to do) where the target page was expected, or the other way round.",
+      "handling": "Read the end and its final page; adopt or record the ending the run met, or try again when the application's state allows the expected end."
+    },
+    "trial_end_unread": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "resource-tooling",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "request_id": "required",
+        "run_state": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.65",
+      "description": "Workflow #463 S3-11 (contracts/standard-pack-trial.md, \"The end\"): the read of the trial's run (request_id), as run show reads it, shows that it has not ended yet, and no record was written: run_state not_found (no fact of the run yet), admitted or running (no terminal yet). The answer carries next, the line that reads it again later (--collect). Nothing is sent again. Fix round 2: its one cause; an interrupted run is trial_run_interrupted, and a terminal whose ledger record was not found is trial_terminal_unrecorded.",
+      "common_causes": "The run had not ended when its end was read (a --collect too early, or a --wait that ended first), or the request id names no run of this Runtime's ledger.",
+      "handling": "Read it again later with the answer's next line (--collect); when run_state stays not_found, check the request id."
+    },
+    "trial_collect_mismatch": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "resource-tooling",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "request_id": "required",
+        "trial_collect_problem": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.65",
+      "description": "Workflow #463 S3-11 (contracts/standard-pack-trial.md, \"Reading the end later\"): standard-pack trial --collect named the run request_id, whose facts do not show a trial's run of the trial's package on its instance: trial_collect_problem other_package (another package, or none) or other_instance (another instance, or none); fix round 2: scheduled (the scheduler's run), origin_unknown (no record of its request's origin, so whether it was sent by hand is not known) or other_channel (sent by hand through the command line's or the interface's own channel, not the Lab's, on which a trial's run is sent). An ordinary run start of the same package on the Lab's channel is not told apart: no fact of a run names the command that sent it. Nothing was sent and nothing was written.",
+      "common_causes": "The request id of another trial, of a scheduled run or of a run another client sent, or the same trial's line with another --package or --instance.",
+      "handling": "Give --collect the request_id the trial's own answer named, beside the same arguments."
+    },
+    "trial_run_interrupted": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "resource-tooling",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "request_id": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.65",
+      "description": "Workflow #463 S3-11 fix round 2 (contracts/standard-pack-trial.md, \"The end\"): the read of the trial's run (request_id), as run show reads it, is interrupted_unterminated: the Runtime started or took over after the run's first fact and the run has no terminal, so it has no end to record. No record was written, the answer carries no next (nothing is there to collect), and nothing is sent again.",
+      "common_causes": "The Runtime restarted, or another Runtime took over, while the trial's run was going on.",
+      "handling": "Nothing to collect: read the run's facts (run show) to see how far it got, and try the package again under the owner's authorization when that is wanted."
+    },
+    "trial_terminal_unrecorded": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "resource-tooling",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "request_id": "required",
+        "run_state": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.65",
+      "description": "Workflow #463 S3-11 fix round 2 (contracts/standard-pack-trial.md, \"The end\"): the read of the trial's run (request_id), as run show reads it, names its terminal (run_state succeeded, failed or cancelled), but the read of the ledger's record of that terminal, by the run's request at the terminal's sequence, which gives the time that names the record, did not find it. No record was written and the answer carries no next; nothing is sent again.",
+      "common_causes": "Not told by the reads: the ledger answered the run's facts with a terminal, and then not that terminal's record at its sequence.",
+      "handling": "Look at the run's facts in the ledger (run show, the ledger's events at the terminal's sequence); collect the run again only once its terminal's record is found there."
+    },
+    "trial_end_uncoded": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "resource-tooling",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "request_id": "required",
+        "run_state": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.65",
+      "description": "Workflow #463 S3-11 fix round 2 (contracts/standard-pack-trial.md, \"The end\"): the trial's run (request_id) ended failed or cancelled (run_state, the end state as run show names it) and its terminal names no failure code, so no code of its own can stand on top. Whether a run failed is read from its end state, never from whether a code is there: the record is written with the end (no failure_code) and the command fails as for a failed run.",
+      "common_causes": "A terminal recorded without its failure outcome, as a ledger written before the outcome was required may hold one.",
+      "handling": "Read the run's facts and evidence (run show, run evidence) for why it ended; the record keeps the end as read."
+    },
+    "enabling_needs_authorization": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "resource-tooling",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "package_id": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.68",
+      "description": "Workflow #463 S3-12 (contracts/standard-pack-authoring.md, \"The trial and the two warnings\"): the decision of actinglab standard-pack adopt gives the package package_id a class that runs, business or maintenance, and so lifts its hold where it had one. Adoption prepares the checkout and enables nothing: the pack enters scheduling, or takes its supporting role, only by a placement, and a placement that changes anything asks for --authorization, the reference of the owner's word, and for --enables naming every package that enters scheduling or takes a new supporting role, this one among them when the installed root did not run it before. Nothing is refused: the adoption is written, or validated under --dry-run, as without it. It rides in the answer's warnings.",
+      "common_causes": "A first adoption of the class business or maintenance, or a decision that lifts a package's hold.",
+      "handling": "Before the placement that enables the package, get the owner's authorization and give its reference to place with --authorization, and the package in --enables; adopt it as held (--held-reason) while it is not to run."
+    },
+    "not_tried": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "resource-tooling",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "package_id": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.68",
+      "description": "Workflow #463 S3-12 (contracts/standard-pack-authoring.md, \"The trial and the two warnings\"): no passed trial of the content actinglab standard-pack adopt writes for the package package_id is on record in its state directory: no trial record of that content (by the content prefix a trial keeps of packs/<package_id>/), or none whose run ended normally on the end it expected. A record of another content of the same package counts for nothing. The answer's review.trial says what is on record (passed, failed or none, with the latest record's authorization, time and end, and other_content). Not warned when the trial records could not be read: review.trial_not_read says why instead. Nothing is refused; it rides in the answer's warnings.",
+      "common_causes": "A package not tried on a real application yet, a trial that failed or ended on another end, or a content changed since its trial (a new recording, a repaired package).",
+      "handling": "Under the owner's authorization, try the adopted directory (actinglab standard-pack trial --instance <instance> --package <checkout>/packs/<package_id> --authorization <reference>) before it is enabled; keep it held until a trial of this content passes."
     }
   }
 }

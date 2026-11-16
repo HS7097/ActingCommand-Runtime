@@ -7,6 +7,7 @@ use super::*;
 use crate::codes::{HostCode, HostLocation};
 use actingcommand_contract::codes::{ContractLocation, RuntimeErrorCode, SharedCode};
 use actingcommand_contract::outcome::Location;
+use actingcommand_scheduler::{ClaimClass, MemberGates, QueuedCandidate};
 
 #[cfg(test)]
 #[derive(Clone)]
@@ -954,10 +955,17 @@ impl HostShared {
         self.record_expired_queued(expired)
     }
 
+    /// Commits the prepared transfer: the receiver's `lease.transition_intent`, the end of the
+    /// holder's device use with `end`, `lease.transferred` and the grant to the queued claim; its
+    /// `lease.transferred`. Workflow #475: `None` when `end` is a holder's own end (a
+    /// pre-emption's hand-over) whose close met the lapsed lease and is owed
+    /// (`expired_close_owed`): nothing is transferred, the claim stays queued, and the caller
+    /// ends the lease handing the device to no one, which makes that close.
     pub(super) fn perform_transfer(
         &self,
         prepared: Box<PreparedLeaseTransfer>,
-    ) -> Result<PersistedEvent, RequestFailure> {
+        end: LeaseDeviceEnd,
+    ) -> Result<Option<PersistedEvent>, RequestFailure> {
         let from = prepared.from_token().clone();
         let to = prepared.to_token().clone();
         let queued_request_id = prepared.queued_request_id();
@@ -1021,8 +1029,13 @@ impl HostShared {
             ),
         )?;
         // Workflow #191 H: the device session stays with the instance across the transfer; a
-        // Ready transfer has no step in flight.
-        self.end_lease_device_use(&from, prepared.from_connection_id(), LeaseDeviceEnd::Keep)?;
+        // Ready transfer has no step in flight. Workflow #475: a pre-emption hands over a lease
+        // that may have lapsed under an input that outlasted it; a close that lapsed lease refuses
+        // fences the instance and is owed (#458, #461), and the device goes to no one.
+        self.end_lease_device_use(&from, prepared.from_connection_id(), end)?;
+        if end != LeaseDeviceEnd::Keep && self.expired_close_owed(&from)? {
+            return Ok(None);
+        }
         let transferred = self.append_event(
             EventSeverity::Info,
             EventSource::Scheduler,
@@ -1073,7 +1086,7 @@ impl HostShared {
             .map_err(RequestFailure::poison_without_terminal)?;
         self.persist_active_instances()
             .map_err(RequestFailure::poison_without_terminal)?;
-        Ok(transferred)
+        Ok(Some(transferred))
     }
 
     /// The caller holds the per-instance admission guard, so no lease mutation can invalidate the
@@ -1131,8 +1144,25 @@ impl HostShared {
                     return Ok(None);
                 }
                 let token = prepared.to_token().clone();
-                self.perform_transfer(prepared)
-                    .map(|event| Some((token, event)))
+                let from = prepared.from_token().clone();
+                let from_connection = prepared.from_connection_id();
+                match self.perform_transfer(prepared, LeaseDeviceEnd::HolderEnd)? {
+                    Some(event) => Ok(Some((token, event))),
+                    // Workflow #475: the idle holder's lease had lapsed and its close is owed;
+                    // the pre-emption ends it handing the device to no one, which makes the
+                    // close, and the claim waits in the queue (`cleanup_token_guarded`).
+                    None => {
+                        drop(order);
+                        self.cleanup_token_inner(
+                            &from,
+                            from_connection,
+                            LeaseReleaseReason::Preempted,
+                            None,
+                            Some(_admission),
+                        )?;
+                        Ok(None)
+                    }
+                }
             }
             TransferPreparation::Deferred | TransferPreparation::NoCandidate => Ok(None),
         }
@@ -1227,6 +1257,19 @@ impl HostShared {
                     .request_links(request, Some(resolved.instance_id()), None, None),
                 EventAction::LeaseAcquire,
             )?;
+        }
+        // Workflow #437 G1 (`contracts/device-group.md`, "A failure stays where it belongs"): an
+        // immediate try of a member whose device is held for another member's unconfirmed close
+        // is refused, naming that member, before the scheduler is asked.
+        if let Some(held) = self.device_held_error(instance_id)? {
+            self.append_lease_requested(request, &resolved)?;
+            return Err(self.scheduler_denied_error(
+                request,
+                Some(resolved.instance_id()),
+                None,
+                resolved.audit_endpoint(),
+                held,
+            )?);
         }
         // Workflow #437 MAPP-1d: each claim of the device's queue by its own member's gate.
         let gates = self.device_gates(instance_id)?;
@@ -1912,7 +1955,23 @@ impl HostShared {
                     )?;
                     return Ok(true);
                 }
-                self.perform_transfer(prepared).map(|_| true)
+                if self
+                    .perform_transfer(prepared, LeaseDeviceEnd::HolderEnd)?
+                    .is_none()
+                {
+                    // Workflow #475: the preempted lease lapsed under the work that outlasted it
+                    // and its close is owed; the pre-emption ends it handing the device to no
+                    // one, which makes the close, and the claim waits in the queue.
+                    drop(order);
+                    self.cleanup_token_inner(
+                        token,
+                        connection_id,
+                        LeaseReleaseReason::Preempted,
+                        None,
+                        Some(_admission),
+                    )?;
+                }
+                Ok(true)
             }
             TransferPreparation::Deferred => Err(RequestFailure::poison_without_terminal(
                 RuntimeHostError::fatal(
@@ -2019,7 +2078,7 @@ impl HostShared {
                 audit_endpoint(resolved.audit_endpoint()),
             ),
         )?;
-        self.perform_transfer(prepared)?;
+        self.perform_transfer(prepared, LeaseDeviceEnd::Keep)?;
         let released = self.append_event(
             EventSeverity::Info,
             EventSource::Scheduler,
@@ -2138,7 +2197,9 @@ impl HostShared {
     /// and `lease.released` under the run's own links (C1, C9). The hand-off bypasses the queue
     /// and capacity (Q-3 (1), C13). The caller holds the admission guard. Returns the ladder
     /// back when there is no key to hand on (the lease already ended, a destructive step is
-    /// open, or the gate closed since the admission).
+    /// open, or the gate closed since the admission), and (Workflow #475) when the run's lease
+    /// owes the close its lapsed lease refused: the key goes to no one, the caller's lease end
+    /// makes that close once, and the ladder then waits as a claim.
     fn hand_off_to_ladder(
         &self,
         token: &LeaseToken,
@@ -2151,8 +2212,25 @@ impl HostShared {
         let instance_id = token.instance_id();
         self.expire_queued_for_instance(instance_id)
             .map_err(|failure| *failure.error)?;
-        self.end_lease_device_use(token, connection_id, LeaseDeviceEnd::Keep)
+        // Workflow #475 (`contracts/read-session-resource-close.md`): the hand-over is the run's
+        // own end of its lease, which may meet the lease lapsed before the sweep did; a run whose
+        // lease lapsed before its end began has no end phase, so #411 A64 does not take the
+        // refusal. As at a backend failure's end (#461), a close the lapsed lease refuses is
+        // recorded once, fences this instance only and is owed (`fence_expired_lease_close`).
+        // Owed, from this end or from a close made under the lease before it (a failed input's),
+        // the key is handed to no one: the ladder is returned, the caller's lease end
+        // (`cleanup_token_guarded`, a backend failure's) makes the close once and clears the
+        // entry, and the ladder then waits as a claim, granted by the queue after that close.
+        self.end_lease_device_use(token, connection_id, LeaseDeviceEnd::HolderEnd)
             .map_err(|failure| *failure.error)?;
+        if self.expired_close_owed(token)? {
+            // Fix round 1, test only: a test tells this withheld hand-over from a ladder that
+            // never reached it (one that waits in the queue ends the lease the same way).
+            #[cfg(test)]
+            self.ladder_hand_offs_withheld_for_test
+                .fetch_add(1, Ordering::AcqRel);
+            return Ok(Some(ladder));
+        }
         let claim_request = ladder.claim().clone();
         // ISO-5a (#419, ISO-M row B24): an invalid claim of this instance's ladder is an invariant
         // of this instance's data: its boundary fences the instance, never the Runtime.
@@ -2476,7 +2554,9 @@ impl HostShared {
     /// (`fence_expired_lease_close`; that end handed the device to no one, whatever instance it
     /// serves), the instance's session, closed still under the guard under a session close ahead
     /// (`close_expired_lease_session_guarded`), before the claim that waits first is granted;
-    /// nothing is owed for any other lease end.
+    /// Workflow #461: so for a lease whose close a disconnect or a backend failure's end met
+    /// lapsed, or whose failed input's close met it (`finish_input_failure`); nothing is owed for
+    /// any other lease end.
     fn cleanup_token_guarded(
         &self,
         token: &LeaseToken,
@@ -2511,11 +2591,22 @@ impl HostShared {
         self.expire_queued_for_instance(token.instance_id())
             .map_err(|failure| *failure.error)?;
         // Workflow #191 H: every lease end keeps the instance's session, a HostShutdown too (the
-        // Host close's second pass closes it under a dedicated close lease).
-        let end = if reason == LeaseReleaseReason::Expired {
-            LeaseDeviceEnd::Expiry
-        } else {
-            LeaseDeviceEnd::Keep
+        // Host close's second pass closes it under a dedicated close lease). Workflow #461: a
+        // client's disconnect and a backend failure's end are the holder's own end, which may
+        // meet its lease lapsed before the sweep did; a close that lapsed lease refuses is then
+        // owed as at the expiry, and made below once the lease has ended (`cleanup_token_guarded`).
+        // Workflow #475: so a pre-emption's end of the lease it took (`promote_idle_preemption`,
+        // `transfer_preempted_while_guarded`).
+        let end = match reason {
+            LeaseReleaseReason::Expired => LeaseDeviceEnd::Expiry,
+            LeaseReleaseReason::Disconnect
+            | LeaseReleaseReason::BackendFailure
+            | LeaseReleaseReason::Preempted => LeaseDeviceEnd::HolderEnd,
+            LeaseReleaseReason::Explicit
+            | LeaseReleaseReason::HostShutdown
+            | LeaseReleaseReason::InstancePaused
+            | LeaseReleaseReason::ConnectionPrepared
+            | LeaseReleaseReason::SessionClosed => LeaseDeviceEnd::Keep,
         };
         self.end_lease_device_use(token, connection_id, end)
             .map_err(|failure| *failure.error)?;
@@ -2533,7 +2624,10 @@ impl HostShared {
         // Workflow #437 MAPP-1d: no hand-over while a member of several owes its lapsed close;
         // Workflow #458: nor while any instance owes the close its expiry's lapsed lease refused
         // (fix round 1: an instance alone too, whose transfer would close again under the lapsed
-        // lease).
+        // lease); Workflow #461: nor at a holder's own end that owes it; Workflow #475: nor for a
+        // close the lease owes from a close under it made earlier (a switch, an application
+        // command's preparation, a pre-emption's hand-over, a failed run's hand-over to its
+        // ladder).
         let transfer_reason =
             if self.lapsed_close_owed_in_group(token)? || self.expired_close_owed(token)? {
                 None
@@ -2805,7 +2899,7 @@ impl HostShared {
             LeasePayloadDraft::transition_intent(action, audit_endpoint(resolved.audit_endpoint())),
         )
         .map_err(|failure| *failure.error)?;
-        self.perform_transfer(prepared)
+        self.perform_transfer(prepared, LeaseDeviceEnd::Keep)
             .map_err(|failure| *failure.error)?;
         #[cfg(test)]
         policy_crash_test_barrier("after_lease_transfer_before_release");
@@ -3121,11 +3215,6 @@ impl HostShared {
         connection_id: ConnectionId,
         reason: LeaseReleaseReason,
     ) -> RuntimeHostResult<()> {
-        lock(
-            &self.governance_connections,
-            HostLocation::CleanupGovernanceConnection,
-        )?
-        .remove(&connection_id);
         // Workflow #389 U-2: the connection's channel binding leaves with it.
         self.forget_connection_channel(connection_id)?;
         // Workflow #191 ps2: a closed connection sends no further reset.
@@ -3661,7 +3750,10 @@ impl HostShared {
     /// nothing: an instance held, in takeover cooldown, without an eligible entry, short of
     /// business capacity for a claim that waits for it (`waits_for_business_capacity`), or whose
     /// admission guard is taken is left as it is (the guard's holder pumps when it drops it; the
-    /// sweep pumps every tick).
+    /// sweep pumps every tick). Workflow #437 G1: the entry granted is the one
+    /// [`Self::queue_grant_choice`] chooses, so that an entry its own member's performance
+    /// directive or ladder wait holds stays in its place and does not hold back the entries of the
+    /// device's other members behind it.
     pub(super) fn pump(&self, instance_id: InstanceId) -> RuntimeHostResult<()> {
         if self.fatal.is_shutdown_requested() {
             return Ok(());
@@ -3676,35 +3768,15 @@ impl HostShared {
         let gates = self.device_gates(instance_id)?;
         let gate = |member: InstanceId| gates.gate_of(member);
         let names_claims_member = self.pump_names_claims_member();
-        let candidate = {
-            let scheduler = lock(&self.scheduler, HostLocation::ReadQueueGrantCandidate)?;
-            let now_monotonic_ms = self.monotonic_ms()?;
-            let kind = scheduler.grant_candidate(instance_id, gate, now_monotonic_ms);
-            if names_claims_member {
-                kind.zip(
-                    scheduler
-                        .first_eligible_claim(instance_id, gate, now_monotonic_ms)
-                        .map(|(member, _)| member),
-                )
-            } else {
-                kind.map(|candidate| (candidate, instance_id))
-            }
-        };
-        let Some((kind, member)) = candidate else {
+        // Workflow #437 G1 (`contracts/device-group.md`, "One queue, one worker, one lease per
+        // device"): read before the guard, as before, so that a pump that would grant nothing
+        // takes no guard and writes nothing.
+        let Some(candidate) =
+            self.queue_grant_choice(instance_id, gate, self.monotonic_ms()?, names_claims_member)?
+        else {
             return Ok(());
         };
-        // Review L4: a kind that takes today's admission checks is not granted while the
-        // instance's performance-control directive asks for suspension or shutdown.
-        if kind.takes_admission_checks() && self.performance_control_withholds(member)? {
-            return Ok(());
-        }
-        // Workflow #387 D1c (M387 §3.7): a ladder claim whose trigger item starts it after
-        // performance release waits, as a routine claim does, until the instance is released;
-        // every other ladder claim passes as before.
-        if kind == ClaimKind::Ladder && self.ladder_awaits_release(member, gate)? {
-            return Ok(());
-        }
-        if waits_for_business_capacity(kind) {
+        if waits_for_business_capacity(candidate.kind) {
             match self.admit_capacity() {
                 Ok(_) => {}
                 Err(error) if error.is_fatal() => return Err(error),
@@ -3721,14 +3793,49 @@ impl HostShared {
                 return Err(lock_poison_error(HostLocation::PumpInstanceQueue));
             }
         };
+        // Workflow #437 G1 fix round 1: each member's gate, whether the device is held for another
+        // member's unconfirmed close included, is read again now that the device's admission guard
+        // is held: a fence that holds the device is marked under this guard (a lease end's close),
+        // so a gate read before it was marked never grants the device after it. The gates read
+        // above chose only whether to take the guard.
+        let guarded_gates = self.device_gates(instance_id)?;
+        let guarded_gate = |member: InstanceId| guarded_gates.gate_of(member);
         let order_lock = self
             .queue_order_lock(instance_id)
             .map_err(|failure| *failure.error)?;
         let _order = lock(&order_lock, HostLocation::LockInstanceQueueOrder)?;
         self.expire_queued_while_ordered(instance_id)
             .map_err(|failure| *failure.error)?;
+        // Workflow #437 G1: the entry is chosen again under the device's admission guard and its
+        // queue-order lock, which every change of the device's queue takes, with the gates read
+        // under the guard and one clock reading; that entry, and no other, is prepared (by its
+        // request) and granted. The entry chosen before the guard is never granted by itself: an
+        // entry that changed since that read was checked here, and a business claim that was not
+        // that read's candidate asks for capacity here.
+        let now_monotonic_ms = self.monotonic_ms()?;
+        let Some(chosen) = self.queue_grant_choice(
+            instance_id,
+            guarded_gate,
+            now_monotonic_ms,
+            names_claims_member,
+        )?
+        else {
+            return Ok(());
+        };
+        if chosen.request_id != candidate.request_id && waits_for_business_capacity(chosen.kind) {
+            match self.admit_capacity() {
+                Ok(_) => {}
+                Err(error) if error.is_fatal() => return Err(error),
+                Err(_) => return Ok(()),
+            }
+        }
         let prepared = lock(&self.scheduler, HostLocation::PrepareQueueGrant)?
-            .prepare_queued_grant(instance_id, gate, self.monotonic_ms()?)
+            .prepare_queued_grant_of(
+                instance_id,
+                chosen.request_id,
+                guarded_gate,
+                now_monotonic_ms,
+            )
             .map_err(|error| {
                 RuntimeHostError::scheduler(HostLocation::PrepareQueueGrant, &error)
             })?;
@@ -3774,20 +3881,48 @@ impl HostShared {
         self.deliver_claim_grant(&context, &token)
     }
 
-    /// Workflow #387 D1c (M387 §3.7): whether the ladder claim the pump would grant on
-    /// `instance_id` waits for performance release while the instance is not released. Workflow
-    /// #437 MAPP-1d: `instance_id` is the member the claim serves, `gate` each member's gate.
-    fn ladder_awaits_release(
+    /// The entry the queue's grant (`pump`) gives `instance_id`'s free device now: the first
+    /// entry of the device's queue, in its order and each by its own member's gate
+    /// (`grant_candidates`), that its own member lets through. Review L4: a kind that takes
+    /// today's admission checks is held back while the member's performance-control directive asks
+    /// for suspension or shutdown; Workflow #387 D1c (M387 §3.7): a ladder claim whose trigger item
+    /// starts it after performance release waits until the member is released. Workflow #437 G1
+    /// (`contracts/device-group.md`, "One queue, one worker, one lease per device"): such an entry
+    /// stays in its place and holds back every later entry of its own member, so that a member's
+    /// order is kept and an instance alone on its device grants nothing behind it, as before; the
+    /// first entry of another member that its own member lets through is the one granted.
+    /// `names_claims_member` false (a test's `mapp1d_off_for_test`): every entry is judged as
+    /// `instance_id`'s, the member whose queue is pumped, as before MAPP-1d.
+    fn queue_grant_choice(
         &self,
         instance_id: InstanceId,
-        gate: impl Fn(InstanceId) -> ClaimGate,
-    ) -> RuntimeHostResult<bool> {
-        let Some(request_id) = lock(&self.scheduler, HostLocation::ReadQueueGrantCandidate)?
-            .grant_candidate_request(instance_id, gate, self.monotonic_ms()?)
-        else {
-            return Ok(false);
-        };
-        self.ladder_claim_awaits_release(request_id, instance_id)
+        gate: impl MemberGates,
+        now_monotonic_ms: u64,
+        names_claims_member: bool,
+    ) -> RuntimeHostResult<Option<QueuedCandidate>> {
+        let candidates = lock(&self.scheduler, HostLocation::ReadQueueGrantCandidate)?
+            .grant_candidates(instance_id, gate, now_monotonic_ms);
+        let mut held_back = BTreeSet::new();
+        for candidate in candidates {
+            let member = if names_claims_member {
+                candidate.instance_id
+            } else {
+                instance_id
+            };
+            if held_back.contains(&member) {
+                continue;
+            }
+            let withheld = (candidate.kind.takes_admission_checks()
+                && self.performance_control_withholds(member)?)
+                || (candidate.kind == ClaimKind::Ladder
+                    && self.ladder_claim_awaits_release(candidate.request_id, member)?);
+            if withheld {
+                held_back.insert(member);
+                continue;
+            }
+            return Ok(Some(candidate));
+        }
+        Ok(None)
     }
 
     /// Workflow #437 MAPP-1d: whether the queue's grant (`pump`) names the member its candidate
@@ -3816,6 +3951,14 @@ impl HostShared {
             lock(&self.host_claim_work, HostLocation::TakeHostClaimWork)?.get(&request_id),
             Some(HostClaimWork::RecoveryLadder(ladder)) if ladder.awaits_performance_release()
         );
+        // Workflow #437 G1, tests: a member whose ladder claims start after performance release.
+        #[cfg(test)]
+        let awaits = awaits
+            || lock(
+                &self.ladder_after_release_for_test,
+                HostLocation::TakeHostClaimWork,
+            )?
+            .contains(&instance_id);
         Ok(awaits && !self.performance_released(instance_id)?)
     }
 
@@ -3833,6 +3976,15 @@ impl HostShared {
     /// Review L4: whether the instance's performance-control directive withholds a new lease of
     /// a kind that takes today's admission checks (read only; the pump writes nothing).
     fn performance_control_withholds(&self, instance_id: InstanceId) -> RuntimeHostResult<bool> {
+        #[cfg(test)]
+        if lock(
+            &self.performance_suspended_for_test,
+            HostLocation::GatePumpPerformanceControl,
+        )?
+        .contains(&instance_id)
+        {
+            return Ok(true);
+        }
         let Some(instance_alias) = lock(
             &self.registered_instances,
             HostLocation::ReadInstanceRegistry,
@@ -3907,44 +4059,6 @@ impl HostShared {
             .map_err(|failure| *failure.error)?;
         lock(&self.host_claim_work, HostLocation::ForgetHostClaimWork)?.remove(&request_id);
         Ok(true)
-    }
-
-    /// §5.2: an install drain cancels every waiting entry except a holding ladder's own
-    /// continuation (`lease.queue_cancelled`); a holder finishes, or stops at its next holding
-    /// check. Run by the sweep while the host drains.
-    pub(super) fn cancel_queues_for_drain(&self) -> RuntimeHostResult<()> {
-        let instance_ids = lock(
-            &self.registered_instances,
-            HostLocation::ReadInstanceRegistry,
-        )?
-        .keys()
-        .copied()
-        .collect::<Vec<_>>();
-        for instance_id in instance_ids {
-            let order_lock = self
-                .queue_order_lock(instance_id)
-                .map_err(|failure| *failure.error)?;
-            let _order = lock(&order_lock, HostLocation::LockInstanceQueueOrder)?;
-            let removed = lock(&self.scheduler, HostLocation::CancelQueuesForDrain)?
-                .remove_queued_for_drain(instance_id)
-                .map_err(|error| {
-                    RuntimeHostError::scheduler(HostLocation::CancelQueuesForDrain, &error)
-                })?;
-            for cancelled in removed {
-                let context = self
-                    .read_queued_context_for(cancelled.queued())
-                    .map_err(|failure| *failure.error)?;
-                self.finish_queue_terminal(
-                    &context,
-                    DiagnosticCode::LeaseQueueCancelled,
-                    QueueTerminalOutcome::Cancelled { instance_id },
-                )
-                .map_err(|failure| *failure.error)?;
-                lock(&self.host_claim_work, HostLocation::ForgetHostClaimWork)?
-                    .remove(&cancelled.queued().request_id());
-            }
-        }
-        Ok(())
     }
 
     /// W-2: a stopping host cancels every queue (`lease.queue_disconnected`) before it joins
@@ -4038,6 +4152,26 @@ impl HostShared {
         })?;
         let resolved = self.resolve_instance(claim.instance_alias)?;
         let instance_id = resolved.instance_id();
+        // Workflow #437 G1 (`contracts/device-group.md`, "A failure stays where it belongs"): a
+        // person's or a client's claim (an operator claim: a direct run, an input or application
+        // command, a self-check, a resume, a backend switch) of a member whose device is held for
+        // another member's unconfirmed close is refused at once, naming that member; the Runtime's
+        // own routine and internal claims of the member (a ladder, a startup package, an
+        // autostart) wait in the device's queue, held by its gate. A self-check claim is of the
+        // operator's class whoever asks for it: the start preparation the lease sweep queues
+        // (`queue_held_start_preparation`) is refused here too, and its member stays owed.
+        if claim.kind.class() == ClaimClass::Operator
+            && let Some(held) = self.device_held_error(instance_id)?
+        {
+            self.append_lease_requested(&validated, &resolved)?;
+            return Err(self.scheduler_denied_error(
+                &validated,
+                Some(instance_id),
+                None,
+                resolved.audit_endpoint(),
+                held,
+            )?);
+        }
         if claim.kind.takes_admission_checks() {
             self.require_bound_endpoint(
                 &resolved,
@@ -4056,9 +4190,6 @@ impl HostShared {
             priority: claim.priority,
             lease_ttl_ms: claim.lease_ttl_ms,
         };
-        // Workflow #437 MAPP-1d: each claim of the device's queue by its own member's gate.
-        let gates = self.device_gates(instance_id)?;
-        let gate = |member: InstanceId| gates.gate_of(member);
         // Review L5: business capacity is asked before an immediate grant; a refusal queues the
         // claim (writing nothing) instead of failing it, and the pump grants it later. A startup
         // claim is not asked (review C-1).
@@ -4079,6 +4210,29 @@ impl HostShared {
                 .map_err(RequestFailure::poison_without_terminal)?;
         let instance_guard = self.instance_guard(instance_id)?;
         let admission = self.try_lock_admission(&instance_guard, instance_id)?;
+        // Workflow #437 G1 fix round 1: whether the device is held for another member's
+        // unconfirmed close is read again once the device's admission guard is held, under which a
+        // fence that holds the device is marked (a lease end's close): an operator claim is then
+        // refused as above. Without the guard the claim is only queued, and the queue's grant
+        // judges it under the guard.
+        if admission.is_some()
+            && claim.kind.class() == ClaimClass::Operator
+            && let Some(held) = self.device_held_error(instance_id)?
+        {
+            self.append_lease_requested(&validated, &resolved)?;
+            return Err(self.scheduler_denied_error(
+                &validated,
+                Some(instance_id),
+                None,
+                resolved.audit_endpoint(),
+                held,
+            )?);
+        }
+        // Workflow #437 MAPP-1d: each claim of the device's queue by its own member's gate. G1 fix
+        // round 1: read once the guard is held, so that an immediate grant is judged by gates no
+        // fence marked under the guard can have changed since.
+        let gates = self.device_gates(instance_id)?;
+        let gate = |member: InstanceId| gates.gate_of(member);
         let order_lock = self.queue_order_lock(instance_id)?;
         let order = lock(&order_lock, HostLocation::LockInstanceQueueOrder)?;
         if admission.is_some() && capacity_free && !awaits_release {
@@ -4209,23 +4363,35 @@ impl HostShared {
         let context = self.take_queued_context(&removed)?;
         let event = self.append_queue_terminal(&context, DiagnosticCode::LeaseQueueExpired)?;
         drop(order);
+        // Workflow #437 G1 fix round 2: a claim that met the device's admission guard taken was
+        // queued, and while another member's unconfirmed close holds the device its member's gate
+        // holds it in its place; when that hold stands as its wait ends, the expiry names it as
+        // its cause (`device_held_for_member_close`, the fenced member), so the person sees why.
+        let held = self
+            .device_held_error(context.instance.instance_id())
+            .map_err(RequestFailure::poison_without_terminal)?;
         // Q-4: a removed entry may leave an eligible one first on a free instance.
         self.pump(instance_id)?;
         let queue_position = removed.queued().position();
+        let expired = RuntimeHostError::request(
+            actingcommand_contract::codes::SharedCode::LeaseQueueExpired,
+            HostLocation::AwaitOperatorClaim,
+            RuntimeErrorCode::QueueExpired,
+        )
+        // Ledger revision 3: the record's outcome carries the wait as values.
+        .with_outcome_values(|outcome| {
+            let outcome = outcome.timeout_ms(cap_ms).queue_position(queue_position);
+            match holder_kind {
+                Some(kind) => outcome.holder_kind(crate::error::ClaimKindToken(kind)),
+                None => outcome,
+            }
+        });
+        let expired = match held {
+            Some(held) => expired.with_caused_by(held.outcome()),
+            None => expired,
+        };
         Err(RequestFailure::request(
-            RuntimeHostError::request(
-                actingcommand_contract::codes::SharedCode::LeaseQueueExpired,
-                HostLocation::AwaitOperatorClaim,
-                RuntimeErrorCode::QueueExpired,
-            )
-            // Ledger revision 3: the record's outcome carries the wait as values.
-            .with_outcome_values(|outcome| {
-                let outcome = outcome.timeout_ms(cap_ms).queue_position(queue_position);
-                match holder_kind {
-                    Some(kind) => outcome.holder_kind(crate::error::ClaimKindToken(kind)),
-                    None => outcome,
-                }
-            }),
+            expired,
             RuntimeReceiptState::Denied,
             Some(terminal(&event)),
         ))

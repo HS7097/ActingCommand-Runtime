@@ -8,7 +8,7 @@
 
 use crate::RUNTIME_STATE_ROOT_ENV;
 use actingcommand_contract::outcome::Outcome;
-use actingcommand_lab_ops::locate;
+use actingcommand_lab_ops::locate::{self, Location};
 use std::path::PathBuf;
 
 /// The developer text of a state root that could not be located.
@@ -40,4 +40,26 @@ pub(crate) fn place() -> Place {
         state_root: located.map(|location| location.state_root),
         root,
     }
+}
+
+/// #463 S1-8: the state root of the installation this process runs from, located as [`place`]
+/// locates it (`lab_ops::locate`), the variable aside: `None` when the program runs from no
+/// installation (a build directory, a test), else that state root or why it could not be located.
+/// In test builds the place a test set (`super::authoring::test_place`), as `record draft` reads
+/// it.
+pub(crate) fn installation_state_root() -> Option<Result<PathBuf, Outcome>> {
+    installation_location().map(|found| found.map(|location| location.state_root))
+}
+
+/// #463 S2-1b: the location of the installation this process runs from (its root, its selection,
+/// its selected configuration and its state root), as [`installation_state_root`] locates it, the
+/// variable aside: `None` when the program runs from no installation, else the location or why it
+/// could not be located. In test builds the place a test set (`super::authoring::test_place`).
+/// `record ready` and `record stop` read the instance's game and server from its configuration.
+pub(crate) fn installation_location() -> Option<Result<Location, Outcome>> {
+    #[cfg(test)]
+    if let Some(program) = super::authoring::test_place::program() {
+        return locate::installed_location_from(&program, None).transpose();
+    }
+    locate::installed_location().transpose()
 }

@@ -479,7 +479,9 @@ pub fn read(
 
 /// One row of §4.3: the run's identity, the policy task id of a scheduled run, its alias when its
 /// instance is still configured, its dispatch, origin and state, when it was first recorded and
-/// when it ended, and its terminal.
+/// when it ended, and its terminal. Workflow #469 F1 (since 0.12.62): beside the terminal's
+/// `failure_code`, its `failure_values` as the run status carries them (the values codes mode
+/// keeps of the terminal outcome, by key), absent when there are none.
 fn row(run: &ListedContainedRun, status: Option<&RuntimeControlPlaneStatus>) -> Value {
     let run_status = &run.status;
     let alias = run_status.instance_id.and_then(|instance_id| {
@@ -526,6 +528,12 @@ fn row(run: &ListedContainedRun, status: Option<&RuntimeControlPlaneStatus>) -> 
         row.insert("task_result".to_owned(), json!(terminal.outcome));
         if let Some(code) = &terminal.failure_code {
             row.insert("failure_code".to_owned(), json!(code));
+        }
+        if !terminal.failure_values.is_empty() {
+            row.insert(
+                "failure_values".to_owned(),
+                Value::Object(terminal.failure_values.clone()),
+            );
         }
         if let Some(page) = &terminal.final_page {
             row.insert("final_page".to_owned(), json!(page));
@@ -695,9 +703,10 @@ fn parse(arguments: &[OsString]) -> Result<(PathBuf, RunsRequest), Failure> {
     Ok((PathBuf::from(state_root), request))
 }
 
-/// Workflow #434 LAB-5B1, test builds only: [`parse`]'s refusal of the words [`dispatch_within`]
+/// Workflow #434 LAB-5B1 (test builds and, since Workflow #434 LW-1, the feature `test-hooks`, for
+/// `core_ops::handed_refusal`): [`parse`]'s refusal of the words [`dispatch_within`]
 /// is given, if any.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-hooks"))]
 pub(crate) fn parse_refusal(arguments: &[OsString]) -> Option<Outcome> {
     parse(arguments).err().map(|failure| failure.outcome())
 }

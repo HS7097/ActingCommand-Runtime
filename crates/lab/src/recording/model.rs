@@ -4,14 +4,16 @@
 //! (`actingcommand.lab-record-mark.v1`) and the outcome views the CLI prints.
 
 use actingcommand_contract::{
-    InputSamplingEvidence, LabError, LabResult, OcrUnsignedIntegerFormat, OcrValueTrim,
-    SEGMENTED_SWIPE_BRAKE_DURATION_MS, SEGMENTED_SWIPE_CORNER_HOLD_MS,
+    InputFrameReference, InputSamplingEvidence, LabError, LabResult, OcrUnsignedIntegerFormat,
+    OcrValueTrim, SEGMENTED_SWIPE_BRAKE_DURATION_MS, SEGMENTED_SWIPE_CORNER_HOLD_MS,
     SEGMENTED_SWIPE_HORIZONTAL_DURATION_MS, ValueTestOp,
 };
 use actingcommand_execution_kernel::DriveDraw;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::fmt;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 pub const LAB_RECORDING_SCHEMA: &str = "actingcommand.lab-recording.v1";
 pub const LAB_RECORD_MARK_SCHEMA: &str = "actingcommand.lab-record-mark.v1";
@@ -111,6 +113,14 @@ pub struct LabRecording {
     /// to one an earlier build wrote.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub endings: Vec<RecordingEnding>,
+    /// Workflow #392 DA-5cd fix round 1 (`contracts/lab-recording.md`, "A recording's size"): the
+    /// base size the recording must have, written by `record start` (the installed command writes
+    /// the contract crate's `STANDARD_PACK_BASE_SIZE`); the first frame that enters the recording
+    /// is checked against it before it is stored. Absent on a recording started without one (made
+    /// before fix round 1, and the tests' fixtures), which is judged as before and is
+    /// byte-identical to one an earlier build wrote.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_size: Option<RecordSize>,
 }
 
 /// #463 R2 (`contracts/lab-recording.md`, "Endings"): a screen that ends the business another way
@@ -164,6 +174,29 @@ pub struct EndingSpec {
     pub reuse: Vec<String>,
 }
 
+/// #463 R4: the `optional_after` of a `record mark` request on a stopped recording: an optional
+/// step inserted after the effect of the step `step`, a pop-up a run of the package met there. Its
+/// frame and samples (files on the caller's machine, copied into the recording), its page's name,
+/// its marks, its click (declared, never executed) and its settle.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OptionalAfterSpec {
+    pub step: u32,
+    pub frame: String,
+    #[serde(default)]
+    pub samples: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page: Option<String>,
+    #[serde(default)]
+    pub add: Vec<MarkSpec>,
+    #[serde(default)]
+    pub reuse: Vec<String>,
+    #[serde(default)]
+    pub click: Option<ClickSpec>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settle_ms: Option<u64>,
+}
+
 /// Written by `record stop` (#336 L4): the package generated from the recording. Workflow #336
 /// PKG-S5 (option 丙): the package is named by its `package_id`; no digest of it is kept.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -197,9 +230,63 @@ pub struct RecordingArtifact {
     pub generated_at_unix_ms: u64,
 }
 
+/// #463 S2-1b fix round 1: the game and server the instance's row of the configuration of the
+/// installation the program runs from binds it to, both canonical.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstalledIdentity {
+    pub game: String,
+    pub server: String,
+}
+
+/// #463 S2-1b fix round 1: what reads the installation's row: the row, or `None` when it cannot be
+/// read or gives no usable row.
+pub type ReadInstalled = dyn Fn() -> Option<InstalledIdentity> + Send + Sync;
+
+/// #463 S2-1b fix round 1: the instance's row of the configuration of the installation the program
+/// runs from, read only when it is needed: `record stop` and `record ready` call its reader only
+/// when the flags, the recording and the Lab's instance configuration do not give both the game
+/// and the server. The default has no reader and reads nothing (outside an installation).
+#[derive(Clone, Default)]
+pub struct InstalledRow(Option<Arc<ReadInstalled>>);
+
+impl InstalledRow {
+    /// A row that `read` reads when it is needed.
+    pub fn new(read: impl Fn() -> Option<InstalledIdentity> + Send + Sync + 'static) -> Self {
+        let read: Arc<ReadInstalled> = Arc::new(read);
+        Self(Some(read))
+    }
+
+    /// The row, read now; `None` without a reader or when the reader gives none.
+    pub(crate) fn read(&self) -> Option<InstalledIdentity> {
+        self.0.as_ref().and_then(|read| read())
+    }
+}
+
+impl fmt::Debug for InstalledRow {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self.0 {
+            Some(_) => "InstalledRow(reader)",
+            None => "InstalledRow(none)",
+        })
+    }
+}
+
+impl PartialEq for InstalledRow {
+    /// Equal when neither has a reader, or both have the same one.
+    fn eq(&self, other: &Self) -> bool {
+        match (&self.0, &other.0) {
+            (None, None) => true,
+            (Some(mine), Some(theirs)) => Arc::ptr_eq(mine, theirs),
+            _ => false,
+        }
+    }
+}
+
 /// `record stop` options (Workflow #336 L4). Game, server and locale are canonical; the
-/// explicit ones win over the recording's, which win over the `default_*` ones (the
-/// instance configuration).
+/// explicit ones win over the recording's, which win over the `default_*` ones (the Lab's
+/// instance configuration); then (#463 S2-1b, fix round 1) the instance's row of the configuration
+/// of the installation the program runs from (`installed`), taken whole or not at all. `record
+/// ready` reads with the same options.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct RecordStopOptions {
     pub lab_dir: Option<String>,
@@ -210,6 +297,9 @@ pub struct RecordStopOptions {
     pub locale: Option<String>,
     pub default_game: Option<String>,
     pub default_server: Option<String>,
+    /// #463 S2-1b: the instance's row of the configuration of the installation the program runs
+    /// from (its row of `policy.facts.instances`), last of all; fix round 1: read only when needed.
+    pub installed: InstalledRow,
     pub timeout_ms: Option<u64>,
     pub arrival_timeout_ms: Option<u64>,
     pub application_arrival_timeout_ms: Option<u64>,
@@ -255,6 +345,20 @@ pub struct RecordingStep {
     /// step.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub select: Option<StepSelect>,
+    /// #463 S2-6 (`contracts/lab-recording.md`, "Marking a choice first"): the step is marked as
+    /// holding a choice, marked first and refined later by its `select`; the mark stays beside the
+    /// select and means only that the choice is not refined yet while the step has none (fix round
+    /// 1: the wanted value of every select is the package's `ordered` variable, marked or not).
+    /// Absent on every step not marked so, so that a recording without one is byte-identical to
+    /// one an earlier build wrote.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub choice: Option<StepChoice>,
+    /// #463 R4: the recorded step after whose effect a stopped recording inserted this optional
+    /// step (`record mark --optional-after`): it runs after that step and after the steps inserted
+    /// there before it. Absent on every other step, so that a recording without one is
+    /// byte-identical to one an earlier build wrote; an earlier build refuses one that holds it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inserted_after: Option<u32>,
     pub transition: Option<StepTransition>,
     pub closed: bool,
     pub closed_by: Option<String>,
@@ -269,6 +373,15 @@ pub struct RecordingStep {
 #[serde(deny_unknown_fields)]
 pub struct StepOptional {
     pub settle_ms: u64,
+    pub marked_at_unix_ms: u64,
+}
+
+/// #463 S2-6 (`contracts/lab-recording.md`, "Marking a choice first"): the mark of a step that
+/// holds a choice, kept in the recording from the moment it is marked; a mark given again keeps
+/// its time.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StepChoice {
     pub marked_at_unix_ms: u64,
 }
 
@@ -310,6 +423,25 @@ pub struct ApplicationExecution {
     pub action_id: String,
     pub receipt_state: String,
     pub application_event_ids: Vec<String>,
+    /// #463 S1-3 (`contracts/lab-recording.md`, "Application steps"): the id of the step's live
+    /// primary frame when the operation's completed receipt was recorded, the screen it was run on.
+    /// Absent on the application entry step, which has no frame, and on every operation an earlier
+    /// build recorded, as are the two members below.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before_frame: Option<String>,
+    /// #463 S1-3: the id of the frame after the operation: what the screen became. The train of
+    /// stage one (with #463 S1-2): the last capture of the operation's own after loop, written once
+    /// when the loop ends; the first frame that opens a step after it only when the loop kept
+    /// nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after_frame: Option<String>,
+    /// #463 S1-3: how the frame after the operation was taken (#463 S1-2's record of the loop).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after_capture: Option<AfterCaptureRecord>,
+    /// #463 S1-5: when the completed receipt was recorded, on the Lab's clock as a click's
+    /// `executed_at_unix_ms` is; absent on every operation an earlier build recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub executed_at_unix_ms: Option<u64>,
 }
 
 /// An application operation without a completed receipt (it may have run), or a completed
@@ -761,6 +893,59 @@ pub struct ClickExecution {
     /// evidence of `point_rule`'s draw: its algorithm, action seed, boxes and parameters).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sampling: Option<InputSamplingEvidence>,
+    /// #463 S1-1 (`contracts/lab-recording.md`, "Recording while playing"): on a press recorded by
+    /// the command that makes it (`tap`, `swipe` or `long-tap --record`), the id of the step's live
+    /// primary frame when the press was committed: what was on the screen. Absent on every other
+    /// press, as are the two members below, so that a recording without such a press is
+    /// byte-identical to one an earlier build wrote.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before_frame: Option<String>,
+    /// #463 S1-1: on such a press, the id of the first frame that arrived after it: what the
+    /// screen became. #463 S1-2: the last capture of the press's own after loop, written once when
+    /// the loop ends (fix round 3: also when a later capture failed); the first frame that opens a
+    /// step after it only when the loop kept nothing (its first capture could not be taken).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after_frame: Option<String>,
+    /// #463 S1-1: on such a press, how the frame after it was taken.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after_capture: Option<AfterCaptureRecord>,
+    /// #463 S1-1 fix round 3: on such a press, `true` when it was sent on a frame its command
+    /// captured and did not store (the open step carries marks, made on its stored frame), so
+    /// that `before_frame` names the stored frame and not the frame the press was sent on. Absent
+    /// (false) on every other press, so that every recording without one is byte-identical to
+    /// one an earlier build wrote.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub sent_on_unstored_capture: bool,
+}
+
+/// #463 S1-1 (`contracts/lab-recording.md`, "Recording while playing"): how the frame after a
+/// press recorded by the command that makes it was taken. #463 S1-2: the screen is captured until
+/// it is still, and these are the parameters as the press took them and what the loop did: the
+/// wait before the first capture (`after_ms`), the time from the start of one capture to the start
+/// of the next (`interval_ms`), how long the screen must not change to be still (`still_ms`; 0: no
+/// stillness test), the bound after the first capture (`still_max_ms`), whether the screen was
+/// found still (`still`: `true`, `false` at the bound, `None` when no test ran or the loop did not
+/// finish), the time from the press to the start of the last capture (`waited_ms`), how many
+/// captures it took (`captures`) and how many of them it kept beside the last, the frame after
+/// (`kept`, `captures - 1`). Fix round 3: `unfinished` when a capture after the first could not be
+/// taken, so that the loop ended there and kept what it had taken (absent otherwise). A record
+/// without `interval_ms` and `still_ms` (S1-1's build wrote one capture after the wait) reads as
+/// one whose screen after was not tested.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AfterCaptureRecord {
+    pub after_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interval_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub still_ms: Option<u64>,
+    pub still_max_ms: u64,
+    pub still: Option<bool>,
+    pub waited_ms: u64,
+    pub captures: u32,
+    pub kept: u32,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unfinished: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -985,12 +1170,52 @@ pub struct MarkRequest {
     /// --remove-ending <k>`); alone in the request.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remove_ending: Option<String>,
+    /// #463 R4: an optional step the stopped recording inserts after the effect of one of its
+    /// steps (`record mark --optional-after <k>`); alone in the request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub optional_after: Option<OptionalAfterSpec>,
+    /// #463 R4: the serial number of an inserted optional step the stopped recording gives up
+    /// (`record mark --remove-inserted <n>`); alone in the request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remove_inserted: Option<u32>,
+    /// #463 S2-5 (`contracts/lab-recording.md`, "Drawing a box"): boxes drawn on the step's primary
+    /// frame, each a region the step's page is recognized by or the region its click presses;
+    /// absent on a request without one, which is then byte for byte what it was.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub boxes: Vec<BoxSpec>,
+    /// #463 S2-6 (request form only, as `select`; `contracts/lab-recording.md`, "Marking a choice
+    /// first"): `true` marks the step as holding a choice, refined later by its `select`; `false`
+    /// takes the mark off (fix round 1: on a step without it `record_select_invalid`,
+    /// `no_choice`); absent leaves it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub choice: Option<bool>,
+}
+
+/// #463 S2-5: what a box drawn on the step's primary frame is for: a region the step's page is
+/// recognized by (a template mark), or the region its click presses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BoxUse {
+    Recognize,
+    Press,
+}
+
+/// #463 S2-5: a box drawn as a person draws one on a screenshot: two opposite corners, in any
+/// order, in the pixels of the step's primary frame, both inside the box.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BoxSpec {
+    #[serde(rename = "use")]
+    pub usage: BoxUse,
+    pub corners: [RecordPoint; 2],
 }
 
 /// #463 R1 (`contracts/lab-recording.md`, "Selecting in a list"): a select over fixed slots, the
 /// step's effect in place of a click. `record stop` generates its layout (`fixed_slots`, the one
 /// identity feature `name` over `names`), an OCR target per slot, the select operation with its
-/// `on_empty` end and the policy document whose one gate `wanted.<name>` keeps `default`.
+/// `on_empty` end, the package's `ordered` variable `wanted.name` whose default is `[default]`
+/// (#463 S2-6, fix round 1: of every select, marked as a choice or not), and the policy document
+/// whose one gate `wanted.<name>` reads it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SelectSpec {
@@ -1074,8 +1299,8 @@ pub struct SelectMatchSpec {
     pub minimum_margin: u16,
 }
 
-/// #463 R1: the wanted value: its name and its default, a constant of the package until a later
-/// slice reads it as a variable.
+/// #463 R1: the wanted value: its name and its default; #463 S2-6 fix round 1: in the package the
+/// `ordered` variable of that name, its default the one name `default`, on every select step.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SelectWantedSpec {
@@ -1326,6 +1551,15 @@ pub enum TransitionSpec {
         reuse: Vec<String>,
         #[serde(default)]
         timeout_ms: Option<u64>,
+        /// #463 S2-7 (`contracts/lab-recording.md`, "Transitions"; request form only): the
+        /// transition's frame named by the id of a frame this recording stored, in place of
+        /// `frame`; absent on a request without it, which is then byte for byte what it was.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        frame_id: Option<String>,
+        /// #463 S2-7: further frames of the transition this recording stored, by their ids, beside
+        /// `samples`.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        sample_frame_ids: Vec<String>,
     },
     Window {
         min_ms: u64,
@@ -1340,6 +1574,9 @@ pub enum StepActionKind {
     ReopenStep,
     CloseStep,
     ToTransition,
+    /// #463 S2-7 (`contracts/lab-recording.md`, "Steps, frames and remediation"; request form
+    /// only): a step `drop_step` dropped is effective again, as it was before the drop.
+    RestoreStep,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1358,6 +1595,9 @@ pub struct RecordStartOptions {
     pub locale: Option<String>,
     pub match_metric: Option<String>,
     pub template_threshold: Option<f64>,
+    /// Workflow #392 DA-5cd fix round 1: the base size written in the new recording's header
+    /// (`LabRecording::base_size`); `None` writes none.
+    pub base_size: Option<RecordSize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -1385,6 +1625,9 @@ pub struct StepStateView {
     pub forbidden: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub anchor: Option<String>,
+    /// #463 R4: the recorded step an inserted optional step runs after, on such a step only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inserted_after: Option<u32>,
 }
 
 /// `optional` of `step_state` and `record status` steps: `null` or `{settle_ms}`.
@@ -1443,6 +1686,84 @@ pub struct MarkOutcome {
     /// #463 R2: the ending the command gave up, as the recording held it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub removed_ending: Option<RecordingEnding>,
+    /// #463 S2-5: each box of the request, as the step took it; absent without one.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub boxes: Vec<BoxView>,
+    /// #463 S2-6: the step's choice mark, on a step marked as holding a choice.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub choice: Option<StepChoice>,
+}
+
+/// #463 S2-5: a box of the request as the step took it: its rectangle and, for a recognize box,
+/// the template mark it became, with the threshold and metric it is scored at and its score on
+/// each frame of the action that drew it and on each live frame of another step where it holds.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct BoxView {
+    #[serde(rename = "use")]
+    pub usage: BoxUse,
+    pub corners: [RecordPoint; 2],
+    pub rect: RecordRect,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mark: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub threshold: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metric: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub frames: Vec<BoxFrameView>,
+}
+
+/// #463 S2-5: what a frame is to the recognize boxes of a request: a live frame of the step
+/// (`own`; also a capture of the step whose bytes are those of a live frame); a frame of the
+/// action that drew the boxes admitted as a sample of the step (`added`); one that was not
+/// (`not_added`, with `because`); a live frame of another step on which the box reaches its
+/// threshold (`elsewhere`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BoxFrameTaken {
+    Own,
+    Added,
+    NotAdded,
+    Elsewhere,
+}
+
+/// #463 S2-5: a recognize box's template score on one frame, computed as the self-test computes
+/// it on that frame alone. `frame_id` names the frame as the recording holds it (none for a frame
+/// not added); `sample` is a sample of the request by its index in `samples`; `superseded` is a
+/// capture stage one stored for the step before its press, by its frame id; `step` is the other
+/// step of a frame `elsewhere`.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct BoxFrameView {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frame_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sample: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub superseded: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub step: Option<u32>,
+    pub score: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub matched_rect: Option<RecordRect>,
+    pub taken: BoxFrameTaken,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub because: Option<BoxBecause>,
+}
+
+/// #463 S2-5: why a frame of the action was not added: `below_threshold` with the first recognize
+/// box below its threshold there (`box`, its index in `boxes`, and its `mark`), or the refusal the
+/// step's page meets on it (its mark's own reason and the mark it names). Fix round 2: or, first of
+/// all, a capture of the step whose whole frame changed from the step's live frame
+/// (`frame_changed`, with the measure's value `frame_change_milli` and no mark).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct BoxBecause {
+    pub reason: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mark: Option<String>,
+    #[serde(rename = "box", skip_serializing_if = "Option::is_none")]
+    pub index: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frame_change_milli: Option<u32>,
 }
 
 /// Workflow #390 LAB-2: a mark the step's page forbids, tested on every live frame of the step:
@@ -1529,6 +1850,13 @@ pub struct StepView {
     /// #463 R1: the step's select as the recording holds it, on a step that has one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub select: Option<StepSelect>,
+    /// #463 S2-6: the step's choice mark, on a step marked as holding a choice (refined when the
+    /// step has a select too; `record ready` lists one that is not, `select_unrefined`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub choice: Option<StepChoice>,
+    /// #463 R4: the recorded step an inserted optional step runs after, on such a step only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inserted_after: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -1695,6 +2023,155 @@ pub struct RecordStepOutcome {
     pub next_frame: Option<NextFrameOutcome>,
 }
 
+/// #463 S1-1: the wait before the frame after a press (`--after-ms`) when none is given; #463 S1-2:
+/// 100, the first of the captures that repeat until the screen is still.
+pub const LAB_RECORDING_PRESS_AFTER_MS: u64 = 100;
+/// #463 S1-1: the bound of the stillness test after a press (`--still-max-ms`, slice S1-2) when
+/// none is given.
+pub const LAB_RECORDING_PRESS_STILL_MAX_MS: u64 = 5_000;
+/// #463 S1-1: the wait before the frame after an application operation (slice S1-3) when none is
+/// given.
+pub const LAB_RECORDING_APPLICATION_AFTER_MS: u64 = 2_000;
+/// #463 S1-1: the bound of the stillness test after an application operation (slice S1-3) when
+/// none is given.
+pub const LAB_RECORDING_APPLICATION_STILL_MAX_MS: u64 = 30_000;
+/// #463 S1-2 fix round 3: after an application operation, the time from the start of one capture
+/// to the start of the next, so that a loading screen of half a minute takes at most 31 captures.
+pub const LAB_RECORDING_APPLICATION_INTERVAL_MS: u64 = 1_000;
+/// #463 S1-2 fix round 3: after an application operation, how long the screen must not change to
+/// be still.
+pub const LAB_RECORDING_APPLICATION_STILL_MS: u64 = 2_000;
+
+/// #463 S1-1 (`contracts/lab-recording.md`, "Recording while playing"): a tap or a long press that
+/// `tap --record` or `long-tap --record` declares by its point.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PointPress {
+    Tap {
+        point: RecordPoint,
+    },
+    LongPress {
+        point: RecordPoint,
+        duration_ms: u64,
+    },
+}
+
+/// #463 S1-1: how the frame after an effect is taken: the wait before it, in milliseconds (0 to
+/// [`LAB_RECORDING_MAX_NEXT_FRAME_MS`]), and the bound of the stillness test after it. #463 S1-2
+/// runs the test: `interval_ms`, the time from the start of one capture to the start of the next,
+/// and `still_ms`, how long the screen must not change to be still (0: no test), each `None` for
+/// the recording API's default (`record_after_frame`: 100 and 300).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AfterCapture {
+    pub after_ms: u64,
+    pub interval_ms: Option<u64>,
+    pub still_ms: Option<u64>,
+    pub still_max_ms: u64,
+}
+
+impl AfterCapture {
+    /// After a press: `after_ms`, else [`LAB_RECORDING_PRESS_AFTER_MS`]; the bound
+    /// [`LAB_RECORDING_PRESS_STILL_MAX_MS`]; #463 S1-2: the recording API's interval and stillness
+    /// (100, 100, 300, 5000).
+    pub fn for_press(after_ms: Option<u64>) -> Self {
+        Self {
+            after_ms: after_ms.unwrap_or(LAB_RECORDING_PRESS_AFTER_MS),
+            interval_ms: None,
+            still_ms: None,
+            still_max_ms: LAB_RECORDING_PRESS_STILL_MAX_MS,
+        }
+    }
+
+    /// After an application operation (slice S1-3): `after_ms`, else
+    /// [`LAB_RECORDING_APPLICATION_AFTER_MS`]; the bound
+    /// [`LAB_RECORDING_APPLICATION_STILL_MAX_MS`]. #463 S1-2 fix round 3: one capture every
+    /// [`LAB_RECORDING_APPLICATION_INTERVAL_MS`], still after
+    /// [`LAB_RECORDING_APPLICATION_STILL_MS`] unchanged (2000, 1000, 2000, 30000: at most 31
+    /// captures, inside the bound of 120 intervals).
+    pub fn for_application(after_ms: Option<u64>) -> Self {
+        Self {
+            after_ms: after_ms.unwrap_or(LAB_RECORDING_APPLICATION_AFTER_MS),
+            interval_ms: Some(LAB_RECORDING_APPLICATION_INTERVAL_MS),
+            still_ms: Some(LAB_RECORDING_APPLICATION_STILL_MS),
+            still_max_ms: LAB_RECORDING_APPLICATION_STILL_MAX_MS,
+        }
+    }
+}
+
+/// #463 S1-1 (`contracts/lab-recording.md`, "Recording while playing"): a press `tap`, `swipe` or
+/// `long-tap --record` sends and records: a tap or a long press by its point (`point_press`), or a
+/// swipe as `do --capture --record --swipe` plans it (`click.swipe`); and how the frame after it is
+/// taken.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RecordPressRequest {
+    pub click: PlanClickRequest,
+    pub point_press: Option<PointPress>,
+    pub after: AfterCapture,
+}
+
+/// #463 S1-1: the frame on the screen when the press was committed, the open step's live primary
+/// frame; `refreshed` when the press's command took it itself. Fix round 2: every such press is
+/// sent on a frame its command captured immediately before it; `sent_on_unstored_capture` when
+/// that capture was not stored (the open step carries marks, made on its stored frame), so that
+/// `frame_id` names the stored frame and not the one the press was sent on. Fix round 3:
+/// `captured_twice` when the Runtime no longer held the frame of the first capture when the press
+/// was sent on it (`input_frame_unavailable`, nothing sent), so the command captured once more and
+/// sent the press again on the second capture, which `frame_id` names when it was stored.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct BeforeFrame {
+    pub frame_id: String,
+    pub path: String,
+    pub sha256: String,
+    pub refreshed: bool,
+    pub sent_on_unstored_capture: bool,
+    pub captured_twice: bool,
+}
+
+/// #463 S1-1 fix round 2 (`contracts/lab-recording.md`, "Recording while playing"): one frame
+/// taken through the Runtime for a press recorded by the command that makes it: the frame as
+/// `capture --record` hands it to the recording, and the reference of the frame the Runtime
+/// committed for that observation, which an input planned on it names (fix round 3: built as
+/// `do --capture`'s online scene builds the reference of its frame). An observation without a
+/// frame id has none (`None`) and no press is sent on it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CapturedFrame {
+    pub frame: AttachFrameRequest,
+    pub input_frame: Option<InputFrameReference>,
+}
+
+/// #463 S1-1 fix round 2: the frame a press recorded by the command that makes it is sent on, the
+/// capture taken immediately before it: the Runtime's reference of it (`input_frame`, handed to
+/// the press) and its arrival in the recording (`arrived`), `None` when it was not stored (the
+/// open step carries marks).
+#[derive(Debug, Clone, PartialEq)]
+pub struct BeforeCapture {
+    pub input_frame: InputFrameReference,
+    pub arrived: Option<AttachFrameOutcome>,
+}
+
+/// #463 S1-1: the frame after the press and how it was taken. #463 S1-2: the last capture of the
+/// press's after loop, the live primary frame of the step the loop's first capture opened (`step`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct AfterFrame {
+    pub step: u32,
+    pub frame_id: String,
+    pub path: String,
+    pub sha256: String,
+    #[serde(flatten)]
+    pub record: AfterCaptureRecord,
+}
+
+/// #463 S1-1: what a press recorded by the command that makes it recorded, as the command's answer
+/// carries it in `record`: the press (`status` `press_recorded`, the recording, the step and its
+/// click), the frame before it and the frame after it, and the warnings (none in slice S1-1).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct RecordPressOutcome {
+    #[serde(flatten)]
+    pub click: CommitClickOutcome,
+    pub before: BeforeFrame,
+    pub after: Option<AfterFrame>,
+    pub warnings: Vec<String>,
+}
+
 /// `session app <verb> --record`: the verb as given (`launch`, `restart`, `stop`,
 /// `force-stop`).
 #[derive(Debug, Clone, PartialEq)]
@@ -1733,8 +2210,10 @@ pub struct CommitApplicationOutcome {
     pub application: StepApplication,
 }
 
-/// Workflow #449 REC-ARCH: the schema of the manifest `record archive` writes into the recording's
-/// own directory (`archive-manifest-<n>.json`).
+/// Workflow #449 REC-ARCH: the schema of the manifest (`archive-manifest-<n>.json`) the builds
+/// before #463 S1-5 wrote into the recording's own directory, v1. Since #463 S1-5 it is only read
+/// (named again, verified, copied as it is, reopened) and never written: `record archive` writes
+/// v2 (`recording/archive.rs`).
 pub const LAB_RECORDING_ARCHIVE_SCHEMA: &str = "actingcommand.lab-recording-archive.v1";
 
 /// Workflow #449 REC-ARCH: `record archive` options.

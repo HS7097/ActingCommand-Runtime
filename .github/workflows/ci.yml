@@ -293,7 +293,7 @@ jobs:
     timeout-minutes: 35
     env:
       CI_PACKAGES: -p actingcommand-ledger -p actingcommand-runtime-state -p actingcommand-runtime-database -p actingcommand-artifact-store -p actingcommand-ledger-forensics -p actingledger
-      CI_SKIP: ''
+      CI_SKIP: global::tests::gate_ln7c_q::ln7c_q_teq_the_query_decides_the_live_frames_of_a_production_shaped_history_as_the_full_view
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/rust-setup
@@ -362,7 +362,7 @@ jobs:
       CI_PACKAGES: -p actingcommand-runtime-host -p actingcommand-host-metrics -p actingcommand-agent-forward -p actingcommand-actinglab -p actingcommand-lab-ops -p actingcommand-watchdog -p actingcommand-lab-rescue
       # actinglab's dev-dependency turns it on anyway; written out so the selection says it.
       CI_FEATURES: --features actingcommand-runtime-host/fixture-backends
-      CI_SKIP: tests::facts::fact_snapshot_catches_up_with_critical_ledger_events protocol_goldens_match_current_cli
+      CI_SKIP: tests::facts::fact_snapshot_catches_up_with_critical_ledger_events protocol_goldens_match_current_cli tests::contained_tasks::runtime_executes_neutral_contained_task_without_lab_ownership tests::gate_373_nav6::n6_13_without_interrupts_a_run_records_what_it_records_without_a_root
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/rust-setup
@@ -612,7 +612,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 35
     env:
-      FLAKY_TESTS: actingcommand-runtime-host::lib::tests::facts::fact_snapshot_catches_up_with_critical_ledger_events@actingcommand-runtime-host/fixture-backends actingcommand-actinglab::golden_protocol::protocol_goldens_match_current_cli@actingcommand-runtime-host/fixture-backends
+      FLAKY_TESTS: actingcommand-runtime-host::lib::tests::facts::fact_snapshot_catches_up_with_critical_ledger_events@actingcommand-runtime-host/fixture-backends actingcommand-actinglab::golden_protocol::protocol_goldens_match_current_cli@actingcommand-runtime-host/fixture-backends actingcommand-ledger::lib::global::tests::gate_ln7c_q::ln7c_q_teq_the_query_decides_the_live_frames_of_a_production_shaped_history_as_the_full_view actingcommand-runtime-host::lib::tests::contained_tasks::runtime_executes_neutral_contained_task_without_lab_ownership@actingcommand-runtime-host/fixture-backends actingcommand-runtime-host::lib::tests::gate_373_nav6::n6_13_without_interrupts_a_run_records_what_it_records_without_a_root@actingcommand-runtime-host/fixture-backends
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/rust-setup

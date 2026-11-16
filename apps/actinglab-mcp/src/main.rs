@@ -78,6 +78,14 @@ mod gate_434_lab5g3;
 // (`mcp_manual_names_only_offered_tools`, `mcp_manual_exception_is_the_refused_rows`).
 #[cfg(test)]
 mod gate_434_lab5g7;
+// Test-only: #463 S1-1, the tools of `tap`, `swipe` and `long-tap` take `record` and `after_ms`
+// (`s11_ac_tap_takes_record_and_after_ms`).
+#[cfg(test)]
+mod gate_463_s11;
+// Test-only: Workflow #434 LW-1, the slice's named tests (`tap-target` and `navigate` only plan, a
+// finished run's answer fits, every schema property reaches its operation).
+#[cfg(test)]
+mod gate_434_lw1;
 
 use actingcommand_contract::codes::ContractCode;
 use actingcommand_contract::outcome::{IoOp, Outcome, RawSource};

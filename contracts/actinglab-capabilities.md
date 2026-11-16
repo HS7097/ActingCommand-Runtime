@@ -48,7 +48,23 @@ with `argument_problem` `repeated`, instead of the last one winning; only the of
 the earlier frames, passed before `scene`'s; #411 Lab B-2). `recognize`, `is-visible`,
 `detect-page` and `current-page` refuse every other repeated option the same way, and
 `tap-target` and `navigate`, which read one frame, every repeated option, `--scene` included,
-each before it reads anything.
+each before it reads anything. `tap-target` and `navigate` only plan, on a saved scene with
+`--dry-run` (`--capture` is refused, the retired legacy semantic capture); without `--dry-run`
+they are refused `validation_failed`, the refusal naming what presses on an instance: `do
+--capture` with the package and the target, an element, or `--tap x,y`, and `ensure --capture`
+for a route (Workflow #434 LW-1, 0.12.67).
+
+Workflow #392 DA-5, the train of DA-5ab and DA-5cd (0.12.67; [display-adapter.md](display-adapter.md)
+sections 11 and 12): a frame of another size than its package's base is taken by one function,
+whether it is a `--scene` file (the offline paths of the four verbs, `recognize`, `detect-page`,
+`current-page`, `is-visible`, and the dry runs of `tap-target` and `navigate`) or a Runtime capture
+(the `--capture` forms): a frame of the base's ratio, not smaller and in its orientation, is
+reduced to the base once, and the answer names `frame_coordinates` in the base form; any other is
+refused before anything is evaluated, `lab_scene_size_unsupported` (exit 2 on a `--via` line;
+actinglab's own line and `serve --stdio --front mcp` exit 1 for every refusal) for a `--scene` file
+and `display_map_unresolved` for a Runtime capture. A frame of the base's size answers as before.
+Every `--record` form judges the recording and the frame it took before anything is sent or
+written ([lab-recording.md](lab-recording.md), "A recording's size").
 
 Each command has `status`, `available`, `reason_code`, `needs`,
 `availability_scope: offline_declaration` and `dry_run_mode`, with
@@ -93,7 +109,25 @@ as declared support with status `unverified`: `nemu_ipc` performs `tap`, (HS-4,
 `single_touch_drag_with_pause_and_brake_v1` and, Workflow #406 T3, the path drag
 `single_touch_path_drag_v1`), only on a frame the Runtime captured
 (`nemu_input_frame_required`), and neither `key` nor `text`; its reset needs no
-frame (`v012-register.md` §1.268); `maatouch` performs `tap`, `long_tap`, `swipe`,
+frame (`v012-register.md` §1.268). Workflow #434 LW-1 (0.12.67, §1.435): actinglab's `tap`,
+`swipe` and `long-tap` without `--record` read the instance's status once, on every instance,
+and, where its capability table names `nemu_ipc` as the input of the press, capture one frame
+through the Runtime first (its reference alone) and send the press on it (the answer's
+`input_frame`), as a recorded press does; on every other instance they capture nothing. Where the
+Lab reads "this input needs a frame": the `evidence_ref` of an input row of the instance's
+capability table (`input.tap`, `input.long_tap`, `input.swipe`, …, in `Status`) is the instance's
+configured touch backend, and the Lab decides as the Runtime does, which presses only on a frame
+when that backend is `nemu_ipc` (`runtime-host` `host/nemu_input.rs`, `nemu_input_check`, reads
+the configured `input_backend`); the table has no member of its own for it (one would be an
+interface revision). A status that cannot be read stops no press: it is sent without a frame, as
+before LW-1, and the Runtime refuses it where the input needs one (`nemu_input_frame_required`);
+the answer's `touch_backend_warnings` says the status was not read (fix round 2: a refusal's is
+in its `details`, the Runtime's refusal of that press too). A frame the Runtime no longer
+holds when the press names it (`input_frame_unavailable`) is captured once more and the press
+sent once more under the same lease, once (`input_frame_captured_twice`). `key` and `text` stay
+refused there (`nemu_input_capability_unsupported`); their refusal carries `details.hint`, what
+presses instead, where the capability table says the instance's input does not implement
+`input.key` or `input.text`; `maatouch` performs `tap`, `long_tap`, `swipe`,
 the three segmented drags, `key` and `text`; `minitouch` the same without `key`
 and `text`; `adb_shell_input` performs `tap`, `long_tap` (as a swipe that stays at
 its point), `swipe` and (Workflow #406 T3, plan Q18 (a)) the three segmented drags

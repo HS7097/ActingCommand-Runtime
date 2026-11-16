@@ -25,8 +25,10 @@
 //! `client.action{surface_id: "mcp", control_id: <tool>, kind: Command, value:
 //! PathSafeString(<envelope req_id>)}` is recorded on a fresh (Cli, Cli) connection. The
 //! offline forms and the recording commands (start, mark, stop, status), which keep their
-//! state in files and open no Runtime connection, record nothing, nor do the read-only
-//! tools.
+//! state in files, record nothing, nor do the read-only tools. Since #463 S1-7 `record start`
+//! and the recording's end (stop, archive) do open Runtime connections of their own, for a
+//! status read and the instance's scheduling pause and its resume (the recording holds its
+//! instance); no `client.action` is recorded for them either.
 //!
 //! One overflow rule for every answer that does not fit the output budget (review F2): the
 //! verbatim answer goes to the export directory of ac_material export, and the call answers
@@ -758,7 +760,7 @@ static RECORD_ARCHIVE: LabCommand = LabCommand {
             "copy_to",
             "--copy-to",
             Kind::Text,
-            "--copy-to: an absolute path of a directory that does not exist or is empty; the frames, the step table and the manifest are copied there and checked.",
+            "--copy-to: an absolute path of a directory that does not exist or is empty; the step table, the manifest and the frames the manifest's material names are copied there and checked (every frame only with the Lab's record archive --all-frames or the Lab's MCP server's all_frames).",
         ),
         STATE_DIR,
     ],
@@ -1213,15 +1215,14 @@ fn run_job(
     let own = handle.clone();
     let job = context
         .jobs
-        .start_noted(handle, "lab", None, "running", Vec::new(), move || {
-            body(&own)
-        })?;
+        .start_noted(handle, "lab", "running", move || body(&own))?;
     operator::job_answer(context, &job, context.deadline)
 }
 
 /// The client.action of a Lab request this call made, after its child returned. Its warnings:
-/// `client_action_without_req_id`, the recording's own, or `client_action_not_recorded` caused
-/// by the recording's failure (the Lab command is not run again).
+/// `client_action_without_req_id`, or `client_action_not_recorded` caused by the recording's
+/// failure (the Lab command is not run again). Workflow #434 LAB-6S4a (0.12.63): no identity card
+/// is declared before it, so the card's refusal is no warning of it any more.
 fn record_action(
     state_root: &Result<PathBuf, Outcome>,
     tool: &str,
@@ -1236,12 +1237,11 @@ fn record_action(
     }
     let value = req_id.map(|id| ClientActionValue::PathSafeString(id.to_owned()));
     let recorded = runtime::connect_at(state_root, CLI.0, CLI.1)
-        .and_then(|connection| operator::record_provenance(connection, tool, instance, CLI, value));
-    match recorded {
-        Ok(write) => warnings.extend(write.warnings),
-        Err(error) => warnings.push(tools::warning(
+        .and_then(|connection| operator::record_capture_action(&connection, tool, instance, value));
+    if let Err(error) = recorded {
+        warnings.push(tools::warning(
             &Outcome::new(ActingctlCode::ClientActionNotRecorded).caused_by(error.into_outcome()),
-        )),
+        ));
     }
     warnings
 }
@@ -1841,7 +1841,7 @@ pub(super) fn lab_result() -> Value {
 pub(super) fn frame_result() -> Value {
     let mut schema = lab_result();
     schema["description"] = json!(
-        "The actinglab envelope's data, unchanged: with frame_coordinates {device_pixels [width, height], orientation (landscape, portrait or square), applies_to [tap, tap_rect, swipe]}, the coordinate system of the frame (pixels counted from its top-left pixel) (ac_lab_do: of the frame the action was chosen on); preview {path, width, height, scale} when preview was asked; ac_lab_do after an action also after_attachment: {kind page_projection, observation} when the page after it is known, else {kind frame, frame_coordinates, frame_path, preview}. A part that could not be written is {failure {code lab_frame_export_failed, path, raw_text}} in its place. ac_lab_do with record also record (with mark, record.mark) and, with next_frame_after_ms, next_frame {after_ms, out, record}: the next screen, which opens the next step; after_attachment is the operation's own after frame, not the next screen. No image is inlined. Larger than the output budget: {req_id, export {path, sha256, size}, overflowed: true} with the warning answer_exported (without export, and with the warning material_export_failed, when the export could not be written), keeping frame_coordinates, frame_path, preview, next_frame and after_attachment inline, in this order, each while it fits. Beyond the call budget: {handle, job_phase}."
+        "The actinglab envelope's data, unchanged: with frame_coordinates, the coordinate system of the frame (pixels counted from its top-left pixel) (ac_lab_do: of the frame the action was chosen on): {device_pixels [width, height], orientation (landscape, portrait or square), applies_to [tap, tap_rect, swipe]} on a display of the package's base size; {space: base, base_pixels [width, height], reduced_from [device width, device height], orientation, applies_to} on a display that maps to the base, whose frames were reduced from the device size to the base, and whose rectangles, points, frame_path and preview are the base's; preview {path, width, height, scale} when preview was asked; ac_lab_do after an action also after_attachment: {kind page_projection, observation} when the page after it is known, else {kind frame, frame_coordinates, frame_path, preview}. A part that could not be written is {failure {code lab_frame_export_failed, path, raw_text}} in its place. ac_lab_do with record also record (with mark, record.mark) and, with next_frame_after_ms, next_frame {after_ms, out, record}: the next screen, which opens the next step; after_attachment is the operation's own after frame, not the next screen. No image is inlined. Larger than the output budget: {req_id, export {path, sha256, size}, overflowed: true} with the warning answer_exported (without export, and with the warning material_export_failed, when the export could not be written), keeping frame_coordinates, frame_path, preview, next_frame and after_attachment inline, in this order, each while it fits. Beyond the call budget: {handle, job_phase}."
     );
     if let Some(properties) = schema["properties"].as_object_mut() {
         properties.insert("frame_coordinates".to_owned(), json!({"type": "object"}));

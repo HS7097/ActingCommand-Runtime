@@ -283,6 +283,9 @@ fn assert_property(row_name: &str, param: &Param, property: &Value, served: bool
         assert_eq!(value["type"], "string", "{at}");
         assert_eq!(value[member], expected, "{at}: {member}");
     };
+    // Workflow #434 LW-1 (adapted, its work order's item 3): a parameter `tools::WORDS` names lists
+    // the words of its closed list, a list's items and a text's value; every other is as before.
+    let closed = tools::words(row_name, &param.name).expect("the closed lists read");
     match (param.form, &param.value_type) {
         (ParamForm::Switch, _) | (_, ParamType::Boolean) => {
             assert_eq!(value["type"], "boolean", "{at}");
@@ -299,7 +302,11 @@ fn assert_property(row_name: &str, param: &Param, property: &Value, served: bool
         (_, ParamType::Decimal) => assert_eq!(value["type"], "number", "{at}"),
         (_, ParamType::ListOfStrings) => {
             assert_eq!(value["type"], "array", "{at}");
-            assert_eq!(value["items"], json!({"type": "string"}), "{at}");
+            let items = match &closed {
+                Some(words) => json!({"type": "string", "enum": words}),
+                None => json!({"type": "string"}),
+            };
+            assert_eq!(value["items"], items, "{at}");
         }
         (_, ParamType::Enum(words)) => string_with("enum", json!(words)),
         (_, ParamType::Duration) => string_with("pattern", json!("^[0-9]+(ms|s|m|h)$")),
@@ -309,7 +316,11 @@ fn assert_property(row_name: &str, param: &Param, property: &Value, served: bool
         _ => {
             assert_eq!(value["type"], "string", "{at}");
             assert_eq!(value.get("pattern"), None, "{at}");
-            assert_eq!(value.get("enum"), None, "{at}");
+            assert_eq!(
+                value.get("enum"),
+                closed.map(|words| json!(words)).as_ref(),
+                "{at}"
+            );
         }
     }
     match &param.default {

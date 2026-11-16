@@ -61,17 +61,27 @@ use serde_json::{Map, Value};
 /// `record archive` and `record reopen`, since Workflow #464 P1 its row `standard-pack adopt`
 /// (slice SP-ADOPT), since Workflow #464 P2 its row `standard-pack build` (slice `PACK-BUILD`),
 /// since Workflow #464 P3 its row `standard-pack ready` (slice `464-P3`), since Workflow #467
-/// RPT-1 its row `report export`, and since Workflow #463 V3 its rows `goals`, `goals get`,
-/// `goals set`, `goals clear` and `package variables`. The rescue module's rows are those
-/// `crates/lab-rescue` serves (Workflow #434 LAB-3: [`rescue_served`]); a reserved row comes with
-/// the slice that opens it.
-pub(crate) const BUILT_SLICES: [&str; 11] = [
+/// RPT-1 its row `report export`, since Workflow #463 V3 its rows `goals`, `goals get`, `goals
+/// set`, `goals clear` and `package variables`, since Workflow #463 S3-10 its row
+/// `standard-pack trial` (slice `PACK-TRIAL`), since #463 S2-1 its row `record ready`, since
+/// #463 S2-13 its row `record frames` (slice `463-S2-13`), since #463 S3-14 its row
+/// `standard-pack status` (slice `463-S3-14`), since Workflow #477 PC-1 its row
+/// `standard-pack catalog` (slice `477-PC1`), and since #463 S2-2 its row `record review`
+/// (slice `463-S22`). The rescue module's rows are those `crates/lab-rescue` serves (Workflow #434
+/// LAB-3: [`rescue_served`]); a reserved row comes with the slice that opens it.
+pub(crate) const BUILT_SLICES: [&str; 17] = [
+    "463-S2-13",
+    "463-S21",
+    "463-S22",
+    "463-S3-14",
     "463-V3",
     "464-P3",
+    "477-PC1",
     "LAB-1",
     "LAB-1b",
     "LAB-2",
     "PACK-BUILD",
+    "PACK-TRIAL",
     "R-6",
     "R-8",
     "REC-ARCH",

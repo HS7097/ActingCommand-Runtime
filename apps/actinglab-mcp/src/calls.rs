@@ -53,9 +53,6 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-/// The parameter of the instance a write names in its client action.
-const INSTANCE: &str = "instance";
-
 /// What serves the calls: this server's Runtime connection and its export directory, and
 /// (Workflow #434 LAB-5G4b) its `serve` children.
 pub(crate) struct Service {
@@ -118,7 +115,7 @@ impl Service {
         match prepare(operation, arguments, &self.exports) {
             Ok(params) if serving == Serving::Rescue => rescue_line(operation, &params),
             Ok(params) if serving == Serving::Child => self.child(operation, tool, &params, era),
-            Ok(params) => self.core(operation, tool, &params, era),
+            Ok(params) => self.core(operation, &params, era),
             Err(refused) => cli_line::failure(&refused.outcome, refused.text),
         }
     }
@@ -157,13 +154,7 @@ impl Service {
     /// any other on the kept connection. A Runtime that does not answer the kept connection is
     /// left to the serving code, which connects as the command line does and answers its line
     /// (`status` reports the Runtime offline; any other row the client's failure).
-    fn core(
-        &self,
-        operation: &Operation,
-        tool: &str,
-        params: &Map<String, Value>,
-        era: Era,
-    ) -> Exit {
+    fn core(&self, operation: &Operation, params: &Map<String, Value>, era: Era) -> Exit {
         self.within_budget(era, |answer_budget| {
             let place = runtime::place();
             let state_root = match (&place.state_root, operation.runtime) {
@@ -181,7 +172,7 @@ impl Service {
                 }
             };
             if tools::writes_to_runtime(operation) {
-                return self.write(operation, tool, params, &state_root, answer_budget);
+                return self.write(operation, params, &state_root, answer_budget);
             }
             match self.runtime.kept(&state_root) {
                 Ok(kept) => {
@@ -206,37 +197,27 @@ impl Service {
         })
     }
 
-    /// A row that writes to the Runtime: today's provenance on a connection of its own
-    /// (`runtime::begin_write`, the instance it names resolved as today's server resolves it),
-    /// then the row on that connection; the provenance's warnings join the line's. A step of the
-    /// provenance that fails ends the call with its line, and the row is not served.
+    /// A row that writes to the Runtime: the row on a connection of its own
+    /// (`runtime::begin_write`). A connection that fails ends the call with its line, and the row
+    /// is not served. Workflow #434 LAB-6S4a (0.12.63): no provenance is recorded before it.
     fn write(
         &self,
         operation: &Operation,
-        tool: &str,
         params: &Map<String, Value>,
         state_root: &Path,
         answer_budget: &Budget<'_>,
     ) -> Exit {
-        let alias = match instance_of(operation, params) {
-            Some(selector) => match self.runtime.alias(state_root, selector) {
-                Ok(alias) => Some(alias),
-                Err(ended) => return *ended,
-            },
-            None => None,
-        };
-        let write = match runtime::begin_write(state_root, tool, alias.as_deref()) {
-            Ok(write) => write,
+        let client = match runtime::begin_write(state_root) {
+            Ok(client) => client,
             Err(ended) => return *ended,
         };
-        let exit = self.served(
+        self.served(
             operation,
             params,
-            Connection::Kept(&write.client),
+            Connection::Kept(&client),
             self.runtime.generation(),
             answer_budget,
-        );
-        with_warnings(exit, write.warnings)
+        )
     }
 
     /// The row's line from `lab_ops::core_ops` on `connection`, within `answer_budget`, its
@@ -298,33 +279,9 @@ fn rescue_line(operation: &Operation, _params: &Map<String, Value>) -> Exit {
     cli_line::failure(&tools::unsupported(&tools::tool_name(operation)), None)
 }
 
-/// The instance a write names, when its row declares the parameter and the call gives it.
-fn instance_of<'p>(operation: &Operation, params: &'p Map<String, Value>) -> Option<&'p str> {
-    let declared = operation
-        .params
-        .iter()
-        .any(|param| param.name == INSTANCE && param.value_type == ParamType::Instance);
-    if !declared {
-        return None;
-    }
-    params.get(INSTANCE).and_then(Value::as_str)
-}
-
-/// `exit` with `warnings` after the line's own.
-fn with_warnings(mut exit: Exit, warnings: Vec<Value>) -> Exit {
-    if warnings.is_empty() {
-        return exit;
-    }
-    if let Ok(Value::Object(line)) = &mut exit.line {
-        match line.get_mut("warnings") {
-            Some(Value::Array(given)) => given.extend(warnings),
-            _ => {
-                line.insert("warnings".to_owned(), Value::Array(warnings));
-            }
-        }
-    }
-    exit
-}
+// Workflow #434 LAB-6S4a (0.12.63): `instance_of`, the instance a write's client action named, and
+// `with_warnings`, which joined the provenance's warnings to a write's line, went with that
+// provenance.
 
 /// The developer text of a relative path where an absolute one is required.
 const ABSOLUTE_REQUIRED: &str = "an absolute path is required: a resident server's current \
@@ -386,6 +343,13 @@ pub(crate) fn prepare(
             return Err(invalid(member, ArgumentProblem::Unknown).into());
         };
         checked(param, value).map_err(|problem| invalid(member, problem))?;
+        // Workflow #434 LW-1: a word outside the closed list the schema gives (`tools::WORDS`) is
+        // refused as a table enum's is, before anything is sent.
+        if let Some(words) = tools::words(row, member)?
+            && !within(value, &words)
+        {
+            return Err(invalid(member, ArgumentProblem::NotRecognised).into());
+        }
         if flag_like(value) {
             // As `serve` refuses it (actinglab's `cli_module::words::from_json`, `not_a_flag`).
             return Err(cli_line::usage_invalid(
@@ -495,6 +459,20 @@ fn checked(param: &Param, value: &Value) -> Result<(), ArgumentProblem> {
             }
         }
         (false, value) => one(value),
+    }
+}
+
+/// Workflow #434 LW-1: whether `value`, a text or a list of texts (`checked` held its type), is
+/// one of `words`, or holds only them.
+fn within(value: &Value, words: &[String]) -> bool {
+    let one = |value: &Value| {
+        value
+            .as_str()
+            .is_some_and(|text| words.iter().any(|word| word == text))
+    };
+    match value {
+        Value::Array(items) => items.iter().all(one),
+        other => one(other),
     }
 }
 
@@ -686,13 +664,12 @@ fn not_served(exit: Option<Exit>) -> Exit {
     })
 }
 
-/// Workflow #434 LAB-5G3: a run prepared for `ac_run_start` on a connection of its own, after
-/// today's provenance, and not yet submitted.
+/// Workflow #434 LAB-5G3: a run prepared for `ac_run_start` on a connection of its own, and not
+/// yet submitted (Workflow #434 LAB-6S4a, 0.12.63: with no provenance before it, so with no
+/// warnings of its own).
 pub(crate) struct StartedRun {
     client: RuntimeClient,
     prepared: PreparedContainedTask,
-    /// The warnings recording the provenance gave (each `{outcome}`), which the run's lines carry.
-    pub(crate) warnings: Vec<Value>,
 }
 
 impl StartedRun {
@@ -705,11 +682,9 @@ impl StartedRun {
         json!(self.prepared.correlation_id())
     }
 
-    /// Submits the run and waits for its receipt: the line `run start` gives for it, with the
-    /// provenance's warnings after its own.
+    /// Submits the run and waits for its receipt: the line `run start` gives for it.
     pub(crate) fn submitted(self) -> Exit {
-        let exit = core_ops::run_start_ended(self.client.submit_prepared(self.prepared));
-        with_warnings(exit, self.warnings)
+        core_ops::run_start_ended(self.client.submit_prepared(self.prepared))
     }
 }
 
@@ -830,15 +805,15 @@ impl Service {
     }
 
     /// Workflow #434 LAB-5G3 (work order point 5; today's `ac_run_pack`, `operator.rs`): `run
-    /// start` prepared and not submitted: the instance resolved as a write's (one status read on
-    /// the kept connection), today's provenance recorded on a connection of its own
-    /// (`runtime::begin_write`), then the run read as `run start` reads it and prepared on that
-    /// connection (`core_ops::run_start_prepared`), named by its request id. A step that fails
-    /// ends the call with its line, and nothing of the run is sent.
+    /// start` prepared and not submitted: a connection of its own (`runtime::begin_write`), then
+    /// the run read as `run start` reads it and prepared on that connection
+    /// (`core_ops::run_start_prepared`), named by its request id. A step that fails ends the call
+    /// with its line, and nothing of the run is sent. Workflow #434 LAB-6S4a (0.12.63): no
+    /// provenance is recorded before it, so no status read on the kept connection names its
+    /// instance first.
     pub(crate) fn run_start(
         &self,
         operation: &Operation,
-        tool: &str,
         arguments: &Map<String, Value>,
     ) -> Result<StartedRun, Exit> {
         let params = prepare(operation, arguments, &self.exports)
@@ -848,21 +823,8 @@ impl Service {
             Ok(state_root) => state_root.clone(),
             Err(outcome) => return Err(cli_line::failure(outcome, Some(runtime::UNLOCATED))),
         };
-        let alias = match instance_of(operation, &params) {
-            Some(selector) => Some(
-                self.runtime
-                    .alias(&state_root, selector)
-                    .map_err(|ended| *ended)?,
-            ),
-            None => None,
-        };
-        let write =
-            runtime::begin_write(&state_root, tool, alias.as_deref()).map_err(|ended| *ended)?;
-        let prepared = core_ops::run_start_prepared(&params, &write.client)?;
-        Ok(StartedRun {
-            client: write.client,
-            prepared,
-            warnings: write.warnings,
-        })
+        let client = runtime::begin_write(&state_root).map_err(|ended| *ended)?;
+        let prepared = core_ops::run_start_prepared(&params, &client)?;
+        Ok(StartedRun { client, prepared })
     }
 }

@@ -195,8 +195,9 @@ record of severity `warning` or above; a run whose context holds no failure, rea
 completely and within the bound, has no group. #429 RG-STOP (since 0.12.58,
 [v012-register.md](v012-register.md) §1.337): a record whose outcome code is of
 the ladder class `planned_stop` (a stop on request, a pause and the other stops
-the recovery ladder does not answer; eighteen codes today, `contained_task_cancelled`
-and `contained_task_paused` among them) is no failure of the
+the recovery ladder does not answer; twenty codes today, `contained_task_cancelled`
+and `contained_task_paused` among them, and since 0.12.62 (Workflow #469 D4a)
+`device_locked` and `contained_task_application_update_required`) is no failure of the
 grouping unless it is of one of those failure kinds, whatever its severity: it is
 not listed and causes no gap, so a run that was only stopped or paused has no
 group. The rule reads the class the outcome catalog gives the record's code and
@@ -254,6 +255,19 @@ summary; a window that starts earlier, or `unavailable` (no row then), is not
 answered completely by it, and its reader reads the ledger or says so. Neither
 type is carried by an operation in 0.12.27, and no configuration key is added
 (the run summary's two keys come with B-2).
+Workflow #469 F1 (since 0.12.62): the fold's terminal also keeps `failure_values`,
+what codes mode keeps of the terminal outcome's own values (the values whose type
+is a registered name), taken from the terminal fact it takes `failure_code` from
+and absent when there are none; a `QueryRuns` row's status carries it as the
+run status read does ([runtime-state-observation.md](runtime-state-observation.md),
+"Contained-run queries"). `QueryRuns` is still carried by no operation, so no
+interface revision moves.
+Workflow #463 S3-3 (since 0.12.63): the fold's terminal also keeps `outcome_key`,
+the key of the mapping the host keyed the run by, taken from the same terminal
+fact's `scheduling_disposition` and absent when that fact carries none; a
+`QueryRuns` row's status carries it as the run status read does
+([runtime-state-observation.md](runtime-state-observation.md), "Contained-run
+queries"). No interface revision moves.
 
 A Runtime reader-pool thread also keeps, from one of its pages to the next, the
 Lab relations through a page's snapshot, for the last 4 snapshots it read at

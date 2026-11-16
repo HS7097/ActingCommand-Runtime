@@ -76,19 +76,10 @@ actingcommand_contract::outcome_codes! {
         /// status fact (Workflow #381 A R3′). A restart may succeed: the watchdog considers a
         /// start (R5′).
         InstallStartupStopped => "install_startup_stopped": error / none,
-        /// Info (Workflow #378 A7-R). A held start ended because a shutdown request for its owner
-        /// was accepted before it was released. Operation `install_transition`. A requested
-        /// stop: actingd ends with `runtime_stopped`, and the watchdog takes the close as formal
-        /// and never restarts it (Workflow #381 A, #672 review M1).
-        InstallStartupShutDown => "install_startup_shut_down": info / none,
-        /// Error. A held start received no release before its deadline; the transition fails
-        /// with admission closed (Workflow #352) and the start ends with it, even when nobody
-        /// polls (#381 A R5′). Operation `install_transition`.
-        HeldTimeout => "held_timeout": error / none,
-        /// Error. A released start did not finish preparing before its deadline; the
-        /// transition fails with admission closed (Workflow #352) and the start ends with it
-        /// (#381 A R5′). Operation `install_transition`.
-        ReleaseTimeout => "release_timeout": error / none,
+        // Workflow #434 LAB-6S4a: `held_timeout` and `release_timeout` are retired in 0.12.63 with
+        // the five request kinds of LAB-6S4a, which were their only emitters, and so is
+        // `install_startup_shut_down`: a shutdown request is answered busy while a start prepares,
+        // so the accepted shutdown of a held start was its only cause.
         /// Info. A start found a scheduled run whose dispatch has no outcome and whose lease
         /// has no run-linked `lease.released` (cut between its task terminal and its release,
         /// mid-run, or before its first task event; its lease not transferred, expired or
@@ -241,13 +232,8 @@ actingcommand_contract::outcome_codes! {
         /// #372 K4).
         ClockSlotSuperseded => "clock_slot_superseded": warning / none,
         // INST-1 (Workflow #390) begin
-        /// Warning. An install start went on although this instance's daemon-start
-        /// preparation self-check failed, because another instance passed (INST-1, FCM D-01).
-        /// The instance stays unavailable until a later self-check passes. One lifecycle
-        /// record per instance at stage `install_release` (keys `instance_id`); until A2 makes
-        /// it a `caused_by` link, the self-check's failure travels as the token
-        /// `cause=<code>`.
-        InstallPreparationInstanceUnavailable => "install_preparation_instance_unavailable": warning / none,
+        // Workflow #434 LAB-6S4a: `install_preparation_instance_unavailable` is retired in 0.12.63
+        // with the five request kinds of LAB-6S4a, which were their only emitters.
         // INST-1 (Workflow #390) end
         // Workflow #403 begin
         /// Error. An unconfirmed close of one instance's own resources fenced that instance
@@ -406,8 +392,9 @@ actingcommand_contract::outcome_codes! {
         ApprovalProjectionPositionInvalid => "approval_projection_position_invalid": error / none,
         ApprovalProjectionQueryFailed => "approval_projection_query_failed": error / none,
         ApprovalReadIdsExceeded => "approval_read_ids_exceeded": error / none,
-        ApprovalReplayConflict => "approval_replay_conflict": error / none,
-        ApprovalReplayPayloadMismatch => "approval_replay_payload_mismatch": error / none,
+        // Workflow #434 LAB-6S4a: `approval_replay_conflict` and `approval_replay_payload_mismatch`
+        // are retired in 0.12.63 with the five request kinds of LAB-6S4a, which were their only
+        // emitters.
         ArtifactEvictionRecoveryDeadline => "artifact_eviction_recovery_deadline": error / none,
         ArtifactEvictionRecoveryDeferred => "artifact_eviction_recovery_deferred": error / none,
         ArtifactIdentityEncodeFailed => "artifact_identity_encode_failed": error / none,
@@ -635,7 +622,8 @@ actingcommand_contract::outcome_codes! {
         // (R-7a §2.6 O-1, the contract's `ControlGateCode`); R-7a2 and R-7b first emit them.
         DispatchPlayerHeld => "dispatch_player_held": info / none,
         DispatchResourceFenced => "dispatch_resource_fenced": info / none,
-        DrainTimeout => "drain_timeout": error / none,
+        // Workflow #434 LAB-6S4a: `drain_timeout` is retired in 0.12.63 with the five request kinds
+        // of LAB-6S4a, which were their only emitters.
         DuplicateEmulatorCapabilityRequirement => "duplicate_emulator_capability_requirement": error / none,
         DuplicateInstanceAlias => "duplicate_instance_alias": error / none,
         DuplicateInstanceId => "duplicate_instance_id": error / none,
@@ -732,8 +720,9 @@ actingcommand_contract::outcome_codes! {
         FixtureCaptureOutsideSimulationScope => "fixture_capture_outside_simulation_scope": error / none,
         FixtureExecutionScopeForbidden => "fixture_execution_scope_forbidden": error / none,
         FixtureMonitorScopeForbidden => "fixture_monitor_scope_forbidden": error / none,
-        GovernanceAuthorityRequired => "governance_authority_required": error / none,
-        GovernanceConnectionStateConflict => "governance_connection_state_conflict": error / none,
+        // Workflow #434 LAB-6S4a: `governance_authority_required` and
+        // `governance_connection_state_conflict` are retired in 0.12.63 with the five request kinds
+        // of LAB-6S4a, which were their only emitters.
         HostKeyRequestInvalid => "host_key_request_invalid": error / none,
         HostPackageLeaseIdentityMismatch => "host_package_lease_identity_mismatch": error / none,
         HostTestObservationInstallLockPoisoned => "host_test_observation_install_lock_poisoned": error / none,
@@ -742,38 +731,21 @@ actingcommand_contract::outcome_codes! {
         HostTestObservationSinkLockPoisoned => "host_test_observation_sink_lock_poisoned": error / none,
         InputExecutionPlanInvalid => "input_execution_plan_invalid": error / none,
         InputFrameUnavailable => "input_frame_unavailable": error / none,
-        InstallAbortStateInvalid => "install_abort_state_invalid": error / none,
-        InstallFactClockOverflow => "install_fact_clock_overflow": error / none,
-        InstallFactFieldInvalid => "install_fact_field_invalid": error / none,
-        InstallIdentityEncodeFailed => "install_identity_encode_failed": error / none,
-        InstallIdentityRequired => "install_identity_required": error / none,
-        InstallNotDrained => "install_not_drained": error / none,
-        InstallOwnerMismatch => "install_owner_mismatch": error / none,
-        InstallOwnerStopping => "install_owner_stopping": error / none,
-        InstallPauseScopeMismatch => "install_pause_scope_mismatch": error / none,
-        InstallPreparationNotAuthorized => "install_preparation_not_authorized": error / none,
-        /// Error. An install start whose daemon-start preparation self-checks all failed (at
-        /// least one ran and none passed) ends under this code during `install_transition`
-        /// (INST-1, Workflow #390); a start where some instance passed goes on.
-        InstallPreparationSelfcheckFailed => "install_preparation_selfcheck_failed": error / none,
-        InstallPreviousDrainUnverified => "install_previous_drain_unverified": error / none,
-        InstallPreviousOwnerInvalid => "install_previous_owner_invalid": error / none,
-        InstallPreviousPauseIdentityMismatch => "install_previous_pause_identity_mismatch": error / none,
-        InstallPreviousPauseIdentityMissing => "install_previous_pause_identity_missing": error / none,
-        InstallPreviousPauseNotSettled => "install_previous_pause_not_settled": error / none,
-        InstallPreviousPauseRevisionInvalid => "install_previous_pause_revision_invalid": error / none,
-        InstallPreviousPauseScopeInvalid => "install_previous_pause_scope_invalid": error / none,
-        InstallPreviousPauseTimeInvalid => "install_previous_pause_time_invalid": error / none,
-        InstallPreviousPausesInvalid => "install_previous_pauses_invalid": error / none,
-        InstallPreviousPausesMissing => "install_previous_pauses_missing": error / none,
-        InstallPreviousShutdownUnverified => "install_previous_shutdown_unverified": error / none,
-        InstallPreviousTransitionInvalid => "install_previous_transition_invalid": error / none,
-        InstallPreviousTransitionMissing => "install_previous_transition_missing": error / none,
-        InstallPreviousVerificationTimeout => "install_previous_verification_timeout": error / none,
-        InstallReleaseStateInvalid => "install_release_state_invalid": error / none,
-        InstallTicketMismatch => "install_ticket_mismatch": error / none,
-        InstallTransitionConflict => "install_transition_conflict": error / none,
-        InstallTransitionUnknown => "install_transition_unknown": error / none,
+        // Workflow #434 LAB-6S4a: `install_abort_state_invalid`, `install_fact_clock_overflow`,
+        // `install_fact_field_invalid`, `install_identity_encode_failed`,
+        // `install_identity_required`, `install_not_drained`, `install_owner_mismatch`,
+        // `install_owner_stopping`, `install_pause_scope_mismatch`,
+        // `install_preparation_not_authorized`, `install_preparation_selfcheck_failed`,
+        // `install_previous_drain_unverified`, `install_previous_owner_invalid`,
+        // `install_previous_pause_identity_mismatch`, `install_previous_pause_identity_missing`,
+        // `install_previous_pause_not_settled`, `install_previous_pause_revision_invalid`,
+        // `install_previous_pause_scope_invalid`, `install_previous_pause_time_invalid`,
+        // `install_previous_pauses_invalid`, `install_previous_pauses_missing`,
+        // `install_previous_shutdown_unverified`, `install_previous_transition_invalid`,
+        // `install_previous_transition_missing`, `install_previous_verification_timeout`,
+        // `install_release_state_invalid`, `install_ticket_mismatch`, `install_transition_conflict`
+        // and `install_transition_unknown` are retired in 0.12.63 with the five request kinds of
+        // LAB-6S4a, which were their only emitters.
         /// Error (ISO-M #419, R8). A lock of one instance alone that guards no data (its admission
         /// guard, its queue-order lock) was left poisoned by a panic: its poison is cleared, the
         /// work that met it fails and the instance is fenced; every other instance goes on.
@@ -1035,6 +1007,11 @@ actingcommand_contract::outcome_codes! {
         PolicyAdmissionContextUntrusted => "policy_admission_context_untrusted": error / none,
         PolicyAdmissionEventInvalid => "policy_admission_event_invalid": error / none,
         PolicyApprovalFactMissing => "policy_approval_fact_missing": error / none,
+        /// Warning (Workflow #463 U1b fix round 2, since 0.12.63). The break-in of a scheduled
+        /// run's pair could not be established before the run executed; the run went on as one
+        /// outside its break-in (`contracts/policy-suspension.md`, "Only during a package's
+        /// break-in"). Fix round 3: which half, `break_in_problem` ([`BreakInProblem`]).
+        PolicyBreakInUnread => "policy_break_in_unread": warning / none,
         PolicyBudgetCounterOverflow => "policy_budget_counter_overflow": error / none,
         PolicyBudgetExhausted => "policy_budget_exhausted": error / budget_or_permission,
         PolicyBudgetReceiptInvalid => "policy_budget_receipt_invalid": error / none,
@@ -1476,20 +1453,10 @@ actingcommand_contract::outcome_codes! {
         /// Error. From U-6, a request kind of the Lab option that is not installed (keys
         /// `operation`, `lab_option`).
         LabModuleOptionDisabled => "lab_module_option_disabled": error / none,
-        /// Success. UpgradeState enter: drained and its own close accepted (keys
-        /// `transition_id`). Emitted from U-4, as are the four codes below.
-        UpgradeStateEntered => "upgrade_state_entered": success / none,
-        /// Success. UpgradeState cancel during the drain (keys `transition_id`).
-        UpgradeStateCancelled => "upgrade_state_cancelled": success / none,
-        /// Success. UpgradeState leave released the held Runtime (keys `transition_id`).
-        UpgradeStateReleased => "upgrade_state_released": success / none,
-        /// Warning. The enter connection closed before the close was accepted; handled as
-        /// cancel and written as the aborted transition's `failure_code` (keys
-        /// `transition_id`).
-        UpgradeStateRequesterDisconnected => "upgrade_state_requester_disconnected": warning / none,
-        /// Error. The reply to an enter that a cancel withdrew during the drain (keys
-        /// `transition_id`).
-        UpgradeStateAborted => "upgrade_state_aborted": error / none,
+        // Workflow #434 LAB-6S4a: `upgrade_state_entered`, `upgrade_state_cancelled`,
+        // `upgrade_state_released`, `upgrade_state_requester_disconnected` and
+        // `upgrade_state_aborted` are retired in 0.12.63 with `UpgradeState`, which answered
+        // `not_implemented` and so never emitted them.
         /// Success. LoadPack (keys `package_id`). Emitted from U-3, as are the five codes below.
         PackRegistryLoaded => "pack_registry_loaded": success / none,
         /// Success. UnloadPack, after stopping the runs that used the package (keys
@@ -1670,6 +1637,31 @@ actingcommand_contract::outcome_codes! {
         /// the package the step concerned; the step's failure is its cause).
         ApplicationSwitchFailed => "application_switch_failed": error / none,
         // ---- Workflow #437 MAPP-2a: end
+        // ---- Workflow #437 G1 (`contracts/device-group.md`, "A failure stays where it belongs"): begin
+        /// Error. A request of a member of a device group of several that asks for the device (a
+        /// client's lease, a Lab operation, a direct run, an input or application command, a
+        /// self-check, a resume, a backend switch, the member's own connection preparation) while
+        /// another member of the device is fenced (Workflow #403): the device is held for that
+        /// member's unconfirmed close until a preparation of it whose self-check passes lifts the
+        /// fence. Nothing was granted (keys `alias` the fenced member).
+        DeviceHeldForMemberClose => "device_held_for_member_close": error / none,
+        // ---- Workflow #437 G1: end
+        // ---- Workflow #463 S3-8 (`contracts/runtime-interface.md`, "The variable values of a
+        // contained run"): begin. Each refuses a direct run in its preparation, before any record,
+        // claim or lease (keys `package_id` the run's package, `variable_name` the value's name).
+        /// Error. The request gives a value under a name its package declares no variable of.
+        RunVariableUndeclared => "run_variable_undeclared": error / none,
+        /// Error. The request gives a value the variable does not take whole, as the dispatch's own
+        /// judgement (`resolve_variable`) answers it (key `variable_problem` its word).
+        RunVariableValueRefused => "run_variable_value_refused": error / none,
+        /// Error. The request gives a value of a variable that does not apply in the instance's
+        /// game root now, as a dispatch's table says it (key `variable_problem` the root's word).
+        RunVariableNotApplying => "run_variable_not_applying": error / none,
+        /// Error. Fix round of the 0.12.68 train: the judgement of a given value of an applying
+        /// variable (`resolve_variable`) gave neither the value nor a word, which cannot happen;
+        /// the run alone is refused instead of a panic that would stop the Runtime.
+        RunVariableUnjudged => "run_variable_unjudged": error / none,
+        // ---- Workflow #463 S3-8: end
     }
 }
 
@@ -2625,6 +2617,21 @@ actingcommand_contract::outcome_locations! {
         // Workflow #437 MAPP-2a: the switch that brings a member of a device group of several to
         // the front before its run, and its parts.
         SwitchApplication => "switch_application",
+        // Workflow #437 G1 fix round 2: the lease sweep's step that queues the start preparation
+        // of a member the device's hold refused (its list of such members, the member's pause, the
+        // device's state, its mark as queued), the claim's queueing and lease time, the settlement
+        // of a claim the queue refused, and the preparation on the member's worker.
+        ListHeldStartPreparations => "list_held_start_preparations",
+        ReadHeldStartPreparationPause => "read_held_start_preparation_pause",
+        ReadHeldStartPreparationDevice => "read_held_start_preparation_device",
+        MarkHeldStartPreparationQueued => "mark_held_start_preparation_queued",
+        QueueHeldStartPreparation => "queue_held_start_preparation",
+        ReadHeldStartPreparationClaimTtl => "read_held_start_preparation_claim_ttl",
+        SettleHeldStartPreparation => "settle_held_start_preparation",
+        RunHeldStartPreparation => "run_held_start_preparation",
+        // Workflow #463 S3-8: the check of a direct run's given variable values in its
+        // preparation.
+        CheckRunVariables => "check_run_variables",
     }
 }
 
@@ -2716,6 +2723,9 @@ pub(crate) mod test_spellings {
             ExpireAllQueuedForTest => "expire_all_queued_for_test",
             ExpireDueLeasesForTest => "expire_due_leases_for_test",
             ExpireLeaseOnceForTest => "expire_lease_once_for_test",
+            // Workflow #463 U1b, fix round 3: a test makes a scheduled run's read of its break-in
+            // fail.
+            FailBreakInReadForTest => "fail_break_in_read_for_test",
             // Workflow #463 U1, fix round 3: a test makes a scheduled run's read of its runtime
             // budget's end fail.
             FailPolicyRunBudgetEndForTest => "fail_policy_run_budget_end_for_test",
@@ -2752,9 +2762,19 @@ pub(crate) mod test_spellings {
             // refused close fail.
             CloseIsolatesOffForTest => "close_isolates_off_for_test",
             FailRefusedCloseRecordForTest => "fail_refused_close_record_for_test",
+            // Workflow #461: a test ends a client's connection as its thread does once its stream
+            // is gone.
+            EndConnectionForTest => "end_connection_for_test",
+            // Workflow #475: a test runs a hook before the next close of an instance's resources
+            // asks its write authority.
+            RunBeforeNextResourceCloseForTest => "run_before_next_resource_close_for_test",
+            // Workflow #475: a test reads whether the owner is retained as unconfirmed.
+            OwnerRetainedUnconfirmedForTest => "owner_retained_unconfirmed_for_test",
+            // Workflow #475 fix round 1: a test reads how many hand-overs to a ladder withheld the
+            // key for an owed close.
+            LadderHandOffsWithheldForTest => "ladder_hand_offs_withheld_for_test",
             // #411 A51: a test latches a condition in the Runtime's fatal state.
             MarkRuntimeFatalForTest => "mark_runtime_fatal_for_test",
-            ObserveShutdownSettleForTest => "observe_shutdown_settle_for_test",
             ObserveTestPerformanceControl => "observe_test_performance_control",
             PersistContainedTaskStabilityComparison => "persist_contained_task_stability_comparison",
             // #385 P-k: a test pins the pacing factor an instance's runs are handed.
@@ -3331,8 +3351,9 @@ actingcommand_contract::outcome_codes! {
         /// game says its client must be updated, the run ends with no further input, and the
         /// instance fact `health.application.update_required` is true. A scheduled run ends by
         /// a condition (the default `scheduling.rerun.condition_codes`); no ladder by default.
-        /// Keys `page_id`.
-        RunEnded => "contained_task_application_update_required": warning / none,
+        /// Keys `page_id`. Workflow #469 D4a (since 0.12.62): of the ladder class
+        /// `planned_stop`, since the package declares the page and the run stops on purpose.
+        RunEnded => "contained_task_application_update_required": warning / planned_stop,
         /// Info. The candidate's instance waits for its game's client update
         /// (`health.application.update_required` true): every task of the instance except a
         /// `store_update` package's is deferred, position 4a, with no wake of its own. Keys
@@ -3497,3 +3518,70 @@ actingcommand_contract::outcome_vocabulary! {
     }
 }
 // ---- Workflow #438 HELD-1: end ----
+
+// ---- Workflow #469 V0 (register §1.386; the design's places 3 and 4): begin ----
+actingcommand_contract::outcome_vocabulary! {
+    /// Who withdrew an application's availability, from the source of the active
+    /// `session.instance.available` record that withdrew it (vocabulary `availability_source`,
+    /// since 0.12.62): the value of `instance_unavailable`. The host slice sets it.
+    pub enum AvailabilitySource: "availability_source" {
+        /// The configured seed: the configuration marks the application unavailable.
+        Configured => "configured",
+        /// The backend self-check gate: a self-check not passed, not yet recorded or no longer
+        /// valid, or a resource fence (they share the record's source); a gated instance the
+        /// configuration marks unavailable reads `configured` (Workflow #469 H1 fix round 2).
+        SelfCheck => "self_check",
+        /// The handset's wired device link is not `device` (with `device_link_state`).
+        DeviceLink => "device_link",
+        /// The handset is held (with `device_hold`).
+        DeviceState => "device_state",
+        /// A publisher other than these four.
+        OtherPublisher => "other_publisher",
+        /// The instance's facts are missing or unreadable.
+        FactsMissing => "facts_missing",
+    }
+}
+
+actingcommand_contract::outcome_vocabulary! {
+    /// Why a failure paused its task on the application, in the settlement's own order: a
+    /// severe failure first, then a sensitive task, then the streak, then `on_failure`
+    /// (vocabulary `pause_cause`, since 0.12.62): the value of `policy_task_paused`. The host
+    /// slice sets it.
+    pub enum PauseCause: "pause_cause" {
+        /// A failure that pauses its task at the first occurrence.
+        SevereFailure => "severe_failure",
+        /// The package met a screen it never recorded.
+        UnrecordedScreen => "unrecorded_screen",
+        /// The run took longer than its runtime budget.
+        RuntimeBudgetExceeded => "runtime_budget_exceeded",
+        /// The run was cut short by the Runtime's own end twice in a row.
+        InterruptedAgain => "interrupted_again",
+        /// A task marked sensitive failed.
+        SensitiveTask => "sensitive_task",
+        /// The same failure repeated up to the task's threshold.
+        RepeatedFailure => "repeated_failure",
+        /// The task used up its retries and is set to pause on failure.
+        RetriesExhausted => "retries_exhausted",
+    }
+}
+// ---- Workflow #469 V0: end ----
+
+// ---- Workflow #463 U1b fix round 3 (register §1.389): begin ----
+actingcommand_contract::outcome_vocabulary! {
+    /// What of a scheduled run's break-in could not be established before the run executed
+    /// (vocabulary `break_in_problem`, since 0.12.63): the value of `policy_break_in_unread`, whose
+    /// `caused_by` link is the failure behind it. The run is judged outside its break-in whichever
+    /// word it is.
+    pub enum BreakInProblem: "break_in_problem" {
+        /// The package's content was not measured when the run was prepared: the containment
+        /// could not measure the package, or a read the measurement needs (the Runtime clock,
+        /// `scheduling.suspension.lift_check_min_interval_ms`, the lift checks' memory) failed.
+        /// The run counts in no break-in.
+        ContentUnmeasured => "content_unmeasured",
+        /// The pair's break-in could not be judged before the run executed: the decision memory
+        /// does not hold the run's dispatch, or the two keys or the Runtime clock could not be
+        /// read. The run counts as any run of its content does.
+        RecordUnread => "record_unread",
+    }
+}
+// ---- Workflow #463 U1b fix round 3: end ----

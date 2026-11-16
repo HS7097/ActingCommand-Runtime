@@ -67,6 +67,30 @@ fn direct_task_run_claim_cap_ms(receipt_deadline_monotonic_ms: u64, now_monotoni
         .min(DIRECT_TASK_RUN_CLAIM_WAIT_MS)
 }
 
+/// Workflow #463 S3-8: the refusal `code` of a direct run's given value of the variable `name` of
+/// the package `package_id`, with the word `problem` when its cause has one: Denied at
+/// `check_run_variables`, `invalid_request`, before any record, claim or lease.
+fn run_variable_refused(
+    code: HostCode,
+    package_id: &str,
+    name: &str,
+    problem: Option<actingcommand_contract::VariableProblem>,
+) -> RequestFailure {
+    let error = RuntimeHostError::request(
+        code,
+        HostLocation::CheckRunVariables,
+        RuntimeErrorCode::InvalidRequest,
+    )
+    .with_outcome_values(|outcome| {
+        let outcome = outcome.package_id(package_id).variable_name(name);
+        match problem {
+            Some(problem) => outcome.variable_problem(problem),
+            None => outcome,
+        }
+    });
+    RequestFailure::request(error, RuntimeReceiptState::Denied, None)
+}
+
 /// Reads one original run identity without creating identifiers or producer authority.
 fn contained_task_recovery_identity(
     events: &[PersistedEvent],
@@ -695,6 +719,14 @@ pub(super) struct ContainedRunControl {
     /// own time reaches the largest runtime that budget still admits; fix round 3 (item 4): or
     /// that the budget's end could not be read.
     runtime_budget_end: std::sync::OnceLock<RuntimeBudgetEnd>,
+    /// Workflow #463 U1b: set once, before a scheduled run executes, when its pair is past the
+    /// break-in of the package content it runs: a linear step's closing decision that finds a
+    /// screen the package never recorded ends that run with `page_confirmation_failed`.
+    past_break_in: std::sync::OnceLock<()>,
+    /// Workflow #463 U1b fix round 2 (review item 3): set once when the run's kernel run of its
+    /// package began, its `PackageAdmitted` recorded (a layer's run records none of its own): a
+    /// scheduled run counts in its pair's break-in only then.
+    package_began: std::sync::OnceLock<()>,
 }
 
 /// Workflow #463 U1, fix round 3 (item 4): what a scheduled run noted, before it executed, of the
@@ -929,6 +961,8 @@ impl ContainedRunControl {
             stop_reset: std::sync::OnceLock::new(),
             borrowed_key: std::sync::OnceLock::new(),
             runtime_budget_end: std::sync::OnceLock::new(),
+            past_break_in: std::sync::OnceLock::new(),
+            package_began: std::sync::OnceLock::new(),
         }
     }
 
@@ -1101,6 +1135,34 @@ impl ContainedRunControl {
     /// Workflow #463 U1, fix round 2: what [`Self::note_runtime_budget_end`] noted.
     fn runtime_budget_end(&self) -> Option<RuntimeBudgetEnd> {
         self.runtime_budget_end.get().copied()
+    }
+
+    /// Workflow #463 U1b: notes, before a scheduled run executes, that its pair is past the
+    /// break-in of the package content it runs.
+    fn note_past_break_in(&self) {
+        let _ = self.past_break_in.set(());
+    }
+
+    /// Workflow #463 U1b fix round 2 (review item 3): notes that the run's kernel run of its
+    /// package began, once its `PackageAdmitted` is recorded.
+    fn note_package_began(&self) {
+        let _ = self.package_began.set(());
+    }
+
+    /// Workflow #463 U1b fix round 2: what [`Self::note_package_began`] noted.
+    fn package_began(&self) -> bool {
+        self.package_began.get().is_some()
+    }
+
+    /// Workflow #463 U1b: the code an unrecorded verdict of a linear step's closing decision ends
+    /// the run with: `page_confirmation_failed` for a scheduled run noted past its break-in, the
+    /// dedicated code for every other run (a run in its break-in, a direct run, a Lab run).
+    fn unrecorded_screen_end(&self) -> actingcommand_execution_kernel::UnrecordedScreenEnd {
+        if self.past_break_in.get().is_some() {
+            actingcommand_execution_kernel::UnrecordedScreenEnd::PageConfirmation
+        } else {
+            actingcommand_execution_kernel::UnrecordedScreenEnd::Dedicated
+        }
     }
 
     /// Workflow #437 MAPP-2a: marks the run as one on a borrowed key, before it executes.
@@ -2363,6 +2425,45 @@ fn task_geometry_request_failure(
     }
 }
 
+/// Workflow #392 DA-3 (DA-5ab: a Lab operation's input too): an input the display map does not
+/// send (`DisplayMap::send_input`), as the request's failure; nothing was sent.
+/// `display_map_unresolved` with its `display_problem`, `stage` and the frame's and the base's
+/// sizes; `display_map_stale` at `display_input_map`; a point outside the device frame or its box,
+/// `contained_task_input_out_of_bounds`.
+pub(super) fn input_send_failure(
+    error: actingcommand_display_adapter::InputSendError,
+) -> RequestFailure {
+    use actingcommand_display_adapter::{DisplayCode, DisplayLocation, InputSendError};
+    let refused = match error {
+        InputSendError::Unresolved(refusal) => RuntimeHostError::request(
+            DisplayCode::MapUnresolved,
+            HostLocation::ValidateTaskGeometryInput,
+            RuntimeErrorCode::BackendOperationFailed,
+        )
+        .with_outcome_values(|outcome| {
+            outcome
+                .display_problem(refusal.problem)
+                .stage(refusal.stage)
+                .frame_width(refusal.frame.width())
+                .frame_height(refusal.frame.height())
+                .base_width(refusal.base.width())
+                .base_height(refusal.base.height())
+        }),
+        InputSendError::Stale(_) => RuntimeHostError::request(
+            DisplayCode::MapStale,
+            HostLocation::ValidateTaskGeometryInput,
+            RuntimeErrorCode::BackendOperationFailed,
+        )
+        .with_outcome_values(|outcome| outcome.stage(DisplayLocation::InputMap)),
+        InputSendError::OutOfBounds => RuntimeHostError::request(
+            ExecutionKernelCode::ContainedTaskInputOutOfBounds.code(),
+            HostLocation::ValidateTaskGeometryInput,
+            RuntimeErrorCode::BackendOperationFailed,
+        ),
+    };
+    task_geometry_request_failure(refused, None)
+}
+
 impl RuntimeContainedTask<'_> {
     /// Workflow #428 S168-LB1a (LB1-5b): whether the list `joined`, read whole, is larger than one
     /// observation holds, measured on the record the run's end would publish for it: its instance,
@@ -2925,57 +3026,14 @@ impl RuntimeContainedTask<'_> {
         action: &InputAction,
         decided: Option<actingcommand_contract::InputFrameReference>,
     ) -> Result<InputAction, RequestFailure> {
-        use actingcommand_display_adapter::{
-            DisplayCode, DisplayLocation, DisplayMapUnresolved, InputCoordinates, InputMapError,
-        };
         let boxes = self.input_boxes.take().unwrap_or_default();
-        let unresolved = |refusal: DisplayMapUnresolved| {
-            task_geometry_request_failure(
-                RuntimeHostError::request(
-                    DisplayCode::MapUnresolved,
-                    HostLocation::ValidateTaskGeometryInput,
-                    RuntimeErrorCode::BackendOperationFailed,
-                )
-                .with_outcome_values(|outcome| {
-                    outcome
-                        .display_problem(refusal.problem)
-                        .stage(refusal.stage)
-                        .frame_width(refusal.frame.width())
-                        .frame_height(refusal.frame.height())
-                        .base_width(refusal.base.width())
-                        .base_height(refusal.base.height())
-                }),
-                None,
-            )
-        };
-        map.admit_input(action).map_err(unresolved)?;
-        if let Some(decided) =
-            decided.and_then(|frame| CaptureExtent::new(frame.width, frame.height))
-        {
-            map.current_for(decided).map_err(|_| {
-                task_geometry_request_failure(
-                    RuntimeHostError::request(
-                        DisplayCode::MapStale,
-                        HostLocation::ValidateTaskGeometryInput,
-                        RuntimeErrorCode::BackendOperationFailed,
-                    )
-                    .with_outcome_values(|outcome| outcome.stage(DisplayLocation::InputMap)),
-                    None,
-                )
-            })?;
-        }
-        map.device_input(action, &boxes, InputCoordinates::Display)
-            .map_err(|error| match error {
-                InputMapError::Unresolved(refusal) => unresolved(refusal),
-                InputMapError::OutOfBounds => task_geometry_request_failure(
-                    RuntimeHostError::request(
-                        ExecutionKernelCode::ContainedTaskInputOutOfBounds.code(),
-                        HostLocation::ValidateTaskGeometryInput,
-                        RuntimeErrorCode::BackendOperationFailed,
-                    ),
-                    None,
-                ),
-            })
+        // Workflow #392 DA-5ab: the exit a Lab operation's input takes too.
+        map.send_input(
+            action,
+            &boxes,
+            decided.and_then(|frame| CaptureExtent::new(frame.width, frame.height)),
+        )
+        .map_err(input_send_failure)
     }
 
     fn recheck_task_geometry(
@@ -4648,6 +4706,11 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
         self.control.is_host_package()
     }
 
+    /// Workflow #463 U1b: what the run's scheduled path noted of its pair's break-in.
+    fn unrecorded_screen_end(&self) -> actingcommand_execution_kernel::UnrecordedScreenEnd {
+        self.control.unrecorded_screen_end()
+    }
+
     /// Workflow #463 U1, fix round 2 (rule 6): the Runtime-clock time left before the earlier of
     /// the run's host deadline and the end of its admitted runtime budget (a scheduled run's,
     /// `ContainedRunControl::runtime_budget_end`); none for a run with neither. A failed clock
@@ -5635,6 +5698,8 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                         AuditInput::new(),
                     ),
                 )?;
+                // Workflow #463 U1b fix round 2 (review item 3): the run of its package began.
+                self.control.note_package_began();
                 let (game, server) = &self.declared_game_server;
                 for (key, value) in [(TASK_GAME_FACT_KEY, game), (TASK_SERVER_FACT_KEY, server)] {
                     self.host
@@ -7497,6 +7562,9 @@ impl HostShared {
         // Workflow #411 A22: a recovery binding that neither the run's home entry nor a ladder
         // after its failed end can use is refused here, before any record, claim or lease.
         self.check_recovery_binding(&resolved, task_request, &prepared, &prerequisites)?;
+        // Workflow #463 S3-8: so is a given variable value its package does not take, before any
+        // record, claim or lease; a request without values passes unchanged.
+        self.check_run_variables(request, instance_alias, task_request, &prepared)?;
         self.append_request_lifecycle(
             original,
             request,
@@ -7676,6 +7744,141 @@ impl HostShared {
         // receipt and decides. Workflow #387 D1c: `rules.direct_runs = trigger` lets its failed
         // end queue one (`ladder_after_direct_run`).
         with_recovery_ladder_staging(executed, awaited)
+    }
+
+    /// Workflow #463 S3-8 (`contracts/runtime-interface.md`, "The variable values of a contained
+    /// run"; `contracts/package-variables.md`, "Runs without a dispatch"): a direct run's given
+    /// values, judged after its package and prerequisite chain are read and before any record,
+    /// claim or lease, each in the order of its name: a name the package `prepared` declares no
+    /// variable of is `run_variable_undeclared`; a variable that does not apply in the instance's
+    /// game root now, as the variable table a dispatch reads says it, `run_variable_not_applying`
+    /// with the root's word; a value the variable does not take whole, as the dispatch's own
+    /// judgement answers it (the policy crate's `resolve_variable`, the value given as the entry an
+    /// application holds, set through the request's channel now), `run_variable_value_refused`
+    /// with its word. Each is Denied with the package and the name. A request without values passes
+    /// unchanged and reads nothing. Fix round of the 0.12.68 train: a judgement that gives neither
+    /// the value nor a word, which cannot happen, is `run_variable_unjudged`, Denied as the others.
+    fn check_run_variables(
+        &self,
+        request: &ValidatedRuntimeRequest<'_>,
+        instance_alias: &str,
+        task_request: &ContainedTaskRequest,
+        prepared: &PreparedContainedTask,
+    ) -> Result<(), RequestFailure> {
+        let given = task_request.variables();
+        if given.is_empty() {
+            return Ok(());
+        }
+        let channel = request
+            .channel()
+            .map(|binding| binding.channel)
+            .ok_or_else(|| {
+                RequestFailure::request(
+                    RuntimeHostError::request(
+                        HostCode::ChannelBindingMissing,
+                        HostLocation::CheckRunVariables,
+                        RuntimeErrorCode::InvalidRequest,
+                    ),
+                    RuntimeReceiptState::Denied,
+                    None,
+                )
+            })?;
+        let set_by = actingcommand_policy::VariableSetBy {
+            set_unix_ms: self.runtime_clock_sample()?.unix_ms,
+            channel,
+        };
+        // The instance's game, as the policy's inputs bind it; an instance they bind to no game
+        // is one no check judges.
+        let game = lock(&self.policy_inputs, HostLocation::CheckRunVariables)?
+            .as_ref()
+            .and_then(|inputs| {
+                inputs
+                    .facts()
+                    .instances
+                    .iter()
+                    .find(|instance| instance.instance_id == instance_alias)
+                    .map(|instance| instance.game_id.clone())
+            });
+        let table = self.run_variable_table()?;
+        let package_id = prepared.package_label();
+        for (name, value) in given {
+            let Some(variable) = prepared
+                .declared_variables()
+                .iter()
+                .find(|variable| variable.name == *name)
+            else {
+                return Err(run_variable_refused(
+                    HostCode::RunVariableUndeclared,
+                    package_id,
+                    name,
+                    None,
+                ));
+            };
+            let root = match &game {
+                Some(game) => table.root_word(game, name),
+                None => Some(actingcommand_contract::VariableProblem::RootUnchecked),
+            };
+            if let Some(word) = root {
+                return Err(run_variable_refused(
+                    HostCode::RunVariableNotApplying,
+                    package_id,
+                    name,
+                    Some(word),
+                ));
+            }
+            let entry = actingcommand_policy::StoredEntry {
+                value: value.clone(),
+                set_by: Some(set_by),
+            };
+            let resolved = actingcommand_policy::resolve_variable(variable, Some(&entry), None);
+            match (resolved.source, resolved.problem) {
+                (actingcommand_contract::VariableSource::Set, None) => {}
+                // Not taken, or taken only in part (`keys_left_out`): the judgement's word.
+                (_, Some(problem)) => {
+                    return Err(run_variable_refused(
+                        HostCode::RunVariableValueRefused,
+                        package_id,
+                        name,
+                        Some(problem),
+                    ));
+                }
+                // Fix round 1: not reachable. Given an entry whose setter is known and no root
+                // word, `resolve_variable` answers `set` (with `keys_left_out` when it took the
+                // value in part) or the default with the judgement's word, never a default
+                // without a word. Fix round of the 0.12.68 train: should it ever answer one, this
+                // run alone is refused (`run_variable_unjudged`), as the refusals above; a panic
+                // here would stop the whole Runtime at the connection's boundary.
+                (_, None) => {
+                    return Err(run_variable_refused(
+                        HostCode::RunVariableUnjudged,
+                        package_id,
+                        name,
+                        None,
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Workflow #463 S3-8: the variable table a dispatch reads now: the scheduler workbench's with
+    /// a composed standard pack, else the one the last evaluation's remedy table built, else an
+    /// empty one, by which no game's root is judged (`root_unchecked`). Fix round 1: the
+    /// workbench's table is read by the function the policy cycle reads it by
+    /// (`standard_pack_variables`), which copies nothing of the roots.
+    fn run_variable_table(
+        &self,
+    ) -> Result<std::sync::Arc<actingcommand_policy::VariableTable>, RequestFailure> {
+        if let Some(table) = self.standard_pack_variables()? {
+            return Ok(table);
+        }
+        let policy = lock(self.policy()?, HostLocation::CheckRunVariables)?;
+        Ok(std::sync::Arc::new(
+            policy
+                .built_table()
+                .map(|table| table.variables().clone())
+                .unwrap_or_default(),
+        ))
     }
 
     pub(super) fn package_material_deadline(
@@ -8554,6 +8757,22 @@ impl HostShared {
                 .control
                 .note_runtime_budget_end(RuntimeBudgetEnd::Unread),
         }
+        // Workflow #463 U1b (`contracts/policy-suspension.md`, "A failure that pauses at its first
+        // occurrence"): a pair past the break-in of the package content this run was prepared
+        // with ends an unrecorded verdict with `page_confirmation_failed`; the keys are read now,
+        // so a value set while the Runtime runs counts from the next run. Fix round 2 (review
+        // item 2): a break-in that cannot be read aborts no run, as the budget's end above does
+        // not: the run goes on as one outside its break-in, and the host records
+        // `policy_break_in_unread` (`HostShared::scheduled_run_past_break_in`). Fix round 3: a
+        // content its preparation did not measure too (`content_unmeasured`); what goes up here
+        // is what goes up everywhere: a broken lock of the host's run state, or the record that
+        // cannot be written.
+        if self
+            .scheduled_run_past_break_in(context)
+            .map_err(RequestFailure::poison_without_terminal)?
+        {
+            active_run.control.note_past_break_in();
+        }
         // Workflow #429 R-0b (register §1.238): the policy run shows while it executes, with the
         // request it runs as (the one `contained_runs` tracks) and its package; its guard drops
         // however the run returns.
@@ -8589,6 +8808,13 @@ impl HostShared {
         );
         // R-0b: the run's execution ended (its lease is released, or handed to its ladder).
         drop(activity);
+        // Workflow #463 U1b fix round 2 (review item 3): a run that began its package counts in
+        // its pair's break-in when it is settled; one that ended before (a refusal of the
+        // handset's start gate, a stop at its entry) does not.
+        if active_run.control.package_began() {
+            self.note_scheduled_package_began(context.decision_id())
+                .map_err(RequestFailure::poison_without_terminal)?;
+        }
         // Workflow #429 R-12 (register §1.264): the routine summary counts the run as it settled.
         self.note_routine_run(instance_alias, &task_label, &executed)
             .map_err(RequestFailure::poison_without_terminal)?;
@@ -8631,7 +8857,9 @@ impl HostShared {
         // declared defaults. Workflow #411 B8: a policy run also reads the schedule values its
         // dispatch carries, observed at its admission; any other run reads none. Workflow #463
         // V2: a policy run reads the variable values its dispatch carries (`variable_values`),
-        // any other run its package's variable defaults.
+        // any other run its package's variable defaults. Workflow #463 S3-8: a direct run whose
+        // request gives values (judged before its admission, `check_run_variables`) reads them as
+        // a policy run reads its dispatch's, by the same overlay; the others their defaults.
         let run_parameters = match dispatched_parameters {
             Some(dispatched) => match dispatched.values {
                 Some(values) => {
@@ -8641,7 +8869,17 @@ impl HostShared {
             }
             .with_variables(prepared.dispatched_variable_values(&dispatched.variables))
             .with_dispatch_schedule(dispatched.schedule, dispatched.admitted_at_unix_ms),
-            None => prepared.default_run_values(),
+            None if task_request.variables().is_empty() => prepared.default_run_values(),
+            None => {
+                let given = task_request
+                    .variables()
+                    .iter()
+                    .map(|(name, value)| (name.clone(), value.clone()))
+                    .collect::<Vec<_>>();
+                prepared
+                    .default_run_parameters()
+                    .with_variables(prepared.dispatched_variable_values(&given))
+            }
         };
         // Workflow #463 V2 fix round 1, test only: what the run's snapshots are overlaid with.
         #[cfg(test)]
@@ -9422,20 +9660,23 @@ impl HostShared {
                 // Workflow #386 SR-1: a kernel failure that carries the values its code declares (a
                 // sampling timeout's `attempts`, `timeout_ms` and `stage`; a sampling budget's
                 // `required_ms` and `remaining_ms`) keeps them on the terminal and the receipt.
-                if error.has_values() {
+                // Workflow #463 U1b: a closing decision that found a screen the package never
+                // recorded names its frame whichever code the run ends with, so the failure's
+                // outcome gains `artifact_id` also where the code carries no values of its own.
+                if error.has_values() || error.closing_found_unrecorded() {
                     let values = error.outcome();
                     // #411 A15: an unconfirmed step also names the frame of the run's `Failure`
                     // pin, and so (Workflow #463 U1) does a linear step that met a screen its
                     // package never recorded: the run's last frame, the decision's; #411 A30: a
                     // guard refusal names the frame the guard judged on, its `GuardRejection` pin.
-                    // Each is read before the summary moves into the terminal's draft.
-                    let frame_pin = if spelled(
-                        error.code().as_str(),
-                        &[
-                            ExecutionKernelCode::ContainedTaskStepUnconfirmed.code(),
-                            ExecutionKernelCode::ContainedTaskLinearUnrecordedScreen.code(),
-                        ],
-                    ) {
+                    // Each is read before the summary moves into the terminal's draft. Workflow
+                    // #463 U1b: the linear step's pin follows the closing decision's verdict, not
+                    // the code (`contained_task_linear_unrecorded_screen` in its break-in,
+                    // `page_confirmation_failed` after it).
+                    let frame_pin = if error.closing_found_unrecorded()
+                        || error.code().as_str()
+                            == ExecutionKernelCode::ContainedTaskStepUnconfirmed.as_str()
+                    {
                         Some(PinnedFrameReason::Failure)
                     } else if error.code().as_str()
                         == ExecutionKernelCode::ContainedTaskGuardRefused.as_str()
@@ -11628,11 +11869,14 @@ impl HostShared {
             }
             // #411 A64 (ruling C-43): the lapsed lease of the run's end fences its instance (the
             // Workflow #403 instance path); one already fenced by the sweep's expiry stays as it is.
+            // Workflow #437 G1 fix round 1: the lease lapsed and its close was refused; no close
+            // left the session in doubt, so the fence is a refused close's and holds no device of a
+            // group of several (the close that follows, if unconfirmed, does).
             if let (Some(mut lapse), Some(fence_links)) = (lapsed, fence_links) {
                 lapse.lifecycle.instance_id = Some(token.instance_id());
                 lapse.lifecycle.resource_quiescence = Some(ResourceQuiescence::Unconfirmed);
                 match self
-                    .settle_unconfirmed_resources(&lapse, Some(token.instance_id()), fence_links)
+                    .settle_refused_close(&lapse, Some(token.instance_id()), fence_links)
                     .map_err(RequestFailure::poison_without_terminal)?
                 {
                     UnconfirmedResources::Fenced(_) => {}

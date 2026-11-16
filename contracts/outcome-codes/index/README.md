@@ -15,55 +15,55 @@ every code of its fragment, retired ones included, sorted by code, with its cate
 `since`, status (a retired code with the code that replaces it, where it names one), review, text
 (`written` when both texts are written, else `TBD`) and the first sentence of its description, cut
 at a space within 160 characters and then ending in `…`. The index holds codes only: the catalog's
-1764 locations are not in it, and 10 of the header's 41 owners have no fragment file and so no file
+1773 locations are not in it, and 10 of the header's 41 owners have no fragment file and so no file
 here.
 
 ## Codes by status
 
 | Status | Codes |
 |---|---:|
-| active | 3932 |
-| retired | 28 |
-| all | 3960 |
+| active | 3910 |
+| retired | 89 |
+| all | 3999 |
 
 ## Active codes by category
 
 | Category | Codes |
 |---|---:|
-| success | 132 |
-| info | 213 |
-| warning | 155 |
-| error | 3415 |
+| success | 125 |
+| info | 214 |
+| warning | 162 |
+| error | 3392 |
 | fatal | 17 |
 
 ## Text and review of the active codes
 
 | Active codes | Codes |
 |---|---:|
-| `common_causes` and `handling` both written | 745 |
+| `common_causes` and `handling` both written | 760 |
 | one of the two written, the other `TBD` or empty | 4 |
-| neither written (`TBD` or empty) | 3183 |
-| `settled` | 170 |
-| `pending` | 3762 |
-| all active codes | 3932 |
+| neither written (`TBD` or empty) | 3146 |
+| `settled` | 154 |
+| `pending` | 3756 |
+| all active codes | 3910 |
 
 ## By owner
 
 | Owner | Codes | Active | Text written | Settled |
 |---|---:|---:|---:|---:|
 | [actingcommand-entry](actingcommand-entry.md) | 10 | 10 | 10 | 0 |
-| [actingctl](actingctl.md) | 204 | 203 | 44 | 11 |
-| [actingd](actingd.md) | 155 | 154 | 99 | 86 |
-| [actinglab](actinglab.md) | 43 | 42 | 42 | 0 |
-| [actinglab-mcp](actinglab-mcp.md) | 3 | 3 | 3 | 0 |
+| [actingctl](actingctl.md) | 204 | 199 | 40 | 8 |
+| [actingd](actingd.md) | 155 | 153 | 98 | 85 |
+| [actinglab](actinglab.md) | 44 | 43 | 43 | 0 |
+| [actinglab-mcp](actinglab-mcp.md) | 3 | 2 | 2 | 0 |
 | [actingledger](actingledger.md) | 4 | 4 | 0 | 0 |
 | [artifact-store](artifact-store.md) | 77 | 77 | 2 | 0 |
-| [contract](contract.md) | 918 | 904 | 160 | 38 |
+| [contract](contract.md) | 928 | 904 | 163 | 32 |
 | [device](device.md) | 33 | 33 | 27 | 23 |
 | [display-adapter](display-adapter.md) | 2 | 2 | 0 | 0 |
 | [execution-kernel](execution-kernel.md) | 204 | 201 | 30 | 0 |
 | [host-metrics](host-metrics.md) | 17 | 17 | 0 | 0 |
-| [lab](lab.md) | 12 | 12 | 10 | 0 |
+| [lab](lab.md) | 18 | 18 | 16 | 0 |
 | [ledger](ledger.md) | 293 | 292 | 26 | 0 |
 | [ledger-forensics](ledger-forensics.md) | 52 | 52 | 0 | 0 |
 | [mcp-entry](mcp-entry.md) | 3 | 3 | 3 | 0 |
@@ -73,13 +73,13 @@ here.
 | [policy](policy.md) | 119 | 117 | 56 | 0 |
 | [recognition](recognition.md) | 6 | 6 | 0 | 0 |
 | [recognition-pack](recognition-pack.md) | 22 | 22 | 0 | 0 |
-| [resource-tooling](resource-tooling.md) | 87 | 87 | 11 | 0 |
-| [runtime-client](runtime-client.md) | 211 | 210 | 5 | 0 |
+| [resource-tooling](resource-tooling.md) | 103 | 102 | 26 | 0 |
+| [runtime-client](runtime-client.md) | 211 | 209 | 5 | 0 |
 | [runtime-config](runtime-config.md) | 11 | 11 | 11 | 0 |
 | [runtime-database](runtime-database.md) | 51 | 51 | 2 | 0 |
-| [runtime-host](runtime-host.md) | 1157 | 1153 | 198 | 12 |
+| [runtime-host](runtime-host.md) | 1163 | 1116 | 194 | 6 |
 | [runtime-state](runtime-state.md) | 176 | 176 | 0 | 0 |
 | [scheduler](scheduler.md) | 14 | 14 | 0 | 0 |
 | [selection-policy](selection-policy.md) | 27 | 27 | 0 | 0 |
 | [vision-ffi](vision-ffi.md) | 4 | 4 | 1 | 0 |
-| all | 3960 | 3932 | 745 | 170 |
+| all | 3999 | 3910 | 760 | 154 |

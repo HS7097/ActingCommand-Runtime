@@ -35,7 +35,18 @@ naming this file.
   `ac_material` takes `export` and no `out`, `ac_frame` and `ac_report_export` take no `out`
   (section 6); `ac_run_show`
   and `ac_run_stop` take `wait_s`, `ac_events` and `ac_codes` take `cursor` (section 4);
-  `ac_deploy` and `ac_rollback` take no `detach` (section 9).
+  `ac_deploy` and `ac_rollback` take no `detach` (section 9). These are the only parameters of a
+  row a tool leaves out; the command line also takes `actinglab`'s global options, a positional
+  given as its flag (`--id`, `--instance`) and `devices bind`'s own `--root` (the server hands on
+  the root it runs from), which no tool needs. No tool takes `words` either (Workflow #434 LW-1):
+  the further words a row handed on before Workflow #434 LAB-5B4, which no row declares and a row
+  served in the server's own process refuses by name.
+- **Closed word lists** (Workflow #434 LW-1, 0.12.67). Where an operation takes only the words of
+  a closed list for a parameter the table types as text, the schema lists them (`enum`; for a
+  list its items' `enum`): `ac_status`'s `sections` (the overview's blocks; `daemon` and
+  `incomplete` are always answered and are no section) and `ac_events`' `type`, `event_type`,
+  `exclude_event_types` (the ledger's event types) and `origin_module`. Another word is refused
+  before anything is sent (section 7).
 - **No tiers.** Every tool may be called. `--tier`, today's server's option, refuses the start.
 
 ## 2 How to start
@@ -65,10 +76,30 @@ naming this file.
 - **Warnings** are the line's member `warnings`, a list present only when it holds one: each
   `{outcome}`, but a command `actinglab` serves itself keeps its result's own warnings, each
   `{code, values}`. A success with warnings says what it lacks or what was done beside it
-  (`answer_exported`, `mcp_identity_declaration_refused`, `client_action_not_recorded`): report
-  them with it.
+  (`answer_exported`, `client_action_not_recorded`; `mcp_identity_declaration_refused` until
+  Runtime 0.12.63, which retires it with the identity card): report them with it.
 - **`lab_operation_check_failed`**: the Runtime answered a Lab operation and a check after it
   failed. The operation may have taken effect: read its effect before you send it again.
+- **Coordinates** (Workflow #392 DA-5ab, Runtime 0.12.67; `contracts/display-adapter.md`
+  section 11): `ac_lab_observe` and `ac_do` answer what the command line answers, in the package's
+  base. On a display of the base's size their `frame_coordinates` is `{device_pixels,
+  orientation, applies_to}`, the device's own pixels. On a display that maps to the base (1920×1080
+  or 3840×2160 for a 1280×720 package) it is `{space: "base", base_pixels, reduced_from,
+  orientation, applies_to}`: every frame was reduced from the device size `reduced_from` to the
+  base, every rectangle and point of the answer is the base's, `ac_do` takes `tap`, `tap_rect`,
+  `swipe` and an element in the base, and its `frame_path` and `preview` are the reduced frames.
+  A display the base does not map to (another ratio, a smaller one) is refused
+  `display_map_unresolved`; a press at a ratio the input side does not send under (5/4) is refused
+  `display_map_unresolved` (`input_scale_unsupported`), nothing sent. `ac_lab_observe` and `ac_do`
+  with `record` on such a display are refused before anything is sent or written (the train of
+  DA-5ab and DA-5cd; `contracts/lab-recording.md`, "A recording's size"):
+  `record_display_not_base` when the recording has no frame yet, `record_frame_size_mismatch` when
+  the display changed during the recording, `record_size_not_base` for a recording not at the base
+  size; `ac_do` with `record` captures one frame before its press for this. A saved scene of such a
+  size answers the same base form (below, "Offline scenes of another size"). `ac_frame` is one
+  frame of the instance as the device gives it, of the device's size (3840×2160 on such a
+  display), and the device commands (`ac_tap`, `ac_swipe`, `ac_long_tap`) take the device's own
+  pixels.
 
 ## 4 Jobs, handles and cursors
 
@@ -88,10 +119,31 @@ naming this file.
   it again every second while the run is not found, admitted or running. A run a job of this
   process submits carries that job as `job` (`kind`, `job_phase`, and its `line` once it ended).
   A job's phase is `running`, `submitting` (a run's job), `done` or `failed`.
+- **A run's line** (Workflow #434 LW-1, 0.12.67). The line `run start` gives once its run ended
+  holds every ledger record of the run (`events`, with payloads: 100 KB to 500 KB for a run that
+  went far). This server never sends them: the job's `line` that `ac_run_show` carries and the
+  answer of `ac_run_start` with `wait` are that line without `events`, with `events_total` (how
+  many were left out), `truncated` (what was left out, as JSON pointers: `/events`, and
+  `/official_ocr_projection` or `/official_ocr_fields_projection` when the run's OCR reads did
+  not fit beside the rest) and `rest`, the calls that read it: `ac_run_evidence` with the run's
+  request id (its steps, page by page) and `ac_events` with its correlation id and `detail`
+  `payload` (its records). The receipt (state, outcome, `executed_steps`, `final_page`) and the
+  line's outcome stay. So the answer of a finished run no longer grows with its steps or its
+  records. What stays is never cut: the receipt and the line's `warnings` (and, with `ac_run_show`,
+  the run's own line beside the job); a run whose answer still does not fit with them is refused
+  `output_budget_exceeded` with its job's handle (section 5), never cut silently.
 - **`ac_run_start`** without the row's `wait` answers at once `{handle, correlation_id,
   job_phase}` (`submitting`): the handle is the run's request id, and the run is submitted in a
   job. With `wait` the call waits up to that long, within the call budget, and answers the run's
-  line when the run ended by then, else the same handle.
+  line (as above) when the run ended by then, else the same handle. #463 S3-9 (0.12.68;
+  `contracts/runtime-interface.md`, "The variable values of a contained run"): `variable`, a list
+  of `<name>=<json>` (one per variable, as `run start --variable` takes them), gives the run values
+  for variables its package declares; a name given twice is `repeated` and a right side that is no
+  JSON `not_recognised`, before anything is sent. The Runtime judges each value as a dispatch does
+  and refuses one the package does not take (`run_variable_undeclared`, `run_variable_not_applying`,
+  `run_variable_value_refused`, nothing run); a variable not given reads its default. A run with
+  values needs a Runtime of `runtime-client` revision 11: one below it ends the connection and
+  nothing runs. `ac_standard_pack_trial`'s run sends the `variable` its plan shows the same way.
 - **`ac_run_stop`** waits for its job up to `wait_s` (default 20, never more than the call
   budget), then answers the job's line, or its handle while it still runs. A run a job of this
   process still submits is only asked to stop (`cancel_only`).
@@ -124,6 +176,8 @@ naming this file.
     own order and marks the cut (`truncated`, and a cursor where the answer pages), or it writes
     the whole answer to the export directory (section 6) and answers its header with the warning
     `answer_exported`;
+  - a run's line, wherever this server gives it (`ac_run_start` with `wait`, the job of
+    `ac_run_show`), leaves the run's ledger records out and says so (section 4, "A run's line");
   - a child's success line (section 8) that does not fit is written whole to the export directory
     and answered `{req_id, export, overflowed: true}`, `answer_exported` first among its
     `warnings`. `ac_record_stop` keeps its four binding parts together under `lab`, and
@@ -191,46 +245,265 @@ naming this file.
 
 - **In the server's process**: the rows `actinglab`'s CLI module serves itself (most core rows,
   and `run start`, `run stop`, `reset`, `drill`), on one Runtime connection the server keeps (a
-  write on a connection of its own, after the identity card and the client action today's MCP
-  server records before a write); and, on Windows, the rescue module's rows, for the root the
+  write on a connection of its own, the write first after the handshake: since Runtime 0.12.63
+  neither server sends the identity card or the client action before a write, the binding's
+  `Lab-MCP` naming where it came from); and, on Windows, the rescue module's rows, for the root the
   server runs from, their journals recording `Lab-MCP` (`deploy` and `rollback` start a detached
-  run of their own and answer at once, section 9).
+  run of their own and answer at once, section 9). These requests keep the command line's
+  envelope until slice LAB-6S2-E (`contracts/lab-two-entries.md` §2.4 and its slice table): so a
+  run `ac_run_start` starts is listed with `origin` `cli` (`ac_runs`, `ac_run_show`), while its
+  command record's channel is `mcp`; from that slice on it is `lab`.
 - **Through a child**: every other row, by `actinglab.exe serve --stdio --front mcp`, the
   `actinglab.exe` beside the server's own file, as `Lab-MCP` (on each step and mark it adds to a
   recording). One call per child at a time. A child idle for `--child-idle` seconds (default 10)
   is ended by closing its input; no child is ever killed. After a call of `ac_lab_observe` or
   `ac_do` with `capture`, the server records the client action today's server records, naming the
   Lab request; its warnings join the line.
+- **Presses** (Workflow #434 LW-1, 0.12.67). `ac_tap`, `ac_swipe` and `ac_long_tap` without
+  `record` press on every instance. What one such press does: on every instance, one status read
+  first (on a connection of its own), to learn whether the instance's input presses only on a
+  frame the Runtime captured (its capability table names the input, `touch_backend` `nemu_ipc`,
+  the emulator's own interface); on such an instance, one capture (an `ObserveReadonly`, of which
+  the command takes the frame's reference alone) and the press sent on that frame, as a recorded
+  press does, the answer naming the frame (`input_frame`); elsewhere nothing is captured. When the
+  Runtime no longer holds that frame when the press names it (`input_frame_unavailable`: another
+  capture took its place, nothing sent), the command captures once more and sends the press once
+  more under the same lease, once (`input_frame_captured_twice`); a second refusal is the answer.
+  A status read that fails stops no press: the press is sent without a frame, as before this
+  slice (an input that needs one is refused by the Runtime itself, `nemu_input_frame_required`),
+  and the answer's `touch_backend_warnings` says so (a refusal's is in its `details`, the
+  Runtime's refusal of that press too). Such an instance sends no key and no text:
+  `ac_key` and `ac_text` answer `nemu_input_capability_unsupported` there, nothing sent, and the
+  Runtime has no other way to send a key on it; the refusal's `details.hint` says what to press
+  instead (the screen's own control: `ac_tap`, or `ac_do` with `capture` on a package's element).
+  `ac_tap_target` and
+  `ac_navigate` only plan on a saved frame (`scene` with `dry_run`) and press nothing anywhere,
+  as their command line does: `ac_do` with `capture` and the package's element, or `tap` with a
+  point, presses a target on an instance, and `ac_ensure` with `capture` routes one to a page.
 - **Recordings** (Workflow #449 REC-ARCH, 0.12.59; `contracts/lab-recording.md`, "Archiving"). A
   recording belongs to the instance: while one is active, every call with `record` on that
   instance, whoever sends it, adds a step to it, and its answer's `record` names the recording it
   entered (`record_id`, `record_started_at_unix_ms`) and the `step` it became. `ac_do` with
   `record` and `swipe` on a step without a click records that swipe as the step's. A recording kept
   only as material is ended with `ac_record_archive`: no marks are needed; it writes
-  `archive-manifest-<n>.json` beside the frames and the step table, keeps every file and ends the
-  session (`archived`), and with `copy_to` (the absolute path of a directory that does not exist
-  or is empty; a relative or empty one is `not_absolute`) copies them and checks every copy. With
-  `record_id` it also archives a recording `record start --force` left behind, from its own step
-  table, and leaves the session header, another recording's, as it is (`lab.session_header`).
+  `archive-manifest-<n>.json` beside the frames and the step table (#463 S1-5, 0.12.64:
+  `actingcommand.lab-recording-archive.v2`, whose `material` names each press with the frame it
+  happened on and where it was pressed, and the final screen; `lab.warnings` holds
+  `final_frame_missing` when it names none), keeps every file and ends the session (`archived`),
+  and with `copy_to` (the absolute path of a directory that does not exist or is empty; a relative
+  or empty one is `not_absolute`) copies the step table, the manifest and the frames `material`
+  names, or with `all_frames` every frame the manifest lists, and checks every copy; the copy's
+  manifest says which (`copy.frames`, `material` or `all`), a v1 manifest is copied as it is with
+  every file it lists, and `all_frames` without `copy_to` is `validation_failed`
+  (`copy_to_only`). With `record_id` it also archives a recording `record start --force` left
+  behind, from its own step table, and leaves the session header, another recording's, as it is
+  (`lab.session_header`).
   `ac_record_reopen` makes an archived recording active again, so that `ac_record_mark` and
-  `ac_record_stop` can build its package later. #463 L1 (0.12.60; `contracts/lab-recording.md`,
-  "One call per step"): `ac_do` with `capture` and `record` records a whole step in one call:
+  `ac_record_stop` can build its package later. #463 S2-1 (0.12.65; `contracts/lab-recording.md`,
+  "What a recording still lacks"): `ac_record_ready` (`record_id`, `game`, `server`, `locale`,
+  `state_dir`) lists at once
+  everything a recording (the instance's, or the active, archived or stopped one `record_id`
+  names) still lacks before `ac_record_stop` can make its package: every pre-check it fails, each
+  with its word (`what`) and the code `ac_record_stop` would answer, or, once none fails, every
+  failure of each self-check (#463 S2-1c, 0.12.68: `ac_record_stop` answers the first; `checks`
+  says for each self-check that ran whether its list is complete, and why not); and its state,
+  `material`, `draft`, `ready` or `packaged`. It only
+  reads, under no lock, also while another call holds the recording; it opens no Runtime
+  connection and neither pauses nor releases the instance. #463 S2-1b (0.12.67): it also takes
+  `game`, `server` and `locale` as `ac_record_stop` takes them (one out of its form is refused as
+  there, `validation_failed`); each part is the one given, else what the recording holds, else
+  (game and server) the Lab's instance configuration, else (game and server) the instance's row of
+  `policy.facts.instances` in the configuration of the installation the program runs from, which
+  `ac_record_stop` reads too; that row gives both game and server or neither (when the others give
+  one of the two, the row gives the other only if it holds the same value for the given one; the
+  configuration is opened only when the others do not give both); `sources` names where each came
+  from (`command_line`, `recording`, `lab_config`, `installation_config`, or `null` when not known,
+  then it is missing). It writes none of them on the recording: give `ac_record_stop` the ones you
+  gave it. On a packaged recording `sources` names what its package holds, and a given part with
+  another value is the warning `record_stop_option_conflict` (`{code, field, recorded, given}`),
+  which `ac_record_stop` would refuse. #463 L1 (0.12.60;
+  `contracts/lab-recording.md`, "One call per step"): `ac_do` with `capture` and `record` records a
+  whole step in one call:
   `mark_request_json` (or `mark_request`, a file) is the `record mark` request of the open step,
   applied and self-tested as `ac_record_mark` applies it before the press (a refusal is its own, and
   nothing is pressed or written; a request for anything but the open step, a step operation, a
   transition, another step or a frame file, is `validation_failed`: send it with `ac_record_mark`),
   and `next_frame_after_ms` (0 to 60000) takes the next frame after
   a press performed without a failure, as `capture --record` takes it, opening the next step
-  (`next_frame_out` writes its PNG); `dry_run` with `record` is refused by the command.
+  (`next_frame_out` writes its PNG); `dry_run` with `record` is refused by the command. #463 S1-7
+  (0.12.64; `contracts/lab-recording.md`, "A recording holds its instance"): a recording holds its
+  instance, so no pause is asked of the agent: `ac_record_start` pauses the instance's scheduling
+  with the recording's own reason `lab-record-<ms>` (an instance already paused by another party is
+  held by that pause, which the recording never resumes; with nothing listening where the Runtime
+  would, it starts holding nothing, `hold.warnings` `no_runtime_listening`; a Runtime that listens
+  but does not complete the handshake fails the start, and so do a state root that cannot be
+  resolved and a connection that times out). **`ac_record_start` waits until the
+  instance's running task has ended**: up to the pause's drain (300 s), its checkpoint grace (30 s)
+  and the IO timeout (5 s), 335 s in all; a caller with a shorter time limit must give it that time.
+  Should the start end before the pause answers,
+  the session header already names the hold and `ac_record_stop` releases it. `ac_record_archive`
+  and `ac_record_stop` resume only the recording's own pause, found by its reason. A release that
+  fails keeps the hold: the archive or the stop stands, and the answer is the failure with
+  `hold.kept` and `next.release`, the call that tries the release again (`record stop` again, or
+  `record archive` with `record_id`), never an unconditional resume. A press with `record` on an
+  instance that is not held is made and recorded with `record.warnings` `instance_not_held`
+  (`instance_hold_unread` when the status read got no answer); `ac_record_status` shows the hold.
+  #463 S2-13 (0.12.65; `contracts/lab-recording.md`, "The frames around a press"):
+  `ac_record_frames` (`step`, `before` 0 to 100, default 3, `after` 0 to 100, default 10,
+  `record_id`) lists the stored frames captured just before the frame a step's press was sent on
+  and just after the press, with their paths, capture times and offsets from the press; it reads
+  only and takes no lock.
+  #463 S2-2 (0.12.68; `contracts/lab-recording.md`, "Reviewing a recording step by step"):
+  `ac_record_review` (`record_id`, `step`, `no_preview`, `game`, `server`, `locale`, `state_dir`)
+  answers each step of the recording `ac_record_ready` reads as the screen before (`before`), what
+  was pressed (`press`) and the screen after (`after`, with `still` and `waited_ms` where the step
+  table holds them), the frames stored between, the step's marks and its items of
+  `ac_record_ready` (`missing`, given `game`, `server` and `locale` as `ac_record_ready` takes
+  them: a recording without a locale of its own runs no self-check until `locale` is given); a
+  member the step table does not hold is absent. The train of #463 stage two (0.12.68): `missing`
+  is every item of `ac_record_ready`'s one judgement that names the step, a pre-check's
+  (`select_unrefined` among them) or, once no pre-check fails, each self-check failure; an item
+  that names no step is no step's; `choice` is the step's choice mark on a step marked as holding a
+  choice; a step dropped before the last is not listed, one `restore_step` gave back is. An
+  application operation's `outcome` is its manifest row's: `indeterminate` with attempts and no
+  completed receipt. Unless `no_preview`, it writes a preview of each screen under the recording's
+  `lab/preview/` (`s<nn>-before.png`, `s<nn>-after.png`, their absolute paths in `preview`): a copy
+  of the stored frame with the press and the step's boxes drawn (recognize boxes green, the press
+  box orange, other marks blue; on the screen after the next step's). Nothing recorded changes and
+  no stored frame carries a box; a frame whose bytes do not match its sha256 is
+  `record_frame_hash_mismatch` and no preview is written; every call writes its previews anew and
+  none is ever removed. A frame whose file is not there has `path` `null` and is named in the
+  warning `frame_file_missing`, as `ac_record_frames` answers it. It takes no lock. `steps_total`
+  counts every effective step: an answer over the budget is written whole to the export directory
+  (section 5); `step` answers one step, so read a long recording step by step (each call evaluates
+  the whole recording's readiness, its self-checks too).
+  #463 S2-5 (0.12.65; `contracts/lab-recording.md`, "Drawing a box"): stage two marks a draft with
+  boxes: `ac_record_mark` with `box` (`recognize=x1,y1:x2,y2` or `press=x1,y1:x2,y2`, two opposite
+  corners in the frame's pixels; or `boxes` in `request_json`) on any step. A recognize box is a
+  template mark of its own (`box/<nn>/<x>_<y>_<w>_<h>`), whose base images are the step's frames
+  and the captures stage one took of it before its press that reach the threshold; the answer's
+  `boxes[].frames` says of each frame `own`, `added`, `not_added` (with `because`) or `elsewhere`.
+  A capture whose whole frame changed from the step's live frame (the previous screen, the middle
+  of a transition) is another state of the screen and never a base image (`not_added`, `because`
+  `frame_changed` with `frame_change_milli`). Give the recognize boxes of a step in one request:
+  a later box is tested on the samples the earlier ones admitted.
+  A press box is the step's click region; on a tap or a long press recorded with `record` it must
+  hold the point pressed (`record_click_outside_step_rect` with `recorded_point_outside_box`
+  otherwise) and the press stays as recorded; `ac_record_stop` then writes the package of the
+  boxes, and a later `record archive` lists the box as the press's `rect`.
+  Workflow #392 DA-5cd (0.12.67; `contracts/lab-recording.md`, "A recording's size"): a recording
+  is made at the base size, 1280x720. `ac_record_start` first reads the instance's display as the
+  Runtime last observed it (the device frame of its latest task) and refuses one of another size,
+  `record_display_not_base` with `frame_width`, `frame_height`, `base_width` and `base_height`,
+  before anything is written or paused; its answer names `display_last_observed` (`{width,
+  height, observed_at_unix_ms}`, not the display now; `null` when none was observed). That is an
+  early warning: the start writes the base size in the recording's header, and the recording's
+  first frame of any other size is refused `record_display_not_base` before it is stored, nothing
+  written. `ac_record_stop` refuses a recording whose frames are not the base size,
+  `record_size_not_base`, and converts nothing; `ac_record_ready` lists it first as
+  `size_not_base`, a frame added to it is refused with the same code, and `ac_record_status`,
+  `ac_record_frames` and `ac_record_archive` read it as before: archive it and record again. The
+  train of DA-5ab and DA-5cd: every tool that records (`ac_tap`, `ac_swipe` and `ac_long_tap` with
+  `record`, `ac_do` and `ac_lab_observe` with `record`) judges the recording and the frame it took
+  before it sends or writes anything, with these codes and `record_frame_size_mismatch` for a
+  frame of another size than the recording already has; nothing is pressed first.
+  #463 S2-7 (0.12.68; `contracts/lab-recording.md`, "Transitions", "Steps, frames and
+  remediation"): in `request_json`, a page transition (`transition` `{"kind": "page", …}`) takes
+  `frame_id` in place of `frame` and `sample_frame_ids` beside `samples`: frames the recording
+  already stored, as `ac_record_frames` and `ac_record_status` list them (a loading screen stage
+  one captured between a press and the next step), read as stored with their sha256 checked; no
+  file is copied, and the package is the one the same image given as a file makes. An id the
+  recording does not hold is `record_frame_unknown`. `drop_step` (`step_action` `{"kind":
+  "drop_step", "step": n}`, or the row's `drop_step`) takes a step before the last when the stored
+  frames do not contradict that its press changed nothing: the frame after it, and the frame the
+  next step was pressed on, are the frame before it by two comparisons, each by the frame-change
+  measure stage one calls a screen still by, the whole frame and (fix round 1) the neighbourhood of
+  the press (its rectangle grown by one cell of the whole-frame grid, 80 pixels at 1280x720, on
+  every side). Each comparison averages 16 by 9 cells of its region, so a change confined to one or
+  two of them is not seen: a small change away from the press (a counter, a badge) is not seen.
+  Whether the press mattered is the agent's judgement; the tool refuses only what the frames
+  contradict: `record_drop_unproven` with `drop_problem` `frames_not_recorded`, `screen_changed`
+  or `next_screen_differs`, and for the last two `drop_comparison` `frame` or `press_region`.
+  `{"kind": "restore_step", "step": n}` gives a dropped step back (`record_mark_rejected` when a
+  mark it reuses or forbids is gone since). Nothing is proposed: the agent names the frame and the
+  step. The train's fix round (0.12.68): a step that holds a choice (marked with `choice`, or
+  refined by a `select`) is not dropped, the last step too, before any frame is compared
+  (`record_select_invalid` with `select_problem` `drop_of_choice`): its press may have chosen the
+  item already selected, which the frames do not show and which still matters to a run handed
+  another value. Nor is it turned into a page transition (`to_transition`,
+  `transition_of_choice`). Nothing is written; withdraw the choice first (`choice: false` where
+  the step carries the mark, `clear_select` where a select refines it), then drop or convert it.
+  #463 S2-6 (0.12.68; `contracts/lab-recording.md`, "Marking a choice first"): a step that chooses
+  one item among several is marked first and refined later. `ac_record_mark` with a
+  `request_json` that names the step and holds `"choice": true` (beside the step's marks if you
+  like) marks it; the
+  press stage one recorded on the item you chose, a point tap included, is its demonstration.
+  Refine it later, on the active or the stopped recording, by declaring the step's `select` in a
+  request of its own ("Selecting in a list": the slots, how each name is read, the names, the match
+  and the wanted value; `pressed` the name the recorded press chose). Until then `ac_record_ready`
+  lists the step as `select_unrefined` (code `record_select_invalid`) and `ac_record_stop` refuses
+  it with `choice_not_refined`; `choice: false` takes the mark off (on a step without the mark it
+  is refused, `no_choice`; on a refined step the select stays). The mark only says the choice is
+  not refined yet: the wanted value of every select, marked first or given whole, is the package's
+  `ordered` variable of the select's wanted name, its default the select's default (a run given no
+  value chooses as before), which `ac_goals_set` sets on an application by name; a package
+  generated again from an older recording with a select gains that variable, so its content hash
+  changes and its bundle declares `package` 14.
+- **Offline scenes of another size** (Workflow #392 DA-5cd, 0.12.67, as the train of DA-5ab and
+  DA-5cd leaves it; `contracts/display-adapter.md` section 12). `ac_recognize`, `ac_detect_page`,
+  `ac_current_page`, `ac_is_visible`, `ac_lab_observe` on a saved scene, `ac_tap_target` and
+  `ac_navigate` with `dry_run`, and the offline dry runs and waits of `ac_do`, `ac_ensure` and
+  `ac_wait`, take a scene of another size exactly as the live observation takes a frame of that
+  size, by the same function: a scene of the package's ratio, not smaller and in its orientation
+  (1600x900, 1920x1080, 3840x2160 for 1280x720), is reduced to the package's base, every rectangle
+  and point of the answer is the base's, and the answer names `frame_coordinates` in the base form
+  (`{space: "base", base_pixels, reduced_from, orientation, applies_to}`, `reduced_from` the
+  scene's own size). A scene of the base's size answers as before. Any other scene is refused
+  `lab_scene_size_unsupported` (`display_problem`, `frame_width`, `frame_height`, `base_width`,
+  `base_height`); a live capture the map cannot take is `display_map_unresolved` instead.
 - **Adoption** (Workflow #464 P1, 0.12.61; `contracts/standard-pack-authoring.md`).
-  `ac_standard_pack_adopt` (`repo`, `record_id` or `package`, `decide`, `replace`, `state_dir`)
-  makes a stopped recording's package, or any package, a member of its game's standard pack in a
-  resource repository's checkout, through a child: the pack directory, its rule (or held entry, or
-  maintenance entry) and the `requires` words, each derived member answered with where it came
-  from. Every check runs before the first write; a refusal is `adopt_refused`, its
-  `adopt_problem` naming the check, and wrote nothing; with `dry_run` nothing is written in the
-  checkout. Its `value` is `"pending"` or a number of the pack's own: a decision that names the
-  origin `model` is refused (`value_origin_model`).
+  `ac_standard_pack_adopt` (`repo`, `record_id` or `package`, `decide`, or `held_reason` with an
+  optional `held_reference`, `replace`, `state_dir`) makes a stopped recording's package, or any
+  package, a member of its game's standard pack in a resource repository's checkout, through a
+  child: the pack directory, its rule (or held entry, or maintenance entry) and the `requires`
+  words, each derived member answered with where it came from. `held_reason` and `held_reference`
+  (Workflow #463 S3-4, 0.12.63) are the decision of the class `held` without a document, read as a
+  document given by `decide` is; not with `decide`, and `held_reference` only with `held_reason`.
+  Every check runs before the first write; a refusal is `adopt_refused`, its `adopt_problem` naming
+  the check, and wrote nothing; with `dry_run` nothing is written in the checkout. Its `value` is
+  `"pending"` or a number of the pack's own: a decision that names the origin `model` is refused
+  (`value_origin_model`).
+- **Where a pack stands** (#463 S3-14, 0.12.68; `contracts/standard-pack-schedule.md`, "Where a
+  pack stands"). `ac_standard_pack_status` (`root`, `repo`, `package_id`, `state_dir`) answers, for
+  each pack of a game root, through a child and reading only: `formed` (admitted, and its content
+  hash prefix as the trial names a content), `conditions` (its readiness items as
+  `ac_standard_pack_ready` answers them) and `missing` (each failing one, a hold with its reason and
+  reference), `held` (a pack's hold whenever the schedule holds it), `trial` (the trials of this
+  content: `passed`, `failed` or `none`, the latest record and `passed_on_record`, the same summary
+  as `ac_standard_pack_adopt`'s `review.trial`; `trial_not_read` instead for a pack whose records
+  cannot be read), `enabled` (whether the root's schedule enables it) and `stage_state`
+  (`not_admitted`, `not_judged`, `can_be_tried`, `supporting` or `enabled`), with the root's
+  counts. The placement journals are not read here: `enabled.authorization` is `not_recorded`
+  with `journals_not_read`, never an authorization guessed. `packs` grows with the root: an answer
+  over the budget is written whole to the export directory; `package_id` reads one pack.
+- **The package declaration** (Workflow #477 PC-1, 0.12.68; `contracts/pack-catalog.md`).
+  `ac_standard_pack_catalog` (`root`, `plan`) builds or brings up to date a game root's
+  `pack-catalog.json`, through a child: an entry for every package of `bundle.json`, a new entry's
+  display from a leftover `ui.json` and its `consumes` and `produces` the union over the package's
+  rules in `schedule.json`; an entry already there is kept as written and its differences from the
+  rules are answered (`differences`, each also a `standard_pack_catalog_schedule_differs`
+  warning). With `plan` it writes nothing and answers the `document` it would write; without it,
+  it writes the file atomically (`status` `written`, or `unchanged` when the file holds those
+  bytes). `root` is a resource repository's checkout (`applications.json` and `packs/`: the game
+  from `applications.json`, the registry the build's `package_bundle` makes, the file written at
+  the checkout's root, to be committed there) or a built game root (`bundle.json`), never a root
+  inside an installation (`standard_pack_catalog_root_refused`): an installed root takes the file
+  through `ac_standard_pack_build` and `ac_place`. What it leaves out of an existing file (an entry
+  of a package no longer registered, a pool `schedule.json` no longer declares) is answered in
+  `removed` and `dropped` and warned of (`standard_pack_catalog_left_out`). Do not edit the file by
+  hand. `ac_packs` answers each
+  game's `index` (per pool the packages that produce and consume it) and each composed row's
+  `catalog`; `ac_standard_pack_check` answers the root's `catalog` note and the file's warnings.
 - **Busy** is `job_capacity_exhausted` with `limit_count`: a call that would start a job while
   `--jobs` jobs run (default 8), or that needs a child while all `--children` children (default 8)
   are working. It is refused, not queued, and nothing is sent: call again later. More calls at

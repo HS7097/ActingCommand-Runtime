@@ -108,6 +108,13 @@ pub(super) fn run_contained_lab_do(global: &GlobalOptions, flags: &FlagArgs) -> 
         // #411 Lab L5: the frames the package's target consensus makes each of the operation's
         // observations take.
         let frames = super::super::contained_resources::online_frame_plan(&instance, path)?;
+        // Workflow #392 DA-5ab: the recorded press is planned in the recording's coordinates and
+        // the Lab operation takes its package's base. The train of DA-5 (R4): nothing is sent
+        // before the recording is known to take it: the recording's own judgement, then the
+        // frame captured before the press, judged as a frame that enters the recording is.
+        if let Some(lock) = record_lock.as_ref() {
+            recorded_press_check(lock, &instance)?;
+        }
         let session = begin_runtime_debug_session()?;
         // `do --capture --record` (#463 L1): the planned step writes its marks, then sends the
         // input through the port below and records the Runtime's answer as before, and takes the
@@ -115,6 +122,11 @@ pub(super) fn run_contained_lab_do(global: &GlobalOptions, flags: &FlagArgs) -> 
         if let (Some(lock), Some((planned, next_frame_device))) =
             (record_lock.as_ref(), planned_step)
         {
+            // #463 S1-7 fix round 2 (`contracts/lab-recording.md`, "A recording holds its
+            // instance"): whether the instance is held, one status read before the press on a
+            // connection of its own, by the function the point presses use; its word goes into
+            // `record.warnings`.
+            let hold_warning = crate::commands::hold_warning_read(lock.instance());
             let mut runtime = RuntimeStep {
                 global,
                 flags,
@@ -127,7 +139,7 @@ pub(super) fn run_contained_lab_do(global: &GlobalOptions, flags: &FlagArgs) -> 
                 next_frame: None,
             };
             let performed = planned.perform(lock, &mut runtime);
-            return recorded_answer(performed, runtime.answer, runtime.next_frame);
+            return recorded_answer(performed, runtime.answer, runtime.next_frame, hold_warning);
         }
         let verified = session
             .run_contained_lab_operation(&instance, request, frames)
@@ -201,10 +213,20 @@ fn operation_answer(
         payload["arrival"] = json!(record.arrival);
     }
     // Workflow #410 item 1: the coordinate system of the frame the action's coordinates were
-    // chosen on (the before frame).
+    // chosen on (the before frame). Workflow #392 DA-5ab: the package's base, its before
+    // projection's frame, on a display of another size.
+    let base = prepared.before_projection.as_ref().map(|observed| {
+        (
+            observed.projection.frame.width,
+            observed.projection.frame.height,
+        )
+    });
     if let Some(before) = &prepared.before_frame {
-        payload["frame_coordinates"] =
-            super::frame::coordinates(before.observation.width(), before.observation.height());
+        let device = (before.observation.width(), before.observation.height());
+        payload["frame_coordinates"] = match base {
+            Some(base) => super::frame::observed_coordinates(base, device),
+            None => super::frame::coordinates(device.0, device.1),
+        };
     }
     if global.verbose || flags.bool("--verbose") || flags.bool("--pretty") {
         payload["operation_record"] = json!(operation);
@@ -234,6 +256,7 @@ fn operation_answer(
     // is in the details of a failure too.
     if let Some(attachment) = super::frame::after_attachment(
         record,
+        base,
         flags.bool("--preview"),
         projection_request.verbosity == ProjectionVerbosity::Min,
     )? {
@@ -347,14 +370,19 @@ impl RecordStepPorts for RuntimeStep<'_> {
 /// `record` (with a mark request, `record.mark`, `record mark`'s output) and, with a next frame,
 /// `next_frame`, `capture --record`'s answer with the wait (`after_ms`) and the file (`out`). An
 /// error after the input carries the operation's answer in its details (`operation`), as before.
+/// #463 S1-7 fix round 2: `hold_warning`, the word of the status read before the press
+/// (`instance_not_held`, `instance_hold_unread`), in `record.warnings`, of the answer and of a
+/// failure's details that carry `record`.
 fn recorded_answer(
     performed: CliOutcome<RecordStepOutcome>,
     answer: Option<Value>,
     next_frame: Option<Value>,
+    hold_warning: Option<&'static str>,
 ) -> CliOutcome<Value> {
     let outcome = match performed {
         Ok(outcome) => outcome,
         Err(mut error) => {
+            crate::commands::add_hold_warning_to_failure(&mut error, hold_warning);
             if let Some(answer) = answer {
                 let mut details = error.details.take().unwrap_or_else(|| json!({}));
                 if let Some(object) = details.as_object_mut() {
@@ -372,6 +400,7 @@ fn recorded_answer(
     if let Some(mark) = &outcome.mark {
         record["mark"] = encoded(mark)?;
     }
+    crate::commands::add_hold_warning(&mut record, hold_warning);
     projected["record"] = record;
     if let Some(next) = &outcome.next_frame {
         let mut frame = next_frame.unwrap_or_else(|| json!({}));
@@ -534,7 +563,7 @@ fn run_declared_operation(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcom
         request
             .validate()
             .map_err(|error| CliError::usage(error.code().as_str()))?;
-        let task_timeout = declared_operation_admission(&instance, path, &operation_id)?;
+        let (task_timeout, base) = declared_operation_admission(&instance, path, &operation_id)?;
         // #411 Lab L5: the frames the package's target consensus makes an observation take; the
         // after projection's transaction is part of the receipt wait.
         let frames = super::super::contained_resources::online_frame_plan(&instance, path)?;
@@ -582,14 +611,17 @@ fn run_declared_operation(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcom
             "failure":record.failure, "cleanup_failure":record.cleanup_failure,
         });
         // Workflow #410 item 1: the coordinate system of the frame attempt 1 pressed on, else of
-        // the frame the operation took last.
+        // the frame the operation took last. Workflow #392 DA-5ab: the package's base, on a
+        // display of another size.
         if let Some(frame) = prepared
             .before_frame
             .as_ref()
             .or(record.after_frame.as_ref())
         {
-            payload["frame_coordinates"] =
-                super::frame::coordinates(frame.observation.width(), frame.observation.height());
+            payload["frame_coordinates"] = super::frame::observed_coordinates(
+                base,
+                (frame.observation.width(), frame.observation.height()),
+            );
         }
         if global.verbose || flags.bool("--verbose") || flags.bool("--pretty") {
             payload["operation_record"] = json!(operation);
@@ -611,6 +643,7 @@ fn run_declared_operation(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcom
         // after frame's path and preview path; in the details of a failure too.
         if let Some(attachment) = super::frame::after_attachment(
             record,
+            Some(base),
             flags.bool("--preview"),
             projection_request.verbosity == ProjectionVerbosity::Min,
         )? {
@@ -629,12 +662,13 @@ fn run_declared_operation(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcom
 /// its declared operation `operation_id`, as the Runtime admits them, before any Runtime
 /// connection: a package the kernel refuses is `package_invalid`, an operation it does not run
 /// this way (`contained_task_declared_operation_unknown`, `_unsupported`) its own code with its
-/// values as details; both exit 2. Answers the package's task timeout.
+/// values as details; both exit 2. Answers the package's task timeout and (Workflow #392 DA-5ab)
+/// its base, the size the Runtime brings the operation's frames to.
 fn declared_operation_admission(
     instance: &str,
     path: &std::path::Path,
     operation_id: &str,
-) -> CliOutcome<std::time::Duration> {
+) -> CliOutcome<(std::time::Duration, (u32, u32))> {
     let deadline = std::time::Instant::now()
         .checked_add(std::time::Duration::from_millis(
             ContainedTaskRequest::DEFAULT_RESPONSE_DEADLINE_MS,
@@ -654,8 +688,9 @@ fn declared_operation_admission(
         )
         .with_details(Value::Object(error.outcome().values().clone()))
     })?;
-    Ok(std::time::Duration::from_millis(
-        task.effective_timing().task_timeout.milliseconds,
+    Ok((
+        std::time::Duration::from_millis(task.effective_timing().task_timeout.milliseconds),
+        task.resolution(),
     ))
 }
 
@@ -776,6 +811,47 @@ fn recorded_click_selection(plan: &ClickPlan) -> CliOutcome<LabOperationSelectio
         }
     };
     Ok(LabOperationSelection::Coordinates { action })
+}
+
+/// Workflow #392 DA-5, the train of DA-5ab and DA-5cd (its rule R4; `contracts/lab-recording.md`,
+/// "A recording's size"): what `do --capture --record` checks before its press, so that nothing is
+/// sent before the recording is known to take it. First the one judgement `record stop` makes of
+/// the recording (`record_size_not_base`); then one frame of the instance through the Runtime, as
+/// `tap --record` captures the frame before its press, judged as a frame that enters the
+/// recording is (`record_display_not_base` for a recording without a frame,
+/// `record_size_not_base`, `record_frame_size_mismatch` when the display changed during the
+/// recording). The frame is not stored: the Lab operation takes its own before frame. A display
+/// that is not the base size is so refused before anything is pressed or written; a recording is
+/// never made of reduced frames. The train's fix round 1 (review B, (l)): the frame's width and
+/// height are the ones the Runtime's observation answers, in the reference of the frame it
+/// committed for it (`InputFrameReference`, as Workflow #434 LW-1's plain press takes it through
+/// `observe_runtime_frame_reference`, one `ObserveReadonly` on a connection of its own); the frame is
+/// neither read back nor decoded. A capture that fails, or an observation that names no frame, is
+/// `device_error`, and nothing is pressed or written.
+fn recorded_press_check(lock: &RecordingLock, instance: &str) -> CliOutcome<()> {
+    actingcommand_lab::record_size_check(lock)?;
+    let endpoint = crate::runtime_capture_backend::RuntimeCaptureEndpoint::new(
+        instance.to_owned(),
+        crate::runtime_state_root()?,
+    );
+    let frame = crate::runtime_capture_backend::observe_runtime_frame_reference(&endpoint)
+        .map_err(|error| {
+            CliError::device(format!(
+                "the frame before the press could not be captured: {error}; nothing was pressed"
+            ))
+        })?
+        .ok_or_else(|| {
+            CliError::device(
+                "the Runtime's observation before the press carries no frame reference, so its \
+                 size is not known; nothing was pressed",
+            )
+        })?;
+    actingcommand_lab::record_frame_check(
+        lock,
+        (frame.width, frame.height),
+        "the frame captured before the press",
+    )?;
+    Ok(())
 }
 
 fn selection(flags: &FlagArgs) -> CliOutcome<LabOperationSelection> {

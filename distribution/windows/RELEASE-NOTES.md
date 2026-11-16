@@ -9,6 +9,1542 @@ Cargo.lock hash, Rust toolchain, target, build profile, Actions run/attempt and
 file identities are recorded in the accompanying `BUILD-MANIFEST.json`; the zip
 and artifact names bind the complete source SHA.
 
+## v0.12.68
+
+本版是 v0.12.67 之后的 1 次合并、8 张 PR：0.12.68 列车 #1789（#463 S3-8、S3-9 自己），带 #477 PC-1 #1782、第三阶段的并车 #1783（#463 S3-12，带 S3-14 #1785）和第二阶段的并车 #1784（#463 S2-7，带 S2-2 #1786、S2-6 #1787、S2-1c #1788）。
+列车除了各张的头和合并，有自己的提交：命令数和 Lab 子进程的行数按合并后的表重算（两张各自把命令从 106 改成 107，合起来是 108）；加一条测试（第二阶段生成的挑选变量，试跑给允许的次序收下、给不允许的拒）；
+生成器跟上 PC-1 改了名的常量（`MAX_PACK_CATALOG_TITLE_BYTES`，值仍是 128）；再并进第二阶段并车的小修（带挑选的步不丢、不转成过渡）；最后是列车自己的小修
+（宿主判值里一处走不到的分支从 `unreachable!` 改成只拒这一次运行，改对一条写错了期望的 `record review` 测试，列车那条试跑测试多给一个不按选项次序的值，加一条宿主测试：直接运行带生成形状的 `ordered` 值）。登记 §1.441 留给以后的一片，本版没有。
+内容是：每个游戏根一份包声明 `pack-catalog.json`，取代 `ui.json`，派单不变；制包第二阶段的四片（逐步复看；过渡点名存下的帧，丢掉中间没改变画面的一下按；挑选先标后细化，每个挑选都是变量；`record ready` 的自检一次列全）；
+第三阶段的三片（收编看得到试跑；一次看一个游戏根里每个包走到哪一步；直接运行和试跑带变量的值）。
+**生产上跑的是 v0.12.67（2026-11-16 20:33 起，经 Lab 救急模块部署）**：一台实例在跑调度的例行任务，其余实例暂停着、模拟器关着。从 v0.12.67 装本版：
+**Lab 救急模块的 `deploy` 和 `actingctl install` 两面都能装，不用任何标志，没有 `ledger_verify`，`defaults_diff` 没有一行，没有新文件**。**两个接口动了：包格式 `package` 到 [3, 16]，`runtime-client` 到 [3, 11]**（最低值都不动）；
+配置键没加，结果码加了 18 个、1 个标成 `retired`。**部署前不留开着的录制**（见「部署和退路」）。**退回 v0.12.67 开着**；回去以后，带挑选标记的录制和带包声明文件的构建包旧版用不了。
+
+- **为什么有这一版**：主人的制包蓝图分三段：录制；把录制离线做成包；把包带进运行。11-16 在真机实例上第一次从「开始录制」走到「出包」（看板 #463），看出第二、三段缺的：`record ready` 的每个自检一次只说一处不过；
+  没有一处能看一步的前后帧、按在哪、框在哪；一个挑选得在一个请求里一次给全；中间多按的一下拿不掉；收编不说这份内容试过没有；没有一处能看出一个包走到哪一步；试跑和直接运行带不了变量的值。
+  另外是 #477：主人 11-16 定了每个游戏根把自己的包写在一份文件里，本版是它的第一片。
+
+- **在用的安装在部署时和以后碰到的**（逐条核过代码）：
+  - **包声明 `pack-catalog.json`**（PC-1）。**派单不变**：调度器不读这个文件。保证它的是 Runtime 这一侧没有一处打开它：`crates/runtime-host`、`crates/policy`、`crates/scheduler`、`apps/actingd` 都不提这个文件名（后三者本版一个文件没改），
+    Runtime 的根读取只开有名字的那几份文件；读它的只有 Lab 的 `packs`、`standard-pack check`、`standard-pack build`、`standard-pack catalog` 和安装工具的 `place`。今天没有一个已装的游戏根、也没有一个资源仓有这个文件，也都没有 `ui.json`：
+    这样的根上 `packs` 不出任何新成员：游戏那一行没有 `ui`、`display`、`index`，组出来的每一行没有 `ui`、`display`、`catalog`（没有就不写，`crates/lab-ops/src/packs.rs` 170–177、205–216；文件不在时 `game_catalog` 直接答没有，962–996），
+    也不为它去读 `schedule.json` 的池（779–787、1103–1128），回答和 v0.12.67 的逐字节一样；`standard-pack check` 的回答最后多一个成员 `catalog`，提示 `standard_pack_catalog_absent`（info），别的不变；`ready`、`build`、`place --plan` 不变。
+    文件的两半读法不同：**业务那一半和整个文件是严格的**，不是 JSON、游戏不对、包没登记、重复、池在 `schedule.json` 里没声明、超限、数量的写法不对、任何不认识的成员，都是 `standard_pack_root_invalid`（带指针）：
+    `packs` 每处一条警告、这个根当没有文件列；`standard-pack check` 拒；构建失败；`place` 在计划里、按住之前拒 `pack_invalid`。**展示那一半是宽松的**：缺文字、组不存在、重复、超限、类型不对、不认识的成员，都只是警告 `standard_pack_catalog_display_invalid`，
+    丢掉碰到的那一组、那一段或那一条，那个包按编号显示（`crates/actingcommand-contract/src/standard_pack_catalog.rs` 563）。带这个文件的构建包声明包格式 16（`apps/actinglab/src/resource_verify/revision.rs` 532–537，
+    `CATALOG_PACKAGE_REVISION` 在 `standard_pack_catalog.rs` 99），v0.12.67 及更早的安装工具在 `package` 那条边上拒它（`interface_edge`，在计划里、按住和写任何东西之前）。`ui.json` 由这个文件的展示那一半取代，什么都不再读它：
+    根里还留着的，`packs` 每个游戏出一条 `standard_pack_ui_retired`；`place` 每次放置都把它当退下的根文件挪到一边（`ui.json.old-<毫秒>`，`install undo` 能放回；`crates/lab-rescue/src/install/place.rs` 196–206、1724–1729），
+    带 `ui.json` 的构建包在计划里被拒（`pack_invalid`，1528–1546）。写这个文件的是新行 `standard-pack catalog --root <资源仓的检出，或安装以外的已构建游戏根> [--plan]`：已有条目原样留着，和 `schedule.json` 不一样的地方只报不改，
+    丢掉的条目和池给警告 `standard_pack_catalog_left_out`；安装里的根拒（`standard_pack_catalog_root_refused`）。
+  - **录制，第二阶段**（S2-2、S2-7、S2-6、S2-1c）：
+    1. **`record review`**（`ac_record_review`）：只读一条录制（开着的、归档过的都行），不改它的任何文件；每一步答之前的帧、这一下按（位置、框、手势、结果）、之后的帧（等了多久、静没静下来）和两步之间存下的帧，
+       每一步的缺项就是 `record ready` 那一个判断里落在这一步的条目（同一个函数 `ready_of`，`crates/lab/src/recording_api.rs` 427）；`--step` 只答一步；也收 `--game`、`--server`、`--locale`。步骤表里没有的东西不编（没有备注、没有「同一画面」）。
+       预览图画在帧的副本上，写在录制自己的 `lab/preview/` 下，先核过要画的每一帧的 sha256 才写，每次调用重写，**工具从不清理它们**；`--no-preview` 什么都不写（带 `--dry-run` 却不带 `--no-preview` 被拒）。
+       帧文件不在时路径为 `null`，警告 `frame_file_missing` 一次（要画预览时照旧拒 `record_frame_hash_mismatch`）。
+    2. **过渡点名存下的帧**：`record mark` 请求里的页面过渡收 `frame_id` 和 `sample_frame_ids`（只在请求形式里；命令行的 `--transition page` 照旧收文件），出的包和给同一张图的文件时一样；
+       录制里没有的帧号拒 `record_frame_unknown`，帧文件被改过拒 `record_frame_hash_mismatch`，都不写。
+    3. **丢掉中间一下按**：`drop_step` 对末步以前的步，只拒存下的帧明摆着矛盾的：按下前的帧和按下后的帧、和下一步按下前的帧各比一次，每次比两处，整屏和按压周围（按的框每边扩一格，1280×720 上一格 80×80），
+       用的是第一阶段判「画面静止」的同一个量和同一个上限（`crates/lab/src/recording/steps.rs` 4481 起）；哪一处看出变化就拒 `record_drop_unproven`（`drop_problem`：`frames_not_recorded`、`screen_changed`、`next_screen_differs`；
+       `drop_comparison`：`frame`、`press_region`）。比这个量能看出的还小的变化看不出来：**这一下要不要紧由智能体判断，工具只拒帧上矛盾的**。`restore_step`（只在请求形式里）把丢掉的步放回来，
+       期间没有别的改动时，步骤表除了更新时间和丢之前一样。**带挑选的步不丢**（标了挑选的、或者有 select 的，末步也一样）：`record_select_invalid` 的 `drop_of_choice`；也不转成过渡：`transition_of_choice`；
+       都不写，先撤回挑选再丢（`steps.rs` 4802–4833）。
+    4. **挑选先标后细化**：请求里 `choice: true` 给一步打上挑选的标记（`recording.json` 的那一步多 `choice {marked_at_unix_ms}`）；没细化的，`record ready` 列成缺项 `select_unrefined`（不拒），
+       `record stop`（连同演练和重新生成）拒 `record_select_invalid` 的 `choice_not_refined`，什么都不写，直到给这一步声明 select，或者用 `choice: false` 撤掉标记（没标过的撤回拒 `no_choice`）。归档、重开，标记都在。
+    5. **每个挑选都是变量**：`record stop` 给每个 select 步按路径次序在 `control.json` 的 `variables` 里声明一个 `ordered` 变量（名字是 select 的 wanted 名，选项是各个名字，默认值是录下的那一项），
+       步的策略从 `session.dispatch.parameter.<名字>` 读它（`crates/lab/src/recording/generate.rs` 2345、2387、2969）；**不给值的运行选的和以前一样**。所以从一条有 select 的录制重新生成的包多了 `variables`、策略换了写法，
+       **内容哈希会变**，要包格式 14（select 步本来就要 13）；v0.12.67 的 Runtime（[3, 15]，`ordered` 变量自 v0.12.61 起就认）照收照跑。select 步多于 16 个的录制在准入时被原有的上限拒。
+    6. **`record ready` 一次列全**：回答多了 `checks`（每个跑了的自检 `{check, complete, reason?}`）。七个自检里五个把自己查出的每一处都列出（`frames`、`first_decision`、`cross_check`、`endings`、`selects`，最后一个连一帧里每个读不出名字的槽都各列一条）；
+       `admission` 和 `final_package` 仍只列一条，标 `complete: false` 和 `whole_package`：这两个是分段判的，每一段建在前一段上，内核一次只答一个拒绝；检查中途遇到不属于它判定的错误时标 `check_error`、排在它的最后。
+       `record stop` 拒在哪、用哪个码，和以前一样。
+    7. **这些工具不提议识别区域、不提议挑哪一项、不提议值**（主人的裁定）：框、挑选和值都由智能体给。
+  - **第三阶段**（S3-12、S3-14、S3-8、S3-9）：
+    - **收编的回答**：`review.run_through` 改名 `review.recording_checked`（规则和拒绝的码 `recording_unreviewed` 都不变，旧名不留）；`review.trial` 是这份内容最近一次试跑：`state`（`passed`、`failed`、`none`）、
+      `content_hash_prefix`、`record`（授权引用、时刻、运行号、结局、给了期望时的 `matched`）、`passed_on_record`（这份内容有没有哪一次通过过）、`other_content`；记录读不出来时是 `review.trial_not_read`，不拦收编。
+      两条警告只警告、退出码 0：`enabling_needs_authorization`（决定给的是会运行的类别，放置时要写授权并点名这个包）、`not_tried`（这份内容没有一次通过的试跑）。`next` 的每一项从字符串改成对象 `{path, fixed_value?}`，
+      规则还没有值时点名模型侧的绑定文件 `bindings.json` 和两种写法。
+    - **「通过」只有一处定义**：`PackTrialRecord::passed`（`crates/resource-tooling/src/standard_pack_trial.rs` 605–607；合同 `standard-pack-trial.md` 的「A trial that passed」）：运行停在包声明的结局上，给了 `--expect` 时停在那一个上。收编和下一条都调它。
+    - **`standard-pack status`**（`ac_standard_pack_status`）：离线、什么都不写，对游戏根里每个包（或 `--package-id` 点名的一个）答 `formed`（准入过没有、内容前缀，带 `--repo` 时还有检出里那一份的）、`conditions`（就是就绪检查那十三项，同一个函数）、
+      `missing`、`held`（按住的原因和引用）、`trial`（和收编同一份）、`enabled`、`stage_state`，以及根的两组计数。`enabled.state` 照根里的文件判：`enabled`（有规则点名、没按住）、`held`、`not_placed`、`not_scheduled`（辅助、没有规则派）、
+      `not_judged`（`schedule.json` 被组合器拒，Runtime 用的是上一份）；`stage_state` 是 `not_admitted`、`not_judged`、`can_be_tried`、`supporting`、`enabled`。**它不读放置的流水，也不读这台机器**：
+      每个包的授权都答 `not_recorded`，带 `authorization_unrecorded` 的 `journals_not_read`（`crates/resource-tooling/src/standard_pack_status.rs` 391–392），绝不推断；读流水是下一片的事。一条读不出的试跑记录只让那一个包答 `trial_not_read`。
+    - **直接运行和试跑带值**：`run start --variable <名字>=<JSON>`（可重复，最多 16 个；`ac_run_start` 的 `variable` 是列表）；`standard-pack trial --variable` 现在照带（以前拒 `trial_variables_not_carried`，这个码标成 `retired`）。
+      值到了 Runtime，和派单给包填变量走同一对函数（判值 `resolve_variable`，盖值 `dispatched_variable_values`）。拒绝一个原因一个码，都是拒、什么都不跑：Lab 在发出之前拒多于 16 个（`--variable` `out_of_range`）和写法不对的
+      （`value_missing`、`not_recognised`、`repeated`），退出码 1；Runtime 在门口拒 `invalid_contained_task_variable_count`、`invalid_contained_task_variable_name`；读完包以后、在任何记录、认领和租约之前拒 `run_variable_undeclared`（包没声明这个变量）、
+      `run_variable_not_applying`（这个应用的根上不适用，带根的词）、`run_variable_value_refused`（值没被整个接受，带判断的词，`keys_left_out` 也算），
+      以及判值既没收下值、也没给词时的 `run_variable_unjudged`（照今天的判值走不到；它取代原来那处 `unreachable!`，那里一旦 panic，会在连接边界上停掉整个 Runtime，现在只拒这一次运行）
+      （`crates/runtime-host/src/host/contained_task.rs` 7761–7862），都是 Denied，Lab 那一行退出码 1。
+      **不带值的请求和以前逐字节一样**（`ContainedTaskRequest::variables` 为空不写出，`crates/actingcommand-contract/src/runtime.rs` 2833–2834），走原来的默认值。试跑的运行连回执的头都没收到时，回答的 `next` 是 `{unconfirmed: no_receipt}`，
+      不再给收结果的那一行（`apps/actinglab/src/standard_pack_cli.rs` 924–932）：客户端分不清是旧 Runtime 解不了这个请求还是 Runtime 中途停了，只说没收到回执。
+  - **盘上的东西**：
+    - **在 v0.12.67 上开的录制本版照读**：`record ready` 用同一个判断、现在列全；`record review` 照读（更早的版本录下、没有按前按后帧的按，答这一步的帧为之前、没有之后）；`record stop` 的判断不变，但录制里有 select 时出的包多了变量、内容哈希变了（见上）。
+    - **本版写的录制里只要有一步带挑选标记，v0.12.67 就读不了**（它读 `recording.json` 拒不认识的成员，v0.12.67 的 `crates/lab/src/recording/model.rs` 320–321），直到用 `choice: false` 撤掉标记（细化过的步撤掉标记，包不变）。
+      丢掉的中间步：`dropped` 是旧成员，v0.12.67 照读，它的生成器也照样跳过这一步（S2-7 没改生成器），只是放不回来（没有 `restore_step`）。用存下的帧做的过渡：帧条目的 `source: "recording_frame"` 是文字成员，S2-5 起就有，旧版照读。
+      预览目录 `lab/preview/`：旧版不读、不拷，留在那里，要删由人删。
+    - **试跑的记录形状不变**（`actingcommand.pack-trial.v1`）：带值的试跑在 `plan.variables` 里写每个变量的值和来源 `given`，这个成员和这个词 v0.12.67 的读者都认（它的 `standard_pack_trial.rs` 205–219、311）。
+
+- **改了什么**（包声明、录制、收编和状态、带值运行）：
+  - **包声明**（PC-1，§1.438）：读取、两张索引、和 `schedule.json` 的比对、合并规则都在 `crates/actingcommand-contract/src/standard_pack_catalog.rs`（取代 `standard_pack_ui.rs`）；`packs` 在 `crates/lab-ops/src/packs.rs`（`game_catalog`），
+    check 在 `crates/resource-tooling/src/standard_pack_check.rs`，写文件在 `crates/resource-tooling/src/standard_pack_catalog.rs`（检出时游戏名取自 `applications.json`，包的登记由构建用的 `package_bundle` 生成），
+    构建在 `apps/actinglab/src/resource_verify/bundle.rs`，放置在 `crates/lab-rescue/src/install/place.rs`（`check_catalog` 在计划里）。
+  - **录制**（§1.439、§1.440、§1.442、§1.443，并成第二阶段的并车）：`crates/lab/src/recording/` 新的 `review.rs`、`preview.rs`（画预览直接写像素，不加依赖），`steps.rs`（按帧号取帧、两道比较、`restore_step`、带挑选不丢），
+    `select.rs`、`generate.rs`（标记、没细化的预检、变量），`crosscheck.rs`（`Failures` 的 `first` 给 `record stop`、`every` 给 `record ready`），`ready.rs`（`checks`）；`record ready` 的判断搬成一个函数 `ready_of`，两个命令都调它。
+  - **收编和状态**（§1.445、§1.446，并成第三阶段的并车）：`crates/resource-tooling/src/adopt.rs`；试跑模块里的 `PackTrialRecord::passed`、`trial_summary`、`content_hash_prefix_of`，收编和状态共用；新的 `standard_pack_status.rs`；
+    `standard_pack_ready.rs` 多一个同一次读出放置状态的入口（就绪的判断和回答不变）。
+  - **带值运行**（§1.444）：契约库的请求成员和两个码；内核只加一个读声明的访问器（`crates/execution-kernel/src/contained_task/remedies.rs` 的 `declared_variables`）；宿主的 `check_run_variables`、`run_variable_table` 和直接运行那一臂的盖值；
+    Lab 的 `parse_variables` 搬进 `crates/lab-ops/src/core_ops.rs`（回放、`run start`、试跑三处共用）；试跑的 `check_trial_run` 不再拒 `--variable`。
+
+- **部署和退路**：照 v0.12.67 那次的做法，用在线 v0.12.67 留下的那份 `actinglab` 跑 `release stage`、`deploy <提交> --plan` 预看、`deploy <提交> --detach` 实做，再用 `op status` 看结果。
+  救急模块（`crates/lab-rescue`）自 v0.12.67 只改了 `install/place.rs`（PC-1）和测试，部署、退回、撤销那几条路没动。
+  - **部署前不留开着的录制**：状态里有暂停原因是 `lab-record-<毫秒>` 的实例，先对它 `record stop` 或 `record archive`。开着的录制按住那一台的调度。
+  - 部署以后 `op status` 的 `mcp_servers_on_old_images` 照旧列出还跑在改名放到一边的旧映像上的 MCP 服务进程：本版没删请求种类，旧进程照样能用，但答的是旧的工具表（没有 `ac_record_review`、`ac_standard_pack_catalog`、
+    `ac_standard_pack_status`，`ac_run_start` 没有 `variable`）；要新的，重开那个客户端的会话。
+  - **退路**：回 v0.12.67 用留着的 v0.12.67 那份 `actingctl install`（`install undo`、`install resume`、`install release-hold`）或救急模块的退回：账本的修订和记录种类都没变，`runtime-client` 的边 [3, 10] 和 [3, 11] 相交，回退门放行。
+    退回之前把带挑选标记的录制撤掉标记或做完；带包声明文件的构建包旧的安装工具放不了。
+
+- **已知的限度**（各片审查和验收记录列的，逐条核过）：
+  - `standard-pack status` 不读放置的流水，也不读这台机器（按住、启用都照根里的文件判）；授权一律 `not_recorded`。
+  - 试跑还没在真机上发过；带挑选变量的包还没在真机上做出来，也还没带值跑过。
+  - 直接运行的账本记录不记它带了哪些值（命令记录没有参数成员）；只有试跑自己的记录里有。
+  - Runtime 每次启动以后到调度台第一次检查之前，以及游戏没有根、根检查失败或组合被拒时，带值的运行答 `run_variable_not_applying`（`root_unchecked` 这类词）；派单这时也不交外来的值。
+  - 放置的撤销不说哪些包进出调度（`crates/lab-rescue/src/install/undo.rs` 不读 `schedule_changes`）。
+  - 会滚动的列表里的挑选没有做（`contracts/lab-recording.md` 785、1040）；返回键不在本版（录制里的 `key` 照旧是 `record_flag_unsupported`，线性步骤没有按键这一种）；没有从录制写回归用例的东西。
+  - 丢中间步的两道比较看不出比那个量还小的变化，离按压远的小变化也看不出。
+  - 包声明的写手还没在真的资源仓检出上跑过；业务那一半（每个包产什么、耗什么）一个值都没填。
+  - 不是基准尺寸的显示上照旧不能录制。
+  - 契约里 `record_*` 拒绝的退出码 3 是带 `--via` 那一行的；Lab 自己的命令行和经 `serve --stdio --front mcp` 都答 1（`record_frame_unknown`、`record_drop_unproven` 和 `record_select_invalid` 的新词同样）。
+  - 八片都没在真机上跑过；`record review` 的预览、列全以后 `record ready` 的回答有多长（超出 MCP 的预算时整份导出）、`standard-pack status` 在生产的根上答什么，都等上线以后看。
+
+配置：按代码、`distribution/windows/component-interfaces.json` 和 `contracts/component-interfaces.md` 核过：
+
+- 接口：**`package` 从 [3, 15] 升到 [3, 16]**（`component-interfaces.json` 9；契约表 `package` 第 16 行，`contracts/component-interfaces.md` 172）：带 `pack-catalog.json` 的构建包声明 [16, 16]。最低值留 3：不带这个文件的包修订不变。
+  v0.12.67 及更早的安装工具（范围到 15）在 `package` 边上拒声明 16 的包（`interface_edge`，在计划里）；带这个文件却声明更低的 zip（不会构建出来）在它的布局检查上拒（`pack_invalid`，点名这个文件）。
+  v0.12.67 的 Runtime 读一个有这个文件的根，当它没有。本版的 `place` 不另拒「带文件却声明低于 16」的包：构建出来的都声明 16。
+  **`runtime-client` 从 [3, 10] 升到 [3, 11]**（`component-interfaces.json` 8；契约表 `runtime-client` 第 11 行，同文件 156）：请求 `ContainedTaskRequest` 多了可选成员 `variables`（`crates/actingcommand-contract/src/runtime.rs` 2833–2834），不带值时不写出。
+  最低值留 3：Runtime 照旧读 3 到 10 的每一个请求，也不发任何新东西。v0.12.67 的 Runtime 收到带值的运行请求解不开（它的 `ContainedTaskRequest` 拒不认识的成员，v0.12.67 的 `runtime.rs` 2818–2819），不给回执就断开连接，什么都不跑；
+  客户端报连接在回执之前断了。钉在修订 9 或 10 的客户端库什么新东西都收不到：没有回答变了，只有带值运行的请求才带这个成员。
+  其余逐行和 v0.12.67 一样：`actingd-config` [5, 33]、`install-selection` [1, 1]、`install-control` [0, 0]、`ledger` [3, 8]、`runtime-outcomes` [1, 1]（`component-interfaces.json` 4–7、10）。
+  没找到该升没升的：账本没有加记录种类、成员或修订（`crates/ledger` 一个文件没改；直接运行不记值）；录制的 `choice`、预览目录、`packs`、`record ready`、收编和状态的回答都不属于表里任何一个接口；试跑记录的形状不变；放置的流水照旧（包声明文件是一条 `root` 项，带 digest）。
+- **Runtime 改了的文件**：宿主 `crates/runtime-host/src/` 的生产代码 `codes.rs` 和 `host/contained_task.rs`，测试 `tests.rs` 和 `tests/gate_463_s38.rs`；内核 `crates/execution-kernel/src/contained_task/remedies.rs`（一个访问器）；
+  契约库 `crates/actingcommand-contract`（请求成员和码、`standard_pack_catalog.rs` 取代 `standard_pack_ui.rs`、改了名的常量）。`crates/ledger`、`crates/runtime-client`、`crates/runtime-config`、`crates/policy`、`crates/scheduler`、`apps/actingd` 一个文件没改。
+- 配置键：没有加的、没有去掉的；`actingd.defaults.json` 一字没改，sha256 仍是 `e14b0ced7040a6d05046edddd9b0c8ee95a53de4b65d69fcc7d9dae17a433343`；两个配置模板和 `apps/actingd/src/config/manifest.rs` 没改。
+- 结果码：加了 18 个，1 个标成 `retired`。按片：PC-1 加 8 个契约码（`standard_pack_catalog_absent`、`standard_pack_catalog_coverage`，info；`standard_pack_catalog_display_invalid`、`standard_pack_catalog_schedule_differs`、
+  `standard_pack_catalog_left_out`、`standard_pack_ui_retired`，警告；`standard_pack_catalog_root_refused`、`standard_pack_catalog_write_failed`，拒，退出码 2 和 4），键和词表 `catalog_side`、`catalog_difference`，`standard_pack_problem` 换掉四个 `ui_*` 词、加五个 `catalog_*` 词；
+  S2-7 加 `record_frame_unknown`、`record_drop_unproven`（lab，error，拒），键和词表 `drop_problem`（3 个词）、`drop_comparison`（2 个词），并车的小修给 `select_problem` 加 `drop_of_choice`、`transition_of_choice`；
+  S2-6 加 `ready_missing` 的 `select_unrefined` 和 `select_problem` 的 `choice_not_refined`、`no_choice`；S2-1c 加词表 `ready_check_stop`（2 个词，只在回答里）；S2-2 没有新码；
+  S3-8/9 加 `invalid_contained_task_variable_count`、`invalid_contained_task_variable_name`（契约）、`run_variable_undeclared`、`run_variable_not_applying`、`run_variable_value_refused`（runtime-host），列车的小修再加 `run_variable_unjudged`（runtime-host），都是拒，位置名 `check_run_variables`，
+  词表 `trial_run_unconfirmed`（`no_receipt`），`trial_variables_not_carried` 标成 `retired`（`retired_in` 0.12.68）；S3-12 加 `enabling_needs_authorization`、`not_tried`（resource-tooling，警告，退出码 0）和词表 `trial_state`；
+  S3-14 加词表 `stage_state`、`enabled_state`、`pack_authorization`、`authorization_unrecorded`（只在回答里）。改了说明的：`adopt_refused`、`record_select_invalid`、`standard_pack_root_invalid`。
+  合计 3999 个码（在用 3910，`retired` 89），1773 个位置、31 个分片；键 685，词表 270，词 2038；在用码按类别 error 3392、warning 162、info 214、success 125、fatal 17；审阅定稿的在用码 154 个。
+  本版的发布文件 `contracts/outcome-codes/released/0.12.68.json`：1 个码（标成 `retired` 的 `trial_variables_not_carried`）、0 个位置；索引由脚本生成，仍是 32 个文件，核过是最新的。
+- Lab 的操作表从 190 行到 193 行：加 `record review`（authoring，离线，写预览；参数 `instance`、`record_id`、`step`、`no_preview`、`state_dir`、`game`、`server`、`locale`）、`standard-pack catalog`（authoring，离线，写；`root`、`plan`）、
+  `standard-pack status`（authoring，离线，只读；`root`、`repo`、`package_id`、`state_dir`）。改了 10 行：`run start`（加参数 `variable`）、`standard-pack trial`（`variable` 的说明、输出）、`standard-pack adopt`（`state_dir` 的说明、输出）、
+  `record mark`（`request`、`drop_step` 的说明）、`do`（`mark_request` 的说明）、`record ready`（输出加 `checks`）、`standard-pack check`（输出加 `catalog`）、`packs`、`place`、`standard-pack build`（说明）。
+  命令清单 46 个顶层分派臂、108 条命令（加 `standard-pack status`、`standard-pack catalog`）。Lab 的 MCP 服务器在 Windows 上从 163 个工具到 166 个（三行都交给 `serve` 子进程，子进程的行从 70 到 73，别的平台从 124 到 127）；
+  第一代 MCP 服务器仍是 46 个工具，只改了 `ac_packs` 的说明和结果说明（`catalog`、`index`）。README 两种语言把工具表标题改成 v0.12.68（命令数 108 列车已改）。
+  两个压缩包的文件表不变（`.github/workflows/windows-remote-build.yml` 没改）：没有新文件、没有去掉的文件。
+- 不稳定表仍是 FLK-08、FLK-10、FLK-14、FLK-15、FLK-16（`ci/flaky-tests.toml`，本版没动）。看板 #71 另登记了 FLK-17、FLK-18（宿主的两条靠机器快慢的门测，在慢的运行上红过，都没有重跑到绿），没有镜像进这张表。
+
+升级与退回（救急模块部署、退回、撤销那几条路，`crates/lab-rescue/src/install/` 的 `plan.rs`、`update.rs` 自 v0.12.65 没改，v0.12.66 说明里引的行号对本版也对；`actinglab deploy` 和 `actingctl install` 走的都是它）：
+
+- **v0.12.67 的安装工具装本版：两面都能装，不用任何标志。** 计划的边：`ledger` 两边 [3, 8]，`previous_max_in_next` 过，`one_way` 不触发，`ledger_verify` 为 false（`install/plan.rs` 924）；`runtime-outcomes`、`install-control` 的边过；
+  **读这两个范围的边**：`runtime-client` 的 `installer_meets_previous` 是安装工具 I [3, 10] 对在线的 Rp [3, 10]，`installer_meets_next` 是 I [3, 10] 对本版 R* [3, 11]，范围相交就过（324–340），两条都过；
+  `package` 的 `bundle_max_in_next` 每个已装的游戏一条，B（登记里的范围）没有、R* 写 [3, 16]，照旧是 `pack_declaration_unknown` 警告，不挡（341–364）；部署计划不拿安装工具自己的 `package` 范围去比。
+  `installer_knows_keys` 过；`defaults_diff`（583–607）没有一行；文件计划里没有 `new`。
+- **本版第一次启动多写的**：没有。Runtime 只多了带值运行那一条路（不带值的请求一个字节不变）；`config.selection` 的默认值哈希不变。v0.12.67 的配置文件照收；`standard-pack check` 对今天的根只多 `catalog` 那一条提示。
+- **退回 v0.12.67**：回退门（`install/update.rs` 390–447）只放行这次部署替换掉的 v0.12.67；第 1 部分的边都过（`runtime-client` [3, 11] 和 [3, 10] 相交，`package` 照旧是警告）；第 2 部分用 v0.12.67 自己的 `actingledger events` 读部署以来的每一页：
+  本版不写新的记录种类或成员，新码和新位置名在旧的读者那里照原样读成收到的拼写（`crates/actingcommand-contract/src/outcome.rs` 690），过。
+  - 读不了、放不了的：**带挑选标记的录制**（撤掉标记以后读得了）；**带 `pack-catalog.json` 的构建包**（v0.12.67 的 `place` 在 `package` 边上拒）。本版放进根里的 `pack-catalog.json`，v0.12.67 的 Runtime 和 `packs` 都不读，
+    它的 `place` 放一个不带这个文件的包时也不动它。
+  - 用不了的功能：丢掉的步放不回来；带值的运行发不出去；预览目录没人读。本版重新生成的、带变量的包，v0.12.67 的 Runtime 照收。
+  - **除了带挑选标记的录制，这些都不让安装的状态或日志对 v0.12.67 读不了。**
+
+配对：
+
+- **控制台 UI**（UI main `41600540` 钉 Runtime v0.12.63 `3581a8af`；它声明 `runtime-client` [3, 9]）：`ui_meets_next` 是 [3, 9] 对 [3, 11]，过。**本版没有东西碰得到它**：没有回答变了，新成员只在带值运行的请求里，它不发值；
+  `packs` 的回答对没有包声明文件的根逐字节不变（以后根里有了这个文件，游戏的 `ui` 仍是 `{groups, packs}`，它按成员名读）。它不用为本版改钉；v0.12.67 说明里写的条件照旧
+  （对映射显示上的实例发观察或 Lab 操作之前、放开一台多应用之前，要改钉到修订 10 或更新）。
+- **部署工具包**（这次走 Lab 的行）：两个构建清单的 `speaks` 是 `actingd-config` [5, 33]、`install-selection` [1, 1]、`install-control` [0, 0]、`ledger` [3, 8]、**`runtime-client` [3, 11]**、**`package` [3, 16]**、`runtime-outcomes` [1, 1]；
+  默认值文件的哈希不变；`git diff --stat v0.12.67 <提交> -- apps/actingd/src/config/manifest.rs distribution/windows/actingd.defaults.json` 什么都不打印；不过的边没有，`runtime-client` 的两条边写着 I [3, 10]、Rp [3, 10]、R* [3, 11]，都过；
+  警告照旧是每个游戏一条 `package` 的 `bundle_max_in_next`（R* 现在写 [3, 16]）；没有新文件、没有去掉的文件；运行中的 `actingctl.exe`（MCP 服务）、`actinglab-mcp.exe` 和做计划的 `actinglab` 改名放到一边，别的跑着的程序文件挡住，
+  和 v0.12.67 一样；`standard-pack check` 不出新的警告码（只多 `catalog` 的提示 `standard_pack_catalog_absent`）；启动日志不多一行；**部署前核没有开着的录制**。
+- **热放置工具包**：`place` 改了：带 `pack-catalog.json` 的包把它最后放、之后的包不带就挪开；已装的 `ui.json` 每次放置都挪到一边；带 `ui.json` 的包在计划里被拒。今天的包都不带这两个文件、已装的根也没有，所以照旧放。
+  工具包要是按钉住的 `package` 范围核包的 `interfaces.json`，放第一个带包声明的包之前先认 16。重钉要换的照旧只是构建值；`actingd_config` 5,33 和默认值哈希不变。
+- **两个 MCP 服务器**：Lab 的多 3 个工具、`ac_run_start` 多 `variable`；第一代的工具一个没增减，只改了 `ac_packs` 的说明和结果说明。旧映像上的进程照旧能用，答旧的工具表。
+
+运行上的变化：
+
+- 从 v0.12.67 部署，经 Lab 的 `release stage`、`deploy`、`op status`：不用标志，没有 `ledger_verify`，`defaults_diff` 没有行，没有新文件；`runtime-client` 的两条边都过；部署前不留开着的录制。
+- 派单不变；包声明文件今天哪里都没有，`packs` 的回答不变，`standard-pack check` 多一条提示。
+- 做包时：`record review` 一步步看；过渡可以点名存下的帧；中间多按的一下可以丢、能放回；挑选可以先标后细化，每个挑选都是变量；`record ready` 一次列全。
+- 收编说这份内容试过没有、先给两条警告；`standard-pack status` 一次看一个游戏根（不读流水）。
+- `run start` 和试跑能带变量的值；不带值的请求不变。
+- 退回 v0.12.67 开着；带挑选标记的录制先撤掉标记，带包声明的构建包旧版放不了。
+
+本版合并的 PR：
+
+- #1782 #477 PC-1（登记 §1.438）：apps 门表 `#477 PC-1` 20 条；3 个测试名记进 `ci/retired-gates.toml`（两条 `ui.json` 读取的测试和 P2 那条带 `ui.json` 的构建测试）。
+- #1784 #463 S2-7（§1.440，同时是第二阶段的并车）：exec 门表 `#463 S2-7` 12 条，并车和它的小修 5 条；#1786 S2-2（§1.439）17 条；#1787 S2-6（§1.442）11 条；#1788 S2-1c（§1.443）10 条。
+- #1783 #463 S3-12（§1.445，同时是第三阶段的并车）：7 条，并车 12 条；#1785 S3-14（§1.446）9 条。
+- #1789 #463 S3-8、S3-9（§1.444，同时是 0.12.68 列车）：契约门表 3 条、宿主门表 7 条、exec 门表 3 条；列车自己 2 条（exec、宿主门表各 1 条，exec 那条在列车的小修里多给一个不按选项次序的值）。
+
+## v0.12.67
+
+本版是 v0.12.66 之后的 4 次合并、6 张 PR：直接合并的 #1776（#463 S2-1b）和 #1779（#434 LW-1），Lab 的并车 #1780（#392 DA-5ab #1780 自己，带 DA-5cd #1781），宿主的并车 #1778（#437 G1 #1778 自己，带 #475 #1777）。
+两趟车除了各张的头和合并，有并车自己的提交：Lab 那趟把两片统一成一套（存图和在线帧走同一个缩图函数、回答只有一种 `frame_coordinates`、两个尺寸拒绝码各管各的、带录制的路在发出任何东西之前先核录制），
+再小修一轮；宿主那趟在两片都改了的几个函数上并好、补登记的 Train 段和一条测试，再小修一轮（改登记里说错的一句、「设备空闲」的判法、照拒绝自己的码定欠账、一条门测把子进程的报错接出来）。
+内容是：Lab 在分辨率不是包的基准尺寸的实例上能看、能点，说的是基准坐标；这种实例上不让录制；离线识别收同比例的大图；Lab 的 MCP 服务器在实机上碰到的五处；`record ready` 认得安装里的游戏和服；
+宿主又有五条「租约已过期、关会话被拒」的路只围住那一台；一台模拟器放几个应用之前要有的头一件，今天哪个安装都走不到。
+**生产上跑的是 v0.12.66（2026-11-16 14:54 起，经 Lab 救急模块部署）**：一台实例在跑调度的例行任务，其余实例暂停着、模拟器关着。从 v0.12.66 装本版：
+**Lab 救急模块的 `deploy` 和 `actingctl install` 两面都能装，不用任何标志，没有 `ledger_verify`，`defaults_diff` 没有一行，没有新文件**。**一个接口动了：`runtime-client` 到 [3, 10]**（最低值不动）；
+配置键没加，结果码加了 4 个。**部署前不留开着的录制**（见「部署和退路」）。**退回 v0.12.66 开着**；回去以后，在本版上开的录制读不了。
+
+- **为什么有这一版**：11-16 在真机实例上验了显示换算的三档，1280×720、1920×1080 和 3840×2160（看板 #392）：包内运行三档上换算和落点都对，但 Lab 自己的观察、点按和离线识别在每一种不是基准尺寸的显示上
+  都失败（`observation_projection_failed`，存图被拒），而在 3840×2160 的实例上开的录制会不声不响录成那个尺寸，出的包到别的实例上跑不了。同一次实走经 Lab 的 MCP 服务器碰到五处毛病（看板 #434）。
+  安装好的实例上 `record ready` 总说缺游戏、服、区域三样，前两样安装其实知道（看板 #463）。读 #461 的代码又看出五条路（看板 #475）。最后是一台模拟器放几个应用之前必须先有的几件里的头一件（看板 #437）。
+  - **v0.12.66 说明里「点后每张约 0.1 秒……这是预计，部署以后量一次」和「点后每张多快、钉有没有命中，部署以后读一次账本才知道」要改：量了**（v0.12.66 上线以后，看板 #463）：
+    录下的一下按之后，第一张截图在按下后 168 毫秒，之后约每 100 毫秒一张（88 到 114 毫秒）；Lab 的钉从 `artifact.pin_recorded` 到 `capture.completed` 1 到 4 毫秒（12 张都是，原来 720 到 755 毫秒）。
+    只量了一下点按；那一次按之前那一张 64 毫秒，没有出现「约 1.6 秒重开会话」，原因没查，那一句不改。
+
+- **在用的安装在部署时和以后碰到的**（逐条核过代码）：
+  - **Lab 在映射到基准的显示上**（DA-5ab）。显示是包的基准尺寸的纯缩放时（今天 1280×720 的包遇上 1920×1080 或 3840×2160），`observe --capture`、`do --capture`（元素、`--tap`、`--swipe`、声明操作、
+    录下的点击）和客户端的 `do --capture --dry-run`、`ensure --capture`、`wait --capture` 现在能用：设备帧用包内运行同一个帧闸缩到基准再认（`crates/execution-kernel/src/contained_task/display_gate.rs` 96–216）。
+    交出去的帧（`--with-frame`、`--preview`、操作后的附件）、回答里的每个框和点、`do` 收进来的点、矩形和滑动都在包的基准坐标里，发出之前按这一帧的映射换成设备坐标。
+    **`frame_coordinates` 有两种样子**（只在内核一处构造，`crates/execution-kernel/src/readonly.rs` 586 起）：基准尺寸的显示上是 `{device_pixels, orientation, applies_to}`，和以前逐字节一样；
+    映射的显示上是 `{space: "base", base_pixels, reduced_from, orientation, applies_to}`，`reduced_from` 是设备尺寸。智能体看回答里的这个成员：带 `space` 的就是基准坐标。`capture` 和 `ac_frame` 交出的
+    仍是设备原帧、设备像素；单发的 `tap`、`swipe`、`long-tap` 照旧是设备像素。Lab 的 MCP 手册「Coordinates」、服务器说明和第一代 `ac_lab_observe`、`ac_lab_do` 的说明都写了两种样子。
+    适配器不让按的比例（5/4 这类，缩放的两倍不是整数）：观察不拒；按在输入那一步拒 `display_map_unresolved`（`input_scale_unsupported`，阶段 `display_input_map`），什么都不发
+    （`crates/display-adapter/src/lib.rs` 948–962、986–1002）。**包内运行不变**：两次独立审查逐行对过帧闸和输入出口（基准、3 倍、3/2、5/4、别的比例、过期帧六种情形下的帧、识别输入、拒绝和设备点都没变），
+    并车以后那些文件一个字节没再动。
+  - **录制只在基准尺寸上做**（DA-5cd 和并车）。`record start` 先在自己的连接上读 Runtime 内存里这一台的 `display.frame_extent` 事实（`InstanceFactSnapshot`，最近一次任务的第一帧，不碰设备）；
+    上次看到的不是 1280×720，就在写录制的头、暂停调度之前拒 `record_display_not_base`（只留下会话目录和锁文件），拒绝里写明看到的尺寸和基准尺寸（`apps/actinglab/src/commands/record_hold.rs` 270–286、359–396）。
+    开始成功时回答带 `display_last_observed {width, height, observed_at_unix_ms}`（没看到过是 `null`）。这只是预警：没跑过任务、改过分辨率以后它不知道，所以录制的头写上 `base_size` 1280×720，
+    第一帧不是这个尺寸就在存下之前拒（`crates/lab/src/display_base.rs` 295–321）；每条带录制的路（`tap`、`swipe`、`long-tap --record`，`session app --record`，`do --capture --record`，`observe --capture --record`）
+    都在发出、写下任何东西之前先核这份录制和它取到的那一帧（334–367；`do --capture --record` 为此在按之前经 Runtime 多取一帧、不存，取失败是 `device_error`，什么都不按）。
+    三个码各管一件（§1.437 的表和码目录对过）：`record_display_not_base` 是这一台的显示不是基准尺寸、录制里还没有帧；`record_size_not_base` 是这份录制的帧不是基准尺寸，`record stop`（演练、重新生成也是）拒，
+    `record ready` 列成 `size_not_base`，不再往里加帧；`record_frame_size_mismatch` 是原有的码，一帧和录制已有的尺寸不同。
+    **本版写的录制头带 `base_size`，v0.12.66 读不了**（它读 `recording.json` 是严格的，v0.12.66 的 `crates/lab/src/recording/model.rs` 88–89）：退回以后，在本版上开的录制旧的 Lab 读不出来。
+    本版以前开的录制（头里没有基准）照旧读得了：`record status`、`record frames`、`record archive`、`record reopen` 不变；`record ready`、`record stop` 用旧的判法，只拒帧是基准比例的更大显示
+    （1920×1080 这类）的录制，别的照旧出包（`display_base.rs` 260–286）；要按的路上它的第一帧也先这样判一次。
+  - **离线识别收同比例的大图**（DA-5cd 和并车）：`recognize`、`detect-page`、`current-page`、`is-visible`、离线的 `observe`、`wait`，存图上的 `do`、`ensure`、`tap-target`、`navigate` 演练，
+    收和包同比例、不比包小、同朝向的存图（5/4 也收），用同一个函数缩到基准再判，回答带基准形的 `frame_coordinates`；别的尺寸拒 `lab_scene_size_unsupported`，带帧闸的原因词
+    （`layout_undeclared`、`scale_below_base`、`orientation_mismatch`）。基准尺寸的图回答逐字节不变。
+  - **Lab 的 MCP 服务器和 Lab 的普通按**（LW-1，§1.435 的五件逐件核过）：
+    1. `ac_tap_target`、`ac_navigate` 写明只在存下的帧上做规划、什么都不按：实机上按包里的目标用 `do --capture`（带 `--package` 和目标、元素或 `--tap x,y`），走路由用 `ensure --capture`（带 `--to`）；
+       两行 `writes` 为 false、`runtime` 为 `offline`、不发请求，MCP 标成只读。不带 `--dry-run` 时内核照旧拒 `validation_failed`，文字点名这两条路（`crates/lab/src/drive.rs`）。
+    2. `ac_run_start` 带 `wait`、`ac_run_show` 读本进程提交的运行：回答不再带整条关联的账本记录（`events`，实走时 106 到 514 KB），改给 `events_total`、`truncated`（拿掉的部分的 JSON 指针）和 `rest`
+       （`ac_run_evidence` 按请求号读步骤，`ac_events` 按关联号读记录）；回执（状态、结果、`task_result`、步数、终页）和运行的状态照留（`apps/actinglab-mcp/src/budget.rs` 210）。命令行照旧打印整行。
+       回执和警告不截，还放不下照旧答 `output_budget_exceeded`。
+    3. `ac_status` 的 `sections`，`ac_events` 的 `type`、`event_type`、`exclude_event_types`、`origin_module` 在参数表里列出能用的词（`enum`），词表外的词在发出之前就拒（`arguments_invalid`，`not_recognised`；
+       `apps/actinglab-mcp/src/tools.rs` 250）。
+    4. 普通 `tap`、`swipe`、`long-tap`（经 `serve` 子进程的 `ac_tap`、`ac_swipe`、`ac_long_tap` 同）：每个实例上先在自己的连接上读一次 `Status`；能力表说这下按的输入是模拟器自己的接口
+       （`evidence_ref` 为 `nemu_ipc`）时，经 Runtime 截一帧（只取帧的引用），在这一帧上按，回答写 `input_frame`；Runtime 已不持有那一帧（`input_frame_unavailable`）时重截一次、在同一个租约上再发一次，
+       只这一次，回答写 `input_frame_captured_twice`；别的实例什么都不截，照旧发出。读状态失败不拦按：不带帧发出，回答（失败时是拒绝的 `details`）的 `touch_backend_warnings` 写明
+       （`apps/actinglab/src/commands/device_commands.rs` 775–896）。**代价**：每次普通按多读一次状态，要帧的实例再多截一帧；Runtime 连得上却不应答时每步最多等 5 秒（`crates/runtime-client/src/client.rs` 89），
+       最坏约 20 秒以后才发出（连接、Health、绑定、Status 四步，独立审查的推算；那时按也发不成）。`key`、`text` 在这种输入上照旧被拒（`nemu_input_capability_unsupported`）；拒绝以后读一次状态，
+       能力表说不支持时 `details.hint` 写改用什么，码和退出码不变。
+    5. 经 MCP 发起的运行，来源照旧记成 `cli`：核过是设计如此（LAB-6S2-E 之前服务器进程里的请求信封是 (Cli, Cli)），MCP 手册第 8 节写明，没改。
+  - **`record ready` 认得游戏和服**（S2-1b）：收 `--game`、`--server`、`--locale`，读法、校验和 `record stop` 是同一个函数；给了就算知道，但 `record ready` 什么都不写，之后的 `record stop` 该给的照旧要给。
+    在安装里没给游戏和服时，取安装配置里这一台在 `policy.facts.instances` 的那一行，要么两样都取、要么都不取（`crates/lab/src/recording_api.rs` 268）；区域没有配置的地方。回答多了 `sources {game, server, locale}`，
+    词是 `command_line`、`recording`、`lab_config`、`installation_config` 之一，不知道是 `null`。已出过包的录制答包里的值，给的值不同时出警告 `record_stop_option_conflict`。
+    **`record stop` 在安装里什么都没给时，现在用安装配置那一行出包，以前拒 `record_locale_missing`**；旗标和录制里记着的永远优先。
+  - **宿主：平常什么都碰不到。**
+    - **#475**：「租约已过期、关会话被拒」又有五条路只围住那一台，不再停掉整个 Runtime：失败的运行把钥匙交给自己的恢复阶梯（`host/lease.rs` 2203–2224）、抢占的移交（`perform_transfer`，964；两处抢占 1149、1959）、
+      应用命令的准备（`host/input.rs` 737–770）、后端切换（`host/backend_switch.rs` 427–435、557）、成员切换（`host/switch.rs` 867–884，只有一台几个应用时走得到）。记录和 #458、#461 一样：`runtime.failed`
+      （阶段 `runtime_lifecycle_session_close`，点名钥匙的租约）、`instance_resources_fenced`（原因 `lease_expired`）、钥匙的结束；欠的那次关会话在钥匙结束时补一次，期间设备不交给任何人，别的实例照常派单。
+      调用方各答自己的：运行答它自己的失败（阶梯在关闭之后排队）；抢占要给的认领留在队里原位（`queued`）；应用命令以 `lease_expired` 失败，没有命令发到设备；后端切换答 `backend_switch_refused` 带 `instance_fenced`；
+      成员切换答 `application_switch_failed`（步骤 `stop`），被围的是被停的那个成员。认这个拒绝要操作名 `begin_destructive_resource_close` 和码 `lease_expired` 都对上、且不在停机中（`host/resource_close.rs` 492–497）。
+      围栏照旧由自检、恢复或围栏自己的复查解开。**仍然致命的**照旧：停机中的拒绝、没有围栏能接的拒绝，和这几条路上 Runtime 自己的故障（拒绝的记录写不进、锁中毒、所有者的日志或标识出错、调度的不变量出错、补关时出致命错）。
+      **第六处这一版没修**（看板 #475）：连接准备过程中在持有的钥匙下关会话（`prepare_connection_attempt`，`host/resource_close.rs` 2156 起，留着的会话的关闭在 2278），钥匙在准备过程中过期，拒绝照旧致命；
+      人做的自检、模拟器控制、恢复阶梯的准备、模拟器监视、后端切换的候选和恢复都走得到。
+    - **#437 G1：今天哪个安装都走不到**：加载配置时一律拒绝一台几个应用（`several_members_unsupported`，`apps/actingd/src/config/device_group.rs` 377–383）。为那一天加的：一个成员的关会话结果不知道（不是被拒）时，
+      它被围住，设备为它挡着（`ResourceFence::holds_device`，只在内存里），直到它的围栏由一次自检通过的准备解开：别的成员的认领留在原位；操作员类的请求当场被拒 `device_held_for_member_close`（`alias` 是被围的成员）；
+      派发等 `device_group_waiting` 的 `close_unconfirmed`；状态行带 `device_held {device_group_wait: close_unconfirmed, alias}`（`host/read_events.rs` 489、629）。开机准备被这道挡拒掉的成员，由租约清扫在解挡、
+      设备空闲（没有租约、没有冷却、队里没有现在够格的条目）以后排一个 Runtime 自己的自检认领，由那台设备自己的 worker 在认领的钥匙上做开机准备（主机任务 `HeldStartPreparation`，`host/resource_close.rs` 1589、1792），
+      清扫线程不做设备步骤。操作员的认领等到期限时设备还挡着，`lease_queue_expired` 的 `caused_by` 点名挡着设备的成员（`host/lease.rs` 4311 起）。关会话在开始之前就被拒的（A64、#456、#458、#461、#475）
+      照旧只围、不挡设备。一个成员自己的闸挡着的条目不再卡住同一台上别的成员（发放在设备的准入守卫和队列顺序锁下重选、重核，按那一条的请求号准备）。单独一台的实例：`device_held_for` 不拿锁直接答没有
+      （`host/device_group.rs` 153–160），队列选的还是同一条。
+
+- **改了什么**（Lab、MCP 服务器、内核、宿主）：
+  - **Lab**：DA-5ab（§1.436）的在线观察五条路都过内核的 `lab_scene_on_base`，Lab 操作的输入走 `lab_display_map` 和适配壳的 `DisplayMap::send_input`；DA-5cd（§1.437）的存图走 `crates/lab/src/display_base.rs`
+    的 `scene_in_base`，调同一个内核函数；基准尺寸只有一处（`STANDARD_PACK_BASE_SIZE`，`crates/actingcommand-contract/src/standard_pack_display.rs`）；录制头的 `LabRecording::base_size` 没有时不写出，
+    没有基准的录制写出来和以前逐字节一样；三个码由一个判断（`recording_not_base`）给。`detect-page`、`tap-target`、`navigate` 的拒绝在命令行和 MCP 上带出 `values`（`cli_module/own_line.rs`）。
+    S2-1b（§1.434）由一个函数定游戏和服（`package_identity`），安装那一行用 `packs` 现成的读法读（`crates/lab-ops/src/packs.rs` 437、502），只在前三处给不全时才打开，只取这一台的游戏和服，别的不留、不打印。
+  - **MCP 服务器**（LW-1）：`budget::run_line`、`tools::WORDS`、两个只规划的工具的元数据；`lab-ops` 给门测用的 `handed_refusal` 只在测试和特性 `test-hooks` 下编译，正式构建不带。
+  - **内核**（DA-5ab）：帧闸拆成 `frame_map` 和 `validate_pixels`，`validate_frame` 照旧调这两个（码、阶段、缩图参数不变）；包内运行的输入也走 `send_input` 这一个出口。`ContainedPageObservation::validate`
+    收的投影帧是观察帧本身，或同比例、不大于它的缩小帧，拒有一边为 0 的（`crates/actingcommand-contract/src/runtime/online_observation.rs` 296、324）；它只知道两个尺寸、不知道包，所以 5/4 的投影也收。
+  - **宿主**（#475 §1.432、G1 §1.433，并成一趟车）：五处都落到 `fence_expired_close_of`；欠的关会话按租约记（`BTreeMap<LeaseId, BTreeSet<InstanceId>>`，`host.rs` 6725，只在内存里），一个租约可以欠几个成员的。
+    G1 的挡：`ResourceFence::holds_device`、`device_held_for`、调度库的 `ClaimGate::DeviceHeld`（`crates/scheduler/src/lib.rs`）；发放在守卫下重选，`prepare_queued_grant_of` 只准备选中的那一条；
+    新的清扫步骤和主机任务见上；8 个新位置名。`host/facts.rs` 的显示事实键改用契约库的常量（同一个拼写）。门测 `gate_epoch_close` 把崩溃子进程的报错读回来写进失败信息，不改行为。
+
+- **部署和退路**：照 v0.12.66 那次的做法，用在线 v0.12.66 留下的那份 `actinglab` 跑 `release stage`、`deploy <提交> --plan` 预看、`deploy <提交> --detach` 实做，再用 `op status` 看结果。
+  救急模块（`crates/lab-rescue`）自 v0.12.66 只改了一个测试文件（`install/gate_429_r0b_pairing.rs`，钉 [3, 10]）。
+  - **部署前不留开着的录制**：状态里有暂停原因是 `lab-record-<毫秒>` 的实例，先对它 `record stop` 或 `record archive`。开着的录制按住那一台的调度；它的头里没有基准，到本版上按旧的判法走。
+  - 部署以后 `op status` 的 `mcp_servers_on_old_images` 照旧列出还跑在改名放到一边的旧映像上的 MCP 服务进程：本版没删请求种类，旧进程照样能用，但它们答的是旧的工具表和旧的运行回答
+    （没有词表、跑完的运行照旧可能超上限、`ac_record_ready` 没有三个新参数）；要新的，重开那个客户端的会话。
+  - **退路**：回 v0.12.66 用留着的 v0.12.66 那份 `actingctl install`（`install undo`、`install resume`、`install release-hold`）或救急模块的退回：账本的修订和记录种类都没变，`runtime-client` 的边
+    [3, 9] 和 [3, 10] 相交，回退门放行。退回之前把在本版上开的录制做完（`record stop` 出的包格式没变，v0.12.66 照用）：录制本身回去以后读不了。
+
+- **已知的限度**（各片审查和验收记录列的，逐条核过）：
+  - 不是基准尺寸的显示上不能录制：是拒绝，不是支持。`record start` 只知道 Runtime 上次看到的显示（最近一次任务的第一帧），没跑过任务、改过分辨率以后靠第一帧那一道核；它的拒绝写尺寸，不写看到的时间。
+  - `tap-target`、`navigate` 没有在线的路，只在存下的帧上做规划。
+  - 模拟器自己的输入（`nemu_ipc`）发不了 `key`、`text`，回答带改用什么的提示。
+  - 契约里 `record_*` 拒绝的退出码 3 是带 `--via` 那一行的；Lab 自己的命令行和经 `serve --stdio --front mcp` 都答 1（`apps/actinglab/src/cli_module/own_line.rs`）。`lab_scene_size_unsupported` 同样：
+    带 `--via` 那一行是 2，自己的命令行答 1。
+  - 一个游戏的启动包在 3840×2160 上冷启动停在标题页：服务器那一行小字缩下来以后分数贴着阈值，是资源侧的事，不是程序的。4K 一帧缩到基准多花的时间没量。
+  - #475 的第六处（见上）没修。G1 的 worker 跑被挡的开机准备时中途出错，「已排」的标记会一直留着，直到那个成员的一次准备拿到钥匙或租约、或 Runtime 重启，和围栏复查一样。
+  - 六片都没在真机上跑过；映射显示上的观察、点按和录制被拒，要等上线以后在 1920×1080 的实例上走一遍。
+    部署以后在两台真机实例上核过（看板 #421）：基准尺寸的那台上，经 MCP 不给帧的一下普通按发出去了，跑完的运行的回答装得下，`record ready` 只说缺 `locale`，
+    录制开得了、也归档了；一台 1920×1080 的实例上，Lab 的观察答的是基准坐标，经包的一下按在应用不在前台时被拒、拉到前台以后发出去了，`record start` 被拒。
+
+配置：按代码、`distribution/windows/component-interfaces.json` 和 `contracts/component-interfaces.md` 核过：
+
+- 接口：**`runtime-client` 从 [3, 9] 升到 [3, 10]**（`component-interfaces.json` 8；契约表 `runtime-client` 第 10 行，`contracts/component-interfaces.md` 155）：状态回执的实例行多了可选成员 `device_held`
+  （`crates/actingcommand-contract/src/runtime.rs` 1654–1658），而 `RuntimeInstanceStatus` 拒未知成员（1620）。最低值留 3：加载时一律拒绝一台几个应用，今天没有安装能填出这个成员；放开一台多应用的那一片把最低值升到 10。
+  钉在修订 9 的客户端：不带这个成员的状态照旧解得开；带的那份整个解不开（`runtime_receipt_decode_failed`，锁住连接），今天出不来。**修订 10 也是投影放宽的那一版**（DA-5ab）：
+  显示不是包的基准尺寸时，观察的投影帧是缩到基准的帧，`ContainedPageObservation::validate` 收观察帧本身或同比例、不大于它的缩小帧（`crates/actingcommand-contract/src/runtime/online_observation.rs` 296、324）；
+  修订 10 以下的客户端库只收观察帧本身，判这种回执（`ObserveContainedPage`、`RunContainedLabOperation`）无效并锁住连接；基准尺寸的显示上没有差别（见「配对」）。其余逐行和 v0.12.66 一样：`actingd-config` [5, 33]、`install-selection` [1, 1]、
+  `install-control` [0, 0]、`ledger` [3, 8]、`package` [3, 15]、`runtime-outcomes` [1, 1]（`component-interfaces.json` 4–10）。没找到该升没升的：账本没有加记录种类、成员或修订（`crates/ledger` 一个文件没改）；
+  录制头的 `base_size` 不属于表里任何一个接口，旧版本读不了它写在「退回」里。
+- **Runtime 改了的文件**：宿主 `crates/runtime-host/src/` 的生产代码 `host.rs`、`codes.rs` 和 `host/` 下的 `backend_switch.rs`、`contained_task.rs`、`device_group.rs`、`facts.rs`、`host_claims.rs`、`input.rs`、
+  `lab_operation.rs`、`lease.rs`、`online_observation.rs`、`read_events.rs`、`resource_close.rs`、`resource_fence.rs`、`switch.rs`，测试 `tests.rs` 和 `tests/` 下的 `gate_392_da3.rs`、`gate_392_da5ab.rs`、`gate_437_g1.rs`、
+  `gate_458_close_isolates.rs`、`gate_epoch_close.rs`；调度库 `crates/scheduler/src/lib.rs`；内核 `crates/execution-kernel`（帧闸、在线观察、只读回答）；显示适配壳 `crates/display-adapter`；契约库 `crates/actingcommand-contract`；
+  `crates/policy/src/codes.rs`（一个词）。`crates/ledger`、`crates/runtime-client`、`crates/runtime-config`、`crates/resource-tooling`、`apps/actingd` 一个文件没改；`crates/lab-rescue` 只改了一个测试。
+- 配置键：没有加的、没有去掉的；`actingd.defaults.json` 一字没改，sha256 仍是 `e14b0ced7040a6d05046edddd9b0c8ee95a53de4b65d69fcc7d9dae17a433343`；两个配置模板和 `apps/actingd/src/config/manifest.rs` 没改。
+- 结果码：加了 4 个，没有 `retired`。按片：G1 加 `device_held_for_member_close`（runtime-host，error，拒，退出码 1）、`device_group_wait` 的词 `close_unconfirmed` 和 8 个位置名（`*held_start_preparation*`）；
+  DA-5cd 加 `lab_scene_size_unsupported`、`record_display_not_base`、`record_size_not_base`（lab，error，都是拒）和 `ready_missing` 的词 `size_not_base`；S2-1b 加词表 `ready_source`（4 个词，只在回答里）；
+  LW-1 只改了 `nemu_input_capability_unsupported`、`nemu_input_frame_required` 的 `common_causes`、`handling`；DA-5ab 只改了 `display_map_unresolved` 的说明（G1 也改了 `device_group_waiting` 的说明）。
+  合计 3981 个码（在用 3893，`retired` 88），1772 个位置、31 个分片；键 681，词表 259，词 2005；在用码按类别 error 3383、warning 156、info 212、success 125、fatal 17；审阅定稿的在用码 154 个。
+  本版的发布文件 `contracts/outcome-codes/released/0.12.67.json`：0 个码、0 个位置（新码都还没定稿）；索引由脚本生成，仍是 32 个文件，核过是最新的。
+- Lab 的操作表仍是 190 行，没加没减；改了 13 行：`do`（请求加 `ObserveReadonly`）、`ensure`、`wait`（输出加 `frame_coordinates`）、`key`、`text`（请求加 `Status`，说明写 `details.hint`）、`tap`、`swipe`、`long-tap`（说明）、
+  `tap-target`、`navigate`（说明，`writes` false、`runtime` `offline`、不发请求）、`record ready`（参数从 3 个到 6 个：`game`、`server`、`locale`；输出加 `sources`）、`record start`（请求加 `InstanceFactSnapshot`，
+  输出加 `display_last_observed`）、`record stop`（说明）。命令清单仍是 46 个顶层分派臂、106 条命令。Lab 的 MCP 服务器在 Windows 上仍是 163 个工具：五个参数加词表、`ac_record_ready` 多三个参数、
+  两个只规划的工具的说明和只读标记、运行的回答、服务器说明里的坐标；第一代 MCP 服务器仍是 46 个工具：`ac_lab_observe`、`ac_lab_do` 的说明和结果说明写两种 `frame_coordinates`，概览的结果说明加 `device_held`。
+  README 两种语言只把工具表标题改成 v0.12.67。两个压缩包的文件表不变（`.github/workflows/windows-remote-build.yml` 没改）：没有新文件、没有去掉的文件。
+- 不稳定表仍是 FLK-08、FLK-10、FLK-14、FLK-15、FLK-16（`ci/flaky-tests.toml`，本版没动）。看板 #71 另登记了 FLK-17（宿主的一条门测在宿主并车较早的头上红过一次，子进程的报错当时没留下；
+  这条测试现在把它读回来），没有镜像进这张表。
+
+升级与退回（救急模块部署、退回、撤销那几条路，`crates/lab-rescue/src/install/` 的 `plan.rs`、`update.rs` 自 v0.12.65 没改，v0.12.66 说明里引的行号对本版也对；`actinglab deploy` 和 `actingctl install` 走的都是它）：
+
+- **v0.12.66 的安装工具装本版：两面都能装，不用任何标志。** 计划的边：`ledger` 两边 [3, 8]，`previous_max_in_next` 过，`one_way` 不触发，`ledger_verify` 为 false（`install/plan.rs` 924）；`runtime-outcomes`、
+  `install-control` 的边过；**`runtime-client` 和 v0.12.66 那次不同**：`installer_meets_previous` 是安装工具 I [3, 9] 对在线的 Rp [3, 9]，`installer_meets_next` 是 I [3, 9] 对本版 R* [3, 10]，两个范围相交就过
+  （324–340），两条都过；`installer_knows_keys` 过；`defaults_diff`（583–607）没有一行；文件计划里没有 `new`；`package` 的 `bundle_max_in_next` 照旧每个游戏一条 `pack_declaration_unknown` 警告，不挡。
+- **本版第一次启动多写的**：没有。G1 的清扫步骤只在有成员欠准备时才排认领，单独一台的实例欠不出来；#475 只改租约结束那几条路；`config.selection` 的默认值哈希不变。v0.12.66 的配置文件照收；
+  `standard-pack check` 没改（`crates/resource-tooling` 没动），对今天的根答法相同。
+- **退回 v0.12.66**：回退门（`install/update.rs` 390–447）只放行这次部署替换掉的 v0.12.66；第 1 部分的边都过（`runtime-client` [3, 10] 和 [3, 9] 相交）；第 2 部分用 v0.12.66 自己的 `actingledger events`
+  读部署以来的每一页：本版不写新的记录种类，新码在旧的读者那里照原样读成收到的拼写（`crates/actingcommand-contract/src/outcome.rs` 690），过。
+  - 读不了的：**在本版上开的录制**（头里的 `base_size`，v0.12.66 读 `recording.json` 拒未知成员）。在映射显示上做的 Lab 操作，它的取证交给 v0.12.66 的 `resource restore` 校验时投影帧对不上，被拒；今天在跑调度的实例不在映射显示上。
+  - 本版设下的围栏、欠着的关会话、设备的挡和欠着的开机准备都只在内存里（`crates/runtime-host/src/host.rs` 6656、6719、6725）；退回要停下 Runtime，v0.12.66 起来时每一台照常准备、自检，没有带过去的。
+    账本里那几条记录（带 `lease_expired` 的 `runtime.failed`、`instance_resources_fenced`、租约的结束）是 #458 自 v0.12.60 起就写的同样记录，v0.12.66 照读。
+  - **除了在本版上开的录制，这些都不让安装的状态或日志对 v0.12.66 读不了。**
+
+配对：
+
+- **控制台 UI**（UI main `41600540` 钉 Runtime v0.12.63 `3581a8af`，`Cargo.toml` 41–46；它声明 `runtime-client` [3, 9]，`crates/acui-setup/component-interfaces.json` 8）：`ui_meets_next` 是 [3, 9] 对 [3, 10]，过。
+  碰得到它的有两样：
+  - 带 `device_held` 的状态：它钉的客户端库整份解不开，今天出不来（见「配置」）；不带的照旧。
+  - **映射显示上的投影**：它钉的库要投影帧和观察帧一样大，所以一个 `ObserveContainedPage` 或 `RunContainedLabOperation` 的回执，只要来自显示不是包的基准尺寸的实例，就被判无效并锁住那条连接
+    （v0.12.63 的 `crates/runtime-client/src/client/online_observation.rs` 104–127、`client/lab_operation.rs` 234–257）。控制台的 main 不发这两种请求（它的源码里没有），所以今天碰不到；基准尺寸的实例上什么都不变。
+    **控制台在对这种实例发观察或 Lab 操作之前，以及放开一台多应用的那一片（最低值升到 10）之前，必须改钉到本版或更新的 Runtime。**
+  - 认录制按住（`lab-record-<毫秒>`）的改动仍在控制台仓开着的 PR #182 里，读的时候没合进 main。
+- **部署工具包**（这次走 Lab 的行）：两个构建清单的 `speaks` 是 `actingd-config` [5, 33]、`install-selection` [1, 1]、`install-control` [0, 0]、`ledger` [3, 8]、**`runtime-client` [3, 10]**、`package` [3, 15]、
+  `runtime-outcomes` [1, 1]；默认值文件的哈希不变；`git diff --stat v0.12.66 <提交> -- apps/actingd/src/config/manifest.rs distribution/windows/actingd.defaults.json` 什么都不打印；不过的边没有，`runtime-client` 的两条边
+  写着 I [3, 9]、Rp [3, 9]、R* [3, 10]，都过；警告照旧是每个游戏一条 `package` 的 `bundle_max_in_next`；没有新文件、没有去掉的文件；运行中的 `actingctl.exe`（MCP 服务）、`actinglab-mcp.exe` 和做计划的
+  `actinglab` 改名放到一边，别的跑着的程序文件挡住，和 v0.12.66 一样；`standard-pack check` 不出新的警告码；启动日志不多一行；**部署前核没有开着的录制**。
+- **热放置工具包**：本版没有让它变的东西：`place`、`standard-pack check` 没改，`actingctl` 只改了 MCP 的工具说明和结果说明。重钉要换的照旧只是构建值；`actingd_config` 5,33 和默认值哈希不变。
+- **两个 MCP 服务器**：工具一个没增减；改的是参数表、说明和运行的回答（见「配置」）。旧映像上的进程照旧能用，答旧的工具表。
+
+运行上的变化：
+
+- 从 v0.12.66 部署，经 Lab 的 `release stage`、`deploy`、`op status`：不用标志，没有 `ledger_verify`，`defaults_diff` 没有行，没有新文件；`runtime-client` 的两条边都过；部署前不留开着的录制。
+- 分辨率不是 1280×720、但和它同比例的实例上，Lab 的观察、点按和离线识别能用，说的是基准坐标；包内运行不变。
+- 这种实例上不能录制：录制一律在 1280×720 的实例上做。
+- 普通按每次多读一次状态；模拟器自己的输入上先截一帧再按。
+- 安装里 `record ready`、`record stop` 不给游戏和服也行，区域仍要给。
+- 宿主又有五条路只围住那一台；一台几个应用时为成员挡设备，今天走不到。
+- 退回 v0.12.66 开着；本版上开的录制回去以后读不了。
+
+本版合并的 PR：
+
+- #1776 #463 S2-1b（登记 §1.434）：门行 `#463 S2-1b`（`gate_463_s21b`，12 条）。
+- #1779 #434 LW-1（§1.435）：门行 `#434 LW-1` 和两轮小修的行（13 条）。
+- #1780 #392 DA-5ab（§1.436，同时是 Lab 的并车）、#1781 #392 DA-5cd（§1.437）：门行 `#392 DA-5ab`（16 条，含改名的 DA-3 那一条）、`#392 DA-5cd`（19 条）、并车的 `#392 DA-5`（12 条）；
+  3 个测试名记进 `ci/retired-gates.toml`。
+- #1778 #437 G1（§1.433，同时是宿主的并车）、#1777 #475（§1.432）：门行 `#437 G1`（16 条）、`#475`（`gate_458_close_isolates` 的 `close475_*`，13 条）。
+
+## v0.12.66
+
+本版是 v0.12.65 之后的 2 次合并、3 张 PR：截图提速的并车 #1772（#463 S1-10 #1772 自己，带 S1-9 #1773）和直接合并的 #1774（#461）。车上除了两张的头和合并，有两个并车自己的提交：
+照 #1773 的审查给 S1-9 那一节契约补三句（放租约失败报在哪、一台几个应用时占住的是整台、两个时刻不再含放租约的时间），登记 §1.429、§1.430 各补一句点名这趟车。
+内容是：Lab 截的每一张图不再在账本里白等约 0.72 秒；录下的一下按把租约拿到点后的截图做完再放；租约已过期、关会话被拒时，又有三条路只围住那一台，不再停掉整个 Runtime。
+**生产上跑的是 v0.12.65（2026-11-16 13:14 起，经 Lab 救急模块部署）**：一台实例在跑调度的例行任务，其余实例暂停着、模拟器关着。从 v0.12.65 装本版：
+**Lab 救急模块的 `deploy` 和 `actingctl install` 两面都能装，不用任何标志，没有 `ledger_verify`，`defaults_diff` 没有一行，没有新文件**。接口一个没动，配置键没加，结果码没加。
+**本版改了 Runtime 自己的程序**（前三版只改了 Lab）：账本和宿主各有三个文件的生产代码改了（见「配置」），没有新的记录、格式或修订。**退回 v0.12.65 一直开着**，退回之前不必先做什么。
+
+- **为什么有这一版**：v0.12.64（03:32）和 v0.12.65（13:18）上线后都在一台真机实例上走了录制（看板 #463）：录下的一下按之后只留下两张已经停稳的帧，第一张在按下后约 2.2 到 2.6 秒，
+  下一张再隔约 0.9 秒，过渡画面一张都没有。生产账本上读出两笔：
+  - **v0.12.65 说明里「每一张……都固定多花约 0.72 秒，花在哪一步还没查到」这一句要改：查到了，花在账本收钉上**。Lab 截的每一张图，从 `artifact.pin_recorded` 到 `capture.completed`
+    都隔 720 到 755 毫秒（会话冷热都一样），同一台、同一天调度运行的截图只隔 1 毫秒。截图的线程把钉交给账本后同步等写入端答复；写入端收下理由是 `Lab` 的钉之前要问
+    「触发它的那条记录和 Lab 有没有关系」（`crates/ledger/src/global/retention.rs` 785–791），而这一问每次都把整部账本的 Lab 关系（每个 Lab 锚点的请求号、关联号，再加上点名它们的全部运行）
+    读一遍（`history.rs` 409–418），写入端没有缓存，Lab 的历史越长越慢。调度运行的钉理由是 `explicit`，不问这一句。
+  - 按下后第一张多花约 1.6 秒重开会话：按下用的租约一放，同机有两台以上登记的实例用 Nemu 时（多 Nemu 闸门，`crates/runtime-host/src/host/resource_close.rs` 115–155），会话就关了。
+  - 第三片：读 #458 的修法时看出，还有几条路会因为一台实例的租约过期而停掉整个 Runtime（看板 #461）。
+
+- **在用的安装在部署时和以后碰到的**（逐条核过代码）：
+  - **Lab 截的图都快了，不只录制的按下**（S1-10）。钉的理由是 `Lab` 的，是请求信封为 (Lab, Lab) 的截图（`crates/runtime-host/src/host/frame_retention.rs` 104–112）。`actinglab` 开的每一条连接都是
+    （`apps/actinglab/src/main.rs` 435–469），所以从命令行跑的 `capture`、`frame`、`observe --capture`、`do --capture`，录制的按前、按后截图，以及两个 MCP 服务器经 `actinglab` 子进程做的
+    （Lab 的 MCP 服务器调试、创作模块的行，例如 `ac_lab_observe`、`ac_do`；第一代的 `ac_lab_observe`、`ac_lab_do` 和录制工具）都快了。**Lab 的 MCP 服务器在自己进程里服务的核心行
+    （例如 `ac_frame`）和第一代的 `ac_observe` 不在其中**：它们用 (Cli, Cli) 信封连（`crates/lab-ops/src/front.rs` 103、115–133，`apps/actinglab-mcp/src/runtime.rs` 77–78，
+    `apps/actingctl/src/mcp/runtime.rs` 261–265），钉的理由是 `explicit`，原来就不卡，本版对它们不变。研读估计两片合起来点后每张约 0.1 秒（0.09 到 0.11）：**这是预计，部署以后量一次**。
+  - **录下的一下按占住这一台的队列，直到点后的截图做完**（S1-9）：从按下到点后最后一张，最长是点后的等待和上限（`after_ms + still_max_ms`，默认 100 + 5000 毫秒）再加一张截图
+    （帧失效重试那一次再多一张截图和一次状态读）。录制自己的按住本来就把调度挡在外面。命令持着租约时续租；命令被杀，连接一断，Runtime 就收回租约。
+  - **下一下按之前那一张又是冷的**：租约一放，多 Nemu 闸门下会话照旧关，所以下一下按之前那张截图要重开会话，约 1.6 到 1.7 秒（v0.12.64 真机上第一下按之前那张重开用了 1682 毫秒）。
+    v0.12.65 上这张是热的，因为前一下按的点后截图已经把会话重开了。等的地方从按下之后（挡住了过渡）挪到下一下按之前（只是让智能体多等）。
+  - **#461：平常什么都碰不到**（租约一般在到期之前就放了）。碰到「租约已过期、关会话被拒」的三条路：客户端断开连接、输入做到一半租约过期随后失败、后端故障的收尾（运行或应用命令失败后的收尾）。
+    原来整个 Runtime 停；现在只围住那一台，原因词 `lease_expired`，记录和 #458（v0.12.60 起）在过期那条路上写的一样：`runtime.failed`（阶段 `runtime_lifecycle_session_close`，点名租约）、
+    `instance_resources_fenced`、`lease.released`。欠的那次关会话在租约结束后补一次，期间设备不交给任何人，别的实例照常派单；失败的输入只答它自己的失败，不再把所有者记成「未确认」。
+    围栏照旧只有自检通过的准备才解（围栏自己的复查，默认每 5 分钟一次、最多 12 次；人做的恢复、自检、模拟器启动或重启；恢复阶梯的重新准备；`host/resource_fence.rs` 19–22、622–657）；
+    客户端的租约和输入算人手的活，默认（`recovery_ladder.rules.direct_runs` 为 `exempt`）这样的围栏立刻等人，调度运行的后端故障收尾交给恢复阶梯。**仍然致命的**是 Runtime 自己的故障：
+    正在停机、拒绝的记录写不进、锁中毒、没有围栏能接、补关时出致命错、结束租约的那几条记录写不进、步骤状态不一致（`resource_close.rs` 72–82、478–483、534–546、600，`lease.rs` 2767–2785）。
+
+- **改了什么**（账本、Lab、宿主）：
+  - **账本：收 Lab 的钉先按索引点查**（S1-10，§1.430）。写入端答「这条记录和 Lab 有没有关系」时，先看有没有 Lab 锚点（来源 `lab` 或类型 `lab.request` 的记录）在它之前点名它的请求号或关联号：
+    先查同一批里还没存的，再用 `ledger_links_request`、`ledger_links_correlation` 两个索引查已存的（一条语句、最多一行；`crates/ledger/src/global/history.rs` 426–452，`sqlite.rs` 5037–5069）。
+    命中就答「有关」；没命中照旧整读，认只靠运行相关的记录。「有关」本来就是请求号、关联号、运行三种取或，点查证明的是前两种之一，所以每一条的答案都和原来一样（独立审查在 12000 个
+    随机例上比过，没有一处不同）。保留规则另外三处问同一句的地方（封存范围里的记录、逐出意图受不受 Lab 保护、逐出关闭的冲突）也先点查，决定不变。两个索引从第一版 SQLite 账本结构起
+    就有（`sqlite/schema.sql` 26–27），清理器早就点名用它们。这条检查护着的东西（Lab 的钉只落在 Lab 的范围里）一点没松。
+  - **Lab：录下的一下按把租约拿到点后截图做完**（S1-9，§1.429）。`tap`、`swipe`、`long-tap` 带 `--record` 时，输入代理连同租约归整次按下：第一次输入时取，帧失效重试那一次用同一个，
+    点后截图期间一直拿着，`record_press` 答完以后放，什么结果都放（`apps/actinglab/src/commands/device_commands.rs` 856–868、1020–1043）。点后某张截图失败：已截的先记下再放；按下结果不明、
+    输入被拒：不截点后的图，立即放。`input_outcome.close_stage`（失败时加 `close_error`）照旧说放得怎样，放之后才填；按已发出、录制随后报错时，放失败只写在那个错误细节的 `input_outcome` 里。
+    按下的 `executed_at_unix_ms` 和 `waited_ms` 的起点改在放租约之前取，不再含放租约（多 Nemu 闸门下就是关会话）的时间。不变的：先截图、再按在这一帧上；只按 Runtime 自己截的帧
+    （持着租约时，持有者自己的不带键只读观察照常收，帧仍算观察者的）；不带 `--record` 的按和 `session app … --record`；步骤表的结构（`contracts/lab-recording.md`「The lease of a recorded press」）。
+  - **宿主：租约过期后关会话被拒，又有三条路只围住那一台**（#461，§1.431）。客户端断开（`end_connection`，`crates/runtime-host/src/host/requests.rs` 1325，是 `connection_boundary` 末尾原样拆出来的）
+    和后端故障的收尾在 `end_lease_ordered` 里传新的 `HolderEnd`（`host/lease.rs` 2520–2531），`close_instance_resources` 把它接到 #458 的 `fence_expired_lease_close` 上
+    （`host/resource_close.rs` 322–329）；欠着关会话时不移交（`lease.rs` 2549–2554），租约结束后在同一把准入锁下关一次（`cleanup_token_guarded`，2482–2496）。失败的输入在
+    `finish_input_failure` 里碰到这个拒绝，照样隔离、记下欠账（`resource_close.rs` 1259–1279）；输入自己的租约结束时再碰到它，不再多记，结束后关一次。认这个拒绝要操作名和码两样都对上
+    （`begin_destructive_resource_close` 的 `lease_expired`，`resource_close.rs` 478–483），不会误抓别的错误。
+
+- **部署和退路**：照 v0.12.65 那次的做法，用在线 v0.12.65 留下的那份 `actinglab` 跑 `release stage`、`deploy <提交> --plan` 预看、`deploy <提交> --detach` 实做，再用 `op status` 看结果。
+  救急模块（`crates/lab-rescue`）自 v0.12.65 一行没改。部署以后 `op status` 的 `mcp_servers_on_old_images` 照旧列出还跑在改名放到一边的旧映像上的 MCP 服务进程：本版没改工具、
+  没删请求种类，旧进程照样能用。
+  - **退路**：回 v0.12.65 用留着的 v0.12.65 那份 `actingctl install`（`install undo`、`install resume`、`install release-hold`）或救急模块的退回：账本的修订和记录种类都没变，回退门放行。
+
+- **已知的限度**（各片审查和验收记录列的，逐条核过）：
+  - **每一下按之前那张仍要重开会话**（约 1.6 到 1.7 秒）。要去掉它得改「同机两台以上用 Nemu 时每次租约结束都关会话」那条规矩（#191 H），本版没动。
+  - 一台模拟器上几个应用成组的成员，录制的按下照旧被拒：按之前那张截图在租约之外截，这样的成员上一次不带键的观察结束时就关会话，按下点名的那一帧随之没了，输入被拒
+    `input_frame_unavailable`（`host/observation.rs` 272–279，`host/resource_close.rs` 765 起的 `close_keyless_session_of_group`，`host/input.rs` 132–147）。今天碰不到：构建在装载时就拒
+    每一个多成员的组（`several_members_unsupported`，`apps/actingd/src/config/device_group.rs` 293、381）。
+  - **还有五处同一种拒绝照旧停掉整个 Runtime**（看板 #475）：跑到一半交给恢复阶梯（`hand_off_to_ladder`，`host/lease.rs` 2154）、抢占后的移交（`perform_transfer`，1025）、
+    应用命令的准备（`host/input.rs` 716–740）、后端切换（`host/backend_switch.rs` 421）、成员切换（`host/switch.rs` 856）；最后一处只在一台几个应用时走得到，今天哪个安装都配不出来。
+  - S1-10 审查提的两条测试没做：只靠关联号命中的用例、给新语句的查询计划检查。没命中只是退回整读：慢，不会错。理由是 `Lab`、触发记录却和 Lab 无关的钉照旧被致命拒绝
+    （`artifact_pin_reason_conflict`），写入端结束、Runtime 停（`retention.rs` 785–791）：只在宿主自己构造钉出错时才会这样，本版没碰这条路。
+  - 三片都没在真机上跑过；点后每张多快、钉有没有命中，部署以后读一次账本才知道。
+
+配置：按代码、`distribution/windows/component-interfaces.json` 和 `contracts/component-interfaces.md` 核过，一个没动：
+
+- 接口：`actingd-config` [5, 33]、`install-selection` [1, 1]、`install-control` [0, 0]、`ledger` [3, 8]、`runtime-client` [3, 9]、`package` [3, 15]、`runtime-outcomes` [1, 1]
+  （`component-interfaces.json` 4–10，`contracts/component-interfaces.md` 自 v0.12.65 没改）。本版不写新的记录、成员或文件格式：S1-10 只改写入端怎么答，S1-9 只改租约放的时刻，
+  #461 写的是 #458 早就写的那几种记录，所以没有该升没升的修订。
+- **Runtime 改了的文件**：账本 `crates/ledger/src/global/` 的生产代码三个：`history.rs`（点查，和它在 `lab_related` 里的位置）、`sqlite.rs`（点查语句 `LAB_ANCHOR_NAMING`、`read_lab_anchor_names`）、
+  `storage.rs`（存储接口的新方法 `lab_anchor_names`；只在测试里编的内存存储也实现了）；`global.rs` 只多了测试里才编的计数器 `with_lab_relations_reads`；测试是 `tests.rs` 和新的
+  `tests/gate_463_s110.rs`。宿主 `crates/runtime-host/src/` 的生产代码三个：`host/lease.rs`、`host/resource_close.rs`、`host/requests.rs`；`host.rs` 只多了测试入口 `end_connection_for_test`
+  （只在测试里编）和注释，`codes.rs` 只多了测试里才有的拼写；测试是 `tests.rs`（注释）和 `tests/gate_458_close_isolates.rs`。Lab 是 `apps/actinglab/src/commands/device_commands.rs`，
+  测试 `apps/actinglab/tests/runtime_input_proxy.rs`。`crates/execution-kernel`、`crates/policy`、`crates/runtime-client`、`crates/actingcommand-contract`、`crates/runtime-config`、`crates/lab`、
+  `crates/lab-ops`、`crates/lab-rescue`、`crates/resource-tooling`、`apps/actingd` 和两个 MCP 服务器一个文件没改。
+- 配置键：没有加的、没有去掉的；`actingd.defaults.json` 一字没改，sha256 仍是 `e14b0ced7040a6d05046edddd9b0c8ee95a53de4b65d69fcc7d9dae17a433343`；两个配置模板和
+  `apps/actingd/src/config/manifest.rs` 没改。
+- 结果码：一个没加，没有 `retired`。3977 个码（在用 3889，`retired` 88），1764 个位置、31 个分片；键 681，词表 258，词 1999；在用码按类别 error 3379、warning 156、info 212、success 125、
+  fatal 17；审阅定稿的在用码 154 个：都和 v0.12.65 一样。#461 用的是 #458 的原因词 `lease_expired` 和它的码。本版的发布文件 `contracts/outcome-codes/released/0.12.66.json`：0 个码、
+  0 个位置；索引由脚本生成，仍是 32 个文件，核过是最新的。
+- Lab 的操作表（190 行）、命令清单（46 个顶层分派臂、106 条命令）、Lab 的 MCP 服务器（Windows 上 163 个工具）、第一代 MCP 服务器（46 个工具）都没变。README 两种语言只把工具表标题
+  改成 v0.12.66。两个压缩包的文件表不变（`.github/workflows/windows-remote-build.yml` 没改）：没有新文件、没有去掉的文件。
+- 不稳定表仍是 FLK-08、FLK-10、FLK-14、FLK-15、FLK-16（`ci/flaky-tests.toml`，本版没动）。
+
+升级与退回（救急模块部署、退回、撤销那几条路，`crates/lab-rescue` 自 v0.12.65 一行没改，v0.12.65 说明里引的行号对本版也对；`actinglab deploy` 和 `actingctl install` 走的都是它）：
+
+- **v0.12.65 的安装工具装本版：两面都能装，不用任何标志。** 两个构建清单的 `interfaces` 和 v0.12.65 的一字不差，计划的每条边和 v0.12.65 那次一样：`ledger` 两边 [3, 8]，`one_way` 不触发，
+  `ledger_verify` 为 false（`install/plan.rs` 924）；`installer_knows_keys` 过；`defaults_diff`（583–607）没有一行；文件计划里没有 `new`；`package` 的 `bundle_max_in_next` 照旧每个游戏一条
+  `pack_declaration_unknown` 警告，不挡。
+- **本版第一次启动多写的**：没有。点查只读；#461 只改租约结束那几条路；`config.selection` 的默认值哈希不变。v0.12.65 的配置文件照收；`standard-pack check` 没改，对今天的根答法相同。
+- **退回 v0.12.65**：回退门（`install/update.rs` 390–447）只放行这次部署替换掉的 v0.12.65；第 1 部分的边都过；第 2 部分用 v0.12.65 自己的 `actingledger events` 读部署以来的每一页：
+  本版的 Runtime 不写 v0.12.65 不认识的记录，过。
+  - 本版设下的围栏：围栏和欠着的关会话都只在内存里（`crates/runtime-host/src/host.rs` 6477–6479、6521–6524）；退回要停下 Runtime，v0.12.65 起来时每一台照常准备、自检，没有围栏带过去。
+    账本里那几条记录（带 `lease_expired` 的 `runtime.failed`、`instance_resources_fenced`、`lease.released`）是 #458 自 v0.12.60 起在过期那条路上就写的同样记录，v0.12.65 照读。
+  - 录制：S1-9 没改步骤表和清单的结构，只把两个时刻的起点挪到放租约之前；在本版上开始的录制在 v0.12.65 上照常结束、放开。
+  - **这些都不让安装的状态或日志对 v0.12.65 读不了。**
+
+配对：
+
+- **控制台 UI**（UI main `41600540` 钉 Runtime v0.12.63 `3581a8af`，`Cargo.toml` 41–46）：它钉的六个库里本版只改了账本，改的是写入端内部（新东西都是 `pub(super)` 或只在测试里编），
+  它离线读账本用的那一面一字没变；契约库、客户端、配置、内核、取证库自 v0.12.65 没改，接口一个没动，所以本版没有东西碰到它，下一次钉也不因本版多改什么。认录制按住
+  （`lab-record-<毫秒>`）的改动在控制台仓开着的 PR #182 里，读的时候还没合进 main（main 的 `crates/acui-app/src/ledger/resume.rs` 63–81 只认救急模块的词），账本窗口照旧把录制的按住
+  当成「别的工具设的」暂停。
+- **部署工具包**（这次走 Lab 的行）：两个构建清单的 `speaks` 和 v0.12.65 相同（`actingd-config` [5, 33]、`install-selection` [1, 1]、`install-control` [0, 0]、`ledger` [3, 8]、`runtime-client` [3, 9]、
+  `package` [3, 15]、`runtime-outcomes` [1, 1]）；默认值文件的哈希不变；`git diff --stat v0.12.65 <提交> -- apps/actingd/src/config/manifest.rs distribution/windows/actingd.defaults.json`
+  什么都不打印；不过的边没有，警告照旧是每个游戏一条 `package` 的 `bundle_max_in_next`；没有新文件、没有去掉的文件；运行中的 `actingctl.exe`（MCP 服务）、`actinglab-mcp.exe` 和做计划的
+  `actinglab` 改名放到一边，别的跑着的程序文件挡住，和 v0.12.65 一样；`standard-pack check` 不出新的警告码；启动日志不多一行。
+- **热放置工具包**：本版没有让它变的东西：`place`、`standard-pack check`、`actingctl` 都没改。重钉要换的照旧只是构建值；`actingd_config` 5,33 和默认值哈希不变。
+- **两个 MCP 服务器**：工具一个没增减、一行没改；经 `actinglab` 子进程做的截图快了，`ac_frame` 和第一代的 `ac_observe` 不变（见上）。
+
+运行上的变化：
+
+- 从 v0.12.65 部署，经 Lab 的 `release stage`、`deploy`、`op status`：不用标志，没有 `ledger_verify`，`defaults_diff` 没有行，没有新文件。
+- Lab 截的图不再在账本里卡约 0.72 秒；录下的一下按之后预计约 0.1 秒一张（部署以后量）。
+- 录下的一下按占住这一台到点后截图做完（默认最长约 5.1 秒再加一张）；下一下按之前那张要等约 1.7 秒重开会话。
+- 租约已过期、关会话被拒，在客户端断开、输入失败、后端故障收尾这三条路上只围住那一台；还有五处照旧会停（#475）。
+- 退回 v0.12.65 一直开着，退回之前不必先做什么。
+
+本版合并的 PR：
+
+- #1772 S1-10（登记 §1.430，同时是截图提速的并车）、#1773 S1-9（§1.429）：门行 `#463 S1-10`（`gate_463_s110`，7 条）、`#463 S1-9`（`runtime_input_proxy` 的 `s19_*`，4 条）；
+  并车补了 S1-9 契约的三句和登记的两句。
+- #1774 #461（§1.431）：门行 `#461`（`gate_458_close_isolates` 的 `close461_*`，4 条）。
+
+## v0.12.65
+
+本版是 v0.12.64 之后的 2 次合并、5 张 PR，都是 #463 制包的：并车 #1766（S2-1 #1766 自己，带 S2-13 #1765、S2-5 #1768、S3-11 #1767）和直接合并的 #1770（S1-8）。车上除了各张的头和合并，
+有四个并车自己的提交：让 `record ready`、`record frames` 和画框接上（两条测试、一句契约、版本标签改成 0.12.65），修改轮（画了点击框就算第二阶段写过；`record frames` 照第一阶段的参数那样读数），两个只改登记的提交。
+内容是：制包第二阶段的三片（一次读出一份录制离出包还差什么、读出一下按前后存下的帧、在草稿上画识别框和点击框），试跑真正发一次运行，安装里的 `actinglab` 不设变量也认自己安装的 Runtime。
+**生产上跑的是 v0.12.64（2026-11-16 03:23 起，经 Lab 救急模块部署；05:23 这台电脑重启过，Runtime 自己起来了）**：一台实例在跑调度的例行任务，其余实例暂停着、模拟器关着。从 v0.12.64 装本版：
+**Lab 救急模块的 `deploy` 和 `actingctl install` 两面都能装，不用任何标志，没有 `ledger_verify`，`defaults_diff` 没有一行，没有新文件**。接口一个没动，配置键没加；Runtime 自己的做法一处没变：
+`crates/runtime-host`、`crates/execution-kernel`、`crates/policy`、`crates/ledger`、`apps/actingd` 自 v0.12.64 一个文件没改（不稳定测试的镜像只动了 `ci/flaky-tests.toml` 和 `.github/workflows/ci.yml`），
+它们链接的契约库只多了一个结果键 `trial_collect_problem`（`crates/actingcommand-contract/src/outcome/keys.rs` 880–882，只有资源工具写）。结果码加 9 个，没有 `retired`。
+**退回 v0.12.64 一直开着**：本版能写下的东西 v0.12.64 都读得了（见「升级与退回」）。
+
+- **在用的安装在部署时和以后碰到的**（逐条核过代码）：
+  - **安装里的 `actinglab` 不设变量也找到自己安装的 Runtime**（S1-8，登记 §1.428）。v0.12.64 上线后在一台实例上真机走了一遍第一阶段（看板 #463 当时的记录）：从普通命令行跑安装里的 `actinglab`、
+    不设 `ACTINGCOMMAND_RUNTIME_STATE_ROOT`，`record start` 答 `hold.state: none` 加警告 `no_runtime_listening`，没按住那一台就开始录了，而这个安装的 Runtime 正在跑。原因：`actinglab` 自己的那批命令
+    没设变量时去看用户目录下的默认状态根（`%LOCALAPPDATA%\ActingCommand\runtime`），不看安装自己的；CLI 模块那几行（救急的行）早就按程序所在的安装认状态根。所以在 v0.12.64 上，智能体要么
+    把这个变量设成安装的状态根，要么经两个 MCP 服务器之一调用。现在整个程序一条规矩（`apps/actinglab/src/state_roots.rs` 20–36）：设了变量用变量的（空的照旧拒）；没设、程序在安装里，
+    用这个安装的状态根，和 CLI 模块同一个定位（`apps/actinglab/src/cli_module/place.rs` 50–63，`crates/lab-ops/src/locate.rs` 的 `installed_location`）；安装的状态根认不出来就拒，码是定位的结果码
+    （`install_state_root_unresolved`，或安装选择自己的码），文字和 CLI 模块那几行拒它时一样，细节里带定位的结果，退出 2（`state_roots.rs` 38–49），不再落到默认状态根；程序不在任何安装里
+    （构建目录、测试）才用原来的默认值。没有新码、新词。
+    - **操作的人看得到的变化**：这条规矩管 `actinglab` 自己那批命令里连 Runtime 或读它状态根的 26 处调用：按下（`tap`、`swipe`、`long-tap` 这些，带不带 `--record` 都算）、截图和观察
+      （`capture`、`observe`、`do`、`ensure`、`wait`）、`session app …`、`stream`、`runtime …` 的调试命令、`lab run`、录制的按住和放开、试跑的运行。从普通命令行不设变量跑安装里的程序，
+      它们现在连的是这个安装的 Runtime（原来去看默认状态根，那里没有这个安装的 Runtime 在听，连不上）；`record start` 的 `no_runtime_listening` 现在名副其实：安装的状态根下真的没有 Runtime 在听。
+      安装坏了（没有配置，或配置里没有 `state_root`）时，这些命令拒 `install_state_root_unresolved`，不去看别处。设了变量的、CLI 模块的行、不在安装里跑的程序、录制自己的状态目录
+      （`--state-dir`，默认仍在用户目录下 actinglab 那一份，`state_roots.rs` 8–13、51–59）都不变。
+    - **两个 MCP 服务器不变**：它们给自己的 `actinglab` 子进程设了这个变量（Lab 的 MCP 服务器 `apps/actinglab-mcp/src/children.rs` 355–356；第一代 `apps/actingctl/src/mcp/lab.rs` 1059 经
+      `crates/lab-ops/src/lab_child.rs` 74–76），回答一字不变。只有一处细微的：服务器自己也认不出状态根时它不设变量，子进程原来落到默认状态根，现在照上面拒；这只在安装坏了时发生。
+  - **新的两行和两处新参数**：`record ready`、`record frames`（Lab 的 MCP 服务器多 `ac_record_ready`、`ac_record_frames`，在创作模块），`record mark` 多参数 `box`，都只在智能体调用时起作用，
+    什么都不自动做。**`standard-pack trial` 不带 `--plan` 现在真的发一次运行**：v0.12.64 上这样调用拒 `validation_failed`；现在先做计划的全部检查，再拒只有运行才要的三样，都在发出和写任何东西之前：
+    没给授权 `trial_authorization_missing`、带「不可逆」标记的包没有 `--irreversible` `trial_irreversible_unacknowledged`、带了 `--variable` `trial_variables_not_carried`（直接运行还带不了变量值）
+    （`crates/resource-tooling/src/standard_pack_trial.rs` 514–558）；三样都过才连 Runtime、发 `run start` 发的那一个请求（`apps/actinglab/src/standard_pack_cli.rs` 373–462、486–496）。
+    第一代 MCP 服务器自 v0.12.64 一行没改，没有加工具和参数；它的 `ac_record_mark` 把 `request_json` 原样交给安装里的 actinglab（`lab.rs` 464–466），所以请求里带 `boxes` 经它也能用。
+  - **部署时**有录制正按住某一台：和 v0.12.64 一样，部署的守卫把它报成别人的暂停，救急模块记下、不碰它（救急模块部署那条路自 v0.12.63 没改）。
+
+- **新的东西**（照制包的智能体用的次序）：
+  - **还差什么**（S2-1，§1.425）：`record ready [--record-id <id>]`（`ac_record_ready`）一次列出这份录制在 `record stop` 能出包之前缺的全部东西：`missing` 每项带哪一步、那一步按在哪一帧、
+    缺的是什么（一个词，码表的封闭词表 `ready_missing`，31 个词，一个词一个原因）、`record stop` 会答的码，一条命令能解决的带 `hint`；预检全过以后跑 `record stop` 的七项自检（在内存里生成包、
+    哪儿都不写），答第一个拒绝和没跑的几项（`checks_after`）。不给建议、不给候选框。`status` 是四种之一：`material`（第二阶段什么都没写）、`draft`、`ready`（`record stop` 会写出包）、
+    `packaged`（停了、包写了、之后没再改）。警告 `press_point_only`：录下的点按，点击框还是那一个像素的步。只读：不取录制锁、不连 Runtime、不写录制的文件（没有状态目录时会建一个）
+    （`contracts/lab-recording.md` 2924–3075）。`record stop` 拒在第一处时照旧，细节多 `missing_total` 和 `hint: "record ready"`。
+  - **按前后的帧**（S2-13，§1.426）：`record frames --step <k> [--before <0..100>] [--after <0..100>] [--record-id <id>]`（`ac_record_frames`）读出第 k 步那一下按（位置、时刻、按在哪一帧）和它
+    前面最后几帧、后面最前几帧（默认前 3、后 10，跨步也算），每帧带路径、哈希、时刻、离按下多少毫秒、存在哪一步下面。次序是帧进步骤表的次序：设备截的帧截下就进；从文件挂进来的
+    （标记的样本、过渡帧、离线帧）和画框收下的样本在挂进去的那一刻进，时刻也是那一刻。文件不在了照列、路径为空，警告 `frame_file_missing`；按在没存下的截图上的，警告
+    `press_frame_not_stored`。超出 0–100 拒 `validation_failed`（`range`），不是整数也拒（`wrong_type`），同一个参数给两次取最后一个；步不存在拒 `record_step_not_found`。只读、不取锁、
+    连状态目录都不建（`contracts/lab-recording.md` 2360–2410）。
+  - **画框**（S2-5，§1.427）：`record mark --box recognize=x1,y1:x2,y2`、`--box press=x1,y1:x2,y2`（请求里是 `boxes`，Lab 的 MCP 工具是 `ac_record_mark` 的 `box`），对录下的任意一步画，
+    两个角给哪个次序都行，两个角上的像素都在框里（`contracts/lab-recording.md` 1211–1367）。
+    - 识别框是一个模板标记，名字 `box/<步号>/<x>_<y>_<宽>_<高>`，模板就是这一步那一帧上框里的那一块；框里只有一种灰度的拒（`record_mark_rejected`，原因 `box_flat`，改用颜色标记）。
+    - 点击框落在录下的那一下按上：只改这一步的点击范围，按的位置、时刻、帧、结果都不动，不会再按；框必须含录下的那个点，不含拒 `record_click_outside_step_rect`（`details.reason`
+      `recorded_point_outside_box`）；滑动拒 `record_click_rect_conflict`；换一个框要 `--replace-click`。出的包里这一步是「在这个矩形里点」；之后的 `record archive` 清单把这个框写成这一下的
+      `rect`（`crates/lab/src/recording/archive.rs` 1274–1280）。画了点击框也算第二阶段写过（`material` 变 `draft`），这一步的 `press_point_only` 跟着消失。
+    - 底图：候选只有前一下按（或应用操作）之后那一轮截下的帧。整帧和这一步的那一帧相比变了的不收（`frame_changed`，判法和第一阶段判「画面静止」同一个函数、同一个门槛），
+      每个识别框里都到 0.95、整页的自测仍成立的才收成样本（`source: "recording_frame"`，就是那个已存的帧文件，不另写）；回答的 `boxes[].frames` 给每一帧的去向：`own`、`added`、
+      `not_added`（带原因 `frame_changed`、`below_threshold` 或这一页的拒因）、`elsewhere`（在别的步的帧上也达到门槛）。不收只是列出来，不拒请求。一步的识别框最好一次请求画齐。
+  - **出包**：`record stop` 照旧，画框写下的和手写的标记、点击、样本一样生成。
+  - **试跑发运行**（S3-11，§1.418）：`standard-pack trial <实例> --package <目录> --authorization <引用> [--expect <结局>] [--irreversible] [--root <游戏根>] [--state-dir <目录>] [--wait <时长>]`
+    不带 `--plan` 时发一次运行，用的就是 `run start` 的那个函数，在 Lab 的通道上、带这个进程的发起者；等到回执（或 `--wait` 到点），照 `run show` 的办法读回结局，回答带计划、`request_id`、
+    `run_id`、`end {state, outcome_key?, final_page?, failure_code?, failure_values?}`、`expected`、`matched`，再写一份记录（`actingcommand.pack-trial.v1`，一次运行一份）。正常结束但不是 `--expect`
+    的结局：成功、退出 0，`matched: false`，警告 `trial_end_unexpected`；运行失败或取消：答它自己的码，退出 1，和 `run start` 一样，记录照写；没有失败码的失败答 `trial_end_uncoded`。
+    读不到结局不写记录：还没结束 `trial_end_unread`（回答带 `next`，过一会儿 `--collect`）、被重启打断 `trial_run_interrupted`、有结局但账本里按序号查不到 `trial_terminal_unrecorded`。
+    任何一条路都不会把这次运行再发一遍（`contracts/standard-pack-trial.md` 292–394）。
+  - **事后收结局**：`--collect <request_id>` 加同样的参数，什么都不发，读那次运行、写记录；不是这个包、不是这一台、调度器发的、没有来源记录的、不是经 Lab 通道手动发的，拒
+    `trial_collect_mismatch`（词表 `trial_collect_problem`）；已经有记录的再收拒 `trial_record_exists`（同上 396–430）。`--dry-run` 下运行和 `--collect` 都拒 `dry_run_unsupported`。
+    契约守住的三句话照旧：试跑通过不等于授权启用；试跑不计入磨合期；一次试跑只发一次。
+
+- **部署和退路**：照 v0.12.64 那次的做法，用在线 v0.12.64 留下的那份 `actinglab` 跑 `release stage`、`deploy <提交> --plan` 预看、`deploy <提交> --detach` 实做，再用 `op status` 看结果。
+  救急模块部署、退回、撤销那几条路本版没改（`crates/lab-rescue` 只加了一个测试文件；它用的定位函数 `crates/lab-ops/src/locate.rs` 拆成了两步，`locate_from` 包着新的 `installed_location_from`，
+  回答一字不变）。部署以后 `op status` 的 `mcp_servers_on_old_images` 照旧列出还跑在改名放到一边的旧映像上的 MCP 服务进程：这次没有删请求种类，旧进程照样能用；要用 Lab 的 MCP 服务器的
+  新工具和新参数，让列出的客户端重开会话。
+  - **退路**：回 v0.12.64 用留着的 v0.12.64 那份 `actingctl install`（`install undo`、`install resume`、`install release-hold`）或救急模块的退回：账本的修订和记录种类都没变，回退门放行。
+    退回之前不必先做什么：v0.12.64 认得录制的按住，在本版上开始的录制在 v0.12.64 上照常结束、放开。
+
+- **已知的限度**（各片验收记录和审查列的，逐条核过）：
+  - **截图比第一阶段的默认参数假定的慢得多，本版没改**。真机上按下以后第一张截图约 2.56 秒才进步骤表，下一张再隔约 0.9 秒，所以照默认参数一下按只留下按前一帧和按后两张已经停稳的帧，
+    动画中途一张都没有。账本记下的这几张：取一帧本身约 6.6 毫秒；按下用的租约一放，会话就关了，重开要约 1.6 秒；每一张在工件钉住之后、截图完成之前都固定多花约 0.72 秒，花在哪一步还没查到。
+    所以 `record frames` 和画框的底图只能给出截到的那几张。
+  - v0.12.64 说明里「一台模拟器上几个应用成组的实例，录制的按下会被拒：……没在代码里找到拒的那一处」这一句要改：它是从代码里推得出的。在这样的成员上，一次不带键的观察结束时就把会话关掉
+    （`crates/runtime-host/src/host/observation.rs` 272–279；`crates/runtime-host/src/host/resource_close.rs` 748–777 的 `close_keyless_session_of_group`，只在 `in_group_of_several` 时关，754），
+    按下点名的那一帧随会话没了（内核找不到会话，`crates/execution-kernel/src/kernel.rs` 327–336），输入被拒 `input_frame_unavailable`（`crates/runtime-host/src/host/input.rs` 132–147）。
+    这条路没有测试，今天也碰不到：构建在装载时就拒每一个多成员的组。
+  - `record ready` 的七项自检和 `record stop` 一样各在第一个拒绝处停，所以预检都过了以后一次只列一项；生成器自己的警告有十几种形状，回答里原样带出，没有逐种定类型。
+  - 试跑分不出「试跑」和经 Lab 发的一次普通手动运行（同一个函数、同一个发起者，运行记下的来源只有通道）；记录里的内容是写记录那一刻包目录里的内容（手动运行的记录里没有内容哈希，
+    `--collect` 记的是收取时读到的）。试跑没在真机上发过；`--wait` 给得很短时命令行进程退出会不会让请求根本没发出去，没有实测（`run start` 也一样）。
+  - `record frames` 和画框都没在真实的录制上用过（测试用的是合成的帧）。第一阶段以前的录制没有点后的截图，画框时候选是空的。收下的样本删不掉。
+  - 底图必须是「同一屏的同一个状态」：整帧和这一步的那一帧比没变（不超过 1500 milli），再每个框里到 0.95。这是对看板 #471 上那条答复的读法，已请定夺；整帧这一条挡的是换了屏的帧，
+    小范围的动画仍然靠 0.95 挡。
+
+配置：按代码、`distribution/windows/component-interfaces.json` 和 `contracts/component-interfaces.md` 核过，一个没动：
+
+- 接口：`actingd-config` [5, 33]、`install-selection` [1, 1]、`install-control` [0, 0]、`ledger` [3, 8]、`runtime-client` [3, 9]、`package` [3, 15]、`runtime-outcomes` [1, 1]
+  （`component-interfaces.json` 4–10，`contracts/component-interfaces.md` 自 v0.12.63 没改）。
+- **新落盘的东西归哪个接口**：步骤表 `recording.json` 没有新成员：识别框是一个普通的模板标记，名字 `box/…`（`RecordedMark.id` 是字符串，`crates/lab/src/recording/model.rs` 694–695），
+  它收下的样本是一行普通的帧，`source: "recording_frame"`（`RecordedFrame.source` 是字符串，376–384），点击框是按下那一步的 `rect`，`source` 仍是 `point`（`StepClick`，869–873）；schema 仍是
+  `actingcommand.lab-recording.v1`（16），`model.rs` 本版只加了请求和回答的类型。清单里点按一行的 `rect` 自第二版清单起就是可空的成员（`archive.rs` 的 `ArchiveTap`、`ArchiveLongPress`），
+  schema 仍是 v2。试跑记录 `actingcommand.pack-trial.v1` 的格式自 v0.12.64 没改，本版只是有了调用写入器的程序，记录在 Lab 自己的状态目录里（`<state>/trials/<包>/…`，安装根里拒）。
+  发出去的试跑不写任何日志，它的运行就是 `run start` 发的那个 `RunContainedTask`（只带实例和包），Runtime 照记一次 Lab 通道上的手动运行。这些都是 Lab 自己的文件，契约的词表
+  （`contracts/component-interfaces.md` 97–180）里没有哪个接口管它们；画框生成的包里只有矩形点击和模板，`package` 没有新成员。所以没有该升没升的修订。
+- 配置键：没有加的、没有去掉的；`actingd.defaults.json` 一字没改，sha256 仍是 `e14b0ced7040a6d05046edddd9b0c8ee95a53de4b65d69fcc7d9dae17a433343`；两个配置模板和
+  `apps/actingd/src/config/manifest.rs` 没改。
+- 结果码：3968 → 3977 个码（在用 3880 → 3889，`retired` 88 不变），1764 个位置、31 个分片不变；键 680 → 681，词表 254 → 258，词 1955 → 1999；在用码按类别 warning 155 → 156、
+  error 3371 → 3379，别的不变；审阅定稿的在用码仍是 154 个。
+  - **新码 9 个**，都在资源工具（`resource-tooling`），阶梯类 `none`，审阅 `pending`。拒的 8 个（error，actinglab 命令行退出 1；经 `--via` 的信封：发出之前的三个和 `trial_collect_mismatch` 是 2，
+    读结局的四个是 4）：发出之前的 `trial_authorization_missing`、`trial_irreversible_unacknowledged`、`trial_variables_not_carried`（都必带 `package_id`，最后一个还带 `variable_name`）；
+    读结局的 `trial_end_unread`、`trial_run_interrupted`、`trial_terminal_unrecorded`、`trial_end_uncoded`（都必带 `request_id`，除 `trial_run_interrupted` 外都带 `run_state`）；`trial_collect_mismatch`
+    （必带 `request_id`、`trial_collect_problem`）。警告 1 个：`trial_end_unexpected`（warning，照常成功，退出 0）。已有的 `trial_record_exists` 多管一种情形：这次运行已经有记录。
+  - **加的词表**：`ready_missing`（31 个词）、`ready_check`（7 个词）、`ready_warning`（1 个词 `press_point_only`），都在 Lab 库；`trial_collect_problem`（5 个词：`other_package`、`other_instance`、
+    `scheduled`、`origin_unknown`、`other_channel`），配一个同名的键。已有的词表没有加词；没有码改类别或阶梯类，没有 `retired`。
+  - 回答里的几个词不是目录里的码：`record frames` 的 `frame_file_missing`、`press_frame_not_stored`；画框的 `box_flat`（`record_mark_rejected` 下标记的原因）、`recorded_point_outside_box`
+    （`record_click_outside_step_rect` 的 `details.reason`）、`frame_changed`、`below_threshold`、`own`、`added`、`not_added`、`elsewhere`。
+  - 本版的发布文件 `contracts/outcome-codes/released/0.12.65.json` 按合入全部 5 张 PR 以后的树生成：0 个码、0 个位置（新码都是 `pending`，没有 `retired`）；索引由脚本生成，仍是 32 个文件，
+    核过是最新的。
+- Lab 的操作表：188 → 190 行（13 行 `reserved` 不变，`not_exposed` 16 不变）：加 `record ready`、`record frames`（都在创作模块，只读，不要 Runtime）；两行改了：`record mark` 多 `box`；
+  `standard-pack trial` 多 `collect`、`wait`，从不要 Runtime、不写变成要 Runtime（`RunContainedTask`、`QueryEvents`、`Status`）、会写，帮助、说明、输出和六个参数的说明跟着改。所以 Lab 的
+  MCP 服务器在 Windows 上 161 → 163 个工具（创作模块 40 → 42），`ac_record_mark` 多 `box`，`ac_standard_pack_trial` 多 `collect`、`wait`、不再是只读的。命令清单
+  （`ratchet/actinglab_commands.json`）不变：46 个顶层分派臂、106 条命令（`ready`、`frames` 是 `record` 下的动作）。第一代 MCP 服务器仍是 46 个工具，一行没改。
+  README 两种语言只把工具表标题改成 v0.12.65。
+- 两个压缩包的文件表不变（`.github/workflows/windows-remote-build.yml` 没改）：没有新文件、没有去掉的文件；改了内容的是各个程序和本文件。
+- 不稳定表现在是 FLK-08、FLK-10、FLK-14、FLK-15、FLK-16（`ci/flaky-tests.toml`）：FLK-15、FLK-16 随 S3-11 登记，是主机的两条测试（`contained_tasks` 的一条在读超时之内没收到回执，和 FLK-08
+  同类；`gate_373_nav6` 的一条在第二次几何观察之后以 `contained_task_page_unknown` 失败），都是在 #1767 的一次 `host-lab` 红里出现的，#1767 没动 `crates/runtime-host`，原因没找到；
+  `host-lab` 那一项检查跳过它们，不卡合并的 `flaky` 项照跑（`.github/workflows/ci.yml` 的 `CI_SKIP`、`FLAKY_TESTS`；看板 #71）。
+
+升级与退回（救急模块部署、退回、撤销那几条路，`crates/lab-rescue` 里除 `place` 以外自 v0.12.63 一行没改，本版只多一个测试文件，v0.12.64 说明里引的行号对本版也对；`actinglab deploy` 和
+`actingctl install` 走的都是它）：
+
+- **v0.12.64 的安装工具装本版：两面都能装，不用任何标志。** 两个构建清单的 `interfaces` 和 v0.12.64 的一字不差，计划的每条边和 v0.12.64 那次一样：`ledger` 两边 [3, 8]，`one_way` 不触发，
+  `ledger_verify` 为 false（`install/plan.rs` 924）；`install-control` [0, 0]；`runtime-client` 处处 [3, 9]；`package` 的 `bundle_max_in_next` 照旧每个游戏一条 `pack_declaration_unknown`
+  警告，不挡；`installer_knows_keys` 过；`defaults_diff`（583–607）没有一行；文件计划里没有 `new`。救急模块发的请求、启动后检查读的形状都没变。
+- **本版第一次启动多写的**：没有。Runtime 的代码没改，`config.selection` 的默认值哈希不变。
+- **配置文件和已装的包**：v0.12.64 的配置文件照收；准入没改（`crates/pack-containment`、`crates/policy`、`crates/ledger` 都没改），`standard-pack check` 没改（资源工具只加了试跑的运行），
+  对今天的根答法和 v0.12.64 相同，不出新的警告码。
+- **退回 v0.12.64**：回退门（`install/update.rs` 390–447）只放行这次部署替换掉的 v0.12.64；第 1 部分的边都过；第 2 部分用 v0.12.64 自己的 `actingledger events` 读部署以来的每一页：本版的
+  Runtime 不写 v0.12.64 不认识的记录（试跑的运行就是一次 Lab 通道上的手动运行），过。本版可能写下的东西，v0.12.64 怎么办（行号是 v0.12.64 的）：
+  - 带框和 `recording_frame` 样本的步骤表：照读。v0.12.64 的 Lab 把 `recording.json` 解成 `LabRecording`、核四个身份字段（`crates/lab/src/recording/store.rs` 235–259），结构和本版的一样
+    （见上「新落盘的东西」，`model.rs` 376–384、694–695、869–873 两版相同）；它还能接着标记、`record stop` 出包：生成器对框没有专门的代码，`box/…` 换成模板文件名的规矩相同
+    （`recording/marks.rs` 111–124，`assets/box_<步号>_…png`）。它没有 `record ready`、`record frames`、`--box`。
+  - 点按一行带 `rect` 的清单：照读。`ArchiveTap.rect`、`ArchiveLongPress.rect` 在 v0.12.64 就是可空的成员（`recording/archive.rs` 278–304），`read_manifest`（864–871）照解，按编号再归档和拷贝照做。
+  - 试跑记录：v0.12.64 没有读它的程序（读者和写入器只在库里，没有程序调用），它也不在安装根里。
+  - 会话头：本版写的和 v0.12.64 一样（S1-7 的 `hold`，格式没变）；v0.12.64 的 `record stop`、`record archive` 照常放开这个按住。
+  - **这些都不让安装的状态或日志对 v0.12.64 读不了**：Runtime 的状态根和账本本版没写新东西，救急模块的日志照读，录制、清单都照读。
+
+配对：
+
+- **控制台 UI**（UI main `8b4d7480` 钉 Runtime v0.12.63 `3581a8af`，`Cargo.toml` 41–46；最新发版 UI v0.12.20 钉 v0.12.61）：声明的范围没变（`crates/acui-setup/component-interfaces.json` 3–11：
+  `actingd-config` [5, 32]、`install-control` [0, 1]、`ledger` [3, 8]、`runtime-client` [3, 9]、`runtime-outcomes` [1, 1]），本版的接口一个没动，向导核的四条边和对 v0.12.64 一样都过。
+  控制台不调 `place`、不跑录制、试跑、`record ready` 和 `record frames`。安装向导给子进程清掉每一个 `ACTINGCOMMAND_` 开头的变量（`crates/acui-wizard/src/child.rs` 29–38），跑的是安装里
+  `actinglab` 的 `up`、`pause`、`status`、`adopt`、`config replace`、`watchdog install`（CLI 模块的行，原来就认安装的状态根）和 `standard-pack check`（不连 Runtime），S1-8 一处都不改它们。
+  **它碰到的一处和 v0.12.64 一样**：账本窗口按理由认暂停，`lab-<词>-<毫秒>` 只认救急模块的七个词（`crates/acui-app/src/ledger/resume.rs` 63–81），录制的 `lab-record-<毫秒>` 不在里面，
+  于是当成「别的工具设的」、给出两步确认的「恢复调度」（134–145）；S1-8 以后从普通命令行开始的录制也按住了，这样的暂停会更常见。认它的改动在读的时候还没进控制台仓
+  （main `8b4d7480`，分支和开着的 PR 里都没有）。
+  - **下一次钉**：六个 `rev`（和锁文件）换成本版的提交，带进来的只有契约库自 v0.12.63 起的三个新键（`trial_state_place`、`trial_record_problem`、`trial_collect_problem`；账本、客户端、配置、
+    内核那几个库自 v0.12.63 没改）；范围不用改；账本窗口要把 `lab-record-<毫秒>`（`crates/lab/src/recording/hold.rs` 34 的前缀）认作录制的按住，由录制结束时放开，不当作随手可以恢复的暂停。
+- **部署工具包**（这次走 Lab 的行）：两个构建清单的 `speaks` 和 v0.12.64 相同（`actingd-config` [5, 33]、`install-selection` [1, 1]、`install-control` [0, 0]、`ledger` [3, 8]、`runtime-client` [3, 9]、
+  `package` [3, 15]、`runtime-outcomes` [1, 1]）；默认值文件的哈希不变；`git diff --stat v0.12.64 <提交> -- apps/actingd/src/config/manifest.rs distribution/windows/actingd.defaults.json`
+  什么都不打印；不过的边没有，警告照旧是每个游戏一条 `package` 的 `bundle_max_in_next`；没有新文件、没有去掉的文件；运行中的 `actingctl.exe`（MCP 服务）、`actinglab-mcp.exe` 和做计划的
+  `actinglab` 改名放到一边，别的跑着的程序文件挡住，和 v0.12.64 一样；本版的 `standard-pack check` 不出新的警告码；启动日志不多一行。
+- **热放置工具包**：本版没有让它变的东西：它不调救急模块的 `place`、不读 `schedule_changes`，本版 `place`、`standard-pack check`、`actingctl` 都没改；S1-8 只管 `actinglab` 自己那批连 Runtime 的命令，
+  `standard-pack check` 不连 Runtime。重钉要换的照旧只是构建值（提交、`actinglab`、`actingledger` 和两个构建清单的哈希）；`actingd_config` 5,33 和默认值哈希不变。
+- **两个 MCP 服务器**：第一代的工具一个没增减、一行没改；Lab 的多 `ac_record_ready`、`ac_record_frames`，`ac_record_mark`、`ac_standard_pack_trial` 多了参数（见上面操作表）。
+
+运行上的变化：
+
+- 从 v0.12.64 部署，经 Lab 的 `release stage`、`deploy`、`op status`：不用标志，没有 `ledger_verify`，`defaults_diff` 没有行，没有新文件；Runtime 的做法不变。
+- 安装里的 `actinglab` 从普通命令行不设变量也连自己安装的 Runtime，录制照常按住；安装坏了拒 `install_state_root_unresolved`，不再看别处。
+- 第二阶段：`record ready` 看还差什么，`record frames` 看按前后的帧，`record mark --box` 画识别框和点击框，`record stop` 出包。
+- `standard-pack trial` 不带 `--plan` 会真的发一次运行，要 `--authorization`；没等到结局的，用回答里 `next` 的那一行 `--collect`。
+- 截图仍是一张约 0.8 到 0.9 秒、按下后第一张约 2.5 秒，别指望留下动画中途的帧。
+- 退回 v0.12.64 一直开着，退回之前不必先做什么。
+
+本版合并的 PR：
+
+- #1766 S2-1（登记 §1.425，同时是第二阶段第一趟并车）、#1765 S2-13（§1.426）、#1768 S2-5（§1.427）、#1767 S3-11（§1.418）：各自的门行 `#463 S2-1`、`#463 S2-13`、`#463 S2-5`、`#463 S3-11`；
+  `gate_434_lab5b4` 的命令名单 31 → 33 条（多 `record ready`、`record frames`），`gate_463_s310` 去掉了「不带 `--plan` 就拒」那一条（现在那是运行），S3-11 在 S3-1 的门文件里补了两条前置链的测试
+  （`crates/lab-rescue/src/install/gate_463_s31.rs`）；FLK-15、FLK-16 进不稳定表。
+- #1770 S1-8（§1.428）：门行 `#463 S1-8`（`gate_463_s18`）。
+
+## v0.12.64
+
+本版是 v0.12.63 之后的 2 次合并、8 张 PR，都是 #463 制包的：并车 #1758（S3-2 #1758 自己，带 S3-1 #1754、S3-10 #1759）和并车 #1757（S1-1 #1757 自己，带 S1-2 #1760、S1-3 #1761、
+S1-5 #1763、S1-7 #1762）。两趟车上除了各张的头和合并，第二趟有三个改版本标签和说法的提交，第一阶段那趟有四个接线和修改轮的提交（接上 S1-2 和 S1-3、清单读步骤表记的没存截图、S1-7 补测试和登记、两次整体审查留下的几处）。
+内容是：制包第一阶段「开始录制、正常玩、结束录制」，录制期间按住它录的那一台；放置的预看列出进出调度的包，会改动东西的放置要写明凭哪一条授权、启用哪几个包；试跑工具的计划（不发运行）。
+**生产上跑的是 v0.12.63（2026-11-16 00:04 起，经 Lab 救急模块部署）**：一台实例在跑调度的例行任务，其余实例暂停着、模拟器关着。从 v0.12.63 装本版：**Lab 救急模块的 `deploy` 和
+`actingctl install` 两面都能装，不用任何标志，没有 `ledger_verify`，`defaults_diff` 没有一行，没有新文件**。接口一个没动，配置键没加；Runtime 自己的做法一处没变：`crates/runtime-host`、
+`crates/execution-kernel`、`crates/policy`、`crates/ledger`、`apps/actingd` 自 v0.12.63 一个文件没改，它们链接的契约库只多了两个结果键（`crates/actingcommand-contract/src/outcome/keys.rs`
+875–879，只有资源工具写）。结果码加 5 个，没有 `retired`。**退回 v0.12.63 一直开着**；读不了的只是用本版的 `--record` 按下或应用操作录下的录制和第二版清单（见「升级与退回」）。
+
+- **在用的安装在部署时和以后碰到的**（逐条核过代码）：
+  - **录制会按住它录的那一台**（S1-7，登记 §1.424）：`record start` 先把「按住」写进会话头，再以录制自己的理由 `lab-record-<毫秒>` 暂停这一台的调度（和 Lab 的 `pause` 行同一个请求，
+    排空上限 300000 毫秒；`crates/lab-ops/src/scheduling.rs` 44–46、114–125）；`record stop` 和 `record archive` 只恢复显示这个理由的那一个暂停（同一文件 155–173）。这一台本来就被别人暂停着的
+    （人的、部署的、热放置的），什么都不发、也从不恢复它；这个安装没有 Runtime 在跑（状态根下没有地址文件，或地址连不上）时照常开始、什么都不按住，回答的 `hold.warnings` 带
+    `no_runtime_listening`；握手不成、探测超时、状态根解析不了，开始失败、什么都不写（`apps/actinglab/src/commands/record_hold.rs` 10–36、85–150）。
+    - **今天录制的智能体会注意到的**：`record start` 要等这一台正在跑的任务停下：在跑的调度运行先排空，排空期过了在下一个检查点停下，客户端最多等 335 秒（排空 300 秒、检查点宽限 30 秒、
+      IO 5 秒；`contracts/lab-recording.md` 1791–1803），调用方的时限要给够。结束时恢复调度要重连设备并自检，最多 33 秒加 IO 超时（1904–1906），这时归档或停止本身已经做完。
+      忘了结束的录制让这一台一直不在调度里：暂停没有期限、重启以后还在，`status` 和总览里看得到理由 `lab-record-<毫秒>`（1933–1935）。录制的每一下按、每个应用操作之前读一次这一台按没按住，
+      没按住时 `record.warnings` 带 `instance_not_held`，读不到带 `instance_hold_unread`，按照样按、照样记（`record_hold.rs` 466–509）。原来「先 `actingctl pause` 再录」的做法：
+      那个暂停是别人的，录制不恢复它，要自己恢复；README 两种语言里这一行都去掉了。
+    - **第一代 MCP 服务器**（`actingctl mcp-serve`）的 `ac_record_start`、`ac_record_stop`、`ac_record_archive` 跑的是安装里的 `tools\actinglab.exe`（`apps/actingctl/src/mcp/lab.rs` 1033），
+      所以一样按住、一样恢复，只改了这三条的说明。它一次调用最多等 25 秒（`apps/actingctl/src/mcp/tools.rs` 49），等不完的 `ac_record_start` 回 `{handle, job_phase}`，用 `ac_get_run` 接着看，
+      actinglab 照样跑完。
+    - **部署时**有录制正按住某一台：部署的守卫 `foreign_pauses` 把它报成别人的暂停，救急模块记下、不碰它，新版启动时恢复这个暂停，录制结束时照理由放开（`contracts/lab-recording.md` 1937–1942；
+      救急模块部署那条路自 v0.12.63 没改）。
+  - **会改动东西的放置要写明授权**（S3-2，§1.409）：救急模块的 `place` 在计划算完以后、按住和写任何东西之前核，有没有 Runtime 在跑都一样（`crates/lab-rescue/src/rescue.rs` 1889–1901）：
+    没带 `--authorization` 或是空的，拒 `place_authorization_missing`；`--enables` 不正好等于计划的 `enters`（少、多、重复，没有包进调度却点了名），拒 `place_enables_mismatch`，带
+    `expected` 和 `given`；压缩包一侧读不到、`enters` 没有值，拒 `place_enables_unknown`，旁边带计划的 `schedule_changes`；授权超过 1024 字节或带控制字符是用法错误（`unusable`）。
+    只预看（`--plan`）和每一项都没变的放置两样都不问；只换内容、没有包进调度的放置要授权、不带 `--enables`。授权原样、启用的包排好序记进 `pack_place` 日志的 `inputs`（`authorization`、
+    `enabled`），冷热两条路都记，`op status` 看得到；工具只记、不判断授权，也没有默认值、变量或开关能绕过（`crates/lab-rescue/src/install/place.rs` 1734–1761、1782–1844）。
+    - **本版里谁调用 `place`、要传什么**：救急模块的 `place` 行（`actinglab place <压缩包> [--sums <文件>] --authorization <引用> [--enables <包>]…`）和 Lab 的 MCP 工具 `ac_place`（多
+      `authorization`、`enables` 两个参数）都照上面传；第一代 MCP 服务器没有放置的工具；控制台不放置（它的向导没有自己的放置，UI `crates/acui-wizard/src/layout.rs` 8–9）；
+      `standard-pack build` 回答里的 `next.place` 只是预看那一行，不变。
+  - **计划的 `schedule_changes` 换成了对象**（S3-1，§1.408）：原来是布尔值，现在是 `{packages, enters, leaves, content_only, unread?}`（`place.rs` 289–304、545–582）。读旧布尔值的：本仓库里
+    只有救急模块自己的测试（改了）；控制台仓 main 里一处都没有。救急模块日志里检查那一步的意图仍记布尔值 `schedule_changes`（「`schedule.json` 换不换」，`place.rs` 280–286、1846–1855），形状没变。
+    压缩包里的 `schedule.json` 读不进（契约库的读者或组合器的引用检查拒它）时，计划照答、`enters` 没有值，真放置就拒 `place_enables_unknown`。
+  - **`record archive` 写第二版清单**（S1-5，§1.406）：`archive-manifest-<n>.json` 现在是 `actingcommand.lab-recording-archive.v2`（`crates/lab/src/recording/archive.rs` 67）；
+    `--copy-to` 默认只拷步骤表、清单和清单的 `material` 点到的帧，要全部帧加 `--all-frames`（只给它、不给 `--copy-to`，拒 `validation_failed`；`contracts/lab-recording.md` 2585–2595、2649）。
+    v0.12.63 的 Lab 碰到第二版清单：按编号再归档和拷贝都答 `record_state_io_failed`，`record reopen` 照常能用（见「升级与退回」）。
+
+- **新的东西**（照智能体用的次序）：
+  - **开始**：`record start --task-id <任务>`，见上面「按住」。
+  - **按**（S1-1，§1.402）：`tap`、`swipe`、`long-tap` 带 `--record`，这一下按就是录制里的一步，不要任何标记：按的位置（点；滑动的两端；长按的时长）、时刻、按之前的那一帧、按完的结果。
+    每一下都先经 Runtime 截一帧、按在这一帧上（原生触控的实例上 Runtime 只在它自己截的帧上点）；这一帧在按下之前被顶掉，就再截一帧、再发一次，只这一次，`before.captured_twice`；
+    按在没存下来的截图上（打开的一步已经有标记）时如实记 `sent_on_unstored_capture`。录制的按下和应用操作都经 Runtime 截图，不再读本机的设备配置。点击框是按到的那一个像素
+    （`rect {x, y, 1, 1}`，`crates/lab/src/recording/steps.rs` 4020–4040）。回答的 `record` 带 `before`、`after`、`warnings`。
+  - **按完以后的截图**（S1-2，§1.403）：从 `--after-ms`（默认 100）起每 `--interval-ms`（默认 100）截一张，画面连续 `--still-ms`（默认 300）没变算静止，最长 `--still-max-ms`（默认 5000）；
+    **每一张都留在录制里**，最后一张是这一下的 `after_frame`。一下按最多 `1 + still_max_ms / interval_ms` 张（默认 51），间隔数超过 120 在按下之前就拒（`range`）；到上限还没静止给
+    `after_not_still`、这一步照记；中途一张截不成，已截的留着，`after_capture.unfinished`，报错带着已经记下的东西，别再按一次（`contracts/lab-recording.md` 1664–1715）。这四个是命令的参数，
+    不是配置键。
+  - **应用操作**（S1-3，§1.404）：录制进行中 `session app launch|restart|stop --record` 记成一步，带操作之前那一帧和操作之后截到静止的帧（2 秒后开始、每 1 秒一张、2 秒不变算静止、最长 30 秒，
+    `crates/lab/src/recording/model.rs` 的四个常数）；入口的启动没有帧；不再要求操作之前这一步先有标记。
+  - **归档和清单交出什么**（S1-5，§1.406）：清单的 `material` 每一下按或应用操作一行：发生在哪一帧、按在哪里、什么时候、结果怎样，再加最后的结果帧（没有就给警告 `final_frame_missing`，
+    归档照做）。用旧办法 `do --capture --record` 录的按下没记它按在哪一帧，清单推出一帧并写 `derived: true`，`sent_on_unstored_capture` 写 `null`。第一版清单只读不写，带着它的归档原样拷贝。
+  - **放置的预看和授权**（S3-1、S3-2）：`place <压缩包> --plan` 的 `schedule_changes.packages` 给每个有变化的包放置前后各是什么（`scheduled`、`held` 带原因和引用、`maintenance_role`、
+    `unclassified`、`absent`、`unread`，加上支撑的角色词和 `prerequisite`）和内容（新、替换、没变）；`enters` 是放置以后会被调度或被用到、之前没有的包，前置包也算；`leaves`、`content_only`
+    另两份。真放置照 `enters` 逐个 `--enables`，再带 `--authorization`（看板评论的链接这一类）。
+  - **试跑的计划**（S3-10，§1.417）：新命令 `standard-pack trial <实例> --package <目录> [--authorization <引用>] [--variable <名>=<json>]… [--expect <结局>] [--irreversible] [--root <游戏根>]
+    [--state-dir <目录>] --plan`，Lab 的 MCP 工具 `ac_standard_pack_trial`（创作模块）。本版只答计划（不带 `--plan` 拒 `validation_failed`），什么都不发：包、内容哈希的前 12 位、实例、
+    授权引用（原样）、入口任务声明的各个结局、每个变量的值或默认值、带没带「不可逆」、期望的结局、记录放在哪、`run_requires`（`contracts/standard-pack-trial.md` 23–45）。计划不要授权；
+    记录目录在安装根或仓库里拒 `trial_state_dir_refused`。试跑记录的格式、写入器和读者在资源工具库里，本版没有程序写记录（`write_trial_record` 只有测试调用）。
+
+- **部署和退路**：照 v0.12.63 那次的做法，用在线 v0.12.63 留下的那份 `actinglab` 跑 `release stage`、`deploy <提交> --plan` 预看、`deploy <提交> --detach` 实做，再用 `op status` 看结果。
+  救急模块部署、退回、撤销那几条路自 v0.12.63 一行没改（`crates/lab-rescue` 本版只改了 `place`）。部署以后 `op status` 的 `mcp_servers_on_old_images` 照旧列出还跑在改名放到一边的旧映像上的
+  MCP 服务进程：这次没有删请求种类，旧进程照样能用；要用 Lab 的 MCP 服务器的新工具和新参数，让列出的客户端重开会话。
+  - **退路**：回 v0.12.63 用留着的 v0.12.63 那份 `actingctl install`（`install undo`、`install resume`、`install release-hold`）或救急模块的退回：账本的修订和记录种类都没变，回退门放行。
+    退回之前先把本版上开始的录制结束掉（`record stop` 或 `record archive`），否则那一台的暂停要人来恢复（见「升级与退回」）。
+
+- **已知的限度**（各片验收记录列的，逐条核过；核不到的写明了）：
+  - 第一阶段这条录制的路还没在真机上走过；真机上一次截图要多久没量过，它决定一下按留几张帧。
+  - 一台模拟器上几个应用成组的实例，录制的按下会被拒：这一句是 S1-1 的验收记录写的，没在代码里找到拒的那一处；今天的构建在装载时就拒每一个多成员的组（登记 §1.328 起），在用的安装碰不到。
+  - 按下的点击框是一个像素，要等智能体给它一个范围（「画框」那一片，不在本版）。
+  - 试跑什么都不发；发运行、读后来才结束的那次运行（`--collect`）是下一片 S3-11 的，本版的代码里都没有。
+  - 第一代 MCP 服务器没加参数：`ac_record_archive` 没有 `all_frames`，经它拷贝只带清单点到的帧。
+  - S3-1 的名单可能多于实际、不会漏报：预看不跑组合器，组合器因别的原因拒的根当成组合得成；前置链缺一层、成环或超过三层时 Runtime 拒整趟运行，名单仍把前面几层算作用到（`contracts/install-cli.md`）。
+
+配置：按代码、`distribution/windows/component-interfaces.json` 和 `contracts/component-interfaces.md` 核过，一个没动：
+
+- 接口：`actingd-config` [5, 33]、`install-selection` [1, 1]、`install-control` [0, 0]、`ledger` [3, 8]、`runtime-client` [3, 9]、`package` [3, 15]、`runtime-outcomes` [1, 1]
+  （`component-interfaces.json` 4–10，`contracts/component-interfaces.md` 自 v0.12.63 没改）。
+- **新落盘的东西归哪个接口**：`pack_place` 日志的 `authorization`、`enabled` 是单地点日志 `install-operation.v1` 的输入，`install-root` 不管这个日志（`contracts/component-interfaces.md` 319–325），
+  日志的 `inputs` 在 v0.12.63 是不带类型的值；录制的会话头 `hold`、步骤表 `recording.json` 的新成员、第二版清单、试跑记录都是 Lab 自己的文件，契约里没有哪个接口管它们。所以没有该升没升的修订。
+  但步骤表的 schema 仍是 `actingcommand.lab-recording.v1`（`crates/lab/src/recording/model.rs` 16），v0.12.63 的 Lab 拒它的新成员（见「升级与退回」）。
+- 配置键：没有加的、没有去掉的；`actingd.defaults.json` 一字没改，sha256 仍是 `e14b0ced7040a6d05046edddd9b0c8ee95a53de4b65d69fcc7d9dae17a433343`；两个配置模板和
+  `apps/actingd/src/config/manifest.rs` 没改。截图的那几个数是命令参数，不是配置键。
+- 结果码：3963 → 3968 个码（在用 3875 → 3880，`retired` 88 不变），1764 个位置、31 个分片不变；键 678 → 680，词表 252 → 254，词 1946 → 1955；在用码按类别 warning 154 → 155、
+  error 3367 → 3371，别的不变；审阅定稿的在用码仍是 154 个。
+  - **新码 5 个**，都在资源工具（`resource-tooling`），阶梯类 `none`，审阅 `pending`，都带 `path`：`trial_state_dir_refused`（error，必带 `trial_state_place`：`installed_root` 或 `repository`；拒）、
+    `trial_record_exists`（error；拒，不覆盖）、`trial_record_write_failed`（error；拒）、`trial_record_unreadable`（error，必带 `trial_record_problem`：`read_failed`、`too_large`、`undecodable`、
+    `name_mismatch`；拒）、`trial_record_part_left`（warning；记录写成了、临时文件没清掉，照常成功）。本版的程序只有计划会答第一个，别的四个只有记录的写入器和读者用，本版没有程序调用它们。
+  - **加的词表**：`trial_state_place`（2 个词）、`trial_record_problem`（4 个词），各配一个同名的键；已有词表 `install_refusal` 加 3 个词：`place_authorization_missing`、`place_enables_mismatch`、
+    `place_enables_unknown`（`crates/lab-ops/src/codes.rs` 643–651）。新的域前缀 `trial_` 归资源工具。没有码改类别或阶梯类，没有 `retired`。
+  - 第一阶段的几个警告词（`after_not_still`、`instance_not_held`、`instance_hold_unread`、`no_runtime_listening`、`replaced_header_unread`、`final_frame_missing`）是回答里的词，不是目录里的码。
+  - 本版的发布文件 `contracts/outcome-codes/released/0.12.64.json` 按合入全部 8 张 PR 以后的树生成：0 个码、0 个位置（新码都是 `pending`，没有 `retired`）；索引由脚本生成，仍是 32 个文件，
+    核过是最新的。
+- Lab 的操作表：187 → 188 行（13 行 `reserved` 不变，`not_exposed` 16 不变）：加 `standard-pack trial`；十行改了：`tap`、`swipe`、`long-tap`、`app launch`、`app restart`、`app stop` 多
+  `record`、`after_ms`、`interval_ms`、`still_ms`、`still_max_ms`，`record start`、`record stop` 现在要 Runtime（`Status` 和 `PauseScheduling` / `ResumeScheduling`），`record archive` 多 `all_frames`
+  并要 Runtime，`place` 多 `authorization`、`enables`。所以 Lab 的 MCP 服务器多一个工具 `ac_standard_pack_trial`，这十行的工具多了参数。命令清单（`ratchet/actinglab_commands.json`）
+  46 个顶层分派臂不变，命令 105 → 106。第一代 MCP 服务器仍是 46 个工具，只改了 `ac_record_start`、`ac_record_stop`、`ac_record_archive` 的说明和 `ac_record_archive` 的 `copy_to` 说明。
+  README 两种语言的命令数改成 106、工具表标题改成 v0.12.64；中文 README 的录制那一段照英文改了（去掉先 `actingctl pause` 的那一行）。
+- 两个压缩包的文件表不变（`.github/workflows/windows-remote-build.yml` 没改）：没有新文件、没有去掉的文件；改了内容的是各个程序和本文件。
+- 不稳定表现在是 FLK-08、FLK-10、FLK-14（`ci/flaky-tests.toml`）：FLK-14 随第一阶段那趟车登记，是账本 `gate_ln7c_q` 的一条测试在慢的机器上等写入器回复超时（`writer_response_timeout`），
+  原因没找到；账本那一项检查跳过它，不卡合并的 `flaky` 项照跑（`.github/workflows/ci.yml` 的 `CI_SKIP`、`FLAKY_TESTS`；看板 #71）。
+
+升级与退回（救急模块部署、退回、撤销那几条路，`crates/lab-rescue` 里除 `place` 以外，自 v0.12.63 一行没改，v0.12.63 说明里引的行号对 v0.12.63 和本版都对；`actinglab deploy` 和
+`actingctl install` 走的都是它）：
+
+- **v0.12.63 的安装工具装本版：两面都能装，不用任何标志。** 两个构建清单的 `interfaces` 和 v0.12.63 的一字不差，计划的每条边和 v0.12.63 那次一样：`ledger` 两边 [3, 8]，`one_way` 不触发，
+  `ledger_verify` 为 false（`install/plan.rs` 924）；`install-control` [0, 0]；`runtime-client` 处处 [3, 9]；`package` 的 `bundle_max_in_next` 照旧每个游戏一条 `pack_declaration_unknown`
+  警告，不挡；`installer_knows_keys` 过；`defaults_diff`（583–607）没有一行；文件计划里没有 `new`。救急模块发的请求、启动后检查读的形状都没变。
+- **本版第一次启动多写的**：没有。Runtime 的代码没改，`config.selection` 的默认值哈希不变。
+- **配置文件和已装的包**：v0.12.63 的配置文件照收；准入没改（`crates/pack-containment`、`crates/policy`、`crates/ledger` 都没改），`standard-pack check` 没改（资源工具只加了试跑），
+  对今天的根答法和 v0.12.63 相同，不出新的警告码。
+- **退回 v0.12.63**：回退门（`install/update.rs` 390–447）只放行这次部署替换掉的 v0.12.63；第 1 部分的边都过；第 2 部分用 v0.12.63 自己的 `actingledger events` 读部署以来的每一页：本版的
+  Runtime 不写 v0.12.63 不认识的记录，过。本版可能写下的东西，v0.12.63 怎么办（行号是 v0.12.63 的）：
+  - 带 `authorization`、`enabled` 的 `pack_place` 日志：照读。日志的 `inputs` 和 `plan` 是不带类型的值（`crates/lab-rescue/src/install/journal.rs` 154–155），`op status`、`install undo`、
+    `install resume` 都照读；步骤的意图形状没变（`pack_item` 的 `Item` 和检查那一步的 `CheckIntent`，后者的 `schedule_changes` 仍是布尔值，`install/place.rs` 178–205、1011–1019）；`plan` 里成了对象的
+    `schedule_changes` 没有人按类型读。
+  - 带 `hold` 的录制会话头：照读，不认 `hold`（`SessionRecordContext` 不拒未知成员，`apps/actinglab/src/commands/session_record.rs` 29–43）。但 v0.12.63 的 `record stop`、`record archive`
+    不恢复录制的暂停，重写会话头时也不带 `hold`：在本版上开始、在 v0.12.63 上结束的录制，那一台一直暂停着（理由 `lab-record-<毫秒>`），要人用 `resume` 恢复。
+  - 带第一阶段新成员的步骤表（`recording.json` 里按下的 `before_frame`、`after_frame`、`after_capture`、`sent_on_unstored_capture`，应用操作的前三个和 `executed_at_unix_ms`）：拒。
+    `ClickExecution`、`ApplicationExecution` 拒未知成员（`crates/lab/src/recording/model.rs` 334–336、768–770），这份录制在 v0.12.63 的 Lab 里答 `lab_recording_unreadable`
+    （`recording/store.rs` 243–244），标记、停止、生成包都做不了。只用 `do --capture --record` 录、没有应用操作的录制和以前逐字节相同，照读。从本版的录制生成的包格式没变
+    （`recording/generate.rs` 没改），照常装、照常跑。
+  - 第二版清单：`record archive --record-id` 再归档和 `--copy-to` 拷贝答 `record_state_io_failed`（`crates/lab/src/recording/archive.rs` 540–556 只认第一版，240、457 两处调它；码见
+    `recording/store.rs` 69–72）；`record reopen` 照常能用。
+  - 试跑记录：本版没有程序写，安装上不会有；v0.12.63 也没有读它的地方。
+  - **这些都不让安装的状态或日志对 v0.12.63 读不了**：Runtime 的状态根和账本本版没写新东西，救急模块的日志照读。读不了的只是用本版的 `--record` 按下或应用操作录下的那几份录制
+    （从它们第一次这样录起）和它们的第二版清单。
+
+配对：
+
+- **控制台 UI**（UI main `8b4d7480` 钉 Runtime v0.12.63 `3581a8af`，`Cargo.toml` 41–46；最新发版 UI v0.12.20 钉 v0.12.61）：声明的范围没变（`crates/acui-setup/component-interfaces.json` 3–11：
+  `actingd-config` [5, 32]、`install-control` [0, 1]、`ledger` [3, 8]、`runtime-client` [3, 9]、`runtime-outcomes` [1, 1]），本版的接口一个没动，向导核的四条边和对 v0.12.63 一样都过。
+  控制台不调 `place`、不读 `schedule_changes`、不跑录制命令（UI main 里搜过）。**它碰到的一处**：账本窗口按理由认暂停，`lab-<词>-<毫秒>` 只认救急模块的七个词
+  （`crates/acui-app/src/ledger/resume.rs` 63–81），录制的 `lab-record-<毫秒>` 不在里面，于是当成「别的工具设的」、给出两步确认的「恢复调度」（134–145）；人从这里恢复它，录制接下来的每一下按都带
+  `instance_not_held`，结束时答 `already_gone`。
+  - **下一次钉**：六个 `rev`（和锁文件）换成本版的提交，带进来的只有契约库的两个新键（账本、客户端、配置、内核那几个库没改）；范围不用改；账本窗口要把 `lab-record-<毫秒>` 认作录制的按住
+    （由录制结束时放开），不当作随手可以恢复的暂停。
+- **部署工具包**（这次走 Lab 的行）：两个构建清单的 `speaks` 和 v0.12.63 相同（`actingd-config` [5, 33]、`install-selection` [1, 1]、`install-control` [0, 0]、`ledger` [3, 8]、`runtime-client` [3, 9]、
+  `package` [3, 15]、`runtime-outcomes` [1, 1]）；默认值文件的哈希不变；`git diff --stat v0.12.63 <提交> -- apps/actingd/src/config/manifest.rs distribution/windows/actingd.defaults.json`
+  什么都不打印；不过的边没有，警告照旧是每个游戏一条 `package` 的 `bundle_max_in_next`；没有新文件、没有去掉的文件；运行中的 `actingctl.exe`（MCP 服务）、`actinglab-mcp.exe` 和做计划的
+  `actinglab` 改名放到一边，别的跑着的程序文件挡住，和 v0.12.63 一样；本版的 `standard-pack check` 不出新的警告码；启动日志不多一行。
+- **热放置工具包**：它不调救急模块的 `place`，也不读 `schedule_changes`：它用自己的放置脚本写文件、用 `actingctl pause` / `resume` 按住和放开、用 `actinglab standard-pack check` 核，所以本版的授权
+  核对管不到它。重钉要换的是构建值（提交、`actinglab`、`actingledger` 和两个构建清单的哈希）；`actingd_config` 5,33 和默认值哈希不变。要让放置留下授权记录，就得改走
+  `actinglab place <压缩包> --sums <文件> --plan` 读出 `plan.schedule_changes.enters`，再 `actinglab place <压缩包> --sums <文件> --authorization <引用> --enables <enters 里的每一个>`。
+  它碰到目标实例上别人的暂停就停，录制按住的那一台也一样。
+- **两个 MCP 服务器**：第一代的工具一个没增减，三个录制工具经安装里的 actinglab 按住和恢复；Lab 的多 `ac_standard_pack_trial`，十个工具多了参数（见上面操作表）。
+
+运行上的变化：
+
+- 从 v0.12.63 部署，经 Lab 的 `release stage`、`deploy`、`op status`：不用标志，没有 `ledger_verify`，`defaults_diff` 没有行，没有新文件；Runtime 的做法不变。
+- 录制按住那一台：`record start` 最多等 335 秒；结束时恢复要重连设备；忘了结束，那一台一直不调度；不必再先暂停。
+- 会改动东西的 `place` 要带 `--authorization`，有包进调度时逐个 `--enables`；先用 `--plan` 看 `schedule_changes.enters`。
+- 归档的拷贝默认只带清单点到的帧，要全部帧加 `--all-frames`。
+- 退回 v0.12.63 一直开着；退回之前先结束本版上开始的录制。
+
+本版合并的 PR：
+
+- #1754 S3-1（登记 §1.408）、#1758 S3-2（§1.409，同时是第二趟并车）、#1759 S3-10（§1.417）：各自的门行 `#463 S3-1`、`#463 S3-2`、`#463 S3-10`；救急模块七个旧门的放置调用照规矩带上授权
+  （`crates/lab-rescue/src/install/fixture.rs` 的 `authorized`），`gate_453_cold_place` 的 `schedule_changes` 断言改成看文件那一项，日志输入的名单多两个。
+- #1757 S1-1（§1.402，同时是第一阶段的并车）、#1760 S1-2（§1.403）、#1761 S1-3（§1.404）、#1763 S1-5（§1.406）、#1762 S1-7（§1.424）：各自的门行；`gate_449_rec_arch`（Lab 库和 actinglab 两处）加了第二版清单的测试，
+  `apps/actinglab/tests/runtime_input_proxy.rs` 加了第一阶段的测试；FLK-14 进不稳定表。
+
+## v0.12.63
+
+本版是 v0.12.62 之后的 3 次合并、9 张 PR：#1744（#434 LAB-6S4a）、#1750（#469 D4b）直接合并，其余七张由并车 #1756 带着合（S3-5 #1756 自己、S3-4 #1752、
+R4 + P4 #1736、U1b #1737、S3-3 #1751、S3-6 #1753、S3-7 #1755；车上除了各张的头和合并，只有一个改提示文字、手册折行和契约说法的小修提交，和一个改登记里索引总数的提交）。
+内容是：删掉五种旧请求、身份卡和带保持的启动（#434）；守卫、条件、认身份时识别服务失败，按识别服务失败算（#469 批准的四处改动里的第四处）；录出来的包的磨合期（#463）；
+制包第三阶段最前面的几片工具（#463、#464）。
+**生产上跑的是 v0.12.62（2026-11-15 起，第一次经 Lab 救急模块部署）**：一台实例在跑调度的例行任务，其余实例暂停着、模拟器关着。从 v0.12.62 装本版：**Lab 救急模块的
+`deploy` 和 `actingctl install` 两面都能装，不用任何标志，没有 `ledger_verify`，`defaults_diff` 两行（两个新键），没有新文件**。接口动了两个：`install-control` [0, 1] → [0, 0]、
+`actingd-config` [5, 32] → [5, 33]。结果码加 3 个、`retired` 60 个。**退回 v0.12.62 只在第一条带 `break_in` 的值记录写下之前开着**（见下面「升级与退回」）。
+
+- **在用的安装在部署时和第一周碰到的**（逐条核过代码）：
+  - **还在跑的旧 MCP 服务进程**：v0.12.62 的两个 MCP 服务器在写之前先发身份卡（`DeclareGovernanceIdentity`），本版删了这一种请求。部署把运行中的 `runtime\actingctl.exe`
+    （今天的 MCP 服务器 `actingctl mcp-serve`）和 `tools\actinglab-mcp.exe` 改名放到一边（`<文件>.old-<毫秒>`，`crates/lab-rescue/src/install/plan.rs` 33–37、960–973），
+    进程照旧跑旧映像：它对本版的每一次写都在身份卡那一步被断开、什么都没写，直到这个进程换掉；读不受影响。哪些写、怎么看、怎么办见下面「LAB-6S4a」。
+  - **磨合期从头算**：在用的安装里没有哪一对（目录任务、实例）有磨合期记录，所以每一对调度的线性包（`linear_steps`，录出来的包）从它在本版上第一次算数的运行起进入磨合期；
+    至少 20 次、至少 7 天之内，碰到没录过的画面仍是专用码 `contained_task_linear_unrecorded_screen` 加立刻暂停，和 v0.12.62 一样。页图包不受影响。
+  - 别的都没变：第一次启动多写的只有程序事实 `config.parameters.scheduling` 里两个新键的两行（默认值，来源 default；`contracts/component-interfaces.md` 133）和
+    `config.selection` 里新的默认值哈希；启动日志不多一行（只在安装排空时才打印的 `actingd policy_monitor waiting install_transition` / `resumed` 跟着排空一起删了）。
+
+- **新的读法和工具**：
+  - **运行停在哪个结局**（S3-3，登记 §1.410）：运行状态的终结多 `outcome_key`，是这次运行完成时所在那一页的映射的名字（目标页、补的结局页、挑选的 `on_empty` 页等），
+    宿主早就写在终结记录上，读的时候取出来（`crates/actingcommand-contract/src/run_summary.rs` 106、584）；失败、取消、包没声明映射的没有这个成员。`actinglab run show`、
+    `status`、两边的 `ac_get_run`、总览里每台实例的 `run` 都带；运行列表的行不带。
+  - **从跑挂的那一帧补一个可选步**（R4，§1.388）：停下的录制用 `record mark --optional-after <k>`（加 `--frame`、标记和关掉它的点击）在第 k 步后面插一个可选步
+    （跑的时候冒出来、关掉以后原路照走的弹窗），`record stop` 照常自检并重新生成包；`--remove-inserted <n>` 撤掉，包回到原样。k 是录制里的序号，不是包里 `step_<nn>_click`
+    的编号：在 `record status` 里找 `artifact_step` 等于 nn 的那一行，取它的 `index`。拒绝是新码 `record_optional_after_invalid`（退出 3），带 `optional_after_problem` 九个词之一。
+  - **`record stop` 留下什么**（P4，§1.388）：不再覆盖上一次的输出，旧的留成 `<名字>.old-<毫秒>`，回答的 `lab.kept` 说留了什么；`--lab-dir` 落在一个安装根里
+    （某一级目录里有 `install\state.json`）时拒，`record_lab_dir_invalid` 带 `inside_installed_root`（`crates/lab/src/recording/container.rs` 126–159、239–277）；
+    回答多 `adoption_example`：收编那条命令和一份「按住」决定的骨架，理由留空，要自己填。
+  - **收编**（S3-4、S3-5，§1.411、§1.412）：`standard-pack adopt --held-reason <文字> [--held-reference <文字>]` 就是一份「按住」的决定文件，交给读决定文件的同一个函数，
+    写出的字节一样；和 `--decide` 同给、只给 `--held-reference` 都在读任何东西之前拒。收编的回答（`--dry-run` 下也是）带这个包的就绪那一行 `readiness`，算不出来时给
+    `readiness_not_judged`，收编本身不受影响。Lab 的 MCP 工具 `ac_standard_pack_adopt` 多 `held_reason`、`held_reference`。
+  - **就绪说出理由**（S3-6，§1.413）：`standard-pack ready` 里被按住的包那一行多 `held: {reason, reference?}`（排程文件里那两段文字原样），每个包那一行多 `warnings`
+    （检查里点名这个包的警告）；没有的就不出现（`crates/resource-tooling/src/standard_pack_ready.rs` 231–260）。
+  - **构建的回答**（S3-7，§1.414）：`standard-pack build` 的回答多 `readiness`（就绪函数对构建铺出来的安装根的回答）和 `next.place`（放置预看那一行的词：`place`、压缩包、
+    `--sums`、校验文件、`--plan`；只给预看，不给真放置那一行）；就绪算不出来时给 `readiness_refused` 和一条警告 `resource_build_readiness_refused`，退出码照旧 0
+    （`apps/actinglab/src/resource_verify/build.rs` 421–456）。
+  - **磨合期看得到**（U1b，§1.389）：`actingd suspended` 多一张 `break_ins` 表，每对一行：内容、`runs` / `runs_needed`、第一次结算的时间、`since_first_ms` / `ms_needed`、
+    `in_break_in`（`crates/runtime-host/src/suspension_report.rs` 1276–1341）。两个新配置键 `scheduling.suspension.break_in_runs`（默认 20）和
+    `scheduling.suspension.break_in_ms`（默认 604800000，7 天），运行中可以改，从下一次运行起算。
+
+- **变了做法的三处**：
+  - **LAB-6S4a（#1744，登记 §1.287「Slice LAB-6S4a」）**：请求种类 `DeclareGovernanceIdentity`、`RecordApprovalDecision`、`InstallTransition`、`UpgradeState`、
+    `UpgradeStateStatus` 删了，连同结果、校验、宿主的处理、客户端的方法和操作表 `not_exposed` 里的四行；发它们的地方也删了：`actingctl install-transition`（现在是
+    `actingctl_usage_invalid`，不连接）、actingd 的 `--install-held` 启动（`usage_invalid`）、两个 MCP 服务器在写之前记的身份卡和 `client.action`（写的发起者改由绑定时的
+    `Lab-MCP` 说明；Lab 调用截图以后补记的客户端动作留着，前面不再发身份卡）、`evidence read` 的身份卡。
+    - **收到已删的请求**：解不出来，Runtime 断开这条连接、不发回执，记一条 `runtime_protocol_invalid`，自己照常往下跑（`crates/runtime-host/src/host/requests.rs` 1413–1423）。
+    - **v0.12.62 里谁发、什么时候**（核的是 v0.12.62 的源码）：`actingctl mcp-serve` 在 Cli 来源的每次写之前（`ac_run_pack`、`ac_stop_run`、`ac_pause`、`ac_resume`、
+      `ac_emulator`、`ac_ladder_drill`、`ac_targets_set`、`ac_perf_preset`、`ac_config_set`；`apps/actingctl/src/mcp/operator.rs` 53–92）：对本版这次写失败（连接在回执之前
+      断开，客户端报 `runtime_receipt_header_failed`），什么都没写；Lab 工具调用以后补记客户端动作也先发身份卡，失败只是一条 `client_action_not_recorded` 警告，Lab 那一下
+      已经做了（`apps/actingctl/src/mcp/lab.rs` 1236–1245）；`ac_remedy_set`（Agent 来源）不发。`actinglab-mcp.exe` 在它记录的每次写之前都发
+      （`apps/actinglab-mcp/src/runtime.rs` 263–296），同样失败、什么都没写。`ac_evidence_confirm_read` 在确认之前发（`crates/lab-ops/src/evidence_read.rs` 379）。
+      每一次这样的失败，账本多一条 `runtime_protocol_invalid`。`RecordApprovalDecision` 和升级态的两种，v0.12.62 的程序里没有谁发。v0.12.62 的救急模块、看门狗一处都
+      不发这五种（`crates/lab-rescue`、`crates/watchdog` 里没有），救急模块起新版只带 `--config`。
+    - **部署以后要做的**：`actinglab op status`（不带操作号：安装状态）的 `mcp_servers_on_old_images` 列出还跑在改名放到一边的旧映像上的 MCP 服务进程
+      （`crates/lab-rescue/src/install/status.rs` 304–319）；列出的每一个，让它的客户端重开会话。MCP 入口的子进程由入口在两次调用之间自己换
+      （`contracts/install-cli.md` 614–618），换过就不在这张表上。
+    - **留着的**：每种记录的形状（旧账本里的身份卡记录和审批记录照旧读得出）；`governance.allowed_clients` 照旧读、照旧报，什么都不决定，所以 `actingd-config` 不为它升；
+      旧账本里两条安装切换的事实（`host.install_transition` 和它的 `.pauses`）在启动时作废，和 v0.12.62 的启动一样。
+  - **D4b（#1750，§1.401）**：给一步的守卫、一个操作的 `when`、一个期望身份求值时，如果是识别服务自己失败或答得不对，运行以 `contained_task_vision_provider_failed`
+    （error，阶梯类 `environment_fault`）结束，带那一处原来的说明、不带值，和认页时（#387 D1c-G 起）一样；真正的求值错误照旧是 `contained_task_guard_evaluation_failed`（守卫）
+    或 `contained_task_recognition_failed`（`when`、身份），说明逐字节不变（一处读法：`crates/execution-kernel/src/contained_task.rs` 12743–12776）。
+    - **跟着变的四处**（都是认页那条路今天的做法）：没有冷却窗（默认配置任务阶段的 `pack_logic` 只点名 `pack_logic_mismatch`，`distribution/windows/actingd.defaults.json`
+      17–21，所以不立刻起阶梯，也就不开窗）；守卫的这种失败不再钉 `GuardRejection` 帧；`when`、身份的这种失败以后不做任务几何复查；回主页入口层和前置层的这种失败走
+      「不是识别失败」那一支，层的错误只带码。由 `stability_burst` 计数（同一实例 600000 毫秒内第三次登记一次突发，从回主页那一级起阶梯；同一文件 23–28）。
+      请求恢复的重试轮照旧以 `contained_task_requires_scheduler` 结束，它的 `failure_code` 现在是识别服务的码。
+    - **什么能让一直这样失败的包停下**：这种失败不累计，计数永远是 1，所以 `on_failure` 只在 `retry_limit` 为 0 或 `escalation_threshold` 为 1 时暂停它；别的情形每次
+      退避以后重跑，拦住连续失败的是突发计数。认页那条路本来就是这样。
+  - **U1b（#1737，§1.389）：磨合期**。调度派的线性包，只在这一对（目录任务、实例）对它的包内容（主包内容哈希的前 12 位）的磨合期内，碰到没录过的画面才用专用码
+    `contained_task_linear_unrecorded_screen` 结束、立刻暂停这一对（v0.12.60 起就是这样）；出了磨合期，同样的情形以 `page_confirmation_failed` 结束，带同一个词
+    `confirmation_problem` `unrecorded_screen` 和 `artifact_id`（那次运行钉住的失败帧），照普通失败走 `on_failure`、重试和恢复阶梯（`pack_logic`），不立刻暂停
+    （`crates/execution-kernel/src/contained_task/linear.rs` 728–768）。直跑和 Lab 跑永远用专用码。
+    - **算一次的**：开始跑了包（记下了 `PackageAdmitted`）、并以成功或不因条件结束的失败结算的运行；被停下的、因条件结束的、重放的、启动时补结算的、切换应用失败的、
+      入口门拒掉的、前置包那一层失败的，都不算（`crates/runtime-host/src/host/policy_outcome.rs` 2222–2237）。满 `break_in_runs` 次**并且**从第一次起满 `break_in_ms`
+      才出磨合期；换了内容（比如补了一个结局）就从头算（`crates/runtime-host/src/policy_control.rs` 337–351、558–580）。
+    - **没有记录的一对**（在用安装里的每一对）：从它在本版上第一次算数的运行起进入磨合期，至少 20 次、7 天之内对它来说什么都没变。
+    - **读不到、量不出的时候**：磨合期自己的记账绝不让一次运行失败：记一条警告 `policy_break_in_unread`（警告级 `runtime.failed`，带运行的链接和
+      `break_in_problem`：包的内容没量出来是 `content_unmeasured`，读不到这一对的记录、两个键或时钟是 `record_unread`；背后的失败作 `caused_by`），这次运行照跑、
+      按磨合期外处理，同时交给 actingd 的日志（`crates/runtime-host/src/host/failure_settlement.rs` 359–375、446–537）。宿主自己运行状态的锁坏了、这条警告写不进账本，
+      照旧往上抛。
+    - **落盘的**：这一对的值记录 `policy.control_state_recorded` 多一个可选成员 `break_in`（`{content_hash, runs, first_settled_at_unix_ms}`，
+      `crates/actingcommand-contract/src/event/payload/observer.rs` 473–519），由算数的那次结算写下；装载的启动读它，播种的启动从各对最新的值记录取回。`ledger` 修订没升。
+      **v0.12.62 读不了这个成员**，见「升级与退回」。
+
+- **部署和退路**：照 v0.12.62 那次的做法，用在线 v0.12.62 留下的那份 `actinglab` 跑 `release stage`、`deploy <提交> --plan` 预看、`deploy <提交> --detach` 实做，
+  再用 `op status` 看结果；Lab 这一面总带 `accept_ledger_one_way`（`crates/lab-rescue/src/install/update.rs` 93），本版 `ledger` 修订不动，这一项不起作用。
+  部署的组合步骤（停旧版、按住调度、带 `--config` 起新版、启动后检查、交回调度）发的请求种类本版都留着，一步不变。
+  - **退路**：组合步骤里的自动退回发生在交回调度之前，那时本版还没跑过调度的运行，退得回去。部署做完以后，回到 v0.12.62 用留着的 v0.12.62 那份 `actingctl install`
+    （`install undo`、`install resume`、`install release-hold`）或救急模块的退回：**只在本版还没写下第一条带 `break_in` 的值记录时放行**；那以后回退门拒，手工放回 v0.12.62
+    它也起不来（见「升级与退回」）。要看写没写过：`actingd suspended` 的 `break_ins` 为空，就是还没有。
+
+- **已知的限度**（各片验收记录列的，逐条核过代码）：
+  - **内容哈希走缓存**：同一个包位置在 `scheduling.suspension.lift_check_min_interval_ms`（默认 60000）里最多量一次（`failure_settlement.rs` 359–375 经解除暂停检查的缓存）；
+    包在这段时间里被换掉，这段时间的运行按旧内容判、记在旧内容上，新内容的磨合期从换过以后第一次量到它起算。
+  - **构建和收编回答里的就绪不读安装**：两处都以 `installation: None` 调用就绪函数（`adopt.rs` `adopted_readiness`；`build.rs` 421–424），五项安装项都是 `not_judged`
+    （`installation_not_read`），一个包最多答到 `ready_to_place`。
+  - **`standard-pack build` 的 `build.json` 一个字没动**：格式仍是 `actingcommand.standard-pack-build.v1`、十一个成员；就绪只在命令的回答里。
+  - **今天的 MCP 服务器的工具说明没跟上新成员**：`ac_get_run` 的说明写了 `failure_values`、没写 `outcome_key`（`apps/actingctl/src/mcp/tools.rs` 464），成员照样在回答里。
+
+配置：按代码、`distribution/windows/component-interfaces.json` 和 `contracts/component-interfaces.md` 核过，动了两个：
+
+- `install-control` [0, 1] → [0, 0]（`component-interfaces.json` 6；`contracts/component-interfaces.md` 136–137）：修订 1（安装切换）随 `InstallTransition` 删了；
+  说 [0, 1] 的安装工具和 [0, 0] 相交，取修订 0（冷的做法：`actingctl request-shutdown --wait`、不带 `--install-held` 的启动）。
+- `actingd-config` [5, 32] → [5, 33]（`component-interfaces.json` 4；`contracts/component-interfaces.md` 133）：修订 32 加上 `scheduling` 段 `suspension` 的两个成员。
+  没写这两个键的文件保持原来的修订，所以本版照收修订 5 到 32 的文件。两行键表 `since` 0.12.63、可设（`crates/runtime-config/src/scheduling.rs` 578–592、944–964）。
+- 别的都没动：`install-selection` [1, 1]、`ledger` [3, 8]、`runtime-client` [3, 9]、`package` [3, 15]、`runtime-outcomes` [1, 1]（`component-interfaces.json` 5、7–10）。
+  删这五种不动 `runtime-client`（`contracts/component-interfaces.md` 292 的计划表写明）。`ledger` 没升，但值记录多了一个 v0.12.62 拒收的成员（见「升级与退回」）。
+- 配置键：加两个，`scheduling.suspension.break_in_runs`（整数 `1..=4294967295`，默认 `20`）和 `scheduling.suspension.break_in_ms`（毫秒，默认 `604800000`），运行中可设，
+  每次调度的运行执行之前读，没有按实例的写法；没有去掉的键。`actingd.defaults.json` 只多这两个键（351–354：`suspension` 里 `lift_check_min_interval_ms` 后面），
+  sha256 `9ee26e8fc203fef21234b072d5c0f02d0c33b6fbef1b6c3f1613d5b55a99666d` → `e14b0ced7040a6d05046edddd9b0c8ee95a53de4b65d69fcc7d9dae17a433343`；两个配置模板和
+  `apps/actingd/src/config/manifest.rs` 没改，没有新的子系统名。`governance.allowed_clients` 照旧收，不再决定任何事。
+- 结果码：3960 → 3963 个码（在用 3932 → 3875，`retired` 28 → 88），1764 个位置、31 个分片不变；键 676 → 678，词表 250 → 252，词 1935 → 1946；审阅定稿的仍是 172 个
+  （在用的 170 → 154：定稿的有 16 个随这次 `retired`）；在用码按类别 success 132 → 125、info 213 → 212、warning 156 → 154、error 3414 → 3367、fatal 17。
+  - **新码 3 个**：`policy_break_in_unread`（runtime-host，warning，阶梯类 `none`，必带 `break_in_problem`、`task_id`、`instance_id`；只记录、不拒、不结束进程）；
+    `record_optional_after_invalid`（lab，error，`none`，必带 `optional_after_problem`；拒，退出 3，什么都不写）；`resource_build_readiness_refused`（actinglab，warning，`none`，
+    必带 `path`；只警告，退出 0）。
+  - **`retired` 60 个**，都是 LAB-6S4a 的（contract 10、runtime-client 1、actingd 1、actingctl 4、actinglab-mcp 1、runtime-host 43），`retired_in` 0.12.63，发它们的代码都没了，
+    留在目录里，旧记录照样读得出；封闭的 Global 表少 4 个（146 → 142，`contracts/runtime-outcomes.md`）。
+  - **加的词表**：`optional_after_problem`（9 个词）、`break_in_problem`（2 个词：`content_unmeasured`、`record_unread`），各配一个同名的键。**已有码加的可选值**只有一个：
+    `page_confirmation_failed` 的 `artifact_id`。没有码改类别或阶梯类。
+  - 说明改了的在用码 9 个：D4b 的三个（`contained_task_vision_provider_failed`、`contained_task_guard_evaluation_failed`、`contained_task_recognition_failed`）、
+    U1b 的两个（`contained_task_linear_unrecorded_screen` 连它的 `handling`、`page_confirmation_failed`）、LAB-6S4a 以后没人再发的四个（`governance_client_not_allowed`、
+    `governance_identity_already_declared`、`governance_instance_unknown`、`recovery_ladder_drain_requested`）；`retired` 的 60 个说明都改了，其中 16 个连 `handling` 也改了。
+  - 本版的发布文件 `contracts/outcome-codes/released/0.12.63.json` 按合入全部 9 张 PR 以后的树生成：60 个码（就是这 60 个 `retired` 的签名）、0 个位置；索引照旧由脚本生成，
+    仍是 32 个文件，核过是最新的。
+- Lab 的操作表：187 行不变（13 行 `reserved`），`not_exposed` 20 → 16（删掉的四种）；七行改了：`record mark` 多 `optional_after`、`remove_inserted`，`standard-pack adopt`
+  多 `held_reason`、`held_reference`，`standard-pack ready`、`standard-pack build` 的 `output` 和说明，`status`、`run show` 的说明（`outcome_key`），`evidence read` 的
+  `requests` 去掉 `DeclareGovernanceIdentity`。所以 Lab 的 MCP 服务器工具数不变，`ac_record_mark` 和 `ac_standard_pack_adopt` 多了参数。命令清单
+  （`ratchet/actinglab_commands.json`，46 个顶层分派臂、105 条命令）没改；`actingctl` 少了 `install-transition` 这条命令。今天的 MCP 服务器仍是 46 个工具，只有 `ac_record_mark`
+  的说明写上了 `optional_after`、`remove_inserted`；README 两种语言的工具表标题改成 v0.12.63，`RuntimeOperation` 的个数改成 76（其中回答 `not_implemented` 的 6 种）。
+- 两个压缩包的文件表不变（`.github/workflows/windows-remote-build.yml` 660–680 没改）：没有新文件、没有去掉的文件；改了内容的是各个程序、`actingd.defaults.json`、`INSTALL.md`
+  （去掉了带保持的启动）和本文件。不稳定表照旧是 FLK-08 和 FLK-10，`ci/` 只多了 `ci/retired-gates.toml` 的条目。
+
+升级与退回（`crates/lab-rescue` 自 v0.12.61 一行没改，下面的行号对 v0.12.62 和本版都对；`actinglab deploy` 和 `actingctl install` 走的都是它）：
+
+- **v0.12.62 的安装工具装本版：两面都能装，不用任何标志。** 计划的边（`install/plan.rs`）：`ledger` 两边 [3, 8]，`previous_max_in_next` 过、`one_way` 不触发（298–310），
+  `ledger_verify` 为 false（924）；`runtime-outcomes` 过（311–323）；`install-control` 安装工具自己的 [0, 1] 和 Rp [0, 1]、R\* [0, 0] 都相交（324–340，`meet` 是有交集），
+  `runtime-client` 处处 [3, 9]；`package` 的 `bundle_max_in_next`（341–364）比安装登记里每个根的范围，登记里一律没有，每个游戏一条 `pack_declaration_unknown` 警告，不挡；
+  `installer_knows_keys`（368–385）过，配置文件没写这两个新键；`runtime_equals_tools`（765–772）过；`next_check_config`（911–923）是本版的 `check-config --install-root`
+  读在用的配置文件，修订 32 以内的文件照收。`defaults_diff`（583–607）恰好两行：两个新键，`live` 为空、`target` 是 20 和 604800000，来源 `default`。文件计划里没有 `new`。
+  救急模块发给旧版和新版的请求、启动后检查读的 `Status`、`RuntimeFactSnapshot`、`StartReport` 形状都没变。
+- **本版第一次启动多写的**：见上面「在用的安装碰到的」；从第一次算数的结算起，那一对的值记录带 `break_in`。别的记录、事实、键都和 v0.12.62 写的一样。
+- **配置文件和已装的包**：v0.12.62 的配置文件照收；准入没改（`crates/pack-containment`、`crates/policy`、`crates/ledger` 都没改），本版的 `standard-pack check` 对今天的根
+  答法和 v0.12.62 相同，不出新的警告码。
+- **退回 v0.12.62**：回退门（`install/update.rs` 390–447）只放行这次部署替换掉的 v0.12.62；第 1 部分的边都过（`install-control` [0, 1] 和 [0, 0]、[0, 1] 都相交）；
+  第 2 部分用 v0.12.62 自己的 `actingledger events` 读部署以来的每一页（`install/programs.rs` 733–773），读到它拒收的记录就拒，`rollback_gate_failed` 带
+  `ledger_sequence`（第一条拒收的序号，`update.rs` 154–176）；本版启动过以后的 `install undo` 也走这道门（`install/undo.rs` 189–202、410–443）。本版可能写下的东西，
+  v0.12.62 怎么办（行号是 v0.12.62 的）：
+  - **带 `break_in` 的值记录：拒收**。v0.12.62 的 `PolicyControlStateRecord` 拒未知成员（`crates/actingcommand-contract/src/event/payload/observer.rs` 470–472），
+    账本按类型解每条记录的载荷（`crates/ledger/src/fact.rs` 247），读到这一条就是 `corrupt_ledger_record`（`crates/ledger/src/global/sqlite.rs` 4141–4147、5574–5580）。
+    所以回退门第 2 部分拒；就算手工把 v0.12.62 放回去，它的启动装载决策记忆时读到这一条，以账本失败结束（`crates/runtime-host/src/policy_host.rs` 2172–2203、
+    `tagged_state.rs` 58–78）。**这一条从一对调度的线性包（主包的内容量到了）第一次开始跑包、并以成功或不因条件结束的失败结算时写下，以后这一对每条值记录都带它。
+    从那一刻起退回 v0.12.62 是单程的。**页图包、被按住的包、停下的或因条件结束的运行都不写它；`actingd suspended` 的 `break_ins` 为空，就是还没写过。
+  - 带 `policy_break_in_unread` 和 `break_in_problem` 的 `runtime.failed` 警告：照收。码是不核目录的字符串（`crates/actingcommand-contract/src/outcome.rs` 738–742），
+    `values` 是不带类型的映射（1709–1725），只留码模式丢掉它不认识的键（1786–1795）；这几处自 v0.12.62 没改。
+  - `page_confirmation_failed` 带 `artifact_id` 的结局：照收，`artifact_id` 是 v0.12.62 认识的键（`outcome/keys.rs` 112）。
+  - 插过可选步的录制：v0.12.62 的 Lab 读不了这份 `recording.json`（`RecordingStep` 拒未知成员 `inserted_after`，`crates/lab/src/recording/model.rs` 229–231），答
+    `lab_recording_unreadable`（`recording/store.rs` 243–244）；从它生成的包照常装、照常跑（任务的 `provenance` 只要求是对象，`crates/pack-containment/src/source/declarations.rs`
+    4856–4858，自 v0.12.62 没改）。`<名字>.old-<毫秒>` 留下的副本是没人读的普通文件。
+  - 标准包工具写下的：`--held-reason` 写的排程文件条目和「按住」决定文件写的逐字节相同，v0.12.62 的收编和编排照读；就绪、构建的回答不落盘，`build.json` 没变；没有新的日志。
+  - 运行中改过两个新键的设定：v0.12.62 启动时丢掉，记 `config_override_dropped`（`crates/runtime-config/src/effective.rs` 1299–1304）。
+  - 删掉的五种请求不落盘，退回以后 v0.12.62 的程序又能发；`outcome_key` 和就绪都是读的时候算的，不落盘。
+
+配对：
+
+- **控制台 UI**（最新发版 UI v0.12.20，就是 UI 提交 `40c6d4be`，钉 Runtime v0.12.61 `5c629e3b`；UI main `06d8b548` 钉 v0.12.62 `44cbab53`：两处都在 `Cargo.toml` 41–46）：
+  声明的范围两处相同（`crates/acui-setup/component-interfaces.json` 3–11，这个 crate 已不在工作区里，只有构建读这份声明）：`actingd-config` [5, 32]、`install-control` [0, 1]、
+  `ledger` [3, 8]、`runtime-client` [3, 9]、`runtime-outcomes` [1, 1]。
+  - **安装向导**（`crates/acui-wizard`）和 Runtime 只核四条边：`runtime-client`、`actingd-config` 要有交集，`ledger`、`runtime-outcomes` 要 Runtime 的最高修订在它的范围里
+    （`crates/acui-wizard/src/manifest.rs` 200–213、239–286，两处相同）；[5, 32] 和 [5, 33] 有交集，`install-control` 不是这两方之间的边，所以什么都不拒。它停 Runtime 用
+    `actingctl request-shutdown --wait 60`，起用 Lab 的 `up`，核配置用 `actingd check-config --install-root`（`crates/acui-wizard/src/runtime.rs` 14–25、263–270），
+    控制台自己起 actingd 只带 `--config`（`crates/acui-app/src/launcher.rs` 859–873）：本版都留着。删掉的那几种请求只在已不编译的 `crates/acui-setup` 里用过。
+  - **控制台**：设置页的哪些键显示、在哪一组，取钉住的 Runtime 库的档位（`crates/acui-app/src/workbench/settings.rs` 6–10），两个新键在那里是 `hidden`
+    （Runtime `crates/runtime-config/src/ui_tier.rs` 102–105；本版也没给它们档位），不显示。账本页离线读用钉住的 v0.12.62 账本库（`crates/acui-source/src/lib.rs` 252–265），
+    读到带 `break_in` 的值记录的那一页会拒，和上面 v0.12.62 自己的读者一样；在线读拿的是 Runtime 给 UI 的公开投影（Runtime `crates/ledger/src/global/projection.rs`
+    452–455），值记录的内容不在里面，不受影响。
+  - **下一次钉**：`Cargo.toml` 41–46 的六个 `rev`（和锁文件）换成本版的提交，离线读就认 `break_in`；范围不用改，`actingd-config` 要等控制台编辑这两个键时才升到 33，
+    `install-control` 可以跟着改成 [0, 0]（控制台已经没有用修订 1 的地方）。
+- **部署工具包**（这次走 Lab 的行）：两个构建清单的 `interfaces` 都照 `component-interfaces.json` 写（`.github/workflows/windows-remote-build.yml` 709–721、775、838–845），
+  `speaks` 是 `actingd-config` [5, 33]、`install-selection` [1, 1]、`install-control` [0, 0]、`ledger` [3, 8]、`runtime-client` [3, 9]、`package` [3, 15]、
+  `runtime-outcomes` [1, 1]；默认值文件的哈希换成上面那一个；`git diff --stat v0.12.62 <提交> -- apps/actingd/src/config/manifest.rs distribution/windows/actingd.defaults.json`
+  只打印 `actingd.defaults.json | 4 +++-`（3 行加、1 行减）；不过的边没有，警告照旧是每个游戏一条 `package` 的 `bundle_max_in_next`（`pack_declaration_unknown`）；
+  没有新文件、没有去掉的文件；运行中的 `actingctl.exe`（MCP 服务）和 `actinglab-mcp.exe` 改名放到一边，做计划的那个 `actinglab` 也改名放到一边，别的跑着的程序文件挡住；
+  本版的 `standard-pack check` 不出新的警告码；启动日志不多一行（`policy_break_in_unread` 出现时作为警告进 actingd 的日志，不在启动时）。
+- **热放置工具包**：重钉要换的比上一次多：构建记录里的 `actingd_config` 从 5,32 改成 5,33，`defaults_sha256` 换成上面的新值，两个构建清单和 `actinglab`、`actingledger`
+  的哈希照例换成本版的，接受的 `validated_with` 加上本版的提交；`package` [3, 15] 和 `ledger` [3, 8] 留着。它不用删掉的那几种请求和命令。
+- **两个 MCP 服务器**：工具一个没增减；读运行的工具（`ac_get_run`、`ac_overview`，Lab 那边的 `ac_run_show`）多 `outcome_key`；`ac_record_mark` 多 `optional_after`、
+  `remove_inserted`，Lab 的 `ac_standard_pack_adopt` 多 `held_reason`、`held_reference`；写之前都不再发身份卡。
+
+运行上的变化：
+
+- 从 v0.12.62 部署，经 Lab 的 `release stage`、`deploy`、`op status`：不用标志，没有 `ledger_verify`，`defaults_diff` 两行，没有新文件。
+- 部署以后看 `op status` 的 `mcp_servers_on_old_images`，列出的 MCP 服务进程让它的客户端重开会话；不重开的，写一次失败一次、账本多一条 `runtime_protocol_invalid`。
+- 守卫、`when`、认身份时识别服务失败：不立刻起恢复阶梯，由突发计数拦。
+- 录出来的包：每一对头 20 次、7 天照旧碰到没录过的画面就停；过了以后按普通失败处理，`actingd suspended` 的 `break_ins` 看进度。
+- 退回 v0.12.62 只在还没写过带 `break_in` 的值记录时可行；写过以后只能往前。
+- 制包工具：`record mark --optional-after`、`standard-pack adopt --held-reason`、就绪说出按住的理由、构建直接给就绪和放置预看那一行。
+
+本版合并的 PR：
+
+- #1744 LAB-6S4a（登记 §1.287）：主机门行 `#434 LAB-6S4a`；`ci/retired-gates.toml` 加 39 条（31 个测试、8 个行键，各写明风险现在由什么盖着）；按现在的线上样子改了 MCP、`actingctl` 的几组测试。
+- #1750 D4b（§1.401）：内核和主机的门行 `#469 D4b`；没有改旧测试。
+- #1736 R4 + P4（§1.388）：门行 `#463 R4`；改了 `gate_336_pkgs5` 一条（`--lab-dir` 里同名的包现在留成 `.old-<毫秒>`）和 `serve_calls` 的 `mcp_lab_overflow_rule`
+  （截短时保留 `adoption_example`）。
+- #1737 U1b（§1.389）：门行 `#463 U1b`（11 条）；只在结构体多了成员的地方改了 `gate_422_ln3` 和 `failure_settlement` 的单元测试；架构钉 `actingd-config` [5, 33]。
+- #1751 S3-3（§1.410）、#1753 S3-6（§1.413）、#1755 S3-7（§1.414）：各自的门行；没有改旧测试。
+- #1752 S3-4（§1.411）和 #1756 S3-5（§1.412，同时是这一趟并车）：门行 `#463 S3-4`、`#463 S3-5`；只改了 `gate_464_p1` 的辅助函数 `request` 交出路径的方式，断言没变。
+
+## v0.12.62
+
+本版是 v0.12.61 之后同一张单子（#469「状态码，A 档」）的 8 张 PR：V0 #1738、F1 #1739 直接合并，其余六张由并车 #1745 带着合（K2 #1745 自己、K1 #1743、H2 #1742、D4a #1746、
+H1 #1747、H3 #1748；车上除了各张的头和合并，只有一个改注释、说明文字和三处测试的提交）。#469 定的是：最混的几个码在码旁边带一个原因词（一个封闭词表里的值），程序怎么读码不变。
+**生产上跑的是 v0.12.61（2026-11-15 起）**：一台实例在跑调度的例行任务，其余实例暂停着、模拟器关着。从 v0.12.61 装本版：**Lab 救急模块的 `deploy` 和 `actingctl install`
+两面都能装，不用任何标志，没有 `ledger_verify`，`defaults_diff` 零行，没有新文件，能退回 v0.12.61**。接口一个都没升，没有新配置键，没有新码。
+
+- **在用的安装碰到的**（逐片核过代码）：
+  - **第一次启动**：`apps/actingd`、`crates/runtime-config` 一行没改，`crates/ledger` 只多一个测试文件，默认值文件和两个配置模板没改；启动写的事实、记录和启动日志都和 v0.12.61
+    相同。多做的只有 H2 一处：从值记录装载的暂停，在内存里补上它的原因词（读调度日志里那次派发的执行记录，`crates/runtime-host/src/policy_host.rs` 6347–6354、
+    `crates/runtime-host/src/policy_control.rs` 663–685），只读、不写。
+  - **每天的例行任务：运行、派单和恢复阶梯做的事都不变，只有一处例外（D4a，见下）。** 词只进结果的值、从不进说明文字，所以失败身份、连续计数、钉住的帧、线上的码和退出码都不变，
+    也没有哪处判断读这些词；多出来的只是已有形状的记录和答复里几个可选的值。
+  - **本版以前写下的记录不带词**：读者照旧只显示码（F1 的 `failure_values` 照样出现，里面是那次结局本来就带的码、位置和词表值）。现算的不受这条限：H1 的词每次评估从当前记录算，
+    `actingd suspended` 的暂停词每次从执行记录算。v0.12.61 记下的暂停，在 `ac_schedule` 这一类读法里第一次启动就补回词，条件是调度日志还留着那次派发的执行记录、而且它说的是同一个
+    失败（码、失败身份、原始类都对上）；对不上就只显示码，契约举的情形是暂停解除以后又有一次被条件结束的运行（`contracts/policy-suspension.md`「Why a pair is paused」）。
+
+- **现在哪里能读到「为什么」**（V0 写词表，K1、K2、H1、H2、H3 发词，F1 把运行结局的值带到读运行的地方；登记 §1.386、§1.387、§1.395 到 §1.399）：
+  - **一次运行失败**：`page_confirmation_failed`、`contained_task_step_unconfirmed`、`contained_task_error_page_reached`、`contained_task_linear_unrecorded_screen`、
+    `contained_task_requires_scheduler` 带 `confirmation_problem`（线性包 K1，页图包 K2），`contained_task_requires_scheduler` 还带让它请求恢复的那次失败的 `failure_code`；
+    `contained_task_guard_refused` 带 `guard_problem`，`target_not_passed` 旁边是目标自己登记的原因（有的话）作 `failure_code`。读的地方：运行的回执和账本记录（完整的值）；查一次运行（`ac_get_run`、
+    `actinglab run show`）、运行列表（`actingctl runs`、`ac_runs`、`actinglab run list`）、总览里每台实例的 `run`、诊断的 `runs` 行，都在结局的 `failure_code` 旁边多 `failure_values`：
+    只留码模式下留得住的结局值（码、位置、词表的词），没有就不出现（`crates/actingcommand-contract/src/run_summary.rs` 88–101、561–578，`crates/lab-ops/src/run_list.rs` 529–537）。
+    按码分组的 `runs_grouped`、`failures_grouped` 照旧只按码分。
+  - **一个应用不可用**：`instance_unavailable` 带 `availability_source`，`device_link` 旁边带 `device_link_state`，`device_state` 旁边带 `device_hold`。读的地方：`actingctl schedule`、
+    `ac_schedule` 的行和总览的 `not_running`，诊断的 `not_run` 行，挂起记录的原因（词在所有判断做完以后、建说明表之前才写上，`policy_host.rs` 388–412、4278–4281；来源的判断在
+    `crates/runtime-host/src/host/facts.rs` 913–967）。规划通道的同一个码不带词。
+  - **一个任务被暂停**：`policy_task_paused` 带 `pause_cause` 和让它暂停的那次失败的 `failure_code`，重试退避的 `policy_retry_backoff_active` 只带 `failure_code`
+    （`policy_control.rs` 53–78、819、832）。读的地方：`ac_schedule` 和诊断的行、`policy.dispatch_rejected` 记录、`actingd suspended` 的 `suspended` 行多 `pause_cause`
+    （`crates/runtime-host/src/suspension_report.rs` 1093–1096）。
+  - **一次模拟器控制失败**：`emulator_control_failed` 带已有的 `stage`（失败在哪一步，登记过的位置）和 `device_category`（设备诊断给的类别）。读的地方：控制的回执（`ac_emulator`、
+    `actingctl` 的模拟器命令）和结算了的超时的 `caused_by`（`crates/runtime-host/src/host/emulator_instance.rs` 2204–2283）；账本记录见「已知的限度」。
+
+  `confirmation_problem`（24 个词；修复轮加的是 `returned_to_own_page`、`final_state_unmet`、`wait_max_reached`）：一步等的页没确认到的地方、或运行停着的声明错误页上，程序看到了什么。
+
+  | 词 | 目录里的说明 |
+  |---|---|
+  | `input_not_taken` | 输入以后确认结束时程序看到的是这一步自己的页，而且输入以来没见过别的页（线性步判中间的帧，页图步只看最后一帧）：输入没生效；查它的目标和它之前的间隔 |
+  | `returned_to_own_page` | 输入以后画面显示过别的东西，结束时又是这一步自己的页：输入生效了、画面回来了；打开这次运行的帧看中间显示了什么 |
+  | `awaited_page_late` | 等的页在确认的等待结束以后才出现：调大这一步的时限，或查是什么让这一页变慢 |
+  | `other_page_shown` | 画面停在包声明的另一页上：把那一页声明成目的页或打断页 |
+  | `loading_page_shown` | 画面停在声明的加载页上：给这一步更多时间，或打开加载处理 |
+  | `transition_shown` | 等待结束时画面还是加载过渡 |
+  | `interrupt_shown` | 屏幕上有一个共享打断页没被处理：查这个打断页的处理 |
+  | `screen_moving` | 没有出现声明的页，画面一直在变：这一步的时限可能太短 |
+  | `unrecorded_screen` | 画面停在包从没录过的页上：把这一页录进包里 |
+  | `nothing_recognised` | 最后一帧没有匹配任何声明的页；打开这次运行的帧看它显示了什么 |
+  | `screen_still` | 画面直到静止上限都没变：输入多半什么都没做 |
+  | `final_state_unmet` | 结束时等的页在屏幕上，但这一步为它声明的状态不成立：查这一步的终态目标和那一页显示了什么 |
+  | `wait_max_reached` | 等待步自己的页一直在屏幕上，直到它的 `max_ms` 用完，等的页没来：调大 `max_ms` 或声明 `on_timeout` |
+  | `loading_limit` | 屏幕还在加载时，等待在它的加载额度上结束了 |
+  | `error_page` | 这一步到了包声明为错误页的页 |
+  | `error_page_no_exit` | 运行停在一个声明的错误页上，这一页没有哪个操作能离开它 |
+  | `deadline_reached` | 还没来得及判断画面，任务的时间就用完了 |
+  | `check_failed` | 最后看画面那一下失败了（截图或识别）；读这次运行的记录 |
+  | `neither_page` | 重试时，等的页和这一步自己的页都没出现 |
+  | `unjudged_layer_run` | 等待以后没判断画面：这次运行是某一层的（前置、回主页、导航或恢复运行）或宿主自己起的，不是任务自己的；打开这次运行的帧 |
+  | `unjudged_restart_segment` | 等待以后没判断画面：这一步跑在一次应用重启里面；打开这次运行的帧 |
+  | `unjudged_consensus` | 等待以后没判断画面：包声明了样本共识；打开这次运行的帧 |
+  | `unjudged_application_entry` | 等待以后没判断画面：这一步是应用入口；打开这次运行的帧 |
+  | `unjudged_time_short` | 等待以后没判断画面：任务剩的时间太少（不到步骤时限的两倍）；打开这次运行的帧 |
+
+  `guard_problem`（3 个词）：操作的守卫为什么拒了它的输入；不管哪个词，程序接下来做的都一样。
+
+  | 词 | 目录里的说明 |
+  |---|---|
+  | `page_mismatch` | 输入被拒：画面不是这个操作的守卫要的页 |
+  | `target_not_passed` | 输入被拒：守卫的目标在它的页上没过（见 `failure_code`） |
+  | `page_moved` | 信任坐标的输入之前的等待里，页变了 |
+
+  `availability_source`（6 个词）：是谁撤下了应用的可用性，取自撤下它的那条在用的 `session.instance.available` 记录的来源和应用的配置种子。配置把应用标成不可用的，不管那条「不可用」
+  记录是哪个发布者写的（自检这道门的也算）都读 `configured`（一条这样的记录都没有时读 `facts_missing`）；`self_check` 包括自检没过、还没记下（含准备步骤失败）或已失效的自检，和资源
+  围栏，门用同一个来源撤下它们。不管哪个词，应用都在派位时被挡下。
+
+  | 词 | 目录里的说明 |
+  |---|---|
+  | `configured` | 配置把这个应用标成不可用 |
+  | `self_check` | 设备自检没过（或实例被围栏）：看实例的自检和围栏 |
+  | `device_link` | 手机的线缆连接没连上（见 `device_link_state`） |
+  | `device_state` | 手机锁着、太热、电量低或正被使用（见 `device_hold`） |
+  | `other_publisher` | 别的发布者把这个应用标成不可用 |
+  | `facts_missing` | 实例的事实缺了或读不了 |
+
+  `pause_cause`（7 个词）：一次失败为什么让它的任务在这个应用上暂停，按结算自己的次序取：先严重失败，再敏感任务，再连续计数，最后 `on_failure`。目录里每个词的说明都以「包变了暂停才
+  解除，没有手动解除」结尾，下表省去这一句。
+
+  | 词 | 目录里的说明 |
+  |---|---|
+  | `severe_failure` | 这个失败是第一次出现就暂停它的任务的那一种 |
+  | `unrecorded_screen` | 包遇到了一个从没录过的画面 |
+  | `runtime_budget_exceeded` | 运行用的时间超过了它的运行预算 |
+  | `interrupted_again` | 运行连续两次被 Runtime 自己的结束打断（重启只解除第一次） |
+  | `sensitive_task` | 一个标为敏感的任务失败了；它立刻暂停 |
+  | `repeated_failure` | 同一个失败重复到了任务的阈值 |
+  | `retries_exhausted` | 任务用完了重试，并且设成失败时暂停 |
+
+- **唯一变了做法的一处（D4a #1746，登记 §1.400）**：`device_locked` 的阶梯类从 `budget_or_permission`、`contained_task_application_update_required` 从 `none` 改成 `planned_stop`；
+  `call_budget_exhausted` 的类别从 error 改成 warning。
+  - **变的**：账本错误视图的运行恢复分组按类 `planned_stop` 判（`crates/ledger/src/global/projection/views.rs` 419–427，读这个构建内嵌的目录），所以这两个码的记录不再算作它那次
+    运行的失败，也不再带来缺口：只因锁屏或要更新而停的运行不再成组；同一次运行里另有真失败的照样成组，组的状态可能从「不明」变成「已恢复」或「未解决」。分组是读的时候算的，**本版以前写下
+    的记录也照新的类分**。`call_budget_exhausted` 只作为成功答复旁边的提醒或 `report_part_missing` 的原因出现（只在 `crates/lab-ops` 里写），从不是头码，所以退出码和 MCP 的
+    `isError` 不变，只是那条提醒写 `category: warning`。
+  - **不变的**：默认配置里按类的触发只点名 `pack_logic_mismatch`、`stability_warning`、`environment_fault`（`distribution/windows/actingd.defaults.json` 18–28、97–98），三个码改前改后
+    都不在里面；锁屏跳过一级（`device_not_ready`）和更新码结束阶梯都按码判（`crates/runtime-host/src/host/recovery_ladder.rs` 4375–4386、2546），暂停和结算不读阶梯类。
+
+- **部署：本版是第一个经 Lab 救急模块部署到生产的版本**：用在线 v0.12.61 留下的那份 `actinglab` 跑 `release stage`（核标签和提交）、`deploy <提交> --plan` 预看、
+  `deploy <提交> --detach` 实做，再用 `op status` 看结果。Lab 这一面总带 `accept_ledger_one_way`（`crates/lab-rescue/src/install/update.rs` 93），本版账本修订不动，这一项不起作用。
+  原来「到 LAB-7 前生产只用 `actingctl install` 部署」的规矩，理由是 v0.12.47 及更早的安装工具读不了模块写的日志；11-15 定了不再兼容以前的构建，这个理由没了，
+  `contracts/install-cli.md`「Journals across versions」那条规矩和 `contracts/lab-two-entries.md` 里复述它的两处跟着改了；`apps/actinglab-mcp/MANUAL.md`（「Production」）和
+  `contracts/lab-operations.json` 的 `deploy` 一行的说明还写着旧规矩，本版没改。
+  - **退路**：v0.12.61 的 `actingctl install` 和 Lab 的救急行是同一份代码（`crates/lab-rescue`，自 v0.12.61 一行没改；`apps/actingctl/src/main.rs` 95–99），读得了 Lab 写的日志：
+    部署中途断了用 `install resume` 接着做或 `install undo` 撤回（有 actingd 在这个根下跑时 `undo` 拒），Lab 留下的暂停用 `install release-hold` 交回；部署做完以后回到 v0.12.61
+    是一次退回（见下面「升级与退回」）。
+
+- **已知的限度**（各片验收记录列的，逐条核过代码）：
+  - **还不带词的结束**：前置包和回主页这一层失败时，外面那次运行只带它的码（`crates/runtime-host/src/host/prerequisite.rs` 600–609，只有 `contained_task_state_invalid` 带值）；
+    `contained_task_requires_scheduler` 在输入之前被守卫或输入复核拦下、请求恢复时，只带 `failure_code`、不带 `confirmation_problem`（`crates/execution-kernel/src/contained_task.rs`
+    8842–8864）；漏看了中间页、没有尝试余下的 `contained_task_linear_intermediate_unobserved` 不带词；规划通道的 `instance_unavailable` 不带词。
+  - **`self_check` 仍然一词三用**：自检没过、还没记下自检、资源围栏共用一个记录来源（`host/facts.rs` 798–809、939–942），模拟器关着、还没自检过的应用读到的也是它。
+  - **模拟器控制失败的账本记录**（`runtime.failed`）只多 `device_category`，它的 `stage` 照旧是生命周期阶段 `runtime_lifecycle_operation_cleanup`（`host/lifecycle.rs` 243）；设备那一步
+    的阶段只在回执上。没有设备诊断的失败只带 `stage`、不带 `device_category`；重启失败时外层的 `caused_by` 两个值都不带。
+  - 本版里 `confirmation_problem` 和别的新值在目录里都是可选的（十个码加的值全是 `optional`）。
+
+配置：按代码、`distribution/windows/component-interfaces.json` 和 `contracts/component-interfaces.md` 核过，**一项都没升**：`component-interfaces.json`（4–10）自 v0.12.61 没改，
+`actingd-config` [5, 32]、`install-selection` [1, 1]、`install-control` [0, 1]、`ledger` [3, 8]、`runtime-client` [3, 9]、`package` [3, 15]、`runtime-outcomes` [1, 1]。
+
+- `runtime-outcomes` 1（`contracts/component-interfaces.md` 170）：四个新键、四个新词表和它们的词都加在修订 1 里（同一文件 479 行是同样的先例；升修订的规则 486–496：旧的一方容得下的
+  变化不升）。**v0.12.61 构建的读者碰到不认识的键或词**：结果的 `values` 是不带类型的映射，照收（`crates/actingcommand-contract/src/outcome.rs` 1568–1581、1709–1725），收到的结果不拿
+  目录核（`outcome/check.rs` 231–234），完整模式原样打印；只留码模式按它自己的键表留值，不认识的键丢掉（`outcome.rs` 1786–1795，`key_kind` 953–958）。两个文件自 v0.12.61 没改，
+  行号对两版都对。新词只在这四个新键下面；本版发词用到的已有键（`failure_code`、`stage`、`device_category`、`device_link_state`、`device_hold`）没有新词，码和位置也一个没加，所以
+  v0.12.61 认识的键下面没有它不认识的词。
+- `ledger` 不动：没有新的记录形状，新值都在已有结果的 `values` 里；`failure_values` 是读运行时折出来的，不落盘。`runtime-client` 不动：运行状态是客户端从 `QueryEvents` 页折出来的，
+  不在任何线上答复里，`QueryRuns` 还没有 Runtime 答（`contracts/runtime-state-observation.md`「Contained-run queries」）。`ContainedRunTerminal` 拒未知成员：用 v0.12.61 的契约库去解
+  本版程序打印的运行结局会被拒，要换新契约库重编。
+- 配置键：**没有新增，也没有去掉**；`actingd.defaults.json`（sha256 `9ee26e8fc203fef21234b072d5c0f02d0c33b6fbef1b6c3f1613d5b55a99666d`，和 v0.12.61 相同）、两个配置模板和
+  `apps/actingd/src/config/manifest.rs` 都没改，没有新的子系统名。
+- 结果码：仍是 3960 个码（在用 3932，`retired` 28）、1764 个位置、31 个分片，审阅定稿的仍是 172 个（在用 170）；键 672 → 676，词表 246 → 250，词 1895 → 1935；在用码按类别
+  success 132、info 213、warning 155 → 156、error 3415 → 3414、fatal 17。**没有码、位置、键或词去掉，没有新码，没有码 `retired`**。38 个码的说明改了：**改了类的五个**，V0 两个不改做法
+  （`recognition_sample_budget_invalid` 阶梯类 `budget_or_permission` → `declaration_error`，默认配置没有触发点名这两种类；`contained_task_declared_operation_page_mismatch` `none` →
+  `pack_logic_mismatch`，这个码只在 Lab 的声明操作里报，`crates/runtime-host/src/host/lab_operation.rs` 797，不进恢复阶梯），D4a 三个（上面）；十个码加了可选的值（上面四类）；
+  23 个只改了说明（V0 把几处实际做法写进说明）。本版的发布文件 `contracts/outcome-codes/released/0.12.62.json` 按合入全部 8 张 PR 以后的树生成，没有码、没有位置（改了的都不是定稿
+  条目）；索引照旧由脚本生成，仍是 32 个文件，核过是最新的，本版没有变化。
+- 别的都没变：Lab 的操作表行数不变（`status`、`runs`、`run show`、`diagnose` 的说明写上 `failure_values`），`apps/actinglab`、`apps/actinglab-mcp`、命令清单、`.github/`、
+  `INSTALL.md`、`Cargo.toml`、`Cargo.lock`、`ci/` 都没改（两个压缩包的文件表不变，不稳定表照旧是 FLK-08 和 FLK-10）；今天的 MCP 服务器仍是 46 个工具，只有 `ac_get_run`、`ac_runs`
+  的说明和 `ac_runs` 的行结构写上 `failure_values`，README 两种语言的工具表标题改成 v0.12.62。
+
+升级与退回（`crates/lab-rescue` 自 v0.12.61 一行没改，下面的行号对 v0.12.61 和本版都对；`actinglab deploy` 和 `actingctl install` 走的都是它，`apps/actinglab/src/cli_module.rs`
+476–494、`apps/actingctl/src/main.rs` 95–99）：
+
+- **v0.12.61 的安装工具装本版：两面都能装，不用任何标志。** 安装工具自己的声明和目标的声明逐项相同。计划的边（`install/plan.rs`）：`ledger` 两边 [3, 8]，`previous_max_in_next` 过、
+  `one_way` 不触发（298–310），`ledger_verify` 为 false（924）；`runtime-outcomes` 过（311–323）；`install-control`、`runtime-client` 相交（324–340）；`package` 的
+  `bundle_max_in_next`（341–364）比安装登记里每个根的范围，登记里一律没有，每个游戏一条 `pack_declaration_unknown` 警告，不挡；`installer_knows_keys`（368–385）、
+  `runtime_equals_tools`（765–772）、`next_check_config`（911–923，`apps/actingd` 和 `crates/runtime-config` 没改）都过。`defaults_diff`（583–607）零行；文件计划里没有 `new`。
+  启动后检查是 v0.12.61 那一版的（`postcheck.rs`），读的形状都没变。
+- **配置文件和已装的包**：v0.12.61 的配置文件照收；准入没改（内核只改了运行路径上的结束），本版的 `standard-pack check` 对今天的根答法和 v0.12.61 相同（`apps/actinglab`、
+  `crates/resource-tooling`、`crates/lab` 都没改），不出新的警告码。
+- **退回 v0.12.61**：回退门只放行这次部署替换掉的 v0.12.61（`install/update.rs` 410–447），边都过（修订全同），配置不变；回退门第 2 部分用 v0.12.61 自己的读者读部署以来的每一页
+  （421–427），它照收带新值的记录（见上「`runtime-outcomes`」）。v0.12.61 对本版写下的东西：显示码、不显示词（只留码模式丢掉不认识的键，完整模式原样打印）；错误视图对锁屏、要更新的
+  记录又照 v0.12.61 的类分组；`failure_values` 和暂停词都不落盘，退回以后没有。没有新文件、新事实或新键要处理。
+
+配对：
+
+- **控制台 UI**（最新发版 UI v0.12.20，就是 UI main `40c6d4be`，钉 Runtime v0.12.61 `5c629e3b`：`Cargo.toml` 41–46）：声明的范围和本版相同（`crates/acui-setup/component-interfaces.json`
+  3–11），向导的边照过，什么都不拒。**带新值的结果它显示什么**：一个 Runtime 码只显示码和它那一类的通用一句，类别取自钉住的目录（`crates/acui-rows/src/outcome.rs` 169–220）；排程那一页
+  每行只取 `why` 的码和 `benefit_gap`、`pool_line_hold` 两个值（`crates/acui-source/src/workbench.rs` 1828–1849、1873），新词解得出来、不显示；账本页的载荷窗格把记录的载荷整个显示成
+  JSON（`crates/acui-rows/src/lib.rs` 160–164），新词在那里看得到。**带 `failure_values` 的运行结局**：它的源码里没有读运行状态（`ContainedRunTerminal`）的地方，碰不到。**下一次钉**只要
+  把 `Cargo.toml` 41–46 的六个 `rev`（和锁文件）换成本版的提交，范围不用改；要显示这些词是控制台自己的活，钉不要求。
+- **部署工具包**（这次走 Lab 的行）：两个构建清单的 `speaks` 都照 `component-interfaces.json` 写（`.github/workflows/windows-remote-build.yml` 709–718、842），和 v0.12.61 相同；默认值
+  文件的哈希没变；`git diff --stat v0.12.61 <提交> -- apps/actingd/src/config/manifest.rs distribution/windows/actingd.defaults.json` 什么都不打印；不过的边只有每个游戏一条 `package`
+  的 `bundle_max_in_next` 警告；没有新文件；本版的 `standard-pack check` 不出新的警告码；启动日志不多一行。
+- **热放置工具包**：重钉只改标签和接受的 `validated_with` 那一行（构建记录照例换成本版的）；`package` 范围、`ledger`、`actingd-config` 和默认值哈希都留着。它读 `actingctl` 回答时按成员
+  名取值，多出的可选值不碍事。
+- **两个 MCP 服务器**：工具一个没变，答法照旧，读运行的工具（`ac_get_run`、`ac_runs`、`ac_overview`、`ac_diagnose`，Lab 那边的 `ac_run_show`）多 `failure_values`。
+
+运行上的变化：
+
+- 从 v0.12.61 部署，经 Lab 的 `release stage`、`deploy`、`op status`：不用标志，没有 `ledger_verify`，`defaults_diff` 零行，没有新文件，接口全不动；能退回 v0.12.61。
+- 失败的运行、被暂停的任务、不可用的应用、失败的模拟器控制都在码旁边说出原因（上面四张词表），在查运行、运行列表、总览、诊断、排程、`actingd suspended` 和控制回执里读得到。
+- 唯一变的做法：错误视图不再把锁屏、要更新的记录算作运行的失败；`call_budget_exhausted` 是警告。
+
+本版合并的 PR：
+
+- #1738 V0（登记 §1.386）：四个词表和键、十个码的可选值、几处不改做法的小毛病，`contracts/runtime-outcomes.md` 写上「新代码按类或按词决定」；没有测试改动。
+- #1739 F1（§1.387）、#1743 K1（§1.395）、#1747 H1（§1.397）、#1742 H2（§1.398）、#1748 H3（§1.399）：各自的门行 `#469 <片>`，没有改旧测试。
+- #1745 K2（§1.396，同时是这一趟并车）：门行 `#469 K2`；改了 `gate_rc2_a15` 四条和 `gate_still1` 一条，只在钉住的值里加上词。
+- #1746 D4a（§1.400）：账本、主机和 apps 的门行；改了更新码那条测试断言的类（`planned_stop`）。
+
+## v0.12.61
+
+本版是 v0.12.60 之后的 12 张 PR：3 个直接合并（#1733、#1734 和 #1731；#1731 的合并 `d32d4d6c` 同时合入 #1728，它的提交都在 #1731 上）和 3 趟并车（#1726 带 #1720、#1723；
+#1730 带 #1722、#1719、#1718；#1732 带 #1725、#1727、#1729；车上除了各张的头和合并，每趟只有一个只改契约文字的提交）。按单子分：#463「录制做包」的七张（K1 #1720、V1 #1723、V2 #1728、
+V3 #1731、K2 #1727、R1 #1729、R2 #1734），#464「用 Lab 收包、建包、判就绪」的四张（P1 #1722、P2 #1719、P2b #1733、P3 #1718），#467 的 RPT-1（#1725）。先说部署：**生产上跑的是
+v0.12.60（2026-11-15 起）。** 从 v0.12.60 装本版：**能装，不用任何标志，计划里没有 `ledger_verify`，`defaults_diff` 一行都没有（默认值文件一个字节没改），文件计划里没有新文件，装上以后能
+退回 v0.12.60**（见下面「升级与退回」）。接口升了两项，都不是单向的：`package` [3, 12] → [3, 15]（13 是 K1 的选择一步，14 是 V1 的变量和第 2 版 `goals.json`，15 是 K2 的结局页）和
+`runtime-client` [3, 8] → [3, 9]（V3 的 `GoalView`、`EditGoal`）；没有新配置键。**在用的安装第一次启动和每天的例行任务都不变**（第一条逐片核过；工作台每次检查多看一次 `goals.json`；
+唯一的边角是一种本来每次都失败的线性包，现在准入时就拒）。运行上要知道的是这几处：
+
+- **在用的安装碰到的：今天的例行任务什么都不变**（逐片核过代码）。在用的安装上没有哪个游戏根带目标声明，没有哪个应用存着目标值，没有哪个包声明 `variables`，没有哪个 `linear_steps` 包
+  带选择一步或结局页，没有哪份录制带选择或结局；资源仓也还没有发布这样的包。
+  - **启动**：`apps/actingd`、`crates/runtime-config`、`crates/ledger` 的产品代码自 v0.12.60 一行没改，默认值文件和两个配置模板也没改；宿主只多了 V2、V3 的代码（下面那一节），启动时
+    什么都不多写，所以启动写的事实、`config.parameters`、`config.subsystems`、启动日志和账本记录的形状都和 v0.12.60 相同；S11 的身份文件和认领记录是 v0.12.60 第一次启动写的，本版读出来
+    判是自己的，什么都不写。组合器只在内存里多记一张「哪些规则算 pending」的表给 Lab 读（`crates/policy/src/compose.rs` 的 `benefit_pending`），组合出的目录、哈希和决定一个不变。
+  - **工作台和派单（V2、V3）**：每次检查多看一次每个在用的游戏根 `goals.json` 的长度和修改时间（没有这个文件就记成「没有」，`crates/runtime-host/src/host/standard_pack_schedule.rs` 147、
+    1113），重读一个根时多打开它一次（181 起），在内存里判一遍这个根所有包的变量（569 起）；没有 `goals.json`、没有包声明变量的根判出来是空的，策略循环查变量表时对这些包什么都不出
+    （`crates/policy/src/variables.rs` 的 `lookup` 365–398、`RootVariableJudgement::new` 136–156 只收声明了变量的包），派单的理由、运行的参数和记录都和以前一样。只有两种情况会多一条
+    警告：根里有 `goals.json` 却被拒或读不了（`standard_pack_goals_not_applied`），或者派出去的包工作台读不了、或它的游戏根启动以来一次都没读成（`goal_value_package_unreadable`，
+    `crates/runtime-host/src/policy_host.rs` 4140 起）；今天的根上没有 `goals.json`，部署前的 `standard-pack check` 不报 `standard_pack_package_unreadable`、每个根都组合得成时也碰不到
+    后一种。没有人调 `EditGoal` 或 `targets set` 写变量，就没有值可读。
+  - **线性包都走改过的内核路径，算出来的和以前一样**（`crates/execution-kernel/src/contained_task/linear.rs`）：一步的结束换成 `LinearStepEnd`（1487 起），不是扫描选择的一步窗口照旧是
+    步骤时限（1512）；点击的后半段挪进共用的 `linear_send_input`（2366 起），次序不变；没有结局的包候选页表和以前相同（`candidates`，360 起），`run_set` 只在一串可选步的候选多于一页时为真，
+    正是原来走 `linear_wait_set` 的地方（2644）；到达以后照旧确认资源调整（1422）。记录、细节和计时都不变。页图包不变。
+  - **准入多一处判断，碰到的只有一种本来就跑不通的包**：线性包每个终点页先解析到识别器的页（1119 起）。同一个识别器页写成带游戏前缀和不带前缀、分在两条映射里时，原来能准入、每次跑到
+    最后以 `contained_task_outcome_mapping_conflict` 失败，现在准入时就以 `contained_task_linear_invalid`（`reason=terminal_page_duplicate`）拒；写法相同的两条照旧是声明自己的
+    `mapping_overlap`。控制声明多读一个可选成员 `variables`（`crates/execution-kernel/src/contained_task.rs` 8959–8970，源解析器的控制关口），不写它的包读法和运行逐字节不变。
+  - **Tools**：本版的 `standard-pack check` 对今天的根答法和 v0.12.60 相同：没有变量就不出变量警告，回答里不出现 `variable_provenance`（`crates/resource-tooling/src/api.rs` 184–189）；
+    组合照旧（P3 把它改成调 `compose_per_server`，回答逐字节相同）。第 1 版 `goals.json` 现在被拒（`goal_version_retired`），没有哪个根带它。
+  - **今天就在用的命令有两处新的拒绝**：`record mark` 拒以 `select/` 开头的标记编号（`record_mark_id_reserved`，`crates/lab/src/recording/marks.rs` 96–103：这个前缀留给生成的格子目标）；
+    actinglab 的占位命令 `report export --last-error` 去掉了，`--last-error` 现在答 `actingctl_usage_invalid`（部署和热放置工具包都不调它）。`clear_select` 在没有选择的一步上被拒
+    （`no_select`）不算：这个成员是本版才有的。Runtime 的显示适配一行没改；改成 3840×2160 的那台设备的实例照旧暂停着。
+
+- **录制做包**（#463 K1、V1、K2、R1、R2，登记 §1.374、§1.378、§1.380、§1.381、§1.384；`contracts/linear-steps.md`「Select steps」「Endings」，`contracts/package-variables.md`，
+  `contracts/lab-recording.md`「Selecting in a list」「Endings」，`contracts/standard-pack-goals.md`）。智能体开着录制、经 Lab 玩游戏做包，从本版起能从头做到尾：在一串固定格子里按读到的
+  名字挑一个，挑不到时正常结束；包可以声明留给人、智能体或模型填的变量；业务在最后一次按下以后换一种方式结束的画面算正常结局；录完停下以后还能从一帧补一个结局，不用重录。
+  - **选择一步（K1 内核，R1 录制）**：`linear_steps` 的一步可以是页图包已有的选择一步：在这一步的帧上按策略文档决定、在一帧新的上确认、在选中格子的点击框里按一次（绑在那一帧上），然后
+    像点击一步那样往下走（U1 的收尾判断也在内）；声明了 `on_empty` 时，决定为空、没有未知的就不按，这次运行在这一步的页上以 Completed 结束、带 `on_empty` 的键。选择一步不能重试、不能可选、
+    不能从任意画面开始，`on_empty` 的页不能是目标页（新的准入理由 `select_optional`、`select_retry`、`expect_identity`、`select_on_empty_terminal`、`select_on_empty_target`，都是
+    `contained_task_linear_invalid` 的细节值）；记录是页图的（`task.selection_evaluated`，再是这次按下的 `EffectIntent`、`EffectCompleted`）。录制这一侧：`record mark` 的请求多 `select`
+    （`slots[]` 1 到 16 个格子，每格 `rect`、可选的 `click` 和 `name`；`read`、`names[]`、`match`、`wanted {name, default}`、可选的 `pressed`、`on_empty_key`（默认
+    `<task_id>_not_found`）、`confirm`）和 `clear_select`，都只有请求形式；标记时用内核自己的试跑在一个探针包上自测，`record stop` 生成布局、格子目标、操作 `step_ii_select`、
+    `policies/step_ii_select.json` 和 `on_empty` 的映射，再用生成的包把每一帧的决定判一遍。新码 `record_select_invalid`（词表 `select_problem`，21 个词）。**已知的限度**：只看一屏、
+    不滚动（滚动的列表是 R3）；想要的名字是常量（一条 `wanted.<name>` 门，`control.json` 不写 `variables`；改它就重新声明选择再 `record stop`，或改策略文档那一行）；名字多时格子目标只列
+    前 64 个别名；最后一步不能是选择（`on_final_step`）；没有文字识别模型时选择不评估。
+  - **变量（V1）**：`control.json` 可以写顶层成员 `variables`，1 到 16 个，种类 `choice`、`integer`、`switch`、`ordered`，每个有 `name`、`type`、`title`、可选的 `help` 和 `block`、种类自己
+    的成员、`default` 和可选的 `default_origin: "model"`。提供不可逆能力的包不许声明（`variables_on_irreversible`），名字在变量和 `provides` 的参数之间不能重（`variable_name_taken`）；
+    内核准入以 `contained_task_control_invalid` 拒，源解析器以 `resource_declaration_invalid`（`invalid_value`）拒，都在 JSON 指针处。`standard-pack check` 对整个根检查：只有逐字节相同
+    的声明能共用一个名字，不同的、被 `goals.json` 拿去作别用的、第 97 个名字、当上限读又超过 1000 的、整个根算下来不可逆的包的，都是警告（`variable_conflict`、`variable_out_of_limits`、
+    `variable_cap_range`、`variable_irreversible_by_root`），回答在 `models` 后面多 `variable_provenance`（按默认值是谁写的列出，`not_applying` 列不生效的）。`goals.json` 改成第 2 版
+    （`actingcommand.goals.v2`）：五种类型 `heading`、`note`、`resource`、`tier`、`variable`，`variable` 是变量在页上的位置；第 1 版管包的四种类型去掉了，第 1 版文件是 `goal_version_retired`。
+    V1 只声明；运行读值、按名字设值是 V2、V3（见下面「按名字读、设目标」）。**已知的限度**：准入只看包自己的不可逆标记；在 Tools 里「不生效」只是 `standard-pack check` 的警告（安装工具
+    的 `place` 放完包跑这条检查、只看退出码，警告不挡），Runtime 从 V2 起照同一份规则（`judge_root_variables`）让这样的变量读默认值；上限检查只看同一个包读的键；成员次序不同也算不同的
+    声明。
+  - **结局页（K2 内核，R2 录制）**：`scheduling_outcome` 里一条映射的终点页既不是目标页、也不是选择一步的 `on_empty` 页时，它就是结局页：没有哪一步从它出发或到达它。路径末尾目标页是候选
+    的地方（最后一步，或以目标页为跳过目标的一串可选步），结局页按映射的次序排在目标页前面，过了就立刻过、不等稳定，运行在它上面以 Completed 结束，宿主照这一页唯一的那条映射给键（宿主给键的代码
+    没改）；到达结局页的那一步不确认资源调整，那个键之前的记录照旧。重试判断和 U1 的收尾判断等同一张表，再等这一步自己的页。准入：结局页不能是哪一步的中间页、确认时加的加载页或等待页
+    （`ending_page`），一个识别器页不能是两条映射的终点（`terminal_page_duplicate`），带结局的包不能当前置包或回主页包（`linear_endings`），声明 `store_update` 的包不能带结局
+    （`store_update_endings`：这种包任何一次成功都会清掉「需要更新」）。录制这一侧：结局只加在**停下的**录制上（开着的以 `recording_active` 拒，归档的先 `record reopen` 再 `record stop`）：
+    `record mark --ending --frame <png> --outcome-key <key>`（可加 `--sample`、`--page`、`--template`、`--scales`、`--color`、`--reuse`）或请求里的 `ending` 从一帧取一个结局，
+    `record mark --remove-ending <key>` 去掉；`record stop` 生成 `ending_kk`（或 `ending_kk_<page>`）页、它的规则和目标、排在选择映射后面的映射和 `lab.endings`，自检第 9 项要结局页在自己
+    的帧上过，在最后一步之前那一步（含它那串可选步）、最后一步和别的结局的帧上都不过（`record_ending_ambiguous`，`against` 为 `previous`、`usual`、`other_ending`）。新码
+    `record_ending_invalid`（词表 `ending_problem`，10 个词）、`record_ending_ambiguous`。**已知的限度**：排程规则的 `consumes`、`produces` 没有按结局分的条件，在池子下一次读数之前，
+    跑到结局的那次照旧按声明的消耗算一次，读数会纠正；结局帧要是录制的尺寸或它的纯缩放（别的尺寸 `record_frame_size_mismatch`）；只靠文字识别标记的结局没有模型时 `record stop` 拒
+    （`ocr_alone_unchecked`）。
+  - **从 `contained_task_linear_unrecorded_screen` 到一个结局，照目录里这个码现在的处理文字**：① 失败里的 `artifact_id` 本身不是素材引用：`actinglab run evidence <request_id>` 把这次
+    运行的帧列成 `<seq>:<event_id>:<artifact_id>`，最后一段是这个 `artifact_id` 的那条就是钉住的帧；② `actinglab material <ref> --out <dir>` 把它写成 `<dir>/<sha256>.png`（MCP 的
+    `ac_material` 用 `mode: export` 写同一个文件）；③ 要趁早：没人确认读过的钉住帧在入库 `frame_retention_evidence_max_age_days`（顶层键，默认 15）天以后被清掉，确认读过的在账本存储下一轮
+    就清；④ 业务在最后一次按下以后结束的画面（余额不够、没东西可领）是这份录制的一个结局：在停下的录制上 `actinglab record mark --ending --frame <png> --outcome-key <key>`，只给这个画面的
+    标记（比如它那句话的 `--template`）；另一种分辨率、但是录制尺寸纯缩放的帧照原样给，Lab 自己换算；⑤ `actinglab record stop` 重新生成包，以后这次运行遇到的画面就以这个键 Completed
+    结束；⑥ 别的情况是新录一份：之后路径还往下走的弹窗（一个可选步），更早一次按下的结果，或者让业务接着走的分支（一步和一页）；慢的画面声明成一页或加载页；⑦ 包的内容变了，这一对在下一次
+    到期的评估时放开（U1 的规矩，没为它另加东西），在那之前 `actingd suspended` 和 `ac_diagnose` 列着它。
+  - **生成的包声明哪个 `package` 修订、哪一版 Runtime 跑它**：`record stop` 只写内容目录，不写 `interfaces.json`，生成的包自己不声明修订；修订是打包时写的：资源仓自己的打包脚本，或者
+    Lab 的 `standard-pack build` 按内容算（带选择一步 13，带变量或 `goals.json` 14，带结局页 15）。带选择一步或结局页的包要 0.12.61 起的 Runtime；更早的 Runtime 每次运行都在准入时拒
+    （选择 `reason=operation_effect`，结局 `reason=terminal_page`）。**没人核 13 和 15**：`place` 只要求带 `notices/` 的包声明 10、带 `goals.json` 或变量的包声明 14，从不为选择要 13、
+    为结局要 15，Runtime 准入时也不看包声明的范围；所以声明少了的包更早的安装工具也会放，之后每次运行都被拒。
+
+- **用 Lab 收包、建包、判就绪**（#464 P1、P2、P2b、P3，登记 §1.377、§1.376、§1.385、§1.375；`contracts/standard-pack-authoring.md`，`contracts/resource-verify.md`「`standard-pack build`」
+  「The `package` revision」，`contracts/standard-pack-schedule.md`「Readiness」）。三行都离线：不连 Runtime、不放任何东西、不读任何安装。
+  - **`standard-pack adopt`**（P1，`crates/resource-tooling/src/adopt.rs`）：`actinglab standard-pack adopt --repo <资源仓检出里的游戏根> (--record-id <录制> | --package <目录、zip 或
+    json>) [--decide <决定文档>] [--replace] [--state-dir <目录>]` 把录好的包收成这个游戏标准包的成员：拷进 `packs/<package_id>/`，按决定文档（`actingcommand.pack-decision.v1`，第一次收
+    必须给）写一条 Runtime 的组合器收得下的规则、一条 `held` 或一条 `maintenance.json`，让这个包只有一个角色。值只能是 `"pending"` 或包自己的数，从不替人写
+    `fixed_value_origin: "model"`；缺的成员按规则推出并说明来源（`feedback_stop` 是「这条规则自己的运行以包声明的键正常结束」，`expected_duration_ms` 不低于 60000）。写之前在检查树里把整个
+    根用 `standard-pack check` 和组合器跑一遍，每个读这条规则结果的键都要是包声明过的。**写在哪**：只写 `--repo` 里和 Lab 的状态目录下（默认是 actinglab 在用户应用数据下的会话目录：
+    `adopt/` 存被替换下来的旧目录，`adopt-check/` 是检查树）；每个文件先写 `.part`、刷盘再改名；检出里什么都不删。actinglab 的全局 `--dry-run` 只跑检查、不写检出。新码 `adopt_refused`
+    （词表 `adopt_problem`，17 个词）、`adopt_write_failed`。
+  - **`standard-pack build`**（P2、P2b，`apps/actinglab/src/resource_verify/build.rs`、`revision.rs`）：`actinglab standard-pack build --repo <检出> --source-repository <owner>/<name>
+    --out <目录> [--commit <40 位>]` 在一个干净的提交上跑 `resource verify` 的那几步（同一个函数），把整个标准包写进新的或空的 `--out`：压缩包、`SHA256SUMS` 和 `build.json`
+    （`actingcommand.standard-pack-build.v1`：源仓、提交、树、Tools 的提交和可执行文件的 SHA-256，从压缩包读回的游戏、范围、根文件、包和压缩包本身），工作目录在 `<out>\work\`。压缩包多带
+    仓里的 `tables/`（`bundle.json` 的 `tables` 列着）和 `ui.json`，各用自己的读取器核过；`interfaces.json` 的 `package` 按内容逐行算（45 行成员、5 行文件；P2b 加的第 15 行照内核
+    `declares_linear_endings` 的读法只看入口任务）。树上有改动就拒；`--out` 是文件、不是空的、在 `--repo` 里面，都在读任何东西之前拒；`--out` 在安装根里面**不拒**（没有哪段代码判得出）。
+    三个文件先写 `.part`、齐了再改名，`build.json` 最后；仓里什么都不写、不删。`resource verify` 照旧按固定的 3（带 `notices/` 是 10）声明、不带 `goals.json` 和 `tables/`，所以同一个
+    提交两行可能声明不同的修订（已知的差别）。新码 `resource_build_output_invalid`、`resource_build_failed`、`resource_build_write_failed`。
+  - **`standard-pack ready`**（P3，`crates/resource-tooling/src/standard_pack_ready.rs`）：`actinglab standard-pack ready --root <游戏根>`（装好的根，或摊开成根的包）逐个包判 13 项：根上的
+    S1 准入、S2 分类、S3 有值、S4 组合、S5 入口走得到（内核自己的前置链和回主页规则）、S6 点名的模型、S7 根检查（先跑一遍 `standard-pack check`），安装上的 I1 实例绑定、I2 `package` 修订
+    （和 `place` 在边上用同一份规则 `package_edge_holds`、`BundleRevisionNeed`）、I3 未录画面的码（只是一行信息）、I4 `requires` 认得、I5 这一对没停住、I6 模型装了；答四种：`waiting`
+    （带每个原因）、`ready_to_place`、`dispatchable`、`not_scheduled`。这一行只读游戏根：什么都不写、不起子进程、不读安装和任何密钥，所以 I1、I2、I4、I5、I6 都是 `not_judged`
+    （`installation_not_read`），一个包最多答 `ready_to_place`；把安装上的读数交给这个函数的调用方是以后的片。新码 `package_dispatch_waiting`（警告）、`package_readiness_unjudged`（信息）。
+
+- **问题报告导出**（#467 RPT-1，登记 §1.379；`contracts/problem-report.md`）：`actinglab report export [<实例>] --out <目录> [--since <时长>] [--until-unix-ms <毫秒>] [--max-runs <n>]
+  [--max-mib <n>] [--no-frames]`，要 Runtime 在跑；Lab 的 MCP 服务器上是 `ac_report_export`（文件写进它的导出目录）；今天的 MCP 服务器还没有这个工具，监控台的按钮是 UI 仓的事。
+  - **收什么**：窗口（默认 24 小时，最多 7 天）里每台实例最新的失败和没结束的运行（默认 5 次，同一个包以同一个码结束的最多 2 次）：状态、每一步、失败那一步的分数（目标的匹配、最近和最好的
+    分、阈值和余量；从诊断流取，没有或大于 8 MiB 就从识别记录取）、几何、失败那一步的诊断流节选、最多三帧；每台实例账本错误视图最新的 200 行；各成员的构建清单和每个游戏根的包来源。第一页
+    `SUMMARY.md`（中英两种标签）写每次运行以什么码结束（带目录里的描述）、停在哪一步哪一页、最后认出的页、目标的分，和一行显示的话（设备和包的尺寸、缩放、在缩小的帧上识别还是没缩放）。
+  - **不收什么**：配置只为 `standard_packs.root` 整份读一次（最多 1 MiB），一个字都不写进去，盐也不写；状态根的密钥文件、设备绑定的私有文件、账本和数据库文件从不打开；路径里 `Users`
+    下面那一段、用户名和这台电脑的几个名字换成 `<user>`、`<computer>`（按名字长短分三档，`crates/lab-ops/src/report/archive.rs`），学不到的名字列在清单的 `names_not_looked_for`；
+    `--no-frames` 连帧上读出来的文字和数也去掉。超过上限（默认 24 MiB，4 到 64）先去帧、再去诊断流节选、再去错误视图，摘要、清单和每次运行的状态、步骤、分数从不去，去完还超就照写并说
+    `still_over`。
+  - **写在哪**：`--out` 里一个 `problem-report-<时间>Z-<8 位哈希>.zip`，先写 `.partial` 再改名，同名的从不覆盖；`--out` 在安装根或状态根里面（解析过链接和大小写）以
+    `report_output_refused` 拒，在连 Runtime 之前。Runtime 和安装什么都不变，什么都不离开这台机器。
+  - **对在跑的 Runtime 花多少**：只发 `Status`、`QueryEvents`、`ReadMaterial`（都在 `ui` 的清单上）；每个选记录的读都带请求号，或带实例和窗口，从不从账本第一条读起；一份报告的所有读共用
+    120 秒的期限，每个读最多 20 秒，错误视图的搜索也算一个读（时间到了就不再发下一页，记成 `report_part_missing`）；每台实例的运行列表最多 20 条，诊断流最多 8 MiB，帧每次运行最多三张、
+    每张最多 32 MiB。从不截图、不按、不钉、不确认读过证据（导出不会让 Runtime 放掉留着的帧）。新码五个：`report_exported`、`report_output_refused`、`report_write_failed`、
+    `report_part_missing`、`report_trimmed`。
+
+- **按名字读、设目标（#463 V2、V3）**（登记 §1.382、§1.383；`contracts/package-variables.md`「The run」，`contracts/runtime-interface.md`「Goal request kinds」，
+  `contracts/resource-targets.md`）。V1 声明的变量从本版起有人读：调度派的一次运行读它的包里变量的值，一个应用的目标按名字读、按名字设。
+  - **运行读什么、从哪读（V2，`crates/policy/src/variables.rs`）**：一对（任务、实例）的包声明了变量时，按声明的次序，每个变量取这个应用 `session.resource_targets` 第 3 版记录里同名的
+    条目行（从评估的事实里读，宿主从内存的事实库投影，不多读账本），用契约库的 `PackageVariable::judge` 判过；没有、或者不再合声明，就用包的默认值；没有第三个来源，什么都不算出来、不
+    改写。生不生效照工作台对整个根的判断（`judge_root_variables`，同 `standard-pack check` 一份规则；没有组合的标准包时是修复表的判断）：名字冲突、被 `goals.json` 拿去作别用、超出个数、
+    当上限读不合、整个根算下来不可逆、有读不了的包、`goals.json` 读不了，或者这一刻没有检查判得了这个根（`root_unchecked`），都读默认值。值作为 `session.dispatch.parameter.<name>` 覆盖
+    给运行：`choice` 是字符串、`switch` 布尔、`integer` 整数、`ordered` 是记录列表 `{key, rank}`（从 1 起）；调度派的运行读派单带的值，别的运行（直跑、Lab、离线回放）读默认值，Lab 的
+    扫描回放用 `actinglab replay --variable <name>=<json>` 给值。派单的理由 `policy_dispatch_parameters` 多可选值 `variable_values`（每个变量一条：名字、来源 `set` 或 `default`、
+    `value_json`、谁在什么时候经哪个入口设的、不生效时的词 `variable_problem`）；一个理由超过记录的上限（32 640 字节）时，账本里最长的几个值换成 `value_sha256`、`value_bytes` 和
+    `value_json_left_out`，运行读的内存里的值是完整的。存的值没用上记 `goal_value_not_applied`（启动以后每个应用、名字、声明和值一次）；派出去的包工作台读不了记
+    `goal_value_package_unreadable`（每个实例、包和它文件的状态一次，这时派单不带值、运行读默认值）。值写在应用的条目里：`targets set` 带 `entries`，或下面的 `EditGoal`。
+  - **工作台多读的**（`crates/runtime-host/src/host/standard_pack_schedule.rs`）：每个游戏根的 `goals.json` 和 `schedule.json`、`bundle.json`、包的声明文件一起比长度和修改时间，变了下一次
+    检查（最多每 `standard_packs.check_interval_ms` 一次）重读；重读时用契约库的读取器读一次 `goals.json`（最多读到上限再多一字节），判这个根所有的包（含 held 的）的变量，建策略循环从
+    内存读的变量表，并把根的 `goals.json` 和判断留到下一次检查，给目标页用。`goals.json` 被拒或读不了时记 `standard_pack_goals_not_applied`（`goals_failure` 为 `refused` 或
+    `unreadable`，原因是读取器的第一个问题或操作系统的错；被拒的每个内容一次，读不了的到它读得了为止一次）：这个文件不生效，根照跑。
+  - **目标页和两种请求（V3，`runtime-client` 9；`crates/actingcommand-contract/src/runtime/goals.rs`，`crates/runtime-host/src/host/goals.rs`）**：`GoalView {instance_alias}` 答
+    `GoalViewed {view}`，一个应用的目标页，只从内存读（工作台留着的根的 `goals.json` 和变量判断、上一次评估为现行目录和清单建的修复表、投影、资源目标视图和记录），一个文件都不读、什么都
+    不记：`goals.json` 的每个条目按它的次序（资源条目带池子上的目标、读数和缺口，`tier` 答 `not_built`，位置带它的变量，绑在这个应用上的包都不声明的是 `not_offered`），再是绑定的包声明了却
+    没有位置的变量；每个变量有它的声明（`default_origin` 照写）、声明它的包和根里声明它却没绑上的包、默认值、存的值和谁设的、下一次派单会交给运行的值（用派单自己的解析）、它的
+    `variable_problem` 和原因（`variable_cause`）、在不在生效；然后是没有条目认领的存值、只读的修复参数、不在声明池子上的目标、资源目标视图和记录的版本（`fact.published` 的序号，没有
+    记录时为 0）。`EditGoal {instance_alias, expected_version?, op}`（`op` 为 `{kind: set, name, value_json}` 或 `{kind: clear, name}`）答 `GoalEdited {version, event_id, replayed,
+    replaced_target_id?}`：照同样的办法读页，然后在事实写闸里先比版本（对不上 `fact_observation_version_conflict`），再照它要改的记录核名字和值（不合 `goal_value_invalid`，词表
+    `goal_problem` 23 个词，什么都不追加），变量的值用派单自己的 `resolve_variable` 判，所以 `set` 收下的正是派单会整个用上的；值的规范文字最多 1024 字节。然后只换或去掉第 3 版记录的那一行
+    （别的行原样，第 2 版的目标变成第 3 版的），读回整份记录，发一次 `fact.published`（记下 Runtime 的时间、请求的入口和 Lab 连接声明的发起人）；`clear` 去掉这个名字下存的东西。两种都是
+    通用请求、都在监控台的清单上；更早的 Runtime 解不开，断开连接（客户端答 `runtime_operation_unsupported`）。新码 `goal_value_invalid`、`request_goal_view_completed`、
+    `request_edit_goal_completed`。
+  - **什么都不列时的三个词**：`not_checked_yet`：启动以后工作台还没检查过这个根、或还没有一次评估，问一次就会自己过去；`root_failing`：启动以来没有一次检查读得了这个游戏根，声明里写着
+    文件、读取器的第一个问题和指针或操作系统的 `io_kind`，要修根；`no_schedule`：这个游戏没有带 `schedule.json` 的标准包根。三个词也是 `set`、`clear` 被拒的原因，不要变量声明的资源目标
+    也一样。
+  - **Lab 的行和工具**：`goals <实例> [--package <package_id>]`、`goals get <实例> <名字>`、`goals set <实例> <名字> <JSON 值> [--expected-version <n>]`、`goals clear <实例> <名字>
+    [--expected-version <n>]`（核心模块，在 Lab 进程里服务，要 Runtime，入口 `lab` 和 `ui`），`package variables --package <包目录>`（actinglab 自己的命令：经 Runtime 的元数据读取器读一个
+    包的控制声明，列出变量、默认值和修复参数，不要 Runtime、什么都不写）；Lab 的 MCP 服务器上是 `ac_goals`、`ac_goals_get`、`ac_goals_set`、`ac_goals_clear`、`ac_package_variables`。
+    `goals get` 对没检查过的页答它的状态和那个词，不答 `not_recognised`。
+  - **命令行的一处修正**：同一行既有位置上的实例、又有 `--instance`（比如 `goals set <实例> <名字> <值> --instance <x>`）时，actinglab 原来把后面的位置参数错一位读、以 `wrong_type` 拒名字；
+    现在类型不收的位置词先留着、数完词再判，多出来的一个答 `repeated`，正是 `contracts/lab-two-entries.md` §9.3 一直写的；别的行照旧。
+  - **已知的限度**：给一次没有派单的运行设值是以后的片；派单和运行开始之间包被换掉时，运行可能读默认值而记录写着 `set`；`tier` 条目还没建（`tier_not_built`），资源目标的期限
+    （`by_unix_ms`）是以后的片（`deadline_unsupported`）；录制里声明变量（V4）、监控台的页（V5）、资源仓的包（V6）都在以后。
+
+- **LAB-3 的运维规矩到 LAB-7 前照旧：生产照旧用 `actingctl install` 部署**，不用 Lab 救急模块的 `deploy`、`rollback`、`place`、`config replace`，也不用后来加的 `new`、`vision place`、
+  `state-root claim` 和 Runtime 停着时的 `instance add`；这些行都不用在生产根上。
+
+- **生产上**：自 2026-11-11 起有一台实例在试跑调度，其余实例暂停着。每个在用的安装都是一台设备一个应用，设备跑在正好 1280×720；只有一台设备为了显示适配的实机验证改成了 3840×2160，那次验证
+  还没做，这台的实例暂停着。在用的安装上没有本版加的任何东西（见第一条），部署本身不改变派单，部署以后今天的例行任务也没有哪处行为会变。
+
+配置：按代码、`distribution/windows/component-interfaces.json` 和 `contracts/component-interfaces.md` 核过，**升了两项：`package` [3, 12] → [3, 15]，`runtime-client` [3, 8] → [3, 9]**。
+`component-interfaces.json`（4–10）：`runtime-client` [3, 9]（8）、`package` [3, 15]（9），`actingd-config` [5, 32]（4）、`install-selection` [1, 1]、`install-control` [0, 1]、`ledger` [3, 8]、
+`runtime-outcomes` [1, 1] 没变；架构测试 `tools/actinglab-architecture/tests/component_interfaces.rs` 的 `V0120`（169 起，`package` 在 174、`runtime-client` 在 175）跟着钉。
+
+- `runtime-client` 9（`contracts/component-interfaces.md` 153，V3）：请求种类 `GoalView`、`EditGoal` 和它们的结果 `GoalViewed`、`GoalEdited`（`crates/actingcommand-contract/src/runtime/goals.rs`，
+  `runtime.rs` 的 `RuntimeOperation`、`RuntimeResult`；客户端 `crates/runtime-client/src/client.rs` 的 `goal_view`、`edit_goal`），修订 3 到 8 的形状一个都没改，所以 `min` 仍是 3。**谁声明**：
+  Runtime 声明 [3, 9]（请求的 schema 仍是 `actingcommand.runtime.request.v4`）。**本版之前的程序**：修订 8 及以下的 Runtime 解不开这两种请求，不给回执就断开连接，客户端把读答成
+  `runtime_operation_unsupported`、把写答成传输失败（写之前先用 `GoalView` 读回）；安装工具的边两头都过（[3, 8] 和 [3, 9] 相交，见下面「升级与退回」）；控制台见「配对」。
+- `package` 13（`contracts/component-interfaces.md` 166，K1：`linear_steps` 的选择一步）、14（167，V1：包的 `variables`，同一修订带来第 2 版 `goals.json`）、15（168，K2：`linear_steps` 的
+  结局页）。**谁声明**：Runtime 声明 [3, 15]；包由打包的一方声明：带选择一步的 [13, 13]，带变量或 `goals.json` 的 [14, 14]（`VARIABLES_PACKAGE_REVISION`、`GOALS_PACKAGE_REVISION`），
+  带结局页的 [15, 15]；写它的是资源仓的打包脚本或 Lab 的 `standard-pack build`，`record stop` 不写（见上）。本版的 `place` 要求带 `goals.json` 或变量的包声明 14（`goal_undeclared`、
+  `variable_undeclared`，`crates/lab-rescue/src/install/place.rs` 的 `check_goals_declared`、`check_variables_declared`），不为 13、15 要求什么。**本版之前的程序**：v0.12.60 的 `place`
+  （范围 [3, 12]）在计划阶段、挂暂停和写任何东西之前以 `interface_edge` 拒声明 13 到 15 的包（v0.12.60 的 `place.rs` 694–696）；v0.12.60 的 Runtime 在准入时拒选择一步
+  （`operation_effect`）和结局页（`terminal_page`），在声明关口拒 `variables`（`resource_declaration_invalid`，`UnknownField` 在 `/variables`），不打开 `goals.json`；更新和退回的
+  `package` 边比的是安装登记里每个根的范围，登记里一律没有，照旧每个游戏一条 `pack_declaration_unknown` 警告；控制台对 `package` 什么都不拒，见下面「配对」。`ledger`、`actingd-config`、
+  `runtime-outcomes` 都不动（新码只是目录里的字符串，`runtime-outcomes` 仍是 1；派单理由多的 `variable_values` 是已有码的可选值；第 3 版目标记录的行形状没变，`ledger` 不动；录制、建包和
+  报告的文件都不是接口）。
+- 配置键：**没有新增，也没有去掉**。`actingd.defaults.json`、`actingd.config.example.json`、`actingd.config.first.json` 自 v0.12.60 没改，`crates/runtime-config` 和 `apps/actingd` 也没改，
+  所以默认值文件的哈希、每个根的清单、`config.parameters` 和 `config.subsystems` 都和 v0.12.60 相同。
+- 结果码：目录从 3939 个码、1760 个位置、644 个键、228 个词表变成 3960 个码、1764 个位置、672 个键、246 个词表，仍是 31 个分片；在用的 3911 → 3932，状态为 `retired` 的仍是 28 个，
+  审阅定稿的仍是 172 个（在用的 170 个）；词从 1711 个变成 1895 个；在用码按类别是 success 132、info 213、warning 155、error 3415、fatal 17。**新码 21 个**（都 pending、`since` 0.12.61、
+  阶梯类别 none）：resource-tooling 的 `adopt_refused`、`adopt_write_failed`（error）、`package_dispatch_waiting`（warning）、`package_readiness_unjudged`（info）；actinglab 的
+  `resource_build_output_invalid`、`resource_build_failed`、`resource_build_write_failed`（error）；lab 的 `record_select_invalid`、`record_ending_invalid`、`record_ending_ambiguous`（error）；
+  actingctl 的 `report_exported`（success）、`report_output_refused`、`report_write_failed`（error）、`report_part_missing`、`report_trimmed`（warning）；runtime-host 的 `goal_value_invalid`
+  （error）、`goal_value_not_applied`、`goal_value_package_unreadable`、`standard_pack_goals_not_applied`（warning）；contract 的 `request_goal_view_completed`、`request_edit_goal_completed`
+  （success）。**新位置 4 个**：runtime-host 的 `goal_view`、`edit_goal`，runtime-client 的 `runtime_goal_view`、`runtime_edit_goal`；新的码域 `goal_`、`goal_value_`（runtime-host）。
+  **新键 28 个**：`adopt_problem`、`select_problem`、`ending_problem`、`against`、`readiness_item`、`readiness_problem`、`readiness_unjudged`、`required_revision`（整数）、`blocking_package_id`、
+  `report_part`、`report_part_reason`、`report_write_step`、`report_fit`、`report_output_root`；V2、V3 的 `variable_values`（记录列表）、`variable_name`、`variable_source`、`variable_problem`、
+  `value_json`（新的键类型 `json`：一个值的紧凑 JSON 文字，最多 1024 字节）、`set_unix_ms`、`set_channel`、`declaration_sha256`、`value_sha256`、`value_bytes`、`value_json_left_out`、
+  `goals_failure`、`goal_name`、`goal_problem`。**新词表 18 个**：上面 12 个带新词表的键各自的（`against` 的词表叫 `ending_against`），两个只用在回答里的 `readiness_state`、`readiness_role`，
+  和 V2、V3 的 `variable_source`（2 个词）、`variable_problem`（17 个）、`goals_failure`（2 个）、`goal_problem`（23 个）；`set_channel` 用已有的词表 `channel`。**改了的**：
+  `policy_dispatch_parameters` 多可选值 `variable_values`，描述和常见原因改写；
+  `standard_pack_problem` 多 7 个词（`goal_variable_unknown`、`goal_version_retired`、`variable_conflict`、`variable_out_of_limits`、`variable_cap_range`、`variable_irreversible_by_root`、
+  `variable_undeclared`），它的说明和 `goal_type_unknown`、`goal_block_mismatch`、`goal_package_unknown`、`goal_governs_irreversible`、`goal_range_invalid`、`goal_default_invalid`、
+  `goal_table_unknown`（现在没有谁给）、`goal_undeclared`、`ui_parameter_undeclared` 九个词的说明改写；`contained_task_linear_unrecorded_screen` 的描述（点击或选择一步之后）和处理（上面那条
+  路）改写，只是文字，签名不变。没有码、位置、键或词去掉，没有码 `retired`。在用码里两段文字都写了的从 724 个变成 745 个（21 个新码都写了）。本版的发布文件
+  `contracts/outcome-codes/released/0.12.61.json` 按合入全部 12 张 PR 以后的树生成，没有码、没有位置（新码都是 pending，改了的都不是定稿条目）。索引照旧由脚本生成，仍是 32 个文件，核过是
+  最新的。
+- Lab 的操作表（`contracts/lab-operations.json`）：178 行 → 187 行：核心模块多 `report export`、`standard-pack ready`、`goals`、`goals get`、`goals set`、`goals clear`、`package variables`
+  （54 → 61），编写模块多 `standard-pack adopt`、`standard-pack build`（41 → 43），调试 30 行、救急 53 行没变（救急模块服务的行仍是 39）；`record mark` 多三个参数 `ending`、`outcome_key`、
+  `remove_ending`，`request` 的说明写上 `select`、`clear_select`、`ending`、`remove_ending`；`replay` 多参数 `variable`；监控台的请求种类表多 `GoalView`（读）、`EditGoal`（写），都还没有
+  监控台发。Lab 的 MCP 服务器照表的命名规则多九个工具：`ac_report_export`（在它自己的进程里服务，`out` 由它给成导出目录）、`ac_goals`、`ac_goals_get`、`ac_goals_set`、`ac_goals_clear`（也在
+  它自己的进程里），`ac_standard_pack_adopt`、`ac_standard_pack_build`、`ac_standard_pack_ready`、`ac_package_variables`（经 `serve` 子进程）；`ac_record_mark` 多那三个参数，`ac_replay` 多
+  `variable`。
+- 压缩包：**两个包的文件表都没变**：`.github/` 自 v0.12.60 没改（Runtime 包的 `$runtimeFiles` 仍是八个文件、布局 `distribution-v1`；Tools 包的 `$toolFiles` 没改、布局 `platform-tools-v3`），
+  `INSTALL.md` 没改。
+- 程序文件：`Cargo.toml` 没改；`Cargo.lock` 只多两条内部依赖（`actingcommand-lab-ops` 用上工作区里已有的 `zip` 写报告，`actingcommand-lab` 依赖显示适配库做结局帧的换算），没有新的外部依赖；
+  `crates/host-metrics` 多一个读完整 DNS 名的函数（报告的遮挡用）。`ci/` 一行没改：`ci/retired-gates.toml` 不多条目，不稳定表照旧是 FLK-08 和 FLK-10。actinglab 从 47 个顶层分派臂、
+  102 条命令变成 46 个、105 条（多 `standard-pack adopt`、`standard-pack build`、`standard-pack ready`、`package variables`，去掉占位的 `report export` 和它的 `report` 组；
+  `ratchet/actinglab_commands.json`；`goals` 那四行是 CLI 模块的行，不在清单里），`record mark` 多三个开关 `--ending`、`--outcome-key`、`--remove-ending`，`replay` 多 `--variable`；`apps/actingctl` 只改了 MCP 一侧一个工具的说明：今天的 MCP 服务器仍是 46 个工具
+  （`apps/actingctl/src/mcp/tools.rs`），README 两种语言的工具表标题改成 v0.12.61。
+
+升级与退回（部署由当时装着的那一版的安装工具做。v0.12.60 的 `install/plan.rs` 和 v0.12.58 的只差一个常量的可见性，下面的行号对两版都对；`crates/lab-rescue` 自 v0.12.60 只改了 `place.rs`
+和测试）：
+
+- **v0.12.60 的安装工具装本版：能装，不用任何标志。** 安装工具的声明是它自己构建里的 `component-interfaces.json`（v0.12.60 的 `install/host.rs` 24–26）：`ledger` [3, 8]、`runtime-client`
+  [3, 8]、`package` [3, 12]、`actingd-config` [5, 32]。计划的边逐条（v0.12.60 的 `plan.rs`）：
+  - `ledger` 两边 [3, 8]，`previous_max_in_next` 过、`one_way` 不触发（298–310），`ledger_verify` 是 false（924：两边的 `ledger` 相同）；`runtime-outcomes` 过（311–323）；`install-control`、
+    `runtime-client` 安装工具和 Rp、R\* 都相交（324–340，判断是 250–252 的 `meet`：安装工具的 `runtime-client` [3, 8] 和目标的 [3, 9] 相交，V2、V3 合入以后照样不用标志）。`package` 的 `bundle_max_in_next`（341–364）比的是安装登记里每个包的范围，登记里一律没有，每个游戏一条 `pack_declaration_unknown`
+    警告，不挡；没有哪条边拿安装工具的 [3, 12] 去比目标的 [3, 15]。`runtime_equals_tools`（765–772）过。
+  - `actingd-config` 没有比范围的边：`installer_knows_keys`（368–385）过（没有新键，生产的文件不变）；`next_check_config`（911–923）：本版的 check-config 带 `--install-root` 读 v0.12.60 的
+    文件，`apps/actingd` 没改；它经工作台同一个读取器也打开 `goals.json`，没有这个文件、没有包声明变量的根答法和 v0.12.60 的相同。
+  - `defaults_diff`（583–607）**一行都没有**：两份默认值文件字节相同。文件计划（774–858）里没有 `new` 也没有 `extra`，两个包的文件都是替换或不变。
+  - **启动后检查是 v0.12.60 那一版的**（`postcheck.rs`）：`no_seeding`（315–345）有 S0 就要求 `load`，生产的根早过了第一段，过；`packs`（382–411）读启动报告里每个游戏的包数，本版不改它；
+    `new_keys`（550–582）的 `added_keys` 为空，这一行以空的 `keys` 过；别的行读 `StartReport`、`Status` 和配置事实，形状都没变（契约库只多两种请求和它们的结果）。
+- **配置文件**：v0.12.60 写的配置文件本版照收，不用改（`actingd-config` 仍是 [5, 32]）。
+- **已装的包**：本版对今天的包不改准入，只有第一条那一种同页两种写法的线性包现在准入就拒（它原来每次都失败）；运行路径变了的是线性包，算出来的一样；本版的 `standard-pack check` 对今天的根
+  答法和 v0.12.60 相同。
+- **退回（按本版安装工具的边和回退门核过；退回由在线的本版安装工具跑，`crates/lab-rescue/src/install/update.rs` 自 v0.12.60 没改）**：
+  - **能退回的只有这次部署替换掉的 v0.12.60**（回退门第 2 部分，`update.rs` 410–447，`live_operation` 181 起）；部署失败时的自动回退由跑部署的 v0.12.60 安装工具做，也退向 v0.12.60。退回时
+    边都过：`ledger` 8 在 [3, 8] 里、`one_way` 不触发；`runtime-client` 相交；`package` 是警告；`installer_knows_keys` 和第 4 部分 `config`（目标的 check-config 读现行的文件）都过，因为
+    文件不变；文件计划里没有 `extra`。
+  - **v0.12.60 对本版在在用的安装上能写下的东西：没有新东西要处理。** 本版的 Runtime 在今天的根上不写新记录、新事实、新文件或新键（actingd、账本、配置没改；宿主的 V2、V3 代码只在根带
+    `goals.json`、包声明变量、派出去的包工作台读不了、或有人调 `EditGoal` 时才写东西，见第一条；内核对不带选择和结局的包写的记录和以前一样）；V2、V3 以外的新码都是 Lab 和 Tools 的，不进
+    账本；改写的只是文字。
+  - **只有新加的行和新包才写的东西**：
+    - 带选择或结局的录制：v0.12.60 的 actinglab 解不开（`lab_recording_unreadable`），文件原样留着；带 `select`、`clear_select`、`ending`、`remove_ending` 的请求它以 `validation_failed` 拒。
+      一次录制里别换着用不同的构建。
+    - 声明 `package` 13、14 或 15 的包：v0.12.60 的 `place` 在计划阶段拒（见上）。**已经放进游戏根的**：v0.12.60 的 Runtime 每次运行都在准入时拒带选择一步或结局页的包；声明 `variables`
+      的包连元数据都读不了（它的声明关口拒这个成员），所以它的修复表把这个包列成读不了，工作台也把它当成读不了的包：那个游戏的任务全带不可逆标记、目标全不生效，并记
+      `standard_pack_package_unreadable` 警告（v0.12.60 的 `crates/runtime-host/src/host/standard_pack_schedule.rs` 395–448）；v0.12.60 的 `standard-pack check` 逐个准入，以 `package_invalid`
+      拒整个根。所以这样的根退回之前先把这些包拿出去，或者留在本版上。
+    - 第 2 版 `goals.json`：v0.12.60 的 Runtime 不打开它；v0.12.60 的 `standard-pack check` 把它读成 `/schema_version` 的 `malformed`、每个位置 `goal_type_unknown`，作警告、当作没有这个文件
+      检查根；`package bundle --goals` 拒；它的 `place` 拒声明 14 的包，放不带这个文件的包时把它收起来（G-R1 的规矩）。
+    - 问题报告：只在人给的 `--out` 里（不许在安装根和状态根里），根上什么都没有；v0.12.60 的 actinglab 对 `report export` 照旧是占位命令。
+    - `adopt`、`build` 留下的：资源仓检出里收进的包和改过的根文件、Lab 状态目录下的 `adopt/` 和 `adopt-check/`、`build` 的 `--out`，都不在安装上；v0.12.60 的 actinglab 没有这三行、拒这些
+      词；建出的压缩包放在范围收得下它所声明上限的任何安装工具上（v0.12.60 的收 12 以下的）。`ready` 什么都不写。
+
+配对：
+
+- **控制台 UI**（最新发版 UI v0.12.19，是 UI 的 `69e699da`，钉 Runtime v0.12.60 `2eaf9b7e`；UI main `95c145cd` 比它多 13 个提交，只改了 `model/` 下建模用的 Python，监控台和安装向导的
+  代码没动）：
+  - **它对声明到 `package` 15 的 Runtime 做什么：什么都不拒。** v0.12.19 声明 `actingd-config` [5, 32]、`ledger` [3, 8]、`runtime-client` [3, 8]、`package` [1, 2]、`runtime-outcomes`
+    [1, 1]（`crates/acui-setup/component-interfaces.json` 3–11）。安装向导核控制台和 Runtime 的边只有四条：`runtime-client` 和 `actingd-config` 要相交，`ledger` 和 `runtime-outcomes` 要
+    Runtime 的上限落在控制台的范围里（`crates/acui-wizard/src/manifest.rs` 208–213 的 `CONSOLE_EDGES`，判断在 268–271），`package` 不在里面，控制台自己的 [1, 2] 不跟谁比。`package` 只用来
+    核安装集里的标准包：向导从 Runtime 压缩包自己的构建清单读 `package` 范围（`crates/acui-wizard/src/set.rs` 692–701），每个标准包 `interfaces.json` 的上限要落在里面（`package_edge`，
+    `manifest.rs` 192–198，`set.rs` 825–831，不在就是 `Mismatch`）。所以和本版的 Runtime 压缩包配在一起，声明 13 到 15 的包都收；和 v0.12.60 的配在一起，这样的包被拒。下一版控制台为
+    `package` 不用收任何东西。
+  - **它解码的**：`ui` 的清单上多两种请求 `GoalView`、`EditGoal`（`runtime-client` 9），v0.12.19 不发它们；别的请求、回答和回执形状没变，v0.12.19 钉着的 v0.12.60 的类型照读；它的
+    `runtime-client` [3, 8] 和本版的 [3, 9] 相交（`manifest.rs` 209、268–271），向导照过。`report export` 的 `entries` 有 `ui`，但控制台还没有这个按钮。
+- **部署工具包**（照现在的做法，用在线那一版的 `actingctl install` 跑每一步）：`release stage --root --dir --facts --expect-tag --expect-commit`、`guards --root --for stop --hold
+  --known-pause …`、`status --root [--operation]`、`update plan --root --build [--preview]`、`update apply --root --build --plan --stop --hold --known-pause … --start --detach`、
+  `release-hold --root --reason`；另用目标构建的 actinglab 跑 `--json standard-pack check --root <游戏根>` 预查包根。从 v0.12.60 装本版时，回答这几步的都是在线的 v0.12.60 安装工具自己的
+  代码，**没有一条被拒、没有一条换了答法**；目标构建的 `install status` 只读文件、不连 Runtime；本版的 actinglab 对今天的根答法相同。**会把标准错误有输出、或第一行变了当成失败的：没有。**
+  跑安装工具的那一处把标准错误并进输出、按退出码判；轮询上线和汇总守卫的两处从并起来的输出里取第一行以 `{` 开头的；解析计划、状态、分离日志的辅助脚本取以 `{` 开头的行；预查包根的那一处
+  分开读标准输出、按退出码和 JSON 判；这条路上没有程序多打一行。**工具包要跟着改的**：目标提交和标签、暂停的名字和目录；跑每一步的安装工具指向在线的 v0.12.60；预期改成**目标的 `package`
+  和 `runtime-client` 两条边换了范围、都过**（[3, 12] → [3, 15]，[3, 8] → [3, 9]）、`ledger_verify` 为 false、`defaults_diff` **零行**、文件计划**没有** `new`（v0.12.60 那次多一个模板，这次没有）、启动后检查的 `new_keys` 以空的 `keys`
+  过、每个游戏一条 `package` 警告、能退回的是 v0.12.60；给热放置工具包写构建记录的那一步核新包清单的 `actingd-config`、`package`、`ledger` 现在是 [5, 32]、**[3, 15]**、[3, 8]，记成
+  `5,32`、**`3,15`**、`3,8`（`3,12` 会让那一步和后面的重钉不过）；默认值文件的哈希和 v0.12.60 相同；没有新的子系统（`apps/actingd` 没改），重钉时子系统那一处不用改；这次部署没有
+  v0.12.60 那次第一次启动的身份和认领要看。
+- **热放置工具包的命令行，本版都照旧收、答法和 v0.12.60 相同**：actinglab 两行，`--json standard-pack check --root <游戏根>`（没有变量的根不出 `variable_provenance`）和 `--json standard-pack
+  compose --root <包根> --instance <别名>=<游戏>/<区服> … --out <新目录>`（组合出的目录字节和哈希不变）；actingctl 的 `status`、`status --config`、`pause --instance <别名> --reason <理由>
+  --drain-timeout-ms <毫秒>`、`resume --instance <别名>`、`schedule --instance <别名>`、`overview --root <根> --instance <别名> --sections catalog`（都带 `--state-root`；actingctl 的命令行没改，
+  这几种请求的回答形状也没改，没有 `goals.json`、没有变量的根上答的值和以前一样）；actingledger 的 `events --after … --through … --limit …`（`apps/ledger-forensics`、`crates/ledger-forensics` 没改）。**热放置工具包要学的**：重钉时比的构建记录里
+  `package` 是 `3,15`；它读包压缩包的两个脚本钉着 `package` 的上限 [3, 12]，改成 [3, 15]（声明 13 到 15 的包出现时才用得上），接受的 `validated_with` 提交表加本版；资源仓改用
+  `standard-pack build` 发包以后，压缩包会多 `tables/`（`bundle.json` 的 `tables`）和 `ui.json`，工具包读压缩包的地方到时要照这几项核一遍（本次没核它的读法）。
+- **今天的 MCP 服务器（`actingctl mcp-serve`，现在注册着的那个）**：仍是 46 个工具，答法照旧；只有 `ac_record_mark` 的说明写上选择、`clear_select`、结局和 `remove_ending`，这些请求它原样
+  交给 actinglab（R2 的测试钉着）；`ac_outcome_code` 认得 21 个新码和改写的文字；它还没有目标页的工具（在 Lab 的 MCP 服务器上）。退回 v0.12.60 以后，旧的 actinglab 拒这些请求成员
+  （`validation_failed`）。
+- **Lab 的 MCP 服务器（`actinglab-mcp`，没有注册指向它）**：多九个工具 `ac_report_export`、`ac_goals`、`ac_goals_get`、`ac_goals_set`、`ac_goals_clear`、`ac_standard_pack_adopt`、
+  `ac_standard_pack_build`、`ac_standard_pack_ready`、`ac_package_variables`，`ac_record_mark` 多 `ending`、`outcome_key`、`remove_ending`，`ac_replay` 多 `variable`；别的工具答法照旧。
+
+运行上的变化：
+
+- 从 v0.12.60 直接部署：不用标志，没有 `ledger_verify`，`defaults_diff` 零行，没有新文件，`package` 升到 [3, 15]、`runtime-client` 升到 [3, 9]；能退回 v0.12.60。
+- 在用的安装上今天的例行任务不变；线性包走改过的内核路径、结果相同；终点页同页两种写法的线性包现在准入就拒（原来每次失败）；工作台每次检查多看一次每个游戏根的 `goals.json`。
+- 变量有人读了：调度派的运行读应用存的值（不生效就读默认值，派单理由里记着），一个应用的目标页按名字读（`GoalView`、`goals`）、按名字设（`EditGoal`、`goals set`、`goals clear`）。
+- 录制做包：选择一步（按读到的名字挑、挑不到正常结束）、结局页（停下以后从一帧补上）、包的变量声明；`contained_task_linear_unrecorded_screen` 的处理文字写着从钉住的帧到结局的整条路。
+- Lab 多三行离线的包工作：`standard-pack adopt` 收进资源仓的检出，`standard-pack build` 建出可以放的整个标准包、按内容算 `package` 修订，`standard-pack ready` 逐个包说还差什么。
+- `actinglab report export` 导出一份问题报告（错误视图），只读、有期限和大小上限、遮掉用户名和机器名；占位的 `report export --last-error` 没了。
+- 接口：`package` [3, 15]、`runtime-client` [3, 9]；工具包的构建记录记 `3,15`；两个压缩包的文件表不变。
+
+本版合并的 PR：
+
+- #1720 K1（#463，登记 §1.374）：线性任务的选择一步和 `on_empty` 的正常结束，`package` 13；exec 门行 `#463 K1`（`gate_463_k1`）和主机门行 `#463 K1`，架构钉跟着改，没有改 main 上的旧测试。
+- #1723 V1（#463，登记 §1.378）：`control.json` 的 `variables`、根检查、`goals.json` 第 2 版，`package` 14，七个新词；契约、exec、apps 门行 `#463 V1`，改了契约库四条目标测试、资源工具的
+  `gate_455_gr1` 八条和 `gate_455_gr2s` 一条（理由在登记册），机械地改了 `gate_411_b15p_host`、`gate_cov1`、`gate_sched_c1f1`，修正轮 3 把各处夹具换成第 2 版。
+- #1728 V2（#463，登记 §1.382）：运行读包里变量的值、覆盖、派单理由的 `variable_values`、整个根判「不生效」、三个警告码、`replay --variable`；policy、exec、host、apps 门行 `#463 V2`
+  （`gate_463_v2`、`gate_390_out2` 一条、`gate_463_v2_replay`），没有改 main 上的旧测试；它最后的几条测试和文字随 #1731 一起合入。
+- #1731 V3（#463、#455 G-R2b，登记 §1.383）：`GoalView`、`EditGoal`，`runtime-client` 9，`goal_value_invalid` 和两个回执码，Lab 的 `goals` 四行、`package variables` 和五个 MCP 工具，
+  同一行两种写法的实例答 `repeated`；policy 和主机门行 `#463 V3`（`gate_463_v3`）和 MCP 服务器的两条，改了 `gate_434_lab6s3` 的监控台清单、`gate_434_lab5a` 的核心行、接口表和
+  `runtime-client` 的钉（架构测试、`gate_429_r0b_pairing`）、`gate_434_cli_in`。
+- #1722 P1（#464，登记 §1.377）：`standard-pack adopt`，两个新码；exec 门行 `#464 P1`（`gate_464_p1`）。
+- #1719 P2（#464，登记 §1.376）：`standard-pack build`，三个新码；apps 门行 `#464 P2`（`gate_464_p2`），改了 `gate_434_lab5g2a` 读 `BUILT_SLICES` 的地方。
+- #1718 P3（#464，登记 §1.375）：`standard-pack ready`，两个新码；exec 门行 `#464 P3`（`gate_464_p3`），改了 `gate_434_lab5a` 的路由检查。
+- #1725 RPT-1（#467，登记 §1.379）：`report export`，五个新码、五个键和词表，去掉占位命令；lab-ops 和 apps 的 `gate_467_rpt1`，改了 `gate_434_cli_help`、`gate_434_lab5b5`、`gate_434_lab5g2b`。
+- #1727 K2（#463，登记 §1.380）：线性任务的结局页，`package` 15；exec 和主机门行 `#463 K2`（`gate_463_k2`），改了救急模块的 `v1_the_build_declares_package_through_revision_14`（[3, 15]）
+  和架构钉。
+- #1729 R1（#463，登记 §1.381）：录制里的选择，一个新码、词表 `select_problem`；exec 门行 `#463 R1`（`gate_463_r1`，16 条），没有改 main 上的旧测试。
+- #1733 P2b（#464，登记 §1.385）：`standard-pack build` 算 `package` 15；apps 门行 `#464 P2b revision 15`（五条新测试），没有改旧测试。
+- #1734 R2（#463，登记 §1.384）：停下的录制补结局、`clear_select` 的 `no_select`、结局帧的纯缩放换算，两个新码；exec 门行 `#463 R2`（`gate_463_r2`，15 条），actinglab 和 actingctl 各一条，
+  新的支持模块 `crates/lab/src/scripted_clock.rs`，没有改旧测试。
+
 ## v0.12.60
 
 本版是 v0.12.59 之后的 24 张 PR：5 个直接合并（#1689、#1704、#1706、#1707、#1708）和 5 趟并车（#1697 带 #1690、#1691、#1695；#1699 带 #1692、#1693、#1694；#1705 带 #1698、

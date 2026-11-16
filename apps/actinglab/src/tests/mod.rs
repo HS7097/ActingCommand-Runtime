@@ -78,6 +78,10 @@ mod gate_386_rlt;
 // game root's display declaration.
 #[path = "gate_392_da4.rs"]
 mod gate_392_da4;
+// Workflow #392 DA-5cd: offline recognition takes a scene that is a pure scale of its package; a
+// recording is refused on a display that is not the base size.
+#[path = "gate_392_da5cd.rs"]
+mod gate_392_da5cd;
 // Workflow #407 LOAD-2: `package check` answers a pack's loading set, and `resource validate`
 // reads `loading.json` and a pack's loading copy.
 #[path = "gate_load2.rs"]
@@ -182,6 +186,37 @@ mod gate_449_rec_arch;
 // `--record`.
 #[path = "gate_463_l1.rs"]
 mod gate_463_l1;
+// #463 S1-1: `tap`, `swipe` and `long-tap --record` refuse a dry run, and `--after-ms` needs
+// `--record`.
+#[path = "gate_463_s11.rs"]
+mod gate_463_s11;
+// #463 S1-2: the flags of the captures after a recorded press need `--record`.
+#[path = "gate_463_s12.rs"]
+mod gate_463_s12;
+// #463 S1-3: an application operation in the middle of a business is the open step's effect with
+// the screens before and after it; the entry launch is as before.
+#[path = "gate_463_s13.rs"]
+mod gate_463_s13;
+// #463 S1-7: a recording holds its instance: `record start` pauses its scheduling with a reason of
+// its own, and the end of the recording resumes only that pause.
+#[path = "gate_463_s17.rs"]
+mod gate_463_s17;
+// #463 S1-8: without the variable, an installed actinglab reaches its installation's state root,
+// and `record start` holds its instance there.
+#[path = "gate_463_s18.rs"]
+mod gate_463_s18;
+// #463 S2-13: `record frames` refuses on its command line a number it cannot read, and makes no
+// session directory.
+#[path = "gate_463_s213.rs"]
+mod gate_463_s213;
+// #463 S2-1b: `record ready` takes the package's game, server and locale as `record stop` takes
+// them and, in an installation, the instance's game and server from its configuration.
+#[path = "gate_463_s21b.rs"]
+mod gate_463_s21b;
+// #463 S2-2 fix round 1: `record review` refuses a dry run that would write its previews before
+// the recording is read, and reads the package's game, server and locale as `record ready` does.
+#[path = "gate_463_s22.rs"]
+mod gate_463_s22;
 // Workflow #464 P2: `standard-pack build` builds a game's standard pack from one commit on the
 // steps of `resource verify`, whose report is as before.
 #[path = "gate_464_p2.rs"]
@@ -190,6 +225,30 @@ mod gate_464_p2;
 // those words is gone.
 #[path = "gate_467_rpt1.rs"]
 mod gate_467_rpt1;
+// Workflow #463 S3-4: `standard-pack adopt` refuses a held decision's flags beside `--decide`, and
+// its reference without its reason, before anything is read.
+#[path = "gate_463_s34.rs"]
+mod gate_463_s34;
+// #463 S3-7: `standard-pack build` answers the readiness of the installed root it kept and the
+// command line of the placement's plan; `build.json` does not change.
+#[path = "gate_463_s37.rs"]
+mod gate_463_s37;
+// Workflow #463 S3-10: `standard-pack trial` answers only with `--plan`, the plan of a trial, and
+// sends nothing.
+#[path = "gate_463_s310.rs"]
+mod gate_463_s310;
+// Workflow #463 S3-11: without `--plan`, `standard-pack trial` sends its one run, reads its
+// business end and records it; `--collect` reads an end later.
+#[path = "gate_463_s311.rs"]
+mod gate_463_s311;
+// Workflow #463 S3-9: `run start --variable <name>=<json>`, read by the one parser of
+// `--variable`, sends the values in the run's request.
+#[path = "gate_463_s38.rs"]
+mod gate_463_s38;
+// Workflow #477 PC-1: `standard-pack catalog`, the writer of a game root's `pack-catalog.json`, on
+// the command line and through `serve --stdio`.
+#[path = "gate_477_pc1.rs"]
+mod gate_477_pc1;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
 use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{

@@ -19,7 +19,10 @@ admission guard and on a free device: the session the monitor's probe opened
 session a run's lease that lapsed in its end phase left open (below, and
 [device-group.md](device-group.md), "Device-level actions", row 7). Workflow #458 uses it for
 the session any instance's lease left open when its close at the lease's expiry was refused,
-an instance alone on its device included (below).
+an instance alone on its device included (below); Workflow #461 for the session it left open when
+the close at a client's disconnect, at a backend failure's lease end or in a failed input's
+clean-up met the lapsed lease before the lease sweep did (below); Workflow #475 for the sessions
+five more closes under a lapsed key left open (below).
 `begin_resource_close` admits the native close and returns its `FencedWrite`;
 ordinary input validation rejects this lease. Host invokes
 `close_instance(FencedDeviceWrite(Arc<FencedWrite>))` only after that
@@ -162,7 +165,9 @@ lock, an identifier, an invariant of the scheduler), the close keeps its fatalit
 An earlier fatal does not skip other instances' permitted cleanup. A close attempted
 under an otherwise invalid lease, an unresolved destructive step, or an unconfirmed native
 close retains failure and owner protection; a close refused under an expired lease fences its
-instance instead, at a lease's expiry (below) and after a capture failure (above). The end of an
+instance instead, at a lease's expiry, at a holder's own end of the lapsed lease, in a failed
+input's clean-up and in the five closes under a held key of Workflow #475 (below), and after a
+capture failure (above). The end of an
 expired lease attempts no close (Workflow #191 H): it keeps the session and forgets its input
 frames, as for no session. A session that must close (it needs the close, its instance is
 outside the multi-Nemu gate, or it is a member of a device group of several) is asked to close
@@ -185,7 +190,59 @@ the session to a preparation of the fenced instance; a failed close is recorded,
 unconfirmed one settled, by the close path. Only a preparation whose self-check passes lifts the
 fence. During shutdown, and where no fence may take the instance, the lease end fails as before;
 a failure of the Runtime itself in these paths (a record that cannot be appended, a poisoned
-lock, the owner's journal) stays fatal. #411 A64's own dedicated close lease, refused for any
+lock, the owner's journal) stays fatal. Workflow #461 (Runtime 0.12.66) does the same for two
+paths that meet the lapsed lease before the lease sweep does. A holder's own end of its lapsed
+lease, a client's connection that closes (`cleanup_connection`) or a backend failure's lease end,
+asks the close under the lapsed lease and is refused the same way; and an input under way when
+its lease lapses, which then fails, asks its clean-up's close under that lease
+(`finish_input_failure`) and is refused the same way, before its own lease end is. Each refusal
+is recorded once (it names the lease; its stage is the session close), the instance is fenced
+with `lease_expired` as its cause, and the lease ends handing the device to no one; once it has
+ended, still under the instance's admission guard, the session is closed under the session close
+ahead (`close_expired_lease_session_guarded`), as above. The failed input answers its own failure
+and retains no owner as unconfirmed: the close it owes is made after its lease ended, and while
+the fence holds the owner's resources stay `in_use`. During shutdown, where no fence may take the
+instance, and for a failure of the Runtime itself, these two paths keep their fatality as above
+(the failed input's clean-up then records the failure, retains the owner as unconfirmed and
+latches, as before, except for a failure of the ledger itself, such as the refusal's record that
+cannot be appended: no record carries it, so the clean-up returns it unrecorded, before that
+retention, and the request's boundary latches it with the owner not retained; Workflow #475, fix
+round 2). Workflow #475
+(Runtime 0.12.67) does the same for five closes made under a held key whose lease lapsed before
+the lease sweep met it: a failed run's hand-over of its key to its admitted ladder
+(`hand_off_to_ladder`, a run whose lease lapsed before its end began, which no end phase
+covers); a pre-emption's hand-over of an idle or preempted lease, and its end of that lease
+(`perform_transfer`, `promote_idle_preemption`, `transfer_preempted_while_guarded`); an
+application command's preparation (`prepare_application_resources_result`); a backend switch's
+close of the kept or the candidate session (`close_switch_session`); and a member switch's close
+of the stopped member's session under the run's key (`stop_member_application`). Each close is
+refused the same way; the refusal is recorded once, the instance whose session it is (the
+stopped member's, in a member switch) is fenced with `lease_expired` as its cause, and the close
+is owed under the lease. The key is handed to no one: the hand-over to the ladder or to the
+preempting claim is not made, and the lease ends instead (a backend failure's end, a
+pre-emption's end, the command's own clean-up, the switch's end of its key, the run's end or the
+expiry), which closes every owed session under the session close ahead once it has ended, as
+above; the ladder and the preempting claim then wait in the queue. Each caller answers its own
+failure: the run its own, the application command and the member switch (`application_switch_failed`
+at its step `stop`) the refusal, the backend switch `backend_switch_refused` with
+`instance_fenced`. The refusal the close met is fatal as the close path builds it, so neither the
+application command nor the member switch hands it on: each answers with a refusal of its own
+that is not fatal, `lease_expired` naming the key's lease (at `prepare_application_resources`, at
+`close_execution_session`), and so does a member switch's stop whose preparation met it. Each
+session the key's end owes is closed so, except two: during shutdown the Host close's second pass
+closes it, and a session whose instance's own key a holder took on is that holder's, whose lease
+end or preparation closes it. A session owed for a member whose device a lease of another member
+holds then (no path reaches it today) is not passed over: its close is tried, the session close
+ahead refuses the held device (`lease_busy`), and that refusal is recorded once and leaves the
+session to a preparation of the fenced member, as any refusal of that close does. A close that a
+connection preparation makes under a held key (`prepare_connection_attempt` on the key of a
+person's self-check, an emulator control, the recovery ladder, the emulator watch or a backend
+switch's candidate and restored backends: the retained session's close before the opens, and the
+close after a failed open or outside the multi-Nemu gate) is not among these: the same refusal
+there keeps its fatality, left to a later slice of Workflow #475. During shutdown, where no fence
+may take the instance, and for a failure of the Runtime itself, these paths keep their fatality
+as above. #411 A64's own
+dedicated close lease, refused for any
 reason that is not fatal (a waiting entry, the takeover cooldown, a queue ahead whose claim the
 fenced instance's gate holds back), is recorded once and leaves the session to the waiting entry
 or to a preparation of the fenced instance (fix round 1: before, a queue ahead reached the lease

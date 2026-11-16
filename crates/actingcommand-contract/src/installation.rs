@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! Installation inputs and the non-persistent Host installation protocol (Workflow #352).
-//! Only acsetup commits the selection. Running processes retain the selection they started
-//! with; these documents contain no Runtime state and are never a substitute for the ledger.
+//! Installation inputs (Workflow #352). Only acsetup commits the selection. Running processes
+//! retain the selection they started with; these documents contain no Runtime state and are never
+//! a substitute for the ledger. Workflow #434 LAB-6S4a (0.12.63): the non-persistent Host
+//! installation protocol (`install-control` revision 1, the transition and the held start) is gone;
+//! `install-control` is [0, 0].
 
 use crate::codes::{InstallationCode, RuntimeContractCode, SharedCode};
-use crate::{RequestId, RuntimeContractError, RuntimeContractResult, RuntimeShutdownTarget};
+use crate::{RuntimeContractError, RuntimeContractResult};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::io::Read;
@@ -24,8 +26,6 @@ pub const INSTALL_SELECTION_PATH: &str = "install/active.json";
 pub const INSTALL_ROOT_ENV: &str = "ACTINGCOMMAND_INSTALL_ROOT";
 pub const INSTALL_SELECTION_ENV: &str = "ACTINGCOMMAND_INSTALL_SELECTION";
 pub const MAX_INSTALL_SELECTION_BYTES: usize = 16 * 1024;
-pub const DEFAULT_INSTALL_TIMEOUT_MS: u64 = 60_000;
-pub const MAX_INSTALL_TIMEOUT_MS: u64 = 600_000;
 
 /// OS occupancy of an existing, permanently empty installation locator. Dropping the
 /// handle (including process exit) releases occupancy; it never writes installation state.
@@ -506,145 +506,11 @@ impl InstallSelection {
     }
 }
 
-/// This identity names one in-memory transition of one exact Host, including its first request.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct InstallTransitionTicket {
-    pub target: RuntimeShutdownTarget,
-    pub transition_id: String,
-    pub request_id: RequestId,
-}
-
-impl InstallTransitionTicket {
-    pub fn validate(&self) -> RuntimeContractResult<()> {
-        self.target.validate()?;
-        validate_transition_id(&self.transition_id)
-    }
-}
-
-// Interface anchor `install-control` (contracts/component-interfaces.md): raise its revision in
-// distribution/windows/component-interfaces.json when older peers can no longer use this.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
-pub enum InstallTransitionAction {
-    BeginDrain {
-        transition_id: String,
-        #[serde(default = "default_install_timeout_ms")]
-        timeout_ms: u64,
-    },
-    Query {
-        transition_id: String,
-    },
-    Abort {
-        ticket: InstallTransitionTicket,
-    },
-    CommitShutdown {
-        ticket: InstallTransitionTicket,
-    },
-    Release {
-        ticket: InstallTransitionTicket,
-        #[serde(default = "default_install_timeout_ms")]
-        timeout_ms: u64,
-    },
-}
-
-impl InstallTransitionAction {
-    pub fn validate(&self) -> RuntimeContractResult<()> {
-        match self {
-            Self::BeginDrain {
-                transition_id,
-                timeout_ms,
-            } => {
-                validate_transition_id(transition_id)?;
-                validate_install_timeout(*timeout_ms)
-            }
-            Self::Query { transition_id } => validate_transition_id(transition_id),
-            Self::Abort { ticket } | Self::CommitShutdown { ticket } => ticket.validate(),
-            Self::Release { ticket, timeout_ms } => {
-                ticket.validate()?;
-                validate_install_timeout(*timeout_ms)
-            }
-        }
-    }
-}
-
-/// Workflow #389 section 3.6: the steps of the upgrade state, the installer's one instruction
-/// family for an upgrade (install-control revision 2). The Runtime drains, records its pause,
-/// releases and shuts down by itself; the installer only says which step. It reuses the
-/// transition machine of `InstallTransitionAction`, so its identities, bounds and phases are the
-/// same. U-1 fixes the shape; U-4 adds the behaviour and declares the revision.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
-pub enum UpgradeStateAction {
-    /// To the running Runtime: close admission and drain within `timeout_ms`; once drained,
-    /// and while this request's connection is still open, accept its own shutdown, whose owner
-    /// journal close record carries the upgrade state marker. A connection lost before that
-    /// counts as `Cancel`.
-    Enter {
-        transition_id: String,
-        #[serde(default = "default_install_timeout_ms")]
-        timeout_ms: u64,
-    },
-    /// Withdraws an upgrade state that is still draining; admission reopens.
-    Cancel { transition_id: String },
-    /// To the new Runtime started held: prepare the Provider, restore the pause of the previous
-    /// ticket and open admission within `timeout_ms`.
-    Leave {
-        ticket: InstallTransitionTicket,
-        #[serde(default = "default_install_timeout_ms")]
-        timeout_ms: u64,
-    },
-}
-
-impl UpgradeStateAction {
-    pub fn validate(&self) -> RuntimeContractResult<()> {
-        match self {
-            Self::Enter {
-                transition_id,
-                timeout_ms,
-            } => {
-                validate_transition_id(transition_id)?;
-                validate_install_timeout(*timeout_ms)
-            }
-            Self::Cancel { transition_id } => validate_transition_id(transition_id),
-            Self::Leave { ticket, timeout_ms } => {
-                ticket.validate()?;
-                validate_install_timeout(*timeout_ms)
-            }
-        }
-    }
-}
-
-/// Startup input supplied by the installation transaction, before Provider assembly.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct InstallHeldStartup {
-    pub transition_id: String,
-    pub request_id: RequestId,
-    #[serde(default = "default_install_timeout_ms")]
-    pub timeout_ms: u64,
-    /// The prior Host's drained transition; only its ledger facts may restore user pauses.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub previous: Option<InstallTransitionTicket>,
-}
-
-impl InstallHeldStartup {
-    pub fn validate(&self) -> RuntimeContractResult<()> {
-        validate_transition_id(&self.transition_id)?;
-        validate_install_timeout(self.timeout_ms)?;
-        if let Some(previous) = &self.previous {
-            previous.validate()?;
-            if previous.transition_id != self.transition_id {
-                return Err(RuntimeContractError::new(
-                    RuntimeContractCode::InstallPreviousTransitionMismatch,
-                ));
-            }
-        }
-        Ok(())
-    }
-}
-
-/// A live IPC projection, never serialized as a new ledger payload or lifecycle enum.
+/// The phases of the installer's transition, the vocabulary `install_phase` of the outcome key
+/// `phase`. Workflow #434 LAB-6S4a (0.12.63): the transition itself is gone with the request kinds
+/// `InstallTransition`, `UpgradeState` and `UpgradeStateStatus` and actingd's held start
+/// (`install-control` [0, 0]); the vocabulary stays, since the released codes that carry the key
+/// keep their signature.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InstallTransitionPhase {
@@ -669,69 +535,6 @@ impl InstallTransitionPhase {
             Self::Failed => "failed",
         }
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct InstallTransitionStatus {
-    pub ticket: InstallTransitionTicket,
-    pub phase: InstallTransitionPhase,
-    pub admission_closed: bool,
-    pub timeout_ms: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub failure_code: Option<String>,
-}
-
-impl InstallTransitionStatus {
-    pub fn validate(&self) -> RuntimeContractResult<()> {
-        self.ticket.validate()?;
-        validate_install_timeout(self.timeout_ms)?;
-        let closed = !matches!(
-            self.phase,
-            InstallTransitionPhase::Released | InstallTransitionPhase::Aborted
-        );
-        if self.admission_closed != closed
-            || self.failure_code.as_ref().is_some_and(|code| {
-                code.is_empty()
-                    || code.len() > 128
-                    || !code
-                        .bytes()
-                        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
-            })
-        {
-            return Err(RuntimeContractError::new(
-                RuntimeContractCode::InvalidInstallTransitionStatus,
-            ));
-        }
-        Ok(())
-    }
-}
-
-pub fn validate_install_timeout(timeout_ms: u64) -> RuntimeContractResult<()> {
-    if timeout_ms == 0 || timeout_ms > MAX_INSTALL_TIMEOUT_MS {
-        return Err(RuntimeContractError::new(
-            RuntimeContractCode::InvalidInstallTimeout,
-        ));
-    }
-    Ok(())
-}
-
-const fn default_install_timeout_ms() -> u64 {
-    DEFAULT_INSTALL_TIMEOUT_MS
-}
-
-pub(crate) fn validate_transition_id(value: &str) -> RuntimeContractResult<()> {
-    if value.is_empty()
-        || value.len() > 128
-        || !value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
-    {
-        return Err(RuntimeContractError::new(
-            RuntimeContractCode::InvalidInstallTransitionId,
-        ));
-    }
-    Ok(())
 }
 
 fn canonical_sha256(value: &str) -> bool {

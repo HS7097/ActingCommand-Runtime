@@ -1,3 +1,5 @@
+use super::device_commands::NOT_A_WHOLE_NUMBER;
+use super::record_hold::{self, Ended};
 use crate::flag_args::reads::{FlagReads, ReadPart};
 use crate::{
     CliError, CliOutcome, FlagArgs, GlobalOptions, UserConfig, canonical_game, canonical_server,
@@ -12,12 +14,15 @@ use crate::{
 };
 use actingcommand_device::{CaptureBackendName, Frame, PixelFormat};
 use actingcommand_lab::{
-    ApplicationSpec, ClickRetry, ClickSpec, EndingSpec, LAB_RECORD_MARK_SCHEMA, MarkFamily,
-    MarkRequest, MarkSpec, RecordArchiveOptions, RecordRect, RecordReopenOptions,
-    RecordStartOptions, RecordStopOptions, RecordingLock, StepAction, StepActionKind,
-    TemplateScalesSpec, TransitionSpec, parse_mark_request, record_archive, record_archive_copy,
-    record_instance_check, record_mark, record_reopen, record_start, record_start_defaults,
-    record_status, record_stop, record_stop_close,
+    ApplicationSpec, ArchiveCopyFrames, BoxSpec, BoxUse, ClickRetry, ClickSpec, EndingSpec,
+    InstalledIdentity, InstalledRow, LAB_RECORD_MARK_SCHEMA, MarkFamily, MarkRequest, MarkSpec,
+    OptionalAfterSpec, RecordArchiveOptions, RecordFramesRequest, RecordPoint, RecordRect,
+    RecordReopenOptions, RecordReviewRequest, RecordStartOptions, RecordStopOptions, RecordingHold,
+    RecordingLock, StepAction, StepActionKind, TemplateScalesSpec, TransitionSpec,
+    parse_mark_request, record_archive, record_archive_copy, record_archive_warnings,
+    record_frames, record_hold_status, record_instance_check, record_mark, record_ready,
+    record_reopen, record_review, record_start, record_start_defaults, record_status, record_stop,
+    record_stop_close,
 };
 use actingcommand_recognition::{MatchMetric, Rect as RecognitionRect};
 use actingcommand_resource_tooling::canonical_locale;
@@ -41,6 +46,11 @@ pub(crate) struct SessionRecordContext {
     pub(crate) updated_at_unix_ms: u64,
     #[serde(default)]
     pub(crate) steps: Vec<SessionRecordStep>,
+    /// #463 S1-7 (`contracts/lab-recording.md`, "A recording holds its instance"): the
+    /// instance's scheduling pause the recording runs under, its own or another party's; absent
+    /// when it holds nothing, so that such a header is byte for byte what it was.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) hold: Option<RecordingHold>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -346,14 +356,14 @@ pub(crate) const RECORD_STATUS_READS: FlagReads = FlagReads {
 };
 
 /// Workflow #449 REC-ARCH: the flags `record archive` reads: the recording named by its id and the
-/// directory it is copied to.
+/// directory it is copied to; #463 S1-5: and whether the copy holds every frame (`--all-frames`).
 pub(crate) const RECORD_ARCHIVE_READS: FlagReads = FlagReads {
     row: "record archive",
     parts: &[
         &RECORD_SESSION_READS,
         &ReadPart {
             options: &["--record-id", "--copy-to"],
-            switches: &[],
+            switches: &["--all-frames"],
             refused: &[],
         },
     ],
@@ -369,6 +379,55 @@ pub(crate) const RECORD_REOPEN_READS: FlagReads = FlagReads {
         &ReadPart {
             options: &["--record-id"],
             switches: &[],
+            refused: &[],
+        },
+    ],
+    positionals: &[],
+};
+
+/// #463 S2-1: the flags `record ready` reads: the recording named by its id (active, archived or
+/// stopped), else the one the instance's session names. #463 S2-1b: and the package's game, server
+/// and locale as `record stop` reads them (`--game` and `--server` are actinglab's global options),
+/// which it checks with and writes nowhere.
+pub(crate) const RECORD_READY_READS: FlagReads = FlagReads {
+    row: "record ready",
+    parts: &[
+        &RECORD_SESSION_READS,
+        &ReadPart {
+            options: &["--record-id", "--game", "--server", "--locale"],
+            switches: &[],
+            refused: &[],
+        },
+    ],
+    positionals: &[],
+};
+
+/// #463 S2-13: the flags `record frames` reads: the step, how many frames each side lists and the
+/// recording named by its id.
+pub(crate) const RECORD_FRAMES_READS: FlagReads = FlagReads {
+    row: "record frames",
+    parts: &[
+        &RECORD_SESSION_READS,
+        &ReadPart {
+            options: &["--step", "--before", "--after", "--record-id"],
+            switches: &[],
+            refused: &[],
+        },
+    ],
+    positionals: &[],
+};
+
+/// #463 S2-2: the flags `record review` reads: the recording named by its id (active, archived or
+/// stopped), the one step to answer and whether no preview is written. Fix round 1: and the
+/// package's game, server and locale as `record ready` reads them (`--game` and `--server` are
+/// actinglab's global options), with which `record ready`'s items of each step are checked.
+pub(crate) const RECORD_REVIEW_READS: FlagReads = FlagReads {
+    row: "record review",
+    parts: &[
+        &RECORD_SESSION_READS,
+        &ReadPart {
+            options: &["--record-id", "--step", "--game", "--server", "--locale"],
+            switches: &["--no-preview"],
             refused: &[],
         },
     ],
@@ -509,6 +568,12 @@ fn record_reads(action: &str) -> Option<&'static FlagReads> {
         // Workflow #449 REC-ARCH.
         "archive" => &RECORD_ARCHIVE_READS,
         "reopen" => &RECORD_REOPEN_READS,
+        // #463 S2-1.
+        "ready" => &RECORD_READY_READS,
+        // #463 S2-13.
+        "frames" => &RECORD_FRAMES_READS,
+        // #463 S2-2.
+        "review" => &RECORD_REVIEW_READS,
         _ => return None,
     })
 }
@@ -575,7 +640,8 @@ fn run_session_record_inner(
 ) -> CliOutcome<Value> {
     let action = args.first().map(String::as_str).ok_or_else(|| {
         CliError::usage(
-            "session record requires start|status|stop|mark|step|candidates|amend|archive|reopen",
+            "session record requires \
+             start|status|stop|mark|step|candidates|amend|archive|reopen|ready|frames|review",
         )
     })?;
     // Workflow #434 LAB-5B4: before anything is read or written.
@@ -585,12 +651,16 @@ fn run_session_record_inner(
         .map(Path::to_path_buf)
         .map(Ok)
         .unwrap_or_else(|| session_state_dir_from_flags(&flags))?;
-    fs::create_dir_all(&state_dir).map_err(|err| {
-        CliError::runtime_not_running(format!(
-            "failed to create session state dir {}: {err}",
-            state_dir.display()
-        ))
-    })?;
+    // #463 S2-13: `record frames` writes nothing, not even the session directory; #463 S2-2:
+    // `record review` writes its previews alone, in the recording's own directory.
+    if !matches!(action, "frames" | "review") {
+        fs::create_dir_all(&state_dir).map_err(|err| {
+            CliError::runtime_not_running(format!(
+                "failed to create session state dir {}: {err}",
+                state_dir.display()
+            ))
+        })?;
+    }
     let instance_id = resolve_instance_id_for_flags(global, &config, &flags)?;
     let record_path = session_record_path(&state_dir, &instance_id);
     let record_lock = record_action_lock(global, action, &state_dir, &instance_id)?;
@@ -602,10 +672,25 @@ fn run_session_record_inner(
             }
             let lab_options = record_start_lab_options(global, &config, &flags, &instance_id)?;
             record_start_defaults(&lab_options)?;
-            if record_path.exists()
-                && !flags.bool("--force")
-                && let Some(existing) = read_json_file::<SessionRecordContext>(&record_path)?
-                && existing.status == "active"
+            let force = flags.bool("--force");
+            // #463 S1-7 fix round 2: the header's bytes before this start, which a pause the
+            // Runtime refuses puts back (`None`: there is none, or they cannot be read).
+            let before = fs::read(&record_path).ok();
+            let (replaced, unread) = match (record_path.exists(), force) {
+                (false, _) => (None, None),
+                (true, false) => (read_json_file::<SessionRecordContext>(&record_path)?, None),
+                // #463 S1-7: `--force` replaces the header whatever it holds, as before; only the
+                // hold of one that reads is taken over. Fix round 2: one that cannot be read is
+                // named in the answer (`replaced_header_unread`), never forgotten in silence.
+                (true, true) => match read_json_file::<SessionRecordContext>(&record_path) {
+                    Ok(replaced) => (replaced, None),
+                    Err(error) => (None, Some(error)),
+                },
+            };
+            if !force
+                && let Some(existing) = replaced
+                    .as_ref()
+                    .filter(|existing| existing.status == "active")
             {
                 return Err(CliError::safety_blocked(
                     "record_session_active",
@@ -616,10 +701,31 @@ fn run_session_record_inner(
                     &["session_record"],
                 ));
             }
-            let record = new_session_record(&instance_id, &task_id, &flags);
-            write_json_file_atomic(&record_path, &record)?;
-            let lab_recording = record_start(held_record_lock(&record_lock)?, &lab_options)?;
-            let (flag_state_dir, reachable) = record_flag_reachability(&state_dir)?;
+            let mut record = new_session_record(&instance_id, &task_id, &flags);
+            // #463 S1-7 (`contracts/lab-recording.md`, "A recording holds its instance"): the
+            // recording holds its instance; fix round 2: `take` writes the session header naming
+            // the hold before it asks the Runtime to pause, and puts it back when the Runtime
+            // refuses the pause. Workflow #392 DA-5cd ("A recording's size"): before both, it
+            // refuses a display the Runtime last observed at another size than the base size.
+            let (mut hold_answer, display_last_observed) = record_hold::take(
+                &record_path,
+                &mut record,
+                replaced
+                    .as_ref()
+                    .and_then(|replaced| replaced.hold.as_ref()),
+                before.as_deref(),
+            )?;
+            if let Some(error) = &unread {
+                record_hold::replaced_header_unread(&mut hold_answer, &record_path, error);
+            }
+            // Fix round 2: the header names the hold now; a failure after it carries the hold in
+            // its details, since its end releases a pause with that reason.
+            let (lab_recording, (flag_state_dir, reachable)) = held_record_lock(&record_lock)
+                .and_then(|lock| record_start(lock, &lab_options))
+                .and_then(|lab_recording| {
+                    record_flag_reachability(&state_dir).map(|reachable| (lab_recording, reachable))
+                })
+                .map_err(|error| record_hold::with_hold(error, record.hold.as_ref()))?;
             Ok(json!({
                 "status": "started",
                 "record": record,
@@ -627,7 +733,9 @@ fn run_session_record_inner(
                 "auto_recording": false,
                 "lab_recording": lab_recording,
                 "record_flag_state_dir": flag_state_dir,
-                "record_flag_reachable": reachable
+                "record_flag_reachable": reachable,
+                "hold": hold_answer,
+                "display_last_observed": display_last_observed
             }))
         }
         "status" => Ok(json!({
@@ -635,7 +743,9 @@ fn run_session_record_inner(
             "instance": instance_id,
             "record": read_json_file::<SessionRecordContext>(&record_path)?,
             "path": record_path.display().to_string(),
-            "lab": record_status_lab(&state_dir, &instance_id)?
+            "lab": record_status_lab(&state_dir, &instance_id)?,
+            // #463 S1-7: what the recording holds: own, foreign, none or kept.
+            "hold": record_hold_status(&state_dir, &instance_id)?
         })),
         "stop" => {
             let options = record_stop_options(global, &config, &flags, &instance_id)?;
@@ -650,24 +760,71 @@ fn run_session_record_inner(
             };
             let lock = held_record_lock(&record_lock)?;
             let outcome = record_stop(lock, &options, crate::offline_ocr::lab_ocr())?;
-            if !options.dry_run {
-                record.status = "stopped".to_string();
-                record.updated_at_unix_ms = current_unix_ms();
-                write_json_file_atomic(&record_path, &record)?;
-                record_stop_close(lock)?;
+            if options.dry_run {
+                return Ok(json!({
+                    "status": "validated",
+                    "dry_run": true,
+                    "record": record,
+                    "path": record_path.display().to_string(),
+                    "lab": outcome.lab
+                }));
             }
-            Ok(json!({
-                "status": if options.dry_run { "validated" } else { "stopped" },
-                "dry_run": options.dry_run,
+            // #463 S1-7: the stop ends the recording, which then releases its own hold; a refused
+            // stop returned above and keeps it.
+            let held = record.hold.take();
+            record.hold = held.as_ref().and_then(RecordingHold::ended);
+            record.status = "stopped".to_string();
+            record.updated_at_unix_ms = current_unix_ms();
+            write_json_file_atomic(&record_path, &record)?;
+            record_stop_close(lock)?;
+            let ended = record_hold::end(&record_path, &mut record, held)?;
+            let mut answer = json!({
+                "status": "stopped",
+                "dry_run": false,
                 "record": record,
                 "path": record_path.display().to_string(),
                 "lab": outcome.lab
-            }))
+            });
+            match ended {
+                Ended::Nothing => {}
+                Ended::Hold(hold) => answer["hold"] = hold,
+                Ended::Kept(kept) => {
+                    // Fix round 2: `record stop` of the stopped recording tries the release again.
+                    let release = record_hold::release_again(&instance_id, &state_dir, &["stop"]);
+                    return Err(kept.answer(
+                        &instance_id,
+                        "record stop ended the recording (its package, if it has one, is written)",
+                        answer,
+                        &release,
+                    ));
+                }
+            }
+            Ok(answer)
         }
         "mark" => run_record_mark(global, &flags, held_record_lock(&record_lock)?),
         // Workflow #449 REC-ARCH: a recording ended as material only, and reopened later.
         "archive" => run_record_archive(&flags, &record_path, held_record_lock(&record_lock)?),
         "reopen" => run_record_reopen(&flags, &record_path, held_record_lock(&record_lock)?),
+        // #463 S2-1: what the recording still lacks before `record stop` can make its package;
+        // offline, under no lock (`record_action_lock` takes none for it), writing nothing.
+        // #463 S2-1b: with the game, server and locale `record stop` would take.
+        "ready" => {
+            let options = identity_options(global, &config, &flags, &instance_id)?;
+            let ready = record_ready(
+                &state_dir,
+                &instance_id,
+                record_flag_value(&flags, "--record-id")?.as_deref(),
+                &options,
+                crate::offline_ocr::lab_ocr(),
+            )?;
+            serde_json::to_value(ready).map_err(|error| {
+                CliError::usage(format!("failed to encode record ready output: {error}"))
+            })
+        }
+        // #463 S2-13: offline, without the recording lock.
+        "frames" => run_record_frames(&flags, &state_dir, &instance_id),
+        // #463 S2-2: offline, without the recording lock; it writes its previews alone.
+        "review" => run_record_review(global, &config, &flags, &state_dir, &instance_id),
         "step" => {
             let Some(mut record) = read_json_file::<SessionRecordContext>(&record_path)? else {
                 return Err(CliError::safety_blocked(
@@ -2646,6 +2803,8 @@ fn new_session_record(instance: &str, task_id: &str, flags: &FlagArgs) -> Sessio
         started_at_unix_ms: now,
         updated_at_unix_ms: now,
         steps: Vec::new(),
+        // #463 S1-7: `record start` sets it once the hold is taken.
+        hold: None,
     }
 }
 
@@ -2718,7 +2877,58 @@ fn record_start_lab_options(
         locale,
         match_metric: record_flag_value(flags, "--metric")?,
         template_threshold,
+        base_size: recording_base(),
     })
+}
+
+/// Workflow #392 DA-5cd fix round 1 (`contracts/lab-recording.md`, "A recording's size"): the base
+/// size `record start` writes in the recording's header, `STANDARD_PACK_BASE_SIZE`; the first frame
+/// that enters the recording is checked against it.
+#[cfg(not(test))]
+fn recording_base() -> Option<actingcommand_lab::RecordSize> {
+    Some(actingcommand_lab::RECORDING_BASE_SIZE)
+}
+
+/// Test-only: the base size the unit tests' `record start` writes, the one this thread set
+/// ([`recording_base_for_tests`]), none by default: a recording of the unit tests' small frames
+/// keeps the judgement of a recording whose header names no base size, and a test of the installed
+/// value sets `RECORDING_BASE_SIZE`. The program the integration tests run writes the installed
+/// value.
+#[cfg(test)]
+fn recording_base() -> Option<actingcommand_lab::RecordSize> {
+    recording_base_for_tests::get()
+}
+
+/// Test-only (Workflow #392 DA-5cd fix round 1): the base size this thread's `record start` writes
+/// in a recording's header, none until a test sets one.
+#[cfg(test)]
+pub(crate) mod recording_base_for_tests {
+    use actingcommand_lab::RecordSize;
+    use std::cell::Cell;
+
+    thread_local! {
+        static BASE: Cell<Option<RecordSize>> = const { Cell::new(None) };
+    }
+
+    /// This thread's `record start` writes `base` until the answer drops.
+    pub(crate) fn set(base: RecordSize) -> Reset {
+        BASE.with(|cell| cell.set(Some(base)));
+        Reset
+    }
+
+    /// What this thread's `record start` writes.
+    pub(super) fn get() -> Option<RecordSize> {
+        BASE.with(Cell::get)
+    }
+
+    /// Writes none again when it drops.
+    pub(crate) struct Reset;
+
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            BASE.with(|cell| cell.set(None));
+        }
+    }
 }
 
 pub(crate) const RECORD_STOP_FLAGS: &[&str] = &[
@@ -2771,7 +2981,35 @@ fn record_stop_options(
             })
             .transpose()
     };
-    let instance = config.instances.get(instance_id);
+    let identity = identity_options(global, config, flags, instance_id)?;
+    Ok(RecordStopOptions {
+        lab_dir: record_flag_value(flags, "--lab-dir")?,
+        package_id: record_flag_value(flags, "--package-id")?,
+        requires: record_flag_value(flags, "--requires")?,
+        timeout_ms: millis("--timeout-ms")?,
+        arrival_timeout_ms: millis("--arrival-timeout-ms")?,
+        application_arrival_timeout_ms: millis("--application-arrival-timeout-ms")?,
+        dry_run: global.dry_run || record_flag_switch(flags, "--dry-run")?,
+        ..identity
+    })
+}
+
+/// #463 S2-1b: the options that name the package's game, server and locale, read alike by `record
+/// stop` and by `record ready` (which checks with them and writes none of them): `--game` and
+/// `--server` (actinglab's global options) and `--locale` as given, each canonical, one out of its
+/// form refused `validation_failed` on both commands (exit 1 on actinglab's own line, as every
+/// refusal: `cli_module::own_line`); the Lab's instance configuration's game and server
+/// (`default_*`); and the reader of the game and server the installation the program runs from
+/// binds the instance to (`installed`, [`installed_identity`]), which fix round 1 calls only when
+/// the others do not give both (`recording_api::package_identity`). The recording's own come
+/// between the given ones and the Lab's (`record stop`'s settings). #463 S2-2 fix round 1: `record
+/// review` reads them by it too, as `record ready` does.
+fn identity_options(
+    global: &GlobalOptions,
+    config: &UserConfig,
+    flags: &FlagArgs,
+    instance_id: &str,
+) -> CliOutcome<RecordStopOptions> {
     let game = record_flag_value(flags, "--game")?
         .or_else(|| global.game.clone())
         .map(|game| canonical_game(&game))
@@ -2780,6 +3018,10 @@ fn record_stop_options(
         .or_else(|| global.server.clone())
         .map(|server| canonical_server(&server))
         .transpose()?;
+    let locale = record_flag_value(flags, "--locale")?
+        .map(|locale| canonical_locale(&locale))
+        .transpose()?;
+    let instance = config.instances.get(instance_id);
     let default_game = instance
         .and_then(|instance| instance.game.clone())
         .map(|game| canonical_game(&game))
@@ -2788,22 +3030,66 @@ fn record_stop_options(
         .and_then(|instance| instance.server.clone())
         .map(|server| canonical_server(&server))
         .transpose()?;
+    let instance = instance_id.to_owned();
     Ok(RecordStopOptions {
-        lab_dir: record_flag_value(flags, "--lab-dir")?,
-        package_id: record_flag_value(flags, "--package-id")?,
-        requires: record_flag_value(flags, "--requires")?,
         game,
         server,
-        locale: record_flag_value(flags, "--locale")?
-            .map(|locale| canonical_locale(&locale))
-            .transpose()?,
+        locale,
         default_game,
         default_server,
-        timeout_ms: millis("--timeout-ms")?,
-        arrival_timeout_ms: millis("--arrival-timeout-ms")?,
-        application_arrival_timeout_ms: millis("--application-arrival-timeout-ms")?,
-        dry_run: global.dry_run || record_flag_switch(flags, "--dry-run")?,
+        installed: InstalledRow::new(move || installed_identity(&instance)),
+        ..RecordStopOptions::default()
     })
+}
+
+/// #463 S2-1b: the game and server the configuration of the installation this program runs from
+/// binds the instance `instance_id` to: located as the CLI module's rows locate the installation
+/// (`cli_module::place::installation_location`), its selected configuration read by the reader of
+/// `actinglab`'s and MCP's `packs` (`lab_ops::packs::instance_binding`, the instance's row of
+/// `policy.facts.instances`), each value canonical. Outside an installation, or where the
+/// installation cannot be located, its configuration cannot be read, names no such instance or
+/// row, or names a value out of its form, there is no row (fix round 1: the row gives both parts
+/// or neither): nothing is refused, and nothing of the configuration is kept, printed or logged.
+/// Called only when it is needed (`recording_api::package_identity`).
+fn installed_identity(instance_id: &str) -> Option<InstalledIdentity> {
+    #[cfg(test)]
+    installed_reads::add();
+    let Some(Ok(location)) = crate::cli_module::place::installation_location() else {
+        return None;
+    };
+    let Ok(Some(binding)) = actingcommand_lab_ops::packs::instance_binding(
+        location.installation.as_ref(),
+        &location.config,
+        instance_id,
+    ) else {
+        return None;
+    };
+    Some(InstalledIdentity {
+        game: canonical_game(&binding.game_id).ok()?,
+        server: canonical_server(&binding.server_id).ok()?,
+    })
+}
+
+/// Test-only (#463 S2-1b fix round 1): how many times this thread called [`installed_identity`],
+/// the one place `record ready` and `record stop` locate the installation and open its
+/// configuration, so that a test tells whether a command opened it.
+#[cfg(test)]
+pub(crate) mod installed_reads {
+    use std::cell::Cell;
+
+    thread_local! {
+        static READS: Cell<usize> = const { Cell::new(0) };
+    }
+
+    /// The calls so far on this thread.
+    pub(crate) fn count() -> usize {
+        READS.with(Cell::get)
+    }
+
+    /// One more call.
+    pub(super) fn add() {
+        READS.with(|reads| reads.set(reads.get() + 1));
+    }
 }
 
 /// A single-valued flag with a value: given twice or without a value is a usage error.
@@ -2894,6 +3180,11 @@ pub(crate) const RECORD_MARK_SHORTCUT_FLAGS: &[&str] = &[
     "--ending",
     "--outcome-key",
     "--remove-ending",
+    // #463 R4: an optional step a stopped recording inserts after a step, and one to give up.
+    "--optional-after",
+    "--remove-inserted",
+    // #463 S2-5: a box drawn on the step's primary frame by two opposite corners.
+    "--box",
 ];
 
 /// Workflow #434 LAB-5B2: the other flags `record mark` takes besides its shortcut flags: the
@@ -2972,7 +3263,7 @@ pub(crate) fn read_mark_request_file(path: &str) -> CliOutcome<MarkRequest> {
     parse_mark_request(&text)
 }
 
-/// Workflow #449 REC-ARCH: `record archive [--record-id <id>] [--copy-to <dir>]`
+/// Workflow #449 REC-ARCH: `record archive [--record-id <id>] [--copy-to <dir> [--all-frames]]`
 /// (`contracts/lab-recording.md`, "Archiving"). The Lab writes the recording's manifest, or reads
 /// the one an archived recording named again has; the session header of the instance's active
 /// recording becomes `archived` before any copy; then the copy, checked against the manifest. A
@@ -2982,6 +3273,10 @@ pub(crate) fn read_mark_request_file(path: &str) -> CliOutcome<MarkRequest> {
 /// its manifest in its details too; a recording the header does not name (one `record start
 /// --force` left behind) leaves the header as it is (`ends_session` false). The copy target must be
 /// an absolute path: the Lab refuses another (`validation_failed`) before anything is written.
+/// #463 S1-5: the copy holds the manifest's material, or every frame with `--all-frames`, which
+/// without `--copy-to` is `validation_failed` (`details{argument: "all_frames", reason:
+/// "copy_to_only"}`) before the session is read; the answer's `lab.warnings` holds
+/// `final_frame_missing` when the manifest names no final screen.
 fn run_record_archive(
     flags: &FlagArgs,
     record_path: &Path,
@@ -2992,6 +3287,18 @@ fn run_record_archive(
         copy_to: record_flag_value(flags, "--copy-to")?,
         written_by: env!("ACTINGCOMMAND_RUNTIME_HEAD").to_owned(),
     };
+    let frames = if flags.bool("--all-frames") {
+        ArchiveCopyFrames::All
+    } else {
+        ArchiveCopyFrames::Material
+    };
+    if frames == ArchiveCopyFrames::All && options.copy_to.is_none() {
+        return Err(CliError::usage(
+            "--all-frames is accepted only with --copy-to: it names what the copy holds; nothing \
+             was written",
+        )
+        .with_details(json!({"argument": "all_frames", "reason": "copy_to_only"})));
+    }
     let mut archived = record_archive(lock, &options)?;
     // Fix 1: the manifest is there, written now or before; a person must learn that from a failure
     // of the session header as well.
@@ -3004,40 +3311,85 @@ fn run_record_archive(
             ],
         )
     };
+    let warnings = record_archive_warnings(&archived).map_err(with_manifest)?;
     let mut record = read_json_file::<SessionRecordContext>(record_path).map_err(with_manifest)?;
+    // #463 S1-7: what the recording's session header holds, when the header names it: before
+    // this archive for an active recording, the hold an earlier end kept for an archived one.
+    let held = record
+        .as_ref()
+        .filter(|record| record.record_id == archived.record_id)
+        .and_then(|record| record.hold.clone());
     if archived.ends_session
         && let Some(record) = record.as_mut()
     {
         record.status = "archived".to_string();
         record.updated_at_unix_ms = current_unix_ms();
+        record.hold = held.as_ref().and_then(RecordingHold::ended);
         write_json_file_atomic(record_path, &*record).map_err(with_manifest)?;
     }
     if let Some(target) = &options.copy_to {
-        let copy = record_archive_copy(lock, &archived, target).map_err(|error| {
-            with_archive_context(
-                error,
-                &[
-                    ("record_id", json!(&archived.record_id)),
-                    ("archived", json!(true)),
-                    ("manifest", json!(&archived.manifest)),
-                ],
-            )
+        let copy = record_archive_copy(lock, &archived, target, frames).map_err(|error| {
+            let mut context = vec![
+                ("record_id", json!(&archived.record_id)),
+                ("archived", json!(true)),
+                ("manifest", json!(&archived.manifest)),
+            ];
+            // #463 S1-7: the copy failed before the release was tried: an own hold stays.
+            if let Some(held) = held.as_ref().filter(|held| held.own) {
+                context.push((
+                    "hold",
+                    json!({"reason": held.reason, "own": true, "kept": true}),
+                ));
+            }
+            with_archive_context(error, &context)
         })?;
         archived.copy = Some(copy);
     }
     let status = archived.status.clone();
+    // #463 S1-7: the archive's own work is done; the recording then releases its own hold.
+    let ended = match record
+        .as_mut()
+        .filter(|record| record.record_id == archived.record_id)
+    {
+        Some(header) => record_hold::end(record_path, header, held)?,
+        None => Ended::Nothing,
+    };
     let record = record.filter(|record| record.record_id == archived.record_id);
-    Ok(json!({
+    // Fix round 2: `record archive --record-id <id>` of the archived recording tries a release
+    // that failed again (without `--record-id` an archive finds no active recording and is
+    // refused, `record_session_not_active`).
+    let release = record_hold::release_again(
+        lock.instance(),
+        lock.state_dir(),
+        &["archive", "--record-id", archived.record_id.as_str()],
+    );
+    let mut answer = json!({
         "status": status,
         "record": record,
         "path": record_path.display().to_string(),
         "lab": archived
-    }))
+    });
+    answer["lab"]["warnings"] = json!(warnings);
+    match ended {
+        Ended::Nothing => {}
+        Ended::Hold(hold) => answer["hold"] = hold,
+        Ended::Kept(kept) => {
+            return Err(kept.answer(
+                lock.instance(),
+                "record archive archived the recording (its manifest is written, and copied when \
+                 asked)",
+                answer,
+                &release,
+            ));
+        }
+    }
+    Ok(answer)
 }
 
 /// Workflow #449 REC-ARCH: `error` with `context` added to its details, an object (details of
-/// another form are kept under `cause`).
-fn with_archive_context(mut error: CliError, context: &[(&str, Value)]) -> CliError {
+/// another form are kept under `cause`). #463 S1-7: the recording's hold is added so too
+/// (`record_hold::with_hold`).
+pub(super) fn with_archive_context(mut error: CliError, context: &[(&str, Value)]) -> CliError {
     let mut details = match error.details.take() {
         Some(Value::Object(details)) => details,
         given => {
@@ -3075,7 +3427,7 @@ fn run_record_reopen(
             record.updated_at_unix_ms = now;
             record
         }
-        _ => SessionRecordContext {
+        replaced => SessionRecordContext {
             schema_version: "session-record-v0".to_string(),
             record_id: reopened.record_id.clone(),
             task_id: reopened.task_id.clone(),
@@ -3086,6 +3438,11 @@ fn run_record_reopen(
             started_at_unix_ms: reopened.record_started_at_unix_ms,
             updated_at_unix_ms: now,
             steps: Vec::new(),
+            // #463 S1-7: a reopen takes no hold; an own pause the replaced header kept stays
+            // named, so that the end of this recording releases it.
+            hold: replaced
+                .and_then(|replaced| replaced.hold)
+                .filter(|hold| hold.own),
         },
     };
     write_json_file_atomic(record_path, &record)?;
@@ -3096,6 +3453,101 @@ fn run_record_reopen(
         "path": record_path.display().to_string(),
         "lab": reopened
     }))
+}
+
+/// #463 S2-13 (`contracts/lab-recording.md`, "The frames around a press: `record frames`"): `record
+/// frames --step <k> [--before <n>] [--after <n>] [--record-id <id>]`, offline and without the
+/// recording lock: the stored frames just before and just after the press of step `k` of the
+/// recording `record status` reads, or of the one `--record-id` names (`record_frames`). `--step`
+/// is required; it and `--before` and `--after` are whole numbers (the Lab checks the two sides'
+/// range, 0 to 100, `range`). #463 stage two, train 1, fix round: read as the waits of a recorded
+/// press are read (`after_capture_ms`): a flag given more than once is its last value, and a value
+/// that is no whole number is `validation_failed` with `details{argument, reason: "wrong_type",
+/// value}`. The answer is the Lab's.
+fn run_record_frames(flags: &FlagArgs, state_dir: &Path, instance_id: &str) -> CliOutcome<Value> {
+    let step = frames_number::<u32>(flags, "--step", "step")?.ok_or_else(|| {
+        CliError::usage("record frames needs --step <k>, the step's serial number")
+    })?;
+    let request = RecordFramesRequest {
+        record_id: record_flag_value(flags, "--record-id")?,
+        step,
+        before: frames_number(flags, "--before", "before")?,
+        after: frames_number(flags, "--after", "after")?,
+    };
+    let outcome = record_frames(state_dir, instance_id, &request)?;
+    serde_json::to_value(outcome)
+        .map_err(|error| CliError::usage(format!("failed to encode record frames output: {error}")))
+}
+
+/// #463 S2-13: the whole number `flag` gives (`argument` its MCP name), `None` when it is not
+/// given. #463 stage two, train 1, fix round: as the parent's flags (`after_capture_ms`), the last
+/// value when the flag is given more than once, and a value that is no such number
+/// `validation_failed` with `details{argument, reason: "wrong_type", value}`.
+fn frames_number<T: std::str::FromStr>(
+    flags: &FlagArgs,
+    flag: &str,
+    argument: &str,
+) -> CliOutcome<Option<T>> {
+    flags
+        .optional(flag)
+        .map(|value| {
+            value.parse::<T>().map_err(|_| {
+                CliError::usage(format!(
+                    "{flag} (MCP {argument}) takes a whole number, got {value}"
+                ))
+                .with_details(json!({
+                    "argument": argument,
+                    "reason": NOT_A_WHOLE_NUMBER,
+                    "value": value
+                }))
+            })
+        })
+        .transpose()
+}
+
+/// #463 S2-2 (`contracts/lab-recording.md`, "Reviewing a recording step by step: `record
+/// review`"): `record review [--record-id <id>] [--step <k>] [--no-preview] [--game <g>] [--server
+/// <s>] [--locale <l>]`, offline and without the recording lock: each effective step of the
+/// recording `record ready` reads, or the one `--step` names, as the screen before, the press and
+/// the screen after, with its items of `record ready` and, without `--no-preview`, a preview of each
+/// screen written under the recording's `lab/preview/` (`record_review`). `--step` is read as
+/// `record frames` reads it (`frames_number`). Fix round 1: the items are those `record ready`
+/// answers given the same flags: `--game`, `--server` and `--locale`, read and refused by the
+/// function `record ready` reads them with (`identity_options`), else the recording's, the Lab's
+/// and the installation's. Under `--dry-run` the previews are files written, so the form without
+/// `--no-preview` is refused `dry_run_unsupported` before anything of the recording is read; with
+/// it nothing is written (`no_effect`). The answer is the Lab's.
+fn run_record_review(
+    global: &GlobalOptions,
+    config: &UserConfig,
+    flags: &FlagArgs,
+    state_dir: &Path,
+    instance_id: &str,
+) -> CliOutcome<Value> {
+    let no_preview = flags.bool("--no-preview");
+    if !no_preview {
+        crate::dry_run_gate::refuse(
+            global,
+            "record review",
+            Some("record review --no-preview"),
+            json!({"action": "review"}),
+        )?;
+    }
+    let request = RecordReviewRequest {
+        record_id: record_flag_value(flags, "--record-id")?,
+        step: frames_number(flags, "--step", "step")?,
+        no_preview,
+    };
+    let options = identity_options(global, config, flags, instance_id)?;
+    let outcome = record_review(
+        state_dir,
+        instance_id,
+        &request,
+        &options,
+        crate::offline_ocr::lab_ocr(),
+    )?;
+    serde_json::to_value(outcome)
+        .map_err(|error| CliError::usage(format!("failed to encode record review output: {error}")))
 }
 
 fn record_mark_request_from_flags(flags: &FlagArgs) -> CliOutcome<MarkRequest> {
@@ -3248,6 +3700,19 @@ fn record_mark_request_from_flags(flags: &FlagArgs) -> CliOutcome<MarkRequest> {
         clear_select: false,
         ending: None,
         remove_ending: record_flag_value(flags, "--remove-ending")?,
+        optional_after: None,
+        remove_inserted: number("--remove-inserted")?,
+        // #463 S2-5: `--box <use>=x1,y1:x2,y2`, the request form's `boxes`; beside `--ending`,
+        // `--optional-after` or `--transition` they stay in the request, which the Lab refuses:
+        // nothing is dropped.
+        boxes: flags
+            .values("--box")
+            .iter()
+            .map(|value| parse_record_mark_box(value.as_str()))
+            .collect::<CliOutcome<Vec<_>>>()?,
+        // #463 S2-6: a choice is marked, and its mark taken off, by the request form only, as a
+        // select is declared.
+        choice: None,
     };
     // #463 R2: `--ending` makes `--frame`, `--sample`, `--page`, the marks (`--template`,
     // `--color`) and `--reuse` the ending's, with `--outcome-key`, as the request form's `ending`
@@ -3270,6 +3735,29 @@ fn record_mark_request_from_flags(flags: &FlagArgs) -> CliOutcome<MarkRequest> {
         });
     } else if outcome_key.is_some() {
         return Err(CliError::usage("--outcome-key needs --ending"));
+    }
+    // #463 R4: `--optional-after <k>` makes `--frame`, `--sample`, `--page`, the marks, `--reuse`,
+    // the click (`--click`, `--click-from`, `--click-follow` and the gestures) and `--settle-ms`
+    // the inserted step's, as the request form's `optional_after` holds them. Every other flag
+    // stays the request's own, which the Lab refuses beside it (`record_optional_after_invalid`,
+    // `with_other_change`): nothing is dropped.
+    if let Some(step) = number("--optional-after")? {
+        if request.ending.is_some() {
+            return Err(CliError::usage("give one of --ending and --optional-after"));
+        }
+        let Some(frame) = request.frame.take() else {
+            return Err(CliError::usage("--optional-after needs --frame <png>"));
+        };
+        request.optional_after = Some(OptionalAfterSpec {
+            step,
+            frame,
+            samples: std::mem::take(&mut request.samples),
+            page: request.page.take(),
+            add: std::mem::take(&mut request.add),
+            reuse: std::mem::take(&mut request.reuse),
+            click: request.click.take(),
+            settle_ms: request.optional_settle_ms.take(),
+        });
     }
     let timeout_ms = millis("--transition-timeout-ms")?;
     let min_ms = millis("--min-ms")?;
@@ -3302,6 +3790,9 @@ fn record_mark_request_from_flags(flags: &FlagArgs) -> CliOutcome<MarkRequest> {
                 add: std::mem::take(&mut request.add),
                 reuse: std::mem::take(&mut request.reuse),
                 timeout_ms,
+                // #463 S2-7: frames this recording stored are named in the request form only.
+                frame_id: None,
+                sample_frame_ids: Vec::new(),
             });
         }
         Some("window") => {
@@ -3364,6 +3855,61 @@ fn parse_record_mark_scales(value: &str) -> CliOutcome<TemplateScalesSpec> {
         })
         .collect::<CliOutcome<Vec<_>>>()?;
     Ok(TemplateScalesSpec { factors_milli })
+}
+
+/// #463 S2-5: `--box <use>=x1,y1:x2,y2`: what the box is for (`recognize` or `press`) and two
+/// opposite corners with the colon between them, as the request form's `boxes` holds them. The
+/// four numbers `x,y,w,h` of every other rectangle flag are refused, so that a rectangle is never
+/// read as two corners.
+fn parse_record_mark_box(value: &str) -> CliOutcome<BoxSpec> {
+    let (word, corners) = value.split_once('=').ok_or_else(|| {
+        CliError::usage(format!(
+            "--box must be <recognize|press>=x1,y1:x2,y2, got {value}"
+        ))
+    })?;
+    let usage = match word.trim() {
+        "recognize" => BoxUse::Recognize,
+        "press" => BoxUse::Press,
+        other => {
+            return Err(CliError::usage(format!(
+                "--box is recognize=x1,y1:x2,y2 or press=x1,y1:x2,y2, got {other}"
+            )));
+        }
+    };
+    let Some((first, second)) = corners.split_once(':') else {
+        return Err(CliError::usage(format!(
+            "--box takes two opposite corners x1,y1:x2,y2 with a colon between them, not a \
+             rectangle x,y,w,h; got {corners}"
+        )));
+    };
+    Ok(BoxSpec {
+        usage,
+        corners: [
+            parse_record_mark_corner(first, value)?,
+            parse_record_mark_corner(second, value)?,
+        ],
+    })
+}
+
+/// #463 S2-5: one corner `x,y` of `--box`'s `value`, with integer fields.
+fn parse_record_mark_corner(text: &str, value: &str) -> CliOutcome<RecordPoint> {
+    let parts = text.split(',').map(str::trim).collect::<Vec<_>>();
+    let [x, y] = parts.as_slice() else {
+        return Err(CliError::usage(format!(
+            "--box corner must be x,y, got {text} in {value}"
+        )));
+    };
+    let field = |number: &str, name: &str| {
+        number.parse::<i32>().map_err(|error| {
+            CliError::usage(format!(
+                "--box corner {name} '{number}' in {value}: {error}"
+            ))
+        })
+    };
+    Ok(RecordPoint {
+        x: field(x, "x")?,
+        y: field(y, "y")?,
+    })
 }
 
 /// `x,y,w,h` with integer fields.
@@ -3624,5 +4170,133 @@ mod lab2_tests {
         .expect("request");
         assert!(beside.ending.is_some());
         assert!(beside.click.is_some(), "the click stays in the request");
+    }
+
+    // #463 R4 fix round 2 (contracts/lab-recording.md, "Inserting an optional step after stop"):
+    // `record mark --optional-after <k>` makes the frame, the samples, the page, the marks, the
+    // reused marks, the click and the settle the inserted step's, as the request form's
+    // `optional_after` holds them, and `--remove-inserted <n>` is the request form's
+    // `remove_inserted`, so the command line and the MCP tool (which hands the request form to this
+    // command unchanged) give the Lab the same request. `--optional-after` without `--frame` is
+    // refused, and a step's flag beside it stays in the request, which the Lab refuses
+    // (`with_other_change`): nothing is dropped.
+    #[test]
+    fn r4_the_optional_after_flags_declare_the_request_forms_optional_after() {
+        let shortcut = record_mark_request_from_flags(&flags(&[
+            "--optional-after",
+            "3",
+            "--frame",
+            "notice.png",
+            "--sample",
+            "notice_2.png",
+            "--page",
+            "notice",
+            "--color",
+            "popup/notice=20,50,4,4",
+            "--reuse",
+            "state/list",
+            "--click",
+            "16,20,24,16",
+            "--settle-ms",
+            "1000",
+        ]))
+        .expect("request");
+        let request: MarkRequest = serde_json::from_value(json!({
+            "schema_version": LAB_RECORD_MARK_SCHEMA,
+            "optional_after": {
+                "step": 3,
+                "frame": "notice.png",
+                "samples": ["notice_2.png"],
+                "page": "notice",
+                "add": [{"id": "popup/notice", "family": "color",
+                         "region": {"x": 20, "y": 50, "width": 4, "height": 4}}],
+                "reuse": ["state/list"],
+                "click": {"region": {"x": 16, "y": 20, "width": 24, "height": 16}},
+                "settle_ms": 1000
+            }
+        }))
+        .expect("the request form");
+        assert_eq!(shortcut, request);
+
+        let removing =
+            record_mark_request_from_flags(&flags(&["--remove-inserted", "3"])).expect("request");
+        let request: MarkRequest = serde_json::from_value(json!({
+            "schema_version": LAB_RECORD_MARK_SCHEMA,
+            "remove_inserted": 3
+        }))
+        .expect("the request form");
+        assert_eq!(removing, request);
+
+        let error = record_mark_request_from_flags(&flags(&["--optional-after", "3"]))
+            .expect_err("--optional-after needs --frame");
+        assert_eq!(error.code, "validation_failed", "{}", error.message);
+        let beside = record_mark_request_from_flags(&flags(&[
+            "--optional-after",
+            "3",
+            "--frame",
+            "notice.png",
+            "--step",
+            "2",
+        ]))
+        .expect("request");
+        assert!(beside.optional_after.is_some());
+        assert_eq!(beside.step, Some(2), "the step stays in the request");
+    }
+
+    // #463 S2-5 (contracts/lab-recording.md, "Drawing a box"): `record mark --box
+    // <use>=x1,y1:x2,y2`, repeated, gives the request form's `boxes` in the order given, so the
+    // command line and the MCP tools (which hand the request form on unchanged) give the Lab the
+    // same request. The four numbers `x,y,w,h` of every other rectangle flag, a use that is neither
+    // `recognize` nor `press`, a value without `=` and a corner that is not `x,y` are refused, and
+    // `--box` beside `--request-json` is refused as every shortcut flag is.
+    #[test]
+    fn s25_the_box_flag_declares_the_request_forms_boxes() {
+        let shortcut = record_mark_request_from_flags(&flags(&[
+            "--page",
+            "title",
+            "--box",
+            "recognize=1180,664:1252,688",
+            "--box",
+            "press=1252,688:1180,664",
+        ]))
+        .expect("request");
+        let request: MarkRequest = serde_json::from_value(json!({
+            "schema_version": LAB_RECORD_MARK_SCHEMA,
+            "page": "title",
+            "boxes": [
+                {"use": "recognize", "corners": [{"x": 1180, "y": 664}, {"x": 1252, "y": 688}]},
+                {"use": "press", "corners": [{"x": 1252, "y": 688}, {"x": 1180, "y": 664}]}
+            ]
+        }))
+        .expect("the request form");
+        assert_eq!(shortcut, request);
+
+        for value in [
+            "recognize=1180,664,73,25",
+            "hover=1180,664:1252,688",
+            "recognize1180,664:1252,688",
+            "press=1180,664:1252",
+            "press=1180,top:1252,688",
+        ] {
+            let error = record_mark_request_from_flags(&flags(&["--box", value])).expect_err(value);
+            assert_eq!(
+                error.code, "validation_failed",
+                "{value}: {}",
+                error.message
+            );
+        }
+
+        let temp = tempfile::TempDir::new().expect("temporary directory");
+        let lock =
+            RecordingLock::acquire(temp.path(), "neutral.instance", "record mark", "Lab-CLI")
+                .expect("recording lock");
+        let error = run_record_mark(
+            &GlobalOptions::default(),
+            &flags(&["--request-json", "{}", "--box", "press=1,1:2,2"]),
+            &lock,
+        )
+        .expect_err("--box beside --request-json");
+        assert_eq!(error.code, "validation_failed", "{}", error.message);
+        assert!(error.message.contains("--box"), "{}", error.message);
     }
 }

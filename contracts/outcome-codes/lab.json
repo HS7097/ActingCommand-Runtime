@@ -150,9 +150,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.61",
-      "description": "#463 R1: the select of a Lab recording step (a request's select, the choice in a list of fixed slots by the name read in each slot) cannot be declared, or record stop cannot generate it; select_problem says why. record mark is refused (exit 3) and nothing is written; record stop refuses the same way and writes nothing. with_follow, with_gesture, with_click, with_retry, on_optional_step and with_application name what the step or the request declares beside the select (with_application also a select on an application step, which has no frame); on_final_step a select on the last step of a stopped recording; slot_outside_frame a slot outside the frame; name_id_invalid a name's id, wanted_name_invalid the wanted value's name, name_duplicate, default_not_in_names, pressed_not_in_names, wanted_name_taken, on_empty_key_invalid, on_empty_key_reserved (the task's own <task_id>_done key) and on_empty_key_taken (another select step's key) a name or key; guard_missing a page without a guard; kernel_refused the kernel's admission of the select step as record stop would generate it, its code in loader_code (a bound of the read that only the kernel checks, such as a timeout above its limit); no_select a clear_select on a step that has no select (#463 R2); on_empty_key_of_ending an on_empty key that is the outcome key of an ending of the recording (#463 R2 fix 1, a select declared after the ending) (actinglab details step, and loader_code and detail for kernel_refused).",
-      "common_causes": "The request also declares a click, a click follow, a gesture, a retry, an optional step or an application operation, or names an application step; the step's page has only OCR marks, so it gives no guard; a name or the wanted value breaks the parameter grammar, or the default or the pressed name is not one of the names; another select step of the recording uses the same wanted name or on_empty key, or the on_empty key is the task's _done key (a second select that leaves on_empty_key out takes the first one's default), or an ending's key; the select is marked on the last step of a stopped recording; a read the kernel's admission refuses.",
-      "handling": "Send the select alone as the step's effect, without click, retry, optional or application, on a step with a frame; give the step's page a template, color, color digest or check mark that recognizes it; use names, a wanted name and an on_empty key of their grammars, distinct across the recording and from its endings' keys (give a second select its own on_empty_key), with the default and the pressed name among the names; mark the select on a step before the last one; for kernel_refused read loader_code and detail and change the read."
+      "description": "#463 R1: the select of a Lab recording step (a request's select, the choice in a list of fixed slots by the name read in each slot) cannot be declared, or record stop cannot generate it; select_problem says why. record mark is refused (exit 3) and nothing is written; record stop refuses the same way and writes nothing. with_follow, with_gesture, with_click, with_retry, on_optional_step and with_application name what the step or the request declares beside the select (with_application also a select on an application step, which has no frame); on_final_step a select on the last step of a stopped recording; slot_outside_frame a slot outside the frame; name_id_invalid a name's id, wanted_name_invalid the wanted value's name, name_duplicate, default_not_in_names, pressed_not_in_names, wanted_name_taken, on_empty_key_invalid, on_empty_key_reserved (the task's own <task_id>_done key) and on_empty_key_taken (another select step's key) a name or key; guard_missing a page without a guard; kernel_refused the kernel's admission of the select step as record stop would generate it, its code in loader_code (a bound of the read that only the kernel checks, such as a timeout above its limit); no_select a clear_select on a step that has no select (#463 R2); on_empty_key_of_ending an on_empty key that is the outcome key of an ending of the recording (#463 R2 fix 1, a select declared after the ending); choice_not_refined (#463 S2-6, record stop and its dry run only, and the code of record ready's item select_unrefined) a step marked as holding a choice (a request's choice) that no select refines yet, so its package would know no names; no_choice (#463 S2-6 fix round 1) a request's choice false on a step that is not marked as holding a choice, so there is nothing to take off; drop_of_choice (#463 stage two, train, fix round) a drop_step of a step that holds a choice (marked as holding one, or refined by a select), the last step too, since its press may have chosen the item already selected, which changes nothing on the screen and still matters to a run handed another value; transition_of_choice (the same round) a to_transition of a step that holds a choice, which a page transition would lose (actinglab details step, and loader_code and detail for kernel_refused). A step marked as holding a choice keeps the rules a select step keeps, with the same words.",
+      "common_causes": "The request also declares a click, a click follow, a gesture, a retry, an optional step or an application operation, or names an application step; the step's page has only OCR marks, so it gives no guard; a name or the wanted value breaks the parameter grammar, or the default or the pressed name is not one of the names; another select step of the recording uses the same wanted name or on_empty key, or the on_empty key is the task's _done key (a second select that leaves on_empty_key out takes the first one's default), or an ending's key; the select is marked on the last step of a stopped recording; a read the kernel's admission refuses; a choice marked on a step and not refined by a select before record stop; choice false sent for a step that carries no mark; drop_step or to_transition sent for a step marked as holding a choice or refined by a select.",
+      "handling": "Send the select alone as the step's effect, without click, retry, optional or application, on a step with a frame; give the step's page a template, color, color digest or check mark that recognizes it; use names, a wanted name and an on_empty key of their grammars, distinct across the recording and from its endings' keys (give a second select its own on_empty_key), with the default and the pressed name among the names; mark the select on a step before the last one; for kernel_refused read loader_code and detail and change the read. For choice_not_refined run record ready, which lists every such step (select_unrefined), and refine each with record mark --step <n> and its select, on the active or the stopped recording, or take its mark off with choice false; then run record stop again. For no_choice there is nothing to do: the step carries no mark (record status shows each step's choice). For drop_of_choice and transition_of_choice withdraw the choice first, with choice false where the step carries the mark and clear_select where a select refines it, then drop or convert the step again."
     },
     "record_ending_invalid": {
       "category": "error",
@@ -185,6 +185,111 @@
       "description": "#463 R2: record stop's self-check item 9 found an ending's page passing on recorded frames of a screen the run may show instead of it, where the run, which evaluates the endings before the usual ending, would end on the ending; against says which: previous the frames of a step after whose press the run awaits the endings (its page, or its page transition's frames when it has one: the screen before the result of that press showed), usual the frames of the last step, other_ending the frames of another ending. Nothing is written (exit 3; actinglab details outcome_key, page, frames, and step or other_outcome_key).",
       "common_causes": "The ending's marks hold on the screen before the last press, on the usual ending's screen or on another ending's screen too: a mark reused from a step, a color of a background the screens share, or a template that is no part of the ending's own message.",
       "handling": "Give up the ending with record mark --remove-ending <key> and take it again with a mark that holds on its screen only, such as a template of its message or a button; check with record stop --dry-run."
+    },
+    "record_optional_after_invalid": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "lab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "optional_after_problem": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.63",
+      "description": "#463 R4: an optional step a stopped Lab recording inserts after the effect of one of its steps (record mark --optional-after <k> or a request's optional_after: a pop-up after which the path goes on, taken from a frame), or gives up again (record mark --remove-inserted <n>, a request's remove_inserted), cannot be inserted or given up; optional_after_problem says why. record mark is refused (exit 3) and nothing is written. recording_active a step inserted on an active recording; with_other_change another change beside optional_after or remove_inserted, or both; step_unknown, step_last and step_application the step k names: none (or a dropped or converted one), the last step, a step whose effect is an application operation; no_marks an inserted step without a mark; no_click one without a click; clears_optional a request that clears optional on an inserted step; not_inserted remove_inserted naming no inserted step that is not given up yet (actinglab details step, and members for with_other_change).",
+      "common_causes": "The recording was not stopped yet; the request also names a step, a frame, marks of a step, an ending or another change; k names a step that is not there, the last step (nothing is pressed after it) or an application step; the pop-up's request gives no mark or no click; --not-optional names an inserted step; --remove-inserted names a recorded step or a step given up already.",
+      "handling": "Run record stop first and insert the pop-up on the stopped recording, alone in its request: --optional-after <k> with the step after whose press the run met it, --frame of the pop-up (the pinned frame of the run, as material writes it), a mark of the pop-up's own (such as a template of its title) and the click that closes it; read record status for the steps in the order they run; give up an inserted step with record mark --remove-inserted <n>, its own serial number. Then run record stop, which checks it as every optional step."
+    },
+    "lab_scene_size_unsupported": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "lab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "display_problem": "required",
+        "frame_width": "required",
+        "frame_height": "required",
+        "base_width": "required",
+        "base_height": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.67",
+      "description": "Workflow #392 DA-5cd: an offline scene, a stored image (recognize, detect-page, current-page, is-visible, offline observe, do --dry-run, ensure --dry-run and wait on saved scenes, tap-target --dry-run, navigate --dry-run), cannot be brought to its package's coordinate_space (its base), so nothing is evaluated (exit 2; actinglab's own line, and serve --stdio --front mcp, exit 1 for every refusal). The train of DA-5 (Workflow #392 DA-5ab and DA-5cd): a stored image is judged, reduced and answered as the Lab's live observation takes a frame of its size, by the same function (the kernel's frame gate for a Lab frame); this code is the stored image's refusal of that function, as display_map_unresolved is a live capture's, and neither answers for the other's cause. frame_width and frame_height are the scene's size, base_width and base_height the package's coordinate_space, and display_problem the frame gate's word for why: layout_undeclared another ratio, scale_below_base a scene smaller than the package, orientation_mismatch the package's other orientation. A scene of the coordinate_space is evaluated as before; one of its ratio, not smaller and in its orientation (5/4 of it too) is reduced to it as the live observation reduces a frame, and its answer names frame_coordinates in the base form (space base, base_pixels, reduced_from, orientation, applies_to). Before this code such a scene was refused validation_failed.",
+      "common_causes": "The scene was captured on an instance whose display has another ratio than the package or is smaller than the package; or the scene was cropped or turned.",
+      "handling": "Give a scene of the package's coordinate_space or of its ratio, at least as large and in its orientation (1600x900, 1920x1080, 2560x1440, 3840x2160 for 1280x720), uncropped; or set the instance's display to such a size and capture again."
+    },
+    "record_display_not_base": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "lab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "frame_width": "required",
+        "frame_height": "required",
+        "base_width": "required",
+        "base_height": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.67",
+      "description": "Workflow #392 DA-5cd: this instance's display is not the base size, so nothing was recorded. A Lab recording is made at the base size (STANDARD_PACK_BASE_SIZE, 1280x720, the coordinate_space every standard package declares). record start refuses an instance whose display the Runtime last observed (its display.frame_extent fact, the first frame of the latest contained task run on it) at another size, before anything is written and before anything is asked of the scheduling, so the instance is not held; that is an early warning (fix round 1): record start writes the base size in the recording's header (base_size), and the first frame that enters the recording is checked against it before it is stored: a frame of another size (another aspect, smaller or larger, whether or not the Runtime knew the display) is refused with nothing written, no frame, no step and the header as it was, and the recording stays active as it was. The train of DA-5 (Workflow #392 DA-5ab and DA-5cd): every path that records judges the frame it took as such a first frame before anything is sent or written, whether or not it will store it: tap, swipe and long-tap --record, do --capture --record (one frame captured through the Runtime before its press) and observe --capture --record (the Runtime's frame, after it observed). The train's fix round 1: on the paths that press (tap, swipe and long-tap --record, session app --record), a frame that would be the recording's first is judged before it is stored as if the recording already had its size, by the judgement record stop makes, so that a recording whose header names no base size is refused here a first frame of a larger display of the base size's ratio, before anything is sent. frame_width and frame_height are the display's size (the frame's at the first frame), base_width and base_height the base size (exit 3; actinglab's own line, and serve --stdio --front mcp, exit 1 for every refusal; actinglab details display and base, each {width, height}).",
+      "common_causes": "The instance's display is 1920x1080, 3840x2160, a handset's 2400x1080, a portrait display or another size than 1280x720; at record start, the display was set back to 1280x720 but no task has run on the instance since (an instance whose scheduling is paused runs none), so the Runtime still knows the earlier display.",
+      "handling": "Record on an instance whose display is the base size: set this instance's display to 1280x720, or use another instance at that size. When record start refused a display that was set back since, the Runtime observes it only when a task runs on the instance: resume its scheduling until a task has run, then start again, or start on another instance at the base size. After a refused first frame the recording is as it was: take the frame again once the display is the base size."
+    },
+    "record_size_not_base": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "lab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "frame_width": "required",
+        "frame_height": "required",
+        "base_width": "required",
+        "base_height": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.67",
+      "description": "Workflow #392 DA-5cd fix round 1: this recording holds frames that are not the base size: a recording whose header names a base size (base_size, written by record start) and whose frames are of any other size, or one whose header names none (started before fix round 1) and whose frames show a larger display of the base size's ratio (a pure scale the display adapter maps onto it, such as 1920x1080 or 3840x2160). record stop (its dry run and the regeneration of a stopped recording marked again too) refuses it before anything is planned or written, the recording and its session staying active and the hold kept, and converts nothing; record ready lists it first as missing size_not_base and runs no self-check; a frame added to it (a recorded step's, a sample's, a transition's, an ending's) is refused before it is stored. The train of DA-5 (Workflow #392 DA-5ab and DA-5cd): every recorded step asks this judgement before it sends anything, and nothing is captured, sent or written: tap, swipe and long-tap --record and session app --record before they capture (also when the open step is marked and the frame before the press would not be stored), do --capture --record before its press, observe --capture --record before its capture. frame_width and frame_height are the recording's frames' size, base_width and base_height the base size (exit 3; actinglab's own line, and serve --stdio --front mcp, exit 1 for every refusal; actinglab details frames and base, each {width, height}).",
+      "common_causes": "A recording made on a display that is not the base size before this release, or a recording file changed by hand.",
+      "handling": "Archive the recording with record archive (record status, record frames and record archive read it as before) and record the task again on an instance whose display is the base size, 1280x720."
+    },
+    "record_frame_unknown": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "lab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.68",
+      "description": "#463 S2-7: a page transition of record mark (a request's transition with frame_id or sample_frame_ids, the request form only) names by its frame id a frame this Lab recording does not hold: no frame of a step (superseded frames included), of a step's page transition or of an ending has that id. Nothing is written (exit 3; actinglab's own line, and serve --stdio --front mcp, exit 1 for every refusal; actinglab details step and frame_id). A frame the recording holds whose stored file no longer holds its sha256 is record_frame_hash_mismatch, as every stored frame read back.",
+      "common_causes": "The id was mistyped, taken from another recording, or read from a record frames or record status answer of another recording.",
+      "handling": "Read the recording's frames with record status or record frames --step <k> (the frames before and after a press, with their ids) and name one of them, or give the frame as a PNG file with frame."
+    },
+    "record_drop_unproven": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "lab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "drop_problem": "required",
+        "drop_comparison": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.68",
+      "description": "#463 S2-7: record mark --drop-step (a request's step_action drop_step) names a step before the last effective one, and the frames this Lab recording stored contradict that its press changed nothing, or do not hold what the comparison needs. The tool drops such a step only when its stored frames do not contradict that its press changed nothing; whether a press mattered is the agent's judgement, the tool refuses only what the frames contradict. drop_problem says why: frames_not_recorded (no press on record with the stored frame it was sent on and the stored frame after it, as tap, swipe and long-tap --record record one, or a frame the comparison needs is not on record), screen_changed (the frame after the press differs from the frame before it) or next_screen_differs (the next step's frame before its press differs from the frame before this press). Fix round 1: two frames are the same screen when two comparisons hold, both by the measure and bound stage one calls a screen still by (frame_change_milli at most FRAME_CHANGE_MAX_MILLI, 1500): the whole frame, and the neighbourhood of the press (its rectangle, a point a rectangle of one pixel and a swipe the rectangle spanned by its two ends, grown on every side by one cell of the whole-frame grid at the recording's size and clamped to the frame); drop_comparison names the one that showed the change, frame or press_region (the whole frame is compared first). Each comparison averages the colour of 16 by 9 cells of its region and sees a change only when it adds up to more than 1.5 of the measure's 93 points a cell on average: a change confined to two cells is never seen; over the whole frame at 1280x720 a cell is 80 by 80 pixels, so a small change away from the press (a counter, a badge or a switch elsewhere) is not seen. Nothing is written (exit 3; actinglab's own line, and serve --stdio --front mcp, exit 1 for every refusal; actinglab details step, drop_comparison, before_frame, after_frame, next_step, next_before_frame and frame_change_milli, the value of the comparison that showed the change, where they are known). The last effective step is dropped as before, without these comparisons.",
+      "common_causes": "The press opened something (a pop-up, another page, a change of a value), so its screen after or the next step's screen differs; the press was made by do --capture --record or an application operation, whose frames before and after are not on record; the step is not a press at all.",
+      "handling": "Leave the step in the package (it does something), or, when the press only seemed to do nothing, read its frames with record frames --step <k>. A step whose press did change something is no press to drop: mark it as any other step."
     }
   },
   "locations": {

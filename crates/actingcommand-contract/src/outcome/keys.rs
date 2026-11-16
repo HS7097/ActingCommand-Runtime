@@ -181,6 +181,8 @@ outcome_keys! {
     // passes on.
     ending_problem: vocab(ending_problem),
     against: vocab(ending_against),
+    // #463 R4: why an optional step a stopped recording inserts after one of its steps cannot hold.
+    optional_after_problem: vocab(optional_after_problem),
     unknown_reason: vocab(unknown_reason),
     rule_id: token,
     unknown_clause: vocab(unknown_clause),
@@ -477,6 +479,10 @@ outcome_keys! {
     added_package_ids: list(name),
     removed_package_ids: list(name),
     // ---- Workflow #373 NAV-6: end ----
+    // Workflow #477 PC-1 (contracts/pack-catalog.md): the side of a package's business part a
+    // pool stands on, and which of `pack-catalog.json` and `schedule.json` lacks it.
+    catalog_side: vocab(catalog_side),
+    catalog_difference: vocab(catalog_difference),
     // ROUT-L RL-1b (frozen model v1.0 §3.8): what a game's `schedule.json` gave the scheduler
     // workbench: its sha256 and its rules, held and unclassified packages.
     schedule_sha256: hash,
@@ -860,4 +866,29 @@ outcome_keys! {
     // was refused; kept in codes mode. ----
     goal_name: token,
     goal_problem: vocab(goal_problem),
+    // ---- Workflow #469 V0 (register §1.386; the owner's option A on board #469): the reason
+    // words of the most mixed codes, optional values beside the code, never in the detail text;
+    // kept in codes mode. ----
+    confirmation_problem: vocab(confirmation_problem),
+    guard_problem: vocab(guard_problem),
+    availability_source: vocab(availability_source),
+    pause_cause: vocab(pause_cause),
+    // ---- Workflow #463 U1b fix round 3 (register §1.389): what of a scheduled run's break-in
+    // could not be established (`policy_break_in_unread`); kept in codes mode. ----
+    break_in_problem: vocab(break_in_problem),
+    // ---- Workflow #463 S3-10 (`actinglab standard-pack trial`, contracts/standard-pack-trial.md):
+    // where a state directory refused for trial records lies, and (fix round 2) why a file of a
+    // trial record's name is not read as that record; kept in codes mode. ----
+    trial_state_place: vocab(trial_state_place),
+    trial_record_problem: vocab(trial_record_problem),
+    // ---- Workflow #463 S3-11 (the run of `actinglab standard-pack trial`): why a run `--collect`
+    // names is not a run of the trial; kept in codes mode. ----
+    trial_collect_problem: vocab(trial_collect_problem),
+    // ---- #463 S2-7 (`record mark`'s `drop_step` on a step before the last,
+    // contracts/lab-recording.md "Steps, frames and remediation"): why it is not dropped: the
+    // stored frames do not hold what the comparison needs, or they show a change. ----
+    drop_problem: vocab(drop_problem),
+    // ---- #463 S2-7 fix round 1 (the same refusal): which of the two comparisons of two stored
+    // frames, the whole frame or the neighbourhood of the press, showed the change. ----
+    drop_comparison: vocab(drop_comparison),
 }

@@ -10,6 +10,10 @@
 //   UI's v0.12.0 and v0.12.1 declare) and [4, 4];
 // - a console whose `max` is 2 does not: the existing refusal, the failed `ui_meets_next` row
 //   naming both sides with their source and range, the only failed edge.
+// Workflow #437 G1 fix round 2 (register §1.433, 0.12.67) raises `max` to 10 and keeps the floor:
+// a console that speaks at most 9 ([3, 9], the revision before) still meets this build's [3, 10].
+// Workflow #463 S3-8 (register §1.444, 0.12.68) raises `max` to 11 and keeps the floor: a console
+// that speaks at most 10 ([3, 10], the revision before) still meets this build's [3, 11].
 
 use super::manifest::{Speaks, UiDeclaration, parse_declaration};
 use super::plan::{Edge, EdgeResult, ui_edges};
@@ -50,14 +54,18 @@ fn failed(edges: &[Edge]) -> Vec<(&'static str, &'static str)> {
 #[test]
 fn r0b_the_build_declares_runtime_client_three_to_four() {
     // Workflow #432 AGT-1b (register §1.246) raises `max` to 5, #407 PERF-READ (§1.280) to 6,
-    // #428 S168-LB1a (§1.311) to 7, #434 LAB-6S1a (§1.287) to 8 and #463 V3 (§1.383) to 9; the
-    // floor this test is about stays.
-    assert_eq!(own_speaks().get("runtime-client"), Some(&[3, 9]));
+    // #428 S168-LB1a (§1.311) to 7, #434 LAB-6S1a (§1.287) to 8, #463 V3 (§1.383) to 9, #437
+    // G1 fix round 2 (§1.433) to 10 and #463 S3-8 (§1.444) to 11; the floor this test is about
+    // stays.
+    assert_eq!(own_speaks().get("runtime-client"), Some(&[3, 11]));
 }
 
 #[test]
 fn r0b_a_console_at_three_or_four_pairs_and_one_whose_max_is_two_is_refused() {
-    for range in [[3, 3], [3, 4], [4, 4]] {
+    // Workflow #437 G1 fix round 2: a console of the revision before the raise, at most 9, pairs
+    // too, since the floor stays at 3. Workflow #463 S3-8: and one at most 10, the revision before
+    // 11.
+    for range in [[3, 3], [3, 4], [4, 4], [3, 9], [3, 10]] {
         let edges = edges_with(range);
         assert!(
             failed(&edges).is_empty(),
@@ -82,7 +90,7 @@ fn r0b_a_console_at_three_or_four_pairs_and_one_whose_max_is_two_is_refused() {
             "result": "fail",
             "parties": [
                 {"party": "U*", "source": "manifest", "range": [2, 2]},
-                {"party": "R*", "source": "manifest", "range": [3, 9]},
+                {"party": "R*", "source": "manifest", "range": [3, 11]},
             ],
         })
     );

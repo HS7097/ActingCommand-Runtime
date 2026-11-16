@@ -313,8 +313,8 @@ fn session_record_policy_payload(
             "daemon_record_policy_query": "session request record-policy"
         },
         "record_flag": {
-            "commands": ["capture --record", "session capture --record", "observe --capture --record", "do --capture --record", "session app <launch|restart|stop|force-stop> --record", "session instance app <launch|restart|stop|force-stop> --record"],
-            "dry_run_refused": ["capture --record", "session capture --record", "observe --capture --record", "do --capture --record", "session app --record", "session instance app --record"],
+            "commands": ["capture --record", "session capture --record", "observe --capture --record", "do --capture --record", "session app <launch|restart|stop|force-stop> --record", "session instance app <launch|restart|stop|force-stop> --record", "tap --record", "swipe --record", "long-tap --record"],
+            "dry_run_refused": ["capture --record", "session capture --record", "observe --capture --record", "do --capture --record", "session app --record", "session instance app --record", "tap --record", "swipe --record", "long-tap --record"],
             "unflagged_commands_recorded": false,
             "unsupported_with_flag": "record_flag_unsupported",
             "flag_with_value": "record_flag_takes_no_value",
@@ -688,8 +688,6 @@ pub(crate) fn session_access_contract() -> Value {
                     "stream --input-relay",
                     "stream --input-event <action,args>",
                     "stream --relay-event <action,args>",
-                    "tap-target",
-                    "navigate",
                     "recover except --stale-capture"
                 ]
             }
@@ -1172,8 +1170,6 @@ pub(crate) fn session_api_contract() -> Value {
                     "stream --input-relay",
                     "stream --input-event <action,args>",
                     "stream --relay-event <action,args>",
-                    "tap-target",
-                    "navigate",
                     "recover except --stale-capture"
                 ]
             },

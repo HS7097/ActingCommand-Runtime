@@ -177,6 +177,10 @@ mod gate_434_lab6s3;
 // the reads, no frames, the size bound, the errors view and the table's row).
 #[cfg(test)]
 mod gate_467_rpt1;
+// Test-only: #463 S1-3, `apps::App` passes `--record` and the waits of the screen after the
+// operation (`s13_the_app_line_carries_record_and_its_waits_when_asked`).
+#[cfg(test)]
+mod gate_463_s13;
 // Test-only: ROUT-L RL-1c (#411), the standard-pack game root fixtures of `packs::tests`.
 #[cfg(test)]
 #[path = "../../../tests/support/standard_pack_schedule.rs"]
@@ -328,7 +332,7 @@ pub fn foreign_data_error(error: &impl fmt::Display) -> Outcome {
 
 /// `top` caused by `cause`. A fatal cause is the top itself: a fatal link needs a fatal top
 /// (spec §5), and the operation ended in that condition. Workflow #434 LAB-1b: moved from
-/// actingctl's `main.rs`, where `install-transition` reads it too.
+/// actingctl's `main.rs` (where `install-transition` read it too until Workflow #434 LAB-6S4a).
 pub fn with_cause(top: Outcome, cause: Outcome) -> Outcome {
     if cause.category() == Category::Fatal {
         cause

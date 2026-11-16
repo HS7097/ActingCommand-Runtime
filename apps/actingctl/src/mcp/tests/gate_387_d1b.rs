@@ -9,7 +9,7 @@ use super::super::protocol::Era;
 use super::super::runtime::RuntimeAccess;
 use super::super::settings::changes as mcp_changes;
 use super::super::tools::{Tier, TierSet, ToolContext, find};
-use crate::held_runtime::{HELD_SALT, NoInstances};
+use crate::no_instance_runtime::{NoInstances, TEST_SALT};
 use actingcommand_contract::{
     ConfigParameter, ConfigParameterSource, EventActor, EventSource, FactScalar, FactValue,
     RuntimeConfigManifest, config_parameter_section, config_parameters_fact_key,
@@ -133,7 +133,7 @@ fn rk1_an_unknown_key_refuses_ac_config_set_whole_with_a_declared_receipt_top() 
     // A misspelt member: no row of the key table has it.
     let misspelt = instance_key(INSTANCE, "stuck_recovery_cooldown_seconds");
     let host = RuntimeHost::start(
-        RuntimeHostConfig::new(root.path(), HELD_SALT).with_config_manifest(
+        RuntimeHostConfig::new(root.path(), TEST_SALT).with_config_manifest(
             RuntimeConfigManifest {
                 subsystems: Vec::new(),
                 parameters: vec![ConfigParameter {

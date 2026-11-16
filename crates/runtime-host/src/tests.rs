@@ -244,11 +244,23 @@ mod gate_mapp1c;
 mod gate_mapp1d;
 // Workflows #456 and #458 (0.12.60; register §1.364): a close of one instance's session refused
 // before it began, at a lease's expiry or after a keyless observation's capture failure, fences
-// that instance only; the Runtime runs on.
+// that instance only; the Runtime runs on. Workflow #461 (0.12.66; register §1.431): so at a
+// client's disconnect and after a failed input, whose lease lapsed before the sweep met it.
+// Workflow #475 (0.12.67; register §1.432): so at five more closes under a lapsed key.
 mod gate_458_close_isolates;
+// Workflow #437 G1 (0.12.67; register §1.433): an unconfirmed close of one member holds the
+// device for it until its fence is lifted, and a member's own performance wait leaves the
+// device's queue to the other members.
+mod gate_437_g1;
 // Workflow #463 U1 (0.12.60; register §1.372): a linear step on a screen its package never
 // recorded ends with its own code, names its frame and pauses only its own pair, at once.
 mod gate_463_u1;
+// Workflow #463 U1b (0.12.63; register §1.389): the unrecorded-screen code only during a pair's
+// break-in of its package's content; after it `page_confirmation_failed`, its frame still named.
+mod gate_463_u1b;
+// Workflow #469 K1 (0.12.62; register §1.395): the word a linear step's end carries reaches the
+// policy record and leaves the failure identity and the streak as they are.
+mod gate_469_k1;
 // Workflow #463 K1 (0.12.61; register §1.374): a linear select step that ends empty gets its
 // `on_empty` key from the host's scheduling disposition.
 mod gate_463_k1;
@@ -262,6 +274,17 @@ mod gate_463_v2;
 // Workflow #463 V3 (0.12.61; register §1.383): an application's goals read and set by name
 // (`GoalView`, `EditGoal`).
 mod gate_463_v3;
+// Workflow #463 S3-8 (0.12.68; register §1.444): a direct run's request gives values for its
+// package's variables, judged before its admission as a dispatch judges one, overlaid as a
+// dispatch's are.
+mod gate_463_s38;
+// Workflow #469 H2 (0.12.62; register §1.398): a paused pair's `policy_task_paused` says why it
+// was paused (`pause_cause`) and with which failure (`failure_code`), live, after a restart and in
+// `actingd suspended`; a backoff names the failure it follows.
+mod gate_469_h2;
+// Workflow #469 H1 (0.12.62; register §1.397): an unavailable application's `instance_unavailable`
+// reason says who withdrew its availability.
+mod gate_469_h1;
 // Workflow #437 MAPP-1b (0.12.57; register §1.328, §1.330): the host's half of a device group:
 // one worker per device, the group's occupancy, pause, gates, session rule and refusals.
 mod gate_mapp1b;
@@ -272,6 +295,13 @@ mod gate_mapp2a;
 // Workflow #437 MAPP-2b (0.12.60; register §1.353): the switch's callers, the run's clock that
 // leaves the switch out, the member's lease, a failed switch and the member's switch cooldown.
 mod gate_mapp2b;
+// Workflow #469 H3 (0.12.62; register §1.399): an emulator control failure says where it failed
+// (`stage`, `device_category`).
+mod gate_469_h3;
+// Workflow #469 D4b (0.12.63; register §1.401): a scheduled run whose guard or `when` meets a vision
+// provider failure starts no ladder at once and is counted toward the burst; a real evaluation
+// error there still starts the ladder.
+mod gate_469_d4b;
 // Workflow #437 ORD-1c (0.12.60; register §1.373): the host passes the order within one device: the
 // member in front, the queue waits and the configured default limit.
 mod gate_ord1c;
@@ -302,7 +332,6 @@ mod gate_357_db1;
 mod gate_357_db2;
 // Workflow #432 AGT-1a: the client words stay in the forwarding crate.
 mod gate_375_r3;
-mod gate_381a;
 mod gate_381b;
 mod gate_agt_1a;
 // Workflow #432 AGT-1b: the worker of the Runtime's messages, over a real ledger and a fake clock.
@@ -314,17 +343,12 @@ mod gate_agt_2b;
 // CAP-IDX (since 0.12.27): capture takes the MuMu index from the discovery binding; a shifted
 // port is checked against MuMu's report before capture opens.
 mod gate_cap_idx;
-// Workflow #382 H-1-rest (test plan v2.2 §3.10): the install transition's deadlines on the
-// manual Runtime clock (HOST-I2), G1 and G3.
-mod gate_382_h1;
 // Workflow #382 H-4 (test plan v2.2 §3.6): the recovery ladder's G8 and G9 rows.
 mod gate_382_h4;
 // Workflow #382 H-5 (test plan v2.2 §3.6): host wave B.
 mod gate_382_h5;
 // Workflow #378 A6a: the latch rule, `ledger_opened` and `owner_released`.
 mod gate_378_a6a;
-// Workflow #378 SHUT-FU: the install CommitShutdown lets lifecycle work in flight end first.
-mod gate_378_shutfu;
 // Workflow #383 AO-7, test row AO7-b.
 mod gate_383;
 // Workflow #383 AO-1, the acceptance row of additions §8.3: a forced write failure's dump is
@@ -404,14 +428,17 @@ mod gate_389_u2;
 // answers byte for byte as before.
 mod gate_434_lab6s1a;
 // Workflow #434 LAB-6S1b: `validate()` judges no request by its origin; a Lab connection's pause
-// and resume are a CLI connection's, and the host's own checks of the governance and install
-// kinds still refuse.
+// and resume are a CLI connection's (the host's own checks of the governance and install kinds
+// went with those kinds in LAB-6S4a).
 mod gate_434_lab6s1b;
 // Workflow #434 LAB-6S3: the UI list on the `ui` channel; every other connection as before.
 mod gate_434_lab6s3;
 // Workflow #434 LAB-6S2-M: on `lab` with a word the host records, and answers a request not from
 // the Lab with, the channel that program's binding had on 0.12.58.
 mod gate_434_lab6s2m;
+// Workflow #434 LAB-6S4a: a request of a deleted kind carries an unknown operation tag and is
+// refused undecoded, its connection's failure recorded, and the Runtime goes on.
+mod gate_434_lab6s4a;
 // Workflow #429 R-0: the workbench's kinds have their shapes and answer `not_implemented`.
 mod gate_429_r0;
 // Workflow #429 R-0b: the Status member `activity` while each activity runs and after it ends.
@@ -476,6 +503,8 @@ mod gate_392_da3;
 // Workflow #392 DA-3b: a vertical-brake drag under a scale, sent as a drag with a pause and a
 // brake.
 mod gate_392_da3b;
+// Workflow #392 DA-5ab: the Lab's presses in the package's base on a display that maps to it.
+mod gate_392_da5ab;
 mod gate_398_rd1a;
 mod gate_398_rd1b;
 // Workflow #398 RD-2: a handset's wired device link through the host.

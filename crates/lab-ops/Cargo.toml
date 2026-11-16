@@ -12,7 +12,9 @@ publish = false
 
 [features]
 # The #422 QR-2b gate of actingctl's MCP tests builds a diagnosis whose report never started
-# (`diagnose::SuspensionReport::not_started`); actingctl's dev-dependency turns it on.
+# (`diagnose::SuspensionReport::not_started`); actingctl's dev-dependency turns it on. Workflow
+# #434 LW-1 fix round 1: also `core_ops::handed_refusal` and the parsers' `parse_refusal`, which
+# the walk of actinglab-mcp's `gate_434_lw1` runs; its dev-dependency turns it on.
 test-hooks = []
 
 [dependencies]

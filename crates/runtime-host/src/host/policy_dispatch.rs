@@ -7,7 +7,7 @@ use crate::codes::HostCode;
 use crate::codes::HostLocation;
 use crate::codes::SchedulingRuleHostCode;
 use crate::fact_store::LeftOutRecordLists;
-use crate::policy_host::{DeviceQueue, InstanceOccupancy};
+use crate::policy_host::{AvailabilityWithdrawals, DeviceQueue, InstanceOccupancy};
 use crate::{PolicyRecomputeDirective, PolicyRecomputeKind, PolicyRecomputeReason};
 use actingcommand_contract::codes::{ContractLocation, SharedCode};
 use actingcommand_contract::outcome::{Code, Location, Outcome};
@@ -566,24 +566,6 @@ pub(super) struct SchedulingPauseTable {
 }
 
 impl SchedulingPauseTable {
-    pub(super) fn from_install_pauses(
-        global: Option<SchedulingPauseState>,
-        instances: BTreeMap<String, InstancePauseState>,
-    ) -> Self {
-        Self {
-            global_revision: global.as_ref().map_or(0, |pause| pause.revision),
-            global,
-            instance_revisions: instances
-                .iter()
-                .map(|(alias, pause)| (alias.clone(), pause.revision))
-                .collect(),
-            instances,
-            client_resets: BTreeMap::new(),
-            origins: BTreeMap::new(),
-            player_held: BTreeSet::new(),
-        }
-    }
-
     /// #402 HS-2, test builds: a player holds `instance_alias` (`held`), or no longer does.
     #[cfg(test)]
     pub(super) fn hold_player_for_test(&mut self, instance_alias: &str, held: bool) {
@@ -632,23 +614,6 @@ impl SchedulingPauseTable {
 
     pub(super) fn holds_instance(&self, instance_alias: &str) -> bool {
         self.instances.contains_key(instance_alias)
-    }
-
-    pub(super) fn holds_pauses(&self) -> bool {
-        self.global.is_some() || !self.instances.is_empty()
-    }
-
-    /// Workflow #361 B1: gives `origin` to every held pause that has none (the pauses an
-    /// installer-held start restored from its transition).
-    pub(super) fn adopt_origins(&mut self, origin: &PauseOrigin) {
-        if self.global.is_some() {
-            self.origins.entry(None).or_insert_with(|| origin.clone());
-        }
-        for alias in self.instances.keys() {
-            self.origins
-                .entry(Some(alias.clone()))
-                .or_insert_with(|| origin.clone());
-        }
     }
 
     pub(super) fn set_global(&mut self, state: SchedulingPauseState, origin: PauseOrigin) {
@@ -724,24 +689,6 @@ impl SchedulingPauseTable {
         Ok(true)
     }
 
-    pub(super) fn validate_install_scopes(
-        &self,
-        registered: &BTreeMap<InstanceId, RegisteredInstance>,
-    ) -> RuntimeHostResult<()> {
-        if self.instances.keys().any(|alias| {
-            !registered
-                .values()
-                .any(|instance| &instance.instance_alias == alias)
-        }) {
-            return Err(RuntimeHostError::request(
-                HostCode::InstallPauseScopeMismatch,
-                HostLocation::RestoreInstallPauses,
-                RuntimeErrorCode::InvalidRequest,
-            ));
-        }
-        Ok(())
-    }
-
     /// Moves an instance pause of `revision` from stage `from` to `to`; any other state means
     /// the pause this request set was lost.
     fn advance_instance(
@@ -776,16 +723,6 @@ impl SchedulingPauseTable {
         self.client_resets
             .values()
             .any(|connections| !connections.is_empty())
-    }
-
-    pub(super) fn install_reset_continuation(
-        &self,
-        instance_alias: &str,
-        connection: ConnectionId,
-    ) -> bool {
-        self.client_resets
-            .get(instance_alias)
-            .is_some_and(|connections| connections.contains(&connection))
     }
 
     /// Workflow #429 R-7a2 (R-7a §2.6 O-3, O-4): the control gates of `instance_alias`, in the
@@ -1365,6 +1302,7 @@ impl HostShared {
             missing_instance_facts,
             unknown_offset_tasks,
             left_out_lists,
+            availability_withdrawals,
             dispatches_read,
             queue_wait_starts,
         ) = {
@@ -1400,15 +1338,21 @@ impl HostShared {
                 #[cfg(test)]
                 PolicyCycleClock::Fixed { time, monotonic_ms } => (time, monotonic_ms),
             };
-            let (facts, resources, missing_instance_facts, unknown_offset_tasks, left_out_lists) =
-                self.project_authoritative_policy_inputs_with_gaps_under_gate(
-                    &mut policy,
-                    HostLocation::EvaluatePolicyCycle,
-                    &outcome_keys,
-                    None,
-                    Some(time.unix_ms),
-                    Some(time.unix_ms),
-                )?;
+            let (
+                facts,
+                resources,
+                missing_instance_facts,
+                unknown_offset_tasks,
+                left_out_lists,
+                availability_withdrawals,
+            ) = self.project_authoritative_policy_inputs_with_gaps_under_gate(
+                &mut policy,
+                HostLocation::EvaluatePolicyCycle,
+                &outcome_keys,
+                None,
+                Some(time.unix_ms),
+                Some(time.unix_ms),
+            )?;
             // IDLE-3 (#447, register §1.332): the policy's own dispatches as these inputs count
             // them, read under the guard they were projected under (a settlement that comes
             // between this read and the evaluation below is not in them).
@@ -1422,6 +1366,7 @@ impl HostShared {
                 missing_instance_facts,
                 unknown_offset_tasks,
                 left_out_lists,
+                availability_withdrawals,
                 dispatches_read,
                 queue_wait_starts,
             )
@@ -1578,6 +1523,7 @@ impl HostShared {
                     switch_cooldowns: &switch_cooldowns,
                     dispatches_read,
                     standard_pack_variables: standard_pack_variables.as_deref(),
+                    availability_withdrawals: &availability_withdrawals,
                 },
             )?;
             let unknown = if cycle.evaluation.is_some() {
@@ -1777,7 +1723,7 @@ impl HostShared {
         outcome_keys: &PolicyOutcomeKeySnapshot,
         as_of_ledger_position: Option<u64>,
     ) -> RuntimeHostResult<(EvaluationFacts, EvaluationResources)> {
-        let (facts, resources, _, _, _) = self
+        let (facts, resources, _, _, _, _) = self
             .project_authoritative_policy_inputs_with_gaps_under_gate(
                 policy,
                 operation,
@@ -1796,7 +1742,8 @@ impl HostShared {
     /// whose TTL has elapsed by then is not passed; without it every active offset is.
     /// `eligibility_as_of_unix_ms` is the evaluation instant whose memory-only eligibility
     /// ages are projected (Workflow #308 slice 5b); without it none are. Workflow #428 S168-LB1a:
-    /// and the record lists the projection left out for their rows.
+    /// and the record lists the projection left out for their rows. Workflow #469 H1: and who
+    /// withdrew the availability of each instance projected unavailable.
     /// The caller holds `policy` and then `fact_write_gate` (Workflow #191 L1 lock order).
     pub(super) fn project_authoritative_policy_inputs_with_gaps_under_gate(
         &self,
@@ -1812,6 +1759,7 @@ impl HostShared {
         MissingPolicyInstanceFacts,
         UnknownPriorityOffsetTasks,
         LeftOutRecordLists,
+        AvailabilityWithdrawals,
     )> {
         let operation: Location = operation.into();
         self.synchronize_fact_store_under_gate()?;
@@ -1858,7 +1806,7 @@ impl HostShared {
             &historical
         };
         let mut base_facts = inputs.facts().clone();
-        let (instances, missing_instance_facts) =
+        let (instances, missing_instance_facts, availability_withdrawals) =
             project_policy_instances(&inputs, fact_projection);
         base_facts.instances = instances;
         // Manual priority offsets (Workflow #308 slice 4a-2) come from the store's
@@ -2180,6 +2128,7 @@ impl HostShared {
             missing_instance_facts,
             unknown_offset_tasks,
             left_out,
+            availability_withdrawals,
         ))
     }
 
@@ -2612,7 +2561,7 @@ impl HostShared {
                 )?;
                 // The eligibility ages are projected as of the intent's evaluation instant, as
                 // that evaluation projected them (Workflow #308 slice 5b).
-                let (current_facts, current_resources, _, _, _) = self
+                let (current_facts, current_resources, _, _, _, _) = self
                     .project_authoritative_policy_inputs_with_gaps_under_gate(
                         &mut policy,
                         HostLocation::AdmitPolicyDispatch,
@@ -3817,13 +3766,21 @@ pub(super) type MissingPolicyInstanceFacts = BTreeMap<String, Vec<&'static str>>
 /// `preferred_task_ids` read from the three policy instance facts that apply to it (the most
 /// specific scope first). An instance missing any of the three, or holding one that is not an
 /// inline value of the expected shape, is projected unavailable and reported under its alias
-/// with the keys it lacks; it is never silently available.
+/// with the keys it lacks; it is never silently available. Workflow #469 H1 (register §1.397):
+/// every instance projected unavailable is also returned with who withdrew it, read from the
+/// `session.instance.available` record resolved here and the instance's configured seed in
+/// `inputs` ([`HostShared::availability_withdrawal`]).
 fn project_policy_instances(
     inputs: &PolicyInputSnapshot,
     store: &InstanceFactStore,
-) -> (Vec<InstanceSnapshot>, MissingPolicyInstanceFacts) {
+) -> (
+    Vec<InstanceSnapshot>,
+    MissingPolicyInstanceFacts,
+    AvailabilityWithdrawals,
+) {
     let mut instances = Vec::new();
     let mut missing_instance_facts = MissingPolicyInstanceFacts::new();
+    let mut withdrawals = AvailabilityWithdrawals::new();
     for identity in inputs.instance_identities() {
         let context = InstanceFactContext {
             instance_id: identity.instance_id.to_owned(),
@@ -3831,8 +3788,8 @@ fn project_policy_instances(
             game_id: identity.game_id.to_owned(),
         };
         let mut missing = Vec::new();
-        let available = store
-            .resolve_active(&context, POLICY_INSTANCE_AVAILABLE_KEY)
+        let available_record = store.resolve_active(&context, POLICY_INSTANCE_AVAILABLE_KEY);
+        let available = available_record
             .and_then(policy_instance_boolean)
             .unwrap_or_else(|| {
                 missing.push(POLICY_INSTANCE_AVAILABLE_KEY);
@@ -3856,6 +3813,18 @@ fn project_policy_instances(
         if !missing.is_empty() {
             missing_instance_facts.insert(identity.instance_id.to_owned(), missing);
         }
+        if !available {
+            // Workflow #469 H1 fix 2: the instance's configured seed, which these inputs hold;
+            // with it `false`, the configuration is who withdrew the availability.
+            let seed_available = inputs
+                .instance_seeds()
+                .find(|seed| seed.instance_id == identity.instance_id)
+                .is_none_or(|seed| seed.available);
+            withdrawals.insert(
+                identity.instance_id.to_owned(),
+                HostShared::availability_withdrawal(available_record, seed_available),
+            );
+        }
         instances.push(InstanceSnapshot {
             instance_id: identity.instance_id.to_owned(),
             server_id: identity.server_id.to_owned(),
@@ -3866,7 +3835,7 @@ fn project_policy_instances(
             preferred_task_ids,
         });
     }
-    (instances, missing_instance_facts)
+    (instances, missing_instance_facts, withdrawals)
 }
 
 fn policy_instance_boolean(record: &FactRecord) -> Option<bool> {

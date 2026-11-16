@@ -240,7 +240,11 @@ device-state command. In order:
 A read that fails or answers an unknown shape is `device_state_unreadable`. A refusal ends the
 run before its first step with its own code (not fatal), and no input reaches the device;
 `device_locked`, `device_thermal_hold`, `device_battery_low` and `device_in_use` also hold the
-handset ([instance-fact-store.md](instance-fact-store.md), `device_state:<hold>`).
+handset ([instance-fact-store.md](instance-fact-store.md), `device_state:<hold>`). The four are
+warnings of the ladder class `planned_stop` (`device_locked` since 0.12.62, Workflow #469 D4a):
+the run stops on purpose, so the errors view's run-recovery grouping counts their records as no
+failure of the run ([global-ledger-query.md](global-ledger-query.md)); a ladder rung whose run
+the gate holds is skipped `device_not_ready` ([emulator-control.md](emulator-control.md)).
 
 **Keepalive.** Inside a run, an input that comes later than the screen-off timeout less
 `device_state.keepalive_margin_ms` after the last interaction (the start gate, then each input)

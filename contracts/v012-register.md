@@ -12303,6 +12303,177 @@ each program is served by that Runtime's own rules (fix 1: the connections count
 
 **LAB-6S2-B2 rollback** (to 0.12.58). Two-way: nothing persisted changes shape or value.
 
+#### Slice LAB-6S4a (0.12.63): the five request kinds are deleted, with the identity card and the held start
+
+Coordinator work order `rd-1115/brief-434-lab6s4a-five-kinds.md`, after the survey
+`rd-1113/lab6-step0-survey.md` (its sections A and B.4, its row S4a and its open points N4,
+`install-control` [0, 0] in the same slice, and N8, MCP's client action provenance goes with the
+identity card); the coordinator's rulings on board #434, not the owner's words, but for the
+owner's ruling the work order quotes, that nothing is kept for what came before (an older console,
+an older client, a rollback get no work of their own); based on main `d32d4d6c` (0.12.61 with #463
+V3). The contracts are [lab-two-entries.md](lab-two-entries.md) (the slice table, §2.4, §2.5,
+§9.3, §12), [runtime-interface.md](runtime-interface.md) (the request kinds, "Old Runtimes", the
+upgrade state), [component-interfaces.md](component-interfaces.md) (`install-control`) and
+[client-interactions.md](client-interactions.md) (the identity card).
+
+**What.**
+- The request kinds `DeclareGovernanceIdentity`, `RecordApprovalDecision`, `InstallTransition`,
+  `UpgradeState` and `UpgradeStateStatus` leave `RuntimeOperation` with their results
+  (`GovernanceIdentityAccepted`, `ApprovalDecisionRecorded`, `InstallTransition`, `UpgradeState`,
+  `UpgradeStateStatus`), their validation, their success codes and their rows of the interface
+  table; the host's handlers go with them (the card's checks and the governance connections, the
+  approval request, the installer's transition with its drain, its held start and its release,
+  the upgrade state's `not_implemented`), and so do the runtime client's methods
+  (`declare_governance_identity`, `record_approval_decision`, `install_transition`) and the
+  operation table's four `not_exposed` rows. A request of a deleted kind carries an unknown
+  operation tag: it does not decode, the Runtime drops its connection without a receipt and records
+  `runtime_protocol_invalid` once at the request's decoding (runtime-interface.md, "Old
+  Runtimes"), and nothing else changes.
+- Their senders: `actingctl install-transition` (the command, its run budget and its three outcome
+  codes; the word is now refused as any word no subcommand is, `actingctl_usage_invalid`, before
+  any connection); actingd's `--install-held` start (a start that names it is `usage_invalid`,
+  exit 1); the identity card `actingctl-mcp` and the `client.action` of the tool that both MCP
+  servers recorded before a write (ruling N8: the initiator `Lab-MCP` the binding carries replaces
+  them), so a write's connection sends the write first after the handshake, and `actinglab-mcp` no
+  longer reads a write's instance on its kept connection first, which only that client action
+  named; the card `actingctl` of the row `evidence read`, whose `requests` drop the kind; and the
+  test support that held a Runtime with the held start (`tests/support/held_runtime.rs` becomes
+  `no_instance_runtime.rs`, its provider without instances and its salt kept).
+- `install-control` becomes [0, 0] (`distribution/windows/component-interfaces.json`, the pin in
+  `tools/actinglab-architecture/tests/component_interfaces.rs`). No other interface moves:
+  `runtime-client` stays [3, 9] and `actingd-config` [5, 32].
+
+**What stays.** Every record's shape, so a ledger of 0.12.61 reads as before: its
+`governance.identity_declared` records (and the registry `GovernanceIdentityRefusal` their verdict
+carries), its approval records, its lifecycle records whose stage was `install_drain`,
+`install_held` or `install_release` (the stages are no longer written; their locations stay
+registered), and `InstallTransitionPhase` as the vocabulary `install_phase`. The configured
+approvals' transcription in process; the configuration's `governance.allowed_clients`, still read,
+checked and reported, deciding nothing; the client action after a Lab call's capture, in both
+servers, now without the card before it; every other request; the refusal of `cli`, `mcp` and a
+`lab` binding without a word, `via`, and the initiator in the ledger (LAB-6S4b, LAB-6S5).
+
+**At deploy** (the owner's ruling as the work order quotes it: only how this build reaches a
+machine that runs v0.12.62, the live build when this one ships, and that its ledger and state root
+load).
+- *Production's installer, the rescue module of the live v0.12.62.* Since 0.12.62 production
+  deploys through the module (`actinglab release stage`, `deploy`, `op status`, run from the live
+  build's kept `actinglab`), with `actingctl install` of that build as the way back
+  ([install-cli.md](install-cli.md), "Journals across versions"); both faces are the same code,
+  `crates/lab-rescue`, whose code, like the watchdog's start and the runtime client's, is v0.12.61's
+  unchanged. `deploy` stages the release, plans (`update plan`, `--preview` while a Runtime runs;
+  neither reaches the Runtime) and runs the composite `update apply --stop --hold lab-deploy-<ms>
+  --start`. Its plan's edges pass: `install-control` I [0, 1] (v0.12.62's own declaration) meets
+  Rp [0, 1] and R\* [0, 0] (`installer_meets_previous`, `installer_meets_next`), `runtime-client`
+  [3, 9] on every side, `ledger` [3, 8] on both, the configuration's keys unchanged. It sends none
+  of the five kinds and never passes `--install-held` (neither is in its code): to the old Runtime
+  the module's own `Status` (whether a Runtime runs) and the N + 9 connections Slice LAB-6S2-B2
+  counts for the composite (`Status`, `RuntimeFactSnapshot`, `ScheduleExplanation`; `Status`, one
+  `PauseScheduling` per instance, `Status`; `Status`, `RuntimeFactSnapshot`, `Status`,
+  `RequestShutdown`), each after `Health` and `BindChannel` `lab` with the module's word
+  ([lab-two-entries.md](lab-two-entries.md) §4.2), answered by v0.12.62 as before; then it starts
+  this build with `--config` only (the watchdog's start), and to the new Runtime the readiness
+  probe (`Health`, `BindChannel`), the post-start check (`Status`, `RuntimeFactSnapshot`,
+  `StartReport`), the release (`Status`, each `ResumeScheduling`, `ScheduleExplanation`) and the
+  module's `alive` (the watchdog's probe, `Health` and `BindChannel`): kinds this build keeps,
+  answered as v0.12.62 answers them. No step changes.
+- *Back.* The composite's automatic rollback (the new start not ready, or a fail-class post-start
+  check failed) closes this build's Runtime with `RequestShutdown`, puts v0.12.62 back, starts it
+  with `--config` only and makes the same reads and the release against it; after the deployment
+  the way back is `actingctl install` of v0.12.62 (`install undo`, `install resume`,
+  `install release-hold`), whose rollback edges pass the same way (I [0, 1] meets [0, 0] and
+  [0, 1]). This build writes no record v0.12.62 cannot read (no shape changes; the invalidation of
+  the transition facts below is the record every start of v0.12.62 writes too, by v0.12.61's
+  code). Not run: the owner's ruling leaves the rollback without work.
+- *The console's installer* negotiates `install-control` per step (component-interfaces.md: I ∩ Rp
+  to close, I ∩ R\* to start), so it starts this build at revision 0, without `--install-held`,
+  and closes a Runtime of v0.12.62 through that slot's own `actingctl` as before. What this build's
+  tools answer it: `actingctl request-shutdown [--wait <seconds>]` as before;
+  `actingctl install-transition` `actingctl_usage_invalid` with exit 1 before any connection;
+  actingd with `--install-held` `usage_invalid` with exit 1. The console's repository was not read.
+- *A ledger and a state root of v0.12.62* load: the records under "What stays" decode; a retired
+  code a record carries is still the catalog's (retired, not removed, so a relayed spelling keeps
+  its category); the runtime facts `host.install_transition` and `host.install_transition.pauses`
+  a drained transition left are invalidated at the start as a takeover, as v0.12.62's starts do
+  on a new epoch, and nothing reads them (their tag pattern stays, so the start sees them); an
+  owner journal whose close carries `closed_by` `upgrade_state` reads as before; a configuration
+  that names `governance.allowed_clients` is accepted.
+- *This build's watchdog, rescue module and MCP servers.* The watchdog's probe (`Health`,
+  `BindChannel`) and its reading of logs and journals are unchanged: in a log of v0.12.62 or earlier
+  `install_startup_stopped`, `held_timeout` and `release_timeout` are errors that consider a start,
+  as before. The rescue module's rows never sent one of the five kinds. Each MCP write's
+  connection sends `Health`, `BindChannel` (`lab`, `Lab-MCP`), then the write; a capture's client
+  action is its connection's first request after the handshake.
+
+**Codes.** Retired in 0.12.63 (status `retired`, `retired_in` 0.12.63; the descriptions say why;
+the release files keep the released ones): contract `request_install_transition_completed`,
+`request_declare_governance_identity_completed`, `request_record_approval_decision_completed`,
+`invalid_approval_decision`, `invalid_install_transition_receipt`,
+`install_previous_transition_mismatch`, `invalid_install_transition_status`,
+`invalid_install_timeout`, `invalid_install_transition_id` and `invalid_governance_origin`;
+runtime-client `install_transition_receipt_unconfirmed`; actingd `install_held_input_invalid`;
+actingctl `install_transition_reported`, `install_transition_failed`, `install_transition_aborted`
+and `mcp_identity_card_refused`; actinglab-mcp `mcp_identity_declaration_refused`; runtime-host the
+43 codes only those paths emitted (60 codes in all): `drain_timeout`, `held_timeout`,
+`release_timeout`, `install_startup_shut_down` (the accepted shutdown of a held start: a starting
+Runtime answers a shutdown request busy, so no start ends as a requested stop, and actingd's
+branch for that end went with it), `governance_authority_required`,
+`governance_connection_state_conflict`, `approval_replay_conflict`, `approval_replay_payload_mismatch`, `install_abort_state_invalid`,
+`install_fact_clock_overflow`, `install_fact_field_invalid`, `install_identity_encode_failed`,
+`install_identity_required`, `install_not_drained`, `install_owner_mismatch`,
+`install_owner_stopping`, `install_pause_scope_mismatch`,
+`install_preparation_instance_unavailable`, `install_preparation_not_authorized`,
+`install_preparation_selfcheck_failed`, `install_previous_drain_unverified`,
+`install_previous_owner_invalid`, `install_previous_pause_identity_mismatch`,
+`install_previous_pause_identity_missing`, `install_previous_pause_not_settled`,
+`install_previous_pause_revision_invalid`, `install_previous_pause_scope_invalid`,
+`install_previous_pause_time_invalid`, `install_previous_pauses_invalid`,
+`install_previous_pauses_missing`, `install_previous_shutdown_unverified`,
+`install_previous_transition_invalid`, `install_previous_transition_missing`,
+`install_previous_verification_timeout`, `install_release_state_invalid`,
+`install_ticket_mismatch`, `install_transition_conflict`, `install_transition_unknown`, and the
+five `upgrade_state_*` codes, which nothing ever emitted. The closed Global list loses
+`approval_replay_conflict`, `approval_replay_payload_mismatch`, `install_abort_state_invalid` and
+`install_release_state_invalid` (146 codes to 142; [runtime-outcomes.md](runtime-outcomes.md)).
+No code is added. Kept: `install_startup_stopped` (a start whose preparation a latched failure
+stops), every location, the registry `GovernanceIdentityRefusal` (a record shape; nothing raises
+its three codes since this build, and their catalog texts say so) and
+`recovery_ladder_drain_requested`, which with the install drain gone only a shutdown accepted
+while a ladder's holding check runs raises (its catalog text says so). What only the deleted
+paths used went too: the lease sweep's cancellation of the waiting entries during an install
+drain, which no stop could reach; the contract's draft of a `governance.identity_declared` record
+(the record still decodes and validates); and the architecture tool's two inspectors of the
+retired governance guard (`inspect_function_origin_terms`, `inspect_field_accesses`).
+
+**Tests.** New: host row "#434 LAB-6S4a", `gate_434_lab6s4a`: each of the five in the complete
+shape 0.12.61 decoded (`install_transition` with the Runtime's target and the query action,
+`declare_governance_identity` with a card, `record_approval_decision` with a decision,
+`upgrade_state` with the target and `enter`, `upgrade_state_status` with a transition id), so
+that the contract refuses it for its unknown variant alone; on the test host a request of each,
+after a `Health` its connection answered, gets no receipt, its connection dropped, one
+`runtime_protocol_invalid` record at `runtime_request_decode_failed` each and no record that
+names the request; the Runtime latches nothing and does not stop, and a new connection's `Status`
+completes; no clock is read. **Retired** with their rows (`ci/retired-gates.toml`, 39 entries:
+31 tests and 8 row keys, each with what covers its risk): contract key R4 and its three tests, the two install-control
+tests of the transition's status and timeout, and the architecture guard's governance test of
+row A3; host keys 7, 8, 9, 10, 49 and 73 with their tests, the two install-drain tests of the
+ladder wait (H-4), the approvals' governance test and LAB-6S1b's test of the host's own checks;
+apps key 17 and its three tests, the watchdog's test of a real held start's state root and
+LAB-6S2-B2's test of the transition's receipts; renamed, the old names retired: actingd's
+`--install-held` tests, now `gate_install_held_is_refused_as_a_usage_error` and
+`gate_ledger_maintenance_refusals_carry_registered_error_codes`. **Adapted** for the wire as it now
+is: the scripted Runtimes of `actinglab-mcp`'s `serve_calls` (one row per kind, the write as
+today's server, the jobs, run show and run stop, the capture's client action, the two goals rows)
+and of `actingctl`'s `lab6s2b2` and `mcp_ladder_drill_parity`; `evidence_confirm_read` (no card
+record in the ledger); `mcp_instance_alias` (renamed
+`gate_mcp_pause_and_resume_take_an_upper_case_alias`, no client action of a write); `cli_grammar`
+and `flag_refusals` (`install-transition` is a usage error); the host's approval supports (the transcription instead of the request); the contract's
+and the client's tests beside the kinds; `gate_idle1p` (another stand-in code for a release's
+failure). Unmapped tests of the drain and the held start left with them.
+
+**LAB-6S4a rollback** (to v0.12.62). Two-way: no persisted shape changes, and nothing this build
+writes is new to v0.12.62.
+
 ### 1.288 Slice SS-2f (0.12.46): the business tier across instances goes to the instance least recently dispatched first (Workflow #428; Alice's answer K2 to question 137 of 2026-11-02 19:4x, recorded on board #428 and in the coordinator's pending list, 「137：K2」, with no reason given; design `rd-1031/design-acm-price-addendum2.1.md` §5.4 and its slice row SS-2f, read on main `eb1e946d`; placed before 116 is lifted by the research channel's `rd-1031/design-c424-redline-1109.md` §4.9, Q13; coordinator work order `rd-1109/brief-ss2f.md`)
 
 [scheduling/README.md](scheduling/README.md) ("Net benefit within a tier", "Turns across
@@ -27254,6 +27425,447 @@ declare an ending page declares [15, 15], which an installer of [3, 14] refuses 
 
 **Rollback** (below 0.12.61). Nothing is persisted; an earlier Tools has no `standard-pack build`.
 
+### 1.386 Slice #469 V0 (0.12.62): the reason words of the most mixed codes and their keys, and the registry's small defects that change nothing (Workflow #469; the owner's choice of option A on board #469 on 11-15; the design `rd-1115/status-codes-a-design.md`, Part 2: its three facts, the places 1, 2, 3, 4, 6 and 8 of A-1, A-2 items 1 to 4, A-3 and the rows V0, D1, D2 and D3 of its slice table, accepted by the coordinator; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-469-v0-words-and-registry.md`, read on main `d32d4d6c` (after #1728 and #1731))
+
+The coordinator gave this slice 1.386: main `d32d4d6c` holds the sections up to §1.385, and 1.387
+belongs to a slice dispatched with this one. The slice ships in 0.12.62 (release 0.12.61 is cut
+without it).
+
+**What it is.** The words a reader needs to see why one of the most mixed codes ended something,
+written down, and nothing else: no emitter sets any of them yet. The slices that set them (the
+design's K1, K2, H1, H2, H3) come after this one and each finds its vocabulary here. A word comes
+only from what the program already knows where it raises the code, goes into the outcome's values
+and never into its detail text (the failure identity hashes fragments of that text), and changes
+nothing the program does next: for one code, every word leads to the same next step. Every word is
+a `vocab:` value, which codes mode keeps.
+
+| Vocabulary and key | Words | Enum | Codes that carry it |
+|---|---|---|---|
+| `confirmation_problem` | 21: the design's place 1 (`input_not_taken`, `awaited_page_late`, `other_page_shown`, `loading_page_shown`, `transition_shown`, `interrupt_shown`, `screen_moving`, `unrecorded_screen`, `nothing_recognised`, `screen_still`, `loading_limit`, `error_page`, `deadline_reached`, `check_failed`, `neither_page`, the five `unjudged_*`) and place 2's `error_page_no_exit` | `ConfirmationProblem`, `crates/execution-kernel/src/codes.rs` | `page_confirmation_failed`, `contained_task_step_unconfirmed`, `contained_task_error_page_reached`, `contained_task_linear_unrecorded_screen`, `contained_task_requires_scheduler` |
+| `guard_problem` | 3: `page_mismatch`, `target_not_passed`, `page_moved` | `GuardProblem`, the same file | `contained_task_guard_refused` |
+| `availability_source` | 6: `configured`, `self_check`, `device_link`, `device_state`, `other_publisher`, `facts_missing` | `AvailabilitySource`, `crates/runtime-host/src/codes.rs` | `instance_unavailable` |
+| `pause_cause` | 7: `severe_failure`, `unrecorded_screen`, `runtime_budget_exceeded`, `interrupted_again`, `sensitive_task`, `repeated_failure`, `retries_exhausted` | `PauseCause`, the same file | `policy_task_paused` |
+
+Each vocabulary is `review` `pending` with its `source`; each word's text is the design's line
+for it, the five `unjudged_*` written one by one from the design's shared line. The `pause_cause`
+texts end with how the pause lifts as the program lifts it: when the package changes, with no
+manual lift ([policy-suspension.md](policy-suspension.md), "Lifting (R19)"); the design's
+sentence for all seven also said "or a person resumes the task", which no code does, so it is not
+written.
+
+**Optional values on ten codes** (all optional now; the last slice that sets a word at every site
+makes it required). Before writing, each code was read in its fragment and in every file under
+`released/`: all ten are `pending`, `active`, and in no release file, as the design says.
+
+| Code | Values added |
+|---|---|
+| `page_confirmation_failed`, `contained_task_step_unconfirmed`, `contained_task_error_page_reached`, `contained_task_linear_unrecorded_screen` | `confirmation_problem` |
+| `contained_task_requires_scheduler` | `failure_code` (the existing key), `confirmation_problem` |
+| `contained_task_guard_refused` | `guard_problem`, `failure_code` |
+| `instance_unavailable` | `availability_source`, and the existing `device_link_state` and `device_hold` |
+| `policy_task_paused` | `pause_cause`, `failure_code` |
+| `policy_retry_backoff_active` | `failure_code` |
+| `emulator_control_failed` | the existing `stage` and `device_category` |
+
+Each code's description says what the new value holds when present.
+
+**The always-severe list (D2).** `nemu_app_index_requires_paired_input` leaves
+`severe_policy_failure_codes` (`crates/actingcommand-contract/src/event/payload.rs`). It was
+retired in 0.12.39 (#402 HS-3, §1.271 row HS3-6; `released/0.12.39.json`); nothing raises it: no registry
+variant, no literal outside the list, only two comments in `apps/actingd/src/config.rs` and
+`apps/actingd/src/config/gate_hs1.rs`. No test counts the list: the ledger's tests name one listed
+and one unlisted code, and the outcome guard's bridge names the function, not its entries.
+
+**Two classes (D3).** `recognition_sample_budget_invalid` is `declaration_error` (it was
+`budget_or_permission`): refused at admission from the declarations, without looking at the
+screen. `contained_task_declared_operation_page_mismatch` is `pack_logic_mismatch` (it was `none`):
+the screen differs from the declaration. Both in the registry macro and the fragment (G1). Before
+the second, the path from a Lab declared operation's end to the ladder was read: the operation
+(`run_lab_declared_operation`, `crates/runtime-host/src/host/lab_operation.rs`) holds a
+`LabOperation` claim and notes no ladder source, so `ladder_trigger_for` finds no trigger for it
+and the task stage's `match_trigger` is never called (only a policy run and a direct run note a
+source, `crates/runtime-host/src/host/contained_task.rs`); the kernel's failure goes into the
+operation's terminal artifact and its receipt, and its only ledger record is `command.rejected`,
+whose outcome is `command_rejected`, so the warning count (`count_stability_record`, which counts
+a record by its own outcome's code) never sees the kernel's code. Under the defaults no trigger
+item reads `declaration_error` either.
+
+**Texts (D1).** [runtime-config.md](runtime-config.md) and [emulator-control.md](emulator-control.md)
+name `device_link_lost` in the default of `recovery_ladder.exclude_codes`, as the defaults file has
+since §1.52. runtime-config.md says that `scheduling.feature_lock.codes` and
+`.locked_valid_for_ms` are for SR-5a and SR-5b, which are not built (nothing reads either key, no
+run ends with `contained_task_feature_locked`), and that of `performance.calibration.*` P-m's
+learning view reads `apply`, `learning_max_stage` and `learning_backstop_bp` while P-a, which reads
+the rest, `trouble_codes` among them, is not built. The catalog texts of the codes the design's
+A-2 item 1 leaves as they are say what the program does with them: `display_map_unresolved`,
+`perf_run_yielded` and `perf_hold_expired` (not raised yet), `recognition_pack_text_read_refused`,
+`device_link_lost`, `application_foreground_unknown`, `recovery_readiness_adb_unconfirmed` and
+`preparation_deadline_exceeded` (on the always-severe list), `policy_settlement_interrupted`,
+`contained_task_interrupt_environment_limit_reached`, `standard_pack_package_unclassified`,
+`watchdog_installer_busy`, `watchdog_run_in_progress`, `watchdog_alive`, `lease_busy`,
+`lease_cooldown`, `max_steps_reached`, `consecutive_unchanged_threshold_reached`,
+`recognition_sample_deadline_exceeded`, `candidate_sample_deadline_exceeded`,
+`recognition_sample_geometry_changed`, `detect_failed` and `action_failed`. The other codes of the
+always-severe list keep their texts.
+
+**The rule for new code (A-3).** [runtime-outcomes.md](runtime-outcomes.md), "Deciding from an
+outcome", after "Classes": decide by class or by word, never by name. No guard holds it yet.
+
+**Counts.** The catalog header holds 676 keys (672 before), 250 vocabularies (246) and 1932 words
+(1895). No code is added or retired, so the index's README counts do not change; its
+`execution-kernel.md` shows the two new classes. No README states these totals.
+
+**Tests.** None is added: no behaviour changes. The gates are G1 (registry class = fragment), G7
+(key table and the four enums = catalog) and the index's `--check`. No existing test pins either
+corrected class: `d1_l9` of `crates/runtime-config/src/ladder_tests.rs` asserts that no default
+trigger item matches `recognition_sample_budget_invalid` at any stage, which `declaration_error`
+keeps.
+
+**What is not changed.** Every place that builds or raises an outcome; every detail text; the
+failure identity, the streak, the frame rules, the lists other than the one entry; every class and
+category but D3's two; no interface revision, record shape or configuration key.
+
+**At deploy.** Nothing changes for an installation: no emitter sets a new value, the two class
+changes reach no trigger under the defaults, and the removed list entry names a code no build
+since 0.12.39 raises.
+
+### 1.387 Slice #469 F1 (0.12.62): a run's reads carry the values of its terminal outcome (Workflow #469; the owner's decision of 11-15 on board #469 that the most mixed codes carry a reason word, a value of a closed vocabulary beside the code; the design `rd-1115/status-codes-a-design.md`, Part 2's three facts, place 1's table "How the word reaches a reader" (the rows for `ac_get_run`, the run list, the overview and the diagnosis) and the slice row F1; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-469-f1-run-reads.md`, read on main `d32d4d6c`)
+
+The coordinator gave this slice 1.387: main `d32d4d6c` holds the sections up to §1.385, and 1.386
+belongs to a slice dispatched with this one. The slice ships in 0.12.62 (release 0.12.61 is cut
+without it).
+
+**Why.** A reason word travels in an outcome's values, never in its detail text. The reads a
+person or an agent looks at first showed the terminal's code alone: a run's status
+(`ContainedRunTerminal`, the read of `ac_get_run`, the overview's `run` and the diagnosis's
+`runs`) kept `failure_code` and nothing of the outcome it was read from, and the run list's row
+took that code. Every word the other slices add would have been invisible there.
+
+**What it is.** One optional member of `ContainedRunTerminal`
+(`crates/actingcommand-contract/src/run_summary.rs`), `failure_values`: what codes mode keeps
+of the terminal outcome's own values, `Outcome::codes_only`'s top node (the values whose type is
+a registered name: a code, a location, a word of a vocabulary, and lists of them), as a map by
+key, the shape an outcome envelope's `values` has. An id, a name, a number, a duration, a path
+and every other type is dropped there, and so are the outcome's causes. It is absent when the
+outcome carries none (`skip_serializing_if` on an empty map), so such a terminal serializes byte
+for byte as before. `RunFold` takes it from the `TerminalCommitted` fact it takes `failure_code`
+from: no record is read for it and no query is added. It knows no code and no word.
+
+**Readers** (every reader of `ContainedRunTerminal` and `RunBriefStatus` in this repository, all
+on the same contract crate, none kept for an earlier shape; the owner's ruling of 11-15 that
+nothing is kept compatible with earlier builds):
+- the contract crate: `RunFold::brief` and `RunBriefStatus`, and a `QueryRuns` row's status
+  (`QueryRunsRow`, `QueryRunsPage::validate`, which reads only whether a terminal is there);
+- runtime-client: `ContainedRunStatus.terminal` (`contained_run_status`, `latest_runs`,
+  `list_contained_runs`, `window_run_status`), brief and full, which carry the fold's terminal as
+  it is;
+- lab-ops: `run_show` (MCP `ac_get_run`, actinglab `run show`, the problem report's `run` part),
+  `overview::run_block` (the instance row's `run`) and the diagnosis's `runs`, which put the status
+  into their answer as it is, so they carry the member without a line of their own;
+  `run_list::row` (`actingctl runs`, MCP `ac_runs`, actinglab `run list`), which builds its row and
+  now adds `failure_values` beside `failure_code`; the diagnosis's `runs_grouped`, which keeps
+  grouping by (policy task, failure code, final page) and reads the code alone; the problem
+  report's run row (`report::source::row_of`), which keeps the code as `ended_with` (its `run`
+  part, the run's status, carries the member);
+- the MCP servers: actingctl's `ac_get_run`, `ac_runs`, `ac_overview`, `ac_diagnose` (above) and
+  `ac_stop_run`, which reads the state and the instance only; actinglab-mcp's `ac_run_show`, which
+  reads the line's `state` only; `run evidence`, which reads the status's state and identity only;
+- a runtime-host gate (`gate_411_a34`), which reads the terminal's code.
+
+**Interfaces.** `runtime-client` does not move. Its revisions are of the exchange between the
+console and actingd ([component-interfaces.md](component-interfaces.md)), and no answer of that
+exchange changes: a run's status is the client's projection of `QueryEvents` pages, which keep
+their shape, and `QueryRuns`, whose rows carry `RunBriefStatus`, is carried by no operation yet
+([global-ledger-query.md](global-ledger-query.md), the P32 B-1 note;
+[runtime-interface.md](runtime-interface.md), "New request kinds"). `ledger` does not move: no
+record changes. A console built on an earlier runtime-client folds runs itself from the same
+pages and meets nothing: its terminal has no `failure_values` and refuses nothing. A console that
+decodes a terminal this build serialized (an `ac_get_run`, overview or diagnosis answer) with an
+earlier contract crate's `ContainedRunTerminal` refuses it, since the type denies unknown members;
+it reads the member once it is built on this contract crate.
+
+**Faces.** `ac_get_run` and actinglab `run show`: `terminal {outcome, failure_code,
+failure_values?, final_page?, executed_steps?, cancellation_reason?, sequence, event_id}`; the
+overview's `run` and the diagnosis's `runs` rows: the same terminal of the brief status; the run
+list's row: `failure_values` beside `failure_code`, as `{<key>: <value>}`. `ac_runs`'s result
+schema gains the row member, and the tool texts of `ac_get_run` and `ac_runs` name it; the
+operation table's rows `status`, `runs`, `run show` and `diagnose` note it
+([lab-operations.json](lab-operations.json)).
+
+**Counts.** One member of `ContainedRunTerminal` (eight from seven); one member of a run list row
+and of `ac_runs`'s row schema; `gate_c2.rs` holds 14 tests (13 before); the new gate file
+`gate_469_f1.rs` holds 4; two new gate map rows (`contract.toml`, `apps.toml`).
+
+**Tests.** `crates/runtime-client/src/tests/gate_c2.rs`,
+`f1_a_run_terminal_carries_the_values_codes_mode_keeps_of_its_outcome` (gate map `contract.toml`,
+"#469 F1"), on the ScriptedRuntime ledger of the run-status gates: in brief and in full, a failed
+run whose terminal outcome (`contained_task_deadline_exceeded`) carries `receipt_state` `failed`,
+`lease_id` and `retry_after_ms` has `failure_values` `{receipt_state: failed}` alone, in the
+struct and in the status's JSON; a succeeded run without an outcome and a failed one whose outcome
+carries only an id and a boolean have none, and their terminal's JSON text is the text of the
+members a terminal had before, in their order. `apps/actingctl/src/mcp/tests/gate_469_f1.rs`
+(gate map `apps.toml`, "#469 F1"), on A42's fake Runtime with one such failed run: the
+`ac_get_run` tool's full status, the `ac_runs` tool's row, the overview's run block and the
+diagnosis's `runs` row each show `{receipt_state: failed}` beside the code; `runs_grouped` keeps
+its group by code without the member. No existing test changes, no golden changes, no test leaves
+the gate map.
+
+**What is not changed.** The fold's anomaly rules and what makes a run's state; the ledger's
+records; every code's registration, key and word; the detail texts; the grouped reads; the
+outcome code index (no fragment changes). No code, key, word, configuration key, interface
+revision or record shape is added.
+
+**At deploy.** Nothing to do: the member is computed when a run is read. A run recorded before
+0.12.62 shows the values its terminal outcome recorded.
+
+### 1.388 Slice #463 R4 and #464 P4 (0.12.63): a stopped recording takes an optional step after one of its steps from a frame; `record stop` keeps its earlier output, refuses an installed root and answers the adoption's skeleton (Workflow #463; the owner's rule two on board #463, that only the main path is recorded and that what a run meets later is added from that run's frame without recording again, with the owner's agreement of 11-15 that a stopped recording takes an optional step too; Workflow #464, the design `rd-1114/464-pack-build-design.md`, sections A and B and the slice row P4 with its tests, and the coordinator's ruling 5 on board #464, not the owner's words; coordinator work orders `rd-1115/brief-463-nb-common.md` and `rd-1115/brief-463-r4p4-after-stop.md`, read on main `1a962a54` (#463 R2 merged))
+
+1.388 is the number the coordinator assigned this section (the numbers between are slices
+dispatched with this one). The slice ships in 0.12.63 (release 0.12.62 is cut without it).
+
+**What it is.** R4: a `record mark` request's `optional_after {step, frame, samples, page, add,
+reuse, click, settle_ms}` (command `record mark --optional-after <k>`) inserts, on a stopped
+recording, a pop-up a run met after step k's press, after which the path goes on, as an optional
+step from its frame; `remove_inserted` (`--remove-inserted <n>`) gives it up. `record stop`
+generates it in its place and checks it as every optional step. P4: `record stop` keeps the output
+an earlier stop wrote, refuses a `--lab-dir` inside an installed root and answers
+`adoption_example`. Contract: [lab-recording.md](lab-recording.md), "Inserting an optional step
+after stop", "Writing" and "Output". Nothing of the kernel changes: an optional step is already
+what it runs.
+
+**Where, by reading.**
+- The order of the steps came from their serial numbers alone (`steps.rs` `effective_indices`,
+  `generate.rs` `effective_steps`: sorted by `index`). One function, `path_order`, now gives it:
+  the steps recorded on the path by serial number, each followed by the steps inserted after it,
+  by theirs; `effective_indices`, `effective_steps` and `record status` read it, so the package's
+  numbering, its pages, the runs of optional steps (`optional_runs`) and self-check item 7 see the
+  inserted step in its place without change.
+- The frame is admitted as R2 admits an ending's (`apply_ending`: `scaled_to_recording`,
+  `admit_frame`, `scaled_from`); the step's marks, click, page and `optional` go through
+  `apply_marks` with a request naming the new step, so every mark rule and self-test, the click
+  rules and `apply_optional` (not the first step, no application) hold unchanged. The step is
+  closed as `--close-step` closes a step whose click was declared and never executed.
+- Giving it up drops the step as `--drop-step` does: serial and frame numbers are never reused,
+  and a dropped step is no step of the package, so the package generated before comes back but
+  for its generation time.
+- `record_frame_size_mismatch` (a frame of another size that is no pure scale) and
+  `record_optional_settle_invalid` (a settle above 60000) say exactly what they say for a step and
+  an ending, and are reused. `record_mark_in_use` refuses giving up a step whose mark another step,
+  a transition or an ending reuses, or another page forbids, as `--drop-step` refuses it.
+- P4: `replace_in_place` (`container.rs`) deleted the set-aside file after the rename; it keeps it
+  and finds a free `.old-<ms>` name first. `preflight_lab_dir` gains the installed-root check
+  (the directory made absolute, and its nearest existing part with links resolved), which every
+  `--lab-dir` path reaches before anything is written, `--dry-run` and the `already_generated`
+  copy included.
+- `binding_example` is read by `record draft` (`apps/actinglab/src/record_draft.rs`) and by
+  `ac_binding_draft` (`apps/actingctl/src/mcp/lab.rs`), each taking the package path from its
+  `scheduled_execution.package_path`, and `lab-operations.json`'s `record stop` row says it gives
+  "the binding parts record draft takes"; the slice therefore adds `adoption_example` beside it
+  and keeps it, the removal the work order asks for being left to the coordinator.
+
+**The request members** `optional_after` and `remove_inserted` (new members of
+`actingcommand.lab-record-mark.v1`), two flags (rows `optional_after` and `remove_inserted` of
+`lab-operations.json` `record mark`). A member beside either is refused (`with_other_change`),
+never dropped. `recording.json`: a step's `inserted_after`, absent on every other step, so a
+recording without one is byte-identical to one written before. `record status`, `step_state`
+and the step provenance of the package carry `inserted_after` on such a step only; `record status`
+lists the steps in the order they run. The answer's statuses `optional_step_inserted` and
+`optional_step_removed`. `record stop`'s answer: `kept` (present only when a file was set aside)
+and `adoption_example {command, decision}`.
+
+**Codes and words** (`contracts/outcome-codes/lab.json`; catalog key `optional_after_problem`,
+vocabulary `optional_after_problem`): `record_optional_after_invalid` (error, exit 3, value
+`optional_after_problem`, refuses, nothing written): `recording_active`, `with_other_change`,
+`step_unknown`, `step_last`, `step_application`, `no_marks`, `no_click` (the work order's
+situations) and, one situation each, `clears_optional` (`--not-optional` on an inserted step,
+which would make a step never recorded on the path required) and `not_inserted`
+(`remove_inserted` naming no inserted step). `record_lab_dir_invalid` (exit 2) gains the reason
+`inside_installed_root` with `details.installed_root`. The catalog's `handling` of
+`contained_task_linear_unrecorded_screen` (a text; nothing its released snapshot fixes) and the
+row `record mark` of [lab-operations.json](lab-operations.json) say the way that now exists for a
+pop-up after which the path goes on.
+
+Tests: Lab `gate_463_r4.rs` (exec gate row "#463 R4", ten tests): an inserted pop-up generated in
+its place, regenerated with another content hash and admitted; the kernel's interpreter pressing
+it when it shows and going on without it; every `optional_after_problem` word and the frame of
+another ratio; item 7's two refusals on an inserted step; giving it up giving back the package
+generated before but for its generation time; a recording without one; a frame of a pure scale
+converted; P4's three: the kept `.old-<ms>`, the installed root refused, a first stop writing as
+before with `adoption_example`. Adapted: `gate_336_pkgs5::s5_t3_…` pinned that no set-aside file
+is left beside a replaced `--lab-dir` package; the requirement keeps it, so the test now asserts it
+is there with the earlier bytes. No golden changes, no test leaves the gate map.
+
+**Fix round 2** (after the full review; coordinator work order `rd-1115/brief-463-r4p4-fix2.md`,
+the coordinator's rulings, not the owner's words, but for the owner's rule in item 4). A step has a
+serial number (`index`, what `record mark --step`, `--optional-after` and `--remove-inserted` take)
+and a number inside the package (`artifact_step`, what `step_<nn>_click` is made of); they differ
+once a step is inserted after the stop or dropped.
+- Self-check item 7's refusals name both: `record_optional_step_ambiguous` adds `record_index`,
+  `record_optional_skip_target_insensitive` adds `record_index` and `optional_record_index`, as
+  `record_step_self_mismatch` does (members of a refusal's `details`, not outcome keys).
+- From a run that stopped on an unrecorded screen to the step to insert after: `record status` prints
+  `artifact_step` on every effective step (`step_view` numbers them by `effective_indices`, the
+  order `record stop` numbers them in), so the one way is written down where an agent reads it at
+  that moment (the catalog's `handling` of `contained_task_linear_unrecorded_screen`, its text
+  only; the contract's "The members"; the note of `optional_after` in `lab-operations.json`): find
+  the row whose `artifact_step` equals the number in `pack_operation_id` and take its `index`.
+- An installed root is a directory holding the installer's state file `install\state.json`
+  ([install-cli.md](install-cli.md), "Layout"); a child named `install` alone (a folder of
+  installers, matched without case on Windows) refused before and is none now.
+- `adoption_example.decision` is `{"schema_version": "actingcommand.pack-decision.v1", "class":
+  "held", "held": {"reason": ""}}` (the owner's rule: a package that has not run through on a real
+  device is registered and stays held): adopt refuses its blank reason (`decided_held`,
+  `bounded_text` in `crates/resource-tooling/src/adopt.rs`) and accepts it once filled; before, the
+  class and trigger `pending` were refused.
+- "Output" no longer advises placing the package under an installed root's `packages/<game>/`
+  (P4 refuses that); the Lab's MCP server keeps `adoption_example` beside the binding parts when it
+  shortens an exported `record stop` answer.
+
+Tests: in `gate_463_r4.rs`, item 7's test asserts both numbers of each refusal; the run test asserts
+each press inside its step's click box; the installed-root test holds `install\state.json` and adds
+a plain folder `Install` beside a target that validates; the first-stop test pins the held
+skeleton; new: the way from a run's operation to the serial number and an insertion there that runs
+after the step the run stopped at, two steps inserted after one step (in the order inserted, giving
+up one leaving the other), and `--remove-inserted` refused `record_mark_in_use`; in
+`session_record.rs`, the command line's `--optional-after` and `--remove-inserted` against the
+request form (beside R2's test of `--ending`). Adapted: `apps/actinglab-mcp/tests/serve_calls.rs`
+`mcp_lab_overflow_rule`, whose kept binding parts now include `adoption_example`. No code, key or
+word is added; no test leaves the gate map.
+
+**At deploy.** A second `record stop` of a recording leaves `<name>.old-<ms>` beside its package,
+in the recording's `lab/out/` and in `--lab-dir`; nothing deletes them. A `--lab-dir` under an
+installed root (for example `<install root>\packages\<game>\`) is refused: a recording reaches the
+schedule through `standard-pack adopt`, which `adoption_example` spells for it.
+
+### 1.389 Slice #463 U1b (0.12.63): the unrecorded-screen code only during a package's break-in (Workflow #463; the owner's ruling on board #463 that the code and its pause at once hold only within a period after a package is first run, the ordinary failure handling otherwise; the numbers and the scope are the coordinator's proposal the owner agreed to; the rest are the coordinator's rulings in the work orders, not the owner's words; coordinator work orders `rd-1115/brief-463-u1b-break-in.md`, read on main `1a962a54`, `rd-1115/brief-463-u1b-fix2.md`, fix round 2 after main `44cbab53`, v0.12.62, and `rd-1115/brief-463-u1b-fix3.md`, fix round 3 after main `326ae285`)
+
+1.389 is the number the coordinator assigned this section; the numbers before it are other slices
+dispatched with this one. The slice ships in 0.12.63 (release 0.12.62 is cut without it): its keys'
+`since`, its new code's `since`, this section, its rows of the gate map and its contract sentences
+say 0.12.63.
+
+**What it is.** `contained_task_linear_unrecorded_screen` (§1.372) ends a scheduled run, and pauses
+its pair at once, only while the pair (catalog task, instance) is in the break-in of the content of
+the package it runs ([policy-suspension.md](policy-suspension.md), "A failure that pauses at its
+first occurrence", "Only during a package's break-in"):
+
+- the content is the main package's content hash, 12 hex digits as the failure identity's `m`
+  segment, read when a scheduled run of a `linear_steps` main package is prepared
+  (`ScheduledMain::content`, `host/failure_settlement.rs`) through the lift checks' memory of each
+  package location's hash (`LiftChecks::current`, PKG-S3), so a location measured within
+  `scheduling.suspension.lift_check_min_interval_ms` is not measured again (a package replaced
+  inside the interval is judged and counted against the content measured before until the
+  interval ends); a page-graph package has none and counts nothing, and (fix round 3) a
+  `linear_steps` package whose content is not measured has none, its run counting nothing and
+  judged as outside its break-in;
+- the break-in starts at the first run of that content on the pair that began its package (its
+  kernel run's `PackageAdmitted` recorded: `ContainedRunControl::package_began`, noted into the
+  run's resolution when its execution returns) and was settled as a success or a failure, counts
+  each such run (never a stop, a condition end or a run that never began its package: the live
+  settlement decides it, `host/policy_outcome.rs`), and ends when at least
+  `scheduling.suspension.break_in_runs` (default 20) have settled and at least
+  `scheduling.suspension.break_in_ms` (default 604 800 000) have passed since the first; another
+  content starts a new one;
+- before a scheduled run executes the host judges it on the Runtime clock
+  (`HostShared::scheduled_run_past_break_in`) and notes it on the run's control; the kernel asks
+  once at the run's start (`ContainedTaskRuntime::unrecorded_screen_end`, as it asks
+  `host_started_run`) and keeps the answer in `LinearRun::unrecorded_end`. The closing decision,
+  its conditions and its control flow are unchanged. Since the merge of main (Workflow #469 K1,
+  §1.395) the decision's verdict becomes a code in one function, `closing_end` (`linear.rs`): the
+  verdict `unrecorded_screen` ends the run with the dedicated code only when the runtime's answer
+  is `Dedicated`; past the break-in it ends with `page_confirmation_failed`, that end's detail and
+  timing, and K1's word `confirmation_problem` `unrecorded_screen`, which every end of the closing
+  decision carries. Either failure carries the verdict
+  (`ContainedTaskError::closing_found_unrecorded`), and the host names the frame of the run's
+  `Failure` pin as `artifact_id` by that verdict, not by the code (`page_confirmation_failed` gains
+  the optional value `artifact_id`). The pause stays the code's (`pauses_task`, unchanged), and its
+  `policy_task_paused` carries Workflow #469 H2's `pause_cause` `unrecorded_screen` (§1.398); past
+  the break-in the failure follows `on_failure` and a pause it reaches says the word of how
+  (`repeated_failure`, `retries_exhausted`, `sensitive_task`). Direct and Lab runs keep the
+  dedicated code.
+- a break-in that cannot be established ends no run and fails no preparation (fix rounds 2 and
+  3): the run goes on as one outside its break-in, and the host records the warning
+  `policy_break_in_unread` (a Warning `runtime.failed` with the run's links; the failure its
+  `caused_by` link; since fix round 3 the required word `break_in_problem`, `content_unmeasured`
+  or `record_unread`). A broken lock of the host's run state and a failure to write that record
+  end the run, as everywhere.
+
+**Persisted.** One optional member of the pair's value record `policy.control_state_recorded`
+(register L7, `PolicyControlStateRecord::break_in`, `{content_hash, runs,
+first_settled_at_unix_ms}`), written by the settlement that counts a run; a loading start loads it
+with the decision memory. No dispatch record holds it (a success does not name the content it
+ran), so a start that seeds ([ledger-observer.md](ledger-observer.md) §11.5, a root's second
+start) and a re-alignment before the seeding take each pair's from its latest value record
+(`recorded_break_ins`, `policy_host.rs`; `PolicyControlState::restore_break_ins`); before fix round
+2 the seeding start lost it, and so did every record it wrote. What 0.12.62 and earlier recorded
+does not name the content a successful run ran, so a ledger written before this slice gives every
+pair no break-in: such a pair is inside from its first run on this build, until 20 runs that began
+the package have settled and seven days have passed since the first; a screen the package never
+recorded then pauses it at once until its content changes (policy-suspension.md, "A package that
+ran before this build"). No `ledger` revision is declared (the owner's ruling of 11-15 on
+compatibility).
+
+**Keys** (`actingd-config` revision 33, [component-interfaces.md](component-interfaces.md)):
+`scheduling.suspension.break_in_runs` (integer `1..=4294967295`, default `20`) and
+`scheduling.suspension.break_in_ms` (milliseconds, default `604800000`), settable (their rows of
+the key table, `Settable::Yes`), read before each scheduled run executes, no per-instance form.
+Every root's manifest holds them, as the assembly renders every key with a default from the
+defaults file; a manifest without them has no such setting, and `ConfigureSettings` of one is
+`config_key_unknown` (what the first CI run of the gate's eighth test met: its manifest did not
+hold them).
+
+**Where a person sees it.** `actingd suspended`'s list `break_ins`: per pair whose latest value
+record carries a break-in, its content, `runs` of `runs_needed`, the first's time, `since_first_ms`
+of `ms_needed` and `in_break_in`, judged by the configuration the report loads. Fix round 2: the
+report's now is the ledger's latest event, its head row, as `remedies` and `held` take it, not the
+ledger's latest time (the maximum over every row, which counts rows stamped by the system clock).
+
+**Codes.** One added, `policy_break_in_unread` (runtime-host, warning, ladder class `none`, since
+0.12.63): a scheduled run's break-in could not be established before it executed; it refuses
+nothing and ends no process. Fix round 3 adds its required value `break_in_problem` (the key and
+the vocabulary `break_in_problem`, `BreakInProblem` in `runtime-host/src/codes.rs`, two words:
+`content_unmeasured`, `record_unread`) and widens its texts to both. The outcome code index is
+regenerated after main `326ae285` (LAB-6S4a) and again in the 0.12.63 train, beside R4's and
+S3-7's codes: 3875 active codes of 3963, runtime-host 1158 (1111 active), warnings 154.
+`page_confirmation_failed` gains the optional value `artifact_id`; the two
+kernel codes' descriptions say when each is raised.
+
+**Tests.** Gate `host.toml` "#463 U1b", `tests/gate_463_u1b.rs`, eight tests: inside (with K1's
+word and H2's `pause_cause`), after (with K1's word), one of the two reached, a condition end and a
+stop, a new content, a restart, a direct run, the keys set while running. Fix round 2 changes two
+of them, whose first CI run failed for a reason of the test or the product: the restart now
+restarts as an installation does and asserts each start's kind from its start report (the root's
+second start seeds, its third loads; the break-in kept on both), and the keys' test starts from a
+manifest that holds the two keys at their defaults as the assembly renders them (and asserts
+those defaults, 20 and 604 800 000, settable). gate_463_u1's tests stand unchanged (a new package
+has no break-in, so its pair is inside). Adapted only where a struct gained a member:
+`gate_422_ln3` names `break_in: None`, and the `failure_settlement` unit test `content: Ok(None)`
+(fix round 3; `None` before) and `began: false`.
+
+**Fix round 3** (the independent review of fix round 2, "can merge", and the coordinator's
+rulings in work order `rd-1115/brief-463-u1b-fix3.md`; main `326ae285`, LAB-6S4a, merged first,
+the outcome code index regenerated and `install-control` [0, 0] beside `actingd-config` 33 in the
+architecture test). A break-in's own bookkeeping never fails a run: a package whose content the
+preparation cannot measure (the containment's refusal; before, `.ok()` dropped it and the run
+went on as inside, counted nothing and recorded nothing), and the preparation's reads of the
+Runtime clock, of `scheduling.suspension.lift_check_min_interval_ms` and of the lift checks'
+memory (before, each failed the preparation, fatally), are kept as `content_unmeasured`
+(`ScheduledMain::content` is `Err`, `HostShared::measure_break_in_content`); the reads before the
+run of the two keys, of the pair's break-in and of the clock are `record_unread`. Both are
+recorded before the run executes and judge the run outside its break-in. What goes up as it goes
+up everywhere (`scheduled_past_break_in`'s outer `Err`): a lock of the scheduled runs'
+resolutions or of the policy's state another thread left broken, and a failure to build or write
+the warning; before, every error of the verdict, these included, became the warning. The contract
+says what the lift checks' memory means for a package replaced inside the interval. Three tests
+(9 to 11): a run whose prerequisite layer failed never began its package and counts nothing; a
+content not measured and a break-in not read each record one warning with its word, the run
+going on outside (a one-shot test hook makes each read fail, `fail_next_break_in_read_for_test`,
+as gate_463_u1 makes a run's budget end fail: no fixture makes them fail otherwise); and
+`actingd suspended`'s `break_ins` row before and after the break-in ends.
+
+**At deploy.** Nothing to do; a pair that ran before starts its break-in at its first run on this
+build that began its package.
+
 ### 1.392 Slice #463 K-R3a (0.12.62): the kernel's offline dry run of a scan select as far as its decision (Workflow #463; the owner's rule on board #463 that every package but a complex looping battle is recorded, never written by hand, and the owner's rule that what stands in a list is chosen by what is read, never by its position; the design note `rd-1115/463-r3-scan-design.md`, section 3.1 and its row K-R3a of section 8, which the coordinator accepted; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-r3-first-slices.md`, read on main `d32d4d6c`)
 
 1.392 is the number the coordinator gave this slice; main `d32d4d6c` holds the sections up to
@@ -27327,6 +27939,6186 @@ draft that wants a card of the first viewport, the draft's decision and choice; 
 run the same code), no golden changes, no test leaves the gate map.
 
 **At deploy.** Nothing: no Runtime behaviour, record or configuration changes.
+
+### 1.395 Slice #469 K1 (0.12.62): a linear step's end says what was seen (Workflow #469; the owner's choice of option A on board #469 on 11-15; the design `rd-1115/status-codes-a-design.md`, Part 2: its three facts, place 1 of A-1 in its linear parts and the row K1 of its slice table, accepted by the coordinator; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-469-word-slices.md`, read on main `b6fe6ec2` (after V0, §1.386))
+
+The coordinator gave this slice 1.395: main `b6fe6ec2` holds the sections up to §1.386; 1.387 to
+1.394 and 1.396 to 1.399 belong to other slices, K2, H1, H2 and H3 among them. The slice ships in
+0.12.62, as §1.386 does.
+
+**What it is.** V0's vocabulary `confirmation_problem` (§1.386) is set on every end of a
+`linear_steps` step that U1's closing decision classifies (§1.372): the three sites where a failed
+wait ends the run with `page_confirmation_failed` (the last attempt's arrival and the next page
+after a seen intermediate page or skip target; the continued wait after a late gate; a retry
+decision that saw neither page), and `contained_task_linear_unrecorded_screen`, which always
+carries `unrecorded_screen` ([linear-steps.md](linear-steps.md), "What the program saw").
+`linear_closing_decision` returns its verdict, a word, in place of a `bool`; `another_page_on`
+tells a declared page, a declared loading page and an error of its own evaluation apart;
+`linear_closing_pages` names the condition that kept the decision from being made. One function of
+`crates/execution-kernel/src/contained_task/linear.rs`, `closing_end`, turns the verdict into the
+code, as U1 did: `unrecorded_screen` into the dedicated code, every other word into
+`page_confirmation_failed`. The conditions and the control flow of the closing decision are U1's;
+no code is added, and no code, class, detail, timing or other value changes.
+
+| Word | From what the program already decides |
+|---|---|
+| `deadline_reached` | the closing observation's two deadline checks |
+| `input_not_taken`, `awaited_page_late` | a frame on which one of the decision's pages passed: the step's own page, the last of them, or an awaited page |
+| `transition_shown` | the frame's transition row (`judge_frame`, LOAD-4 under `on`) |
+| `interrupt_shown` | the recognising check of the shared interrupt pages |
+| `screen_moving` | at the bound, the first and last frames' or the last two captures' comparison |
+| `loading_page_shown`, `other_page_shown` | `another_page_on`: a page it matched that is a declared loading page, or another page it matched |
+| `check_failed` | an error of `another_page_on`'s evaluation, and every other error of the decision's own capture, recognition or evaluation but a bookkeeping failure |
+| `unrecorded_screen` | every rule held |
+| `loading_limit` | the `LoadingLimit` of the failed wait or of the retry decision, whose values the outcome carries |
+| `neither_page` | a retry decision that saw neither page, with no closing decision after it |
+| `unjudged_layer_run`, `unjudged_restart_segment`, `unjudged_consensus`, `unjudged_application_entry`, `unjudged_time_short` | the conditions of `linear_closing_pages`, in its order |
+
+**Choices of this slice** (the design does not settle them). Where several conditions keep the
+decision from being made, the first in `linear_closing_pages`'s order gives the word, the loading
+allowance's first: the outcome then carries its loading values, which codes mode drops. After a
+retry decision that saw neither page and no closing decision, the word is `neither_page` whatever
+condition held (but the loading allowance's): that is what the program saw there, and the design's
+row for the word is that path's. A declared loading page among the pages `another_page_on` matched
+makes the word `loading_page_shown`, as a loading page holding over a page makes the frame a
+loading frame under LOAD-3.
+
+**Not reached.** `unjudged_application_entry` is set where `linear_closing_pages` finds the step's
+`from` to be an application entry, but no run gets there: admission refuses a click or a select
+step from any screen (`any_requires_application`), and an application step ends with
+`contained_task_linear_application_unconfirmed` before any closing decision. No test reaches it.
+
+**What is not changed.** The catalog: the five codes keep `confirmation_problem` optional (V0's
+texts already name it); making it required waits for K2. Every detail text, so the failure
+identity's key K and the accumulating list; the streak; the frame pins; the wire code; the
+`contained_task_linear_intermediate_unobserved` end, which carries no word; a layer's failure,
+which leaves its gate as its code alone as before; no interface revision, record shape or
+configuration key.
+
+**Tests.** `crates/execution-kernel/src/contained_task/linear/gate_469_k1.rs` (17 tests, declared
+in `linear.rs`), one per word on U1's fixture: each asserts the word and that the code, the detail
+byte for byte, the timing and the other values are those of the same end before. The host's half,
+`crates/runtime-host/src/tests/gate_469_k1.rs` (2 tests): a scheduled run's policy record carries
+the word, and its failure identity is the one of the code, the scope, the step and the detail
+alone; the same swallowed tap again keeps that identity byte for byte and counts 2. No existing test
+is adapted.
+
+**Fix round 2.** A word of V0's vocabulary added here, `returned_to_own_page`, takes the place of
+`input_not_taken` where the program had already seen another page since the input (the
+intermediate page, a skip target, the late gate), so `confirmation_problem` holds 22 words (21
+before) and the catalog 1933 (1932), and the text of `contained_task_linear_unrecorded_screen`
+says its word is always there ([linear-steps.md](linear-steps.md), "What the program saw").
+
+**At deploy.** Nothing to do. A failed linear run's terminal, receipt, policy record and
+`actingd suspended` row show the word from this build on; `ac_get_run`, `ac_runs` and the overview
+show it with F1.
+
+### 1.396 Slice #469 K2 (0.12.62): a page-graph step's end and a guard's refusal say why (Workflow #469; the owner's choice of option A on board #469 on 11-15; the design `rd-1115/status-codes-a-design.md`, Part 2: its three facts, the places 1 ("Page graph"), 2 and 6 of A-1 and the row K2 of its slice table, accepted by the coordinator; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-469-word-slices.md`, read on main `b6fe6ec2` (after #1738, V0))
+
+The coordinator gave this slice 1.396: 1.387 to 1.395 belong to slices dispatched with or before
+this one (K1 is 1.395). The slice ships in 0.12.62, as V0 (§1.386) does.
+
+**What it is.** The kernel sets the words V0 wrote down for the page graph and the guard, each from
+what it already decides where it raises the code, as a value of the outcome and never in its
+detail. Nothing the program does next changes: the code raised, its class, the control flow that
+leads to it, the detail, the pins, the wire code and every value it had are as before.
+
+| Code (where) | Value | Taken from |
+|---|---|---|
+| `page_confirmation_failed` (a page-graph step without a retry policy; a retry's confirmation that matched no page), `contained_task_step_unconfirmed` (an operation that decides Fail; a wait step's away clock) | `confirmation_problem`: `error_page`, `loading_limit`, `screen_still`, `nothing_recognised`, `final_state_unmet`, `input_not_taken`, `returned_to_own_page`, `other_page_shown` | the wait's `PostconditionResolution::Failed`: `hit_error_page`, then `loading_limit`, then `still_limit`, otherwise `last_frame_page` (none; `page_anchor_matches` with one of the step's destinations, a frame its final-state judgement did not take; with the page the step was dispatched from, a wait step's `from`, after the destination had passed, `destination_reached`, or not; or another page); one helper, `confirmation_word` in `crates/execution-kernel/src/contained_task.rs` |
+| `contained_task_step_unconfirmed` (a wait step's `max_ms` on its own page) | `confirmation_problem` `wait_max_reached` | `PostconditionResolution::Held` without `on_timeout` (`wait_step.rs`) |
+| `contained_task_error_page_reached` (an operation that decides Fail; a retry's confirmation; a wait step) | `confirmation_problem` `error_page` | `hit_error_page` of the same `Failed` |
+| `contained_task_error_page_reached` (#411 A45, `candidate_directive` in `contained_task/candidates.rs`) | `confirmation_problem` `error_page_no_exit` | the transition's `run_decision_invalid` on a declared error page |
+| `contained_task_requires_scheduler` | `failure_code`, and `confirmation_problem` | the terminal's `failure_reason` (`RunSuccessorSuggestion`, `RunPause`), until now dropped with `{ .. }`; the word the decision that asked for the recovery was taken with, kept beside `recovery_timing` (none after a guard's refusal) |
+| `contained_task_guard_refused` | `guard_problem` `page_mismatch` | `judged_guard_outcome`'s page check (a later attempt's frame on another page included) |
+| `contained_task_guard_refused` | `guard_problem` `target_not_passed`, with `failure_code` | the evaluated guard target that did not pass; `failure_code` is its registered reason (`TargetEvaluation::failure`, the detail's `cause=` token) when it has one |
+| `contained_task_guard_refused` | `guard_problem` `page_moved` | the trusted-coordinate step's frame after its action gap on another page (DP06) |
+
+**What the design offers and the page graph cannot give.** `loading_page_shown`: the page the
+wait's last frame matched is a page of the package's page set, and only a page that exists solely
+as a loading copy (the package's loading set, `PageDetector::with_loading_pages`) is outside that
+set, so `last_frame_page` never names one. A page of the set that a confirmation adds to its
+loading pages (`loading.add`) or declares as its wait page is matched as any page of the set is
+and, as another page, gives `other_page_shown`, as in K1 (§1.395); under `on` its frames are
+transition frames, and a wait that ends on them ends with `loading_limit`. No moving-or-still word
+for an unrecognised screen (the design's own exclusion): `nothing_recognised` stands for both.
+
+**The design's open point, decided here.** A wait step that meets a declared error page ends, as
+before, with `contained_task_error_page_reached` after the confirmation's own judgement of the
+frame (`PostconditionResolution::Failed` with `hit_error_page`, `wait_step.rs`), as a step's
+confirmation after its input does: it carries `error_page`. `error_page_no_exit` stays the run
+standing on an error page that no operation leaves. A wait step whose `max_ms` runs out on its own
+page (`PostconditionResolution::Held`) carries `wait_max_reached` (fix round 2, below).
+
+**Ends without a word.** Of the four page-graph codes, one end still carries no
+`confirmation_problem`: `contained_task_requires_scheduler` after a refusal before the input (a
+guard's or an input recheck's) that asked for the recovery, whose `failure_code` names that
+refusal ([linear-steps.md](linear-steps.md)). Every end of `page_confirmation_failed`,
+`contained_task_step_unconfirmed` and `contained_task_error_page_reached` carries one.
+
+**Required stays optional.** Every value stays optional in the catalog (the work order, item 5).
+
+**Tests.** `crates/execution-kernel/src/contained_task/gate_469_k2.rs`: one test per word, each
+over the fixtures that reach it, asserting the code and the outcome's values whole (the values the
+code had, with the word): `input_not_taken`, `other_page_shown` (a wait step's away clock
+included), `nothing_recognised` (a retry's confirmation included), `screen_still`,
+`loading_limit`, `error_page` (no retry policy, a decided Fail, a retry's confirmation, a wait
+step), `error_page_no_exit`, `contained_task_requires_scheduler` (after a confirmation, after a
+retry's error page, after a guard's refusal), `page_mismatch`, `target_not_passed` and
+`page_moved`; fix round 2: `final_state_unmet` (no retry policy, a decided Fail, a wait step's
+away clock), `returned_to_own_page` (an observation window's end, no retry policy and a decided
+Fail) and `wait_max_reached`, each also asserting its detail byte for byte; and the design's test
+rule for every fixture (29): the code, the detail byte for byte as before and the values without
+the word as before. `value_test_tests.rs`: a guard whose value test does not hold names
+`value_test_not_met` as `failure_code`. The identity string and the streak count are the host's:
+in `crates/runtime-host/src/tests/gate_390_exec3.rs`, two identical scheduled page-graph failures
+carry `input_not_taken` on their settled outcomes, their identity's key is the one of the code, the
+scope `main`, the step and the native detail's fragments (none of which holds the word), and the
+second keeps the first's identity and counts 2. Adapted: the four tests of `gate_rc2_a15.rs`
+(kernel), which pin the whole values of `contained_task_step_unconfirmed`, take its word (the
+window's end, since fix round 2, `returned_to_own_page`); and `gate_still1.rs`
+`still_limit_off_keeps_todays_wait`, which pinned that a confirmation without a still limit
+carries no values, now pins that it carries no still values, only its word.
+
+**Fix round 2.** Two words added to V0's vocabulary here, `final_state_unmet` and
+`wait_max_reached`, so `confirmation_problem` holds 24 words (22 with K1's
+`returned_to_own_page`, §1.395) and the catalog 1935 (1933). `final_state_unmet` takes the place of
+`other_page_shown` where the last frame is one of the step's destinations, so that word is never
+set on a destination; a destination that is the page the step left gives `final_state_unmet`
+before the own page's word. `PostconditionResolution::Failed` gains `destination_reached`, true
+only where an observation window ran out (`observation_window.rs`), so that end's own page gives
+K1's `returned_to_own_page` in place of `input_not_taken`. The wait step's `max_ms` end, which
+had no word, gets `wait_max_reached`. Only the word changes: code, detail, timing, other values
+and control flow are as they were.
+
+**Texts.** The catalog texts of `page_confirmation_failed`, `contained_task_step_unconfirmed`,
+`contained_task_error_page_reached` and `contained_task_guard_refused` say when each word is set,
+and the catalog's vocabulary describes the two words of fix round 2;
+[linear-steps.md](linear-steps.md) (the page-graph failures and the guard's row) and
+[resource-declarations.md](resource-declarations.md) ("Wait steps and wait pages") say it in the
+contracts.
+
+**At deploy.** Nothing to do: a run that ends so carries the word on its terminal, its receipt and
+its policy record; no record shape, key, interface revision or configuration changes.
+
+### 1.397 Slice #469 H1 (0.12.62): an unavailable application says who withdrew it (Workflow #469; the owner's decision of 11-15 on board #469 that the most mixed codes carry a reason word; the design `rd-1115/status-codes-a-design.md`, Part 2's three facts, place 3 of A-1 and the slice row H1; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-469-word-slices.md`, read on main `a5827228` (after #1738 and #1739))
+
+The coordinator gave this slice 1.397; 1.395, 1.396, 1.398 and 1.399 belong to the slices
+dispatched with it (K1, K2, H2, H3). It ships in 0.12.62.
+
+**What it is.** `instance_unavailable`, the evaluator's placement reason of every decision of an
+instance projected `available = false`, carries `availability_source` (V0's vocabulary, §1.386),
+with `device_link_state` and `device_hold` where the record names them
+([instance-fact-store.md](instance-fact-store.md), "Who withdrew it"). The word is read from the
+active `session.instance.available` record the projection resolves for the instance
+(`project_policy_instances`, `crates/runtime-host/src/host/policy_dispatch.rs`), by its own members
+`source_detector` and `source_snapshot_id` (`HostShared::availability_withdrawal`,
+`crates/runtime-host/src/host/facts.rs`, beside the publishers whose detectors and prefixes it
+reads), and from the instance's configured seed, which the projection's inputs already hold
+(`PolicyInputSnapshot::instance_seeds`; no new read, no new record): a record holding `false`
+over a configured seed `false` `configured`, whichever publisher wrote it; otherwise the
+configured seed `configured`; the backend self-check gate's `backend_selfcheck:` `self_check`,
+which a failed self-check, one not recorded yet or invalidated (`unchecked`, also after a failed
+preparation step) and a resource fence share (the fence's split is the design's later H1b);
+`device_link:<state>` `device_link` with the state; `device_state:<hold>` `device_state` with
+the hold; another publisher's `false` `other_publisher`; no record holding `false`
+`facts_missing`. A state or hold token the vocabulary does not know leaves its detail out.
+
+**Fix round 2 (the review of the pull request).** The first build read the record alone, so an
+instance the backend self-check gates and the configuration marks unavailable read `self_check`:
+its start publishes no configured seed (`seed_policy_instance_facts` skips `available` for a
+device self-checked instance) and the gate withdraws it under `backend_selfcheck:unchecked`, which
+a passing self-check never replaces while the seed is `false`. A reader could not tell "the
+configuration says so" from "the self-check did not pass", which ask for different actions. The
+projection now passes the instance's configured seed beside the record; with the seed `false` the
+word is `configured`. Every other classification is as before, and every deciding step still runs
+before the word is set.
+
+**Where it is set, and the design's one wrong turn.** The design placed the attach after the
+evaluation, beside `attach_missing_instance_fact_reasons`, and expected the word in the schedule
+explanation. The explanation is built inside `PolicyHost::evaluate`
+(`crates/runtime-host/src/policy_host.rs`, "before the host adds its notes to the decisions"), so a
+value set after the evaluation never reaches `ac_schedule`; for the same reason
+`policy_instance_fact_missing` never stood behind `instance_unavailable` there. So the host
+computes the words in its projection, hands them to the evaluation in `PolicyEvaluationContext`
+(`availability_withdrawals`) and sets them (`set_availability_words`) after every step that judges
+the evaluation (signals, eligibility staging, arbitration) and right before the explanation: the
+explanation's rows, the held records built from them, the cycle's decisions and the fact refresh
+recorder's reading see the word; nothing before it does. The policy crate does not change.
+
+**A restart.** The reason row is built from the active record, which the ledger keeps whole
+(`fact.published` carries the record with its detector and snapshot id) and the fact store
+reloads at a start, and from the configured seed, which the configuration gives again; nothing of
+it is in memory. The same record gives the same word after a restart (test 7, on the configured
+seed, which the start does not publish again; test 9, on the gate's withdrawal of a gated instance
+configured unavailable, which its start does not publish again). A gated instance's availability
+is decided again by its start (the withdrawal before its preparation, then its self-check), and
+the word follows the record that leaves.
+
+**What does not change.** The reason's code, its detail text and its other values (none); which
+decisions are blocked, their eligibility, wake and order; the explanation's `since_unix_ms`
+(`same_clock` compares the code) and a held record's start, id and gate code; the clock-slot
+records, read before the words are set; the planning lane's `instance_unavailable`, which carries
+none. A held record's `caused_by` is the row's why whole, so it carries the word. A not-run reason
+has no failure identity or streak.
+
+**Texts.** `instance_unavailable`'s catalog text (`policy.json`) says when each word is set; the
+index is regenerated. [instance-fact-store.md](instance-fact-store.md) gains "Who withdrew it".
+
+**Tests.** `crates/runtime-host/src/tests/gate_469_h1.rs` (gate map `host.toml`, "#469 H1"), the
+fixture instance (no self-check gate) with one task due at 10:00 UTC, the production evaluation
+path on a manual clock: one test per word (1-6), each asserting the task's one
+`instance_unavailable` reason on the cycle's decision has exactly the word's values and the
+evaluator's detail text, and the explanation's candidate row and not-running row carry the same
+why: `configured` (the configuration's seed `false`), `self_check`, `device_link` with
+`device_link_state` `absent` and `device_state` with `device_hold` `thermal` (each through its
+publisher's own function, by three test hooks of `RuntimeHost`), `other_publisher` and
+`facts_missing` (a record of another detector holding `false`, and one holding a string; the
+cycle's decision still carries `policy_instance_fact_missing`); after a restart the same seed
+record and the same word (7); a word that changes from `other_publisher` to `facts_missing` keeps
+the row's `since_unix_ms`, and the one held record written past the 30-minute default has the
+first unavailable evaluation's start, its signal id and `gate_code` `instance_unavailable`, and
+its one `caused_by` link is `instance_unavailable` with `facts_missing` (8); fix round 2: the same
+instance on a bound device endpoint (so the self-check gates it) configured unavailable, whose
+active record is the gate's `backend_selfcheck:unchecked`, reads `configured` at the evaluation
+and, from the same record, after a restart (9). No existing test changes, no golden changes, no
+test leaves the gate map.
+
+**Counts.** One gate file of 9 tests and one gate map row; one member of `PolicyEvaluationContext`;
+one more member of the projection's tuple. No code, key, word, configuration key, record shape or
+interface revision is added.
+
+**At deploy.** Nothing to do: the word is computed at each evaluation from the records an
+installation already holds.
+
+### 1.398 Slice #469 H2 (0.12.62): a paused pair says why it was paused (Workflow #469; the owner's choice of option A on board #469 on 11-15; the design `rd-1115/status-codes-a-design.md`, Part 2: its three facts, place 4 of A-1 and the row H2 of its slice table, accepted by the coordinator; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-469-word-slices.md`, read on main `b6fe6ec2` (after #1738, V0, §1.386))
+
+The coordinator gave this slice 1.398: main `b6fe6ec2` holds the sections up to §1.386, and the
+numbers between belong to the slices dispatched with this one. The slice ships in 0.12.62
+(release 0.12.61 is cut without it).
+
+**What it is.** V0's vocabulary `pause_cause` and the existing key `failure_code`, set where the
+program already knows them, as values of the outcome only
+([policy-suspension.md](policy-suspension.md), "Why a pair is paused"):
+
+| Value | On | From |
+|---|---|---|
+| `pause_cause` | `policy_task_paused` | the execution record the pair's settlement wrote (`PolicyFailureRecord`: its outcome's code for the three severe sources, `original_class`, `sensitive`, `effective_class`, `disposition`), in the settlement's own order (`crates/runtime-host/src/policy_control.rs`, `pause_cause`) |
+| `failure_code` | `policy_task_paused`, `policy_retry_backoff_active` | the pair's failure streak's code, the record's `scheduled_failure_code_str` (a registered code; a relayed spelling the catalog does not register is left out) |
+| `pause_cause` | the `suspended` rows of `actingd suspended` | the same function on the same record |
+
+All seven words the design offers are set; none needed a new observation. `failure_code` was
+already a key of the table; the two codes carried it optional since V0. Nothing reads either
+value to decide: the denial is raised where, when and with the class it was, and its detail text
+(`Runtime control availability: …`) is unchanged.
+
+**Where it is kept.** `FailureStreak` gains `pause_cause`, memory only, like `paused_on`. The
+commit of an execution (the live settlement and every replay pass there) sets it from the record.
+A start that loads the decision memory from its value records (`TaggedStart::Load`) rebuilds the
+streak from the L7 record, which keeps neither `sensitive` nor the effective class, so the
+re-alignment (`refresh_dispatch_tail`, the start's included) gives each paused streak without a
+cause the cause of its dispatch's execution record, which the dispatch journal holds (it keeps a
+pair's latest admitted dispatches, so a paused pair's own), when that record names the streak's
+failure (code, identity, class). No persisted member, record shape or interface revision is added;
+the L7 record is byte for byte what it was. `actingd suspended` v2 gains the member `pause_cause` on
+its `suspended` rows (`null` for none); `actingctl diagnose` and `ac_diagnose` relay the rows as
+they are.
+
+**Deciding by word, not by name (A-3).** The three severe sources of their own word are told apart
+by the record's code (`policy_runtime_budget_exceeded`, `policy_settlement_interrupted`,
+`contained_task_linear_unrecorded_screen`), as the design names them. Choosing a word nothing
+reads is building a value, not a decision point; no code chooses what happens next from the word.
+
+**Tests.** A new gate file, `crates/runtime-host/src/tests/gate_469_h2.rs`, host gate map
+`contracts/test-gates/host.toml`: one test per word, each settling a run through
+`record_policy_dispatch_outcome` on a fresh start of the host, and one with two causes at once (a
+sensitive task's run over its runtime budget, whose record is both sensitive and severe:
+`runtime_budget_exceeded`, the settlement's order): the record keeps the input's failure identity
+byte for byte and the expected counts, the pair's streak in its latest L7 record serializes byte
+for byte as the one built from the record's own members; the pair's `policy_task_paused` at its
+next due evaluation carries the word and the record's code, its detail naming neither (both
+asserted), live, on the root's next start and on the start after it; the closed root's
+`actingd suspended` row carries the word. The start checked last loads: a root's first start writes
+no marker and its second seeds, replaying the history (LN-4), so only a later start loads the streak
+from its value record, as every restart of an installation does, and gives the word back from the
+dispatch journal. Each test asserts the kind of both starts from their `StartReport`
+(`tagged_state`): `load` for the last; for the one before it `seed` after one run (the word a
+replay gives) and `load` after two. One test for the backoff's `failure_code`, its detail not
+naming the code, live, on the root's second start (`seed`) and on its third (`load`). No existing
+test is changed.
+
+**What is not changed.** When a pair is paused, backed off or lifted; the lift and its restart
+rule; the streak's comparison (code, identity, class); the failure identity; every record and its
+fields; every class and category; the detail texts; the catalog's texts (V0 wrote them); the codes
+that read `policy_task_paused` by its code (the clock-slot class, the fact refresh's denial, the
+remedy's persistent gates, the held clock).
+
+**At deploy.** Nothing to do. A pair paused before the deploy shows its word after the first start
+of the new build (its execution record is in the journal); a pair whose execution record the
+journal does not hold shows the pause without the word.
+
+### 1.399 Slice #469 H3 (0.12.62): an emulator control failure says where it failed (Workflow #469; the owner's decision of 11-15 on board #469 that the most mixed codes carry a reason word; the design `rd-1115/status-codes-a-design.md`, Part 2's three facts, place 8 of A-1 and the slice row H3; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-469-word-slices.md`, read on main `a5827228` (after #1738 and #1739))
+
+The coordinator gave this slice 1.399; 1.395 to 1.398 belong to the slices dispatched with it (K1,
+K2, H1, H2). It ships in 0.12.62.
+
+**What it is.** `emulator_control_failed`, every provider control failure that is not a binding
+refusal, an unsupported provider or an expired readiness wait, carries the two values V0 declared
+for it (§1.386): `stage`, the location the failure arose at, and `device_category`, the device
+diagnostic's category (vocabulary `device_category`). Both are what the function that builds the
+failure (`emulator_control_error`, `crates/runtime-host/src/host/emulator_instance.rs`) already
+decided and wrote into the record's primary detail: `stage` is the device diagnostic's stage, or
+without a diagnostic the default `mumu_manager_control`; `device_category` is present when the
+failure carries a device diagnostic and is its category. Without a diagnostic no
+`device_category` is set: the detail's category `child_exit` there is a default, and no child
+process exited. No new vocabulary, no new code; the value stays optional
+([emulator-control.md](emulator-control.md), "Event shape", item 4).
+
+**Where a reader finds them.** The receipt carries both values, and so does a settled timeout's
+`caused_by` link (`emulator_control_timeout_settled` relays the failure's outcome whole). The
+ledger's `runtime.failed` record gains only `device_category`: the host's lifecycle record writes
+its own stage into the `stage` of every failure it records (`host/lifecycle.rs`, unchanged; the
+ledger's failure signatures read it), so the record's `stage` stays
+`runtime_lifecycle_operation_cleanup`. A reader who needs the device stage reads the receipt. The
+cause a failed restart wraps carries neither value: it is a newly built outcome of the failing
+phase's code and operation, and the stage that phase failed at stays in the restart record's
+primary detail.
+
+**What does not change.** The code chosen for each stage, its class, the receipt state, the effect,
+the wire code `backend_operation_failed`, the other values, the primary detail and the native
+detail; the three other codes this function builds carry neither value; the stop-result table;
+a restart's wrapping, which compares the code (the design keeps the values optional until a
+failed restart's record is shown to keep them); the number of records; the burst count, which
+reads class and severity; the lifecycle record's stage. An operator, autostart or rung control is
+no run: no failure identity or streak reads this outcome.
+
+**Texts.** `emulator_control_failed`'s catalog text (`runtime-host.json`) says when each is set and
+where a reader finds them; [emulator-control.md](emulator-control.md) item 4 says it.
+
+**Tests.** `crates/runtime-host/src/tests/gate_469_h3.rs` (gate map `host.toml`, "#469 H3"), one
+discovery-bound instance on the scripted emulator controller (HOST-I1), an operator `start` and
+then a `stop` the controller fails, one test per stage family the controller gives: the vendor
+command exited (`mumu_manager_control_exit`, `child_exit`, exit code 1), the tool could not run
+(`mumu_manager_run`, `backend_launch`, no exit code), the vendor's error envelope
+(`mumu_manager_control_errcode`, `response`, exit code 0): the receipt is
+`emulator_control_failed` with the failure's stage and category as `stage` and `device_category`;
+the control's one `runtime.failed` record is `emulator_control_failed` with the category as
+`device_category` and `runtime_lifecycle_operation_cleanup` as `stage`, keeps `elapsed_ms`,
+`exit_code` and `device_process_present`, and its primary detail is the category, the stage,
+`mumu_manager` and `control_instance` (1-3).
+`crates/runtime-host/src/host/emulator_instance/gate_469_h3.rs` (the same gate row), on the
+building function and a hand-made failure, the family the scripted controller cannot reach (it
+gives every failure a diagnostic): no diagnostic gives `stage` `mumu_manager_control` and no
+`device_category`, the detail `mumu_manager_control` and `child_exit` (4); the expired readiness
+wait, the binding refusal and the unsupported provider carry neither value, their detail
+unchanged (5). No existing test changes, no golden changes, no test leaves the gate map.
+
+**Counts.** Two gate files (3 and 2 tests) and one gate map row. No code, key, word, configuration
+key, record shape or interface revision is added.
+
+**At deploy.** Nothing to do.
+
+### 1.400 Slice #469 D4a (0.12.62): a locked device and an application update stop on purpose; a spent call budget is a warning (Workflow #469; the owner's approval on board #469 on 11-15 of the four corrections that change what the program does, these three of them; the design `rd-1115/status-codes-a-design.md`, Part 2, A-2 item 1, the rows of `device_locked`, `contained_task_application_update_required` and `call_budget_exhausted`, and the slice row D4; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-469-d4-owner-four.md`, read on main `a5827228`)
+
+The coordinator gave this slice 1.400: main `a5827228` holds the sections up to §1.387, and the
+numbers between them and this one belong to slices dispatched with it (1.401 is D4b, the fourth
+correction). The slice ships in 0.12.62.
+
+**What it is.** Three corrections of a registered class, each in the registry macro and its
+fragment (G1). Each changes what the program does where a reader already reads the class; no
+decision point is added and none names a code.
+
+| Code (owner) | Was | Is | What reads the change |
+|---|---|---|---|
+| `device_locked` (device) | warning, `budget_or_permission` | warning, `planned_stop` | the errors view's run-recovery grouping (§1.337): its records are no failure of their run, as those of `device_thermal_hold`, `device_battery_low` and `device_in_use` are not |
+| `contained_task_application_update_required` (runtime-host) | warning, `none` | warning, `planned_stop` | the same: the package declares the update page and the run stops on purpose |
+| `call_budget_exhausted` (actingctl, registered in `crates/lab-ops/src/codes.rs`) | error, `none` | warning, `none` | the `category` of each envelope that carries it (below) |
+
+**What stays as it was.** Under the defaults no trigger item names `budget_or_permission`, `none`
+or `planned_stop` (they name `pack_logic_mismatch`, `stability_warning` and `environment_fault`,
+and `busy.screen.classes` names `pack_logic_mismatch`), so no trigger, burst or screen hold
+changes. A rung whose entry `device_locked` holds is skipped `device_not_ready` by its code
+(`recovery_entry_skip`), as before. A rung run that ends with
+`contained_task_application_update_required` ends the ladder by its code, a scheduled run that
+ends with it is a condition termination by its code (`scheduling.rerun.condition_codes`), and it
+never accumulates (by prefix). The policy's streak and pause read no class. No detail text, failure
+identity or streak changes.
+
+**Where `call_budget_exhausted` is written.** Searched: the code's variant and its spelling in
+every file of `apps/`, `crates/`, `tools/` and `tests/`, tests included, and every program that
+builds an answer from those writers. It is written only in `crates/lab-ops`: the overview
+(`budget_skipped`, `not_running_skipped`, `run_block`: a warning beside the overview), the
+diagnosis (`Unfinished::cut` and the `not_run` read: a warning beside the diagnosis), the run list
+(`RunsAnswer::warnings`: the warning of a page the read budget ended early) and the problem report
+(`RuntimeSource::step`: the cause of `report_part_missing` with `budget_spent`). Those reads are
+served by actingctl's command line and its MCP server (`overview`, `diagnose`, `runs`; `ac_overview`,
+`ac_diagnose`, `ac_runs`), by actinglab's command line (`status`, `diagnose`, `runs`, `report
+export`) and by actinglab-mcp, which serves the same operations and neither registers nor writes the
+code itself. In none is it the top code of an answer, a line or an exit status: each answer's top is
+its success code (`runtime_overview_reported`, `runtime_diagnosis_reported`, `run_list_reported`,
+`report_exported`), and no failure's outcome is built from it. So no exit status and no MCP
+`isError` changes; the `category` of the warning's envelope does (`warning`), in the command
+line's result line, both MCP servers' answers and a report's warnings. The code is registered once
+(that macro and `actingctl.json`).
+
+**Texts.** The three fragments' descriptions say the new class or category; the contracts that
+state the class: [application-lifecycle.md](application-lifecycle.md) ("The handset start
+gate"), [emulator-control.md](emulator-control.md) ("The game's update dialog"),
+[package-reference.md](package-reference.md) (`interrupts.json` `result`) and
+[global-ledger-query.md](global-ledger-query.md) (`run_recovery`: twenty codes of the class, from
+eighteen). The index is regenerated: warning 156 codes (155 before), error 3414 (3415).
+
+**Tests.** `crates/ledger/src/global/tests/gate_429_rg_stop.rs`, `d4a_t1_…` (`device_locked`) and
+`d4a_t2_…` (`contained_task_application_update_required`), gate map `ledger.toml` "#469 D4a": the
+embedded catalog gives the code `warning` and `planned_stop`; a run whose `task.failed` terminal and
+`runtime.failed` carry it has no group, both records stay warnings and rows of the page in the
+Errors view; a warning of the class `none` appended to the run is listed alone (missing relation,
+unknown). `crates/runtime-host/src/host/recovery_ladder/tests.rs`, `d4a_a_locked_device_…`: the
+four holds are `planned_stop` and each is skipped `device_not_ready`; no default trigger item
+matches `device_locked` at any of the seven stages; three of its warnings within the window
+register no burst.
+`crates/runtime-host/src/tests/gate_373_nav6.rs`, `d4a_the_update_dialog_…` (UPD-1 A4's run): the
+rung fails with the code, the ladder ends `exhausted` at Warning with
+`recovery_ladder_interrupted`, no emulator restart, one ladder only (gate map `host.toml`).
+`crates/lab-ops/src/overview.rs`, `d4a_a_spent_call_budget_…` (gate map `apps.toml`): the
+overview's two writers give warnings beside its success line, exit 0, no developer line, envelope
+`warning`. Adapted: `upd1_a9_…` of `gate_373_nav6.rs` asserted the update code's class `none`; it
+asserts `planned_stop`. No golden changes, no test leaves the gate map.
+
+**What is not changed.** Every emitter, every detail text, every other code's class and category,
+every decision that names a code, the configuration, the record shapes and every interface
+revision.
+
+**At deploy.** Nothing to do. The grouping reads the class of a record's code from the catalog
+the build embeds when a page is read, so a run recorded before 0.12.62 that ended with
+`device_locked` or the update code shows no group in the errors view either.
+
+### 1.401 Slice #469 D4b (0.12.63): a vision provider failure during a guard is reported as one (Workflow #469; the owner's approval on board #469 on 11-15 of the four corrections that change what the program does, this one of them; the design `rd-1115/status-codes-a-design.md`, Part 2, A-2 item 1, the row of `contained_task_guard_evaluation_failed` and `contained_task_recognition_failed`, and the slice row D4; the coordinator's rulings in the work order and in its dispatch, not the owner's words; coordinator work order `rd-1115/brief-469-d4-owner-four.md`, read on main `8b85593a` (the #469 train: K2, §1.396, and D4a, §1.400, merged))
+
+The coordinator gave this slice 1.401 (§1.400 names it). It ships in 0.12.63: release 0.12.62 is
+cut from main without it (the coordinator's dispatch, in place of the work order's 0.12.62).
+
+**What it is.** A vision provider that fails, or answers invalidly, while the kernel evaluates a
+step's guard target, an operation's `when` target or an expected identity's target now ends the
+run with `contained_task_vision_provider_failed` (error, `environment_fault`), as one met at a
+page evaluation has since Workflow #387 D1c-G, with the detail that place writes and no values
+(the page path gives that code none either). A real evaluation error there (the declaration cannot
+be evaluated; the provider answered) keeps its code (error, `pack_logic_mismatch`), its detail
+and its control flow. The classes of the three codes do not change.
+
+| Place (`crates/execution-kernel/src/contained_task.rs` unless named) | A provider failure: was | is | A real evaluation error (as before) | Detail (as before, either way) |
+|---|---|---|---|---|
+| a step's guard (`judged_guard_outcome`) | `contained_task_guard_evaluation_failed` | `contained_task_vision_provider_failed` | `contained_task_guard_evaluation_failed` | the evaluation's error, then ` cause=<code>` for an evaluation that refused to conclude |
+| an operation's `when` (`when_holds`, `contained_task/candidates.rs`) | `contained_task_recognition_failed` | `contained_task_vision_provider_failed` | `contained_task_recognition_failed` | `operation=<id> when=<target> <error>`, then ` cause=<code>` as above |
+| an expected identity's targets, text path and template path (`read_expected_identity`) | `contained_task_recognition_failed` | `contained_task_vision_provider_failed` | `contained_task_recognition_failed` | the evaluation's error |
+
+**Told apart as a page evaluation tells them apart.** One function, `failed_by_provider`, reads
+the recognition pack's code of the evaluation's error: `recognition_pack_provider_failed` or
+`recognition_pack_provider_response_invalid` is a failure of the provider, any other a real
+evaluation error. It is D1c-G's reading moved out of `page_failed_by_provider`, which now reads a
+failed page target's cause through it; `target_evaluation_failure_code` gives the three places
+their code from it, and the host's record of a failed guard or `when` evaluation
+(`diagnostic_guard`, `crates/runtime-host/src/host/task_diagnostic.rs`) its primary code, as
+`page_batch_failure_code` does for a page batch. No second reading is added and no decision point
+names a code.
+
+**Where the code that ends a run changes, path by path.** Only where an evaluation at one of the
+three places fails because the provider failed:
+
+1. A step's guard, at every place that judges it: a page-graph step's first attempt and a retry's,
+   an input recheck (`fresh_frame` and the stable or still frames' guards), a `linear_steps` step
+   and its recheck, a select step's confirmation, a scan's guard. The run ends with the provider
+   code where it ended with `contained_task_guard_evaluation_failed`: none of these callers tells
+   the two apart (their only readings by code are `contained_task_guard_refused` and the sampling
+   timeouts, which neither is), so the step, its retry decision and its failure decision go as
+   before. Where the failure decision asks for recovery (a retry attempt of an operation with a
+   recovery task), the run still ends with `contained_task_requires_scheduler`, whose `failure_code`
+   now names the provider code. A select step's confirmation record (`guard_failed`) carries the
+   provider code as its outcome.
+2. An operation's `when`: the run ends with the provider code before the step starts, where it
+   ended with `contained_task_recognition_failed`.
+3. An expected identity, after the step's input: the run ends with the provider code where it
+   ended with `contained_task_recognition_failed`.
+4. The host's record of a failed guard or `when` evaluation whose PP-OCR reports cannot be archived
+   or recorded: the run's primary failure is the provider code where it was
+   `contained_task_guard_evaluation_failed` (for a `when` too, as before for every other error).
+
+What the host, the ladder and the policy do with a run that ends so is what they already do with a
+page evaluation's provider failure; each is a reading by class or by code that already exists. The
+whole list (fix round 2, after the independent review), each with its place in the code
+(`crates/runtime-host/src/host/` unless named):
+
+- **No ladder at once, so no cool-down window either.** At a scheduled run's failed lease end
+  (`ladder_at_lease_end`, `recovery_ladder.rs`) no default trigger item matches the code at the
+  task stage (`pack_logic` names `pack_logic_mismatch`): no ladder is admitted, and the run's key is
+  released, not handed on. The cool-down window opens only on the way to a ladder: when an item
+  matches under `cooldown_opens_on` `triggered` (`admit_or_suppress_ladder`), or when an admitted
+  ladder gets the key under `admitted`, the default (`climb_recovery_ladder`; both read
+  `opens_cooldown_window`). So none opens, and the instance's next trigger is not suppressed by one.
+- **The burst.** Direction ① counts the run's terminal record as each record is committed
+  (`count_stability_record`, `StabilityCounter::count`, `recovery_ladder.rs`): the default
+  `stability_burst` matches `environment_fault` at `stability_warnings`, and the third such failure
+  of one instance within 600 000 ms registers a burst, whose ladder the lease sweep admits
+  (`admit_stability_bursts`) and which climbs from its return-home rung.
+- **A retry round that asks for recovery.** A guard that fails so on a retry attempt of an
+  operation with a recovery task (`refuse_before_input`,
+  `crates/execution-kernel/src/contained_task/observation_window.rs`) still ends the run with
+  `contained_task_requires_scheduler`, and its `failure_code` (`requires_scheduler`,
+  `crates/execution-kernel/src/contained_task.rs`) is the provider code. A guard of a select step's
+  confirmation that fails so writes a confirmation record (`TaskSelectionConfirmation::GuardFailed`,
+  `confirm` in `contained_task/selection.rs` and in `contained_task/scan/select.rs`) whose outcome
+  names the provider code.
+- **The busy-screen probe.** A return-home rung's run that ends so is not held on it
+  (`climb_screen_gate`, `recovery_ladder.rs`: `busy.screen.classes`).
+- **The capture evidence.** A guard's provider failure no longer pins its last frame as
+  `GuardRejection` (the host's list of guard codes in `execute_contained_task_with_lease`,
+  `contained_task.rs`), and keeps its `Terminal` and `Failure` pins.
+- **The task geometry recheck** after a run that ended with `contained_task_recognition_failed`
+  (`recheck_task_geometry`, `contained_task.rs`) no longer runs after a `when` or identity provider
+  failure.
+- **The return-home entry layer and the prerequisite layer.** A `when` or an identity of a home
+  entry recovery package (`run_preflighted_contained_task`, `contained_task.rs`) or of a
+  prerequisite package (`gate_layer` and `close_open`, `prerequisite.rs`) that fails so takes the
+  branch of a failure that is not a recognition failure, as a page evaluation's provider failure
+  did already (a guard's failure took it before too). The layer's facts (`EntryRecoveryFailed`,
+  `EntryTargetDisposition { FailClosed }`, relaying the code) are written by the entry-fact writer
+  (`record_entry_fact`, `contained_task.rs`), which first checks that the run is still active
+  (`ensure_active`): a write at the very moment of a deadline, a cancellation or a pause is refused
+  with the deadline's, the cancellation's or the pause's own code. The layer's error then carries
+  its code only, without the kernel's detail text
+  (`fail_contained_task_entry`; `layer_task_failure`, `prerequisite.rs`), so the main package's
+  terminal record has no native detail for it and its failure identity's key has no `operation=`
+  fragment (`failure_detail_fingerprint`, `crates/runtime-host/src/failure_identity.rs`), as for a
+  page evaluation's provider failure today. Before, the recognition branch recorded the failure for
+  the geometry check (`record_geometry_triggered_recovery_failure`,
+  `record_geometry_triggered_prerequisite_failure`) and carried the kernel's error, its detail
+  included.
+- **The policy's streak.** The settlement (`failure_settlement.rs`) records the failure as it
+  records a page evaluation's provider failure, under the provider code: the code does not
+  accumulate (`failure_accumulates`, `failure_identity.rs`), so its identity's frame mark is unique
+  to its dispatch (`IdentityFrame::unique`). It is compared in the same streak as a page
+  evaluation's provider failure, the provider code's (`same_error`, `policy_control.rs`: code,
+  failure identity and class), not in a class-4 code's; like every failure that does not
+  accumulate, its count stays 1 ([policy-suspension.md](policy-suspension.md), "Every other failure
+  is rerun only").
+- **What stops a package while the provider stays down.** The burst (the default: three such
+  failures of one instance within ten minutes start the ladder from its return-home rung), and the
+  package's own `on_failure` (`policy_control.rs`): its `retry_limit` and `escalation_threshold`
+  apply as to every failure that does not accumulate, whose count stays 1, so they pause the task
+  only at `retry_limit` 0 (then `action` decides) or `escalation_threshold` 1; otherwise each
+  failure is rerun after its backoff while the immediate-rerun round lasts (R22,
+  [policy-suspension.md](policy-suspension.md), "Immediate rerun"). Before, the first such failure
+  started the ladder at once (`pack_logic`).
+
+**What stays as it was.** Every run whose evaluation at the three places does not fail; every
+real evaluation error there (code, detail byte for byte, values, failure identity and streak);
+every page evaluation (the same reading, moved); every other evaluation of a select, a scan or a
+field list, which keeps `contained_task_recognition_failed` whatever failed; the classes and
+categories of every code; the configuration; every record shape and interface revision. Nothing is
+kept for an earlier build.
+
+**Texts.** The catalog descriptions of `contained_task_vision_provider_failed`
+(`execution-kernel.json`), `contained_task_guard_evaluation_failed` and
+`contained_task_recognition_failed` (`contract.json`, with its common causes); fix round 2: the
+later sentences of `contained_task_guard_evaluation_failed`'s description also say that a real
+evaluation error of an operation's `when` ends with that code, not
+`contained_task_recognition_failed`, when the host cannot archive the evaluation's PP-OCR reports
+(`diagnostic_guard`, `task_diagnostic.rs`; existing behaviour; its first sentence, which the index
+shows, is unchanged and the index is current). The contracts
+[resource-declarations.md](resource-declarations.md) ("Candidates": the `when`, and the guard that
+could not be evaluated, twice), [ocr-fields.md](ocr-fields.md) (the text guard),
+[linear-steps.md](linear-steps.md) ("Steps", item 2, and the provider row of "Failure codes"),
+[selection-graph.md](selection-graph.md) ("Expected identity") and
+[emulator-control.md](emulator-control.md) ("Triggers": no ladder at once, the burst; fix round 2:
+the whole list above, each with its place). The index is regenerated.
+
+**Tests.** `crates/execution-kernel/src/contained_task/gate_469_d4b.rs` (gate map `exec.toml`
+"#469 D4b"), on a page graph from a colour home page to a colour terminal page whose one located OCR
+target a scripted provider reads, on the scripted clock: `d4b_a_provider_failure_…`: a provider
+that fails (unavailable, timeout, internal) or answers invalidly ends the guard's run, the `when`'s
+run (both before any input) and the identity's reading with the provider code, the place's detail
+and no values; `d4b_a_real_evaluation_error_…`: a read that cannot conclude because the provider
+kept 64 of 65 boxes keeps `contained_task_guard_evaluation_failed` at the guard and
+`contained_task_recognition_failed` at the `when` and the identity, their detail byte for byte and
+no values; `d4b_a_provider_that_reads_…`: the guard passes and the `when` holds, each run taps once
+and ends `Success` on the terminal page after one step, and the identity reads its business ID; fix
+round 2: each run's records are pinned byte for byte, every trace in order (the step traces with
+their index, operation and page, the effect intent with its guard outcome, each frame's recognised
+page, the final outcome) and every guard evaluation with its kind, target and whether it passed.
+`crates/runtime-host/src/host/recovery_ladder/tests.rs`, `d4b_a_vision_provider_failure_…` (gate
+map `host.toml`): under the defaults the provider code is `environment_fault`, matches no item at
+the task stage and `stability_burst` by class at `stability_warnings`, and three such failures on
+one instance within the window register one burst; the two class-4 codes match `pack_logic` at the
+task stage and register none. Fix round 2, the run level:
+`crates/runtime-host/src/tests/gate_469_d4b.rs` (gate map `host.toml` "#469 D4b"), modelled on the
+page row of `gate_387_d1cg.rs`: a scheduled run on the ladder fixture's physical instance, its
+located OCR target read at `claim`'s guard or at `open`'s `when`.
+`d4b_a_provider_failure_at_a_guard_or_a_when_…`: a provider that fails ends the run with the
+provider code; no ladder claim holds or waits for the instance, the run's lease hands its key to no
+ladder and no ladder starts at the task stage; the run's `task.failed` is what direction ① counts
+(its instance link, warning severity or worse, a code of `environment_fault`). `d4b_a_real_evaluation_error_at_a_guard_or_a_when_…`: the read that
+cannot conclude ends the run with `contained_task_guard_evaluation_failed` (guard) or
+`contained_task_recognition_failed` (`when`), its lease end hands the key to the ladder, and one
+ladder starts at the task stage for the run with that code, by `pack_logic`, matched by the class.
+Without a run-level test: an expected identity (a select step's `choice_of` read back after its
+tap), the return-home entry layer and the prerequisite layer, the retry round that asks for
+recovery, and a select step's or a scan's confirmation guard (the kernel test reads the identity;
+the others rest on the places named above). Test 3 of the kernel file is strengthened, not
+adapted: what it pinned stays pinned. No golden changes, no test leaves the gate map.
+
+**At deploy.** Nothing to do: a run recorded before 0.12.63 keeps the code it ended with.
+
+### 1.410 Slice #463 S3-3 (0.12.63): a run's read names the outcome key it finished on (Workflow #463; the owner's approval of 11-15 of the three-stage blueprint of package making as a whole, which lifted its pause, recorded on board #463; the design `rd-1115/pack-stage3-design.md`, §4.2 "S3-3", with §2.4 "How the result is read back" and the row W9 of §1.1; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s33-outcome-key.md`, read on main `44cbab53`)
+
+The coordinator gave this slice 1.410: main `44cbab53` holds the sections up to §1.400. The slice
+ships in 0.12.63.
+
+**Why.** A recorded package may end in more than one way: on its target page, or on an ending page
+added later from a real frame ([linear-steps.md](linear-steps.md), "Endings", §1.380). Each end is
+named by the `outcome_key` of the package's `scheduling_outcome` mapping, and the host already
+writes that key on the run's terminal fact. The run's read (`run show`, MCP `ac_get_run`,
+`actingcommand.run-status.v1`) dropped it: a reader saw "completed on page X" and mapped the page to
+the key by hand (the design's H12). A run that ended normally is not the business having succeeded;
+the key says which end it was, and the trial the design plans for stage three (S3-11) is to
+compare it with the end expected.
+
+**What the terminal fact holds.** `TerminalCommitted.scheduling_disposition` is a
+`SchedulingDisposition` (`crates/actingcommand-contract/src/event/payload.rs`) of two members:
+`outcome_key`, the key of the one mapping whose effect condition and terminal page the run's end
+matched (the host's `select_scheduling_disposition`, called when the terminal is checked), and
+`effect`, the designated-effect evidence that chose the condition (`kind`
+`no_designated_effect`, `designated_effect_completed` with its step and operation, or
+`designated_effects` with one tally per member of a set). The fact's own validation lets only a
+success without an outcome carry one, and only with a final page. This slice reads the key alone;
+the effect evidence is not projected.
+
+**What it is.** One optional member of `ContainedRunTerminal`
+(`crates/actingcommand-contract/src/run_summary.rs`), `outcome_key` (a text), right after
+`outcome`. `RunFold` takes it from the `TerminalCommitted` fact it takes the terminal from: no
+record is read for it and no query is added. It knows no key, compares none and never derives one
+from the final page.
+
+| The run | `outcome_key` |
+|---|---|
+| completed on the package's target page | the target mapping's key |
+| completed on an ending page | that ending's key |
+| completed on another terminal page a mapping names (a select's `on_empty` page, a terminal page of a page graph) | that mapping's key |
+| completed, its package declaring no `scheduling_outcome` | absent |
+| failed or cancelled | absent |
+| a keying the host refused (`contained_task_outcome_*`: the run is committed failed) | absent |
+
+Absent is no member (`skip_serializing_if`), never an empty text: a terminal without a disposition
+serializes byte for byte as before.
+
+**Readers** (as in §1.387, every one on the same contract crate, none kept for an earlier shape):
+runtime-client's `ContainedRunStatus.terminal`, brief and full, carries the fold's terminal as it
+is; lab-ops's `run_show` answers that status as it is (`answer` is the status's JSON), so actinglab
+`run show`, MCP `ac_get_run` (actingctl's `runs::get_run` calls `run_show::read` and
+`run_show::answer`) and the problem report's `run` part carry the member without a line of their
+own, as does the overview's `run` (a brief status); a `QueryRuns` row's status carries it. The
+diagnosis's `runs` are brief statuses too, but it lists failed and open runs only (its
+`FAILED_OR_OPEN`), none of which has a disposition, and its `runs_grouped` keeps its groups. The
+run list's row (`run_list::row`: `actingctl runs`, MCP `ac_runs`, actinglab `run list`) builds its
+own members and does not take it.
+
+**Interfaces.** No revision moves, as for `failure_values` (§1.387, the precedent this slice
+follows): a run's status is the client's projection of `QueryEvents` pages, whose shape is
+unchanged, and `QueryRuns` is carried by no operation yet; `ledger` does not move, no record
+changes.
+
+**Faces.** `ac_get_run` and actinglab `run show`: `terminal {outcome, outcome_key?, failure_code?,
+failure_values?, final_page?, executed_steps?, cancellation_reason?, sequence, event_id}`; the
+overview's `run`: the same terminal of the brief status. The contract texts:
+[runtime-state-observation.md](runtime-state-observation.md) ("Contained-run queries"),
+[global-ledger-query.md](global-ledger-query.md) (the P32 B-1 note), and the notes of the rows
+`status` and `run show` of [lab-operations.json](lab-operations.json). The tool texts of the MCP
+servers are not changed.
+
+**Counts.** One member of `ContainedRunTerminal` (nine from eight); `gate_c2.rs` holds 15 tests (14
+before); one new gate map row (`contract.toml`).
+
+**Tests.** `crates/runtime-client/src/tests/gate_c2.rs`,
+`s3_3_a_run_terminal_names_the_outcome_key_of_the_end_it_finished_on` (gate map `contract.toml`,
+"#463 S3-3"), on the ScriptedRuntime ledger of the run-status gates (R7), in brief and in full: a
+run completed on its target page whose terminal carries the disposition `task_done` answers
+`outcome_key` `task_done`, one completed on an ending page with `task_short` answers `task_short`,
+each with the page it finished on, in the struct and in the status's JSON; a failed run, a
+cancelled run and a completed run of a package without mappings (no disposition) have no
+`outcome_key`, in the struct or in the JSON. No existing test changes, no golden changes, no test
+leaves the gate map.
+
+**What is not changed.** The ledger's records and the host (the key was already written); the
+scheduler and its `outcome` predicate; the fold's anomaly rules and what makes a run's state; the
+run list's row and the grouped reads; every outcome code, its keys and its words; the outcome code
+index (no fragment changes). No outcome code, outcome value key, word, configuration key,
+interface revision or record shape is added.
+
+**At deploy.** Nothing to do: the member is computed when a run is read. A run recorded before
+0.12.63 whose terminal carries a disposition shows its key.
+
+### 1.411 Slice #463 S3-4 (0.12.63): a first adoption as held needs two flags and no decision file (Workflow #463; the owner's approval on 11-15 of the three-stage blueprint of package making, board #463; the rule the work order states, that a package not run through on a real device is registered with its rules and stays held; the design `rd-1115/pack-stage3-design.md`, §4.2 "S3-4", with §1.1 rows W1 to W3, §1.2 H1, H3 and H16 and §2.1 "Missing" item 1; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s34-adopt-held.md`, read on main `44cbab53`)
+
+The coordinator gave this slice 1.411; the numbers between §1.400 and this one belong to slices
+dispatched with it. The slice ships in 0.12.63.
+
+**What it is.** `standard-pack adopt` takes `--held-reason <text>` and an optional
+`--held-reference <text>`, which are exactly the decision `{schema_version, class: "held", held:
+{reason, reference?}}`. The resource tooling's request names where its decision comes from
+(`AdoptDecision`: `Document`, the path `--decide` gives; `Held`, the two texts); for the second it
+builds that document (`held_document` in `crates/resource-tooling/src/adopt.rs`) and hands it to
+the document's own reader (`Decision::of_document`: the part of `Decision::read` after the file is
+read and parsed, split out unchanged), at the place among the checks where a document is read. So
+every check and every byte written is the one a document of the class `held` gives; there is no
+second path ([standard-pack-authoring.md](standard-pack-authoring.md), "A held decision by two
+flags").
+
+**The texts' limits.** Those of the document's `held` (`decided_held`, at most 1024 bytes, the
+schedule reader's bound): a non-blank text without a control character. A blank reason is refused
+`adopt_refused` `decision_invalid` at `/held/reason`, as the document's blank reason is; the outcome
+names no `path`, since no file was read (`decision_invalid` already leaves out an empty one).
+
+**The command line's refusals.** Before the checkout, the state directory or any file is read:
+`--decide` beside `--held-reason` (with `--held-reference` or without it) is `validation_failed`,
+exit 2, naming `--held-reason`; `--decide` beside `--held-reference` alone, and `--held-reference`
+without `--held-reason`, which it needs, the same naming `--held-reference`; each with
+`argument_problem` `conflicting` and the details of the command line's other conflicts
+(`argument`, `argument_problem`, `arguments`), as `do --operation` without `--capture` is refused.
+No code, word or key is added; the outcome catalog and its index do not change.
+
+**On a package already scheduled.** The one-role table's row `held` (its held entry; its rule, if
+any, kept and not composed while the hold lasts; every `maintenance.json` entry of the package
+removed) is what a decision of the class `held` does today: such a decision wants no rule, so the
+package's rule is kept as written and the held entry is added beside it. So `--replace
+--held-reason` on a package its business rule schedules keeps that rule and writes its hold, as the
+document does. Nothing here lifts a hold: that stays a decision of another class given by
+`--decide` ("Repeating").
+
+**Texts.** The refusal of a first adoption without a decision names `--held-reason` beside
+`--decide`; `help`'s options of the command (`adopt_options`); the row `standard-pack adopt` of
+[lab-operations.json](lab-operations.json) gains the parameters `held_reason` and `held_reference`
+(strings, not required), which the MCP tool `ac_standard_pack_adopt` takes, its schema generated
+from the row, and `decide`'s note and the row's notes say so;
+[standard-pack-authoring.md](standard-pack-authoring.md): "The operation" (the line and two
+inputs), "The decision document" (the new part "A held decision by two flags"), and the row "The
+decision document" of "The checks". The Lab's MCP manual (`apps/actinglab-mcp/MANUAL.md`,
+"Adoption") still lists the tool's parameters without the two; it is not this slice's file.
+
+**Tests.** `crates/resource-tooling/src/gate_464_p1.rs`, on P1's fixtures, gate map `exec.toml`
+"#463 S3-4": `s34_a_first_adoption_by_the_held_reason_writes_what_the_held_document_writes` (a
+package not run through, adopted first by the two texts: its held entry with both and no rule, the
+repository byte for byte what the same document writes on a repository of its own, the answers
+alike; a blank reason by the texts and by the document alike refused `decision_invalid` at
+`/held/reason`, nothing written) and
+`s34_the_held_reason_on_a_scheduled_package_keeps_its_rule_and_writes_its_hold` (`--replace` by the
+reason and by the document alike on a package its business rule schedules: the rules byte for
+byte, the held entry beside them, nothing removed or replaced, the two repositories alike).
+`apps/actinglab/src/tests/gate_463_s34.rs`, gate map `apps.toml` "#463 S3-4":
+`s34_the_held_flags_beside_decide_or_the_reference_alone_are_refused_before_anything_is_read` (the
+three refusals of the command line, five lines, with paths that do not exist, none made).
+Adapted: P1's helper `request` in `gate_464_p1.rs` hands its decision's path on as
+`AdoptDecision::Document`, since the request's member became that source; no assertion changes. No
+golden changes, no test leaves the gate map.
+
+**What is not changed.** What adopt checks and writes for a decision document, the classes
+`business` and `maintenance`, readiness, `standard-pack build` and the recording side.
+
+**At deploy.** Nothing to do.
+
+### 1.412 Slice #463 S3-5 (0.12.63): adoption answers the adopted pack's readiness (Workflow #463; the owner's approval on 11-15 of the three-stage blueprint of package making, board #463, whose third stage checks a package for readiness once it is adopted; the design `rd-1115/pack-stage3-design.md`, §4.2 "S3-5" and §2.1 "Missing" item 3; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s35-adopt-readiness.md`, built on the head `8169acf4` of S3-4's branch, §1.411)
+
+The coordinator gave this slice 1.412; it stands on S3-4 (§1.411) and ships with it in 0.12.63.
+
+**What it is.** `standard-pack adopt` already lays out the game root the build would produce, in
+its check tree (`<state>/adopt-check/<checkout>/installed/<game>/`), and checks it with
+`standard-pack check`. After every check of the adoption passed, and by the same path under
+`--dry-run`, it now calls the readiness function (`judge_standard_pack_readiness`, called, not
+copied) on that directory with no installation and no declared `package` range, and answers the
+adopted pack's row as `readiness` ([standard-pack-authoring.md](standard-pack-authoring.md), "The
+answer"): `package_id`, `server`, `readiness`, `roles` and the thirteen `items`, the row
+`standard-pack ready --root` answers for that directory. The five items an installation tells are
+`not_judged` (`installation_not_read`) and I3 is information, so the pack answers `ready_to_place`
+at best. A refused adoption answers no readiness. The question "held, waiting for a value, ready to
+place?" no longer needs a build and a second command on a copied path.
+
+**Where it is judged.** `crates/resource-tooling/src/adopt.rs`: the check tree's `Checked` keeps
+the directory it laid out (`installed`); `standard_pack_adopt` judges the readiness after the
+writes (or, under `--dry-run`, after the list of what it would write), immediately before the
+answer is built (`adopted_readiness`). The readiness function only reads; the tree is the one the
+checks read, and nothing the adoption checks, writes or refuses changes.
+
+**When the function refuses.** The adoption's own result is not changed: the answer carries
+`readiness_not_judged` in place of `readiness`, `{outcome, text}`, as `waits_for_value` carries a
+secondary finding (a registered outcome and the same in words): `outcome` is the function's refusal
+with its code as the function answered it (the outcome its error carries, else its code relayed),
+`text` the same in words. A row of the pack missing from the function's answer is answered so too,
+with `package_invalid` "is no package of the bundle", the function's own code for that case. No
+code, word or key is added; the outcome catalog and its index do not change.
+
+**Where the design and the code differ.** The design names S3 `value_pending` for a business rule
+with `"pending"` alone. The readiness function answers `value_undeclared` there: adopt writes no
+fixed value and no entry for `"pending"`, and the composer counts such a rule undeclared (adopt's
+own `coverage` says `undeclared`); `value_pending` is a rule that reads an entry or a pool with the
+pending marker. The tests take the function's words (the coordinator's ruling 4).
+
+**Texts.** [standard-pack-authoring.md](standard-pack-authoring.md): its opening paragraph (the
+answer says how far the laid-out root makes the package ready; readiness on an installation stays
+another slice's), "`--dry-run`" and "The answer" (the members and the part "The adopted pack's
+readiness"). [lab-operations.json](lab-operations.json): the row `standard-pack adopt`'s `output`
+names the readiness row; its `notes` lose P1's clause "the readiness of the package is another
+slice's" and gain the sentence of this slice. The sentence of
+[standard-pack-schedule.md](standard-pack-schedule.md), "Readiness", that adopt's answer, the
+build's `build.json` and the placement plan "are to call it" is not this slice's file and stays.
+
+**Tests.** `crates/resource-tooling/src/gate_464_p1.rs`, on P1's fixtures, gate map `exec.toml`
+"#463 S3-5": each case adopted first under `--dry-run`, then for real, both answering the same row
+and no `readiness_not_judged`:
+`s35_a_held_adoption_answers_its_pack_waiting_for_its_hold` (adopted by S3-4's `--held-reason`:
+`waiting`, S2 `classified` failing alone with `held`, S3 not judged `no_rule`),
+`s35_a_business_rule_with_pending_alone_answers_its_pack_waiting_for_its_value` (`waiting`, S3
+`valued` failing alone with `value_undeclared` naming the rule, caused by
+`standard_pack_benefit_undeclared`),
+`s35_a_business_rule_with_its_value_answers_its_pack_ready_to_place` (`ready_to_place`, the seven
+items of the game root holding, S2 by `scheduled`, S3 by `complete`) and
+`s35_a_maintenance_entry_by_its_uses_answers_its_pack_not_scheduled_with_its_role`
+(`not_scheduled`, `roles` `startup`, S2 by `maintenance_role`, S3 by `maintenance_tier`). The tests
+assert only members the readiness row has on this branch. No test is adapted, no golden changes,
+no test leaves the gate map.
+
+**What is not changed.** What adopt checks, writes and refuses; the readiness function
+(`standard_pack_ready.rs`); `standard-pack build`; the placement.
+
+**Carried from the review of S3-4 (§1.411), on this branch, nothing of it changing behaviour.**
+`apps/actinglab-mcp/MANUAL.md` ("Adoption") names `held_reason` and `held_reference`. Adopt's
+messages that named only `--decide` (a pack directory a maintenance role of another root file
+owns, a directory no root file names, two roles, a first adoption without a decision, and the
+advice to run an interrupted adoption again) name `--held-reason` beside it, and so do the matching
+sentences of [standard-pack-authoring.md](standard-pack-authoring.md); its part "A held decision
+by two flags" says that the command line cannot give a text that is the word `true` or begins with
+`--` (the flag parser takes no such word as a value), which goes through a decision document.
+Three tests: `gate_464_p1.rs`
+`s34_a_held_package_adopted_again_by_the_held_reason_takes_the_reason_and_keeps_its_reference` and
+`s34_held_texts_outside_their_limits_are_refused_alike_by_the_flags_and_by_a_document` (gate map
+`exec.toml`), and `apps/actinglab/src/tests/gate_463_s34.rs`
+`s34_the_held_flags_on_the_command_line_reach_the_adoption_with_their_two_texts` (gate map
+`apps.toml`), each under "#463 S3-4".
+
+**At deploy.** Nothing to do.
+
+### 1.413 Slice #463 S3-6 (0.12.63): readiness names a hold's reason and lists each pack's own warnings (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole; the design `rd-1115/pack-stage3-design.md`, §4.2 "S3-6" and §2.3, "Other gaps of this point", read on main `44cbab53`; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s36-ready-held-reason.md`, read on main `44cbab53`; fix round 2, coordinator brief `rd-1115/brief-463-s36-fix2.md`, on main `b7c47129`)
+
+The coordinator gave this slice 1.413: main `44cbab53` holds the sections up to §1.400, and the
+numbers between belong to slices dispatched with it. The slice ships in 0.12.63.
+
+**What it is.** A held pack waits with a reason someone wrote (`schedule.json` holds
+`{package_id, reason, reference?}`), and the warnings of `standard-pack check` were listed for the
+root only. Now, in `judge_standard_pack_readiness`
+([standard-pack-schedule.md](standard-pack-schedule.md), "Readiness"):
+
+- A pack whose S2 fails `held` answers `held` on its row, `{reason, reference?}`: the reason and
+  the reference of its `held` entry as written, `reference` absent where the entry writes none
+  (absent, not empty), `held` absent from every other pack's row (both levels
+  `skip_serializing_if = "Option::is_none"`). It is the shape the `held` entry and adoption's
+  decision ([standard-pack-authoring.md](standard-pack-authoring.md), `held`) give the same two
+  texts: text for a reader, never evaluated and used to decide nothing (the contract: nothing
+  evaluates it by machine). S2's outcome is what it was before the slice
+  (`package_dispatch_waiting` with `readiness_problem` `held` and nothing more), and which items
+  fail and why is unchanged: the hold is looked up by package id in the composer-accepted file's
+  `held` list, the list the classification reads, only for a pack whose S2 item fails with the word
+  `held`.
+- Each pack's row gains `warnings`: the warnings of `standard-pack check` that name the pack, in
+  the check's order. The answer's `warnings` stays as it was, so a pack's warning is listed in both
+  places. A pack no warning names answers no `warnings` member, as a pack without `roles` answers
+  no `roles` (the row's precedent, `skip_serializing_if = "Vec::is_empty"`).
+
+**Where the code corrected the design.** The work order's ruling 3 names a warning's pack by
+its `package_id`, and the design's test asks that "a variable that does not apply appears on the
+declaring pack's row". The root check of the variables (`variable_report`, Workflow #463 V1, §1.378)
+names the declaring pack only by `path`, its `control.json`, and carries no `package_id`. So a
+warning names a pack by its `package_id` (a pack of the registry), else by a `path` that lies under
+the pack's directory in the game root (`CheckWarning::read`). That is not the rule the root check's
+refusals follow: `CheckRefusal::read` takes the `package_id`, else the pack whose relative
+directory name, as the registry writes it, the `path` is, and compares nothing under it. Fix round
+2 lets a warning's `path` that is the pack's relative directory name itself name that pack too, as
+the refusals' comparison does. A warning that names no pack (a rule's hint by `task_id`, a refused
+`goals.json`) is on no row and stays in the answer's `warnings`. The check's warnings are not
+changed.
+
+**Codes, keys and words.** None: no code, no key, no key type and no vocabulary word.
+`package_dispatch_waiting` carries what it carried before the slice (warning, ladder class none,
+exit status 0: `standard-pack ready` answers the readiness beside `lab_operation_completed` and
+refuses nothing). No fragment under `contracts/outcome-codes/` changes, and the outcome code index
+is current.
+
+**The callers.** `judge_standard_pack_readiness` has one caller in the product,
+`actinglab standard-pack ready` (`apps/actinglab/src/standard_pack_cli.rs`), which serializes the
+whole answer; the operation table's row `standard-pack ready` is served by that command (the CLI
+module's engine) and its MCP tool `ac_standard_pack_ready` through a `serve` child, so all three
+print the row's `held` and `warnings` with no change of their own. Adopt, the build and the
+placement plan do not call it on this branch (slices S3-5, S3-7 and S3-15); the module
+documentation says what S3-7 makes `standard-pack build`'s answer do (call it on the installed root
+its steps laid out, as `ready --root` does; `build.json` does not carry it). The row's `output` in
+[lab-operations.json](lab-operations.json) names both members.
+
+**Interface revisions.** None moves. The readiness answer belongs to no interface revision: P3 and
+its fix round 1, which added `readiness`, `roles`, `warnings` and the counts, wrote "No
+configuration key, record type, payload member, fact, wire shape or interface revision" (§1.375),
+and so does this slice: `held` and `warnings` are members of the answer's rows. The outcome model is
+not touched: `runtime-outcomes` stays 1, `actingcommand.outcome.v1` and
+`actingcommand.outcome-codes.v1` stay.
+
+**Tests** (`crates/resource-tooling/src/gate_463_s36.rs`, gate map `contracts/test-gates/exec.toml`
+"#463 S3-6"): a pack held with a reason and a reference fails S2 `held` alone among its items, its
+row's `held` `{reason, reference}` as written; a pack held with a reason of more than 256 bytes and
+one held with a reason in Chinese, neither with a reference, carry the reason byte for byte and no
+`reference`, in the row and serialized; S2's outcome carries no `held_*` value, in the row and
+serialized; a pack not held answers no `held`
+(`s36_a_held_pack_s2_names_its_reason_and_reference`); two packs that declare one variable
+differently each list on their own row, in the check's order, the check's
+`standard_pack_package_unclassified` naming them by `package_id` and its
+`standard_pack_root_invalid` `variable_conflict` naming their `control.json` by `path`, the answer's
+`warnings` equal to the check's own, and the other packs answer no `warnings`
+(`s36_a_variable_that_does_not_apply_is_listed_on_the_declaring_pack_s_row`); a root the check
+warns nothing of answers each row with the members it had before
+(`s36_a_root_without_warnings_answers_as_before`); the composer's hint of a rule that declares no
+value, by its `task_id` and without a `package_id` or a `path`, is the answer's one warning, the
+check's own, and is on no pack's row (`s36_a_warning_that_names_no_pack_is_on_no_row`, fix round
+2). No existing test changes; none leaves the gate map.
+
+**Fix round 2** (coordinator brief `rd-1115/brief-463-s36-fix2.md`, after the independent review;
+its ruling replaces ruling 2 of the work order). The first round carried the hold as two outcome
+keys of S2, `held_reason` and `held_reference`, and, since a reason may hold 1024 bytes
+(`MAX_SCHEDULE_TEXT_BYTES`) where the free-text key type `name` ends at 256, added a key type
+`text` to the outcome contract, the outcome guard and the problem report. The coordinator ruled
+for the row: a new value type of the outcome model is permanent once released, differs from `name`
+only by its bound, and would let later code put a kilobyte of free text into outcomes that travel
+to ledgers and receipts; the reason of a hold is text for a reader, never evaluated, and the row is
+where a reader looks. So the key type `text` and the two keys went, with everything changed only
+for them (the key table, the catalog and its fragment `resource-tooling.json`, the outcome guard's
+scalar types, [runtime-outcomes.md](runtime-outcomes.md), [problem-report.md](problem-report.md)
+and the report archive's masks): each of those files is main's again, and none was released. The
+review's two smaller points were taken: the path rule above, and the test of a warning that names
+no pack. Main `b7c47129` (§1.401) was merged in.
+
+**What is not changed.** What readiness decides (the thirteen items and their verdicts, the four
+answers, the counts), the composer, `standard-pack check` and its warnings, adopt, the build, the
+placement, the outcome catalog and key table, the record shapes and the configuration.
+
+**At deploy.** Nothing to do: a read-only answer gains members; nothing is persisted.
+
+### 1.414 Slice #463 S3-7 (0.12.63): `standard-pack build` answers its packs' readiness and names the placement's plan as the next command (Workflow #463; the owner's approval on 11-15 of the three-stage blueprint of package making as a whole, board #463; the design `rd-1115/pack-stage3-design.md`, §4.2 "S3-7", with §1.1 rows W6, W7, W10 and §1.2 H10, H13; the coordinator's rulings in the work order, not the owner's words, its ruling 1 changing the design; coordinator work order `rd-1115/brief-463-s37-build-readiness.md`, read on main `44cbab53`; main `326ae285` (#1744, LAB-6S4a) merged before the push; fix round 2 after the independent review, coordinator work order `rd-1115/brief-463-s37-fix2.md`, main `b7c47129` (#1750, #469 D4b, §1.401) merged first)
+
+The coordinator gave this slice 1.414: main `44cbab53` holds the sections up to §1.400, and the
+numbers between them and this one belong to slices dispatched with it. The slice ships in 0.12.63.
+
+**What it is.** `standard-pack build` (§1.376) turns one clean commit of a resource repository into
+the zip a placement takes and answered the files and the steps. To learn whether the packs it built
+were ready one copied a path out of the answer into `standard-pack ready --root` (§1.375; the
+design's H10), and to plan a placement two more into `place` (H13). The answer now says both
+([resource-verify.md](resource-verify.md), "`standard-pack build`", "The answer"):
+
+- `readiness`, the readiness of `<out>/work/installed/<game>/`, judged by
+  `judge_standard_pack_readiness`, called, not copied, as `standard-pack ready --root` calls it (no
+  installation, no declared range): that row's answer for that root, `installation` `not_read`, the
+  five installation items `not_judged`, each pack `waiting` with every reason, `ready_to_place` or
+  `not_scheduled`;
+- (fix round 2) `warnings`, beside a readiness the function refused: `resource_build_readiness_refused`;
+- `next.place`, the words of the Lab's command line after the program's name (fix round 2),
+  `["place", "<zip>", "--sums", "<SHA256SUMS>", "--plan"]`, the paths of `files`.
+
+**What the code showed** (the design's §6 and the work order's rulings 2 and 3).
+
+- **The installed root is kept.** The `bundle` step makes `work/installed/<game>/`
+  (`apps/actinglab/src/resource_verify/bundle.rs`, after the read-back), lays the root files and the
+  packs into it and checks it with `standard-pack check`. No code of `resource verify` or of the
+  build deletes: there is no removal call in `apps/actinglab/src/resource_verify.rs` or its
+  modules, and its, the step's and the build's module docs say that nothing is deleted. A build
+  whose steps all passed has laid the root
+  out: the step leaves before it only on an error or after a failure it recorded. So after every
+  successful build the root is there. The readiness is judged once the product is written, while
+  the root exists; a root that is not there is never judged but refused by the function.
+- **What `standard-pack ready` hands in.** `declared_package: None` and `installation: None`
+  (`apps/actinglab/src/standard_pack_cli.rs`, its `ready` arm). The design took `declared_package`
+  from the zip's `interfaces.json`; by ruling 2 the build does what the row does and hands in none.
+  Without an installation it changes nothing: I2 answers `not_judged` `installation_not_read` before
+  it reads the declared range.
+
+**Ruling 1, which changes the design.** The design put the readiness into `build.json` too and
+moved its schema to v2. `build.json` does not change: its members, its schema
+`actingcommand.standard-pack-build.v1` and the capability's `build_schema` stay. Readiness is a
+judgement of a root at a moment, which any reader can ask for again; the file records the build.
+The contract says that the answer carries the readiness and the next command and the file does not.
+
+**When the readiness cannot be computed.** The function refuses with its own codes
+(`validation_failed` for a root that is no directory or cannot be read, `standard_pack_root_invalid`
+for a root file the structure check refuses, `package_invalid`). The answer then has no
+`readiness` and has `readiness_refused`, that refusal in the envelope's error form (`code`,
+`message`, `blocked_by`, `details`); the build still exits 0, its product written. No readiness is
+answered that was not computed. Fix round 2 (the review: a reader of the answer's outcome and
+warnings did not see it): the answer's `warnings` then holds exactly one `{outcome}`, the form the
+Lab's answers carry a warning in (`lab_ops::cli_line::warning`; the build's answer had no
+`warnings` before), `resource_build_readiness_refused` (warning, `path` the root) caused by the
+refusal's own code, relayed; its developer line is the program's form (`cli_line::developer_text`),
+`WARN actinglab: resource_build_readiness_refused path=<root> [caused_by: <code>] <message>`. The
+precedent needs a code of its own (the Lab's warnings are the answering program's warning codes,
+the cause a link: `preflight_failed`, `client_action_not_recorded`; a developer line's level is its
+outcome's category, and the function's codes are errors), so one is added: a code of the build's
+own prefix with this one cause.
+
+| Code | The one situation | Refuses or warns | Exit |
+|---|---|---|---|
+| `resource_build_readiness_refused` (actinglab, warning, `none`, pending, since 0.12.63; `path` required; the cause the refusal's code) | the product is written and the readiness function refused the installed root | warns | 0 |
+
+**The next command.** The plan only (ruling 4): a placement is an act under the owner's
+authorization, and no answer hands out the line that places. Fix round 2: its words are those of
+the Lab's command line after the program's name, as every `next` of the Lab holds a command
+(the rescue module's `{status: ["op", "status"]}`; [install-cli.md](install-cli.md), "Who runs an
+argv"), so no reader parses a shell line; the paths are the ones the build wrote, unquoted. The
+`actinglab` that runs them is the one of the installation the bundle is to be placed into
+(`place` acts on the root of the `actinglab.exe` that runs it, [install-cli.md](install-cli.md),
+"The Lab's rescue module").
+
+**The answer's size** (fix round 2). The readiness of a real game makes the answer large: through
+the Lab's MCP server an answer above its budget is exported whole to a file by that server's
+overflow rule ([lab-two-entries.md](lab-two-entries.md) §9.3) and never cut; the contract says so.
+
+**Tests.** `apps/actinglab/src/tests/gate_463_s37.rs`, gate map `apps.toml` "#463 S3-7", on P2's
+neutral fixture repository with a `schedule.json` of one valued pool: a commit whose pack A is held
+(a held entry, no rule) and whose pack B has a rule with a complete value answers A `waiting`, its
+S2 failing `held`, and B `ready_to_place`, the readiness equal to the answer of `standard-pack
+ready --root` for the kept root, and `build.json` the answer's `build`, v1, its eleven members; a
+commit whose two packs both have such a rule answers both `ready_to_place`, their installation
+items `not_judged` `installation_not_read`; `next` is the plan's five words of the zip and
+`SHA256SUMS` written. Fix round 2: `s37_a_refused_readiness_is_a_warning_of_the_answer`. No fixture
+makes the function refuse the installed root after the `bundle` step passed (the step lays the root
+out and checks it with `standard-pack check`, whose structure check the function runs, and nothing
+of the build runs between), so it drives the function that builds the answer's readiness members
+(`resource_verify::build::readiness_members`, reached by the gate through a re-export compiled for
+tests only) on a root that is not there and on an empty one: no `readiness`, `readiness_refused`
+with the function's own code (`validation_failed`, `standard_pack_root_invalid`), and in `warnings`
+exactly one `{outcome}`, `resource_build_readiness_refused`, a warning, `path` the root, caused by
+that code. The tests assert only members of the readiness that exist on main `44cbab53` (ruling
+5). Adapted in fix round 2: `s37_next_place_is_the_plan_line_of_the_files_written` pinned the one
+line with quoted paths, which the requirement changes; it asserts the five words. No golden
+changes, no test leaves the gate map.
+
+**What is not changed.** What the build writes (the zip, `SHA256SUMS`, `build.json`, the work
+tree), its steps and their refusals, the readiness function, adopt and the placement. Fix round 2
+corrects, with the review's words, the texts of other slices that named `build.json` as a later
+caller of the readiness: [standard-pack-schedule.md](standard-pack-schedule.md), "Readiness", the
+notes of the row `standard-pack ready` and [package-reference.md](package-reference.md), "The built
+standard pack"; the doc of `crates/resource-tooling/src/standard_pack_ready.rs` is another fix
+round's.
+
+**At deploy.** Nothing to do: the answer gains its members, and nothing on disk changes.
+
+### 1.408 Slice #463 S3-1 (0.12.64): the placement plan lists the packages that enter or leave scheduling (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, and her rule that no package enters normal scheduling without her explicit authorization; the design `rd-1115/pack-stage3-design.md` §4.2, S3-1, with §1.1 rows W10 and W11, §2.5 and §2.6; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s31-place-plan.md`, read on main `44cbab53`)
+
+The coordinator gave this slice 1.408: main `44cbab53` holds the sections up to §1.400, and the
+numbers between them and this one belong to slices dispatched with it. The slice ships in 0.12.64.
+The next slice, S3-2, is built on it and makes a placement name the packages of `enters`.
+
+**What it is.** A placement is the act that enables: once a game root is placed, the workbench
+composes it and dispatches every package a rule names and no hold keeps back. Until this slice
+`place --plan` listed the items it would write and said nothing of which packages would enter
+scheduling. Now the plan of the rescue module's `place` (`crates/lab-rescue/src/install/place.rs`,
+the `--plan` answer and the answer's step `plan`) answers `schedule_changes`
+([install-cli.md](install-cli.md), "The Lab's rescue module", "The packages a placement makes
+enter or leave scheduling"). The packages of the bundle's game are classified on the installed
+game root and on the zip's root by the contract crate's own `standard_pack_maintenance_packages`
+and `classify_standard_pack_packages`, called, not copied (the module already depends on the
+contract crate; no dependency is added). The roles are readiness's words, found by that same
+function called on the entries of one use, or on one list of the root files, at a time (fix round
+2, below), and the plan's own `prerequisite`, of a layer of a prerequisite chain (fix round 3,
+below). **`enters` lists the packages that, by the schedule, the root files and the prerequisite
+chains of the two sides, will be dispatched or used after the placement and were not before.**
+The plan does not run the composer: a root the composer would refuse for another reason than the
+reader's and the reference check's (in its `read_game`: a member whose subsystem `requires` does
+not name, a subsystem this Runtime does not name, a member only the composer writes, a `limited`
+that is not `true` or sits on a maintenance rule, a realization, limited or fixed-value mark on a
+rule of a maintenance-role package, a timeline event that invalidates the application update fact;
+after it: a package another game's rules already name or an id two composed items share,
+`rule_id_conflict`, and the compile of the joined catalog) is counted as composed, so the lists
+then say more than will happen; for a game bound to an instance the placement's own post check
+fails in that case (the composer leaves out a game no instance is bound to, and the post check does
+not judge it), and a placement made while a Runtime runs keeps its hold.
+
+```json
+"schedule_changes": {
+  "packages": [
+    {"package_id": "neutral.handler", "before": {"state": "absent"},
+     "after": {"state": "maintenance_role", "roles": ["handler"]}, "content": "new"},
+    {"package_id": "neutral.waiting",
+     "before": {"state": "held", "reason": "not yet run on a device", "reference": "board-reference-1"},
+     "after": {"state": "scheduled"}, "content": "unchanged"}
+  ],
+  "enters": ["neutral.handler", "neutral.waiting"],
+  "leaves": [],
+  "content_only": []
+}
+```
+
+| Member | What it holds |
+|---|---|
+| `packages` | each package whose part or pack content changes, or that a list names, by package id: `before`, `after` (`state` `scheduled`, `held` with `reason` and `reference`, `maintenance_role`, `unclassified`, `absent` or `unread`; `roles`, when there is one, in this order: readiness's words `startup`, `return_home`, `recognition`, `features`, `edge`, `chain`, `handler`, `then_run`, then the plan's own `prerequisite`, which is not one of readiness's) and `content` (its pack item's `new`, `replace` or `unchanged`; absent for a pack the zip no longer carries) |
+| `enters` | sorted package ids that, by the schedule, the root files and the prerequisite chains of the two sides, will be dispatched or used after the placement and were not before: `scheduled` after and not before, or a role word after (`prerequisite` included) it did not hold before; only a composed side counts (its root holds a `schedule.json` the reader and the composer's reference check take), and an installed side that could not be read counts none; a package of a server no instance is bound to is listed too; the composer is not run (see above) |
+| `leaves` | sorted package ids: `scheduled` before and not after; a role word lost; no longer carried by the zip |
+| `content_only` | sorted package ids the scheduler uses before and after in the same way and whose pack is replaced |
+| `unread` | only when a side could not be read: `{root, failure}`, `root` `installed` or `bundle`, the failure as a warning; that side's packages `unread` (without roles when its root files failed, with them when its `schedule.json` did); with the zip's side unread none of `enters`, `leaves` and `content_only` is answered; nothing is refused |
+
+**What it replaces.** The plan's answer had a member `schedule_changes`, a boolean: whether the
+game's `schedule.json` changes. The work order names the new member `schedule_changes` (S3-2
+reads its lists by that name): the object takes the name and the boolean goes; the file's change
+is still its item (`schedule.json`, `new`, `replace` or `retire`), and the check after the
+placement still reads the same fact from the items (`Placement::schedule_changes`, the
+`post_check` intent's member, which a journal on disk keeps), unchanged.
+
+**Words.** No outcome code, no key and no vocabulary word of the catalog is added; the fragments
+and the index are unchanged. The states above are words of the plan's answer only; the failures
+under `unread` are the existing `standard_pack_root_invalid` (at the file, its problem and
+pointer) and `foreign_os_error`, each a warning beside a plan that exits 0.
+
+**Tests.** `crates/lab-rescue/src/install/gate_463_s31.rs`, gate map `apps.toml` "#463 S3-1", on
+the fake host with an installer of `package` [3, 10] and bundles declaring [3, 3], each plan
+leaving the game root byte for byte as it was and pausing nothing: a new pack with a rule enters
+from `absent`; a lifted hold enters, its `before` `held` with the entry's reason and reference; an
+added hold leaves; a pack replaced with its rule unchanged is `content_only`; a new
+`interrupts.json` handler enters by its role (`handler`), the `pages.json` feature not listed; on
+a game's first root every pack a rule names enters, a held one and one in no set are listed and do
+not; a zip that is the installed root has its eight items `unchanged` and lists nothing. Each
+asserts the whole `schedule_changes`. Adapted: `s5_unbound_composition_passes_at_once` of
+`gate_453_cold_place.rs` asserted the boolean `true`; it asserts the plan's item `schedule.json`
+`new`. No golden changes, no test leaves the gate map.
+
+**Fix round 2** (the slice's independent review, its seven items to change and its table against
+the composer; coordinator work order `rd-1115/brief-463-s31-fix2.md`, the coordinator's rulings,
+not the owner's words; main `b7c47129` merged, §1.401 kept before this section). The next slice
+makes a placement name exactly the packages of `enters`, so `enters` must be exactly the packages
+the scheduler dispatches, or uses in a supporting role, after the placement and did not before.
+(1) A side whose root holds no `schedule.json` composes nothing (the workbench leaves such a game
+out, [standard-pack-schedule.md](standard-pack-schedule.md), "Unload"; the composer reads only
+the games of bound instances whose root holds the file): none of its packages counts as scheduled
+or as holding a role for `enters`, `leaves` and `content_only`; `packages` still shows the
+standing and the roles its root files give. So over an installed root without the file every
+package the zip schedules or gives a role enters, and a zip without the file makes nothing enter
+and every package used before leave. No exception was found: the bundle's `recognition` entry is
+read in the Runtime only by the workbench's composition (`host/standard_pack_schedule.rs`,
+`ScheduleGame`), which leaves the game out without the file; the fact refresh runs the
+recognition package each instance's configuration binds (`instances[].recognition_package`),
+which no placement writes. (2) and (4) One notion of an unread side: its root files or its
+`schedule.json` cannot be read or parsed, or the composer's own reference check
+(`validate_standard_pack_schedule_references`, called after the reader, on both sides) refuses
+the file. An unread installed side counts nothing before, so everything scheduled or holding a
+role after enters. (3) With the zip's side unread (only its `schedule.json` can be: the plan
+refuses its other root files) `ScheduleChanges::enters` is `None` and the answer carries
+`packages` and `unread` and none of the three lists. (5) Roles are readiness's words (the
+contract crate's `MaintenanceUse` and `NavigationRole`, the tokens of the vocabulary
+`readiness_role`), found by `standard_pack_maintenance_packages` called on the entries of one use
+at a time and on one list at a time (the features, the edges, the recovery chain, the handlers,
+the `then.run` packages); a package enters when it gains a word it did not hold, whichever file
+gives it. (7) The sentence on a `bundle.json` the index does not take (`foreign_data_error`) is
+gone: the root reader has already parsed the same bytes the same way and refused them as
+`standard_pack_root_invalid`. Also: the installed side's files are read as readiness reads a
+root file, at most 32 MiB (`foreign_os_error` with `io_kind` `file_too_large` beyond it), and a
+package of a server no instance is bound to is listed in `enters` like any other, since binding an
+instance later needs no placement. Tests (6), in the same gate file, a second entry "#463 S3-1"
+of `apps.toml`, each asserting the whole `schedule_changes` (the failure under `unread` by its
+code and values): an installed root without `schedule.json` (the zip's scheduled pack and its
+feature package, role unchanged, both enter); a zip without it (nothing enters, its new handler
+shown with its role; the scheduled pack and the feature package leave); an installed
+`schedule.json` the reader refuses (both enter, `unread` `installed` with `schedule_invalid`); the
+zip's refused (`packages` and `unread` `bundle` only); a rule of the zip naming a package it does
+not carry (the same, `rule_package_unregistered` at `/rules/2/package_id`); a `startup` entry
+gaining `return_home`, an edge package added to the recovery chain and a handler that also
+becomes `then.run` (all three enter with readiness's words); a scheduled pack and a pack in no
+set that the zip no longer carries (both leave, no `content`). Adapted:
+`s31_a_new_interrupt_handler_enters_by_its_role` asserted the role `interrupts.json`; it asserts
+`handler` (the requirement changes the word).
+
+**Fix round 3** (the slice's second independent review; coordinator work order
+`rd-1115/brief-463-s31-fix3.md`, the coordinator's rulings, not the owner's words; no main merged).
+The next slice makes a placement name the packages of `enters` as the ones authorized to start
+running, and the second review found two things the plan did not read. (A) A pack's
+`control.json` may name `prerequisite_package_id`, the package the host runs as a layer of the
+pack's runs, resolved through the game root's registry when each run is prepared
+(`host/prerequisite.rs`; the Lab's recorder writes the member from `requires`). On each side, a
+package that is a layer of the prerequisite chain of a package that is scheduled or holds one of
+readiness's words is used, with the plan's own role word `prerequisite`, which is not one of
+readiness's eight (they still come from the contract crate's function; the new word is kept apart,
+`Role::Prerequisite`). The chain is followed as the host follows it: the member of the
+`control.json` in the package's directory the side's registry gives, the named package looked up
+in the same registry (`StandardPackRegistry::get`, the lookup of the host's
+`GameRegistry::package_path`), at most three layers (the execution kernel's
+`MAX_PREREQUISITE_DEPTH`); a layer the registry does not list, or one already in the chain, ends
+it and counts nothing (the host refuses that run, another check's refusal); in that case, and with
+a fourth layer, the host refuses the whole run while the plan still counts the package that starts
+the chain and the layers before its end as used, so the lists hold more than what runs, as for a
+root the composer would refuse (the train's correction after the re-review). The rescue module
+links neither the host nor the kernel, and the contract crate has no reader of the member, so the
+plan reads it with its own readers: `Archive::read` for the zip's `packs/<directory>/control.json`
+and the bounded `read_root_file` for the installed one (a file it cannot read leaves the
+installed side unread). `enters`, `leaves` and `content_only` follow as for any role: a package
+that gains the role enters, one that loses its last use leaves, one used only as a prerequisite
+whose content is replaced is `content_only`; a package used only as a prerequisite keeps the
+state the classification gives it (`unclassified`) beside the role. (B) The definition of
+`enters` above replaces "exactly", and the plan says it does not run the composer, with the
+reasons it does not read. (C) The roles are listed in the plan's own order, given above. Tests,
+in the same gate file, a third entry "#463 S3-1" of `apps.toml`, each asserting the whole
+`schedule_changes`: a new pack that is only the prerequisite of a new scheduled pack (both
+enter); a pack in no set that becomes the prerequisite of the scheduled pack, whose replaced
+`control.json` names it (it enters, the scheduled pack `content_only`); the prerequisite of a held
+pack (nothing enters); a chain two deep (the scheduled pack and both layers enter); a scheduled
+pack that loses its rule (it and its prerequisite leave); an installed `bundle.json` the root
+reader refuses (every pack `unread` before without roles, the zip's scheduled pack and feature
+package enter, `unread` `installed` with `malformed` at that file). No test is adapted. What S3-2
+reads is unchanged: `Placement.scheduling.enters` stays `Option<Vec<String>>`, `None` when the
+zip's side could not be read; it may now hold packages used only as prerequisites.
+
+**What is not changed.** The items, the plan document and the plan id, every check of the plan and
+after the placement, the hold, the journal and its inputs, `place`'s parameters and refusals, and
+every interface revision. `rescue.rs` is not touched: `place`'s members carry the plan's value as
+before.
+
+**At deploy.** Nothing to do. A reader of the plan's boolean `schedule_changes` reads the item
+`schedule.json` instead.
+
+### 1.409 Slice #463 S3-2 (0.12.64): a placement names its authorization and the packages it enables (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, and her rule that nothing enters normal scheduling without her explicit authorization; the design `rd-1115/pack-stage3-design.md` §4.2, S3-2, with §2.3's last paragraph and §2.6; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s32-place-authorization.md`, built on S3-1, §1.408)
+
+The coordinator gave this slice 1.409, after S3-1's §1.408, on whose branch it is built. The
+slice ships in 0.12.64.
+
+**What it is.** The placement is the act that enables (§1.408), and until this slice `place`
+asked for nothing: its journal recorded who started it and what was placed, not under which
+authorization and not which packages began to be scheduled. Now the rescue module's `place`
+(`crates/lab-rescue/src/install/place.rs`, `authorize`; called once by `crates/lab-rescue/src/rescue.rs`,
+`place`) requires, for a plan that changes something, `--authorization <reference>` and
+`--enables <package_id>` repeated, and records both ([install-cli.md](install-cli.md), "The
+Lab's rescue module", "The authorization a placement names"). `--plan` and a plan whose items
+are all `unchanged` need neither and read neither; everything else needs the reference, also a
+placement that only replaces content or only places held packages.
+
+| Check, in this order, after the plan and before the hold | Answer |
+|---|---|
+| no `--authorization`, or a blank one | `install_command_refused` `place_authorization_missing` |
+| a reference over 1024 bytes or holding a control character | `actingctl_usage_invalid` `unusable` (`--authorization`) |
+| the plan answers no `enters` (`None`: the zip's side unread, round 2) | `place_enables_unknown`, the plan's `schedule_changes` beside it (its `unread` names the refusal) |
+| `--enables`, sorted, not exactly the plan's `enters` (a name missing, one too many, one twice, any when nothing enters) | `place_enables_mismatch`, the answer's `expected` and `given`, each sorted |
+
+Each refusal carries `plan_id` and `game` and comes before the hold, any pause, the writer lock
+and any write. The check runs once in `place`, after the early answer of `--plan` and of a plan
+that changes nothing and before the path is chosen, so the placement with a Runtime and the one
+while it is stopped (`place_cold`) pass the same code. The journal's `inputs` gain
+`authorization` (the reference as given) and `enabled` (the sorted list of the packages enabled,
+`[]` when none), on both paths; `op status <op>` shows them with the journal.
+
+**Codes.** No code is new. The three refusals are words of the vocabulary `install_refusal` of
+the existing `install_command_refused` (registered in `crates/lab-ops/src/codes.rs`, the fragment
+`contracts/outcome-codes/catalog.json`), as every refusal of the rescue module is; the index is
+regenerated. Each refuses, exit 1. A malformed reference is the module's existing argument
+refusal.
+
+| Word | The one situation | Refuses or warns | Exit |
+|---|---|---|---|
+| `place_authorization_missing` | a placement of a plan that changes something names no authorization | refuses | 1 |
+| `place_enables_mismatch` | `--enables` is not exactly the plan's `enters` | refuses | 1 |
+| `place_enables_unknown` | the plan answers no `enters` (the zip's side unread), so what the placement enables cannot be named | refuses | 1 |
+
+**The zip's side and the installed side.** The plan refuses a zip whose other root files the
+reader refuses (`pack_invalid`, caused by `standard_pack_root_invalid`), before this check; its
+own reading of the zip's `schedule.json` (the reader, then the composer's reference check), which
+no earlier check reads, is the one way the zip's side is `unread`, and then the plan answers no
+`enters` (round 2), which is `place_enables_unknown`. An installed game root that cannot be read
+refuses nothing (a placement is how a broken root is repaired): it counts nothing before, so the
+names required are every package scheduled or holding a role after, as S3-1 gives them.
+
+**What the texts say.** The tool records an authorization and grants none: it does not judge the
+reference and never supplies one; there is no default, no variable and no switch that places
+without it. `--enables` is the caller's statement that it knows what it is enabling. A plan that
+lists `enters` is not an authorization. The row `place` of
+[lab-operations.json](lab-operations.json) gains the parameters `authorization` (an option) and
+`enables` (an option, repeated), which the Lab's MCP tool takes from the row; its notes say the
+same.
+
+**A journal already on disk.** A `pack_place` journal an earlier build began has neither member.
+It loads, and is resumed, undone and shown as before; its authorization reads as not recorded
+(the members absent), never as an empty one. The inputs are free JSON, so nothing else reads
+them.
+
+**Tests.** `crates/lab-rescue/src/install/gate_463_s32.rs`, gate map `apps.toml` "#463 S3-2", on
+the fake host with an installed game root whose one pack a rule names (both roots of every scene
+hold a `schedule.json` and the installed one is read, so no test depends on how S3-1 counts a
+root without one or an installed root that cannot be read): no reference, a blank one, and none
+beside a wrong `--enables` refuse `place_authorization_missing`, with a Runtime and without;
+1025 bytes, a line feed and a tab refuse `unusable`, 1024 bytes pass to the next check; with
+`enters` the two packs the bundle adds, `--enables` absent, only one of the two, the two and a
+third, one of them twice, another name in place of one, and any name where nothing enters refuse
+`place_enables_mismatch` with `expected` and `given`, each stated name by name, on both paths;
+an unreadable zip `schedule.json` refuses `place_enables_unknown` beside the plan's
+`schedule_changes`, on both paths, and without a reference `place_authorization_missing` first;
+each refusal leaves the root's `install` folder and the game root byte for byte, asks the
+Runtime nothing and pauses nothing. A content-only placement with a Runtime records the
+reference and `[]`, `op status` shows both, and the journal without them loads and is answered
+without them; a cold placement naming exactly the two packs (in the other order) records them
+sorted; `--plan` and an unchanged bundle need neither.
+
+Adapted, because every placement that changes something now names its authorization: the
+placements of `gate_434_lab3.rs` (`place_holds_only_the_bundles_idle_instances`),
+`gate_444_notices2.rs`, `gate_451_loadp.rs`, `gate_451_place_pkg.rs`, `gate_453_cold_place.rs`,
+`gate_455_gr1.rs` and `gate_463_v1.rs` pass the reference and, when their plan lists `enters`,
+those names, through one fixture function (`fixture::authorized`, which asks the module's own
+plan; their `--plan` calls are unchanged). In `gate_453_cold_place.rs` the bundles' placeholder
+`schedule.json` bytes, which the reader refuses and which would now be `place_enables_unknown`,
+are a schedule without rules or holds, and the two tests that list the journal's input names
+(`s5_a_hot_placement_with_a_bound_instance_answers_as_before`,
+`s6_cold_place_places_the_items_and_keeps_the_replaced_ones`) list `authorization` and
+`enabled` too. No golden changes, no test leaves the gate map.
+
+**Round 2** (S3-1's fix round 2 merged, its head `053d4bdf`, which holds main `b7c47129`;
+coordinator work order `rd-1115/brief-463-s32-fix2.md`, the coordinator's rulings, not the
+owner's words). S3-1's `ScheduleChanges::enters` is now `Option<Vec<String>>`, `None` when the
+zip's side could not be read (its `schedule.json` refused by the reader or by the composer's
+reference check). `authorize` refuses `place_enables_unknown` on that `None`, after the
+authorization check and before the hold and any write, and no longer looks for the zip's side
+under `unread` itself: the plan is the one place that decides what cannot be stated. The refusal
+carries the plan's `schedule_changes` (its `packages` and `unread`) beside the outcome in place
+of the reader's failure as the cause, so the answer says why without a second reading. The
+first round's own detection caught no case that `None` does not: both were the zip's side
+unread. The placeholder `schedule.json` of `gate_453_cold_place.rs` stays the schedule without
+rules or holds of the first round: S3-1 composes it (an empty rule table composes; a root without
+the file composes nothing), so the plan reads the zip's side and nothing enters, and the gate's
+bundles still change `schedule.json`. Tests: `entering()` adds two packs, so `enters` holds two
+and each mismatch case states `expected` and `given` name by name (only one of the two, the two
+and a third, one twice, another in place of one); the cold placement names exactly the two in
+the other order and its journal records them sorted; the test of an unreadable zip
+`schedule.json` asserts the plan's `packages` and `unread` with none of the three lists, the
+same beside the refusal. New: `s32_a_bundle_schedule_naming_a_package_it_lacks_is_refused_enables_unknown`,
+a zip rule naming a package the zip does not carry (`rule_package_unregistered` at
+`/rules/2/package_id`), on both paths: the plan answers `packages` and `unread` and no list, the
+placement is refused `place_enables_unknown`, nothing written, no pause sent. The seven old gates'
+`fixture::authorized` reads `enters` through the `Option` (none when it is `None`).
+
+**Round 3** (S3-1's fix round 3 merged, its head `5c28a2a4`; coordinator work order
+`rd-1115/brief-463-s32-fix3.md`, after an independent review of round 2, the coordinator's
+rulings, not the owner's words; no main merged). S3-1's `enters` may now hold a package used only
+as a layer of the prerequisite chain of a package scheduled or holding one of readiness's words
+(the plan's role `prerequisite`); its type
+and what `None` means are unchanged, so `authorize` is unchanged and `--enables` names such a
+package too ([install-cli.md](install-cli.md), "The authorization a placement names", "The
+parameters"). The outcome codes entry of `install-cli.md` said that `place_enables_unknown`
+carries the reader's refusal as its cause, round 1's text: the code attaches no cause, and why
+the lists cannot be stated is in the plan's `schedule_changes` beside the outcome, whose `unread`
+names the refusal, as the catalog says. The rule "No confirmation parameters" says that `place`'s
+`--authorization` and `--enables` are statements of the caller that the tool records, not
+confirmations it asks for. The row `place`'s `help`, the description of the Lab's MCP tool, now
+names the authorization (157 bytes, within `MAX_HELP_BYTES`). The sentence on `undo` below is
+written into `install-cli.md` where the `undo` of a placement is described. Tests, two new in the
+same gate file and gate entry: `s32_a_content_only_placement_without_a_reference_is_refused_hot_and_cold`
+(on both paths a bundle that only replaces a pack's content, `enters` empty, placed without
+`--authorization` is `place_authorization_missing`, nothing written, no pause sent: the reference
+does not depend on `enters` being non-empty) and
+`s32_a_new_prerequisite_is_named_with_its_scheduled_package` (a bundle adding a pack named by a
+rule whose `control.json` names a new pack as its prerequisite plans `enters` both; on both
+paths `--enables` naming only the scheduled one is `place_enables_mismatch` with both in
+`expected`, nothing done; with no Runtime naming both places them, the journal's `enabled` the
+two, sorted). No test is adapted.
+
+**What is not changed.** What a placement places, holds and checks; the plan, its id, its items
+and its `schedule_changes` (S3-1's); `release stage`, `deploy` and the other rows; every
+interface revision. **What the slice does not cover: `undo`** (round 3). The `undo` of a placement,
+with a Runtime or without one, restores the content the placement replaced and asks for no
+authorization; if the undone placement had made a package leave scheduling, the undo brings it
+back, and no record says under which authorization. This slice does not change `undo`, `op
+resume` or `rollback`: `undo` is the way back of a rescue operation, and its record is ordered
+separately.
+
+**At deploy.** Nothing to do on the root. A caller of `place` that changes something passes
+`--authorization` and `--enables` from this build on; a placement without them is refused before
+anything happens, so nothing is half done.
+
+### 1.417 Slice #463 S3-10 (0.12.64): `standard-pack trial`: its plan, its refusals and its record (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, whose stage three puts a trial on a real application under the owner's explicit authorization; the design `rd-1115/pack-stage3-design.md`, §2.4 and §4.2 "S3-10"; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s310-trial-plan.md`, read on main `44cbab53`)
+
+The coordinator gave this slice 1.417; the numbers between §1.400 and this one belong to slices
+dispatched with it. The slice ships in 0.12.64.
+
+**What it is.** A new authoring row, `standard-pack trial` (slice `PACK-TRIAL`; actinglab's own
+command `standard-pack trial`, MCP's `ac_standard_pack_trial` through a `serve` child), the half of
+the trial tool that shows and refuses and keeps the record
+([standard-pack-trial.md](standard-pack-trial.md)). **It sends nothing**: in this release the row
+answers only with `--plan`, and without it the line is refused before anything is read,
+`validation_failed` naming `--plan` `required` (the coordinator's ruling 1); S3-11 builds the run on
+this slice's branch and lifts that refusal. The offline part is one module of the resource tooling,
+`standard_pack_trial`: `plan_standard_pack_trial` (the plan and its refusals),
+`check_trial_state_dir`, `write_trial_record`, `trial_records` and `latest_trial_record`.
+
+**The plan** (ruling 5): the package id; `content_hash_prefix`, the first 12 hex digits of the
+content hash of the directory given, the digits the failure identity keeps and the break-in of
+#1737 takes of the same function's hash (#1737, U1b, §1.389, is on main; the second train of stage
+three read the merged code: the two call two functions, not one, over one digest; the break-in
+measures by containment's `measure_content_hash`, through the host's `measure_package_hash` and the
+lift checks' memory, and cuts the digits by the host's `content_hash_prefix`; the plan reads its own
+snapshot, `snapshot_content_directory`, and calls the contract crate's `content_directory_digest`
+of each file's SHA-256 itself, the directory branch of `measure_content_hash`, keeping
+`CONTENT_PREFIX_DIGITS` (12) digits); the instance as given, never contacted; the declared ends, each `scheduling_outcome` mapping of the entry task
+with its key, its kind and its pages; each declared variable with the value `--variable` gives
+(parsed by the scan replay's own parser, judged offline by the contract crate's
+`PackageVariable::judge`, the rule a dispatch resolves a value by, taken only as given) or its
+default; the irreversible mark; the authorization reference, `null` when none was given;
+`--expect`; `run_requires`, what the run will require that the plan was not given; and
+`record_directory`. It reads the package directory once, `--root`, and whether the state
+directory's path holds the entries below: no Runtime, no device, no installation, and it writes
+nothing (ruling 7).
+
+**A plan asks for nothing** (fix round 2, the coordinator's ruling 1, the review's item 1). The plan
+is "prepare and show" (the design's authorization line): it needs no authorization and refuses
+nothing only the run needs. `--authorization` is optional with `--plan`: given, it is bounded and
+checked and shown back; given without a value or blank, `validation_failed` `value_missing`, the
+command line's refusal of an option without its value; not given, the plan answers `authorization`
+`null` and `run_requires` `["authorization"]`. A package the irreversible mark flags is shown,
+`irreversible_acknowledged` true or false as `--irreversible` was given; nothing is refused for it.
+So `trial_authorization_missing` and `trial_irreversible_unacknowledged` had no path in this slice
+and are removed (enum entries, fragment, index, texts, tests); they arrive with the slice that sends
+the run. The record's writer is called by no command yet. Fix round 3 (the second review) corrects
+what fix round 2 said here: a record without an authorization was held by a `debug_assert`, which
+a release build does not run, and the sentence that no existing code fits was wrong, since the
+writer already refuses another malformed record `validation_failed`. Now it cannot be built: the
+record's plan is a type of its own, `TrialRecordPlan`, whose `authorization` is a text, made from a
+`TrialPlan` only by a conversion (`TryFrom`; outside the crate the type is `non_exhaustive`) that
+refuses a plan without one `validation_failed`, as the writer's other refusals of a malformed
+record; the writer takes it, and the reader decodes into it, so a stored record whose
+`authorization` is absent or `null` is `trial_record_unreadable` `undecodable`.
+
+**Malformed arguments are `validation_failed`** (fix round 2, the coordinator's ruling 2): one code,
+one cause, and one way for the same kind of mistake, as the slice already answered an undeclared
+`--variable` name. A `--package` that is a file is `validation_failed` naming `--package` with
+`unusable`, the vocabulary `argument_problem`'s word for an argument that names something not of its
+kind (no word of the command line names a path of the wrong kind more closely), the message saying
+why a directory is required; an `--expect` the package does not declare is `validation_failed`
+naming `--expect` with `not_recognised`, the word an undeclared `--variable` name gets, the details
+keeping `expected` and `declared_outcome_keys`. `trial_package_not_directory` and
+`trial_expectation_unknown` are removed.
+
+**One reading** (fix round 2, point 5): the plan read the package four times (its description, its
+remedy declarations, its content hash, its entry task) and, over a root, a fifth time for the
+irreversible mark. It now takes one bounded snapshot by the containment crate's
+`snapshot_content_directory` and derives everything from it: the hash is the contract crate's
+`content_directory_digest` of each file's SHA-256 (`Sha256Hash::digest`), exactly the directory
+branch of `measure_content_hash`, which the test compares it with; the kernel admits the same bytes
+(`PreparedContainedTask::load_content_entries`, offline without a vision provider); the package id,
+the entry task, the control declaration's `provides` and `variables` (the contract crate's
+`parse_package_variables`) come from the snapshot. Fix round 3 (the second review's suggestion c):
+fix round 2 also derived from the snapshot what the rule of irreversibility judges of the package,
+by a copy of `RemedyDeclarations::declared_capabilities`, and judged the root by a copy of the loop
+of `root_irreversibility`; copies drift, so both are gone. `declared_capabilities` takes the parsed
+declarations, but the only reader that makes them, the kernel's
+`PreparedContainedTask::read_remedy_declarations`, takes a path, and the kernel is not this
+slice's to change; so the mark is now judged by `root_irreversibility` itself, called with a
+directory map that gives the directory tried in place of the registered directory of its id, and
+over a root the directory tried is read once more, by that reader, for the mark alone.
+
+**The ends** (fix round 2, point 5): the first round listed the keyed ends of a page graph as
+`ending`. Each kind is now named by the declaration that makes it one, as the package's own
+contracts name them, told apart in this order: `target` (a target page of the task, by the kernel's
+`terminal_holds_page`), `on_empty`, `on_max_runs`, `on_guard_refused`, `on_timeout` (the key of an
+operation's select step, keyed cap, keyed guard refusal or wait step), `end_page` (a stage's
+`end_pages`), and for every other mapping `ending` in a `linear_steps` task or `other` in a page
+graph.
+
+**The refusals.**
+
+| Code (resource-tooling) | The one situation | Refuses / warns | Exit |
+|---|---|---|---|
+| `trial_state_dir_refused` (word `trial_state_place`: `installed_root`, `repository`) | the state directory is, or lies inside, an installed root or a repository (ruling 6) | refuses | 1 (envelope 2) |
+| `trial_record_exists` (fix round 2) | a record or its `.part` of that name is already there: it is never replaced; a person looks at that file | refuses | 1 (envelope 2) |
+| `trial_record_write_failed` | the operating system refused a step of the write, and no record was written (fix round 3) | refuses | 1 (envelope 2) |
+| `trial_record_unreadable` (word `trial_record_problem`, fix round 2: `read_failed`, `too_large`, `undecodable`, `name_mismatch`) | a file of a record's name is not that record | refuses | 1 (envelope 2) |
+| `trial_record_part_left` (fix round 3) | the record is written and in place, but the `.part` its write created could not be removed | warns, in the `warnings` of the writer's success | 0 |
+
+The command line's own refusals and the malformed arguments are `validation_failed` naming the
+flag: `--authorization` given blank (`value_missing`), longer than 1024 bytes (`out_of_range`) or
+with a control character (`not_recognised`); `--package` a file (`unusable`); a `--variable` the
+scan replay's parser refuses or the declaration does not take (the details carry `variable_name` and
+the judgement's `variable_problem`); `--expect` undeclared (`not_recognised`). A check of the state
+directory's path that the operating system refuses is `foreign_os_error`. Two new keys and their
+vocabularies, `trial_state_place` and `trial_record_problem`, and the domain `trial_` of the
+resource tooling's fragment. No decision point reads a code: each refusal is built where its
+situation is known.
+
+**Without `--root`** the mark cannot be judged: the plan answers `irreversible` `not_judged`. The
+row's notes and the contract say so; S3-11 decides whether the run requires `--root` (ruling 3).
+
+**The record** `actingcommand.pack-trial.v1` (ruling 6): `schema_version`, `at_unix_ms`, `plan`
+(whose `authorization` always holds a reference), `request_id`, `run_id`, `end` (`outcome`,
+`outcome_key`, `final_page`, `failure_code`, `failure_values`) and `matched`, under
+`<state>/trials/<package_id>/<content12>-<ms>.json`. Fix round 2 (the review's item 3): "never
+replaced" holds without a window between a check and the write. The writer writes the record whole,
+and flushed, under its name with `.part` added (a file created anew, `create_new`), then
+`hard_link`s it to its name, which fails when the name is taken (a rename would replace an existing
+file on Windows); a record or a `.part` of that name already there is `trial_record_exists`, built
+from what was found and from no forged I/O error; once linked, the `.part` it created is removed
+(fix round 3: a refused removal leaves the record written and is a warning, below, no longer
+`trial_record_write_failed`). The reader answers every record of a package and the latest of one
+content and refuses a file of a record's name that is not the record its name says, with the word
+that says why. Nothing writes one outside the tests in this release.
+
+**Fix round 3** (the second review; brief `rd-1115/brief-463-s310-fix3.md`). *A written record is
+never reported as not written*: fix round 2 answered a refused removal of the `.part` after the
+link `trial_record_write_failed`, so a record on disk was reported as not written and the code held
+two causes. Now the writer answers success, `WrittenTrialRecord`: the record's `path`, `part_left`
+naming the `.part` left, and in `warnings` the new warning `trial_record_part_left` (`path` the
+`.part`, the refusal of the removal its cause), in the shape the Lab's answers carry warnings in;
+`trial_record_write_failed` now means only that no record was written. *The failure paths*: after a
+refused write, flush or link (for another reason than the name being taken) the writer removes the
+files it created anew with `create_new`, so that the one retry of the same record is not blocked by
+its own leftovers; one whose removal is refused too is named by a `cleanup` link
+(`foreign_os_error`, `io_op` `remove`) and the answer is still the original failure. A refused
+flush is `io_op` `sync`, no longer `write`. *Without hard links* (FAT32, exFAT, some network
+shares), following main's precedent (`state_root_installation.rs`, `place_once` and
+`create_exclusive`; [install-cli.md](install-cli.md), `install\identity.json`): a link refused for
+another reason than the name being taken falls back to an exclusive create of the record's own
+name, the link's refusal a `note` link when that fails too. It keeps that no file of the name is
+ever written over; it gives up that the name exists before its bytes do, so a reader then, or a
+crash meanwhile, finds an incomplete record, which the reader refuses `undecodable`; a refused
+write or flush removes that file too. *The text*: the contract's order of the refusals names
+`--root`'s own last (a root that is no directory or names no game, a root file that cannot be read
+or is too large: `validation_failed`; a root without `bundle.json` or a root file refused:
+`standard_pack_root_invalid`), where the code has them.
+
+**The state directory's place** (fix round 2, the review's item 2). The work order asked to refuse a
+state directory inside a repository or an installed root "by the test the Lab already has for
+that". The first round recognised an installed root by `runtime\BUILD-MANIFEST.json` or
+`install\active.json` and said that main has no such test; both were wrong. The first file is in
+every unpacked release and every kept build (it marks a member folder, not an installation), the
+second exists only in one layout, and `install\state.json` is the installer's own state file in both
+layouts ([install-cli.md](install-cli.md), "Layout"); main recognises an installation by it for one
+directory (`actingcommand_runtime_host::installation_root_at`, `state_root_installation.rs`). Now one
+function of the resource tooling, `installed_root_containing`, answers the directory a path is or
+lies inside whose `install\state.json` is a file, along the path made absolute and then along its
+nearest existing part with its links resolved, a part whose existence or kind the operating system
+does not tell, or that cannot be resolved, being `foreign_os_error` (`try_exists`), never read as
+"absent". The resource tooling may not reach the host's crate (the architecture guard
+`production_packages_cannot_reach_resource_tooling`), so the function repeats only the file's name
+and none of `installation_root_at`. It sits below the Lab's crate so that both can call it: pull
+request #1736 (R4 and P4, §1.388, on main since 0.12.63) refuses a recording's output directory
+inside an installed root by the same file with its own walk. The second train of stage three
+compared the two and left that walk in place: it reads a check the operating system refuses as
+"absent" and walks on (and walks a path that cannot be made absolute as given), where this
+function answers `foreign_os_error` (`validation_failed` for that path), so the two name the same
+root only while every check is answered ([standard-pack-trial.md](standard-pack-trial.md)). A
+state directory inside a repository (a directory along the path that holds `.git`) keeps its
+refusal (the work order's "never in a repository"); what it costs: a state directory kept inside a
+checkout is refused for the trial's records though recordings accept it there, and `--state-dir`
+names another.
+
+**Where the row is wired.** Beside the module and actinglab's `standard_pack_cli.rs`: the row in
+`lab-operations.json`; `engine::COMMANDS` (68), the strict rows (33) with the command's flag lists
+`TRIAL_FLAGS` and `TRIAL_SWITCHES`, the census's group (a) (66), `BUILT_SLICES` and the MCP
+server's `ACTINGLAB_SLICES` (`PACK-TRIAL`), the capability (`offline`, `read_only`), the help's
+options, the dry-run declaration (`no_effect`, [actinglab-dry-run.md](actinglab-dry-run.md)) and
+the command inventory (106 commands); fix round 2: `--variable` by `replay_cli::given_variables`,
+the scan replay's own parser, which names the command in its messages, and the counts of
+[lab-two-entries.md](lab-two-entries.md) (23 rows take the instance on the command line only as
+`--instance`; 161 offered rows on Windows, 68 of them by children, 122 elsewhere) and the Files list
+of [README.md](README.md). The resource tooling reads the root by the contract crate's
+`read_standard_pack_root` and judges it by `IrreversiblePackages` as its own `root_irreversibility`
+builds it (fix round 3: called, not copied), every package of the root read by the Runtime's
+metadata reader, the directory tried read in place of the registered one of its id.
+
+**Tests.** `crates/resource-tooling/src/gate_463_s310.rs` (eleven) and
+`apps/actinglab/src/tests/gate_463_s310.rs` (two), gate map `exec.toml` "#463 S3-10": the plan of a
+`linear_steps` package with two ending pages lists three keys; a plan writes nothing; a plan without
+an authorization answers `null` and `run_requires`, a given one is bounded; a container, an
+undeclared `--expect` and unfit `--variable` values are `validation_failed`; a marked package is
+shown, not refused; a state directory in a repository or an installed root is refused by the plan
+and by the writer, and an unpacked release or a selection alone is no installed root; the writer
+never replaces a record or a `.part` (`trial_record_exists`) and the reader's three words; the
+command line without `--plan` and with it, with and without `--authorization`. Fix round 2 renames
+`s310_the_authorization_is_required_bounded_and_shown_back` to
+`s310_the_authorization_is_optional_bounded_and_shown_back` (neither is on main, so nothing leaves
+the gate map's merge base). Fix round 3 adds
+`s310_a_record_plan_is_made_only_from_a_plan_with_an_authorization` (the conversion of a plan
+without an authorization is `validation_failed`) and
+`s310_a_stored_record_whose_authorization_is_null_is_unreadable` (`undecodable`), and adapts two of
+this slice's own tests to the writer's new types (a record's plan made by the conversion; the
+writer's answer compared whole, no `.part` left and no warning). No golden changes, no test of
+main is adapted.
+
+**What is not changed.** `run start` and the run path of `crates/lab-ops`, the Runtime, `adopt.rs`,
+readiness, the placement, every interface revision and record shape.
+
+**At deploy.** Nothing to do: the row only reads, and nothing writes a trial record yet.
+
+### 1.402 Slice #463 S1-1 (0.12.64): a press is recorded by the command that makes it, `tap`, `swipe` and `long-tap --record` (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, whose stage one starts recording, plays the business normally and ends recording; the design `rd-1115/pack-stage12-design.md`, A1, A2.1, A3, A5 and A6.1, read on main `44cbab53`; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s11-press-record.md`, read on main `44cbab53`)
+
+The coordinator gave this slice 1.402: main `44cbab53` holds the sections up to §1.400, and 1.401
+is #469 D4b. The slice ships in 0.12.64 (release 0.12.63 was cut without it).
+
+**Why.** A press reached a recording only through `do --capture --record`, which needs a rectangle
+and a carrier package, and `tap`, `swipe` and `long-tap` refused `--record`
+(`record_flag_unsupported`), so an agent could not simply play. Now `record start`, the presses
+each with `--record`, and `record archive` record a business: each press a step with the screen
+before it and the screen after it ([lab-recording.md](lab-recording.md), "Recording while
+playing").
+
+**Established by reading.**
+- *A box of one pixel.* The kernel admits a `rect` click of width and height 1: `ClickRect`'s
+  `validate_shape` and `validate` (`crates/execution-kernel/src/contained_task.rs`) ask width and
+  height of at least 1 and both corners inside the resolution, and its draw's
+  `InputSamplingRegion::validate` (`crates/actingcommand-contract/src/event/payload.rs`) the same;
+  `record stop` writes a point click as that `rect` (`click_json`,
+  `crates/lab/src/recording/generate.rs`, unchanged). The gate's ninth test generates it and the
+  dry run's admission takes it.
+- *Coordinates* (the coordinator's ruling 3). The input proxy's tap, long tap and swipe reach the
+  instance's input backend with the coordinates they were given: the kernel's `prepare_input`
+  (`crates/execution-kernel/src/kernel.rs`) converts nothing. The ADB shell input takes the display's
+  coordinates in its current rotation (`connect_with_steps`, `crates/device/src/touch.rs`); a
+  DroidCast frame is turned to the display (`crates/device/src/capture.rs`); a MuMu IPC frame carries
+  `rotation: NotProvidedBySource` and an unproven ADB display mapping (the same file). So a recorded
+  point and the frames agree where both backends see the display alike, and the code proves nothing
+  more; no conversion is built and nothing new is refused. An instance whose input needs the
+  frame's reference (`nemu_input_frame_required`, `crates/runtime-host/src/host/input.rs`) presses
+  since fix round 2 (below): every recorded press names the frame of the capture just before it.
+- *The after frame.* A performed press closes its step (`commit_click`), so the next frame finds no
+  open step and closes none (`plan_arrival`): the design's "`arrive` when it closes a step by click"
+  never runs for such a press. The after frame is noted where a frame opens a step, on the step
+  before it, when that step's press names its `before_frame` and has no after frame yet
+  (`note_after_frame`).
+- *What the model could not take in this slice.* `ApplicationExecution` is built member by member in
+  `apps/actinglab/src/session_management.rs` and `PlanClickRequest` in
+  `apps/actinglab/src/lab2_cli/operation.rs`, two files the work order keeps out of this slice: a
+  member added to either does not compile there. The application execution's three members come
+  with S1-3, which touches that file; the point press is a member of `RecordPressRequest`.
+- *The capture's request.* One frame taken as `capture --record` takes it (`capture_for_command`
+  without `--require-fresh`) is the `ObserveReadonly` read (`capture_runtime_sequence` of one
+  frame), not a `CaptureSequence`: the three rows name `ObserveReadonly`. No request kind is new.
+- *Interface revisions.* None moves: no request kind, wire shape, record, ledger member,
+  configuration key or outcome code is added, and `actingcommand.lab-recording.v1` keeps its name
+  (every new member is absent on every other press).
+
+**What it builds.**
+
+| Part | Where |
+|---|---|
+| The model | `ClickExecution` gains `before_frame`, `after_frame` and `after_capture` (`AfterCaptureRecord {after_ms, still_max_ms, still, waited_ms, captures, kept}`), each `serde(default, skip_serializing_if)`; `PointPress`, `AfterCapture` (`for_press` 800 and 5000, `for_application` 2000 and 30000), `RecordPressRequest {click, point_press, after}`, `BeforeFrame`, `AfterFrame`, `RecordPressOutcome {click, before, after, warnings}` (`crates/lab/src/recording/model.rs`) |
+| The steps | `plan_press` (refusals, then `plan_point`: `rect {x, y, 1, 1}`, `source: "point"`, a long press's `gesture`; a swipe through `plan_click`), `commit_click` naming the step's live primary frame with `names_frames`, `note_after_frame` in `arrive`, `note_after_capture` (`crates/lab/src/recording/steps.rs`) |
+| The recording API | `RecordFramePorts {wait, capture}`, `record_before_frame` (one capture when no step is open), `record_after_frame` (the wait, the preflight, one capture, its arrival with `after_capture`), `record_press`, `record_press_input` (the input of a plan); `record_commit_click`'s recording part shared as `commit_recorded`, its two exit-4 errors as functions, its answers unchanged (`crates/lab/src/recording_api.rs`) |
+| The command | `tap`, `swipe` and `long-tap` take `--record` and `--after-ms` (`DIRECT_TOUCH_FLAGS`, `DIRECT_TOUCH_SWITCHES`, parsed by `FlagArgs::parse_switches`); `run_recorded_touch`: the lock (`record_flag_begin`), the Runtime's capture endpoint (fix round 3: no local device configuration), `record_press` with the input sent through `RuntimeInputProxy` (`send_recorded_press`: a receipt performed; fix round 2, below: a denied usage or safety refusal not performed, any other error indeterminate) and the captures as `capture --record` takes them (`PressFrames`) (`apps/actinglab/src/commands/device_commands.rs`); `record_flag_gate` takes the three without `--dry-run` and refuses `--after-ms` without `--record` (`PRESS_RECORD_ONLY_FLAGS`, `apps/actinglab/src/main.rs`); `dry_run_gate.rs` declares the three forms refused, and the record policy's `record_flag` (`session_contracts.rs`) lists them |
+| The table | the rows `tap`, `swipe`, `long-tap`: `record` (switch), `after_ms` (integer), their help, output and notes, `ObserveReadonly` beside `Input`; `own_flags.rs` reads the switch from the command's constant |
+| Texts | [lab-recording.md](lab-recording.md): "Recording while playing", the opening paragraph, the members' paragraph of `recording.json`, "`--record` on device commands" (its first sentence, its table, nine forms); [actinglab-dry-run.md](actinglab-dry-run.md): the three forms |
+
+**Codes and words.** No outcome code is added and no fragment changes. New words of existing codes,
+each in the details of the refusal or the answer, never in a text: `validation_failed` with
+`details{argument, reason}`, `reason` one of `outside_frame` (the point, of a tap or a long press,
+outside the frame), `duration_range` (a long press outside 1..=60000 ms), `range` (`--after-ms`
+outside 0..=60000 or no whole number), `record_only` (`--after-ms` without `--record`), each
+refusing, exit 2; the answer's `record.status` `press_recorded`, and `press_indeterminate` in
+`record_click_indeterminate`'s `details.record` (exit 4); `after.taken: false` in the details of a
+frame after that was not taken (the capture's own code). No decision reads a code.
+
+**Tests.** `crates/lab/src/gate_463_s11.rs` (exec gate map "#463 S1-1"; fake Runtime, fake clock,
+synthetic 1280x720 frames): a tap on a new recording (one capture, the input, the wait, one capture;
+`rect {100, 200, 1, 1}`, `source "point"`, `before_frame` f0001, `after_frame` f0002,
+`after_capture`, the answer); a long press; a swipe; an uncertain answer (indeterminate, the step
+open, no frame after); a press not performed (every file byte for byte); refusals before the press
+(`outside_frame`, `duration_range`, `range`); a declared click (`record_click_exists`); a frame after
+that cannot be taken (details `record`, then `after`); marked afterwards, `record stop --dry-run`
+validated and the generated click the `rect` of one pixel; a press of `do --capture --record` and
+its next frame with none of the new members. `apps/actinglab/src/tests/gate_463_s11.rs`: the three
+commands with `--record --dry-run` and `key back --record` are `record_flag_unsupported`, `tap 1 2
+--after-ms 5` is `validation_failed` `record_only`. `apps/actinglab-mcp/src/gate_463_s11.rs`:
+`ac_tap`, `ac_swipe` and `ac_long_tap` list `record` and `after_ms`. No test is adapted, no golden
+changes, no test leaves the gate map.
+
+**What is not changed.** `do --capture --record`, its answers and what it records; `capture --record`;
+`session app --record`; the package generator and the kernel; today's MCP server (`actingctl
+mcp-serve`); every recording without a press of the three commands, byte for byte. Not built here (the
+design's later slices): the refresh of an old frame before and the stillness test after (S1-2), the
+frames of application operations (S1-3), `record frame` and the warning of an unrecorded input
+(S1-4), the manifest (S1-5), notes (S1-6).
+
+**At deploy.** Nothing to configure. Recordings already on disk load as before. Through MCP the
+three tools take `record` on the Lab's MCP server (`actinglab-mcp`); a client registered with
+today's server has no such tool until its registration moves, which is the owner's to do.
+
+**Fix round 2** (the independent review's two must-change items and the coordinator's B0;
+coordinator work order `rd-1115/brief-463-s11-fix2.md`, on the branch's head `61caa484`, main
+`b7c47129`).
+- *Every recorded press is sent on a frame captured immediately before it, and names it.* The
+  first round sent the press with no frame, so an instance whose input is the emulator's own
+  refused it (`nemu_input_frame_required`) and nothing was recorded. Now each `tap`, `swipe` and
+  `long-tap --record` takes one `ObserveReadonly` capture right before its press, a step open or
+  not, and sends the input with that observation's frame reference, built by the one function
+  `do`'s scene uses (`runtime_capture_backend::input_frame_reference`, shared with
+  `lab2_cli.rs`). Kept of it: no step open, it opens the step; an open step without marks, it
+  arrives as `capture --record`'s does there (the older frame superseded); an open step with marks,
+  it is not stored (`record.before.sent_on_unstored_capture`, `refreshed` false), checked to be of
+  the recording's size. The step's own refusals come before the capture. An observation without a
+  frame id (refused already by the client's receipt check, `ReadonlyObservation::validate`) is
+  `device_error` before anything is stored or pressed.
+- *Established by reading: the frame reference on every backend.* The host resolves a given
+  reference whatever the backend (`host/input.rs`, the block after the frame requirement; the
+  kernel's `ResolveFrame` finds the committed frame of either owner) and only the Nemu input reads
+  it (`execute_input`, `crates/execution-kernel/src/session.rs`; every other backend's `*_in_frame`
+  is not called). So it is passed on every instance; no backend refuses it.
+- *A press that may have landed is indeterminate.* Not performed is now only a usage or safety
+  refusal the Runtime denied (`input_not_sent`, `device_commands.rs`: the class of
+  `RuntimeClientError::disposition` and the received receipt's state); every other error (a device
+  failure of the backend, which the Runtime records `indeterminate` on a physical instance, a
+  Runtime failure, an input its check stopped, an unread answer) records the press indeterminate,
+  `record_click_indeterminate`, as `do --capture --record` records every press the Runtime did not
+  record as not performed.
+- *Signatures.* `RecordFramePorts::capture` returns `CapturedFrame {frame, input_frame}`;
+  `record_before_frame` always captures and returns `BeforeCapture {input_frame, arrived}`;
+  `record_press`'s press closure is `FnMut(&ClickPlan, InputFrameReference)`; `BeforeFrame` gains
+  `sent_on_unstored_capture`; `CaptureCommandResult` gains `input_frame`; `steps::has_marks` is
+  `pub(crate)`.
+- *Smaller points.* Capability entries `tap --record`, `swipe --record`, `long-tap --record`
+  (`capabilities.rs`), so the three dry-run declarations annotate them; a swipe's refusals carry
+  `details{argument, reason}` as a tap's (`point`/`outside_frame`, `duration_ms`/`duration_range`);
+  `FlagArgs::reject_flags` names what the command takes; the rows' `help` within 160 bytes (the
+  check `lab_ops_table_complete`), the rest in their `notes`.
+- *Tests.* Four new in `crates/lab/src/gate_463_s11.rs` (two presses in a row, a failed after
+  capture then a press, a step with marks, an observation without a frame id) and two in
+  `apps/actinglab/tests/runtime_input_proxy.rs` on the fake Runtime host (`tap --record` on an
+  instance whose input is `nemu_ipc`: the ledger's capture, the input naming its frame, the capture
+  after; a backend failure of the tap recorded indeterminate). Adapted: the press not performed runs
+  on a step with a mark (its capture is not stored, so every file still keeps its bytes); the
+  refusals before the press add a swipe's two. No test leaves the gate map.
+
+**Fix round 3** (CI's two red tests of fix round 2, the second independent review's must-change
+item and the coordinator's ruling on one retry; coordinator work order
+`rd-1115/brief-463-s11-fix3.md`, on the branch's head `24e48b47`, main `b7c47129`).
+- *No local device configuration.* The two tests of `runtime_input_proxy.rs` failed with
+  `device_error` "ADB path is not configured" before anything ran: `run_recorded_touch` resolved
+  `device_config` (the ADB path, `effective_adb_path_for_instance`) and its captures used only its
+  Runtime capture endpoint (`capture_for_command` ignores the capture backend it is given). `tap`
+  without `--record` resolves none (`open_cli_runtime_input_proxy`). Now the command builds the
+  endpoint from the instance and the Runtime's state root, and `PressFrames` captures through
+  `capture_observation_for_command`, which `capture_for_command` without `--require-fresh` calls
+  too: the tests are unchanged.
+- *The recording says when a press was sent on a capture it did not store.* `ClickExecution`
+  gains `sent_on_unstored_capture` (`serde(default, skip_serializing_if = Not::not)`: every
+  existing recording and every press on a step without marks byte for byte as before), handed by
+  `record_press` through `commit_recorded` to `commit_click`, written beside `before_frame`.
+- *One retry when the frame is gone before the press.* An input the Runtime denies
+  `input_frame_unavailable` sent nothing: the command captures once more and sends the press once
+  more on the new capture; a second refusal of any kind is answered as before. The refusal is
+  told from every other in one place, `input_frame_unavailable` in `device_commands.rs` (the
+  denied receipt's state and the receipt outcome's code; the code's category and ladder class,
+  `error`/`none`, are those of other input refusals and the outcome carries no word that
+  separates it, so this decision names the code, by the coordinator's ruling), which marks the
+  refusal (`record_press_frame_unavailable`); `record_press` retries on the mark only and takes
+  the mark away before it answers. Kept: the first capture, if stored, stays superseded by the
+  second, which the press is committed on; on a step with marks neither is stored. The answer's
+  `record.before.captured_twice` says so.
+- *Wording.* "Not performed" leaves the capture before the press in the step (except on a step
+  with marks); the frame reference is built as `do --capture`'s online scene builds one (the
+  recorded `do` presses inside the Runtime's own operation).
+- *Signatures.* `commit_click` and the private `commit_recorded` take `sent_on_unstored_capture`
+  after `names_frames` (every other caller passes `false`); `BeforeFrame` gains
+  `captured_twice`; new public `record_press_frame_unavailable`; `PressFrames` holds the endpoint
+  in place of the device configuration. `record_before_frame`, `record_after_frame`,
+  `RecordFramePorts`, `CapturedFrame`, `BeforeCapture`, the press closure, `note_after_frame` and
+  `note_after_capture` are unchanged.
+- *Codes and words.* No outcome code is added and no fragment changes. One decision now reads a
+  code (above). New members: `sent_on_unstored_capture` of an execution, `captured_twice` of the
+  answer's `before`.
+- *Tests.* Two new in `crates/lab/src/gate_463_s11.rs` (a press refused for its frame and sent
+  once more, on a new recording and on a step with marks; a second refusal, of the frame or
+  another, answered as it is, no press recorded, both captures kept) and one in
+  `runtime_input_proxy.rs` (an input denied for the foreground: `device_error`, one capture, no
+  click, the capture before it kept as step 1's frame; the fake device reports another
+  application when the test asks). Adapted: the step with marks asserts the execution's
+  `sent_on_unstored_capture`, the two presses in a row its absence. No test leaves the gate map.
+
+**Fix round after the train's review** (0.12.64; coordinator work order
+`rd-1115/brief-463-train-s1-fix.md`, items 4, 5 and 7, after the two independent reviews of the
+whole train of stage one; the coordinator's rulings, not the owner's words). The wait `after_ms`
+is checked where the other three parameters of the screen after are, in one function
+(`record_after_capture_check`), and its refusal carries their keys, `value`, `min` and `max` (it
+carried `after_ms` and `max_after_ms`); `--after-ms` that is no whole number answers `wrong_type`
+with `value` (`parse_after_ms`), the word the Lab's other flags answer for it, and `range` is
+left to a value outside the bounds. The texts of `record_before_frame`, which takes the frame
+before a press and before an application operation, name both. The answer's `record.warnings`
+is listed whole in the contract, `after_not_still`, then `instance_not_held` or
+`instance_hold_unread`. No code or word is added; `wrong_type` is the Lab's own.
+
+### 1.403 Slice #463 S1-2 (0.12.64): after a recorded press the screen is captured until it is still, and every capture is kept (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, and the owner's words on board #463 on the evening of 11-15 on what stage one hands over and on the captures after a press; the coordinator's rulings in the work orders, not the owner's words; coordinator work orders `rd-1115/brief-463-s12-still-after.md`, `rd-1115/brief-463-s12-fix2.md`, which replaces its rulings where they differ, and `rd-1115/brief-463-s12-fix3.md`, fix round 3 after the independent review; built on S1-1's branch at `24e48b47cdac` (§1.402))
+
+The coordinator gave this slice 1.403, after S1-1 (§1.402), on whose code it stands. The slice
+ships in 0.12.64 (release 0.12.63 was cut without it).
+
+**Why.** The owner (board #463, 11-15 evening): what stage one hands over of a recording is, for
+each press, the frame it happened on and the last result frame; stage two must be able to give an
+agent that asks the several, or several dozen, frames before and after a press; and since the
+screen may change quickly after a press, the captures after it must be closer together. S1-1 took
+one capture a fixed time after a press. Now the screen after a press is captured until it is still
+and every capture is kept ([lab-recording.md](lab-recording.md), "Recording while playing", "The
+screen after").
+
+**Established by reading.**
+- *The measure* (the first work order's ruling 1). The Runtime's one frame-change measure is
+  `frame_change_digest` and `frame_change_milli`, still at most `FRAME_CHANGE_MAX_MILLI`, in
+  `actingcommand-recognition` (`crates/recognition/src/color_digest.rs`), which the kernel's still
+  waits use; the Lab crate already depends on it. The recording API calls it on the whole frame;
+  nothing is copied and no dependency is added.
+- *The frame before.* S1-1's fix round 2 captures a frame immediately before every press and stores
+  it by its own rule (§1.402). This slice's first round, which re-captured an old frame and stored
+  it only when it had changed, is gone; `record_before_frame` is S1-1's as S1-1 wrote it.
+- *The clock.* A capture starts `interval_ms` after the start of the one before it, or at once when
+  that one took longer, so the loop reads the time a capture took: `RecordFramePorts` gains
+  `elapsed`, the caller's clock (actinglab: a monotonic clock from the command's start; a gate: a
+  fake clock moved by its waits and its scripted captures). No gate reads a clock.
+- *`after_frame` in one place* (the coordinator's ruling 3; a change in `steps.rs`). S1-1's
+  `note_after_frame` named the first frame that opens a step after a press. It is split into
+  `awaiting_after_frame` (the press such a frame follows) and `name_after_frame`, the one write.
+  `arrive` names the frame that opens the step as before; `arrive_after_press`, the arrival of the
+  loop's captures, names none, and the loop names its last capture once it ends. So a frame that
+  arrives later (a `capture --record`, the next press's capture before it) never rewrites it, and
+  when the loop stored nothing (its first capture failed) the first frame that opens a step after
+  the press is named, as in S1-1.
+- *Memory.* The loop's frames are written once, when it ends; each capture's decoded pixels leave
+  the session's cache as soon as it arrived, its PNG staying in the pending writes (at most 121).
+- *The bound wherever the loop is entered* (fix round 3, the review's first item). The neighbouring
+  slice S1-3 calls `record_after_frame` directly after an application operation, so the loop
+  checks its own parameters (`check_after_capture`, which `record_press` also calls before the
+  press) and ends by count as well as by time.
+- *`--interval-ms` is taken by other commands* (`stream`, the session monitor, `session` lines):
+  `record_flag_gate` refuses it without `--record` on `tap`, `swipe` and `long-tap` only
+  (`PRESS_COMMANDS`, `apps/actinglab/src/main.rs`).
+- *Interface revisions.* None moves: `after_capture` gains three optional members, `interval_ms`
+  and `still_ms` (absent on a record S1-1's build wrote, which loads as one whose screen after was
+  not tested, `still` `null`) and `unfinished` (fix round 3, absent but on a loop a failed capture
+  ended); no request kind, configuration key or outcome code is added, and each capture is the
+  `ObserveReadonly` read the rows name.
+
+**What it builds.**
+
+| Part | Where |
+|---|---|
+| The model | `AfterCapture` gains `interval_ms` and `still_ms` (`None` for the recording API's defaults); `AfterCaptureRecord` gains `interval_ms` and `still_ms`, each `serde(default, skip_serializing_if)`, and (fix round 3) `unfinished`, `serde(default, skip_serializing_if = "std::ops::Not::not")`; `LAB_RECORDING_PRESS_AFTER_MS` is 100; fix round 3: `AfterCapture::for_application` takes its own interval and stillness, `LAB_RECORDING_APPLICATION_INTERVAL_MS` 1000 and `LAB_RECORDING_APPLICATION_STILL_MS` 2000 (after 2000 ms, bound 30000 ms: at most 31 captures) (`crates/lab/src/recording/model.rs`) |
+| The steps | `awaiting_after_frame`, `name_after_frame` (the one write of `after_frame`), `arrive` through `arrive_naming`, `arrive_after_press` (`crates/lab/src/recording/steps.rs`) |
+| The recording API | `RecordFramePorts::elapsed`; `check_after_capture` (the ranges and the bound of 120 intervals, called by `record_press` after the wait's bound and, fix round 3, by the loop itself); `record_after_frame` over `capture_after_press`: the check, the wait, the device-arrival check, the first capture (`take_after_capture`), then `capture_until_still` (`AfterTiming`, `AfterLoop`: the next capture's start, the end by time and by count, the stillness test `unchanged_for` on `change_digest`), one write of the frames, `after_frame` and `after_capture`, and (fix round 3) the error of a later capture that failed after what it took is written (`AfterTaken`, `after_loop_stopped`, `after_loop_stopped_press`); `record_press` adds `after_not_still`; `record_attach_frame` without S1-1's `after` branch (`DeviceFrame`, `frame_recorded`) (`crates/lab/src/recording_api.rs`) |
+| The command | `tap`, `swipe` and `long-tap` take `--interval-ms`, `--still-ms` and `--still-max-ms` (`DIRECT_TOUCH_FLAGS`, `after_capture_ms`); `PressFrames::elapsed` (`apps/actinglab/src/commands/device_commands.rs`); `record_flag_gate` refuses the three without `--record` (`PRESS_RECORD_ONLY_FLAGS`, `PRESS_COMMANDS`, `apps/actinglab/src/main.rs`) |
+| The table | the rows `tap`, `swipe`, `long-tap`: `interval_ms`, `still_ms`, `still_max_ms` (integers), `after_ms`'s default 100, their notes; `help` unchanged |
+| Texts | [lab-recording.md](lab-recording.md): in "Recording while playing" the synopsis, the MCP parameters, the refusals, "The screen after", the members of `recording.json` and the answer; the members' paragraph of `recording.json`; the `validation_failed` row of "`--record` on device commands" |
+
+**Still** (fix round 3, the coordinator's ruling, which replaces the window of the second round:
+"still" must not depend on how fast a capture is). The screen is still when it has not changed for
+at least `still_ms`: the newest capture and the unbroken run of captures before it that are each
+within the frame-change bound of the newest hold at least one earlier capture, and the newest
+started at least `still_ms` after the run's first. With captures every 100 ms and `still_ms` 300
+it takes four unchanged captures; with a capture cycle of 400 ms two. There is no other condition
+on the time since the loop's first capture.
+
+**Choices the work orders left.** The loop ends when the next capture would start more than
+`still_max_ms` after the first, and (fix round 3) at `1 + still_max_ms / interval_ms` captures
+whatever the caller's clock says; `waited_ms` runs from the press to the start of the last capture;
+`kept` is `captures - 1`; the four parameters are recorded as the press took them, with
+`--still-ms 0` too; the defaults (100, 300) are constants of the recording API, as S1-1's are
+(`--still-max-ms` 5000), not configuration keys, and so are the application's (fix round 3); a
+first capture that fails stores nothing of the loop, so that S1-1's rule for an after frame that
+could not be taken stands, and (fix round 3, the review's first "good to change"; the owner asked
+that every capture be kept) a later one that fails keeps what the loop took, its last the frame
+after, `after_capture` with `still` `null` and `unfinished` true, and answers the capture's own
+error with `after: {after_ms, taken: true, captures}` in its details; the reason word of a bound of
+more than 120 intervals is (fix round 3, the review's third item) `range`, a value out of the range
+the interval allows, with that range's `max` and `interval_ms` in the details, as the precedent of
+a bound that depends on another value (the path drag's `duration_ms`).
+
+**Codes and words.** No outcome code is added and no fragment changes. Words, each in the answer or
+the details, never in a text:
+
+| word | the one situation | refuses or warns | exit |
+|---|---|---|---|
+| `after_not_still` (`record.warnings`) | the loop reached `--still-max-ms` without a still screen; the last capture is the frame after | warns | 0 |
+| `validation_failed` `details{argument, reason: "range"}`, `argument` `interval_ms`, `still_ms` or `still_max_ms` | the value is outside its range (20..=1000, 0..=5000, 0..=60000) or no whole number | refuses | 2 |
+| `validation_failed` `details{argument, reason: "record_only"}`, the same three | the flag without `--record` | refuses | 2 |
+| `validation_failed` `details{argument: "still_max_ms", reason: "range", value, min: 0, max, interval_ms}`, `max` 120 times `interval_ms` | `still_max_ms` above 120 times `interval_ms` | refuses | 2 |
+| `unfinished: true` (`after_capture`) | a capture after the first could not be taken; the loop kept what it took and the command answers that capture's own error | the capture's own error | the capture's own |
+
+No decision reads a code.
+
+**Tests.** `crates/lab/src/gate_463_s12.rs` (exec gate map "#463 S1-2"; fake Runtime and clock,
+synthetic 160x90 screens of one colour): an animation that settles, captures every 100 ms (four
+unchanged needed: six captures, all kept in order, the last the frame after, `after_capture {100,
+100, 300, 5000, true, 600, 6, 5}`); captures of 400 ms each (two unchanged suffice: three
+captures, `waited_ms` 900); a change in the middle of a run (the run starts again, and the screen
+before the change does not count: eight captures); a screen that never settles for six bounds and
+intervals (exactly `1 + still_max_ms / interval_ms` captures, 121 at the last, `still` false,
+`after_not_still`); a caller's clock that does not advance (the loop ends by count at 11 captures,
+`still` false); a capture slower than the interval (the next at once, five captures); the same
+screen four times (four entries, one file); two taps (step 2's frames in time order: the first
+tap's loop, then the frame the second tap was sent on; step 1's `after_frame` not rewritten);
+`still_ms 0` (one capture, `still` null); a capture that fails midway (the two taken kept, the
+last the after frame, `unfinished`, the capture's own `device_error` with `after {100, true, 2}`);
+each parameter out of its range (`range` with `min` and `max`); a bound of more than 120 intervals
+(`range`, `max` 120 times `interval_ms`, `interval_ms`; nothing captured, pressed or written).
+`apps/actinglab/src/tests/gate_463_s12.rs`: the three flags without `--record` on the three
+commands; the three flags given a value that is no whole number (`range`). **Adapted**, because
+this slice deliberately changes what they pin: the tests of `crates/lab/src/gate_463_s11.rs`
+(S1-1) that take the frame after a press ask for one capture with no stillness test (`--after-ms
+800 --still-ms 0`) and pin `after_capture` with `interval_ms` and `still_ms`, their fake gains its
+clock; `apps/actinglab/tests/runtime_input_proxy.rs`'s `tap --record --after-ms 0` gains
+`--still-ms 0`. Fix round 3 adapts this slice's own tests: the capture slower than the interval
+now ends at its fifth capture (the new definition), the bound of 120 intervals answers `range`;
+the fake gains a failing capture and a clock that can stand still. No golden changes; no test
+leaves the gate map (the first round's tests never reached main).
+
+**What is not changed.** `record_before_frame` and the press (S1-1's), `archive.rs`,
+`session_management.rs`, the kernel, the Runtime; `do --capture --record`; `capture --record`,
+whose one frame arrives as before; every recording without a press of the three commands, byte for
+byte.
+
+**At deploy.** Nothing to configure. Recordings already on disk load as before; a press S1-1's build
+recorded keeps `after_capture` without `interval_ms` and `still_ms` and reads as not tested.
+
+**Fix round after the train's review** (0.12.64; coordinator work order
+`rd-1115/brief-463-train-s1-fix.md`, items 1, 3, 4 and 5; the coordinator's rulings, not the
+owner's words). One function checks the four parameters of the screen after
+(`record_after_capture_check`, `check_after_capture` is gone): `after_ms`, then the three of this
+slice, then the bound of 120 intervals, each refusal `range` with `value`, `min` and `max`; the
+after loop checks them wherever it is entered. A value of `--interval-ms`, `--still-ms` or
+`--still-max-ms` that is no whole number is `wrong_type` with `value` (`after_capture_ms`; it was
+`range`), the word the Lab's other flags answer for it. The loop's typed result is public,
+`AfterTaken {frame, record, stopped_by}`: `record_after_frame` (the screen after an application
+operation) answers it whatever the loop kept, its `stopped_by` worded for the effect (the
+captures after the press or the application operation stopped there, how many were kept), and
+`Err` only when nothing was kept; `record_press` runs the same loop for a press. Tests: new,
+`s12_fix_record_after_frame_refuses_a_bound_out_of_range_before_anything` (a direct call, nothing
+waited for or captured); adapted, actinglab's
+`s12_the_flags_of_the_captures_after_a_press_take_whole_numbers` now pins `wrong_type`, as the
+requirement changes the word. No test leaves the gate map.
+
+### 1.404 Slice #463 S1-3 (0.12.64): an application operation in the middle of a business is a step like a press, with the screens before and after it (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, whose stage one starts recording, plays the business normally and ends recording; the design `rd-1115/pack-stage12-design.md`, the row S1-3 of A6, A4's row of the rule "an application operation needs a marked open step", A1's parts on application operations and A2.1's row of `steps[].application.executed`, read on main `44cbab53`; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s13-app-steps.md`, built on the branch of #463 S1-1 at `486f5ce7`)
+
+The coordinator gave this slice 1.404. It stands on #463 S1-1 (§1.402) and ships in 0.12.64 (release 0.12.63 was cut without
+it).
+
+**Why.** A business sometimes launches, restarts or stops the application in its middle (a restart
+after an update prompt, for one). `session app <verb> --record` took such an operation only on a
+step that already carried marks (`record_application_step_marks_missing`), so the agent had to stop
+playing and describe the screen first, and the step had no screen before it and none after it in
+the material. Now the operation is the open step's effect, with both screens, as a press is
+([lab-recording.md](lab-recording.md), "Application steps", "In the middle of a business").
+
+**Established by reading** (the code's facts where the work order's notes or the design said
+otherwise first).
+- *Where the screen after is written.* `record_after_frame` writes the capture's record through
+  `attach_frame`, which asks the arrival's `pressed_step` (`note_after_frame`) and then writes
+  `after_capture` with `note_after_capture`; S1-1's `note_after_capture` knew only a click's
+  execution and would answer `record_step_not_found` for an application step. So both functions
+  (`crates/lab/src/recording/steps.rs`) read the completed receipt of an application operation as
+  they read a press's execution: the first frame that opens a step after it is its `after_frame`
+  when the receipt names its `before_frame` and has none yet. The work order named the first one;
+  the second is the smallest change that lets `record_after_frame` run as it is.
+- *The entry step.* `record_before_frame` takes a frame whenever no step is open, an empty recording
+  too; taken there it would make the launch the effect of a step with a frame, and the package
+  would no longer start `from: "any"`. So `session app --record` asks the plan first whether the
+  operation opens the entry step, and only otherwise takes the screen before and plans again (a
+  refusal of the first plan is the second's). The entry step's receipt names no `before_frame`, so
+  the frame after it is noted on nothing and opens the next step, as before; no screen after the
+  entry step is taken and no device configuration is read for it.
+- *Where the rule stood.* `plan_application` (the device, `session app --record`) and
+  `apply_application` (offline, `record mark --application`) refused an open step without marks
+  through `application_marks_missing`; both refusals and the function are gone, and
+  `apply_application` no longer takes the mark batch it read only for them. No test pinned the
+  code, and no fragment registers it. The generator's own check stays as it is: `record stop`
+  refuses a step but the entry step without an own or reused mark
+  (`record_step_without_recognition`, `crates/lab/src/recording/generate.rs`, the first loop over
+  the effective steps after the effect checks).
+- *The rows and the core module.* The coordinator's ruling of 2026-11-11 (L5C-7, "Slice LAB-5C")
+  kept `record` off the core rows `app launch|restart|stop`; this slice's ruling 4 gives them
+  `record`, `after_ms` and `still_max_ms`, so `own_flags::DECLARED_EXCEPTIONS` loses its one entry
+  (`session app`'s `--record`). Each screen is one capture as `capture --record` takes it, the
+  `ObserveReadonly` read, a kind of the UI list, so the rows keep `entries` `lab`, `ui`.
+- *The stillness test.* `AfterCapture::for_application` (S1-1) gives 2000 and 30000; the command
+  hands `record_after_frame` both numbers, the flags' or those, and the loop that reads
+  `still_max_ms` is slice S1-2's. S1-1's `record_after_frame` records `still_max_ms` 0.
+- *Interface revisions.* None moves: no request kind, wire shape, record, ledger member,
+  configuration key or outcome code is added, and `actingcommand.lab-recording.v1` keeps its name
+  (every new member is absent on the entry step and on every other operation).
+
+**What it builds.**
+
+| Part | Where |
+|---|---|
+| The model | `ApplicationExecution` gains `before_frame`, `after_frame` (frame ids) and `after_capture` (`AfterCaptureRecord`), each `serde(default, skip_serializing_if)` (`crates/lab/src/recording/model.rs`, that struct only) |
+| The steps | `plan_application` and `apply_application` without the marks rule; `commit_application` names the step's live primary frame as the receipt's `before_frame`; `note_after_frame` and `note_after_capture` read an application operation's receipt (`crates/lab/src/recording/steps.rs`) |
+| The command | `session app <verb> --record [--after-ms] [--still-max-ms]`: `application_after_capture` (the waits, their range, `AfterCapture::for_application`'s defaults), `record_application_operation` (the entry plan, else `record_before_frame` and the plan; the operation; the commit; then `record_after_frame`; the answer's `after`), `ApplicationFrames` (each capture as `capture --record` takes it); the plain `session app` refuses the waits without `--record` (`apps/actinglab/src/session_management.rs`); `SESSION_APP_READS` reads them |
+| lab-ops | `apps::App::recorded(after_ms, still_max_ms)`: the child's line ends with `--record` and the waits given (`crates/lab-ops/src/apps.rs`) |
+| The table | the rows `app launch`, `app restart`, `app stop`: `record` (switch), `after_ms`, `still_max_ms` (integers), their help, output and notes, `ObserveReadonly` beside `ApplicationLifecycle`; `own_flags::DECLARED_EXCEPTIONS` empty |
+| Texts | [lab-recording.md](lab-recording.md): "Application steps" (the screens' bullet, "Where the operation lands", the bullet of `--frame` and `--step`, the order and the error codes of `session app … --record`, the new "In the middle of a business"), "Error codes" (the removed code) |
+
+**Codes and words.** No outcome code is added and no fragment changes. `record_application_step_marks_missing`
+is no longer produced (it was in no fragment; the contract's tables drop it). New words of existing
+codes, each in the details, never in a text: `validation_failed` with `details{argument, reason}`,
+`argument` `after_ms` or `still_max_ms`, `reason` `range` (outside 0..=60000 or no whole number) or
+`record_only` (`--still-max-ms` without `--record` on `session app`; `--after-ms` without it stays
+the shared gate's, §1.402), each refusing, exit 2; `after: {after_ms, taken: false}` in the details
+of a screen after that was not taken (the capture's own code and class). The answer's `record.after`
+is a member, not a word. No decision reads a code.
+
+**Tests.** `apps/actinglab/src/tests/gate_463_s13.rs` (exec gate map "#463 S1-3"; fake Runtime,
+fake clock, captures repeating their last screen, synthetic 1280x720 frames): a tap, then `restart
+--record` on the unmarked step it opened (nothing captured before, the step's executed effect with
+`before_frame` its frame, the handed wait 2000 and a capture opening step 3, `after_frame` and
+`after_capture`, the answer with `after`); `launch --record` on an empty recording (the entry step
+without a frame, no device asked for, none of the three members; the next tap's screen before opens
+step 2 and is no screen after the entry step; marked afterwards, `record stop --dry-run` validated
+and the package's entry `from: "any"`); `record mark --application` on an open step without marks;
+the waits handed (none, both, the bound alone, and `range` refusals).
+`crates/lab-ops/src/gate_463_s13.rs`: `App`'s line with and without `recorded`, for each action.
+The assertions read what the command hands the screen after and the frames the step table names,
+not how many captures the screen after takes (slice S1-2's loop). No test is adapted, no golden
+changes, no test leaves the gate map.
+
+**What is not changed.** The entry launch (its step, its package's `from: "any"`); the indeterminate
+and denied answers of `session app --record`; `tap`, `swipe`, `long-tap --record` and their frames;
+`record_before_frame`, `record_after_frame` and `RecordFramePorts` (called as they are); the package
+generator and its marks check; the kernel and the Runtime; today's MCP server (`actingctl
+mcp-serve`); every recording without such an operation, byte for byte.
+
+**At deploy.** Nothing to configure. Recordings already on disk load as before. Through MCP the
+three tools take `record`, `after_ms` and `still_max_ms` on the Lab's MCP server (`actinglab-mcp`);
+a client registered with today's server has no such parameter until its registration moves, which
+is the owner's to do.
+
+**Round 2** (coordinator work order `rd-1115/brief-463-s13-fix2.md`, after #463 S1-1's fix round 2,
+§1.402; the parent's branch merged at `24e48b47`).
+- *The screen before an application operation follows a press's.* On an open step the plan comes
+  first (its refusals capture and send nothing), then S1-1's `record_before_frame` captures one
+  frame immediately before the operation, always, and keeps it as a press's: no step open, it
+  opens the step; an open step without marks, it is the step's live primary frame (the older one
+  superseded); an open step with marks, it is not stored. The frame reference it answers is not
+  used (an application operation names no frame); no second capture path is written. The entry
+  launch on an empty recording still captures nothing and asks for no device.
+- *Established by reading: a step that already declares the operation.* `plan_application` sends
+  the same action again on an open step that declares it without a completed receipt (an earlier
+  attempt, or `record mark --application`), the documented way on after
+  `record_application_indeterminate`; but such a step refuses a device frame
+  (`application_arrival`, `record_step_click_not_executed`), so a capture stored there would
+  refuse the operation. Such a step takes no frame before it (the frame it was declared on stands);
+  the command reads whether the open step declares one as `record status` reads it
+  (`record_status`). Only a completed receipt that names its `before_frame` takes a screen after
+  it, so an entry launch run again after an indeterminate one takes none either (the first round
+  would have answered `record_step_not_found` after the operation there).
+- *An uncertain outcome* is recorded as before and takes no screen after it. The classification
+  stays `session app`'s (`application_not_completed`, `apps/actinglab/src/session_management.rs`):
+  a denied receipt did not run; a failed receipt or no receipt may have run. It agrees with
+  S1-1's for a press on what may have run; S1-1 counts a denied receipt as not performed only
+  with a usage or safety class, the application path on the receipt's state alone, as it did.
+- *Merged functions.* `note_after_frame` and `note_after_capture` hold S1-1's code for a press as
+  it is and read an application's completed receipt beside it; the application arm of
+  `note_after_frame` returns early through `?` (clippy's `question_mark` on the first round's
+  head). `DECLARED_EXCEPTIONS` stays empty and `declared_rows_match_their_commands` passed with it
+  on the first round's head; the rows' notes and "In the middle of a business" say that the three
+  `app` rows take `record`. The rows' `help` is 128, 138 and 135 bytes.
+- *Tests* (`apps/actinglab/src/tests/gate_463_s13.rs`, exec gate map "#463 S1-3"). Adapted, as the
+  requirement changes what it pins: the restart after a tap now captures before the operation
+  (step 2's live primary f0003 and its `before_frame`, f0002 superseded and still the tap's
+  `after_frame`); the fakes take S1-1's new signatures (`CapturedFrame`, the press closure's frame
+  reference). New: an operation on a marked step (the capture not stored, `before_frame` the
+  stored f0001, the screen after the next frame id); two operations in a row (each capture before
+  its `before_frame`, the restart's `after_frame` as its answer named it); a tap after an operation
+  (its capture before supersedes the frame the operation's screen after opened the step with, the
+  operation's `after_frame` not rewritten). No test leaves the gate map.
+
+**Joined in the train of stage one** (0.12.64; coordinator work order `rd-1115/brief-463-train-s1.md`,
+which merges S1-1, S1-2 and S1-3 in that order on main `abf08ced`, and the list (g) of the
+independent review of S1-2; the coordinator's rulings, not the owner's words).
+- *The screen after.* S1-2's `awaiting_after_frame` and `name_after_frame`
+  (`crates/lab/src/recording/steps.rs`) take a step closed by an application operation as this
+  slice's `note_after_frame` did: the step's click when it has one, else the completed receipt of
+  its application operation, chosen in one place (`after_members`), which `note_after_capture` uses
+  too; `note_after_frame` is gone. The screen after an operation is S1-2's loop with
+  `AfterCapture::for_application` (after 2000 ms, every 1000 ms, still after 2000 ms unchanged, at
+  most 30000 ms: at most 31 captures), every capture kept; `ApplicationFrames::elapsed` reads a
+  monotonic clock started with the command.
+- *The flags.* `session app <verb> --record` takes the four of a recorded press, `--after-ms`,
+  `--interval-ms`, `--still-ms` and `--still-max-ms`, read by the press's own functions
+  (`parse_after_ms`, `after_capture_ms`) and checked, the bound of 120 intervals included, by
+  `record_after_capture_check` (`crates/lab/src/recording_api.rs`; `record_press` calls it too, for
+  S1-1's check of the wait and S1-2's of the rest) before the recording lock is taken. A refusal of
+  `--after-ms` names the value as `after_ms`, as S1-1's does (this slice wrote `value`). Without
+  `--record` the gate of `apps/actinglab/src/main.rs` refuses each of the four, its text naming
+  `session app`. The rows `app launch|restart|stop` take `interval_ms` and `still_ms` beside
+  `after_ms` and `still_max_ms`, with their bounds; their `help` is unchanged.
+- *The answer.* `record.warnings` holds `after_not_still` as a press's answer does
+  (`record_after_warnings`); when a later capture of the loop failed, the error keeps the loop's
+  `after: {after_ms, taken: true, captures}` in its details.
+- *Texts.* The hints of `plan_application` and of `record_application_entry_invalid` no longer ask
+  for a mark. The contract and the rows' notes say that the Lab's MCP server writes the command
+  line from the rows itself and that `apps::App::recorded` has no caller in the product; the
+  function stays.
+- *Tests.* `apps/actinglab/src/tests/gate_463_s13.rs` is adapted, because the screen after now
+  repeats until it is still: the fake's clock moves with its waits, the initializers name
+  `interval_ms` and `still_ms`, and the logs and frame ids are those of the loop (a tap of the gate
+  takes one capture before it and four after it, an operation one before it and three after it).
+  The waits test adds the loop's flags and a bound of more than 120 intervals. No test switches the
+  loop off, and none leaves the gate map.
+
+**Fix round after the train's review** (0.12.64; coordinator work order
+`rd-1115/brief-463-train-s1-fix.md`, items 1, 3, 5, 6 and 7; the review of the train's first half
+asked for item 1 before merging; the coordinator's rulings, not the owner's words). An application
+operation whose after loop a capture after its first stops says what was recorded:
+`record_application_operation` takes the loop's typed result (`AfterTaken`), names the last
+capture as the execution's `after_frame` with `after_capture.unfinished`, and answers the
+capture's own error with `record` (the operation as recorded, with `after` and `warnings`), the
+loop's `after: {after_ms, taken: true, captures}` built from that result and `operation`; its
+message says the captures after the operation stopped and how many were kept, and asks for no
+screen after it (`after_loop_stopped`; the error of a first capture that cannot be taken is as
+before). The captures take their frames through the Runtime's capture endpoint of the instance, as
+a recorded press does (`runtime_captured_frame`, which `PressFrames` uses too): `session app <verb>
+--record` reads no local device configuration (no ADB path); the operation itself was the
+Runtime's already. The refusals of the four flags are a press's (`range` outside the bounds,
+`wrong_type` for a value that is no whole number, `after_ms` with `value`, `min` and `max`). The
+contract's answer names `warnings` in both places. Tests: new
+`s13_fix_a_capture_after_an_operation_that_fails_midway_keeps_what_was_taken`,
+`s13_fix_a_screen_that_never_settles_after_an_operation_is_warned` and
+`s13_fix_the_waits_without_record_name_the_command_that_takes_them` (the first join's point 7);
+adapted, the waits test (`wrong_type`, and `value`, `min`, `max` of `after_ms`) and its fake, which
+can fail a capture. No test leaves the gate map.
+
+### 1.406 Slice #463 S1-5 (0.12.64): the archive's manifest names each step's screens, the presses of the material and the final screen (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, whose stage one hands over the recorded material of a business, and the owner's words of the 11-15 evening that stage one hands over, for each press, the frame the click happened on with where it was pressed, and the last result frame; the design `rd-1115/pack-stage12-design.md`, A2.2, the row S1-5 of A6, A3 and A5's row `final_frame_missing`, read on main `44cbab53`; the coordinator's rulings in the work order and in its dispatch, not the owner's words; coordinator work order `rd-1115/brief-463-s15-manifest-v2.md`, built on the branch of #463 S1-3 at `d5b0825e`)
+
+The coordinator gave this slice 1.406. It stands on #463 S1-3 (§1.404), which stands on #463 S1-1
+(§1.402), and ships in 0.12.64 (release 0.12.63 was cut without it).
+
+**Why.** `record archive` is how stage one ends and hands the material over. Its manifest (v1) listed
+a step's frames and its press as a rectangle; it did not say which frame was on the screen when the
+press was made, which frame the screen became or where the business ended, and it could not describe
+a press made at a point. A reader without a Runtime now reconstructs the business from the manifest
+and the files alone ([lab-recording.md](lab-recording.md), "Archiving", "The manifest").
+
+**Established by reading** (the code's facts where the design or the work order's notes said
+otherwise first).
+- *Where the switch and the warning go.* `RecordArchiveOptions` and `RecordArchiveOutcome` are in
+  `crates/lab/src/recording/model.rs`, which the work order keeps closed but for the one member
+  below. So `--all-frames` is a parameter of `record_archive_copy` (`ArchiveCopyFrames`, beside it
+  in `archive.rs`), read by the `record` command (`RECORD_ARCHIVE_READS` gains the switch, the row
+  the parameter `all_frames`), and the answer's `lab.warnings` is `record_archive_warnings`, which
+  reads the manifest the outcome names and which the command adds to `lab`.
+- *The v2 schema's name* is a constant of `archive.rs`, beside its use of
+  `LAB_RECORDING_ARCHIVE_SCHEMA`, which keeps naming v1 (the design's line was model.rs 1738, now
+  1909). `read_manifest` reads the schema a manifest names first and decodes exactly the v1 or the
+  v2 document by it; nothing else reads a manifest's content: `record reopen` reads only the latest
+  manifest's file name (`latest_manifest`), so it takes either.
+- *A press sent on a capture that was not stored* (S1-1's fix round: an open step with marks) is said
+  only by the press's answer (`record.before.sent_on_unstored_capture`); the step table records
+  nothing of it, and the execution's `before_frame` names the stored frame. The manifest cannot know
+  and claims nothing: `material.clicks[].sent_on_unstored_capture` (`Option<bool>`, fix round 2) is
+  `null` on every press, written and not left out ("the step table does not say"), until the step
+  table's own member is read, which the join with S1-1's third round does (that round adds
+  `ClickExecution.sent_on_unstored_capture`; its head is no ancestor of this branch). `false`, as
+  the first round wrote it, said something wrong of two kinds of press (the review of #1763): a
+  press of `do --capture --record`, sent on the Runtime's own capture, which the recording does not
+  hold, and a point press on an open step with marks, whose capture before is not stored.
+- *An application operation had no time.* `ClickExecution` carries `executed_at_unix_ms`;
+  `ApplicationExecution` did not. On the coordinator's word in the dispatch this slice adds
+  `executed_at_unix_ms: Option<u64>` to `ApplicationExecution`
+  (`serde(default, skip_serializing_if)`), stamped by `commit_application` on the clock that stamps
+  a click's execution, named `None` in its initializers (`session_management.rs`'s
+  `performed_execution`, `gate_463_s13.rs`'s `completed`). A row's `at_unix_ms` of an application
+  step is that time; for an operation an earlier build recorded it is `null`, and none is derived.
+- *The design's rule for derived frames.* Its frame after is "the first frame of the next effective
+  step when it was recorded at or after `executed_at_unix_ms`"; an application operation recorded
+  before S1-3 has no time, so the rule finds none there (`null`). The rule's frame before applies
+  also to an application operation without a completed receipt (attempts only), whose step table
+  names no frame; such a row is `derived: true`. The entry step has no frame and names none.
+- *The material's final screen* is `material.final_frame` (the coordinator's ruling (i)), not a
+  member of the header as the design drew it; a member in two places would be one fact twice.
+- *Outcomes.* A click's is its execution's word; an application operation's is `performed` with a
+  completed receipt (attempts may stand beside it), `indeterminate` with attempts and none
+  (the review of S1-3), `null` without either.
+- *Interface revisions.* None moves: no request kind, wire shape, ledger member, configuration key or
+  outcome code is added; `actingcommand.lab-recording.v1` keeps its name (the new member is absent
+  on every operation an earlier build recorded).
+
+**What it builds.**
+
+| Part | Where |
+|---|---|
+| The manifest | `ArchiveManifest` is v2: the header's `locale`, `coordinate_space`, `note`, `archive_note`, `material` and `copy`; each row's `dropped`, `converted_to_transition`, frames with `superseded` and `recorded_at_unix_ms`, `before_frame`, `after_frame` (`{step, frame_id}`), `after_capture`, `derived`, `outcome`, `tap` with `source` (`rect` `null` for a point), `long_press`, `application_op`, `note`; `material.clicks` (`frame`, `derived`, `sent_on_unstored_capture`, `entry`, `point`, `to`, `duration_ms`, `action`, `outcome`) and `material.final_frame` (`crates/lab/src/recording/archive.rs`: `manifest_of`, `row_of`, `relation`, `outcome_of`, `click_of`, `final_frame`) |
+| Reading | `ArchiveManifestV1` (the v1 document, read only) and `read_manifest` by the schema named; `ReadManifest` |
+| The copy | `record_archive_copy(…, ArchiveCopyFrames)`: the step table, the manifest and the material's frames, or every listed frame; the copy's manifest is the recording's with `copy: {frames}`, checked against itself as written; a v1 manifest's copy as before |
+| The warning | `record_archive_warnings`: `final_frame_missing` on a v2 manifest whose `material.final_frame` is `null` |
+| The step table | `ApplicationExecution.executed_at_unix_ms` (`model.rs`), stamped in `commit_application` (`steps.rs`) |
+| The command | `record archive --all-frames` (`RECORD_ARCHIVE_READS`), refused without `--copy-to`; `lab.warnings` in the answer (`apps/actinglab/src/commands/session_record.rs`) |
+| The table | the row `record archive`: `all_frames` (switch), `copy_to`'s note, `help` (149 bytes, "Ends a recording as material (stage one) …"), `output`, `notes` |
+| Texts | [lab-recording.md](lab-recording.md): "Files", the `recording.json` members, "Archiving" (the usage, "The manifest" with the material, the rows, the rule for derived frames, what a reader reconstructs, the frames around a press, the manifests written before 0.12.64, "The copy", "Named again", "The answer", the refusals) |
+
+**Codes and words.** No outcome code is added and no fragment changes. New words, none decided on
+by any code:
+
+| word | the one situation | refuses or warns | exit |
+|---|---|---|---|
+| `final_frame_missing` (in `record archive`'s `lab.warnings`) | the manifest the answer names (v2) has `material.final_frame` `null`: the last effective step is not a screen that arrived after an effect on record | warns, the archive stands | 0 |
+| `copy_to_only` (`validation_failed`, `details{argument: "all_frames", reason}`) | `--all-frames` without `--copy-to` | refuses, before the session is read | 1 (2 under `--via`; the train of stage one) |
+
+The manifest's own vocabularies are members, not outcome words: `copy.frames` `material` or `all`,
+`outcome` `performed` or `indeterminate` (a click execution's words).
+
+**Tests.** `crates/lab/src/gate_449_rec_arch.rs` (the existing gate, apps gate map; new tests "#463
+S1-5"; fake Runtime and clock through `RecordFramePorts`, synthetic 16x9 frames):
+- `s15_a_stage_one_recording_archives_its_presses_their_screens_and_the_final_screen`: a launch on
+  the empty recording, a tap, a long press, a swipe and a restart as stage one records them: each row
+  equals the step table's (the stored frames, `derived` false, `tap.rect` and `long_press.rect`
+  `null`, the superseded frames in order, the launch's and the restart's time); `material` each press
+  with its frame (the entry's `null`, `entry` true) and where it was pressed, and `final_frame` the
+  screen after the restart; no warning.
+- `s15_a_recording_made_with_do_archives_with_derived_frames`: presses of `do --capture --record`:
+  `before_frame` the live primary frame (not the step's first), `after_frame` the next step's first
+  frame or `null`, `derived` true in the rows and the material; `final_frame` `null` and
+  `final_frame_missing`.
+- `s15_a_v1_manifest_on_disk_is_named_again_copied_as_it_is_and_reopened`: a v1 manifest written as
+  0.12.59 to 0.12.63 wrote it: named again read, verified (a changed frame
+  `record_archive_verify_failed`, `checked: "recording"`), no warning, nothing written; copied byte
+  for byte with every file it lists; reopened; the next archive writes `archive-manifest-2.json` as
+  v2, whose tap row's `after_frame` names a frame since superseded, the first manifest as it was.
+- `s15_without_a_screen_after_the_last_press_there_is_no_final_frame`: two taps whose screens after
+  fail: the first's `after_frame` the second's capture before, `after_capture` `null`; the archive
+  stands, `final_frame` `null`, `final_frame_missing`.
+- `s15_the_copy_holds_the_material_unless_every_frame_is_asked_for`: the copy holds the step table,
+  the manifest and the material's frames, not the superseded one, its manifest `copy.frames`
+  `material`; with every frame the superseded one too and `all`; that frame changed fails the
+  archive named again.
+
+Adapted, as the requirement changes what they pin: `rec_arch_steps_of_several_callers_archive_and_the_rows_equal_the_step_table`
+and `rec_arch_a_step_table_written_by_0_12_54_archives` (Lab) assert the v2 rows (their presses'
+frames derived) and the copy's manifest saying `material`;
+`rec_arch_the_copy_goes_only_into_a_new_or_an_empty_directory`,
+`rec_arch_a_copy_that_does_not_verify_names_the_file_and_the_retry_by_id_copies` and
+`rec_arch_a_recording_record_start_force_left_behind_is_archived_by_its_id` (actinglab) compare each
+copy with the recording but for its manifest, which says `copy: {frames: "material"}`, and two of them
+the answer's `lab.warnings` (`[]`; `["final_frame_missing"]`); `gate_463_s13.rs`'s receipt names the
+new member. No golden changes, no test leaves the gate map.
+
+**What is not changed.** The manifest's file series and its writer; `record reopen` but that it takes
+either manifest; the step table's other members and every recording without an application
+operation, byte for byte; `recording_api.rs`, the generator, the kernel and the Runtime; today's MCP
+server (`actingctl mcp-serve`) but the text of one parameter (fix round 2).
+
+**At deploy.** Nothing to configure. v1 manifests on disk are read, verified, copied and reopened as
+before; the next archive of such a recording writes v2. A build before 0.12.64 refuses a v2 manifest
+(`record_state_io_failed`): not owed. Through MCP `ac_record_archive` takes `all_frames` on the Lab's
+MCP server (`actinglab-mcp`).
+
+**Fix round 2** (coordinator work order `rd-1115/brief-463-s15-fix2.md`, after the independent
+review of #1763 at `bebf984e`).
+- *Claims.* `material.clicks[].sent_on_unstored_capture` is `Option<bool>`, `null` on every press
+  ("A press sent on a capture that was not stored" above; contract "The manifest").
+- *The copy's manifest is written last* (`record_archive_copy`, with `copy_failed`): the step table
+  and the frames are copied and hashed first, then the manifest is written and hashed against
+  itself; a copy that fails before it holds no manifest naming files it does not hold.
+- *Texts.* The manual of the Lab's MCP server (`ac_record_archive`: the manifest v2, the warning,
+  what the copy holds, `all_frames` and `copy_to_only`); the first-generation server's `copy_to`
+  says what the copy holds and that every frame is copied with the Lab's `record archive
+  --all-frames` or the Lab's MCP server's `all_frames` (no parameter is added: that server is not
+  extended, the coordinator's ruling); the contract names the server that takes `all_frames`, the
+  order of the copy and two more cases without a final screen (fewer than two effective steps; the
+  effective step before the last without an effect on record); `LAB_RECORDING_ARCHIVE_SCHEMA`'s
+  comment says v1 is only read; every version of this slice is 0.12.64.
+- *Tests* (the slice's gate, registered in its entry): `crates/lab/src/gate_449_rec_arch.rs`
+  `s15_fix2_a_copy_that_fails_after_its_first_frame_leaves_no_manifest` (the copies' seam, a
+  stored frame that no longer holds its sha256, on the second frame the copy takes),
+  `s15_fix2_an_application_operation_recorded_the_old_way_is_derived`,
+  `s15_fix2_an_indeterminate_press_is_in_the_material`,
+  `s15_fix2_dropped_and_converted_steps_are_listed_and_not_in_the_material`,
+  `s15_fix2_a_step_table_without_executed_at_is_written_back_byte_for_byte`;
+  `apps/actinglab/src/tests/gate_449_rec_arch.rs`
+  `s15_fix2_all_frames_needs_copy_to_and_copies_every_frame`. Adapted, as the requirement changes
+  what they pin: the tests that compare `material.clicks` (`material_click`) expect
+  `sent_on_unstored_capture` `null`. No test leaves the gate map; no code or word is added.
+- *Not here:* the fakes' capture scripts for S1-2's stillness loop, which is not on this branch;
+  the join lengthens them.
+
+**Joined in the train of stage one** (0.12.64; coordinator work order
+`rd-1115/brief-463-train-s1b.md`, which merges this slice at `8031b17f` and #463 S1-7 into the
+branch of S1-1, S1-2 and S1-3 on main `3581a8af`; the coordinator's rulings, not the owner's words).
+- *The step table's own member is read* (a). `material.clicks[].sent_on_unstored_capture` of a press
+  whose execution names its own frame before (`derived: false`) is the execution's
+  `sent_on_unstored_capture` (§1.402, fix round 3; absent there, so `false`, unless the press was
+  sent on a capture that was not stored); a press whose frame the manifest derives (`derived: true`:
+  `do --capture --record`, a press recorded the old way) carries `null`, and so does an application
+  operation, whose receipt records no such member (`click_of`, `archive.rs`).
+- *The screen after* (with §1.403). A row's `after_frame` is the last capture after its effect, the
+  captures before it superseded in the step the first opened; the contract's "frames after press
+  k" are the frames of that row recorded at or after the press's `at_unix_ms`, so the loop's earlier
+  captures are among them.
+- *`--all-frames` without `--copy-to`* (h). The refusal is `validation_failed`, and actinglab's own
+  command line answers every failure with exit 1 (`cli_module::own_line`), the Lab's other refusals
+  of a flag without the flag it needs included; the class's 2 is a `--via` line's. The contract and
+  the codes table above say so; the test pins 1.
+- *Tests.* The gate's fake (`Screens`) has a clock moved by its waits; each point press now takes
+  one capture before it and four after it, each application operation (`Bench::operated`) one and
+  three, and the tests that press or operate expect the loop's frame ids, superseded frames, final
+  frames and the press's default wait of 100 ms; none switches the loop off. New:
+  `s15_train_the_material_says_what_the_step_table_says_of_the_capture_a_press_was_sent_on`
+  (`false` on a stored capture, `true` on a marked step whose capture was not stored, `null` for a
+  `do` press), in this slice's gate entry.
+
+**Fix round after the train's review** (0.12.64; coordinator work order
+`rd-1115/brief-463-train-s1-fix.md`, item 7; text only). The contract's section on the copy says
+that the exit codes it gives (2 for an absolute path refused, 3 for a target that is not empty, 5
+for a copy that fails) are those of a `--via` line's envelope, and that actinglab's own command
+line exits 1 on every failure, as its refusal of `--all-frames` without `--copy-to` already said.
+No code, test or behaviour changes.
+
+### 1.424 Slice #463 S1-7 (0.12.64): a recording holds its instance (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, whose stage one asks nothing of the agent but to start recording, play and end recording; the read-only investigation `rd-1115/record-hold-investigation.md`; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s17-record-hold.md`, stacked on #463 S1-1, §1.402, cut from its head `24e48b47cd` on main `b7c47129`, its fix round 3 `124e2b4de2` merged; fix round 2 by the coordinator's work order `rd-1115/brief-463-s17-fix2.md` after the independent review `rd-1115/review-1762.md`)
+
+The coordinator gave this slice 1.424. It ships in 0.12.64 (release 0.12.63 was cut without it), after S1-1.
+
+**Why.** An agent's presses are separate commands with seconds or minutes between them, each
+holding the instance's input lease for its press alone, and a recording was only files of the
+Lab's state directory: nothing kept the scheduler from dispatching a scheduled task to the instance
+between two presses, whose screen then became a press's screen after it and opened the next step,
+silently. The contract's "pause the instance first" was a second thing the agent had to remember,
+and no tool checked it. Now `record start` holds the instance and the end of the recording releases
+the hold ([lab-recording.md](lab-recording.md), "A recording holds its instance").
+
+**Established by reading.**
+- *A press under the recording's own pause.* A pause gates only routine claims; client leases,
+  Lab operations and observations are operator claims (`ClaimKind::class`,
+  `crates/scheduler/src/lib.rs`), so a press is admitted under it. An instance outside the
+  multi-Nemu gate closes its device session at the pause's stage (c) (`release_paused_instance`,
+  `crates/runtime-host/src/host/policy_dispatch.rs`), as it closes it at every lease end
+  (`keeps_device_session`, `host/resource_close.rs`); after a confirmed close the kernel starts a
+  new session at the next operation (`ExecutionKernel::session`,
+  `crates/execution-kernel/src/kernel.rs`; only an unconfirmed close refuses), whose input and
+  capture open lazily (`SessionBackends`, `crates/execution-kernel/src/session.rs`). So the press
+  works on every path; the slice builds on it.
+- *What the end costs.* An instance resume reconnects the device and runs its self-check: up to
+  33 000 ms plus the IO timeout ([scheduling-pause.md](scheduling-pause.md), "Resume"). The archive's
+  manifest, the session header and the copy, or the stop's package, are written before it.
+- *A deploy* (fix round 2, as the review found it). The deploy's guard `foreign_pauses` (`guards
+  --for stop`, `crates/lab-rescue/src/install/guards.rs`) reports a recording's pause as another
+  party's (the guard fails on it); the rescue module records that report and goes on without
+  touching the pause ([lab-two-entries.md](lab-two-entries.md) §6: its hold takes only the
+  instances not paused or paused with its own reason, `held_instances`, `install/hold.rs`), so the
+  recording's pause is neither taken again nor resumed; and the restarted Runtime restores it (a
+  new owner epoch, revision 1, stage `released`).
+- *Today's MCP server holds too* (the work order's "keeps starting recordings without a hold" is
+  not what the code does): its `ac_record_start`, `ac_record_stop` and `ac_record_archive` run the
+  installation's `actinglab.exe` with the command's words (`apps/actingctl/src/mcp/lab.rs`,
+  `Program::locate`, `author`), so they take and release the hold as the command line does. Fix
+  round 2 changes their texts to say so (the coordinator's ruling: an author-tier session holding
+  and releasing its own recording's instance is intended); no behaviour of that server changes.
+- *Another party's pause is told by the status, not by a code.* `record start` reads the status
+  first and sends no pause to an instance it shows paused; no decision names
+  `scheduling_already_paused` or any other code. A pause refused for any reason, the rare race
+  with another party's pause included, fails the start.
+- *Fix round 2: a refusal is told by the receipt, nothing listening by a connection, neither by a
+  code.* A pause the Runtime refused is one whose own receipt arrived carrying the failure
+  (`scheduling::pause_refused`, the received receipt the client keeps); by the pause's rules
+  ([scheduling-pause.md](scheduling-pause.md)) a denied pause changes nothing and a failed one
+  lifts the gate it closed, so the header is put back; every other end (no receipt) leaves it. The
+  client's connect reads the runtime-info, opens the connection and shakes hands in one call, and
+  its failures (a refused connection and an owner epoch that `Health` answered differently both
+  at `connect_runtime`) do not tell whether anything listened; so after a failed connect one plain
+  connection to the runtime-info's address, opened and closed at once with nothing sent
+  (`record_hold::listening`; the Runtime's IPC takes a close before the first frame as an
+  ordinary close), tells them apart: accepted, the start fails as the Lab's commands answer the
+  connect's failure (`runtime_slice_cli::map_runtime_error`); refused, or no runtime-info naming an
+  address, `no_runtime_listening`. The only race is a Runtime that starts or stops between the two
+  attempts: one that starts fails the start loudly, one that stops dispatches nothing.
+- *Interface revisions.* None moves: no request kind, wire shape, outcome code, configuration key
+  or record of the Runtime is added; the session header's `hold` is absent on a header without one.
+
+**What it builds.**
+
+| Part | Where |
+|---|---|
+| The facts | `RecordingHold {reason, own, kept}` (the session header's `hold`), `RecordingHoldFound` (what `record start` met: `Paused`, `Shown`, `NoRuntime`), `RecordingHold::reason_for` (`lab-record-<ms>`), `at_start` (own, foreign, taken over, carried over with nothing listening), `taken_over`, `ended`; `RecordingHoldView {state, reason}` with `RecordingHoldState` `own`, `foreign`, `none`, `kept`, and `record_hold_status`; the four warning words (fix round 2: `no_runtime_listening` in place of `runtime_not_answering`, and `replaced_header_unread`) (`crates/lab/src/recording/hold.rs`); the header view reads `hold` (`OldRecordView`, `store.rs`) |
+| The Runtime requests | `instance_pause_reason` (one `Status`: the reason of the pause the instance shows), `pause_for_recording` (`PauseScheduling` as the `pause` row, `LAB_PAUSE_DRAIN_TIMEOUT_MS` 300000, which `core_ops`' `pause` default now names), `pause_refused` (fix round 2: the pause's own receipt arrived and carries the failure, so no pause was made), `release_recording_hold` (one `Status`; the pause that shows the reason resumed by `resume_expected` with the status's owner epoch and that pause's revision; the client's failure keeps the hold), `instance_scheduling_paused` (one `Status`: the instance's pause or the global pause) (`crates/lab-ops/src/scheduling.rs`) |
+| The command | `record start` reads the replaced header (with `--force` over one that cannot be read: the warning `replaced_header_unread`, fix round 2) and its bytes; `record_hold::take` connects and reads the status, then writes the header naming the hold (`SessionRecordContext.hold`) before it sends `PauseScheduling` (fix round 2), puts the header back when the Runtime refuses the pause, and leaves it, the hold in the failure's details, on any other end of the pause; `reach` tells nothing listening (`no_runtime_listening`) from a handshake that does not complete (the start fails, `runtime_slice_cli::map_runtime_error`) by one plain connection to the runtime-info's address after a failed connect; a failure after the header names the hold carries it; `record status` adds `hold`; `record stop` (no dry run) and `record archive` write the header with the hold kept, then release (`record_hold::end`) and write it without; a release that fails answers `Kept::answer` with `next.release`, `record stop` again or `record archive --record-id <id>` (`release_again`; fix round 2: never an unconditional `resume`); `record reopen` carries an own pause the replaced header kept (`apps/actinglab/src/commands/record_hold.rs`, `session_record.rs`); `tap`, `swipe` and `long-tap --record` (`send_recorded_press`, `device_commands.rs`), `do --capture --record` (`lab2_cli/operation.rs`, fix round 2) and `session app --record` (`session_management.rs`) read the hold before the press or the operation, each on a connection of its own (`hold_warning_read`; fix round 2 for the presses, whose read shared the press's connection), so that a read that fails cannot make the press `not_submitted` or the operation look indeterminate, the word in `record.warnings` |
+| The table | the rows `record start` (`runtime` `optional`, `requests` `Status`, `PauseScheduling`, its help, output and notes), `record stop` (`optional`, `Status`, `ResumeScheduling`, help, output, notes), `record archive` (`optional`, `Status`, `ResumeScheduling`, output, notes); fix round 2: `tap`, `swipe`, `long-tap` and the three `app` rows list the `Status` read they send with `--record` (`requests`, notes), the `record start`, `record stop` and `record archive` notes name the new words and `next.release` |
+| Texts | [lab-recording.md](lab-recording.md): "A recording holds its instance", the opening paragraphs, `record start`, `record status`, `record stop`, the four sentences that asked the agent to pause first, "Archiving" (what it asks the Runtime, the answer); `README.md`'s recording lines; `apps/actinglab-mcp/MANUAL.md`, "Recordings"; fix round 2: the contract's start (the header before the pause, the two cases of no hold, the wait up to 335 s, `--force` over an unreadable header), `next.release`, the deploy sentence and today's MCP server; the manual's wait; actinglab's capabilities (`record start`, `record stop`, `record archive` and their `session record` aliases need `offline` and `runtime_optional`) and its Lab2 contracts (`hold` in the output fields); today's MCP server's `ac_record_start`, `ac_record_stop` and `ac_record_archive` descriptions (`apps/actingctl/src/mcp/tools.rs`, texts only, the coordinator's ruling: an author-tier session holding and releasing its own recording's instance is intended) and their row in [runtime-interface.md](runtime-interface.md) |
+
+**Codes and words.** No outcome code is added and no fragment changes. New answer words, each in
+an answer or in the details of a failure, never in a text, and none read by a decision:
+
+| Word | The one situation | Refuses or warns | Exit |
+|---|---|---|---|
+| `hold.warnings` `no_runtime_listening` (`record start`; fix round 2, in place of `runtime_not_answering`, a word of `install_needs_person` with another meaning) | no connection to the installation's Runtime could be opened at all (no state root located, no runtime-info naming an address, nothing accepting a connection there), so the recording holds nothing of its own | warns | 0 |
+| `hold.warnings` `replaced_header_unread` with `hold.replaced_header {path, error}` (`record start --force`; fix round 2) | the session header `--force` replaced could not be read, so a pause the earlier recording took, if any, is not released by this recording | warns | 0 |
+| `record.warnings` `instance_not_held` (a `--record` press or application operation) | the status read before it showed the instance's scheduling not paused | warns | 0 |
+| `record.warnings` `instance_hold_unread` | that status read got no answer | warns | 0 |
+| `hold.state` `own`, `foreign`, `none`, `kept` (`record start`, `record status`) | the recording runs under its own pause; under another party's; under none; ended with its own pause kept | — | 0 |
+| `hold.release` `resumed`, `already_gone`, `not_own` (`record stop`, `record archive`) | the own pause found by its reason and resumed; no pause showed the reason; another party's pause left alone | — | 0 |
+| `hold.kept: true` with `next.release` (fix round 2, the command that tries the release again) in the details of the release's failure (`runtime_not_running` or `device_error`) | the end's work stands and its own pause stays: the release failed or no Runtime answered | refuses | 1 (the class's 5 or 4 under `--via`) |
+
+**Tests.** `crates/lab/src/gate_463_s17.rs` (exec gate map "#463 S1-7"; temporary state directories,
+no Runtime): the Lab's reading of the header carries the hold, the Lab recording starts on it and
+`record status` shows it; the four states; what `record start` met gives the hold; what keeps a
+header without a hold as it was (`{state: none}` without `reason`, `kept` written only when true).
+`apps/actinglab/src/tests/gate_463_s17.rs` (the runtime client's scripted Runtime, every
+request of every connection in order): the start's `status`, `pause_scheduling` with the
+recording's reason and the drain 300000; another party's pause, `status` only, and an archive that
+makes no connection (`not_own`); nothing listening (`no_runtime_listening`, a header with
+exactly the members it had before the slice); a denied pause starts nothing (fix round 2: the
+header written before the pause does not stay, an earlier one is put back byte for byte); after a
+restart (a second scripted Runtime, the pause at revision 1 in its epoch, another instance paused
+beside it) one `resume_scheduling` expecting that epoch and revision
+1; a denied resume keeps the hold with `next.release`, `record status` `kept`, and named
+again with no Runtime `runtime_not_running`; a refused `record stop` makes no connection and keeps
+the hold; `record start --force` takes the pause over with one pause in all. Fix round 2: a
+connection lost after `pause_scheduling` leaves the header naming the hold, the failure
+carrying it, and the next `record stop` sends `status` and one `resume_scheduling` and
+answers `release: resumed`; `record reopen` carries an own kept hold that its end resumes; a
+start without `--force` after an end that kept its hold takes it over; the status read
+before a press answers `instance_not_held`, nothing, or `instance_hold_unread` (a status
+without an answer, no Runtime).
+`apps/actinglab/tests/runtime_input_proxy.rs` (the fake Runtime host):
+`s17_record_start_and_archive_hold_and_release_the_instance_on_the_runtime`, the host's status
+shows the recording's pause, a tap under it warns nothing, the archive resumes it; and
+`s17_a_press_on_an_instance_that_is_not_held_says_so`, a recording started with no Runtime, then a
+tap on the unpaused instance pressed and recorded with `instance_not_held`, one under another
+party's pause with no warning, and an archive that leaves that pause; fix round 2:
+`s17_an_application_operation_on_an_instance_that_is_not_held_says_so`, `session app launch
+--record` on the unpaused instance recorded with `instance_not_held`. Fix round 2 adapted
+this slice's own tests only (the review's (j)): the library's first and fourth now fail when
+the behaviour is taken away (their assertions that held without it are gone), and the
+scripted-Runtime tests assert that no connection beyond the scripted ones came. No golden
+changes; no test leaves the gate map. The parent's tests that start a recording on the fake host
+now run under the recording's pause, which gates none of their requests.
+
+**What is not changed.** The behaviour of `apps/actingctl` (fix round 2 changed only the texts of
+its three recording tools); the scheduler, the pause's own rules and the Runtime's crates; the
+rescue module; the parent's press path beyond the status read and the warning; `generate.rs`, `crosscheck.rs`, `select.rs`; the step
+table (`recording.json`) and the manifest; `capture --record` and `observe --capture
+--record`, which take no hold and read none; an alias the running Runtime does not know still
+makes the start fail (fix round 2 leaves it as built).
+
+**At deploy.** Nothing to configure. Recordings and session headers already on disk load as
+before and hold nothing; a recording active across the deploy holds nothing until it ends. Through
+MCP the hold is taken by both servers, which run the installation's actinglab; `record start`
+waits as the pause waits, up to 335 s, so a caller must give it that time.
+
+**Joined in the train of stage one** (0.12.64; coordinator work order
+`rd-1115/brief-463-train-s1b.md`, which merges this slice at `b67eaa7e` after #463 S1-5, §1.406,
+into the branch of S1-1, S1-2 and S1-3 on main `3581a8af`; the coordinator's rulings, not the
+owner's words).
+- *One press path* (c). A `tap`, `swipe` or `long-tap --record` press does, under the recording
+  lock: the planned press's refusals; S1-1's capture before it; this slice's status read on a
+  connection of its own (`hold_warning_read`, in `send_recorded_press`, immediately before each
+  press is sent, so twice when S1-1's retry sends it again on a second capture, the second read's
+  word answered); the press on that capture's frame reference; S1-2's captures until still on the
+  command's clock, its bounds checked first. The word follows `after_not_still` in
+  `record.warnings`, of the answer and of a failure whose details carry `record`. `do --capture
+  --record` reads it before its one Lab operation, as built.
+- *Application operations* (d). `session app <verb> --record` reads the status inside the
+  operation's closure, after the plan and S1-3's capture before it, immediately before the
+  operation's connection; the word joins `record.warnings` beside `after_not_still`, in the answer
+  and in a failure whose details carry `record`. The three `app` rows list `ApplicationLifecycle`,
+  `ObserveReadonly` and `Status`, with the train's parameters.
+- *`record archive`* (e). S1-5's manifest; the session header archived, an own hold written `kept`;
+  S1-5's copy (its manifest written last), an own hold named `kept` in a copy's failure; the
+  answer's `lab.warnings`; then the release, last. Named again by `--record-id`, it reads the
+  manifest S1-5's rules name and tries the release again; `record reopen` carries an own hold as
+  built, and the next archive writes the next manifest, v2.
+- *Tests* (i). In this slice's gate entry:
+  `s17_train_nothing_listening_at_the_runtime_address_starts_holding_nothing` (a runtime-info whose
+  address no longer listens: `no_runtime_listening`, no hold),
+  `s17_train_force_over_a_header_that_cannot_be_read_says_so` (`replaced_header_unread` with the
+  header's path), and on the fake Runtime host
+  `s17_train_do_capture_record_on_an_instance_that_is_not_held_says_so` (`instance_not_held` in
+  `record.warnings` of `do --capture --record`).
+
+**Fix round after the train's review** (0.12.64; coordinator work order
+`rd-1115/brief-463-train-s1-fix.md`, items 2, 3 and 7; the review of the train's second half
+suggested item 2 and the coordinator made it a must: a recording never starts unheld because the
+Lab could not tell; the coordinator's rulings, not the owner's words). `record start`
+(`record_hold::reach`) fails before anything is written when the installation's state root cannot
+be resolved (an empty or white-space `ACTINGCOMMAND_RUNTIME_STATE_ROOT`, neither `LOCALAPPDATA`
+nor `APPDATA`), with `validation_failed`, as the Lab's other commands answer it; and when, after
+the client's failed connect, the plain connection to the runtime-info's address times out, fails
+otherwise than by a refusal, or the runtime-info cannot be read or names no address, as a
+handshake that does not complete fails it (`not_reached`, one path and one code,
+`runtime_not_running` when no receipt said otherwise). `no_runtime_listening` is left with one
+cause, no Runtime listening at the state root: the address the runtime-info names refuses the
+connection, or (kept as built, the question put to the coordinator) no runtime-info is there,
+which a Runtime writes when it starts and removes when it stops. The decision reads the plain
+connection's IO error kind (`Probed`), no outcome code. The contract, the Lab's MCP manual, the
+first-generation MCP server's module text (`apps/actingctl/src/mcp/lab.rs`) and the actinglab
+table of `runtime-interface.md` no longer say that the recording commands open no Runtime
+connection; the press and application answers list `warnings` whole. Tests, in this slice's gate
+entry: `s17_fix_an_unresolved_state_root_starts_nothing`,
+`s17_fix_a_probe_that_times_out_fails_the_start_as_a_failed_handshake`,
+`s17_fix_a_handshake_that_fails_starts_nothing` (the scripted Runtime drops the `BindChannel`, the
+reconnect meets another owner epoch), `s17_fix_a_stop_whose_release_fails_names_the_retry`
+(`next.release` is `record stop`), and on the fake Runtime host behind a relay that closes the
+status read `s17_fix_a_press_whose_hold_read_fails_is_made_and_says_so` (`instance_hold_unread`).
+No code or word is added; no test leaves the gate map.
+
+### 1.418 Slice #463 S3-11 (0.12.65): `standard-pack trial` sends its one run and records the business end (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, whose stage three puts a trial on a real application under the owner's explicit authorization, and the owner's ruling of 11-15 that a trial of a held package, on the instance and application it was recorded on, is within her standing authorization, recorded as a reference; the design `rd-1115/pack-stage3-design.md`, §2.4 and §4.2 "S3-11"; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s311-trial-run.md`, built on the branch of #1758, which holds S3-10)
+
+The coordinator gave this slice 1.418; it stands on S3-10 (§1.417) and ships in 0.12.65 (release
+0.12.64 was cut without it).
+
+**What it is.** Without `--plan` the row `standard-pack trial` is the run
+([standard-pack-trial.md](standard-pack-trial.md), "The run", "The end", "Reading the end later"):
+S3-10's refusal of a line without `--plan` is lifted. Everything the plan does comes first, by the
+same function, then the refusals only the run needs, before anything is sent or written; then one
+run, sent once; then its business end, read as `run show` reads it, answered and recorded once by
+S3-10's writer. The tool records the authorization reference it is given and judges nothing; it
+never starts a trial by itself. Its three sentences stay true: a passed trial is not an
+authorization to enable; a trial counts nothing toward a break-in; a trial is one run, sent once.
+
+**The run's own refusals** (the resource tooling's `check_trial_run`), in this order:
+
+| Code (resource-tooling) | The one situation | Refuses / warns | Exit |
+|---|---|---|---|
+| `trial_authorization_missing` | the run was asked for without `--authorization` (`package_id`) | refuses | 1 (envelope 2) |
+| `trial_irreversible_unacknowledged` | the mark flags the package (`marked`) and `--irreversible` was not given (`package_id`) | refuses | 1 (envelope 2) |
+| `trial_variables_not_carried` | a `--variable` was given, and a direct run carries no variable value yet (`package_id`, `variable_name`) | refuses | 1 (envelope 2) |
+
+A mark not judged (no `--root`) refuses nothing: the run does not require `--root` (the decision
+S3-10 left to this slice). The state directory refused is S3-10's `trial_state_dir_refused`,
+already the plan's; a record of this content at the run's millisecond already there is S3-10's
+`trial_record_exists`, which only the writer can find, since the record's name carries the time the
+run ended. Under the global `--dry-run` the run and `--collect` are `dry_run_unsupported` after the
+flags (the dry-run declaration is now `mixed`). The run's malformed flags are `validation_failed`:
+`--collect` or `--wait` beside `--plan` and `--wait` beside `--collect` `conflicting`, a `--collect`
+that is no request id `not_recognised`, a `--wait` that is no duration `wrong_type`.
+
+**One run, sent once.** The request is the one `run start` sends, made by its own function
+(`lab-ops` `core_ops::run_start_prepared`, called, not copied: the instance resolved by one status
+read, the package directory by its canonical path, the longest deadline, 30 minutes), on the Lab
+channel with the process's initiator (`lab_client_config`), named by its `request_id` before it is
+sent and submitted once. It is waited for as `run start` waits: without `--wait` to its receipt
+(the longest wait `run start` allows: the run's deadline and the client's margin bound it), with
+`--wait` by `lab-ops`'s `wait::wait_at_most`. A wait that ends first is `command_wait_expired`
+(reused: `run start`'s answer) with the request id and `next`, and writes no record. A Runtime that
+refused the run (a receipt without a terminal) answers its refusal. Otherwise the end is read on the
+same connection: after a result that is not known (no receipt came back), a lost connection answers
+the read at once with the client's failure, which is the answer, with the request id and `next`;
+nothing is sent again by this command or anything it starts (the client's own reset after a run it
+saw cancelled, and its recovery of a receipt that did not come in time, are `run start`'s).
+
+**The end.** The run read by `run_show::read` (its key the request id): its state and its terminal,
+whose `outcome_key` S3-3 put on the read. The answer: `{sent, plan, request_id, run_id?, end:
+{state, outcome_key?, final_page?, failure_code?, failure_values?}, expected?, matched?, record,
+part_left?, warnings?}`. A run that ended normally on another end than `--expect` named succeeds,
+exit 0, `matched` false, with the new warning `trial_end_unexpected` (`package_id`, the end's
+`outcome_key`); a failed or cancelled run is refused with its own code and values on top beside the
+same members, as `run start` answers a failed run (exit 1 on the command line). The record is
+written once, when the end has been read; its `<ms>` is the time the ledger recorded the run's
+terminal (one more read, of that record by its request and its sequence), so one run has one name.
+An end not read writes no record: a read the client refuses is answered as that with `next`; a
+read with no terminal, or a terminal whose record that read did not find, is the new
+`trial_end_unread` (`request_id`, `run_state`, the vocabulary `run_state` of `lab-ops`) with `next`.
+
+**Reading the end later.** `--collect <request_id>` beside the same arguments (the words `next`
+gives): it sends nothing; one status read resolves the trial's instance and the run is read as `run
+show` reads it; a run whose facts do not name the trial's package or its instance is the new
+`trial_collect_mismatch` (`request_id`, and the new key and vocabulary `trial_collect_problem`:
+`other_package`, `other_instance`); then its end is answered and recorded as the run's, `sent`
+false. A second `--collect` of the same run finds its record there: `trial_record_exists`.
+
+| Code (resource-tooling) | The one situation | Refuses / warns | Exit |
+|---|---|---|---|
+| `trial_end_unexpected` | the run ended normally on another end than `--expect` named | warns, in the answer's `warnings` | 0 |
+| `trial_end_unread` (key `run_state`) | the read of the run shows no end a record can keep; no record | refuses | 1 (envelope 4) |
+| `trial_collect_mismatch` (word `trial_collect_problem`: `other_package`, `other_instance`) | `--collect` names a run that is not this package's on this instance | refuses | 1 (envelope 2) |
+
+Six new codes in the domain `trial_` of the resource tooling's fragment, one new key and vocabulary
+(`trial_collect_problem`); the index is regenerated. No decision point reads a code: the run's
+branches read typed things (a receipt there or not, committed or not; the run's state; a terminal
+there or not; a failure code there or not), and every code is built, relayed or printed.
+
+**The row** (`lab-operations.json`): `plan` no longer required; `collect` (`request_id`) and `wait`
+(`duration`) added; `writes` true, `runtime` `required` and `requests` `RunContainedTask`,
+`QueryEvents`, `Status`, as `run start` declares them; `help` 152 bytes; the MCP server offers it
+through a `serve` child as before. Beside it: `TRIAL_FLAGS` (10) and the help's options (11), the
+capability (`offline`, `running_runtime`, `device`), the dry-run declaration and
+[actinglab-dry-run.md](actinglab-dry-run.md), and the Files list of [README.md](README.md).
+
+**What the review of S3-10's third round left** (done here): the writer takes its link and its
+write steps as parameters inside the module (`WriteSteps`, as the host's `place_once` takes its
+link), and its failure paths are tested (the fallback without hard links, the success with
+`trial_record_part_left`, the cleanup after a refused write or flush, `io_op` `sync`, a refused
+cleanup named by a `cleanup` link); the conversion into the record's plan calls the plan's own check
+of the authorization's bounds; the comment on `installed_root_containing` says it is not the only
+test of an installed root (the recordings keep their own walk, with the two different answers the
+contract names). From the review of S3-1's third round, two tests in S3-1's gate file: a package
+that only holds a role starts a counted chain, and a chain's fourth layer is not counted.
+
+**Tests.** `crates/resource-tooling/src/gate_463_s311.rs` (seven) and
+`apps/actinglab/src/tests/gate_463_s311.rs` (seven, with the runtime client's scripted Runtime,
+every frame of every connection written down; the sent run's ledger is made when its request
+arrives, its links the client's own ids), gate map `exec.toml` "#463 S3-11"; two tests in
+`crates/lab-rescue/src/install/gate_463_s31.rs`, gate map `apps.toml` "#463 S3-11". Adapted:
+S3-10's `s310_without_plan_the_line_is_refused_before_anything_is_read` (the requirement it pinned,
+a line without `--plan` refused `--plan` `required`, is lifted by this slice): it now pins that a
+line without `--plan` under `--dry-run` is `dry_run_unsupported` before anything is read, and that a
+line naming nothing is `--instance` `required`; its gate entry's text says so. No golden changes.
+
+**What is not changed.** What `--plan` answers; the record's format and what S3-10's reader
+accepts; `run start` and `run show` for their own callers (the run calls their public functions);
+the Runtime's crates; adopt, readiness, build and the placement but the two tests.
+
+**At deploy.** Nothing to do on the root. The trial's run reaches the running Runtime as `run start`
+does; its records go to the Lab's state directory.
+
+**Fix round 2** (coordinator work order `rd-1115/brief-463-s311-fix2.md`, after the independent
+review of #1767: a record must not say more than what was tried). `--collect` takes only a run its
+facts show sent by hand on the Lab's channel: the scheduler's run, a run whose request's origin is
+not recorded and a manual run of another channel are `trial_collect_mismatch` with the new words
+`scheduled`, `origin_unknown` and `other_channel` of `trial_collect_problem`; an ordinary `run
+start` of the same package on the Lab's channel is not told apart (the request is the same, by the
+same function and initiator, and no fact names the command), and the contract says so. The run's
+facts record no content digest (option 丙), so a `--collect` records the package directory as read
+then, which the contract states as a limit; what holds is one run, one record: before the writer the
+package's records are read (`trial_record_of_run`, new in the resource tooling) and a record of the
+run's request id, whatever content it names, is `trial_record_exists` naming it, without `next`. A
+refusal of that reading or of the writer carries `next`. Whether a run failed is read from its end
+state, never from whether a code is there: a failed or cancelled run whose terminal names no code
+is the new `trial_end_uncoded` (`request_id`, `run_state`), its record written. `trial_end_unread`
+keeps one cause, a run not ended yet (`not_found`, `admitted`, `running`) with `next`; an
+interrupted run is the new `trial_run_interrupted` (`request_id`) and a terminal whose record the
+second read did not find the new `trial_terminal_unrecorded` (`request_id`, `run_state`), both
+without `next`: a code each, since the next step differs (read again later; nothing to collect;
+look at the ledger). The four codes refuse, exit 1 on the command line and 4 in a `--via` envelope
+(`device_instance`); the mismatch and `trial_record_exists` stay 1 and 2. No decision reads a
+code: the branches read the run's state, its `dispatch` and `origin`, a terminal there or not, a
+record found or not. Five tests in `apps/actinglab/src/tests/gate_463_s311.rs`, gate map
+`exec.toml` "#463 S3-11"; the made-up ledgers now record their request's origin (the Lab's channel
+unless a test says otherwise), so a made-up terminal is the third record: the tests that pin the
+record's time read it from one constant (`s311_a_run_ending_on_the_target_page_records_its_key_and_matched`
+adapted); the index is regenerated.
+
+### 1.425 Slice #463 S2-1 (0.12.65): `record ready` lists everything a recording still lacks before `record stop` can make its package (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, whose stage two turns the recorded material into a package offline; the design `rd-1115/pack-stage12-design.md`, B2.1, B2.2 and the row S2-1 of B5, read on main `44cbab53`; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s21-record-ready.md`, built on the branch of the stage-one train (#1757) at `5706d568`)
+
+The coordinator gave this slice 1.425. It stands on the train of stage one (§1.402 to §1.404) and
+ships in 0.12.65.
+
+**Why.** `record stop` refused at the first pre-check a recording failed, so an agent working a
+recording in stage two learned what it lacked one refusal at a time. `record ready` is the one read
+that lists it all, and the recording's state ([lab-recording.md](lab-recording.md), "What a
+recording still lacks: `record ready`").
+
+**Established by reading** (the code's facts where the design or the work order said otherwise).
+- *The pre-checks* are those of `generate::plan` (`crates/lab/src/recording/generate.rs`), the
+  functions it calls among them (`refuse_optional_positions`, `refuse_select_rules`, `ending.rs`'s
+  `refuse_ending_rules`), each of which returned at its first failure. They are now one
+  implementation that collects (`generate::survey`, with `optional_positions`, `select_rules` and
+  `ending_rule_refusals`); `plan`, `record stop`'s, answers the first failure the generator meets,
+  as before. The design's word list did not match them: `effect_indeterminate` and
+  `final_frame_missing` are made by no pre-check (an indeterminate press leaves its step open with a
+  click, which the generator takes as an effect; a last step with a press is `final_has_effect`)
+  and are not registered; `optional_position` stood for four checks with four codes and is four
+  words; the pre-checks the list did not name each have their own word. `select_unrefined`,
+  `scan_end_not_recorded` and `press_box` belong to slices not built (V4, C6, C3).
+- *A check that needs what a failed one did not give waits for it*: the package id needs the game
+  and the server, `application_without_home` and `optional_restart_home` the game. Nothing after
+  the pre-checks (the coordinate space, the arrival timeouts, the runs of optional steps) runs once
+  one failed, as none ran before. The checks of an option's form (`--timeout-ms`, `--package-id`,
+  `--requires`) are no pre-checks of the recording: they answer where the generator meets them,
+  unless a failed pre-check came first, which is then the answer as before.
+- *The self-checks* (`recording_api::generate_and_write`) are now one function, `self_checks`, that
+  `record stop` and `record ready` call, its failure naming the check that refused. Each check
+  returns at its first refusal (`load_package_inputs` at the first frame it cannot read; admission
+  and the final package give one verdict each; the first decision simulates step 1; the cross-check,
+  the endings and the selects in `crosscheck.rs` return at their first refusal, and their later
+  parts read what the earlier ones matched), and the first refusal ends them, since a later check
+  reads what an earlier one built. Listing every page that does not match its own frames would mean
+  changing `crosscheck.rs`, which this slice leaves as it is: `record ready` lists the first
+  refusal, and `checks_after` names the checks after it.
+- *The frames check* is the last row of the contract's "Pre-checks" table, but the code runs it
+  after the generator, when it reads the package's inputs; `record ready` runs it as the first
+  self-check, `frames`.
+- *The frame of an item* is the press's `before_frame` that stage one records on a click's
+  execution (§1.402) or an application operation's completed receipt (§1.404); the design named the
+  step's `before_frame`, which no step carries.
+- *The four states* follow the work order's definitions, which differ from the design's B2.2 in one
+  place: a stopped recording marked again is `ready` or `draft` by those definitions (whether
+  `record stop` would write), where the design had it `draft` until `record stop`.
+- *The row's runtime.* The work order said `runtime: none`; the table's word for an operation that
+  never needs actingd is `offline` (`RuntimeNeed::Offline`).
+- *Which recording.* `record status` takes no `--record-id`; `record ready` reads the recording the
+  session header names, or with `--record-id` that one or (by its step table, `archive.rs`'s
+  `read_recording`) one the header no longer names, `archived` when it is active and holds a
+  manifest (`latest_manifest`), both now `pub(crate)`.
+
+**What it builds.**
+
+| Part | Where |
+|---|---|
+| The pre-checks, collected | `generate::survey` and `Survey`, `Lack`; `plan` answers the first with `details.missing_total` and `details.hint` `record ready`; `optional_positions`, `select_rules` (`generate.rs`) and `ending_rule_refusals`, `ending_key_problem` with the word (`ending.rs`) |
+| The self-checks, one function | `recording_api::self_checks` (`Checked`, `SelfCheckFailure`), which `generate_and_write` calls; `stop_settings`, the options of an active recording, which `record_stop` and `record_ready` read |
+| The read | `recording_api::record_ready` and `ready_recording`; `crates/lab/src/recording/ready.rs`: `RecordReadyOutcome`, `ReadyItem`, the items, the warning, the state |
+| The words | `crates/lab/src/codes.rs`: `ReadyMissing` (`ready_missing`), `ReadyCheck` (`ready_check`), `ReadyWarning` (`ready_warning`); the catalog's three vocabularies (`contracts/outcome-codes/catalog.json`) |
+| The command | `record ready [--record-id] [--state-dir]` (`apps/actinglab/src/commands/session_record.rs`: `RECORD_READY_READS`, the dispatch, `record_ready_options`), under no lock; the capability entries and their dry-run mode `no_effect` (`capabilities.rs`, `dry_run_gate.rs`, [actinglab-dry-run.md](actinglab-dry-run.md)) |
+| The row | `record ready` in [lab-operations.json](lab-operations.json) (authoring, `offline`, `writes` false, slice `463-S21`); `engine::COMMANDS`, `own_flags::READ_LIST_ROWS` and `reads`, `words::BUILT_SLICES`, and the Lab's MCP server's `ACTINGLAB_SLICES`, so that it offers `ac_record_ready` through a `serve` child; the first-generation server gets nothing |
+| Texts | [lab-recording.md](lab-recording.md): the opening paragraph, the new section "What a recording still lacks: `record ready`" and the sentence of "Pre-checks"; `apps/actinglab-mcp/MANUAL.md`, section 8, "Recordings" |
+
+**Codes and words.** No outcome code is added. Three closed vocabularies of the catalog, built
+from the enums of `crates/lab/src/codes.rs`, used by no outcome key: `ready_missing`, the 31 words of
+`record ready`'s `missing[].what`, one per pre-check and one cause each (the table in the contract
+names each word's code); `ready_check`, the 7 self-checks in the order they run (`checks_after` and
+the `what` of a self-check's refusal); `ready_warning`, `press_point_only`. None refuses or warns as
+an outcome: they are members of a read that exits 0. `record stop`'s first refusal keeps its code,
+class and exit status, its `details` adding `missing_total` and `hint`. The outcome code index is
+current (it lists codes only). No decision reads a code: `record ready` answers a self-check's
+failure as the command's own error by its class (`runtime_unavailable`), and every other by the
+check that refused.
+
+**Tests.** `crates/lab/src/gate_463_s21.rs` (exec gate map "#463 S2-1"; fake Runtime and clock,
+synthetic 1280x720 frames): three things missing listed in order, and `record stop` answering the
+first with `missing_total` 3 and the hint; a complete recording `ready` with every self-check run;
+a recording that lacks something running no self-check (its changed frame refused by `record
+stop --dry-run` once the locale is given); `material` against `draft`; `packaged` after `record
+stop` and `draft` after a later mark; `press_point_only` until a press region is set; the read
+writing nothing and answering while the lock is held. Adapted:
+`apps/actinglab/src/tests/gate_434_lab5b4.rs` holds the register's read lists equal to its commands,
+and `READ_LIST_ROWS` gains `record ready` (its 31 commands are 32). No golden changes; no test leaves
+a gate map.
+
+**What is not changed.** What `record stop` decides, writes or refuses, and the code, class and
+details of every refusal but the two members its first pre-check refusal adds; every check's own
+decision; the generator's output; the step table's format; `record status`; the kernel and the
+Runtime; today's MCP server (`actingctl mcp-serve`). A recording made before this slice is read as
+it is.
+
+**At deploy.** Nothing to configure. Through MCP `ac_record_ready` is on the Lab's MCP server
+(`actinglab-mcp`); a client registered with today's server has no such tool until its registration
+moves, which is the owner's to do.
+
+**Merged with the train** (the coordinator's notice: the parent's branch at `32f71ea6`, which holds
+#463 S1-5 (§1.406), #463 S1-7 (§1.424) and main `a3bf7e28` with §1.408, §1.409 and §1.417). Kept
+whole on both sides: the register (the parent's sections, then this one), the exec gate map (the
+parent's entries, then this slice's), `crates/lab/src/lib.rs` (S1-7's gate, then this slice's), the
+two slice lists (`words::BUILT_SLICES` and the MCP server's `ACTINGLAB_SLICES`, 13 each with
+`PACK-TRIAL` and `463-S21`), the opening paragraph of [lab-recording.md](lab-recording.md) and
+`session_record.rs`'s imports. `engine::COMMANDS` is 69 (`standard-pack trial` and `record ready`
+each added one). `READ_LIST_ROWS` is 28, unchanged by the parent, so `gate_434_lab5b4`'s 32 holds.
+An item's `frame_id` stays the step table's `before_frame` of the press (`ClickExecution`, or
+`ApplicationExecution`); on a press sent on a capture that was not stored
+(`sent_on_unstored_capture`, S1-1) it is the stored frame, and no frame is derived where the step
+table names none, unlike the manifest's `material` (S1-5). `record ready` takes no lock and opens
+no Runtime connection, so it neither pauses nor releases the instance (S1-7); `record start`,
+`record stop` and `record archive` do, and its tests call the Lab's functions, not those commands.
+
+**Fix round 2** (CI's `light` job and the review of #1766). The two architecture guards: the
+gate's bench pressed through a method named `tap`, which `lab_input_face_is_semantic_input_executor`
+reads as a call of `LabInputPort::tap`; it is `press` now and goes through `record_press` as the
+parent's gates do. `RecordReadyOutcome::warnings` was `serde_json::Value`
+(`lab_source_obeys_dependency_law`); it is `ReadyWarningItem`, `press_point_only` as a struct
+(`PressPointOnly`) or a warning of the generator or of a self-check as `record stop` prints it
+(`OpaqueJson`, a dozen shapes), the JSON unchanged; no other public member of the slice was a
+`Value`. The review's three: a check of `--package-id` or `--requires` met after a failed
+pre-check no longer ends the survey (`Lacks::or_refusal`), so `missing_total` counts every one;
+an item carries `details` (`ReadyDetails`, `ReadyMark`), what its refusal's details say beside its
+own members, and `ending_mark_missing` the ending's outcome key (`Lack::outcome_key`); an item's
+`frame_id` on a step whose press `--reopen-step` moved aside is the click's last attempt's. Three
+tests added (exec gate map "#463 S2-1"); the first and third tests adapted (their identity items
+now show `details.missing`). No code, word or key added.
+
+**Stage two, train 1** (0.12.65; coordinator work order `rd-1115/brief-463-train-s2.md`). Pull
+request #1766 carries this slice, #463 S2-13 (§1.426) and #463 S2-5 (§1.427), merged on main (the
+stage-one train with its last fix round) in that order, and then #463 S3-11 (§1.418, pull request
+#1767, with the unstable host tests FLK-15 and FLK-16 in `ci/flaky-tests.toml` and the workflow's
+two lines as it has them). Release 0.12.64 was cut without the four, so their labels say 0.12.65.
+Kept whole on every side: the register (main's sections, then §1.418, §1.425, §1.426 and §1.427),
+the exec gate map, the operation table's rows `record ready` and `record frames`, the capability
+table, the dry-run declarations and their contract row, the Lab's MCP manual, the catalog (the
+outcome-code index regenerated with S3-11's codes: 3977 codes, 3889 active), and the lists the
+three stage-two slices append to: `engine::COMMANDS` is 70, `own_flags::READ_LIST_ROWS`
+29 (so `gate_434_lab5b4`'s commands are 33), `words::BUILT_SLICES` and the MCP server's
+`ACTINGLAB_SLICES` 14 each. `record ready` meets S2-5's boxes in two tests of this gate, on the
+recording S2-5's test of the whole of stage two makes, with that gate's bench:
+`s21_train_a_press_box_ends_the_press_point_only_of_its_step` (the three recorded taps are
+`press_point_only`; a press box on step 2 ends step 2's alone) and
+`s21_train_the_draft_boxed_on_every_step_is_ready_and_material_before` (archived and reopened,
+`material`; boxed on every step as that test boxes it, `ready` with nothing missing and every
+self-check run). The train's fix round: a press box is a stage-two write (`stage_two_written`
+counts a press recorded by its point whose rectangle is no longer that one pixel, the test
+`press_point_only` makes), so a recording on which only a press box was drawn is `draft`, not
+`material`, and the first test asserts both states. No code, word or key added.
+
+### 1.426 Slice #463 S2-13 (0.12.65): `record frames` lists the stored frames just before and just after one press (Workflow #463; the owner's words of 11-15 on board #463 that in the second stage of recording the Lab may need to accept an agent's request to hand back the several, or several dozen, frames before and after a press, and that after a press the screen may change quickly; the rules are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s213-record-frames.md`, read on the head `5706d568` of the train of stage one, #1757)
+
+The coordinator gave this slice 1.426. It stands on the train of stage one (§1.402, §1.403, §1.404;
+fix round 2 merged its head `32f71ea6`, which adds §1.406 and §1.424) and ships in 0.12.65.
+
+**Why.** Stage one keeps every capture it takes: the frame each recorded press is sent on and every
+capture of the loop after it. Stage two works on the frame each press happened on and the final
+screen; when that does not show what a press did (an animation, a pop-up that came and went, a list
+that scrolled), the agent asks for the frames around that press. This slice is that read
+([lab-recording.md](lab-recording.md), "The frames around a press: `record frames`"). It adds
+nothing to what is recorded.
+
+**Established by reading** (the code's facts where the work order said otherwise).
+- *An application operation's time.* A click execution holds its time (`executed_at_unix_ms`,
+  written when the press's outcome is recorded). An application operation's completed receipt
+  holds one since #463 S1-5 (`ApplicationExecution.executed_at_unix_ms`, §1.406, which fix round 2
+  merged); an operation an earlier build recorded, one without a completed receipt and a step
+  without an effect hold none. So a step without an executed press answers no point and
+  `press.at_unix_ms` its receipt's time, or `null` without one. Its sides are split at the frame its
+  receipt names (`before_frame`, §1.404) when it names one, at its time when it names only that,
+  and otherwise at the step: the frames stored under the steps numbered below it, and those stored
+  under it and above it. A press an earlier build recorded (`do --capture --record`, no
+  `before_frame`) is split at its time: the frames recorded at or before it, and those after it.
+- *The order.* The step table numbers every frame as it enters (`frame_id`, `f0001`, …;
+  `admit_frame` gives `next_frame`, one above the highest on record, and writes
+  `recorded_at_unix_ms` then). The sequence is in that order, the order the frames entered the
+  step table: a frame captured from the device enters when it is captured, in the command that
+  captured it, right after the capture; a frame attached from a file (a mark's sample, a page
+  transition's frame, an offline frame, a step inserted after the stop) enters when it is
+  attached, and its time is that moment, not the moment its screen was captured.
+  `captured_at_unix_ms` is the frame's `recorded_at_unix_ms`.
+- *Which frames.* The steps' frames and their page transitions' frames, as the archive's manifest
+  lists a row's (`row_of`, `crates/lab/src/recording/archive.rs`). An ending's frames (#463 R2) are
+  stored under no step and come from a later run: they are not in the sequence, and the contract
+  says so.
+- *`runtime: none`.* The table's vocabulary has no such word; `offline` is "never needs it"
+  (`RuntimeNeed`, `crates/lab-ops/src/table.rs`), and the row says `offline`.
+- *The refusal of a step.* `record mark --step` refuses a step that does not exist, is dropped or
+  was converted into a transition with `record_step_not_found` and no word in its details
+  (`effective_step`, `crates/lab/src/recording/steps.rs`); `record frames` calls the same function.
+- *The flags' refusal.* The parent's flags (`after_capture_ms`,
+  `apps/actinglab/src/commands/device_commands.rs`) answer a value that is no whole number with
+  `validation_failed`, `details{argument, reason: "range", value}`, and the Lab adds `min` and `max`
+  for a number out of its range (`check_after_capture`); a flag given twice is not refused there
+  (the last is read). `record frames` answers all three so, a flag given twice with `value` the
+  texts given.
+- *`sent_on_unstored_capture`* is a member of the execution, and the parent has no warning word for
+  it; this slice adds `press_frame_not_stored`. Such a press names its step's stored frame
+  (`before_frame`), and a frame may be stored after that one and before the press is sent (a mark's
+  sample, a transition's frame). Fix round 2 (the review of #1765): its `after` are the frames
+  after the stored frame recorded after the press was sent (`recorded_at_unix_ms` later than
+  `executed_at_unix_ms`), and those recorded at or before it are `before`.
+
+**What it builds.**
+
+| Part | Where |
+|---|---|
+| The read | `record_frames`, `RecordFramesRequest`, `RecordFramesOutcome` and its parts (`crates/lab/src/recording/around.rs`, new); `effective_step` (`steps.rs`) and `read_recording`, `step_kind` and `instance_mismatch` (`archive.rs`) are `pub(crate)`; `stored_frame_path` (`archive.rs`), the absolute path of a frame's file as the manifest names it |
+| The command | `record frames` and `session record frames`: `RECORD_FRAMES_READS`, the dispatch (no lock), `run_record_frames` and `frames_number`; the session directory is not created for it (`apps/actinglab/src/commands/session_record.rs`) |
+| The registers | `own_flags::READ_LIST_ROWS` and `reads`, `engine::COMMANDS`, `words::BUILT_SLICES` and the Lab's MCP server's `ACTINGLAB_SLICES` (slice `463-S2-13`), the capability entries `record frames` and `session record frames` and their dry-run declarations (`no_effect`) |
+| The table | the row `record frames` (authoring, `runtime: offline`, `writes: false`, `help` 135 bytes), so that the Lab's MCP server offers `ac_record_frames`; today's server (`actingctl mcp-serve`) gets nothing |
+| Texts | [lab-recording.md](lab-recording.md), "The frames around a press: `record frames`" (new); [actinglab-dry-run.md](actinglab-dry-run.md), the `record` row; `apps/actinglab-mcp/MANUAL.md`, "Recordings" |
+
+**Codes and words.** No outcome code is added and no fragment changes. Two warning words of the
+answer's `warnings` (`[{code, frame_ids}]`), each from what the step table and the frames' directory
+hold, never in a text:
+
+| Word | The one situation | Refuses or warns | Exit |
+|---|---|---|---|
+| `frame_file_missing` | a listed frame's file is not where the manifest names it; `frame_ids` names each such frame, listed with `path: null` | warns | 0 |
+| `press_frame_not_stored` | the press was sent on a capture its command did not store (`sent_on_unstored_capture`); `press.frame` is the stored frame its step names, which `frame_ids` names | warns | 0 |
+
+The refusals reuse existing codes and words: `validation_failed` with `details{argument, reason:
+"range", value}` (and `min`, `max` for a number out of range; `argument` `before`, `after` or
+`step`), exit 2; `record_step_not_found`, exit 3; `record_session_not_active`,
+`record_lab_unavailable` (`lab_recording_missing` and its other reasons) and
+`record_instance_mismatch` when there is no recording to read. No decision reads a code.
+
+**Tests.** `crates/lab/src/gate_463_s213.rs` (exec gate map "#463 S2-13"; a step table written as
+stage one writes it, made-up frame files that are never decoded, no Runtime, no clock read): step 2
+of three presses (its press, the three frames before the frame it was sent on and the eight after
+it across the step boundaries, offsets, paths and totals; then five before and two after); `before`
+and `after` 0 on a tap and on a swipe (both ends); 101 refused and 100 accepted; the last step,
+without an effect; a dropped step and one that does not exist; two missing files; archived (by
+`record archive`, read by its id under another recording's session header) and stopped; the reads
+under another command's lock, every directory and file unchanged. Adapted, as the requirement
+changes what it pins: `apps/actinglab/src/tests/gate_434_lab5b4.rs`, whose list of the own commands
+that refuse an unknown flag is held equal to `READ_LIST_ROWS` and the unrowed lists (32 now, `record
+frames` after `record reopen`; still 32 after fix round 2 merged #463 S1-5 and S1-7, which add no
+read list). Fix round 2 (the review of #1765) adds five tests to the same gate: in the same file, a
+press sent on a capture that was not stored, with a mark's sample stored between its step's frame
+and the press (the sample `before`, the warning `press_frame_not_stored`); an application
+operation's step split at the frame its receipt names, with offsets from its receipt's time and,
+recorded before #463 S1-5, without; a recording whose presses an earlier build recorded (no
+`before_frame`), split at the press's time with offsets; and in
+`apps/actinglab/src/tests/gate_463_s213.rs`, on the command line, a value that is no whole number,
+a flag given twice and `--step` missing refused, and a read that creates no session directory. No
+test leaves the gate map.
+
+**What is not changed.** Anything recorded or written; the step table's format; every other
+command's answer; the recording lock; the archive and its manifest; today's MCP server.
+
+**At deploy.** Nothing to configure. Recordings already on disk are read as they are: one made
+before stage one (presses of `do --capture --record`, without `before_frame` or a loop after them)
+lists its frames in their stored order, each press split at its time with offsets, and a step
+without a press split at the step with `offset_ms` `null`. Through MCP the tool is
+`ac_record_frames` of the Lab's MCP server (`actinglab-mcp`); a client registered with today's
+server has no such tool until its registration moves, which is the owner's to do.
+
+**Stage two, train 1** (0.12.65; §1.425). A frame a box admits as a step's sample on a draft
+(§1.427, `source: recording_frame`, the file and sha256 of the capture it was taken from) is a
+frame of the step table and enters the sequence when the mark admits it, after every frame stored
+before that mark; the contract's section says so in one sentence, and S2-5's
+`s25_a_recognize_box_takes_the_settled_capture_and_lists_the_animation` asserts it (`record frames`
+of step 2 lists the sample `f0007` after step 2's press, after step 3's `f0006`). The check of the
+parent's waits this section names, `check_after_capture`, is `record_after_capture_check` since the
+stage-one train's last fix round (§1.403), which answers `after_ms` too with `details{argument,
+reason: "range", value, min, max}`, as `record frames` answers its sides out of 0..=100. That round
+also made the parent's flags answer a value that is no whole number `wrong_type` (it was `range`).
+The train's fix round (the coordinator's ruling: one convention for the command line, one cause
+per word): `record frames` reads its numbers as the parent's flags do (`after_capture_ms`): a value
+of `--step`, `--before` or `--after` that is no whole number is `validation_failed` with
+`details{argument, reason: "wrong_type", value}` (the parent's `NOT_A_WHOLE_NUMBER`, now
+`pub(crate)`), a flag given more than once is its last value and no longer refused, and `range`
+stays for a side outside 0..=100 alone. The contract's sentence says so; actinglab's
+`s213_the_command_line_refuses_a_number_it_cannot_read` asserts `wrong_type`, and for a flag given
+twice that the last value is the one read (`--after 3 --after abc` refused for `abc`, `--step x
+--step 1 --after abc --after 3` going on to the read). No code or word is added.
+
+### 1.427 Slice #463 S2-5 (0.12.65): boxes on a draft: the recognition region and the press region of any recorded step (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making, whose stage two hands the agent the frame and where the press went and lets the agent set the recognition region and the press region; the owner's words of 11-15 on the design of board #471: a box is drawn on one state of one screen, its base images are the frames of the action whose similarity reaches 0.95, a picture with boxes is only a preview; the design `rd-1115/471-box-design.md`, its English part, and its first implementation, slices B1 to B3, paused before stage one and ported here by hand; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-s25-record-boxes.md`, stacked on the stage-one train #1757 at `32f71ea6291c`)
+
+The coordinator gave this slice 1.427. It ships in 0.12.65, after the stage-one train (§1.402 to
+§1.406, §1.424).
+
+**Why.** A press recorded while playing is an executed click of one pixel, and until now the only
+way to give a step another click region was to reopen it, which works for the last step alone; a
+package that presses one exact pixel is what the kernel then ran. Boxes make the region the agent
+draws the way to say both things, the page's recognition and the press's region, on any step of a
+draft ([lab-recording.md](lab-recording.md), "Drawing a box").
+
+**Ported, and what differs from the earlier work.**
+- *B1* (boxes in the mark request) and *B3* (`--box` on the command line, the row's `box`) are
+  ported whole, labelled #463 S2-5; the request form, the generated ids
+  `box/<nn>/<x>_<y>_<w>_<h>`, `box_flat` with `instead: "color"`, the static rules and the repeat
+  rule are as built. Not ported: everything under `apps/actingctl` (today's MCP server hands the
+  request form on unchanged, no code).
+- *B2* (base images) is ported with the change the work order made: the frames of the action are
+  the request's own samples, treated as B2 built them, and on a draft the captures stage one stored
+  for the step before its press. The answer's words for a frame are the design's: `own`, `added`,
+  `not_added` with `because`, `elsewhere` (B2 as built answered `drawn_on`, `kept`, `added`,
+  `left_out`, and listed no frame of another step).
+- *New*: a press box on a tap or a long press recorded by its point (`source: "point"`) becomes
+  that click's `rect` when it holds the recorded point; a recorded swipe refuses it; a second box
+  needs `--replace-click`. `optional_after` and `remove_inserted` (#463 R4, on main since the earlier
+  work) refuse boxes beside them (`with_other_change`), as an ending does.
+
+**Established by reading.**
+- *Which captures are stage one's.* Every capture stage one stores is `source: "lab_capture"`, as a
+  `capture --record` by hand is, and every frame that replaces an open step's frame supersedes it
+  alike (`arrive_naming`, `ArrivalPlan::Replace`); the step table has no member that tells a capture
+  before the press from a frame an agent replaced by hand, or the first capture of a press sent twice
+  (`before.captured_twice` is in the answer only). What it does record: the press or application
+  operation that opened the step names the last capture of its own after loop as `after_frame`, with
+  `after_capture.captures`, and the loop's captures arrive in one command under the recording lock,
+  so they stand together in the step's frames, ending at that one. Those, superseded now, are the
+  captures taken (`boxes.rs`, `stage_one_captures`); no other superseded frame is.
+- *A press box on an executed click* reached `record_click_executed` in `apply_click`, the one place
+  a click's rectangle is declared; the press box now takes a branch of its own there
+  (`box_on_recorded_press`), so the execution is never touched and nothing is pressed.
+- *The whole-page check of a capture* is the mark-time self-test (`evaluate_batch`,
+  `follow_frames`, `anchor_rejection`, `evaluate_forbidden`, `select_frames`,
+  `other_pages_on_select_frames`), run on the step's live frames and the capture; fix round 2: one
+  function, `page_check`, which `apply_marks`' own self-test calls too. A check's `any_of` is
+  decided over every frame at once (`derive_check`), so captures that hold one by one may not hold
+  together; then they are taken one after the other while the page holds, and no capture is ever a
+  refusal.
+- *The archive's manifest* named a point click's rectangle as absent (`archive.rs`, `row_of`,
+  `source != "point"`), and a boxed point click keeps `source: "point"`; fix round 2: a point
+  click whose rectangle is no longer one pixel is written with it.
+- *Stage one's "unchanged"* (fix round 2): the after loop decides "still" with `unchanged_for`
+  (`recording_api.rs`), the run of captures each within the Runtime's one frame-change bound of
+  the newest (`frame_change_milli` of the whole frame, `change_digest`, at most
+  `FRAME_CHANGE_MAX_MILLI`, 1500); given two digests at one instant and no time to stand, it
+  decides exactly whether the two are unchanged, so `record mark` calls it (both made `pub(crate)`,
+  nothing copied).
+
+**What it builds.**
+
+| Part | Where |
+|---|---|
+| The request and the answer | `MarkRequest.boxes` (`BoxSpec {use, corners}`, `BoxUse`); `MarkOutcome.boxes` (`BoxView {use, corners, rect, mark?, threshold?, metric?, frames?}`, `BoxFrameView {frame_id?, sample?, superseded?, step?, score, matched_rect?, taken, because?}`, `BoxFrameTaken`, `BoxBecause {reason, mark?, box?, frame_change_milli?}`) (`crates/lab/src/recording/model.rs`) |
+| The boxes | `box_rect`, `box_mark_id`, `press_rect`, `validate_boxes`, `with_press_click`, `expanded_request`, `expanded_add`, `flat_boxes`, `made_box_marks`, `call_frame`, `below_because`, `stage_one_captures`, `box_views`, `FRAME_CHANGED` (`crates/lab/src/recording/boxes.rs`) |
+| `record mark` | `apply_marks`: the expansion after the target step is known, `box_flat` before the marks are made, the request's samples scored (`not_added` not stored), the captures scored and admitted before the self-test (`admit_captures`, `frame_unchanged`, `cached_digest`, `changed_because`, `page_check`, `recorded_sample`), the self-test (`page_check`, `PageCheck`), the answer's frames (`scored_frames`, `elsewhere_frames`); `apply_click`: `box_on_recorded_press` (`steps.rs`); `validate_mark_request` and the repeat rule, and `change_digest` and `unchanged_for` made `pub(crate)` (`recording_api.rs`); `boxes` among the members beside an ending (`ending.rs`) and an inserted step (`inserted.rs`) |
+| The archive's manifest | `row_of`: a point click's `rect` written once a press box made it more than one pixel (`crates/lab/src/recording/archive.rs`) |
+| The command line | `--box` in `RECORD_MARK_SHORTCUT_FLAGS`, `parse_record_mark_box`, `parse_record_mark_corner` (`apps/actinglab/src/commands/session_record.rs`); the help's flag list (`lab2_cli.rs`) |
+| The table and texts | the row `record mark` gains `box` (option, repeat; its help unchanged, 154 bytes) ([lab-operations.json](lab-operations.json)); [lab-recording.md](lab-recording.md): "Drawing a box" (new), the synopsis, the `--sample` rule, the output, "Recording while playing" (`record stop`), "Marking after stop", the error codes; `apps/actinglab-mcp/MANUAL.md`, "Recordings" |
+
+**Codes and words.** No outcome code is added and no fragment changes (the index is not
+regenerated). Inside existing codes:
+
+| Word | The one situation | Refuses or warns | Exit |
+|---|---|---|---|
+| mark reason `box_flat` of `record_mark_rejected`, with `box`, `rect`, `instead: "color"` | a recognize box whose crop on the primary frame holds one gray value | refuses | 3 |
+| `details.reason` `recorded_point_outside_box` of `record_click_outside_step_rect`, with `step`, `point`, `box` | a press box that does not hold the point a tap or long press recorded by its point pressed | refuses | 3 |
+| `boxes[].frames[].taken` `own` | a frame the step held before the call, or a capture whose bytes are those of a live frame | — | 0 |
+| `taken` `added` | a frame of the action admitted as a sample by this call | — | 0 |
+| `taken` `not_added` with `because.reason` `below_threshold` (or the mark reason the page meets there) | a frame of the action not admitted: a recognize box below its threshold there (or the step's page does not hold there) | — | 0 |
+| `taken` `not_added` with `because.reason` `frame_changed`, with `frame_change_milli` (fix round 2) | a capture stage one stored whose whole frame changed from the step's live frame beyond the frame-change bound: it shows another state of the screen; given before any other reason | — | 0 |
+| `taken` `elsewhere` | a live frame of another step on which the box reaches its threshold | — | 0 |
+
+Existing codes with no new word: `validation_failed` with `argument: "boxes"` and
+`argument_problem` `repeated` or `conflicting` (exit 2); `record_click_rect_conflict` for a press
+box on a recorded swipe, `record_click_exists` for a second box without `--replace-click`,
+`record_click_executed` for a click executed on a declared rectangle (exit 3);
+`record_ending_invalid` and `record_optional_after_invalid` `with_other_change` naming `boxes`
+(exit 3). No decision reads a code: the press box's branch reads the click's `source`.
+
+**Tests.** `crates/lab/src/gate_463_s25_boxes.rs` (B1 and B2 ported, ten), `gate_463_s25_draft.rs`
+(four, on recordings `record_press` made: the whole of stage two to the package, a press box on a
+tap, a swipe and a long press, the captures of an animation and of the settled screen, a press box
+after the stop) and actinglab's `s25_the_box_flag_declares_the_request_forms_boxes`
+(`session_record.rs`, `lab2_tests`), all in the exec gate map ("#463 S2-5"). No existing test
+changes, no golden changes, no test leaves the gate map.
+
+**What is not changed.** `generate.rs`, `crosscheck.rs`, `select.rs`, the kernel and the
+recognition crates; `recording.json`'s schema (a box mark is a template mark, an admitted capture a
+sample with `source: "recording_frame"`, a press box a click's `rect`); the press path of stage one
+and its after loop; `apps/actingctl`. Nothing proposes a box and nothing draws on a frame.
+
+**Fix round 2** (coordinator work order `rd-1115/brief-463-s25-fix2.md`, after the independent
+review of `8379a03b89af`; nothing merged).
+- *The gate map parses*: the gate's `tests` array is closed.
+- *A base image is a frame of the same state of the screen* (the coordinator's ruling on the
+  review's point d, after the owner's words of board #471): a capture stage one stored is taken
+  only when its whole frame has not changed from the step's live primary frame, by stage one's own
+  "unchanged" (`unchanged_for`, the frame-change bound 1500 milli); one that changed is `not_added`
+  with `frame_changed` and `frame_change_milli`, before any other reason, and nothing is refused
+  ([lab-recording.md](lab-recording.md), "Drawing a box", which says why).
+- *One function decides whether a page holds on frames*: `page_check`, for the self-test and the
+  captures alike; for every request that is not a box request it runs the same checks in the same
+  order, with the select's dry run and the other pages' check gated on no refusal before them, as
+  the self-test's own block was.
+- *The archive's manifest* writes a boxed point click's rectangle (`row_of`).
+- *Texts*: the recognize boxes of a step are best given in one request (a later box is tested on
+  the samples the earlier ones admitted), in the contract and the MCP manual.
+- *Tests* (`gate_463_s25_draft.rs`, six more): the previous screen's last capture, on which the
+  box's region matches, is `frame_changed` and the settled captures are added; another step's
+  frame is `elsewhere` and never taken, and a capture of the live frame's bytes is `own`; a capture
+  on which the box passes and the page does not is `not_added` with the page's reason; a point on
+  the press box's bottom-right pixel is inside it and one pixel further is
+  `recorded_point_outside_box`; a recording with `recording_frame` samples archives and reopens; a
+  press box set after a reopen is in the next manifest. The animation test asserts what it did:
+  its two moments change the button's square alone, so they stay within the frame-change bound and
+  are `below_threshold` as before (a comment says so); the helper that paints its frames now paints
+  on any gray, the same bytes as before.
+
+**At deploy.** Nothing to configure: no key, no ledger record, no package revision. Recordings on
+disk load as before; a request without boxes is byte for byte what it was.
+
+**Stage two, train 1** (0.12.65; §1.425). In `gate_463_s25_draft.rs` the bench (`Bench`, its
+`new`, `state`, `header`, `press` and `marked`, its lock and its OCR), the instance, the screens,
+the points pressed, `tap_at`, `one_capture_after` and `button_box` are `pub(crate)`, so that S2-1's
+gate builds the recording of this gate's test of the whole of stage two; and
+`s25_a_recognize_box_takes_the_settled_capture_and_lists_the_animation` asserts where `record
+frames` lists the sample the box admitted (§1.426). Nothing else changes.
+
+### 1.428 Slice #463 S1-8 (0.12.65): the installed actinglab finds its installation's Runtime (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making, whose stage one starts recording, plays and ends recording; the rule below is the coordinator's ruling in the work order, not the owner's words; coordinator work order `rd-1116/brief-463-s18-installed-state-root.md`)
+
+This section follows §1.427, the highest on main when it was written. It ships in 0.12.65.
+
+**What the walk showed.** After 0.12.64 went live, stage one was walked on a real instance with the
+installed program (`<root>\tools\actinglab.exe`) from a plain shell. Without the variable
+`ACTINGCOMMAND_RUNTIME_STATE_ROOT`, `actinglab --json --instance <i> record start --task-id <t>`
+answered `hold {state: "none", warnings: ["no_runtime_listening"], runtime_error: "runtime client
+error runtime_info_unavailable during discover_runtime"}` and started the recording unheld, while
+the installation's Runtime was running. With the variable set to the installation's state root the
+same command held the instance (`hold.state` `own`). actinglab's own commands took the state root
+from `runtime_state_root()` (`apps/actinglab/src/state_roots.rs`): the variable, else
+`%LOCALAPPDATA%\ActingCommand\runtime`, which is not an installation's state root; the CLI
+module's rows already located the installation's (`cli_module::place`, `lab_ops::locate`).
+
+**The rule** (one for the whole program, in `runtime_state_root()`):
+1. the variable, when it is set (empty or white space refused, as before);
+2. else, when the program runs from an installation, that installation's state root, located as the
+   CLI module's rows locate it; one that cannot be located refuses the command with the located
+   outcome's code (`install_state_root_unresolved`, or the selection's install code), the CLI
+   module's text (`cli_module::place::UNLOCATED`) and the outcome in the details, and nothing falls
+   back to the default: an installed program never reaches another state root than its
+   installation's;
+3. else (a build directory, a test) the default state root, as before.
+
+`no_runtime_listening` keeps its words ("no Runtime listens at the installation's state root"),
+which an installed `record start` now means; a state root that cannot be resolved refuses the start
+and writes nothing, as before.
+
+**Where it is built.** `lab_ops::locate` gains `installed_location` and `installed_location_from`
+(the location, `None` outside any installed root), which `locate_from` now wraps with its
+`install_root_unresolved`; nothing it answers changes. `cli_module::place` is `pub(crate)` and gains
+`installation_state_root`, which reads them (in test builds the place a test set,
+`cli_module::authoring::test_place`, as `record draft` reads it). `place()`, and so every row of
+the CLI module, is unchanged. The two MCP servers set the variable for their actinglab children, so
+their answers do not change.
+
+**No code, no word, no row.** No outcome code or word is added; the operation table and the outcome
+catalog do not change. At deploy nothing is configured.
+
+**Gate** (`contracts/test-gates/exec.toml`, `gate_463_s18`): the default from no installation; the
+variable wherever the program runs; an installation's state root without the variable; an
+installation whose state root cannot be located refused, never the default; `record start` from an
+installation without the variable holding its instance on a scripted Runtime (`hold.state` `own`).
+
+### 1.429 Slice #463 S1-9 (0.12.66): a recorded press keeps its lease until the captures after it are done (Workflow #463; the owner asked on board #463 that the captures after a recorded press be close together and that stage two can show the frames of the transition; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1116/brief-463-s19-lease-through-after-captures.md`)
+
+This section follows §1.428, the highest on main when it was written. It ships in 0.12.66.
+
+**What production showed.** On release 0.12.64 two recorded taps were made on a production
+instance. The first capture after each press entered the step table about 2.56 s after the press,
+the next about 0.9 s later, and both showed the settled screen. The ledger of those taps: the
+press's own lease (`lease.requested` to `input.committed` about 200 ms) was released about 45 ms
+later, and the first capture after the press opened the instance's device session again
+(`capture.requested` to `runtime.lifecycle_observed` about 1.6 s), which the second capture found
+open. The press took its own lease and released it as soon as the input was committed
+(`send_recorded_press`, `apps/actinglab/src/commands/device_commands.rs`); while two or more
+registered instances use Nemu, every lease end closes the device session (the multi-Nemu gate,
+`keeps_device_session` and `end_lease_device_use`, `crates/runtime-host/src/host/resource_close.rs`).
+The other cost, about 0.72 s on every Lab capture after its frame is stored, is the ledger's and
+another slice's (S1-10).
+
+**What changes** (in the Lab only; `contracts/lab-recording.md`, "Recording while playing", "The
+lease of a recorded press"). The input proxy, and with it the lease, is held by the recorded press
+as a whole (`run_recorded_touch`), not by the one input: the press's first input connects it and
+takes the lease, the one retry on `input_frame_unavailable` is sent through it (one lease per
+recorded press), the loop after the press runs while it is held, and it is released once
+`record_press` has answered, whatever the outcome: after the loop's last capture (still or at its
+bound), after a capture after the press that could not be taken (what was taken is recorded
+first), and at once when no capture follows the press (an indeterminate press, a refused input, a
+refusal of the recording after the lease was taken). `input_outcome.close_stage` keeps its place in
+the answer and is filled after the release (`close_error` with a failure); a failed release is the
+first failure after a performed press, as before; a refused input's `input_outcome` gets it as
+before; another error answered with a lease taken (a refusal of the retry) is answered as it is,
+and a release that failed beside it adds itself to its message and its details' `input_outcome`
+`{close_stage: "failed", close_error}`. A renewal of the lease that failed while it was held is
+answered as a failed release. The press's `executed_at_unix_ms` is now stamped before the release,
+so it no longer includes a session close.
+
+**What it costs, and what it does not give.** The instance's one queue is held from the press to
+the end of the captures after it, at most `after_ms + still_max_ms` and one capture more (with the
+one retry, its capture and status read more); the recording's own hold already keeps scheduling
+away. When the lease is released at the end, the session of an instance behind the multi-Nemu gate
+is closed again, so the capture before the next press opens it again: the reopening moves from
+after the press, where it hid the transition, to before the next press, where it only makes the
+agent wait. Taking it away needs a change of the multi-Nemu gate (#191 H), which this slice does not
+make.
+
+**Checked in the code before building** (main `e3758be8`). A keyless read-only observation is
+taken on an instance whose lease is held: `capture_readonly_observation`
+(`crates/runtime-host/src/host/observation.rs`) takes the admission guard only while it captures
+(an input takes it only while it is admitted, `host/input.rs`) and refuses only a member of a device
+group of several while another member holds the device (`refuse_keyless_observation_of_group`,
+`host/device_group.rs`); its frame is an observer's (`FrameOwner::Observer`), whose capture drops
+and replaces only the observers' frame and leaves the lease holder's in place (`InputFrames`,
+`crates/execution-kernel/src/session.rs`); and an input resolves the frame it names whichever owner
+committed it (`InputFrames::committed`, reached from the frame's resolution before the input's
+intent, `host/input.rs`), so an instance whose input is the emulator's own still presses only on a
+frame the Runtime captured.
+
+**Unchanged.** `tap`, `swipe` and `long-tap` without `--record` (their lease is the press's alone);
+`session app … --record`, which shares with the press only the capture of one frame
+(`runtime_captured_frame`) and the library's loop after an effect, neither of which changes; the
+order "capture, then press on that capture"; the frame rule; the timing of the loop after a press;
+what the step table and the answer record, but for the moment `close_stage` is filled; nothing
+under `crates/runtime-host` or `crates/ledger`, and no Runtime request.
+
+**No code, no word, no row.** No outcome code or word and no key are added; the operation table and
+the outcome catalog do not change. At deploy nothing is configured.
+
+**Gate** (`contracts/test-gates/exec.toml`, `#463 S1-9`, in `apps/actinglab/tests/runtime_input_proxy.rs`
+against the fake Runtime host, the press's requests read from its ledger in order): a press with two
+captures after it on an instance whose input is the emulator's own (capture, lease, input, capture,
+capture, release); a capture after the press that fails (capture, lease, input, capture, capture
+failed, release; what was taken recorded, `unfinished`); an indeterminate press and a refused input
+(capture, lease, input, release, the release the Runtime's own after an input its backend failed,
+as before; capture, lease, release); the retry after `input_frame_unavailable`
+behind a relay that takes a keyless observation before the press's lease connection (capture,
+capture, lease, capture, input, capture, release; one lease, one tap, `captured_twice`). The tests
+of stage one stay as they are.
+
+**The capture-speed train** (0.12.66; coordinator work order `rd-1116/brief-463-train-speed.md`):
+pull request #1772 carries this slice (pull request #1773) with #463 S1-10 (§1.430) on main of
+release 0.12.65, both whole, so that the two ship in one merge.
+
+### 1.430 Slice #463 S1-10 (0.12.66): a Lab pin's admission looks its trigger up by index first (Workflow #463; production 0.12.64, the coordinator's reading of the ledger after two taps recorded with the Lab; read-only study `rd-1116/report-post-store-stall-study.md`; coordinator work order `rd-1116/brief-463-s110-lab-pin-point-lookup.md`)
+
+This section follows §1.428, the highest on main when it was written; §1.429 is another slice's.
+It ships in 0.12.66.
+
+**What production showed.** On 0.12.64 every read-only observation the Lab sent took 720 to 755 ms
+between its frame's `artifact.pin_recorded` and its `capture.completed`, with a cold capture
+session and with a warm one, while a scheduled run's capture on the same instance and day took
+1 ms between the same two records. The pin of a Lab observation has the reason `lab`, a run's
+`explicit`.
+
+**The cause.** The observing thread appends the pin and waits for the writer's answer. Before the
+writer admits a pin whose reason is `Lab`, retention asks whether the pin's trigger record is
+related to the Lab (refused `artifact_pin_reason_conflict` otherwise: a Lab pin lands only inside
+the Lab's range, which the frame cleaner's statement L and the Lab's unpin rely on). The writer
+answered by reading the Lab relations of the whole ledger (`read_lab_relations`: the request and
+the correlation of every Lab anchor, then the run of every link row naming one of them), with no
+cache on its side: RB-1 (§1.194 LNWS-6) gave the reader pool an index of them, not the writer. That
+read grows with the Lab's history.
+
+**The change.** The writer's answer first looks whether a Lab anchor (a record of the source `lab`
+or of the type `lab.request`) at or before the record being checked names the trigger's request or
+its correlation: among the records staged in the batch, then among the stored ones through the
+link indexes `ledger_links_request` and `ledger_links_correlation` (one statement of at most one
+row; the in-memory test store answers from its anchor index). A hit answers "related" at once; a
+miss reads every Lab relation as before, which also covers a record related by its run alone.
+"Related" is the disjunction of the request, the correlation and the run relations, and a hit is
+one of the first two at the same position, so the answer is the whole read's in every case. A Lab
+observation's own `lab.request` names its request, so a Lab observation's pin always hits. The
+other questions retention puts to the writer's history (a record in a sealed scope, an eviction
+intent's Lab protection) take the same lookup first.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| S110-1 | the writer's Lab relation of a record (a Lab pin's trigger, a record in a sealed scope, an eviction intent's frame) | Runtime-internal behaviour (no key, code, format, table or index) (ledger gate row "#463 S1-10") | S1-10 | — | first the Lab anchors that name the record's request or correlation, staged or stored (`ledger_links_request`, `ledger_links_correlation`); a hit answers related, a miss reads every Lab relation as before; the answer is the whole read's in every case |
+
+**What does not change.** No answer, no record, no format, no ledger contract, no interface
+revision, no configuration key, no outcome code or word; the reader pool's index of RB-1 is as it
+was. At deploy nothing is configured.
+
+**Gate** (`contracts/test-gates/ledger.toml`, `gate_463_s110`): on the SQLite store and on the
+in-memory store, a Lab pin whose trigger's request an anchor names is admitted without reading every
+Lab relation (T1); one whose trigger is related only through its run is admitted by one such read
+(T2); one whose trigger nothing relates is refused `artifact_pin_reason_conflict`, fatal, as before
+(T3); on the SQLite store, an anchor staged in one batch with the trigger and the pin admits it
+without that read (T4). The reads are counted through `GlobalLedgerConfig::with_lab_relations_reads`,
+which exists in test builds only.
+
+**The capture-speed train** (0.12.66; coordinator work order `rd-1116/brief-463-train-speed.md`):
+this slice's pull request #1772 carries it with #463 S1-9 (§1.429, pull request #1773) on main of
+release 0.12.65, both whole, so that the two ship in one merge.
+
+### 1.431 Fix #461 (0.12.66): a close refused because the lease had already lapsed isolates the instance on two more paths, a client's disconnect and a failed input's clean-up (Workflow #461, found by reading when #458 was fixed, never seen on an installation; the rule of board #419, [runtime-outcomes.md](runtime-outcomes.md), "Failure scope"; the model is #458's fix, §1.364; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1116/brief-461-expired-lease-close-isolates.md`, read on main `e3758be8`)
+
+This section takes 1.431, the number the work order gives: §1.428 is the highest on main
+`e3758be8`, and two other slices being built take §1.429 and §1.430. It ships in 0.12.66. Line
+numbers are of this fix's head.
+
+**The two paths, established by reading.**
+
+*A client's disconnect.* When a client's connection ends, `end_connection`
+(`host/requests.rs:1325`, the end of `connection_boundary` split out so that a test runs the same
+code) cleans its leases up: `cleanup_connection` (`host/lease.rs:3131`) → `cleanup_token` with
+`Disconnect` → `cleanup_token_guarded` → `end_lease_ordered`, whose `end_lease_device_use` closes
+the session under the lease when it must close (#458's condition: it needs its close, its instance
+is outside the multi-Nemu gate, or it is a member of a device group of several). When the lease had
+lapsed and the sweep had not ended it yet (a device call held the instance's admission guard longer
+than the lease, so the sweep's `try_lock` left it, and the client gave up and disconnected),
+`begin_resource_close` refused the close `lease_expired`. The end passed the kind `Keep`, which
+#458's branch does not take, so the refusal returned as a poison (fatal), and the connection's end
+latched it: the Runtime stopped.
+
+*A failed input.* An input writes without the admission guard, and the sweep leaves a lease alone
+while a write is in flight on it (ISO-5a row B02). When the lease lapsed during the write and the
+input then failed with its resources confirmed, `finish_input_failure`
+(`host/resource_close.rs:1237`) ended the input's step and closed the session under the input's
+lease, which `begin_resource_close` refused `lease_expired`; its `Err` arm recorded the failure,
+retained the owner as unconfirmed (`OwnerGuard::retain_unconfirmed`) and latched the refusal.
+That arm alone is not the whole path: the input's own lease end follows (`cleanup_token` with
+`BackendFailure`, `host/input.rs:544`), and its close under the same lapsed lease (the kernel marks
+a session as needing its close after a failed input) is refused the same way and returned to the
+input, whose `replace_with_poison` made it fatal. This path reaches every instance: a failed input
+always closes the session.
+
+**The cure.**
+
+| Part | Where |
+|---|---|
+| A holder's own end | `LeaseDeviceEnd::HolderEnd` (`host/resource_close.rs:22`): `end_lease_ordered` (`host/lease.rs:2505`) passes it for a disconnect and a backend failure's end, `Expiry` for an expiry and `Keep` for every other reason. `close_instance_resources` (`host/resource_close.rs:304`) takes a refusal of every end but `Keep` that `expiry_close_refused` (`:478`; `lease_expired` at `begin_destructive_resource_close`, not during shutdown) names into #458's `fence_expired_lease_close` (`:496`, which now takes the error itself), after #411 A64's branch, which stays first. The refusal is recorded once per lease, the instance is fenced with `lease_expired` as its cause, the close is owed, `end_lease_ordered` names no transfer (`expired_close_owed`), the lease is released, and `cleanup_token_guarded` (`host/lease.rs:2482`) makes the owed close under the session close ahead (`close_expired_lease_session_guarded`, `host/resource_close.rs:566`), as at an expiry. Otherwise `HolderEnd` is `Keep` |
+| A failed input's clean-up | `finish_input_failure`: a refusal of its close that `expiry_close_refused` names goes, still under the instance's admission guard, to `fence_expired_lease_close` (`:1274`), and the input answers its own failure; no owner is retained and nothing is latched. The input's own lease end then meets the same refusal as a `HolderEnd`, records nothing more (the lease's close is owed already), ends the lease handing the device to no one and makes the close. Should another end of the lease come first (the sweep's expiry, a disconnect), that end makes it |
+| A test's way in | `RuntimeHost::end_connection_for_test` (`host.rs:4491`, `cfg(test)` only, test spelling `end_connection_for_test`) runs `end_connection` for a connection, as the connection's thread runs it once its stream is gone |
+
+**Which failures stay fatal.** As #458 kept them: a refusal during shutdown (`expiry_close_refused`
+takes none then), a refusal where no fence may take the instance (`fence_refused_close` returns it,
+fatal), and the Runtime's own failures (the refusal's record, a lock, the owner's journal, an
+identifier, an invariant of the scheduler). On the disconnect's path they return through
+`end_lease_ordered` and `cleanup_connection` to `end_connection`, which latches a fatal one; on the
+input's path to `finish_input_failure`'s `Err` arm, unchanged, which records them, retains the
+owner as unconfirmed and latches. Only `lease_expired` at `begin_destructive_resource_close` is
+taken.
+
+**The owner on the input's path, and why it is safe.** Before, the refused close retained the owner
+as unconfirmed (the owner's journal records `unconfirmed`, and the host's close then fails
+`owner_resource_unconfirmed`), although the refusal comes before the close's write authority, so no
+device step ran and nothing was left half closed. Now it retains nothing, as #458's expiry and
+#456's capture failure retain nothing. No device is left held: the lease ends at the input's own end
+(or at whichever end comes first) handing the device to no one, and the owed close runs under the
+session close ahead before the instance's admission guard is let go, so no other lease of the device
+begins while the session is open. No session is leaked: the owed close closes it; a refusal of that
+close lease that is not fatal is recorded and leaves it to a preparation of the fenced instance,
+which closes a kept session before it opens; at shutdown the Host close's second pass closes it.
+While the fence holds, the owner's resources stay `in_use` (`record_owner_resource_close`), and the
+next lease of the instance is used only after a preparation whose self-check passes lifts the fence,
+as fences are lifted today.
+
+**A third path of the same kind (the work order's search).** Every caller of the session's close
+that maps a refusal to a fatal error while the lease may have lapsed:
+- fixed by the same change, in the same function family (`end_lease_ordered` →
+  `end_lease_device_use` → `close_instance_resources`): every other backend failure's lease end of a
+  lapsed lease (`cleanup_composite_failure`, `cleanup_composite_failure_with_run_links` for a run
+  outside its end phase, an application command's or an emulator control's failure), which the
+  input's own lease end above needs;
+- not fixed, each another function: a failed policy run's hand-off to its admitted ladder
+  (`hand_off_to_ladder`, `end_lease_device_use` with `Keep`, `host/lease.rs:2154`), a ready transfer
+  of a lapsed lease (`perform_transfer`, `:1025`; a preempted lease handed on after an input that
+  outlasted it), and the closes under a held key right after its validation (an application
+  command's preparation, `prepare_application_resources_result` through `host/input.rs:716`; the
+  backend switch, `host/backend_switch.rs:421`; a member's switch, `host/switch.rs:856`), reached
+  only when the lease lapses between the validation and the close;
+- not reachable: an explicit release (`host/lease.rs:1699`) and a release that hands the key to a
+  claim (`:2311`) validate the lease under the guard first and deny a lapsed one.
+
+**Tests.** In `crates/runtime-host/src/tests/gate_458_close_isolates.rs` (gate map `host.toml`, the
+row "Workflow #461"), on #458's fixture (X and Y alone on their devices, both on the Nemu IPC, a
+manual Runtime clock, stuck recovery off), the lease sweep's expiry scan held so that the holder's
+own end, not the sweep, meets the lapsed lease:
+`close461_a_disconnect_after_its_lease_lapsed_fences_only_its_instance_and_the_runtime_runs`,
+`close461_an_input_whose_lease_lapsed_under_it_fails_alone_and_keeps_no_owner_unconfirmed` (the
+input's write moves the clock just past the lease and then fails),
+`close461_a_record_that_cannot_be_appended_at_a_disconnects_close_still_stops_the_runtime` and
+`close461_a_record_that_cannot_be_appended_at_a_failed_inputs_close_still_stops_the_runtime`
+(#458's test-only switch makes the refusal's record fail). Each of the first two asserts the
+Runtime's health clean, only X fenced with `lease_expired` (one fence record), the refusal recorded
+once naming X, the lease and the stage `runtime_lifecycle_session_close`, X's lease released once
+by the holder's own end and never expired, X's session closed once after that under a fenced close,
+and Y's direct run dispatched and completed; the second also that the close's record keeps no owner
+unconfirmed and that the host closes. No existing test is adapted or retired.
+
+**What is not added.** No outcome code, value key, word, configuration key, record type, payload
+member, fact, wire shape, interface revision or ledger revision. The test-only switch
+`close_isolates_off_for_test` now turns these two paths off as well.
+
+**At deploy.** Nothing to do. What an operator sees when it happens: the Runtime keeps running; the
+instance's row shows its resource fence with `lease_expired` as its cause, waiting for a person (a
+client's lease is manual work) or handed to a ladder; the ledger holds the refusal's
+`runtime.failed` record (stage `runtime_lifecycle_session_close`, naming the lease; on the input's
+path under the input's request), `instance_resources_fenced`, and the lease's `lease.released`;
+a failed input answers its own failure. A self-check, a resume or the fence's recheck lifts the
+fence.
+
+### 1.432 Fix #475 (0.12.67): a close refused because the key's lease had already lapsed isolates the instance on five more paths (Workflow #475, found by the independent review of #461's fix by reading, never seen on an installation; the rule of board #419, [runtime-outcomes.md](runtime-outcomes.md), "Failure scope"; the models are #458's fix, §1.364, and #461's, §1.431; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1116/brief-475-refused-close-isolates-five.md`, read on main `8eb03787`)
+
+This section takes 1.432, the number the work order gives: §1.431 is the highest on main
+`8eb03787` (§1.429 and §1.430, #463 S1-9 and S1-10, were merged after it), and §1.433 and
+§1.434 belong to two slices being built. It ships in 0.12.67.
+
+**The five places, established by reading.** Each closes a session under a held key after the
+key was validated, and before the key's end; a key whose lease lapsed meanwhile (a device call
+that outlasted it, the sweep's expiry left behind by its `try_lock`) has the close refused by
+`begin_resource_close` (`lease_expired`), and each place took that refusal as fatal:
+
+- *A failed run's hand-over of its key to its ladder* (`hand_off_to_ladder`, `host/lease.rs`):
+  the run's lease end with `Keep`. A run whose lease lapsed before its end began enters no end
+  phase (`enter_run_end_phase`), so #411 A64 does not take the refusal. The hand-over also never
+  passed through the lease end that clears the owed closes (`cleanup_token_guarded`), so a close
+  owed by the run's lease from before (a failed input's under #461) was left behind and the key
+  handed on with the session open.
+- *A pre-emption's hand-over* (`perform_transfer`, from `promote_idle_preemption` and
+  `transfer_preempted_while_guarded`): the holder's device end with `Keep`, under a lease that may
+  have lapsed under the input that outlasted it; and the pre-emption's own end of that lease when
+  capacity holds the transfer back (`LeaseReleaseReason::Preempted`, `Keep`).
+- *An application command's preparation* (`prepare_application_resources_result` in
+  `control_application_of`, `host/input.rs`), whose `Err` poisoned the command.
+- *A backend switch* (`close_switch_session`, `host/backend_switch.rs`): the kept session's close
+  at step 3.2 and the candidate's at the restore, whose `Err` poisoned the switch.
+- *A member switch* (`stop_member_application`, `host/switch.rs`): the close of the stopped
+  member's session under the run's key. Reached only by a device group of several members, which
+  no installation can configure today (the load refuses it).
+
+**The cure.** Recognition is #458's and #461's, unchanged (`expiry_close_refused`: operation
+`begin_destructive_resource_close` and code `lease_expired`, not during shutdown). Each refusal is
+recorded once, fences the instance whose session it is with `lease_expired` as its cause, and owes
+its close under the key's lease (`fence_expired_lease_close`, `fence_expired_close_of`); the key is
+handed to no one (`end_lease_ordered` names no transfer while a close is owed, as before); the
+key's end, whichever it is, makes every owed close once under the session close ahead, still under
+the device's admission guard, and clears the entry (`close_expired_lease_session_guarded`).
+
+| Place | What changes | What the caller sees |
+|---|---|---|
+| Hand-over to the ladder | `hand_off_to_ladder` ends the device use with `HolderEnd`; when the lease owes a close (this refusal, or one before it) it returns the ladder without a hand-over | The run returns its own failure. The caller's lease end (a backend failure's, `cleanup_token_guarded`) releases the key, makes the close and clears the entry; the ladder then waits as a claim (`enqueue_ladder_claim`) and the queue grants it after the close, as when no key is left to hand on |
+| Pre-emption | `perform_transfer` takes the device end (`HolderEnd` from the two pre-emptions, `Keep` from a release's and a lease end's transfer, unchanged) and answers `None` when the close is owed; the two pre-emptions then end the lease (`Preempted`, which `end_lease_ordered` now maps to `HolderEnd`) | The claim that was to receive the device stays queued (`queued`); it is granted by the queue once the close is made and its gate lets it. A pre-emption at an input's start still refuses the input (`transfer_not_safe`), as for a transfer |
+| Application preparation | The refusal is fenced and owed for the instance whose application the command drives (the key's own, or a member under MAPP-2a) | The command fails with a refusal of its own, `lease_expired` at `prepare_application_resources` naming the key's lease, not fatal (fix round 1: the refusal the close met is fatal as the close path builds it and is not handed on), before its step and without a command sent, as a lapsed key at its step does; so does a member switch's stop whose preparation meets it; its own clean-up, the run's or the ladder's end, or the expiry, makes the close |
+| Backend switch | The refusal is fenced and owed; `release_switch_key` ends an owed key as a backend failure's end instead of a release (which the lapsed lease would refuse), and a ladder the restore admitted then waits as a claim | `backend_switch_refused` (failed) with `instance_fenced`, caused by `lease_expired`; the registration keeps its backends |
+| Member switch | The refusal fences the stopped member and owes the close of its session under the run's key | `application_switch_failed` at its step `stop`, with `lease_expired` as its step's code (its own failure code and cooldown, as before; since fix round 1 its cause is a refusal of its own at `close_execution_session`, not fatal); the run's end or the expiry closes the member's session |
+
+The owed closes are now kept by lease and instance (`expired_lease_closes`,
+`BTreeMap<LeaseId, BTreeSet<InstanceId>>`), so a lease of one member may owe another member's
+close; memory only, as before.
+
+**The review's three small items.** A holder's own end (`HolderEnd`) gives way while a write is
+in flight on the lease, as the expiry's end does (`end_lease_device_use`): `begin_resource_close`
+asks the lease's time before the step, so a close under a lapsed lease with a write in flight would
+be owed under that write; no path reaches it today. A test proves that a claim waiting in the
+queue is not handed the device while the close is owed, and #461's fourth test asserts what its
+fatal path does with the owner (fix round 2: it retains none, below).
+[runtime-outcomes.md](runtime-outcomes.md) says "before the lease sweep meets it" where it said
+"before the lease's expiry".
+
+**Which failures stay fatal.** As the two fixes kept them: a refusal during shutdown, a refusal no
+fence may take, and the Runtime's own failures in these paths (the refusal's record, a lock, the
+owner's journal, an identifier, an invariant of the scheduler). The hand-over returns them into
+the run's lease end, the pre-emptions and the application command into their request (a poison
+the request's boundary latches), the backend switch into its request, the member switch to its
+caller.
+
+**Nothing changes when the lease has not expired.** `HolderEnd` differs from `Keep` only where a
+close is refused `lease_expired` at `begin_destructive_resource_close`, which the scheduler
+answers only for a lease whose time is over, and, by the defensive line above, when a write is in
+flight on the lease (where every one of these places failed before as well, a Ready transfer has
+no step in flight, and a run's hand-over has none). An owed close exists only after such a
+refusal, so `expired_close_owed` is false for every lease whose time is not over, and the new
+branches of the application command, the backend switch and the member switch are reached only by
+that refusal. The receiver's `lease.transition_intent` of a pre-emption whose hand-over is so
+abandoned stays recorded; nothing reads it as a transfer.
+
+**Tests.** In `crates/runtime-host/src/tests/gate_458_close_isolates.rs` (gate map `host.toml`,
+the row "Workflow #475"); a test-only hook (`RuntimeHost::run_before_next_resource_close_for_test`,
+test spelling `run_before_next_resource_close_for_test`) lets the lease lapse right before the
+next close that finds a session asks its write authority, and the lease sweep's expiry scan is
+held:
+`close475_a_failed_runs_hand_over_to_its_ladder_after_its_lease_lapsed_fences_only_its_instance`,
+`close475_a_record_that_cannot_be_appended_at_a_runs_hand_over_to_its_ladder_still_stops_the_runtime`,
+`close475_a_preemptions_hand_over_of_a_lapsed_lease_fences_only_its_instance`,
+`close475_a_record_that_cannot_be_appended_at_a_preemptions_close_still_stops_the_runtime`,
+`close475_an_application_command_whose_key_lapsed_before_its_preparation_fails_alone`,
+`close475_a_record_that_cannot_be_appended_at_an_application_preparation_still_stops_the_runtime`,
+`close475_a_backend_switch_whose_key_lapsed_before_its_close_is_refused_and_fences_only_its_instance`,
+`close475_a_record_that_cannot_be_appended_at_a_backend_switchs_close_still_stops_the_runtime`,
+`close475_a_member_switch_whose_key_lapsed_before_its_close_fences_only_the_stopped_member`,
+`close475_a_record_that_cannot_be_appended_at_a_member_switchs_close_still_stops_the_runtime`
+and `close475_a_disconnects_owed_close_is_made_before_the_waiting_claim_is_granted`. The
+hand-over's run fails a capture whose own close meets the lapse first and fences the instance
+(#456), so that test counts the hand-over's refusal after the run's terminal, and its fatal test
+asserts that nothing is fenced from there on. `close461_a_record_that_cannot_be_appended_at_a_failed_inputs_close_still_stops_the_runtime`
+gains one assertion (since fix round 2: the owner not retained as unconfirmed, read through the
+test-only `RuntimeHost::owner_retained_unconfirmed_for_test`); no other existing test is adapted
+or retired.
+
+**What is not added.** No outcome code, value key, word, configuration key, record type, payload
+member, fact, wire shape, interface revision or ledger revision. The test-only switch
+`close_isolates_off_for_test` turns these paths off as well.
+
+**Fix round 1** (coordinator work order `rd-1116/brief-475-fix2.md`, after the independent review
+of pull request #1777; the coordinator's rulings; the pull request's first CI run, read once, had
+its host tests still running). (1) The application preparation was not cured: the refusal its
+close met is built by `retire_instance_resources` through
+`RequestFailure::poison_without_terminal`, which marks it fatal (`into_fatal`), so its clone in
+`ActionFailure::scheduler` poisoned the command (`poison_runtime`), its untagged fatal scope is
+Global, no fence took it, and the request's boundary latched the Runtime after the instance was
+fenced. The command now answers a refusal of its own, the scheduler's `lease_expired` at
+`prepare_application_resources` naming the key's lease, built as its step's refusal is, not
+fatal. A member switch's stop is that same command (`control_member_application`), so its
+preparation answers the same way, and the switch's close of the stopped member hands on such a
+refusal of its own too (at `close_execution_session`). No other place of this fix hands the error
+on: the hand-over and the pre-emptions fence and owe it inside their lease end and return nothing
+of it, and the backend switch hands on only its outcome, which carries the code's category, not
+the error's fatality. (2) An owed close of an instance whose device a lease holds when the owing
+lease's end comes to make it (`close_expired_lease_session_guarded`) was passed over and forgotten
+with the entry; no path reaches it today (the owing end hands the device to no one, under the
+admission guard). Of the work order's two answers this round takes the second, as #458 records a
+refusal of that close it cannot act on: only a holder of the owed instance's own key still takes
+the session over (the session is the instance's, Workflow #191 H, and that holder's lease end or
+preparation closes it); under any other member's lease the close is tried, the session close ahead
+refuses the held device (`lease_busy`, not fatal), and that refusal is recorded once (stage
+`runtime_lifecycle_session_close`, naming the instance) and leaves the session to the fenced
+instance's own paths (its recovery ladder, the fence's recheck, a person's self-check or resume),
+each of which closes a kept session before it opens, while the fence keeps the instance out of
+policy dispatch and visible as fenced. The first answer, keeping the entry owed, would keep it
+under a lease that has ended, which no later end takes. (3) The closes a connection preparation
+makes under a held key (`prepare_connection_attempt` with `PreparationLease::Held`,
+`host/resource_close.rs` near 1915, the retained session's close before the opens, and 2013, the
+close after a failed open or outside the multi-Nemu gate) meet the same refusal and keep it fatal;
+they are not changed here and are stated so in
+[read-session-resource-close.md](read-session-resource-close.md). The preparation reports its close
+as a kernel result into its self-check, and its callers (a person's self-check on an operator
+claim, an emulator control, the recovery ladder's preparation, the emulator watch's recognition, a
+backend switch's candidate and restored backends) end the lapsed key by a release or a hand-over
+to a ladder, which the lapsed lease refuses, so the cure changes each caller's key end besides the
+recognition: a later slice the coordinator files. (4) Tests: the first test asserts that
+`hand_off_to_ladder` itself withheld the key once (a test-only count,
+`RuntimeHost::ladder_hand_offs_withheld_for_test`, test spelling
+`ladder_hand_offs_withheld_for_test`; a ladder that waits in the queue writes the same records);
+new are `close475_a_preemption_at_an_inputs_end_whose_lease_lapsed_fences_only_its_instance` (the
+pre-emption a reset's write in flight deferred, made at the reset's end,
+`transfer_preempted_while_guarded`) and
+`close475_a_backend_switchs_restore_whose_key_lapsed_before_its_close_fences_only_its_instance`
+(the restore after a refused commit, `restore_backends`), in the row "Workflow #475" of the gate
+map. (5) The texts: this section's numbers (§1.429 and §1.430 are #463 S1-9 and S1-10) and the
+table's rows for the application preparation and the member switch. No outcome code, word or key
+is added.
+
+**Fix round 2** (coordinator work order `rd-1116/brief-475-fix3.md`, after the pull request's CI
+run on the head of fix round 1, `15c9d98a`, failed one host test; the coordinator's rulings). The
+assertion this section added to
+`close461_a_record_that_cannot_be_appended_at_a_failed_inputs_close_still_stops_the_runtime` (the
+owner kept unconfirmed) stated what the program never did, on main as here: the review of #461 had
+read `finish_input_failure`'s `Err` arm as keeping the owner on that path. It does not. The
+failure there is the ledger's own (the refusal's record cannot be appended), and
+`append_lifecycle_failure` hands a ledger failure back instead of recording it (`host/lifecycle.rs`,
+the return of a `ledger_failure` before the record is built), so the arm's `?` on its record of the
+clean-up's failure (`host/resource_close.rs:1345-1350` at this fix's head) returns it before the
+arm's `retain_unconfirmed` (`:1351`) and its own latch. The input's poison reaches the request's
+boundary, whose `contain_failure` latches it (`latch_failure`) and retains nothing. Main at
+`8eb03787` (#461) has the same lines (`:1292-1299`), and no round of this fix changed them, nor
+`append_lifecycle_failure`: the arm keeps the owner for a failure it can record (the refusal itself
+before #461; today a refusal during shutdown, or one no fence may take). The test-only reader reads
+the owner's retention (`OwnerGuard::retained_resource_disposition`, set only by
+`retain_unconfirmed` and never undone) after the input's request has returned and before the
+host's own close, so its moment was not the cause. Of the work order's three answers it is the
+second: the assertion now states that the owner is not retained as unconfirmed, beside what the
+test already asserted (the ledger's failure latched, no instance fenced); the refused close began
+nothing, so no device step is left half done (§1.431, "The owner on the input's path"). The
+sentence of [read-session-resource-close.md](read-session-resource-close.md) that said the failed
+input's clean-up then keeps the owner, which §1.431's "Which failures stay fatal" says of the
+Runtime's own failures as well, is true except for a failure of the ledger itself; the contract
+now says so, and this section's two sentences on that assertion are corrected. No program
+behaviour, other test, outcome code, word or key changes. Main is merged locally afterwards.
+
+**At deploy.** Nothing to do. What an operator sees when it happens: the Runtime keeps running;
+the instance's row shows its resource fence with `lease_expired` as its cause; the ledger holds
+the refusal's `runtime.failed` record (stage `runtime_lifecycle_session_close`, naming the key's
+lease), `instance_resources_fenced`, the key's end and the session's close; the caller answers its
+own failure as the table says. A self-check, a resume or the fence's recheck lifts the fence.
+
+**Train** (coordinator work order `rd-1116/brief-train-host-475-g1.md`). Pull request #1778
+carries this fix and §1.433, Workflow #437 G1, merged as one: both change what the host does in
+the same functions, and both rewrote row 7 of [device-group.md](device-group.md)'s table, where
+this fix's sentence now stands, unchanged, before G1's. How the two rules meet, read in the merged
+tree (no program behaviour changes in the train): (1) **Each refusal here holds nothing.** Every
+place of this fix and the three answers of fix round 1 settle the refusal through
+`fence_expired_close_of` and `fence_refused_close`, which G1 settles through `settle_refused_close`
+(so does #411 A64's arm, `fence_lapsed_lease_close`, which a lease end takes first for a run in its
+end phase): the instance is fenced as before and `ResourceFence::holds_device` stays false. The
+refusals fix round 1 builds (`lease_expired` at `prepare_application_resources` and at
+`close_execution_session`) carry no resource quiescence, so the member switch's settlement of its
+stop's failure and a command's clean-up (`settle_failure_resources`) find them confirmed and mark
+nothing either. (2) **The other members of the device.** `device_held_for` finds no mark: their
+status rows carry no `device_held`; their claims are judged by their own gates and are granted the
+device once the key's end has made the owed close under the guard (the guard's drop pumps, the
+gates read again under the guard); their dispatch waits `device_group_waiting` `fenced`, naming the
+fenced member, as before G1. Only when the owed close itself, under the session close ahead, ends
+unconfirmed does `settle_unconfirmed_resources` mark the fence, and the device is then held for
+that member (G1). (3) **Fix round 1's `lease_busy` refusal.** Under the guard of the owing key's
+end, which released the key with no transfer, the only lease that can hold the device is a session
+close ahead the same loop kept for an earlier owed member whose close ended unconfirmed, whose
+fence then holds the device. That needs one key owing two members' sessions; the only entries for
+a member other than the key's own are a member switch's (its stop's preparation or its close),
+made before the run's own member has a session, and no path found makes the second. Were it
+reached, the later member's session stays open and that member, fenced by a refused close, owes no
+start preparation (`start_preparations_held` takes only a dedicated start preparation the hold
+refused), so no `HeldStartPreparation` closes it; a later preparation of its own does, as every
+preparation first closes a kept session: its ladder's claim waits in its place (`DeviceHeld`) and
+is granted once the earlier member's fence is lifted, while its recheck and a person's self-check
+or resume are refused `device_held_for_member_close` as long as the hold stands (a refused recheck
+counts as a failed one). Meanwhile the earlier member's own way out opens its session on its own
+key with the later member's still open. Nothing of this is changed here. (4) **The locks.** G1's
+pump takes the guard by `try_lock`, reads the gates (leaf locks), then takes the queue-order lock
+and the scheduler. The two pre-emptions let the queue-order lock go before `cleanup_token_inner`,
+which is handed the guard their caller holds and takes the queue-order lock again inside
+`end_lease_ordered`; `hand_off_to_ladder` returns an owed key before it takes the queue-order
+lock; `release_switch_key` runs after the switch let its guard go and takes it in
+`cleanup_token_inner`; the owed closes, the fences and `start_preparations_held` are leaf locks. No
+lock is taken twice, and none in the other order.
+
+### 1.433 Slice #437 G1 (0.12.67): an unconfirmed close holds the device for its member, and a member's own wait leaves the queue to the others (Workflow #437; [device-group.md](device-group.md), "A failure stays where it belongs", "Device-level actions", row 7, "One queue, one worker, one lease per device" and "Release."; the two items of "Before the load accepts a group of several" that MAPP-1d and its review found, §1.359; the owner's request of 11-16 on board #437 to start testing several applications on one device; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1116/brief-437-g1-device-hold.md`, read on main `8eb03787`)
+
+This section takes 1.433, the number the work order gives: §1.431 is the highest on main
+`8eb03787`, and §1.429, §1.430, §1.432 and §1.434 are other slices'. It ships in 0.12.67. The load
+still refuses every group of several (`several_members_unsupported`, unchanged), so no
+installation reaches this slice's group paths; the tests hand the host the member → device key
+map and the group's name as the assembly builds them.
+
+**Rule 1: what holds the device.** A fence (Workflow #403) now records whether it met an
+unconfirmed close of its member's own resources (`ResourceFence::holds_device`, memory only, beside
+the fence): set when `settle_unconfirmed_resources` fences the member or meets its fence (a close,
+an ADB child or a contained failure whose quiescence is unconfirmed), never by a close refused
+before it began. #411 A64's `fence_lapsed_lease_close` and #456/#458/#461's `fence_refused_close`
+settle through `settle_refused_close`, which fences exactly as before but sets nothing: their
+session is closed by the session close ahead that follows before the device is handed on (MAPP-1d,
+§1.364), and only if that close, too, ends unconfirmed does the fence hold the device (the case
+row 7 named). The flag is cleared only with the fence, by a preparation of the member whose
+self-check passes; nothing else lifts a fence or ends the hold. `HostShared::device_held_for`
+(`host/device_group.rs`) names, for a member of a device of several, the first other member (id
+order) whose fence holds the device; `None` for an instance alone, for a member whose own fence
+holds it (its own way out; two such members are each judged by their own gate) and otherwise.
+
+**Rule 1: every way the device could pass to another member, and what stops each.**
+
+| Way | Where | Now |
+|---|---|---|
+| The queue's own grant | `pump` (`host/lease.rs`) | the member's gate is `ClaimGate::DeviceHeld` (`HostShared::member_gate`, read by `device_gates`), which holds every kind but a holder-owned continuation: its entries are passed over in their places |
+| A lease's end: the kept close lease's expiry, a release, a preemption, a transfer while guarded | `end_lease_ordered`, `release_lease`, `promote_idle_preemption`, `transfer_preempted_while_guarded` (`host/lease.rs`) | the same gates (`prepare_transfer_gated`): no entry of the member is a candidate, so the end hands the device to no one but the fenced member's own entry |
+| An immediate grant of a client's or the Runtime's lease | `acquire_lease_guarded` (`AcquireLease`, a Lab operation, a policy dispatch's lease) | refused before the scheduler is asked: `device_held_for_member_close`, `alias` the fenced member, `scheduler.denied` |
+| A client's `QueueLease` | `queue_lease`; `SeedScheduler::request_queued_gated` | no immediate grant while the member's own gate holds a client lease; it is queued in its place |
+| A person's or a client's operator claim (a direct run, an input or application command, a self-check, a resume, a backend switch) | `request_host_claim` (`ClaimClass::Operator`) | refused at once, as the immediate grant |
+| The Runtime's own claim (a ladder, a startup package, an autostart) | `request_host_claim` | `GateHeld` under `DeviceHeld`: queued in its place |
+| A policy dispatch | the evaluation and the admission (`device_group_hold`) | `device_group_waiting` `close_unconfirmed`, `alias` the fenced member, before `fenced`; the admission's lease is refused as above should the fence come between |
+| A dedicated preparation lease (the start's connection preparation of the member) | `prepare_connection_attempt`'s `PreparationLease::Dedicated` (`host/resource_close.rs`) | refused with the same code, recorded as the preparation's failure (a non-fatal one) |
+| A keyless observation, the monitor's probe | `device_held_by_another_member` (rows 7 and 15) | the observation is refused `device_group_action_refused` `observe_readonly`, the probe's round is not made, exactly as while another member's lease holds the device |
+| The switch before a run | `switch_before_run`, `stop_others_before_start` | none starts: they run only on a granted run's or command's key |
+| A hand-off to a holder's own ladder or claim | `hand_off_to_ladder`, the release to a claim | unchanged: it keeps the device with the member that holds it, and gives it to no other member |
+| A session close ahead, a dedicated close lease | `prepare_session_close_ahead`, `grant_dedicated_instance_lease` | unchanged: close-only leases that open nothing, refuse every write and (a close ahead) name no transfer; another member's observation and probe, which would ask for a close ahead, are refused or wait first |
+
+**When the fence is lifted.** The other members' entries are no longer held: the first lease end
+after the lift (the self-check's own key, whose release hands the device on) or the next pump (a
+guard's drop, the sweep's tick) grants the entry that waited first, in its place, with its own
+member, holder and lease time. Nothing is queued again, and nothing waits on: a Runtime claim has
+no deadline, a client's `QueueLease` keeps the deadline it asked for.
+
+**After a restart.** Fences are memory only (`ResourceFence`, as before), so none survives a
+restart and no state is added: the next start gives the device the takeover cooldown when the
+earlier epoch held it and prepares and self-checks every member, the formerly fenced one
+included, as every start does. A fence the start's own preparation makes holds the device as
+above, and a member's own dedicated preparation lease is refused meanwhile.
+
+**The order within one device.** A member's task that waits `close_unconfirmed` keeps no queue
+wait (`queued_in_device` keeps only `held` and the order's `selected`), as with `fenced`: its wait
+ends while the device is held and begins anew at the first evaluation after the lift.
+`max_queue_wait_ms` and how the order counts it are unchanged.
+
+**Rule 2: the queue's grant past a member's own wait.** `pump` chooses its entry with
+`queue_grant_choice` (`host/lease.rs`): the device's eligible entries in the queue's order
+(`SeedScheduler::grant_candidates`, a free device out of its cooldown, each by its own member's
+gate), passing over an entry its own member holds back (a kind that takes today's admission checks
+while the member's performance-control directive asks for suspension or shutdown; a ladder's claim
+whose trigger item starts it after performance release while the member is not released) and every
+later entry of that member, so the member's own order is kept. The first entry of another member
+that its own member lets through is granted; the held entry stays first in its place and is granted
+when the directive releases it. For an instance alone every entry is its own: a withheld entry
+grants nothing, as before.
+
+**Selected, checked, prepared and granted: one entry.** The choice is made once before the guard
+(a pump that would grant nothing takes no guard and writes nothing, as before) and again under the
+device's admission guard and its queue-order lock, which every change of the device's queue takes
+(the queueing, a cancel, an expiry, a grant, a transfer), with the same gates and one clock reading.
+That second choice is checked there (its member's directive and ladder wait), asks for capacity
+there when it is a business claim the first choice was not, and is prepared by its request
+(`SeedScheduler::prepare_queued_grant_of`: only while the device is free, out of its cooldown, and
+that entry still waits eligible) and granted by that preparation (the grant commits the prepared
+token and removes that request's entry). Before, the candidate was checked outside the lock and
+`prepare_queued_grant` took whatever entry was first at that moment.
+
+**The lock order.** Under the guard and the queue-order lock the pump now reads the members'
+performance directives (the registry, then `performance_control`, each taken and released),
+`host_claim_work` and business capacity (`performance`), as `acquire_lease_guarded` already reads
+the directive and capacity under them, and `deliver_claim_grant` `host_claim_work`; each is taken
+and released on its own and none is held while the guard, the queue-order lock or the scheduler is
+asked. The device's hold reads `resource_fences`, a leaf lock, before the scheduler, as the routine
+gate does. **No inversion was found.**
+
+| Part | Where |
+|---|---|
+| The flag and its two entries | `ResourceFence::holds_device`, `settle_unconfirmed_resources` / `settle_refused_close`, `fence_instance`, `fence_contained_failure` (`host/resource_fence.rs`); `fence_lapsed_lease_close`, `fence_refused_close` (`host/resource_close.rs`) |
+| The hold | `device_held_for`, `member_gate`, `device_gates`, `device_occupancy`, `device_held_by_another_member`, `device_group_hold`, `device_held_error` (`host/device_group.rs`) |
+| The refusals | `acquire_lease_guarded`, `request_host_claim` (`host/lease.rs`); the dedicated preparation lease (`host/resource_close.rs`) |
+| The gate | `ClaimGate::DeviceHeld`; `request_queued_gated` (`crates/scheduler/src/lib.rs`) |
+| Rule 2 | `pump`, `queue_grant_choice`, `ladder_claim_awaits_release` (`host/lease.rs`); `QueuedCandidate`, `grant_candidates`, `prepare_queued_grant_of` (`crates/scheduler/src/lib.rs`); `ladder_awaits_release` is deleted |
+
+**Codes.** One code and one word, in the catalog and its index:
+
+| Code or word | The one situation | Refuses or warns | Exit status | Who reads it |
+|---|---|---|---|---|
+| `device_held_for_member_close` (`runtime-host`, error, ladder class `none`; `alias` required, the fenced member) | a request of a member asks for the device while another member's fence holds it | refuses (`scheduler.denied`; projected `lease_busy`) | 1 (category error) | the person or agent behind actingctl, MCP, the Lab or the console; the ledger's `scheduler.denied` |
+| `close_unconfirmed` of `device_group_wait` (value of `device_group_waiting`, `policy`, info) | a member's candidate waits because another member's fence that met an unconfirmed close holds the device | neither: a deferral (the admission's refusal of an intent evaluated before it is at info) | 0 | the decision, the not-run explanation (`ac_schedule`, `actingctl schedule`), the not-run history, a dispatch's refusal record |
+
+The fenced member keeps its own codes (`dispatch_resource_fenced`, `instance_resources_fenced`,
+its availability withheld by the self-check gate, `availability_source` `self_check`); the other
+members' reason is another cause, so another code and another word.
+
+**Tests.** `crates/runtime-host/src/tests/gate_437_g1.rs` (gate map `host.toml`, "#437 G1"), on
+MAPP-1d's fixture (A and B one device group writing one session log, C alone, a manual Runtime
+clock, stuck recovery off, the resident monitor loop held), nine tests:
+`g1_a_members_unconfirmed_close_keeps_the_device_from_the_other_member_after_its_close_lease`,
+`g1_once_the_fence_is_lifted_the_claim_that_waited_is_granted_in_its_place`,
+`g1_another_members_observation_and_probe_meet_the_fenced_device_as_another_members_lease`,
+`g1_a_manual_operation_on_the_other_member_is_refused_naming_the_fenced_member`,
+`g1_an_instance_alone_with_its_close_unconfirmed_is_as_before`,
+`g1_a_failure_of_the_runtimes_own_on_the_device_hold_is_still_fatal`,
+`g1_a_members_claim_its_directive_withholds_stays_first_while_the_other_members_is_granted`,
+`g1_a_members_ladder_waiting_for_release_stays_first_while_the_other_members_is_granted` and
+`g1_an_instance_alones_withheld_candidate_still_grants_nothing`. Test-only stand-ins, compiled under
+`cfg(test)` only: `fence_instance_unconfirmed_for_test` (a fence as an unconfirmed capture close
+makes it), `suspend_member_performance_for_test` (one member's suspension and its ladders that start
+after performance release), `device_group_wait_for_test` (the admission's hold of a member) and
+`fail_next_device_hold_read_for_test` (the hold's read failing as a poisoned lock). No existing test
+is adapted or retired: the MAPP-1d and #458 tests that fence a member by a refused close followed by
+a confirmed one, or by an instance fault (`fence_instance_for_test`), hold nothing and keep their
+expectations.
+
+**What is not added.** No configuration key, record type, payload member, fact, tag, state file or
+ledger revision. Fix round 1 adds one wire member (`RuntimeInstanceStatus.device_held`), and fix
+round 2 raises `runtime-client` to [3, 10] for it.
+
+**At deploy.** Nothing reachable for a group of several until the load accepts one. An instance
+alone on its device runs as before: it is never held for another member, its fences hold its
+routine claims as before, and its queue's grant chooses the same entry (a withheld first entry
+still grants nothing); the pump's second choice under the guard reads the same entry it read
+before, which a lone instance's records show unchanged.
+
+**Fix round 1** (coordinator work order `rd-1116/brief-437-g1-fix2.md`, after the independent
+review of the pull request and the coordinator's disposition of it; main `03258b33` merged in).
+(1) **A refused close holds nothing at the run's end either.** #411 A64's settlement of the
+lapsed lease at the run's end (`contained_task.rs`, the terminal's commit) settled through
+`settle_unconfirmed_resources` and marked the fence, so after MAPP-1d's confirmed session close
+ahead had handed the device to the other member, the device was held from the run's end until the
+fenced member's self-check. It now settles through `settle_refused_close`, as the expiry's does:
+the lease lapsed and its close was refused, no close left the session in doubt. Every other caller
+of `settle_unconfirmed_resources` was read: each is a close or a device step whose result is not
+known (a lease end's close, a dedicated close lease's, the session close ahead, a run's, an
+observation's or a probe's capture, an input, an application command, the application stop of a
+ladder, an idle action or a switch; `settle_unconfirmed_adb`'s ADB checks), or names no instance
+(the fenced write not reclaimed, which retains the owner as before). (2) **The gates under the
+guard.** A fence's mark is set under the device's admission guard (a lease end's or a close lease's
+close). `pump` reads `device_gates` again once it holds the guard and chooses, checks, prepares and
+grants with those only; its first read decides only whether to take the guard, and the entry it
+grants is the one chosen under the guard, prepared by its request. `request_host_claim` reads the
+gates only once its `try_lock` of the guard has succeeded, and refuses an operator claim there
+again when the device is held; without the guard the claim is only queued, and the pump judges it
+under the guard. Every other grant already read them under the guard (`acquire_lease_guarded`,
+`queue_lease` after its `try_lock`, `release_lease`, `end_lease_ordered`,
+`promote_idle_preemption`, `transfer_preempted_while_guarded`, the dedicated preparation lease,
+`device_held_by_another_member`). (3) **The members the hold refused come back by themselves.**
+Only the start's connection preparation is refused `device_held_for_member_close` with the
+member's availability withdrawn; such a member is recorded in `HostShared::start_preparations_held`
+(memory only, a leaf lock) and forgotten when any preparation of it is granted its lease. The
+lease sweep's new step `prepare_members_after_device_hold` gives it, once no other member's fence
+holds its device, under the device's admission guard (`try_lock`; a taken guard waits for the next
+tick) and on a free device (no lease, no waiting claim, no takeover cooldown), the start's own
+preparation again (`prepare_physical_instance_on_start`, whose guarded half is now
+`prepare_physical_instance_while_guarded`), as the start prepares again an instance whose
+preparation lease the takeover cooldown refused (Workflow #191 h2). No way to lift a fence is
+added. (4) **The other members' status rows.** `RuntimeInstanceStatus.device_held?`
+`{device_group_wait, alias}` (`InstanceDeviceHeld`, `DeviceHeldWait`, in
+`crates/actingcommand-contract`), `device_group_wait` `close_unconfirmed`, the word the dispatch
+gives, and `alias` the fenced member, filled by `control_plane_status_projection` from `device_held_for`; the Lab's overview row
+carries it ([runtime-interface.md](runtime-interface.md)). An answer without it is as before; a
+reader of `runtime-client` 9 or lower refuses one with it, so fix round 2 raises `runtime-client`
+to [3, 10]. (5) **Two rules the coordinator accepted, written in
+[device-group.md](device-group.md), "A failure stays where it belongs":** two members both fenced
+for resources not confirmed each keep their own way out (a member whose own fence holds the device
+is judged by its own gate); and every fence that stands for resources of the member's whose state
+is not confirmed holds the device, whichever step left them so, with the list of the settlements
+that mark it (`settle_unconfirmed_resources`, `settle_unconfirmed_adb`, `fence_contained_failure`
+with unconfirmed resources) and of those that do not (`settle_refused_close`,
+`fence_application_backend_failure`). Row 7's rewritten sentence now says that no other member is
+given the device meanwhile but on its own way out when its own fence holds the device too. The
+catalog's texts of `device_held_for_member_close`, `close_unconfirmed` and `device_group_waiting`
+say the same; no code or word is added. (6) **Tests**, four more in `gate_437_g1.rs` (the gate map
+row "#437 G1"):
+`g1_a_refused_close_whose_session_close_ahead_is_confirmed_holds_the_device_for_no_one`,
+`g1_an_ordinary_lease_end_whose_close_is_unconfirmed_hands_the_device_to_no_one`,
+`g1_a_member_whose_start_preparation_the_hold_refused_is_prepared_again_once_the_fence_is_lifted`
+and `g1_a_policy_cycle_dispatches_nothing_to_the_other_member_while_the_device_is_held` (a real
+policy cycle on gate_mapp1b's catalog); the first test now holds the device only by the close
+path's mark, since the refused close's fence holds nothing. New test-only stand-ins:
+`prepare_on_start_for_test` and `prepare_members_after_device_hold_for_test`. (7) A comment line
+of 115 columns in `device_group.rs` is wrapped.
+
+**Fix round 2** (coordinator work order `rd-1116/brief-437-g1-fix3.md`, after the second
+independent review and the coordinator's disposition of it; main still `03258b33`, nothing merged).
+(1) **`runtime-client` 10.** `RuntimeInstanceStatus` denies unknown members, so the member
+`device_held` that fix round 1 added is refused by a reader of revision 9 or lower; by the bump
+rule ([component-interfaces.md](component-interfaces.md), "Bump rule", as rows 5 and 6 did) its
+writer raises `max`: row 10 of the `runtime-client` table, `distribution/windows/component-interfaces.json`
+[3, 10], the anchor comment in `crates/actingcommand-contract/src/runtime.rs` and on
+`InstanceDeviceHeld`, the architecture test's pinned ranges (`component_interfaces.rs`) and
+`gate_429_r0b_pairing.rs`. `min` stays 3: no installation can fill the member while the load
+refuses every group of several; row 10 says that `min` rises to 10 in the slice that lets such a
+configuration load, since from then on a Runtime can send the member to a client that cannot read
+it. The README's sentence of declared interfaces names v0.12.10's and is left as it is. The texts
+that said no revision moves now say it does (this section's fix round 1 (4) and "What is not
+added", [runtime-interface.md](runtime-interface.md)'s row, [device-group.md](device-group.md),
+"Interfaces", and the `runtime-client` bullet of component-interfaces.md's MAPP rows). actingctl's
+MCP overview schema names `device_held` (`apps/actingctl/src/mcp/tools.rs`). (2) **The sweep
+queues; the device's worker prepares.** Fix round 1's step ran the start's preparation on the
+lease sweep's own thread, which the sweep's rule forbids (it waits for no device step, Workflow
+#369 Q-8). The step is now `queue_members_after_device_hold`: for each member the hold refused
+(`start_preparations_held`, now a map of member to its alias and whether its claim is queued),
+once no other member's fence holds the device, the member's pause is not released (as the start
+passes such a member over), no blackout covers it (a preparation the Runtime starts on its own, as
+a fence's recheck: `scheduling-blackout.md`, "Complete silence") and the device is free, it marks
+the member queued and queues one self-check claim of the Runtime's own (`queue_held_start_preparation`,
+built as `queue_fence_recheck` builds a recheck's: a minted holder on the Runtime's fixed connection,
+the scheduler's lease time, `request_host_claim_work`). The claim's payload is a new kind of host
+work, `HostClaimWork::HeldStartPreparation`: the existing kinds cannot carry it, since a recheck's
+payload runs only for a fence's wait for a person (the member has no fence) and a link restore's
+reports to the handset link machine. The device's worker runs it (`run_held_start_preparation`):
+the start's preparation (stage `startup_preparation`, no emulator status read first) under the
+device's admission guard on the claim's key, then the key's release, to the ladder a failed
+preparation admitted when it admitted one; a member that owes nothing any more, or whose pause is
+released by then (it stays owed), runs nothing and releases the key. No thread is added. A failed
+preparation is recorded as every preparation is (`instance_preparation_finished` with its failure,
+the failing step's `runtime.failed`), leaves the member unavailable and is not queued again: its
+grant ended what the member owed. A claim the queue refuses is recorded once (`runtime.failed`,
+stage `operation_cleanup`); the member is owed again only while another member's hold stands by
+then, otherwise it owes nothing more. So no member is queued every tick: one claim per refusal by
+the hold, none while one waits or runs. (3) **An operator's expiry names the hold.** An operator's
+claim that met the device's admission guard taken is queued and held in its place; when its wait
+ends (`await_operator_claim`) while the device is held for another member's unconfirmed close, its
+`lease_queue_expired` carries `device_held_for_member_close` (the fenced member) as its
+`caused_by`; the queue's own record is unchanged. (4) **Tests.**
+`g1_a_refused_close_whose_session_close_ahead_is_confirmed_holds_the_device_for_no_one` now also
+asserts that the run's end met the lapsed lease (no lease of A's run holds the device after the
+end work's sweep tick, and A's run does not complete);
+`g1_a_member_whose_start_preparation_the_hold_refused_is_prepared_again_once_the_fence_is_lifted`
+follows (2): while the hold stands the refused preparation is recorded once and two runs of the
+step queue and prepare nothing; once the fence is lifted the step queues B's claim, B's worker
+prepares B once on its key, the key is released and the step queues nothing more. New:
+`actingcommand-contract`'s `g1_status_device_held_round_trips_and_is_strict` (gate map
+`contract.toml`, "#437 G1"). `r0b_a_console_at_three_or_four_pairs_and_one_whose_max_is_two_is_refused`
+also pairs a console of [3, 9] with this build's [3, 10], and `r0b_the_build_declares_runtime_client_three_to_four`
+pins [3, 10]. The test-only step is now `queue_members_after_device_hold_for_test`. (5) **Locations.**
+Each lock and step of the new path has its own location (`list_held_start_preparations`,
+`read_held_start_preparation_pause`, `read_held_start_preparation_device`,
+`mark_held_start_preparation_queued`, `queue_held_start_preparation`,
+`read_held_start_preparation_claim_ttl`, `settle_held_start_preparation`,
+`run_held_start_preparation`), registered in the `runtime-host` fragment; the step borrows
+`list_physical_instances` no more. The catalog's text of `device_held_for_member_close` says
+the queueing and the expiry's cause; no code or word is added.
+
+**Train** (coordinator work order `rd-1116/brief-train-host-475-g1.md`). Pull request #1778 now
+also carries §1.432, Fix #475, merged as one; row 7 of [device-group.md](device-group.md)'s table
+has #475's sentence, unchanged, before this section's. #475's five places and its fix round 1's
+three answers are closes refused before they began: they settle through `settle_refused_close` and
+hold nothing, and the list of such closes now names #475 ([device-group.md](device-group.md), "A
+failure stays where it belongs"; `ResourceFence::close_unconfirmed` and `settle_refused_close` in
+`host/resource_fence.rs`). How each place, the other members, #475's `lease_busy` refusal and the
+locks meet this section's rules is §1.432's "Train". One more meeting was read and needs no
+change: a pre-emption's hand-over (`perform_transfer`, from `promote_idle_preemption` and
+`transfer_preempted_while_guarded`) prepares the transfer before it closes the holder's session,
+but the entry it hands the device to always serves the holder's own member (`asks_preemption_of`,
+and `prepare_transfer_gated` on `Preempted`, in `crates/scheduler/src/lib.rs`), so a close there
+that ends unconfirmed and marks the fence gives the device to that fenced member's own client
+lease, which its own gate lets through, and never to another member. One test more, fix round 2's
+item 3:
+`g1_an_operator_claim_that_waits_out_its_bound_while_the_device_is_held_names_the_fenced_member`
+(gate map `host.toml`, "#437 G1"): a person's lease of A holds the device and a person's self-check
+of B waits for it; A is then fenced for an unconfirmed close; at its bound B's self-check is refused
+`lease_queue_expired` whose one `caused_by` link is `device_held_for_member_close` naming A, it was
+never granted, and its entry has left the queue.
+
+**Train, fix round 1** (coordinator work order `rd-1116/brief-train-host-fix1.md`, after the two
+independent reviews of the train and the coordinator's dispositions of them; main merged in
+afterwards). (1) **The pre-emption's hand-over.** The "Train" paragraph above said that a close
+there that ends unconfirmed may still hand the device to another member; it cannot, since the
+entry that receives a pre-emption serves the holder's own member, and the sentence now says so. No
+program behaviour changes for it. (2) **An idle device.** `queue_members_after_device_hold` queues a
+member's start preparation only on an idle device: no lease holds it, no takeover cooldown runs and
+no entry of its queue is eligible now by the scheduler's own judgement (`SeedScheduler::eligible_count`,
+the predicate `first_eligible` and the queue's grant use), each entry by its own member's gate as the
+pump reads the gates (`device_gates`, before the scheduler's lock). Before, any waiting entry kept
+the preparation back, so another member's routine claim parked behind its own pause or blackout kept
+it from ever being queued; an entry that waits eligible still keeps it back, so the claim is queued
+only when it is the device's next work. No read is added to the scheduler. (3) **The refusal's own
+code.** A claim of the step that the queue refuses keeps its member owed only when the refusal is
+`device_held_for_member_close` (a self-check claim is an operator's, refused at once by a hold that
+came back between the step's read and the claim); any other refusal settles what it owes, as before.
+The hold is not read a second time. (4) **Tests** (gate map `host.toml`, "#437 G1"):
+`g1_a_refused_close_whose_session_close_ahead_is_confirmed_holds_the_device_for_no_one` now pins the
+failure's code: the run's receipt is its own lease end's refusal of the lease the sweep had ended,
+`lease_mismatch` (the release validates a token that is no longer the device's, ISO-5a row B17; the
+code is not `lease_expired`, which the success terminal does not carry), and the lease A's run was
+granted has one `lease.expired` record;
+`g1_a_member_whose_start_preparation_the_hold_refused_is_prepared_again_once_the_fence_is_lifted`
+asserts that B's preparation is recorded under its claim's request, which was asked for and granted
+the device (fix round 1's preparation on the sweep's thread was recorded under links the sweep
+minted); `g1_an_operator_claim_that_waits_out_its_bound_while_the_device_is_held_names_the_fenced_member`
+gains the opposite case on a host of its own (no member fenced: the expiry carries `holder_kind`
+`client_lease` and no `caused_by` of `device_held_for_member_close`) and then releases A's lease once
+A is fenced, so that the expiry carries no `holder_kind` and only the hold kept B waiting (an
+operator's claim asked while the hold stands is refused at once, so B is first queued behind A's
+lease; both steps must land within B's bound, the product's 3 s wait for a self-check, as the fence
+already had to); new:
+`g1_another_members_claim_parked_behind_its_own_pause_leaves_the_held_preparation_queued`. (5)
+**Texts.** [scheduling-blackout.md](scheduling-blackout.md)'s table of "Complete silence" has the
+row of this step; the catalog's text of `device_held_for_member_close` and the comment of
+`request_host_claim` no longer say that every claim of the Runtime's own waits in place (the queued
+start preparation is a self-check claim, of the operator's class, and is refused at once while the
+device is held); the locations `read_held_start_preparation_device` and
+`settle_held_start_preparation` say the idle device and the refusal's code; the test switches of the
+refused closes name #475. The outcome-code index is regenerated. (6) **Recorded, not changed.** A
+worker that panics while it runs a held start preparation leaves the member's queued mark set: the
+step queues it no more until a preparation of the member is granted its key or lease (a person's
+self-check or resume, its ladder) or the Runtime restarts, as a panicking fence recheck leaves its
+own mark. (7) **The train's red check.** `gate_411_a65`'s test (a) failed on the train's head:
+its epoch-close child exited with 101 before its crash point; the child's error output was not
+kept, so the cause was not in the log. The crash child's error output is now read and named in
+that failure (`gate_epoch_close`); no program behaviour changes for it.
+
+### 1.434 Slice #463 S2-1b (0.12.67): `record ready` knows the package's game, server and locale (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making, whose stage two turns the recorded material into a package offline; found when stages one and two were walked on an installed instance with 0.12.65; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1116/brief-463-s21b-record-ready-identity.md`, read on main `8eb03787`)
+
+This section takes 1.434, the number the work order gives: §1.431 is the highest on main
+`8eb03787`, and §1.429, §1.430, §1.432 and §1.433 belong to slices not merged yet. It ships in
+0.12.67.
+
+**What the walk showed.** On an installed instance `record ready` (§1.425) never reached `ready`:
+it always listed `game`, `server` and `locale`, each with the remedy `record stop --<part>`. It
+read them from what the recording holds and from the Lab's instance configuration (actinglab's
+own `config.json`); in an installation the instance's game and server are in the Runtime's
+configuration, and the locale is nowhere. An agent that had marked every step was told three
+things were missing and could only try `record stop` with the three flags.
+
+**The rule.**
+- `record ready` takes `--game`, `--server` (actinglab's global options) and `--locale`, the
+  parameters `record stop` takes, read by one function (`session_record::identity_options`), so a
+  value out of its form is refused as `record stop` refuses it (`validation_failed`, exit 2). A
+  value given counts as known for the answer; `record ready` writes it nowhere, so a later `record
+  stop` still needs it.
+- Each part is the first known of: the command line (`command_line`); what the recording holds
+  (`recording`: given at `record start`, or on a stopped recording marked again what its package
+  was generated with); for game and server the Lab's instance configuration (`lab_config`); for
+  game and server the configuration of the installation the program runs from (`installation_config`):
+  the instance's row of `policy.facts.instances` (its `game_id`, `server_id`), the instance selected
+  as `packs` selects it (alias, `instance_id` or ADB port). A stopped recording marked again reads
+  only the first two, as before. The installation is located as S1-8 (§1.428) locates it, whatever
+  `ACTINGCOMMAND_RUNTIME_STATE_ROOT` says. Outside an installation, and where it cannot be
+  located, its configuration cannot be read, binds no such instance or names a value out of its
+  form, the part stays unknown and nothing is refused. The locale has no configured place.
+- `record stop` takes game and server in the same order (the flag, the recording, the Lab's
+  instance configuration, the installation's), through the same settings function
+  (`recording_api::stop_settings`), so what `record ready` called known is what `record stop`
+  builds with. This widens what `record stop` accepts: in an installation, a recording whose game
+  or server neither the flags, the recording nor the Lab's configuration give was refused
+  `record_locale_missing` and now builds with the installation's. A flag and the recording's value
+  always win.
+- The answer's new member `sources` (`{game, server, locale}`) names where each part came from, a
+  word of the new closed vocabulary `ready_source`, `null` for a part not known (which `missing`
+  lists). The hint of the items `game`, `server` and `locale` names both ways: `record ready
+  --<part> <v> to check, record stop --<part> <v> to build`.
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The configuration's binding | `lab_ops::packs::instance_binding`: the configuration read and decoded by the reader `packs` and `ac_packs` use (`read_config`, split out of `read_answer`, which is otherwise unchanged), the instance selected by `select`, its row of `policy.facts.instances` |
+| The installation | `cli_module::place::installation_location` (the location `installation_state_root` now reads; in test builds `test_place`) |
+| The command | `session_record`: `RECORD_READY_READS` (`--game`, `--server`, `--locale`), `identity_options` (read by `record stop`'s `record_stop_options` and by `record ready`; `record_ready_options` is gone), `installed_identity` |
+| The Lab | `RecordStopOptions::installed_game`, `installed_server`; `stop_settings` and `regeneration_settings` answer the settings and the sources (`ready::known`, `ReadySources`); `RecordReadyOutcome::sources`; the hints in `ready::hint` |
+| The words | `crates/lab/src/codes.rs`: `ReadySource` (`ready_source`: `command_line`, `recording`, `lab_config`, `installation_config`); the catalog's vocabulary; the texts of `ready_missing`'s `game` and `server` |
+| The row | `record ready` in [lab-operations.json](lab-operations.json) gains the parameters `game`, `server` (global options) and `locale` (6 parameters, was 3), `sources` in its output, and its notes; `record stop`'s notes. No row is added: `engine::COMMANDS` stays 70, `own_flags::READ_LIST_ROWS` 29, `words::BUILT_SLICES` and the MCP server's `ACTINGLAB_SLICES` 14 each. The Lab's MCP server offers the three parameters on `ac_record_ready` through its `serve` child; `ac_record_stop` keeps its parameters and reads the installation as the command does |
+| Texts | [lab-recording.md](lab-recording.md): "What a recording still lacks: `record ready`" (the synopsis, a bullet on the package's game, server and locale with the table of places, the answer, the hint) and the row of "Pre-checks"; `apps/actinglab-mcp/MANUAL.md`, section 8, "Recordings" |
+
+**Codes and words.** No outcome code is added: a malformed value is `record stop`'s refusal,
+`validation_failed` (exit 2). One closed vocabulary is added, `ready_source`, four words, one
+place each, used by no outcome key: a member of a read that exits 0, it neither refuses nor
+warns. No decision reads a code or a word. The outcome-code index is regenerated (it lists codes
+only).
+
+**Tests** (`apps/actinglab/src/tests/gate_463_s21b.rs`, exec gate map "#463 S2-1b"; made-up
+installation roots as S1-8's tests make them, recordings as `gate_449_rec_arch` makes them, no
+Runtime): the installed instance without flags (only `locale` missing, game and server
+`installation_config`) and with `--locale` (`ready`); from no installation without flags (the three
+missing, `sources` null) and with them (`ready`, `command_line`, on the command line and through
+`serve --stdio`); a flag and the recording each winning over the installation, with the package
+id `record stop --dry-run` builds; a malformed game, server and locale refused alike by both
+commands; `record ready` with flags writing nothing (the session directory byte for byte, and
+`record stop --dry-run` without them still refused `record_locale_missing`); `record stop` in the
+installation building with its game and server, and with the flags when given. Adapted:
+`crates/lab/src/gate_463_s21.rs`, its first and third tests pin the new hint of the identity items
+(the requirement changes the remedy). No golden changes; no test leaves a gate map.
+
+**What is not changed.** No ledger record, configuration key, Runtime interface revision or
+outcome code. What `record stop` decides when its flags or the recording give game and server,
+and everything else it checks, writes or refuses. The first-generation MCP server
+(`actingctl mcp-serve`) has no `ac_record_ready`; its `ac_record_stop` runs actinglab's command and
+so reads the installation too.
+
+**Fix round 1** (coordinator work order `rd-1116/brief-463-s21b-fix2.md`, after the independent
+review of `75a76e03` and the first CI run on it; the rules are the coordinator's rulings).
+- *The installation's row is one thing.* The first build took game and server each from the first
+  place that held it, so a flag or a recording giving game X and no server took the server of a
+  row binding game Y, and `record stop` built `X.<Y's server>` without a word. Now
+  `recording_api::package_identity`, the one function `record stop` and `record ready` decide by,
+  takes each part from the flag, the recording and the Lab's instance configuration as before,
+  then the row whole or not at all: both when those give neither; the other one when they give
+  one and the row's value of that one is the same; otherwise nothing, the part stays missing and
+  `record stop` refuses `record_locale_missing` as before §1.434. A row whose value is out of its
+  form is no row. `RecordStopOptions::installed` (an `InstalledRow`, the reader of an
+  `InstalledIdentity`) takes the place of `installed_game` and `installed_server`.
+- *Read only when needed.* The reader (`session_record::installed_identity`, which locates the
+  installation and opens its configuration) is called only when the flag, the recording and the
+  Lab's instance configuration do not give both game and server; test builds count its calls
+  (`session_record::installed_reads`).
+- *A packaged recording* answers what its package holds: `sources` `recording` for each part the
+  package holds, whatever is given. A given `--game`, `--server` or `--locale` with another value
+  is the warning `{code: "record_stop_option_conflict", field, recorded, given}`, the code and the
+  details `record stop` refuses it with; `recording_api::option_conflicts` is the one comparison both
+  use (`record stop` refuses the first, `record ready` warns of each). A warning, not a refusal,
+  because `record ready` refuses nothing the recording holds; it adds no code.
+- *Texts.* [lab-recording.md](lab-recording.md): the options `record ready` reads with, the row
+  taken whole, "not kept and not printed" for the rest of the configuration, the packaged
+  recording's sources and warning, the row of "Pre-checks"; the MCP manual and both rows' notes.
+  `record_locale_missing`'s message names `record ready` beside `record start` and `record stop`.
+- *Exit codes.* A refusal exits 1 on actinglab's own line whatever its class (`cli_module::own_line`:
+  every failure is category error, exit 1; the classes' exits 2 to 6 are the envelope's, on a
+  `--via` line only). The first build's tests asked 2 for `validation_failed` and
+  `record_locale_missing`; they now ask 1.
+- *Tests* (`gate_463_s21b.rs`, six more, each in the gate "#463 S2-1b"): a configuration that is a
+  folder, no JSON, without the instance's row, or with a server out of its form: game and server
+  missing, exit 0; the Lab's instance configuration over the row; the row taken whole, equal and
+  not, both ways, with `record stop`'s refusal; the configuration not opened when flags give both,
+  once each otherwise; `record ready` in an installation leaving the session directory and the
+  installation root byte for byte; a packaged recording's sources and warnings against `record
+  stop`'s refusal. Adapted: the third test lost its case of a flag's server beside the row's game
+  (now the whole-row test's), the fourth and fifth ask exit 1.
+
+**At deploy.** Nothing to configure: an installation's configuration already names each
+instance's game and server in `policy.facts.instances`.
+
+### 1.435 Slice #434 LW-1 (0.12.67): the MCP front says which tools only plan, reads a finished run and presses on every instance (Workflow #434; the owner's rule for the Lab on board #434, 11-13, that what the Lab can do both its command line and its MCP front can do; the coordinator's walk of 11-16 through the Lab's MCP server on Runtime 0.12.65, five things that got in the way; the rules below are the coordinator's rulings in the work order and in its correction of item 1 the same day, not the owner's words; coordinator work order `rd-1116/brief-434-lw1-mcp-walk-findings.md`, read on main `381fe461`)
+
+This section takes 1.435, the number the work order gives: §1.431 is the highest on main
+`381fe461`, and three other slices being built take §1.432, §1.433 and §1.434. It ships in 0.12.67.
+
+**Item 1, `ac_tap_target` cannot press: the design, made honest.** The tool takes no `capture`
+because its row declares none, and the row declares none because its command line takes `--capture`
+only to refuse it: `actinglab tap-target` and `navigate` read their frame through the readers' input
+(`readonly_cli::READONLY_INPUT_READS`, `--capture` among `refused`), which refuses the retired legacy
+semantic capture ("use observe/do/ensure/wait") before anything; without `--capture` the Lab's
+kernel refused real execution "requires --capture" (`crates/lab/src/drive.rs`), a flag that is
+itself refused. So neither front presses with these two commands; their only path is `--scene` with
+`--dry-run` (§1.331, LAB-OCR-DL, its table "The rows", already said so). Built, as the coordinator's
+correction asks: the commands stay as they are; the kernel's refusal without `--dry-run` says that
+the command only plans on a saved scene and presses nothing, and names what presses a package's
+target on an instance (`do --capture` with `--package` and the target, an element, or `--tap x,y`)
+or routes one (`ensure --capture` with `--package` and `--to`); the rows' `help`, which is the tools'
+description, says that they plan on a saved frame, pressing nothing, and names `do` and `ensure`
+with capture, and their `notes` say why the rows declare no capture.
+
+*Every tool against its command.* For each offered row, the command-line parameters the tool's
+schema leaves out:
+- given by the front, and so no member of the tool (the manual, sections 1, 6 and 9): `material`'s,
+  `frame`'s and `report export`'s `out` (the server's export directory), `deploy`'s and
+  `rollback`'s `detach` (always true: they replace the server);
+- a positional given as its flag, the same parameter: `--id` (`run show`, `run evidence`), `--op`
+  and the installer's `--operation` (`op status`), `--dir` (`release verify`, `release stage`), and
+  `--instance` on every row with a positional instance (§1.307);
+- `devices bind`'s `--root`, the module's own root, which the server gives from where it runs;
+- `actinglab`'s global options, which its own commands' command lines hand on: every one a command
+  reads is a parameter of its row (the gates of LAB-5B2 and LAB-5B3 hold each read list to its row
+  in both directions: `dry_run`, `verbose`, `game` and `server` where they are read); the rest are
+  read by no command an offered row reaches, refused by the command (`regression`, `replay`,
+  `resource verify`, `scheduling …`, `package` offline) or retired (`--require-session`), and `--via`
+  is the front's own (`serve --front mcp`);
+- the flags a command reads only to refuse them: `--capture` of `tap-target`, `navigate` and the
+  four readers, `--touch-backend` of `touch-probe`, the legacy routing flags.
+No other absence keeps a tool from what its description says. The walk of item 3 pins the first group
+(`LEFT_OUT`), so that a later slice that leaves a row's parameter out of its tool decides it there
+(fix round 1: and `devices bind`'s `root` and the further words every row served in the server's
+own process refuses, the names outside the table its command lines take).
+
+**Item 2, a finished run cannot be read: the bulk.** `run start`'s line once its run ended carries
+`RuntimeFlowOutput` whole: its receipt and `events`, every ledger record of the run's correlation in
+the forensic projection with payloads (`runtime-client` `flow_output`), 106 KB to 514 KB on the walk.
+`ac_run_start` with `wait` answered that line, and `ac_run_show` of a run a job of this process
+submitted carried it as `job.line` beside the run's status (`server.rs`, `with_job`), so both
+answered `output_budget_exceeded`; a run that failed early came back with few records and fitted. A
+run's status itself (`run show`, `actingcommand.run-status.v1`) is small. Built: wherever the server
+gives a run's job line (`server::run_answer` for `ac_run_start` with `wait`, `server::with_run_job`
+for `ac_run_show`), it is `budget::run_line`'s: every member but `events`, which is counted
+(`events_total`), `truncated` (JSON pointers of what was left out: `/events`, and
+`/official_ocr_projection` or `/official_ocr_fields_projection` when the run's OCR reads do not fit
+beside the rest, measured as the result is sent) and `rest`, the calls that read it
+(`ac_run_evidence` with the run's request id, its steps page by page; `ac_events` with the
+receipt's correlation id and `detail` `payload`, its records). The receipt (state, outcome,
+`task_result`, `executed_steps`, `final_page`) and the line's outcome stay; `ac_run_show` keeps the
+run's status (state, terminal, counts). The command line prints the line whole, as before.
+
+**Item 3, a parameter the schema offers and the operation refuses.** Read in the code: `ac_events`
+hands `exclude_event_types` on as `--exclude-event-types` (`core_reads::HANDED`) and `events`' parser
+takes it; what it refuses is a word that names no event type (`NotEventTypes`, `not_recognised`,
+the word not in the answer), while the schema offered any text. The coordinator's second example is
+the same: `ac_status`'s `sections` takes only the overview's block names (`daemon` and `incomplete`
+are always answered and are no section). Built: the front's one table `tools::WORDS` names the
+parameters whose operation takes only the words of a closed list the table types as text, each with
+its source: `status` `sections` (`lab_ops::overview::Section::ALL`), `events` `type`, `event_type`,
+`exclude_event_types` (the catalog vocabulary `event_type`, which the outcome guard holds equal to
+`EventType`) and `origin_module` (the vocabulary `origin_module`). The schema lists the words
+(`enum`, a list's items' `enum`) and the front refuses another word before anything is sent
+(`arguments_invalid`, `not_recognised`), as it refuses a table enum's.
+`lab_ops::core_ops::handed_refusal` runs the parser of a handed command line alone (the thirteen
+modules' `parse_refusal`, test builds only before; fix round 1: test builds and `lab-ops`' feature
+`test-hooks`, which the MCP server's tests turn on) for the walk.
+
+**Item 4, a plain press on an emulator whose input needs a frame.** The Nemu input performs a tap,
+a long tap, a swipe and the segmented drags only on a frame the Runtime captured
+(`NemuInputSupport::InFrame`; the host refuses one without, `nemu_input_frame_required`), and no key
+and no text (`nemu_input_capability_unsupported`). A recorded press captures before it and sends
+the press with the reference of that frame (#463 S1-1, `send_recorded_press`); a plain one sent
+none. Built, in `actinglab`'s `tap`, `swipe` and `long-tap` without `--record` (and so `ac_tap`,
+`ac_swipe` and `ac_long_tap` through a `serve` child): one `Status` read on every instance (fix
+round 1: on a connection of its own); where the instance's capability table names `nemu_ipc` as the
+input of the press's capability (`evidence_ref`, the configured touch backend), one capture through
+the Runtime (`ObserveReadonly`, on a connection of its own, as the recorded press takes it; fix
+round 1: its frame's reference alone) and the press sent on that frame through the Runtime's input
+proxy; the answer names the frame (`input_frame`). Elsewhere, and for an instance listed without a
+capability table, nothing is captured and the press goes as before. The cost on such an instance is
+one capture. A capture that fails is the command's failure, nothing pressed; a status read that
+fails and a refusal of the frame (`input_frame_unavailable`) are answered as fix round 1 says.
+*`key`:* the Nemu input sends no key, and the Runtime has no other way to send one on such an
+instance: the recovery ladder sends none (its rungs are a recovery package's presses, an application
+restart and an emulator restart). Not built: the refusal stays the Runtime's, and the catalog's
+entries of `nemu_input_capability_unsupported` and `nemu_input_frame_required` (their
+`common_causes` and `handling`, "TBD" before) say what happened and what presses instead; the
+manual says it; fix round 1: the refusal carries its own hint.
+
+**Item 5, who started it: as designed.** A run `ac_run_start` starts is served in the MCP server's
+own process (`Front::Mcp`), whose requests bind `lab` with `Lab-MCP` and keep the command line's
+envelope `(Cli, Cli)` until LAB-6S2-E ([lab-two-entries.md](lab-two-entries.md) §2.4, the map M and
+the row LAB-6S2-B1 of its slice table): the Runtime records the request's command record on the
+channel `mcp` (M), and the run's origin, folded from the record type of its request
+(`cli.command`), is `cli`. The slice table's row LAB-6S2-E says that with it "the runs they start
+have the origin `lab`". Nothing changed; the MCP manual, section 8, says it.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| LW1-1 | the refusal of `tap-target` and `navigate` without `--dry-run`, and their rows' `help` and `notes` | message text, table text (no code, no key, no member) | LW-1 | `crates/lab` `drive.rs`; `contracts/lab-operations.json` | the code stays `validation_failed`; the tools' description is the row's help |
+| LW1-2 | `ac_run_start` with `wait` and `ac_run_show`'s `job.line`: `events_total`, `truncated`, `rest`, without `events` | MCP answer members (no code) | LW-1 | `apps/actinglab-mcp` `budget::run_line` | the command line's line unchanged |
+| LW1-3 | `tools::WORDS`: `enum` in the schema of five parameters, refused `not_recognised` before anything is sent | MCP schema and argument check (no code, no word) | LW-1 | `apps/actinglab-mcp` `tools.rs`, `calls.rs` | words from `overview::Section::ALL` and the catalog's vocabularies |
+| LW1-4 | `tap`, `swipe`, `long-tap` without `--record`: a `Status` read on every instance; on a Nemu-input instance one capture, the press on its frame, `input_frame` in the answer; fix round 1: the one retry on a lost frame (`input_frame_captured_twice`), a press sent without a frame after a failed status read (`touch_backend_warnings`); fix round 2: on a failure after that read, the Runtime's refusal of the press too, the same warning as `details.touch_backend_warnings` | Lab command behaviour and answer members (no code, no request kind) | LW-1 | `apps/actinglab` `device_commands.rs` | `Status` and `ObserveReadonly` were already the rows' requests |
+| LW1-5 | `common_causes` and `handling` of `nemu_input_capability_unsupported` and `nemu_input_frame_required` | outcome catalog text (index regenerated) | LW-1 | `contracts/outcome-codes` | no key, word or status changes |
+| LW1-6 | `lab_ops::core_ops::handed_refusal` and the thirteen `parse_refusal` in test builds and with the feature `test-hooks` (fix round 1; every build before it) | `lab-ops` function (parse only) | LW-1 | `crates/lab-ops` | read by the walk |
+| LW1-7 | fix round 1: `details.hint` on the refusal of `key` and `text` where the instance's capability table says its input does not implement `input.key` or `input.text` (one `Status` read after the failure) | Lab answer member (no code, no word) | LW-1 fix round 1 | `apps/actinglab` `device_commands.rs`; fix round 2: `contracts/lab-operations.json` | decided by the capability table, not by the refusal's code; fix round 2: the rows `key` and `text` declare that read, `Status` in their `requests`, and name `details.hint` in their `notes` |
+| LW1-8 | fix round 1: `tap-target` and `navigate`: their rows' `writes` false and `requests` none, their capabilities' needs `offline`, `read_only`, not in the lease-holding examples; `runtime-interface.md` no longer names them as senders of `Input` | table, capability and contract text (no code, no member) | LW-1 fix round 1 | `contracts/lab-operations.json`, `apps/actinglab` `capabilities.rs`, `session_contracts.rs` | MCP's `readOnlyHint` of the two tools follows `writes` |
+
+**What is not added.** No outcome code, value key, word, configuration key, request kind, record
+type, interface revision or ledger revision. No row parameter: the table changes only the two
+rows' `help` and the `notes` of `tap-target`, `navigate`, `tap`, `swipe`, `long-tap` and `key`
+(fix round 1: and the two rows' `writes` and `requests`). No capability member.
+
+**Tests** (gate map `contracts/test-gates/apps.toml`, the row "#434 LW-1"):
+`lw1_tap_target_and_navigate_tools_say_they_only_plan` (the two tools take no `capture` and their
+description says they press nothing and names `do` and `ensure` with capture) and, in
+`crates/lab` (`drive::tests`), `lw1_tap_target_and_navigate_without_a_dry_run_name_what_presses`
+(item 1); `lw1_a_finished_runs_answer_fits_with_its_state_outcome_and_the_rest` (item 2: 400
+made-up records over the budget, both answers within it with the state, the terminal outcome,
+`events_total`, `truncated` and `rest`, an OCR read kept when it fits and left out when not);
+`lw1_every_schema_property_reaches_its_operation` (item 3: every property of every tool, every word
+its schema lists or a made-up value of its type, through the front's check, the core rows' constants
+and the handed parsers, no `unknown`, `wrong_type` or `not_recognised` but six pinned identifiers;
+before this slice it failed on `sections`, `type`, `event_type`, `exclude_event_types` and
+`origin_module`; the pinned list of what the tools leave out); in `apps/actinglab/tests/
+runtime_input_proxy.rs`, on the fake Runtime host,
+`lw1_a_plain_tap_on_an_instance_whose_input_needs_a_frame_presses_on_its_capture` and
+`lw1_a_plain_tap_on_an_instance_whose_input_needs_no_frame_captures_nothing` (item 4; the fake
+provider's Nemu instance now carries the registry's capability table). Adapted:
+`gate_434_lab5g2a::mcp_tools_from_op_table`, which pinned that no text parameter lists words: a
+parameter of `tools::WORDS` lists its words.
+
+**Fix round 1** (coordinator work order `rd-1116/brief-434-lw1-fix2.md`, after the independent
+review `rd-1116/review-1779.md` and the first CI run, whose `lint` and `exec-tooling` stopped on one
+compile error of the `lab` crate's tests: the binding `ledger` of the new drive test shadowed the
+function of that name it called again; renamed). (1) A plain press whose frame the Runtime no longer
+holds is sent once more, as a recorded press is ([lab-recording.md](lab-recording.md), "When the
+frame is gone before the press"): on exactly the refusal `send_recorded_press` sends again for
+(`input_frame_unavailable`, the one function that tells it, `input_frame_unavailable` of
+`device_commands.rs`, which this round reuses and does not copy), one capture more and the press
+sent once more on it, through the same input proxy and so under the same lease; a second refusal
+of any kind is the command's answer. The answer says `input_frame_captured_twice` beside
+`input_frame`. The press now sends through the Runtime's input proxy itself (its errors answered as
+the input port answered them, `runtime_input_backend::device_error`), since the port's error no
+longer carries the receipt. (2) The coordinator's ruling: a status read that fails does not stop a
+press. The read only learns whether the instance's input needs a frame; it now runs on a connection
+of its own, and when it fails the press is sent without a frame, as before this slice: an input
+that needs none is not affected by this slice, and one that needs a frame is refused by the Runtime
+itself (`nemu_input_frame_required`), as before; the answer's `touch_backend_warnings` names the
+failed read. (3) The capture of a plain press takes the frame's reference alone
+(`runtime_capture_backend::observe_runtime_frame_reference`: the same `ObserveReadonly` and the same
+`input_frame_reference`, without reading the frame back and verifying it). (4) Where the Lab reads
+"this input needs a frame" is written beside the touch backends in
+[actinglab-capabilities.md](actinglab-capabilities.md): an input row's `evidence_ref` is the
+configured touch backend, and the Lab decides as the Runtime does (`host/nemu_input.rs`,
+`nemu_input_check`); no capability member is added. (5) `tap-target` and `navigate` are planning
+only in their metadata too: their rows' `writes` false and `requests` none (so MCP's `readOnlyHint`),
+their capabilities' needs `offline` and `read_only` and no longer among the commands that take a
+lease (`capabilities.rs`, `session_contracts.rs`), and [runtime-interface.md](runtime-interface.md)'s
+row `Input` no longer names them. (6) Texts: this section's title; the MCP manual's run answer
+(what can still exceed the budget: the receipt and the warnings are never cut, and an answer that
+still does not fit is refused, never cut) and its presses (one status read on every instance, one
+capture on a Nemu-input one, the one retry, the failed read); the refusal of `key` and `text`
+carries its own `details.hint` (what presses instead) where the instance's capability table says
+its input does not implement `input.key` or `input.text`: one `Status` read after the failure, on a
+connection of its own, decided by that table, the fact the Runtime's refusal rests on, not by the
+refusal's code; a read that fails leaves the refusal as it is. (7) `core_ops::handed_refusal` and the
+thirteen `parse_refusal` it calls are compiled in test builds and with `lab-ops`' feature
+`test-hooks` only, which the MCP server's dev-dependency turns on for its gate; a production build
+has neither. (8) Tests, below.
+
+*Tests of fix round 1* (gate map `contracts/test-gates/apps.toml`, the row "#434 LW-1 fix round 1"),
+in `apps/actinglab/tests/runtime_input_proxy.rs`, on the fake Runtime host behind a loopback relay
+(`lw1_relay_losing_frames`, which takes a keyless observation where the press's frame must be lost):
+`lw1_fix_a_plain_press_whose_frame_is_lost_is_sent_once_more_under_its_one_lease` (one capture more,
+the press sent once more on it: one tap, one lease, the input's intent naming the second capture's
+frame, `input_frame_captured_twice`); `lw1_fix_a_plain_press_whose_frame_is_lost_twice_is_refused_after_one_retry`
+(the second loss is the answer: no tap, no input, one lease released, two captures of the command);
+`lw1_fix_a_plain_press_whose_status_read_fails_is_sent_without_a_frame` (on an input that needs no
+frame, the status read's connection closed at once: committed, no capture, no frame, one warning).
+Changed, not added: `lw1_a_finished_runs_answer_fits_with_its_state_outcome_and_the_rest` answers
+the run's job through `server::job_answer` and `server::with_job`, the functions the server calls,
+with a `jobs::Job` that ended with the run's line; `lw1_every_schema_property_reaches_its_operation`
+sends every list parameter as a list of two and holds `LEFT_OUT`, a list of its own, against the
+row parameters the tools leave out and the names outside the table the command lines of the rows
+served in the server's process take (`core_reads::EXCEPTIONS`). The drive test's bindings are
+renamed (the compile error).
+
+**Fix round 2** (coordinator work order `rd-1116/brief-434-lw1-fix3.md`, after the second
+independent review `rd-1116/review-1779-fix1.md` and the coordinator's rulings on it; the CI run
+on fix round 1's head `9d18747b`, read once, had passed every job that had ended, `host-lab` and
+`build` not yet ended). (1) The rows `key` and `text` declare the request they now make: `Status`
+in their `requests` (after a failure the command reads the status once, for `details.hint`), and
+LW1-7 above says so. (2) The coordinator's choice of the review's must-fix 2: the warning of a
+status read that failed is in the answer of a press that fails after it too, as
+`details.touch_backend_warnings` (`device_commands.rs`, `with_touch_backend_warnings`): above all
+the Runtime's refusal of the press sent without a frame on an input that needs one
+(`nemu_input_frame_required`), when "the status was not read" matters most. The warning's text
+now says the press "is sent" without a frame ("was sent" before): it is also in the answer of a
+press whose connection or lease failed before anything was sent. The sentence on it in the MCP
+manual and in [actinglab-capabilities.md](actinglab-capabilities.md) names the refusal's
+`details`. (3) The operation table says what the answers carry: the `notes` of
+`tap`, `swipe` and `long-tap` name the status read on every instance, the warning of a failed one
+(`touch_backend_warnings`, a failure's `details.touch_backend_warnings`) and
+`input_frame_captured_twice`; those of `key` and the new ones of `text` name `details.hint`; the
+rows `tap-target` and `navigate` need no Runtime (`runtime` `offline`, as their capabilities say
+since fix round 1); the MCP manual lists `words` among what no tool takes. (4) The tests, below.
+No code, word, key or request kind is added; a failure's `details` gain `touch_backend_warnings`,
+the member the answer of a sent press had; the table changes only these rows' `requests`,
+`runtime` and `notes`.
+
+*Tests of fix round 2* (gate map `contracts/test-gates/apps.toml`, the row "#434 LW-1 fix round
+2"), in `apps/actinglab/tests/runtime_input_proxy.rs`, on the fake Runtime host:
+`lw1_fix2_a_plain_press_refused_for_another_cause_is_neither_captured_nor_sent_again` (the device
+shows another application, the Runtime refuses the press on its held frame for that,
+`application_not_foreground`: the answer at once, one `command.rejected`, one capture, no second,
+no tap; so the one retry tells the frame's refusal from every other);
+`lw1_fix2_a_press_whose_status_read_fails_on_a_frame_input_is_refused_with_the_warning` (on a
+Nemu-input instance the status read's connection closed at once: the press goes without a frame,
+the Runtime refuses it `nemu_input_frame_required`, and the refusal's details carry the one
+warning, whose text is asserted); `lw1_fix2_a_plain_press_whose_frame_cannot_be_captured_again_answers_the_first_refusal`
+(the frame lost once and the capture taken again fails: the first refusal,
+`input_frame_unavailable`, is the answer, the capture's error appended to its message, the lease
+released, no tap); `lw1_fix2_key_and_text_on_an_input_that_sends_neither_hint_what_presses_instead`
+(`key` and `text` on a Nemu-input instance: refused `nemu_input_capability_unsupported`, each
+refusal's `details.hint` naming that input, which of the two it does not send and `tap x y` and
+`do --capture`). Changed, not added: `lw1_fix_a_plain_press_whose_frame_is_lost_twice_is_refused_after_one_retry`
+asserts that the answered refusal is the frame's (`input_frame_unavailable`);
+`lw1_fix_a_plain_press_whose_status_read_fails_is_sent_without_a_frame` asserts the warning's
+text; `lw1_a_finished_runs_answer_fits_with_its_state_outcome_and_the_rest` makes the run's job
+as `ac_run_start` makes it, by `jobs::Jobs::start` under the run's request id as a run's job, and
+waits for it with `jobs::Job::wait_ended` (test builds only, no clock), which replaces fix round
+1's constructor of an ended job.
+
+**At deploy.** Nothing to configure. An agent sees: `ac_tap_target` and `ac_navigate` described as
+planning only, and read-only; a finished run's answer without its records; five parameters with
+their words; a plain press that reads the instance's status first on every instance and works on a
+Nemu-input instance at the cost of one capture (one more when the frame was lost before the press),
+and that is still sent, without a frame, when the status cannot be read.
+
+### 1.436 Slice #392 DA-5ab (0.12.67): the Lab observes and presses on a display that maps to its package's base, in the base coordinates (Workflow #392; the owner's decision 203 on board #392, one set of packages at the base size and a converter; the real check of 11-16 on the 3840×2160 and 1920×1080 instances, where a run recognised and pressed and the Lab's `observe --capture` and `do --capture` failed `observation_projection_failed` and a declared operation's press was refused `display_map_unresolved` (`input_scale_unsupported`); the read-only study of main `381fe461`; the rule is the coordinator's ruling under the owner's "what is not written follows the default" for #392, not the owner's words; coordinator work order `rd-1116/brief-392-da5ab-lab-on-mapped-display.md`, read on main `23161b3a`)
+
+This section takes 1.436, the number the work order gives: §1.431 is the highest on main
+`23161b3a`, and §1.432 to §1.435 and §1.437 are taken by slices being built at the same time. It
+ships in 0.12.67. [display-adapter.md](display-adapter.md) section 11 is its contract.
+
+**The rule.** On a display that maps to the package's base, the Lab speaks the base coordinates to
+an agent: the frames its observations and operations hand out, every rectangle and point of its
+answers, and every point, rectangle and swipe it takes are in the package's base space (1280×720
+for today's packages). The answer says so and names the device size the frame was reduced from. On
+a display of the base's size nothing changes, byte for byte.
+
+**The one implementation.** The kernel's frame gate (`Resolution::validate_frame`,
+`crates/execution-kernel/src/contained_task/display_gate.rs`) is split into its map (`frame_map`)
+and its map and resample over a frame's pixels and its producer's geometry (`validate_pixels`);
+the gate calls them as before. `lab_scene_on_base` and `lab_display_map` call the same two for a
+frame read back from its picture (no producer geometry, no game declaration, as the Lab's declared
+operations map). The input side's one exit is `DisplayMap::send_input` in the display adapter
+(`admit_input`, `current_for`, `device_input` to the logical display); the run's input
+(`RuntimeContainedTask::device_input`) and every Lab input take it, and the host maps its refusals
+with one function (`input_send_failure`). `actinglab`'s client forms reach the same functions
+through `actingcommand-lab`.
+
+**The live observations, every one through it.**
+
+| # | Observation | Where | Before this slice on a mapped display |
+|---|---|---|---|
+| D5-1 | `observe --capture`, its transaction and every further transaction of a candidate layout's series | the kernel's `PreparedPageObservation::evaluate_with_series` | `observation_projection_failed` |
+| D5-2 | a Lab operation's before observation, its after observation and each arrival sample (`do --capture` with an element, `--tap`, `--swipe`, a recorded click) | the host's `evaluate_lab_operation_frame` → `evaluate_frames` | `observation_projection_failed` at `before_projection` |
+| D5-3 | a declared operation's frames | the kernel's frame gate, as before | recognised |
+| D5-4 | a declared operation's after projection | `evaluate_lab_operation_frame` | `observation_projection_failed` |
+| D5-5 | the client's `--capture` forms: `do --capture --dry-run`, `ensure --capture` (its frame set, each guard frame and each poll), `wait --capture --page` and `--stable` | `actinglab`'s `load_runtime_lab2_frames` → `on_package_base` | refused, the scene's size does not match the pack |
+
+A frame the map cannot take is refused with the code a run gives the same frame,
+`display_map_unresolved` at `display_map_build` with `display_problem` (`layout_undeclared`,
+`scale_below_base`, `orientation_mismatch`) and the frame's and the base's sizes; the kernel's
+`OnlineObservationError` carries the values and the host relays them (`observation_kernel_error`).
+The client's forms answer it as `device_error` with the code and its values in `details`.
+
+**The projection's frame identity.** It names the device frame's artifact hash at the base's size.
+What the ledger holds settles it: the observation evidence's `frame` is the capture's artifact,
+with the device's size, and the projection's width and height are the base; a verifier reads the
+device frame by the hash, builds the map from the two sizes (the identity or a pure scale, no
+declaration, no producer geometry), finds that the scale frame is the projection's size, and
+recomputes `rgb8_sha256` as that of the device frame resampled once under the map (area average,
+REC-5). `ContainedPageObservation::validate` (the receipt's and the record's check) now takes a
+projection frame that is the observation's frame, or of its ratio and no larger.
+
+**The presses.** A selection's input (`--tap`, `--swipe`, an element's rectangle and point, a
+recorded click) and a declared operation's input are in the base. On a frame of the base's size
+they leave as taken; on any other through `DisplayMap::send_input` under the frame's map, each
+point inside the inward device box of its box (the selection's rectangles; a declared attempt's
+draw regions, as a run's step keeps them). At 3/2 the base point (640, 360) leaves as (960, 540) and
+the base column 1279 as 1919. A ratio the input side does not send under (a pure scale whose double
+is not whole, 5/4) refuses the operation at its `input` stage, `display_map_unresolved`
+(`input_scale_unsupported` at `display_input_map`), nothing sent. This replaces DA-3 fix 1's
+refusal of every declared operation's input on a frame of another size (`lab_input_scale_unsupported`,
+removed). `ensure --capture` sends its route's inputs the same way. A recorded click (`do --capture
+--record`) is planned in the recording's coordinates: a recording whose frames are not of the
+package's base is refused before anything is pressed or written, `record_frame_size_mismatch`
+(`actingcommand_lab::record_press_base_check`), so no recorded press leaves in the wrong space;
+the recording on such a display is DA-5cd's.
+
+**The answers.** `frame_coordinates` on a mapped display is `{space: "base", base_pixels: [width,
+height], reduced_from: [device width, device height], orientation, applies_to}`; on a display of
+the base's size `{device_pixels, orientation, applies_to}` as before. `observe --with-frame`,
+`--preview` and an operation's after attachment (`frame_path`, `preview`) hand out the frames
+brought to the base (`frame::handed_out_png`, encoded as PNG). `capture` and `ac_frame` hand out the
+device's own frame, of its size. The MCP front answers the command line's line; its manual and its
+instructions say so.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| D5-6 | `ContainedObservationEvidence` and `ContainedPageObservation` on a mapped display | values of existing members (no member, no format) | DA-5ab | 0.12.67 | `projection.frame` is the device artifact's hash at the base's size; `rgb8_sha256` the scale frame's; `frame` the device frame's reference; the validation takes a projection frame of the frame's ratio and no larger |
+| D5-7 | a Lab operation's records on a mapped display | values of existing members | DA-5ab | 0.12.67 | `prepared.action`, `prepared.geometry` and an attempt's `action` in the base; the input intent's input in device pixels, as a run's |
+| D5-8 | `frame_coordinates` of `actinglab`'s answers | answer member's value | DA-5ab | 0.12.67 | `{space, base_pixels, reduced_from, orientation, applies_to}` on a mapped display |
+
+**What does not change.** No record gains or loses a member, no format, schema, ledger revision or
+interface revision moves; the map is not recorded, since the device frame's size and the base settle
+it. No outcome code or word is added; the texts of `display_map_unresolved` and of the word
+`input_scale_unsupported` say that a Lab operation's input now leaves under the frame's map (the
+index regenerated). On a display of the base's size every answer, record and input is as before.
+
+**An installer of 0.12.66.** The plan's edges are the component interface ranges, and this slice
+itself moves none of them; the release it ships in, 0.12.67, raises `runtime-client` to [3, 10]
+(§1.433), and revision 10 is also where this slice's widened projection belongs (a client library
+below 10 judges the receipt of a projection reduced to the base size invalid;
+[component-interfaces.md](component-interfaces.md), row 10 of `runtime-client`), so an installer
+of 0.12.66 ([3, 9]) installs 0.12.67 ([3, 10]) because the two ranges meet. The Lab and the
+Runtime of 0.12.67 ship in one build.
+
+**Tests.** `crates/execution-kernel/src/tests/gate_392_da5ab.rs`: a 96×64 package on frames three
+and one and a half times its base, made by nearest neighbour from a base frame whose features lie
+on whole 2×2 blocks (so that the area average gives it back): the same page, rectangle and
+projection, the projection frame of the base's size, the base frame's RGB8 hash; the base frame
+observed as it is (D5-1); a frame of another ratio, of half the base and of the other orientation
+refused `display_map_unresolved` with its word, never a projection failure.
+`crates/runtime-host/src/tests/gate_392_da5ab.rs`: on a 1920×1080 fake device a 1280×720 package's
+`do` of (640, 360), (1279, 0) and a swipe to (1279, 719) reach the device at (960, 540), (1919, 0)
+and (1919, 1079), the records keeping the base and the projections of the base's size; on a
+1600×900 device the press is refused at `input`, nothing sent. `crates/display-adapter/src/
+gate_392_da5ab.rs`: `send_input` at 3/2 for a rectangle's every point, a swipe and a stale frame,
+and its refusal at 5/4. `gate_392_da3`'s declared operation test is adapted (it pinned the refusal
+this slice replaces; renamed, its old name retired in `ci/retired-gates.toml`): at 48×27 the tap
+(1, 0) leaves as (3, 0) and the operation is confirmed. `actinglab`'s `frame::tests` pins both
+statements of `frame_coordinates`, and `actinglab-mcp`'s `serve_calls` that `ac_lab_observe` and
+`ac_do` answer them. Gate maps: `host.toml` and `apps.toml`, the rows "#392 DA-5ab".
+
+**At deploy.** Nothing to configure. On an instance of the base's size nothing changes; on a mapped
+one the Lab's observations and presses work, in the base.
+
+**Fix round 1** (coordinator work order `rd-1116/brief-392-da5ab-fix2.md`, after the independent
+review of pull request #1780 at `cde05c59`, which found the contained run unchanged line by line;
+nothing here touches the run's frame gate or the run's input; main merged in before the push).
+- *The first-generation MCP server says the same.* `actingctl`'s `ac_lab_observe` and `ac_lab_do`
+  descriptions and the result schema they share (`apps/actingctl/src/mcp/tools.rs`,
+  `mcp/lab.rs`) state both forms of `frame_coordinates`, that on a mapped display the frames,
+  rectangles, points, `frame_path` and `preview` are the base's and `tap`, `tap_rect`, `swipe`, an
+  element and an operation are taken in it, and the 5/4 refusal. No test pins that text (`gate_406_t4`
+  pins `seed` and the sampling names, kept).
+- *The receipt's check.* `ContainedPageObservation::validate` refuses a projection frame with a
+  side of zero; otherwise it takes the observation frame itself or the frame reduced to a base of
+  its ratio no larger than it, the map a pure scale of the display adapter builds for that frame
+  without a declaration (contract: it knows the two sizes, not the package, so it cannot know the
+  package's base; see "Not done as written" below).
+- *A recorded observation on a mapped display is refused.* `observe --capture --record` makes the
+  recorded press's check of the recording (`record_press_base_check`) before it captures, and,
+  after the Runtime observed, `record_observation_base_check` refuses a device frame of another size
+  than the base (the projection's frame) before the frame file or the recording is written, both
+  `record_frame_size_mismatch` (details `{frame, expected, actual}`); its debug terminal is
+  `rejected`. The search for another recording path that mixes the two spaces found only `do
+  --capture --record`, closed by this slice; the device commands' and `session app`'s `--record`
+  record the device's frames and pixels. The code stays `record_frame_size_mismatch` this round;
+  the train that joins DA-5cd unifies it with that slice's code.
+- *The stale comment.* `crates/display-adapter/src/codes.rs` on `input_scale_unsupported` no longer
+  says a Lab declared operation is refused.
+- *Tests.* `crates/runtime-host/src/tests/gate_392_da5ab.rs`:
+  `da5ab_fix1_an_element_at_three_halves_leaves_inside_its_device_box`,
+  `da5ab_fix1_a_declared_operations_drawn_box_at_three_halves_leaves_inside_its_device_box`,
+  `da5ab_fix1_a_declared_operation_on_a_device_five_quarters_the_base_sends_nothing` (the case the
+  retired DA-3 test's `covered_by` claimed, now named there);
+  `crates/actingcommand-contract/src/runtime/gate_392_da5ab.rs` (the check of the projection
+  frame); `crates/lab/src/gate_392_da5ab.rs` (the recorded press's and the recorded observation's
+  checks); `apps/actinglab/tests/runtime_input_proxy.rs` on a fake device of 3x3 frames and a 2x2
+  package:
+  `da5ab_fix1_observe_and_do_on_a_mapped_display_state_and_hand_out_the_base` (`frame_coordinates`,
+  the element, the `--with-frame` file and the previews, the device's points),
+  `da5ab_fix1_the_capture_client_forms_on_a_mapped_display_decide_and_press_in_the_base` (`do
+  --capture --dry-run`, `wait`, `ensure`),
+  `da5ab_fix1_a_recorded_observation_on_a_mapped_display_is_refused_and_nothing_is_recorded`; the
+  fake records each tap's point. Gate maps: `host.toml`,
+  `contract.toml`, `exec.toml`, the rows "DA-5ab fix round 1". No test is adapted or retired; no
+  outcome code, word, key, member or revision is added.
+- *Not done as written.* The work order asked the check to take a reduced frame only at a ratio
+  the adapter's `admit_input` takes. The Runtime's own observation on a 5/4 display (the capture
+  side admits it, and this slice's test
+  `da5ab_a_lab_press_on_a_device_five_quarters_the_base_sends_nothing` relies on it, its press
+  refused at its input) projects such a frame, so that clause would
+  make the client refuse the Runtime's own receipt as an integrity failure (fatal); it is left for
+  the coordinator.
+
+**Train** (coordinator work order `rd-1116/brief-392-train-lab-display.md`; the train of DA-5ab and
+DA-5cd in pull request #1780, which carries this section's head `8ee87579` and §1.437's `7010e74e`,
+merged in that order on main `03258b33`, then made one by the coordinator's rulings R1 to R5, not
+the owner's words; main `40abd08b` (with §1.435, LW-1) was merged in after that, before the push).
+What it changed of this section, with §1.437 (DA-5cd):
+- *One rule for a stored image (R1).* DA-5cd's stored scenes take this section's function:
+  `actingcommand_lab::scene_in_base` calls the kernel's `lab_scene_on_base`, and DA-5cd's own
+  `DisplayMap::build`, `admit_input` and `resample_pixels` sequence is gone. A Runtime capture of the
+  client's `--capture` forms is reduced once, by `on_package_base` (D5-5); DA-5cd's second reduction
+  of the forms that press nothing, outside `load_runtime_lab2_frames`, is gone.
+- *One answer (R2).* `frame_coordinates` is built in one place, the kernel's `FrameCoordinates`
+  (`readonly.rs`: `of_frame` the device form, `observed` the base form), which `actinglab`'s
+  `frame::coordinates` and `frame::observed_coordinates` serialize byte for byte as before; the
+  answers about a stored scene name it (§1.437). The live `ensure --capture` and `wait --capture`
+  answers, which stated none, state the base form when their frames were reduced.
+- *Recording (R4).* This section's checks of a recorded press and a recorded observation against
+  the Lab operation's package base (`record_press_base_check`, `record_observation_base_check`,
+  `record_frame_size_mismatch`) are replaced by the recording's own judgement, §1.437's:
+  `record_size_check` (the judgement `record stop` makes, `record_size_not_base`) and
+  `record_frame_check` (a frame a path took, judged as a frame that enters the recording:
+  `record_display_not_base` for a recording without a frame, `record_size_not_base`,
+  `record_frame_size_mismatch` for another size than the recording already has). `do --capture
+  --record` judges the recording, then captures one frame through the Runtime before its press (as
+  `tap --record` captures its frame before the press; not stored) and judges it, before anything is
+  pressed or written; `observe --capture --record` judges the recording before it captures and its
+  device frame after it observed. `contained_resources::online_base` went with the old checks.
+- *What does not move (R5).* The contained run: its frames, recognition input, refusals and device
+  points; no merge conflict reached `validate_frame`, `send_input` or their callers in the host,
+  and the train touched none of them. No outcome code or word beyond the two slices', no interface
+  revision, no record member.
+- *Tests.* `crates/lab/src/gate_392_da5ab.rs`: its two tests of the replaced checks are retired
+  (`ci/retired-gates.toml`) and two of the recording's judgement take their place
+  (`da5_train_a_frame_a_recording_path_took_is_judged_before_anything_is_written`,
+  `da5_train_a_recorded_press_on_a_recording_not_at_the_base_sends_nothing`);
+  `da5ab_fix1_a_recorded_observation_on_a_mapped_display_is_refused_and_nothing_is_recorded` is
+  adapted (the recording's header names the base 1280x720, so the 3x3 device frame, its first, is
+  `record_display_not_base`); `da5_train_recorded_do_and_observe_after_the_display_changed_send_and_write_nothing`
+  (`apps/actinglab/tests/runtime_input_proxy.rs`, the fake's display changed to 1920x1080 after a
+  first frame of 1280x720: `do --capture --record` and `observe --capture --record` refused
+  `record_frame_size_mismatch`, no tap, nothing written) is new. Gate map: `exec.toml`, the rows
+  "DA-5ab fix round 1" and "Workflow #392 DA-5, the train".
+- *Texts.* [display-adapter.md](display-adapter.md) section 11 ("Presses", "The answers", "Not in
+  this section"), [contained-lab-operation.md](contained-lab-operation.md),
+  [contained-page-observation.md](contained-page-observation.md), the MCP manual's "Coordinates",
+  the server's instructions and `actingctl`'s two descriptions; the text of `display_map_unresolved`
+  says a stored image is refused `lab_scene_size_unsupported` instead (the index regenerated).
+- *The train's fix round 1* is written down once, in §1.437 ("Train, fix round 1"): for this
+  section, the client form's unreachable branch that sent its own tap (`device.action`,
+  `device.base_action`) is removed, and the frame before a recorded `do` takes its size from the
+  Runtime's observation.
+
+### 1.437 Slice #392 DA-5cd (0.12.67): offline recognition takes a scene that is a pure scale of its package; a recording is refused on a display that is not the base size (Workflow #392; the owner's decision 203 on board #392, one set of packages at the base size and a converter; the real check of 11-16 on board #392 (decision 204) and the read-only study `rd-1116/report-392-lab-on-mapped-display-study.md`, its answers to questions 2 to 4, its slices (b) and (c), its doubt 4 and the coordinator's disposition at its end; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1116/brief-392-da5cd-offline-scale-and-record-refusal.md`, built on main `23161b3a`)
+
+This section takes 1.437, the number the work order gives: §1.431 is the highest on main
+`23161b3a`, and slices being built take §1.432 to §1.436. It ships in 0.12.67. DA-5ab, built at the
+same time, makes the Lab's live observation and presses work on a scaled display; this slice
+depends on none of its code.
+
+**What it closes (the real check of 11-16).** Offline, every Lab evaluation of a scene that was not
+its package's size was refused `validation_failed` ("scene dimensions … do not match pack
+coordinate_space"), so a frame captured on a 3840×2160 instance could not be examined. And a
+recording started on such an instance silently became a recording of that size (its first frame's,
+`recording.json`'s `coordinate_space`): its presses in device pixels, its boxes cutting templates at
+that size, and `record stop` building a package of it that every smaller instance refused
+`scale_below_base`.
+
+**Offline recognition** ([display-adapter.md](display-adapter.md) section 12). `recognize`,
+`detect-page`, `current-page` and `is-visible` (the Lab's `recognition_frames`), `tap-target
+--dry-run` and `navigate --dry-run` (the Lab's `drive`), offline `observe`, `do --dry-run`, `ensure
+--dry-run` and `wait` (actinglab's `load_lab2_scene`), and the Runtime captures of the client forms
+that press nothing, `do --capture --dry-run`, `ensure --capture --dry-run` and `wait --capture` (the
+study's doubt 2: they pass the same check), take every frame in the package's `coordinate_space`
+(`crates/lab/src/display_base.rs`, `scene_in_base`): a frame of that size as it is, its answer byte
+for byte as before; a frame whose map onto it (`DisplayMap::build`, no declaration, the frame its own
+display) is one under which a run sends its input (`DisplayMap::admit_input`: a pure scale whose
+double is a whole number) reduced to it by `resample_pixels` to the map's scale frame, the frame
+gate's two calls, and evaluated there; any other refused `lab_scene_size_unsupported`. An answer
+about a reduced frame names `scaled_from: {width, height}` (`SceneExtentResponse` in the kernel's
+read-only answers, the drive answers and the Lab-2 payloads; Min keeps it, as it keeps
+`frame_coordinates`), and every rectangle and point in it is in the coordinate space. The client
+forms that press (`do --capture`, `ensure --capture` without `--dry-run`, and the Lab's `tap-target`
+and `navigate` that press) keep the frame as captured: presses on a scaled display are DA-5ab's.
+
+**The base size and a recording** ([lab-recording.md](lab-recording.md), "A recording's size").
+Neither a standard package, a game root nor its `display-layout.json` declares a base of its own
+the Lab could read (each package declares its own `coordinate_space`; the root's display layout
+says how a game follows a display, not its base), so the base size has one named home:
+`STANDARD_PACK_BASE_SIZE` (1280×720) in `crates/actingcommand-contract/src/standard_pack_display.rs`.
+`record start` learns the instance's display from what the Runtime already knows, the instance's
+`display.frame_extent` fact (`DISPLAY_FRAME_EXTENT_FACT_KEY`, now named in the contract crate),
+read with one `InstanceFactSnapshot` on the start's own connection before the status read. Chosen
+over one capture at the start because it asks nothing of the device, so the start gains no device
+step that could fail in a new way, and a scripted or fixture Runtime answers it from memory; its
+limit: the fact is the device frame of the instance's latest contained task, so a display changed
+since is known only after a task has run on it, and an instance on which none has run, or a start
+while nothing listens, has no known display and starts (`display_extent` `null`; fix round 1:
+`display_last_observed`). A display of another size is refused `record_display_not_base` before
+anything is written or paused. `record stop` refuses, before anything is planned or written, a
+recording whose frames show a larger display of the base size's ratio (`larger_display_of_base_ratio`:
+the adapter maps it onto the base size as a pure scale); `record ready` lists it first as missing
+and runs no self-check (fix round 1: the code `record_size_not_base`, the word `size_not_base`).
+Nothing is converted; `record status`, `record frames` and `record archive` read such a recording
+as before.
+
+**Codes and words** (as fix round 1 leaves them).
+
+| Name | Kind | Refuses or warns | Exit | Who reads it |
+|---|---|---|---|---|
+| `lab_scene_size_unsupported` (`lab`, error / none; values `display_problem`, `frame_width`, `frame_height`, `base_width`, `base_height`, all required) | new code | refuses an offline scene that is neither the package's size nor an admitted pure scale of it; nothing evaluated | 2 on a `--via` line (usage); 1 on actinglab's own line and through `serve --stdio --front mcp` | the agent or person running an offline evaluation, through the command line or MCP; `display_problem` is the display adapter's existing word |
+| `record_display_not_base` (`lab`, error / none; values `frame_width`, `frame_height`, `base_width`, `base_height`, all required) | new code | this instance's display is not the base size: refuses `record start` on a display the Runtime last observed at another size, and (fix round 1) the first frame of a recording whose header names a base size, of another size; nothing recorded | 3 on a `--via` line (safety); 1 on actinglab's own line and through `serve --stdio --front mcp` | the agent or person recording, through the command line or MCP: record on an instance whose display is the base size |
+| `record_size_not_base` (`lab`, error / none; the same values; fix round 1) | new code | this recording holds frames that are not the base size: refuses `record stop` (dry run and regeneration too) and a frame added to such a recording | 3 on a `--via` line (safety); 1 on actinglab's own line and through `serve --stdio --front mcp` | the agent or person recording: archive it and record again on a display of the base size |
+| `size_not_base` (vocabulary `ready_missing`; fix round 1, was `display_not_base`) | new word | listed by `record ready` (never refuses by itself) | 0 | the agent reading `record ready`; its item's `code` is `record_size_not_base` |
+| `scaled_from` (answer member) | new member | neither | — | the reader of an offline answer |
+| `display_last_observed` (member of `record start`'s answer; fix round 1, was `display_extent`) | new member | neither | — | the reader of `record start`: the display the Runtime last observed and when, not the display now |
+| `base_size` (member of a recording's header, `recording.json`; fix round 1) | new member, absent when not written | neither | — | the Lab, at the recording's first frame and at `record stop` |
+
+**Tests.** In `apps/actinglab/src/tests/gate_392_da5cd.rs` (gate map `exec.toml`, the row "Workflow
+#392 DA-5cd"): one test per offline command (observe, do, ensure and wait on saved scenes,
+recognize, is-visible, detect-page, current-page, tap-target, navigate), each through
+`da5cd_offline_row` on an 8x4 package in 2x2 blocks: the frame enlarged 3 and 3/2 times by nearest
+neighbour (24x12, 12x6) answers as the 8x4 frame, identifiers, times and the scene's path aside,
+naming `scaled_from`; the 8x4 frame names none; 8x6, 4x2 and 10x5 are refused with
+`layout_undeclared`, `scale_below_base` and `input_scale_unsupported`; `recognize`'s enlarged answer
+is the 8x4 one and the member. In `gate_lab_l5c.rs`, its fake screen enlarged 3 times:
+`da5cd_do_capture_dry_run_plans_on_a_scaled_capture`, `da5cd_ensure_capture_dry_run_plans_on_a_scaled_capture`
+and `da5cd_wait_capture_arrives_on_a_scaled_capture`. Against the scripted Runtime:
+`da5cd_record_start_on_a_display_that_is_not_the_base_size_starts_nothing` (1920x1080: refused, the
+wire the handshake and `instance_fact_snapshot` only, no header, no recording, no file but the
+lock's) and `da5cd_record_start_on_a_display_of_the_base_size_starts_as_before`; and
+`da5cd_a_recording_of_another_display_is_listed_refused_and_still_read` (1920x1080 frames: `record
+ready`, `record stop`, `record status`, `record archive`). Adapted, as the requirement changes what
+they pin: the record starts of `gate_463_s17.rs` and `gate_463_s18.rs` that reach a Runtime now
+script the display read and expect `instance_fact_snapshot` before `status` (s17's place and wire
+helpers serve the new gate); nothing else they assert changes. No test is retired.
+
+**What a recording of another ratio is not.** In the first round this paragraph said what the
+review then called the hole: a recording smaller than the base size or of another ratio was not
+refused by `record stop`, and `record start` knew a display only from the Runtime's last
+observation, so a handset, a portrait display or a smaller display could still be recorded into a
+package of its own size without a word. Fix round 1 closes it with the check below: every
+recording `record start` makes names the base size in its header, its first frame of any other
+size is refused before it is stored, and `record stop` refuses any recording whose header names a
+base size and whose frames are of another size. Only a recording whose header names no base size
+(started before fix round 1, and the Lab's own test fixtures, whose frames are 96x64, 16x9 and the
+like) keeps the first round's judgement: refused only when its frames show a larger display of the
+base size's ratio.
+
+**Fix round 1** (coordinator work order `rd-1116/brief-392-da5cd-fix2.md`; the independent review
+`rd-1116/review-1781.md`, its sections (a), (b), (c), (f) and (g), and the coordinator's
+disposition at its end; the recording half only: the offline half meets #1780 and a later work
+order brings the two together).
+
+- *The base size in the header, checked at the first frame.* `LabRecording` gains `base_size`
+  (`Option<RecordSize>`, `#[serde(default, skip_serializing_if = "Option::is_none")]`, no schema
+  change), written by `record_start` from `RecordStartOptions::base_size`; actinglab's `record
+  start` fills it with `RECORDING_BASE_SIZE` (the contract crate's `STANDARD_PACK_BASE_SIZE` as a
+  recording's size; `crates/lab/src/display_base.rs`). Every frame that enters a recording passes
+  `admit_recording_frame` in `recording/steps.rs`'s `admit_frame`, before the size check and before
+  anything is queued: a first frame of another size than the header's base is refused
+  `record_display_not_base`, and every frame of a recording whose frames are not the base size
+  (`recording_not_base`) `record_size_not_base`; the command returns the refusal before it saves,
+  so no frame, no step and no header change is written. `record stop`, its dry run and its
+  regeneration, and `record ready`, judge with `recording_not_base`: a header with a base size,
+  frames of any other size; a header without one, the first round's `larger_display_of_base_ratio`.
+- *Two causes, two codes* (the coordinator's ruling, one cause per code): `record_display_not_base`
+  is this instance's display (the start and the first frame; nothing recorded; record on an instance
+  whose display is the base size); `record_size_not_base` (new) is this recording's frames
+  (`record stop`, `record ready`'s item, a frame added to it; archive it and record again). The word
+  `display_not_base` of `ready_missing` is renamed `size_not_base`, as its item's code changed.
+- *`record start`'s answer about the display.* `display_extent` is renamed `display_last_observed`
+  and carries the fact's `observed_at_unix_ms`: the display a task last observed, not the display
+  now. The start's refusal says what to do on an instance whose scheduling is paused, where no task
+  runs to observe the display again (resume its scheduling until a task has run, or start on
+  another instance at the base size), and that the first frame is checked in any case: the start's
+  check is an early warning, not the guard ([lab-recording.md](lab-recording.md), "A recording's
+  size").
+- *The values of `detect-page`, `tap-target` and `navigate`.* Their refusals carry the refusal's
+  own details as the member `details` of their trace (`commands::semantic_ledger`), one level
+  deeper than the line's values were read (`cli_module::own_line`, `nested_values`): the line now
+  also reads the outcome of the same code in that member, on the command line and through `serve
+  --stdio --front mcp`.
+- *One home for the fact's key.* runtime-host's `host/facts.rs` uses the contract crate's
+  `DISPLAY_FRAME_EXTENT_FACT_KEY` in place of its private constant of the same spelling.
+- *Tests.* In `gate_392_da5cd.rs`: `da5cd_fix1_record_start_writes_the_base_size_and_checks_the_first_frame`
+  (the unit tests' switch set to `RECORDING_BASE_SIZE`; nothing listens: the header's `base_size`
+  1280x720 and no size; first frames of 2400x1080, 640x360 and 1920x1080 refused
+  `record_display_not_base` with their sizes, the recording's files unchanged; 1280x720 opens step
+  1) and `da5cd_fix1_detect_page_tap_target_and_navigate_carry_their_values_through_mcp` (through
+  `serve --stdio --front mcp`, the three refusals of an 8x6 scene carry `lab_scene_size_unsupported`'s
+  values, exit 1); in `apps/actinglab/tests/runtime_input_proxy.rs`, through the installed
+  program, `da5cd_fix1_the_installed_start_writes_the_base_and_its_first_frame_is_checked` (the
+  header's `base_size` 1280x720; `tap 0 0 --record` on 1920x1080 frames refused
+  `record_display_not_base` with one capture, no tap, nothing written). Adapted, as the requirement
+  changes what they pin: `da5cd_record_start_on_a_display_of_the_base_size_starts_as_before`
+  (`display_last_observed` with its time) and `da5cd_a_recording_of_another_display_is_listed_refused_and_still_read`
+  (`size_not_base`, `record_size_not_base`, and a frame added to it refused); in
+  `runtime_input_proxy.rs`, the tests that start a recording with the installed program and then
+  record frames are served frames of 1280x720 (`base_frames`), and the two packages they observe
+  and press with take that coordinate space (L4, S1-1, S1-7 and S1-9 rows). actinglab's unit tests
+  start recordings without a base size (the test-only switch `recording_base_for_tests`, none by
+  default), and the Lab crate's fixtures name none: they keep the first round's judgement. No test
+  is retired.
+
+**What is not added.** No Runtime interface revision, no request or result shape, no configuration
+key, no ledger revision, no record type, no fact key (the display facts are DA-A's). The
+`record start` row of `contracts/lab-operations.json` names `InstanceFactSnapshot` among its
+requests.
+
+**At deploy.** Nothing to do. An offline answer about a reduced frame carries `scaled_from`; a
+`record start` on an instance whose last task ran at another size than 1280×720 is refused until
+the display is set back and a task has run on it; a recording started on this build takes a first
+frame of 1280×720 only. A recording made on an earlier build reads as before. The way back (the
+train's fix round 1): a recording's header this build writes names `base_size`, and 0.12.66 cannot
+read it (its reader of `recording.json` is strict and refuses a member it does not know), so after a
+way back to 0.12.66 a recording begun on this build cannot be read there. No recording is left open
+across the deployment: stop or archive every recording before it.
+
+**Train** (coordinator work order `rd-1116/brief-392-train-lab-display.md`; the train of DA-5ab and
+DA-5cd in pull request #1780, which carries §1.436's head `8ee87579` and this section's `7010e74e`,
+merged in that order on main `03258b33`, then made one by the coordinator's rulings R1 to R5, not
+the owner's words; main `40abd08b` (with §1.435, LW-1) was merged in after that, before the push).
+What it changed of this section, with §1.436 (DA-5ab):
+- *One rule for a stored image (R1).* A stored scene is judged, reduced and answered exactly as a
+  frame of its size is by DA-5ab's live observation, by the same function: `scene_in_base` and
+  `frames_in_base` (`crates/lab/src/display_base.rs`) call the kernel's `lab_scene_on_base` (its
+  `frame_map` and `validate_pixels`); this section's own `DisplayMap::build`, `admit_input` and
+  `resample_pixels` sequence (`admitted_map`) is gone. So a scene is taken at every size the live
+  observation takes: of the base's ratio, not smaller, in its orientation, 5/4 too (whether a press
+  could land exactly is no reason to refuse a read; a press at 5/4 stays refused where presses are
+  admitted, §1.436). The `--capture` client forms that press nothing no longer reduce a second time
+  (`in_package_base` reads scene files only).
+- *One answer (R2).* The answer member of this section is gone everywhere (code, tests, contracts,
+  manuals, READMEs): an answer about a reduced scene names §1.436's `frame_coordinates` in the base
+  form, built by the kernel's `FrameCoordinates::observed` (`SceneExtentResponse` is gone; the
+  read-only and drive answers carry `frame_coordinates`, absent unless the scene was reduced; Min's
+  frame members are main's three again). An answer that stated `frame_coordinates` before (offline
+  `observe` and `do`) states the base form for a reduced scene; one that stated none states them
+  only for a reduced scene. At the base size every answer is byte for byte main's. The member
+  `scaled_from` of a recording's ending frame (#463 R2) is another member and stays.
+- *Two refusals of a size, one cause each (R3).* `lab_scene_size_unsupported` is a stored scene's,
+  with the word the frame gate's refusal carries (`layout_undeclared`, `scale_below_base`,
+  `orientation_mismatch`; no longer `input_scale_unsupported`); `display_map_unresolved` is a live
+  capture's (§1.436). Neither path answers the other's code.
+- *Recording (R4).* The hole this section's fix round left is closed: `record_before_frame` (`tap`,
+  `swipe` and `long-tap --record`, `session app --record`) asks `record stop`'s judgement before it
+  captures, so a recording whose header names no base size and whose frames `record stop` refuses
+  is refused `record_size_not_base` before anything is captured or sent, also when its open step is
+  marked; `do --capture --record` and `observe --capture --record` ask the same judgement and judge
+  the frame they took (§1.436). The three codes, one cause each: `record_display_not_base` (this
+  instance's display is not the base size and the recording has no frame yet), `record_size_not_base`
+  (this recording is not at the base size), `record_frame_size_mismatch` (a frame of another size
+  than the recording already has), as [lab-recording.md](lab-recording.md), "A recording's size",
+  now says; its ready table names the word `size_not_base` and its exit table `record_size_not_base`
+  for `record stop`. The test switch `recording_base_for_tests` is as it was.
+- *Tests.* `gate_392_da5cd.rs`'s ten offline rows are adapted (the enlarged scenes' answers name
+  `frame_coordinates` in the base form, the base scene's as before; 10x5 is no longer refused) and
+  `gate_lab_l5c.rs`'s three `da5cd_` tests rewritten to what the one path answers (the base form,
+  reduced once on DA-5ab's path), their names kept; new, `da5_train_a_stored_five_quarters_scene_is_taken_by_detect_page`
+  and `da5_train_a_stored_five_quarters_scene_is_taken_by_a_dry_run` (`ensure --dry-run`) on a 10x5
+  scene of the 8x4 package. Gate map: `exec.toml`, the rows "Workflow #392 DA-5cd" and "Workflow
+  #392 DA-5, the train".
+- *Texts.* [display-adapter.md](display-adapter.md) section 12 (this section's, numbered after
+  DA-5ab's 11 in the merge), [lab-recording.md](lab-recording.md), [actinglab-capabilities.md](actinglab-capabilities.md),
+  the MCP manual, both READMEs, the catalog's texts of `lab_scene_size_unsupported`,
+  `record_display_not_base` and `record_size_not_base` (the index regenerated). No code, word, key,
+  member or revision is added by the train.
+
+**Train, fix round 1** (coordinator work order `rd-1116/brief-392-train-lab-fix1.md`; the two
+independent reviews of the train at `2ff33cb3`, review B's one must-fix and the "may change" points
+of both, with the coordinator's dispositions; for §1.436 and this section alike).
+- *The first frame of a recording without a base in its header* (review B's must-fix). Such a
+  recording (one begun on 0.12.66 and still open, or one the Lab re-created) took the first frame of
+  a press on a display that is not the base size as it came, the press was sent, and only the frame
+  after it was refused `record_size_not_base`: the device had moved and the recording could never
+  become a package. Now `record_before_frame` (`tap`, `swipe` and `long-tap --record`, `session app
+  --record`), before it stores a frame that would be the recording's first, judges the recording as
+  if it already had that frame's size, by the one judgement (`recording_not_base`, through
+  `admit_pressed_first_frame` in `crates/lab/src/display_base.rs`): one it would refuse is refused
+  `record_display_not_base` with the frame's size and the base size, nothing stored, nothing sent.
+  Only the paths that press: a frame attached by `capture --record` or `observe --capture --record`
+  is judged as before. *Its source:* a recording the Lab re-creates because the session's header
+  exists and `recording.json` does not (`recording/steps.rs`, `open_session_with`) writes the base
+  size in its header, as the installed `record start` writes it (`RECORDING_BASE_SIZE`).
+- *The frame before a recorded `do`* (review B, (l)). It stays (nothing is sent before the
+  display's size is known), but its width and height are the ones the Runtime's observation answers,
+  in the reference of the frame it committed (`observe_runtime_frame_reference`, as §1.435's plain
+  press takes it): the frame is no longer read back, decoded, encoded and decoded again. A capture
+  that fails is `device_error`, nothing pressed or written. The `do` row of
+  `contracts/lab-operations.json` names `ObserveReadonly` among its requests.
+- *Unreachable code* (review A, (e)). `run_do` turns `do --capture` without `--dry-run` to the Lab
+  operation before it reaches `run_runtime_do`, so that function's branch that sent its own tap
+  (`device.action`, `device.base_action`, §1.436's fix round 1) was never reached: it is removed,
+  with its `dry_run` parameter (one caller, in the same file), and §1.436's sentence that described
+  it. [contained-lab-operation.md](contained-lab-operation.md) and
+  [display-adapter.md](display-adapter.md) section 11 say that no client form of `do` sends its own
+  tap.
+- *Texts.* `contracts/lab-operations.json`: the rows `record stop` and `record ready` name
+  `record_size_not_base`, and the rows `ensure` and `wait` (with `actinglab`'s own command contract,
+  their `output_fields`) `frame_coordinates`; this section's "At deploy" says what a way back to
+  0.12.66 cannot read; both "Train" paragraphs name main `40abd08b`; both READMEs say that live
+  `observe` and `do` speak the base coordinates on a mapped display and lose the sentence that a
+  scaled frame sends no input before DA-3; the catalog's text of `lab_scene_size_unsupported`,
+  [actinglab-capabilities.md](actinglab-capabilities.md) and display-adapter.md section 12 say its
+  exit 1 on actinglab's own line and through `serve --stdio --front mcp`, as the `record_*` codes
+  say theirs; the catalog's text of `record_display_not_base` and
+  [lab-recording.md](lab-recording.md), "A recording's size", say the first-frame judgement above
+  (the index regenerated).
+- *Tests* (gate map `exec.toml`, the row "Workflow #392 DA-5, the train's fix round 1"; no test
+  retired): in `crates/lab/src/gate_392_da5ab.rs`,
+  `da5_train_fix1_a_first_frame_the_recording_would_refuse_is_refused_before_the_press` (the gate
+  test of the must-fix: no base, no frame, a capture of 1920x1080: the press never called, the
+  files unchanged), `da5_train_fix1_the_retry_of_a_recorded_press_judges_the_recording_again_before_it_sends`
+  and `da5_train_fix1_a_frame_not_stored_is_checked_against_a_recording_with_a_base`; in
+  `apps/actinglab/src/tests/gate_392_da5cd.rs`,
+  `da5_train_fix1_a_stored_image_of_the_other_orientation_is_refused_with_its_word` and
+  `da5_train_fix1_session_app_record_on_a_display_that_is_not_the_base_sends_nothing`; in
+  `gate_lab_l5c.rs`, `da5_train_fix1_a_live_form_and_a_stored_image_each_answer_their_own_refusal`,
+  and its three `da5cd_` tests adapted to assert `reduced_from` (the device's size) and
+  `base_pixels` (the base) each on its own; in `apps/actinglab/tests/runtime_input_proxy.rs`,
+  `da5_train_fix1_a_recorded_do_whose_frame_before_the_press_fails_presses_and_writes_nothing`. No
+  code, word, key, member or revision is added.
+
+### 1.438 Slice #477 PC-1 (0.12.68): one package declaration per standard-pack root, `pack-catalog.json`, read, checked, indexed both ways and carried by build and place (Workflow #477; the owner's approval on board #477 on 11-16 and her six answers for this slice; the rest the coordinator's ruling under her words "the rest is approved"; read-only study `rd-1116/report-pack-catalog-claims-study.md`; coordinator work order `rd-1116/brief-477-pc1-pack-catalog.md`, read on main `03258b33`)
+
+This section takes 1.438, the number the work order gives: §1.432 to §1.437 belong to slices not
+merged yet. It ships in 0.12.68.
+
+**Why.** A game root said what its packages are and do in five places (`ui.json`, the rules of
+`schedule.json`, the packages' own declarations, the goal declaration, the model's tables), and
+no rule declared a production, so a resource goal reached nothing. The owner approved one
+declaration per package, whose business part the scheduler will later read as an index. The
+contract is [pack-catalog.md](pack-catalog.md); its section "The owner's six answers" gives the
+reason of each choice.
+
+**The rule.**
+- *The file.* `<game root>/pack-catalog.json`, `actingcommand.pack-catalog.v1`: a display part
+  (`groups`, `display`, per entry `title`, `summary`, `group`, `risk`: what `ui.json` carried but
+  `parameters`) and a business part (per entry `consumes` and `produces`, each pool of
+  `schedule.json` with an optional quantity `{"kind":"constant","amount":N}` or
+  `{"kind":"pending"}`). No value member: a member the reader does not know is an error at its
+  pointer, everywhere in the file.
+- *Errors and warnings* (the owner's answer 6). An error of the file or of its business part
+  (`malformed`, `game_mismatch`, `package_not_listed`, `catalog_duplicate`,
+  `catalog_pool_undeclared`, `catalog_out_of_limits`) makes the root's declaration wrong; a display
+  defect (`malformed`, `catalog_text_missing`, `catalog_group_unknown`, `catalog_duplicate`,
+  `catalog_out_of_limits`) is a warning and leaves out what it touches, the package showing by its
+  id. A package without an entry is neither, counted and listed.
+- *The index* (`producing`, `consuming`: per pool the packages, each once, pending and absent
+  quantities included) is computed by the reader and never stored.
+- *`ui.json` is gone* (the owner's answer 1): its reader `standard_pack_ui.rs` became
+  `standard_pack_catalog.rs`; `packs`, `standard-pack check`, the build and `place` read the new
+  file instead; a root that still holds `ui.json` gets `standard_pack_ui_retired`, and nothing
+  reads both.
+- *Two places, compared* (answer 2): each difference between an entry's business part and the
+  package's rules in `schedule.json` is `standard_pack_catalog_schedule_differs`.
+- *The writer* (answer 5): `actinglab standard-pack catalog --root <game root> [--plan]`, one rule
+  (`merge_standard_pack_catalog`): an entry for every package of `bundle.json`, an existing entry
+  kept as written and its differences answered, a new one's display from a leftover `ui.json` and
+  its business part the union over its rules (constant when every rule states the same amount,
+  else pending); `--plan` answers the document, without it an atomic write when the bytes change;
+  a root inside an installation refused.
+- *The Runtime does not read the file* (answer 4): its root reader, startup, run preparation, the
+  policy crate, the scheduler workbench and check-config are unchanged, and a change of the file
+  triggers no composition.
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The reader, the index, the comparison, the merge | `crates/actingcommand-contract/src/standard_pack_catalog.rs` (was `standard_pack_ui.rs`): `parse_standard_pack_catalog`, `read_standard_pack_root_with_catalog`, `StandardPackCatalog::{ui, display, index, unlisted}`, `standard_pack_catalog_differences`, `merge_standard_pack_catalog`, `catalog_display_outcome`, `retired_ui_outcome`; the words in `standard_pack.rs` (`StandardPackProblem`) and the vocabularies `catalog_side`, `catalog_difference`; `goals.json`, `loading.json` and the variables keep reading their texts with the moved helpers |
+| `packs` | `crates/lab-ops/src/packs.rs`: `game_catalog` (in place of `game_ui`), the game row's `ui`, `display`, `index`, the composed row's `ui`, `display`, `catalog`; `apps/actingctl/src/mcp/packs.rs`: `ac_packs`' description and result schema |
+| `standard-pack check` | `crates/resource-tooling/src/standard_pack_check.rs`: `catalog_report`, the answer's last member `catalog` (`StandardPackCatalogReport`: `note`, `unlisted`) |
+| The writer | `crates/resource-tooling/src/standard_pack_catalog.rs` (`write_standard_pack_catalog`); `apps/actinglab/src/standard_pack_cli.rs` (`run_catalog`) |
+| Build | `apps/actinglab/src/resource_verify/bundle.rs` (`carry_catalog` in place of `carry_ui`), `steps.rs` (the checkout's read paths) |
+| Place | `crates/lab-rescue/src/install/place.rs`: `ROOT_FILES` (the catalog last, `ui.json` out), `RETIRED_WHEN_ABSENT` (the catalog first, `ui.json` kept so an installed one is set aside), `check_catalog` in the plan |
+| The row | `standard-pack catalog` in [lab-operations.json](lab-operations.json) (authoring, `root`, `plan`, slice `477-PC1`) and the notes of `packs`, `standard-pack check`, `standard-pack build` and `place`; `engine::COMMANDS` 71 (was 70), `own_flags::STRICT_ROWS` 34 and `REFUSING_COMMANDS` 67, `words::BUILT_SLICES` and the MCP server's `ACTINGLAB_SLICES` 15 each, the capability `standard-pack catalog` (offline), the dry-run declaration (mixed: `--plan` no effect, without it `dry_run_unsupported`), `ratchet/actinglab_commands.json` 107 commands. The Lab's MCP server offers `ac_standard_pack_catalog` through a `serve` child |
+| Texts | [pack-catalog.md](pack-catalog.md) (new); [package-reference.md](package-reference.md) (the root's files, the build's zip, `pack-catalog.json` and the retired `ui.json`); [standard-pack-schedule.md](standard-pack-schedule.md), [runtime-interface.md](runtime-interface.md) (`packs`), [resource-verify.md](resource-verify.md), [install-cli.md](install-cli.md), [standard-pack-goals.md](standard-pack-goals.md), [actinglab-dry-run.md](actinglab-dry-run.md), [lab-two-entries.md](lab-two-entries.md) (the rows children serve, counted again: 164 on Windows, 125 elsewhere, with `record ready` and `record frames`, which the count had not taken), `apps/actinglab-mcp/MANUAL.md` section 8, the READMEs |
+
+**Codes and words.** Seven contract codes, prefix `standard_pack_`:
+
+| Code | Category | Read by |
+|---|---|---|
+| `standard_pack_catalog_absent` (`game`, `path`) | info, a note | `standard-pack check`'s `catalog.note` |
+| `standard_pack_catalog_coverage` (`game`, `path`, `count`) | info, a note | the same, beside `unlisted` |
+| `standard_pack_catalog_display_invalid` (`game`, `path`, `standard_pack_problem`, `json_pointer`) | warning | `packs`, `standard-pack check`, `standard-pack catalog` |
+| `standard_pack_catalog_schedule_differs` (`game`, `package_id`, `pool_id`, `catalog_side`, `catalog_difference`, `task_id`?) | warning | `standard-pack check`, `standard-pack catalog` |
+| `standard_pack_ui_retired` (`game`, `path`) | warning | `packs`, `standard-pack check`, `standard-pack catalog`, `standard-pack build` |
+| `standard_pack_catalog_root_refused` (`path`, `install_root`) | error, the line refused | `standard-pack catalog` |
+| `standard_pack_catalog_write_failed` (`path`, the OS error its cause) | error, the line refused | `standard-pack catalog` |
+
+An error of the business part is the existing `standard_pack_root_invalid` (one warning per error
+in `packs`; the refusal of `standard-pack check` and `standard-pack catalog` with the first; a
+failure of the build's `bundle` step per error; `place`'s `pack_invalid` cause). The closed
+vocabulary `standard_pack_problem` loses `ui_out_of_limits`, `ui_duplicate`, `ui_group_unknown`
+and `ui_parameter_undeclared` and gains `catalog_out_of_limits`, `catalog_duplicate`,
+`catalog_pool_undeclared`, `catalog_group_unknown` and `catalog_text_missing`; two vocabularies are
+new, `catalog_side` (`consumes`, `produces`) and `catalog_difference` (`catalog_lacks`,
+`schedule_lacks`), each an outcome key of its own. No decision reads a code or a word. The
+outcome-code index is regenerated.
+
+**Tests** (apps gate map "#477 PC-1", sixteen): the contract reader (a full file with both parts
+and the smallest one; each refusal at its pointer; an unknown member and a value member; display
+defects as warnings with their fallback; the index from a merge of three rules naming one pool,
+with pending and absent quantities); `packs` (rows with display and `catalog`, the game's `index`;
+a leftover `ui.json` alone: ids and one warning); `standard-pack check` (each finding with its
+code; a wrong business part makes the root not ready, a display defect does not; the composition
+the same with and without the file); the writer (from `bundle.json` and `schedule.json` with a
+leftover `ui.json`, a second run unchanged; an entry kept and its differences; an installation
+refused; on the command line and through `serve --stdio`, `--plan` writing nothing); the build
+(the file carried byte for byte, one wrong in its business part failing the build); `place` (the
+file placed with its digest and set aside by a later zip without it, an installed `ui.json` set
+aside; a zip whose file is wrong in its business part refused before the hold). Adapted:
+`gate_r11_packs_and_ac_packs_answer_the_same_ui_irreversible_and_task_ids` reads the display from
+`pack-catalog.json`; `standard-pack check`'s goldens gain the member `catalog`
+(`gate_453_s8`, `gate_cov1`, `gate_sched_c1f1`). Retired with their mapping
+([ci/retired-gates.toml](../ci/retired-gates.toml)): the two R-11 reader tests and P2 fix round 1's
+`ui.json` build test.
+
+**What is not changed.** The policy crate, the composition bench and its file marks,
+`schedule.json`'s format, `adopt` and the readiness judgement (they do not know the file), the
+model's repository, every Runtime interface and every `package` revision: the Runtime reads no
+member of the file, and the `packs` answer is the Lab's offline read, which no revision covers. For
+a root without the file every answer is as before but `standard-pack check`'s new last member
+`catalog` (its note `standard_pack_catalog_absent`).
+
+**At deploy.** Nothing to configure. A resource repository writes its file with `actinglab
+standard-pack catalog --root <the repository's checkout>` (fix round 1: the game from the
+checkout's `applications.json`, the registry the build's own `package_bundle` makes of its
+`packs/`; each new entry taking its display from the checkout's `ui.json`), commits
+`pack-catalog.json` at the checkout's root, removes `ui.json`, and builds and places as before. Fix
+round 1: a zip that carries the file declares `package` [16, 16] and this build [3, 16]; an
+installer of 0.12.67 or earlier refuses such a zip at its `package` edge (`interface_edge`), so the
+installer of 0.12.68 is deployed before the first such zip is placed, and a tool that reads a zip's
+`interfaces.json` against a pinned `package` range must accept 16 first. A zip built before
+0.12.68 that carries `ui.json` is refused by this `place` (`pack_invalid` naming the member).
+
+**Fix round 1** (coordinator work order `rd-1116/brief-477-pc1-fix2.md`, after the independent
+review, which found two things that must change and five that may).
+
+- *The writer on a real checkout* (must-fix 1). No resource repository's checkout is a game root:
+  its `bundle.json` is made at build time from `applications.json` and `packs/`. `--root` now takes
+  a checkout (a directory with `applications.json` and no `bundle.json`, whatever its name): the
+  game is `applications.json`'s, the registry that of the `bundle.json` the build's own
+  `package_bundle` makes of `applications.json` and the directories of `packs/` (a file there, such
+  as a `README.md`, passed over as the build passes it over; each directory copied, following
+  links as the build's copy does, into a scratch directory of the system's temporary folder, which
+  is removed before the line answers), and the file is written at the checkout's root, where the
+  build carries it from. The first round's form, a built game root outside an installation
+  (`bundle.json`, the directory named as its game), stays: it costs nothing. A directory with
+  neither is `standard_pack_root_invalid` `bundle_missing` at `bundle.json`; a root inside an
+  installation stays refused first. The four texts that promised the old path
+  ([pack-catalog.md](pack-catalog.md) "The file" and "Who writes it", this section's "At deploy",
+  the row's `root` note in [lab-operations.json](lab-operations.json), the flag text of
+  `standard_pack_cli.rs`) and the outcome texts that named `--root <game root>` say so now.
+- *The display part only warns* (must-fix 2; the owner's answer 6). A member a group or `display`
+  does not know is `standard_pack_catalog_display_invalid` `malformed` at its pointer, and that
+  group or that `display` is left out (`Check::unknown_display`); the document's own level, an
+  entry's, a pool's and a quantity's stay errors. Nothing else of the reader changes.
+- *`package` 16* (the review's (d)). An installer of 0.12.67 or earlier knows no root file
+  `pack-catalog.json` and refused a zip that carries it as a member it does not know; now such a
+  zip declares `package` [16, 16] (`CATALOG_PACKAGE_REVISION`; `standard-pack build` counts the
+  file by its presence at the zip's root, a row of its revision table), this build declares
+  [3, 16] ([component-interfaces.md](component-interfaces.md), the `package` row 16), and the
+  earlier installer refuses it at its `package` edge. 17 is another slice's. By the coordinator's
+  ruling, this build's `place` gains no refusal for a zip that carries the file and declares less
+  than 16: no such zip is built (the build that writes the file declares 16), and the boundary
+  that matters is the other one, the earlier installer's.
+- *Smaller things* (the review's "may fix"). `standard_pack_catalog_write_failed` is of the class
+  `device_instance` (exit status 4), as the Lab's other local write failures, not
+  `usage_validation`; so is an OS failure of a checkout's `packs/` or of the scratch directory
+  (`foreign_os_error`). What the writer leaves out is warned of as well as answered (the answer's
+  `removed` and `dropped` stay): one new warning code, below. `packs` parses `schedule.json` for
+  the catalog's pools only when the game root holds `pack-catalog.json` (it ran on every status
+  read), and its standard-pack root row reads that file under `MAX_STANDARD_PACK_SCHEDULE_BYTES`.
+  A rule that names a pool `schedule.json` does not declare, of a package the writer gives a new
+  entry, is refused `standard_pack_root_invalid` at `schedule.json`, the file the pool is missing
+  from, `catalog_pool_undeclared` at `/rules/<i>/<side>/<j>/pool_id` (it named the catalog's
+  pointer of the entry it would have written).
+
+| Code | Category | Read by |
+|---|---|---|
+| `standard_pack_catalog_left_out` (`game`, `path`, `standard_pack_problem` `package_not_listed` or `catalog_pool_undeclared`, `json_pointer` in the existing file, `package_id`, `pool_id`?) | warning, exit status 0 | `standard-pack catalog`, once per entry of `removed` and pool of `dropped`, after the display defects and before the differences |
+
+No word or key is new; the outcome-code index is regenerated. **Tests** (the gate row "#477 PC-1",
+twenty now): the business part's limits, each at its pointer and each bound read; the writer on a
+synthetic checkout; the writer's `removed` and `dropped` with their warnings; a zip that carries
+`ui.json` refused by `place` in the plan, before the hold. Adapted: the reader's strictness test
+loses its two display cases, which the display test now asserts as warnings with the group and
+`display` left out; the build's catalog test reads the zip's `package` as [16, 16] (it read
+[3, 3]); `gate_463_v1::v1_the_build_declares_package_through_revision_14` and the architecture
+test's `V0120` table read `package` [3, 16].
+
+### 1.439 Slice #463 S2-2 (0.12.68): `record review` answers each step of a recording as the screen before, the press and the screen after, with rendered previews (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making, whose stage two turns the recorded material into a package offline, and her rulings of the night of 11-15 there: the tool hands back the material and the agent decides, and a preview's boxes are rendered onto a copy while the stored frames carry no box; the design `rd-1115/pack-stage12-design.md`, B1.2 and B1.6, the row S2-2 of B5, of which `shared`, `suggestions` and `candidates` are not built; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1116/brief-463-s22-record-review.md`, stacked on the Lab display train, #1780, at its head `2ff33cb3d3`, its fix round 1 `b157951c06` merged)
+
+The coordinator gave this slice 1.439. It stands on the train of DA-5ab and DA-5cd (§1.436,
+§1.437, #1780; its fix round 1 merged) and ships in 0.12.68.
+
+**Why.** An agent saw a recording only as the step table (`record status`) and single frames on
+request (`record frames`, §1.426). This read lays each step out as the screen before, where the
+press went and the screen after, with the step's marks and its items of `record ready` (§1.425),
+and draws the press and the declared boxes on copies of the stored frames
+([lab-recording.md](lab-recording.md), "Reviewing a recording step by step: `record review`").
+
+**Established by reading** (the code's facts where the work order or the design said otherwise).
+- *What the step table holds.* A step holds no note (the design's S1-6 notes were not built), no
+  frame-change measure of a stored frame (stage one's after loop compares digests in memory and
+  stores none) and no list of the frames of the same screen (S2-5 measures a capture against the
+  step's live frame when a box is drawn, and stores the result nowhere). The work order's rule, a
+  member the step table does not hold is absent, never invented, decides: the answer has no `note`,
+  no `same_screen` and no change on a frame `between`.
+- *`runtime: none`.* As §1.426 found, the table's word is `offline`; the row says `offline`.
+- *The cut for MCP's budget.* `record frames` marks no cut: its sides are bounded by its request
+  and counted (`before_total`, `after_total`), and a child's success over the budget is written
+  whole to the export (`answer_exported`; no row of the server's `LAB_ROWS` keeps parts of it).
+  This read does the same: `steps` beside `steps_total`, `--step` for one step; the MCP server is
+  not changed.
+- *No drawing crate.* The design proposed `imageproc`; the work order adds no dependency (no
+  `cargo` here, so the lock file cannot be regenerated). The previews are drawn by plain pixel
+  writes on the frame `Frame::from_png` decodes and encoded with `Frame::encode_png_fast`, the
+  device crate's, which the Lab already uses for its crops.
+- *The screen before of a step without a press* (the final screen) is its live primary frame; a
+  press's is its `before_frame` as `record ready` names it (`ready::press_frame`).
+
+**What it builds.**
+
+| Part | Where |
+|---|---|
+| The read | `record_review` (`crates/lab/src/recording_api.rs`), which reads the recording with `ready_recording` and takes `record ready`'s answer from `ready_of`, the body of `record_ready` moved into a function of its own (`record_ready` calls it, its answer unchanged); `review_outcome`, `RecordReviewRequest`, `RecordReviewOutcome` and its parts (`crates/lab/src/recording/review.rs`, new); `around::sequence_of` and `Stored`, `ready::press_frame` and `one_pixel`, `recording_api::click_outcome` are `pub(crate)` |
+| The previews | `crates/lab/src/recording/preview.rs` (new): `render`, its colours and `press_radius`; written with `store::write_atomic` after `store::read_verified` of every frame drawn on |
+| The command | `record review` and `session record review`: `RECORD_REVIEW_READS`, the dispatch (no lock, no session directory created), `run_record_review` (`--step` read by `frames_number`, the options by `identity_options` of no flags, the dry-run refusal) (`apps/actinglab/src/commands/session_record.rs`) |
+| The registers | `own_flags::READ_LIST_ROWS` and `reads`, `engine::COMMANDS`, `words::BUILT_SLICES` and the Lab's MCP server's `ACTINGLAB_SLICES` (slice `463-S22`), the capability entries `record review` and `session record review` and their dry-run declarations (mixed: `--no-preview` `no_effect`, without it `dry_run_unsupported`) |
+| The table | the row `record review` (authoring, `runtime: offline`, `writes: true`, `help` 136 bytes), so that the Lab's MCP server offers `ac_record_review`; today's server (`actingctl mcp-serve`) gets nothing |
+| Texts | [lab-recording.md](lab-recording.md), "Reviewing a recording step by step: `record review`" (new), its file list and its opening; [actinglab-dry-run.md](actinglab-dry-run.md), the `record` row; `apps/actinglab-mcp/MANUAL.md`, "Recordings" |
+
+**Codes and words.** None is added and no fragment changes. A frame drawn on whose bytes do not
+match its sha256 is `record_frame_hash_mismatch` (3), as every read of a stored frame answers it,
+and then no preview is written; a step that does not exist, is dropped or was converted is
+`record_step_not_found` (3); no recording to read is `record_session_not_active`,
+`record_lab_unavailable` or `record_instance_mismatch`, as `record ready` answers; a preview that
+cannot be decoded or encoded is `record_frame_unreadable`, as a crop's is. No decision reads a
+code.
+
+**Tests.** `crates/lab/src/gate_463_s22.rs` (exec gate map "#463 S2-2"; S2-5's bench, no
+Runtime, no clock read): each step's before, press and after as the step table holds them, the
+tap's two captures between, no `note` and no `same_screen`; `step` answering one step as the whole
+answer has it and `record_step_not_found`; the seven previews under `lab/preview/` the answer names,
+each of its frame's size, every other file byte for byte; `--no-preview` writing no file; the
+pixels of the press and of a press box's and a recognize box's outline, the next step's box on the
+screen after, the stored frames unchanged; each step's `missing` equal to `record ready`'s items of
+that step; an archived recording reviewed the same, by the session header and by its id; a frame
+file with other bytes refused with no preview written, and the intact step reviewed alone.
+Adapted, as the requirement changes what it pins: `apps/actinglab/src/tests/gate_434_lab5b4.rs`,
+whose list of the own commands that refuse an unknown flag is held equal to `READ_LIST_ROWS` and
+the unrowed lists (34 now, `record review` after `record frames`). No test leaves the gate map.
+
+**What is not changed.** Any recorded file; the step table's format; `record ready`'s answer;
+`record stop`'s decisions and the generator; the recording lock; today's MCP server.
+
+**Fix round 1** (coordinator work order `rd-1116/brief-463-s22-fix1.md`, after the independent
+review of `324f9cad`, "may merge with one change"; main `a91e657c`, the Lab display train #1780,
+merged first; the rules are the coordinator's rulings).
+- *An application operation's outcome* (the review's change). The first build answered `declared`
+  for an operation with attempts and no completed receipt, which may have run. `review::press_of`
+  now names it by `archive::outcome_of`, the judgement the manifest's row `outcome` is (made
+  `pub(crate)`, with `archive::PERFORMED`), in the words `record status` names a click's:
+  `performed` is `executed`, `indeterminate` stays, none is `declared`. No second judgement.
+- *The identity flags of `record ready`.* `record review` reads `--game`, `--server` and `--locale`
+  (`RECORD_REVIEW_READS`, the row's parameters `game`, `server` and `locale`, so
+  `ac_record_review` takes them) and passes them through `session_record::identity_options`, the
+  function `record ready` reads and refuses them with, to the one readiness judgement (`ready_of`).
+  A recording without a locale of its own lists `locale` for the whole recording and runs no
+  self-check; given it, a self-check's refusal reaches the step it names.
+- *A frame file that is not there.* Every path of the answer (`before`, `after`, `between`) is
+  `around::located`'s, `record frames`' (made `pub(crate)`, with `FRAME_FILE_MISSING`): `null`
+  for a missing file, which the answer's new member `warnings` names once in `frame_file_missing`,
+  `record frames`' own warning, with `--no-preview` as without it. Without `--no-preview` a screen
+  before or after whose file is missing is refused as before, `record_frame_hash_mismatch`.
+- *Small things.* The answer's paths are `archive::display`'s (made `pub(crate)`); the copy in
+  `review.rs` is gone. The MCP manual says `steps_total` counts every effective step; the contract
+  says that `--step` evaluates the recording's whole readiness, self-checks included, on every
+  call, and that previews are written anew on every call and never removed by the tool.
+- *Codes and words.* None is added; `frame_file_missing` is `record frames`' warning word (§1.426),
+  not a catalog code. No decision reads a code.
+- *Tests* (`crates/lab/src/gate_463_s22.rs`, eight more, and
+  `apps/actinglab/src/tests/gate_463_s22.rs`, new, one; all in the gate "#463 S2-2"): an
+  application operation with attempts only is `indeterminate`, as its manifest row; a tap and a box
+  at the frame's bottom-right edge and a long press and a box of the whole frame at its top-left,
+  drawn inside the frame; a tap's cross where a long press has none, both rings; a colour mark's
+  region in the marks' colour; an application step with its receipt's screens; a dropped step
+  neither listed nor counted; a frame of another step left out of `between`; a self-check's item on
+  its step once the locale is given, as `record ready` lists it; the command line's refusal of
+  `--dry-run` without `--no-preview` before the recording is read. Adapted: the last test of the
+  first build reads a frame's `path` as nullable.
+
+**At deploy.** Nothing to configure. Recordings already on disk are read as they are: a press an
+earlier build recorded without `before_frame` or `after_frame` answers the step's live frame as its
+screen before and no screen after. Through MCP the tool is `ac_record_review` of the Lab's MCP
+server (`actinglab-mcp`).
+
+**Train** (coordinator work order `rd-1116/brief-463-train-stage2.md`; the train of #463 stage two
+in pull request #1784, which carries this section's head `f7708a61` (#1786), §1.440's `e6bc6fa3`
+(#1784), §1.442's `438f17b0` (#1787) and §1.443's `6c7b3b22` (#1788): main `dc4c3622` merged into
+the branch of #1784, then this section, §1.442 and §1.443 in that order, then main `3a17b927` (the
+release of 0.12.67); the rulings are the coordinator's, not the owner's words). What it changed of
+this section, with §1.440, §1.442 and §1.443:
+- *The one readiness judgement.* `ready_of`, the body of `record ready` this section moved so that
+  `record review` calls it, holds §1.443's judgement (every failure of each self-check, `checks`)
+  and §1.442's pre-check (`select_unrefined`); the merge took §1.443's body with this section's
+  reference to the recording. Neither command keeps a judgement of its own.
+- *A step's `missing`* is every item of that judgement that names the step: a pre-check's,
+  §1.442's `select_unrefined` among them, or, once no pre-check fails, each of §1.443's self-check
+  failures (their `Locus` names the step by the serial number `record mark --step` takes, the
+  number this section filters by); an item that names no step (a part of the identity, an ending's,
+  a template's crop, the package as a whole) is no step's. A failed pre-check runs no self-check
+  (§1.425, kept by §1.443), so the two kinds never stand in one answer.
+- *What a step shows.* The answer's step gains `choice` (`RecordReviewStep::choice`): §1.442's
+  choice mark as the step table holds it, on a step marked as holding a choice, absent otherwise
+  (the row's `output` names it). A refined choice's press is `press` as before, the select's click
+  as the step table holds it. A step §1.440 dropped before the last is no effective step and is not
+  listed, as a dropped last step is not; one `restore_step` gave back is listed again; the step
+  before a dropped one names in `after.step` the dropped step its frame is stored under, whose
+  screen the drop found the same as the one the next effective step was pressed on.
+- *Texts.* [lab-recording.md](lab-recording.md): its summary names the four slices in one
+  paragraph; this section's contract (`choice`, `missing`, `after.step`, dropped and restored steps)
+  and a sentence in "What a recording still lacks: `record ready`" naming the one function; the
+  row `record review`'s `output` and `notes`; the MCP manual's `ac_record_review`. No count the
+  manuals carry changes (only this section adds a row). The outcome-code index, regenerated after
+  the merges and again after those of the 0.12.68 train (§1.438 to §1.446 in one branch), counts
+  3909 active codes, 89 retired, 3998 in all (`--check`: current).
+- *Test* (`crates/lab/src/gate_463_s2_train.rs`; exec gate map row "#463 stage two, train"):
+  `s2_train_each_step_reviews_exactly_its_items_of_the_one_readiness_judgement`, on §1.443's bench
+  (its `Bench`, `INSTANCE`, `EVERY_CHECK` and `complete` made `pub(crate)` for it): step 2 marked as
+  holding a choice and not refined, step 1's mark expecting another colour, the recording's locale
+  taken out of the step table. `record ready` lists the locale (no step) and step 2's
+  `select_unrefined`, runs no self-check and names the seven in `checks_after`; `record review
+  --step k` of each step lists exactly the items that name k, step 2 with its choice mark, no step
+  the locale. With the mark taken off (`choice: false`) and `--locale` given, `record ready` lists
+  step 1's `first_decision` and `cross_check` failures, and `record review` of each step lists
+  exactly its items, step 1 those two. The work order asked for one recording whose one reading
+  lists both kinds; since a failed pre-check runs no self-check, the test reads it twice.
+
+### 1.440 Slice #463 S2-7 (0.12.68): a page transition from frames the recording stored; a press before the last that changed nothing can be dropped (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making, stage two of which turns the recorded material into a package offline, and her ruling of the night of 11-15 that the tool hands back the material and the agent decides; the design's table B1.5, its rows "these frames are a loading screen between two steps" and "this press did nothing"; the rules below are the coordinator's in the work order, not the owner's words; coordinator work order `rd-1116/brief-463-s27-transitions.md`, built on the branch of pull request #1780 at `2ff33cb3`)
+
+This section takes 1.440, the number the work order gives; it stands on pull request #1780 (§1.436,
+§1.437 and their train) and ships in 0.12.68. [lab-recording.md](lab-recording.md), "Transitions"
+and "Steps, frames and remediation", is its contract.
+
+**A transition from stored frames.** A `record mark` request's page transition takes `frame_id` in
+place of `frame`, and `sample_frame_ids` beside `samples`: frames the recording already stored
+(any step's frame, a superseded one included, a page transition's or an ending's), such as the
+loading screen stage one captured between a press and the next step. The request form only; the
+command line's `--transition page` takes files as before. A named frame is found by its id
+(`steps.rs`, `stored_frame`), read back as stored with its sha256 checked, and then taken by
+`admit_frame`, the function that takes a file's frame, with every check of it; the one place the
+two forms meet is `transition_frame`. Its entry in the transition is the stored file itself (the
+same path and sha256: the content-addressed write finds the file there and writes nothing), with a
+frame id of its own, the stored frame's provenance and `source: "recording_frame"`, the word S2-5
+gave a stored frame a step takes as its sample. The package is the one the same image given as a
+file makes: the generator names a transition's frames by their sha256 alone. A file-given transition
+is taken as before, by the same calls.
+
+**A press before the last that changed nothing.** `--drop-step n` (`step_action` `drop_step`)
+takes an effective step before the last one when the stored frames do not contradict that its
+press changed nothing (`steps.rs`, `press_changed_nothing`; fix round 1, below: by two
+comparisons): its press is on record with the stored frame it was sent on and the stored frame
+after it (`before_frame`, `after_frame`, performed, not `sent_on_unstored_capture`); the frame
+after it is the same screen as the frame before it; and the frame the next effective step was
+pressed on (its press's `before_frame`, else its live primary frame) is the same screen too. "The
+same screen" is the measure and bound by which stage one calls a screen still, not a second
+threshold: `frame_unchanged` (`steps.rs`, S2-5's), which asks `unchanged_for` (`recording_api.rs`,
+the after loop's) of `frame_change_milli` and `FRAME_CHANGE_MAX_MILLI`, 1500
+(`crates/recognition/src/color_digest.rs`). The step is then dropped as the last step is (kept in
+the file, `dropped: true`); the generator, which numbers the effective steps wherever a dropped one
+stands, leaves it out: the step before it presses and the run waits for the page of the step after
+it, the screen that press led to. The last effective step is dropped as before, by the same code
+and without these comparisons; before this slice a step before the last was
+`record_step_not_last`.
+
+**Undoing a drop.** The work order says the middle drop "can be undone as the existing drop can";
+no operation undid a drop (a dropped step is no effective step, so `--reopen-step` and every other
+operation refuse it `record_step_not_found`). The request form's `step_action` `restore_step`
+(`StepActionKind::RestoreStep`) is that undo, for any dropped step: it is effective again and,
+when nothing else changed in between, the step table is what it was before the drop but for
+`updated_at_unix_ms`; an id or a template asset
+name of its marks that another mark took since is refused as a new mark's is
+(`record_mark_id_conflict`, `record_asset_name_conflict`), and a step that is no dropped step is
+`record_step_not_found`; nothing is written then.
+
+**`record ready`.** Unchanged: it reads the effective steps, so a dropped step before the last is
+read as a dropped last step is (no item names it, the steps after it carry their package numbers
+without it); no state or word is added. `record review` is not on this branch.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| S27-1 | `transition.frame_id`, `transition.sample_frame_ids` of `actingcommand.lab-record-mark.v1` | request members, absent unless given | S2-7 | `crates/lab` `model.rs` `TransitionSpec::Page` | the request form only; a request without them is byte for byte what it was |
+| S27-2 | `step_action.kind` `restore_step` | request word | S2-7 | `crates/lab` `model.rs` `StepActionKind` | the request form only |
+| S27-3 | a page transition's frame entry taken from a stored frame | values of existing members | S2-7 | `crates/lab` `steps.rs` | `source: "recording_frame"`, the stored file's path and sha256 |
+
+**Codes and words.**
+
+| Name | Kind | Refuses or warns | Exit | Who reads it |
+|---|---|---|---|---|
+| `record_frame_unknown` (`lab`, error / none; no value; actinglab details `step`, `frame_id`) | new code | refuses a page transition whose `frame_id` or `sample_frame_ids` entry the recording does not hold; nothing written | 3 (safety class); 1 on actinglab's own line and through `serve --stdio --front mcp`, as every refusal there | the agent marking a draft, through the request form or `ac_record_mark` |
+| `record_drop_unproven` (`lab`, error / none; value `drop_problem`, required; actinglab details `step`, `before_frame`, `after_frame`, `next_step`, `next_before_frame`, `frame_change_milli` where known) | new code | refuses `drop_step` on a step before the last whose stored frames show a change at its press or do not hold what the comparison needs; nothing written | 3; 1 as above | the agent marking a draft |
+| `drop_problem` (key, `vocab:drop_problem`) and its vocabulary: `frames_not_recorded`, `screen_changed`, `next_screen_differs` | new key, new vocabulary (`crates/lab/src/codes.rs`, `DropProblem`) | the value of `record_drop_unproven` | — | the same agent: which of the three the frames show |
+
+A stored frame whose file no longer holds its sha256 is `record_frame_hash_mismatch`, as every
+stored frame read back. The index is regenerated.
+
+**What is not added.** No record member, schema, ledger revision, interface revision, configuration
+key, command-line flag or MCP parameter; the table changes the `record mark` row's `notes` and its
+`drop_step` note. The generator, `record ready` and stage one's recording are unchanged.
+
+**Tests** (`crates/lab/src/gate_463_s27.rs`; gate map `contracts/test-gates/exec.toml`, the row
+"#463 S2-7"; 160x90 screens, each of its own gray with a square of noise, the presses recorded by
+`record_press` with a fake Runtime): `s27_a_transition_from_a_stored_frame_writes_the_package_a_file_writes`
+(the loading capture named by its id is the transition's frame, the stored file itself, no frame
+file added; `record stop` writes the package the same image given as a file writes, but for the
+generation time); `s27_a_frame_id_the_recording_does_not_hold_is_refused` (as the frame and as a
+sample, nothing written); `s27_a_stored_frame_whose_file_no_longer_holds_its_bytes_is_refused`
+(`record_frame_hash_mismatch`, nothing written); `s27_a_middle_press_that_changed_nothing_is_dropped_renumbered_and_restored`
+(dropped; `restore_step` gives back every file and the step table but for its update time; dropped
+again, the package's steps 1 to 3 are the recorded steps 1, 3 and 4);
+`s27_a_middle_press_whose_screen_after_differs_is_refused` (`screen_changed`, the measure above the
+bound); `s27_a_middle_press_after_which_the_next_step_starts_elsewhere_is_refused`
+(`next_screen_differs`). The last step's drop is pinned, unchanged, by `gate_449_rec_arch`'s
+`s15_fix2_dropped_and_converted_steps_are_listed_and_not_in_the_material`. No test is adapted or
+retired.
+
+**At deploy.** Nothing to configure. An agent can name a stored loading frame as a transition's
+frame and drop a press whose stored frames show no change; everything else is as before.
+
+**Fix round 1** (coordinator work order `rd-1116/brief-463-s27-fix1.md`, its rulings R1 to R3; the
+independent review of pull request #1784 at `4f6b633c`, `rd-1116/review-1784.md`, its two must-fix
+items and its items (d), (h), (k) and (l); the parent pull request #1780 merged, main `a91e657c`
+merged into the branch, the conflicts in `contracts/test-gates/exec.toml`, this register and the
+imports of `crates/lab/src/recording/steps.rs` resolved with both sides kept).
+- *Two comparisons* (R1, review (l)). The whole-frame measure (16 by 9 cells, the mean colour of
+  each, the bound `FRAME_CHANGE_MAX_MILLI`) cannot see a change confined to a cell or two: at
+  1280x720 a cell is 80 by 80 pixels, and a counter, a badge or a switch that a press changed left
+  the press droppable. Now two frames are the same screen for a drop before the last when two
+  comparisons hold, both by that measure and that bound (`frame_unchanged` for each,
+  `steps.rs` `changed_by`): the whole frame (`change_digest`, as before), then the neighbourhood of
+  the press: the press's rectangle as the step table holds it (`pressed_rect`: `click.rect`, a
+  rectangle of one pixel for a press by its point; for a drag, a recorded swipe, the rectangle
+  spanned by `click.rect` and its `to`), grown on every side by `PRESS_REGION_MARGIN_CELLS` (1)
+  cells of the whole-frame grid at the size of the recording's frames (width /
+  `FRAME_CHANGE_COLUMNS` by height / `FRAME_CHANGE_ROWS`, rounded up: 80 by 80 pixels at
+  1280x720, 10 by 10 on the tests' 160x90) and clamped to the frame (`press_region`), the
+  frame-change digest taken over that region (`frame_change_digest` with a region, in
+  `stored_digests`, which reads each stored frame once with its sha256 checked). The same pair
+  applies to the frame the next step was pressed on (`next_screen_differs`), with the neighbourhood
+  of the dropped press. A press whose frames fail either is refused as before, `screen_changed` or
+  `next_screen_differs` ("the stored frames show a change"); the refusal names the comparison that
+  failed first, the whole frame being compared first, by the new key `drop_comparison` (in the
+  details and in the outcome's values): `frame` or `press_region`, and `frame_change_milli` is that
+  comparison's value. A change smaller than the measure sees is still not seen: each comparison
+  sees a change only when it adds up to more than 1.5 of the measure's 93 points a cell on average,
+  so a change confined to two cells is never seen, and a small change away from the press is not
+  seen by either.
+- *Texts* (must-fix 2). [lab-recording.md](lab-recording.md) (the summary and "Steps, frames and
+  remediation"), the MCP manual, the operation table's `record mark` notes and its `drop_step`
+  note, the catalog's texts of `record_drop_unproven`, `drop_problem` and its words, and this
+  section stop saying that the frames prove anything: the tool drops a press before the last only
+  when its stored frames do not contradict that it changed nothing, by the two comparisons; a change
+  smaller than the measure sees is not seen; whether a press mattered is the agent's judgement, the
+  tool only refuses what the frames contradict. The code keeps its name.
+- *`restore_step`* (R2, review (d) and (k)). Its check of ids and asset names is the one
+  `add_marks` makes, two functions with these two callers: `claim_mark_ids` (the id, then a value
+  test's side targets: `record_mark_id_conflict`) and `claim_asset_name`
+  (`record_asset_name_conflict`). A mark it reuses (on its page or on its page transition) or forbids
+  that is no longer an own mark of an effective step is refused as the mark path refuses a missing
+  source: `record_mark_rejected`, `details.marks[]` naming each with `reuse_source_missing` or
+  `forbidden_source_missing`, so that the fault is told at the restore and not by the next command.
+  The contract's sentence on the step table after a restore says "when nothing else changed in
+  between".
+- *Codes and words.*
+
+  | Name | Kind | Refuses or warns | Exit | Who reads it |
+  |---|---|---|---|---|
+  | `drop_comparison` (key, `vocab:drop_comparison`, optional value of `record_drop_unproven`) and its vocabulary: `frame`, `press_region` | new key, new vocabulary (`crates/lab/src/codes.rs`, `DropComparison`) | rides on the refusal `record_drop_unproven` with `screen_changed` or `next_screen_differs` | 3; 1 on actinglab's own line and through `serve --stdio --front mcp`, as before | the agent marking a draft: which comparison saw the change |
+
+  No code is added; the index is regenerated.
+- *Tests* (`crates/lab/src/gate_463_s27.rs`; gate map `exec.toml`, the row "#463 S2-7, fix round
+  1"; no test adapted or retired):
+  `s27_fix1_a_change_near_the_press_the_whole_frame_does_not_see_is_refused` (the cell holding the
+  pressed point painted over, its whole-frame measure above 0 and at most the bound:
+  `screen_changed` with `press_region`, the measure above the bound, nothing written; the test of
+  the second comparison); `s27_fix1_a_small_change_far_from_the_press_is_not_seen_and_the_press_is_dropped`
+  (a cell far from the press painted over: dropped, the stated limit pinned);
+  `s27_fix1_a_press_sent_on_a_capture_that_was_not_stored_is_frames_not_recorded`;
+  `s27_fix1_a_transition_takes_stored_samples_by_their_frame_ids` (the success path of
+  `sample_frame_ids`); `s27_fix1_a_transition_given_a_file_and_a_frame_id_is_refused`
+  (`validation_failed`); `s27_fix1_each_refusal_of_restore_step_writes_nothing` (an effective step
+  and an unknown one, no step, an id and an asset name taken since, a reused and a forbidden mark
+  gone since).
+
+**Train** (as §1.439's "Train": the train of #463 stage two in pull request #1784, this section's
+own, with §1.439 (#1786), §1.442 (#1787) and §1.443 (#1788)). What it changed of this section, or
+found where it meets the others; no code of this section changed:
+- *`record review`* is on the branch now (§1.439): a step this section dropped before the last is
+  not listed, as a dropped last step is not, and one `restore_step` gave back is listed again; the
+  step before a dropped one names in `after.step` the dropped step its frame is stored under.
+  "`record review` is not on this branch" above is history.
+- *The self-checks* (§1.443) run on the package of the effective steps (`generate::survey` reads
+  `effective_steps`), so a step dropped before the last is no step of any of them, as a dropped
+  last step is not.
+- *A step marked as holding a choice* (§1.442) and the drop (corrected by the fix round of the
+  train, below): a step that holds a choice, marked as holding one or refined by a select, is not
+  dropped, the last step too (`record_select_invalid` with `drop_of_choice`), and not converted into
+  a page transition (`transition_of_choice`); nothing is written, and the choice is withdrawn first.
+  The train itself had read neither the mark nor a select in the drop and added no rule, so such a
+  step whose stored frames did not contradict "changed nothing" was dropped as any other press, its
+  `select_unrefined` and its variable gone from `record ready` and the package with it; the fix
+  round's rule replaces that.
+- *Texts.* The summary of [lab-recording.md](lab-recording.md) names this section with the three
+  others in one paragraph, and "What a recording still lacks" keeps this section's bullet on a
+  dropped or converted step after §1.443's sentences on the order.
+
+**Fix round of the train** (coordinator work order `rd-1116/brief-463-train-stage2-fix1.md`; the
+independent review of the train at `e564402b`, `rd-1116/review-train-stage2.md`, its must-fix items 1
+to 3 and three of its further points; the rule is the coordinator's ruling, not the owner's words).
+What this round changed:
+- *A step that holds a choice is not dropped* (the coordinator's ruling; review item 1). The
+  realistic trap: a recorded choice that pressed the item already selected; the stored frames show
+  no change, and the press still matters to a run handed another value. `drop_step` of a step that
+  holds a choice, marked as holding one (§1.442) or refined by a select (`steps.rs`,
+  `holds_choice`), is refused `record_select_invalid` with the new `select_problem` word
+  `drop_of_choice` (the function of that name), `details.step`, nothing written. It is checked once the step
+  is found effective and before anything else of the drop (the last step told from the others,
+  `press_changed_nothing`, the marks found reused), so it holds for the last effective step too: one
+  rule, where until now a last step with a select or a mark was dropped. Its text says how to go on:
+  withdraw the choice first (`choice: false` where the step carries the mark, `clear_select` where a
+  select refines it), then drop. Every other refusal of the drop keeps its code, after this one;
+  `restore_step`, and what a dropped step is to `record review`, `record ready` and the generated
+  package, are unchanged. The reverse order was refused already (a dropped step takes no mark and
+  no select, `record_step_not_found`), and no recording on disk holds a dropped step with a choice:
+  §1.440 and §1.442 ship together in 0.12.68.
+- *Nor converted into a page transition* (review: `--to-transition` reads no mark). `to_transition`
+  of a step that holds a choice is refused `record_select_invalid` with the new word
+  `transition_of_choice` (the function of that name), nothing written. It is checked after every other
+  condition of the conversion, so that each refusal it had keeps its code: a select step has its
+  click and is `record_to_transition_invalid` with `step_has_effect` as before, and the new word
+  meets a step marked as holding a choice without a press (the open last step of an active
+  recording takes the mark), whose mark the conversion dropped silently until now.
+- *Codes and words.*
+
+  | Name | Kind | Refuses or warns | Exit | Who reads it |
+  |---|---|---|---|---|
+  | `drop_of_choice` (vocabulary `select_problem` of the existing `record_select_invalid`, error / none) | new word | refuses `drop_step` of a step that holds a choice, the last step too; nothing written | 3 on a `--via` line (safety); 1 on actinglab's own line and through `serve --stdio --front mcp`, as the code's other words | the agent marking a draft: withdraw the choice first |
+  | `transition_of_choice` (the same vocabulary) | new word | refuses `to_transition` of a step that holds a choice, once every other condition of the conversion is met; nothing written | as `drop_of_choice` | the same agent |
+
+  No code is added; `SelectProblem` (`crates/lab/src/codes.rs`), the catalog's `select_problem`
+  vocabulary and the texts of `record_select_invalid` (`contracts/outcome-codes/lab.json`) name the
+  two words; the index's `--check` says current, so it is not regenerated.
+- *Texts* (review item 2). [lab-recording.md](lab-recording.md): the `select_problem` table's two
+  rows, "Marking a choice first" ("Its rules"), "Steps, frames and remediation" (the drop and the
+  conversion); the operation table's `record mark` notes and its `drop_step` note (`to_transition`
+  has no note); the MCP manual's paragraph of S2-7; this section's and §1.442's "Train" paragraphs,
+  which said the step is dropped and no rule was added. Two lines the review found too long and too
+  short are rewrapped, no word changed: the MCP manual's paragraph of `ac_record_review` and
+  "Reviewing a recording step by step: `record review`".
+- *Tests* (exec gate map, the new row "#463 stage two, train, fix round"):
+  `gate_463_s27.rs` `s27_train_fix_a_step_holding_a_choice_is_dropped_only_once_the_choice_is_withdrawn`
+  (step 2 of three presses whose frames do not contradict "changed nothing", marked as holding a
+  choice, and on a second recording marked and refined by a select beside a template mark:
+  `drop_of_choice` with step 2, every file byte for byte; withdrawn, dropped);
+  `gate_463_r1.rs` `r1_train_fix_a_select_on_the_last_step_is_not_dropped` (the open last step
+  with a select: `drop_of_choice`, the recording byte for byte);
+  `gate_463_s27.rs` `s27_train_fix_a_step_marked_as_holding_a_choice_is_not_converted_into_a_transition`
+  (`transition_of_choice` with step 3, every file byte for byte);
+  `gate_463_s22.rs` `s22_train_fix_a_frame_whose_file_is_gone_has_no_path_and_one_warning`
+  (§1.439's fix round 1, its third item untested until now: with `no_preview`, f0008, step 3's screen
+  after and step 4's screen before, without its file: `path` `null` on both, every other frame its
+  file, `frame_file_missing` naming f0008 once; `step` 4 alone the same). Adapted, because the
+  review's answer 2 found what it could not prove:
+  `s2_train_each_step_reviews_exactly_its_items_of_the_one_readiness_judgement` (§1.439's "Train")
+  now stands on §1.443's bench stopped with its two endings (`Bench::with_endings`,
+  `break_ending_mark`, `BRAVO_KEY` and `BRAVO_MARK` made `pub(crate)` for it), the locale taken out
+  being the one its package was generated with; its second reading adds step 3's mark expecting
+  another colour and the second ending's colour mark expecting white: `record ready` lists step 1's
+  two failures, step 3's `cross_check` and the ending's `record_step_self_mismatch` (no step), and
+  `record review` lists step 1's two on step 1, step 3's on step 3, none on steps 2 and 4, and the
+  ending's on no step. Its first reading is as before. No golden changes; no test leaves a gate map.
+
+### 1.442 Slice #463 S2-6 (0.12.68): a choice in a step, marked first and refined later; its pending item in `record ready` (Workflow #463; the owner's direction on board #463 on 11-15, that a choice inside a step be singled out by marking the step first and refined afterwards, and her approval the same day of the three-stage blueprint of package making; the rules below are the coordinator's rulings in the work order and in the work order of the half-built piece it ports, not the owner's words; coordinator work order `rd-1116/brief-463-s26-select-unrefined.md`, stacked on pull request #1780, the Lab display train)
+
+This section takes 1.442, the number the work order gives; it follows §1.437, the last section of
+its parent. It ships in 0.12.68.
+
+**What it ports.** A piece built before stage one changed the recording base (V4, work order
+`rd-1115/brief-463-v4-select-variable.md`, never pushed) let an agent mark a step as holding a
+choice while recording and refine it later. Stage one now records the business by playing it
+(§1.402 and after: each press a step with its frame before and after), and stage two writes the
+business's meaning on the draft offline, with `record ready` (§1.425) listing what it still lacks.
+This slice brings the piece onto that base: the mark is made on the draft, its pending item is
+`record ready`'s, and what it ported, rewrote and left is listed below.
+
+**The rule** ([lab-recording.md](lab-recording.md), "Marking a choice first").
+- *The mark.* A `record mark` request's `choice` (request form only, as `select`): `true` marks the
+  step as holding a choice, `false` takes the mark off (fix round 1: on a step without the mark
+  `record_select_invalid` with `no_choice`), absent leaves it. The step keeps
+  `choice: {marked_at_unix_ms}` in `recording.json` (`RecordingStep::choice`, `StepChoice`; absent
+  on every step not marked, so a recording without one is byte for byte what it was); a mark given
+  again keeps its time; `record archive` and `record reopen` never rewrite it. The answer of
+  `record mark` (`MarkOutcome::choice`) and the step of `record status` (`StepView::choice`) carry
+  it. The demonstration is the step's own recorded press: a point tap of `tap --record` (`source:
+  "point"`) is taken over by the refining select as any recorded tap is (`declare_select`, R1's
+  path; nothing new).
+- *Its rules* are a select step's, with their words of `record_select_invalid`
+  (`check_select_rules` now holds a step with a select or a choice): not optional, no application
+  operation (also on the application entry step, which a choice is refused on before it needs a
+  frame), no retry, gesture or follow; on the last step of a stopped recording `on_final_step`
+  (`apply_choice`). Beside a transition it is `record_transition_has_click`, beside a step operation
+  `validation_failed`, beside an ending or an inserted optional step `with_other_change` naming
+  `choice` (the lists of other members in `ending.rs` and `inserted.rs`).
+- *Refining* is declaring the step's select, on the active or the stopped recording, the select R1
+  takes as it is; the mark stays beside it. `clear_select` leaves the choice to refine again;
+  `choice: false` on a refined step takes the mark off alone, and the package is the same (fix
+  round 1).
+- *The pending item.* The generator's pre-checks (`generate::survey`, §1.425's one implementation)
+  gain `unrefined_choices`: each effective step with a choice and no select is a failed pre-check,
+  the word `select_unrefined` of `ready_missing`, the refusal `record_select_invalid` with the new
+  `select_problem` word `choice_not_refined`. It is checked after the optional steps' positions and
+  before the select steps' rules, so within its step it comes after the effect and recognition
+  items. `record ready` lists it with its step, its number in the package and the frame its press
+  was sent on; `record stop` (its dry run and its regeneration) answers it as any first failed
+  pre-check, with `details.missing_total` and `details.hint`. A recording with it is a stage-two
+  write (`ready::stage_two_written`).
+- *The wanted value of every select* (fix round 1, the coordinator's ruling R1; the first round
+  declared it for a step marked as a choice only) is a variable of the package: `record stop`
+  declares, for each select step in path order, marked first or given whole, one `ordered` entry of
+  `control.json` `variables` ([package-variables.md](package-variables.md)): its name the select's
+  wanted name, its options the names (each titled by its first alias of 1 to 128 bytes, else its
+  id), 1 to `min(32, names)` values, its default `[wanted.default]`, the order the recording holds;
+  the step's policy document reads it through `keyed_fact` over
+  `session.dispatch.parameter.<name>` (`generate::choice_policy_document`, `choice_variable_json`),
+  one form for every select. A run handed no value chooses what R1's constant chose. The Lab's dry
+  runs of a select (`select::decide`: the mark-time self-test, the first decision, self-check item
+  8) read every variable at its default (`default_run_values`); the pressed name is decided with
+  R1's constant document (`select_policy_document`) holding it alone.
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The mark | `crates/lab/src/recording/model.rs` (`StepChoice`, `RecordingStep::choice`, `MarkRequest::choice`, `MarkOutcome::choice`, `StepView::choice`); `select.rs` (`apply_choice`, `check_select_rules`); `steps.rs` (`apply_marks`: the application entry step, the frame it needs, the mark applied before the rules); `recording_api.rs` (the request's form beside a step operation and a transition; the answer; the status view); `ending.rs`, `inserted.rs` (other members); actinglab's flag form names no `choice` (`session_record.rs`) |
+| The pending item | `generate.rs` (`unrefined_choices` in `survey`); `ready.rs` (`stage_two_written`); `codes.rs` (`ReadyMissing::SelectUnrefined`, `SelectProblem::ChoiceNotRefined`) |
+| The variable | `generate.rs` (`render`: `variables` and the policy of every select step, fix round 1); `select.rs` (`decide` reads `default_run_values`) |
+| Texts | [lab-recording.md](lab-recording.md) (the opening, `recording.json`, `record mark`'s answer, `record status`, "Selecting in a list", the new "Marking a choice first", "Marking after stop", the `record ready` words, "Pre-checks", "Pages and documents"); [package-variables.md](package-variables.md) ("Not built"); [lab-operations.json](lab-operations.json) (the notes of `record mark`'s `request`, `do`'s `mark_request` and `record ready`); `apps/actinglab-mcp/MANUAL.md`; the catalog |
+
+**Codes and words.** No outcome code is added.
+
+| Name | Kind | Refuses or warns | Exit | Who reads it |
+|---|---|---|---|---|
+| `select_unrefined` (vocabulary `ready_missing`) | new word | listed by `record ready`, which refuses nothing by it | 0 | the agent reading `record ready`; its item's `code` is `record_select_invalid` |
+| `choice_not_refined` (vocabulary `select_problem` of the existing `record_select_invalid`, error / none) | new word | refuses `record stop`, its dry run and its regeneration; nothing written | 3 on a `--via` line (safety); 1 on actinglab's own line and through `serve --stdio --front mcp` | the agent stopping the recording: refine the step or take its mark off |
+| `no_choice` (vocabulary `select_problem` of the existing `record_select_invalid`; fix round 1) | new word | refuses `record mark` whose `choice: false` names a step without the mark; nothing written | as `choice_not_refined` | the agent taking a mark off: there is none |
+
+No decision reads a code or a word. The catalog's two vocabularies and the texts of
+`record_select_invalid` are updated and the outcome-code index regenerated.
+
+**Tests** (`crates/lab/src/gate_463_s26.rs`, exec gate map "#463 S2-6"; recordings made as stage
+one makes them, `record_press` with a fake Runtime, on 96x64 lists whose names a scripted OCR
+provider reads): a choice not refined listed by `record ready` (`draft`, `select_unrefined` on
+f0001 alone) and refused by `record stop` and its dry run (`choice_not_refined`, `missing_total` 1,
+the hint, nothing written); refined, `ready`, and the package's variable, its policy reading it, the
+offline simulation tapping the default's slot and the kernel's dry run following a given order; the
+mark kept through `record archive` and `record reopen`; the point tap taken as the demonstration
+(`select_press_mismatch` for a name in the other slot, nothing written; the tap the select's click,
+`click_before` the point tap); a select given whole without the mark (fix round 1: holding the
+variable and the policy of the same select marked first, its run handed no value tapping the
+default's slot as before; the test renamed within this pull request, so none leaves the gate map of
+main). Fix round 1 adds six tests and adapts two R1 tests (below). No golden changes.
+
+**What was ported, rewritten and left.**
+- *Ported:* the request's `choice` and the step's mark with its time; a marked step keeping a
+  select step's rules with their words; `on_final_step` on a stopped recording's last step; the
+  refusals beside a transition, a step operation and an ending; refining by the select R1 takes;
+  the `ordered` variable, its declaration and the policy that reads it.
+- *Rewritten on today's base:* the refusal of `record stop` is a pre-check of `survey` with its
+  `ready_missing` word, answered as the first item with `missing_total`, where V4 refused in `plan`
+  with every step in `details.steps`; inserted optional steps (R4) and boxes (S2-5), which V4 did
+  not know, name or take a choice as their rules say; the pressed name is decided as R1 decides it,
+  with the policy holding it alone, where V4 handed the variable `[pressed]`. The first round
+  declared the variable only for a step marked as a choice; fix round 1 makes every select's wanted
+  value a variable, as V4 did, and adapts two R1 tests as V4 did.
+- *Left:* V4's list `unrefined_choices` beside `record status` (`record ready` is where it is
+  read); V4's `missing` members of a choice (`slots`, `read`, `names`, `match`, `wanted`, always the
+  same five); nothing proposes the choices or their boxes (the owner's rulings of 11-15).
+
+**Fix round 1** (coordinator work order `rd-1116/brief-463-s26-fix1.md`, after the independent
+review `rd-1116/review-1787.md`, the coordinator's rulings R1 to R5; main `a91e657c`, with the
+parent #1780 merged, merged in first).
+
+- *Every choice is a variable* (R1; the review's (l)). The first round's work order kept "a choice
+  fully given in one request as today", which made the mark decide whether a person can set a
+  choice's value: a hidden switch, the coordinator's mistake. `generate::render` now declares the
+  `ordered` variable for every select step (the filter on the mark is gone) and writes every select
+  step's policy document in the variable form (`choice_policy_document`; R1's
+  `select_policy_document` stays the base of that document and the constant the pressed name is
+  decided with). A run handed no value chooses what it chose before: the variable's default
+  `[wanted.default]` keeps the one name R1's gate kept, and the term scores every slot kept alike,
+  so the tie-break decides as before. The mark now means only "this choice is not refined yet".
+  Accepted with it ([lab-recording.md](lab-recording.md), "The wanted value is a variable of the
+  package"): a package generated again from an existing recording with a select gains `variables`
+  and the policy in the variable form, so its content hash changes, and it needs `package` 14; the
+  gate's `on_unknown` is `abort_evaluation` where R1's was `drop_candidate`, with no effect a run can
+  meet (a slot whose name reads no known name is left out before the policy); a recording with more
+  select steps than a package may declare variables (16) is refused at admission, by the existing
+  limit.
+- *Withdrawing a mark* (R2; the review's (m)). `choice: false` on a step without the mark is
+  refused, `record_select_invalid` with the new `select_problem` word `no_choice`, as R2 refuses
+  `clear_select` with nothing to take off (`no_select`); nothing is written. On a refined step it
+  takes off the mark and nothing else: the select stays, and the package is the same with the mark
+  or without it (`select::apply_choice`).
+- *The lint* (R3; the review's (k)). The arm `Some(true)` of `apply_choice` is
+  `step.choice.get_or_insert_with(…)`, which clippy's `collapsible_match` accepts and which keeps
+  the `match` exhaustive.
+- *Texts* (R4; the review's (j) and (l)). [lab-recording.md](lab-recording.md): the opening,
+  "Selecting in a list" (its opening, the `select_problem` table's `no_choice`, the policy document and
+  `control.json` of "What `record stop` generates", the paragraph "The wanted value is a variable of
+  the package" in place of the constant's, the `package` revision), "Marking a choice first" (the
+  mark, refining, what `record stop` generates for a choice) and "Pages and documents";
+  [package-variables.md](package-variables.md) ("Not built" and V4 under "What arrives later");
+  [lab-operations.json](lab-operations.json) (the note of `record mark`'s `request`);
+  `apps/actinglab-mcp/MANUAL.md`; the catalog's `no_choice` and the texts of
+  `record_select_invalid`; the index regenerated.
+- *Tests* (R5; the review's (h) and (m)). Adapted, as the requirement changes what they pin:
+  `gate_463_r1::r1_a_marked_select_is_accepted_generated_and_admitted` (the gate reads the variable,
+  the control declares it with the default `[item_b]`) and
+  `gate_463_r1::r1_a_default_changed_after_stop_regenerates_another_package` (the new default is the
+  variable's `[item_a]`); this slice's test 5 turned the other way round and renamed
+  `s26_a_select_given_whole_without_the_mark_holds_the_same_variable`. New in `gate_463_s26.rs`:
+  `s26_fix1_the_first_name_of_the_order_on_the_screen_is_chosen` (two names in an order, and
+  reversed, pin the term's sign), `s26_fix1_no_name_of_the_order_on_the_screen_ends_on_the_on_empty_key`,
+  `s26_fix1_choice_false_refuses_an_unmarked_step_and_takes_off_only_the_mark`,
+  `s26_fix1_a_marked_step_keeps_each_rule_of_a_select_step` (optional, application, retry, gesture,
+  follow), `s26_fix1_a_choice_is_marked_and_refined_on_a_stopped_recording` and
+  `s26_fix1_a_step_inserted_beside_a_marked_step_leaves_the_mark_where_it_was`; each once in the
+  exec gate map's row "#463 S2-6". No golden changes; no test leaves a gate map of main.
+
+**At deploy.** Nothing to configure. A recording made on an earlier build reads as before; one that
+holds a choice is not read by a build before 0.12.68. Fix round 1: a package `record stop` generates
+again from a recording with a select declares `variables` and needs `package` 14; the Runtime of
+this release admits it.
+
+**Train** (as §1.439's "Train": the train of #463 stage two in pull request #1784, with §1.439
+(#1786), §1.440 (#1784) and §1.443 (#1788)). What it changed of this section, or found where it
+meets the others; no code of this section changed:
+- *`record ready`.* This section's pre-check `select_unrefined` stands in the one readiness
+  judgement (§1.439's `ready_of`, with §1.443's self-checks): a failed pre-check runs no
+  self-check, so a recording with a choice not refined lists no self-check failure until the
+  choice is refined or its mark taken off.
+- *`record review`* (§1.439) lists `select_unrefined` in the `missing` of the step it names, and
+  shows the step's mark (`choice`, as the step table holds it); a refined choice's press is
+  `press`, the select's click as the step table holds it.
+- *The self-checks and the variables* (§1.443). Every check evaluates the generated package with
+  its variables at their defaults: the selects check decides by `select::decide`, which hands the
+  kernel's dry run `default_run_values` (the variable at `[default]`; its run of the pressed name
+  takes R1's document with that name), and the first decision and the final package simulate by
+  `simulate_contained_task_at`, which runs with `default_run_values` too. So a refined choice
+  passes them, as this section's `s26_refining_the_choice_ends_its_item_and_the_package_holds_its_variable`
+  asks (`ready`, nothing missing, nothing in `checks_after`; under §1.443 `checks` names the seven,
+  each complete), read against the joined code.
+- *The drop* (§1.440; corrected by §1.440's "Fix round of the train"): a step that holds a choice,
+  marked as holding one or refined by a select, is not dropped, before the last or as the last
+  (`record_select_invalid` with `drop_of_choice`), and not converted into a page transition
+  (`transition_of_choice`); nothing is written, and the choice is withdrawn first (`choice: false`
+  where the step carries the mark, `clear_select` where a select refines it). So a drop never takes
+  a choice's `select_unrefined` out of `record ready` or its variable out of the package.
+
+### 1.443 Slice #463 S2-1c (0.12.68): `record ready` lists every failure of each self-check, not only the first (Workflow #463; the owner asked on board #463 for one complete list of what a recording still lacks, as the work order's "Why" says; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1116/brief-463-s21c-selfchecks-list-all.md`, begun on the branch of the train of #392 DA-5, #1780, at `b157951c`; it stands on main, into which that train was merged (`a91e657c`), and fix round 1 merged main `dc4c3622`)
+
+This section takes 1.443, the number the work order gives. It ships in 0.12.68.
+
+**Why.** `record ready` (§1.425) lists at once every pre-check a recording fails, but of the
+self-checks `record stop` runs once the pre-checks pass it listed one item: each check stopped at
+its first failure, and that failure ended them all. An agent that fixed one failure and asked again
+got the next: one round per failure.
+
+**The rule.**
+- Each self-check is one implementation with two callers (`crosscheck::Failures`). `record stop`
+  (`Failures::first`) ends at the first failure, which is its refusal, at the place and with the
+  code of before. `record ready` (`Failures::every`) notes each failure and the check goes on to
+  the next thing it judges. An error that is none of a check's verdicts ends the check for both.
+- Under `record ready` a check runs after a failed one when it reads nothing the failed one gave:
+  the first decision, the cross-check, the endings and the selects read only the frames and the
+  admitted package, so each runs whatever the others found; nothing runs after a failed `frames`
+  or `admission`; `final_package`, built of what every check before it gave, runs only when none
+  failed. The running order is that of before.
+- One failure is one item of `missing`: `what` the check, `code` the code `record stop` answers for
+  it, `step`, `artifact_step` and `frame_id` those of the step it is about (`frame_id` stays the
+  step's press frame, as for a pre-check's item), and in `details` where the check met it: `frames`,
+  `page`, `target` (a followed mark, a template whose crop cannot be read back), `outcome_key` with
+  the ending's `page`. An item of the package as a whole has no step and no `details`.
+- Order: the checks' running order; within a check by the step's serial number (items without a
+  step first), then by the first frame named (`f0009` before `f0010`), failures of one step and
+  frame in the order the check met them.
+- The answer's new member `checks[{check, complete, reason?}]` names each check that ran, in the
+  order they ran: `complete: true` when its items are all it has, `complete: false` with `reason`
+  (the new closed vocabulary `ready_check_stop`) when it stopped at its last listed failure. It is
+  empty when a pre-check fails (and on a packaged recording); when every check passed it names the
+  seven, each complete. `checks_after` names the checks that did not run, as before.
+
+**The checks** (for the work order's question: which listed every failure, which stopped at the
+first, and why one cannot go on):
+
+| check | before | now | why it cannot go on past a failure |
+|---|---|---|---|
+| `frames` | the first frame or crop it could not read back | every frame and every crop; any failure ends every later check, which reads every frame | — |
+| `admission` | the first refusal | the first refusal, `complete: false`, `whole_package` | admitted by the kernel, its evaluator: each stage built on the one before, and the kernel answers one refusal (fix round 1: rendering the package is no stage) |
+| `first_decision` | the first frame that failed | every live frame of step 1 a click that follows a mark is simulated on | a click that follows nothing, a select and a package with an application step judge one frame: one failure at most, the list complete |
+| `cross_check` | the first | every page on each of its own frames, every located-text guard on each frame, every optional page against each screen (7a) and the skip target against each optional step (7b); after a failure the arrival gates and the entry overlay, which only warn, are not evaluated | — |
+| `endings` | the first | every ending's page on each of its own frames and against each screen (`record_ending_ambiguous`, `ocr_alone_unchecked`) | — |
+| `selects` | the first | every live frame of every select step | within one frame each part reads the one before: one failure per frame |
+| `final_package` | the first refusal | the first refusal, `complete: false`, `whole_package` | encoded, expanded, admitted and decided again: each stage built on the one before |
+
+Any check but `frames` stops at an error that is none of its verdicts (`check_error`): what it
+would judge after it would be judged on no basis (fix round 1: `admission` and `final_package` too,
+where rendering the package judges nothing; before it, they named such an error `whole_package`).
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The collector | `crates/lab/src/recording/crosscheck.rs`: `Locus`, `CheckFailure`, `CheckRun`, `Failures` (`first`, `every`, `fail`); `first_decision`, `select_first_decision`, `select_checks`, `cross_check`, `optional_checks` and `ending_checks` take `&mut Failures`, a verdict's `return Err` now `failures.fail(…)?`; `FirstDecision::undecided`; `CrossCheck` is `Default` |
+| The running order | `crates/lab/src/recording_api.rs`: `self_checks(plan, ocr, failures)` with `Runner` and `SelfCheckFailures` (`into_refusal`, `record stop`'s refusal; `unreadable`, a `runtime_unavailable` failure `record ready` answers as its own error, as before); `admission`, `final_package` (`FinalPackage`); `load_package_inputs` with `read_package_frame` and `read_crop` |
+| The answer | `crates/lab/src/recording/ready.rs`: `ReadyCheckRun`, `RecordReadyOutcome::checks`, `check_items` (was `check_item`), `check_runs`, `every_check_complete`; `ReadyDetails::frames` and `target`, never read from a pre-check's refusal (`skip_deserializing`), so a pre-check's item is as before |
+| The words | `crates/lab/src/codes.rs`: `ReadyCheckStop` (`ready_check_stop`: `whole_package`, `check_error`); the catalog's vocabulary |
+| Texts | [lab-recording.md](lab-recording.md): "What a recording still lacks: `record ready`" (the second answer, a self-check item's `details`, "Order", "The self-checks" with the table of the two words, the rows `ready` and `packaged`) and "Self-checks" ("Every failure, for `record ready`"); the row `record ready` in [lab-operations.json](lab-operations.json), its output and notes |
+
+**Codes and words.** No outcome code is added. One closed vocabulary is added,
+`ready_check_stop`, two words, one cause each, used by no outcome key: a member of a read that
+exits 0, it neither refuses nor warns. The one decision the slice adds reads a class
+(`runtime_unavailable`), as `record ready` did. The outcome-code index lists codes, so it does not
+change (`ci/outcome_codes_index.py --check` finds it current).
+
+**Tests** (`crates/lab/src/gate_463_s21c.rs`, exec gate map "#463 S2-1c"; a recording made as stage
+one makes it, three taps through `record_press` with a fake Runtime on synthetic 160x90 screens,
+four steps marked with a colour mark each, then one mark broken in the step table; no clock read):
+the marks of steps 2 to 4 expecting another colour: three `cross_check` items by step, each with
+its frame and page, the checks before `final_package` complete, and `record stop --dry-run`
+refused `record_step_self_mismatch` for step 2 on f0003 as before; step 1's mark expecting another
+colour: the `first_decision` item, then the `cross_check` item, and `record stop` refused at the
+first decision; step 2's mark with a negative colour distance: one `admission` item,
+`complete: false` with `whole_package`, every later check in `checks_after`, `record stop` refused
+at admission; nothing broken: `ready`, every check complete. No test is adapted, no golden
+changes, no test leaves a gate map.
+
+**What is not changed.** Any check's decision; what `record stop` refuses and with which code; the
+pre-checks' list; the package generated. No ledger record, configuration key, Runtime interface
+revision or outcome code.
+
+**Fix round 1** (coordinator work order `rd-1116/brief-463-s21c-fix1.md`; the independent review of
+pull request #1788 at `72f6289d`, its points that may change and its list of untested cases (h), with
+the coordinator's dispositions; the rulings are the coordinator's, not the owner's words).
+- *Where a stopped check's own item stands* (review, point 1). The failure a check stopped at
+  (`complete: false`) is its last item, after the failures it met before it, as "stopped at the
+  last of them" says; it no longer sorts first as an item without a step (`ready::check_items`).
+- *One cause per word* (review, (l)). In `admission` and `final_package` rendering the package
+  judges nothing: an error there stops the check with `check_error`, as in every other check;
+  `whole_package` is only a refusal of their staged judgement (admitted by the kernel, its
+  evaluator; encoded, expanded, admitted and decided again). `self_checks` renders before it calls
+  `admission` and `final_package`, which now take the rendered files. Under `record stop` the
+  refusal is the one it was.
+- *Every unreadable slot of a frame* (review, point 3). `select_checks` lists each slot of a frame
+  whose name reads no known name, one failure each, its `target` the target that reads that slot's
+  name (`Plan::select_slot_target_id`, `select/step_ii/slot_kk`), so one read of `record ready`
+  lists them all; `record stop` answers the first, as before.
+- *Point 4 kept.* An ending's page that passes on the frame of a select step after whose press the
+  run awaits the endings is listed by `endings` and by `selects`, one cause in two items; the
+  contract says so.
+- *Texts.* [lab-recording.md](lab-recording.md), "What a recording still lacks": a self-check
+  item's `target` and which items have no `details`; "Order" (the stopped failure last, and that the
+  first item of a check is not necessarily the failure `record stop` answers: `frames` reads the
+  steps' frames before an ending's frames and the crops, and lists those, without a step, first);
+  "The self-checks" (each unreadable slot, point 4, the table of `ready_check_stop`); and "Every
+  failure, for `record ready`". The MCP manual's sentence on `ac_record_ready` says it lists every
+  failure of each self-check. In this section the heading (what the branch stands on), the
+  sentence on the index, the `admission` row and the sentence after the table of the checks.
+- *Tests* (`gate_463_s21c.rs`, exec gate map row "#463 S2-1c, fix round 1"; no test adapted,
+  retired or re-recorded). For the endings the bench is stopped with its package and takes two
+  endings from frames (`alpha`, f0007; `bravo`, with an OCR mark over a patch of a colour only its
+  screen shows, f0008); a scripted OCR model reads no text and fails on a frame showing that
+  colour. `s21c_fix1_failures_that_arrive_out_of_step_order_are_listed_by_step` (step 4's and the
+  first ending's stored frames damaged: the ending's item first; `record stop` refuses step 4's, the
+  first it met), `s21c_fix1_a_check_that_meets_an_error_says_check_error_and_lists_it_last` (the
+  first ending's mark broken, the second ending's OCR read failing: the verdict, then the error,
+  `check_error`), `s21c_fix1_a_final_package_that_stops_is_listed_with_whole_package` (the answer
+  built from runs: the final package is built of the plan, frames and crops every earlier check
+  passed, so no recording reaches its refusal), `s21c_fix1_the_endings_check_lists_every_ending_that_fails`,
+  `s21c_fix1_the_selects_check_lists_every_unread_slot_of_every_frame` (step 2 with a sample and a
+  select of two slots: four items, each with its slot's target) and
+  `s21c_fix1_a_pre_check_item_never_carries_frames_or_target` (a pre-check's refusal whose details
+  name `frames` and `target`: its item has neither).
+- No code, word, key or member is added; no check decides otherwise; the package generated is the
+  same.
+
+**Train** (as §1.439's "Train": the train of #463 stage two in pull request #1784, with §1.439
+(#1786), §1.440 (#1784) and §1.442 (#1787)). What it changed of this section, or found where it
+meets the others:
+- *One judgement, two commands.* The body of `record ready` this section changed is `ready_of`
+  (§1.439), which `record ready` and `record review` call; the merge of this section took its body
+  as it is, with §1.439's reference to the recording (`recording_api.rs`, the one conflict of Rust
+  code in the train). `record review` lists each self-check failure on the step its `Locus` names
+  and a failure of no step (an ending's, a template's crop, the package as a whole) on none.
+- *Choices* (§1.442): the selects check and the first decision evaluate every select step's
+  package variable at its default (§1.442's "Train"), so a refined choice passes them; a choice
+  not refined is a pre-check, and then no self-check runs.
+- *Dropped steps* (§1.440): a step dropped before the last is no step of the package the checks run
+  on, as a dropped last step is not.
+- *The bench.* `gate_463_s21c.rs`'s `Bench` (its field `ocr`, its `marked`, `state`, `break_mark`,
+  `recording`, `write_recording` and `mark_request`), `INSTANCE`, `EVERY_CHECK` and `complete` are
+  `pub(crate)`, for the train's test (§1.439's "Train"); no test of this section changed.
+- *Texts.* In [lab-recording.md](lab-recording.md), "What a recording still lacks", this section's
+  sentences on the order come before §1.440's bullet on a dropped or converted step.
+
+### 1.444 Slice #463 S3-8, S3-9 (0.12.68): a direct run and a trial carry variable values (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, whose stage three puts a trial on a real application under her explicit authorization; the design `rd-1115/pack-stage3-design.md`, §4.2 "S3-8" and "S3-9" with §2.4; the rules below are the coordinator's rulings in the work order and in its take-over, not the owner's words; coordinator work orders `rd-1116/brief-463-s38-run-variables.md` and `rd-1116/brief-463-continue.md`, stacked on the host train #1778, `claude/437-g1-device-hold`)
+
+This section takes 1.444, the number the work order gives. It ships in 0.12.68. The slice was
+begun before the owner's silence of 11-16 and finished from its breakpoint by a second
+implementer.
+
+**Why.** A package may declare variables (`control.json` `variables`, [package-variables.md](package-variables.md)).
+A dispatch hands its run a value for each; a direct run read every default, so a trial of a
+package on a real application could only try the defaults: `standard-pack trial --variable`
+showed the value in its plan and then refused the run (`trial_variables_not_carried`, §1.418).
+
+**The rule.**
+- *The request* (`runtime-client` 11): `ContainedTaskRequest` gains the optional member
+  `variables` (`{name: json}`), absent when empty, so a request without values serializes byte
+  for byte as under revision 10. The contract's check: at most 16 values
+  (`MAX_PACKAGE_VARIABLES`), `invalid_contained_task_variable_count`; each under a name of a
+  variable's form (`remedy_token_valid`), `invalid_contained_task_variable_name`.
+- *The host's judgement* (`check_run_variables`), in the run's preparation after its package and
+  prerequisite chain are read, right after `check_recovery_binding` and before any record, claim
+  or lease, each value in the order of its name: a name the package does not declare,
+  `run_variable_undeclared`; a variable that does not apply on the instance now, as the variable
+  table a dispatch reads says it (`VariableTable::root_word` of the instance's game as the
+  policy's inputs bind it; the table the scheduler workbench keeps with a composed standard pack,
+  else the one the last evaluation's remedy table built, else an empty one; an instance bound to no
+  game `root_unchecked`), `run_variable_not_applying` with that word; a value the dispatch's own
+  function (`resolve_variable`, the value as the application's stored entry set through the
+  request's channel at the Runtime's clock) does not answer `set` without a word,
+  `run_variable_value_refused` with its word (`keys_left_out` included, as `EditGoal` refuses it).
+  Each is Denied, `invalid_request`, with `package_id`, `variable_name` and, for the last two,
+  `variable_problem`; nothing runs.
+- *The overlay*: in `execute_contained_task_with_lease`, the arm of a run without a dispatch whose
+  request gives values reads `default_run_parameters().with_variables(dispatched_variable_values(
+  given))`, the two functions the dispatch's arm of the same `match` calls, so the package reads
+  each value as `session.dispatch.parameter.<name>` exactly as a dispatched one; a variable not
+  given reads its default; a request without values reads `default_run_values()` as before.
+- *The Lab*: `run start` takes `--variable <name>=<json>` (repeatable), read before anything else
+  of the row by `lab_ops::core_ops::parse_variables`, the scan replay's parser moved into
+  `lab-ops` (the replay and the trial call it; it refuses `value_missing`, `not_recognised` and
+  `repeated`), and given to the request; a request the contract's check refuses is `--variable`
+  `not_recognised`; without `--variable` the request is built as before. Its MCP tool takes
+  `variable` as a list.
+- *The trial*: `check_trial_run` refuses nothing for a `--variable` any more (its parameter
+  `request` is gone); the run hands the values to `run start`'s `variable`, each
+  `<name>=<compact JSON>`, and `next`'s collect line repeats them. The record's plan already names
+  every variable with its value and source (`TrialRecordPlan.variables`).
+- *A Runtime below revision 11* (the coordinator's ruling 1 of the take-over): nothing on the wire
+  tells a client the Runtime's revision before a request, so no probe is built and the Lab refuses
+  nothing for it (the owner's rule: no compatibility with what came before; the Lab and the
+  Runtime of an installation come from one build). Such a Runtime cannot decode a request that
+  carries `variables`: it ends the connection, nothing runs, and the client reports the
+  connection ended. The work order's sentence asking the Lab to refuse `--variable` there before
+  anything is sent is set aside.
+- *The run's record*: a direct run records nothing of its values, as it records nothing of its
+  parameters (its command record has no parameters member); recording them needs a new ledger
+  member, which this slice does not add.
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The request | `crates/actingcommand-contract/src/runtime.rs`: `ContainedTaskRequest::variables`, `with_variables`, `validate`; `codes.rs`: the two codes |
+| The declaration | `crates/execution-kernel/src/contained_task/remedies.rs`: `PreparedContainedTask::declared_variables` |
+| The host | `crates/runtime-host/src/host/contained_task.rs`: `check_run_variables`, `run_variable_table`, `run_variable_refused`, the overlay's arm; `codes.rs`: three codes and the location `check_run_variables` |
+| The Lab | `crates/lab-ops/src/core_ops.rs`: `VariableRefusal`, `parse_variables`, `run_variables`, `run_start_request`; `core_reads.rs`: `run start` reads `variable`; `apps/actinglab/src/replay_cli.rs`: `given_variables` calls `parse_variables`; `apps/actinglab/src/standard_pack_cli.rs`: the run's `variable`, the collect line, the option's text |
+| The trial | `crates/resource-tooling/src/standard_pack_trial.rs`: `check_trial_run`; `codes.rs`: `TrialVariablesNotCarried` removed |
+| The declaration of revisions | `distribution/windows/component-interfaces.json`: `runtime-client` [3, 11]; the pins `tools/actinglab-architecture/tests/component_interfaces.rs` (`V0120`) and `crates/lab-rescue/src/install/gate_429_r0b_pairing.rs` |
+| The rows | `run start` and `standard-pack trial` in [lab-operations.json](lab-operations.json): `run start` gains the parameter `variable` (`key_value`, repeatable) and both rows' notes say a run with values needs a Runtime of revision 11 |
+| Texts | [runtime-interface.md](runtime-interface.md), "The variable values of a contained run"; [package-variables.md](package-variables.md), "Built in S3-8, S3-9", "Not built", "Runs without a dispatch" ("A direct run given values"), "Interface", "What arrives later"; [component-interfaces.md](component-interfaces.md), the `runtime-client` row 11; [standard-pack-trial.md](standard-pack-trial.md), the inputs, "The variables", "The run", `next`, "Reading the end later", "Outcome codes"; `apps/actinglab-mcp/MANUAL.md`, section 4 |
+
+**Codes and words.** One cause each; no decision reads a code by name.
+
+| Code | The one situation | Refuses / warns | Exit |
+|---|---|---|---|
+| `invalid_contained_task_variable_count` (contract) | A request's `variables` holds more than 16 values. | refuses (the Runtime: Denied) | no client of this build sends one; actinglab answers `--variable` `out_of_range` (fix round 1; `not_recognised` before), exit 1 |
+| `invalid_contained_task_variable_name` (contract) | A request's `variables` gives a value under a name outside a variable's form. | refuses (the Runtime: Denied) | as above |
+| `run_variable_undeclared` (runtime-host) | The package declares no variable of the name. | refuses, Denied | 1 on actinglab's line |
+| `run_variable_not_applying` (runtime-host) | The variable does not apply on the instance now (`variable_problem` the root's word). | refuses, Denied | 1 |
+| `run_variable_value_refused` (runtime-host) | The variable does not take the value whole (`variable_problem` the judgement's word). | refuses, Denied | 1 |
+| `run_variable_unjudged` (runtime-host; the fix round of the 0.12.68 train, below) | The judgement of the value gave neither the value nor a word, which cannot happen. | refuses, Denied | 1 |
+
+The location `check_run_variables` is added. No vocabulary and no key is added.
+`trial_variables_not_carried` is retired as the catalog retires a code: its fragment entry stays
+with `status` `retired` and `retired_in` `0.12.68` (G9 keeps a released retired entry retired),
+its description beginning "Retired", and its variant leaves the resource tooling's registry (G1
+refuses a retired code still in a registry). The outcome-code index is regenerated.
+
+**Tests.**
+- `crates/actingcommand-contract/src/runtime/gate_463_s38.rs`, contract gate map "#463 S3-8": a
+  request without values is today's byte for byte, alone and in the run's envelope, and revision
+  10's encoding decodes into it (the work order's revision-pair test as ruling 1 makes it); values
+  of the four kinds round-trip and validate; sixteen values pass, seventeen and names out of form
+  are refused with their codes, given and decoded alike.
+- `crates/runtime-host/src/tests/gate_463_s38.rs`, host gate map "#463 S3-8" (composer mode over
+  `gate_463_v2`'s game root, a physical fake instance, one evaluation first): a given value is
+  what the run's snapshots hold; a value the variable does not take, and an undeclared name, are
+  Denied with their code and values, nothing pressed and no run reaching its execution; without
+  values the default.
+- `apps/actinglab/src/tests/gate_463_s38.rs` and `gate_463_s311.rs`'s
+  `s38_a_trial_with_a_value_sends_it_and_its_record_names_it`, exec gate map "#463 S3-8, S3-9":
+  two values reach the request and none sends no member; a repeated name and a right side that is
+  no JSON are refused by the shared parser after the handshake, before any read; a trial's run
+  carries its value, its record's plan names it, and the catalog holds the code retired.
+- Adapted (the requirement changes what they pin): `crates/resource-tooling/src/gate_463_s311.rs`
+  `s311_the_runs_own_refusals_come_after_the_plan_in_their_order` (a `--variable` passes, the
+  kept plan naming it); `apps/actinglab/src/tests/gate_463_s311.rs`
+  `s311_each_run_only_refusal_sends_nothing_and_writes_nothing` (its `--variable` case removed);
+  `gate_429_r0b_pairing`'s two tests ([3, 11], and a console of [3, 10] pairs). No golden changes;
+  no test leaves a gate map.
+
+**What is not changed.** How a dispatch resolves its variables; a run without values (its request
+byte for byte, its behaviour); the trial's plan, its other refusals and its record's shape; the
+ledger; `package`, `actingd-config` and `runtime-outcomes`. `distribution/windows/RELEASE-NOTES.md`
+still names the retired code in the notes of 0.12.65, as released.
+
+**At deploy.** Nothing to configure. The Lab and the Runtime of one build speak revision 11
+together; a run started with values against an older Runtime ends its connection and runs nothing.
+
+**Fix round 1** (coordinator work order `rd-1116/brief-463-s38-fix1.md`, after the independent
+review `rd-1116/review-1789.md`, its six points that may be changed and its section (h)). The slice
+now stands on main `dc4c3622` (#1778 merged) and on the stage-three train,
+`claude/463-s312-adopt-trial-review` (#1783: S3-12 and S3-14, §1.445 and §1.446) at `ae6b11ed`, and
+merges after it.
+
+- *Where it meets the train.* Both change `crates/resource-tooling/src/standard_pack_trial.rs`;
+  both are kept whole: this slice's `check_trial_run(answer)` (no `request`, no refusal of a
+  `--variable`) beside the train's `PackTrialRecord::passed`, `trial_summary` and
+  `content_hash_prefix_of`. The train's one caller of the old signature (`gate_463_s312.rs`,
+  `record_trial_with`) takes the new one in the merge. Nothing names `trial_variables_not_carried`
+  but its retired catalog entry, the texts that say it is retired and the notes of 0.12.65.
+- *Too many values.* `run start` refuses more than 16 `--variable` values
+  (`MAX_PACKAGE_VARIABLES`) as `--variable` `out_of_range` (`run_variables`, after the parser and
+  before anything is read), the word of a count out of its range; the contract's check of the
+  request still refuses them, and at the Lab answers only a name out of form (`not_recognised`).
+- *The table.* `run_variable_table` reads the workbench's table by `standard_pack_variables`, the
+  function the policy cycle reads it by, which copies nothing of the roots
+  (`standard_pack_goal_roots`, which the goal page reads, copies every root).
+- *What cannot be reached.* `check_run_variables` refuses a value with the judgement's word
+  whenever `resolve_variable` names one (`keys_left_out` included); a default without a word, which
+  `resolve_variable` never answers for a given value whose setter is known and whose variable
+  applies, is an `unreachable!` that says so, in place of a silent `type_changed`.
+- *A trial whose run's connection ended before its receipt.* When nothing of the run's receipt came
+  back, not even its header (the client's error holds no received receipt and holds the header
+  read's failure), the answer's `next` is `{unconfirmed: no_receipt}` (the new vocabulary
+  `trial_run_unconfirmed` of the resource tooling, the member `next.unconfirmed`), not the
+  `--collect` line, which would read a run the Runtime never had `not_found` for ever. The client
+  cannot know that nothing was accepted: a Runtime below revision 11 ends the connection of a run
+  with values and runs nothing, and one that stopped while the run was in it ends it too; so the
+  word says what it knows, that the Runtime confirmed nothing. No probe of the Runtime's revision
+  is built. The answer's code, its other members and its exit are as before.
+- *Texts.* [package-variables.md](package-variables.md): the line joined in "Runs without a
+  dispatch" wrapped as its neighbours; "A direct run given values" names `out_of_range`.
+  [runtime-interface.md](runtime-interface.md), the row of `request.variables?`.
+  [standard-pack-trial.md](standard-pack-trial.md), "The run" and `next`.
+  [lab-operations.json](lab-operations.json): `run start`'s `variable`; `standard-pack trial`'s
+  `variable` and `output`.
+- *Codes and words.* No code. One vocabulary, `trial_run_unconfirmed`, one token: `no_receipt`,
+  the run's request written and its connection ended before any of its receipt came back; a
+  member of an answer that is already a refusal (the client's code, exit as before), it refuses
+  and warns nothing by itself. The catalog holds it (vocabularies); the index is regenerated.
+- *Tests.* `crates/actingcommand-contract/src/runtime/gate_463_s38.rs`,
+  `s38_fix1_a_reader_of_revision_ten_refuses_a_request_with_values` (contract gate map, "Workflow
+  #463 S3-8, fix round 1"): the request as revision 10 declared it, `deny_unknown_fields` and no
+  `variables`, reads today's request without values and refuses one with a value, alone and in the
+  run's envelope, naming `variables`. `crates/runtime-host/src/tests/gate_463_s38.rs` (host gate
+  map, "Workflow #463 S3-8, fix round 1"):
+  `s38_fix1_a_variable_that_does_not_apply_is_refused_before_admission` (`goals.json` takes `pick`: `run_variable_not_applying` `goal_name_conflict`),
+  `s38_fix1_a_value_taken_only_in_part_is_refused` (an `ordered` value of which the variable would
+  take a part: `run_variable_value_refused` `keys_left_out`) and
+  `s38_fix1_seventeen_values_in_a_raw_request_are_refused_at_the_door` (a raw request frame:
+  `invalid_contained_task_variable_count`), each with nothing pressed, no run reaching its
+  execution and no `task.package_admitted` more in the ledger; the row's tests 2 and 3 assert the
+  same of the ledger (`Scene::counted`). Adapted (the requirement changes what it pins):
+  `apps/actinglab/src/tests/gate_463_s311.rs`
+  `s311_an_unknown_result_sends_nothing_again_and_writes_no_record` (`next` is `{unconfirmed:
+  no_receipt}`, no collect line). No test leaves a gate map; no golden changes.
+
+**The 0.12.68 train.** This section's branch (pull request #1789) carries the 0.12.68 train: main
+`3a17b927` (0.12.67), #477 PC-1 (§1.438) at `13712223` and #463 stage two (§1.439, §1.440, §1.442,
+§1.443) at `e564402b`, merged in that order onto this slice and stage three (§1.445, §1.446). Since
+§1.442 every choice of a generated package is an `ordered` variable whose default is the recorded
+order; this section's checks take it as they take any declared variable (the trial's plan by
+`PackageVariable::judge`, the host by `resolve_variable`). The tests above pin a refusal of an
+`ordered` value only, of another shape, so the train adds one test:
+`crates/resource-tooling/src/gate_463_s310.rs`,
+`train_01268_a_generated_choice_variable_takes_an_allowed_order_and_refuses_another` (exec gate
+map, "The 0.12.68 train"): a package directory declaring `list_item` as §1.442's own gate shows
+`record stop` writing it (options `item_a` and `item_b`, `min_count` 1, `max_count` 2, default
+`["item_b"]`); a trial's plan given `["item_a", "item_b"]` shows it `given`, and one given
+`["item_a", "item_c"]` is `validation_failed` naming `--variable` with `variable_name`
+`list_item` and `variable_problem` `keys_left_out`. No code, word, key or revision is added.
+
+**Fix round of the 0.12.68 train** (coordinator work order `rd-1116/brief-train-01268-fix1.md`,
+after the independent review of the train, `rd-1116/review-train-01268.md`: its first point and
+its two points that may be changed; on the train's head `61108b17`).
+
+- *What cannot be reached refuses; it does not panic.* The `unreachable!` of `check_run_variables`
+  (fix round 1, "What cannot be reached") is gone: a judgement that gives neither the value nor a
+  word is `run_variable_unjudged`, Denied, `invalid_request`, with `package_id` and
+  `variable_name`, before any record, claim or lease, as the check's other refusals, after them in
+  their order. A panic there was caught at the connection's boundary (`runtime_connection_panicked`)
+  and stopped the whole Runtime, every instance with it; the refusal stops this run alone. The
+  branch still cannot be reached (the host gives an entry whose setter is known and no root word,
+  and `resolve_variable` then answers `set` or the default with a word), so no test reaches it.
+- *Codes.* One code, `run_variable_unjudged` (runtime-host, error / none, pending, since 0.12.68):
+  it refuses, Denied; exit 1 on actinglab's line, as the check's other codes. No key, word,
+  vocabulary or location is added; the index is regenerated. Texts:
+  [runtime-interface.md](runtime-interface.md), "The judgement", its fourth item;
+  [package-variables.md](package-variables.md), "A direct run given values"; this section's table.
+- *A test of stage two that expected too little.* `gate_463_s22.rs`
+  `s22_train_fix_a_frame_whose_file_is_gone_has_no_path_and_one_warning` (§1.440, "Fix round of the
+  train") failed in `exec-tooling`: `record review` named f0003 and f0008, the test f0008 alone.
+  The code is right: frames are stored by their content (`lab/frames/<sha256>.png`), and f0003,
+  step 1's second capture between its press and its screen after, is the same screen as f0008, so
+  one file holds both and moving it away takes f0003's file too. The test now asserts, before the
+  move, that f0003's path is f0008's; after it, that both are `path` `null` wherever they are
+  answered, every other frame keeps its file, and `frame_file_missing` names f0003 and f0008 once
+  each, in the answer's order; `step` 4 alone names f0008 alone. §1.440's line on the test is read
+  with this one; the exec gate map's row says both.
+- *Tests.* The train's test above also gives `["item_b", "item_a"]`, allowed and not in the
+  options' order: the plan holds it as given, in that order (a judgement that sorted it back would
+  fail it); the exec gate map's row says so. New:
+  `crates/runtime-host/src/tests/gate_463_s38.rs`
+  `train_01268_fix1_an_allowed_order_of_a_generated_choice_is_what_the_package_reads` (host gate
+  map, "The 0.12.68 train, fix round"): on S3-8's fixture, the package declaring `list_item` as
+  stage two writes a choice, a direct run given `["item_b", "item_a"]` completes after its one tap
+  and reads `session.dispatch.parameter.list_item` as the rows `{key item_b, rank 1}` and
+  `{key item_a, rank 2}`; `overlaid_pick` now reads through the new `overlaid(scene, key)`.
+  Adapted (the requirement changes what it pins): the s22 test above. No golden changes; no test
+  leaves a gate map.
+
+### 1.445 Slice #463 S3-12 (0.12.68): adoption shows the trial, names the offline review as what it is, and warns before enabling (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, and her rules that a package not run through on a real device stays held and that nothing is enabled without her explicit authorization; the design `rd-1115/pack-stage3-design.md`, §4.2 "S3-12", §2.1 "Missing" items 2 and 4, §2.2 "The value's source", §2.3 and §2.4; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1116/brief-463-s312-adopt-trial-review.md`, read on main `40abd08b`)
+
+This section takes 1.445, the number the work order gives; the numbers between §1.435 and it
+belong to slices dispatched with it. It ships in 0.12.68.
+
+**Why.** Adoption's answer had a member `review.run_through` that sounds as if the package had
+been run; it only meant that the recording passed its offline checks (ruling 2 on #464). An agent
+that adopts could not see whether this very content was ever tried on a real application, though
+`standard-pack trial` (§1.417, §1.418) keeps a record of every trial. So "checked offline" and
+"tried on a device" are told apart by name, the latest trial of this content is shown, and the two
+things the owner's rules require before a pack may run are said at adoption, as warnings, not at
+the moment the placement refuses ([standard-pack-authoring.md](standard-pack-authoring.md), "The
+trial and the two warnings").
+
+**The rule.**
+- *The name.* `review.run_through` is `review.recording_checked`: the same rule (a recording's
+  provenance, the cross-check `passed`, the first decision evaluated, no step needing review), the
+  same refusal `recording_unreviewed` for a class other than `held`; its message says that the
+  recording was not checked offline and that such a class needs one. No member of the old name is
+  left (the owner's rule: the newest is the standard).
+- *The trial.* `review.trial` is the latest trial record of the content the adoption writes into
+  `packs/<package_id>/` (under `--dry-run`, would write), among the records of the package in the
+  state directory the adoption is given (`--state-dir`, actinglab's session directory by default,
+  the trial's own default): `state` `passed`, `failed` or `none` (the new vocabulary
+  `trial_state`), `content_hash_prefix`, `record` (`authorization`, `at_unix_ms`, `request_id`,
+  `end`, and `matched` when the trial named its expected end; absent with `none`) and
+  `other_content` (a record of another content of the same package id is there; it counts for
+  nothing). A trial passed when its run ended normally and, when it named an expected end, on that
+  end. The records are read by the trial's own reader (`trial_records`, the module's reader that
+  `latest_trial_record` calls); the content is named by the trial's own content prefix, the first
+  12 hex digits of the contract crate's `content_directory_digest` of each file's SHA-256, computed
+  by one function of the trial's module (`content_hash_prefix_of`, split out of the plan's reading,
+  which now calls it) over the files adoption writes, which are exactly the files of
+  `packs/<package_id>/` a trial of that directory reads.
+- *Two warnings*, appended to `warnings`, refuse nothing: `enabling_needs_authorization` when a
+  decision gives a class that runs (`business` or `maintenance`), lifting a hold where there was
+  one (the placement asks for `--authorization` and `--enables` naming the package, §1.409); not for
+  a held decision or an adoption without a decision. `not_tried` while no record of this content
+  passed.
+- *`next`* names `ours/model/bindings.json` while the adopted rule has no value yet (it writes no
+  `fixed_value_milli` and `waits_for_value` is answered), whether the checkout holds that file or
+  not: `fixed_value` holds the rule's id, a `value_binding` `{value: "", file: "schedule.json",
+  rule_id, path: "/fixed_value_milli"}` (the entry the model's writer `acmodel bindings apply`
+  writes the model's value by, with `fixed_value_origin: "model"`) and a `hand_entry` `{rule_id,
+  status: "", ref: ""}` (the entry that registers a number written by hand), blank where adopt
+  cannot know the text. Every item of `next` is now `{path}` (a list of texts before), the
+  bindings item with `fixed_value` too.
+
+**Where the design and the code differ.** The design's §4.2 lists `NEXT_FILES` as three items;
+on main it is two (`docs/PACKS.md`, the census row) beside the regression directory, and
+`bindings.json` is not added to it: it is named on another condition (the rule's value, not
+whether the checkout holds the file). The design names `review.trial` with `passed`, `failed` and
+`none` only; this slice adds `review.trial_not_read` (`outcome`, `text`) for a reader that refuses
+the package's records, as §1.412 added `readiness_not_judged`, rather than a new refusal of
+adopt (the brief: its refusals' codes do not change), and `not_tried` is then not warned, since
+whether the content was tried is not known. The design's stale sentences on the model's writer
+(`standard-pack-authoring.md`, "The value's origin"; `standard-pack-schedule.md`, "The fixed
+value") are corrected: the writer is `acmodel bindings apply` (the model's repository,
+`model/contracts/formats.md`, "A value's rule" and "A value written by hand").
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The review, the trial, the warnings, `next` | `crates/resource-tooling/src/adopt.rs`: `RecordingReview::recording_checked`, `trial`, `trial_not_read`; `AdoptTrial`, `AdoptTrialRecord`, `TrialNotRead`; `adopted_trial`; `AdoptNext`, `NextFixedValue`, `NextValueBinding`, `NextHandEntry`; `next_items`; the refusal's message |
+| The content prefix | `crates/resource-tooling/src/standard_pack_trial.rs`: `content_hash_prefix_of`, which the plan's `read_tried_package` and adoption call |
+| Codes and words | `crates/resource-tooling/src/codes.rs`: `EnablingNeedsAuthorization`, `NotTried`, `TrialState`; [outcome-codes/resource-tooling.json](outcome-codes/resource-tooling.json) (the two codes; `adopt_refused`'s text of `recording_unreviewed`); [outcome-codes/catalog.json](outcome-codes/catalog.json) (the vocabulary `trial_state`, the domain `enabling_`); the index regenerated |
+| Texts | [standard-pack-authoring.md](standard-pack-authoring.md): `--state-dir`, "The value's origin", "The checks", "What it writes", "`--dry-run`", "The answer" and its part "The trial and the two warnings"; [standard-pack-schedule.md](standard-pack-schedule.md), "The fixed value"; [lab-operations.json](lab-operations.json), the row `standard-pack adopt` (`state_dir`'s note, `output`, `notes`). The MCP manual names no `run_through` and is not changed |
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| S312-1 | `review.recording_checked` in place of `review.run_through` | Lab answer member renamed | S3-12 | `adopt.rs` | the same rule and refusal |
+| S312-2 | `review.trial` (`state`, `content_hash_prefix`, `record?`, `other_content`), `review.trial_not_read` | Lab answer members | S3-12 | `adopt.rs` | read only; the trial's record and store unchanged |
+| S312-3 | `enabling_needs_authorization`, `not_tried` | outcome codes, warning, class none | S3-12 | `adopt.rs` | key `package_id` (required); exit 0 |
+| S312-4 | `trial_state` (`passed`, `failed`, `none`) | closed vocabulary (no key) | S3-12 | `codes.rs` | the member `review.trial.state` |
+| S312-5 | `next` items `{path, fixed_value?}` | Lab answer member's shape | S3-12 | `adopt.rs` | a list of texts before |
+
+**Codes and words.** Two codes, both warnings (category `warning`, class `none`), riding in the
+answer's `warnings` of an adoption that succeeds, exit 0: `enabling_needs_authorization` (a
+decision of a class that runs; the placement will ask for an authorization and the package named)
+and `not_tried` (no passed trial of the content written is on record). One vocabulary, `trial_state`,
+three words of one member, used by no key. The domain `enabling_` is the resource tooling's. No
+decision reads a code or a word: a trial passed is read from its record's `end.outcome` and
+`matched`; the warnings are written, not read.
+
+**Tests** (`crates/resource-tooling/src/gate_463_s312.rs`, exec gate map "#463 S3-12"; P1's
+made-up repository, the trial's own plan, checks and writer for the records, no Runtime, no clock):
+`s312_the_review_names_the_offline_check_and_no_run_through`,
+`s312_without_a_record_the_trial_is_none_and_not_tried_is_warned` (the prefix is the one the
+trial's plan measures of the directory written),
+`s312_a_passed_record_of_this_content_answers_passed_and_not_tried_is_gone`,
+`s312_a_failed_record_of_this_content_answers_failed_and_not_tried_stays`,
+`s312_a_record_of_other_content_answers_none_and_says_so` (under `--dry-run`),
+`s312_a_decision_that_lifts_a_hold_warns_that_enabling_needs_authorization` and
+`s312_next_names_bindings_json_only_when_the_rule_has_no_value` (under `--dry-run`). Adapted:
+`gate_464_p1`'s `p1_a_first_adoption_writes_the_pack_directory_the_rule_and_the_requires_words`,
+`p1_the_held_and_the_maintenance_classes` and
+`s34_a_first_adoption_by_the_held_reason_writes_what_the_held_document_writes` assert
+`recording_checked` where they asserted `run_through` (the member is renamed, the rule is the
+same). No golden changes; no test leaves a gate map.
+
+**What is not changed.** What adoption checks, writes and refuses (the codes of its refusals);
+the trial's record, its writer, its reader and its store; readiness. Nothing here starts a trial,
+lifts a hold or enables a package.
+
+**At deploy.** Nothing to configure. An agent that adopts sees `recording_checked` where it saw
+`run_through`, the latest trial of the content it adopted, the two warnings, and where a value is
+registered.
+
+**Train** (coordinator work order `rd-1116/brief-463-train-stage3.md`; the train of S3-12 and
+S3-14 in pull request #1783, which carries this section's head `71e6f4b6` and §1.446's `96e6ea2d`,
+merged in that order after main `a91e657c`, then made one by the coordinator's rulings R1 to R7,
+not the owner's words, and the review of #1783). What it changed of this section, with §1.446
+(S3-14):
+- *One judgement of a passed trial (R1).* `PackTrialRecord::passed` in
+  `standard_pack_trial.rs`, beside `unexpected_end`: a trial passed when its run ended on an end the
+  package declares (`end.outcome` `success`) and, where it was given `--expect`, on that end
+  (`matched` not `false`); without an expectation any declared end passes. This section's closure
+  in `adopted_trial` is gone; [standard-pack-trial.md](standard-pack-trial.md), "The record", "A
+  trial that passed", defines it, and [standard-pack-authoring.md](standard-pack-authoring.md)
+  refers to it. The rule is this section's own; §1.446's (`end.outcome` alone) is gone.
+- *One summary of a content's trials (R2).* `AdoptTrial`, `AdoptTrialRecord`, `TrialNotRead` and
+  `adopted_trial` left `adopt.rs`: the trial module's `trial_summary` builds `TrialSummary`
+  (`state`, `content_hash_prefix`, `record` as `TrialReference` {`authorization`, `at_unix_ms`,
+  `request_id`, `end`, `matched?`}, the new `passed_on_record`, `other_content`) or `TrialNotRead`
+  (`outcome`, `text`), which `review.trial` and `review.trial_not_read` answer and §1.446's row
+  answers too. `not_tried` is warned while `passed_on_record` is false; a content that passed once
+  and failed since reads `failed` and `true` (the review's point (l)). The `Serialize` of
+  `TrialState` and the helper `cause_of` moved to the trial module with it. The vocabulary
+  `trial_state`, its enum (this section's names, `NoRecord` for `none`), its catalog entry and its
+  `pub use` are this section's, once; §1.446's copies went in the merge.
+- *Texts.* [standard-pack-authoring.md](standard-pack-authoring.md), "The trial and the two
+  warnings": `passed_on_record`, the reference to the trial's definition, and the sentence on when
+  `next` names `bindings.json` now says what the code does (also for a rule judged by its
+  `produces` and `consumes` whose entry's amount is `"pending"` or whose pool's valuation is
+  `"pending"` or missing); the row `standard-pack adopt` of the operation table; the catalog's
+  texts of `trial_state`.
+- *Tests* (`gate_463_s312.rs`, exec gate map "#463 stage three, the train of S3-12 and S3-14"):
+  `s312_train_an_end_other_than_the_expected_one_is_failed`,
+  `s312_train_passed_once_and_failed_since_shows_both`,
+  `s312_train_an_unreadable_record_answers_trial_not_read`,
+  `s312_train_a_first_business_adoption_warns_enabling_and_a_bare_replace_does_not` and
+  `s312_train_next_items_are_objects_with_a_path` (the review's list (h)). This section's seven
+  tests are unchanged.
+- *What does not move (R7).* What adoption checks, writes and refuses; the trial's records, writer,
+  reader and store; readiness. No code or key is added; no word beyond §1.446's.
+
+### 1.446 Slice #463 S3-14 (0.12.68): `standard-pack status` says where each pack of a game root stands (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making, whose stage three shows each package's states: formed, its running conditions met or what is missing, tried or not, enabled and under which authorization; the design `rd-1115/pack-stage3-design.md`, §2.3 "One read for one package and for a whole game root" and §4.2 "S3-14"; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1116/brief-463-s314-pack-status.md`, read on main `40abd08b`)
+
+The coordinator gave this slice 1.446. It ships in 0.12.68.
+
+**What it is.** To learn where one package stands an agent asked four places: the readiness, the
+hold's reason, the trial records and the placement journals. `actinglab standard-pack status
+--root <game root> [--repo <checkout game root>] [--package-id <id>] [--state-dir <dir>]` is the
+one read, for the part that needs no running installation
+([standard-pack-schedule.md](standard-pack-schedule.md), "Where a pack stands: `standard-pack
+status`"): per pack `formed` (`admitted`, `content_hash_prefix`), `conditions` (the readiness's
+thirteen items, by the one function), `missing` (each failing item, a hold with its reason and
+reference), `trial` (the latest record of this content, by the trial's own reader), `enabled`
+(`state` and the authorization) and `stage_state`; for the root the counts of each `stage_state` and
+each `enabled.state`. It reads only, offline, and writes nothing.
+
+**Where the code corrected the design.**
+- *The journals are not reachable.* Their reader (`crates/lab-rescue`, `install::journal`,
+  `pub(crate)` in a crate built on Windows only) cannot be reached from the module the row lives in:
+  the row's command is actinglab's own (`apps/actinglab/src/standard_pack_cli.rs`), which reaches
+  the rescue module only through its served operations, and the rescue module may not reach the
+  resource tooling, where the readiness and the trial records are read (the architecture guard
+  `production_packages_cannot_reach_resource_tooling`). So, as the work order says for this case:
+  every pack answers `enabled.authorization` `not_recorded` with `enabled.authorization_unrecorded`
+  `journals_not_read`, never an authorization inferred; the row lives in module `authoring`, beside
+  `standard-pack trial`; the journal's part moves to S3-15. The journal's reader is neither moved
+  nor copied.
+- *A fifth word of `enabled.state`, `not_judged`.* When the composer refuses `schedule.json`, the
+  readiness's S2 is not judged (`composition_refused`) and the Runtime keeps the last schedule it
+  accepted ("Last good rules"), so this root does not tell whether a pack is enabled: none of the
+  work order's four words would be true.
+- *What the readiness's answer does not name.* Its rows name neither a pack's directory nor, for a
+  maintenance-role pack that waits, whether a rule names it. `judge_readiness_and_placement`
+  (crate-internal) answers the readiness and, per pack, its directory and its `enabled.state` from
+  the classification S2 read (`Context::enabled_state`, beside `Context::supporting`), in the same
+  reading; `judge_standard_pack_readiness` answers through it, its answer unchanged.
+
+**Decided here** (the design and the work order leave them open). `--repo` is read for one thing:
+`formed.checkout`, the checkout's `packs/<package_id>` and its content prefix, `null` when nothing
+is there. `trial.state` is `passed` when the record's `end.outcome` is `success` (on whichever end;
+`matched` beside), `failed` for `failure` and `cancelled`. `stage_state` `enabled` is `enabled.state`
+`enabled` on an admitted pack; a supporting pack stands `can_be_tried`. The content of a pack whose
+S1 fails and whose directory the containment's reader cannot read is not answered (no prefix, no
+`trial`): the loader reads it by the same reader, so S1 carries the refusal; a directory of a pack
+whose S1 holds that cannot be read refuses the answer (`package_invalid`).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| S314-1 | `standard_pack_status`, `StandardPackStatusRequest`, `StandardPackStatus` and its rows | resource tooling function and answer | S3-14 | `crates/resource-tooling/src/standard_pack_status.rs` (new) | reads only |
+| S314-2 | `judge_readiness_and_placement`, `PackPlacement`, `Context::enabled_state` | crate-internal readiness entry | S3-14 | `standard_pack_ready.rs` | the readiness's judgement and answer unchanged |
+| S314-3 | the row `standard-pack status` (authoring, `runtime: offline`, `writes: false`, slice `463-S3-14`) and its command | operation table row and actinglab command | S3-14 | `contracts/lab-operations.json`, `standard_pack_cli.rs` | `engine::COMMANDS`, `own_flags::STRICT_ROWS` and `REFUSING_COMMANDS`, `words::BUILT_SLICES` and the MCP server's `ACTINGLAB_SLICES`, the help's options, the capability (`offline`, `read_only`), the dry-run declaration (`no_effect`), the command inventory (107) |
+| S314-4 | five vocabularies of the answer's members | outcome catalog (`catalog.json`, `vocabularies`) | S3-14 | `crates/resource-tooling/src/codes.rs` | no code, no key; the index holds codes only and is current |
+
+**Codes and words.** No outcome code and no key. The words, each of an answer member (none
+refuses or warns; the row answers beside `lab_operation_completed`, exit 0):
+
+| Word | The one situation |
+|---|---|
+| `stage_state` `not_admitted` | S1 does not hold |
+| `stage_state` `can_be_tried` | admitted, `enabled.state` not `enabled` |
+| `stage_state` `enabled` | admitted, `enabled.state` `enabled` |
+| `enabled_state` `enabled` | a rule names it and it is not held |
+| `enabled_state` `held` | `schedule.json` holds it, no supporting part |
+| `enabled_state` `not_placed` | no rule, no hold, no supporting part, or no `schedule.json` |
+| `enabled_state` `not_scheduled` | a supporting part no rule dispatches |
+| `enabled_state` `not_judged` | the composer refuses `schedule.json` |
+| `trial_state` `passed`, `failed`, `none` | the latest record of this content ended `success`; `failure` or `cancelled`; no record of this content |
+| `pack_authorization` `not_recorded` | no journal read names the pack |
+| `authorization_unrecorded` `journals_not_read` | the journals were not read: their reader is the rescue module's |
+
+The refusals reuse existing codes: `validation_failed` for a flag off the row, a positional word, a
+flag given twice, an option without its value, `--package-id` the root does not register (with
+`argument` `--package-id`, `argument_problem` `not_recognised`) and `--repo` that is no directory;
+`package_invalid` for a pack directory that cannot be read; `trial_record_unreadable` from the
+trial's reader; the readiness's refusals of the root. No decision reads a code.
+
+**Tests** (`crates/resource-tooling/src/gate_463_s314.rs`, gate map `contracts/test-gates/exec.toml`
+"#463 S3-14"; one installed game root of five packs inside a made-up installation whose `pack_place`
+journal names one pack in `enabled`, and three trial records written by the trial's writer): the
+held pack (`can_be_tried`, `held`, S2 alone missing with its reason and reference); a pack the
+readiness answers `ready_to_place` with the passed trial of its content (the trial's own prefix,
+request, business end and time); the pack the journal names (`enabled`, `not_recorded`,
+`journals_not_read`); a pack no journal names (the same); the counts (each word's count the rows
+with it, five in all); `package_id` (the one row as the whole answer gives it, the root's counts;
+an unknown id `validation_failed` `--package-id` `not_recognised`); a record of other content
+(counts for nothing, a later failed one included); nothing written (the installation, the root and
+the state directory byte for byte); `conditions` equal to `standard-pack ready`'s items and
+`missing` to its failing ones. No existing test changes; none leaves the gate map.
+
+**What is not changed.** The readiness's judgement and answer; the trial's records, writer and
+reader; the journals; the placement; anything on disk. No interface revision, record type, key or
+configuration key.
+
+**At deploy.** Nothing to configure. Through MCP the tool is `ac_standard_pack_status` of the
+Lab's MCP server, listed with the authoring module and served by a `serve` child.
+
+**Train** (coordinator work order `rd-1116/brief-463-train-stage3.md`; the train of S3-12 and
+S3-14 in pull request #1783, which carries §1.445's head `71e6f4b6` and this section's `96e6ea2d`,
+merged in that order after main `a91e657c`, then made one by the coordinator's rulings R1 to R7,
+not the owner's words, and the review of #1785). What it changed of this section, with §1.445
+(S3-12):
+- *The vocabulary collision.* Both slices defined `trial_state` (an enum `TrialState`, its catalog
+  entry, its `pub use`, its `Serialize`). §1.445's is kept, once; this section's went in the merge
+  (`NotTried` is §1.445's `NoRecord`, the word `none` as before).
+- *One judgement of a passed trial (R1).* The row's `trial.state` is judged by
+  `PackTrialRecord::passed`, §1.445's rule ([standard-pack-trial.md](standard-pack-trial.md), "A
+  trial that passed"): a run that ended normally on another end than the one its trial expected is
+  `failed`, no longer `passed`. "Decided here" above no longer holds for `trial.state`.
+- *One summary (R2).* `PackTrial` and `PackTrial::of` are gone: `trial` is the trial module's
+  `TrialSummary` (`state`, `content_hash_prefix`, `record` {`authorization`, `at_unix_ms`,
+  `request_id`, `end`, `matched?`}, `passed_on_record`, `other_content`), §1.445's shape, built by
+  `trial_summary`; the record's members moved under `record`, and `authorization` and
+  `passed_on_record` are new to this row.
+- *One content identity (R3).* `formed.content_hash_prefix` and `formed.checkout` are named by the
+  trial module's `content_hash_prefix_of` over the directory read as a trial reads one
+  (containment's `snapshot_content_directory`); the row's own prefix of `measure_content_hash` is
+  gone (the same digits for a directory). The refusal of an unknown `--package-id` and the
+  absolute path are the trial module's `argument_refused` and `absolute`, each now with two
+  callers; the row's copies are gone.
+- *An unreadable record refuses no root (R4).* A pack one of whose trial records the reader refuses
+  answers `trial_not_read` (`outcome`, `text`; §1.445's one shape and member name) and no `trial`;
+  the other packs are answered. `trial_record_unreadable` no longer refuses the row.
+- *`stage_state` says only what the row knows (R5).* Two words: `not_judged` (admitted, and the
+  composer refuses the root's `schedule.json`, as `enabled.state` `not_judged`) and `supporting`
+  (admitted, a supporting part no rule names, `enabled.state` `not_scheduled`); `can_be_tried` is
+  left for a held pack and one nothing places. The counts `stage_states` follow (`not_admitted`,
+  `not_judged`, `can_be_tried`, `supporting`, `enabled`). A row member `held` (`{reason,
+  reference?}`) shows a pack's hold whenever the accepted `schedule.json` holds it, so a held pack in
+  a supporting role, whose S2 holds by its role, shows it on its own row: `PackPlacement` gains
+  `held`, from `Context::hold_entry`, which `Context::held` now calls too; the readiness's
+  judgement and answer do not change (R7).
+- *The journals (R6).* Still not read, and the texts now say why exactly: their reader is private
+  to the rescue module (`install::journal`, `pub(crate)`) and `crates/lab-rescue` is built for
+  Windows only (the review's correction of "Where the code corrected the design" above; the
+  architecture guard matters only for a row placed in the rescue module). The next slice reads
+  them; nothing of that is built here.
+- *Words.* `stage_state` gains `not_judged` and `supporting`; `authorization_unrecorded`'s
+  `journals_not_read` and `stage_state`'s `can_be_tried` are said again. No code, no key; the index
+  is current.
+- *Texts.* [standard-pack-schedule.md](standard-pack-schedule.md), "Where a pack stands": `held`,
+  `trial`, `trial_not_read`, `stage_state`, `enabled.authorization`, the words, and the sentence on
+  `conditions` (items of a root judged without an installation, so `ready_to_place` at best); the
+  row `standard-pack status` of the operation table; the MCP manual; the command count of both
+  READMEs (107, as the command inventory already says).
+- *Tests* (`gate_463_s314.rs`). Renamed, their placement journal fixture removed (nothing read it):
+  `s314_a_pack_placed_under_a_journal_that_names_it_answers_journals_not_read` is
+  `s314_an_enabled_pack_answers_not_recorded_with_journals_not_read`;
+  `s314_a_pack_that_runs_unnamed_by_any_journal_answers_not_recorded` is
+  `s314_every_pack_answers_not_recorded_with_journals_not_read`, which now asserts the two words
+  for every pack. Adapted: `s314_a_pack_ready_to_place_answers_the_passed_trial_of_its_content`
+  (its passed trial expected the end it reached, `matched` true; then a later trial of that
+  content that ended normally on another end than expected is `failed`, `passed_on_record` true:
+  it tells R1's rule), `s314_the_counts_add_up` (the return-home pack is `supporting`) and
+  `s314_a_trial_record_of_other_content_does_not_count` (the record under `record`, the summary's
+  shape). New (exec gate map "#463 stage three, the train of S3-12 and S3-14"):
+  `s314_train_a_refused_schedule_is_not_judged`, `s314_train_a_pack_no_rule_names_is_not_placed`,
+  `s314_train_a_pack_the_loader_refuses_is_not_admitted`, `s314_train_a_failed_run_answers_failed`,
+  `s314_train_a_supporting_pack_stands_supporting_and_shows_its_hold`,
+  `s314_train_repo_measures_the_checkout_pack` and
+  `s314_train_an_unreadable_record_leaves_only_its_pack_not_read`. None of these names was on main,
+  so none needs a retirement.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
