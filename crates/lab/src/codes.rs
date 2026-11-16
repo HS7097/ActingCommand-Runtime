@@ -90,9 +90,10 @@ actingcommand_contract::outcome_codes! {
         /// `sample_frame_ids`) a frame this recording does not hold; nothing is written (exit 3;
         /// actinglab details `step`, `frame_id`).
         RecordFrameUnknown => "record_frame_unknown": error / none,
-        /// Error. #463 S2-7: `drop_step` names a step before the last whose stored frames do not
-        /// prove that its press changed nothing (key `drop_problem`: why); nothing is written (exit
-        /// 3; actinglab details `step`).
+        /// Error. #463 S2-7: `drop_step` names a step before the last whose stored frames show a
+        /// change at its press or do not hold what the comparison needs (key `drop_problem`: why;
+        /// fix round 1, key `drop_comparison`: which comparison showed the change); nothing is
+        /// written (exit 3; actinglab details `step`).
         RecordDropUnproven => "record_drop_unproven": error / none,
     }
 }
@@ -415,21 +416,37 @@ actingcommand_contract::outcome_vocabulary! {
     }
 }
 
-// #463 S2-7: why the stored frames do not prove that the press of a step before the last changed
-// nothing, so that `drop_step` does not drop it.
+// #463 S2-7: why `drop_step` does not drop a step before the last: the stored frames do not hold
+// what the comparison needs, or they show a change (fix round 1: they contradict that its press
+// changed nothing; the tool refuses only that).
 actingcommand_contract::outcome_vocabulary! {
     /// Why a step before the last cannot be dropped (`drop_problem`).
     pub enum DropProblem: "drop_problem" {
         /// The step has no press on record with the stored frame it was sent on and the stored
         /// frame after it (no click performed by `tap`, `swipe` or `long-tap --record`, a press
-        /// sent on a capture that was not stored, an application operation), or a frame the proof
-        /// needs is not on record.
+        /// sent on a capture that was not stored, an application operation), or a frame the
+        /// comparison needs is not on record.
         FramesNotRecorded => "frames_not_recorded",
-        /// The frame after the press differs from the frame before it by more than the frame-change
-        /// bound.
+        /// The stored frames show a change: the frame after the press differs from the frame
+        /// before it by more than the frame-change bound, by one of the two comparisons
+        /// (`drop_comparison`).
         ScreenChanged => "screen_changed",
-        /// The next step's frame before its press differs from the frame before this press by more
-        /// than the frame-change bound.
+        /// The stored frames show a change: the next step's frame before its press differs from
+        /// the frame before this press by more than the frame-change bound, by one of the two
+        /// comparisons (`drop_comparison`).
         NextScreenDiffers => "next_screen_differs",
+    }
+}
+
+// #463 S2-7 fix round 1 (the coordinator's ruling R1): which of the two comparisons of two stored
+// frames showed the change that `drop_step` refuses a step before the last for.
+actingcommand_contract::outcome_vocabulary! {
+    /// Which comparison showed a change (`drop_comparison`).
+    pub enum DropComparison: "drop_comparison" {
+        /// The whole frame, by the frame-change measure.
+        Frame => "frame",
+        /// The neighbourhood of the press (its rectangle grown by one cell of the whole-frame
+        /// measure's grid on every side, clamped to the frame), by the same measure.
+        PressRegion => "press_region",
     }
 }

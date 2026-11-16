@@ -25,8 +25,9 @@ instance: `record start` pauses the instance's scheduling with a reason of its o
 the recording resumes only that pause ("A recording holds its instance"). #463 S2-1: `record ready`
 lists at once everything a recording still lacks before `record stop` can make its package, and its
 state ("What a recording still lacks: `record ready`"). #463 S2-7: a page transition may name frames
-the recording already stored in place of files, and a press before the last whose stored frames
-prove it changed nothing can be dropped, and given back ("Transitions", "Steps, frames and
+the recording already stored in place of files, and a press before the last can be dropped when
+its stored frames do not contradict that it changed nothing (fix round 1: by two comparisons, the
+whole frame and the neighbourhood of the press), and given back ("Transitions", "Steps, frames and
 remediation").
 
 The recording state lives in the Lab state directory. Nothing in this document writes to
@@ -1416,40 +1417,61 @@ arrival: `record mark --frame` without `--step` then targets that open step exac
 - Without an open step and without `--frame`, `record mark` refuses with
   `record_step_frame_missing`.
 - Remediation acts on the last effective step only (`record_step_not_last`; #463 S2-7: but for
-  `--drop-step` on a step whose press changed nothing, below) and deletes no file:
+  `--drop-step` on a step whose stored frames show no change at its press, below) and deletes no
+  file:
   - `--drop-step n` marks step n `dropped`; its marks free their ids; the previous step is
     unchanged. A mark of step n reused by another step is refused (`record_mark_in_use`).
   - #463 S2-7 (0.12.68; [v012-register.md](v012-register.md) §1.440; stage two of package making on
     board #463, "this press did nothing"): `--drop-step n` also takes an effective step n before the
-    last one when the frames the recording stored prove that its press changed nothing. The proof,
-    all of it from the step table and the stored frames, nothing proposed: step n's press is on
-    record with the stored frame it was sent on and the stored frame after it, as `tap`, `swipe` and
-    `long-tap --record` record a press ("Recording while playing": its execution's `before_frame`
-    and `after_frame`, performed, not `sent_on_unstored_capture`); the frame after it is the same
-    screen as the frame before it; and the frame the next effective step was pressed on (its
-    press's `before_frame`, or, without a press on record, its live primary frame) is the same
-    screen as the frame before step n's press. Two frames are the same screen by the one measure
-    and bound by which stage one calls a screen still ("The screen after"): `frame_change_milli`
-    of the whole frame at most `FRAME_CHANGE_MAX_MILLI`, 1500 ([color-digest.md](color-digest.md)),
-    the function the after loop asks. Every frame is read back with its sha256 checked
+    last one when the frames the recording stored do not contradict that its press changed nothing.
+    Whether a press mattered is the agent's judgement; the tool only refuses what the stored frames
+    contradict, and proposes nothing. What it compares, all of it from the step table and the
+    stored frames: step n's press is on record with the stored frame it was sent on and the stored
+    frame after it, as `tap`, `swipe` and `long-tap --record` record a press ("Recording while
+    playing": its execution's `before_frame` and `after_frame`, performed, not
+    `sent_on_unstored_capture`); the frame after it is the same screen as the frame before it; and
+    the frame the next effective step was pressed on (its press's `before_frame`, or, without a
+    press on record, its live primary frame) is the same screen as the frame before step n's press.
+    Fix round 1 (0.12.68; [v012-register.md](v012-register.md) §1.440, "Fix round 1"): two frames
+    are the same screen when two comparisons hold, both by the one measure and bound by which stage
+    one calls a screen still ("The screen after"): `frame_change_milli` at most
+    `FRAME_CHANGE_MAX_MILLI`, 1500 ([color-digest.md](color-digest.md), its frame-change digest),
+    the function the after loop asks. The first compares the whole frame; the second the
+    neighbourhood of the press: the press's rectangle as the step table holds it (`click.rect`, a
+    rectangle of one pixel for a press by its point; for a swipe the rectangle spanned by its two
+    ends, `click.rect` and the drag's `to`), grown on every side by one cell of the whole-frame
+    measure's grid at the recording's size (its width / 16 by its height / 9, rounded up: 80 by
+    80 pixels at 1280x720) and clamped to the frame, the frame-change digest taken over that
+    region. What neither sees is not seen: each averages the colour of 16 by 9 cells of its region
+    and sees a change only when it adds up to more than 1.5 of the measure's 93 points a cell on
+    average, so a change confined to two cells is never seen; over the whole frame at 1280x720 a
+    cell is 80 by 80 pixels, and a small change away from the press (a counter, a badge or a switch
+    elsewhere) is not seen; in the neighbourhood of a press by its point at 1280x720 (161 by 161
+    pixels) a cell is about 10 by 18 pixels. Every frame is read back with its sha256 checked
     (`record_frame_hash_mismatch`). Then step n is dropped as the last step is: it stays in the file
     with its frames and its press, `dropped: true`; `record stop` leaves it out and numbers the
     effective steps again, so the step before it presses, and the run waits for the page of the
     step after it, which is the screen that press led to. Otherwise `record_drop_unproven` (exit 3,
-    `details{step, drop_problem, outcome, before_frame, after_frame, next_step,
+    `details{step, drop_problem, drop_comparison?, outcome, before_frame, after_frame, next_step,
     next_before_frame, frame_change_milli?}`) and nothing is written: `drop_problem`
     `frames_not_recorded` (no press on record with those two stored frames: a press of `do
     --capture --record`, an application operation, a declared or indeterminate click, a press sent
-    on a capture that was not stored; or a frame the proof names is not on record),
-    `screen_changed` (the frame after the press differs from the frame before it, with the
-    measure's value) or `next_screen_differs` (the next step was pressed on another screen, with
-    the measure's value). The last effective step is dropped as before, without the proof.
+    on a capture that was not stored; or a frame the comparison needs is not on record),
+    `screen_changed` (the stored frames show a change: the frame after the press differs from the
+    frame before it) or `next_screen_differs` (the stored frames show a change: the next step was
+    pressed on another screen). Beside these two, `drop_comparison` (in the details and the
+    outcome's values) names the comparison that showed it, `frame` or `press_region` (the whole
+    frame is compared first), and `frame_change_milli` its value. The last effective step is
+    dropped as before, without these comparisons.
   - #463 S2-7: the request form's `{"kind":"restore_step","step":n}` undoes a drop: step n, a
-    dropped step, is effective again, and the step table is what it was before the drop but for
-    `updated_at_unix_ms`. Its marks take their ids and template asset names back: one another mark
-    took since is refused as a new mark's is (`record_mark_id_conflict`,
-    `record_asset_name_conflict`) and nothing is written; a step that is no dropped step is
-    `record_step_not_found`.
+    dropped step, is effective again, and, when nothing else changed in between, the step table is
+    what it was before the drop but for `updated_at_unix_ms`. Its marks take their ids and template
+    asset names back: one another mark took since is refused as a new mark's is, by the same check
+    (`record_mark_id_conflict`, `record_asset_name_conflict`). Fix round 1: a mark it reuses (on
+    its page or on its page transition) or forbids that is no longer an own mark of an effective
+    step is refused as the mark path refuses a missing source: `record_mark_rejected`,
+    `details.marks[]` naming each with `reuse_source_missing` or `forbidden_source_missing`. A
+    step that is no dropped step is `record_step_not_found`; nothing is written on any refusal.
   - `--reopen-step n` moves the recorded click outcome into `click.attempts[]` and opens
     the step again; the click can be executed again or replaced.
   - `--close-step` closes the open step that has a declared click (not executed, or with an

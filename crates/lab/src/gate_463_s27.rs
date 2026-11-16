@@ -23,8 +23,20 @@
 //   `record_drop_unproven`, `next_screen_differs`; nothing is written.
 // The drop of the last step is pinned, unchanged, by gate_449_rec_arch's
 // `s15_fix2_dropped_and_converted_steps_are_listed_and_not_in_the_material`.
-// Frames are synthetic 160x90 screens of flat gray with squares of gray noise; no Runtime, no
-// device; the tests read no clock and never sleep.
+// Fix round 1 (the coordinator's rulings R1 to R3; register §1.440, "Fix round 1"): two frames are
+// the same screen when the whole frame and the neighbourhood of the press both hold, by the one
+// measure and bound.
+// - `s27_fix1_a_change_near_the_press_the_whole_frame_does_not_see_is_refused`: `screen_changed`
+//   with `drop_comparison` `press_region`; nothing is written.
+// - `s27_fix1_a_small_change_far_from_the_press_is_not_seen_and_the_press_is_dropped`: the stated
+//   limit, pinned.
+// - `s27_fix1_a_press_sent_on_a_capture_that_was_not_stored_is_frames_not_recorded`.
+// - `s27_fix1_a_transition_takes_stored_samples_by_their_frame_ids`: the success path of
+//   `sample_frame_ids`.
+// - `s27_fix1_a_transition_given_a_file_and_a_frame_id_is_refused`: `validation_failed`.
+// - `s27_fix1_each_refusal_of_restore_step_writes_nothing`.
+// Frames are synthetic 160x90 screens of flat gray with squares of gray noise (fix round 1: and a
+// cell painted over); no Runtime, no device; the tests read no clock and never sleep.
 
 use crate::recording::store::{hex_sha256, lab_dir, old_record_path, recording_path};
 use crate::{
@@ -38,7 +50,10 @@ use actingcommand_device::{CaptureBackendName, Frame, PixelFormat};
 use actingcommand_pack_containment::{
     ContainmentLimits, ContentContainer, expand_content_container,
 };
-use actingcommand_recognition::color_digest::FRAME_CHANGE_MAX_MILLI;
+use actingcommand_recognition::Scene;
+use actingcommand_recognition::color_digest::{
+    FRAME_CHANGE_MAX_MILLI, frame_change_digest, frame_change_milli,
+};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, VecDeque};
 use std::fs;
@@ -81,6 +96,21 @@ const IDLE_POINT: (i32, i32) = (150, 80);
 const LOADING: RecordRect = rect(100, 60, 16, 16);
 const LOADING_SEED: u64 = 0x0463_2721;
 const LOADING_BACKGROUND: u8 = 100;
+// Fix round 1: a second loading screen, the same square of noise on another gray.
+const LOADING_LIGHTER_BACKGROUND: u8 = 120;
+// Fix round 1: a point of the first screen away from its button, pressed where the tests of the two
+// comparisons change the screen or not. Its neighbourhood is the point grown by one cell of the
+// whole-frame measure's grid (16 by 9 cells of 10 by 10 pixels on these 160x90 screens) on every
+// side: 45..66 on both axes.
+const QUIET_POINT: (i32, i32) = (55, 55);
+// The cell of the whole-frame grid holding that point: painted over, a change confined to the
+// neighbourhood of the press.
+const NEAR_CELL: RecordRect = rect(50, 50, 10, 10);
+// A cell of the whole-frame grid far from that point: painted over, a change outside the
+// neighbourhood of the press.
+const FAR_CELL: RecordRect = rect(130, 70, 10, 10);
+// The gray a changed cell is painted in (the screens' grays are 60, 100, 120, 140 and 200).
+const BADGE_GRAY: u8 = 250;
 
 // A deterministic generator of neutral gray noise.
 struct Noise(u64);
@@ -95,8 +125,8 @@ impl Noise {
     }
 }
 
-// The PNG of a flat screen of gray `background` with the square `area` of noise of `seed`.
-fn painted(background: u8, area: RecordRect, seed: u64) -> Vec<u8> {
+// The gray values of a flat screen of gray `background` with the square `area` of noise of `seed`.
+fn grays(background: u8, area: RecordRect, seed: u64) -> Vec<u8> {
     let width = WIDTH as usize;
     let mut values = vec![background; width * HEIGHT as usize];
     let mut noise = Noise(seed);
@@ -105,6 +135,29 @@ fn painted(background: u8, area: RecordRect, seed: u64) -> Vec<u8> {
             values[row as usize * width + column as usize] = noise.between(1, 255);
         }
     }
+    values
+}
+
+// The PNG of a flat screen of gray `background` with the square `area` of noise of `seed`.
+fn painted(background: u8, area: RecordRect, seed: u64) -> Vec<u8> {
+    png_of(&grays(background, area, seed))
+}
+
+// Fix round 1: screen `index` with the rectangle `block` painted flat in `gray`, a change confined
+// to it.
+fn touched(index: usize, block: RecordRect, gray: u8) -> Vec<u8> {
+    let width = WIDTH as usize;
+    let mut values = grays(BACKGROUNDS[index], BUTTONS[index], SEEDS[index]);
+    for row in block.y..block.y + block.height {
+        for column in block.x..block.x + block.width {
+            values[row as usize * width + column as usize] = gray;
+        }
+    }
+    png_of(&values)
+}
+
+// The PNG of the gray screen whose values are `values`, row by row.
+fn png_of(values: &[u8]) -> Vec<u8> {
     let pixels = values
         .iter()
         .flat_map(|value| [*value; 3])
@@ -129,6 +182,20 @@ fn screen(index: usize) -> Vec<u8> {
 // The loading screen.
 fn loading() -> Vec<u8> {
     painted(LOADING_BACKGROUND, LOADING, LOADING_SEED)
+}
+
+// Fix round 1: the second loading screen.
+fn loading_lighter() -> Vec<u8> {
+    painted(LOADING_LIGHTER_BACKGROUND, LOADING, LOADING_SEED)
+}
+
+// Fix round 1: the whole-frame measure of two screens, as stage one takes it: the frame-change
+// digest of the whole frame and the measure of the two.
+fn whole_frame_change(older: &[u8], newer: &[u8]) -> u32 {
+    let digest = |png: &[u8]| {
+        frame_change_digest(&Scene::from_png(png).expect("a scene"), None).expect("a digest")
+    };
+    frame_change_milli(&digest(older), &digest(newer)).expect("the measure")
 }
 
 fn request(mut value: Value) -> MarkRequest {
@@ -808,4 +875,309 @@ fn s27_a_middle_press_after_which_the_next_step_starts_elsewhere_is_refused() {
         "{details}"
     );
     assert_eq!(bench.files(), before, "a file changed");
+}
+
+// Fix round 1 (the coordinator's ruling R3; register §1.440, "Fix round 1").
+
+// The screen after a press as three captures, 100, 200 and 300 ms after it, the bound reached at
+// the third.
+fn three_captures_after() -> AfterCapture {
+    AfterCapture {
+        after_ms: 100,
+        interval_ms: Some(100),
+        still_ms: None,
+        still_max_ms: 200,
+    }
+}
+
+// Two presses: the first at `QUIET_POINT` on the first screen, after which the screen is `after`;
+// the second on `after`, after which the screen is the final one. Step 1 is a step before the last.
+fn quiet_press_then(after: &[u8]) -> Bench {
+    let bench = Bench::new();
+    bench.press(
+        &tap_at(QUIET_POINT, one_capture_after()),
+        vec![screen(0), after.to_vec()],
+    );
+    bench.press(
+        &tap_at(POINTS[1], one_capture_after()),
+        vec![after.to_vec(), screen(2)],
+    );
+    bench
+}
+
+// Three presses, the second on the second screen where it changes nothing (its frames before and
+// after it and the third press's frame before it the second screen), then the final screen: steps
+// 1 to 4, no page marked; step 2 can be dropped.
+fn idle_recording() -> Bench {
+    let bench = Bench::new();
+    bench.press(
+        &tap_at(POINTS[0], one_capture_after()),
+        vec![screen(0), screen(1)],
+    );
+    bench.press(
+        &tap_at(IDLE_POINT, one_capture_after()),
+        vec![screen(1), screen(1)],
+    );
+    bench.press(
+        &tap_at(POINTS[1], one_capture_after()),
+        vec![screen(1), screen(2)],
+    );
+    bench
+}
+
+// `restore_step` of `step` (null: none named), which must be refused, every file as it was.
+fn refused_restore(bench: &Bench, step: Value) -> LabError {
+    let before = bench.files();
+    let error = bench
+        .mark(json!({"step_action": {"kind": "restore_step", "step": step}}))
+        .expect_err("a restore_step that is refused");
+    assert_eq!(bench.files(), before, "a file changed");
+    error
+}
+
+// R3, the test of the second comparison: the press at `QUIET_POINT` changed the cell of the
+// whole-frame grid that holds it, a change the whole-frame comparison does not see (the measure of
+// the two screens is above 0 and at most the bound). `drop_step` of it is `record_drop_unproven`
+// with `screen_changed` and `drop_comparison` `press_region`, in the details and in the outcome,
+// the measure's value over the neighbourhood of the press above the bound, and nothing is written.
+#[test]
+fn s27_fix1_a_change_near_the_press_the_whole_frame_does_not_see_is_refused() {
+    let near = touched(0, NEAR_CELL, BADGE_GRAY);
+    let whole = whole_frame_change(&screen(0), &near);
+    assert!(
+        (1..=FRAME_CHANGE_MAX_MILLI).contains(&whole),
+        "the whole-frame measure of the two screens: {whole}"
+    );
+    let bench = quiet_press_then(&near);
+    let before = bench.files();
+    let (problem, details) = unproven(
+        bench
+            .mark(json!({"step_action": {"kind": "drop_step", "step": 1}}))
+            .expect_err("a press that changed its neighbourhood"),
+    );
+    assert_eq!(problem, "screen_changed", "{details}");
+    assert_eq!(details["drop_comparison"], "press_region", "{details}");
+    assert_eq!(
+        details["outcome"]["values"]["drop_comparison"], "press_region",
+        "{details}"
+    );
+    assert!(
+        change_of(&details) > u64::from(FRAME_CHANGE_MAX_MILLI),
+        "{details}"
+    );
+    assert_eq!(bench.files(), before, "a file changed");
+}
+
+// R3, the stated limit pinned as a choice: the press at `QUIET_POINT` left its neighbourhood as it
+// was, and a cell of the whole-frame grid far from it changed, a change the whole-frame comparison
+// does not see (the measure of the two screens is above 0 and at most the bound). Neither
+// comparison sees it: `drop_step` of the press is taken and the step is dropped.
+#[test]
+fn s27_fix1_a_small_change_far_from_the_press_is_not_seen_and_the_press_is_dropped() {
+    let far = touched(0, FAR_CELL, BADGE_GRAY);
+    let whole = whole_frame_change(&screen(0), &far);
+    assert!(
+        (1..=FRAME_CHANGE_MAX_MILLI).contains(&whole),
+        "the whole-frame measure of the two screens: {whole}"
+    );
+    let bench = quiet_press_then(&far);
+    let dropped = bench.marked(json!({"step_action": {"kind": "drop_step", "step": 1}}));
+    assert_eq!(dropped.status, "step_dropped");
+    assert_eq!(dropped.step, Some(1));
+    let stored = bench.recording();
+    assert_eq!(step_of(&stored, 1)["dropped"], true, "{stored}");
+}
+
+// R3: a press sent on a capture its command did not store (the open step carried a mark, made on
+// its stored frame) is not on record with the frame it was sent on: `drop_step` of it is
+// `record_drop_unproven` with `frames_not_recorded`, no `drop_comparison`, and nothing is written.
+#[test]
+fn s27_fix1_a_press_sent_on_a_capture_that_was_not_stored_is_frames_not_recorded() {
+    let bench = Bench::new();
+    bench.press(
+        &tap_at(POINTS[0], one_capture_after()),
+        vec![screen(0), screen(1)],
+    );
+    bench.pages(&[(2, "second", 1)]);
+    bench.press(
+        &tap_at(IDLE_POINT, one_capture_after()),
+        vec![screen(1), screen(1)],
+    );
+    bench.press(
+        &tap_at(POINTS[1], one_capture_after()),
+        vec![screen(1), screen(2)],
+    );
+    let recorded = bench.recording();
+    assert_eq!(
+        step_of(&recorded, 2)["click"]["execution"]["sent_on_unstored_capture"],
+        true,
+        "{recorded}"
+    );
+    let before = bench.files();
+    let (problem, details) = unproven(
+        bench
+            .mark(json!({"step_action": {"kind": "drop_step", "step": 2}}))
+            .expect_err("a press not on record with the frame it was sent on"),
+    );
+    assert_eq!(problem, "frames_not_recorded", "{details}");
+    assert_eq!(details["step"], 2, "{details}");
+    assert_eq!(details["next_step"], 3, "{details}");
+    assert!(details.get("drop_comparison").is_none(), "{details}");
+    assert!(
+        details["outcome"]["values"]
+            .get("drop_comparison")
+            .is_none(),
+        "{details}"
+    );
+    assert_eq!(bench.files(), before, "a file changed");
+}
+
+// R3: the success path of `sample_frame_ids`. The first press took its screen after in three
+// captures: the loading screen, a second loading screen (the same square of noise on another
+// gray), then the second screen. The page transition of step 1 names the first loading capture by
+// `frame_id` and the second by `sample_frame_ids`: its sample is the stored file itself (role
+// `transition_sample`, `source: "recording_frame"`, the stored path and sha256, a frame id of its
+// own), no frame file is added and the stored frame stays as it was.
+#[test]
+fn s27_fix1_a_transition_takes_stored_samples_by_their_frame_ids() {
+    let bench = Bench::new();
+    bench.press(
+        &tap_at(POINTS[0], three_captures_after()),
+        vec![screen(0), loading(), loading_lighter(), screen(1)],
+    );
+    bench.press(
+        &tap_at(POINTS[1], one_capture_after()),
+        vec![screen(1), screen(2)],
+    );
+    bench.pages(&[(1, "first", 0), (2, "second", 1), (3, "done", 2)]);
+    let recorded = bench.recording();
+    let primary = frame_of(&recorded, 2, &loading()).clone();
+    let sample = frame_of(&recorded, 2, &loading_lighter()).clone();
+    let frames_before = frame_files(&bench.files());
+    let marked = bench.marked(loading_transition(json!({
+        "frame_id": primary["frame_id"],
+        "sample_frame_ids": [sample["frame_id"]]
+    })));
+    assert_eq!(marked.step, Some(1));
+    assert_eq!(
+        frame_files(&bench.files()),
+        frames_before,
+        "a frame file was added"
+    );
+    let taken = bench.recording();
+    let frames = step_of(&taken, 1)["transition"]["frames"]
+        .as_array()
+        .expect("the transition's frames");
+    assert_eq!(frames.len(), 2, "{taken}");
+    assert_eq!(frames[0]["sha256"], primary["sha256"], "{taken}");
+    let entry = &frames[1];
+    assert_eq!(entry["role"], "transition_sample", "{taken}");
+    assert_eq!(entry["source"], "recording_frame", "{taken}");
+    assert_eq!(entry["sha256"], sample["sha256"], "{taken}");
+    assert_eq!(entry["path"], sample["path"], "{taken}");
+    assert_ne!(entry["frame_id"], sample["frame_id"], "{taken}");
+    assert_ne!(entry["frame_id"], frames[0]["frame_id"], "{taken}");
+    assert_eq!(
+        frame_of(&taken, 2, &loading_lighter()),
+        &sample,
+        "the stored frame stays as it was"
+    );
+}
+
+// R3: a page transition given both a PNG file (`frame`) and a stored frame (`frame_id`) is
+// `validation_failed`, and nothing is written.
+#[test]
+fn s27_fix1_a_transition_given_a_file_and_a_frame_id_is_refused() {
+    let bench = loading_recording();
+    let recorded = bench.recording();
+    let stored = frame_of(&recorded, 2, &loading())["frame_id"].clone();
+    let png = bench.scratch("loading.png");
+    fs::write(&png, loading()).expect("the loading screen's file");
+    let before = bench.files();
+    let error = bench
+        .mark(loading_transition(json!({
+            "frame": png.display().to_string(),
+            "frame_id": stored
+        })))
+        .expect_err("a file and a frame id");
+    assert_eq!(error.code, "validation_failed", "{}", error.message);
+    assert_eq!(bench.files(), before, "a file changed");
+}
+
+// R3: every refusal of `restore_step`, each with every file as it was: a step that is no dropped
+// step (an effective step, a step the recording does not hold) is `record_step_not_found`, and no
+// step named `validation_failed`; a mark of the dropped step whose id another mark took since is
+// `record_mark_id_conflict`, one whose template asset name another template took since
+// `record_asset_name_conflict`; a mark another step owns that the dropped step reuses, or that its
+// page forbids, taken off that step since, is `record_mark_rejected` naming it with
+// `reuse_source_missing` or `forbidden_source_missing`.
+#[test]
+fn s27_fix1_each_refusal_of_restore_step_writes_nothing() {
+    let drop_step_2 = json!({"step_action": {"kind": "drop_step", "step": 2}});
+    {
+        let bench = idle_recording();
+        for step in [2, 9] {
+            let error = refused_restore(&bench, json!(step));
+            assert_eq!(error.code, "record_step_not_found", "{}", error.message);
+            assert_eq!(error.details.expect("details")["step"], step);
+        }
+        let error = refused_restore(&bench, Value::Null);
+        assert_eq!(error.code, "validation_failed", "{}", error.message);
+    }
+    {
+        let bench = idle_recording();
+        bench.marked(json!({"step": 2, "add": [template("ui/idle", BUTTONS[1])]}));
+        bench.marked(drop_step_2.clone());
+        bench.marked(json!({"step": 3, "add": [template("ui/idle", BUTTONS[1])]}));
+        let error = refused_restore(&bench, json!(2));
+        assert_eq!(error.code, "record_mark_id_conflict", "{}", error.message);
+        let details = error.details.expect("details");
+        assert_eq!(details["id"], "ui/idle", "{details}");
+    }
+    {
+        let bench = idle_recording();
+        bench.marked(json!({"step": 2, "add": [template("ui/idle", BUTTONS[1])]}));
+        bench.marked(drop_step_2.clone());
+        bench.marked(json!({"step": 3, "add": [template("ui_idle", BUTTONS[1])]}));
+        let error = refused_restore(&bench, json!(2));
+        assert_eq!(
+            error.code, "record_asset_name_conflict",
+            "{}",
+            error.message
+        );
+        let details = error.details.expect("details");
+        assert_eq!(details["id"], "ui/idle", "{details}");
+        assert_eq!(details["asset"], "assets/ui_idle.png", "{details}");
+        assert_eq!(details["existing"], "ui_idle", "{details}");
+    }
+    {
+        let bench = idle_recording();
+        bench.marked(json!({"step": 3, "add": [template("ui/third", BUTTONS[1])]}));
+        bench.marked(json!({"step": 2, "reuse": ["ui/third"]}));
+        bench.marked(drop_step_2.clone());
+        bench.marked(json!({"step": 3, "remove": ["ui/third"]}));
+        let error = refused_restore(&bench, json!(2));
+        assert_eq!(error.code, "record_mark_rejected", "{}", error.message);
+        let details = error.details.expect("details");
+        assert_eq!(
+            details["marks"],
+            json!([{"id": "ui/third", "reason": "reuse_source_missing"}]),
+            "{details}"
+        );
+    }
+    {
+        let bench = idle_recording();
+        bench.marked(json!({"step": 1, "add": [template("ui/first", BUTTONS[0])]}));
+        bench.marked(json!({"step": 2, "forbid": ["ui/first"]}));
+        bench.marked(drop_step_2);
+        bench.marked(json!({"step": 1, "remove": ["ui/first"]}));
+        let error = refused_restore(&bench, json!(2));
+        assert_eq!(error.code, "record_mark_rejected", "{}", error.message);
+        let details = error.details.expect("details");
+        assert_eq!(
+            details["marks"],
+            json!([{"id": "ui/first", "reason": "forbidden_source_missing"}]),
+            "{details}"
+        );
+    }
 }

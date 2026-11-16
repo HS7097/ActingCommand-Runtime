@@ -381,11 +381,18 @@ naming this file.
   file is copied, and the package is the one the same image given as a file makes. An id the
   recording does not hold is `record_frame_unknown`. `drop_step` (`step_action` `{"kind":
   "drop_step", "step": n}`, or the row's `drop_step`) takes a step before the last when the stored
-  frames prove its press changed nothing (the frame after it, and the frame the next step was
-  pressed on, are the frame before it by the frame-change measure stage one calls a screen still
-  by); otherwise `record_drop_unproven` with `drop_problem` `frames_not_recorded`,
-  `screen_changed` or `next_screen_differs`. `{"kind": "restore_step", "step": n}` gives a
-  dropped step back. Nothing is proposed: the agent names the frame and the step.
+  frames do not contradict that its press changed nothing: the frame after it, and the frame the
+  next step was pressed on, are the frame before it by two comparisons, each by the frame-change
+  measure stage one calls a screen still by, the whole frame and (fix round 1) the neighbourhood of
+  the press (its rectangle grown by one cell of the whole-frame grid, 80 pixels at 1280x720, on
+  every side). Each comparison averages 16 by 9 cells of its region, so a change confined to one or
+  two of them is not seen: a small change away from the press (a counter, a badge) is not seen.
+  Whether the press mattered is the agent's judgement; the tool refuses only what the frames
+  contradict: `record_drop_unproven` with `drop_problem` `frames_not_recorded`, `screen_changed`
+  or `next_screen_differs`, and for the last two `drop_comparison` `frame` or `press_region`.
+  `{"kind": "restore_step", "step": n}` gives a dropped step back (`record_mark_rejected` when a
+  mark it reuses or forbids is gone since). Nothing is proposed: the agent names the frame and the
+  step.
 - **Offline scenes of another size** (Workflow #392 DA-5cd, 0.12.67, as the train of DA-5ab and
   DA-5cd leaves it; `contracts/display-adapter.md` section 12). `ac_recognize`, `ac_detect_page`,
   `ac_current_page`, `ac_is_visible`, `ac_lab_observe` on a saved scene, `ac_tap_target` and

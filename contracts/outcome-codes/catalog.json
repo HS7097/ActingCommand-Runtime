@@ -2870,7 +2870,11 @@
     },
     "drop_problem": {
       "type": "vocab:drop_problem",
-      "description": "Why the stored frames of a Lab recording do not prove that the press of a step before the last changed nothing, so that record mark's drop_step does not drop it (#463 S2-7, since 0.12.68)."
+      "description": "Why record mark's drop_step does not drop a step before the last of a Lab recording: the stored frames do not hold what the comparison needs, or they show a change at its press (#463 S2-7, since 0.12.68; fix round 1: the tool refuses only what the stored frames contradict, whether the press mattered is the agent's judgement)."
+    },
+    "drop_comparison": {
+      "type": "vocab:drop_comparison",
+      "description": "Which of the two comparisons of two stored frames showed the change for which record mark's drop_step refuses a step before the last (record_drop_unproven with drop_problem screen_changed or next_screen_differs): the whole frame or the neighbourhood of the press (#463 S2-7 fix round 1, since 0.12.68)."
     }
   },
   "vocabularies": {
@@ -10786,7 +10790,7 @@
       }
     },
     "drop_problem": {
-      "description": "Why the stored frames of a Lab recording do not prove that the press of a step before the last changed nothing, the value drop_problem of record_drop_unproven (#463 S2-7, contracts/lab-recording.md \"Steps, frames and remediation\", since 0.12.68). The measure is the one stage one calls a screen still by: frame_change_milli of the whole frame at most FRAME_CHANGE_MAX_MILLI (1500).",
+      "description": "Why record mark's drop_step does not drop a step before the last of a Lab recording, the value drop_problem of record_drop_unproven (#463 S2-7, contracts/lab-recording.md \"Steps, frames and remediation\", since 0.12.68): the stored frames do not hold what the comparison needs, or they show a change. Fix round 1: two frames are the same screen when two comparisons hold, the whole frame and the neighbourhood of the press (its rectangle grown by one cell of the whole-frame grid on every side), each by the measure stage one calls a screen still by, frame_change_milli at most FRAME_CHANGE_MAX_MILLI (1500); a change smaller than that measure sees is not seen, and whether the press mattered is the agent's judgement.",
       "review": "pending",
       "source": {
         "file": "crates/lab/src/codes.rs",
@@ -10794,13 +10798,29 @@
       },
       "tokens": {
         "frames_not_recorded": {
-          "description": "The step has no press on record with the stored frame it was sent on and the stored frame after it (no click performed by tap, swipe or long-tap --record, a press sent on a capture that was not stored, an application operation), or a frame the proof needs is not on record."
+          "description": "The step has no press on record with the stored frame it was sent on and the stored frame after it (no click performed by tap, swipe or long-tap --record, a press sent on a capture that was not stored, an application operation), or a frame the comparison needs is not on record."
         },
         "screen_changed": {
-          "description": "The frame after the press differs from the frame before it by more than the frame-change bound."
+          "description": "The stored frames show a change: the frame after the press differs from the frame before it by more than the frame-change bound, by one of the two comparisons (drop_comparison)."
         },
         "next_screen_differs": {
-          "description": "The next step's frame before its press differs from the frame before this press by more than the frame-change bound."
+          "description": "The stored frames show a change: the next step's frame before its press differs from the frame before this press by more than the frame-change bound, by one of the two comparisons (drop_comparison)."
+        }
+      }
+    },
+    "drop_comparison": {
+      "description": "Which of the two comparisons of two stored frames showed the change for which record mark's drop_step refuses a step before the last, the value drop_comparison of record_drop_unproven beside drop_problem screen_changed or next_screen_differs (#463 S2-7 fix round 1, contracts/lab-recording.md \"Steps, frames and remediation\", since 0.12.68). The whole frame is compared first.",
+      "review": "pending",
+      "source": {
+        "file": "crates/lab/src/codes.rs",
+        "enum": "DropComparison"
+      },
+      "tokens": {
+        "frame": {
+          "description": "The whole frame, by the frame-change measure (a grid of 16 by 9 cells over the frame, the mean colour of each cell)."
+        },
+        "press_region": {
+          "description": "The neighbourhood of the press: its rectangle (a point is a rectangle of one pixel, a swipe the rectangle spanned by its two ends) grown on every side by one cell of the whole-frame grid at the recording's size and clamped to the frame, by the same measure over that region."
         }
       }
     }

@@ -32080,26 +32080,28 @@ file makes: the generator names a transition's frames by their sha256 alone. A f
 is taken as before, by the same calls.
 
 **A press before the last that changed nothing.** `--drop-step n` (`step_action` `drop_step`)
-takes an effective step before the last one when the stored frames prove that its press changed
-nothing (`steps.rs`, `press_changed_nothing`): its press is on record with the stored frame it was
-sent on and the stored frame after it (`before_frame`, `after_frame`, performed, not
-`sent_on_unstored_capture`); the frame after it is the same screen as the frame before it; and the
-frame the next effective step was pressed on (its press's `before_frame`, else its live primary
-frame) is the same screen too. "The same screen" is the measure and bound by which stage one calls
-a screen still, not a second threshold: `frame_unchanged` (`steps.rs`, S2-5's), which asks
-`unchanged_for` (`recording_api.rs`, the after loop's) of `frame_change_milli` and
-`FRAME_CHANGE_MAX_MILLI`, 1500 (`crates/recognition/src/color_digest.rs`). The step is then dropped
-as the last step is (kept in the file, `dropped: true`); the generator, which numbers the effective
-steps wherever a dropped one stands, leaves it out: the step before it presses and the run waits for
-the page of the step after it, the screen that press led to. The last effective step is dropped as
-before, by the same code and without the proof; before this slice a step before the last was
+takes an effective step before the last one when the stored frames do not contradict that its
+press changed nothing (`steps.rs`, `press_changed_nothing`; fix round 1, below: by two
+comparisons): its press is on record with the stored frame it was sent on and the stored frame
+after it (`before_frame`, `after_frame`, performed, not `sent_on_unstored_capture`); the frame
+after it is the same screen as the frame before it; and the frame the next effective step was
+pressed on (its press's `before_frame`, else its live primary frame) is the same screen too. "The
+same screen" is the measure and bound by which stage one calls a screen still, not a second
+threshold: `frame_unchanged` (`steps.rs`, S2-5's), which asks `unchanged_for` (`recording_api.rs`,
+the after loop's) of `frame_change_milli` and `FRAME_CHANGE_MAX_MILLI`, 1500
+(`crates/recognition/src/color_digest.rs`). The step is then dropped as the last step is (kept in
+the file, `dropped: true`); the generator, which numbers the effective steps wherever a dropped one
+stands, leaves it out: the step before it presses and the run waits for the page of the step after
+it, the screen that press led to. The last effective step is dropped as before, by the same code
+and without these comparisons; before this slice a step before the last was
 `record_step_not_last`.
 
 **Undoing a drop.** The work order says the middle drop "can be undone as the existing drop can";
 no operation undid a drop (a dropped step is no effective step, so `--reopen-step` and every other
 operation refuse it `record_step_not_found`). The request form's `step_action` `restore_step`
-(`StepActionKind::RestoreStep`) is that undo, for any dropped step: it is effective again and the
-step table is what it was before the drop but for `updated_at_unix_ms`; an id or a template asset
+(`StepActionKind::RestoreStep`) is that undo, for any dropped step: it is effective again and,
+when nothing else changed in between, the step table is what it was before the drop but for
+`updated_at_unix_ms`; an id or a template asset
 name of its marks that another mark took since is refused as a new mark's is
 (`record_mark_id_conflict`, `record_asset_name_conflict`), and a step that is no dropped step is
 `record_step_not_found`; nothing is written then.
@@ -32119,7 +32121,7 @@ without it); no state or word is added. `record review` is not on this branch.
 | Name | Kind | Refuses or warns | Exit | Who reads it |
 |---|---|---|---|---|
 | `record_frame_unknown` (`lab`, error / none; no value; actinglab details `step`, `frame_id`) | new code | refuses a page transition whose `frame_id` or `sample_frame_ids` entry the recording does not hold; nothing written | 3 (safety class); 1 on actinglab's own line and through `serve --stdio --front mcp`, as every refusal there | the agent marking a draft, through the request form or `ac_record_mark` |
-| `record_drop_unproven` (`lab`, error / none; value `drop_problem`, required; actinglab details `step`, `before_frame`, `after_frame`, `next_step`, `next_before_frame`, `frame_change_milli` where known) | new code | refuses `drop_step` on a step before the last whose stored frames do not prove its press changed nothing; nothing written | 3; 1 as above | the agent marking a draft |
+| `record_drop_unproven` (`lab`, error / none; value `drop_problem`, required; actinglab details `step`, `before_frame`, `after_frame`, `next_step`, `next_before_frame`, `frame_change_milli` where known) | new code | refuses `drop_step` on a step before the last whose stored frames show a change at its press or do not hold what the comparison needs; nothing written | 3; 1 as above | the agent marking a draft |
 | `drop_problem` (key, `vocab:drop_problem`) and its vocabulary: `frames_not_recorded`, `screen_changed`, `next_screen_differs` | new key, new vocabulary (`crates/lab/src/codes.rs`, `DropProblem`) | the value of `record_drop_unproven` | — | the same agent: which of the three the frames show |
 
 A stored frame whose file no longer holds its sha256 is `record_frame_hash_mismatch`, as every
@@ -32146,7 +32148,72 @@ bound); `s27_a_middle_press_after_which_the_next_step_starts_elsewhere_is_refuse
 retired.
 
 **At deploy.** Nothing to configure. An agent can name a stored loading frame as a transition's
-frame and drop a press that did nothing; everything else is as before.
+frame and drop a press whose stored frames show no change; everything else is as before.
+
+**Fix round 1** (coordinator work order `rd-1116/brief-463-s27-fix1.md`, its rulings R1 to R3; the
+independent review of pull request #1784 at `4f6b633c`, `rd-1116/review-1784.md`, its two must-fix
+items and its items (d), (h), (k) and (l); the parent pull request #1780 merged, main `a91e657c`
+merged into the branch, the conflicts in `contracts/test-gates/exec.toml`, this register and the
+imports of `crates/lab/src/recording/steps.rs` resolved with both sides kept).
+- *Two comparisons* (R1, review (l)). The whole-frame measure (16 by 9 cells, the mean colour of
+  each, the bound `FRAME_CHANGE_MAX_MILLI`) cannot see a change confined to a cell or two: at
+  1280x720 a cell is 80 by 80 pixels, and a counter, a badge or a switch that a press changed left
+  the press droppable. Now two frames are the same screen for a drop before the last when two
+  comparisons hold, both by that measure and that bound (`frame_unchanged` for each,
+  `steps.rs` `changed_by`): the whole frame (`change_digest`, as before), then the neighbourhood of
+  the press: the press's rectangle as the step table holds it (`pressed_rect`: `click.rect`, a
+  rectangle of one pixel for a press by its point; for a drag, a recorded swipe, the rectangle
+  spanned by `click.rect` and its `to`), grown on every side by `PRESS_REGION_MARGIN_CELLS` (1)
+  cells of the whole-frame grid at the size of the recording's frames (width /
+  `FRAME_CHANGE_COLUMNS` by height / `FRAME_CHANGE_ROWS`, rounded up: 80 by 80 pixels at
+  1280x720, 10 by 10 on the tests' 160x90) and clamped to the frame (`press_region`), the
+  frame-change digest taken over that region (`frame_change_digest` with a region, in
+  `stored_digests`, which reads each stored frame once with its sha256 checked). The same pair
+  applies to the frame the next step was pressed on (`next_screen_differs`), with the neighbourhood
+  of the dropped press. A press whose frames fail either is refused as before, `screen_changed` or
+  `next_screen_differs` ("the stored frames show a change"); the refusal names the comparison that
+  failed first, the whole frame being compared first, by the new key `drop_comparison` (in the
+  details and in the outcome's values): `frame` or `press_region`, and `frame_change_milli` is that
+  comparison's value. A change smaller than the measure sees is still not seen: each comparison
+  sees a change only when it adds up to more than 1.5 of the measure's 93 points a cell on average,
+  so a change confined to two cells is never seen, and a small change away from the press is not
+  seen by either.
+- *Texts* (must-fix 2). [lab-recording.md](lab-recording.md) (the summary and "Steps, frames and
+  remediation"), the MCP manual, the operation table's `record mark` notes and its `drop_step`
+  note, the catalog's texts of `record_drop_unproven`, `drop_problem` and its words, and this
+  section stop saying that the frames prove anything: the tool drops a press before the last only
+  when its stored frames do not contradict that it changed nothing, by the two comparisons; a change
+  smaller than the measure sees is not seen; whether a press mattered is the agent's judgement, the
+  tool only refuses what the frames contradict. The code keeps its name.
+- *`restore_step`* (R2, review (d) and (k)). Its check of ids and asset names is the one
+  `add_marks` makes, two functions with these two callers: `claim_mark_ids` (the id, then a value
+  test's side targets: `record_mark_id_conflict`) and `claim_asset_name`
+  (`record_asset_name_conflict`). A mark it reuses (on its page or on its page transition) or forbids
+  that is no longer an own mark of an effective step is refused as the mark path refuses a missing
+  source: `record_mark_rejected`, `details.marks[]` naming each with `reuse_source_missing` or
+  `forbidden_source_missing`, so that the fault is told at the restore and not by the next command.
+  The contract's sentence on the step table after a restore says "when nothing else changed in
+  between".
+- *Codes and words.*
+
+  | Name | Kind | Refuses or warns | Exit | Who reads it |
+  |---|---|---|---|---|
+  | `drop_comparison` (key, `vocab:drop_comparison`, optional value of `record_drop_unproven`) and its vocabulary: `frame`, `press_region` | new key, new vocabulary (`crates/lab/src/codes.rs`, `DropComparison`) | rides on the refusal `record_drop_unproven` with `screen_changed` or `next_screen_differs` | 3; 1 on actinglab's own line and through `serve --stdio --front mcp`, as before | the agent marking a draft: which comparison saw the change |
+
+  No code is added; the index is regenerated.
+- *Tests* (`crates/lab/src/gate_463_s27.rs`; gate map `exec.toml`, the row "#463 S2-7, fix round
+  1"; no test adapted or retired):
+  `s27_fix1_a_change_near_the_press_the_whole_frame_does_not_see_is_refused` (the cell holding the
+  pressed point painted over, its whole-frame measure above 0 and at most the bound:
+  `screen_changed` with `press_region`, the measure above the bound, nothing written; the test of
+  the second comparison); `s27_fix1_a_small_change_far_from_the_press_is_not_seen_and_the_press_is_dropped`
+  (a cell far from the press painted over: dropped, the stated limit pinned);
+  `s27_fix1_a_press_sent_on_a_capture_that_was_not_stored_is_frames_not_recorded`;
+  `s27_fix1_a_transition_takes_stored_samples_by_their_frame_ids` (the success path of
+  `sample_frame_ids`); `s27_fix1_a_transition_given_a_file_and_a_frame_id_is_refused`
+  (`validation_failed`); `s27_fix1_each_refusal_of_restore_step_writes_nothing` (an effective step
+  and an unknown one, no step, an id and an asset name taken since, a reused and a forbidden mark
+  gone since).
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

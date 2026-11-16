@@ -3745,3 +3745,16 @@ tests = [
     "actingcommand-lab::lib::gate_463_s27::s27_a_middle_press_after_which_the_next_step_starts_elsewhere_is_refused",
 ]
 incident = ["#463 S2-7"]
+
+# #463 S2-7, fix round 1 (0.12.68; register §1.440, "Fix round 1"; brief rd-1116/brief-463-s27-fix1.md, the coordinator's rulings R1 to R3; review rd-1116/review-1784.md, its items (d), (h), (k) and (l); contracts/lab-recording.md, "Steps, frames and remediation", "Transitions"): two frames are the same screen for a drop before the last when two comparisons hold, both by the frame-change measure and its bound: the whole frame, and the neighbourhood of the press (its rectangle grown on every side by one cell of the whole-frame grid at the recording's size, clamped to the frame); restore_step refuses a mark it reuses or forbids that is gone, and checks ids and asset names by the one check a new mark takes. On 160x90 recordings stage one made, as in the row "#463 S2-7": a press at a point of the first screen after which the cell of the whole-frame grid holding that point is painted over (a change whose whole-frame measure is above 0 and at most 1500): drop_step of it is record_drop_unproven with screen_changed and drop_comparison press_region, in the details and the outcome, the measure above 1500, nothing written (1); the same press after which a cell far from it is painted over (the whole-frame measure above 0 and at most 1500): drop_step drops it (2); a press sent on a capture its command did not store (its open step marked): drop_step is record_drop_unproven with frames_not_recorded, no drop_comparison, nothing written (3); a press whose screen after took three captures (a loading screen, a second loading screen of the same square, the second screen): the transition of step 1 names the first loading capture by frame_id and the second by sample_frame_ids, the sample is the stored file (role transition_sample, source recording_frame, the stored path and sha256, a frame id of its own), no frame file added (4); a transition given both frame and frame_id is validation_failed, nothing written (5); restore_step of an effective step and of a step the recording does not hold is record_step_not_found, of no step validation_failed; of a dropped step one of whose mark ids another mark took since record_mark_id_conflict, whose template asset name another template took since record_asset_name_conflict, that reuses a mark taken off its step since record_mark_rejected with reuse_source_missing, whose page forbids a mark taken off its step since record_mark_rejected with forbidden_source_missing; nothing written by any of them (6).
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-lab::lib::gate_463_s27::s27_fix1_a_change_near_the_press_the_whole_frame_does_not_see_is_refused",
+    "actingcommand-lab::lib::gate_463_s27::s27_fix1_a_small_change_far_from_the_press_is_not_seen_and_the_press_is_dropped",
+    "actingcommand-lab::lib::gate_463_s27::s27_fix1_a_press_sent_on_a_capture_that_was_not_stored_is_frames_not_recorded",
+    "actingcommand-lab::lib::gate_463_s27::s27_fix1_a_transition_takes_stored_samples_by_their_frame_ids",
+    "actingcommand-lab::lib::gate_463_s27::s27_fix1_a_transition_given_a_file_and_a_frame_id_is_refused",
+    "actingcommand-lab::lib::gate_463_s27::s27_fix1_each_refusal_of_restore_step_writes_nothing",
+]
+incident = ["#463 S2-7"]
