@@ -1783,9 +1783,48 @@ its instance").
   pixel at its point, `rect {x, y, 1, 1}`, `source: "point"`, rule `explicit` (a long press with
   `gesture{kind: "long_press", duration_ms}`, ending where it began); a swipe is the recorded swipe
   of "`--record` on device commands" (a drag between boxes of one pixel, `source: "swipe"`). The
-  input is sent once through the Runtime's input proxy, with its own lease as `tap` takes it and the
-  frame reference of the capture before it: a tap, one long tap or one swipe, as the kernel presses
-  the click the recording generates for it.
+  input is sent once through the Runtime's input proxy, with the frame reference of the capture
+  before it: a tap, one long tap or one swipe, as the kernel presses the click the recording
+  generates for it. The proxy's lease is the recorded press's ("The lease of a recorded press").
+- **The lease of a recorded press** (#463 S1-9, 0.12.66; the owner asked on board #463 that the
+  captures after a recorded press be close together, so that stage two can show the frames of the
+  transition; the rules here are the coordinator's). The press's first input takes the instance's
+  input lease as `tap` takes it; the one retry ("When the frame is gone before the press") is sent
+  through the same proxy under the same lease, so a recorded press takes one lease. The lease is
+  held while the screen after the press is captured and released once those captures are done,
+  whatever the outcome: after the loop's last capture (still or at its bound), after a capture
+  that could not be taken (what was taken is recorded first, "The screen after"), and at once when
+  no capture follows the press (an indeterminate press, a refused input, or a refusal of the
+  recording after the lease was taken). The answer's `input_outcome.close_stage` (and
+  `close_error`) says what the release did, filled once it is done; a release that fails, a
+  renewal of the lease that failed while it was held included, is a failure after a performed
+  press ("The screen after"); beside any other error it is in that error's `input_outcome`, and in
+  its message as well when the error carried no input outcome. A press without
+  `--record` and `session app … --record` keep their leases as before.
+  - *Why.* While two or more registered instances use Nemu, every lease end closes the instance's
+    device session (the multi-Nemu gate, `keeps_device_session`,
+    `crates/runtime-host/src/host/resource_close.rs`). When the lease was the press's alone, its
+    release closed the session, and the first capture after the press opened it again (about
+    1.6 s on production with release 0.12.64), so that capture showed the settled screen. While the
+    lease is held the session stays open across the captures after the press.
+  - *Why the captures are taken under it.* Each is the keyless read-only observation `capture
+    --record` takes (`ObserveReadonly`), which the Runtime takes on an instance whose lease is held
+    (a member of a device group of several is refused only while another member holds the device).
+    Its frame is an observer's and leaves a lease holder's frame in place, and an input resolves
+    the frame it names whichever of the two committed it, so an instance whose input is the
+    emulator's own still presses only on a frame the Runtime captured.
+  - *What it costs others.* While the lease is held the instance's one queue is held: from the
+    press to the end of the captures after it, at most `after_ms + still_max_ms` and one capture
+    more (with the one retry, its capture and status read more). The recording's own hold ("A
+    recording holds its instance") already keeps scheduling away. The command renews the lease
+    while it holds it; a command that is killed ends it with its connection, and a lease no longer
+    renewed ends at its time to live.
+  - *What it does not give.* When the lease is released at the end, the device session of an
+    instance behind the multi-Nemu gate is closed again, so the capture before the *next* press
+    opens it again; before 0.12.66 that capture found the session the captures after the previous
+    press had opened. The reopening moves from after the press, where it hid the transition, to
+    before the next press, where it only makes the agent wait. Taking it away needs a change of the
+    multi-Nemu gate, which this does not make.
 - **Refused before anything is pressed** (exit 2 or 3): what the open step and the point refuse
   comes before anything is captured; on a new recording the frame the command took first stays.
   `validation_failed` with `details{argument, reason}`: a point outside the frame (`point`,
@@ -1941,8 +1980,8 @@ $lab = 'C:\ActingCommand\tools\actinglab.exe'
 #463 S1-7 (0.12.64; the owner approved the three-stage blueprint of package making on board #463,
 whose stage one asks nothing of the agent but to start recording, play and end recording; the rules
 here are the coordinator's, fix round 2 included). An agent's presses are separate commands with
-seconds or minutes of thinking between them, and each holds the instance's input lease for its
-press alone. Before this
+seconds or minutes of thinking between them, and each holds the instance's input lease only for
+its press and the captures after it (#463 S1-9, "The lease of a recorded press"). Before this
 slice nothing kept the scheduler from dispatching a scheduled task to the instance between two
 presses: the task's screen became a press's screen after it and opened the next step, and nothing
 warned. A recording now holds its instance itself: nothing else is asked of the agent.

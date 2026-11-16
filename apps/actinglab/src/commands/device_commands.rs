@@ -813,7 +813,11 @@ fn direct_touch_answer(
 /// performed and recorded press (the input lease's release, the receipt's encoding) is answered
 /// after the frame after it, with `record` and `input_outcome` in its details. #463 S1-2: after the
 /// wait the screen is captured until it is still (`--interval-ms`, `--still-ms`, `--still-max-ms`,
-/// `record_after_frame`), every capture kept; the last is the frame after.
+/// `record_after_frame`), every capture kept; the last is the frame after. #463 S1-9 ("The
+/// press"): the input proxy, and with it the input lease, is the recorded press's as a whole: taken
+/// at its first input, the one retry sent through it, held while the screen after it is captured,
+/// and released once `record_press` has answered, whatever it answered; the input outcome's
+/// `close_stage` says what the release did (`note_release`, `with_release`).
 fn run_recorded_touch(
     global: &GlobalOptions,
     config: &UserConfig,
@@ -848,29 +852,45 @@ fn run_recorded_touch(
         origin: Instant::now(),
     };
     let mut sent = None;
-    let mut press =
-        |plan: &ClickPlan, frame: InputFrameReference| -> CliOutcome<CommitClickRequest> {
-            let pressed = send_recorded_press(&instance, record_press_input(plan)?, frame)?;
-            let commit = pressed.commit.clone();
-            sent = Some(pressed);
-            Ok(commit)
-        };
+    // #463 S1-9: the press's input proxy, none until its first input connects it.
+    let mut held = None;
+    let mut press = |plan: &ClickPlan,
+                     frame: InputFrameReference|
+     -> CliOutcome<CommitClickRequest> {
+        let pressed = send_recorded_press(&instance, &mut held, record_press_input(plan)?, frame)?;
+        let commit = pressed.commit.clone();
+        sent = Some(pressed);
+        Ok(commit)
+    };
     let recorded = record_press(&lock, &request, &mut press, &mut frames);
+    // #463 S1-9: the lease is released here, after the last capture after the press (or at once
+    // when none was taken), whatever the recording answered.
+    let released = held.take().map(|mut proxy| proxy.close());
     // Not sent: the recording's refusal, or the input's own error, as they are.
     let Some(SentPress {
-        input_outcome,
-        after_input,
+        mut input_outcome,
+        mut failures,
         hold_warning,
         ..
     }) = sent
     else {
-        return Err(match recorded {
-            Err(error) => error,
-            Ok(_) => CliError::device(
+        let error = recorded.err().unwrap_or_else(|| {
+            CliError::device(
                 "the recording answered a press the command never sent; nothing more is known",
-            ),
+            )
         });
+        return Err(with_release(error, released));
     };
+    // A press that was sent was sent through the held proxy, so its release is known; a release
+    // that failed is the first failure after the input, as it was when the lease was the press's
+    // alone.
+    if let Some(released) = &released {
+        note_release(&mut input_outcome, released);
+        if let Err(error) = released {
+            failures.insert(0, release_failure(error));
+        }
+    }
+    let after_input = (!failures.is_empty()).then(|| CliError::device(failures.join("; ")));
     // #463 S1-7: whether the instance was held when the press was made, in `record.warnings`.
     let mut outcome = recorded.map_err(|error| {
         let mut error = with_input_outcome(error, &input_outcome);
@@ -969,12 +989,14 @@ fn with_input_outcome(mut error: CliError, input_outcome: &Value) -> CliError {
 }
 
 /// #463 S1-1: one input of a press recorded by its command, sent through the Runtime's input proxy
-/// (its own lease, as `tap` takes it): what the recording takes of it, the input outcome the
-/// answer carries, and a failure after a performed input that leaves the press performed.
+/// (#463 S1-9: the recorded press's, held until the captures after it are done): what the
+/// recording takes of it, the input outcome the answer carries (its `close_stage` filled once the
+/// lease is released, `note_release`), and the failures after a performed input that leave the
+/// press performed (the receipt's encoding; the lease's release is added to them first).
 struct SentPress {
     commit: CommitClickRequest,
     input_outcome: Value,
-    after_input: Option<CliError>,
+    failures: Vec<String>,
     /// #463 S1-7: the word of `record.warnings` from the status read before the press, on a
     /// connection of its own: none when the instance's scheduling was paused
     /// (`record_hold::hold_warning_read`).
@@ -990,9 +1012,14 @@ struct SentPress {
 /// that proves nothing was sent was not performed and is answered as `tap` answers it, with
 /// `input_outcome` (fix round 3: the frame's being unavailable, [`input_frame_unavailable`],
 /// marked so that `record_press` sends the press once more). A connection or lease that fails
-/// sends nothing (`input_stage: not_submitted`).
+/// sends nothing (`input_stage: not_submitted`). #463 S1-9: the input goes through `held`, the
+/// recorded press's input proxy, connected (its lease taken) by the press's first input and used
+/// again by the one retry; it is not released here (`run_recorded_touch` releases it once the
+/// captures after the press are done), so the input outcome's `close_stage` is left for the release
+/// (`note_release`, `with_release`).
 fn send_recorded_press(
     instance: &str,
+    held: &mut Option<RuntimeInputProxy>,
     action: InputAction,
     frame: InputFrameReference,
 ) -> CliOutcome<SentPress> {
@@ -1001,23 +1028,26 @@ fn send_recorded_press(
     // none); fix round 2: on a connection of its own, so that a read that fails never leaves the
     // press's connection dead and the press `not_submitted`.
     let hold_warning = super::record_hold::hold_warning_read(instance);
-    let state_root = runtime_state_root().map_err(input_not_submitted)?;
-    let client = RuntimeClient::connect(crate::lab_client_config(state_root))
-        .map_err(|error| input_not_submitted(CliError::device(error.to_string())))?;
-    let mut proxy = RuntimeInputProxy::connect(client, instance)
-        .map_err(|error| input_not_submitted(CliError::device(error.to_string())))?;
+    let proxy = match held {
+        Some(proxy) => proxy,
+        None => {
+            let state_root = runtime_state_root().map_err(input_not_submitted)?;
+            let client = RuntimeClient::connect(crate::lab_client_config(state_root))
+                .map_err(|error| input_not_submitted(CliError::device(error.to_string())))?;
+            held.insert(
+                RuntimeInputProxy::connect(client, instance)
+                    .map_err(|error| input_not_submitted(CliError::device(error.to_string())))?,
+            )
+        }
+    };
     let operation = proxy.input_with_frame(action, Some(frame));
-    let close = proxy.close();
     let mut input_outcome = json!({
         "input_stage": if operation.is_ok() { "committed" } else { "receipt_unavailable" },
         "input_receipt": Value::Null,
-        "close_stage": if close.is_ok() { "succeeded" } else { "failed" },
+        // #463 S1-9: what the release did, filled when the lease is released (`note_release`).
+        "close_stage": Value::Null,
     });
     let mut failures = Vec::new();
-    if let Err(error) = &close {
-        input_outcome["close_error"] = json!(error.to_string());
-        failures.push(format!("releasing the input lease failed: {error}"));
-    }
     let commit = match operation {
         Ok(receipt) => {
             match serde_json::to_value(&receipt) {
@@ -1081,13 +1111,67 @@ fn send_recorded_press(
             });
         }
     };
-    let after_input = (!failures.is_empty()).then(|| CliError::device(failures.join("; ")));
     Ok(SentPress {
         commit,
         input_outcome,
-        after_input,
+        failures,
         hold_warning,
     })
+}
+
+/// #463 S1-9 (`contracts/lab-recording.md`, "Recording while playing", "The press"): what the
+/// release of a recorded press's input lease did, `released`, in the press's input outcome
+/// `input_outcome` (an object `send_recorded_press` built): `close_stage` `succeeded` or `failed`,
+/// in the place it always had, and with a failure `close_error`, as when the lease was the press's
+/// alone.
+fn note_release(input_outcome: &mut Value, released: &Result<(), RuntimeClientError>) {
+    let stage = if released.is_ok() {
+        "succeeded"
+    } else {
+        "failed"
+    };
+    input_outcome["close_stage"] = json!(stage);
+    if let Err(error) = released {
+        input_outcome["close_error"] = json!(error.to_string());
+    }
+}
+
+/// #463 S1-9: the text of a release of a recorded press's input lease that failed, a failure after
+/// the input.
+fn release_failure(error: &RuntimeClientError) -> String {
+    format!("releasing the input lease failed: {error}")
+}
+
+/// #463 S1-9: `error`, which `record_press` answered without a press it could record (a refusal, or
+/// the input's own error as `send_recorded_press` answered it), once the press's input lease
+/// (`released`, `None` when no lease was taken) is released. When its details hold the input
+/// outcome of the press's input (the input's refusal), that outcome gets the release's
+/// `close_stage`, as when the lease was the press's alone; any other error is answered as it is,
+/// unless the release failed: then its message says so and its details carry `input_outcome`
+/// `{close_stage: "failed", close_error}`, so that the failure is never lost.
+fn with_release(mut error: CliError, released: Option<Result<(), RuntimeClientError>>) -> CliError {
+    let Some(released) = released else {
+        return error;
+    };
+    if let Some(input_outcome) = error
+        .details
+        .as_mut()
+        .and_then(|details| details.get_mut("input_outcome"))
+        .filter(|input_outcome| input_outcome.is_object())
+    {
+        note_release(input_outcome, &released);
+        return error;
+    }
+    match released {
+        Ok(()) => error,
+        Err(failure) => {
+            error.message = format!("{}; {}", error.message, release_failure(&failure));
+            with_input_outcome(
+                error,
+                &json!({"close_stage": "failed", "close_error": failure.to_string()}),
+            )
+        }
+    }
 }
 
 /// #463 S1-1 fix round 2 (`contracts/lab-recording.md`, "Recording while playing", "The
