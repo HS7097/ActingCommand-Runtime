@@ -456,8 +456,10 @@ impl HostShared {
             )
             .map_err(RequestFailure::poison_without_terminal)?;
         }
+        // Workflow #437 G1: a refused close fences as an unconfirmed one, but leaves the session to
+        // the close that follows.
         match self
-            .settle_unconfirmed_resources(&error, Some(instance_id), links)
+            .settle_refused_close(&error, Some(instance_id), links)
             .map_err(RequestFailure::poison_without_terminal)?
         {
             UnconfirmedResources::Fenced(_) => Ok(()),
@@ -539,7 +541,8 @@ impl HostShared {
                 None,
             )?;
         }
-        match self.settle_unconfirmed_resources(&error, Some(instance_id), links)? {
+        // Workflow #437 G1: as at `fence_lapsed_lease_close`.
+        match self.settle_refused_close(&error, Some(instance_id), links)? {
             UnconfirmedResources::Fenced(_) => Ok(()),
             UnconfirmedResources::Confirmed | UnconfirmedResources::Retained => {
                 Err(error.into_fatal())
@@ -1811,13 +1814,18 @@ impl HostShared {
                 token,
                 connection_id,
             } => Ok((token.clone(), connection_id)),
-            PreparationLease::Dedicated(kind) => self
-                .grant_dedicated_instance_lease(
-                    instance_id,
-                    CONNECTION_PREPARATION_CONNECTION_VALUE,
-                    kind,
-                )
-                .map(|(token, connection_id, _)| (token, connection_id)),
+            // Workflow #437 G1: a member whose device is held for another member's unconfirmed
+            // close opens nothing: its preparation's own lease is refused, naming that member.
+            PreparationLease::Dedicated(kind) => match self.device_held_error(instance_id)? {
+                Some(held) => Err(held),
+                None => self
+                    .grant_dedicated_instance_lease(
+                        instance_id,
+                        CONNECTION_PREPARATION_CONNECTION_VALUE,
+                        kind,
+                    )
+                    .map(|(token, connection_id, _)| (token, connection_id)),
+            },
         };
         let (token, connection_id) = match granted {
             Ok(granted) => granted,

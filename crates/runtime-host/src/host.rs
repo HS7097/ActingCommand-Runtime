@@ -2311,6 +2311,12 @@ impl RuntimeHost {
             mapp1c_off_for_test: AtomicBool::new(false),
             #[cfg(test)]
             mapp1d_off_for_test: AtomicBool::new(false),
+            #[cfg(test)]
+            device_hold_failure_for_test: AtomicBool::new(false),
+            #[cfg(test)]
+            performance_suspended_for_test: Mutex::new(BTreeSet::new()),
+            #[cfg(test)]
+            ladder_after_release_for_test: Mutex::new(BTreeSet::new()),
             expired_lease_closes: Mutex::new(BTreeSet::new()),
             #[cfg(test)]
             close_isolates_off_for_test: AtomicBool::new(false),
@@ -3426,6 +3432,105 @@ impl RuntimeHost {
         self.shared_ref(crate::codes::test_spellings::TestLocation::ReadStuckRecoveryForTest)?
             .performance_hold_for_test
             .store(held, Ordering::Release);
+        Ok(())
+    }
+
+    /// Workflow #437 G1: `instance_alias`'s performance-control directive asks for suspension
+    /// (`suspended`), or no longer does, as performance control's suspension of that one instance
+    /// would; with `ladder_after_release`, its ladder claims start after performance release, as a
+    /// ladder whose trigger item says `after_performance_release` does. Nothing is pumped.
+    #[cfg(test)]
+    pub(crate) fn suspend_member_performance_for_test(
+        &self,
+        instance_alias: &str,
+        suspended: bool,
+        ladder_after_release: bool,
+    ) -> RuntimeHostResult<()> {
+        let location = crate::codes::test_spellings::TestLocation::ReadStuckRecoveryForTest;
+        let shared = self.shared_ref(location)?;
+        let instance_id = shared
+            .resolve_instance(instance_alias)
+            .map_err(|failure| *failure.error)?
+            .instance_id();
+        let mut suspended_members = lock(&shared.performance_suspended_for_test, location)?;
+        let mut ladders = lock(&shared.ladder_after_release_for_test, location)?;
+        if suspended {
+            suspended_members.insert(instance_id);
+        } else {
+            suspended_members.remove(&instance_id);
+        }
+        if ladder_after_release {
+            ladders.insert(instance_id);
+        } else {
+            ladders.remove(&instance_id);
+        }
+        Ok(())
+    }
+
+    /// Workflow #437 G1: fences `instance_alias` (#403) as an unconfirmed close of its own capture
+    /// does (`settle_unconfirmed_resources`, its capture backend's failure left unconfirmed): one
+    /// fence record, its policy availability withheld, and its fence holds the device of a device
+    /// group of several for it.
+    #[cfg(test)]
+    pub(crate) fn fence_instance_unconfirmed_for_test(
+        &self,
+        instance_alias: &str,
+    ) -> RuntimeHostResult<()> {
+        let location = crate::codes::test_spellings::TestLocation::FenceInstanceForTest;
+        let shared = self.shared_ref(location)?;
+        let instance_id = shared
+            .resolve_instance(instance_alias)
+            .map_err(|failure| *failure.error)?
+            .instance_id();
+        let mut failure = RuntimeHostError::instance_fault(
+            actingcommand_contract::codes::SharedCode::CaptureBackendOperationFailed.code(),
+            location,
+            RuntimeErrorCode::CaptureFailed,
+            instance_id,
+        );
+        failure.lifecycle.resource_quiescence = Some(ResourceQuiescence::Unconfirmed);
+        match shared.settle_unconfirmed_resources(
+            &failure,
+            Some(instance_id),
+            shared.events.system_links()?,
+        )? {
+            resource_fence::UnconfirmedResources::Fenced(_) => Ok(()),
+            resource_fence::UnconfirmedResources::Confirmed
+            | resource_fence::UnconfirmedResources::Retained => Err(RuntimeHostError::fatal(
+                crate::codes::test_spellings::TestCode::TestInstanceMissing,
+                location,
+                RuntimeErrorCode::RuntimeHalted,
+            )),
+        }
+    }
+
+    /// Workflow #437 G1: what keeps `instance_alias` from its device because of another member,
+    /// as a policy admission reads it now (`admission_device_group_hold`, the reason
+    /// `device_group_waiting` its dispatch is refused with): the wait's word and the member named.
+    #[cfg(test)]
+    pub(crate) fn device_group_wait_for_test(
+        &self,
+        instance_alias: &str,
+    ) -> RuntimeHostResult<Option<(actingcommand_policy::DeviceGroupWait, String)>> {
+        let shared =
+            self.shared_ref(crate::codes::test_spellings::TestLocation::InstanceClaimsForTest)?;
+        let instance_id = shared
+            .resolve_instance(instance_alias)
+            .map_err(|failure| *failure.error)?
+            .instance_id();
+        let now_unix_ms = shared.runtime_clock_sample()?.unix_ms;
+        Ok(shared
+            .admission_device_group_hold(instance_id, now_unix_ms)?
+            .map(|hold| (hold.wait, hold.alias)))
+    }
+
+    /// Workflow #437 G1: the next read of whether a member's device is held for another member's
+    /// unconfirmed close fails as a poisoned lock does, a failure of the Runtime's own.
+    #[cfg(test)]
+    pub(crate) fn fail_next_device_hold_read_for_test(&self) -> RuntimeHostResult<()> {
+        self.shared_ref(crate::codes::test_spellings::TestLocation::FenceInstanceForTest)?
+            .device_hold_failure_for_test
+            .store(true, Ordering::Release);
         Ok(())
     }
 
@@ -6518,6 +6623,21 @@ struct HostShared {
     // before the slice.
     #[cfg(test)]
     mapp1d_off_for_test: AtomicBool,
+    // Workflow #437 G1, test only: the next read of whether a member's device is held for another
+    // member's unconfirmed close (`device_held_for`) fails as a poisoned lock does, a failure of
+    // the Runtime's own.
+    #[cfg(test)]
+    device_hold_failure_for_test: AtomicBool,
+    // Workflow #437 G1, test only: the members whose performance-control directive asks for
+    // suspension (`performance_control_withholds`), the stand-in for performance control's
+    // suspension of one member.
+    #[cfg(test)]
+    performance_suspended_for_test: Mutex<BTreeSet<InstanceId>>,
+    // Workflow #437 G1, test only: the members whose ladder claims start after performance
+    // release, as a ladder whose trigger item says `after_performance_release` does
+    // (`ladder_claim_awaits_release`).
+    #[cfg(test)]
+    ladder_after_release_for_test: Mutex<BTreeSet<InstanceId>>,
     // Workflow #458: the leases whose close at their expiry met the lapsed lease and fenced the
     // instance, until the lease's end closes the session (`close_expired_lease_session_guarded`).
     // A leaf lock. Memory only: a restart opens no session it would owe.

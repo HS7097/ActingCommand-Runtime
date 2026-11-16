@@ -7,6 +7,7 @@ use super::*;
 use crate::codes::{HostCode, HostLocation};
 use actingcommand_contract::codes::{ContractLocation, RuntimeErrorCode, SharedCode};
 use actingcommand_contract::outcome::Location;
+use actingcommand_scheduler::{ClaimClass, MemberGates, QueuedCandidate};
 
 #[cfg(test)]
 #[derive(Clone)]
@@ -1227,6 +1228,19 @@ impl HostShared {
                     .request_links(request, Some(resolved.instance_id()), None, None),
                 EventAction::LeaseAcquire,
             )?;
+        }
+        // Workflow #437 G1 (`contracts/device-group.md`, "A failure stays where it belongs"): an
+        // immediate try of a member whose device is held for another member's unconfirmed close
+        // is refused, naming that member, before the scheduler is asked.
+        if let Some(held) = self.device_held_error(instance_id)? {
+            self.append_lease_requested(request, &resolved)?;
+            return Err(self.scheduler_denied_error(
+                request,
+                Some(resolved.instance_id()),
+                None,
+                resolved.audit_endpoint(),
+                held,
+            )?);
         }
         // Workflow #437 MAPP-1d: each claim of the device's queue by its own member's gate.
         let gates = self.device_gates(instance_id)?;
@@ -3668,7 +3682,10 @@ impl HostShared {
     /// nothing: an instance held, in takeover cooldown, without an eligible entry, short of
     /// business capacity for a claim that waits for it (`waits_for_business_capacity`), or whose
     /// admission guard is taken is left as it is (the guard's holder pumps when it drops it; the
-    /// sweep pumps every tick).
+    /// sweep pumps every tick). Workflow #437 G1: the entry granted is the one
+    /// [`Self::queue_grant_choice`] chooses, so that an entry its own member's performance
+    /// directive or ladder wait holds stays in its place and does not hold back the entries of the
+    /// device's other members behind it.
     pub(super) fn pump(&self, instance_id: InstanceId) -> RuntimeHostResult<()> {
         if self.fatal.is_shutdown_requested() {
             return Ok(());
@@ -3683,35 +3700,15 @@ impl HostShared {
         let gates = self.device_gates(instance_id)?;
         let gate = |member: InstanceId| gates.gate_of(member);
         let names_claims_member = self.pump_names_claims_member();
-        let candidate = {
-            let scheduler = lock(&self.scheduler, HostLocation::ReadQueueGrantCandidate)?;
-            let now_monotonic_ms = self.monotonic_ms()?;
-            let kind = scheduler.grant_candidate(instance_id, gate, now_monotonic_ms);
-            if names_claims_member {
-                kind.zip(
-                    scheduler
-                        .first_eligible_claim(instance_id, gate, now_monotonic_ms)
-                        .map(|(member, _)| member),
-                )
-            } else {
-                kind.map(|candidate| (candidate, instance_id))
-            }
-        };
-        let Some((kind, member)) = candidate else {
+        // Workflow #437 G1 (`contracts/device-group.md`, "One queue, one worker, one lease per
+        // device"): read before the guard, as before, so that a pump that would grant nothing
+        // takes no guard and writes nothing.
+        let Some(candidate) =
+            self.queue_grant_choice(instance_id, gate, self.monotonic_ms()?, names_claims_member)?
+        else {
             return Ok(());
         };
-        // Review L4: a kind that takes today's admission checks is not granted while the
-        // instance's performance-control directive asks for suspension or shutdown.
-        if kind.takes_admission_checks() && self.performance_control_withholds(member)? {
-            return Ok(());
-        }
-        // Workflow #387 D1c (M387 §3.7): a ladder claim whose trigger item starts it after
-        // performance release waits, as a routine claim does, until the instance is released;
-        // every other ladder claim passes as before.
-        if kind == ClaimKind::Ladder && self.ladder_awaits_release(member, gate)? {
-            return Ok(());
-        }
-        if waits_for_business_capacity(kind) {
+        if waits_for_business_capacity(candidate.kind) {
             match self.admit_capacity() {
                 Ok(_) => {}
                 Err(error) if error.is_fatal() => return Err(error),
@@ -3734,8 +3731,26 @@ impl HostShared {
         let _order = lock(&order_lock, HostLocation::LockInstanceQueueOrder)?;
         self.expire_queued_while_ordered(instance_id)
             .map_err(|failure| *failure.error)?;
+        // Workflow #437 G1: the entry is chosen again under the device's admission guard and its
+        // queue-order lock, which every change of the device's queue takes, with the same gates and
+        // one clock reading; that entry, and no other, is prepared (by its request) and granted.
+        // An entry that changed since the read above was checked here; a business claim that was
+        // not the read's candidate asks for capacity here.
+        let now_monotonic_ms = self.monotonic_ms()?;
+        let Some(chosen) =
+            self.queue_grant_choice(instance_id, gate, now_monotonic_ms, names_claims_member)?
+        else {
+            return Ok(());
+        };
+        if chosen.request_id != candidate.request_id && waits_for_business_capacity(chosen.kind) {
+            match self.admit_capacity() {
+                Ok(_) => {}
+                Err(error) if error.is_fatal() => return Err(error),
+                Err(_) => return Ok(()),
+            }
+        }
         let prepared = lock(&self.scheduler, HostLocation::PrepareQueueGrant)?
-            .prepare_queued_grant(instance_id, gate, self.monotonic_ms()?)
+            .prepare_queued_grant_of(instance_id, chosen.request_id, gate, now_monotonic_ms)
             .map_err(|error| {
                 RuntimeHostError::scheduler(HostLocation::PrepareQueueGrant, &error)
             })?;
@@ -3781,20 +3796,48 @@ impl HostShared {
         self.deliver_claim_grant(&context, &token)
     }
 
-    /// Workflow #387 D1c (M387 §3.7): whether the ladder claim the pump would grant on
-    /// `instance_id` waits for performance release while the instance is not released. Workflow
-    /// #437 MAPP-1d: `instance_id` is the member the claim serves, `gate` each member's gate.
-    fn ladder_awaits_release(
+    /// The entry the queue's grant (`pump`) gives `instance_id`'s free device now: the first
+    /// entry of the device's queue, in its order and each by its own member's gate
+    /// (`grant_candidates`), that its own member lets through. Review L4: a kind that takes
+    /// today's admission checks is held back while the member's performance-control directive asks
+    /// for suspension or shutdown; Workflow #387 D1c (M387 §3.7): a ladder claim whose trigger item
+    /// starts it after performance release waits until the member is released. Workflow #437 G1
+    /// (`contracts/device-group.md`, "One queue, one worker, one lease per device"): such an entry
+    /// stays in its place and holds back every later entry of its own member, so that a member's
+    /// order is kept and an instance alone on its device grants nothing behind it, as before; the
+    /// first entry of another member that its own member lets through is the one granted.
+    /// `names_claims_member` false (a test's `mapp1d_off_for_test`): every entry is judged as
+    /// `instance_id`'s, the member whose queue is pumped, as before MAPP-1d.
+    fn queue_grant_choice(
         &self,
         instance_id: InstanceId,
-        gate: impl Fn(InstanceId) -> ClaimGate,
-    ) -> RuntimeHostResult<bool> {
-        let Some(request_id) = lock(&self.scheduler, HostLocation::ReadQueueGrantCandidate)?
-            .grant_candidate_request(instance_id, gate, self.monotonic_ms()?)
-        else {
-            return Ok(false);
-        };
-        self.ladder_claim_awaits_release(request_id, instance_id)
+        gate: impl MemberGates,
+        now_monotonic_ms: u64,
+        names_claims_member: bool,
+    ) -> RuntimeHostResult<Option<QueuedCandidate>> {
+        let candidates = lock(&self.scheduler, HostLocation::ReadQueueGrantCandidate)?
+            .grant_candidates(instance_id, gate, now_monotonic_ms);
+        let mut held_back = BTreeSet::new();
+        for candidate in candidates {
+            let member = if names_claims_member {
+                candidate.instance_id
+            } else {
+                instance_id
+            };
+            if held_back.contains(&member) {
+                continue;
+            }
+            let withheld = (candidate.kind.takes_admission_checks()
+                && self.performance_control_withholds(member)?)
+                || (candidate.kind == ClaimKind::Ladder
+                    && self.ladder_claim_awaits_release(candidate.request_id, member)?);
+            if withheld {
+                held_back.insert(member);
+                continue;
+            }
+            return Ok(Some(candidate));
+        }
+        Ok(None)
     }
 
     /// Workflow #437 MAPP-1d: whether the queue's grant (`pump`) names the member its candidate
@@ -3823,6 +3866,14 @@ impl HostShared {
             lock(&self.host_claim_work, HostLocation::TakeHostClaimWork)?.get(&request_id),
             Some(HostClaimWork::RecoveryLadder(ladder)) if ladder.awaits_performance_release()
         );
+        // Workflow #437 G1, tests: a member whose ladder claims start after performance release.
+        #[cfg(test)]
+        let awaits = awaits
+            || lock(
+                &self.ladder_after_release_for_test,
+                HostLocation::TakeHostClaimWork,
+            )?
+            .contains(&instance_id);
         Ok(awaits && !self.performance_released(instance_id)?)
     }
 
@@ -3840,6 +3891,15 @@ impl HostShared {
     /// Review L4: whether the instance's performance-control directive withholds a new lease of
     /// a kind that takes today's admission checks (read only; the pump writes nothing).
     fn performance_control_withholds(&self, instance_id: InstanceId) -> RuntimeHostResult<bool> {
+        #[cfg(test)]
+        if lock(
+            &self.performance_suspended_for_test,
+            HostLocation::GatePumpPerformanceControl,
+        )?
+        .contains(&instance_id)
+        {
+            return Ok(true);
+        }
         let Some(instance_alias) = lock(
             &self.registered_instances,
             HostLocation::ReadInstanceRegistry,
@@ -4007,6 +4067,23 @@ impl HostShared {
         })?;
         let resolved = self.resolve_instance(claim.instance_alias)?;
         let instance_id = resolved.instance_id();
+        // Workflow #437 G1 (`contracts/device-group.md`, "A failure stays where it belongs"): a
+        // person's or a client's claim (an operator claim: a direct run, an input or application
+        // command, a self-check, a resume, a backend switch) of a member whose device is held for
+        // another member's unconfirmed close is refused at once, naming that member; the Runtime's
+        // own claims of the member wait in the device's queue, held by its gate.
+        if claim.kind.class() == ClaimClass::Operator
+            && let Some(held) = self.device_held_error(instance_id)?
+        {
+            self.append_lease_requested(&validated, &resolved)?;
+            return Err(self.scheduler_denied_error(
+                &validated,
+                Some(instance_id),
+                None,
+                resolved.audit_endpoint(),
+                held,
+            )?);
+        }
         if claim.kind.takes_admission_checks() {
             self.require_bound_endpoint(
                 &resolved,

@@ -30,6 +30,12 @@
 //! instead of retaining the whole owner: a restart prepares and self-checks the fenced instance
 //! again, as every start does, and no other instance is affected.
 //!
+//! Workflow #437 G1 (`contracts/device-group.md`, "A failure stays where it belongs"): a fence of
+//! a member of a device group of several that met an unconfirmed close of the member's own
+//! resources (`ResourceFence::holds_device`) holds the device for that member until the fence is
+//! lifted: no other member is given it (`HostShared::device_held_for`). Fences are memory only,
+//! so none survives a restart.
+//!
 //! An unconfirmed failure that names no registered instance, or that comes with a ledger
 //! failure, still retains the owner and ends the whole Runtime, as before. So does every
 //! unconfirmed failure once the Runtime is shutting down (a requested shutdown, or after a
@@ -97,6 +103,20 @@ pub(super) struct ResourceFence {
     stage: FenceStage,
     /// #411 A38: present exactly while the stage is `Person`.
     person_wait: Option<PersonWait>,
+    /// Workflow #437 G1 (`contracts/device-group.md`, "A failure stays where it belongs"): a close
+    /// of the instance's own resources ended unconfirmed while it was fenced (it fenced it, or met
+    /// the fence), so the device of a member of a device group of several is held for it until the
+    /// fence is lifted. A close refused before it began (Workflows #456, #458, #461, #411 A64)
+    /// leaves the session to a close that follows and does not set it.
+    close_unconfirmed: bool,
+}
+
+impl ResourceFence {
+    /// Workflow #437 G1: whether the fenced instance's device is held for it: a close of its own
+    /// resources ended unconfirmed and the fence has not been lifted since.
+    pub(super) const fn holds_device(&self) -> bool {
+        self.close_unconfirmed
+    }
 }
 
 /// #411 A38: a fence's wait for a person and its periodic self-check (memory only).
@@ -283,6 +303,32 @@ impl HostShared {
         instance_id: Option<InstanceId>,
         links: EventLinksDraft,
     ) -> RuntimeHostResult<UnconfirmedResources> {
+        self.settle_unconfirmed(error, instance_id, links, true)
+    }
+
+    /// Workflows #456, #458, #461 and #411 A64: [`Self::settle_unconfirmed_resources`] of a close
+    /// refused before it began (`error`, marked unconfirmed by its caller): the instance is fenced
+    /// as an unconfirmed close fences it, but its session is left to the close that follows, so
+    /// the fence does not hold the device of a device group of several for it (Workflow #437 G1);
+    /// that close, if it ends unconfirmed, does.
+    pub(super) fn settle_refused_close(
+        &self,
+        error: &RuntimeHostError,
+        instance_id: Option<InstanceId>,
+        links: EventLinksDraft,
+    ) -> RuntimeHostResult<UnconfirmedResources> {
+        self.settle_unconfirmed(error, instance_id, links, false)
+    }
+
+    /// [`Self::settle_unconfirmed_resources`]; `close_unconfirmed`: the fence holds the device of a
+    /// device group of several for the instance (Workflow #437 G1).
+    fn settle_unconfirmed(
+        &self,
+        error: &RuntimeHostError,
+        instance_id: Option<InstanceId>,
+        links: EventLinksDraft,
+        close_unconfirmed: bool,
+    ) -> RuntimeHostResult<UnconfirmedResources> {
         if error.lifecycle.resource_quiescence != Some(ResourceQuiescence::Unconfirmed) {
             return Ok(UnconfirmedResources::Confirmed);
         }
@@ -294,7 +340,7 @@ impl HostShared {
         let Some(instance_id) = self.fence_owner(error, instance_id)? else {
             return self.retain_unconfirmed_owner(error, links);
         };
-        self.fence_instance(instance_id, error, links)
+        self.fence_instance(instance_id, error, links, close_unconfirmed)
             .map(UnconfirmedResources::Fenced)
     }
 
@@ -331,7 +377,8 @@ impl HostShared {
         let Some(instance_id) = self.fence_owner(error, Some(instance_id))? else {
             return Ok(None);
         };
-        self.fence_instance(instance_id, error, links).map(Some)
+        self.fence_instance(instance_id, error, links, false)
+            .map(Some)
     }
 
     /// ISO-M (#419, R0.5, R0.7): the fence entry of `contain_failure` for `error`, an
@@ -356,7 +403,12 @@ impl HostShared {
         let Some(instance_id) = self.fence_owner(error, Some(instance_id))? else {
             return Ok(None);
         };
-        self.fence_instance(instance_id, error, links).map(Some)
+        // Workflow #437 G1: a contained failure whose resources were left unconfirmed holds the
+        // device of a device group of several for the instance, as an unconfirmed close does.
+        let close_unconfirmed =
+            error.lifecycle.resource_quiescence == Some(ResourceQuiescence::Unconfirmed);
+        self.fence_instance(instance_id, error, links, close_unconfirmed)
+            .map(Some)
     }
 
     /// The instance a fence for `error` takes: the failure's own instance, else `instance_id`
@@ -384,12 +436,15 @@ impl HostShared {
     /// holds already, the kernel's record of an unconfirmed close of the instance forgotten (none
     /// is kept for a confirmed failure), and, when the instance is newly fenced, one
     /// `runtime.failed` record of `instance_resources_fenced` caused by `error` and the
-    /// instance's policy availability withheld. Returns the fence's non-fatal failure.
+    /// instance's policy availability withheld. Returns the fence's non-fatal failure. Workflow
+    /// #437 G1: `close_unconfirmed`, a close of the instance's own resources ended unconfirmed;
+    /// the fence then holds the device of a device group of several for it until it is lifted.
     fn fence_instance(
         &self,
         instance_id: InstanceId,
         error: &RuntimeHostError,
         links: EventLinksDraft,
+        close_unconfirmed: bool,
     ) -> RuntimeHostResult<RuntimeHostError> {
         let now = self.runtime_clock_sample()?;
         let since_unix_ms = now.unix_ms;
@@ -405,7 +460,14 @@ impl HostShared {
         let newly = match lock(&self.resource_fences, HostLocation::FenceInstanceResources)?
             .entry(instance_id)
         {
-            Entry::Occupied(_) => false,
+            Entry::Occupied(mut occupied) => {
+                // Workflow #437 G1: an unconfirmed close met by a fence that holds already holds
+                // the device from then on; nothing else of the fence changes.
+                if close_unconfirmed {
+                    occupied.get_mut().close_unconfirmed = true;
+                }
+                false
+            }
             Entry::Vacant(vacant) => {
                 vacant.insert(ResourceFence {
                     cause: error.outcome().code().clone(),
@@ -416,6 +478,7 @@ impl HostShared {
                         FenceStage::Pending
                     },
                     person_wait: manual.then(|| PersonWait::new(now)),
+                    close_unconfirmed,
                 });
                 true
             }

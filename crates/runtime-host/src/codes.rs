@@ -1637,6 +1637,15 @@ actingcommand_contract::outcome_codes! {
         /// the package the step concerned; the step's failure is its cause).
         ApplicationSwitchFailed => "application_switch_failed": error / none,
         // ---- Workflow #437 MAPP-2a: end
+        // ---- Workflow #437 G1 (`contracts/device-group.md`, "A failure stays where it belongs"): begin
+        /// Error. A request of a member of a device group of several that asks for the device (a
+        /// client's lease, a Lab operation, a direct run, an input or application command, a
+        /// self-check, a resume, a backend switch, the member's own connection preparation) while
+        /// another member of the device is fenced (Workflow #403): the device is held for that
+        /// member's unconfirmed close until a preparation of it whose self-check passes lifts the
+        /// fence. Nothing was granted (keys `alias` the fenced member).
+        DeviceHeldForMemberClose => "device_held_for_member_close": error / none,
+        // ---- Workflow #437 G1: end
     }
 }
 

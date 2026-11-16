@@ -247,6 +247,10 @@ mod gate_mapp1d;
 // that instance only; the Runtime runs on. Workflow #461 (0.12.66; register §1.431): so at a
 // client's disconnect and after a failed input, whose lease lapsed before the sweep met it.
 mod gate_458_close_isolates;
+// Workflow #437 G1 (0.12.67; register §1.433): an unconfirmed close of one member holds the
+// device for it until its fence is lifted, and a member's own performance wait leaves the
+// device's queue to the other members.
+mod gate_437_g1;
 // Workflow #463 U1 (0.12.60; register §1.372): a linear step on a screen its package never
 // recorded ends with its own code, names its frame and pauses only its own pair, at once.
 mod gate_463_u1;

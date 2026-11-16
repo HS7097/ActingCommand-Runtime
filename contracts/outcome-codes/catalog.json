@@ -9914,6 +9914,9 @@
         },
         "fenced": {
           "description": "The other member is fenced; its fence holds the whole group until it is lifted."
+        },
+        "close_unconfirmed": {
+          "description": "Since 0.12.67 (Workflow #437 G1): the other member is fenced after a close of its own resources that could not be confirmed, and the device is held for it: no other member is given the device until its fence is lifted. It comes before fenced."
         }
       }
     },

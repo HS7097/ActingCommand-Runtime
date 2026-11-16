@@ -16,6 +16,13 @@
 //! - **The refusals of device-level actions** (`device_group_action_refused`): an operator's
 //!   emulator control of a member, and a keyless observation of a member while another member
 //!   holds the device.
+//! - **The device held for another member's unconfirmed close** (Workflow #437 G1): while a member
+//!   is fenced (Workflow #403) after an unconfirmed close of its own resources, the device is given
+//!   to no other member (`device_group_waiting` `close_unconfirmed`). Their entries in the
+//!   device's queue wait in their places (`ClaimGate::DeviceHeld`), a request of theirs that asks
+//!   for the device at once is refused `device_held_for_member_close` naming the fenced member,
+//!   and a keyless observation or a monitor probe of theirs meets the device as another member's
+//!   lease. The fenced member's own way out is unchanged.
 
 use super::*;
 use crate::codes::{HostCode, HostLocation};
@@ -103,19 +110,107 @@ impl HostShared {
     /// Workflow #437 MAPP-1d: the routine gate of `instance_id` and of every other member of its
     /// device ([`DeviceGates`]), each read before the scheduler's lock is taken, as the routine
     /// gate is. For an instance alone on its device it is its one routine gate, read once.
+    /// Workflow #437 G1: each member's gate as [`Self::member_gate`] reads it.
     pub(super) fn device_gates(&self, instance_id: InstanceId) -> RuntimeHostResult<DeviceGates> {
-        let own = self.routine_gate(instance_id)?;
-        let mut others = BTreeMap::new();
         #[cfg(test)]
         if self.mapp1d_off_for_test.load(Ordering::Acquire) {
-            return Ok(DeviceGates { own, others });
+            return Ok(DeviceGates {
+                own: self.routine_gate(instance_id)?,
+                others: BTreeMap::new(),
+            });
         }
+        let own = self.member_gate(instance_id)?;
+        let mut others = BTreeMap::new();
         for member in self.device_members(instance_id) {
             if member != instance_id {
-                others.insert(member, self.routine_gate(member)?);
+                others.insert(member, self.member_gate(member)?);
             }
         }
         Ok(DeviceGates { own, others })
+    }
+
+    /// Workflow #437 G1 (`contracts/device-group.md`, "A failure stays where it belongs"): the
+    /// gate the device's queue judges `member`'s entries by: `ClaimGate::DeviceHeld` while its
+    /// device is held for another member's unconfirmed close ([`Self::device_held_for`]), so that
+    /// no entry of `member` is granted the device, else its routine gate, as before. An instance
+    /// alone on its device and a fenced member keep their routine gate.
+    pub(super) fn member_gate(&self, member: InstanceId) -> RuntimeHostResult<ClaimGate> {
+        if self.device_held_for(member)?.is_some() {
+            return Ok(ClaimGate::DeviceHeld);
+        }
+        self.routine_gate(member)
+    }
+
+    /// Workflow #437 G1 (`contracts/device-group.md`, "A failure stays where it belongs", row 7
+    /// of "Device-level actions"): the member of `instance_id`'s device for whose unconfirmed
+    /// close the device is held, if any: another member whose fence (Workflow #403) met an
+    /// unconfirmed close of its own resources (`ResourceFence::holds_device`; a fence is lifted
+    /// only by a preparation of that member whose self-check passes, the proof of its close), the
+    /// first in id order. While it holds, the device is given to no other member. `None` for an
+    /// instance alone on its device, for a member whose own fence holds the device (its own way
+    /// out stays as it is) and when no other member's fence holds it. Fences are memory only, so
+    /// none outlives the Runtime's process.
+    pub(super) fn device_held_for(
+        &self,
+        instance_id: InstanceId,
+    ) -> RuntimeHostResult<Option<InstanceId>> {
+        let members = self.device_members(instance_id);
+        if members.len() < 2 {
+            return Ok(None);
+        }
+        #[cfg(test)]
+        if self
+            .device_hold_failure_for_test
+            .swap(false, Ordering::AcqRel)
+        {
+            return Err(lock_poison_error(HostLocation::ReadInstanceResourceFence));
+        }
+        let fences = lock(
+            &self.resource_fences,
+            HostLocation::ReadInstanceResourceFence,
+        )?;
+        let holds = |member: &InstanceId| {
+            fences
+                .get(member)
+                .is_some_and(super::resource_fence::ResourceFence::holds_device)
+        };
+        if holds(&instance_id) {
+            return Ok(None);
+        }
+        Ok(members
+            .into_iter()
+            .find(|member| *member != instance_id && holds(member)))
+    }
+
+    /// Workflow #437 G1: the refusal of a request of `instance_id` that asks for its device while
+    /// the device is held for another member's unconfirmed close ([`Self::device_held_for`]):
+    /// `device_held_for_member_close`, `alias` the fenced member, projected as `lease_busy` (the
+    /// device is not free). `None` when the device is not held so.
+    pub(super) fn device_held_error(
+        &self,
+        instance_id: InstanceId,
+    ) -> RuntimeHostResult<Option<RuntimeHostError>> {
+        let Some(fenced) = self.device_held_for(instance_id)? else {
+            return Ok(None);
+        };
+        let alias = self
+            .member_aliases(&[fenced])?
+            .remove(&fenced)
+            .ok_or_else(|| {
+                RuntimeHostError::request(
+                    RuntimeErrorCode::InstanceUnknown,
+                    HostLocation::ReadInstanceRegistry,
+                    RuntimeErrorCode::InstanceUnknown,
+                )
+            })?;
+        Ok(Some(
+            RuntimeHostError::request(
+                HostCode::DeviceHeldForMemberClose,
+                HostLocation::SchedulerAdmission,
+                RuntimeErrorCode::LeaseBusy,
+            )
+            .with_outcome_values(|outcome| outcome.alias(alias.as_str())),
+        ))
     }
 
     /// The registered aliases of `members`, by id. A member the registry does not hold is not a
@@ -157,9 +252,11 @@ impl HostShared {
         now_unix_ms: u64,
     ) -> RuntimeHostResult<DeviceOccupancy> {
         let members = self.device_members(instance_id);
+        // Workflow #437 G1: a member whose device is held for another member's unconfirmed close
+        // has no eligible claim ([`Self::member_gate`]).
         let gates = members
             .iter()
-            .map(|member| Ok((*member, self.routine_gate(*member)?)))
+            .map(|member| Ok((*member, self.member_gate(*member)?)))
             .collect::<RuntimeHostResult<BTreeMap<_, _>>>()?;
         let own_gate = gates.get(&instance_id).copied().unwrap_or(ClaimGate::Open);
         let gate_of = |member: InstanceId| gates.get(&member).copied().unwrap_or(own_gate);
@@ -229,8 +326,9 @@ impl HostShared {
     /// What keeps the member `instance_id` of a device group of several from its device because
     /// of another member (`contracts/device-group.md`, "One pick per device per round", "A
     /// failure stays where it belongs", "Pause and hold"), in this order: another member's player
-    /// hold (`player_hold`), another member's fence (`fenced`), then another member's holder of
-    /// the device (`held`). `None` for an instance alone on its device, for a member that holds
+    /// hold (`player_hold`), Workflow #437 G1: another member's fence that holds the device for its
+    /// unconfirmed close (`close_unconfirmed`), another member's fence (`fenced`), then another
+    /// member's holder of the device (`held`). `None` for an instance alone on its device, for a member that holds
     /// the device itself (its own holder keeps its own code) and for a free device. The other
     /// members are read in alias order; `player_held` and `fenced` answer by alias, read by the
     /// caller at one moment with the member's own control gates, which come before this.
@@ -268,6 +366,15 @@ impl HostShared {
         };
         if let Some(alias) = others.iter().copied().find(|alias| player_held(alias)) {
             return Ok(Some(gate(DeviceGroupWait::PlayerHold, alias)));
+        }
+        // Workflow #437 G1: another member's fence that met an unconfirmed close of its own holds
+        // the device for it (`close_unconfirmed`), before any other fence (`fenced`).
+        if let Some(alias) = self
+            .device_held_for(instance_id)?
+            .and_then(|member| aliases.get(&member))
+            .map(String::as_str)
+        {
+            return Ok(Some(gate(DeviceGroupWait::CloseUnconfirmed, alias)));
         }
         if let Some(alias) = others.iter().copied().find(|alias| fenced(alias)) {
             return Ok(Some(gate(DeviceGroupWait::Fenced, alias)));
@@ -382,7 +489,9 @@ impl HostShared {
     /// read under the device's admission guard (`_admission`): a lease of the device whose token
     /// names another member, lapsed or not, or the device held for the member by another member's
     /// run or waiting claim, as its occupancy reads it. `false` for an instance alone on its
-    /// device, before any lock.
+    /// device, before any lock. Workflow #437 G1: or the device held for another member's
+    /// unconfirmed close ([`Self::device_held_for`]), which the member meets as it meets another
+    /// member's lease.
     pub(super) fn device_held_by_another_member(
         &self,
         instance_id: InstanceId,
@@ -390,6 +499,9 @@ impl HostShared {
     ) -> RuntimeHostResult<bool> {
         if !self.in_group_of_several(instance_id) {
             return Ok(false);
+        }
+        if self.device_held_for(instance_id)?.is_some() {
+            return Ok(true);
         }
         let lease_of_another = lock(&self.scheduler, HostLocation::ReadInstanceAdmission)?
             .active_lease(instance_id)
