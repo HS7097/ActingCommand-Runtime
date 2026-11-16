@@ -31212,6 +31212,555 @@ path under the input's request), `instance_resources_fenced`, and the lease's `l
 a failed input answers its own failure. A self-check, a resume or the fence's recheck lifts the
 fence.
 
+### 1.432 Fix #475 (0.12.67): a close refused because the key's lease had already lapsed isolates the instance on five more paths (Workflow #475, found by the independent review of #461's fix by reading, never seen on an installation; the rule of board #419, [runtime-outcomes.md](runtime-outcomes.md), "Failure scope"; the models are #458's fix, §1.364, and #461's, §1.431; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1116/brief-475-refused-close-isolates-five.md`, read on main `8eb03787`)
+
+This section takes 1.432, the number the work order gives: §1.431 is the highest on main
+`8eb03787` (§1.429 and §1.430, #463 S1-9 and S1-10, were merged after it), and §1.433 and
+§1.434 belong to two slices being built. It ships in 0.12.67.
+
+**The five places, established by reading.** Each closes a session under a held key after the
+key was validated, and before the key's end; a key whose lease lapsed meanwhile (a device call
+that outlasted it, the sweep's expiry left behind by its `try_lock`) has the close refused by
+`begin_resource_close` (`lease_expired`), and each place took that refusal as fatal:
+
+- *A failed run's hand-over of its key to its ladder* (`hand_off_to_ladder`, `host/lease.rs`):
+  the run's lease end with `Keep`. A run whose lease lapsed before its end began enters no end
+  phase (`enter_run_end_phase`), so #411 A64 does not take the refusal. The hand-over also never
+  passed through the lease end that clears the owed closes (`cleanup_token_guarded`), so a close
+  owed by the run's lease from before (a failed input's under #461) was left behind and the key
+  handed on with the session open.
+- *A pre-emption's hand-over* (`perform_transfer`, from `promote_idle_preemption` and
+  `transfer_preempted_while_guarded`): the holder's device end with `Keep`, under a lease that may
+  have lapsed under the input that outlasted it; and the pre-emption's own end of that lease when
+  capacity holds the transfer back (`LeaseReleaseReason::Preempted`, `Keep`).
+- *An application command's preparation* (`prepare_application_resources_result` in
+  `control_application_of`, `host/input.rs`), whose `Err` poisoned the command.
+- *A backend switch* (`close_switch_session`, `host/backend_switch.rs`): the kept session's close
+  at step 3.2 and the candidate's at the restore, whose `Err` poisoned the switch.
+- *A member switch* (`stop_member_application`, `host/switch.rs`): the close of the stopped
+  member's session under the run's key. Reached only by a device group of several members, which
+  no installation can configure today (the load refuses it).
+
+**The cure.** Recognition is #458's and #461's, unchanged (`expiry_close_refused`: operation
+`begin_destructive_resource_close` and code `lease_expired`, not during shutdown). Each refusal is
+recorded once, fences the instance whose session it is with `lease_expired` as its cause, and owes
+its close under the key's lease (`fence_expired_lease_close`, `fence_expired_close_of`); the key is
+handed to no one (`end_lease_ordered` names no transfer while a close is owed, as before); the
+key's end, whichever it is, makes every owed close once under the session close ahead, still under
+the device's admission guard, and clears the entry (`close_expired_lease_session_guarded`).
+
+| Place | What changes | What the caller sees |
+|---|---|---|
+| Hand-over to the ladder | `hand_off_to_ladder` ends the device use with `HolderEnd`; when the lease owes a close (this refusal, or one before it) it returns the ladder without a hand-over | The run returns its own failure. The caller's lease end (a backend failure's, `cleanup_token_guarded`) releases the key, makes the close and clears the entry; the ladder then waits as a claim (`enqueue_ladder_claim`) and the queue grants it after the close, as when no key is left to hand on |
+| Pre-emption | `perform_transfer` takes the device end (`HolderEnd` from the two pre-emptions, `Keep` from a release's and a lease end's transfer, unchanged) and answers `None` when the close is owed; the two pre-emptions then end the lease (`Preempted`, which `end_lease_ordered` now maps to `HolderEnd`) | The claim that was to receive the device stays queued (`queued`); it is granted by the queue once the close is made and its gate lets it. A pre-emption at an input's start still refuses the input (`transfer_not_safe`), as for a transfer |
+| Application preparation | The refusal is fenced and owed for the instance whose application the command drives (the key's own, or a member under MAPP-2a) | The command fails with a refusal of its own, `lease_expired` at `prepare_application_resources` naming the key's lease, not fatal (fix round 1: the refusal the close met is fatal as the close path builds it and is not handed on), before its step and without a command sent, as a lapsed key at its step does; so does a member switch's stop whose preparation meets it; its own clean-up, the run's or the ladder's end, or the expiry, makes the close |
+| Backend switch | The refusal is fenced and owed; `release_switch_key` ends an owed key as a backend failure's end instead of a release (which the lapsed lease would refuse), and a ladder the restore admitted then waits as a claim | `backend_switch_refused` (failed) with `instance_fenced`, caused by `lease_expired`; the registration keeps its backends |
+| Member switch | The refusal fences the stopped member and owes the close of its session under the run's key | `application_switch_failed` at its step `stop`, with `lease_expired` as its step's code (its own failure code and cooldown, as before; since fix round 1 its cause is a refusal of its own at `close_execution_session`, not fatal); the run's end or the expiry closes the member's session |
+
+The owed closes are now kept by lease and instance (`expired_lease_closes`,
+`BTreeMap<LeaseId, BTreeSet<InstanceId>>`), so a lease of one member may owe another member's
+close; memory only, as before.
+
+**The review's three small items.** A holder's own end (`HolderEnd`) gives way while a write is
+in flight on the lease, as the expiry's end does (`end_lease_device_use`): `begin_resource_close`
+asks the lease's time before the step, so a close under a lapsed lease with a write in flight would
+be owed under that write; no path reaches it today. A test proves that a claim waiting in the
+queue is not handed the device while the close is owed, and #461's fourth test asserts what its
+fatal path does with the owner (fix round 2: it retains none, below).
+[runtime-outcomes.md](runtime-outcomes.md) says "before the lease sweep meets it" where it said
+"before the lease's expiry".
+
+**Which failures stay fatal.** As the two fixes kept them: a refusal during shutdown, a refusal no
+fence may take, and the Runtime's own failures in these paths (the refusal's record, a lock, the
+owner's journal, an identifier, an invariant of the scheduler). The hand-over returns them into
+the run's lease end, the pre-emptions and the application command into their request (a poison
+the request's boundary latches), the backend switch into its request, the member switch to its
+caller.
+
+**Nothing changes when the lease has not expired.** `HolderEnd` differs from `Keep` only where a
+close is refused `lease_expired` at `begin_destructive_resource_close`, which the scheduler
+answers only for a lease whose time is over, and, by the defensive line above, when a write is in
+flight on the lease (where every one of these places failed before as well, a Ready transfer has
+no step in flight, and a run's hand-over has none). An owed close exists only after such a
+refusal, so `expired_close_owed` is false for every lease whose time is not over, and the new
+branches of the application command, the backend switch and the member switch are reached only by
+that refusal. The receiver's `lease.transition_intent` of a pre-emption whose hand-over is so
+abandoned stays recorded; nothing reads it as a transfer.
+
+**Tests.** In `crates/runtime-host/src/tests/gate_458_close_isolates.rs` (gate map `host.toml`,
+the row "Workflow #475"); a test-only hook (`RuntimeHost::run_before_next_resource_close_for_test`,
+test spelling `run_before_next_resource_close_for_test`) lets the lease lapse right before the
+next close that finds a session asks its write authority, and the lease sweep's expiry scan is
+held:
+`close475_a_failed_runs_hand_over_to_its_ladder_after_its_lease_lapsed_fences_only_its_instance`,
+`close475_a_record_that_cannot_be_appended_at_a_runs_hand_over_to_its_ladder_still_stops_the_runtime`,
+`close475_a_preemptions_hand_over_of_a_lapsed_lease_fences_only_its_instance`,
+`close475_a_record_that_cannot_be_appended_at_a_preemptions_close_still_stops_the_runtime`,
+`close475_an_application_command_whose_key_lapsed_before_its_preparation_fails_alone`,
+`close475_a_record_that_cannot_be_appended_at_an_application_preparation_still_stops_the_runtime`,
+`close475_a_backend_switch_whose_key_lapsed_before_its_close_is_refused_and_fences_only_its_instance`,
+`close475_a_record_that_cannot_be_appended_at_a_backend_switchs_close_still_stops_the_runtime`,
+`close475_a_member_switch_whose_key_lapsed_before_its_close_fences_only_the_stopped_member`,
+`close475_a_record_that_cannot_be_appended_at_a_member_switchs_close_still_stops_the_runtime`
+and `close475_a_disconnects_owed_close_is_made_before_the_waiting_claim_is_granted`. The
+hand-over's run fails a capture whose own close meets the lapse first and fences the instance
+(#456), so that test counts the hand-over's refusal after the run's terminal, and its fatal test
+asserts that nothing is fenced from there on. `close461_a_record_that_cannot_be_appended_at_a_failed_inputs_close_still_stops_the_runtime`
+gains one assertion (since fix round 2: the owner not retained as unconfirmed, read through the
+test-only `RuntimeHost::owner_retained_unconfirmed_for_test`); no other existing test is adapted
+or retired.
+
+**What is not added.** No outcome code, value key, word, configuration key, record type, payload
+member, fact, wire shape, interface revision or ledger revision. The test-only switch
+`close_isolates_off_for_test` turns these paths off as well.
+
+**Fix round 1** (coordinator work order `rd-1116/brief-475-fix2.md`, after the independent review
+of pull request #1777; the coordinator's rulings; the pull request's first CI run, read once, had
+its host tests still running). (1) The application preparation was not cured: the refusal its
+close met is built by `retire_instance_resources` through
+`RequestFailure::poison_without_terminal`, which marks it fatal (`into_fatal`), so its clone in
+`ActionFailure::scheduler` poisoned the command (`poison_runtime`), its untagged fatal scope is
+Global, no fence took it, and the request's boundary latched the Runtime after the instance was
+fenced. The command now answers a refusal of its own, the scheduler's `lease_expired` at
+`prepare_application_resources` naming the key's lease, built as its step's refusal is, not
+fatal. A member switch's stop is that same command (`control_member_application`), so its
+preparation answers the same way, and the switch's close of the stopped member hands on such a
+refusal of its own too (at `close_execution_session`). No other place of this fix hands the error
+on: the hand-over and the pre-emptions fence and owe it inside their lease end and return nothing
+of it, and the backend switch hands on only its outcome, which carries the code's category, not
+the error's fatality. (2) An owed close of an instance whose device a lease holds when the owing
+lease's end comes to make it (`close_expired_lease_session_guarded`) was passed over and forgotten
+with the entry; no path reaches it today (the owing end hands the device to no one, under the
+admission guard). Of the work order's two answers this round takes the second, as #458 records a
+refusal of that close it cannot act on: only a holder of the owed instance's own key still takes
+the session over (the session is the instance's, Workflow #191 H, and that holder's lease end or
+preparation closes it); under any other member's lease the close is tried, the session close ahead
+refuses the held device (`lease_busy`, not fatal), and that refusal is recorded once (stage
+`runtime_lifecycle_session_close`, naming the instance) and leaves the session to the fenced
+instance's own paths (its recovery ladder, the fence's recheck, a person's self-check or resume),
+each of which closes a kept session before it opens, while the fence keeps the instance out of
+policy dispatch and visible as fenced. The first answer, keeping the entry owed, would keep it
+under a lease that has ended, which no later end takes. (3) The closes a connection preparation
+makes under a held key (`prepare_connection_attempt` with `PreparationLease::Held`,
+`host/resource_close.rs` near 1915, the retained session's close before the opens, and 2013, the
+close after a failed open or outside the multi-Nemu gate) meet the same refusal and keep it fatal;
+they are not changed here and are stated so in
+[read-session-resource-close.md](read-session-resource-close.md). The preparation reports its close
+as a kernel result into its self-check, and its callers (a person's self-check on an operator
+claim, an emulator control, the recovery ladder's preparation, the emulator watch's recognition, a
+backend switch's candidate and restored backends) end the lapsed key by a release or a hand-over
+to a ladder, which the lapsed lease refuses, so the cure changes each caller's key end besides the
+recognition: a later slice the coordinator files. (4) Tests: the first test asserts that
+`hand_off_to_ladder` itself withheld the key once (a test-only count,
+`RuntimeHost::ladder_hand_offs_withheld_for_test`, test spelling
+`ladder_hand_offs_withheld_for_test`; a ladder that waits in the queue writes the same records);
+new are `close475_a_preemption_at_an_inputs_end_whose_lease_lapsed_fences_only_its_instance` (the
+pre-emption a reset's write in flight deferred, made at the reset's end,
+`transfer_preempted_while_guarded`) and
+`close475_a_backend_switchs_restore_whose_key_lapsed_before_its_close_fences_only_its_instance`
+(the restore after a refused commit, `restore_backends`), in the row "Workflow #475" of the gate
+map. (5) The texts: this section's numbers (§1.429 and §1.430 are #463 S1-9 and S1-10) and the
+table's rows for the application preparation and the member switch. No outcome code, word or key
+is added.
+
+**Fix round 2** (coordinator work order `rd-1116/brief-475-fix3.md`, after the pull request's CI
+run on the head of fix round 1, `15c9d98a`, failed one host test; the coordinator's rulings). The
+assertion this section added to
+`close461_a_record_that_cannot_be_appended_at_a_failed_inputs_close_still_stops_the_runtime` (the
+owner kept unconfirmed) stated what the program never did, on main as here: the review of #461 had
+read `finish_input_failure`'s `Err` arm as keeping the owner on that path. It does not. The
+failure there is the ledger's own (the refusal's record cannot be appended), and
+`append_lifecycle_failure` hands a ledger failure back instead of recording it (`host/lifecycle.rs`,
+the return of a `ledger_failure` before the record is built), so the arm's `?` on its record of the
+clean-up's failure (`host/resource_close.rs:1345-1350` at this fix's head) returns it before the
+arm's `retain_unconfirmed` (`:1351`) and its own latch. The input's poison reaches the request's
+boundary, whose `contain_failure` latches it (`latch_failure`) and retains nothing. Main at
+`8eb03787` (#461) has the same lines (`:1292-1299`), and no round of this fix changed them, nor
+`append_lifecycle_failure`: the arm keeps the owner for a failure it can record (the refusal itself
+before #461; today a refusal during shutdown, or one no fence may take). The test-only reader reads
+the owner's retention (`OwnerGuard::retained_resource_disposition`, set only by
+`retain_unconfirmed` and never undone) after the input's request has returned and before the
+host's own close, so its moment was not the cause. Of the work order's three answers it is the
+second: the assertion now states that the owner is not retained as unconfirmed, beside what the
+test already asserted (the ledger's failure latched, no instance fenced); the refused close began
+nothing, so no device step is left half done (§1.431, "The owner on the input's path"). The
+sentence of [read-session-resource-close.md](read-session-resource-close.md) that said the failed
+input's clean-up then keeps the owner, which §1.431's "Which failures stay fatal" says of the
+Runtime's own failures as well, is true except for a failure of the ledger itself; the contract
+now says so, and this section's two sentences on that assertion are corrected. No program
+behaviour, other test, outcome code, word or key changes. Main is merged locally afterwards.
+
+**At deploy.** Nothing to do. What an operator sees when it happens: the Runtime keeps running;
+the instance's row shows its resource fence with `lease_expired` as its cause; the ledger holds
+the refusal's `runtime.failed` record (stage `runtime_lifecycle_session_close`, naming the key's
+lease), `instance_resources_fenced`, the key's end and the session's close; the caller answers its
+own failure as the table says. A self-check, a resume or the fence's recheck lifts the fence.
+
+**Train** (coordinator work order `rd-1116/brief-train-host-475-g1.md`). Pull request #1778
+carries this fix and §1.433, Workflow #437 G1, merged as one: both change what the host does in
+the same functions, and both rewrote row 7 of [device-group.md](device-group.md)'s table, where
+this fix's sentence now stands, unchanged, before G1's. How the two rules meet, read in the merged
+tree (no program behaviour changes in the train): (1) **Each refusal here holds nothing.** Every
+place of this fix and the three answers of fix round 1 settle the refusal through
+`fence_expired_close_of` and `fence_refused_close`, which G1 settles through `settle_refused_close`
+(so does #411 A64's arm, `fence_lapsed_lease_close`, which a lease end takes first for a run in its
+end phase): the instance is fenced as before and `ResourceFence::holds_device` stays false. The
+refusals fix round 1 builds (`lease_expired` at `prepare_application_resources` and at
+`close_execution_session`) carry no resource quiescence, so the member switch's settlement of its
+stop's failure and a command's clean-up (`settle_failure_resources`) find them confirmed and mark
+nothing either. (2) **The other members of the device.** `device_held_for` finds no mark: their
+status rows carry no `device_held`; their claims are judged by their own gates and are granted the
+device once the key's end has made the owed close under the guard (the guard's drop pumps, the
+gates read again under the guard); their dispatch waits `device_group_waiting` `fenced`, naming the
+fenced member, as before G1. Only when the owed close itself, under the session close ahead, ends
+unconfirmed does `settle_unconfirmed_resources` mark the fence, and the device is then held for
+that member (G1). (3) **Fix round 1's `lease_busy` refusal.** Under the guard of the owing key's
+end, which released the key with no transfer, the only lease that can hold the device is a session
+close ahead the same loop kept for an earlier owed member whose close ended unconfirmed, whose
+fence then holds the device. That needs one key owing two members' sessions; the only entries for
+a member other than the key's own are a member switch's (its stop's preparation or its close),
+made before the run's own member has a session, and no path found makes the second. Were it
+reached, the later member's session stays open and that member, fenced by a refused close, owes no
+start preparation (`start_preparations_held` takes only a dedicated start preparation the hold
+refused), so no `HeldStartPreparation` closes it; a later preparation of its own does, as every
+preparation first closes a kept session: its ladder's claim waits in its place (`DeviceHeld`) and
+is granted once the earlier member's fence is lifted, while its recheck and a person's self-check
+or resume are refused `device_held_for_member_close` as long as the hold stands (a refused recheck
+counts as a failed one). Meanwhile the earlier member's own way out opens its session on its own
+key with the later member's still open. Nothing of this is changed here. (4) **The locks.** G1's
+pump takes the guard by `try_lock`, reads the gates (leaf locks), then takes the queue-order lock
+and the scheduler. The two pre-emptions let the queue-order lock go before `cleanup_token_inner`,
+which is handed the guard their caller holds and takes the queue-order lock again inside
+`end_lease_ordered`; `hand_off_to_ladder` returns an owed key before it takes the queue-order
+lock; `release_switch_key` runs after the switch let its guard go and takes it in
+`cleanup_token_inner`; the owed closes, the fences and `start_preparations_held` are leaf locks. No
+lock is taken twice, and none in the other order.
+
+### 1.433 Slice #437 G1 (0.12.67): an unconfirmed close holds the device for its member, and a member's own wait leaves the queue to the others (Workflow #437; [device-group.md](device-group.md), "A failure stays where it belongs", "Device-level actions", row 7, "One queue, one worker, one lease per device" and "Release."; the two items of "Before the load accepts a group of several" that MAPP-1d and its review found, §1.359; the owner's request of 11-16 on board #437 to start testing several applications on one device; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1116/brief-437-g1-device-hold.md`, read on main `8eb03787`)
+
+This section takes 1.433, the number the work order gives: §1.431 is the highest on main
+`8eb03787`, and §1.429, §1.430, §1.432 and §1.434 are other slices'. It ships in 0.12.67. The load
+still refuses every group of several (`several_members_unsupported`, unchanged), so no
+installation reaches this slice's group paths; the tests hand the host the member → device key
+map and the group's name as the assembly builds them.
+
+**Rule 1: what holds the device.** A fence (Workflow #403) now records whether it met an
+unconfirmed close of its member's own resources (`ResourceFence::holds_device`, memory only, beside
+the fence): set when `settle_unconfirmed_resources` fences the member or meets its fence (a close,
+an ADB child or a contained failure whose quiescence is unconfirmed), never by a close refused
+before it began. #411 A64's `fence_lapsed_lease_close` and #456/#458/#461's `fence_refused_close`
+settle through `settle_refused_close`, which fences exactly as before but sets nothing: their
+session is closed by the session close ahead that follows before the device is handed on (MAPP-1d,
+§1.364), and only if that close, too, ends unconfirmed does the fence hold the device (the case
+row 7 named). The flag is cleared only with the fence, by a preparation of the member whose
+self-check passes; nothing else lifts a fence or ends the hold. `HostShared::device_held_for`
+(`host/device_group.rs`) names, for a member of a device of several, the first other member (id
+order) whose fence holds the device; `None` for an instance alone, for a member whose own fence
+holds it (its own way out; two such members are each judged by their own gate) and otherwise.
+
+**Rule 1: every way the device could pass to another member, and what stops each.**
+
+| Way | Where | Now |
+|---|---|---|
+| The queue's own grant | `pump` (`host/lease.rs`) | the member's gate is `ClaimGate::DeviceHeld` (`HostShared::member_gate`, read by `device_gates`), which holds every kind but a holder-owned continuation: its entries are passed over in their places |
+| A lease's end: the kept close lease's expiry, a release, a preemption, a transfer while guarded | `end_lease_ordered`, `release_lease`, `promote_idle_preemption`, `transfer_preempted_while_guarded` (`host/lease.rs`) | the same gates (`prepare_transfer_gated`): no entry of the member is a candidate, so the end hands the device to no one but the fenced member's own entry |
+| An immediate grant of a client's or the Runtime's lease | `acquire_lease_guarded` (`AcquireLease`, a Lab operation, a policy dispatch's lease) | refused before the scheduler is asked: `device_held_for_member_close`, `alias` the fenced member, `scheduler.denied` |
+| A client's `QueueLease` | `queue_lease`; `SeedScheduler::request_queued_gated` | no immediate grant while the member's own gate holds a client lease; it is queued in its place |
+| A person's or a client's operator claim (a direct run, an input or application command, a self-check, a resume, a backend switch) | `request_host_claim` (`ClaimClass::Operator`) | refused at once, as the immediate grant |
+| The Runtime's own claim (a ladder, a startup package, an autostart) | `request_host_claim` | `GateHeld` under `DeviceHeld`: queued in its place |
+| A policy dispatch | the evaluation and the admission (`device_group_hold`) | `device_group_waiting` `close_unconfirmed`, `alias` the fenced member, before `fenced`; the admission's lease is refused as above should the fence come between |
+| A dedicated preparation lease (the start's connection preparation of the member) | `prepare_connection_attempt`'s `PreparationLease::Dedicated` (`host/resource_close.rs`) | refused with the same code, recorded as the preparation's failure (a non-fatal one) |
+| A keyless observation, the monitor's probe | `device_held_by_another_member` (rows 7 and 15) | the observation is refused `device_group_action_refused` `observe_readonly`, the probe's round is not made, exactly as while another member's lease holds the device |
+| The switch before a run | `switch_before_run`, `stop_others_before_start` | none starts: they run only on a granted run's or command's key |
+| A hand-off to a holder's own ladder or claim | `hand_off_to_ladder`, the release to a claim | unchanged: it keeps the device with the member that holds it, and gives it to no other member |
+| A session close ahead, a dedicated close lease | `prepare_session_close_ahead`, `grant_dedicated_instance_lease` | unchanged: close-only leases that open nothing, refuse every write and (a close ahead) name no transfer; another member's observation and probe, which would ask for a close ahead, are refused or wait first |
+
+**When the fence is lifted.** The other members' entries are no longer held: the first lease end
+after the lift (the self-check's own key, whose release hands the device on) or the next pump (a
+guard's drop, the sweep's tick) grants the entry that waited first, in its place, with its own
+member, holder and lease time. Nothing is queued again, and nothing waits on: a Runtime claim has
+no deadline, a client's `QueueLease` keeps the deadline it asked for.
+
+**After a restart.** Fences are memory only (`ResourceFence`, as before), so none survives a
+restart and no state is added: the next start gives the device the takeover cooldown when the
+earlier epoch held it and prepares and self-checks every member, the formerly fenced one
+included, as every start does. A fence the start's own preparation makes holds the device as
+above, and a member's own dedicated preparation lease is refused meanwhile.
+
+**The order within one device.** A member's task that waits `close_unconfirmed` keeps no queue
+wait (`queued_in_device` keeps only `held` and the order's `selected`), as with `fenced`: its wait
+ends while the device is held and begins anew at the first evaluation after the lift.
+`max_queue_wait_ms` and how the order counts it are unchanged.
+
+**Rule 2: the queue's grant past a member's own wait.** `pump` chooses its entry with
+`queue_grant_choice` (`host/lease.rs`): the device's eligible entries in the queue's order
+(`SeedScheduler::grant_candidates`, a free device out of its cooldown, each by its own member's
+gate), passing over an entry its own member holds back (a kind that takes today's admission checks
+while the member's performance-control directive asks for suspension or shutdown; a ladder's claim
+whose trigger item starts it after performance release while the member is not released) and every
+later entry of that member, so the member's own order is kept. The first entry of another member
+that its own member lets through is granted; the held entry stays first in its place and is granted
+when the directive releases it. For an instance alone every entry is its own: a withheld entry
+grants nothing, as before.
+
+**Selected, checked, prepared and granted: one entry.** The choice is made once before the guard
+(a pump that would grant nothing takes no guard and writes nothing, as before) and again under the
+device's admission guard and its queue-order lock, which every change of the device's queue takes
+(the queueing, a cancel, an expiry, a grant, a transfer), with the same gates and one clock reading.
+That second choice is checked there (its member's directive and ladder wait), asks for capacity
+there when it is a business claim the first choice was not, and is prepared by its request
+(`SeedScheduler::prepare_queued_grant_of`: only while the device is free, out of its cooldown, and
+that entry still waits eligible) and granted by that preparation (the grant commits the prepared
+token and removes that request's entry). Before, the candidate was checked outside the lock and
+`prepare_queued_grant` took whatever entry was first at that moment.
+
+**The lock order.** Under the guard and the queue-order lock the pump now reads the members'
+performance directives (the registry, then `performance_control`, each taken and released),
+`host_claim_work` and business capacity (`performance`), as `acquire_lease_guarded` already reads
+the directive and capacity under them, and `deliver_claim_grant` `host_claim_work`; each is taken
+and released on its own and none is held while the guard, the queue-order lock or the scheduler is
+asked. The device's hold reads `resource_fences`, a leaf lock, before the scheduler, as the routine
+gate does. **No inversion was found.**
+
+| Part | Where |
+|---|---|
+| The flag and its two entries | `ResourceFence::holds_device`, `settle_unconfirmed_resources` / `settle_refused_close`, `fence_instance`, `fence_contained_failure` (`host/resource_fence.rs`); `fence_lapsed_lease_close`, `fence_refused_close` (`host/resource_close.rs`) |
+| The hold | `device_held_for`, `member_gate`, `device_gates`, `device_occupancy`, `device_held_by_another_member`, `device_group_hold`, `device_held_error` (`host/device_group.rs`) |
+| The refusals | `acquire_lease_guarded`, `request_host_claim` (`host/lease.rs`); the dedicated preparation lease (`host/resource_close.rs`) |
+| The gate | `ClaimGate::DeviceHeld`; `request_queued_gated` (`crates/scheduler/src/lib.rs`) |
+| Rule 2 | `pump`, `queue_grant_choice`, `ladder_claim_awaits_release` (`host/lease.rs`); `QueuedCandidate`, `grant_candidates`, `prepare_queued_grant_of` (`crates/scheduler/src/lib.rs`); `ladder_awaits_release` is deleted |
+
+**Codes.** One code and one word, in the catalog and its index:
+
+| Code or word | The one situation | Refuses or warns | Exit status | Who reads it |
+|---|---|---|---|---|
+| `device_held_for_member_close` (`runtime-host`, error, ladder class `none`; `alias` required, the fenced member) | a request of a member asks for the device while another member's fence holds it | refuses (`scheduler.denied`; projected `lease_busy`) | 1 (category error) | the person or agent behind actingctl, MCP, the Lab or the console; the ledger's `scheduler.denied` |
+| `close_unconfirmed` of `device_group_wait` (value of `device_group_waiting`, `policy`, info) | a member's candidate waits because another member's fence that met an unconfirmed close holds the device | neither: a deferral (the admission's refusal of an intent evaluated before it is at info) | 0 | the decision, the not-run explanation (`ac_schedule`, `actingctl schedule`), the not-run history, a dispatch's refusal record |
+
+The fenced member keeps its own codes (`dispatch_resource_fenced`, `instance_resources_fenced`,
+its availability withheld by the self-check gate, `availability_source` `self_check`); the other
+members' reason is another cause, so another code and another word.
+
+**Tests.** `crates/runtime-host/src/tests/gate_437_g1.rs` (gate map `host.toml`, "#437 G1"), on
+MAPP-1d's fixture (A and B one device group writing one session log, C alone, a manual Runtime
+clock, stuck recovery off, the resident monitor loop held), nine tests:
+`g1_a_members_unconfirmed_close_keeps_the_device_from_the_other_member_after_its_close_lease`,
+`g1_once_the_fence_is_lifted_the_claim_that_waited_is_granted_in_its_place`,
+`g1_another_members_observation_and_probe_meet_the_fenced_device_as_another_members_lease`,
+`g1_a_manual_operation_on_the_other_member_is_refused_naming_the_fenced_member`,
+`g1_an_instance_alone_with_its_close_unconfirmed_is_as_before`,
+`g1_a_failure_of_the_runtimes_own_on_the_device_hold_is_still_fatal`,
+`g1_a_members_claim_its_directive_withholds_stays_first_while_the_other_members_is_granted`,
+`g1_a_members_ladder_waiting_for_release_stays_first_while_the_other_members_is_granted` and
+`g1_an_instance_alones_withheld_candidate_still_grants_nothing`. Test-only stand-ins, compiled under
+`cfg(test)` only: `fence_instance_unconfirmed_for_test` (a fence as an unconfirmed capture close
+makes it), `suspend_member_performance_for_test` (one member's suspension and its ladders that start
+after performance release), `device_group_wait_for_test` (the admission's hold of a member) and
+`fail_next_device_hold_read_for_test` (the hold's read failing as a poisoned lock). No existing test
+is adapted or retired: the MAPP-1d and #458 tests that fence a member by a refused close followed by
+a confirmed one, or by an instance fault (`fence_instance_for_test`), hold nothing and keep their
+expectations.
+
+**What is not added.** No configuration key, record type, payload member, fact, tag, state file or
+ledger revision. Fix round 1 adds one wire member (`RuntimeInstanceStatus.device_held`), and fix
+round 2 raises `runtime-client` to [3, 10] for it.
+
+**At deploy.** Nothing reachable for a group of several until the load accepts one. An instance
+alone on its device runs as before: it is never held for another member, its fences hold its
+routine claims as before, and its queue's grant chooses the same entry (a withheld first entry
+still grants nothing); the pump's second choice under the guard reads the same entry it read
+before, which a lone instance's records show unchanged.
+
+**Fix round 1** (coordinator work order `rd-1116/brief-437-g1-fix2.md`, after the independent
+review of the pull request and the coordinator's disposition of it; main `03258b33` merged in).
+(1) **A refused close holds nothing at the run's end either.** #411 A64's settlement of the
+lapsed lease at the run's end (`contained_task.rs`, the terminal's commit) settled through
+`settle_unconfirmed_resources` and marked the fence, so after MAPP-1d's confirmed session close
+ahead had handed the device to the other member, the device was held from the run's end until the
+fenced member's self-check. It now settles through `settle_refused_close`, as the expiry's does:
+the lease lapsed and its close was refused, no close left the session in doubt. Every other caller
+of `settle_unconfirmed_resources` was read: each is a close or a device step whose result is not
+known (a lease end's close, a dedicated close lease's, the session close ahead, a run's, an
+observation's or a probe's capture, an input, an application command, the application stop of a
+ladder, an idle action or a switch; `settle_unconfirmed_adb`'s ADB checks), or names no instance
+(the fenced write not reclaimed, which retains the owner as before). (2) **The gates under the
+guard.** A fence's mark is set under the device's admission guard (a lease end's or a close lease's
+close). `pump` reads `device_gates` again once it holds the guard and chooses, checks, prepares and
+grants with those only; its first read decides only whether to take the guard, and the entry it
+grants is the one chosen under the guard, prepared by its request. `request_host_claim` reads the
+gates only once its `try_lock` of the guard has succeeded, and refuses an operator claim there
+again when the device is held; without the guard the claim is only queued, and the pump judges it
+under the guard. Every other grant already read them under the guard (`acquire_lease_guarded`,
+`queue_lease` after its `try_lock`, `release_lease`, `end_lease_ordered`,
+`promote_idle_preemption`, `transfer_preempted_while_guarded`, the dedicated preparation lease,
+`device_held_by_another_member`). (3) **The members the hold refused come back by themselves.**
+Only the start's connection preparation is refused `device_held_for_member_close` with the
+member's availability withdrawn; such a member is recorded in `HostShared::start_preparations_held`
+(memory only, a leaf lock) and forgotten when any preparation of it is granted its lease. The
+lease sweep's new step `prepare_members_after_device_hold` gives it, once no other member's fence
+holds its device, under the device's admission guard (`try_lock`; a taken guard waits for the next
+tick) and on a free device (no lease, no waiting claim, no takeover cooldown), the start's own
+preparation again (`prepare_physical_instance_on_start`, whose guarded half is now
+`prepare_physical_instance_while_guarded`), as the start prepares again an instance whose
+preparation lease the takeover cooldown refused (Workflow #191 h2). No way to lift a fence is
+added. (4) **The other members' status rows.** `RuntimeInstanceStatus.device_held?`
+`{device_group_wait, alias}` (`InstanceDeviceHeld`, `DeviceHeldWait`, in
+`crates/actingcommand-contract`), `device_group_wait` `close_unconfirmed`, the word the dispatch
+gives, and `alias` the fenced member, filled by `control_plane_status_projection` from `device_held_for`; the Lab's overview row
+carries it ([runtime-interface.md](runtime-interface.md)). An answer without it is as before; a
+reader of `runtime-client` 9 or lower refuses one with it, so fix round 2 raises `runtime-client`
+to [3, 10]. (5) **Two rules the coordinator accepted, written in
+[device-group.md](device-group.md), "A failure stays where it belongs":** two members both fenced
+for resources not confirmed each keep their own way out (a member whose own fence holds the device
+is judged by its own gate); and every fence that stands for resources of the member's whose state
+is not confirmed holds the device, whichever step left them so, with the list of the settlements
+that mark it (`settle_unconfirmed_resources`, `settle_unconfirmed_adb`, `fence_contained_failure`
+with unconfirmed resources) and of those that do not (`settle_refused_close`,
+`fence_application_backend_failure`). Row 7's rewritten sentence now says that no other member is
+given the device meanwhile but on its own way out when its own fence holds the device too. The
+catalog's texts of `device_held_for_member_close`, `close_unconfirmed` and `device_group_waiting`
+say the same; no code or word is added. (6) **Tests**, four more in `gate_437_g1.rs` (the gate map
+row "#437 G1"):
+`g1_a_refused_close_whose_session_close_ahead_is_confirmed_holds_the_device_for_no_one`,
+`g1_an_ordinary_lease_end_whose_close_is_unconfirmed_hands_the_device_to_no_one`,
+`g1_a_member_whose_start_preparation_the_hold_refused_is_prepared_again_once_the_fence_is_lifted`
+and `g1_a_policy_cycle_dispatches_nothing_to_the_other_member_while_the_device_is_held` (a real
+policy cycle on gate_mapp1b's catalog); the first test now holds the device only by the close
+path's mark, since the refused close's fence holds nothing. New test-only stand-ins:
+`prepare_on_start_for_test` and `prepare_members_after_device_hold_for_test`. (7) A comment line
+of 115 columns in `device_group.rs` is wrapped.
+
+**Fix round 2** (coordinator work order `rd-1116/brief-437-g1-fix3.md`, after the second
+independent review and the coordinator's disposition of it; main still `03258b33`, nothing merged).
+(1) **`runtime-client` 10.** `RuntimeInstanceStatus` denies unknown members, so the member
+`device_held` that fix round 1 added is refused by a reader of revision 9 or lower; by the bump
+rule ([component-interfaces.md](component-interfaces.md), "Bump rule", as rows 5 and 6 did) its
+writer raises `max`: row 10 of the `runtime-client` table, `distribution/windows/component-interfaces.json`
+[3, 10], the anchor comment in `crates/actingcommand-contract/src/runtime.rs` and on
+`InstanceDeviceHeld`, the architecture test's pinned ranges (`component_interfaces.rs`) and
+`gate_429_r0b_pairing.rs`. `min` stays 3: no installation can fill the member while the load
+refuses every group of several; row 10 says that `min` rises to 10 in the slice that lets such a
+configuration load, since from then on a Runtime can send the member to a client that cannot read
+it. The README's sentence of declared interfaces names v0.12.10's and is left as it is. The texts
+that said no revision moves now say it does (this section's fix round 1 (4) and "What is not
+added", [runtime-interface.md](runtime-interface.md)'s row, [device-group.md](device-group.md),
+"Interfaces", and the `runtime-client` bullet of component-interfaces.md's MAPP rows). actingctl's
+MCP overview schema names `device_held` (`apps/actingctl/src/mcp/tools.rs`). (2) **The sweep
+queues; the device's worker prepares.** Fix round 1's step ran the start's preparation on the
+lease sweep's own thread, which the sweep's rule forbids (it waits for no device step, Workflow
+#369 Q-8). The step is now `queue_members_after_device_hold`: for each member the hold refused
+(`start_preparations_held`, now a map of member to its alias and whether its claim is queued),
+once no other member's fence holds the device, the member's pause is not released (as the start
+passes such a member over), no blackout covers it (a preparation the Runtime starts on its own, as
+a fence's recheck: `scheduling-blackout.md`, "Complete silence") and the device is free, it marks
+the member queued and queues one self-check claim of the Runtime's own (`queue_held_start_preparation`,
+built as `queue_fence_recheck` builds a recheck's: a minted holder on the Runtime's fixed connection,
+the scheduler's lease time, `request_host_claim_work`). The claim's payload is a new kind of host
+work, `HostClaimWork::HeldStartPreparation`: the existing kinds cannot carry it, since a recheck's
+payload runs only for a fence's wait for a person (the member has no fence) and a link restore's
+reports to the handset link machine. The device's worker runs it (`run_held_start_preparation`):
+the start's preparation (stage `startup_preparation`, no emulator status read first) under the
+device's admission guard on the claim's key, then the key's release, to the ladder a failed
+preparation admitted when it admitted one; a member that owes nothing any more, or whose pause is
+released by then (it stays owed), runs nothing and releases the key. No thread is added. A failed
+preparation is recorded as every preparation is (`instance_preparation_finished` with its failure,
+the failing step's `runtime.failed`), leaves the member unavailable and is not queued again: its
+grant ended what the member owed. A claim the queue refuses is recorded once (`runtime.failed`,
+stage `operation_cleanup`); the member is owed again only while another member's hold stands by
+then, otherwise it owes nothing more. So no member is queued every tick: one claim per refusal by
+the hold, none while one waits or runs. (3) **An operator's expiry names the hold.** An operator's
+claim that met the device's admission guard taken is queued and held in its place; when its wait
+ends (`await_operator_claim`) while the device is held for another member's unconfirmed close, its
+`lease_queue_expired` carries `device_held_for_member_close` (the fenced member) as its
+`caused_by`; the queue's own record is unchanged. (4) **Tests.**
+`g1_a_refused_close_whose_session_close_ahead_is_confirmed_holds_the_device_for_no_one` now also
+asserts that the run's end met the lapsed lease (no lease of A's run holds the device after the
+end work's sweep tick, and A's run does not complete);
+`g1_a_member_whose_start_preparation_the_hold_refused_is_prepared_again_once_the_fence_is_lifted`
+follows (2): while the hold stands the refused preparation is recorded once and two runs of the
+step queue and prepare nothing; once the fence is lifted the step queues B's claim, B's worker
+prepares B once on its key, the key is released and the step queues nothing more. New:
+`actingcommand-contract`'s `g1_status_device_held_round_trips_and_is_strict` (gate map
+`contract.toml`, "#437 G1"). `r0b_a_console_at_three_or_four_pairs_and_one_whose_max_is_two_is_refused`
+also pairs a console of [3, 9] with this build's [3, 10], and `r0b_the_build_declares_runtime_client_three_to_four`
+pins [3, 10]. The test-only step is now `queue_members_after_device_hold_for_test`. (5) **Locations.**
+Each lock and step of the new path has its own location (`list_held_start_preparations`,
+`read_held_start_preparation_pause`, `read_held_start_preparation_device`,
+`mark_held_start_preparation_queued`, `queue_held_start_preparation`,
+`read_held_start_preparation_claim_ttl`, `settle_held_start_preparation`,
+`run_held_start_preparation`), registered in the `runtime-host` fragment; the step borrows
+`list_physical_instances` no more. The catalog's text of `device_held_for_member_close` says
+the queueing and the expiry's cause; no code or word is added.
+
+**Train** (coordinator work order `rd-1116/brief-train-host-475-g1.md`). Pull request #1778 now
+also carries §1.432, Fix #475, merged as one; row 7 of [device-group.md](device-group.md)'s table
+has #475's sentence, unchanged, before this section's. #475's five places and its fix round 1's
+three answers are closes refused before they began: they settle through `settle_refused_close` and
+hold nothing, and the list of such closes now names #475 ([device-group.md](device-group.md), "A
+failure stays where it belongs"; `ResourceFence::close_unconfirmed` and `settle_refused_close` in
+`host/resource_fence.rs`). How each place, the other members, #475's `lease_busy` refusal and the
+locks meet this section's rules is §1.432's "Train". One more meeting was read and needs no
+change: a pre-emption's hand-over (`perform_transfer`, from `promote_idle_preemption` and
+`transfer_preempted_while_guarded`) prepares the transfer before it closes the holder's session,
+but the entry it hands the device to always serves the holder's own member (`asks_preemption_of`,
+and `prepare_transfer_gated` on `Preempted`, in `crates/scheduler/src/lib.rs`), so a close there
+that ends unconfirmed and marks the fence gives the device to that fenced member's own client
+lease, which its own gate lets through, and never to another member. One test more, fix round 2's
+item 3:
+`g1_an_operator_claim_that_waits_out_its_bound_while_the_device_is_held_names_the_fenced_member`
+(gate map `host.toml`, "#437 G1"): a person's lease of A holds the device and a person's self-check
+of B waits for it; A is then fenced for an unconfirmed close; at its bound B's self-check is refused
+`lease_queue_expired` whose one `caused_by` link is `device_held_for_member_close` naming A, it was
+never granted, and its entry has left the queue.
+
+**Train, fix round 1** (coordinator work order `rd-1116/brief-train-host-fix1.md`, after the two
+independent reviews of the train and the coordinator's dispositions of them; main merged in
+afterwards). (1) **The pre-emption's hand-over.** The "Train" paragraph above said that a close
+there that ends unconfirmed may still hand the device to another member; it cannot, since the
+entry that receives a pre-emption serves the holder's own member, and the sentence now says so. No
+program behaviour changes for it. (2) **An idle device.** `queue_members_after_device_hold` queues a
+member's start preparation only on an idle device: no lease holds it, no takeover cooldown runs and
+no entry of its queue is eligible now by the scheduler's own judgement (`SeedScheduler::eligible_count`,
+the predicate `first_eligible` and the queue's grant use), each entry by its own member's gate as the
+pump reads the gates (`device_gates`, before the scheduler's lock). Before, any waiting entry kept
+the preparation back, so another member's routine claim parked behind its own pause or blackout kept
+it from ever being queued; an entry that waits eligible still keeps it back, so the claim is queued
+only when it is the device's next work. No read is added to the scheduler. (3) **The refusal's own
+code.** A claim of the step that the queue refuses keeps its member owed only when the refusal is
+`device_held_for_member_close` (a self-check claim is an operator's, refused at once by a hold that
+came back between the step's read and the claim); any other refusal settles what it owes, as before.
+The hold is not read a second time. (4) **Tests** (gate map `host.toml`, "#437 G1"):
+`g1_a_refused_close_whose_session_close_ahead_is_confirmed_holds_the_device_for_no_one` now pins the
+failure's code: the run's receipt is its own lease end's refusal of the lease the sweep had ended,
+`lease_mismatch` (the release validates a token that is no longer the device's, ISO-5a row B17; the
+code is not `lease_expired`, which the success terminal does not carry), and the lease A's run was
+granted has one `lease.expired` record;
+`g1_a_member_whose_start_preparation_the_hold_refused_is_prepared_again_once_the_fence_is_lifted`
+asserts that B's preparation is recorded under its claim's request, which was asked for and granted
+the device (fix round 1's preparation on the sweep's thread was recorded under links the sweep
+minted); `g1_an_operator_claim_that_waits_out_its_bound_while_the_device_is_held_names_the_fenced_member`
+gains the opposite case on a host of its own (no member fenced: the expiry carries `holder_kind`
+`client_lease` and no `caused_by` of `device_held_for_member_close`) and then releases A's lease once
+A is fenced, so that the expiry carries no `holder_kind` and only the hold kept B waiting (an
+operator's claim asked while the hold stands is refused at once, so B is first queued behind A's
+lease; both steps must land within B's bound, the product's 3 s wait for a self-check, as the fence
+already had to); new:
+`g1_another_members_claim_parked_behind_its_own_pause_leaves_the_held_preparation_queued`. (5)
+**Texts.** [scheduling-blackout.md](scheduling-blackout.md)'s table of "Complete silence" has the
+row of this step; the catalog's text of `device_held_for_member_close` and the comment of
+`request_host_claim` no longer say that every claim of the Runtime's own waits in place (the queued
+start preparation is a self-check claim, of the operator's class, and is refused at once while the
+device is held); the locations `read_held_start_preparation_device` and
+`settle_held_start_preparation` say the idle device and the refusal's code; the test switches of the
+refused closes name #475. The outcome-code index is regenerated. (6) **Recorded, not changed.** A
+worker that panics while it runs a held start preparation leaves the member's queued mark set: the
+step queues it no more until a preparation of the member is granted its key or lease (a person's
+self-check or resume, its ladder) or the Runtime restarts, as a panicking fence recheck leaves its
+own mark. (7) **The train's red check.** `gate_411_a65`'s test (a) failed on the train's head:
+its epoch-close child exited with 101 before its crash point; the child's error output was not
+kept, so the cause was not in the log. The crash child's error output is now read and named in
+that failure (`gate_epoch_close`); no program behaviour changes for it.
+
 ### 1.434 Slice #463 S2-1b (0.12.67): `record ready` knows the package's game, server and locale (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making, whose stage two turns the recorded material into a package offline; found when stages one and two were walked on an installed instance with 0.12.65; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1116/brief-463-s21b-record-ready-identity.md`, read on main `8eb03787`)
 
 This section takes 1.434, the number the work order gives: §1.431 is the highest on main

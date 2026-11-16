@@ -3,8 +3,8 @@
 Workflow #437 MAPP-C (contracts only; [v012-register.md](v012-register.md) §1.323). **Every rule of
 this file is (MAPP, not built yet)** unless its section names MAPP-1 ([v012-register.md](v012-register.md)
 §1.328, Runtime 0.12.56), MAPP-1b (§1.330, Runtime 0.12.57), MAPP-2a (§1.342, Runtime 0.12.59),
-MAPP-2b (§1.353, Runtime 0.12.60), MAPP-2d (§1.360, Runtime 0.12.60) or ORD-1c (§1.373, Runtime
-0.12.60):
+MAPP-2b (§1.353, Runtime 0.12.60), MAPP-2d (§1.360, Runtime 0.12.60), ORD-1c (§1.373, Runtime
+0.12.60) or G1 (§1.433, Runtime 0.12.67):
 no code, key, code, value key or word named here exists until the code slices of §1.323 build it,
 and every code, value key and vocabulary word below is proposed but those MAPP-1 registers:
 `device_group`, `instance.<instance id>.device_group`, `device_group_config_invalid` with the
@@ -13,7 +13,8 @@ vocabulary `device_group_wait`, (MAPP-1b) `device_group_action_refused`, (MAPP-2
 `application_switch_failed` with the vocabulary `application_switch_step`, (MAPP-2b) the key
 `scheduling.device_group.switch_failure_cooldown_ms` and the optional value `failure_code` of
 `dispatch_instance_cooldown`, (MAPP-2d) the word `lease_renewal` of
-`application_switch_step`, and (ORD-1c) the key `scheduling.device_group.max_queue_wait_ms`. The
+`application_switch_step`, (ORD-1c) the key `scheduling.device_group.max_queue_wait_ms`, and (G1)
+the code `device_held_for_member_close` and the word `close_unconfirmed` of `device_group_wait`. The
 coordinator cut
 MAPP-1 in two: MAPP-1a (§1.328) builds the configuration form and its checks, the refusal of every
 group of several, the member → device key map, the scheduler keyed by device and the evaluator's
@@ -49,7 +50,12 @@ lock by the device. MAPP-1d ([v012-register.md](v012-register.md) §1.359, built
 0.12.60) closes the three gaps MAPP-1c's review found and listed as open: the monitor's probe
 ("The monitor's probe in a device group"; row 15), the hand-over at a lapsed run lease's expiry
 (row 7) and the queue's grant judged by one member's gate ("One queue, one worker, one lease per
-device"). What a section says of MAPP-1c and MAPP-1d is built.
+device"). What a section says of MAPP-1c and MAPP-1d is built. G1 ([v012-register.md](v012-register.md)
+§1.433, built in Runtime 0.12.67) closes the two items "Release." still listed: an unconfirmed
+close of one member holds the device for it until its fence is lifted ("A failure stays where it
+belongs"; row 7), and a member's own performance wait leaves the device's queue to the other
+members ("One queue, one worker, one lease per device"); the load still refuses every group of
+several.
 
 ## Words (MAPP, not built yet)
 
@@ -234,7 +240,7 @@ keeps the member ids it keeps today. The next start maps each listed id to its g
 configuration in effect and gives the whole group the takeover cooldown (`SeedScheduler::new`,
 lib.rs:923-939).
 
-## One queue, one worker, one lease per device (MAPP-1: the scheduler; MAPP-1b: the worker, the in-flight registration, the admission guard and the pause's wait; MAPP-1d: each entry by its own member's gate)
+## One queue, one worker, one lease per device (MAPP-1: the scheduler; MAPP-1b: the worker, the in-flight registration, the admission guard and the pause's wait; MAPP-1d: each entry by its own member's gate; G1: a member's own performance wait, built in Runtime 0.12.67)
 
 Today "the queue" of an instance is three things, each keyed by its instance id:
 
@@ -280,6 +286,22 @@ lib.rs:111). The group keys these as follows:
     hold's gate); the group's hold of the policy's dispatch is MAPP-1b's (`player_hold`). For an
     instance alone on its device every entry is its own, its one gate is read once, and nothing
     changes.
+  - **A member's own performance wait leaves the queue to the others** (Workflow #437 G1, Runtime
+    0.12.67, register §1.433). The queue's own grant (`pump`) reads the device's eligible entries
+    in the queue's order (`SeedScheduler::grant_candidates`) and passes over an entry its own
+    member holds back: a kind that takes today's admission checks while that member's
+    performance-control directive asks for suspension or shutdown (review L4), or a ladder's claim
+    whose trigger item starts it after performance release while that member is not released
+    (Workflow #387 D1c). Such an entry stays in its place and holds back every later entry of its
+    own member, so a member's own order is kept; the first entry of another member that its own
+    member lets through is granted. When the member's directive releases it, its entry is first
+    again, in its place. The entry is chosen before the device's admission guard (a pump that would
+    grant nothing takes no guard, as before) and chosen again under the guard and the device's
+    queue-order lock, which every change of the queue takes, with the same gates and one clock
+    reading; that entry, and no other, is prepared by its request
+    (`SeedScheduler::prepare_queued_grant_of`) and granted, and a business claim that was not the
+    first read's choice asks for capacity there. For an instance alone on its device every entry
+    is its own, so a withheld entry still grants nothing, as before.
   - A lease's token keeps the member's instance id (`LeaseToken::new`, lib.rs:1167-1173), so every
     record's links, the run's identity check (`PolicyRunLeaseInstanceMismatch`,
     `crates/runtime-host/src/host/contained_task.rs:7868-7877`) and the fence of a write stay the
@@ -363,7 +385,10 @@ values:
   - `selected`: the other member's candidate won the device this round;
   - `held`: a claim or a run of the other member holds the device, or waits for it first;
   - `player_hold`: a person holds the device through the other member ("Pause and hold");
-  - `fenced`: the other member is fenced ("A failure stays where it belongs").
+  - `fenced`: the other member is fenced ("A failure stays where it belongs");
+  - `close_unconfirmed` (Workflow #437 G1, 0.12.67): the other member's fence met an unconfirmed
+    close of its own resources and the device is held for it until the fence is lifted ("A failure
+    stays where it belongs"); it comes before `fenced`.
 - `task_id` (optional): the other member's task, with `selected`, and with `held` while a policy
   run of the other member holds the device.
 - `holder_kind` (optional): with `held`, the claim kind (`vocab:claim_kind`).
@@ -895,7 +920,7 @@ lists each action, where it is today, and what slice 1 does in a group of severa
 | 4 | Ladder rung `emulator_restart` | [emulator-control.md](emulator-control.md), "Rungs" and "Ladder profiles"; `crates/runtime-host/src/host/recovery_ladder.rs` | **Refused**: a profile in effect whose rungs hold it. The rungs `return_home` and `application_restart` stay per member on the device's key; before the latter stops and starts the member's own application, it stops the member in front, or every other member with the front unknown (MAPP-2b, "The switch before a run") |
 | 5 | Operator emulator control (`actingctl emulator`, the console, MCP `ac_emulator`: start, stop, restart) | [emulator-control.md](emulator-control.md), "Operation and origin gate", "The operator's claim and the fence" (`ClaimKind::EmulatorControl`) | **Refused** before any device step with `device_group_action_refused` (registered by MAPP-1b; error, ladder class `none`, owner `runtime-host`; values `alias`, `operation` `control_emulator_instance`), before its intent. It would rebind and refresh only the asking member (`rebind_discovered_endpoint`, [device-binding.md](device-binding.md), "Backends") and leave the other members' endpoints and device facts as they were |
 | 6 | Device binding: the handset's private file, and the discovery binding | `apps/actingd/src/config/device_binding.rs`; provider_startup.rs:105-141; `bound_alias`, `crates/runtime-host/src/host/instance_discovery.rs:171-194` | **Handsets refused** (`handset_member`). Discovery-bound members resolve the same index. The discovery answer and the startup record name one `bound_alias` per index (instance_discovery.rs takes the lowest instance id; provider_startup.rs keeps the last deferred entry). Slice 1 names the group's first member in alias order in both; the console slice decides how the others are shown |
-| 7 | Capture and input sessions (retained session, Nemu pairing, the touch tool on the device) | `keeps_device_session`, the multi-Nemu gate, `crates/runtime-host/src/host/resource_close.rs:115-155` | A member of a group of several keeps no session across lease ends (`keeps_device_session` false): each member opens its own on its turn, so that two members' sessions are not open on one device at once. A member's lease end closes the member's session under that lease, before its release or its transfer (`end_lease_device_use`), when that close is admitted; a keyless observation closes its own before it lets the device go (MAPP-1c, "The session close of a keyless observation"), and so does the monitor's probe (MAPP-1d, "The monitor's probe in a device group"). A run's lease that lapses in its end phase (MAPP-1d): its close under the lapsed lease is refused and fences the member, as before (#411 A64, `fence_lapsed_lease_close`); that end then hands the device to no one (no transfer, whatever claim waits), and before the device's admission guard is let go the member's session is closed under a session close ahead ("The session close of a keyless observation"), which no waiting claim refuses (`HostShared::cleanup_token_guarded`, `close_lapsed_run_session_guarded`, `crates/runtime-host/src/host/lease.rs`, `resource_close.rs`); the claim that waited first is then granted in its place by the queue's own grant (its own member, holder and lease time). Every other lease of a member that lapses with the member's session open (Workflow #458, Runtime 0.12.60: a client's, a Lab session's, an operator's or the Runtime's own claim) ends the same way at its expiry: the close under the lapsed lease is refused and fences the member (`fence_expired_lease_close`), the expiry hands the device to no one, and the member's session is closed under the session close ahead before the guard is let go (`close_expired_lease_session_guarded`). So does such a lease's own end before the lease sweep meets it (Workflow #461, Runtime 0.12.66): a client's disconnect or a backend failure's lease end, whose close under the lapsed lease is refused, and a failed input's clean-up, whose close under its lapsed lease is refused before its lease end is; each refusal fences the member, the lease's end hands the device to no one, and the member's session is closed under the session close ahead before the guard is let go. A close that cannot be confirmed fences the member (it is fenced already) and keeps its close lease, as every dedicated close lease is kept then, but only for that lease's time to live: the lease sweep then ends it (the fence keeps the member out of use) and hands the device to the next waiting member, whose session may open while the unconfirmed one is not confirmed closed ("Release."); nothing ends the Runtime. Whether two members' sessions could coexist on one emulator (two Nemu connections, two touch servers) is not verified, and slice 1 never tries |
+| 7 | Capture and input sessions (retained session, Nemu pairing, the touch tool on the device) | `keeps_device_session`, the multi-Nemu gate, `crates/runtime-host/src/host/resource_close.rs:115-155` | A member of a group of several keeps no session across lease ends (`keeps_device_session` false): each member opens its own on its turn, so that two members' sessions are not open on one device at once. A member's lease end closes the member's session under that lease, before its release or its transfer (`end_lease_device_use`), when that close is admitted; a keyless observation closes its own before it lets the device go (MAPP-1c, "The session close of a keyless observation"), and so does the monitor's probe (MAPP-1d, "The monitor's probe in a device group"). A run's lease that lapses in its end phase (MAPP-1d): its close under the lapsed lease is refused and fences the member, as before (#411 A64, `fence_lapsed_lease_close`); that end then hands the device to no one (no transfer, whatever claim waits), and before the device's admission guard is let go the member's session is closed under a session close ahead ("The session close of a keyless observation"), which no waiting claim refuses (`HostShared::cleanup_token_guarded`, `close_lapsed_run_session_guarded`, `crates/runtime-host/src/host/lease.rs`, `resource_close.rs`); the claim that waited first is then granted in its place by the queue's own grant (its own member, holder and lease time). Every other lease of a member that lapses with the member's session open (Workflow #458, Runtime 0.12.60: a client's, a Lab session's, an operator's or the Runtime's own claim) ends the same way at its expiry: the close under the lapsed lease is refused and fences the member (`fence_expired_lease_close`), the expiry hands the device to no one, and the member's session is closed under the session close ahead before the guard is let go (`close_expired_lease_session_guarded`). So does such a lease's own end before the lease sweep meets it (Workflow #461, Runtime 0.12.66): a client's disconnect or a backend failure's lease end, whose close under the lapsed lease is refused, and a failed input's clean-up, whose close under its lapsed lease is refused before its lease end is; each refusal fences the member, the lease's end hands the device to no one, and the member's session is closed under the session close ahead before the guard is let go. So does a close under a member's lapsed key before the lease sweep meets it (Workflow #475, Runtime 0.12.67): a failed run's hand-over of its key to its ladder, a pre-emption's hand-over, an application command's preparation, a backend switch, and a member switch's close of the stopped member's session under the run's key, whose refusal fences the stopped member; the key's end then hands the device to no one and closes every session the key owes under the session close ahead before the guard is let go. A close that cannot be confirmed fences the member (it is fenced already) and keeps its close lease, as every dedicated close lease is kept then; when the lease sweep ends that lease at its time to live, the device stays held for the member until its fence is lifted (Workflow #437 G1, "A failure stays where it belongs"): that end hands the device to no one, and no other member is given it meanwhile but on its own way out when its own fence holds the device too; nothing ends the Runtime. Whether two members' sessions could coexist on one emulator (two Nemu connections, two touch servers) is not verified, and slice 1 never tries |
 | 8 | Backend switch (#402 HS-2) | `crates/runtime-host/src/host/backend_switch.rs`; [runtime-config.md](runtime-config.md), "Switching an instance's backends" | Per member, on the device's key: it closes the member's session and opens the new backends while no other member runs |
 | 9 | Self-check, resume reconnect, connection preparation | [emulator-control.md](emulator-control.md), "Triggers", preparation stages | Per member, on the device's key, with the member's own session, closed at the lease end (row 7) |
 | 10 | Resource fence (#403) and its recheck | [emulator-control.md](emulator-control.md), "Resource fence"; `crates/runtime-host/src/host/resource_fence.rs` | Per member as today (cause, ladder, recheck, lift). Every other member waits (`device_group_waiting` `fenced`) until the fence is lifted |
@@ -1046,7 +1071,7 @@ of a device group of several:
 - **An instance alone on its device** meets none of this: the judgement and the close return
   before any lock, and its probe is exactly as before.
 
-## A failure stays where it belongs (MAPP-1b: the group's waits, `held` and `fenced`)
+## A failure stays where it belongs (MAPP-1b: the group's waits, `held` and `fenced`; G1: the device held for an unconfirmed close, built in Runtime 0.12.67)
 
 - **An application's failure** (its run, its startup, its ladder up to the application restart)
   touches that member only: the run's failed settlement, the member's pairs, and the member's
@@ -1059,6 +1084,93 @@ of a device group of several:
   resources a fence is about (capture, input, ADB children, a session) are the device's, and slice
   1 does not tell a device's cause from an application's. The fence's ladder, recheck and lift stay
   the fenced member's, and the lift frees the group.
+- **An unconfirmed close of one member keeps the device from the other members until it is
+  confirmed** (Workflow #437 G1, Runtime 0.12.67, register §1.433). A member whose fence stands
+  for resources of its own whose state is not confirmed (`ResourceFence::holds_device`) holds the
+  device until that fence is lifted, whichever step left them so; only a preparation of that
+  member whose self-check passes lifts it, as for every fence, and nothing else ends the hold
+  (fix round 1, the coordinator's rule). The settlements that mark a fence so, whether they fence
+  the member or meet its fence, are: `settle_unconfirmed_resources`, a close or a device step
+  whose resources were left unconfirmed (a lease end's close, a dedicated close lease's, the
+  session close ahead, a capture of a run, of a keyless observation or of a monitor probe, an
+  input, an application command, the application stop of a ladder, of an idle action or of a
+  switch); `settle_unconfirmed_adb`, an ADB check whose child or pipe clean-up was left
+  unconfirmed (the startup package's probe, the foreground gate, the emulator control's ADB wait,
+  the ADB checks of an idle action, of a ladder or of a self-check, a switch's foreground read);
+  and
+  `fence_contained_failure` when the contained failure's resources were left unconfirmed (an
+  instance failure a boundary contains, a stopped run's failed reset). A fence whose resources are
+  confirmed holds nothing: a close refused before it began (`settle_refused_close`: #411 A64 at
+  the lease's expiry and again at the run's end, Workflows #456, #458, #461, #475) fences the
+  member as before, but the close that follows (the session close ahead) closes the session before
+  the device is handed on, and holds the device only if it, too, ends unconfirmed; and a fatal
+  failure of the member's own application backend whose resources were confirmed
+  (`fence_application_backend_failure`, #411 A46). While the device is so held, it is given to no
+  other member:
+  - each other member's entries in the device's queue are judged by the gate `DeviceHeld`, which
+    lets none of them through but a holder-owned continuation (`HostShared::member_gate`): the
+    queue's own grant passes them over in their places, and a lease's end (the kept close lease's
+    expiry included) transfers the device to none of them, so it names no transfer to them. A
+    fence is marked under the device's admission guard, and every grant reads the gates and
+    whether the device is held under that guard: the queue's own grant and a claim's immediate
+    grant, which read them first to decide whether to take the guard, read them again once they
+    hold it (fix round 1), and only the entry chosen under the guard is prepared and granted;
+  - a client's `QueueLease` of another member is queued in its place, and so is every Runtime
+    claim of it (a ladder, a startup package): they wait, and are granted by the queue once the
+    fence is lifted, as MAPP-1d's lapsed run lease grants the claim that waited first;
+  - a request of another member that asks for the device at once or as a person's or a client's
+    work (`AcquireLease`, a Lab operation, a direct run, an input or application command, a
+    self-check, a resume, a backend switch, a policy dispatch admitted in the same moment) is
+    refused with `device_held_for_member_close`, `alias` the fenced member, `scheduler.denied`
+    under the request, projected as `lease_busy`; so is the dedicated lease of its own connection
+    preparation at the start, recorded once as that preparation's failure, which leaves the member
+    unavailable. Such a member comes back by itself (fix rounds 1 and 2): once the hold has ended
+    and the device is idle (no lease holds it, no takeover cooldown runs, and no entry of its
+    queue is eligible now, each by its own member's gate, so that an entry parked behind its own
+    member's closed gate keeps nothing back; the train's fix round 1), the
+    lease sweep only queues, as it queues a fence's recheck, one self-check claim of the Runtime's
+    own for it, and the device's worker makes the start's preparation on that claim's key
+    (`queue_members_after_device_hold`, `run_held_start_preparation`); the sweep waits for no
+    device step. A member is passed over while the hold stands, while its scheduling is paused
+    with a released pause (as the start passes it over; its resume prepares it) and inside a
+    blackout of it ([scheduling-blackout.md](scheduling-blackout.md), "Complete silence", as a
+    recheck is), and it is queued once: not again while its claim waits or runs, and never once a
+    preparation of it is granted its key or lease (memory only). A preparation that fails is
+    recorded as every preparation is and leaves the member unavailable, and nothing queues it
+    again (its ladder, a person's self-check or resume, or a restart prepares it); a claim the
+    queue refuses is recorded once, and is queued again once another member's hold has ended only
+    when its refusal is `device_held_for_member_close` (the claim is a self-check, an operator's,
+    which a hold that came back refuses at once; read from the refusal's own code since the
+    train's fix round 1);
+  - an operator's claim of another member that met the device's admission guard taken waits in
+    the queue instead of being refused, held in its place; when its wait ends while the hold
+    stands, its refusal `lease_queue_expired` names the hold as its cause
+    (`device_held_for_member_close`, the fenced member; fix round 2);
+  - its policy candidates wait `device_group_waiting` with `device_group_wait`
+    `close_unconfirmed`, `alias` the fenced member (before `fenced`), in the decision, the not-run
+    explanation and the admission's refusal; the fenced member keeps its own codes
+    (`dispatch_resource_fenced`, its availability withheld by the self-check gate);
+  - its row of `Status` (`actingctl status`, the Lab's overview) carries `device_held`
+    `{device_group_wait: close_unconfirmed, alias}`, `alias` the fenced member (fix round 1;
+    `runtime-client` 10 since fix round 2, "Interfaces"), while the fenced member's own row
+    carries its `resource_fence`;
+  - its keyless observation is refused and its monitor probe's round is not made, exactly as while
+    another member's lease holds the device (`device_held_by_another_member`, rows 7 and 15);
+  - no switch starts, since no run of it is granted.
+
+  The fenced member's own way out is unchanged: whatever its fence lets through today (a ladder's
+  claim, a person's work, a self-check, a resume, a recheck) passes on the device, other members'
+  waiting entries never queue ahead of it. **When two members of a device are both fenced for
+  resources not confirmed, each one's own way out (its self-check, its ladder's claim, a person's
+  work on it) is not held by the other's hold** (fix round 1, the coordinator's rule): a member
+  whose own fence holds the device is judged by its own gate (`HostShared::device_held_for` names
+  no other member for it), so either can prove its close, and every member none of whose fences
+  holds the device stays held until both are lifted. The waits of
+  the other members' tasks in the order within one device end while they wait `close_unconfirmed`,
+  as with any fence (it keeps no queue wait), and begin anew once the fence is lifted. Fences are
+  memory only: none survives a restart of the Runtime, whose start gives the device the takeover
+  cooldown when the earlier epoch held it and prepares and self-checks every member, the fenced
+  one included, as every start does. An instance alone on its device meets none of this.
 - **Other devices go on.** One device's fault never stops the Runtime or another device's group
   (#419). A failure of the whole Runtime stays the Runtime's, as today.
 
@@ -1132,7 +1244,10 @@ of a device group of several:
 - **`runtime-client` does not move.** `Status` keeps its shape per instance: a waiting member's
   `not_running` row has `why` `device_group_waiting` with its values, and every request takes an
   alias, the member's. Showing the group in `Status` (a member `device_group?` per row) is proposed
-  for the console slice, which then raises `runtime-client`.
+  for the console slice, which then raises `runtime-client`. G1 fix round 2 (Runtime 0.12.67)
+  raises it to [3, 10] for the row's member `device_held` ("A failure stays where it belongs";
+  [component-interfaces.md](component-interfaces.md), row 10); its `min` rises to 10 in the slice
+  that lets a group of several load.
 - **`runtime-outcomes`:** new codes and words in the catalog only, and the optional value
   `failure_code` of the existing `dispatch_instance_cooldown`.
 - **Untouched:** `package`, `install-selection`, `install-control`, `install-cli`, `tools-layout`
@@ -1225,13 +1340,16 @@ of a device group of several:
 - **Before the load accepts a group of several**, besides the slices above (MAPP-2b, MAPP-2d,
   "order within one device" and "device-level actions by device"), these must be on main (found by
   MAPP-1d and its review, register §1.359; MAPP-1c's open findings 2, 4 and 5, register §1.350, are
-  closed by MAPP-1d):
-  - *An unconfirmed close of one member must keep the device from the other members until it is
-    confirmed*: today the close lease holds the device only for its time to live and the device
-    then passes on, so two members' sessions can be open together after an unconfirmed close (row
-    7).
-  - *A pump candidate blocked by its own member's performance directive or ladder wait* (`pump`)
-    blocks the whole device's queue, so one member's performance pause stops the others.
+  closed by MAPP-1d; the two items that stood here until G1 are closed by G1, register §1.433):
+  - *History (G1, 0.12.67, register §1.433).* Before G1 this list named: an unconfirmed close of one
+    member, whose close lease held the device only for its time to live, after which the device
+    passed on, so that two members' sessions could be open together (row 7); and a pump candidate
+    blocked by its own member's performance directive or ladder wait (`pump`), which blocked the
+    whole device's queue, so that one member's performance pause stopped the others. Each is
+    closed as "A failure stays where it belongs" and "One queue, one worker, one lease per device"
+    now say: the device is held for a member whose fence met an unconfirmed close until that fence
+    is lifted (`device_held_for_member_close`, `device_group_wait` `close_unconfirmed`), and the
+    queue's grant passes over an entry its own member holds back, in its place.
   - *History (MAPP-1d, 0.12.60).* Before MAPP-1d this list named: a run's lease that lapses in
     its end phase while a claim of another member waits (the expiry transferred the device to that
     claim and left the member's session open under it, row 7); the monitor's probe, which was not
@@ -1251,7 +1369,7 @@ of a device group of several:
     the device to no one, and the member's session is closed under the session close ahead before
     any other member's lease begins ([read-session-resource-close.md](read-session-resource-close.md)).
 
-## Codes, value keys and words (MAPP-1 registers the first three codes and two vocabularies, MAPP-1b the fifth code, MAPP-2a the fourth code and the third vocabulary, MAPP-2b one optional value and the key, MAPP-2d one word)
+## Codes, value keys and words (MAPP-1 registers the first three codes and two vocabularies, MAPP-1b the fifth code, MAPP-2a the fourth code and the third vocabulary, MAPP-2b one optional value and the key, MAPP-2d one word, G1 the sixth code and one word)
 
 | Code | Owner | Category, ladder class | Values | State |
 |---|---|---|---|---|
@@ -1260,13 +1378,16 @@ of a device group of several:
 | `device_group_waiting` | `policy` | info, `none` | `instance_id`, `alias`, `device_group_wait`, `task_id`?, `holder_kind`? | registered, MAPP-1 |
 | `application_switch_failed` | `runtime-host` | error, `none` | `alias`, `application_switch_step`, `failure_code`, `application_id` | registered, MAPP-2a (0.12.59) |
 | `device_group_action_refused` | `runtime-host` | error, `none` | `alias`, `operation` | registered, MAPP-1b |
+| `device_held_for_member_close` | `runtime-host` | error, `none` | `alias` | registered, G1 (0.12.67) |
 
 New value keys, each with its vocabulary:
 
 - `device_group_problem` (registered, MAPP-1): `name_invalid`, `device_mismatch`,
   `handset_member`, `fixture_member`, `application_shared`, `startup_package_missing`,
   `device_action_unsupported`, `undeclared_shared_device`, `several_members_unsupported`.
-- `device_group_wait` (registered, MAPP-1): `selected`, `held`, `player_hold`, `fenced`.
+- `device_group_wait` (registered, MAPP-1): `selected`, `held`, `player_hold`, `fenced`; and
+  (registered, G1, 0.12.67) `close_unconfirmed`, the other member's fence that met an unconfirmed
+  close holds the device ("A failure stays where it belongs").
 - `application_switch_step` (registered, MAPP-2a): `foreground_read`, `stop`, `startup_package`;
   and (registered, MAPP-2d, 0.12.60) `lease_renewal`, the run's renewal of its lease after the
   startup run.

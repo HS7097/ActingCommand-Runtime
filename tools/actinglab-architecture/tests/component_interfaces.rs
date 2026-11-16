@@ -169,7 +169,10 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   `BindChannel`, `ChannelBound` and the receipt; a client of 3 to 7 neither sends nor receives
 ///   it, so [3, 8]. Workflow #463 V3 (0.12.61, register §1.383) raises `max` to 9: the request
 ///   kinds `GoalView` and `EditGoal` with their results; every earlier request is answered as
-///   before and no answer of an earlier kind changes, so [3, 9].
+///   before and no answer of an earlier kind changes, so [3, 9]. Workflow #437 G1 fix round 2
+///   (0.12.67, register §1.433) raises `max` to 10: the status member `device_held`, which a
+///   reader whose `max` is below 10 refuses (the status denies unknown members); no installation
+///   can fill it while the load refuses every device group of several, so `min` stays: [3, 10].
 /// - `runtime-outcomes` [1, 1]: the new interface of model-378 §10.
 const V0120: &[(&str, [u64; 2])] = &[
     ("actingd-config", [5, 33]),
@@ -177,7 +180,7 @@ const V0120: &[(&str, [u64; 2])] = &[
     ("install-selection", [1, 1]),
     ("ledger", [3, 8]),
     ("package", [3, 15]),
-    ("runtime-client", [3, 9]),
+    ("runtime-client", [3, 10]),
     ("runtime-outcomes", [1, 1]),
 ];
 
