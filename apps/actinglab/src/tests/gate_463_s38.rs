@@ -217,9 +217,8 @@ fn s39_a_repeated_name_and_a_right_side_that_is_no_json_are_refused_by_the_share
     assert!(record.unscripted.is_empty(), "{record:?}");
     assert_eq!(record.connections.len(), cases.len(), "{record:?}");
 
-    for ((variables, problem), (exit, connection)) in cases
-        .iter()
-        .zip(printed.iter().zip(&record.connections))
+    for ((variables, problem), (exit, connection)) in
+        cases.iter().zip(printed.iter().zip(&record.connections))
     {
         // Refused after the handshake, before the status read and the run.
         assert_eq!(operations(connection), frames(&[]), "{variables:?}");

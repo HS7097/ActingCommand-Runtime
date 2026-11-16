@@ -932,3 +932,12 @@ tests = [
     "actingcommand-contract::lib::runtime::tests::g1_status_device_held_round_trips_and_is_strict",
 ]
 incident = ["#437 G1"]
+
+# Workflow #463 S3-8 (0.12.68; register §1.444; brief rd-1116/brief-463-s38-run-variables.md with the coordinator's ruling 1 of its take-over, rd-1116/brief-463-continue.md; contracts/runtime-interface.md, "The variable values of a contained run"; contracts/component-interfaces.md, the runtime-client row 11): ContainedTaskRequest's member variables ({name: json}). A request built as a run start without --variable builds it, and the same request given no values, encode byte for byte alike with no variables member, alone and in the run's envelope, and revision 10's encoding decodes into that request; values of the four kinds of a variable round-trip under variables by name, alone and in the run's envelope, and validate; sixteen values and names of 1 and 64 bytes pass; seventeen values are invalid_contained_task_variable_count, through with_variables and a decoded request's validate; an empty name and names outside [a-z][a-z0-9_]* or of 65 bytes are invalid_contained_task_variable_name, through with_variables, a decoded request's validate and the run's operation's validate alike
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-contract::lib::runtime::gate_463_s38::s38_a_request_without_values_is_todays_request_byte_for_byte",
+    "actingcommand-contract::lib::runtime::gate_463_s38::s38_a_request_with_values_round_trips",
+]
+incident = ["#463 S3-8"]

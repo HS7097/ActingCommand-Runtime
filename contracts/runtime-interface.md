@@ -656,6 +656,55 @@ The client (`runtime-client` 9): `goal_view` and `edit_goal`. A Runtime that dec
 drops either request: the read reports `runtime_operation_unsupported`; the instruction a
 transport failure, whose effect `GoalView` reads back before it is sent again.
 
+### The variable values of a contained run
+
+Workflow #463 S3-8, S3-9 (register §1.444, since 0.12.68; `runtime-client` revision 11;
+[package-variables.md](package-variables.md), "Runs without a dispatch"). A direct run is given
+values for the variables its package declares, as a dispatch gives its run the values set on the
+application. Shape: `crates/actingcommand-contract`, `runtime.rs`, `ContainedTaskRequest`.
+
+| Member | Shape | Absent |
+|---|---|---|
+| `RunContainedTask`'s `request.variables?` | `{name: json}`: at most 16 values (a package declares at most 16 variables; more is `invalid_contained_task_variable_count`), each under a name of a variable's form (1 to 64 bytes of `[a-z][a-z0-9_]*`; another is `invalid_contained_task_variable_name`): the contract's check, so a client cannot build such a request (actinglab's `run start` answers it `--variable` `not_recognised` before anything is sent) and the Runtime refuses one it receives, Denied, before reading the package | when no value is given: the request is then byte for byte the request of revision 10, and every variable reads its default |
+
+**The judgement**, in the run's preparation, after its package and its prerequisite chain are
+read and before any record, claim or lease (`check_run_variables`), each value in the order of its
+name, each refusal Denied with `invalid_request`, the package's `package_id` and the value's
+`variable_name`, nothing run:
+
+1. a name the package declares no variable of: `run_variable_undeclared`;
+2. a variable that does not apply on the instance now, as the variable table a dispatch reads says
+   it (`VariableTable::root_word` for the instance's game, as the policy's inputs bind it; with a
+   composed standard pack the scheduler workbench's table, else the one the last evaluation's
+   remedy table built, else none; an instance bound to no game, or a game no check judges, is
+   `root_unchecked`): `run_variable_not_applying` with that word as `variable_problem`;
+3. a value the variable does not take whole, judged by the dispatch's own function (the policy
+   crate's `resolve_variable`, the value given as the application's stored entry, set through the
+   request's channel at the Runtime's clock): `run_variable_value_refused` with the judgement's
+   word as `variable_problem` (`not_an_option`, `out_of_range`, `off_step`, `type_changed`,
+   `key_repeated`, `keys_removed`, `count_out_of_range`, or `keys_left_out` for an `ordered` value
+   a dispatch would take in part).
+
+**The overlay.** The values pass into the run's parameters where a dispatch's values pass
+(`execute_contained_task_with_lease`: `dispatched_variable_values` and `with_variables`, one
+line for both), so the package reads each as `session.dispatch.parameter.<name>` with its kind's
+type, exactly as it reads a dispatched value; a variable not given reads its default. A request
+without values reads every default (`default_run_values`), as before. Nothing of the values is
+recorded with the run: a direct run's command record carries no parameters, and no ledger member
+is added.
+
+**An older Runtime.** A Runtime below revision 11 cannot decode a request that carries
+`variables` (the request denies unknown members): it ends the connection without a receipt,
+nothing runs, and the client reports the connection ended before its receipt. Nothing on the wire
+tells a client the Runtime's revision before a request (`runtime-info.json`, `Health`, `Status`
+and `ChannelBound` carry none), so no client asks first; in an installation the Lab and the
+Runtime come from one build. A request without values is answered by every Runtime as before.
+
+The Lab: `run start --variable <name>=<json>` (repeatable, read by the scan replay's own parser)
+and `standard-pack trial --variable` ([standard-pack-trial.md](standard-pack-trial.md), "The
+run") send the values; their MCP tools `ac_run_start` and `ac_standard_pack_trial` take
+`variable` as a list.
+
 ### Instance fact key families
 
 `fact_key_family(key)` in the contract looks only at a key's spelling and returns one

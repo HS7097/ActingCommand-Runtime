@@ -31832,6 +31832,122 @@ review of `75a76e03` and the first CI run on it; the rules are the coordinator's
 **At deploy.** Nothing to configure: an installation's configuration already names each
 instance's game and server in `policy.facts.instances`.
 
+### 1.444 Slice #463 S3-8, S3-9 (0.12.68): a direct run and a trial carry variable values (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, whose stage three puts a trial on a real application under her explicit authorization; the design `rd-1115/pack-stage3-design.md`, §4.2 "S3-8" and "S3-9" with §2.4; the rules below are the coordinator's rulings in the work order and in its take-over, not the owner's words; coordinator work orders `rd-1116/brief-463-s38-run-variables.md` and `rd-1116/brief-463-continue.md`, stacked on the host train #1778, `claude/437-g1-device-hold`)
+
+This section takes 1.444, the number the work order gives. It ships in 0.12.68. The slice was
+begun before the owner's silence of 11-16 and finished from its breakpoint by a second
+implementer.
+
+**Why.** A package may declare variables (`control.json` `variables`, [package-variables.md](package-variables.md)).
+A dispatch hands its run a value for each; a direct run read every default, so a trial of a
+package on a real application could only try the defaults: `standard-pack trial --variable`
+showed the value in its plan and then refused the run (`trial_variables_not_carried`, §1.418).
+
+**The rule.**
+- *The request* (`runtime-client` 11): `ContainedTaskRequest` gains the optional member
+  `variables` (`{name: json}`), absent when empty, so a request without values serializes byte
+  for byte as under revision 10. The contract's check: at most 16 values
+  (`MAX_PACKAGE_VARIABLES`), `invalid_contained_task_variable_count`; each under a name of a
+  variable's form (`remedy_token_valid`), `invalid_contained_task_variable_name`.
+- *The host's judgement* (`check_run_variables`), in the run's preparation after its package and
+  prerequisite chain are read, right after `check_recovery_binding` and before any record, claim
+  or lease, each value in the order of its name: a name the package does not declare,
+  `run_variable_undeclared`; a variable that does not apply on the instance now, as the variable
+  table a dispatch reads says it (`VariableTable::root_word` of the instance's game as the
+  policy's inputs bind it; the table the scheduler workbench keeps with a composed standard pack,
+  else the one the last evaluation's remedy table built, else an empty one; an instance bound to no
+  game `root_unchecked`), `run_variable_not_applying` with that word; a value the dispatch's own
+  function (`resolve_variable`, the value as the application's stored entry set through the
+  request's channel at the Runtime's clock) does not answer `set` without a word,
+  `run_variable_value_refused` with its word (`keys_left_out` included, as `EditGoal` refuses it).
+  Each is Denied, `invalid_request`, with `package_id`, `variable_name` and, for the last two,
+  `variable_problem`; nothing runs.
+- *The overlay*: in `execute_contained_task_with_lease`, the arm of a run without a dispatch whose
+  request gives values reads `default_run_parameters().with_variables(dispatched_variable_values(
+  given))`, the two functions the dispatch's arm of the same `match` calls, so the package reads
+  each value as `session.dispatch.parameter.<name>` exactly as a dispatched one; a variable not
+  given reads its default; a request without values reads `default_run_values()` as before.
+- *The Lab*: `run start` takes `--variable <name>=<json>` (repeatable), read before anything else
+  of the row by `lab_ops::core_ops::parse_variables`, the scan replay's parser moved into
+  `lab-ops` (the replay and the trial call it; it refuses `value_missing`, `not_recognised` and
+  `repeated`), and given to the request; a request the contract's check refuses is `--variable`
+  `not_recognised`; without `--variable` the request is built as before. Its MCP tool takes
+  `variable` as a list.
+- *The trial*: `check_trial_run` refuses nothing for a `--variable` any more (its parameter
+  `request` is gone); the run hands the values to `run start`'s `variable`, each
+  `<name>=<compact JSON>`, and `next`'s collect line repeats them. The record's plan already names
+  every variable with its value and source (`TrialRecordPlan.variables`).
+- *A Runtime below revision 11* (the coordinator's ruling 1 of the take-over): nothing on the wire
+  tells a client the Runtime's revision before a request, so no probe is built and the Lab refuses
+  nothing for it (the owner's rule: no compatibility with what came before; the Lab and the
+  Runtime of an installation come from one build). Such a Runtime cannot decode a request that
+  carries `variables`: it ends the connection, nothing runs, and the client reports the
+  connection ended. The work order's sentence asking the Lab to refuse `--variable` there before
+  anything is sent is set aside.
+- *The run's record*: a direct run records nothing of its values, as it records nothing of its
+  parameters (its command record has no parameters member); recording them needs a new ledger
+  member, which this slice does not add.
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The request | `crates/actingcommand-contract/src/runtime.rs`: `ContainedTaskRequest::variables`, `with_variables`, `validate`; `codes.rs`: the two codes |
+| The declaration | `crates/execution-kernel/src/contained_task/remedies.rs`: `PreparedContainedTask::declared_variables` |
+| The host | `crates/runtime-host/src/host/contained_task.rs`: `check_run_variables`, `run_variable_table`, `run_variable_refused`, the overlay's arm; `codes.rs`: three codes and the location `check_run_variables` |
+| The Lab | `crates/lab-ops/src/core_ops.rs`: `VariableRefusal`, `parse_variables`, `run_variables`, `run_start_request`; `core_reads.rs`: `run start` reads `variable`; `apps/actinglab/src/replay_cli.rs`: `given_variables` calls `parse_variables`; `apps/actinglab/src/standard_pack_cli.rs`: the run's `variable`, the collect line, the option's text |
+| The trial | `crates/resource-tooling/src/standard_pack_trial.rs`: `check_trial_run`; `codes.rs`: `TrialVariablesNotCarried` removed |
+| The declaration of revisions | `distribution/windows/component-interfaces.json`: `runtime-client` [3, 11]; the pins `tools/actinglab-architecture/tests/component_interfaces.rs` (`V0120`) and `crates/lab-rescue/src/install/gate_429_r0b_pairing.rs` |
+| The rows | `run start` and `standard-pack trial` in [lab-operations.json](lab-operations.json): `run start` gains the parameter `variable` (`key_value`, repeatable) and both rows' notes say a run with values needs a Runtime of revision 11 |
+| Texts | [runtime-interface.md](runtime-interface.md), "The variable values of a contained run"; [package-variables.md](package-variables.md), "Built in S3-8, S3-9", "Not built", "Runs without a dispatch" ("A direct run given values"), "Interface", "What arrives later"; [component-interfaces.md](component-interfaces.md), the `runtime-client` row 11; [standard-pack-trial.md](standard-pack-trial.md), the inputs, "The variables", "The run", `next`, "Reading the end later", "Outcome codes"; `apps/actinglab-mcp/MANUAL.md`, section 4 |
+
+**Codes and words.** One cause each; no decision reads a code by name.
+
+| Code | The one situation | Refuses / warns | Exit |
+|---|---|---|---|
+| `invalid_contained_task_variable_count` (contract) | A request's `variables` holds more than 16 values. | refuses (the Runtime: Denied) | no client of this build sends one; actinglab answers `--variable` `not_recognised`, exit 1 |
+| `invalid_contained_task_variable_name` (contract) | A request's `variables` gives a value under a name outside a variable's form. | refuses (the Runtime: Denied) | as above |
+| `run_variable_undeclared` (runtime-host) | The package declares no variable of the name. | refuses, Denied | 1 on actinglab's line |
+| `run_variable_not_applying` (runtime-host) | The variable does not apply on the instance now (`variable_problem` the root's word). | refuses, Denied | 1 |
+| `run_variable_value_refused` (runtime-host) | The variable does not take the value whole (`variable_problem` the judgement's word). | refuses, Denied | 1 |
+
+The location `check_run_variables` is added. No vocabulary and no key is added.
+`trial_variables_not_carried` is retired as the catalog retires a code: its fragment entry stays
+with `status` `retired` and `retired_in` `0.12.68` (G9 keeps a released retired entry retired),
+its description beginning "Retired", and its variant leaves the resource tooling's registry (G1
+refuses a retired code still in a registry). The outcome-code index is regenerated.
+
+**Tests.**
+- `crates/actingcommand-contract/src/runtime/gate_463_s38.rs`, contract gate map "#463 S3-8": a
+  request without values is today's byte for byte, alone and in the run's envelope, and revision
+  10's encoding decodes into it (the work order's revision-pair test as ruling 1 makes it); values
+  of the four kinds round-trip and validate; sixteen values pass, seventeen and names out of form
+  are refused with their codes, given and decoded alike.
+- `crates/runtime-host/src/tests/gate_463_s38.rs`, host gate map "#463 S3-8" (composer mode over
+  `gate_463_v2`'s game root, a physical fake instance, one evaluation first): a given value is
+  what the run's snapshots hold; a value the variable does not take, and an undeclared name, are
+  Denied with their code and values, nothing pressed and no run reaching its execution; without
+  values the default.
+- `apps/actinglab/src/tests/gate_463_s38.rs` and `gate_463_s311.rs`'s
+  `s38_a_trial_with_a_value_sends_it_and_its_record_names_it`, exec gate map "#463 S3-8, S3-9":
+  two values reach the request and none sends no member; a repeated name and a right side that is
+  no JSON are refused by the shared parser after the handshake, before any read; a trial's run
+  carries its value, its record's plan names it, and the catalog holds the code retired.
+- Adapted (the requirement changes what they pin): `crates/resource-tooling/src/gate_463_s311.rs`
+  `s311_the_runs_own_refusals_come_after_the_plan_in_their_order` (a `--variable` passes, the
+  kept plan naming it); `apps/actinglab/src/tests/gate_463_s311.rs`
+  `s311_each_run_only_refusal_sends_nothing_and_writes_nothing` (its `--variable` case removed);
+  `gate_429_r0b_pairing`'s two tests ([3, 11], and a console of [3, 10] pairs). No golden changes;
+  no test leaves a gate map.
+
+**What is not changed.** How a dispatch resolves its variables; a run without values (its request
+byte for byte, its behaviour); the trial's plan, its other refusals and its record's shape; the
+ledger; `package`, `actingd-config` and `runtime-outcomes`. `distribution/windows/RELEASE-NOTES.md`
+still names the retired code in the notes of 0.12.65, as released.
+
+**At deploy.** Nothing to configure. The Lab and the Runtime of one build speak revision 11
+together; a run started with values against an older Runtime ends its connection and runs nothing.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

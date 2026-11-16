@@ -18164,7 +18164,7 @@
       "common_causes": "The request succeeded.",
       "handling": "Nothing to do; send the result's version as the next edit's expected_version."
     },
-    "invalid_contained_task_variables": {
+    "invalid_contained_task_variable_count": {
       "category": "error",
       "ladder_class": "none",
       "owner": "contract",
@@ -18180,9 +18180,29 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.68",
-      "description": "Runtime contract validation refused a value (Workflow #463 S3-8, runtime-client 11): a contained task request's variables holds more values than a package declares variables (16), or a name outside a variable's form (1 to 64 bytes of [a-z][a-z0-9_]*). Nothing was sent, or the Runtime refused the request before reading its package.",
-      "common_causes": "A run start --variable whose name is no variable's name, or more than 16 of them.",
-      "handling": "Give each value under the name the package's control.json declares (package variables reads them), at most once per variable."
+      "description": "Runtime contract validation refused a value (Workflow #463 S3-8, runtime-client 11): a contained task request's variables holds more values than a package can declare variables (16). A client does not build such a request; the Runtime refuses one it receives before reading its package, and nothing runs.",
+      "common_causes": "A request written by hand with more than 16 values; actinglab run start answers more than 16 --variable as --variable not_recognised before anything is sent.",
+      "handling": "Give at most one value per variable the package declares (actinglab package variables --package <dir> lists them)."
+    },
+    "invalid_contained_task_variable_name": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.68",
+      "description": "Runtime contract validation refused a value (Workflow #463 S3-8, runtime-client 11): a contained task request's variables gives a value under a name outside a variable's form (1 to 64 bytes of [a-z][a-z0-9_]*), which no package can declare. A client does not build such a request; the Runtime refuses one it receives before reading its package, and nothing runs.",
+      "common_causes": "A request written by hand with such a name; actinglab run start answers such a --variable as --variable not_recognised before anything is sent.",
+      "handling": "Give each value under the name the package's control.json declares (actinglab package variables --package <dir> lists them)."
     }
   },
   "locations": {

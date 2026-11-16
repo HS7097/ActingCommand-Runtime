@@ -1178,12 +1178,13 @@ pub fn parse_variables<'a>(
 /// [`parse_variables`] before anything is sent; a refusal is `--variable` with its word.
 fn run_variables(params: Params<'_>) -> Result<std::collections::BTreeMap<String, Value>, Exit> {
     let texts = list_of(params, "variable").unwrap_or_default();
-    let given = parse_variables(RUN_START, texts.iter().map(String::as_str)).map_err(|refusal| {
-        cli_line::failure(
-            &cli_line::usage_invalid(Some("--variable"), refusal.problem),
-            Some(refusal.message.as_str()),
-        )
-    })?;
+    let given =
+        parse_variables(RUN_START, texts.iter().map(String::as_str)).map_err(|refusal| {
+            cli_line::failure(
+                &cli_line::usage_invalid(Some("--variable"), refusal.problem),
+                Some(refusal.message.as_str()),
+            )
+        })?;
     Ok(given.into_iter().collect())
 }
 
@@ -1220,7 +1221,8 @@ fn run_start_request(
     if variables.is_empty() {
         return Ok((alias, request));
     }
-    // A name outside a variable's form, or more values than a package declares variables.
+    // More values than a package can declare variables, or a name outside a variable's form: the
+    // contract's own check of the request, before anything is sent.
     let request = request
         .with_variables(variables)
         .map_err(|_| usage("--variable", ArgumentProblem::NotRecognised))?;

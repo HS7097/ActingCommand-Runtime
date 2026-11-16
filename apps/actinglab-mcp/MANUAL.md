@@ -91,7 +91,15 @@ naming this file.
 - **`ac_run_start`** without the row's `wait` answers at once `{handle, correlation_id,
   job_phase}` (`submitting`): the handle is the run's request id, and the run is submitted in a
   job. With `wait` the call waits up to that long, within the call budget, and answers the run's
-  line when the run ended by then, else the same handle.
+  line when the run ended by then, else the same handle. #463 S3-9 (0.12.68;
+  `contracts/runtime-interface.md`, "The variable values of a contained run"): `variable`, a list
+  of `<name>=<json>` (one per variable, as `run start --variable` takes them), gives the run values
+  for variables its package declares; a name given twice is `repeated` and a right side that is no
+  JSON `not_recognised`, before anything is sent. The Runtime judges each value as a dispatch does
+  and refuses one the package does not take (`run_variable_undeclared`, `run_variable_not_applying`,
+  `run_variable_value_refused`, nothing run); a variable not given reads its default. A run with
+  values needs a Runtime of `runtime-client` revision 11: one below it ends the connection and
+  nothing runs. `ac_standard_pack_trial`'s run sends the `variable` its plan shows the same way.
 - **`ac_run_stop`** waits for its job up to `wait_s` (default 20, never more than the call
   budget), then answers the job's line, or its handle while it still runs. A run a job of this
   process still submits is only asked to stop (`cancel_only`).

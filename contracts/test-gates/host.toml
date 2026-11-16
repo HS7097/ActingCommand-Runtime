@@ -4157,3 +4157,14 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_437_g1::g1_an_operator_claim_that_waits_out_its_bound_while_the_device_is_held_names_the_fenced_member",
 ]
 incident = ["#437 G1"]
+
+# Workflow #463 S3-8 (0.12.68; register §1.444; brief rd-1116/brief-463-s38-run-variables.md; contracts/runtime-interface.md, "The variable values of a contained run"; contracts/package-variables.md, "Runs without a dispatch"): a direct run's request gives values for its package's variables (ContainedTaskRequest.variables). The host in composer mode over one game root (gate_463_v2's, the package going from home to result in one tap and declaring the choice pick, item_a or item_b, default item_b), a manual Runtime clock, one fake instance on a physical provider whose display is observed, one policy evaluation first so that the workbench judges the root (pick applies in the game), each run on a connection of its own: pick given item_a completes after its one tap and its snapshots are overlaid with session.dispatch.parameter.pick item_a (1); item_z is Denied run_variable_value_refused with package_id, variable_name pick and variable_problem not_an_option, nothing pressed and no run reaching its execution (2); a value under a name the package does not declare is Denied run_variable_undeclared with package_id and variable_name, nothing pressed and no run reaching its execution (3); no value: the run completes and reads the default item_b (4)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_463_s38::s38_host_a_given_value_is_what_the_package_reads",
+    "actingcommand-runtime-host::lib::tests::gate_463_s38::s38_host_a_value_the_variable_does_not_take_is_refused_before_admission",
+    "actingcommand-runtime-host::lib::tests::gate_463_s38::s38_host_an_undeclared_name_is_refused",
+    "actingcommand-runtime-host::lib::tests::gate_463_s38::s38_host_without_values_the_run_reads_the_defaults",
+]
+incident = ["#463 S3-8"]

@@ -579,8 +579,11 @@ crate::outcome_codes! {
         InvalidContainedTaskPath => "invalid_contained_task_path": error / none,
         InvalidContainedTaskResponseDeadline => "invalid_contained_task_response_deadline": error / none,
         // Workflow #463 S3-8: a contained task request's `variables` with more values than a
-        // package declares variables, or a name outside a variable's form.
-        InvalidContainedTaskVariables => "invalid_contained_task_variables": error / none,
+        // package can declare variables (16).
+        InvalidContainedTaskVariableCount => "invalid_contained_task_variable_count": error / none,
+        // Workflow #463 S3-8: a contained task request's `variables` with a value under a name
+        // outside a variable's form.
+        InvalidContainedTaskVariableName => "invalid_contained_task_variable_name": error / none,
         InvalidEvidenceOutputPath => "invalid_evidence_output_path": error / none,
         InvalidEvidenceZipCount => "invalid_evidence_zip_count": error / none,
         InvalidEvidenceScreenshotCounts => "invalid_evidence_screenshot_counts": error / none,

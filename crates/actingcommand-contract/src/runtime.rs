@@ -2830,10 +2830,7 @@ pub struct ContainedTaskRequest {
     /// by the host before the run's admission as a dispatch judges a value; a variable not named
     /// reads its default. Absent when empty, so a request without values serializes, and is
     /// answered, as before.
-    #[serde(
-        default,
-        skip_serializing_if = "std::collections::BTreeMap::is_empty"
-    )]
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     variables: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
@@ -2873,17 +2870,21 @@ impl ContainedTaskRequest {
                 RuntimeContractCode::InvalidContainedTaskResponseDeadline,
             ));
         }
-        // Workflow #463 S3-8: at most as many values as a package declares variables, each under
-        // a name of a variable's form (1 to 64 bytes of `[a-z][a-z0-9_]*`); the host judges the
-        // rest against the package.
-        if self.variables.len() > crate::MAX_PACKAGE_VARIABLES
-            || !self
-                .variables
-                .keys()
-                .all(|name| crate::remedy_token_valid(name))
+        // Workflow #463 S3-8: at most as many values as a package can declare variables, each
+        // under a name of a variable's form (1 to 64 bytes of `[a-z][a-z0-9_]*`); the host judges
+        // the rest against the package.
+        if self.variables.len() > crate::MAX_PACKAGE_VARIABLES {
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InvalidContainedTaskVariableCount,
+            ));
+        }
+        if !self
+            .variables
+            .keys()
+            .all(|name| crate::remedy_token_valid(name))
         {
             return Err(RuntimeContractError::new(
-                RuntimeContractCode::InvalidContainedTaskVariables,
+                RuntimeContractCode::InvalidContainedTaskVariableName,
             ));
         }
         Ok(())
@@ -2926,8 +2927,8 @@ impl ContainedTaskRequest {
     }
 
     /// Workflow #463 S3-8: this request with the values `variables`, by name; more than
-    /// [`crate::MAX_PACKAGE_VARIABLES`] of them, or a name outside a variable's form, is
-    /// `invalid_contained_task_variables`.
+    /// [`crate::MAX_PACKAGE_VARIABLES`] of them are `invalid_contained_task_variable_count`, a
+    /// name outside a variable's form `invalid_contained_task_variable_name`.
     pub fn with_variables(
         mut self,
         variables: std::collections::BTreeMap<String, serde_json::Value>,
@@ -6880,3 +6881,7 @@ mod gate_434_lab6s1a;
 // Workflow #434 LAB-6S1b: `validate()` judges no request by its origin.
 #[cfg(test)]
 mod gate_434_lab6s1b;
+
+// Workflow #463 S3-8: the request member `ContainedTaskRequest.variables` (`runtime-client` 11).
+#[cfg(test)]
+mod gate_463_s38;

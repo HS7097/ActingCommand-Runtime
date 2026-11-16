@@ -7843,7 +7843,9 @@ impl HostShared {
                         HostCode::RunVariableValueRefused,
                         package_id,
                         name,
-                        Some(problem.unwrap_or(actingcommand_contract::VariableProblem::TypeChanged)),
+                        Some(
+                            problem.unwrap_or(actingcommand_contract::VariableProblem::TypeChanged),
+                        ),
                     ));
                 }
             }

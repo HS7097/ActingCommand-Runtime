@@ -1683,9 +1683,7 @@ fn s38_a_trial_with_a_value_sends_it_and_its_record_names_it() {
         .requests
         .iter()
         .find_map(|sent| match sent.operation() {
-            RuntimeOperation::RunContainedTask { request, .. } => {
-                Some(request.variables().clone())
-            }
+            RuntimeOperation::RunContainedTask { request, .. } => Some(request.variables().clone()),
             _ => None,
         })
         .expect("the run's request");
