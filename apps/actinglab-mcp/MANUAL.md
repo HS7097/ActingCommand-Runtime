@@ -296,8 +296,10 @@ naming this file.
   `state_dir`) lists at once
   everything a recording (the instance's, or the active, archived or stopped one `record_id`
   names) still lacks before `ac_record_stop` can make its package: every pre-check it fails, each
-  with its word (`what`) and the code `ac_record_stop` would answer, or, once none fails, the
-  refusal of a self-check; and its state, `material`, `draft`, `ready` or `packaged`. It only
+  with its word (`what`) and the code `ac_record_stop` would answer, or, once none fails, every
+  failure of each self-check (#463 S2-1c, 0.12.68: `ac_record_stop` answers the first; `checks`
+  says for each self-check that ran whether its list is complete, and why not); and its state,
+  `material`, `draft`, `ready` or `packaged`. It only
   reads, under no lock, also while another call holds the recording; it opens no Runtime
   connection and neither pauses nor releases the instance. #463 S2-1b (0.12.67): it also takes
   `game`, `server` and `locale` as `ac_record_stop` takes them (one out of its form is refused as

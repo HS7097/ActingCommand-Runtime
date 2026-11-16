@@ -84,6 +84,9 @@ mod gate_463_s17;
 // #463 S2-1: one read lists everything a recording still lacks before `record stop`.
 #[cfg(test)]
 mod gate_463_s21;
+// #463 S2-1c: `record ready` lists every failure of each self-check, and whether its list is all.
+#[cfg(test)]
+mod gate_463_s21c;
 // #463 S2-13: `record frames` lists the stored frames just before and just after one step's press.
 #[cfg(test)]
 mod gate_463_s213;

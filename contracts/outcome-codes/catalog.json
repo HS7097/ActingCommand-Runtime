@@ -5473,6 +5473,21 @@
         }
       }
     },
+    "ready_check_stop": {
+      "description": "Why a self-check record ready ran stopped at a failure short of its end, so that the failures missing lists of it may not be all it has, in checks[].reason (#463 S2-1c).",
+      "source": {
+        "file": "crates/lab/src/codes.rs",
+        "enum": "ReadyCheckStop"
+      },
+      "tokens": {
+        "whole_package": {
+          "description": "The check judges the generated package as one, in stages each built on the one before (admission, final_package): its first refusal leaves no stage after it to judge."
+        },
+        "check_error": {
+          "description": "The check met an error that is none of its verdicts (a target the evaluator cannot evaluate, a stored frame it cannot decode): what it would judge after it is not judged."
+        }
+      }
+    },
     "device_category": {
       "description": "The category of a device failure.",
       "source": {
