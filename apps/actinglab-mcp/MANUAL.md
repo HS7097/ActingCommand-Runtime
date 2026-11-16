@@ -183,7 +183,9 @@ naming this file.
     `warnings`. `ac_record_stop` keeps its four binding parts together under `lab`, and
     `ac_lab_observe` and `ac_do` their frame parts (`frame_coordinates`, `frame_path`, `preview`,
     `next_frame`, `after_attachment`) each in turn, while the answer still fits. An exported `ac_record_stop`
-    answer goes to `ac_record_draft` as `record_stop_export` (`{path, sha256}`);
+    answer goes to `ac_record_draft` as `record_stop_export` (`{path, sha256}`). #463 RC-1
+    (0.12.69): `ac_resource_regression` keeps `counts` the same way (its refusal lists at most 10
+    rows and fits);
   - any other line, a refusal and a child's failure line too, that does not fit with its text
     repeated is sent in `structuredContent` alone, beside a summary text `{outcome,
     structured_content_only, warnings?, warnings_omitted?, truncated?, narrow}` (from protocol
@@ -272,10 +274,19 @@ naming this file.
   A status read that fails stops no press: the press is sent without a frame, as before this
   slice (an input that needs one is refused by the Runtime itself, `nemu_input_frame_required`),
   and the answer's `touch_backend_warnings` says so (a refusal's is in its `details`, the
-  Runtime's refusal of that press too). Such an instance sends no key and no text:
-  `ac_key` and `ac_text` answer `nemu_input_capability_unsupported` there, nothing sent, and the
-  Runtime has no other way to send a key on it; the refusal's `details.hint` says what to press
-  instead (the screen's own control: `ac_tap`, or `ac_do` with `capture` on a package's element).
+  Runtime's refusal of that press too). Such an instance sends the back key alone (Workflow #463
+  KB-1, 0.12.69) and no text: `ac_key` with `back` takes the path of a press above (the status
+  read, one capture, the key sent on that frame, the one retry, the warnings); `ac_key` with any
+  other key and `ac_text` answer `nemu_input_capability_unsupported` there, nothing sent, and the
+  Runtime has no other way to send another key on it; `adb_shell_input` sends the back key alone
+  too and refuses another key before anything is sent, `input_key_unsupported` (KB-1 fix round 1,
+  the key train). Where the instance's capability table says
+  its input does not implement `input.key` or `input.text` (`minitouch` sends no key; no input but
+  `maatouch` sends text), the refusal's `details.hint` says what to press instead (the screen's
+  own control: `ac_tap`, or `ac_do` with `capture` on a package's element); where its input sends
+  the back key alone, the hint of another key says that it sends only `back`, and the same.
+  A `key back` is held by the foreground gate as a tap is: it cannot leave another application
+  (`application_not_foreground`).
   `ac_tap_target` and
   `ac_navigate` only plan on a saved frame (`scene` with `dry_run`) and press nothing anywhere,
   as their command line does: `ac_do` with `capture` and the package's element, or `tap` with a
@@ -474,7 +485,8 @@ naming this file.
   `"pending"` or a number of the pack's own: a decision that names the origin `model` is refused
   (`value_origin_model`).
 - **Where a pack stands** (#463 S3-14, 0.12.68; `contracts/standard-pack-schedule.md`, "Where a
-  pack stands"). `ac_standard_pack_status` (`root`, `repo`, `package_id`, `state_dir`) answers, for
+  pack stands"). `ac_standard_pack_status` (`root`, `repo`, `package_id`, `state_dir`,
+  `installation`) answers, for
   each pack of a game root, through a child and reading only: `formed` (admitted, and its content
   hash prefix as the trial names a content), `conditions` (its readiness items as
   `ac_standard_pack_ready` answers them) and `missing` (each failing one, a hold with its reason and
@@ -483,9 +495,24 @@ naming this file.
   as `ac_standard_pack_adopt`'s `review.trial`; `trial_not_read` instead for a pack whose records
   cannot be read), `enabled` (whether the root's schedule enables it) and `stage_state`
   (`not_admitted`, `not_judged`, `can_be_tried`, `supporting` or `enabled`), with the root's
-  counts. The placement journals are not read here: `enabled.authorization` is `not_recorded`
-  with `journals_not_read`, never an authorization guessed. `packs` grows with the root: an answer
-  over the budget is written whole to the export directory; `package_id` reads one pack.
+  counts. Without `installation` the placement journals are not read: `enabled.authorization` is
+  `not_recorded` with `journals_not_read`, never an authorization guessed. With `installation`
+  (#463 S3-15a, 0.12.69; served where the rescue module is built, Windows) the child reads the
+  installation it runs from, and `root` must be that installation's game root of its game
+  (`package_status_root_not_installed` otherwise, before anything is read; a build without the
+  rescue module answers `package_status_installation_unbuilt`): `enabled.authorization` is the
+  placement that last enabled the pack (`reference`, `initiator`, `at_unix_ms`, `operation`) or
+  `not_recorded` with `no_journal_names_it` or `journals_unreadable`; each pack answers `pairs`
+  (each task and instance the installation's one `actingd suspended` names: its `suspended`
+  `pause_cause` and its `break_in` row, as the report names it), or in their place the word
+  `suspension_report_not_read` or `bindings_not_read`, or (fix round 1) for a pack no composed task
+  runs `no_task_bound`; the root answers `installation` (`operations_read`, `operations_unread`,
+  `suspension_report_read`, `report_warnings`, the report's `ledger_read_incomplete` passed on, and
+  the word's outcome, in the detail `ACTINGCOMMAND_DETAIL` sets) and, in `warnings`, outcomes
+  only: the composition's warnings that concern the game. The child is started before the
+  journals are read and runs beside them. The readiness items of an installation (I1 to I6) are
+  not read. `packs`, `pairs` within them, grows with the root: an answer over the budget is
+  written whole to the export directory; `package_id` reads one pack.
 - **The package declaration** (Workflow #477 PC-1, 0.12.68; `contracts/pack-catalog.md`).
   `ac_standard_pack_catalog` (`root`, `plan`) builds or brings up to date a game root's
   `pack-catalog.json`, through a child: an entry for every package of `bundle.json`, a new entry's
@@ -504,6 +531,28 @@ naming this file.
   hand. `ac_packs` answers each
   game's `index` (per pool the packages that produce and consume it) and each composed row's
   `catalog`; `ac_standard_pack_check` answers the root's `catalog` note and the file's warnings.
+- **Regression cases** (#463 RC-1, 0.12.69; `contracts/resource-regression-case.md`).
+  `ac_resource_regression` (`repo`, `game`, `case`, `package_id`) runs the regression cases of a
+  resource repository's checkout offline, through a child: each case `regression/<game>/<case>/`
+  on its package `packs/<package_id>/`, with the kernel's page detection and target evaluation,
+  and answers the counts of the verdicts (`passed`, `failed`, `partial`, `not_run`); with `game`,
+  `case` or `package_id` also a short row of each case asked for (`path`, `id`, `package_id`,
+  `verdict`, the checks that did not pass with their words, its warnings). It reads only. A failed
+  case makes the call the refusal `resource_regression_failed`, whose details are the counts,
+  `failed_total`, `listed` and the rows of the first 10 cases that did not pass, the failed ones
+  first, so it always fits; partial cases add the warning `resource_regression_partial` with their
+  count; a case of another schema is `not_run` with the warning `case_schema_unsupported` and fails
+  nothing.
+- **The undo of a placement** (Workflow #463 S3-18, 0.12.69; `contracts/install-cli.md`, "The
+  packages the undo of a placement makes enter or leave scheduling"). On Windows `ac_undo` of a
+  `pack_place` operation answers `schedule_changes`, the packages it makes enter or leave
+  scheduling, beside `kept`; `plan` true (that kind of operation only) answers them with
+  `reverses` and undoes nothing. Packages that enter are the warning `undo_enters_scheduling`
+  (`names`), a list that cannot be known `undo_scheduling_unknown`, each a note of the answer's
+  outcome (`outcome.causes`), not a refusal: report them with the answer. It asks for no
+  authorization. An undo run again after it stopped, its `plan`, and `ac_op_resume` of an undo
+  that ended its steps answer the lists its undo record holds (`{enters, leaves}`) and their
+  warnings, never lists computed again from a half-undone root.
 - **Busy** is `job_capacity_exhausted` with `limit_count`: a call that would start a job while
   `--jobs` jobs run (default 8), or that needs a child while all `--children` children (default 8)
   are working. It is refused, not queued, and nothing is sent: call again later. More calls at

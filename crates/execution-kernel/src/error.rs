@@ -157,9 +157,19 @@ pub struct ExecutionFailureContext {
     input_check_stop: Option<actingcommand_device::InputCheckStop>,
     /// #402 HS-3: why a paired Nemu open found no application index, when it refused for that.
     nemu_app_index_problem: Option<actingcommand_device::NemuAppIndexProblem>,
+    /// Workflow #463 KB-1 fix round 1 (R2): the backend refused the input before it sent
+    /// anything, because it does not perform it (the primary device failure's).
+    input_unsupported: bool,
 }
 
 impl ExecutionFailureContext {
+    /// Workflow #463 KB-1 fix round 1 (the coordinator's ruling R2 of 11-16): whether the input
+    /// backend refused the input this failure ended before it sent anything, because it does not
+    /// perform it (`DeviceError::input_unsupported`): nothing was performed.
+    pub const fn input_unsupported(&self) -> bool {
+        self.input_unsupported
+    }
+
     /// #402 HS-3: why the paired Nemu open this failure ended found no application index, when
     /// the provider refused it for that.
     pub const fn nemu_app_index_problem(
@@ -517,6 +527,7 @@ impl ExecutionKernelError {
                 capture_open: error.capture_open_failure().cloned().map(Box::new),
                 input_check_stop: error.input_check_stop(),
                 nemu_app_index_problem: error.nemu_app_index_problem(),
+                input_unsupported: error.input_unsupported(),
                 causes,
                 resources: error
                     .resource_contributions()

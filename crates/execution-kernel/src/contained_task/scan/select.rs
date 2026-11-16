@@ -99,6 +99,14 @@ pub(in crate::contained_task) enum ScanSelectEnd<E> {
 /// How `Return` and `Confirm` ended: the record's `confirmation`, and how the attempt ends.
 type Confirmation<E> = (TaskSelectionConfirmation, ScanSelectEnd<E>);
 
+/// Workflow #463 K-R3a: what `Decide` gave: the decision, the coverage it was taken over and the
+/// unknown-instance check of S0 §3.2.
+type Decided = (
+    SelectionDecision,
+    ScanCoverageState,
+    TaskSelectionUnknownCheck,
+);
+
 /// The decision of a select over a scan, the members of its record besides the projection, and
 /// how the attempt ends.
 pub(in crate::contained_task) struct ScanSelection<E> {
@@ -290,6 +298,16 @@ fn not_selected(decision: &SelectionDecision) -> ContainedTaskError {
     )
 }
 
+/// Workflow #463 K-R3a, fix round K-a: the decision selected `candidate_id`, and the scan has no
+/// member of that number: `selection_evaluation_failed` with the detail `Return` gives the same
+/// broken invariant.
+pub(in crate::contained_task) fn not_a_member(candidate_id: &str) -> ContainedTaskError {
+    ContainedTaskError::with_detail(
+        ExecutionKernelCode::SelectionEvaluationFailed.code(),
+        format!("selected candidate {candidate_id} is not a member"),
+    )
+}
+
 /// `selection_identity_unconfirmed` (S0 §2.7) at `Confirm`.
 fn identity_unconfirmed(
     expected: &str,
@@ -377,53 +395,15 @@ impl ScanSession<'_> {
         source: &mut S,
         on_empty: bool,
     ) -> Result<ScanSelection<S::Error>, ContainedTaskRunError<S::Error>> {
-        let (decision, coverage) = match self.run(source)? {
-            // P2 and P3: the evaluator's abort is the decision; nothing blocks it and nothing
-            // is confirmed.
-            ScanEnd::Aborted { decision, coverage } => {
-                let unknown = self.unknown_positions();
-                let upper = self.unknown_bound(&unknown)?;
-                let failure = not_selected(&decision);
-                return Ok(ScanSelection {
-                    decision: *decision,
-                    coverage,
-                    unknown_check: TaskSelectionUnknownCheck {
-                        unknown_instances: u32_of(unknown.len()),
-                        blocking: TaskSelectionBlocking::None,
-                        upper_bound: record_bound(upper),
-                    },
-                    confirmation: TaskSelectionConfirmation::NotAttempted,
-                    end: ScanSelectEnd::Failed(failure.into()),
-                });
-            }
-            ScanEnd::Covered => (self.decide()?, ScanCoverageState::Complete),
-            ScanEnd::EarlyStopped => (self.decide()?, ScanCoverageState::EarlyStopped),
-            // Workflow #428 S168-4: only a list reading's session has a row limit.
-            ScanEnd::RowsExceeded => {
-                return Err(ContainedTaskError::with_detail(
-                    ExecutionKernelCode::SelectionEvaluationFailed.code(),
-                    format!(
-                        "layout={} a select step's scan has no row limit",
-                        self.layout_id
-                    ),
-                )
-                .into());
-            }
-        };
-        let unknown = self.unknown_positions();
-        let unknown_instances = u32_of(unknown.len());
-        let upper = self.unknown_bound(&unknown)?;
-        let blocking = decision_blocking(&decision, upper, unknown_instances)?;
-        let unknown_check = TaskSelectionUnknownCheck {
-            unknown_instances,
-            blocking,
-            upper_bound: record_bound(upper),
-        };
+        // Workflow #463 K-R3a: `Decide` is `decide_attempt`, which a dry run stops after.
+        let scan_end = self.run(source)?;
+        let (decision, coverage, unknown_check) = self.decide_attempt(scan_end)?;
+        let blocking = unknown_check.blocking;
         let not_attempted = |end| (TaskSelectionConfirmation::NotAttempted, end);
         let (confirmation, end) = if blocking != TaskSelectionBlocking::None {
             // P6 and P7.
             not_attempted(ScanSelectEnd::Failed(
-                result_blocked(&decision, blocking, unknown_instances).into(),
+                result_blocked(&decision, blocking, unknown_check.unknown_instances).into(),
             ))
         } else {
             match (&decision.outcome, decision.selected.as_slice()) {
@@ -440,6 +420,7 @@ impl ScanSession<'_> {
                     )
                     .into());
                 }
+                // P2 and P3 (the evaluator's abort is the decision, and nothing blocks it), and
                 // P5.
                 _ => not_attempted(ScanSelectEnd::Failed(not_selected(&decision).into())),
             }
@@ -451,6 +432,62 @@ impl ScanSession<'_> {
             confirmation,
             end,
         })
+    }
+
+    /// Workflow #463 K-R3a: `Decide` (S0 §2.2, §3.2) of the session that ended with `end`, the
+    /// part of [`Self::select`] before `Return`, which the dry run `dry_run_scan_decide` stops
+    /// after. After the evaluator's abort (P2, P3) the abort is the decision; after complete
+    /// coverage or an early stop the members are evaluated once. Then the unknown instances
+    /// decide whether the decision stands (rules 2 and 3; neither blocks an abort, whose kind is
+    /// `unknown`).
+    pub(in crate::contained_task) fn decide_attempt(
+        &self,
+        end: ScanEnd,
+    ) -> Result<Decided, ContainedTaskError> {
+        let (decision, coverage) = match end {
+            ScanEnd::Aborted { decision, coverage } => (*decision, coverage),
+            ScanEnd::Covered => (self.decide()?, ScanCoverageState::Complete),
+            ScanEnd::EarlyStopped => (self.decide()?, ScanCoverageState::EarlyStopped),
+            // Workflow #428 S168-4: only a list reading's session has a row limit.
+            ScanEnd::RowsExceeded => {
+                return Err(ContainedTaskError::with_detail(
+                    ExecutionKernelCode::SelectionEvaluationFailed.code(),
+                    format!(
+                        "layout={} a select step's scan has no row limit",
+                        self.layout_id
+                    ),
+                ));
+            }
+        };
+        let unknown = self.unknown_positions();
+        let unknown_instances = u32_of(unknown.len());
+        let upper = self.unknown_bound(&unknown)?;
+        let blocking = decision_blocking(&decision, upper, unknown_instances)?;
+        Ok((
+            decision,
+            coverage,
+            TaskSelectionUnknownCheck {
+                unknown_instances,
+                blocking,
+                upper_bound: record_bound(upper),
+            },
+        ))
+    }
+
+    /// Workflow #463 K-R3a: the first-seen index of the position whose member `Decide` numbered
+    /// `candidate_id` (`<layout>#NN`). The decision selected it from the members `Decide`
+    /// numbered, so a candidate that is none of them is an invariant broken, not an answer
+    /// ([`not_a_member`]; the fix round K-a).
+    pub(in crate::contained_task) fn member_position(
+        &self,
+        candidate_id: &str,
+    ) -> Result<u32, ContainedTaskError> {
+        self.numbered_members()?
+            .into_iter()
+            .enumerate()
+            .find(|(number, _)| self.member_id(*number) == candidate_id)
+            .map(|(_, index)| self.positions[index].index)
+            .ok_or_else(|| not_a_member(candidate_id))
     }
 
     /// `Decide`'s evaluation (S0 §2.2, §2.6): the members, numbered `<layout>#NN` in first-seen

@@ -118,6 +118,22 @@ pub(crate) struct UndoRecord {
     /// the Lab's rescue module did; absent for `actingctl install undo`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) initiator: Option<Initiator>,
+    /// Workflow #463 S3-18: of the undo of a `pack_place` operation, the packages it makes enter
+    /// and leave scheduling, as computed before its first step; absent for the undo of any other
+    /// kind, and in a record an earlier build wrote.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) schedule_changes: Option<UndoSchedule>,
+}
+
+/// Workflow #463 S3-18: what the undo of a `pack_place` operation makes enter and leave its game's
+/// scheduling (`crate::install::place::undone`): the sorted package ids it lets enter (or take a
+/// role again), `enters`, and those that leave, `leaves`; both `None` (`null`) when the game root
+/// as the undo leaves it could not be read, so that neither is known.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct UndoSchedule {
+    pub(crate) enters: Option<Vec<String>>,
+    pub(crate) leaves: Option<Vec<String>>,
 }
 
 /// Workflow #421 INST-2 (#421 deploy design §4, decision 74 A): the automatic rollback of a
@@ -524,6 +540,16 @@ impl<'h> Operation<'h> {
     /// `initiator` when the rescue module undoes it (Workflow #434 LAB-3). The undo's own
     /// milliseconds name what it moves aside.
     pub(crate) fn begin_undo(&mut self, initiator: Option<Initiator>) -> Result<u64, Outcome> {
+        self.begin_undo_with(initiator, None)
+    }
+
+    /// Workflow #463 S3-18: [`Self::begin_undo`], the record it writes carrying `schedule_changes`
+    /// (the undo of a `pack_place` operation). An undo already under way keeps the record it has.
+    pub(crate) fn begin_undo_with(
+        &mut self,
+        initiator: Option<Initiator>,
+        schedule_changes: Option<UndoSchedule>,
+    ) -> Result<u64, Outcome> {
         if let Some(undo) = &self.journal.undo {
             return Ok(undo.started_at_unix_ms);
         }
@@ -550,6 +576,7 @@ impl<'h> Operation<'h> {
             started_at_unix_ms: now,
             finished_at_unix_ms: None,
             initiator,
+            schedule_changes,
         });
         self.write()?;
         Ok(now)

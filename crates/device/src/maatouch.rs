@@ -767,8 +767,8 @@ impl InputBackend for MaaTouchBackend {
     }
 
     fn key(&mut self, _witness: &FencedWrite, key: &str) -> DeviceResult<()> {
-        let key = validate_maatouch_line_token("key", key)?;
-        self.write_and_flush(&format!("k {key} o\nc\n"))
+        let lines = maatouch_key_lines(key)?;
+        self.write_and_flush(&lines)
     }
 
     fn text(&mut self, _witness: &FencedWrite, text: &str) -> DeviceResult<()> {
@@ -1193,10 +1193,32 @@ fn validate_maatouch_line_token<'a>(name: &str, value: &'a str) -> DeviceResult<
     Ok(value)
 }
 
+/// The lines MaaTouch's `key` writes for the key `key`, carried as it is given: the key pressed
+/// and released at once (`k <key> o`), then the commit (`c`). Workflow #463, the key train's
+/// second round: its own function, so that a test reads the line a key step's back key becomes.
+fn maatouch_key_lines(key: &str) -> DeviceResult<String> {
+    let key = validate_maatouch_line_token("key", key)?;
+    Ok(format!("k {key} o\nc\n"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Cursor;
+
+    // Workflow #463, the key train's second round (register §1.447, "Train, round 2"): the back
+    // key of a package's key step reaches MaaTouch as `k 4 o`. The kernel spells the key from the
+    // device layer's one answer, the number `DeviceKey::android_code`, in decimal digits
+    // (`StepKey::input_key`); MaaTouch's line carries those digits as it is given them.
+    #[test]
+    fn train_key_round2_maatouch_writes_the_back_key_of_a_key_step_as_k_4_o() {
+        let spelled = crate::DeviceKey::Back.android_code().to_string();
+        assert_eq!(spelled, "4");
+        assert_eq!(
+            maatouch_key_lines(&spelled).expect("the back key's line"),
+            "k 4 o\nc\n"
+        );
+    }
 
     // Defect regressions D01/D07: PR298 review 5120590779, Workflow #257 C1B9 v16.
     #[test]

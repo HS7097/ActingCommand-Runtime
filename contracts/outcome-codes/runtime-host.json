@@ -7791,6 +7791,26 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "input_key_unsupported": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.69",
+      "description": "Workflow #463, the key train: a key input names a key the instance's input backend does not send, on an instance whose touch_backend is adb_shell_input, which sends the back key alone (back, or Android's 4 or KEYCODE_BACK). The host refuses it before anything is sent and before an input intent is written: receipt denied, no input record, nothing performed. The emulator's own input (nemu_ipc) refuses such a key with its own code, nemu_input_capability_unsupported.",
+      "common_causes": "A key other than the back key (home, a menu key, another key code) sent by actinglab key, ac_key or a client's Input request to an instance whose touch_backend is adb_shell_input.",
+      "handling": "Nothing was sent. Send the back key as back (or 4 or KEYCODE_BACK). For another key press the screen's own control instead: tap x y, or do --capture with the package's element; actinglab's refusal carries details.hint saying this input sends only back. An instance whose touch_backend is maatouch sends every key."
+    },
     "install_abort_state_invalid": {
       "category": "error",
       "ladder_class": "none",
@@ -10187,8 +10207,8 @@
       "status": "active",
       "since": "0.12.0",
       "description": "The Runtime host reports nemu input capability unsupported.",
-      "common_causes": "A key or a text sent to an instance whose input is the emulator's own interface (touch_backend nemu_ipc), which performs taps, long taps, swipes, the segmented drags and the reset, and no key and no text (the instance's capability table says input.key and input.text unsupported).",
-      "handling": "Nothing was sent. Press the screen's own control instead: a tap, or do with capture on the package's element; the Runtime has no other way to send a key on such an instance (its recovery ladder sends none: a recovery package's presses, an application restart, an emulator restart). An instance whose touch_backend is maatouch sends keys and text (Workflow #434 LW-1)."
+      "common_causes": "A key other than the back key, or a text, sent to an instance whose input is the emulator's own interface (touch_backend nemu_ipc), which performs taps, long taps, swipes, the segmented drags, the reset and (Workflow #463 KB-1, 0.12.69) the back key on a frame the Runtime captured, and no other key and no text (the instance's capability table says input.key supported for the back key alone and input.text unsupported). Since Workflow #463 KB-1 fix round 1 also: the back key on such an instance whose emulator library lacks the two key calls (nemu_input_event_key_down, nemu_input_event_key_up), refused when it is sent, its input record's effect not_performed. A key other than the back key on an instance whose touch_backend is adb_shell_input is input_key_unsupported (the key train).",
+      "handling": "Nothing was sent. The back key is sent as back (or Android's 4 or KEYCODE_BACK) on a frame the Runtime captured; actinglab's key back captures one first on such an instance. For another key press the screen's own control instead: a tap, or do with capture on the package's element; the Runtime has no other way to send another key on such an instance (its recovery ladder sends none: a recovery package's presses, an application restart, an emulator restart). Where the emulator library lacks the key calls, no key is sent on that installation until a library that has them is installed; press the screen's own control meanwhile. An instance whose touch_backend is maatouch sends every key and text (Workflow #434 LW-1)."
     },
     "nemu_input_deadline_overflow": {
       "category": "error",

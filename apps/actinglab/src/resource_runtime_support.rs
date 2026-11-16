@@ -78,6 +78,8 @@ pub(super) fn run_resource(
         // `check-release` are gone; `verify` checks a repository commit.
         // Workflow #411 RV-1: one repository commit checked as its CI checks it.
         "verify" => crate::resource_verify::run_resource_verify(global, &flags),
+        // #463 RC-1: a checkout's regression cases run offline on the kernel's recognition.
+        "regression" => crate::resource_verify::run_resource_regression(global, &flags),
         _ => Err(CliError::usage(format!("unknown resource command: {sub}"))),
     }
 }

@@ -52,7 +52,7 @@
     "session <subcommand>",
     "run <subcommand>"
   ],
-  "command_count": 108,
+  "command_count": 109,
   "commands": [
     "help",
     "version",
@@ -132,6 +132,7 @@
     "resource compile-maa",
     "resource catalog",
     "resource verify",
+    "resource regression",
     "standard-pack check",
     "standard-pack compose",
     "standard-pack build",

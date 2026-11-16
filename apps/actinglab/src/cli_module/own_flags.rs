@@ -54,8 +54,9 @@ use crate::{
 
 /// The strict rows: [`accepted`] answers for each of them and, beside them, for the rows of
 /// [`CORE_STRICT_ROWS`] only. Workflow #464 P2: `standard-pack build`, checked against its list
-/// as `resource verify` is. Workflow #463 S3-14: `standard-pack status`, against its list.
-pub(crate) const STRICT_ROWS: [&str; 35] = [
+/// as `resource verify` is. Workflow #463 S3-14: `standard-pack status`, against its list. #463
+/// RC-1: `resource regression` the same.
+pub(crate) const STRICT_ROWS: [&str; 36] = [
     "tap",
     "swipe",
     "long-tap",
@@ -80,6 +81,8 @@ pub(crate) const STRICT_ROWS: [&str; 35] = [
     "resource catalog",
     "resource validate",
     "resource verify",
+    // #463 RC-1.
+    "resource regression",
     "resource restore",
     "standard-pack compose",
     "standard-pack build",
@@ -379,6 +382,10 @@ pub(crate) fn accepted(row: &str) -> Option<Accepted> {
             Positionals::of(&resource_declarations::VALIDATE_POSITIONALS),
         ),
         "resource verify" => from_lists(resource_verify::FLAGS, &[], none),
+        // #463 RC-1: its game is actinglab's global `--game`.
+        "resource regression" => {
+            from_lists(resource_verify::regression::REGRESSION_FLAGS, &[], none)
+        }
         "resource restore" => from_lists(resource_restore::RESTORE_FLAGS, &[], none),
         "standard-pack check" => from_lists(standard_pack_cli::CHECK_FLAGS, &[], none),
         // Workflow #463 V3.
@@ -399,8 +406,12 @@ pub(crate) fn accepted(row: &str) -> Option<Accepted> {
             &standard_pack_cli::TRIAL_SWITCHES,
             none,
         ),
-        // Workflow #463 S3-14.
-        "standard-pack status" => from_lists(standard_pack_cli::STATUS_FLAGS, &[], none),
+        // Workflow #463 S3-14. Workflow #463 S3-15a: and its switch `--installation`.
+        "standard-pack status" => from_lists(
+            standard_pack_cli::STATUS_FLAGS,
+            &standard_pack_cli::STATUS_SWITCHES,
+            none,
+        ),
         // Workflow #477 PC-1.
         "standard-pack catalog" => from_lists(
             standard_pack_cli::CATALOG_FLAGS,
@@ -503,8 +514,8 @@ pub(crate) const UNROWED_READS: [&FlagReads; 4] = [
 /// completion scripts' callback, which reads every word of its line (its options, the index, the
 /// typed words in their form) and answers a line it cannot read with no candidate, ignoring none.
 /// Workflow #464 P2: `standard-pack build`, against its strict list. Workflow #463 S3-14:
-/// `standard-pack status`, against its strict list.
-pub(crate) const REFUSING_COMMANDS: [&str; 68] = [
+/// `standard-pack status`, against its strict list. #463 RC-1: `resource regression` the same.
+pub(crate) const REFUSING_COMMANDS: [&str; 69] = [
     "schema",
     "touch-probe",
     "tap",
@@ -556,6 +567,8 @@ pub(crate) const REFUSING_COMMANDS: [&str; 68] = [
     "resource compile-maa",
     "resource catalog",
     "resource verify",
+    // #463 RC-1: refuses every flag off its strict list and any positional.
+    "resource regression",
     "standard-pack check",
     "standard-pack compose",
     "standard-pack build",

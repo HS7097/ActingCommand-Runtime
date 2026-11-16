@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
-use crate::{InputBackend, InputSelectionContext, PreparedSegmentedSwipePlan, SegmentedSwipeEvent};
+use crate::{
+    DeviceKey, InputBackend, InputSelectionContext, PreparedSegmentedSwipePlan, SegmentedSwipeEvent,
+};
 use actingcommand_contract::{FencedWrite, InputAction};
 use std::ffi::{CString, c_char};
 
@@ -11,6 +13,30 @@ mod gate_hs4;
 // HS-5a (#402): the paired session without its application's display, and the opener's close.
 #[cfg(test)]
 mod gate_hs5;
+// Workflow #463 KB-1: the back key through the library's key calls, on a fake device.
+#[cfg(test)]
+mod gate_463_kb1;
+
+/// Workflow #463 KB-1: the library's key calls (`external_renderer_ipc`), looked up by name.
+const NEMU_KEY_DOWN: &[u8] = b"nemu_input_event_key_down\0";
+const NEMU_KEY_UP: &[u8] = b"nemu_input_event_key_up\0";
+
+/// Workflow #463 KB-1: the key code the library's key calls take for the back key. The vendor's
+/// header of the library (`external_renderer_ipc.h`, published with the vendor's rights reserved
+/// in the repository `MaaXYZ/EmulatorExtras`, file `Mumu/external_renderer_ipc/
+/// external_renderer_ipc.h`, last changed in its commit `9424dcbe` of 2024-08-15) declares
+/// `int nemu_input_event_key_down(int handle, int displayid, int key_code)` and
+/// `int nemu_input_event_key_up(int handle, int displayid, int key_code)`, 0 for success, and
+/// says that `key_code` is a code of Linux's `include/uapi/linux/input-event-codes.h`, where
+/// `KEY_BACK` is 158. Not yet confirmed on a device.
+const NEMU_KEY_BACK: i32 = 158;
+
+/// Workflow #463 KB-1: the vendor's key code of `key` ([`NEMU_KEY_BACK`]).
+const fn nemu_key_code(key: DeviceKey) -> i32 {
+    match key {
+        DeviceKey::Back => NEMU_KEY_BACK,
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NemuAppIndex(i32);
@@ -444,13 +470,13 @@ fn unsupported() -> DeviceError {
 /// committed frame its step decided on, bound by that frame's geometry fence and by the deadline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NemuInputSupport {
-    /// Performed on the step's committed frame: the tap, the long tap, the swipe and the three
-    /// segmented drags.
+    /// Performed on the step's committed frame: the tap, the long tap, the swipe, the three
+    /// segmented drags and (Workflow #463 KB-1) the back key ([`DeviceKey`]).
     InFrame,
     /// Performed without a frame: the reset, which only lifts a contact whose lift was not
     /// confirmed.
     WithoutFrame,
-    /// Not performed: `key` and `text`.
+    /// Not performed: `text`, and every key but the back key.
     Unsupported,
 }
 
@@ -463,6 +489,7 @@ impl NemuInputSupport {
             | InputAction::SingleTouchDragWithVerticalBrakeV1 { .. }
             | InputAction::SingleTouchDragWithPauseAndBrakeV1 { .. }
             | InputAction::SingleTouchPathDragV1 { .. } => Self::InFrame,
+            InputAction::Key { key } if DeviceKey::named(key).is_some() => Self::InFrame,
             InputAction::Reset => Self::WithoutFrame,
             InputAction::Key { .. } | InputAction::Text { .. } => Self::Unsupported,
         }
@@ -558,6 +585,23 @@ impl InputBackend for NemuInputView {
     fn key(&mut self, _: &FencedWrite, _: &str) -> DeviceResult<()> {
         Err(unsupported())
     }
+    /// Workflow #463 KB-1: the back key as the library's key down and key up, on the step's
+    /// frame, through the worker's geometry fence and deadline, as a tap is pressed
+    /// ([`press_key`]); every other key is refused there before any call.
+    fn key_in_frame(
+        &mut self,
+        _witness: &FencedWrite,
+        key: &str,
+        context: &InputExecutionContext,
+    ) -> DeviceResult<()> {
+        self.require_attached()?;
+        self.owner
+            .input(context, |response| NemuIpcCommand::InputKey {
+                key: key.to_owned(),
+                context: context.clone(),
+                response,
+            })
+    }
     fn text(&mut self, _: &FencedWrite, _: &str) -> DeviceResult<()> {
         Err(unsupported())
     }
@@ -629,6 +673,16 @@ enum Contact {
     Released,
 }
 
+/// Workflow #463 KB-1 fix round 1 (the coordinator's ruling R1 of 11-16): the key the input
+/// pressed last, as [`Contact`] records the finger: its vendor key code, which a later key up
+/// lifts, and whether that key may still be down (`MayBeDown`: pressed, its key up not called;
+/// `UpAttempted`: its key up called without a confirmed answer) or was released.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PressedKey {
+    vendor_key: i32,
+    state: Contact,
+}
+
 pub(super) struct NemuInputState {
     application: NemuApplicationTarget,
     config: NemuInputConfig,
@@ -637,6 +691,8 @@ pub(super) struct NemuInputState {
     display: Option<i32>,
     size: Option<(u32, u32)>,
     contact: Contact,
+    /// Workflow #463 KB-1 fix round 1 (R1): the key the input pressed last; `None` before any.
+    key: Option<PressedKey>,
     /// #402 HS-5a: the connection's main display, the one a capture-only session captures
     /// (`NemuIpcConfig::display_id`).
     main_display: i32,
@@ -655,6 +711,7 @@ impl NemuInputState {
             display: None,
             size: None,
             contact: Contact::NotStarted,
+            key: None,
             main_display: 0,
             source: None,
         }
@@ -664,6 +721,13 @@ impl NemuInputState {
     pub(super) fn with_main_display(mut self, display: i32) -> Self {
         self.main_display = display;
         self
+    }
+
+    /// Workflow #463 KB-1 fix round 1 (R1): the key that may still be down (pressed, or its key
+    /// up called without a confirmed answer), as a contact that may be down is unresolved.
+    fn unreleased_key(&self) -> Option<PressedKey> {
+        self.key
+            .filter(|key| matches!(key.state, Contact::MayBeDown | Contact::UpAttempted))
     }
     fn invalidate(&mut self) -> DeviceResult<()> {
         self.display = None;
@@ -679,6 +743,9 @@ impl NemuInputState {
 type GetDisplay = unsafe extern "C" fn(i32, *const c_char, i32) -> i32;
 type FingerDown = unsafe extern "C" fn(i32, i32, i32, i32, i32) -> i32;
 type FingerUp = unsafe extern "C" fn(i32, i32, i32) -> i32;
+/// Workflow #463 KB-1: the key down and the key up: the connection, the display, the vendor's key
+/// code ([`NEMU_KEY_BACK`]); 0 for success.
+type KeyEvent = unsafe extern "C" fn(i32, i32, i32) -> i32;
 
 impl NemuIpcWorkerState {
     /// #411 A50: a capture open failure's `cause`, with the instance index this worker
@@ -707,17 +774,23 @@ impl NemuIpcWorkerState {
                     "Nemu contact prevents display invalidation",
                 ));
             }
+            // Workflow #463 KB-1 fix round 1 (R1): a key that may be down, as a contact.
+            if input.unreleased_key().is_some() {
+                return Err(contact_unconfirmed(
+                    "Nemu key prevents display invalidation",
+                ));
+            }
             input.invalidate()?;
         }
         Ok(())
     }
 
     /// #402 HS-5a (R1): nothing was pressed on this connection: a capture-only one, or a paired
-    /// one whose contact never started.
+    /// one whose contact never started and (Workflow #463 KB-1 fix round 1) that pressed no key.
     pub(super) fn connection_unpressed(&self) -> bool {
         self.input
             .as_ref()
-            .is_none_or(|input| input.contact == Contact::NotStarted)
+            .is_none_or(|input| input.contact == Contact::NotStarted && input.key.is_none())
     }
 
     /// The display a paired connection's next capture or touch addresses (`resolve_display`);
@@ -795,6 +868,16 @@ impl NemuIpcWorkerState {
         perform_events(self, events, context, stopped)
     }
 
+    /// Workflow #463 KB-1: the key `key` ([`press_key`]).
+    pub(super) fn input_key(
+        &mut self,
+        key: &str,
+        context: &InputExecutionContext,
+        stopped: &AtomicBool,
+    ) -> DeviceResult<()> {
+        press_key(self, key, context, stopped)
+    }
+
     /// HS-4 (#402): the reset.
     pub(super) fn input_reset(
         &mut self,
@@ -804,6 +887,8 @@ impl NemuIpcWorkerState {
         reset_contact(self, context, stopped)
     }
 
+    /// The close's final up of a contact that may be down and (Workflow #463 KB-1 fix round 1,
+    /// R1) of a key that may be down, each under the close's fence and check, as the contact's.
     pub(super) fn close_input_contact(
         &mut self,
         authority: DeviceCloseAuthority,
@@ -823,12 +908,34 @@ impl NemuIpcWorkerState {
                         contact_unconfirmed("Nemu final up has no current close check")
                     })?,
                     stopped,
-                )
+                )?;
             }
             Some(Contact::UpAttempted) => {
-                Err(contact_unconfirmed("Nemu final up was not confirmed"))
+                return Err(contact_unconfirmed("Nemu final up was not confirmed"));
             }
-            _ => Ok(()),
+            _ => {}
+        }
+        match self.input.as_ref().and_then(NemuInputState::unreleased_key) {
+            Some(PressedKey {
+                vendor_key,
+                state: Contact::MayBeDown,
+            }) => {
+                if authority.resource_close_witness().is_none() {
+                    return Err(contact_unconfirmed(
+                        "Nemu final key up requires current fenced close",
+                    ));
+                }
+                key_up(
+                    self,
+                    vendor_key,
+                    check.ok_or_else(|| {
+                        contact_unconfirmed("Nemu final key up has no current close check")
+                    })?,
+                    stopped,
+                )
+            }
+            Some(_) => Err(contact_unconfirmed("Nemu final key up was not confirmed")),
+            None => Ok(()),
         }
     }
 }
@@ -840,6 +947,15 @@ enum NemuTouchCall {
     Down(i32, i32),
     /// The finger up.
     Up,
+}
+
+/// Workflow #463 KB-1: one native key call of the Nemu input, with the vendor's key code.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NemuKeyCall {
+    /// The key down.
+    Down(i32),
+    /// The key up.
+    Up(i32),
 }
 
 /// HS-4 (#402): what one Nemu touch needs of its connection: the paired input's state, the
@@ -879,6 +995,12 @@ trait NemuTouchPort {
         check: &dyn InputOperationCheck,
         stopped: &AtomicBool,
     ) -> DeviceResult<()>;
+    /// Workflow #463 KB-1: whether the library offers both key calls
+    /// (`nemu_input_event_key_down`, `nemu_input_event_key_up`); a library without them sends
+    /// no key, as the input sent none before.
+    fn key_calls(&self) -> bool;
+    /// Workflow #463 KB-1: makes the native key call; its return code, 0 for success.
+    fn key_native(&mut self, call: NemuKeyCall) -> DeviceResult<i32>;
 }
 
 impl NemuTouchPort for NemuIpcWorkerState {
@@ -966,6 +1088,29 @@ impl NemuTouchPort for NemuIpcWorkerState {
     ) -> DeviceResult<()> {
         input_wait(duration, check, stopped)
     }
+
+    fn key_calls(&self) -> bool {
+        self.library.as_ref().is_some_and(|library| {
+            // Looks the two calls up by name; neither is called here.
+            [NEMU_KEY_DOWN, NEMU_KEY_UP]
+                .into_iter()
+                .all(|name| unsafe { library.get::<KeyEvent>(name) }.is_ok())
+        })
+    }
+
+    fn key_native(&mut self, call: NemuKeyCall) -> DeviceResult<i32> {
+        let (connect_id, display_id) = (self.connect_id, self.display_id);
+        Ok(match call {
+            NemuKeyCall::Down(vendor_key) => {
+                let down: KeyEvent = unsafe { self.symbol(NEMU_KEY_DOWN)? };
+                unsafe { down(connect_id, display_id, vendor_key) }
+            }
+            NemuKeyCall::Up(vendor_key) => {
+                let up: KeyEvent = unsafe { self.symbol(NEMU_KEY_UP)? };
+                unsafe { up(connect_id, display_id, vendor_key) }
+            }
+        })
+    }
 }
 
 /// #402 HS-5a (design `model-hs5.md` §4.1): looks the display of the application's package up
@@ -1021,27 +1166,7 @@ fn perform_events<P: NemuTouchPort>(
     context: &InputExecutionContext,
     stopped: &AtomicBool,
 ) -> DeviceResult<()> {
-    input_check(context.check.as_ref(), InputCheckPhase::Continue, stopped)?;
-    let geometry = context
-        .geometry
-        .as_ref()
-        .ok_or_else(|| DeviceError::fatal("Nemu input requires the committed source frame"))?;
-    let (width, height) = port.touch_resolution(context, stopped)?;
-    let display_id = port.touch_display();
-    let input = port.touch_input().ok_or_else(unsupported)?;
-    if !Arc::ptr_eq(&input.owner, &geometry.owner)
-        || input.generation != geometry.generation
-        || display_id != geometry.display_id
-        || (width, height) != geometry.dimensions()
-    {
-        input.invalidate()?;
-        return Err(DeviceError::fatal(
-            "Nemu input frame target or geometry changed",
-        ));
-    }
-    if matches!(input.contact, Contact::MayBeDown | Contact::UpAttempted) {
-        return Err(contact_unconfirmed("Nemu input contact is unresolved"));
-    }
+    let (width, height) = frame_fence(port, context, stopped)?;
     let mut delay = Duration::ZERO;
     for event in events {
         let milliseconds = match event {
@@ -1066,17 +1191,7 @@ fn perform_events<P: NemuTouchPort>(
             .checked_add(Duration::from_millis(milliseconds))
             .ok_or_else(unsupported)?;
     }
-    let reserve = input
-        .config
-        .shutdown_timeout
-        .min(input.config.command_timeout);
-    if delay.checked_add(reserve).ok_or_else(unsupported)?
-        >= input_check(context.check.as_ref(), InputCheckPhase::Continue, stopped)?
-    {
-        return Err(DeviceError::fatal(
-            "Nemu input deadline cannot cover the gesture and final up",
-        ));
-    }
+    cover_deadline(port, delay, context, stopped)?;
     let result = run_events(port, events, context, stopped);
     let unreleased = result.is_err()
         && port
@@ -1090,6 +1205,161 @@ fn perform_events<P: NemuTouchPort>(
                 .with_resource_quiescence(DeviceResourceQuiescence::Unconfirmed, 1)),
         },
         result => result,
+    }
+}
+
+/// The frame `context` names, as every input on a frame meets it (§4.2 item 4): the input's check,
+/// the committed frame's geometry against the display's now (its owner, its display generation,
+/// its display and its size; a frame of another invalidates the geometry of every earlier frame)
+/// and no contact left unresolved, nor (Workflow #463 KB-1 fix round 1, R1) a key that may be
+/// down. The frame's size.
+fn frame_fence<P: NemuTouchPort>(
+    port: &mut P,
+    context: &InputExecutionContext,
+    stopped: &AtomicBool,
+) -> DeviceResult<(u32, u32)> {
+    input_check(context.check.as_ref(), InputCheckPhase::Continue, stopped)?;
+    let geometry = context
+        .geometry
+        .as_ref()
+        .ok_or_else(|| DeviceError::fatal("Nemu input requires the committed source frame"))?;
+    let (width, height) = port.touch_resolution(context, stopped)?;
+    let display_id = port.touch_display();
+    let input = port.touch_input().ok_or_else(unsupported)?;
+    if !Arc::ptr_eq(&input.owner, &geometry.owner)
+        || input.generation != geometry.generation
+        || display_id != geometry.display_id
+        || (width, height) != geometry.dimensions()
+    {
+        input.invalidate()?;
+        return Err(DeviceError::fatal(
+            "Nemu input frame target or geometry changed",
+        ));
+    }
+    if matches!(input.contact, Contact::MayBeDown | Contact::UpAttempted) {
+        return Err(contact_unconfirmed("Nemu input contact is unresolved"));
+    }
+    if input.unreleased_key().is_some() {
+        return Err(contact_unconfirmed("Nemu input key is unresolved"));
+    }
+    Ok((width, height))
+}
+
+/// The input's deadline covers `delay`, the waits of what it presses, together with the reserve
+/// of the final up (§4.2 item 5).
+fn cover_deadline<P: NemuTouchPort>(
+    port: &mut P,
+    delay: Duration,
+    context: &InputExecutionContext,
+    stopped: &AtomicBool,
+) -> DeviceResult<()> {
+    let input = port.touch_input().ok_or_else(unsupported)?;
+    let reserve = input
+        .config
+        .shutdown_timeout
+        .min(input.config.command_timeout);
+    if delay.checked_add(reserve).ok_or_else(unsupported)?
+        >= input_check(context.check.as_ref(), InputCheckPhase::Continue, stopped)?
+    {
+        return Err(DeviceError::fatal(
+            "Nemu input deadline cannot cover the gesture and final up",
+        ));
+    }
+    Ok(())
+}
+
+/// Workflow #463 KB-1 (the owner's ruling on board #463; the coordinator's rulings of 11-16): the
+/// key `key` on the frame `context` names, as a tap is pressed. A key other than the back key
+/// ([`DeviceKey`]) is refused before any call with the error every key had before
+/// ([`unsupported`]); fix round 1 (R2): so is every key on a library without the two key calls,
+/// as the input capability's refusal ([`DeviceError::with_input_unsupported`]), which the Runtime
+/// answers as a denial, nothing performed. Then the frame's fence ([`frame_fence`]), the deadline
+/// with the final up's reserve ([`cover_deadline`]), and the key down and the key up with the
+/// vendor's key code ([`nemu_key_code`]), each checked before it, on the display the frame's
+/// touches address. Once the key down was called the key up is called, whatever the key down
+/// answered; a key up that is not confirmed leaves the input unconfirmed. Fix round 1 (R1): the
+/// key is recorded as possibly down before its key down is called, as a finger is
+/// ([`PressedKey`]); a key up that is not called (its check failed) or not confirmed leaves it so,
+/// for the reset or the close to lift ([`reset_contact`], `close_input_contact`).
+fn press_key<P: NemuTouchPort>(
+    port: &mut P,
+    key: &str,
+    context: &InputExecutionContext,
+    stopped: &AtomicBool,
+) -> DeviceResult<()> {
+    let key = DeviceKey::named(key).ok_or_else(unsupported)?;
+    if !port.key_calls() {
+        return Err(unsupported().with_input_unsupported());
+    }
+    frame_fence(port, context, stopped)?;
+    cover_deadline(port, Duration::ZERO, context, stopped)?;
+    let vendor_key = nemu_key_code(key);
+    let check = context.check.as_ref();
+    input_check(check, InputCheckPhase::Continue, stopped)?;
+    port.touch_resume()?;
+    port.touch_input().ok_or_else(unsupported)?.key = Some(PressedKey {
+        vendor_key,
+        state: Contact::MayBeDown,
+    });
+    let down = port
+        .key_native(NemuKeyCall::Down(vendor_key))
+        .and_then(|answer| key_answered("down", answer));
+    let down = merge_input_snapshot(down, port.touch_snapshot());
+    let up = key_up(port, vendor_key, check, stopped)
+        .map_err(|error| error.with_resource_quiescence(DeviceResourceQuiescence::Unconfirmed, 1));
+    match (down, up) {
+        (Ok(()), up) => up,
+        (Err(primary), Ok(())) => Err(primary),
+        (Err(primary), Err(secondary)) => Err(primary
+            .merge_resource_cleanup(secondary)
+            .with_resource_quiescence(DeviceResourceQuiescence::Unconfirmed, 1)),
+    }
+}
+
+/// Workflow #463 KB-1: the key up, checked as a contact's final up is; it is called even when its
+/// output cannot be captured, and that failure is reported with the snapshot's. Fix round 1 (R1):
+/// as a finger's up ([`finger_up`]), the key is recorded as lifted without a confirmed answer
+/// before the call and as released once the call answers 0; any other answer leaves the input
+/// unconfirmed.
+fn key_up<P: NemuTouchPort>(
+    port: &mut P,
+    vendor_key: i32,
+    check: &dyn InputOperationCheck,
+    stopped: &AtomicBool,
+) -> DeviceResult<()> {
+    input_check(check, InputCheckPhase::FinalUp, stopped)?;
+    port.touch_input().ok_or_else(unsupported)?;
+    let resumed = port.touch_resume();
+    port.touch_input().ok_or_else(unsupported)?.key = Some(PressedKey {
+        vendor_key,
+        state: Contact::UpAttempted,
+    });
+    let native = match port.key_native(NemuKeyCall::Up(vendor_key)) {
+        Ok(0) => {
+            if let Some(input) = port.touch_input() {
+                input.key = Some(PressedKey {
+                    vendor_key,
+                    state: Contact::Released,
+                });
+            }
+            Ok(())
+        }
+        Ok(answer) => Err(contact_unconfirmed(&format!(
+            "Nemu key up failed with code {answer}"
+        ))),
+        Err(error) => Err(error.with_resource_quiescence(DeviceResourceQuiescence::Unconfirmed, 1)),
+    };
+    merge_input_snapshot(merge_input_snapshot(native, resumed), port.touch_snapshot())
+}
+
+/// Workflow #463 KB-1: a key call's return code; 0 confirms it.
+fn key_answered(which: &str, answer: i32) -> DeviceResult<()> {
+    if answer == 0 {
+        Ok(())
+    } else {
+        Err(DeviceError::fatal(format!(
+            "Nemu key {which} failed with code {answer}"
+        )))
     }
 }
 
@@ -1174,18 +1444,22 @@ fn finger_up<P: NemuTouchPort>(
 
 /// HS-4 (#402, §4.4): the reset. A contact whose lift was not confirmed (pressed, or lifted
 /// without a confirmed answer) is lifted once, under the input's check; any other contact is left
-/// as it is and nothing is called. It reads no frame and no display, so `context` needs no
-/// geometry.
+/// as it is and nothing is called. Workflow #463 KB-1 fix round 1 (R1): then a key that may be
+/// down is lifted so too, with its key up ([`key_up`]). It reads no frame and no display, so
+/// `context` needs no geometry.
 fn reset_contact<P: NemuTouchPort>(
     port: &mut P,
     context: &InputExecutionContext,
     stopped: &AtomicBool,
 ) -> DeviceResult<()> {
-    let contact = port.touch_input().ok_or_else(unsupported)?.contact;
+    let input = port.touch_input().ok_or_else(unsupported)?;
+    let (contact, key) = (input.contact, input.unreleased_key());
     if matches!(contact, Contact::MayBeDown | Contact::UpAttempted) {
-        finger_up(port, context.check.as_ref(), stopped)
-    } else {
-        Ok(())
+        finger_up(port, context.check.as_ref(), stopped)?;
+    }
+    match key {
+        Some(key) => key_up(port, key.vendor_key, context.check.as_ref(), stopped),
+        None => Ok(()),
     }
 }
 

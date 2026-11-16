@@ -95,7 +95,9 @@ pub(crate) fn instructions(budget_s: u64) -> String {
 /// Workflow #477 PC-1 (`477-PC1`): its row `standard-pack catalog` (`ac_standard_pack_catalog`),
 /// through a `serve` child.
 /// #463 S2-2: its row `record review` (`ac_record_review`), through a `serve` child.
-pub(crate) const ACTINGLAB_SLICES: [&str; 17] = [
+/// #463 RC-1: its row `resource regression` (`ac_resource_regression`), through a `serve` child.
+pub(crate) const ACTINGLAB_SLICES: [&str; 18] = [
+    "463-RC1",
     "463-S2-13",
     "463-S21",
     "463-S22",

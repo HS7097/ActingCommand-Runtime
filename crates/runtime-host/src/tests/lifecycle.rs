@@ -312,10 +312,13 @@ fn runtime_status_lists_configured_instances_and_live_scheduler_state() {
     host.close().expect("close host");
 
     // The same Status specification consumes the real Registry's metadata without opening it.
-    for (input, capture, segmented, key_text) in [
+    // Workflow #463 KB-1: adb shell input sends the back key, and its row says `input.key`
+    // supported; `input.text` stays maatouch's alone.
+    for (input, capture, segmented, key, text) in [
         (
             TouchBackendChoice::MaaTouch,
             CaptureBackendChoice::Adb,
+            true,
             true,
             true,
         ),
@@ -324,11 +327,13 @@ fn runtime_status_lists_configured_instances_and_live_scheduler_state() {
             CaptureBackendChoice::DroidcastRaw,
             true,
             false,
+            false,
         ),
         (
             TouchBackendChoice::AdbShellInput,
             CaptureBackendChoice::NemuIpc,
             false,
+            true,
             false,
         ),
     ] {
@@ -373,8 +378,8 @@ fn runtime_status_lists_configured_instances_and_live_scheduler_state() {
             (Capability::InputSwipe, true),
             (Capability::InputReset, true),
             (Capability::InputSegmentedSwipe, segmented),
-            (Capability::InputKey, key_text),
-            (Capability::InputText, key_text),
+            (Capability::InputKey, key),
+            (Capability::InputText, text),
             (Capability::CaptureFrame, true),
             (Capability::ApplicationLaunch, true),
             (Capability::ApplicationStop, true),

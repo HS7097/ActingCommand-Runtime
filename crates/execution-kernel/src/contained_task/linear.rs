@@ -61,6 +61,16 @@
 //! program saw there, `confirmation_problem`, in its outcome's values and never in its detail: the
 //! decision's verdict, or, where it is not made, the word of the condition that kept it from being
 //! made. The code, the detail, the timing and every other value of each end are the ones it had.
+//!
+//! Workflow #463 KP-1 (`contracts/linear-steps.md`, "Key steps"; the owner's ruling on board #463
+//! that the back key is added to a recorded package afterwards): an operation's effect may be a
+//! key step, `"key": {"key": "back"}`, a closed vocabulary of one word ([`StepKey`]). It is guarded
+//! as a click step is, declares no retry, and its key goes out through the input channel, bound to
+//! the frame its guard passed on; the post-input wait and the arrival are a click step's. A run of
+//! a package with a key step first asks the runtime whether the instance's input sends that key
+//! ([`ContainedTaskRuntime::key_input_support`]) and, where it does not, is refused before any
+//! capture, input or effect intent (`contained_task_linear_key_unsupported`). A task without a key
+//! step is admitted and run as before.
 
 use super::loading::{Charge, FrameRow, LoadingAllowance, LoadingFrame, LoadingLimit};
 use super::observation_window::StillScreen;
@@ -68,12 +78,13 @@ use super::{
     ApplicationEffectSupport, CaptureBackoff, ColorDigest, ContainedTaskBoundaryTiming,
     ContainedTaskError, ContainedTaskGuardOutcome, ContainedTaskOutcome, ContainedTaskRunError,
     ContainedTaskRuntime, ContainedTaskTimingContext, ContainedTaskTrace, DEFAULT_TASK_TIMEOUT_MS,
-    ExtraRounds, InputRecheck, MAX_DECLARED_INTERVAL_MS, MAX_STEP_TIMEOUT_MS, MAX_STEPS,
-    MAX_TASK_TIMEOUT_MS, PaceClock, PageCandidates, PageObservation, PostAdmissionOcrCollector,
-    PreparedContainedTask, RecheckedInput, SampleRetries, StepPacing, TaskControl, TaskOperation,
-    TaskProgram, UnrecordedScreenEnd, budget_elapsed_since, budget_now, budget_observation_now,
-    invariant_broken, is_geometry_change, pace_pause, paced_step, resolve_page_reference,
-    runtime_touch_choice, sample_budget_invalid, selection, step_point_draw,
+    ExtraRounds, InputRecheck, KeyInputSupport, MAX_DECLARED_INTERVAL_MS, MAX_STEP_TIMEOUT_MS,
+    MAX_STEPS, MAX_TASK_TIMEOUT_MS, PaceClock, PageCandidates, PageObservation,
+    PostAdmissionOcrCollector, PreparedContainedTask, RecheckedInput, SampleRetries, StepKey,
+    StepPacing, TaskControl, TaskOperation, TaskProgram, UnrecordedScreenEnd, budget_elapsed_since,
+    budget_now, budget_observation_now, invariant_broken, is_geometry_change, pace_pause,
+    paced_step, resolve_page_reference, runtime_touch_choice, sample_budget_invalid, selection,
+    step_point_draw,
 };
 use crate::codes::{ConfirmationProblem, ExecutionKernelCode, ExecutionKernelLocation};
 use crate::{InputFrameContext, RunOperationPolicy};
@@ -106,6 +117,7 @@ const APPLICATION_UNCONFIRMED: Code =
     ExecutionKernelCode::ContainedTaskLinearApplicationUnconfirmed.code();
 const PAGE_CONFIRMATION_FAILED: Code = ExecutionKernelCode::PageConfirmationFailed.code();
 const UNRECORDED_SCREEN: Code = ExecutionKernelCode::ContainedTaskLinearUnrecordedScreen.code();
+const KEY_UNSUPPORTED: Code = ExecutionKernelCode::ContainedTaskLinearKeyUnsupported.code();
 const UNRECOGNIZED_PAGE: &str = "<unrecognized>";
 /// The `from` / `entry_page` of an application entry: any screen, never a detector page.
 pub(super) const ANY_PAGE: &str = "any";
@@ -435,13 +447,15 @@ impl LinearFrom {
     }
 }
 
-/// A step's one effect: a click, an application lifecycle action (Workflow #336 R24), or
-/// (Workflow #463 K1) a select step's one tap on the candidate its attempt chose.
+/// A step's one effect: a click, an application lifecycle action (Workflow #336 R24),
+/// (Workflow #463 K1) a select step's one tap on the candidate its attempt chose, or (Workflow
+/// #463 KP-1) the key a key step presses.
 #[derive(Clone, Copy)]
 enum LinearEffect {
     Click,
     Application(ApplicationLifecycleAction),
     Select,
+    Key(StepKey),
 }
 
 /// How one operation ended without a failure.
@@ -926,10 +940,23 @@ impl TaskProgram {
             if operation.max_runs.is_some() || operation.on_max_runs.is_some() {
                 return Err(invalid("max_runs", Some(operation)));
             }
-            let effect = match (&operation.click, &operation.application, &operation.select) {
-                (Some(_), None, None) => LinearEffect::Click,
-                (None, Some(application), None) => LinearEffect::Application(application.action),
-                (None, None, Some(_)) => LinearEffect::Select,
+            // Workflow #463 KP-1: or a key step, whose word is one of the vocabulary's; a key beside
+            // another effect is `operation_effect`.
+            let effect = match (
+                &operation.click,
+                &operation.application,
+                &operation.select,
+                &operation.key,
+            ) {
+                (Some(_), None, None, None) => LinearEffect::Click,
+                (None, Some(application), None, None) => {
+                    LinearEffect::Application(application.action)
+                }
+                (None, None, Some(_), None) => LinearEffect::Select,
+                (None, None, None, Some(key)) => LinearEffect::Key(
+                    StepKey::from_word(&key.key)
+                        .ok_or_else(|| invalid("key_unknown", Some(operation)))?,
+                ),
                 _ => return Err(invalid("operation_effect", Some(operation))),
             };
             if matches!(effect, LinearEffect::Application(_))
@@ -949,13 +976,26 @@ impl TaskProgram {
             {
                 return Err(invalid("select_retry", Some(operation)));
             }
+            // Workflow #463 KP-1 (the coordinator's ruling on the study of board #463): nor a key
+            // step. Its key is a click step's press without a retry: one input, whose page that
+            // does not come ends the run as a click step's last attempt does.
+            if matches!(effect, LinearEffect::Key(_))
+                && (operation.retryable.is_some()
+                    || operation.max_attempts.is_some()
+                    || operation.retry_interval_ms.is_some())
+            {
+                return Err(invalid("key_retry", Some(operation)));
+            }
             let from = if operation.from == ANY_PAGE {
                 if index != 0 {
                     return Err(invalid("any_from", Some(operation)));
                 }
                 // Workflow #463 K1: a select step chooses on a page, so it never starts from any
-                // screen either.
-                if matches!(effect, LinearEffect::Click | LinearEffect::Select) {
+                // screen either; Workflow #463 KP-1: nor does a key step, whose guard is on a page.
+                if matches!(
+                    effect,
+                    LinearEffect::Click | LinearEffect::Select | LinearEffect::Key(_)
+                ) {
                     return Err(invalid("any_requires_application", Some(operation)));
                 }
                 LinearFrom::Any
@@ -1299,6 +1339,41 @@ impl PreparedContainedTask {
             .iter()
             .flat_map(|mapping| mapping.terminal_pages())
             .any(|page| !usual.contains(&crate::canonical_page_anchor(game, page)))
+    }
+
+    /// Workflow #463 KP-1 (`contracts/linear-steps.md`, "Key steps"; the coordinator's ruling on the
+    /// study of board #463: refused by the capability table before any capture, with a code of its
+    /// own): the run of an admitted plan with a key step asks the runtime once whether the
+    /// instance's input sends the key of its first key step, after `RunStarted` and before any
+    /// capture, input or effect intent. Where it does not, the run ends here with
+    /// `contained_task_linear_key_unsupported`, naming that step (`pack_operation_id`): nothing
+    /// was sent and no effect was intended, so no record of the run can call an effect
+    /// indeterminate. A plan without a key step asks nothing.
+    pub(super) fn refuse_unsendable_key<R: ContainedTaskRuntime>(
+        &self,
+        runtime: &mut R,
+        plan: &LinearPlan,
+    ) -> Result<(), ContainedTaskRunError<R::Error>> {
+        let Some((operation, key)) = plan.steps.iter().zip(&self.program.operations).find_map(
+            |(step, operation)| match step.effect {
+                LinearEffect::Key(key) => Some((operation, key)),
+                _ => None,
+            },
+        ) else {
+            return Ok(());
+        };
+        match runtime
+            .key_input_support(key)
+            .map_err(ContainedTaskRunError::operation::<R>)?
+        {
+            KeyInputSupport::Supported => Ok(()),
+            KeyInputSupport::Unsupported => Err(ContainedTaskError::with_detail(
+                KEY_UNSUPPORTED,
+                format!("operation={}", operation.id),
+            )
+            .with_values(Outcome::new(KEY_UNSUPPORTED).pack_operation_id(operation.id.as_str()))
+            .into()),
+        }
     }
 }
 
@@ -1661,11 +1736,27 @@ impl PreparedContainedTask {
                     self.linear_input(
                         runtime,
                         run,
-                        step_index,
+                        (step_index, attempt),
                         operation,
                         frame,
                         step_timing,
-                        attempt,
+                        None,
+                    )?;
+                }
+                // Workflow #463 KP-1: a key step is guarded and sent as a click step is, its key in
+                // place of the click's draw. It declares no retry, so this is its one attempt.
+                LinearEffect::Key(key) => {
+                    let frame = observation.as_ref().ok_or_else(|| {
+                        ContainedTaskError::new(SharedCode::ContainedTaskPageUnknown.code())
+                    })?;
+                    self.linear_input(
+                        runtime,
+                        run,
+                        (step_index, attempt),
+                        operation,
+                        frame,
+                        step_timing,
+                        Some(key),
                     )?;
                 }
                 // Workflow #463 K1: a select step's attempt replaces the guard and the click; its
@@ -2257,16 +2348,18 @@ impl PreparedContainedTask {
     /// bound to that frame's input context, in the order of the page-graph path; with a declared
     /// input recheck (Workflow #411 B12), to the input context of the recheck's last frame. ACT-2:
     /// the first attempt waits the step's gap and takes a fresh frame of the step's page first.
+    /// Workflow #463 KP-1: with `key`, a key step's input is that key's action, drawn from no box
+    /// and carrying no sampling, in place of the click's draw; every other part is the click's.
     #[allow(clippy::too_many_arguments)]
     fn linear_input<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
         run: LinearRun,
-        step_index: u32,
+        (step_index, attempt): (u32, u32),
         operation: &TaskOperation,
         observation: &PageObservation,
         step_timing: ContainedTaskTimingContext,
-        attempt: u32,
+        key: Option<StepKey>,
     ) -> Result<(), ContainedTaskRunError<R::Error>> {
         let deadline = run.timing.deadline();
         // Workflow #386 SR-1 (scheduling model §2.1 items 1-3): the guard's observation whose
@@ -2343,17 +2436,25 @@ impl PreparedContainedTask {
                 },
             };
             let frame = rechecked.as_ref().unwrap_or(frame);
-            // Workflow #406 T12: the step's seed and the touch keys in effect.
-            let draw = step_point_draw(runtime, step_index, &operation.id)?;
-            let click = operation.click.as_ref().ok_or_else(|| {
-                ContainedTaskError::new(ExecutionKernelCode::ContainedTaskOperationInvalid.code())
-            })?;
-            let (action, sampling) = click.draw_input::<R::Error>(
-                &self.control.resolution,
-                target.as_ref(),
-                draw,
-                &mut runtime_touch_choice(runtime),
-            )?;
+            let (action, sampling) = match key {
+                // Workflow #463 KP-1: the key's action; no point is drawn.
+                Some(key) => (key.action(), None),
+                None => {
+                    // Workflow #406 T12: the step's seed and the touch keys in effect.
+                    let draw = step_point_draw(runtime, step_index, &operation.id)?;
+                    let click = operation.click.as_ref().ok_or_else(|| {
+                        ContainedTaskError::new(
+                            ExecutionKernelCode::ContainedTaskOperationInvalid.code(),
+                        )
+                    })?;
+                    click.draw_input::<R::Error>(
+                        &self.control.resolution,
+                        target.as_ref(),
+                        draw,
+                        &mut runtime_touch_choice(runtime),
+                    )?
+                }
+            };
             if frame.sampling.is_some()
                 && budget_observation_now(runtime, step_timing.pace()) >= step_timing.deadline()
             {

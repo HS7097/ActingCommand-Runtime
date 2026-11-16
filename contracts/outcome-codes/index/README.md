@@ -22,9 +22,9 @@ here.
 
 | Status | Codes |
 |---|---:|
-| active | 3910 |
+| active | 3919 |
 | retired | 89 |
-| all | 3999 |
+| all | 4008 |
 
 ## Active codes by category
 
@@ -32,20 +32,20 @@ here.
 |---|---:|
 | success | 125 |
 | info | 214 |
-| warning | 162 |
-| error | 3392 |
+| warning | 166 |
+| error | 3397 |
 | fatal | 17 |
 
 ## Text and review of the active codes
 
 | Active codes | Codes |
 |---|---:|
-| `common_causes` and `handling` both written | 760 |
+| `common_causes` and `handling` both written | 769 |
 | one of the two written, the other `TBD` or empty | 4 |
 | neither written (`TBD` or empty) | 3146 |
 | `settled` | 154 |
-| `pending` | 3756 |
-| all active codes | 3910 |
+| `pending` | 3765 |
+| all active codes | 3919 |
 
 ## By owner
 
@@ -54,16 +54,16 @@ here.
 | [actingcommand-entry](actingcommand-entry.md) | 10 | 10 | 10 | 0 |
 | [actingctl](actingctl.md) | 204 | 199 | 40 | 8 |
 | [actingd](actingd.md) | 155 | 153 | 98 | 85 |
-| [actinglab](actinglab.md) | 44 | 43 | 43 | 0 |
+| [actinglab](actinglab.md) | 46 | 45 | 45 | 0 |
 | [actinglab-mcp](actinglab-mcp.md) | 3 | 2 | 2 | 0 |
 | [actingledger](actingledger.md) | 4 | 4 | 0 | 0 |
 | [artifact-store](artifact-store.md) | 77 | 77 | 2 | 0 |
 | [contract](contract.md) | 928 | 904 | 163 | 32 |
 | [device](device.md) | 33 | 33 | 27 | 23 |
 | [display-adapter](display-adapter.md) | 2 | 2 | 0 | 0 |
-| [execution-kernel](execution-kernel.md) | 204 | 201 | 30 | 0 |
+| [execution-kernel](execution-kernel.md) | 205 | 202 | 31 | 0 |
 | [host-metrics](host-metrics.md) | 17 | 17 | 0 | 0 |
-| [lab](lab.md) | 18 | 18 | 16 | 0 |
+| [lab](lab.md) | 21 | 21 | 19 | 0 |
 | [ledger](ledger.md) | 293 | 292 | 26 | 0 |
 | [ledger-forensics](ledger-forensics.md) | 52 | 52 | 0 | 0 |
 | [mcp-entry](mcp-entry.md) | 3 | 3 | 3 | 0 |
@@ -73,13 +73,13 @@ here.
 | [policy](policy.md) | 119 | 117 | 56 | 0 |
 | [recognition](recognition.md) | 6 | 6 | 0 | 0 |
 | [recognition-pack](recognition-pack.md) | 22 | 22 | 0 | 0 |
-| [resource-tooling](resource-tooling.md) | 103 | 102 | 26 | 0 |
+| [resource-tooling](resource-tooling.md) | 105 | 104 | 28 | 0 |
 | [runtime-client](runtime-client.md) | 211 | 209 | 5 | 0 |
 | [runtime-config](runtime-config.md) | 11 | 11 | 11 | 0 |
 | [runtime-database](runtime-database.md) | 51 | 51 | 2 | 0 |
-| [runtime-host](runtime-host.md) | 1163 | 1116 | 194 | 6 |
+| [runtime-host](runtime-host.md) | 1164 | 1117 | 195 | 6 |
 | [runtime-state](runtime-state.md) | 176 | 176 | 0 | 0 |
 | [scheduler](scheduler.md) | 14 | 14 | 0 | 0 |
 | [selection-policy](selection-policy.md) | 27 | 27 | 0 | 0 |
 | [vision-ffi](vision-ffi.md) | 4 | 4 | 1 | 0 |
-| all | 3999 | 3910 | 760 | 154 |
+| all | 4008 | 3919 | 769 | 154 |

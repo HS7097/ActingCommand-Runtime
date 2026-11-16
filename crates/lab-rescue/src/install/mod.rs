@@ -186,6 +186,10 @@ mod gate_463_s31;
 // Test-only: Workflow #463 S3-2, the authorization a placement names and the packages it enables.
 #[cfg(test)]
 mod gate_463_s32;
+// Test-only: Workflow #463 S3-18, the packages the undo of a placement makes enter or leave
+// scheduling.
+#[cfg(test)]
+mod gate_463_s318;
 
 pub(crate) use host::{Host, SystemHost};
 // Workflow #421 INST-1, watchdog row 7a″: what the watchdog and `actingctl start` read.
@@ -560,7 +564,9 @@ pub(crate) static RESUME_FLAGS: FlagLists = FlagLists {
 /// `install resume --root <root> --operation <id>`: continues the unfinished operation from its
 /// journal; each step's postcondition is checked on disk first. An operation whose end (or its
 /// undo's) is in its journal while `current.json` still names it (a crash before the rename,
-/// review S1 F5) only has `current.json` retired and answers the end it recorded.
+/// review S1 F5) only has `current.json` retired and answers the end it recorded (Workflow #463
+/// S3-18 fix round 1: of the undo of a `pack_place` operation, with the `schedule_changes` its
+/// undo record holds and their warnings).
 fn resume(words: &[&str], host: &dyn Host) -> Result<Answer, Outcome> {
     let flags = Flags::parse_by(words, &RESUME_FLAGS)?;
     let paths = resolve_root(&flags)?;
@@ -575,8 +581,22 @@ fn resume(words: &[&str], host: &dyn Host) -> Result<Answer, Outcome> {
     }
     let operation = Operation::load(host, &paths, operation_id, InstallLocation::Resume)?;
     if operation.ended() {
+        // Workflow #463 S3-18 fix round 1: an undo of a placement that ended its steps answers
+        // the lists its record holds and their warnings, as the undo itself answered them.
+        let scheduling = if operation.journal().kind == OperationKind::PackPlace
+            && operation.journal().undo.is_some()
+        {
+            place::undone(&operation)
+        } else {
+            None
+        };
         let ended = operation.retire_ended()?;
-        return Ok(resumed(operation_id, Answer::new(ended)));
+        let answer = match &scheduling {
+            Some(undone) => Answer::new(plan::with_notes(ended, &undone.notes()))
+                .with("schedule_changes", undone.value())?,
+            None => Answer::new(ended),
+        };
+        return Ok(resumed(operation_id, answer));
     }
     if operation.journal().finished() || operation.journal().undo.is_some() {
         return Err(unusable("--operation"));

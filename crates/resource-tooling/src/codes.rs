@@ -220,6 +220,16 @@ actingcommand_contract::outcome_codes! {
         /// Warning (Workflow #463 S3-12): no passed trial of the content the adoption writes is on
         /// record in its state directory (key `package_id`; the review's `trial` says what is).
         NotTried => "not_tried": warning / none,
+        // Workflow #463 S3-15a: the refusals of `actinglab standard-pack status --installation`
+        // (contracts/standard-pack-schedule.md, "Where a pack stands"), each before the game
+        // root, a journal or the suspension report is read.
+        /// Workflow #463 S3-15a: `--root` is not the installed game root of its game in the
+        /// installation actinglab runs from, `<standard_packs.root>\<game>` (key `path`, the root
+        /// given).
+        PackageStatusRootNotInstalled => "package_status_root_not_installed": error / none,
+        /// Workflow #463 S3-15a: this build of actinglab holds no rescue module (it is built for
+        /// Windows only), so it reads no installation for `--installation`.
+        PackageStatusInstallationUnbuilt => "package_status_installation_unbuilt": error / none,
     }
 }
 
@@ -584,12 +594,42 @@ actingcommand_contract::outcome_vocabulary! {
 
 actingcommand_contract::outcome_vocabulary! {
     /// Workflow #463 S3-14: why no authorization is recorded for a pack (the vocabulary
-    /// `authorization_unrecorded`, the member `enabled.authorization_unrecorded`).
+    /// `authorization_unrecorded`, the member `enabled.authorization_unrecorded`). Workflow #463
+    /// S3-15a: one word per cause.
     pub enum AuthorizationUnrecorded: "authorization_unrecorded" {
-        /// The placement journals were not read: their reader is private to the Lab's rescue
-        /// module (`install::journal`, `pub(crate)`), and that crate is built for Windows only (the
-        /// train of S3-12 and S3-14, ruling R6). A later slice reads them.
+        /// The placement journals were not read: the row was not asked to read the installation
+        /// (`--installation`).
         JournalsNotRead => "journals_not_read",
+        /// Workflow #463 S3-15a: every journal of the installation was read and no placement that
+        /// counts names the pack in its `enabled` (none that finished with its items placed and
+        /// was neither undone nor rolled back).
+        NoJournalNamesIt => "no_journal_names_it",
+        /// Workflow #463 S3-15a: no journal that was read names the pack, and some journals could
+        /// not be read (the root's `installation.operations_unread`): one of them may.
+        JournalsUnreadable => "journals_unreadable",
     }
 }
 // ---- Workflow #463 S3-14: end ----
+
+// ---- Workflow #463 S3-15a (`contracts/standard-pack-schedule.md`, "Where a pack stands"): begin ----
+actingcommand_contract::outcome_vocabulary! {
+    /// Workflow #463 S3-15a: why `standard-pack status --installation` answers no pairs (the
+    /// vocabulary `pairs_unread`: each pack's `pairs` in place of its list, and the root's
+    /// `installation.pairs_unread` beside the outcome that says why).
+    pub enum PairsUnread: "pairs_unread" {
+        /// The installation's `actingd suspended` gave no report: it could not be started, it
+        /// failed or printed no report, it read another state root, or it was ended at its
+        /// deadline (the outcome a diagnosis gives the same child).
+        SuspensionReportNotRead => "suspension_report_not_read",
+        /// The report was read, but the composed bindings that name the package each catalog task
+        /// runs could not be read (`actingctl packs`' reading of the installation's configuration).
+        BindingsNotRead => "bindings_not_read",
+        /// Fix round 1: the report and the composed bindings were read, and the bindings hold no
+        /// task that runs this pack (a configuration that binds its procedures itself, whose rows
+        /// name no task; a game the composition left out, its warnings in the answer's
+        /// `warnings`; a pack no composed rule runs), so no row of the report can be the pack's.
+        /// A pack's own word, never the root's.
+        NoTaskBound => "no_task_bound",
+    }
+}
+// ---- Workflow #463 S3-15a: end ----

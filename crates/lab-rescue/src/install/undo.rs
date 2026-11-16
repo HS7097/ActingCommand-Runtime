@@ -9,6 +9,16 @@
 //! renamed
 //! `<name>.abandoned-<ms2>`, a swapped file renamed `<dst>.rolledback-<ms2>` and its `.old-<ms>`
 //! put back, a placed build renamed aside, the previous state rewritten. Nothing is deleted.
+//!
+//! Workflow #463 S3-18 (`contracts/install-cli.md`, "The packages the undo of a placement makes
+//! enter or leave scheduling"): the undo of a `pack_place` operation computes, before its first
+//! step, which packages it makes enter and leave its game's scheduling
+//! (`super::place::undone`), answers them as `schedule_changes`, warns when packages enter or when
+//! that cannot be known, and records the two lists in its undo record; `--plan` (the rescue
+//! module's, for such an operation only) answers the same and what the undo would reverse, and
+//! writes nothing. It asks for no authorization. Fix round 1: once the undo record is written, an
+//! undo run again after it stopped and its plan form answer and warn of the lists that record
+//! holds, computing nothing again; the steps an undo reverses are [`reversed_steps`]'s.
 
 use super::deploy::of_rollback;
 use super::files;
@@ -16,11 +26,13 @@ use super::host::Host;
 use super::journal::{self, Operation, StepKind, StepState};
 use super::lock::WriterLock;
 use super::manifest;
+use super::place::{self, UndoneScheduling};
 use super::plan::{self, PlanInputs, PlanKind};
 use super::state::{self, CurrentState, OperationKind, Paths};
 use super::update::{self, SwapIntent};
 use super::{Answer, FlagLists, Flags};
-use crate::codes::{InstallLocation, InstallRefusal, RollbackGatePart};
+use crate::cli_line;
+use crate::codes::{ArgumentProblem, InstallLocation, InstallRefusal, RollbackGatePart};
 use crate::watchdog::decide::{Journal as OwnerJournal, OwnerLock};
 use crate::watchdog::observe;
 use actingcommand_contract::outcome::Outcome;
@@ -113,17 +125,44 @@ fn started_inside(journal: &journal::Journal) -> bool {
         })
 }
 
-/// The flags `install undo` takes (Workflow #434 LAB-5B1c).
+/// Workflow #463 S3-18 fix round 1: the steps an undo reverses, in its order: those started or
+/// done, from the last. The one statement of them: the undo's own loop, its plan form's
+/// `reverses` and the places the undo of a placement changes (`super::place::undone_items`) read
+/// it.
+pub(crate) fn reversed_steps(steps: &[journal::Step]) -> impl Iterator<Item = &journal::Step> {
+    steps
+        .iter()
+        .rev()
+        .filter(|step| matches!(step.state, StepState::Started | StepState::Done))
+}
+
+/// Workflow #463 S3-18: the switch of the rescue module's `undo` that answers what the undo of a
+/// `pack_place` operation would do and does nothing.
+const PLAN_FLAG: &str = "--plan";
+
+/// The flags `install undo` takes (Workflow #434 LAB-5B1c; Workflow #463 S3-18: and
+/// [`PLAN_FLAG`], which only the rescue module's face takes).
 pub(crate) static UNDO_FLAGS: FlagLists = FlagLists {
     with_value: &["--root", "--operation"],
     lists: &[],
-    switches: &[],
+    switches: &[PLAN_FLAG],
 };
 
 /// `install undo`. Workflow #434 LAB-3: the rescue module's `undo` runs it with its face, and the
-/// journal's undo record carries its initiator.
+/// journal's undo record carries its initiator. Workflow #463 S3-18: the undo of a `pack_place`
+/// operation also answers, warns and records what it changes of its game's scheduling
+/// ([`UndoneScheduling`]), and the rescue module's `--plan` answers it without undoing
+/// ([`planned`]).
 pub(crate) fn undo(words: &[&str], host: &dyn Host, face: super::Face) -> Result<Answer, Outcome> {
     let flags = Flags::parse_by(words, &UNDO_FLAGS)?;
+    // Workflow #463 S3-18: `actingctl install undo` keeps its face: `--plan` is unknown to it.
+    let plan_only = flags.switch(PLAN_FLAG);
+    if plan_only && !face.rescue() {
+        return Err(cli_line::usage_invalid(
+            Some(PLAN_FLAG),
+            ArgumentProblem::Unknown,
+        ));
+    }
     let paths = super::resolve_root(&flags)?;
     let operation_id = flags.required("--operation")?;
     if journal::operation_ms(operation_id).is_none() || !paths.journal(operation_id).is_file() {
@@ -139,6 +178,10 @@ pub(crate) fn undo(words: &[&str], host: &dyn Host, face: super::Face) -> Result
     }
     let mut operation = Operation::load(host, &paths, operation_id, UNDO)?;
     let kind = operation.journal().kind;
+    // Workflow #463 S3-18: the plan form is a placement's only.
+    if plan_only && kind != OperationKind::PackPlace {
+        return Err(super::unusable(PLAN_FLAG));
+    }
     // Workflow #453 S4: the rescue module's `new` sets aside what it wrote by its own table.
     if kind == OperationKind::New {
         return super::new::undo(operation, host, face);
@@ -214,6 +257,19 @@ pub(crate) fn undo(words: &[&str], host: &dyn Host, face: super::Face) -> Result
         || kind == OperationKind::VisionPlace;
     let cold_config =
         kind == OperationKind::ConfigReplace && super::config_swap::is_cold(&operation);
+    // Workflow #463 S3-18: the plan form judges what the undo judges before its first write, in
+    // the same order, but takes no writer lock: it writes nothing, as no plan form does. Then the
+    // refusal `begin_undo` would give before its write.
+    if plan_only {
+        if cold {
+            let loaded = plan::load(&paths, UNDO)?;
+            super::launch::refuse_running(host, &paths, &loaded.state_root, UNDO)?;
+        }
+        if operation.journal().undo.is_none() && operation.journal().finished() {
+            journal::refuse_unfinished(UNDO, &paths)?;
+        }
+        return planned(&operation, place::undone(&operation).as_ref());
+    }
     let _lock = if changes_program || cold {
         let loaded = plan::load(&paths, UNDO)?;
         let lock = WriterLock::take(&paths, loaded.settings.lock_wait_ms, UNDO)?;
@@ -230,19 +286,30 @@ pub(crate) fn undo(words: &[&str], host: &dyn Host, face: super::Face) -> Result
     } else {
         None
     };
-    let ms2 = operation.begin_undo(face.initiator())?;
+    // Workflow #463 S3-18: what the undo of a placement changes of its game's scheduling, read
+    // before its first step and recorded with its start; fix round 1: an undo run again after it
+    // stopped answers what its record holds.
+    let scheduling = if kind == OperationKind::PackPlace {
+        place::undone(&operation)
+    } else {
+        None
+    };
+    let ms2 = operation.begin_undo_with(
+        face.initiator(),
+        scheduling.as_ref().map(UndoneScheduling::record),
+    )?;
     let mut kept = Vec::new();
     let steps = operation.journal().steps.clone();
     let previous = operation.journal().previous.clone();
-    for step in steps.iter().rev() {
-        if !matches!(step.state, StepState::Started | StepState::Done) {
-            continue;
-        }
+    for step in reversed_steps(&steps) {
         let evidence = reverse_step(&operation, step, &previous, ms2)
             .map_err(|cause| operation.interrupted(cause))?;
         kept.extend(evidence.iter().cloned());
         operation
             .undone(step.n, Some(json!({ "kept": evidence })))
+            .map_err(|cause| operation.interrupted(cause))?;
+        // Workflow #463 S3-18 fix round 1: a test stops the undo here, as if the process died.
+        host.after_undone(operation.id(), step.n)
             .map_err(|cause| operation.interrupted(cause))?;
     }
     if changes_program && let Some(previous_commit) = &previous.live {
@@ -259,6 +326,10 @@ pub(crate) fn undo(words: &[&str], host: &dyn Host, face: super::Face) -> Result
         }
     }
     let operation_id = operation.id().to_owned();
+    // Workflow #463 S3-18: and the warnings of what the undo of a placement changes of scheduling.
+    if let Some(undone) = &scheduling {
+        notes.extend(undone.notes());
+    }
     let outcome = plan::with_notes(
         super::done(UNDO)
             .install_operation_id(operation_id.clone())
@@ -266,9 +337,42 @@ pub(crate) fn undo(words: &[&str], host: &dyn Host, face: super::Face) -> Result
         &notes,
     );
     operation.finish_undo(&outcome)?;
-    Answer::new(outcome)
+    let answer = Answer::new(outcome)
         .with("operation_id", operation_id)?
-        .with("kept", kept)
+        .with("kept", kept)?;
+    match &scheduling {
+        Some(undone) => answer.with("schedule_changes", undone.value()),
+        None => Ok(answer),
+    }
+}
+
+/// Workflow #463 S3-18: the rescue module's `undo --plan` of a `pack_place` operation, judged as
+/// the undo is up to its first write: `install_command_done` of `install_undo`
+/// (`installation_changed` false, the warnings of `scheduling` as notes), with `operation_id`, the
+/// steps the undo would reverse in its order (`reverses`, each `{n, kind, target}`:
+/// [`reversed_steps`]) and `schedule_changes`. Nothing is written. Fix round 1: of an undo under
+/// way, `scheduling` is its record's; an undo an earlier build began, whose record holds none,
+/// answers no `schedule_changes` and no warning.
+fn planned(
+    operation: &Operation<'_>,
+    scheduling: Option<&UndoneScheduling>,
+) -> Result<Answer, Outcome> {
+    let reverses = reversed_steps(&operation.journal().steps)
+        .map(|step| json!({"n": step.n, "kind": step.kind, "target": step.target}))
+        .collect::<Vec<_>>();
+    let outcome = plan::with_notes(
+        super::done(UNDO)
+            .install_operation_id(operation.id())
+            .installation_changed(false),
+        &scheduling.map(UndoneScheduling::notes).unwrap_or_default(),
+    );
+    let answer = Answer::new(outcome)
+        .with("operation_id", operation.id())?
+        .with("reverses", reverses)?;
+    match scheduling {
+        Some(undone) => answer.with("schedule_changes", undone.value()),
+        None => Ok(answer),
+    }
 }
 
 /// Reverses one started or done step of `operation` (`install undo`'s table, and an automatic

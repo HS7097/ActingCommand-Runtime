@@ -267,6 +267,9 @@ mod gate_463_k1;
 // Workflow #463 K2 (0.12.61; register §1.380): a linear run that ends on an ending page gets that
 // page's mapping's key from the host's scheduling disposition.
 mod gate_463_k2;
+// Workflow #463 KP-1 (0.12.69; register §1.448, fix round 1): a linear run with a key step on an
+// instance whose input sends no key is refused with its own code, with no input and no intent.
+mod gate_463_kp1;
 // Workflow #463 V2 (0.12.61; register §1.382): a dispatch hands its run the value set on the
 // application for its package's variable, a start reads it again, and a value not applied is
 // warned once.
@@ -278,6 +281,12 @@ mod gate_463_v3;
 // package's variables, judged before its admission as a dispatch judges one, overlaid as a
 // dispatch's are.
 mod gate_463_s38;
+// Workflow #463 KB-1 (0.12.69; register §1.447): the capability table's key rows, the back key
+// sent on a frame of a Nemu input and every other key refused, and the foreground gate's key.
+mod gate_463_kb1;
+// Workflow #463, the key train (0.12.69; register §1.447 and §1.448, "Train"): a source package's
+// key step through the host to the device on its frame, or refused at its start.
+mod gate_463_train_key;
 // Workflow #469 H2 (0.12.62; register §1.398): a paused pair's `policy_task_paused` says why it
 // was paused (`pause_cause`) and with which failure (`failure_code`), live, after a restart and in
 // `actingd suspended`; a backoff names the failure it follows.
