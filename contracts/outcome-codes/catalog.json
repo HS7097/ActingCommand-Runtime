@@ -1809,6 +1809,14 @@
       "type": "list<name>",
       "description": "Package ids a standard-pack registry lost since it was last read."
     },
+    "catalog_side": {
+      "type": "vocab:catalog_side",
+      "description": "The side of a package's business part in a game root's pack-catalog.json a pool stands on (Workflow #477 PC-1)."
+    },
+    "catalog_difference": {
+      "type": "vocab:catalog_difference",
+      "description": "Which of a game root's pack-catalog.json and schedule.json lacks a pool a package consumes or produces (Workflow #477 PC-1)."
+    },
     "schedule_sha256": {
       "type": "hash",
       "description": "The sha256 of the schedule.json of a standard-pack game root the scheduler workbench composed (ROUT-L RL-1b)."
@@ -2867,6 +2875,14 @@
     "trial_collect_problem": {
       "type": "vocab:trial_collect_problem",
       "description": "Why the run a trial's --collect names is not a trial's run: its facts do not name the trial's package or the instance the trial is for, or (fix round 2) do not show a run sent by hand on the Lab's channel (Workflow #463 S3-11, since 0.12.65)."
+    },
+    "drop_problem": {
+      "type": "vocab:drop_problem",
+      "description": "Why record mark's drop_step does not drop a step before the last of a Lab recording: the stored frames do not hold what the comparison needs, or they show a change at its press (#463 S2-7, since 0.12.68; fix round 1: the tool refuses only what the stored frames contradict, whether the press mattered is the agent's judgement)."
+    },
+    "drop_comparison": {
+      "type": "vocab:drop_comparison",
+      "description": "Which of the two comparisons of two stored frames showed the change for which record mark's drop_step refuses a step before the last (record_drop_unproven with drop_problem screen_changed or next_screen_differs): the whole frame or the neighbourhood of the press (#463 S2-7 fix round 1, since 0.12.68)."
     }
   },
   "vocabularies": {
@@ -5192,6 +5208,18 @@
         },
         "on_empty_key_of_ending": {
           "description": "The on_empty key is the outcome key of an ending of the recording (#463 R2 fix 1)."
+        },
+        "choice_not_refined": {
+          "description": "record stop meets a step marked as holding a choice that no select refines yet: it knows no names, so no package is generated (#463 S2-6)."
+        },
+        "no_choice": {
+          "description": "A request's choice false names a step that is not marked as holding a choice, so there is nothing to take off (#463 S2-6 fix round 1)."
+        },
+        "drop_of_choice": {
+          "description": "drop_step names a step that holds a choice (marked as holding one, or refined by a select), the last step too: its press may have chosen the item already selected, which changes nothing on the screen and still matters to a run handed another value; the choice is withdrawn first (#463 stage two, train, fix round)."
+        },
+        "transition_of_choice": {
+          "description": "to_transition names a step that holds a choice (marked as holding one, or refined by a select): a page transition holds none, so the conversion would lose it; the choice is withdrawn first (#463 stage two, train, fix round)."
         }
       }
     },
@@ -5390,6 +5418,9 @@
         },
         "size_not_base": {
           "description": "Workflow #392 DA-5cd fix round 1: the recording holds frames that are not the base size (record_size_not_base)."
+        },
+        "select_unrefined": {
+          "description": "#463 S2-6: a step marked as holding a choice that no select refines yet (record_select_invalid, choice_not_refined)."
         }
       }
     },
@@ -5453,6 +5484,21 @@
         },
         "installation_config": {
           "description": "The configuration of the installation the program runs from: the instance's row of policy.facts.instances (game and server only)."
+        }
+      }
+    },
+    "ready_check_stop": {
+      "description": "Why a self-check record ready ran stopped at a failure short of its end, so that the failures missing lists of it may not be all it has, in checks[].reason (#463 S2-1c).",
+      "source": {
+        "file": "crates/lab/src/codes.rs",
+        "enum": "ReadyCheckStop"
+      },
+      "tokens": {
+        "whole_package": {
+          "description": "The check judges the generated package as one, in stages each built on the one before (admission, final_package): its first refusal leaves no stage after it to judge."
+        },
+        "check_error": {
+          "description": "The check met an error that is none of its verdicts (a target the evaluator cannot evaluate, a stored frame it cannot decode): what it would judge after it is not judged."
         }
       }
     },
@@ -6986,7 +7032,7 @@
       }
     },
     "standard_pack_problem": {
-      "description": "What is wrong with a standard-pack root file (Workflow #373 NAV-6), table file (Workflow #357 DB-1), pack's loading copy (Workflow #407 LOAD-1), bundle's notices directory (Workflow #444 NOTICES-1) or the variables a game root's packages declare (Workflow #463 V1).",
+      "description": "What is wrong with a standard-pack root file (Workflow #373 NAV-6), table file (Workflow #357 DB-1), pack's loading copy (Workflow #407 LOAD-1), bundle's notices directory (Workflow #444 NOTICES-1), the variables a game root's packages declare (Workflow #463 V1) or a game root's pack-catalog.json (Workflow #477 PC-1).",
       "tokens": {
         "malformed": {
           "description": "The file is not JSON of the file's shape and version; for a table, not canonical JSON either (a floating point number, an unsafe integer or a duplicate key)."
@@ -6998,7 +7044,7 @@
           "description": "bundle.json breaks the bundle index rules."
         },
         "bundle_missing": {
-          "description": "The game root holds interrupts.json, navigation.json, pages.json, (Workflow #392 DA-4) display-layout.json, (Workflow #357 DB-1) a tables directory or, for the readers of ui.json (Workflow #429 R-11, since 0.12.36), ui.json but no bundle.json."
+          "description": "The game root holds interrupts.json, navigation.json, pages.json, (Workflow #392 DA-4) display-layout.json, (Workflow #357 DB-1) a tables directory or, for the readers of pack-catalog.json (Workflow #477 PC-1, since 0.12.68; before it of ui.json, Workflow #429 R-11), pack-catalog.json but no bundle.json."
         },
         "pages_missing": {
           "description": "The game root holds interrupts.json or navigation.json but no pages.json."
@@ -7096,17 +7142,20 @@
         "display_layout_invalid": {
           "description": "display-layout.json breaks one of its rules: its correction.radius_px is above 64 (Workflow #392 DA-4, model 392 v1.2 section 4.1)."
         },
-        "ui_out_of_limits": {
-          "description": "ui.json is larger than 256 KiB, or one of its lists, maps, words or texts is outside its limit (Workflow #429 R-11, since 0.12.36)."
+        "catalog_out_of_limits": {
+          "description": "pack-catalog.json is larger than 1 MiB, or one of its lists, texts, locales, words, pool ids or amounts is outside its limit, at the pointer of what exceeds: an error in the business part and of the file as a whole, a warning in the display part (Workflow #477 PC-1, since 0.12.68). It replaced ui_out_of_limits of ui.json (Workflow #429 R-11), which no program reads any more."
         },
-        "ui_duplicate": {
-          "description": "ui.json lists a group id, a pack's package_id, a risk word of one pack or an aspect ratio twice (Workflow #429 R-11, since 0.12.36)."
+        "catalog_duplicate": {
+          "description": "pack-catalog.json lists a package_id twice or a pool twice on one side of an entry (errors), or a group id, a risk word of one package or an aspect ratio twice (warnings), at the later one (Workflow #477 PC-1, since 0.12.68). It replaced ui_duplicate of ui.json."
         },
-        "ui_group_unknown": {
-          "description": "A pack's group in ui.json is not an id of its groups (Workflow #429 R-11, since 0.12.36)."
+        "catalog_pool_undeclared": {
+          "description": "A pool of a package's consumes or produces in pack-catalog.json is not a pool the game root's schedule.json declares, or the root has no schedule.json (an error; Workflow #477 PC-1, since 0.12.68)."
         },
-        "ui_parameter_undeclared": {
-          "description": "A name under a pack's parameters in ui.json is not a parameter the package declares (Workflow #429 R-11, since 0.12.36); Workflow #463 V1 superseded R-10: a package's variables carry their own texts, so parameters names nothing and every name is this word."
+        "catalog_group_unknown": {
+          "description": "A package's group in pack-catalog.json is not an id of its groups (a warning: the package shows with its id; Workflow #477 PC-1, since 0.12.68). It replaced ui_group_unknown of ui.json."
+        },
+        "catalog_text_missing": {
+          "description": "A group of pack-catalog.json without title, or a package entry that writes a display member without title or summary (a warning: the package shows with its id; Workflow #477 PC-1, since 0.12.68). ui_parameter_undeclared of ui.json went with that file: the catalog has no parameters member, a package's variables carry their own texts."
         },
         "loading_target_invalid": {
           "description": "A target of loading.json or of a pack's loading copy has an id that is not loading/<name> or that the file declares twice, or a template target's template is not loading/<file>.png (Workflow #407 LOAD-1, since 0.12.37)."
@@ -7221,6 +7270,28 @@
         },
         "variable_undeclared": {
           "description": "A bundle zip whose packs declare variables in their control.json declares a package interface maximum below 14. Refused by the installer's place at interfaces.json (Workflow #463 V1 fix round 1, since 0.12.61)."
+        }
+      }
+    },
+    "catalog_side": {
+      "description": "The side of a package's business part in a game root's pack-catalog.json (Workflow #477 PC-1).",
+      "tokens": {
+        "consumes": {
+          "description": "The pools the package spends when it runs."
+        },
+        "produces": {
+          "description": "The pools the package earns when it runs."
+        }
+      }
+    },
+    "catalog_difference": {
+      "description": "Which of a game root's two files lacks a pool a package consumes or produces (Workflow #477 PC-1).",
+      "tokens": {
+        "catalog_lacks": {
+          "description": "A rule of the package in schedule.json names the pool on that side and the package's entry in pack-catalog.json does not list it."
+        },
+        "schedule_lacks": {
+          "description": "The package's entry in pack-catalog.json lists the pool on that side and no rule of the package in schedule.json names it there."
         }
       }
     },
@@ -10783,6 +10854,149 @@
           "description": "Fix round 2: the run was sent by hand on another channel than the Lab's (origin cli or ui); a trial's run is sent on the Lab's channel."
         }
       }
+    },
+    "trial_run_unconfirmed": {
+      "description": "What the answer of a trial's run knows of a run the Runtime confirmed nothing of, the member next.unconfirmed, said in the place of the line that reads the end later (next.collect), which such a run may never have (Workflow #463 S3-8, S3-9 fix round 1, contracts/standard-pack-trial.md \"The run\", since 0.12.68).",
+      "review": "pending",
+      "source": {
+        "file": "crates/resource-tooling/src/codes.rs",
+        "enum": "TrialRunUnconfirmed"
+      },
+      "tokens": {
+        "no_receipt": {
+          "description": "The run's request was written and the connection that carried it ended before any of its receipt came back: the Runtime confirmed nothing of the run, and whether it was accepted or started is not known. A Runtime below runtime-client revision 11 ends the connection so on a run with values, running nothing; one that stopped while the run was in it ends it too. No record is written."
+        }
+      }
+    },
+    "trial_state": {
+      "description": "The latest trial of a content as the trial records of the state directory keep it, the state of the one summary of a content's trials: the member review.trial.state of standard-pack adopt (Workflow #463 S3-12, contracts/standard-pack-authoring.md \"The trial and the two warnings\") and trial.state of standard-pack status (S3-14, contracts/standard-pack-schedule.md \"Where a pack stands\"); each record judged as contracts/standard-pack-trial.md \"The record\" defines a trial that passed (the train of S3-12 and S3-14, since 0.12.68).",
+      "review": "pending",
+      "source": {
+        "file": "crates/resource-tooling/src/codes.rs",
+        "enum": "TrialState"
+      },
+      "tokens": {
+        "passed": {
+          "description": "The latest record of this content passed, as contracts/standard-pack-trial.md \"The record\" defines it: its run ended on an end the package declares (end.outcome success) and, when the trial was given an expectation (--expect), on that end (matched not false)."
+        },
+        "failed": {
+          "description": "The latest record of this content did not pass: its run failed or was cancelled, or ended normally on another end than the one the trial expected (matched false). passed_on_record says whether an earlier record of it passed."
+        },
+        "none": {
+          "description": "No record of this content is on record; a record of another content of the same package counts for nothing (other_content says whether there is one)."
+        }
+      }
+    },
+    "stage_state": {
+      "description": "Where a pack stands in stage three of package making, the member stage_state of standard-pack status and the counts stage_states, saying only what the row knows (Workflow #463 S3-14 and the train of S3-12 and S3-14, contracts/standard-pack-schedule.md \"Where a pack stands\", since 0.12.68).",
+      "review": "pending",
+      "source": {
+        "file": "crates/resource-tooling/src/codes.rs",
+        "enum": "StageState"
+      },
+      "tokens": {
+        "not_admitted": {
+          "description": "Its readiness item S1 does not hold: the Runtime's loader, or standard-pack check, refuses its admission."
+        },
+        "not_judged": {
+          "description": "The train of S3-12 and S3-14: admitted, and the composer refuses the root's schedule.json (enabled.state not_judged); the Runtime keeps the last schedule it accepted, which this root does not tell."
+        },
+        "can_be_tried": {
+          "description": "Admitted, and nothing of the root's accepted schedule.json enables it: it is held (enabled.state held) or no rule names it (not_placed)."
+        },
+        "supporting": {
+          "description": "The train of S3-12 and S3-14: admitted, and it plays a supporting part a root file gives it, used by other packs' runs, and no rule names it (enabled.state not_scheduled)."
+        },
+        "enabled": {
+          "description": "Admitted, and a rule of the root's schedule.json enables it (enabled.state enabled)."
+        }
+      }
+    },
+    "enabled_state": {
+      "description": "Whether the root's schedule.json enables a pack, judged from the classification its readiness item S2 reads, the member enabled.state of standard-pack status and the counts enabled_states (Workflow #463 S3-14, contracts/standard-pack-schedule.md \"Where a pack stands\", since 0.12.68).",
+      "review": "pending",
+      "source": {
+        "file": "crates/resource-tooling/src/codes.rs",
+        "enum": "EnabledState"
+      },
+      "tokens": {
+        "enabled": {
+          "description": "A rule names it and it is not held: the scheduler dispatches it by that rule, whatever supporting part it plays beside."
+        },
+        "held": {
+          "description": "schedule.json holds it, and no root file gives it a supporting part."
+        },
+        "not_placed": {
+          "description": "No rule names it, it is not held and no root file gives it a supporting part, or the root holds no schedule.json: nothing places it into scheduling."
+        },
+        "not_scheduled": {
+          "description": "It plays a supporting part a root file gives it and no rule dispatches it (the readiness's not_scheduled)."
+        },
+        "not_judged": {
+          "description": "The composer refuses the root's schedule.json, so no rule is classified (S2 composition_refused); the Runtime keeps the last schedule it accepted, which this root does not tell."
+        }
+      }
+    },
+    "pack_authorization": {
+      "description": "What standard-pack status says of the authorization a pack was enabled under, the member enabled.authorization (Workflow #463 S3-14, contracts/standard-pack-schedule.md \"Where a pack stands\", since 0.12.68).",
+      "review": "pending",
+      "source": {
+        "file": "crates/resource-tooling/src/codes.rs",
+        "enum": "PackAuthorization"
+      },
+      "tokens": {
+        "not_recorded": {
+          "description": "No placement journal read names the pack; enabled.authorization_unrecorded says why. The tool never infers an authorization."
+        }
+      }
+    },
+    "authorization_unrecorded": {
+      "description": "Why standard-pack status records no authorization for a pack, the member enabled.authorization_unrecorded (Workflow #463 S3-14, contracts/standard-pack-schedule.md \"Where a pack stands\", since 0.12.68).",
+      "review": "pending",
+      "source": {
+        "file": "crates/resource-tooling/src/codes.rs",
+        "enum": "AuthorizationUnrecorded"
+      },
+      "tokens": {
+        "journals_not_read": {
+          "description": "The placement journals were not read: their reader is private to the Lab's rescue module (install::journal, pub(crate)), and that crate is built for Windows only (the train of S3-12 and S3-14). A later slice reads them."
+        }
+      }
+    },
+    "drop_problem": {
+      "description": "Why record mark's drop_step does not drop a step before the last of a Lab recording, the value drop_problem of record_drop_unproven (#463 S2-7, contracts/lab-recording.md \"Steps, frames and remediation\", since 0.12.68): the stored frames do not hold what the comparison needs, or they show a change. Fix round 1: two frames are the same screen when two comparisons hold, the whole frame and the neighbourhood of the press (its rectangle grown by one cell of the whole-frame grid on every side), each by the measure stage one calls a screen still by, frame_change_milli at most FRAME_CHANGE_MAX_MILLI (1500); a change smaller than that measure sees is not seen, and whether the press mattered is the agent's judgement.",
+      "review": "pending",
+      "source": {
+        "file": "crates/lab/src/codes.rs",
+        "enum": "DropProblem"
+      },
+      "tokens": {
+        "frames_not_recorded": {
+          "description": "The step has no press on record with the stored frame it was sent on and the stored frame after it (no click performed by tap, swipe or long-tap --record, a press sent on a capture that was not stored, an application operation), or a frame the comparison needs is not on record."
+        },
+        "screen_changed": {
+          "description": "The stored frames show a change: the frame after the press differs from the frame before it by more than the frame-change bound, by one of the two comparisons (drop_comparison)."
+        },
+        "next_screen_differs": {
+          "description": "The stored frames show a change: the next step's frame before its press differs from the frame before this press by more than the frame-change bound, by one of the two comparisons (drop_comparison)."
+        }
+      }
+    },
+    "drop_comparison": {
+      "description": "Which of the two comparisons of two stored frames showed the change for which record mark's drop_step refuses a step before the last, the value drop_comparison of record_drop_unproven beside drop_problem screen_changed or next_screen_differs (#463 S2-7 fix round 1, contracts/lab-recording.md \"Steps, frames and remediation\", since 0.12.68). The whole frame is compared first.",
+      "review": "pending",
+      "source": {
+        "file": "crates/lab/src/codes.rs",
+        "enum": "DropComparison"
+      },
+      "tokens": {
+        "frame": {
+          "description": "The whole frame, by the frame-change measure (a grid of 16 by 9 cells over the frame, the mean colour of each cell)."
+        },
+        "press_region": {
+          "description": "The neighbourhood of the press: its rectangle (a point is a rectangle of one pixel, a swipe the rectangle spanned by its two ends) grown on every side by one cell of the whole-frame grid at the recording's size and clamped to the frame, by the same measure over that region."
+        }
+      }
     }
   },
   "domains": {
@@ -13704,6 +13918,9 @@
       "display-adapter"
     ],
     "trial_": [
+      "resource-tooling"
+    ],
+    "enabling_": [
       "resource-tooling"
     ]
   },

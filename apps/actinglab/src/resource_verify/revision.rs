@@ -16,8 +16,9 @@
 //!   G-R1 brought it at 12; Workflow #463 V1 fix round 3, the row 14, brought version 2, the one
 //!   version the Tools read): by its presence, as the installer's `place` reads it, whatever
 //!   version it holds (a version 1 file is the check's `goal_version_retired`, not the table's);
-//!   `interrupts.json`'s `limit_cause` and `result`, 6 (Workflow #411 B43, UPD-1a). The game
-//!   root's tables need none (row 6: no member of a pack reads them).
+//!   `interrupts.json`'s `limit_cause` and `result`, 6 (Workflow #411 B43, UPD-1a);
+//!   `pack-catalog.json`, 16 (Workflow #477 PC-1 fix round 1), by its presence. The game root's
+//!   tables need none (row 6: no member of a pack reads them).
 //! - **A pack's loading copy** (`resources/loading.json`, `resources/loading/`), 6 (Workflow #407
 //!   LOAD-1).
 //! - **A member of a pack's file** ([`ROWS`]), read as JSON: of `control.json`, of a task file
@@ -44,8 +45,9 @@
 
 use super::bundle::PACKAGE_REVISION;
 use actingcommand_contract::{
-    GOALS_PACKAGE_REVISION, NOTICES_PACKAGE_REVISION, STANDARD_PACK_GOALS_FILE,
-    STANDARD_PACK_INTERRUPTS_FILE, TaskSchema, VARIABLES_PACKAGE_REVISION, notice_relative_path,
+    CATALOG_PACKAGE_REVISION, GOALS_PACKAGE_REVISION, NOTICES_PACKAGE_REVISION,
+    STANDARD_PACK_CATALOG_FILE, STANDARD_PACK_GOALS_FILE, STANDARD_PACK_INTERRUPTS_FILE,
+    TaskSchema, VARIABLES_PACKAGE_REVISION, notice_relative_path,
 };
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
@@ -544,6 +546,12 @@ fn entry_revision(
     // version it holds; a version 1 file is refused by the check (`goal_version_retired`).
     if name == STANDARD_PACK_GOALS_FILE {
         return GOALS_PACKAGE_REVISION;
+    }
+    // Workflow #477 PC-1 fix round 1: `pack-catalog.json`, 16 (`CATALOG_PACKAGE_REVISION`), by its
+    // name at the zip's root, so that an installer that knows no such root file refuses the zip at
+    // its `package` edge.
+    if name == STANDARD_PACK_CATALOG_FILE {
+        return CATALOG_PACKAGE_REVISION;
     }
     if name == STANDARD_PACK_INTERRUPTS_FILE {
         return document_revision(bytes, File::Interrupts, false, None);

@@ -19,7 +19,11 @@
 //! from ([`ReadySources`]); it writes none of them on the recording. Fix round 1: the
 //! installation's row gives both parts or neither; a packaged recording answers what its package
 //! holds, and a given part that is not its package's is a warning ([`ReadyOptionConflict`]).
+//!
+//! #463 S2-1c: every failure of each self-check, not only the first (`check_items`), and for each
+//! self-check that ran whether that list is all it has ([`ReadyCheckRun`]).
 
+use super::crosscheck::{CheckFailure, CheckRun};
 use super::generate::{Lack, effective_steps};
 use super::model::{LabRecording, OpaqueJson, RecordRect, RecordingStep};
 use super::steps::{POINT_SOURCE, SWIPE_SOURCE};
@@ -36,7 +40,8 @@ use serde_json::Value;
 /// the step after a stop, the pages after the last launch or restart, the parts of the package's
 /// identity that are not known, and the counts of a recording with too few or too many steps.
 /// Read from the refusal's `details`; for `ending_mark_missing`, whose refusal names the mark
-/// alone, `outcome_key` is the ending's. Empty for a self-check's refusal.
+/// alone, `outcome_key` is the ending's. #463 S2-1c: for a self-check's failure, `outcome_key`,
+/// `page`, `frames` and `target` say where the check met it, never read from its refusal.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ReadyDetails {
@@ -44,12 +49,24 @@ pub struct ReadyDetails {
     /// `anchor_not_own_template`, `ending_mark_missing`).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub marks: Vec<ReadyMark>,
-    /// The ending's outcome key (the ending words).
+    /// The ending's outcome key (the ending words; #463 S2-1c: and a self-check's failure of an
+    /// ending).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub outcome_key: Option<String>,
-    /// The ending's page name (`ending_page_taken`).
+    /// The ending's page name (`ending_page_taken`); #463 S2-1c: or the page a self-check's failure
+    /// is about.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub page: Option<String>,
+    /// #463 S2-1c: the frames a self-check's failure is on (a page that does not match its own
+    /// frame, a page that passes on another screen's frames, a frame that cannot be read back).
+    /// Never read from a pre-check's refusal.
+    #[serde(skip_deserializing, skip_serializing_if = "Vec::is_empty")]
+    pub frames: Vec<String>,
+    /// #463 S2-1c: the target a self-check's failure is about: a template whose crop cannot be
+    /// read back, the mark a click follows; fix round 1: the target that reads the name of a
+    /// select's slot. Never read from a pre-check's refusal.
+    #[serde(skip_deserializing, skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
     /// The serial number of the step after a stop (`effect_after_stop`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_step: Option<u32>,
@@ -87,8 +104,8 @@ pub struct ReadyMark {
     pub problem: Option<String>,
 }
 
-/// One thing a recording still lacks: a pre-check of `record stop` it fails, or the refusal of a
-/// self-check (`what` the check's name).
+/// One thing a recording still lacks: a pre-check of `record stop` it fails, or (#463 S2-1c) one
+/// failure of a self-check (`what` the check's name).
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ReadyItem {
     /// 1..n, in the answer's order.
@@ -157,6 +174,18 @@ pub enum ReadyWarningItem {
     OptionConflict(ReadyOptionConflict),
 }
 
+/// #463 S2-1c: one self-check `record ready` ran: whether the failures `missing` lists of it are all
+/// it has (`complete`), or it stopped at the last of them (`reason`, a word of `ready_check_stop`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ReadyCheckRun {
+    /// A word of `ready_check`.
+    pub check: String,
+    pub complete: bool,
+    /// Why it stopped; absent when it is complete.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
 /// The answer of `record ready`.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct RecordReadyOutcome {
@@ -166,13 +195,18 @@ pub struct RecordReadyOutcome {
     /// The session's state as `record status` says it: `active`, `archived` or `stopped`.
     pub session: String,
     /// Every pre-check the recording fails, the recording's own first, then by step, each step's
-    /// in the order the generator checks them; or, when none, the refusal of a self-check.
+    /// in the order the generator checks them; or, when none, the failures of the self-checks
+    /// (#463 S2-1c: every one each check found, in the order the checks run, each check's by step
+    /// and then by frame).
     pub missing: Vec<ReadyItem>,
     pub missing_total: usize,
     /// `press_point_only` for each step whose press is a recorded point without a press region,
     /// then the generator's own warnings as `record stop` prints them; on a packaged recording
     /// (#463 S2-1b fix round 1), then each given part of its identity that is not its package's.
     pub warnings: Vec<ReadyWarningItem>,
+    /// #463 S2-1c: each self-check that ran, in the order they ran, and whether its failures in
+    /// `missing` are all it has; empty when none ran.
+    pub checks: Vec<ReadyCheckRun>,
     /// The self-checks that did not run, in the order they run; empty when every one ran.
     pub checks_after: Vec<String>,
     /// #463 S2-1b: where the package's game, server and locale this answer took came from; on a
@@ -256,8 +290,9 @@ pub(crate) fn packaged(recording: &LabRecording) -> bool {
 /// reused or forbidden, an anchor, a click guard), a press region (a click that is no press stage
 /// one recorded: a tap or a long press by its point, a swipe; or one that follows a mark or
 /// declares a retry; #463 stage two, train 1: or a press box, a press recorded by its point whose
-/// rectangle is no longer that one pixel, the test [`point_press_warnings`] makes), a choice, an
-/// optional flag or a transition; or the recording took an ending.
+/// rectangle is no longer that one pixel, the test [`point_press_warnings`] makes), a choice (a
+/// select; #463 S2-6: or a step marked as holding a choice, refined or not), an optional flag or a
+/// transition; or the recording took an ending.
 fn stage_two_written(recording: &LabRecording) -> bool {
     !recording.endings.is_empty()
         || recording.steps.iter().any(|step| {
@@ -268,6 +303,7 @@ fn stage_two_written(recording: &LabRecording) -> bool {
                 || step.anchor.is_some()
                 || step.click_guard.is_some()
                 || step.select.is_some()
+                || step.choice.is_some()
                 || step.optional.is_some()
                 || step.transition.is_some()
                 || step.click.as_ref().is_some_and(|click| {
@@ -282,8 +318,8 @@ fn stage_two_written(recording: &LabRecording) -> bool {
 /// The frame the press of `step` happened on, as stage one recorded it: its click's or its
 /// application operation's `before_frame`. Fix round 2: a click without an execution, whose press
 /// `--reopen-step` moved aside, names its last attempt's (an application operation moved aside
-/// keeps no frame).
-fn press_frame(step: &RecordingStep) -> Option<String> {
+/// keeps no frame). #463 S2-2: `record review` names a step's screen before by it.
+pub(crate) fn press_frame(step: &RecordingStep) -> Option<String> {
     step.click
         .as_ref()
         .and_then(|click| click.execution.as_ref().or_else(|| click.attempts.last()))
@@ -380,32 +416,85 @@ pub(crate) fn lack_items(recording: &LabRecording, lacks: &[Lack]) -> LabResult<
         .collect()
 }
 
-/// The item of the self-check `check` that refused with `error`: the step its details name
-/// (`record_index`, the serial number, and `step`, the package's number), when they name one.
-pub(crate) fn check_item(
-    recording: &LabRecording,
-    check: ReadyCheck,
-    error: &LabError,
-) -> ReadyItem {
-    let number = |name: &str| {
-        error
-            .details
-            .as_ref()
-            .and_then(|details| details.get(name))
-            .and_then(Value::as_u64)
-            .and_then(|number| u32::try_from(number).ok())
-    };
-    let step = number("record_index");
-    ReadyItem {
-        order: 1,
-        step,
-        artifact_step: step.and(number("step")),
-        frame_id: step.and_then(|serial| press_frame_of(recording, serial)),
-        what: check.as_str().to_string(),
-        code: error.code.clone(),
-        hint: None,
-        details: ReadyDetails::default(),
-    }
+/// #463 S2-1c: the items of the self-checks that ran (`runs`, in the order they ran): every failure
+/// each found, each check's by the step's serial number (none first), then by its first frame
+/// (`f0009` before `f0010`), failures of one step and frame in the order the check met them. An
+/// item names its step (the serial number and the package's number) and the frame the step's press
+/// happened on, as a pre-check's item does, and in its `details` the frames, the page or the target
+/// and the ending the failure is about; an item of the package as a whole names none. Fix round 1:
+/// the failure a check stopped at (its last, `CheckRun::stopped`) is its last item, where it
+/// stopped, after every failure it met before it.
+pub(crate) fn check_items(recording: &LabRecording, runs: &[CheckRun]) -> Vec<ReadyItem> {
+    runs.iter()
+        .flat_map(|run| {
+            let judged = if run.stopped.is_some() {
+                run.failures.len().saturating_sub(1)
+            } else {
+                run.failures.len()
+            };
+            let (met, stop) = run.failures.split_at(judged);
+            let mut failures = met.iter().collect::<Vec<&CheckFailure>>();
+            failures.sort_by_key(|failure| {
+                (
+                    failure.locus.step.map(|(serial, _)| serial),
+                    failure
+                        .locus
+                        .frames
+                        .first()
+                        .map(|frame| (frame.len(), frame.clone())),
+                )
+            });
+            failures
+                .into_iter()
+                .chain(stop)
+                .map(move |failure| (run.check, failure))
+        })
+        .enumerate()
+        .map(|(position, (check, failure))| {
+            let locus = &failure.locus;
+            let step = locus.step.map(|(serial, _)| serial);
+            ReadyItem {
+                order: position + 1,
+                step,
+                artifact_step: locus.step.map(|(_, number)| number),
+                frame_id: step.and_then(|serial| press_frame_of(recording, serial)),
+                what: check.as_str().to_string(),
+                code: failure.error.code.clone(),
+                hint: None,
+                details: ReadyDetails {
+                    outcome_key: locus.outcome_key.clone(),
+                    page: locus.page.clone(),
+                    frames: locus.frames.clone(),
+                    target: locus.target.clone(),
+                    ..ReadyDetails::default()
+                },
+            }
+        })
+        .collect()
+}
+
+/// #463 S2-1c: `checks` of the self-checks that ran (`runs`): each complete unless it stopped, with
+/// the word of why.
+pub(crate) fn check_runs(runs: &[CheckRun]) -> Vec<ReadyCheckRun> {
+    runs.iter()
+        .map(|run| ReadyCheckRun {
+            check: run.check.as_str().to_string(),
+            complete: run.stopped.is_none(),
+            reason: run.stopped.map(|stop| stop.as_str().to_string()),
+        })
+        .collect()
+}
+
+/// #463 S2-1c: `checks` when every self-check ran to its end and found nothing.
+pub(crate) fn every_check_complete() -> Vec<ReadyCheckRun> {
+    ReadyCheck::ALL
+        .iter()
+        .map(|check| ReadyCheckRun {
+            check: check.as_str().to_string(),
+            complete: true,
+            reason: None,
+        })
+        .collect()
 }
 
 /// Workflow #392 DA-5cd: `missing` with, first when `size` is the refusal of a recording whose
@@ -437,8 +526,9 @@ pub(crate) fn with_size_item(size: Option<&LabError>, missing: Vec<ReadyItem>) -
 }
 
 /// #463 stage two, train 1: whether `rect` is one pixel, the rectangle of a press recorded by its
-/// point until a press box (#463 S2-5) gives it a region.
-const fn one_pixel(rect: RecordRect) -> bool {
+/// point until a press box (#463 S2-5) gives it a region. #463 S2-2: `record review` draws a press
+/// region that is no such point.
+pub(crate) const fn one_pixel(rect: RecordRect) -> bool {
     rect.width == 1 && rect.height == 1
 }
 
@@ -477,12 +567,13 @@ pub(crate) fn generator_warnings(warnings: &[Value]) -> LabResult<Vec<ReadyWarni
 /// The answer for `recording` and its session's state `session`. A recording that is not
 /// [`packaged`] is `material` while stage two wrote nothing on it, otherwise `ready` when nothing
 /// is `missing` and `draft` when something is. #463 S2-1b: `sources`, where the package's game,
-/// server and locale came from.
+/// server and locale came from. #463 S2-1c: `checks`, the self-checks that ran.
 pub(crate) fn ready_outcome(
     recording: &LabRecording,
     session: String,
     missing: Vec<ReadyItem>,
     warnings: Vec<ReadyWarningItem>,
+    checks: Vec<ReadyCheckRun>,
     checks_after: &[ReadyCheck],
     sources: ReadySources,
 ) -> RecordReadyOutcome {
@@ -502,6 +593,7 @@ pub(crate) fn ready_outcome(
         missing_total: missing.len(),
         missing,
         warnings,
+        checks,
         checks_after: checks_after
             .iter()
             .map(|check| check.as_str().to_string())

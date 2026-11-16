@@ -673,50 +673,74 @@ fn p2_tables_are_carried_and_listed_and_a_refused_table_fails_the_build() {
     );
 }
 
-// Fix round 1, the review's third point: `ui.json` is a root file of the standard package root
-// (contracts/package-reference.md), which `place` places and sets aside when a zip carries none,
-// so the build carries a commit's `ui.json` byte for byte, `build.json` lists it among the root
-// files and it needs no revision; a `ui.json` its reader (`parse_standard_pack_ui`) refuses
-// against the zip's `bundle.json` (a pack the bundle does not list) fails the build with the
-// reader's refusal, `standard_pack_root_invalid` naming the file and `package_not_listed`.
+// Workflow #477 PC-1 (register §1.438; it takes the place of fix round 1's test of `ui.json`, the
+// file the catalog replaced, which no program reads any more): `pack-catalog.json` is a root file
+// of the standard package root (contracts/package-reference.md), which `place` places with its
+// digest and sets aside when a zip carries none, so the build carries a commit's
+// `pack-catalog.json` byte for byte and `build.json` lists it among the root files; since fix round
+// 1 (contracts/component-interfaces.md, the `package` row 16) the zip that carries it declares
+// `package` [16, 16] (it needed none before, and this assertion read [3, 3]), so that an installer
+// that knows no such file refuses the zip at its `package` edge; a commit's leftover `ui.json` is
+// not carried and is the bundle step's warning
+// `standard_pack_ui_retired`; a catalog its reader (`parse_standard_pack_catalog`) refuses in its
+// business part against the zip's `bundle.json` (a package the bundle does not register) fails the
+// build with the reader's refusal, `standard_pack_root_invalid` naming the file,
+// `package_not_listed` at the entry's `package_id`, and no product.
 #[test]
-fn p2_ui_json_is_carried_and_a_refused_one_fails_the_build() {
+fn p2_pack_catalog_is_carried_and_one_wrong_in_its_business_part_fails_the_build() {
     let fixture = Fixture::new();
-    let ui_of = |package_id: &str| {
+    let catalog_of = |package_id: &str| {
         json!({
-            "schema_version": "actingcommand.ui.v1",
+            "schema_version": "actingcommand.pack-catalog.v1",
             "game": "neutral",
             "groups": [{"id": "daily", "title": {"en": "Daily"}}],
             "packs": [{
                 "package_id": package_id,
                 "title": {"en": "Pack"},
                 "summary": {"en": "A neutral pack"},
-                "group": "daily"
+                "group": "daily",
+                "consumes": [],
+                "produces": []
             }]
         })
     };
-    fixture.write_json("ui.json", &ui_of(PACK_A));
-    let ui = fs::read(fixture.repo().join("ui.json")).unwrap();
-    let head = fixture.commit("display metadata");
-    let built = fixture.build("ui", &[]);
+    fixture.write_json("pack-catalog.json", &catalog_of(PACK_A));
+    fixture.write_json(
+        "ui.json",
+        &json!({"schema_version": "actingcommand.ui.v1", "game": "neutral", "groups": [],
+                "packs": []}),
+    );
+    let catalog = fs::read(fixture.repo().join("pack-catalog.json")).unwrap();
+    let head = fixture.commit("the package declaration");
+    let built = fixture.build("catalog", &[]);
     assert_eq!(built.exit_code(), 0, "{}", built.envelope_json());
-    let entries = zip_entries(&fixture.out("ui").join(zip_name(&head)));
-    assert_eq!(entries.get("ui.json"), Some(&ui));
-    assert_eq!(declared_package(&entries), json!([3, 3]));
-    let document = fixture.build_json("ui");
+    let entries = zip_entries(&fixture.out("catalog").join(zip_name(&head)));
+    assert_eq!(entries.get("pack-catalog.json"), Some(&catalog));
+    assert!(!entries.contains_key("ui.json"), "{:?}", entries.keys());
+    assert_eq!(declared_package(&entries), json!([16, 16]));
+    let document = fixture.build_json("catalog");
+    assert_eq!(document["package"], json!([16, 16]));
     assert_eq!(
         document["root_files"],
         json!([
             "applications.json",
             "bundle.json",
             "interfaces.json",
-            "ui.json"
+            "pack-catalog.json"
         ])
     );
+    let answer = built.envelope.data.clone().unwrap();
+    let warned = step(&answer, "bundle")["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|warning| warning["code"] == "standard_pack_ui_retired")
+        .count();
+    assert_eq!(warned, 1, "{answer}");
 
-    fixture.write_json("ui.json", &ui_of("neutral.build.unlisted"));
-    fixture.commit("a pack the bundle does not list");
-    let built = fixture.build("refused-ui", &[]);
+    fixture.write_json("pack-catalog.json", &catalog_of("neutral.build.unlisted"));
+    fixture.commit("a package the bundle does not register");
+    let built = fixture.build("refused-catalog", &[]);
     assert_eq!(built.exit_code(), 2, "{}", built.envelope_json());
     assert_eq!(error_code(&built), "resource_build_failed");
     let details = error_details(&built);
@@ -727,18 +751,23 @@ fn p2_ui_json_is_carried_and_a_refused_one_fails_the_build() {
     assert_eq!(refusal["values"]["game"], "neutral");
     assert_eq!(
         refusal["values"]["path"],
-        fixture.repo().join("ui.json").display().to_string()
+        fixture
+            .repo()
+            .join("pack-catalog.json")
+            .display()
+            .to_string()
     );
     assert_eq!(
         refusal["values"]["standard_pack_problem"],
         "package_not_listed"
     );
+    assert_eq!(refusal["values"]["json_pointer"], "/packs/0/package_id");
     assert_eq!(
         report["outcome"]["causes"][0]["code"],
         "standard_pack_root_invalid"
     );
     assert_eq!(
-        entries_of(&fixture.out("refused-ui")),
+        entries_of(&fixture.out("refused-catalog")),
         BTreeSet::from(["work".to_owned()]),
         "no product"
     );

@@ -236,10 +236,13 @@ fn s8_the_other_members_are_as_before_on_an_existing_fixture() {
     );
     let line = serde_json::to_string(&checked).expect("the answer");
     let models = serde_json::to_string(&checked.models).expect("the models");
-    let tail = format!(r#","models":{models}}}"#);
+    // Workflow #477 PC-1 (adapted): the answer's last member is its note on `pack-catalog.json`,
+    // `catalog`, always present; `models` comes right before it.
+    let catalog = serde_json::to_string(&checked.catalog).expect("the catalog note");
+    let tail = format!(r#","models":{models},"catalog":{catalog}}}"#);
     let before = line
         .strip_suffix(tail.as_str())
-        .unwrap_or_else(|| panic!("models is the answer's last member: {line}"));
+        .unwrap_or_else(|| panic!("models comes before the catalog note, last: {line}"));
     // The answer this root gave before the slice: its members in their order, those a root
     // without schedule.json or notices/ does not have left out.
     let root = std::path::absolute(&game_root).expect("the absolute game root");

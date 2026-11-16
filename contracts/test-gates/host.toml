@@ -4203,6 +4203,35 @@ tests = [
 ]
 incident = ["#392 DA-5ab"]
 
+# Workflow #463 S3-8 (0.12.68; register §1.444; brief rd-1116/brief-463-s38-run-variables.md; contracts/runtime-interface.md, "The variable values of a contained run"; contracts/package-variables.md, "Runs without a dispatch"): a direct run's request gives values for its package's variables (ContainedTaskRequest.variables). The host in composer mode over one game root (gate_463_v2's, the package going from home to result in one tap and declaring the choice pick, item_a or item_b, default item_b), a manual Runtime clock, one fake instance on a physical provider whose display is observed, one policy evaluation first so that the workbench judges the root (pick applies in the game), each run on a connection of its own: pick given item_a completes after its one tap and its snapshots are overlaid with session.dispatch.parameter.pick item_a (1); item_z is Denied run_variable_value_refused with package_id, variable_name pick and variable_problem not_an_option, nothing pressed and no run reaching its execution (2); a value under a name the package does not declare is Denied run_variable_undeclared with package_id and variable_name, nothing pressed and no run reaching its execution (3); no value: the run completes and reads the default item_b (4)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_463_s38::s38_host_a_given_value_is_what_the_package_reads",
+    "actingcommand-runtime-host::lib::tests::gate_463_s38::s38_host_a_value_the_variable_does_not_take_is_refused_before_admission",
+    "actingcommand-runtime-host::lib::tests::gate_463_s38::s38_host_an_undeclared_name_is_refused",
+    "actingcommand-runtime-host::lib::tests::gate_463_s38::s38_host_without_values_the_run_reads_the_defaults",
+]
+incident = ["#463 S3-8"]
+
+# Workflow #463 S3-8, fix round 1 (0.12.68; register §1.444, "Fix round 1"; brief rd-1116/brief-463-s38-fix1.md; the review of #1789, its section (h); contracts/package-variables.md, "Runs without a dispatch"; contracts/runtime-interface.md, "The variable values of a contained run"): the refusals no test reached, each Denied with nothing pressed, no run reaching its execution and no task.package_admitted more in the ledger than before the run, on the fixture of the row "Workflow #463 S3-8". The root's goals.json uses the name pick for a heading, so pick does not apply in the game root (goal_name_conflict, as the workbench's table says): item_a is run_variable_not_applying with package_id, variable_name pick and variable_problem goal_name_conflict (1); the package also declares order (ordered, options item_a and item_b, 0 to 2 keys), which applies: ["item_a", "item_z"], which the variable would take in part, is run_variable_value_refused with variable_name order and variable_problem keys_left_out (2); a request frame whose variables hold seventeen values, written as raw JSON past the contract's constructor, is Denied at the door invalid_contained_task_variable_count (3). Adapted (row "Workflow #463 S3-8"): its tests 2 and 3 also assert the ledger's admissions unchanged
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_463_s38::s38_fix1_a_variable_that_does_not_apply_is_refused_before_admission",
+    "actingcommand-runtime-host::lib::tests::gate_463_s38::s38_fix1_a_value_taken_only_in_part_is_refused",
+    "actingcommand-runtime-host::lib::tests::gate_463_s38::s38_fix1_seventeen_values_in_a_raw_request_are_refused_at_the_door",
+]
+incident = ["#463 S3-8"]
+
+# The 0.12.68 train, fix round (#463 S3-8 and stage two joined in pull request #1789; register §1.444, "Fix round of the 0.12.68 train"; brief rd-1116/brief-train-01268-fix1.md, point 4; the review of the train, rd-1116/review-train-01268.md, whose host tests of an ordered value were refusals only; contracts/runtime-interface.md, "The variable values of a contained run"): on the fixture of the row "Workflow #463 S3-8", the package declaring one ordered variable as stage two's record stop writes a choice (list_item, its options item_a and item_b titled under the package's locale, min_count 1, max_count 2, default ["item_b"]), which applies in the game root: a direct run given ["item_b", "item_a"], allowed and not in the options' order, completes after its one tap, and its snapshots hold session.dispatch.parameter.list_item as the rows {key item_b, rank 1} and {key item_a, rank 2}
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_463_s38::train_01268_fix1_an_allowed_order_of_a_generated_choice_is_what_the_package_reads",
+]
+incident = ["#463 0.12.68 train"]
+
 # Workflow #463 KB-1 (0.12.69; register §1.447; brief rd-1116/brief-463-kb1-nemu-key.md and the coordinator's rulings of 11-16 evening): the capability table of an instance through a switch of its backends: minitouch no key; adb_shell_input and nemu_ipc input.key supported, their failure semantics naming the back key alone and the Nemu row a library without the key calls; maatouch every key; input.text maatouch's alone (1). On an instance configured nemu_ipc: home, 3, a word of no key and a text refused nemu_input_capability_unsupported, the back key without a frame nemu_input_frame_required, nothing sent; the back key on the frame of a keyless observation completed, the device's one input the back key (2). With another application in front the back key and a tap are each refused application_not_foreground and nothing reaches the device; with the assigned one in front the back key is completed (3)
 [[gate]]
 coverage = "Y"

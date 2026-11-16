@@ -143,9 +143,13 @@ pub struct StandardPackCheckResponse {
     /// judged rule that declares no value, then (SS-2c) one `standard_pack_priority_tier_mismatch`
     /// per rule whose maintenance declaration disagrees with its tier. Workflow #463 V1: then one
     /// `standard_pack_root_invalid` per problem of the root check of the packages' variables,
-    /// naming the package's `control.json`. Workflow #455 G-R1: last, with `goals.json`, one
+    /// naming the package's `control.json`. Workflow #455 G-R1: then, with `goals.json`, one
     /// `standard_pack_root_invalid` per problem of a refused file, in file order; the root is
-    /// checked as without the file.
+    /// checked as without the file. Workflow #477 PC-1: last, with `pack-catalog.json`, one
+    /// `standard_pack_catalog_display_invalid` per display defect and one
+    /// `standard_pack_catalog_schedule_differs` per difference between its business part and the
+    /// rules of `schedule.json`; then one `standard_pack_ui_retired` when the root still holds
+    /// `ui.json`.
     pub warnings: Vec<actingcommand_contract::outcome::Outcome>,
     /// SS-2b (register §1.225): with `schedule.json`, how many of the game's judged rules (their
     /// package is not maintenance-role and, SS-2c, they do not declare themselves maintenance)
@@ -187,6 +191,85 @@ pub struct StandardPackCheckResponse {
     /// `models`, so that a root without variables answers byte for byte as before.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub variable_provenance: Option<actingcommand_contract::VariableOrigins>,
+    /// Workflow #477 PC-1 (register §1.438; contracts/pack-catalog.md): what the check says of the
+    /// root's `pack-catalog.json` beside its warnings, the last member: always present.
+    pub catalog: StandardPackCatalogReport,
+}
+
+/// Workflow #477 PC-1: `standard-pack check`'s note on a game root's `pack-catalog.json`. A root
+/// without the file is no defect (its declaration is written over time), nor is a package the
+/// file lists no entry for: each is a note, an information outcome, not a warning.
+#[derive(Debug, Clone, Serialize)]
+pub struct StandardPackCatalogReport {
+    /// `standard_pack_catalog_absent` (`game`, `path`) for a root without the file;
+    /// `standard_pack_catalog_coverage` (`game`, `path`, `count` the packages without an entry)
+    /// for one whose file reads.
+    pub note: actingcommand_contract::outcome::Outcome,
+    /// With the file: the packages of `bundle.json` it lists no entry for, in the registry's
+    /// order; absent without it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unlisted: Option<Vec<String>>,
+}
+
+impl StandardPackCatalogReport {
+    /// The note of a game root of `game` without the file `path`.
+    pub(crate) fn absent(game: &str, path: &std::path::Path) -> Self {
+        Self {
+            note: actingcommand_contract::outcome::Outcome::new(
+                actingcommand_contract::codes::SharedCode::StandardPackCatalogAbsent,
+            )
+            .game(game)
+            .path(path),
+            unlisted: None,
+        }
+    }
+}
+
+/// Workflow #477 PC-1 (contracts/pack-catalog.md, "Who writes it"): `actinglab standard-pack
+/// catalog --root <root> [--plan]`.
+#[derive(Debug, Clone)]
+pub struct StandardPackCatalogRequest {
+    /// Fix round 1: a resource repository's checkout (`applications.json` and `packs/`, no
+    /// `bundle.json`; its game from `applications.json`, its registry made by the build's
+    /// `package_bundle`), or a built game root (`bundle.json`, its directory named as its game);
+    /// never one inside an installation.
+    pub root: PathBuf,
+    /// `--plan`: write nothing, answer the document the line would write.
+    pub plan: bool,
+}
+
+/// Workflow #477 PC-1: the answer of `standard-pack catalog`.
+#[derive(Debug, Clone, Serialize)]
+pub struct StandardPackCatalogResponse {
+    /// `planned` (`--plan`), `written` or `unchanged` (the file holds the bytes already).
+    pub status: String,
+    pub root: String,
+    pub game: String,
+    /// The file written, or that would be.
+    pub path: String,
+    /// Whether the bytes the writer makes differ from the file's (true when there is none).
+    pub changed: bool,
+    /// The packages given a new entry, in the registry's order.
+    pub added: Vec<String>,
+    /// The packages whose entry was there and is kept as written, in the file's order.
+    pub kept: Vec<String>,
+    /// The entries of packages `bundle.json` no longer registers, left out.
+    pub removed: Vec<String>,
+    /// The pools of kept entries `schedule.json` no longer declares, left out.
+    pub dropped: Vec<actingcommand_contract::CatalogDropped>,
+    /// Every difference between the written entries and the rules of `schedule.json` (a kept
+    /// entry's business part is never overwritten); each is also a warning.
+    pub differences: Vec<actingcommand_contract::CatalogScheduleDifference>,
+    /// The new entries whose display came from the leftover `ui.json`.
+    pub display_from_ui: Vec<String>,
+    /// With `--plan`: the document the line would write.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub document: Option<Value>,
+    /// One `standard_pack_catalog_display_invalid` per display defect of the written document,
+    /// (fix round 1) one `standard_pack_catalog_left_out` per entry of `removed` and per pool of
+    /// `dropped`, in the existing file's order, one `standard_pack_catalog_schedule_differs` per
+    /// difference, and `standard_pack_ui_retired` when the root still holds `ui.json`.
+    pub warnings: Vec<actingcommand_contract::outcome::Outcome>,
 }
 
 /// Workflow #453 S8: one model a game root's packs need, as `standard-pack check` answers it.

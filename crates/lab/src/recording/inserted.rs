@@ -74,6 +74,9 @@ fn other_members(request: &MarkRequest) -> Vec<&'static str> {
         // #463 S2-5: a box marks a recorded step or presses its click; an inserted step takes
         // its marks and click in `optional_after`.
         ("boxes", !request.boxes.is_empty()),
+        // #463 S2-6: a choice marks a recorded step; an inserted step is optional, and a step
+        // marked as a choice is not.
+        ("choice", request.choice.is_some()),
         ("ending", request.ending.is_some()),
         ("remove_ending", request.remove_ending.is_some()),
         (

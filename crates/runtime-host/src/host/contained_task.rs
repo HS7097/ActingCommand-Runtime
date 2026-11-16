@@ -67,6 +67,30 @@ fn direct_task_run_claim_cap_ms(receipt_deadline_monotonic_ms: u64, now_monotoni
         .min(DIRECT_TASK_RUN_CLAIM_WAIT_MS)
 }
 
+/// Workflow #463 S3-8: the refusal `code` of a direct run's given value of the variable `name` of
+/// the package `package_id`, with the word `problem` when its cause has one: Denied at
+/// `check_run_variables`, `invalid_request`, before any record, claim or lease.
+fn run_variable_refused(
+    code: HostCode,
+    package_id: &str,
+    name: &str,
+    problem: Option<actingcommand_contract::VariableProblem>,
+) -> RequestFailure {
+    let error = RuntimeHostError::request(
+        code,
+        HostLocation::CheckRunVariables,
+        RuntimeErrorCode::InvalidRequest,
+    )
+    .with_outcome_values(|outcome| {
+        let outcome = outcome.package_id(package_id).variable_name(name);
+        match problem {
+            Some(problem) => outcome.variable_problem(problem),
+            None => outcome,
+        }
+    });
+    RequestFailure::request(error, RuntimeReceiptState::Denied, None)
+}
+
 /// Reads one original run identity without creating identifiers or producer authority.
 fn contained_task_recovery_identity(
     events: &[PersistedEvent],
@@ -7575,6 +7599,9 @@ impl HostShared {
         // Workflow #411 A22: a recovery binding that neither the run's home entry nor a ladder
         // after its failed end can use is refused here, before any record, claim or lease.
         self.check_recovery_binding(&resolved, task_request, &prepared, &prerequisites)?;
+        // Workflow #463 S3-8: so is a given variable value its package does not take, before any
+        // record, claim or lease; a request without values passes unchanged.
+        self.check_run_variables(request, instance_alias, task_request, &prepared)?;
         self.append_request_lifecycle(
             original,
             request,
@@ -7754,6 +7781,141 @@ impl HostShared {
         // receipt and decides. Workflow #387 D1c: `rules.direct_runs = trigger` lets its failed
         // end queue one (`ladder_after_direct_run`).
         with_recovery_ladder_staging(executed, awaited)
+    }
+
+    /// Workflow #463 S3-8 (`contracts/runtime-interface.md`, "The variable values of a contained
+    /// run"; `contracts/package-variables.md`, "Runs without a dispatch"): a direct run's given
+    /// values, judged after its package and prerequisite chain are read and before any record,
+    /// claim or lease, each in the order of its name: a name the package `prepared` declares no
+    /// variable of is `run_variable_undeclared`; a variable that does not apply in the instance's
+    /// game root now, as the variable table a dispatch reads says it, `run_variable_not_applying`
+    /// with the root's word; a value the variable does not take whole, as the dispatch's own
+    /// judgement answers it (the policy crate's `resolve_variable`, the value given as the entry an
+    /// application holds, set through the request's channel now), `run_variable_value_refused`
+    /// with its word. Each is Denied with the package and the name. A request without values passes
+    /// unchanged and reads nothing. Fix round of the 0.12.68 train: a judgement that gives neither
+    /// the value nor a word, which cannot happen, is `run_variable_unjudged`, Denied as the others.
+    fn check_run_variables(
+        &self,
+        request: &ValidatedRuntimeRequest<'_>,
+        instance_alias: &str,
+        task_request: &ContainedTaskRequest,
+        prepared: &PreparedContainedTask,
+    ) -> Result<(), RequestFailure> {
+        let given = task_request.variables();
+        if given.is_empty() {
+            return Ok(());
+        }
+        let channel = request
+            .channel()
+            .map(|binding| binding.channel)
+            .ok_or_else(|| {
+                RequestFailure::request(
+                    RuntimeHostError::request(
+                        HostCode::ChannelBindingMissing,
+                        HostLocation::CheckRunVariables,
+                        RuntimeErrorCode::InvalidRequest,
+                    ),
+                    RuntimeReceiptState::Denied,
+                    None,
+                )
+            })?;
+        let set_by = actingcommand_policy::VariableSetBy {
+            set_unix_ms: self.runtime_clock_sample()?.unix_ms,
+            channel,
+        };
+        // The instance's game, as the policy's inputs bind it; an instance they bind to no game
+        // is one no check judges.
+        let game = lock(&self.policy_inputs, HostLocation::CheckRunVariables)?
+            .as_ref()
+            .and_then(|inputs| {
+                inputs
+                    .facts()
+                    .instances
+                    .iter()
+                    .find(|instance| instance.instance_id == instance_alias)
+                    .map(|instance| instance.game_id.clone())
+            });
+        let table = self.run_variable_table()?;
+        let package_id = prepared.package_label();
+        for (name, value) in given {
+            let Some(variable) = prepared
+                .declared_variables()
+                .iter()
+                .find(|variable| variable.name == *name)
+            else {
+                return Err(run_variable_refused(
+                    HostCode::RunVariableUndeclared,
+                    package_id,
+                    name,
+                    None,
+                ));
+            };
+            let root = match &game {
+                Some(game) => table.root_word(game, name),
+                None => Some(actingcommand_contract::VariableProblem::RootUnchecked),
+            };
+            if let Some(word) = root {
+                return Err(run_variable_refused(
+                    HostCode::RunVariableNotApplying,
+                    package_id,
+                    name,
+                    Some(word),
+                ));
+            }
+            let entry = actingcommand_policy::StoredEntry {
+                value: value.clone(),
+                set_by: Some(set_by),
+            };
+            let resolved = actingcommand_policy::resolve_variable(variable, Some(&entry), None);
+            match (resolved.source, resolved.problem) {
+                (actingcommand_contract::VariableSource::Set, None) => {}
+                // Not taken, or taken only in part (`keys_left_out`): the judgement's word.
+                (_, Some(problem)) => {
+                    return Err(run_variable_refused(
+                        HostCode::RunVariableValueRefused,
+                        package_id,
+                        name,
+                        Some(problem),
+                    ));
+                }
+                // Fix round 1: not reachable. Given an entry whose setter is known and no root
+                // word, `resolve_variable` answers `set` (with `keys_left_out` when it took the
+                // value in part) or the default with the judgement's word, never a default
+                // without a word. Fix round of the 0.12.68 train: should it ever answer one, this
+                // run alone is refused (`run_variable_unjudged`), as the refusals above; a panic
+                // here would stop the whole Runtime at the connection's boundary.
+                (_, None) => {
+                    return Err(run_variable_refused(
+                        HostCode::RunVariableUnjudged,
+                        package_id,
+                        name,
+                        None,
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Workflow #463 S3-8: the variable table a dispatch reads now: the scheduler workbench's with
+    /// a composed standard pack, else the one the last evaluation's remedy table built, else an
+    /// empty one, by which no game's root is judged (`root_unchecked`). Fix round 1: the
+    /// workbench's table is read by the function the policy cycle reads it by
+    /// (`standard_pack_variables`), which copies nothing of the roots.
+    fn run_variable_table(
+        &self,
+    ) -> Result<std::sync::Arc<actingcommand_policy::VariableTable>, RequestFailure> {
+        if let Some(table) = self.standard_pack_variables()? {
+            return Ok(table);
+        }
+        let policy = lock(self.policy()?, HostLocation::CheckRunVariables)?;
+        Ok(std::sync::Arc::new(
+            policy
+                .built_table()
+                .map(|table| table.variables().clone())
+                .unwrap_or_default(),
+        ))
     }
 
     pub(super) fn package_material_deadline(
@@ -8732,7 +8894,9 @@ impl HostShared {
         // declared defaults. Workflow #411 B8: a policy run also reads the schedule values its
         // dispatch carries, observed at its admission; any other run reads none. Workflow #463
         // V2: a policy run reads the variable values its dispatch carries (`variable_values`),
-        // any other run its package's variable defaults.
+        // any other run its package's variable defaults. Workflow #463 S3-8: a direct run whose
+        // request gives values (judged before its admission, `check_run_variables`) reads them as
+        // a policy run reads its dispatch's, by the same overlay; the others their defaults.
         let run_parameters = match dispatched_parameters {
             Some(dispatched) => match dispatched.values {
                 Some(values) => {
@@ -8742,7 +8906,17 @@ impl HostShared {
             }
             .with_variables(prepared.dispatched_variable_values(&dispatched.variables))
             .with_dispatch_schedule(dispatched.schedule, dispatched.admitted_at_unix_ms),
-            None => prepared.default_run_values(),
+            None if task_request.variables().is_empty() => prepared.default_run_values(),
+            None => {
+                let given = task_request
+                    .variables()
+                    .iter()
+                    .map(|(name, value)| (name.clone(), value.clone()))
+                    .collect::<Vec<_>>();
+                prepared
+                    .default_run_parameters()
+                    .with_variables(prepared.dispatched_variable_values(&given))
+            }
         };
         // Workflow #463 V2 fix round 1, test only: what the run's snapshots are overlaid with.
         #[cfg(test)]

@@ -277,6 +277,10 @@ mod gate_463_v2;
 // Workflow #463 V3 (0.12.61; register §1.383): an application's goals read and set by name
 // (`GoalView`, `EditGoal`).
 mod gate_463_v3;
+// Workflow #463 S3-8 (0.12.68; register §1.444): a direct run's request gives values for its
+// package's variables, judged before its admission as a dispatch judges one, overlaid as a
+// dispatch's are.
+mod gate_463_s38;
 // Workflow #463 KB-1 (0.12.69; register §1.447): the capability table's key rows, the back key
 // sent on a frame of a Nemu input and every other key refused, and the foreground gate's key.
 mod gate_463_kb1;

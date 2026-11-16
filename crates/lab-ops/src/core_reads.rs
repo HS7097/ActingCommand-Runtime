@@ -179,7 +179,9 @@ pub static READ_HERE: [Reads; 35] = [
     ),
     reads(
         "run start",
-        &["instance", "package", "recovery", "deadline", "wait"],
+        &[
+            "instance", "package", "recovery", "deadline", "wait", "variable",
+        ],
     ),
     reads("run stop", &["id", "cancel_only"]),
     reads("reset", &["instance"]),

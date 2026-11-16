@@ -302,6 +302,13 @@ impl PreparedContainedTask {
             .with_variables(self.default_variable_values())
     }
 
+    /// Workflow #463 S3-8: the variables the package declares, in declaration order; empty when it
+    /// declares none. The host judges a direct run's given values against them before the run's
+    /// admission.
+    pub fn declared_variables(&self) -> &[PackageVariable] {
+        &self.control.variables
+    }
+
     /// Workflow #463 V2: every variable the package declares, `(name, default)` with its kind's
     /// type ([`PackageVariable::fact_value`]), in declaration order; empty when it declares none.
     pub fn default_variable_values(&self) -> Vec<(String, FactValue)> {

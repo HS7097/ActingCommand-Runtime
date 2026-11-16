@@ -273,6 +273,8 @@ fn cov1_t4_a_file_without_followers_answers_as_before() {
         models: Vec::new(),
         // Workflow #463 V1: the answer's struct gained this member.
         variable_provenance: None,
+        // Workflow #477 PC-1: the answer's struct gained this member.
+        catalog: crate::StandardPackCatalogReport::absent(GAME, Path::new("root")),
     })
     .expect("the answer");
     assert!(answer.get("benefit_followers").is_none(), "{answer}");

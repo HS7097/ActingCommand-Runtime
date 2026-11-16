@@ -1650,6 +1650,22 @@ actingcommand_contract::outcome_codes! {
         /// fence. Nothing was granted (keys `alias` the fenced member).
         DeviceHeldForMemberClose => "device_held_for_member_close": error / none,
         // ---- Workflow #437 G1: end
+        // ---- Workflow #463 S3-8 (`contracts/runtime-interface.md`, "The variable values of a
+        // contained run"): begin. Each refuses a direct run in its preparation, before any record,
+        // claim or lease (keys `package_id` the run's package, `variable_name` the value's name).
+        /// Error. The request gives a value under a name its package declares no variable of.
+        RunVariableUndeclared => "run_variable_undeclared": error / none,
+        /// Error. The request gives a value the variable does not take whole, as the dispatch's own
+        /// judgement (`resolve_variable`) answers it (key `variable_problem` its word).
+        RunVariableValueRefused => "run_variable_value_refused": error / none,
+        /// Error. The request gives a value of a variable that does not apply in the instance's
+        /// game root now, as a dispatch's table says it (key `variable_problem` the root's word).
+        RunVariableNotApplying => "run_variable_not_applying": error / none,
+        /// Error. Fix round of the 0.12.68 train: the judgement of a given value of an applying
+        /// variable (`resolve_variable`) gave neither the value nor a word, which cannot happen;
+        /// the run alone is refused instead of a panic that would stop the Runtime.
+        RunVariableUnjudged => "run_variable_unjudged": error / none,
+        // ---- Workflow #463 S3-8: end
     }
 }
 
@@ -2617,6 +2633,9 @@ actingcommand_contract::outcome_locations! {
         ReadHeldStartPreparationClaimTtl => "read_held_start_preparation_claim_ttl",
         SettleHeldStartPreparation => "settle_held_start_preparation",
         RunHeldStartPreparation => "run_held_start_preparation",
+        // Workflow #463 S3-8: the check of a direct run's given variable values in its
+        // preparation.
+        CheckRunVariables => "check_run_variables",
     }
 }
 

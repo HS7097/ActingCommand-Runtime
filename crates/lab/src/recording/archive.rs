@@ -71,8 +71,9 @@ const FINAL_FRAME_MISSING: &str = "final_frame_missing";
 /// #463 S1-1: the source of the click a tap or a long press declares by its point.
 const POINT_SOURCE: &str = "point";
 /// #463 S1-5: the outcome of an application operation whose completed receipt is on record, and of
-/// one with attempts only (it may have run), in the words a click's execution records.
-const PERFORMED: &str = "performed";
+/// one with attempts only (it may have run), in the words a click's execution records. #463 S2-2
+/// fix round 1: `record review` reads the first of `outcome_of`'s words by it.
+pub(crate) const PERFORMED: &str = "performed";
 const INDETERMINATE: &str = "indeterminate";
 
 /// The manifest `record archive` writes (#463 S1-5, `actingcommand.lab-recording-archive.v2`): a
@@ -1147,8 +1148,9 @@ fn derived_after(recording: &LabRecording, index: u32, executed_at_unix_ms: u64)
 /// #463 S1-5 ("The manifest", `outcome`): the outcome of the step's effect, when one is on record:
 /// a click's execution's, as the step table records it (`performed` or `indeterminate`); an
 /// application operation's `performed` with its completed receipt (attempts may stand beside it: it
-/// was run again), `indeterminate` with attempts and no completed receipt; `None` otherwise.
-fn outcome_of(step: &RecordingStep) -> Option<String> {
+/// was run again), `indeterminate` with attempts and no completed receipt; `None` otherwise. #463
+/// S2-2 fix round 1: `record review` names an application operation's outcome by this judgement.
+pub(crate) fn outcome_of(step: &RecordingStep) -> Option<String> {
     if let Some(execution) = step
         .click
         .as_ref()
@@ -1589,8 +1591,9 @@ pub(crate) fn instance_mismatch(recorded: &str, command: &str) -> LabError {
     )
 }
 
-/// The absolute form of a path for the answer.
-fn display(path: &Path) -> String {
+/// The absolute form of a path for the answer. #463 S2-2 fix round 1: `record review` gives its
+/// previews' paths by it.
+pub(crate) fn display(path: &Path) -> String {
     std::path::absolute(path)
         .unwrap_or_else(|_| path.to_path_buf())
         .display()
