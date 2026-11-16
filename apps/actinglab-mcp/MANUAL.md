@@ -36,8 +36,9 @@ naming this file.
   (section 6); `ac_run_show`
   and `ac_run_stop` take `wait_s`, `ac_events` and `ac_codes` take `cursor` (section 4);
   `ac_deploy` and `ac_rollback` take no `detach` (section 9). These are the only parameters of a
-  row a tool leaves out; the command line also takes `actinglab`'s global options and a
-  positional given as its flag (`--id`, `--instance`), which no tool needs.
+  row a tool leaves out; the command line also takes `actinglab`'s global options, a positional
+  given as its flag (`--id`, `--instance`) and `devices bind`'s own `--root` (the server hands on
+  the root it runs from), which no tool needs.
 - **Closed word lists** (Workflow #434 LW-1, 0.12.67). Where an operation takes only the words of
   a closed list for a parameter the table types as text, the schema lists them (`enum`; for a
   list its items' `enum`): `ac_status`'s `sections` (the overview's blocks; `daemon` and
@@ -105,7 +106,10 @@ naming this file.
   not fit beside the rest) and `rest`, the calls that read it: `ac_run_evidence` with the run's
   request id (its steps, page by page) and `ac_events` with its correlation id and `detail`
   `payload` (its records). The receipt (state, outcome, `executed_steps`, `final_page`) and the
-  line's outcome stay. So the answer of a finished run fits, whatever it did.
+  line's outcome stay. So the answer of a finished run no longer grows with its steps or its
+  records. What stays is never cut: the receipt and the line's `warnings` (and, with `ac_run_show`,
+  the run's own line beside the job); a run whose answer still does not fit with them is refused
+  `output_budget_exceeded` with its job's handle (section 5), never cut silently.
 - **`ac_run_start`** without the row's `wait` answers at once `{handle, correlation_id,
   job_phase}` (`submitting`): the handle is the run's request id, and the run is submitted in a
   job. With `wait` the call waits up to that long, within the call budget, and answers the run's
@@ -226,15 +230,22 @@ naming this file.
   `ac_do` with `capture`, the server records the client action today's server records, naming the
   Lab request; its warnings join the line.
 - **Presses** (Workflow #434 LW-1, 0.12.67). `ac_tap`, `ac_swipe` and `ac_long_tap` without
-  `record` press on every instance. On an instance whose input is the emulator's own interface
-  (`touch_backend` `nemu_ipc`, which presses only on a frame the Runtime captured), the command
-  reads the instance's status and captures one frame first, and sends the press on it, as a
-  recorded press does: it costs one capture (an `ObserveReadonly`, its frame kept as a Lab
-  frame), and the answer names the frame (`input_frame`). Elsewhere nothing is captured. Such an
-  instance sends no key and no text: `ac_key` and `ac_text` answer
-  `nemu_input_capability_unsupported` there, nothing sent, and the Runtime has no other way to
-  send a key on it; press the screen's own control (`ac_tap`, or `ac_do` with `capture` on a
-  package's element) instead (`ac_codes` gives the code's handling). `ac_tap_target` and
+  `record` press on every instance. What one such press does: on every instance, one status read
+  first (on a connection of its own), to learn whether the instance's input presses only on a
+  frame the Runtime captured (its capability table names the input, `touch_backend` `nemu_ipc`,
+  the emulator's own interface); on such an instance, one capture (an `ObserveReadonly`, of which
+  the command takes the frame's reference alone) and the press sent on that frame, as a recorded
+  press does, the answer naming the frame (`input_frame`); elsewhere nothing is captured. When the
+  Runtime no longer holds that frame when the press names it (`input_frame_unavailable`: another
+  capture took its place, nothing sent), the command captures once more and sends the press once
+  more under the same lease, once (`input_frame_captured_twice`); a second refusal is the answer.
+  A status read that fails stops no press: the press is sent without a frame, as before this
+  slice (an input that needs one is refused by the Runtime itself, `nemu_input_frame_required`),
+  and the answer's `touch_backend_warnings` says so. Such an instance sends no key and no text:
+  `ac_key` and `ac_text` answer `nemu_input_capability_unsupported` there, nothing sent, and the
+  Runtime has no other way to send a key on it; the refusal's `details.hint` says what to press
+  instead (the screen's own control: `ac_tap`, or `ac_do` with `capture` on a package's element).
+  `ac_tap_target` and
   `ac_navigate` only plan on a saved frame (`scene` with `dry_run`) and press nothing anywhere,
   as their command line does: `ac_do` with `capture` and the package's element, or `tap` with a
   point, presses a target on an instance, and `ac_ensure` with `capture` routes one to a page.

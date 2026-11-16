@@ -100,9 +100,9 @@ fn lw1_tap_target_and_navigate_without_a_dry_run_name_what_presses() {
     let mut lab = fixture.lab();
     let mut request = fixture.tap_request(red_scene(), false);
     request.capture_requested = false;
-    let mut ledger = ledger("tap-target");
+    let mut tap_ledger = ledger("tap-target");
     let error = lab
-        .tap_target(request, &mut ledger)
+        .tap_target(request, &mut tap_ledger)
         .expect_err("tap-target only plans");
     assert_eq!(error.code, "validation_failed", "{}", error.message);
     for named in [
@@ -116,9 +116,9 @@ fn lw1_tap_target_and_navigate_without_a_dry_run_name_what_presses() {
 
     let mut request = fixture.navigate_request();
     request.dry_run = false;
-    let mut ledger = ledger("navigate");
+    let mut navigate_ledger = ledger("navigate");
     let error = lab
-        .navigate(request, &mut ledger)
+        .navigate(request, &mut navigate_ledger)
         .expect_err("navigate only plans");
     assert_eq!(error.code, "validation_failed", "{}", error.message);
     for named in ["saved scene", "presses nothing", "ensure --capture"] {

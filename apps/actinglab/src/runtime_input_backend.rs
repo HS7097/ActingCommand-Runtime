@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use actingcommand_contract::{InputAction, InputFrameReference, LeaseToken, RuntimeReceipt};
+use actingcommand_contract::{InputAction, LeaseToken, RuntimeReceipt};
 use actingcommand_device::{DeviceError, DeviceErrorSeverity, DeviceResult};
 use actingcommand_lab::LabInputPort;
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientError, RuntimeInputProxy};
@@ -52,28 +52,14 @@ impl RuntimeInputBackend {
     }
 
     pub(super) fn input_receipt(&mut self, action: InputAction) -> DeviceResult<RuntimeReceipt> {
-        self.input_receipt_on(action, None)
-    }
-
-    /// Workflow #434 LW-1 (register §1.435): [`Self::input_receipt`] sent on `frame`, when given:
-    /// the reference of the frame the Runtime committed for the capture the press was planned on.
-    /// An instance whose input is the emulator's own (Nemu) presses a tap, a long tap or a swipe
-    /// only on such a frame; every other input takes it and resolves it the same way.
-    pub(super) fn input_receipt_on(
-        &mut self,
-        action: InputAction,
-        frame: Option<InputFrameReference>,
-    ) -> DeviceResult<RuntimeReceipt> {
         match &mut self.lease {
-            RuntimeInputLease::Acquired(proxy) => {
-                proxy.input_with_frame(action, frame).map_err(device_error)
-            }
+            RuntimeInputLease::Acquired(proxy) => proxy.input(action).map_err(device_error),
             RuntimeInputLease::Held { closed: true, .. } => Err(DeviceError::fatal(
                 "Runtime input port under the caller's lease is closed",
             )),
-            RuntimeInputLease::Held { client, token, .. } => client
-                .input_with_frame(token, action, frame)
-                .map_err(device_error),
+            RuntimeInputLease::Held { client, token, .. } => {
+                client.input(token, action).map_err(device_error)
+            }
         }
     }
 
@@ -124,7 +110,11 @@ impl LabInputPort for RuntimeInputBackend {
     }
 }
 
-fn device_error(error: RuntimeClientError) -> DeviceError {
+/// The device error an input's Runtime failure is answered as. Workflow #434 LW-1 fix round 1: a
+/// plain `tap`, `swipe` or `long-tap`, which sends through the Runtime's input proxy itself (it reads
+/// the frame's refusal off the client's error to send the press once more), answers its failures so
+/// too.
+pub(super) fn device_error(error: RuntimeClientError) -> DeviceError {
     let severity = if error.is_fallback_eligible() {
         DeviceErrorSeverity::Transient
     } else {

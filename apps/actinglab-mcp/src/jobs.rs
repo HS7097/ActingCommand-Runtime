@@ -213,6 +213,25 @@ impl Jobs {
 }
 
 impl Job {
+    /// Tests only (Workflow #434 LW-1 fix round 1): a job under `handle` that already ended with
+    /// `ended`, as [`Jobs::start`]'s thread leaves one (`done` or `failed`), its line not yet
+    /// handed out; no thread, no clock.
+    #[cfg(test)]
+    pub(crate) fn ended_with(handle: &str, kind: &str, run: bool, ended: Finished) -> Self {
+        Self {
+            handle: handle.to_owned(),
+            kind: kind.to_owned(),
+            run,
+            state: Mutex::new(JobState {
+                phase: if ended.is_error { FAILED } else { DONE },
+                ended: Some(ended),
+                collected: false,
+                issued: false,
+            }),
+            changed: Condvar::new(),
+        }
+    }
+
     pub(crate) fn phase(&self) -> &'static str {
         lock(&self.state).phase
     }

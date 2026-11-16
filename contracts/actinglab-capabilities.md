@@ -98,11 +98,23 @@ as declared support with status `unverified`: `nemu_ipc` performs `tap`, (HS-4,
 `single_touch_path_drag_v1`), only on a frame the Runtime captured
 (`nemu_input_frame_required`), and neither `key` nor `text`; its reset needs no
 frame (`v012-register.md` §1.268). Workflow #434 LW-1 (0.12.67, §1.435): actinglab's `tap`,
-`swipe` and `long-tap` without `--record` read the instance's status and, where its capability
-table names `nemu_ipc` as the input of the press, capture one frame through the Runtime first and
-send the press on it (one capture; the answer's `input_frame`), as a recorded press does; on every
-other instance they capture nothing. `key` and `text` stay refused there
-(`nemu_input_capability_unsupported`, whose catalog entry says what presses instead); `maatouch` performs `tap`, `long_tap`, `swipe`,
+`swipe` and `long-tap` without `--record` read the instance's status once, on every instance,
+and, where its capability table names `nemu_ipc` as the input of the press, capture one frame
+through the Runtime first (its reference alone) and send the press on it (the answer's
+`input_frame`), as a recorded press does; on every other instance they capture nothing. Where the
+Lab reads "this input needs a frame": the `evidence_ref` of an input row of the instance's
+capability table (`input.tap`, `input.long_tap`, `input.swipe`, …, in `Status`) is the instance's
+configured touch backend, and the Lab decides as the Runtime does, which presses only on a frame
+when that backend is `nemu_ipc` (`runtime-host` `host/nemu_input.rs`, `nemu_input_check`, reads
+the configured `input_backend`); the table has no member of its own for it (one would be an
+interface revision). A status that cannot be read stops no press: it is sent without a frame, as
+before LW-1, and the Runtime refuses it where the input needs one (`nemu_input_frame_required`);
+the answer's `touch_backend_warnings` says the status was not read. A frame the Runtime no longer
+holds when the press names it (`input_frame_unavailable`) is captured once more and the press
+sent once more under the same lease, once (`input_frame_captured_twice`). `key` and `text` stay
+refused there (`nemu_input_capability_unsupported`); their refusal carries `details.hint`, what
+presses instead, where the capability table says the instance's input does not implement
+`input.key` or `input.text`; `maatouch` performs `tap`, `long_tap`, `swipe`,
 the three segmented drags, `key` and `text`; `minitouch` the same without `key`
 and `text`; `adb_shell_input` performs `tap`, `long_tap` (as a swipe that stays at
 its point), `swipe` and (Workflow #406 T3, plan Q18 (a)) the three segmented drags

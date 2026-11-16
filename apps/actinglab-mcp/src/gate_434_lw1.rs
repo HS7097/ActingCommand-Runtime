@@ -10,14 +10,18 @@
 //!   instance, `do` and `ensure` with capture.
 //! - `lw1_a_finished_runs_answer_fits_with_its_state_outcome_and_the_rest` (item 2): the line of a
 //!   run's job of 400 made-up ledger records (some 280 KB, over the 24 KiB budget, as the walk's
-//!   106 KB to 514 KB were) is answered, by `ac_run_start` with `wait` (`server::run_answer`) and
-//!   as the `job` of `ac_run_show` (`server::with_run_job`), within the budget: the receipt's state
-//!   and outcome, the run status's state and terminal, `events_total` 400, `truncated` naming what
-//!   was left out (`/events`, and the official OCR read where it does not fit beside them) and
-//!   `rest` the calls that read it (`ac_run_evidence` with the request id, `ac_events` with the
-//!   correlation id), both tools this server offers; an OCR read that fits stays.
+//!   106 KB to 514 KB were) is answered, by `ac_run_start` with `wait` and as the `job` of
+//!   `ac_run_show`, within the budget: the receipt's state and outcome, the run status's state and
+//!   terminal, `events_total` 400, `truncated` naming what was left out (`/events`, and the
+//!   official OCR read where it does not fit beside them) and `rest` the calls that read it
+//!   (`ac_run_evidence` with the request id, `ac_events` with the correlation id), both tools this
+//!   server offers; an OCR read that fits stays. Fix round 1 (the review's (f)): the run's job is a
+//!   `jobs::Job` that ended with that line, answered through the functions the server calls,
+//!   `server::job_answer` (as `ac_run_start` with `wait` answers it) and `server::with_job` (as
+//!   `ac_run_show` of the run answers it).
 //! - `lw1_every_schema_property_reaches_its_operation` (item 3): every property of every tool's
-//!   input schema, each with every word its schema lists (else a made-up value of its row's type),
+//!   input schema, each with every word its schema lists (else a made-up value of its row's type;
+//!   fix round 1: a list parameter always as a list of two, each listed word in one of them),
 //!   beside the row's required ones: the front's check takes it (`calls::prepare`, the members it
 //!   adds `calls::front_members`); a core row read in this process holds it in its constant
 //!   (`lab_ops::core_reads::READ_HERE`); a core row handed to a command of `lab-ops` writes it into
@@ -27,11 +31,16 @@
 //!   its receiver by the gates of Workflow #434 LAB-5B2, LAB-5B3 and LAB-5B1b/c. Before LW-1 this
 //!   walk failed on `status`'s `sections` and on `events`' `type`, `event_type`,
 //!   `exclude_event_types` and `origin_module`: the schema offered any text, the parser refused a
-//!   word outside its list. Every entry of `tools::WORDS` lists its words in the schema, and every
-//!   row parameter a tool leaves out is one of [`LEFT_OUT`], with its reason.
+//!   word outside its list. Every entry of `tools::WORDS` lists its words in the schema. What the
+//!   tools leave out of their rows' command lines is [`LEFT_OUT`], a list of its own (fix round 1):
+//!   every row parameter a tool's schema does not offer, and every name outside the table that the
+//!   command line of a row served in this process takes (`lab_ops::core_reads::EXCEPTIONS`) and its
+//!   tool does not offer, each with its reason; a later parameter of either kind a tool leaves out
+//!   fails until it is decided there.
 
 use crate::budget;
 use crate::calls::{self, Finished};
+use crate::jobs;
 use crate::protocol::{self, Era, LegacyVersion};
 use crate::server;
 use crate::tools::{self, Catalog, Listing, Serving};
@@ -78,10 +87,14 @@ const IDENTIFIERS: [(&str, &str); 6] = [
 ];
 
 /// Item 1's list, pinned (the work order: "the reverse list as a pinned table, so that a later
-/// slice that adds a command-line parameter must decide about the tool"): every parameter of an
-/// offered row that the row's tool leaves out of its schema, and why (the manual, sections 1, 6
-/// and 9). A rescue row's only where the rescue module runs.
-const LEFT_OUT: [(&str, &str, &str); 5] = [
+/// slice that adds a command-line parameter must decide about the tool"), a list of its own (fix
+/// round 1: written here, not taken from `tools::SUPPLIED`): what an offered row's tool leaves out
+/// of the row's command line, and why (the manual, sections 1, 6 and 9;
+/// `lab_ops::core_reads::EXCEPTIONS`): every parameter of the row its schema does not offer, and
+/// every name outside the table that the command line of a row this server serves in its own
+/// process takes and its schema does not offer (`*`: every such row). A rescue row's only where the
+/// rescue module runs.
+const LEFT_OUT: [(&str, &str, &str); 7] = [
     (
         "material",
         "out",
@@ -106,6 +119,16 @@ const LEFT_OUT: [(&str, &str, &str); 5] = [
         "rollback",
         "detach",
         "through MCP it always runs detached: it replaces the server",
+    ),
+    (
+        "devices bind",
+        "root",
+        "the command line's own --root, which the row does not declare: the server hands the root it runs from",
+    ),
+    (
+        "*",
+        "words",
+        "no row declares it: the further words a row handed on before Workflow #434 LAB-5B4, refused by name",
     ),
 ];
 
@@ -279,10 +302,17 @@ fn lw1_a_finished_runs_answer_fits_with_its_state_outcome_and_the_rest() {
             calls::sent(&ended, ERA).is_err(),
             "setup: the run's whole line is over the budget"
         );
+        // The run's job of this process (a run's: its handle the run's request id), ended with it.
+        let job = jobs::Job::ended_with(REQUEST, "ac_run_start", true, ended.clone());
 
-        // `ac_run_start` with `wait`, the run ended within it.
-        let answered = server::run_answer(&ended, REQUEST, ERA);
-        let result = calls::sent(&answered, ERA).expect("the run's answer fits");
+        // `ac_run_start` with `wait`, the run ended within it: answered as the server answers it.
+        let answered = server::job_answer(&job, false, ERA);
+        assert!(
+            answered.handle.is_none(),
+            "the answer is the run's line, no handle: {}",
+            answered.result
+        );
+        let result = answered.result;
         assert_eq!(result["isError"], json!(false), "{result}");
         assert!(
             protocol::complete(ERA, result.clone()).to_string().len() <= budget::RESULT_LIMIT,
@@ -315,14 +345,7 @@ fn lw1_a_finished_runs_answer_fits_with_its_state_outcome_and_the_rest() {
             calls::sent(&calls::finished(&before), ERA).is_err(),
             "setup: before LW-1 the job's whole line made the answer of a finished run over the budget"
         );
-        let shown = server::with_run_job(
-            run_show_line(),
-            "ac_run_start",
-            "done",
-            Some(&ended),
-            REQUEST,
-            ERA,
-        );
+        let shown = server::with_job(run_show_line(), &job, ERA);
         let result = calls::call_result(&shown, ERA);
         assert_eq!(result["isError"], json!(false), "{result}");
         assert!(
@@ -352,8 +375,10 @@ fn lw1_a_finished_runs_answer_fits_with_its_state_outcome_and_the_rest() {
 }
 
 /// The values the walk gives the property `property` of `param`'s row: each word its schema lists
-/// (a list's items: each word alone in a list), else one made-up value of the parameter's type;
-/// `absolute` an absolute path, which every path parameter takes through MCP.
+/// (fix round 1: a list's items two at a time, each word with the one after it, the last with the
+/// first, so that every word is sent and every list has two items), else one made-up value of the
+/// parameter's type (a list of two for a list parameter); `absolute` an absolute path, which every
+/// path parameter takes through MCP.
 fn samples(param: &Param, property: &Value, absolute: &str) -> Vec<Value> {
     let listed = property["type"] == "array";
     let words = if listed {
@@ -362,9 +387,19 @@ fn samples(param: &Param, property: &Value, absolute: &str) -> Vec<Value> {
         &property["enum"]
     };
     if let Some(words) = words.as_array() {
+        if !listed {
+            return words.clone();
+        }
         return words
             .iter()
-            .map(|word| if listed { json!([word]) } else { word.clone() })
+            .zip(words.iter().cycle().skip(1))
+            .map(|(word, next)| {
+                if word == next {
+                    json!([word])
+                } else {
+                    json!([word, next])
+                }
+            })
             .collect();
     }
     let number = || {
@@ -381,7 +416,7 @@ fn samples(param: &Param, property: &Value, absolute: &str) -> Vec<Value> {
         (_, ParamType::Integer | ParamType::Unsigned) => number(),
         (_, ParamType::Decimal) => json!(1),
         (_, ParamType::Duration) => json!("1s"),
-        (_, ParamType::ListOfStrings) => json!(["neutral.a"]),
+        (_, ParamType::ListOfStrings) => json!(["neutral.a", "neutral.b"]),
         (_, ParamType::RequestId | ParamType::RunRef) => json!(REQUEST),
         (_, ParamType::Code) => json!("actingctl_usage_invalid"),
         (_, ParamType::Json) => json!([]),
@@ -618,13 +653,39 @@ fn lw1_every_schema_property_reaches_its_operation() {
             ));
         }
     }
+    // Fix round 1: the names outside the table that the command line of a row served in this
+    // process takes (`core_reads::EXCEPTIONS`), each one its tool does not offer; an exception of
+    // every such row as `*`.
+    for exception in &core_reads::EXCEPTIONS {
+        let rows = every
+            .iter()
+            .filter_map(|definition| {
+                let operation = catalog.operation(definition["name"].as_str()?)?;
+                let applies = tools::serving(operation) == Serving::Core
+                    && (exception.rows.is_empty()
+                        || exception.rows.contains(&operation.name.as_str()));
+                let offered = definition["inputSchema"]["properties"]
+                    .get(exception.name)
+                    .is_some();
+                (applies && !offered).then(|| operation.name.clone())
+            })
+            .collect::<Vec<_>>();
+        if exception.rows.is_empty() && !rows.is_empty() {
+            left_out.insert(("*".to_owned(), exception.name.to_owned()));
+        } else {
+            for row in rows {
+                left_out.insert((row, exception.name.to_owned()));
+            }
+        }
+    }
     // The pinned list of what the tools leave out (item 1's reverse list).
     let pinned = LEFT_OUT
         .iter()
         .filter(|(row, _, _)| {
-            table
-                .operation(row)
-                .is_some_and(|operation| catalog.offers(&tools::tool_name(operation)))
+            *row == "*"
+                || table
+                    .operation(row)
+                    .is_some_and(|operation| catalog.offers(&tools::tool_name(operation)))
         })
         .map(|(row, param, why)| {
             assert!(!why.is_empty(), "{row} {param}: a reason");

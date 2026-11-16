@@ -813,10 +813,11 @@ fn run_job(shared: &Arc<Shared>, job: Job) {
 }
 
 /// Workflow #434 LAB-5G3: what a call answers, and the handle of the job its answer names, which
-/// is issued when the answer is delivered.
-struct Answered {
-    result: Value,
-    handle: Option<String>,
+/// is issued when the answer is delivered. Workflow #434 LW-1 fix round 1: the crate's, so that
+/// the slice's gate reads what [`job_answer`] answers.
+pub(crate) struct Answered {
+    pub(crate) result: Value,
+    pub(crate) handle: Option<String>,
 }
 
 impl Answered {
@@ -865,11 +866,16 @@ impl Asked<'_> {
 
     /// The result of the line of a job that goes on: `members` beside `mcp_job_started`.
     fn started(&self, members: Map<String, Value>) -> Value {
-        calls::call_result(
-            &cli_line::success(members, &Outcome::new(McpCode::JobStarted)),
-            self.era,
-        )
+        job_started(members, self.era)
     }
+}
+
+/// The result of the line of a job that goes on: `members` beside `mcp_job_started`, in `era`.
+fn job_started(members: Map<String, Value>, era: Era) -> Value {
+    calls::call_result(
+        &cli_line::success(members, &Outcome::new(McpCode::JobStarted)),
+        era,
+    )
 }
 
 /// Workflow #434 LAB-5G3: the answer of a call of `tool` with `arguments` in `era`. `parse_call`
@@ -962,7 +968,7 @@ fn served_as_job(
         Err(refusal) => return asked.refused(&refusal),
     };
     job.wait_until(until, &asked.call.cancelled);
-    job_answer(asked, &job, false)
+    job_answer(&job, false, asked.era)
 }
 
 /// Workflow #434 LAB-5G3: the answer about `job`. While it runs: `{handle, job_phase}` with
@@ -971,35 +977,36 @@ fn served_as_job(
 /// the limit neither way is never cut; the answer of its own call (`read` false) is
 /// `output_budget_exceeded` with the job's handle, and the job is kept unread, so that it counts
 /// for the MCP entry until `ac_run_show` of the handle (`read` true) answers the job's summary
-/// beside the same refusal.
-fn job_answer(asked: &Asked<'_>, job: &jobs::Job, read: bool) -> Answered {
+/// beside the same refusal. Workflow #434 LW-1 fix round 1: in the call's `era` (all it read of
+/// the call), and the crate's, so that the slice's gate answers a run's job through it.
+pub(crate) fn job_answer(job: &jobs::Job, read: bool, era: Era) -> Answered {
     let Some(ended) = job.ended() else {
         let mut members = Map::new();
         members.insert(HANDLE.to_owned(), json!(job.handle));
         members.insert(JOB_PHASE.to_owned(), json!(job.phase()));
         return Answered {
-            result: asked.started(members),
+            result: job_started(members, era),
             handle: Some(job.handle.clone()),
         };
     };
     // Workflow #434 LW-1: a run's job (`ac_run_start` with `wait`) answers the run's line without
     // its records ([`run_answer`]).
     let ended = if job.run {
-        run_answer(&ended, &job.handle, asked.era)
+        run_answer(&ended, &job.handle, era)
     } else {
         ended
     };
-    match calls::sent(&ended, asked.era) {
+    match calls::sent(&ended, era) {
         Ok(result) => {
             job.collect();
             Answered::now(result)
         }
         Err(sent_bytes) if read => {
             job.collect();
-            Answered::now(over_budget(asked, job, sent_bytes, Some(&ended.line)))
+            Answered::now(over_budget(era, job, sent_bytes, Some(&ended.line)))
         }
         Err(sent_bytes) => Answered {
-            result: over_budget(asked, job, sent_bytes, None),
+            result: over_budget(era, job, sent_bytes, None),
             handle: Some(job.handle.clone()),
         },
     }
@@ -1007,13 +1014,8 @@ fn job_answer(asked: &Asked<'_>, job: &jobs::Job, read: bool) -> Answered {
 
 /// Workflow #434 LAB-5G3 (work order point 10): `output_budget_exceeded` (the bytes the line takes
 /// as sent, the limit) beside the job's `handle` and, read with `ac_run_show` (`summarised`, the
-/// job's line), its `job_phase` and `summary` (`budget::job_summary`).
-fn over_budget(
-    asked: &Asked<'_>,
-    job: &jobs::Job,
-    sent_bytes: usize,
-    summarised: Option<&Value>,
-) -> Value {
+/// job's line), its `job_phase` and `summary` (`budget::job_summary`), in `era`.
+fn over_budget(era: Era, job: &jobs::Job, sent_bytes: usize, summarised: Option<&Value>) -> Value {
     let mut members = Map::new();
     members.insert(HANDLE.to_owned(), json!(job.handle));
     if let Some(line) = summarised {
@@ -1022,7 +1024,7 @@ fn over_budget(
     }
     calls::call_result(
         &cli_line::receipt(members, &budget::exceeded(sent_bytes), true),
-        asked.era,
+        era,
     )
 }
 
@@ -1046,7 +1048,7 @@ fn run_show(asked: &Asked<'_>, arguments: &Map<String, Value>, wait: Option<Dura
             return asked.refused(&Outcome::new(ActingctlCode::HandleUnknown));
         };
         job.wait_until(wait_until, &asked.call.cancelled);
-        return job_answer(asked, &job, true);
+        return job_answer(&job, true, asked.era);
     }
     let job = shared.jobs.find(id).filter(|job| job.run);
     let exit = shared.service.watched(
@@ -1090,7 +1092,9 @@ fn run_state(exit: &Exit) -> Option<ContainedRunState> {
 }
 
 /// A run's line with the job of this process that submits it, as `job` ([`with_run_job`]).
-fn with_job(exit: Exit, job: &jobs::Job, era: Era) -> Exit {
+/// Workflow #434 LW-1 fix round 1: the crate's, so that the slice's gate answers `ac_run_show`
+/// through it.
+pub(crate) fn with_job(exit: Exit, job: &jobs::Job, era: Era) -> Exit {
     with_run_job(
         exit,
         &job.kind,
@@ -1108,7 +1112,7 @@ fn with_job(exit: Exit, job: &jobs::Job, era: Era) -> Exit {
 /// without its official OCR reads where the answer would not fit with them. Before LW-1 `job.line`
 /// was the whole `run start` line, every record of the run with it, so that the answer of a run
 /// that went far never fit.
-pub(crate) fn with_run_job(
+fn with_run_job(
     exit: Exit,
     kind: &str,
     phase: &str,
@@ -1144,7 +1148,7 @@ pub(crate) fn with_run_job(
 /// line for the run of `request_id`) as `ac_run_start` with `wait` answers it
 /// ([`budget::run_line`]): without the run's records, and without its official OCR reads where the
 /// answer would not fit with them.
-pub(crate) fn run_answer(ended: &Finished, request_id: &str, era: Era) -> Finished {
+fn run_answer(ended: &Finished, request_id: &str, era: Era) -> Finished {
     let shaped = |keep_ocr: bool| Finished {
         line: budget::run_line(&ended.line, request_id, keep_ocr),
         is_error: ended.is_error,
@@ -1200,7 +1204,7 @@ fn run_start(asked: &Asked<'_>, arguments: &Map<String, Value>) -> Answered {
             &asked.call.cancelled,
         )
     {
-        return job_answer(asked, &job, false);
+        return job_answer(&job, false, asked.era);
     }
     members.insert(JOB_PHASE.to_owned(), json!(job.phase()));
     Answered {

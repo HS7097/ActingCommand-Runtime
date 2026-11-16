@@ -1571,9 +1571,10 @@ fn parse(arguments: &[OsString]) -> Result<(PathBuf, Option<PathBuf>, OverviewRe
     ))
 }
 
-/// Workflow #434 LAB-5B1 (in every build since Workflow #434 LW-1, for
+/// Workflow #434 LAB-5B1 (test builds and, since Workflow #434 LW-1, the feature `test-hooks`, for
 /// `core_ops::handed_refusal`): [`parse`]'s refusal of the words [`dispatch_within`]
 /// is given, if any.
+#[cfg(any(test, feature = "test-hooks"))]
 pub(crate) fn parse_refusal(arguments: &[OsString]) -> Option<Outcome> {
     parse(arguments).err().map(|failure| failure.outcome())
 }

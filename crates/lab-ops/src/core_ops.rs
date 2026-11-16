@@ -421,7 +421,9 @@ pub fn handed_words(
 /// or written (`inline`: `remedy set`'s rows go beside the words). A front's test walks every
 /// property of every tool of the core rows handed so through it. A command line no parser of this
 /// crate reads is refused as its first word, `unknown`, as [`answer`] refuses a word no command
-/// takes; an empty one `required`.
+/// takes; an empty one `required`. Fix round 1: test builds and the feature `test-hooks` only (the
+/// MCP server's dev-dependency turns it on for its gate); a production build has none.
+#[cfg(any(test, feature = "test-hooks"))]
 pub fn handed_refusal(argv: &[OsString], inline: bool) -> Option<Outcome> {
     let Some(first) = argv.first() else {
         return Some(cli_line::usage_invalid(None, ArgumentProblem::Required));

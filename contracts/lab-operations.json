@@ -1588,15 +1588,15 @@
       ],
       "help": "Recognizes one target of a package on a saved frame and plans its tap, pressing nothing; do with capture presses a target on an instance.",
       "output": "as today's command",
-      "writes": true,
+      "writes": false,
       "irreversible": false,
       "runtime": "required",
       "entries": ["lab"],
-      "requests": ["ObserveReadonly", "AcquireLease", "QueueLease", "PollQueuedLease", "CancelQueuedLease", "RenewLease", "ReleaseLease", "Input"],
+      "requests": [],
       "source": ["actinglab tap-target"],
       "slice": "LAB-2",
       "status": "planned",
-      "notes": "#434 LW-1 (0.12.67): it plans on a saved scene only (scene with dry_run); its command refuses --capture, the retired legacy semantic capture, so the row declares no capture, and without dry_run it is refused, the refusal naming do --capture with the package and the target, an element, or a point"
+      "notes": "#434 LW-1 (0.12.67): it plans on a saved scene only (scene with dry_run); its command refuses --capture, the retired legacy semantic capture, so the row declares no capture, and without dry_run it is refused, the refusal naming do --capture with the package and the target, an element, or a point. Fix round 1: so it writes nothing and sends the Runtime no request (before, the row declared the frame read, the lease and the input of the retired live press)"
     },
     {
       "name": "navigate",
@@ -1617,15 +1617,15 @@
       ],
       "help": "Plans the route from a saved frame's page to a page along the package's navigation graph, pressing nothing; ensure with capture routes an instance.",
       "output": "as today's command",
-      "writes": true,
+      "writes": false,
       "irreversible": false,
       "runtime": "required",
       "entries": ["lab"],
-      "requests": ["ObserveReadonly", "AcquireLease", "QueueLease", "PollQueuedLease", "CancelQueuedLease", "RenewLease", "ReleaseLease", "Input"],
+      "requests": [],
       "source": ["actinglab navigate"],
       "slice": "LAB-2",
       "status": "planned",
-      "notes": "#434 LW-1 (0.12.67): it plans a route on a saved scene only (scene with dry_run); its command refuses --capture, the retired legacy semantic capture, so the row declares no capture, and without dry_run it is refused, the refusal naming ensure --capture with the package and the page"
+      "notes": "#434 LW-1 (0.12.67): it plans a route on a saved scene only (scene with dry_run); its command refuses --capture, the retired legacy semantic capture, so the row declares no capture, and without dry_run it is refused, the refusal naming ensure --capture with the package and the page. Fix round 1: so it writes nothing and sends the Runtime no request (before, the row declared the frame read, the lease and the input of the retired live press)"
     },
     {
       "name": "drill",
