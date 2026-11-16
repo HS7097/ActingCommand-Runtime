@@ -602,7 +602,7 @@ impl TrialRun<'_> {
         // Workflow #463 S3-8, S3-9 fix round 1: nothing of the run's receipt came back, not even
         // its header (the connection that carried the run ended first): the Runtime confirmed
         // nothing of the run.
-        let unconfirmed = submitted.as_ref().err().is_some_and(|error| {
+        let unconfirmed = submitted.as_ref().is_err_and(|error| {
             error.received_receipt().is_none() && error.receipt_header_io().is_some()
         });
         // Otherwise the end is read: after a receipt, and after a result that is not known (no

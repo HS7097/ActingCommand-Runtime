@@ -32681,7 +32681,7 @@ showed the value in its plan and then refused the run (`trial_variables_not_carr
 
 | Code | The one situation | Refuses / warns | Exit |
 |---|---|---|---|
-| `invalid_contained_task_variable_count` (contract) | A request's `variables` holds more than 16 values. | refuses (the Runtime: Denied) | no client of this build sends one; actinglab answers `--variable` `not_recognised`, exit 1 |
+| `invalid_contained_task_variable_count` (contract) | A request's `variables` holds more than 16 values. | refuses (the Runtime: Denied) | no client of this build sends one; actinglab answers `--variable` `out_of_range` (fix round 1; `not_recognised` before), exit 1 |
 | `invalid_contained_task_variable_name` (contract) | A request's `variables` gives a value under a name outside a variable's form. | refuses (the Runtime: Denied) | as above |
 | `run_variable_undeclared` (runtime-host) | The package declares no variable of the name. | refuses, Denied | 1 on actinglab's line |
 | `run_variable_not_applying` (runtime-host) | The variable does not apply on the instance now (`variable_problem` the root's word). | refuses, Denied | 1 |
@@ -32723,6 +32723,65 @@ still names the retired code in the notes of 0.12.65, as released.
 
 **At deploy.** Nothing to configure. The Lab and the Runtime of one build speak revision 11
 together; a run started with values against an older Runtime ends its connection and runs nothing.
+
+**Fix round 1** (coordinator work order `rd-1116/brief-463-s38-fix1.md`, after the independent
+review `rd-1116/review-1789.md`, its six points that may be changed and its section (h)). The slice
+now stands on main `dc4c3622` (#1778 merged) and on the stage-three train,
+`claude/463-s312-adopt-trial-review` (#1783: S3-12 and S3-14, §1.445 and §1.446) at `ae6b11ed`, and
+merges after it.
+
+- *Where it meets the train.* Both change `crates/resource-tooling/src/standard_pack_trial.rs`;
+  both are kept whole: this slice's `check_trial_run(answer)` (no `request`, no refusal of a
+  `--variable`) beside the train's `PackTrialRecord::passed`, `trial_summary` and
+  `content_hash_prefix_of`. The train's one caller of the old signature (`gate_463_s312.rs`,
+  `record_trial_with`) takes the new one in the merge. Nothing names `trial_variables_not_carried`
+  but its retired catalog entry, the texts that say it is retired and the notes of 0.12.65.
+- *Too many values.* `run start` refuses more than 16 `--variable` values
+  (`MAX_PACKAGE_VARIABLES`) as `--variable` `out_of_range` (`run_variables`, after the parser and
+  before anything is read), the word of a count out of its range; the contract's check of the
+  request still refuses them, and at the Lab answers only a name out of form (`not_recognised`).
+- *The table.* `run_variable_table` reads the workbench's table by `standard_pack_variables`, the
+  function the policy cycle reads it by, which copies nothing of the roots
+  (`standard_pack_goal_roots`, which the goal page reads, copies every root).
+- *What cannot be reached.* `check_run_variables` refuses a value with the judgement's word
+  whenever `resolve_variable` names one (`keys_left_out` included); a default without a word, which
+  `resolve_variable` never answers for a given value whose setter is known and whose variable
+  applies, is an `unreachable!` that says so, in place of a silent `type_changed`.
+- *A trial whose run's connection ended before its receipt.* When nothing of the run's receipt came
+  back, not even its header (the client's error holds no received receipt and holds the header
+  read's failure), the answer's `next` is `{unconfirmed: no_receipt}` (the new vocabulary
+  `trial_run_unconfirmed` of the resource tooling, the member `next.unconfirmed`), not the
+  `--collect` line, which would read a run the Runtime never had `not_found` for ever. The client
+  cannot know that nothing was accepted: a Runtime below revision 11 ends the connection of a run
+  with values and runs nothing, and one that stopped while the run was in it ends it too; so the
+  word says what it knows, that the Runtime confirmed nothing. No probe of the Runtime's revision
+  is built. The answer's code, its other members and its exit are as before.
+- *Texts.* [package-variables.md](package-variables.md): the line joined in "Runs without a
+  dispatch" wrapped as its neighbours; "A direct run given values" names `out_of_range`.
+  [runtime-interface.md](runtime-interface.md), the row of `request.variables?`.
+  [standard-pack-trial.md](standard-pack-trial.md), "The run" and `next`.
+  [lab-operations.json](lab-operations.json): `run start`'s `variable`; `standard-pack trial`'s
+  `variable` and `output`.
+- *Codes and words.* No code. One vocabulary, `trial_run_unconfirmed`, one token: `no_receipt`,
+  the run's request written and its connection ended before any of its receipt came back; a
+  member of an answer that is already a refusal (the client's code, exit as before), it refuses
+  and warns nothing by itself. The catalog holds it (vocabularies); the index is regenerated.
+- *Tests.* `crates/actingcommand-contract/src/runtime/gate_463_s38.rs`,
+  `s38_fix1_a_reader_of_revision_ten_refuses_a_request_with_values` (contract gate map, "Workflow
+  #463 S3-8, fix round 1"): the request as revision 10 declared it, `deny_unknown_fields` and no
+  `variables`, reads today's request without values and refuses one with a value, alone and in the
+  run's envelope, naming `variables`. `crates/runtime-host/src/tests/gate_463_s38.rs` (host gate
+  map, "Workflow #463 S3-8, fix round 1"):
+  `s38_fix1_a_variable_that_does_not_apply_is_refused_before_admission` (`goals.json` takes `pick`: `run_variable_not_applying` `goal_name_conflict`),
+  `s38_fix1_a_value_taken_only_in_part_is_refused` (an `ordered` value of which the variable would
+  take a part: `run_variable_value_refused` `keys_left_out`) and
+  `s38_fix1_seventeen_values_in_a_raw_request_are_refused_at_the_door` (a raw request frame:
+  `invalid_contained_task_variable_count`), each with nothing pressed, no run reaching its
+  execution and no `task.package_admitted` more in the ledger; the row's tests 2 and 3 assert the
+  same of the ledger (`Scene::counted`). Adapted (the requirement changes what it pins):
+  `apps/actinglab/src/tests/gate_463_s311.rs`
+  `s311_an_unknown_result_sends_nothing_again_and_writes_no_record` (`next` is `{unconfirmed:
+  no_receipt}`, no collect line). No test leaves a gate map; no golden changes.
 
 ### 1.445 Slice #463 S3-12 (0.12.68): adoption shows the trial, names the offline review as what it is, and warns before enabling (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, and her rules that a package not run through on a real device stays held and that nothing is enabled without her explicit authorization; the design `rd-1115/pack-stage3-design.md`, §4.2 "S3-12", §2.1 "Missing" items 2 and 4, §2.2 "The value's source", §2.3 and §2.4; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1116/brief-463-s312-adopt-trial-review.md`, read on main `40abd08b`)
 

@@ -475,9 +475,10 @@ start --variable <name>=<json>` (repeatable) reads the values with the scan repl
 (`lab_ops::core_ops::parse_variables`, one function for the three commands) before anything is
 sent (fix round 1: more than 16 of them are `--variable` `out_of_range`, the word of a count out
 of its range), and without `--variable` sends the request of revision 10 byte for byte;
-`standard-pack trial` sends the values its plan shows ([standard-pack-trial.md](standard-pack-trial.md), "The
-run"). A Runtime below revision 11 cannot decode a request that carries values: it ends the
-connection, nothing runs, and the client reports the connection ended.
+`standard-pack trial` sends the values its plan shows
+([standard-pack-trial.md](standard-pack-trial.md), "The run"). A Runtime below revision 11 cannot
+decode a request that carries values: it ends the connection, nothing runs, and the client reports
+the connection ended.
 
 **What the next slice reads** (fix round 2, for V3's view; no request, Lab row or view is added
 here). From memory, never from a file:
