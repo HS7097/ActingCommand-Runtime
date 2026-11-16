@@ -202,6 +202,64 @@
       "common_causes": "The recording was not stopped yet; the request also names a step, a frame, marks of a step, an ending or another change; k names a step that is not there, the last step (nothing is pressed after it) or an application step; the pop-up's request gives no mark or no click; --not-optional names an inserted step; --remove-inserted names a recorded step or a step given up already.",
       "handling": "Run record stop first and insert the pop-up on the stopped recording, alone in its request: --optional-after <k> with the step after whose press the run met it, --frame of the pop-up (the pinned frame of the run, as material writes it), a mark of the pop-up's own (such as a template of its title) and the click that closes it; read record status for the steps in the order they run; give up an inserted step with record mark --remove-inserted <n>, its own serial number. Then run record stop, which checks it as every optional step."
     },
+    "lab_scene_size_unsupported": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "lab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "display_problem": "required",
+        "frame_width": "required",
+        "frame_height": "required",
+        "base_width": "required",
+        "base_height": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.67",
+      "description": "Workflow #392 DA-5cd: an offline scene, a stored image (recognize, detect-page, current-page, is-visible, offline observe, do --dry-run, ensure --dry-run and wait on saved scenes, tap-target --dry-run, navigate --dry-run), cannot be brought to its package's coordinate_space (its base), so nothing is evaluated (exit 2; actinglab's own line, and serve --stdio --front mcp, exit 1 for every refusal). The train of DA-5 (Workflow #392 DA-5ab and DA-5cd): a stored image is judged, reduced and answered as the Lab's live observation takes a frame of its size, by the same function (the kernel's frame gate for a Lab frame); this code is the stored image's refusal of that function, as display_map_unresolved is a live capture's, and neither answers for the other's cause. frame_width and frame_height are the scene's size, base_width and base_height the package's coordinate_space, and display_problem the frame gate's word for why: layout_undeclared another ratio, scale_below_base a scene smaller than the package, orientation_mismatch the package's other orientation. A scene of the coordinate_space is evaluated as before; one of its ratio, not smaller and in its orientation (5/4 of it too) is reduced to it as the live observation reduces a frame, and its answer names frame_coordinates in the base form (space base, base_pixels, reduced_from, orientation, applies_to). Before this code such a scene was refused validation_failed.",
+      "common_causes": "The scene was captured on an instance whose display has another ratio than the package or is smaller than the package; or the scene was cropped or turned.",
+      "handling": "Give a scene of the package's coordinate_space or of its ratio, at least as large and in its orientation (1600x900, 1920x1080, 2560x1440, 3840x2160 for 1280x720), uncropped; or set the instance's display to such a size and capture again."
+    },
+    "record_display_not_base": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "lab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "frame_width": "required",
+        "frame_height": "required",
+        "base_width": "required",
+        "base_height": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.67",
+      "description": "Workflow #392 DA-5cd: this instance's display is not the base size, so nothing was recorded. A Lab recording is made at the base size (STANDARD_PACK_BASE_SIZE, 1280x720, the coordinate_space every standard package declares). record start refuses an instance whose display the Runtime last observed (its display.frame_extent fact, the first frame of the latest contained task run on it) at another size, before anything is written and before anything is asked of the scheduling, so the instance is not held; that is an early warning (fix round 1): record start writes the base size in the recording's header (base_size), and the first frame that enters the recording is checked against it before it is stored: a frame of another size (another aspect, smaller or larger, whether or not the Runtime knew the display) is refused with nothing written, no frame, no step and the header as it was, and the recording stays active as it was. The train of DA-5 (Workflow #392 DA-5ab and DA-5cd): every path that records judges the frame it took as such a first frame before anything is sent or written, whether or not it will store it: tap, swipe and long-tap --record, do --capture --record (one frame captured through the Runtime before its press) and observe --capture --record (the Runtime's frame, after it observed). The train's fix round 1: on the paths that press (tap, swipe and long-tap --record, session app --record), a frame that would be the recording's first is judged before it is stored as if the recording already had its size, by the judgement record stop makes, so that a recording whose header names no base size is refused here a first frame of a larger display of the base size's ratio, before anything is sent. frame_width and frame_height are the display's size (the frame's at the first frame), base_width and base_height the base size (exit 3; actinglab's own line, and serve --stdio --front mcp, exit 1 for every refusal; actinglab details display and base, each {width, height}).",
+      "common_causes": "The instance's display is 1920x1080, 3840x2160, a handset's 2400x1080, a portrait display or another size than 1280x720; at record start, the display was set back to 1280x720 but no task has run on the instance since (an instance whose scheduling is paused runs none), so the Runtime still knows the earlier display.",
+      "handling": "Record on an instance whose display is the base size: set this instance's display to 1280x720, or use another instance at that size. When record start refused a display that was set back since, the Runtime observes it only when a task runs on the instance: resume its scheduling until a task has run, then start again, or start on another instance at the base size. After a refused first frame the recording is as it was: take the frame again once the display is the base size."
+    },
+    "record_size_not_base": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "lab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "frame_width": "required",
+        "frame_height": "required",
+        "base_width": "required",
+        "base_height": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.67",
+      "description": "Workflow #392 DA-5cd fix round 1: this recording holds frames that are not the base size: a recording whose header names a base size (base_size, written by record start) and whose frames are of any other size, or one whose header names none (started before fix round 1) and whose frames show a larger display of the base size's ratio (a pure scale the display adapter maps onto it, such as 1920x1080 or 3840x2160). record stop (its dry run and the regeneration of a stopped recording marked again too) refuses it before anything is planned or written, the recording and its session staying active and the hold kept, and converts nothing; record ready lists it first as missing size_not_base and runs no self-check; a frame added to it (a recorded step's, a sample's, a transition's, an ending's) is refused before it is stored. The train of DA-5 (Workflow #392 DA-5ab and DA-5cd): every recorded step asks this judgement before it sends anything, and nothing is captured, sent or written: tap, swipe and long-tap --record and session app --record before they capture (also when the open step is marked and the frame before the press would not be stored), do --capture --record before its press, observe --capture --record before its capture. frame_width and frame_height are the recording's frames' size, base_width and base_height the base size (exit 3; actinglab's own line, and serve --stdio --front mcp, exit 1 for every refusal; actinglab details frames and base, each {width, height}).",
+      "common_causes": "A recording made on a display that is not the base size before this release, or a recording file changed by hand.",
+      "handling": "Archive the recording with record archive (record status, record frames and record archive read it as before) and record the task again on an instance whose display is the base size, 1280x720."
+    },
     "case_schema_unsupported": {
       "category": "warning",
       "ladder_class": "none",

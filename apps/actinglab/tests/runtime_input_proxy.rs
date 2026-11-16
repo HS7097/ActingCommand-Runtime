@@ -21,7 +21,7 @@ use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tempfile::TempDir;
@@ -60,6 +60,33 @@ struct FakeState {
     foreground_other: AtomicBool,
     // #463 S1-9: the capture of this number (when not zero) fails in the backend.
     capture_fails_at: AtomicUsize,
+    // Workflow #392 DA-5ab fix round 1: the point of every tap the fake performed, in order.
+    tap_points: Mutex<Vec<(i32, i32)>>,
+    // Workflow #392 DA-5cd fix round 1: when set, the width and height of every frame served
+    // outside a Runtime-owned task's 16x9 geometry, instead of the provider's square frame.
+    frame_extent: OnceLock<(u32, u32)>,
+    // Workflow #392 DA-5, the train: when set, the display changed to this width and height,
+    // which every frame served from then on has (outside a Runtime-owned task's 16x9 geometry).
+    display_changed_to: Mutex<Option<(u32, u32)>>,
+}
+
+/// Workflow #392 DA-5cd fix round 1 (`contracts/lab-recording.md`, "A recording's size"): the fake's
+/// state serving frames of `width` x `height`. The installed `record start` writes the base size
+/// 1280x720 in a recording's header and the recording's first frame must have it, so a test that
+/// records frames after a start is served frames of that size ([`base_frames`]).
+fn serving(width: u32, height: u32) -> Arc<FakeState> {
+    let state = FakeState::default();
+    state
+        .frame_extent
+        .set((width, height))
+        .expect("the fake's frame size, set once");
+    Arc::new(state)
+}
+
+/// Workflow #392 DA-5cd fix round 1: the fake's state serving frames of the base size 1280x720,
+/// the size a recording takes.
+fn base_frames() -> Arc<FakeState> {
+    serving(1280, 720)
 }
 
 // Test plan E-3 G11 (§3.10): a manual Runtime clock. It moves only when a capture (or a wait of
@@ -1425,7 +1452,9 @@ fn online_observe_cli_consumes_verified_projection_and_keeps_raw_offline_contrac
 // Workflow #411 Lab L4 (exec gate key 98, register §1.120 row L4-1): `observe --capture --record`
 // stores the backend that captured the Runtime frame in recording.json, named as
 // `capture --record` names it, where it stored `null`. The fake Runtime's frames come from
-// `adb_screencap`. Requirement basis: rd-1019/plan-lab-backends/plan.md §4 L4 R1.
+// `adb_screencap`. Requirement basis: rd-1019/plan-lab-backends/plan.md §4 L4 R1. Workflow #392
+// DA-5cd fix round 1: the recording's first frame must be the base size its start wrote, so the
+// fake serves 1280x720 frames and the package's coordinate space is that size.
 #[test]
 fn l4_observe_capture_record_stores_the_runtime_frames_capture_backend() {
     let root = TempDir::new().unwrap();
@@ -1438,11 +1467,11 @@ fn l4_observe_capture_record_stores_the_runtime_frames_capture_backend() {
         ("control.json", br#"{"game":"neutral","server":"test","package_id":"neutral.observation","entry_task_id":"task"}"#),
         ("resources/manifest.json", br#"{"entry_task_id":"task"}"#),
         ("resources/operations/task/task.json", br#"{}"#),
-        ("resources/recognition/neutral.test.pack.json", br#"{"schema_version":"0.3","coordinate_space":{"width":1,"height":1},"targets":[{"type":"color","id":"anchor","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0]}]}"#),
+        ("resources/recognition/neutral.test.pack.json", br#"{"schema_version":"0.3","coordinate_space":{"width":1280,"height":720},"targets":[{"type":"color","id":"anchor","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0]}]}"#),
         ("resources/recognition/neutral.test.pages.json", br#"{"schema_version":"0.3","pages":[{"id":"page","required":["anchor"]}]}"#),
         ("resources/navigation/neutral.test.navigation.json", br#"{"schema_version":"0.3","navigation":[]}"#),
     ]);
-    let state = Arc::new(FakeState::default());
+    let state = base_frames();
     let instance_id = *IdentifierIssuer::new()
         .unwrap()
         .mint_instance_id()
@@ -2016,8 +2045,8 @@ impl InputBackend for FakeBackend {
     fn tap(
         &mut self,
         _witness: &actingcommand_contract::FencedWrite,
-        _x: i32,
-        _y: i32,
+        x: i32,
+        y: i32,
     ) -> DeviceResult<()> {
         self.state.tap_started.store(true, Ordering::Release);
         if self.state.tap_fails.load(Ordering::Acquire) {
@@ -2029,6 +2058,11 @@ impl InputBackend for FakeBackend {
         if delay_ms > 0 {
             thread::sleep(Duration::from_millis(delay_ms as u64));
         }
+        self.state
+            .tap_points
+            .lock()
+            .expect("fake tap points")
+            .push((x, y));
         self.state.taps.fetch_add(1, Ordering::AcqRel);
         Ok(())
     }
@@ -2128,10 +2162,21 @@ impl CaptureBackend for FakeCapture {
         } else {
             [255, 0, 0]
         };
+        let changed = *self
+            .state
+            .display_changed_to
+            .lock()
+            .expect("the fake's changed display");
         let (width, height) = if self.state.physical_task_geometry.load(Ordering::Acquire) {
             (16, 9)
+        } else if let Some(extent) = changed {
+            extent
         } else {
-            (self.frame_size, self.frame_size)
+            self.state
+                .frame_extent
+                .get()
+                .copied()
+                .unwrap_or((self.frame_size, self.frame_size))
         };
         let pixels = (0..width * height).flat_map(|_| color).collect();
         Frame::from_pixels(
@@ -3902,19 +3947,27 @@ fn online_lab2_ensure_and_wait_use_runtime_authority_without_local_state() {
 }
 
 fn write_semantic_resources(root: &std::path::Path) {
+    write_semantic_resources_at(root, (1, 1));
+}
+
+/// The semantic resources of [`write_semantic_resources`] in the coordinate space `(width,
+/// height)` (Workflow #392 DA-5cd fix round 1: a recording's frames are 1280x720).
+fn write_semantic_resources_at(root: &std::path::Path, (width, height): (u32, u32)) {
     let recognition = root.join("recognition");
     let navigation = root.join("navigation");
     fs::create_dir_all(&recognition).expect("recognition dir");
     fs::create_dir_all(&navigation).expect("navigation dir");
     fs::write(
         recognition.join("fixture-game-a.s1.pack.json"),
-        r#"{
+        format!(
+            r#"{{
             "schema_version":"0.3",
-            "coordinate_space":{"width":1,"height":1},
+            "coordinate_space":{{"width":{width},"height":{height}}},
             "targets":[
-                {"type":"color","id":"home_button","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0],"click":{"x":10,"y":20,"width":4,"height":6}}
+                {{"type":"color","id":"home_button","region":{{"x":0,"y":0,"width":1,"height":1}},"expected":[255,0,0],"click":{{"x":10,"y":20,"width":4,"height":6}}}}
             ]
-        }"#,
+        }}"#
+        ),
     )
     .expect("recognition pack");
     fs::write(
@@ -4102,7 +4155,8 @@ fn s11_tap_record_sends_its_input_on_the_frame_captured_before_it() {
     let local = root.path().join("local");
     let config = root.path().join("actinglab.json");
     fs::write(&config, "{}").expect("write config");
-    let state = Arc::new(FakeState::default());
+    // Workflow #392 DA-5cd fix round 1: frames of the base size the recording's start wrote.
+    let state = base_frames();
     state.nemu_input.store(true, Ordering::Release);
     let host = l3_host(&runtime_root, &state, b"lab-s11-tap-record-frame");
     run_actinglab_json(
@@ -4941,7 +4995,8 @@ fn s11_tap_record_records_a_device_failure_of_the_input_as_indeterminate() {
     let local = root.path().join("local");
     let config = root.path().join("actinglab.json");
     fs::write(&config, "{}").expect("write config");
-    let state = Arc::new(FakeState::default());
+    // Workflow #392 DA-5cd fix round 1: frames of the base size the recording's start wrote.
+    let state = base_frames();
     state.tap_fails.store(true, Ordering::Release);
     let host = l3_host(&runtime_root, &state, b"lab-s11-tap-record-device-failure");
     run_actinglab_json(
@@ -5018,7 +5073,8 @@ fn s11_tap_record_answers_a_denied_input_as_tap_and_keeps_the_capture_before_it(
     let local = root.path().join("local");
     let config = root.path().join("actinglab.json");
     fs::write(&config, "{}").expect("write config");
-    let state = Arc::new(FakeState::default());
+    // Workflow #392 DA-5cd fix round 1: frames of the base size the recording's start wrote.
+    let state = base_frames();
     state.foreground_other.store(true, Ordering::Release);
     let host = l3_host(&runtime_root, &state, b"lab-s11-tap-record-denied-input");
     run_actinglab_json(
@@ -6090,7 +6146,8 @@ fn s17_record_start_and_archive_hold_and_release_the_instance_on_the_runtime() {
     let local = root.path().join("local");
     let config = root.path().join("actinglab.json");
     fs::write(&config, "{}").expect("write config");
-    let state = Arc::new(FakeState::default());
+    // Workflow #392 DA-5cd fix round 1: frames of the base size the recording's start wrote.
+    let state = base_frames();
     let host = l3_host(&runtime_root, &state, b"lab-s17-hold-and-release");
     let started = s17_record_start(&config, &runtime_root, &local);
     let client = s17_client(&runtime_root);
@@ -6159,7 +6216,8 @@ fn s17_a_press_on_an_instance_that_is_not_held_says_so() {
         json!(["no_runtime_listening"]),
         "{started}"
     );
-    let state = Arc::new(FakeState::default());
+    // Workflow #392 DA-5cd fix round 1: frames of the base size the recording's start wrote.
+    let state = base_frames();
     let host = l3_host(&runtime_root, &state, b"lab-s17-press-not-held");
 
     let unheld = s17_tap_record(&config, &runtime_root, &local);
@@ -6218,7 +6276,8 @@ fn s17_an_application_operation_on_an_instance_that_is_not_held_says_so() {
     fs::write(&config, "{}").expect("write config");
     let started = s17_record_start(&config, &runtime_root, &local);
     assert_eq!(started["hold"]["state"], "none", "{started}");
-    let state = Arc::new(FakeState::default());
+    // Workflow #392 DA-5cd fix round 1: frames of the base size the recording's start wrote.
+    let state = base_frames();
     let host = l3_host(&runtime_root, &state, b"lab-s17-application-not-held");
 
     let launched = run_actinglab_json(
@@ -6263,22 +6322,24 @@ fn s17_train_do_capture_record_on_an_instance_that_is_not_held_says_so() {
     let local = root.path().join("local");
     let config = root.path().join("actinglab.json");
     fs::write(&config, "{}").expect("write config");
+    // Workflow #392 DA-5cd fix round 1: the recording's first frame must be the base size its start
+    // wrote, so the fake serves 1280x720 frames and both packages' coordinate space is that size.
     let observe_package = root.path().join("observe.zip");
     write_zip(&observe_package, &[
         ("control.json", br#"{"game":"neutral","server":"test","package_id":"neutral.observation","entry_task_id":"task"}"#),
         ("resources/manifest.json", br#"{"entry_task_id":"task"}"#),
         ("resources/operations/task/task.json", br#"{}"#),
-        ("resources/recognition/neutral.test.pack.json", br#"{"schema_version":"0.3","coordinate_space":{"width":1,"height":1},"targets":[{"type":"color","id":"anchor","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0]}]}"#),
+        ("resources/recognition/neutral.test.pack.json", br#"{"schema_version":"0.3","coordinate_space":{"width":1280,"height":720},"targets":[{"type":"color","id":"anchor","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0]}]}"#),
         ("resources/recognition/neutral.test.pages.json", br#"{"schema_version":"0.3","pages":[{"id":"page","required":["anchor"]}]}"#),
         ("resources/navigation/neutral.test.navigation.json", br#"{"schema_version":"0.3","navigation":[]}"#),
     ]);
     let resources = root.path().join("resources");
     let semantic_package = root.path().join("semantic.zip");
-    write_semantic_resources(&resources);
+    write_semantic_resources_at(&resources, (1280, 720));
     write_semantic_package(&semantic_package, &resources);
     let started = s17_record_start(&config, &runtime_root, &local);
     assert_eq!(started["hold"]["state"], "none", "{started}");
-    let state = Arc::new(FakeState::default());
+    let state = base_frames();
     let host = l3_host(&runtime_root, &state, b"lab-train-s17-do-not-held");
 
     let observed = run_actinglab_json(
@@ -6390,7 +6451,8 @@ fn s17_fix_a_press_whose_hold_read_fails_is_made_and_says_so() {
     fs::write(&config, "{}").expect("write config");
     let started = s17_record_start(&config, &runtime_root, &local);
     assert_eq!(started["hold"]["state"], "none", "{started}");
-    let state = Arc::new(FakeState::default());
+    // Workflow #392 DA-5cd fix round 1: frames of the base size the recording's start wrote.
+    let state = base_frames();
     let host = l3_host(&runtime_root, &state, b"lab-fix-s17-hold-unread");
     // The command's connections: the capture before the press (0), the status read (1), the
     // press, the captures after it.
@@ -6469,7 +6531,8 @@ fn s19_a_recorded_press_releases_its_lease_after_the_last_capture_after_it() {
     let config = root.path().join("actinglab.json");
     fs::write(&config, "{}").expect("write config");
     s19_record_start(&config, &runtime_root, &local);
-    let state = Arc::new(FakeState::default());
+    // Workflow #392 DA-5cd fix round 1: frames of the base size the recording's start wrote.
+    let state = base_frames();
     state.nemu_input.store(true, Ordering::Release);
     let host = l3_host(&runtime_root, &state, b"lab-s19-lease-through-captures");
 
@@ -6530,7 +6593,8 @@ fn s19_a_capture_after_the_press_that_fails_is_recorded_and_the_lease_released()
     let config = root.path().join("actinglab.json");
     fs::write(&config, "{}").expect("write config");
     s19_record_start(&config, &runtime_root, &local);
-    let state = Arc::new(FakeState::default());
+    // Workflow #392 DA-5cd fix round 1: frames of the base size the recording's start wrote.
+    let state = base_frames();
     // The capture before the press (1), the first after it (2), the second after it (3).
     state.capture_fails_at.store(3, Ordering::Release);
     let host = l3_host(&runtime_root, &state, b"lab-s19-capture-after-fails");
@@ -6634,7 +6698,8 @@ fn s19_failed_tap(state: &Arc<FakeState>, label: &[u8]) -> (Value, Vec<&'static 
 /// says the release succeeded.
 #[test]
 fn s19_a_press_that_no_capture_follows_releases_its_lease_at_once() {
-    let state = Arc::new(FakeState::default());
+    // Workflow #392 DA-5cd fix round 1: frames of the base size the recording's start wrote.
+    let state = base_frames();
     state.tap_fails.store(true, Ordering::Release);
     let (failed, wire) = s19_failed_tap(&state, b"lab-s19-indeterminate-press");
     assert_eq!(
@@ -6644,7 +6709,7 @@ fn s19_a_press_that_no_capture_follows_releases_its_lease_at_once() {
     assert_eq!(state.captures.load(Ordering::Acquire), 1);
     assert_eq!(wire, ["capture", "lease", "input", "release"], "{wire:?}");
 
-    let state = Arc::new(FakeState::default());
+    let state = base_frames();
     state.foreground_other.store(true, Ordering::Release);
     let (failed, wire) = s19_failed_tap(&state, b"lab-s19-refused-input");
     assert_eq!(failed["outcome"]["code"], "device_error", "{failed}");
@@ -6727,7 +6792,8 @@ fn s19_the_retry_after_input_frame_unavailable_keeps_the_one_lease() {
     let config = root.path().join("actinglab.json");
     fs::write(&config, "{}").expect("write config");
     s19_record_start(&config, &runtime_root, &local);
-    let state = Arc::new(FakeState::default());
+    // Workflow #392 DA-5cd fix round 1: frames of the base size the recording's start wrote.
+    let state = base_frames();
     let host = l3_host(&runtime_root, &state, b"lab-s19-retry-one-lease");
     let taken = Arc::new(AtomicBool::new(false));
     // The command's connections: the capture before the press (0), the status read (1), the
@@ -6783,4 +6849,731 @@ fn s19_the_retry_after_input_frame_unavailable_keeps_the_one_lease() {
         ],
         "{wire:?}"
     );
+}
+
+// Workflow #392 DA-5ab fix round 1 (contracts/display-adapter.md section 11; register §1.436; the
+// coordinator's work order of 11-16 after the review of pull request #1780, point 5): the fake
+// device's frames are 3x3 and the package's base is 2x2, a pure scale of 3/2, so every frame the
+// Lab hands out or decides on is reduced to the base and every point it takes leaves for the
+// device at `round_half_up(v · 3/2)`: the base point (1, 1) as (2, 2). The package: `neutral/home`
+// (red on the first pixel) with the target `home_button` pressed in the whole frame, and the
+// navigation edge `home_to_page_a` to `neutral/page_a` (blue) pressed at (1, 1).
+fn da5ab_mapped_package(path: &Path) {
+    write_zip(path, &[
+        ("control.json", br#"{"game":"neutral","server":"test","package_id":"neutral.da5ab","entry_task_id":"task"}"#),
+        ("resources/manifest.json", br#"{"schema_version":"0.3","entry_task_id":"task"}"#),
+        ("resources/operations/task/task.json", br#"{}"#),
+        ("resources/recognition/neutral.test.pack.json", br#"{"schema_version":"0.3","coordinate_space":{"width":2,"height":2},"targets":[{"type":"color","id":"home_anchor","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0]},{"type":"color","id":"page_a_anchor","region":{"x":0,"y":0,"width":1,"height":1},"expected":[0,0,255]},{"type":"color","id":"home_button","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0],"click":{"x":0,"y":0,"width":2,"height":2}}]}"#),
+        ("resources/recognition/neutral.test.pages.json", br#"{"schema_version":"0.3","pages":[{"id":"neutral/home","required":["home_anchor"]},{"id":"neutral/page_a","required":["page_a_anchor"]}]}"#),
+        ("resources/navigation/neutral.test.navigation.json", br#"{"schema_version":"0.3","game":"neutral","server":"test","navigation":[{"id":"home_to_page_a","from_page":"neutral/home","to_page":"neutral/page_a","click":{"kind":"point","x":1,"y":1}}],"destructive_actions":[]}"#),
+    ]);
+}
+
+// Workflow #392 DA-5ab fix round 1: a Runtime host over the fake whose frames are 3x3.
+fn da5ab_mapped_host(runtime_root: &Path, state: &Arc<FakeState>, label: &[u8]) -> RuntimeHost {
+    let instance_id = *IdentifierIssuer::new()
+        .expect("identifier issuer")
+        .mint_instance_id()
+        .expect("instance id")
+        .transport();
+    RuntimeHost::start(
+        RuntimeHostConfig::new(runtime_root, label),
+        Arc::new(FakeProvider {
+            instance_alias: "node.a",
+            instance_id,
+            state: Arc::clone(state),
+            frame_size: 3,
+        }),
+    )
+    .expect("runtime host")
+}
+
+// Workflow #392 DA-5ab fix round 1: `frame_coordinates` of a 3x3 frame reduced to the 2x2 base.
+fn da5ab_base_coordinates() -> Value {
+    json!({
+        "space": "base",
+        "base_pixels": [2, 2],
+        "reduced_from": [3, 3],
+        "orientation": "square",
+        "applies_to": ["tap", "tap_rect", "swipe"],
+    })
+}
+
+// Workflow #392 DA-5ab fix round 1: a preview `{path, width, height, scale}` of the 2x2 base
+// frame, a JPEG file of that size, at scale 1.
+fn da5ab_assert_base_preview(preview: &Value, what: &str) {
+    use image::ImageDecoder;
+    let path = preview["path"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{what}: the preview's path: {preview}"));
+    let decoder = image::codecs::jpeg::JpegDecoder::new(std::io::Cursor::new(
+        fs::read(path).expect("the preview file"),
+    ))
+    .unwrap_or_else(|error| panic!("{what}: the preview is not a JPEG: {error}"));
+    assert_eq!(decoder.dimensions(), (2, 2), "{what}: {preview}");
+    assert_eq!(
+        (&preview["width"], &preview["height"], &preview["scale"]),
+        (&json!(2), &json!(2), &json!(1.0)),
+        "{what}: {preview}"
+    );
+}
+
+// Fix round 1, points 5 and 4 (`frame_coordinates`, the frame file and the preview an operation
+// hands out, an element's press): on the 3x3 device, `observe --capture` states the base
+// (`{space: base, base_pixels: [2, 2], reduced_from: [3, 3], ...}`), lists the element in the
+// base, and its `--with-frame` file and `--preview` are the 2x2 frame; `do <element> --capture`
+// states the base, records the base input (1, 1) and the device receives (2, 2); `do --tap 1,1
+// --capture --preview` likewise, its after attachment's preview the 2x2 frame.
+#[test]
+fn da5ab_fix1_observe_and_do_on_a_mapped_display_state_and_hand_out_the_base() {
+    let root = TempDir::new().expect("tempdir");
+    let runtime_root = root.path().join("runtime");
+    let local = root.path().join("local");
+    let config = root.path().join("actinglab.json");
+    fs::write(&config, "{}").expect("write config");
+    let package = root.path().join("mapped.zip");
+    da5ab_mapped_package(&package);
+    let package = package.to_str().expect("package path");
+    let frame = root.path().join("observed.png");
+    let state = Arc::new(FakeState::default());
+    let host = da5ab_mapped_host(&runtime_root, &state, b"lab-da5ab-fix1-observe-and-do");
+
+    let observed = run_actinglab_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "--instance",
+            "node.a",
+            "observe",
+            "--capture",
+            "--zip",
+            package,
+            "--verbose",
+        ],
+    );
+    assert_eq!(
+        observed["frame_coordinates"],
+        da5ab_base_coordinates(),
+        "{observed}"
+    );
+    assert_eq!(
+        observed["observation"]["page"], "neutral/home",
+        "{observed}"
+    );
+    let element = &observed["observation"]["elements"][0];
+    assert_eq!(element["resource_id"], "home_to_page_a", "{observed}");
+    assert_eq!(
+        element["input"]["rect"],
+        json!({"x": 1, "y": 1, "width": 1, "height": 1}),
+        "the element in the base: {observed}"
+    );
+    let element = element["id"].as_str().expect("the element's id").to_owned();
+
+    let handed_out = run_actinglab_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "--instance",
+            "node.a",
+            "observe",
+            "--capture",
+            "--zip",
+            package,
+            "--with-frame",
+            frame.to_str().expect("frame path"),
+            "--preview",
+        ],
+    );
+    assert_eq!(
+        handed_out["frame_coordinates"],
+        da5ab_base_coordinates(),
+        "{handed_out}"
+    );
+    let file = actingcommand_recognition::Scene::from_png(&fs::read(&frame).expect("frame file"))
+        .expect("the frame file is a PNG");
+    assert_eq!((file.width(), file.height()), (2, 2), "the base frame");
+    assert_eq!(
+        &file.rgb8_pixels()[..3],
+        &[255, 0, 0],
+        "the device's colour"
+    );
+    da5ab_assert_base_preview(&handed_out["preview"], "observe");
+
+    let pressed = run_actinglab_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "--instance",
+            "node.a",
+            "do",
+            &element,
+            "--capture",
+            "--zip",
+            package,
+            "--verbose",
+        ],
+    );
+    assert_eq!(pressed["executed"], true, "{pressed}");
+    assert_eq!(
+        pressed["frame_coordinates"],
+        da5ab_base_coordinates(),
+        "{pressed}"
+    );
+    assert_eq!(
+        pressed["operation_record"]["record"]["prepared"]["action"],
+        json!({"kind": "tap", "x": 1, "y": 1}),
+        "the base input: {pressed}"
+    );
+    assert_eq!(
+        *state.tap_points.lock().expect("fake tap points"),
+        [(2, 2)],
+        "the element's base point at 3/2"
+    );
+
+    let tapped = run_actinglab_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "--instance",
+            "node.a",
+            "do",
+            "--tap",
+            "1,1",
+            "--capture",
+            "--zip",
+            package,
+            "--preview",
+        ],
+    );
+    host.close().expect("close host");
+    assert_eq!(tapped["executed"], true, "{tapped}");
+    assert_eq!(
+        tapped["frame_coordinates"],
+        da5ab_base_coordinates(),
+        "{tapped}"
+    );
+    let attachment = &tapped["after_attachment"];
+    assert_eq!(attachment["kind"], "page_projection", "{attachment}");
+    da5ab_assert_base_preview(&attachment["preview"], "the after frame");
+    assert_eq!(
+        *state.tap_points.lock().expect("fake tap points"),
+        [(2, 2), (2, 2)],
+        "the tap's base point at 3/2"
+    );
+}
+
+// Fix round 1, point 5 (the client-side conversion of the `--capture` forms): on the 3x3 device,
+// `do home_button --capture --dry-run` decides on the 2x2 base frame and answers its click and
+// `frame_coordinates` in the base; `wait --capture --page neutral/home` arrives; `ensure --capture
+// --to neutral/page_a` presses the edge's base point (1, 1), which the device receives as (2, 2),
+// and arrives on the page shown after the tap.
+#[test]
+fn da5ab_fix1_the_capture_client_forms_on_a_mapped_display_decide_and_press_in_the_base() {
+    let root = TempDir::new().expect("tempdir");
+    let runtime_root = root.path().join("runtime");
+    let local = root.path().join("local");
+    let config = root.path().join("actinglab.json");
+    fs::write(&config, "{}").expect("write config");
+    let package = root.path().join("mapped.zip");
+    da5ab_mapped_package(&package);
+    let package = package.to_str().expect("package path");
+    let state = Arc::new(FakeState::default());
+    state.transition_after_tap.store(true, Ordering::Release);
+    let host = da5ab_mapped_host(&runtime_root, &state, b"lab-da5ab-fix1-client-forms");
+
+    let planned = run_actinglab_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "--instance",
+            "node.a",
+            "do",
+            "home_button",
+            "--capture",
+            "--dry-run",
+            "--zip",
+            package,
+            "--verbose",
+        ],
+    );
+    assert_eq!(planned["executed"], false, "{planned}");
+    assert_eq!(
+        planned["frame_coordinates"],
+        da5ab_base_coordinates(),
+        "{planned}"
+    );
+    assert_eq!(
+        planned["actual_click"]["rect"],
+        json!({"x": 0, "y": 0, "width": 2, "height": 2}),
+        "{planned}"
+    );
+    assert_eq!(
+        planned["actual_click"]["point"],
+        json!({"x": 1, "y": 1}),
+        "{planned}"
+    );
+
+    let waited = run_actinglab_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "--instance",
+            "node.a",
+            "wait",
+            "--capture",
+            "--page",
+            "neutral/home",
+            "--timeout-ms",
+            "100",
+            "--poll-ms",
+            "1",
+            "--zip",
+            package,
+        ],
+    );
+    assert_eq!(waited["state"], "arrived", "{waited}");
+    assert_eq!(waited["page"], "neutral/home", "{waited}");
+    assert_eq!(state.taps.load(Ordering::Acquire), 0);
+
+    let ensured = run_actinglab_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "--instance",
+            "node.a",
+            "ensure",
+            "--capture",
+            "--to",
+            "neutral/page_a",
+            "--step-timeout-ms",
+            "100",
+            "--poll-ms",
+            "1",
+            "--zip",
+            package,
+        ],
+    );
+    host.close().expect("close host");
+    assert_eq!(ensured["state"], "arrived", "{ensured}");
+    assert_eq!(ensured["page"], "neutral/page_a", "{ensured}");
+    assert_eq!(
+        *state.tap_points.lock().expect("fake tap points"),
+        [(2, 2)],
+        "the edge's base point at 3/2"
+    );
+}
+
+// Fix round 1, point 3: `observe --capture --record` on the 3x3 device of the 2x2 package is
+// refused after the Runtime observed and before anything is written: the recording's file is as
+// `record start` wrote it. The recording starts while nothing listens, so it holds nothing.
+// Workflow #392 DA-5, the train (R4), adapted as the requirement changes what it pins: the
+// recording's base is the one its header names (the installed `record start` writes 1280x720),
+// not the package's, and the observed frame would be its first: `record_display_not_base`, its
+// values the device frame's size and the base size.
+#[test]
+fn da5ab_fix1_a_recorded_observation_on_a_mapped_display_is_refused_and_nothing_is_recorded() {
+    let root = TempDir::new().expect("tempdir");
+    let runtime_root = root.path().join("runtime");
+    let local = root.path().join("local");
+    let config = root.path().join("actinglab.json");
+    fs::write(&config, "{}").expect("write config");
+    let package = root.path().join("mapped.zip");
+    da5ab_mapped_package(&package);
+    run_actinglab_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "--instance",
+            "node.a",
+            "record",
+            "start",
+            "--task-id",
+            "neutral_task",
+            "--record-id",
+            "record_da5ab",
+        ],
+    );
+    let recording = local
+        .join("ActingCommand")
+        .join("actinglab")
+        .join("session")
+        .join("record-artifacts")
+        .join("record_da5ab")
+        .join("lab")
+        .join("recording.json");
+    let before = fs::read(&recording).expect("the recording");
+    let state = Arc::new(FakeState::default());
+    let host = da5ab_mapped_host(&runtime_root, &state, b"lab-da5ab-fix1-observe-record");
+
+    let (exit_code, envelope) = run_actinglab_failure_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "--instance",
+            "node.a",
+            "observe",
+            "--capture",
+            "--zip",
+            package.to_str().expect("package path"),
+            "--record",
+        ],
+    );
+    host.close().expect("close host");
+    assert_eq!(exit_code, 1, "{envelope}");
+    assert_eq!(
+        envelope["outcome"]["code"], "record_display_not_base",
+        "{envelope}"
+    );
+    assert_eq!(
+        envelope["outcome"]["values"],
+        json!({"frame_width": 3, "frame_height": 3, "base_width": 1280, "base_height": 720}),
+        "{envelope}"
+    );
+    assert_eq!(
+        fs::read(&recording).expect("the recording"),
+        before,
+        "nothing recorded"
+    );
+    assert_eq!(state.taps.load(Ordering::Acquire), 0);
+}
+
+/// Workflow #392 DA-5, the train: the names and bytes of every file of the recording directory
+/// `lab`, in name order.
+fn da5_train_recording_files(lab: &Path) -> Vec<(String, Vec<u8>)> {
+    let mut files = fs::read_dir(lab)
+        .expect("the recording's directory")
+        .map(|entry| {
+            let entry = entry.expect("an entry");
+            let bytes = if entry.file_type().expect("its type").is_file() {
+                fs::read(entry.path()).expect("the file")
+            } else {
+                Vec::new()
+            };
+            (entry.file_name().to_string_lossy().into_owned(), bytes)
+        })
+        .collect::<Vec<_>>();
+    files.sort();
+    files
+}
+
+/// Workflow #392 DA-5, the train of DA-5ab and DA-5cd (R4; register §1.436 and §1.437, "Train";
+/// `contracts/lab-recording.md`, "A recording's size"): nothing recorded is sent or written once
+/// the display is not the recording's size. The installed `record start` (nothing listening)
+/// writes the base size 1280x720; on the fake host, whose frames are 1280x720, `observe --capture
+/// --record` takes the recording's first frame (step 1). The display then changes to 1920x1080, a
+/// display that maps to the 1280x720 packages: `do --capture --record --tap-rect 0,0,1,1` is
+/// refused `record_frame_size_mismatch` (the recording's 1280x720 expected, the 1920x1080 frame it
+/// captured before the press actual), exit 1, before anything is pressed; `observe --capture
+/// --record` is refused the same way after the Runtime observed, before anything is written; the
+/// recording's files are byte for byte as the first observation left them, and the device took no
+/// tap.
+#[test]
+fn da5_train_recorded_do_and_observe_after_the_display_changed_send_and_write_nothing() {
+    let root = TempDir::new().expect("tempdir");
+    let runtime_root = root.path().join("runtime");
+    let local = root.path().join("local");
+    let config = root.path().join("actinglab.json");
+    fs::write(&config, "{}").expect("write config");
+    let observe_package = root.path().join("observe.zip");
+    write_zip(&observe_package, &[
+        ("control.json", br#"{"game":"neutral","server":"test","package_id":"neutral.observation","entry_task_id":"task"}"#),
+        ("resources/manifest.json", br#"{"entry_task_id":"task"}"#),
+        ("resources/operations/task/task.json", br#"{}"#),
+        ("resources/recognition/neutral.test.pack.json", br#"{"schema_version":"0.3","coordinate_space":{"width":1280,"height":720},"targets":[{"type":"color","id":"anchor","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0]}]}"#),
+        ("resources/recognition/neutral.test.pages.json", br#"{"schema_version":"0.3","pages":[{"id":"page","required":["anchor"]}]}"#),
+        ("resources/navigation/neutral.test.navigation.json", br#"{"schema_version":"0.3","navigation":[]}"#),
+    ]);
+    let observe_package = observe_package.to_str().expect("observe package path");
+    let resources = root.path().join("resources");
+    let semantic_package = root.path().join("semantic.zip");
+    write_semantic_resources_at(&resources, (1280, 720));
+    write_semantic_package(&semantic_package, &resources);
+    let semantic_package = semantic_package.to_str().expect("semantic package path");
+    let started = s17_record_start(&config, &runtime_root, &local);
+    assert_eq!(started["hold"]["state"], "none", "{started}");
+    let state = base_frames();
+    let host = l3_host(&runtime_root, &state, b"lab-da5-train-display-changed");
+
+    let observed = run_actinglab_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "--instance",
+            "node.a",
+            "observe",
+            "--capture",
+            "--zip",
+            observe_package,
+            "--record",
+        ],
+    );
+    assert!(observed["record"]["frame"].is_object(), "{observed}");
+    let lab = local
+        .join("ActingCommand")
+        .join("actinglab")
+        .join("session")
+        .join("record-artifacts")
+        .join("record_s17")
+        .join("lab");
+    let before = da5_train_recording_files(&lab);
+
+    *state
+        .display_changed_to
+        .lock()
+        .expect("the fake's changed display") = Some((1920, 1080));
+    let (pressed_exit, pressed) = run_actinglab_failure_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "--instance",
+            "node.a",
+            "do",
+            "--capture",
+            "--zip",
+            semantic_package,
+            "--record",
+            "--tap-rect",
+            "0,0,1,1",
+        ],
+    );
+    let (observed_exit, refused) = run_actinglab_failure_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "--instance",
+            "node.a",
+            "observe",
+            "--capture",
+            "--zip",
+            observe_package,
+            "--record",
+        ],
+    );
+    host.close().expect("close host");
+
+    for (exit_code, envelope) in [(pressed_exit, &pressed), (observed_exit, &refused)] {
+        assert_eq!(exit_code, 1, "{envelope}");
+        assert_eq!(
+            envelope["outcome"]["code"], "record_frame_size_mismatch",
+            "{envelope}"
+        );
+        assert_eq!(
+            envelope["details"]["expected"],
+            json!({"width": 1280, "height": 720}),
+            "{envelope}"
+        );
+        assert_eq!(
+            envelope["details"]["actual"],
+            json!({"width": 1920, "height": 1080}),
+            "{envelope}"
+        );
+    }
+    assert_eq!(state.taps.load(Ordering::Acquire), 0, "nothing pressed");
+    assert_eq!(
+        da5_train_recording_files(&lab),
+        before,
+        "nothing recorded or written"
+    );
+}
+
+/// Workflow #392 DA-5, the train's fix round 1 (review B, (h) and (l); `contracts/lab-recording.md`,
+/// "A recording's size"): the frame `do --capture --record` takes through the Runtime before its
+/// press, whose size it judges, cannot be taken. The installed `record start` (nothing listening)
+/// writes the base size 1280x720; on the fake host, whose frames are 1280x720, `observe --capture
+/// --record` takes the recording's first frame; the fake's next capture, the one before the press,
+/// then fails in its backend: `do --capture --record --tap-rect 0,0,1,1` answers `device_error`
+/// before anything is pressed or written: no tap, and the recording's files are byte for byte as
+/// the observation left them.
+#[test]
+fn da5_train_fix1_a_recorded_do_whose_frame_before_the_press_fails_presses_and_writes_nothing() {
+    let root = TempDir::new().expect("tempdir");
+    let runtime_root = root.path().join("runtime");
+    let local = root.path().join("local");
+    let config = root.path().join("actinglab.json");
+    fs::write(&config, "{}").expect("write config");
+    let observe_package = root.path().join("observe.zip");
+    write_zip(&observe_package, &[
+        ("control.json", br#"{"game":"neutral","server":"test","package_id":"neutral.observation","entry_task_id":"task"}"#),
+        ("resources/manifest.json", br#"{"entry_task_id":"task"}"#),
+        ("resources/operations/task/task.json", br#"{}"#),
+        ("resources/recognition/neutral.test.pack.json", br#"{"schema_version":"0.3","coordinate_space":{"width":1280,"height":720},"targets":[{"type":"color","id":"anchor","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0]}]}"#),
+        ("resources/recognition/neutral.test.pages.json", br#"{"schema_version":"0.3","pages":[{"id":"page","required":["anchor"]}]}"#),
+        ("resources/navigation/neutral.test.navigation.json", br#"{"schema_version":"0.3","navigation":[]}"#),
+    ]);
+    let observe_package = observe_package.to_str().expect("observe package path");
+    let resources = root.path().join("resources");
+    let semantic_package = root.path().join("semantic.zip");
+    write_semantic_resources_at(&resources, (1280, 720));
+    write_semantic_package(&semantic_package, &resources);
+    let semantic_package = semantic_package.to_str().expect("semantic package path");
+    let started = s17_record_start(&config, &runtime_root, &local);
+    assert_eq!(started["hold"]["state"], "none", "{started}");
+    let state = base_frames();
+    let host = l3_host(
+        &runtime_root,
+        &state,
+        b"lab-da5-train-fix1-frame-before-fails",
+    );
+
+    let observed = run_actinglab_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "--instance",
+            "node.a",
+            "observe",
+            "--capture",
+            "--zip",
+            observe_package,
+            "--record",
+        ],
+    );
+    assert!(observed["record"]["frame"].is_object(), "{observed}");
+    let lab = local
+        .join("ActingCommand")
+        .join("actinglab")
+        .join("session")
+        .join("record-artifacts")
+        .join("record_s17")
+        .join("lab");
+    let before = da5_train_recording_files(&lab);
+
+    // The next capture the fake takes, the frame before the press, fails in its backend.
+    state.capture_fails_at.store(
+        state.captures.load(Ordering::Acquire) + 1,
+        Ordering::Release,
+    );
+    let (_, failed) = run_actinglab_failure_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "--instance",
+            "node.a",
+            "do",
+            "--capture",
+            "--zip",
+            semantic_package,
+            "--record",
+            "--tap-rect",
+            "0,0,1,1",
+        ],
+    );
+    host.close().expect("close host");
+
+    assert_eq!(failed["outcome"]["code"], "device_error", "{failed}");
+    assert_eq!(state.taps.load(Ordering::Acquire), 0, "nothing pressed");
+    assert_eq!(
+        da5_train_recording_files(&lab),
+        before,
+        "nothing recorded or written"
+    );
+}
+
+/// Workflow #392 DA-5cd fix round 1 (`contracts/lab-recording.md`, "A recording's size"): the
+/// installed `record start`, while nothing listens (so no display is known), writes the base size
+/// 1280x720 in the recording's header and no size; on the fake Runtime host, whose frames are
+/// 1920x1080, the recording's first frame, the capture before `tap 0 0 --record`, is refused
+/// `record_display_not_base` with its size and the base size (exit 1, as every refusal of
+/// actinglab's own line) before it is stored and before anything is pressed: one capture, no tap,
+/// the recording's header byte for byte as written and no other file beside it.
+#[test]
+fn da5cd_fix1_the_installed_start_writes_the_base_and_its_first_frame_is_checked() {
+    let root = TempDir::new().expect("tempdir");
+    let runtime_root = root.path().join("runtime");
+    let local = root.path().join("local");
+    let config = root.path().join("actinglab.json");
+    fs::write(&config, "{}").expect("write config");
+    s19_record_start(&config, &runtime_root, &local);
+    let lab = local
+        .join("ActingCommand")
+        .join("actinglab")
+        .join("session")
+        .join("record-artifacts")
+        .join("record_s11")
+        .join("lab");
+    let written = fs::read(lab.join("recording.json")).expect("the recording");
+    let header: Value = serde_json::from_slice(&written).expect("recording.json");
+    assert_eq!(
+        header["base_size"],
+        json!({"width": 1280, "height": 720}),
+        "{header}"
+    );
+    assert!(header["coordinate_space"].is_null(), "{header}");
+    let state = serving(1920, 1080);
+    let host = l3_host(&runtime_root, &state, b"lab-da5cd-fix1-first-frame");
+
+    let (exit_code, failed) = run_actinglab_failure_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "--instance",
+            "node.a",
+            "tap",
+            "0",
+            "0",
+            "--record",
+            "--after-ms",
+            "0",
+        ],
+    );
+    host.close().expect("close host");
+
+    assert_eq!(exit_code, 1, "{failed}");
+    assert_eq!(
+        failed["outcome"]["code"], "record_display_not_base",
+        "{failed}"
+    );
+    assert_eq!(
+        failed["outcome"]["values"],
+        json!({"frame_width": 1920, "frame_height": 1080, "base_width": 1280, "base_height": 720}),
+        "{failed}"
+    );
+    assert_eq!(state.captures.load(Ordering::Acquire), 1);
+    assert_eq!(state.taps.load(Ordering::Acquire), 0);
+    assert_eq!(
+        fs::read(lab.join("recording.json")).expect("the recording"),
+        written,
+        "the header as written"
+    );
+    let files = fs::read_dir(&lab)
+        .expect("the recording's directory")
+        .map(|entry| {
+            entry
+                .expect("an entry")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(files, ["recording.json"], "no frame stored");
 }

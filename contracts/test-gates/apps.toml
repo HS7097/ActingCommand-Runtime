@@ -2467,6 +2467,15 @@ tests = [
 ]
 incident = ["#434 LW-1"]
 
+# Workflow #392 DA-5ab (0.12.67; register §1.436; contracts/display-adapter.md section 11; the coordinator's work order of 11-16 on board #392, tests "the answers' frame_coordinates" and "through the MCP front"): the command line's frame_coordinates on a display of the base's size are the frame's own statement, byte for byte ({device_pixels, orientation, applies_to}); on a 1920x1080 or a 3840x2160 display of a 1280x720 package they are {space: base, base_pixels: [1280, 720], reduced_from: [device width, device height], orientation, applies_to}; ac_lab_observe and ac_do answer the command line's base statement and frame file member for member
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::lab2_cli::frame::tests::da5ab_frame_coordinates_name_the_base_and_the_device_size_it_was_reduced_from",
+    "actingcommand-actinglab-mcp::serve_calls::da5ab_the_mcp_front_answers_the_command_lines_base_coordinates",
+]
+incident = ["#392 DA-5ab"]
+
 # #463 RC-1 (0.12.69; register §1.450; brief rd-1116/brief-463-rc1-regression-case-runner.md; contracts/resource-regression-case.md): the regression case as a contract of the Runtime, its reader, its offline runner on the kernel's page detection and target evaluation, and resource regression over a checkout. One neutral source package on a 4x1 canvas (page home by a red pixel at x 0, page other by a green pixel at x 1) and synthetic cases over scenes of four pixels in a temporary checkout; no Runtime, no device, no OCR model, no clock read by the tests. A case whose page the kernel recognises on its scene passes, as answered (1); a green pixel beside the red makes other match too: failed, page_conflict, both pages named, none recognised (2); recognize entries expected present and absent, each way right (passed) and wrong (target_mismatch with the kernel's answer), and a case of the right ones passed (3); a scene whose bytes are another scene's, a 5x1 canvas for a 4x1 scene and a rectangle leaving the canvas: scene_sha256_mismatch, canvas_size_mismatch, rect_outside_canvas, each the case's one check (4); entry and step beside a passing page are not_run (not_evaluated) and the case partial, never passed (5); another and no schema_version are not_run with case_schema_unsupported, and a run over a checkout holding one beside a passing case exits 0 (6); a blue pixel outside the rectangles warns resource_regression_scene_outside_rects with count 1 and the case still passes (7); a checkout of three cases (passes, conflict, another schema) answers resource_regression_failed, exit 1, the three verdicts in order, the counts and the failed path, and --case of the passing one exits 0 (8); the checkout and its directory are file for file and byte for byte the same after a run (9)
 [[gate]]
 coverage = "Y"

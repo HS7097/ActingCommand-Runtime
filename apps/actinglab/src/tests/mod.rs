@@ -78,6 +78,10 @@ mod gate_386_rlt;
 // game root's display declaration.
 #[path = "gate_392_da4.rs"]
 mod gate_392_da4;
+// Workflow #392 DA-5cd: offline recognition takes a scene that is a pure scale of its package; a
+// recording is refused on a display that is not the base size.
+#[path = "gate_392_da5cd.rs"]
+mod gate_392_da5cd;
 // Workflow #407 LOAD-2: `package check` answers a pack's loading set, and `resource validate`
 // reads `loading.json` and a pack's loading copy.
 #[path = "gate_load2.rs"]
