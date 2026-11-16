@@ -31212,6 +31212,126 @@ path under the input's request), `instance_resources_fenced`, and the lease's `l
 a failed input answers its own failure. A self-check, a resume or the fence's recheck lifts the
 fence.
 
+### 1.434 Slice #463 S2-1b (0.12.67): `record ready` knows the package's game, server and locale (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making, whose stage two turns the recorded material into a package offline; found when stages one and two were walked on an installed instance with 0.12.65; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1116/brief-463-s21b-record-ready-identity.md`, read on main `8eb03787`)
+
+This section takes 1.434, the number the work order gives: §1.431 is the highest on main
+`8eb03787`, and §1.429, §1.430, §1.432 and §1.433 belong to slices not merged yet. It ships in
+0.12.67.
+
+**What the walk showed.** On an installed instance `record ready` (§1.425) never reached `ready`:
+it always listed `game`, `server` and `locale`, each with the remedy `record stop --<part>`. It
+read them from what the recording holds and from the Lab's instance configuration (actinglab's
+own `config.json`); in an installation the instance's game and server are in the Runtime's
+configuration, and the locale is nowhere. An agent that had marked every step was told three
+things were missing and could only try `record stop` with the three flags.
+
+**The rule.**
+- `record ready` takes `--game`, `--server` (actinglab's global options) and `--locale`, the
+  parameters `record stop` takes, read by one function (`session_record::identity_options`), so a
+  value out of its form is refused as `record stop` refuses it (`validation_failed`, exit 2). A
+  value given counts as known for the answer; `record ready` writes it nowhere, so a later `record
+  stop` still needs it.
+- Each part is the first known of: the command line (`command_line`); what the recording holds
+  (`recording`: given at `record start`, or on a stopped recording marked again what its package
+  was generated with); for game and server the Lab's instance configuration (`lab_config`); for
+  game and server the configuration of the installation the program runs from (`installation_config`):
+  the instance's row of `policy.facts.instances` (its `game_id`, `server_id`), the instance selected
+  as `packs` selects it (alias, `instance_id` or ADB port). A stopped recording marked again reads
+  only the first two, as before. The installation is located as S1-8 (§1.428) locates it, whatever
+  `ACTINGCOMMAND_RUNTIME_STATE_ROOT` says. Outside an installation, and where it cannot be
+  located, its configuration cannot be read, binds no such instance or names a value out of its
+  form, the part stays unknown and nothing is refused. The locale has no configured place.
+- `record stop` takes game and server in the same order (the flag, the recording, the Lab's
+  instance configuration, the installation's), through the same settings function
+  (`recording_api::stop_settings`), so what `record ready` called known is what `record stop`
+  builds with. This widens what `record stop` accepts: in an installation, a recording whose game
+  or server neither the flags, the recording nor the Lab's configuration give was refused
+  `record_locale_missing` and now builds with the installation's. A flag and the recording's value
+  always win.
+- The answer's new member `sources` (`{game, server, locale}`) names where each part came from, a
+  word of the new closed vocabulary `ready_source`, `null` for a part not known (which `missing`
+  lists). The hint of the items `game`, `server` and `locale` names both ways: `record ready
+  --<part> <v> to check, record stop --<part> <v> to build`.
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The configuration's binding | `lab_ops::packs::instance_binding`: the configuration read and decoded by the reader `packs` and `ac_packs` use (`read_config`, split out of `read_answer`, which is otherwise unchanged), the instance selected by `select`, its row of `policy.facts.instances` |
+| The installation | `cli_module::place::installation_location` (the location `installation_state_root` now reads; in test builds `test_place`) |
+| The command | `session_record`: `RECORD_READY_READS` (`--game`, `--server`, `--locale`), `identity_options` (read by `record stop`'s `record_stop_options` and by `record ready`; `record_ready_options` is gone), `installed_identity` |
+| The Lab | `RecordStopOptions::installed_game`, `installed_server`; `stop_settings` and `regeneration_settings` answer the settings and the sources (`ready::known`, `ReadySources`); `RecordReadyOutcome::sources`; the hints in `ready::hint` |
+| The words | `crates/lab/src/codes.rs`: `ReadySource` (`ready_source`: `command_line`, `recording`, `lab_config`, `installation_config`); the catalog's vocabulary; the texts of `ready_missing`'s `game` and `server` |
+| The row | `record ready` in [lab-operations.json](lab-operations.json) gains the parameters `game`, `server` (global options) and `locale` (6 parameters, was 3), `sources` in its output, and its notes; `record stop`'s notes. No row is added: `engine::COMMANDS` stays 70, `own_flags::READ_LIST_ROWS` 29, `words::BUILT_SLICES` and the MCP server's `ACTINGLAB_SLICES` 14 each. The Lab's MCP server offers the three parameters on `ac_record_ready` through its `serve` child; `ac_record_stop` keeps its parameters and reads the installation as the command does |
+| Texts | [lab-recording.md](lab-recording.md): "What a recording still lacks: `record ready`" (the synopsis, a bullet on the package's game, server and locale with the table of places, the answer, the hint) and the row of "Pre-checks"; `apps/actinglab-mcp/MANUAL.md`, section 8, "Recordings" |
+
+**Codes and words.** No outcome code is added: a malformed value is `record stop`'s refusal,
+`validation_failed` (exit 2). One closed vocabulary is added, `ready_source`, four words, one
+place each, used by no outcome key: a member of a read that exits 0, it neither refuses nor
+warns. No decision reads a code or a word. The outcome-code index is regenerated (it lists codes
+only).
+
+**Tests** (`apps/actinglab/src/tests/gate_463_s21b.rs`, exec gate map "#463 S2-1b"; made-up
+installation roots as S1-8's tests make them, recordings as `gate_449_rec_arch` makes them, no
+Runtime): the installed instance without flags (only `locale` missing, game and server
+`installation_config`) and with `--locale` (`ready`); from no installation without flags (the three
+missing, `sources` null) and with them (`ready`, `command_line`, on the command line and through
+`serve --stdio`); a flag and the recording each winning over the installation, with the package
+id `record stop --dry-run` builds; a malformed game, server and locale refused alike by both
+commands; `record ready` with flags writing nothing (the session directory byte for byte, and
+`record stop --dry-run` without them still refused `record_locale_missing`); `record stop` in the
+installation building with its game and server, and with the flags when given. Adapted:
+`crates/lab/src/gate_463_s21.rs`, its first and third tests pin the new hint of the identity items
+(the requirement changes the remedy). No golden changes; no test leaves a gate map.
+
+**What is not changed.** No ledger record, configuration key, Runtime interface revision or
+outcome code. What `record stop` decides when its flags or the recording give game and server,
+and everything else it checks, writes or refuses. The first-generation MCP server
+(`actingctl mcp-serve`) has no `ac_record_ready`; its `ac_record_stop` runs actinglab's command and
+so reads the installation too.
+
+**Fix round 1** (coordinator work order `rd-1116/brief-463-s21b-fix2.md`, after the independent
+review of `75a76e03` and the first CI run on it; the rules are the coordinator's rulings).
+- *The installation's row is one thing.* The first build took game and server each from the first
+  place that held it, so a flag or a recording giving game X and no server took the server of a
+  row binding game Y, and `record stop` built `X.<Y's server>` without a word. Now
+  `recording_api::package_identity`, the one function `record stop` and `record ready` decide by,
+  takes each part from the flag, the recording and the Lab's instance configuration as before,
+  then the row whole or not at all: both when those give neither; the other one when they give
+  one and the row's value of that one is the same; otherwise nothing, the part stays missing and
+  `record stop` refuses `record_locale_missing` as before §1.434. A row whose value is out of its
+  form is no row. `RecordStopOptions::installed` (an `InstalledRow`, the reader of an
+  `InstalledIdentity`) takes the place of `installed_game` and `installed_server`.
+- *Read only when needed.* The reader (`session_record::installed_identity`, which locates the
+  installation and opens its configuration) is called only when the flag, the recording and the
+  Lab's instance configuration do not give both game and server; test builds count its calls
+  (`session_record::installed_reads`).
+- *A packaged recording* answers what its package holds: `sources` `recording` for each part the
+  package holds, whatever is given. A given `--game`, `--server` or `--locale` with another value
+  is the warning `{code: "record_stop_option_conflict", field, recorded, given}`, the code and the
+  details `record stop` refuses it with; `recording_api::option_conflicts` is the one comparison both
+  use (`record stop` refuses the first, `record ready` warns of each). A warning, not a refusal,
+  because `record ready` refuses nothing the recording holds; it adds no code.
+- *Texts.* [lab-recording.md](lab-recording.md): the options `record ready` reads with, the row
+  taken whole, "not kept and not printed" for the rest of the configuration, the packaged
+  recording's sources and warning, the row of "Pre-checks"; the MCP manual and both rows' notes.
+  `record_locale_missing`'s message names `record ready` beside `record start` and `record stop`.
+- *Exit codes.* A refusal exits 1 on actinglab's own line whatever its class (`cli_module::own_line`:
+  every failure is category error, exit 1; the classes' exits 2 to 6 are the envelope's, on a
+  `--via` line only). The first build's tests asked 2 for `validation_failed` and
+  `record_locale_missing`; they now ask 1.
+- *Tests* (`gate_463_s21b.rs`, six more, each in the gate "#463 S2-1b"): a configuration that is a
+  folder, no JSON, without the instance's row, or with a server out of its form: game and server
+  missing, exit 0; the Lab's instance configuration over the row; the row taken whole, equal and
+  not, both ways, with `record stop`'s refusal; the configuration not opened when flags give both,
+  once each otherwise; `record ready` in an installation leaving the session directory and the
+  installation root byte for byte; a packaged recording's sources and warnings against `record
+  stop`'s refusal. Adapted: the third test lost its case of a flag's server beside the row's game
+  (now the whole-row test's), the fourth and fifth ask exit 1.
+
+**At deploy.** Nothing to configure: an installation's configuration already names each
+instance's game and server in `policy.facts.instances`.
+
 ### 1.436 Slice #392 DA-5ab (0.12.67): the Lab observes and presses on a display that maps to its package's base, in the base coordinates (Workflow #392; the owner's decision 203 on board #392, one set of packages at the base size and a converter; the real check of 11-16 on the 3840×2160 and 1920×1080 instances, where a run recognised and pressed and the Lab's `observe --capture` and `do --capture` failed `observation_projection_failed` and a declared operation's press was refused `display_map_unresolved` (`input_scale_unsupported`); the read-only study of main `381fe461`; the rule is the coordinator's ruling under the owner's "what is not written follows the default" for #392, not the owner's words; coordinator work order `rd-1116/brief-392-da5ab-lab-on-mapped-display.md`, read on main `23161b3a`)
 
 This section takes 1.436, the number the work order gives: §1.431 is the highest on main

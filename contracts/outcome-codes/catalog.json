@@ -5317,10 +5317,10 @@
           "description": "More steps have an effect than a package holds (record_too_many_steps)."
         },
         "game": {
-          "description": "The package's game is known neither from record stop nor from the recording nor from the instance configuration (record_locale_missing)."
+          "description": "The package's game is known neither from record stop nor from the recording nor from the Lab's instance configuration nor (#463 S2-1b) from the configuration of the installation the program runs from (record_locale_missing)."
         },
         "server": {
-          "description": "The package's server is known neither from record stop nor from the recording nor from the instance configuration (record_locale_missing)."
+          "description": "The package's server is known neither from record stop nor from the recording nor from the Lab's instance configuration nor (#463 S2-1b) from the configuration of the installation the program runs from (record_locale_missing)."
         },
         "locale": {
           "description": "The package's locale is known neither from record stop nor from the recording (record_locale_missing)."
@@ -5429,6 +5429,27 @@
       "tokens": {
         "press_point_only": {
           "description": "A step's press is a single recorded point with no press region set: the package would press that exact pixel."
+        }
+      }
+    },
+    "ready_source": {
+      "description": "Where a part of the package's identity (its game, server or locale) that record ready answers with came from, as record stop takes it, in sources (#463 S2-1b).",
+      "source": {
+        "file": "crates/lab/src/codes.rs",
+        "enum": "ReadySource"
+      },
+      "tokens": {
+        "command_line": {
+          "description": "The command line of record ready or record stop: --game, --server (actinglab's global options) or --locale."
+        },
+        "recording": {
+          "description": "What the recording holds: given at record start, or, on a stopped recording marked again, what its package was generated with."
+        },
+        "lab_config": {
+          "description": "The Lab's instance configuration: the instance's game or server in actinglab's own configuration (game and server only)."
+        },
+        "installation_config": {
+          "description": "The configuration of the installation the program runs from: the instance's row of policy.facts.instances (game and server only)."
         }
       }
     },

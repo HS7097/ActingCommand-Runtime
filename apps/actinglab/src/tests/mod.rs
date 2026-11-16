@@ -205,6 +205,10 @@ mod gate_463_s18;
 // session directory.
 #[path = "gate_463_s213.rs"]
 mod gate_463_s213;
+// #463 S2-1b: `record ready` takes the package's game, server and locale as `record stop` takes
+// them and, in an installation, the instance's game and server from its configuration.
+#[path = "gate_463_s21b.rs"]
+mod gate_463_s21b;
 // Workflow #464 P2: `standard-pack build` builds a game's standard pack from one commit on the
 // steps of `resource verify`, whose report is as before.
 #[path = "gate_464_p2.rs"]
