@@ -52,7 +52,7 @@
     "session <subcommand>",
     "run <subcommand>"
   ],
-  "command_count": 107,
+  "command_count": 108,
   "commands": [
     "help",
     "version",
