@@ -49,6 +49,9 @@
 // - `s21_train_the_draft_boxed_on_every_step_is_ready_and_material_before`: archived and reopened,
 //   `material`; boxed on every step as that test boxes it, `ready` with nothing missing, every
 //   self-check run and no `press_point_only`.
+// #463 S2-1b (register §1.434) adapts the first and third tests, as the requirement changes what
+// they pin: the hint of a part of the package's identity not known names both ways, `record ready`
+// to check and `record stop` to build.
 // Frames are synthetic 1280x720 (a square of one colour at the top left on gray); no Runtime, no
 // device; the tests read no clock and never sleep.
 
@@ -414,10 +417,12 @@ fn s21_three_things_missing_are_listed_in_order_and_record_stop_answers_the_firs
         ready["missing"],
         json!([
             {"order": 1, "step": null, "artifact_step": null, "frame_id": null, "what": "server",
-             "code": "record_locale_missing", "hint": "record stop --server <s>",
+             "code": "record_locale_missing",
+             "hint": "record ready --server <s> to check, record stop --server <s> to build",
              "details": {"missing": ["server", "locale"]}},
             {"order": 2, "step": null, "artifact_step": null, "frame_id": null, "what": "locale",
-             "code": "record_locale_missing", "hint": "record stop --locale <l>",
+             "code": "record_locale_missing",
+             "hint": "record ready --locale <l> to check, record stop --locale <l> to build",
              "details": {"missing": ["server", "locale"]}},
             {"order": 3, "step": 2, "artifact_step": 2, "frame_id": null,
              "what": "page_recognition", "code": "record_step_without_recognition",
@@ -500,7 +505,8 @@ fn s21_a_recording_that_lacks_something_names_the_self_checks_and_runs_none() {
         ready["missing"],
         json!([
             {"order": 1, "step": null, "artifact_step": null, "frame_id": null, "what": "locale",
-             "code": "record_locale_missing", "hint": "record stop --locale <l>",
+             "code": "record_locale_missing",
+             "hint": "record ready --locale <l> to check, record stop --locale <l> to build",
              "details": {"missing": ["locale"]}}
         ]),
         "{ready}"
