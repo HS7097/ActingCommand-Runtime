@@ -117,6 +117,10 @@ mod gate_392_da5ab;
 // ready` lists one not refined (`select_unrefined`).
 #[cfg(test)]
 mod gate_463_s26;
+// #463 S2-10: `record stop` writes the package's regression cases, each run first by the one
+// runner of the case contract.
+#[cfg(test)]
+mod gate_463_s210;
 mod lab_run;
 mod lab_run_api;
 mod ledger_port;

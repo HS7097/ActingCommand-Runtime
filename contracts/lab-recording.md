@@ -3562,7 +3562,7 @@ The answer:
  "warnings": [{"step": 1, "artifact_step": 1, "frame_id": "f0001", "what": "press_point_only"}],
  "checks": [],
  "checks_after": ["frames", "admission", "first_decision", "cross_check", "endings", "selects",
-                  "final_package"],
+                  "final_package", "cases"],
  "sources": {"game": "installation_config", "server": "installation_config", "locale": null}}
 ```
 
@@ -3581,7 +3581,7 @@ and, once no pre-check fails, with the self-checks' failures (#463 S2-1c):
  "checks": [{"check": "frames", "complete": true}, {"check": "admission", "complete": true},
             {"check": "first_decision", "complete": true}, {"check": "cross_check", "complete": true},
             {"check": "endings", "complete": true}, {"check": "selects", "complete": true}],
- "checks_after": ["final_package"],
+ "checks_after": ["final_package", "cases"],
  "sources": {"game": "recording", "server": "recording", "locale": "recording"}}
 ```
 
@@ -3619,7 +3619,9 @@ and, once no pre-check fails, with the self-checks' failures (#463 S2-1c):
   own frame, a page that passes on another screen's frames, a frame that cannot be read back),
   `page` (the page it is about), `target` (the mark a click follows, a template whose crop cannot
   be read back; fix round 1: the target that reads the name of a select's slot,
-  `select/step_ii/slot_kk`) and `outcome_key` (an ending's failure, with the ending's `page`); its
+  `select/step_ii/slot_kk`) and `outcome_key` (an ending's failure, with the ending's `page`), and
+  (#463 S2-10) for an item of `cases` `case` (the case's id) and `checks` (the runner's failed
+  checks of the case, each `{at, result, problem, page?, target?, mismatch?, detail?}`); its
   `step`, `artifact_step` and `frame_id` are those of the step it is about (an ending's and a
   template's have none); an item of the package as a whole (`admission`, `final_package`), and
   the error a check stopped at (`check_error`), has neither a step nor `details`. No item carries
@@ -3685,7 +3687,10 @@ and, once no pre-check fails, with the self-checks' failures (#463 S2-1c):
   nowhere: `frames` (every live frame and template crop read back with its sha256 and the
   recording's size, the last row of "Pre-checks"), `admission` (item 2, with the evaluator),
   `first_decision` (item 3), `cross_check` (items 4, 5 and 7), `endings` (item 9), `selects` (item
-  8), `final_package` (item 1, and items 2 and 3 again on the final package). #463 S2-1c (0.12.68):
+  8), `final_package` (item 1, and items 2 and 3 again on the final package), and (#463 S2-10,
+  0.12.69) `cases` (item 10, the last: the regression cases made from the recording, each run on
+  the final package; one failing case is one item, with the case's id and the runner's failed
+  checks in its `details`, "Regression cases written with the package"). #463 S2-1c (0.12.68):
   **each check lists every failure it meets, not only its first.** It is the one implementation
   `record stop` runs ("Self-checks"): where `record stop` refuses at a check's first failure, as it
   always has, `record ready` notes the failure and the check goes on to the next thing it judges.
@@ -3707,7 +3712,8 @@ and, once no pre-check fails, with the self-checks' failures (#463 S2-1c):
   one gave: `first_decision`, `cross_check`, `endings` and `selects` read only the frames and the
   admitted package, so each runs whatever the others found; nothing runs after a failed `frames`
   or `admission`, and `final_package`, built of what every check before it gave, runs only when
-  none failed. `checks` names each check that ran, in the order they ran, `{check, complete,
+  none failed, and `cases`, which reads the final package, only after it (#463 S2-10; each case is
+  one judgement, so it lists every failing case). `checks` names each check that ran, in the order they ran, `{check, complete,
   reason?}`: `complete: true` when the failures `missing` lists of it are all it has (none, or
   every one), `complete: false` with `reason` when it stopped at the last of them (its last item,
   "Order" above), so that an empty rest is not read as "nothing more"; `reason` is a word of the
@@ -3720,7 +3726,8 @@ and, once no pre-check fails, with the self-checks' failures (#463 S2-1c):
 
   `checks_after` names the checks that did not run, in the order they run: all of them when a
   pre-check fails (`checks` is then empty), those a failed check left unrun (every later one after
-  a failed `frames` or `admission`, otherwise `final_package`), none when every one ran. A failure
+  a failed `frames` or `admission`, otherwise `final_package` and `cases`; #463 S2-10: `cases`
+  alone after a failed final package), none when every one ran. A failure
   to read the recording's files that is no check's verdict (class `runtime_unavailable`) is the
   command's own error. `record stop` is unchanged: it answers the first failure of the first check
   that meets one, with the code it answered before.
@@ -3743,7 +3750,7 @@ and, once no pre-check fails, with the self-checks' failures (#463 S2-1c):
 |---|---|---|---|
 | `material` | nothing of stage two is written: no step carries a page name, a mark (own, reused or forbidden, an anchor, a click guard), a press region (a click other than a press `tap`, `swipe` or `long-tap --record` recorded, or one that follows a mark or declares a retry, or a press box: a press recorded by its point whose rectangle is no longer that one pixel, #463 S2-5), a choice (a select, or #463 S2-6 a step marked as holding a choice), an optional flag or a transition, and the recording took no ending | stage one: the presses with `--record`, `record archive` | the first such write (`record mark` on the reopened recording) |
 | `draft` | something of stage two is written, and `missing` is not empty | a stage-two write that leaves something missing | the last missing item done (`ready`) |
-| `ready` | `missing` is empty: every pre-check passes and every self-check (`checks` names all seven, each complete): `record stop` would write the package | the last missing item done | `record stop` (`packaged`), or a write that leaves something missing (`draft`) |
+| `ready` | `missing` is empty: every pre-check passes and every self-check (`checks` names all eight, each complete; #463 S2-10: `cases` the eighth): `record stop` would write the package | the last missing item done | `record stop` (`packaged`), or a write that leaves something missing (`draft`) |
 | `packaged` | stopped, its package written (`artifact`), and nothing changed since (no `amended_at_unix_ms`); nothing is checked again, `missing`, `checks` and `checks_after` are empty; `sources` names what its package holds (#463 S2-1b fix round 1) | `record stop` | `record mark` after the stop ("Marking after stop"): then `ready` or `draft` by the rows above, until `record stop` generates the package again |
 
 `record archive` keeps a draft as it is (a manifest n+1); nothing done is lost. A recording made
@@ -4216,6 +4223,11 @@ guard execution still requires the corresponding frames, provider and Runtime ev
    the cross-check `partially_evaluated`. Every refusal comes before every warning. The result is the
    cross-check's `endings[{ending, outcome_key, page, frames[{frame_id, result}], usual}]` (`usual`:
    `distinct`, `passes` or `not_evaluated`), as `lab.endings`, present only with an ending.
+10. **Regression cases** (#463 S2-10, 0.12.69; the self-check `cases`, the last, run once every
+    check above and the final package passed, since it reads the final package): the regression
+    cases made from the recording, each run on the final package by the one runner of the case
+    contract before it is written; a case that fails is `record_case_failed` (3). See "Regression
+    cases written with the package" below.
 
 Warnings never refuse. The provenance and the output carry the same warnings.
 
@@ -4236,6 +4248,91 @@ nothing, of a select and of a package with an application step judges one frame,
 failure at most. Once the cross-check failed, its arrival gates and entry overlay (items 4 and 5,
 warnings only) are not evaluated. No check decides otherwise than before, and the package
 generated is the same.
+
+### Regression cases written with the package
+
+#463 S2-10 (0.12.69; the coordinator's work order on board #463: the rules below are the
+coordinator's). A package of a resource repository comes with regression cases
+([resource-regression-case.md](resource-regression-case.md)): scenes on which its pages must be
+recognised. The recording already knows them (which screen each step was on, the final screen, the
+frame each ending was taken from), so `record stop` writes them with the package and runs each
+before it writes it, by the one runner of the case contract: a case written is one that passed on
+the package it came with.
+
+- **What is written.** One case per effective step that has a press and a page, on the frame its
+  press was sent on: the stored frame its click's or application operation's `before_frame` names
+  while it is a live frame of the step, otherwise (a press declared offline, a step whose frame was
+  replaced since) the step's primary frame. One for the final screen, the last step's primary
+  frame. One per ending, on the frame it was taken from. A dropped or converted step is no
+  effective step and has no case; the application entry step, which has no page and no frame, has
+  none. A case expects its page (`expect.observe.page`, as the package's page detection names it,
+  `<game>/<page>`) and every recognition target that page requires to pass (`expect.recognize`,
+  `{target, passed: true}`, the page's required marks by their targets, an anchor as
+  `page/<page>`), and nothing else. Its `id` says where it comes from: `step_<nn>` (the step's
+  number in the package, as its page), `final`, or `ending_<outcome_key>`. Its `source` names only
+  the recording and the step: `{record_id, step}` (the step's serial number, as `record mark
+  --step` takes it), `{record_id, final: true}` or `{record_id, ending}` (the ending's key); never a
+  path of the machine, an instance, an account or a time.
+- **The scene** is a canvas of the recording's size filled black (`[0, 0, 0]`, as the
+  repositories' cases are), on which are pasted, where they are in the frame, the regions every
+  recognition target of the whole package reads, as the admitted package declares them: a
+  template's search region (and its colour check's region), a colour or colour digest probe's
+  region, an OCR or NN target's region. A check, a value test and a click-only target read nothing
+  of their own: a check's members and a value test's sides are targets of the package themselves.
+  Not only the case's page's targets: a page told apart from the case's page by a target it forbids
+  sees that target's region as on the frame. `scene_construction.rects` lists each pasted rectangle
+  once, its `content` the targets that read it; `scene_sha256` is the SHA-256 of the PNG's bytes.
+  Never a whole frame, and nothing outside those regions, so the runner's scene rule holds without
+  its warning. A target whose region is no fixed rectangle inside the frame (relative to a
+  template, or the whole frame; no recording generates one) cannot be pasted where it is read, and
+  the check stops there with an error.
+- **The run before the write.** Each case is run by `run_regression_case_on_bundle` on the final
+  package, admitted in memory from the very files `record stop` writes: no file is read for it and
+  nothing is evaluated a second way. Its verdict decides: `failed`, the case is not written and is
+  a failure of the self-check `cases`; `passed`, written; `partial` or `not_run`, written and named
+  in `not_proven` with the runner's own reasons (`ocr_unavailable`: the Lab has no text-recognition
+  model for a page or a target that needs one; `frames_required`: a target that reads several
+  frames), so that the case is honest about what it proves when it is run where the model is. The
+  bare canvas, the canvas with no patch at all, is run once per package as a case that expects no
+  page; a case whose page is also a page the bare canvas answers (its marks pass where nothing was
+  pasted, a dark colour for one) proves nothing of its page: it is written and named with the
+  warning `record_case_bare_canvas`.
+- **The self-check `cases`** is the last self-check ("Self-checks", item 10): it reads the final
+  package, so it runs only when every check before it passed. Under `record stop` its first
+  failing case is the refusal `record_case_failed` (3, `details{case, page, frame_id, step,
+  artifact_step | outcome_key, verdict, checks}`, `checks` the runner's failed checks; the outcome's
+  `regression_problem` the word of the first), and nothing is written, as at any self-check's
+  failure. `record ready` lists every failing case, one item each ("What a recording still lacks"):
+  `what` `cases`, `code` `record_case_failed`, the step (or none, for an ending) and its press
+  frame, and in `details` `case` (the case's id), `page`, `frames` (the case's frame), `outcome_key`
+  (an ending's) and `checks`. A case fails most often because two pages of the package pass on one
+  recorded screen (`page_conflict`): the cross-check judges each page on its own frames, and a page
+  that passes on the screen before its step only warns (`arrival_unconfirmed`), but a case's page
+  detection evaluates every page of the package. Tell the screens apart with a mark of the case's
+  own screen, or a forbidden mark on the other page.
+- **Where they are written.** At `record stop` and at its regeneration ("Marking after stop"),
+  beside the package: `lab/out/<package_id>.cases/<case id>/`, holding `case.json` and
+  `scene.png`. The set is written whole: into a new directory beside it,
+  `<package_id>.cases.part-<unix_ms>` (a name no entry holds), then an existing directory is set
+  aside as `<package_id>.cases.old-<unix_ms>` and kept, never deleted, as "Writing" keeps a replaced
+  package, and the new one is renamed into place; a reader finds the old set, the new one or none,
+  never part of one. A failure is `record_state_io_failed` (5) with `details.written_files` (the
+  part directory among them) and `stage`; when the new set cannot be renamed into place the old one
+  is renamed back (`restored`). Under `--dry-run` nothing is written and the answer lists what
+  would be. The cases stay in the recording's own directory; they enter a resource repository only
+  through adoption.
+- **The answer**: `lab.cases{directory, status, kept?, counts{steps, final, endings}, ids,
+  not_proven[{case, verdict, reasons}], warnings[{code, case, page, message}], limits,
+  limit_texts}`: `status` is `written` or `replaced` (`to_write` or `to_replace` under `--dry-run`);
+  `kept` the directory an earlier set was set aside as; `ids` the cases in the order the recording
+  gives them (the steps in path order, the final screen, the endings in the order taken);
+  `limits` is `["self_agreement"]` (the closed vocabulary `case_limit`) and
+  `limit_texts.self_agreement` its text: these cases were made from the frames the package was
+  built from; that they pass shows the package recognises the screens it was recorded on and says
+  nothing about screens it did not meet.
+- **What does not change.** The package `record stop` writes is byte for byte what it was; the
+  other self-checks judge as before, in their order, with their codes; no stored frame changes. No
+  region, choice or value is proposed, and no image is reviewed or refused for its content.
 
 ### Writing
 
@@ -4265,6 +4362,10 @@ D9: an output of the same name is replaced in place, never refused):
    `game`, `server`, `locale`, `timeout_ms`, `arrival_timeout_ms`,
    `application_arrival_timeout_ms` (defaults applied), `generated_at_unix_ms`); then the
    session file is stopped.
+
+#463 S2-10: after step 3 the package's regression cases are written whole beside it,
+`lab/out/<package_id>.cases/` ("Regression cases written with the package"); `lab.written_files`
+and `lab.kept` name the package's files only, `lab.cases` its cases' directory.
 
 Every replacement (steps 2 and 3) writes `<name>.part` beside the target, sets an existing
 target aside as `<name>.old-<unix_ms>` and renames the `.part` file to the target. #464 P4 (since
@@ -4296,10 +4397,14 @@ equal value is accepted.
  pages, transitions, optional_steps[{step, op, settle_ms, skip_to, same_as}], selects?, endings?,
  timeouts{timeout_ms, step_timeout_ms, arrival_timeout_ms,
  application_arrival_timeout_ms}, warnings, arrival_by_time_window, marks_not_evaluated,
- steps_needing_review, cross_check, first_decision, entry_overlay,
+ steps_needing_review, cross_check, first_decision, entry_overlay, cases,
  requires, prerequisite_entry_example, binding_example, adoption_example, task_run_example,
  catalog_on_failure_example, binding_requires}
 ```
+
+- #463 S2-10 (0.12.69): `cases` is the package's regression cases, written beside it or (under
+  `--dry-run`) to be written: `{directory, status, kept?, counts, ids, not_proven, warnings,
+  limits, limit_texts}` ("Regression cases written with the package").
 
 - #464 P4 (since 0.12.63): `kept` lists the files a replacement set aside and kept ("Writing"),
   present only when one was. `adoption_example` is how the package becomes a member of its game's
@@ -4387,7 +4492,7 @@ equal value is accepted.
 | exit | codes |
 |---|---|
 | 2 | `validation_failed` (Workflow #449 REC-ARCH fix 1: also `record archive --copy-to` empty, blank or relative), `record_flag_unsupported`, `record_flag_takes_no_value`, `record_state_dir_unsupported`, `record_frame_unreadable`, `record_transition_window_invalid`, `record_transition_has_click`, `record_application_action_invalid`, `record_application_with_click`, `record_optional_settle_invalid`, `record_locale_missing`, `record_lab_dir_invalid`, `record_requires_invalid` |
-| 3 | `record_session_not_active` (Workflow #390 LAB-2: also, with `details.reason: "recording_stopped"`, a change a stopped recording does not take), `record_lab_unavailable`, `record_instance_mismatch`, `record_step_not_found`, `record_step_not_last`, `record_step_frame_missing`, `record_step_frame_conflict`, `record_frame_size_mismatch`, `record_frame_hash_mismatch`, `record_mark_rejected`, `record_mark_id_conflict`, `record_mark_id_reserved`, `record_mark_in_use`, `record_asset_name_conflict`, `record_click_exists`, `record_click_executed`, `record_click_source_invalid`, `record_click_follow_invalid`, `record_click_rect_conflict`, `record_click_outside_step_rect` (#463 S2-5: also, with `details.reason: "recorded_point_outside_box"`, a press box that does not hold the point a press recorded by its point pressed), `record_step_click_missing`, `record_step_click_not_executed`, `record_gesture_execution_unsupported` (#411 Lab BD), `record_guard_family_invalid`, `record_append_failed_after_input`, `record_transition_without_click`, `record_transition_exists`, `record_to_transition_invalid`, `record_busy`, `record_application_entry_invalid`, `record_step_effect_exists`, `record_optional_first_step`, `record_optional_application`, `record_select_invalid` (#463 R1), `record_ending_invalid` (#463 R2), `record_optional_after_invalid` (#463 R4), `record_frame_unknown`, `record_drop_unproven` (#463 S2-7; the stage-two train named them here); stop: `record_no_steps`, `record_application_entry_not_first`, `record_step_without_recognition`, `record_final_step_has_click`, `record_too_many_steps`, `record_step_after_stop_invalid`, `record_application_without_home`, `record_click_follow_invalid`, `record_optional_first_step`, `record_optional_final_step`, `record_optional_application`, `record_optional_restart_segment_end`, `record_step_self_mismatch`, `record_optional_step_ambiguous`, `record_optional_skip_target_insensitive`, `record_select_invalid` (#463 R1), `record_ending_invalid`, `record_ending_ambiguous` (#463 R2), `record_artifact_admission_failed`, `record_requires_conflict`, `record_stop_option_conflict`, and (Workflow #449 REC-ARCH) `record_session_not_active` with `details.reason: "recording_archived"`, and (Workflow #392 DA-5cd fix round 1) `record_size_not_base`; start (Workflow #392 DA-5cd): `record_display_not_base`; every recording path before it sends anything (the train of DA-5): `record_display_not_base`, `record_size_not_base`, `record_frame_size_mismatch`; archive and reopen (Workflow #449 REC-ARCH): `record_session_not_active`, `record_session_active` (reopen), `record_not_archived`, `record_archive_target_not_empty`, `record_instance_mismatch`, `record_lab_unavailable` |
+| 3 | `record_session_not_active` (Workflow #390 LAB-2: also, with `details.reason: "recording_stopped"`, a change a stopped recording does not take), `record_lab_unavailable`, `record_instance_mismatch`, `record_step_not_found`, `record_step_not_last`, `record_step_frame_missing`, `record_step_frame_conflict`, `record_frame_size_mismatch`, `record_frame_hash_mismatch`, `record_mark_rejected`, `record_mark_id_conflict`, `record_mark_id_reserved`, `record_mark_in_use`, `record_asset_name_conflict`, `record_click_exists`, `record_click_executed`, `record_click_source_invalid`, `record_click_follow_invalid`, `record_click_rect_conflict`, `record_click_outside_step_rect` (#463 S2-5: also, with `details.reason: "recorded_point_outside_box"`, a press box that does not hold the point a press recorded by its point pressed), `record_step_click_missing`, `record_step_click_not_executed`, `record_gesture_execution_unsupported` (#411 Lab BD), `record_guard_family_invalid`, `record_append_failed_after_input`, `record_transition_without_click`, `record_transition_exists`, `record_to_transition_invalid`, `record_busy`, `record_application_entry_invalid`, `record_step_effect_exists`, `record_optional_first_step`, `record_optional_application`, `record_select_invalid` (#463 R1), `record_ending_invalid` (#463 R2), `record_optional_after_invalid` (#463 R4), `record_frame_unknown`, `record_drop_unproven` (#463 S2-7; the stage-two train named them here); stop: `record_no_steps`, `record_application_entry_not_first`, `record_step_without_recognition`, `record_final_step_has_click`, `record_too_many_steps`, `record_step_after_stop_invalid`, `record_application_without_home`, `record_click_follow_invalid`, `record_optional_first_step`, `record_optional_final_step`, `record_optional_application`, `record_optional_restart_segment_end`, `record_step_self_mismatch`, `record_optional_step_ambiguous`, `record_optional_skip_target_insensitive`, `record_select_invalid` (#463 R1), `record_ending_invalid`, `record_ending_ambiguous` (#463 R2), `record_artifact_admission_failed`, `record_case_failed` (#463 S2-10), `record_requires_conflict`, `record_stop_option_conflict`, and (Workflow #449 REC-ARCH) `record_session_not_active` with `details.reason: "recording_archived"`, and (Workflow #392 DA-5cd fix round 1) `record_size_not_base`; start (Workflow #392 DA-5cd): `record_display_not_base`; every recording path before it sends anything (the train of DA-5): `record_display_not_base`, `record_size_not_base`, `record_frame_size_mismatch`; archive and reopen (Workflow #449 REC-ARCH): `record_session_not_active`, `record_session_active` (reopen), `record_not_archived`, `record_archive_target_not_empty`, `record_instance_mismatch`, `record_lab_unavailable` |
 | 4 | `record_click_indeterminate`, `record_click_performed_with_failure`, `record_application_indeterminate` |
 | 5 | `record_lock_failed`, `record_state_io_failed` (Lab state files cannot be read or written; Workflow #449 REC-ARCH: also a copy file that cannot be written), the state directory cannot be created, `record_archive_verify_failed` (Workflow #449 REC-ARCH) |
 | 6 | `record_stop_generation_not_implemented` (a build without the package generator; the #336 L4 build also for a recording with optional steps, `details.reason: "optional_steps"`) |

@@ -86,8 +86,9 @@ const GRAY: [u8; 3] = [60, 60, 60];
 const COLORS: [[u8; 3]; 3] = [[230, 20, 20], [20, 230, 20], [20, 20, 230]];
 /// Each screen's square, a colour mark's region.
 const SQUARE: RecordRect = rect(0, 0, 40, 40);
-/// The self-checks of `record stop`, in the order they run.
-const EVERY_CHECK: [&str; 7] = [
+/// The self-checks of `record stop`, in the order they run (#463 S2-10, adapted: `cases` is the
+/// last).
+const EVERY_CHECK: [&str; 8] = [
     "frames",
     "admission",
     "first_decision",
@@ -95,6 +96,7 @@ const EVERY_CHECK: [&str; 7] = [
     "endings",
     "selects",
     "final_package",
+    "cases",
 ];
 
 const fn rect(x: i32, y: i32, width: i32, height: i32) -> RecordRect {

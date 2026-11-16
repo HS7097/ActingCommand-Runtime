@@ -90,8 +90,9 @@ const SQUARE: RecordRect = RecordRect {
 };
 /// The point each tap presses, on the gray.
 const POINT: RecordPoint = RecordPoint { x: 100, y: 50 };
-/// The self-checks of `record stop`, in the order they run.
-pub(crate) const EVERY_CHECK: [&str; 7] = [
+/// The self-checks of `record stop`, in the order they run (#463 S2-10, adapted: `cases` is the
+/// last).
+pub(crate) const EVERY_CHECK: [&str; 8] = [
     "frames",
     "admission",
     "first_decision",
@@ -99,7 +100,10 @@ pub(crate) const EVERY_CHECK: [&str; 7] = [
     "endings",
     "selects",
     "final_package",
+    "cases",
 ];
+/// #463 S2-10 (adapted): the checks a failed check before the final package leaves unrun.
+const AFTER_SELECTS: [&str; 2] = ["final_package", "cases"];
 
 // Fix round 1: the endings' squares, the colour a broken mark expects, and the poison colour of
 // the second ending's text patch, which only its screen shows and on which the scripted OCR model
@@ -617,7 +621,7 @@ fn s21c_three_frames_that_fail_the_cross_check_are_three_items_and_stop_answers_
     // Every check before the final package ran to its end; the final package is built of what they
     // gave, so it did not run.
     assert_eq!(ready["checks"], complete(&EVERY_CHECK[..6]), "{ready}");
-    assert_eq!(ready["checks_after"], json!(["final_package"]), "{ready}");
+    assert_eq!(ready["checks_after"], json!(AFTER_SELECTS), "{ready}");
 
     // `record stop` answers the first failure with the code it answers today.
     let error = bench.stop_refusal();
@@ -652,7 +656,7 @@ fn s21c_two_self_checks_that_fail_are_listed_in_the_order_the_checks_run() {
     );
     assert_eq!(ready["missing_total"], 2, "{ready}");
     assert_eq!(ready["checks"], complete(&EVERY_CHECK[..6]), "{ready}");
-    assert_eq!(ready["checks_after"], json!(["final_package"]), "{ready}");
+    assert_eq!(ready["checks_after"], json!(AFTER_SELECTS), "{ready}");
 
     // `record stop` answers the first, the first decision's refusal.
     let error = bench.stop_refusal();
@@ -792,7 +796,7 @@ fn s21c_fix1_a_check_that_meets_an_error_says_check_error_and_lists_it_last() {
         ]),
         "{ready}"
     );
-    assert_eq!(ready["checks_after"], json!(["final_package"]), "{ready}");
+    assert_eq!(ready["checks_after"], json!(AFTER_SELECTS), "{ready}");
 
     // `record stop` answers the first failure the endings met.
     let error = bench.stop_refusal_with(&bench.read);
@@ -881,7 +885,7 @@ fn s21c_fix1_the_endings_check_lists_every_ending_that_fails() {
         "{ready}"
     );
     assert_eq!(ready["checks"], complete(&EVERY_CHECK[..6]), "{ready}");
-    assert_eq!(ready["checks_after"], json!(["final_package"]), "{ready}");
+    assert_eq!(ready["checks_after"], json!(AFTER_SELECTS), "{ready}");
 
     let error = bench.stop_refusal();
     assert_eq!(error.code, "record_step_self_mismatch", "{}", error.message);
@@ -930,7 +934,7 @@ fn s21c_fix1_the_selects_check_lists_every_unread_slot_of_every_frame() {
         "{ready}"
     );
     assert_eq!(ready["checks"], complete(&EVERY_CHECK[..6]), "{ready}");
-    assert_eq!(ready["checks_after"], json!(["final_package"]), "{ready}");
+    assert_eq!(ready["checks_after"], json!(AFTER_SELECTS), "{ready}");
 
     let error = bench.stop_refusal_with(&bench.read);
     assert_eq!(error.code, "record_step_self_mismatch", "{}", error.message);

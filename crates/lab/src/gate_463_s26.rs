@@ -119,8 +119,9 @@ const NOT_FOUND: &str = "neutral_task_not_found";
 // Fix round 1: the pop-up's gray and its color mark.
 const POPUP_GRAY: u8 = 120;
 const POPUP_MARK: &str = "popup/notice";
-// The self-checks of `record stop`, in the order they run.
-const EVERY_CHECK: [&str; 7] = [
+// The self-checks of `record stop`, in the order they run (#463 S2-10, adapted: `cases` is the
+// last).
+const EVERY_CHECK: [&str; 8] = [
     "frames",
     "admission",
     "first_decision",
@@ -128,6 +129,7 @@ const EVERY_CHECK: [&str; 7] = [
     "endings",
     "selects",
     "final_package",
+    "cases",
 ];
 
 // The gray value of a marker pixel and the name the provider reads from it.

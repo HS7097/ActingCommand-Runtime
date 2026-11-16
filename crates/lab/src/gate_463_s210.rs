@@ -1,0 +1,995 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
+// #463 S2-10 (contracts/lab-recording.md, "Regression cases written with the package";
+// contracts/resource-regression-case.md; register §1.441): `record stop` writes the package's
+// regression cases beside it, `lab/out/<package_id>.cases/<case id>/`, each run first on the package
+// by the one runner of the case contract. A recording is made as stage one makes it (taps through
+// `record_press` with a fake Runtime, its captures taking the scripted screens and the caller's clock
+// moving only by its waits; three taps give four steps whose live frames are f0001, f0003, f0005 and
+// f0006), then marked with colour marks. Frames are synthetic 160x90 screens of gray with squares of
+// one colour; no Runtime, no device, no OCR model; the tests read no clock and never sleep.
+// - `s210_three_steps_and_an_ending_write_five_cases_that_pass_read_from_disk` (1): the stop writes
+//   four cases, the ending taken after it a fifth on the regeneration; each in the contract's form,
+//   each passing when read from disk and run by `run_regression_case` on the written package.
+// - `s210_the_package_is_byte_for_byte_what_it_is_without_the_cases` (2): the package the
+//   self-checks before `cases` build, from the recording as it was, is the file `record stop` wrote.
+// - `s210_a_scene_holds_no_pixel_of_the_frame_outside_the_regions_the_targets_read` (3): every pixel
+//   no target reads is painted a marker colour; no scene holds it, every pixel outside the
+//   rectangles is the canvas colour, and the runner's scene rule warns nothing.
+// - `s210_a_page_told_apart_by_another_pages_forbidden_target_passes` (4): step 2's page also passes
+//   on step 1's screen but forbids step 3's blue mark, which only steps 1 and 3 show; step 1's case
+//   holds that mark's region and passes.
+// - `s210_the_dry_run_writes_nothing_and_lists_five_and_a_regeneration_replaces_the_cases` (5).
+// - `s210_cases_that_fail_are_listed_by_record_ready_and_refuse_record_stop` (6): screens 1 and 2
+//   differ only where no target reads, so on each both pages pass: two failing cases, both listed by
+//   `record ready`; `record stop` refuses the first and writes no case.
+// - `s210_a_page_that_needs_text_recognition_is_written_and_named_not_proven` (7).
+// - `s210_a_page_the_bare_canvas_answers_is_written_with_the_warning` (8): step 2's square is black.
+// - `s210_a_dropped_middle_step_has_no_case_and_a_source_names_no_path` (9).
+
+use crate::recording::generate::{
+    DEFAULT_APPLICATION_ARRIVAL_TIMEOUT_MS, DEFAULT_ARRIVAL_TIMEOUT_MS, StopSettings,
+    plan as generate_plan,
+};
+use crate::recording::model::LabRecording;
+use crate::recording::store::{hex_sha256, lab_dir, old_record_path, recording_path};
+use crate::recording_api::package_without_cases;
+use crate::{
+    AfterCapture, AttachFrameRequest, CapturedFrame, ClickEffect, ClickPlan, CommitClickRequest,
+    LAB_RECORD_MARK_SCHEMA, LabCode, LabOcr, MarkOutcome, MarkRequest, PlanClickRequest,
+    PointPress, REGRESSION_CASE_SCHEMA, RecordFramePorts, RecordPoint, RecordPressRequest,
+    RecordRect, RecordStartOptions, RecordStopOptions, RecordingLock, RegressionVerdict,
+    record_mark, record_press, record_ready, record_start, record_stop, run_regression_case,
+};
+use actingcommand_contract::{InputFrameReference, LabError, LabResult};
+use actingcommand_device::{CaptureBackendName, Frame, PixelFormat};
+use actingcommand_pack_containment::{
+    ContainmentLimits, ContentContainer, expand_content_container,
+};
+use actingcommand_recognition::Scene;
+use serde_json::{Value, json};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+use tempfile::TempDir;
+
+const INSTANCE: &str = "neutral.instance";
+const RECORD_ID: &str = "record_0463_s210";
+const TASK_ID: &str = "neutral_task";
+/// The package's id, `<game>.<server>.<task_id>`.
+const PACKAGE_ID: &str = "neutral.test.neutral_task";
+const STARTED_AT: u64 = 1_700_000_000_000;
+const WIDTH: u32 = 160;
+const HEIGHT: u32 = 90;
+const GRAY: [u8; 3] = [60, 60, 60];
+const RED: [u8; 3] = [230, 20, 20];
+const GREEN: [u8; 3] = [20, 230, 20];
+const BLUE: [u8; 3] = [20, 20, 230];
+const YELLOW: [u8; 3] = [230, 230, 20];
+const MAGENTA: [u8; 3] = [230, 20, 230];
+const CYAN: [u8; 3] = [20, 230, 230];
+const WHITE: [u8; 3] = [255, 255, 255];
+const BLACK: [u8; 3] = [0, 0, 0];
+/// The colour test 3 paints every pixel of a screen that no target reads.
+const MARKER: [u8; 3] = [201, 13, 177];
+/// The ending taken after the stop, and its mark.
+const ALPHA_KEY: &str = "neutral_task_alpha";
+const ALPHA_MARK: &str = "ending/alpha";
+/// The made-up OCR model of test 7's OCR mark; no test loads it.
+const MODEL_SHA256: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+/// The ids of the five cases of test 1 and test 5, in the order the answer gives them.
+const FIVE: [&str; 5] = [
+    "step_01",
+    "step_02",
+    "step_03",
+    "final",
+    "ending_neutral_task_alpha",
+];
+
+const fn rect(x: i32, y: i32, width: i32, height: i32) -> RecordRect {
+    RecordRect {
+        x,
+        y,
+        width,
+        height,
+    }
+}
+
+/// Each screen's page square, a colour mark's region.
+const SQUARE: RecordRect = rect(0, 0, 16, 16);
+/// Test 4's second and third squares.
+const SECOND: RecordRect = rect(32, 0, 16, 16);
+const THIRD: RecordRect = rect(64, 0, 16, 16);
+/// A square no target reads (test 6).
+const UNREAD: RecordRect = rect(100, 40, 16, 16);
+/// Test 7's OCR mark's region.
+const TEXT_AREA: RecordRect = rect(40, 40, 32, 16);
+/// The point each tap presses, on no square.
+const POINT: RecordPoint = RecordPoint { x: 130, y: 70 };
+
+// Whether `area` covers the pixel at `(x, y)`.
+fn covers(area: RecordRect, x: u32, y: u32) -> bool {
+    let (column, row) = (i64::from(x), i64::from(y));
+    column >= i64::from(area.x)
+        && row >= i64::from(area.y)
+        && column < i64::from(area.x) + i64::from(area.width)
+        && row < i64::from(area.y) + i64::from(area.height)
+}
+
+// The PNG of a screen of `background` with each of `squares` in its colour.
+fn screen_on(background: [u8; 3], squares: &[(RecordRect, [u8; 3])]) -> Vec<u8> {
+    let mut pixels = Vec::with_capacity((WIDTH * HEIGHT * 3) as usize);
+    for y in 0..HEIGHT {
+        for x in 0..WIDTH {
+            let color = squares
+                .iter()
+                .find(|(area, _)| covers(*area, x, y))
+                .map_or(background, |(_, color)| *color);
+            pixels.extend(color);
+        }
+    }
+    Frame::from_pixels(
+        WIDTH,
+        HEIGHT,
+        pixels,
+        PixelFormat::Rgb8,
+        CaptureBackendName::FixtureSimulation,
+    )
+    .expect("fixture frame")
+    .encode_png_fast()
+    .expect("fixture PNG")
+}
+
+// A gray screen with each of `squares` in its colour.
+fn screen(squares: &[(RecordRect, [u8; 3])]) -> Vec<u8> {
+    screen_on(GRAY, squares)
+}
+
+// Four screens, each with its page square in its own colour.
+fn four_screens() -> [Vec<u8>; 4] {
+    [RED, GREEN, BLUE, YELLOW].map(|color| screen(&[(SQUARE, color)]))
+}
+
+// The colour mark `id` over `area`.
+fn color(id: &str, area: RecordRect) -> Value {
+    json!({"id": id, "family": "color", "region": area})
+}
+
+// The OCR mark `id` over `area`, of a made-up model: without an OCR model it is never evaluated.
+fn ocr(id: &str, area: RecordRect) -> Value {
+    json!({"id": id, "family": "ocr", "region": area, "languages": ["en"], "timeout_ms": 1000,
+           "match_mode": "exact", "expected": ["TEXT"], "case_sensitive": false,
+           "minimum_confidence": 0.8, "model_ref": "neutral-ocr", "model_sha256": MODEL_SHA256})
+}
+
+fn request(mut value: Value) -> MarkRequest {
+    value["schema_version"] = json!(LAB_RECORD_MARK_SCHEMA);
+    serde_json::from_value(value).expect("a record mark request")
+}
+
+// What the command hands the recording for a performed input: no carrier package, no Runtime
+// frames.
+fn receipt() -> CommitClickRequest {
+    CommitClickRequest {
+        effect: ClickEffect::Performed,
+        has_failure: false,
+        carrier_package: None,
+        req_id: None,
+        correlation_id: None,
+        action_id: None,
+        lease_id: None,
+        failure: None,
+        before: None,
+        after: None,
+    }
+}
+
+/// The fake Runtime's captures and the caller's clock: the screens its captures take, in order,
+/// and the clock, which moves only by the waits.
+struct Screens {
+    shots: VecDeque<Vec<u8>>,
+    taken: u32,
+    now: Duration,
+}
+
+impl RecordFramePorts for Screens {
+    fn wait(&mut self, duration: Duration) {
+        self.now += duration;
+    }
+
+    fn elapsed(&mut self) -> Duration {
+        self.now
+    }
+
+    fn capture(&mut self) -> LabResult<CapturedFrame> {
+        let png = self
+            .shots
+            .pop_front()
+            .expect("a capture the test did not script");
+        self.taken += 1;
+        Ok(CapturedFrame {
+            frame: AttachFrameRequest {
+                png,
+                source: "lab_capture".to_owned(),
+                runtime_artifact: None,
+                capture_backend: Some("adb_screencap".to_owned()),
+                freshness: None,
+            },
+            input_frame: Some(InputFrameReference {
+                frame_id: serde_json::from_value(json!(format!("frame_{:032x}", self.taken)))
+                    .expect("a frame id"),
+                width: WIDTH,
+                height: HEIGHT,
+            }),
+        })
+    }
+}
+
+// A state directory with an active session of `INSTANCE` and its Lab recording, its game, server
+// and locale known, without an OCR model. The lock is held as one command holds it and dropped
+// before the directory.
+struct Bench {
+    lock: RecordingLock,
+    ocr: LabOcr,
+    temp: TempDir,
+}
+
+impl Bench {
+    fn new() -> Self {
+        let temp = TempDir::new().expect("temporary directory");
+        let state = temp.path().join("state");
+        fs::create_dir_all(&state).expect("state directory");
+        let lock = RecordingLock::acquire(&state, INSTANCE, "gate_463_s210", "Lab-CLI")
+            .expect("recording lock");
+        let bench = Self {
+            lock,
+            ocr: LabOcr::from_vision_root(&temp.path().join("no-vision")),
+            temp,
+        };
+        bench.header("active");
+        record_start(
+            &bench.lock,
+            &RecordStartOptions {
+                game: Some("neutral".to_owned()),
+                server: Some("test".to_owned()),
+                locale: Some("en-US".to_owned()),
+                ..RecordStartOptions::default()
+            },
+        )
+        .expect("record start");
+        bench
+    }
+
+    // The recording of `screens`: one tap on each screen but the last, the screen after it one
+    // capture later.
+    fn recorded(screens: &[Vec<u8>]) -> Self {
+        let bench = Self::new();
+        for pair in screens.windows(2) {
+            bench.press(vec![pair[0].clone(), pair[1].clone()]);
+        }
+        bench
+    }
+
+    fn state(&self) -> PathBuf {
+        self.temp.path().join("state")
+    }
+
+    // The session header, as the `record` command writes it with `status`.
+    fn header(&self, status: &str) {
+        fs::write(
+            old_record_path(&self.state(), INSTANCE),
+            serde_json::to_vec(&json!({
+                "record_id": RECORD_ID,
+                "task_id": TASK_ID,
+                "instance": INSTANCE,
+                "status": status,
+                "started_at_unix_ms": STARTED_AT
+            }))
+            .expect("session JSON"),
+        )
+        .expect("session file");
+    }
+
+    // `tap 130 70 --record`, the fake Runtime performing the input and its captures taking `shots`:
+    // the screen before the press, then the screen after it one capture 800 ms later.
+    fn press(&self, shots: Vec<Vec<u8>>) {
+        let request = RecordPressRequest {
+            click: PlanClickRequest::default(),
+            point_press: Some(PointPress::Tap { point: POINT }),
+            after: AfterCapture {
+                still_ms: Some(0),
+                ..AfterCapture::for_press(Some(800))
+            },
+        };
+        let mut device = Screens {
+            shots: shots.into(),
+            taken: 0,
+            now: Duration::ZERO,
+        };
+        let mut send = |_: &ClickPlan, _: InputFrameReference| -> LabResult<CommitClickRequest> {
+            Ok(receipt())
+        };
+        record_press(&self.lock, &request, &mut send, &mut device).unwrap_or_else(|error| {
+            panic!(
+                "the press: {}: {} {:?}",
+                error.code, error.message, error.details
+            )
+        });
+    }
+
+    // `record mark` of `value`, which must stand.
+    fn marked(&self, value: Value) -> MarkOutcome {
+        record_mark(&self.lock, &request(value), false, &self.ocr).unwrap_or_else(|error| {
+            panic!(
+                "record mark: {}: {} {:?}",
+                error.code, error.message, error.details
+            )
+        })
+    }
+
+    // Steps 1 to `steps`, each with the colour mark `square_<step>` on its square.
+    fn squares(&self, steps: u32) {
+        for step in 1..=steps {
+            self.marked(json!({
+                "step": step,
+                "add": [color(&format!("square_{step}"), SQUARE)]
+            }));
+        }
+    }
+
+    // The ending `ALPHA_KEY` taken from a magenta screen after the stop, the session stopped first
+    // as the command leaves it.
+    fn take_alpha_ending(&self) {
+        self.header("stopped");
+        let frame = self.temp.path().join("alpha.png");
+        fs::write(&frame, screen(&[(SQUARE, MAGENTA)])).expect("the ending's frame");
+        self.marked(json!({"ending": {
+            "frame": frame.display().to_string(),
+            "outcome_key": ALPHA_KEY,
+            "add": [color(ALPHA_MARK, SQUARE)]
+        }}));
+    }
+
+    // `record stop` (with `dry_run`): the `lab` output with its status.
+    fn stop(&self, dry_run: bool) -> Result<Value, LabError> {
+        let options = RecordStopOptions {
+            dry_run,
+            ..RecordStopOptions::default()
+        };
+        record_stop(&self.lock, &options, &self.ocr).map(|outcome| {
+            let mut lab = serde_json::to_value(&outcome.lab).expect("lab JSON");
+            lab["lab_status"] = json!(outcome.lab_status);
+            lab
+        })
+    }
+
+    // `record stop` (with `dry_run`), which must stand.
+    fn stopped(&self, dry_run: bool) -> Value {
+        self.stop(dry_run).unwrap_or_else(|error| {
+            panic!(
+                "record stop: {}: {} {:?}",
+                error.code, error.message, error.details
+            )
+        })
+    }
+
+    // `record ready`, read as the command reads it: the instance's recording, no option.
+    fn ready(&self) -> Value {
+        let outcome = record_ready(
+            &self.state(),
+            INSTANCE,
+            None,
+            &RecordStopOptions::default(),
+            &self.ocr,
+        )
+        .unwrap_or_else(|error| panic!("record ready: {}: {}", error.code, error.message));
+        serde_json::to_value(&outcome).expect("record ready JSON")
+    }
+
+    // The package's output directory, `lab/out`.
+    fn out(&self) -> PathBuf {
+        lab_dir(&self.state(), RECORD_ID).join("out")
+    }
+
+    // The package `record stop` wrote (`lab`), expanded into a checkout's `packs/<package_id>/`.
+    fn package(&self, lab: &Value) -> PathBuf {
+        let bytes = fs::read(lab["path"].as_str().expect("package path")).expect("package");
+        let container = if lab["container"] == "zip" {
+            ContentContainer::Zip
+        } else {
+            ContentContainer::Json
+        };
+        let entries = expand_content_container(&bytes, container, ContainmentLimits::default())
+            .expect("package container");
+        let root = self.temp.path().join("repo").join("packs").join(PACKAGE_ID);
+        for (name, bytes) in entries {
+            let file = name
+                .split('/')
+                .fold(root.clone(), |path, part| path.join(part));
+            fs::create_dir_all(file.parent().expect("a parent")).expect("package directories");
+            fs::write(file, bytes).expect("package file");
+        }
+        root
+    }
+}
+
+// The cases' directory `record stop` answered (`lab.cases.directory`).
+fn cases_dir(lab: &Value) -> PathBuf {
+    let directory = PathBuf::from(
+        lab["cases"]["directory"]
+            .as_str()
+            .unwrap_or_else(|| panic!("no cases directory in {lab}")),
+    );
+    assert!(
+        directory.ends_with(format!("out/{PACKAGE_ID}.cases")),
+        "{}",
+        directory.display()
+    );
+    directory
+}
+
+// Each case of the cases' directory `dir` by its directory's name: its `case.json` and its scene,
+// the only two files of its directory.
+fn written_cases(dir: &Path) -> BTreeMap<String, (Vec<u8>, Vec<u8>)> {
+    let mut cases = BTreeMap::new();
+    for entry in fs::read_dir(dir).expect("the cases' directory") {
+        let path = entry.expect("an entry").path();
+        let names = fs::read_dir(&path)
+            .expect("a case's directory")
+            .map(|file| {
+                file.expect("a file")
+                    .file_name()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            names,
+            BTreeSet::from(["case.json".to_owned(), "scene.png".to_owned()]),
+            "{}",
+            path.display()
+        );
+        let name = path
+            .file_name()
+            .expect("a name")
+            .to_string_lossy()
+            .into_owned();
+        cases.insert(
+            name,
+            (
+                fs::read(path.join("case.json")).expect("case.json"),
+                fs::read(path.join("scene.png")).expect("scene.png"),
+            ),
+        );
+    }
+    cases
+}
+
+// The names of `cases`.
+fn names(cases: &BTreeMap<String, (Vec<u8>, Vec<u8>)>) -> BTreeSet<&str> {
+    cases.keys().map(String::as_str).collect()
+}
+
+fn case_of(bytes: &[u8]) -> Value {
+    serde_json::from_slice(bytes).expect("case JSON")
+}
+
+// The rectangles a case's scene is built of.
+fn rects_of(case: &Value) -> Vec<RecordRect> {
+    case["scene_construction"]["rects"]
+        .as_array()
+        .unwrap_or_else(|| panic!("no rects in {case}"))
+        .iter()
+        .map(|item| {
+            let member = |name: &str| {
+                item[name]
+                    .as_i64()
+                    .and_then(|value| i32::try_from(value).ok())
+                    .unwrap_or_else(|| panic!("no {name} in {item}"))
+            };
+            rect(member("x"), member("y"), member("width"), member("height"))
+        })
+        .collect()
+}
+
+// The targets one rectangle of a case's scene names as its content.
+fn content_of(case: &Value, index: usize) -> BTreeSet<String> {
+    case["scene_construction"]["rects"][index]["content"]
+        .as_str()
+        .unwrap_or_else(|| panic!("no content in {case}"))
+        .split(", ")
+        .map(str::to_owned)
+        .collect()
+}
+
+// The work order's test 1: three steps with a press each and the final screen give four cases at
+// the stop; the ending taken after it gives a fifth at the regeneration. Each is in the contract's
+// form (its id, its package, its scene and how it was made, its source, what it expects), and each,
+// read from the disk, passes when `run_regression_case` runs it on the package written.
+#[test]
+fn s210_three_steps_and_an_ending_write_five_cases_that_pass_read_from_disk() {
+    let bench = Bench::recorded(&four_screens());
+    bench.squares(4);
+    let generated = bench.stopped(false);
+    assert_eq!(generated["lab_status"], "generated", "{generated}");
+    assert_eq!(
+        generated["cases"]["counts"],
+        json!({"steps": 3, "final": 1, "endings": 0}),
+        "{generated}"
+    );
+    assert_eq!(generated["cases"]["status"], "written", "{generated}");
+
+    bench.take_alpha_ending();
+    let lab = bench.stopped(false);
+    assert_eq!(lab["lab_status"], "regenerated", "{lab}");
+    let answer = &lab["cases"];
+    assert_eq!(
+        answer["counts"],
+        json!({"steps": 3, "final": 1, "endings": 1}),
+        "{answer}"
+    );
+    assert_eq!(answer["ids"], json!(FIVE), "{answer}");
+    assert_eq!(answer["not_proven"], json!([]), "{answer}");
+    assert_eq!(answer["warnings"], json!([]), "{answer}");
+    assert_eq!(answer["limits"], json!(["self_agreement"]), "{answer}");
+    assert!(
+        answer["limit_texts"]["self_agreement"]
+            .as_str()
+            .is_some_and(|text| text.contains("says nothing about screens it did not meet")),
+        "{answer}"
+    );
+
+    let package = bench.package(&lab);
+    let cases = written_cases(&cases_dir(&lab));
+    assert_eq!(names(&cases), FIVE.into_iter().collect(), "{answer}");
+    let expected = [
+        ("step_01", "neutral/step_01", "square_1", json!({"step": 1})),
+        ("step_02", "neutral/step_02", "square_2", json!({"step": 2})),
+        ("step_03", "neutral/step_03", "square_3", json!({"step": 3})),
+        (
+            "final",
+            "neutral/step_04",
+            "square_4",
+            json!({"final": true}),
+        ),
+        (
+            "ending_neutral_task_alpha",
+            "neutral/ending_01",
+            ALPHA_MARK,
+            json!({"ending": ALPHA_KEY}),
+        ),
+    ];
+    for (id, page, target, mut source) in expected {
+        let (case_json, scene) = &cases[id];
+        let case = case_of(case_json);
+        source["record_id"] = json!(RECORD_ID);
+        assert_eq!(
+            case["schema_version"], REGRESSION_CASE_SCHEMA,
+            "{id}: {case}"
+        );
+        assert_eq!(case["id"], id, "{case}");
+        assert_eq!(case["package_id"], PACKAGE_ID, "{case}");
+        assert_eq!(case["scene"], "scene.png", "{case}");
+        assert_eq!(case["source"], source, "{case}");
+        assert_eq!(
+            case["expect"],
+            json!({"observe": {"page": page},
+                   "recognize": [{"target": target, "passed": true}]}),
+            "{case}"
+        );
+        let construction = &case["scene_construction"];
+        assert_eq!(construction["kind"], "roi_patch", "{case}");
+        assert_eq!(
+            construction["canvas"],
+            json!({"width": WIDTH, "height": HEIGHT, "fill": [0, 0, 0]}),
+            "{case}"
+        );
+        assert_eq!(
+            construction["scene_sha256"],
+            json!(hex_sha256(scene)),
+            "{case}"
+        );
+        assert_eq!(rects_of(&case), [SQUARE], "{case}");
+        assert_eq!(
+            content_of(&case, 0),
+            ["square_1", "square_2", "square_3", "square_4", ALPHA_MARK]
+                .map(str::to_owned)
+                .into_iter()
+                .collect(),
+            "{case}"
+        );
+        let verdict = run_regression_case(&package, case_json, scene, &bench.ocr);
+        assert_eq!(
+            verdict.verdict,
+            RegressionVerdict::Passed,
+            "{id}: {verdict:?}"
+        );
+        assert!(verdict.warnings.is_empty(), "{id}: {verdict:?}");
+    }
+}
+
+// The work order's test 2: the package is byte for byte what it is without this slice. The package
+// the self-checks before `cases` build (the code before this slice) from the recording as it stands
+// before the stop is the very file `record stop` writes, beside which it writes four cases.
+#[test]
+fn s210_the_package_is_byte_for_byte_what_it_is_without_the_cases() {
+    let bench = Bench::recorded(&four_screens());
+    bench.squares(4);
+    let recording: LabRecording = serde_json::from_slice(
+        &fs::read(recording_path(&bench.state(), RECORD_ID)).expect("step table"),
+    )
+    .expect("step table JSON");
+    let settings = StopSettings {
+        game: Some("neutral".to_owned()),
+        server: Some("test".to_owned()),
+        locale: Some("en-US".to_owned()),
+        package_id: None,
+        requires: None,
+        timeout_ms: None,
+        arrival_timeout_ms: DEFAULT_ARRIVAL_TIMEOUT_MS,
+        application_arrival_timeout_ms: DEFAULT_APPLICATION_ARRIVAL_TIMEOUT_MS,
+    };
+    let plan = generate_plan(&recording, &settings)
+        .unwrap_or_else(|error| panic!("the plan: {}: {}", error.code, error.message));
+    let without = package_without_cases(&plan, &bench.ocr).expect("the package without its cases");
+
+    let lab = bench.stopped(false);
+    assert_eq!(lab["lab_status"], "generated", "{lab}");
+    assert_eq!(
+        lab["cases"]["ids"],
+        json!(["step_01", "step_02", "step_03", "final"]),
+        "{lab}"
+    );
+    let written = fs::read(lab["path"].as_str().expect("package path")).expect("package");
+    assert!(
+        written == without,
+        "the package record stop wrote is not the package without its cases"
+    );
+}
+
+// The work order's test 3: every pixel of every screen that no target reads is the marker colour.
+// No scene holds a pixel of that colour, every pixel outside its rectangles is the canvas colour,
+// and the runner, run on the written package, passes each case with no warning of its scene rule.
+#[test]
+fn s210_a_scene_holds_no_pixel_of_the_frame_outside_the_regions_the_targets_read() {
+    let screens = [RED, GREEN, BLUE, YELLOW].map(|square| screen_on(MARKER, &[(SQUARE, square)]));
+    let bench = Bench::recorded(&screens);
+    bench.squares(4);
+    let lab = bench.stopped(false);
+    assert_eq!(lab["lab_status"], "generated", "{lab}");
+    let package = bench.package(&lab);
+    let cases = written_cases(&cases_dir(&lab));
+    assert_eq!(names(&cases).len(), 4, "{lab}");
+    for (id, (case_json, scene_png)) in &cases {
+        let case = case_of(case_json);
+        let rects = rects_of(&case);
+        assert_eq!(rects, [SQUARE], "{id}: {case}");
+        let scene = Scene::from_png(scene_png).expect("the scene");
+        assert_eq!((scene.width(), scene.height()), (WIDTH, HEIGHT), "{id}");
+        let (pixels, _) = scene.rgb8_pixels().as_chunks::<3>();
+        for (index, pixel) in (0_u32..).zip(pixels) {
+            let (x, y) = (index % WIDTH, index / WIDTH);
+            assert_ne!(
+                *pixel, MARKER,
+                "{id}: the scene holds the frame at ({x}, {y})"
+            );
+            if !rects.iter().any(|area| covers(*area, x, y)) {
+                assert_eq!(*pixel, BLACK, "{id}: ({x}, {y}) is not the canvas colour");
+            }
+        }
+        let verdict = run_regression_case(&package, case_json, scene_png, &bench.ocr);
+        assert_eq!(
+            verdict.verdict,
+            RegressionVerdict::Passed,
+            "{id}: {verdict:?}"
+        );
+        assert!(verdict.warnings.is_empty(), "{id}: {verdict:?}");
+    }
+}
+
+// The work order's test 4: step 2's page requires the red square, which step 1's screen shows too,
+// and forbids `blue_3`, step 3's blue mark, which step 1's screen shows and step 2's does not. Step
+// 1's page is told apart from step 2's on step 1's screen only by that forbidden target of another
+// page: its case's scene holds `blue_3`'s region (the whole package's regions, not only its own
+// page's), so step 2's page does not pass there and the case passes.
+#[test]
+fn s210_a_page_told_apart_by_another_pages_forbidden_target_passes() {
+    let bench = Bench::recorded(&[
+        screen(&[(SQUARE, RED), (SECOND, BLUE), (THIRD, CYAN)]),
+        screen(&[(SQUARE, RED)]),
+        screen(&[(SQUARE, GREEN), (SECOND, BLUE)]),
+        screen(&[(SQUARE, YELLOW)]),
+    ]);
+    bench.marked(json!({"step": 3, "add": [color("square_3", SQUARE), color("blue_3", SECOND)]}));
+    bench.marked(json!({"step": 1, "add": [color("square_1", SQUARE), color("cyan_1", THIRD)]}));
+    bench.marked(json!({"step": 2, "add": [color("square_2", SQUARE)], "forbid": ["blue_3"]}));
+    bench.marked(json!({"step": 4, "add": [color("square_4", SQUARE)]}));
+    let lab = bench.stopped(false);
+    assert_eq!(lab["lab_status"], "generated", "{lab}");
+    let package = bench.package(&lab);
+    let cases = written_cases(&cases_dir(&lab));
+    let (case_json, scene) = &cases["step_01"];
+    let case = case_of(case_json);
+    let rects = rects_of(&case);
+    let second = rects
+        .iter()
+        .position(|area| *area == SECOND)
+        .unwrap_or_else(|| panic!("the scene holds no region of blue_3: {case}"));
+    assert_eq!(
+        content_of(&case, second),
+        BTreeSet::from(["blue_3".to_owned()]),
+        "{case}"
+    );
+    assert_eq!(
+        case["expect"]["observe"]["page"], "neutral/step_01",
+        "{case}"
+    );
+    let verdict = run_regression_case(&package, case_json, scene, &bench.ocr);
+    assert_eq!(verdict.verdict, RegressionVerdict::Passed, "{verdict:?}");
+}
+
+// The work order's test 5: after the stop wrote four cases and the ending was taken, the dry run
+// lists the five the regeneration would write (`to_replace`) and writes nothing; the regeneration
+// writes the five whole in place of the four, the four set aside and kept as they were.
+#[test]
+fn s210_the_dry_run_writes_nothing_and_lists_five_and_a_regeneration_replaces_the_cases() {
+    let bench = Bench::recorded(&four_screens());
+    bench.squares(4);
+    let generated = bench.stopped(false);
+    let dir = cases_dir(&generated);
+    let before = written_cases(&dir);
+    assert_eq!(
+        names(&before),
+        BTreeSet::from(["final", "step_01", "step_02", "step_03"])
+    );
+    bench.take_alpha_ending();
+    let out_before = fs::read_dir(bench.out())
+        .expect("the output directory")
+        .map(|entry| entry.expect("an entry").file_name())
+        .collect::<BTreeSet<_>>();
+
+    let validated = bench.stopped(true);
+    assert_eq!(validated["lab_status"], "validated", "{validated}");
+    let answer = &validated["cases"];
+    assert_eq!(answer["status"], "to_replace", "{answer}");
+    assert_eq!(answer["ids"], json!(FIVE), "{answer}");
+    assert_eq!(
+        answer["counts"],
+        json!({"steps": 3, "final": 1, "endings": 1}),
+        "{answer}"
+    );
+    assert!(answer.get("kept").is_none(), "{answer}");
+    assert_eq!(written_cases(&dir), before, "the dry run wrote a case");
+    let out_after = fs::read_dir(bench.out())
+        .expect("the output directory")
+        .map(|entry| entry.expect("an entry").file_name())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        out_after, out_before,
+        "the dry run wrote beside the package"
+    );
+
+    let regenerated = bench.stopped(false);
+    assert_eq!(regenerated["lab_status"], "regenerated", "{regenerated}");
+    assert_eq!(regenerated["cases"]["status"], "replaced", "{regenerated}");
+    assert_eq!(cases_dir(&regenerated), dir);
+    let after = written_cases(&dir);
+    assert_eq!(names(&after), FIVE.into_iter().collect());
+    let kept = PathBuf::from(
+        regenerated["cases"]["kept"]
+            .as_str()
+            .unwrap_or_else(|| panic!("no kept directory in {regenerated}")),
+    );
+    assert!(
+        kept.file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with(&format!("{PACKAGE_ID}.cases.old-"))),
+        "{}",
+        kept.display()
+    );
+    assert_eq!(
+        written_cases(&kept),
+        before,
+        "the earlier set is kept as it was"
+    );
+}
+
+// The work order's test 6: screens 1 and 2 show the same red square and differ only in a square no
+// target reads, so step 1's page and step 2's page both pass on each of them: a page told apart
+// only by pixels outside every region. The cases of steps 1 and 2 fail (`page_conflict`): `record
+// ready` lists both as failures of the self-check `cases`, the last, every check complete;
+// `record stop` refuses the first, `record_case_failed`, and writes no case and no package.
+#[test]
+fn s210_cases_that_fail_are_listed_by_record_ready_and_refuse_record_stop() {
+    let bench = Bench::recorded(&[
+        screen(&[(SQUARE, RED), (UNREAD, WHITE)]),
+        screen(&[(SQUARE, RED), (UNREAD, BLACK)]),
+        screen(&[(SQUARE, GREEN)]),
+        screen(&[(SQUARE, YELLOW)]),
+    ]);
+    bench.squares(4);
+
+    let ready = bench.ready();
+    assert_eq!(ready["status"], "draft", "{ready}");
+    assert_eq!(ready["missing_total"], 2, "{ready}");
+    for (item, (step, frame, case)) in ready["missing"]
+        .as_array()
+        .expect("missing")
+        .iter()
+        .zip([(1, "f0001", "step_01"), (2, "f0003", "step_02")])
+    {
+        assert_eq!(item["what"], "cases", "{item}");
+        assert_eq!(item["code"], LabCode::RecordCaseFailed.as_str(), "{item}");
+        assert_eq!(item["step"], step, "{item}");
+        assert_eq!(item["artifact_step"], step, "{item}");
+        assert_eq!(item["frame_id"], frame, "{item}");
+        let details = &item["details"];
+        assert_eq!(details["case"], case, "{item}");
+        assert_eq!(details["page"], case, "{item}");
+        assert_eq!(details["frames"], json!([frame]), "{item}");
+        let checks = details["checks"].as_array().expect("checks");
+        assert_eq!(checks.len(), 1, "{item}");
+        assert_eq!(checks[0]["at"], "/expect/observe/page", "{item}");
+        assert_eq!(checks[0]["result"], "failed", "{item}");
+        assert_eq!(checks[0]["problem"], "page_conflict", "{item}");
+        let matched = checks[0]["page"]["matched_pages"]
+            .as_array()
+            .expect("matched pages")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            matched,
+            BTreeSet::from(["neutral/step_01", "neutral/step_02"]),
+            "{item}"
+        );
+    }
+    let every = [
+        "frames",
+        "admission",
+        "first_decision",
+        "cross_check",
+        "endings",
+        "selects",
+        "final_package",
+        "cases",
+    ]
+    .map(|check| json!({"check": check, "complete": true}));
+    assert_eq!(ready["checks"], json!(every), "{ready}");
+    assert_eq!(ready["checks_after"], json!([]), "{ready}");
+
+    let error = bench.stop(false).expect_err("a case that fails");
+    assert_eq!(
+        error.code,
+        LabCode::RecordCaseFailed.as_str(),
+        "{}",
+        error.message
+    );
+    let details = error.details.expect("details");
+    assert_eq!(details["case"], "step_01", "{details}");
+    assert_eq!(details["step"], 1, "{details}");
+    assert_eq!(details["frame_id"], "f0001", "{details}");
+    assert_eq!(details["verdict"], "failed", "{details}");
+    assert_eq!(
+        details["checks"][0]["problem"], "page_conflict",
+        "{details}"
+    );
+    assert_eq!(
+        details["outcome"]["values"]["regression_problem"], "page_conflict",
+        "{details}"
+    );
+    assert!(
+        !bench.out().join(format!("{PACKAGE_ID}.cases")).exists(),
+        "a case was written"
+    );
+    assert!(
+        !bench.out().join(format!("{PACKAGE_ID}.json")).exists(),
+        "a package was written"
+    );
+}
+
+// The work order's test 7: step 2's page requires an OCR mark beside its square, and the Lab has no
+// OCR model. The cases are written; step 2's is named not proven, its page and its OCR target not
+// run with `ocr_unavailable`, the runner's own reason.
+#[test]
+fn s210_a_page_that_needs_text_recognition_is_written_and_named_not_proven() {
+    let bench = Bench::recorded(&four_screens());
+    bench.marked(json!({"step": 1, "add": [color("square_1", SQUARE)]}));
+    bench.marked(json!({
+        "step": 2,
+        "add": [color("square_2", SQUARE), ocr("text_2", TEXT_AREA)]
+    }));
+    bench.marked(json!({"step": 3, "add": [color("square_3", SQUARE)]}));
+    bench.marked(json!({"step": 4, "add": [color("square_4", SQUARE)]}));
+    let lab = bench.stopped(false);
+    assert_eq!(lab["lab_status"], "generated", "{lab}");
+    let answer = &lab["cases"];
+    let not_proven = answer["not_proven"].as_array().expect("not_proven");
+    let step_02 = not_proven
+        .iter()
+        .find(|item| item["case"] == "step_02")
+        .unwrap_or_else(|| panic!("step_02 is not named not proven: {answer}"));
+    assert_eq!(step_02["verdict"], "partial", "{answer}");
+    assert_eq!(step_02["reasons"], json!(["ocr_unavailable"]), "{answer}");
+    let cases = written_cases(&cases_dir(&lab));
+    assert!(cases.contains_key("step_02"), "step_02 is not written");
+    let case = case_of(&cases["step_02"].0);
+    assert_eq!(
+        case["expect"]["recognize"],
+        json!([{"target": "square_2", "passed": true}, {"target": "text_2", "passed": true}]),
+        "{case}"
+    );
+    assert!(rects_of(&case).contains(&TEXT_AREA), "{case}");
+}
+
+// The work order's test 8: step 2's square is black, so its page passes on the bare canvas too. Its
+// case passes and is written, and the answer names it with the warning `record_case_bare_canvas`;
+// no other case is named.
+#[test]
+fn s210_a_page_the_bare_canvas_answers_is_written_with_the_warning() {
+    let bench =
+        Bench::recorded(&[RED, BLACK, BLUE, YELLOW].map(|square| screen(&[(SQUARE, square)])));
+    bench.squares(4);
+    let lab = bench.stopped(false);
+    assert_eq!(lab["lab_status"], "generated", "{lab}");
+    let answer = &lab["cases"];
+    let warnings = answer["warnings"].as_array().expect("warnings");
+    assert_eq!(warnings.len(), 1, "{answer}");
+    assert_eq!(
+        warnings[0]["code"],
+        LabCode::RecordCaseBareCanvas.as_str(),
+        "{answer}"
+    );
+    assert_eq!(warnings[0]["case"], "step_02", "{answer}");
+    assert_eq!(warnings[0]["page"], "neutral/step_02", "{answer}");
+    assert_eq!(
+        answer["ids"],
+        json!(["step_01", "step_02", "step_03", "final"]),
+        "{answer}"
+    );
+    assert!(written_cases(&cases_dir(&lab)).contains_key("step_02"));
+}
+
+// The work order's test 9: three taps, the second on a screen it does not change (its screen
+// before, its screen after and the third tap's screen before are the same), dropped; steps 1, 3 and
+// 4 carry pages. The package's steps 1 to 3 are the recorded steps 1, 3 and 4: two step cases and
+// the final screen's, none for the dropped step; each case's `source` is the recording's id and the
+// step's serial number, or `final`, and nothing else.
+#[test]
+fn s210_a_dropped_middle_step_has_no_case_and_a_source_names_no_path() {
+    let bench = Bench::new();
+    let (first, second, third) = (
+        screen(&[(SQUARE, RED)]),
+        screen(&[(SQUARE, GREEN)]),
+        screen(&[(SQUARE, BLUE)]),
+    );
+    bench.press(vec![first, second.clone()]);
+    bench.press(vec![second.clone(), second.clone()]);
+    bench.press(vec![second, third]);
+    bench.marked(json!({"step": 1, "add": [color("square_1", SQUARE)]}));
+    bench.marked(json!({"step": 3, "add": [color("square_3", SQUARE)]}));
+    bench.marked(json!({"step": 4, "add": [color("square_4", SQUARE)]}));
+    bench.marked(json!({"step_action": {"kind": "drop_step", "step": 2}}));
+    let lab = bench.stopped(false);
+    assert_eq!(lab["lab_status"], "generated", "{lab}");
+    assert_eq!(
+        lab["cases"]["ids"],
+        json!(["step_01", "step_02", "final"]),
+        "{lab}"
+    );
+    assert_eq!(
+        lab["cases"]["counts"],
+        json!({"steps": 2, "final": 1, "endings": 0}),
+        "{lab}"
+    );
+    let cases = written_cases(&cases_dir(&lab));
+    for (id, source) in [
+        ("step_01", json!({"record_id": RECORD_ID, "step": 1})),
+        ("step_02", json!({"record_id": RECORD_ID, "step": 3})),
+        ("final", json!({"record_id": RECORD_ID, "final": true})),
+    ] {
+        let case = case_of(&cases[id].0);
+        assert_eq!(case["source"], source, "{id}: {case}");
+    }
+}

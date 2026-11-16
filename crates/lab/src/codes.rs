@@ -107,6 +107,17 @@ actingcommand_contract::outcome_codes! {
         /// contract does not name is read past, never a failure (optional key `member`: its name);
         /// the case still runs.
         CaseMemberUnknown => "case_member_unknown": warning / none,
+        /// Error. #463 S2-10: a regression case `record stop` made from the recording for the
+        /// package it generated does not pass on that package when the one runner of the case
+        /// contract runs it (key `regression_problem`: the word of its first failed check); the
+        /// case is not written and `record stop` refuses as at any self-check's failure, nothing
+        /// written (exit 3; actinglab details `case`, `page`, `frame_id`, `step` and
+        /// `artifact_step` or `outcome_key`, `verdict`, `checks`).
+        RecordCaseFailed => "record_case_failed": error / none,
+        /// Warning. #463 S2-10: the page a regression case `record stop` wrote expects is also a
+        /// page the bare canvas answers, the canvas with no patch at all, so the case proves
+        /// nothing of its page; it is written and named.
+        RecordCaseBareCanvas => "record_case_bare_canvas": warning / none,
     }
 }
 
@@ -413,6 +424,20 @@ actingcommand_contract::outcome_vocabulary! {
         Selects => "selects",
         /// The final package: encoded, expanded again, admitted again, and the same first decision.
         FinalPackage => "final_package",
+        /// #463 S2-10: the regression cases made from the recording, each run on the final
+        /// package by the one runner of the case contract before it is written; the last check.
+        Cases => "cases",
+    }
+}
+
+// #463 S2-10: what the regression cases `record stop` writes say of themselves (`limits`).
+actingcommand_contract::outcome_vocabulary! {
+    /// A limit of the regression cases written with a package (`case_limit`).
+    pub enum CaseLimit: "case_limit" {
+        /// The cases were made from the frames the package was built from: that they pass shows
+        /// the package recognises the screens it was recorded on and says nothing about screens
+        /// it did not meet.
+        SelfAgreement => "self_agreement",
     }
 }
 

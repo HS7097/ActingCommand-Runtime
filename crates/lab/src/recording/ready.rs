@@ -29,6 +29,7 @@ use super::model::{LabRecording, OpaqueJson, RecordRect, RecordingStep};
 use super::steps::{POINT_SOURCE, SWIPE_SOURCE};
 use super::store::invalid;
 use crate::codes::{ReadyCheck, ReadyMissing, ReadySource, ReadyWarning};
+use crate::regression_case::RegressionCheck;
 use actingcommand_contract::{LabError, LabResult};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -67,6 +68,14 @@ pub struct ReadyDetails {
     /// select's slot. Never read from a pre-check's refusal.
     #[serde(skip_deserializing, skip_serializing_if = "Option::is_none")]
     pub target: Option<String>,
+    /// #463 S2-10: the id of the regression case a failure of the self-check `cases` is about.
+    /// Never read from a pre-check's refusal.
+    #[serde(skip_deserializing, skip_serializing_if = "Option::is_none")]
+    pub case: Option<String>,
+    /// #463 S2-10: the checks of that case that failed, as the one runner of the case contract
+    /// answered them. Never read from a pre-check's refusal.
+    #[serde(skip_deserializing, skip_serializing_if = "Vec::is_empty")]
+    pub checks: Vec<RegressionCheck>,
     /// The serial number of the step after a stop (`effect_after_stop`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_step: Option<u32>,
@@ -466,6 +475,8 @@ pub(crate) fn check_items(recording: &LabRecording, runs: &[CheckRun]) -> Vec<Re
                     page: locus.page.clone(),
                     frames: locus.frames.clone(),
                     target: locus.target.clone(),
+                    case: locus.case.clone(),
+                    checks: locus.checks.clone(),
                     ..ReadyDetails::default()
                 },
             }

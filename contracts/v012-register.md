@@ -33175,6 +33175,102 @@ What this round changed:
   `record review` lists step 1's two on step 1, step 3's on step 3, none on steps 2 and 4, and the
   ending's on no step. Its first reading is as before. No golden changes; no test leaves a gate map.
 
+### 1.441 Slice #463 S2-10 (0.12.69): `record stop` writes the package's regression cases, each run first by the one runner of the case contract (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, whose stage two has the Lab check the package against the recorded material; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1116/brief-463-s210b-record-stop-cases.md`, which replaces the withdrawn `rd-1116/brief-463-s210-regression-cases.md`; stacked on #463 RC-1, §1.450, its branch at `a0c22c1a`, which holds main `ff74c80c`, the release of 0.12.68)
+
+This section takes 1.441, the number the work order gives. It ships in 0.12.69.
+
+**Why.** A package of a resource repository comes with regression cases, scenes on which its pages
+must be recognised; an agent wrote them by hand after recording. The recording already knows them:
+which screen each step was on, the final screen, the frame each ending was taken from. `record stop`
+now writes them with the package, and runs each before it writes it by the one runner of RC-1, so
+that a case written is one that passed on the package it came with.
+
+**The rule** ([lab-recording.md](lab-recording.md), "Regression cases written with the package";
+[resource-regression-case.md](resource-regression-case.md)).
+- *The cases*: one per effective step with a press and a page, on the frame its press was sent on
+  (its `before_frame` while it is a live frame of the step, else the step's primary frame); one for
+  the final screen, the last step's primary frame; one per ending, on the frame it was taken from.
+  Each expects its page as the page detection names it (`<game>/<page>`) and every target that page
+  requires to pass. `id` `step_<nn>`, `final` or `ending_<outcome_key>`; `source` `{record_id,
+  step}` (the serial number), `{record_id, final: true}` or `{record_id, ending}`, nothing else. A
+  dropped step and the application entry step have none.
+- *The scene*: a black canvas of the recording's size with, pasted where they are in the frame, the
+  regions every recognition target of the whole package declares (a template's search region and
+  its colour check's, a colour or colour digest probe's region, an OCR or NN target's region), each
+  rectangle once with the targets that read it as `content`; never a whole frame. A region that is
+  no fixed rectangle inside the frame stops the check with an error (no recording generates one).
+- *The run*: `run_regression_case_on_bundle` on the final package admitted in memory from the files
+  `record stop` writes. `failed`: not written, a failure of the new self-check `cases`; `passed`:
+  written; `partial`, `not_run`: written and named in `not_proven` with the runner's reasons. The
+  bare canvas is run once per package as a case expecting no page; a case whose page it answers is
+  written with the warning `record_case_bare_canvas`.
+- *The self-check `cases`* is the last (`ReadyCheck::Cases`, after `final_package`, whose package
+  it reads): `record stop` refuses its first failing case `record_case_failed`, nothing written;
+  `record ready` lists every failing case (`what` `cases`, `details.case`, `details.checks`).
+- *The write*: at `record stop` and its regeneration, `lab/out/<package_id>.cases/<case id>/`
+  (`case.json`, `scene.png`), the set written whole into `<package_id>.cases.part-<unix_ms>`, an
+  existing set set aside as `<package_id>.cases.old-<unix_ms>` and kept, then renamed into place;
+  nothing under the dry run.
+- *The answer*: `lab.cases{directory, status, kept?, counts{steps, final, endings}, ids, not_proven,
+  warnings, limits: ["self_agreement"], limit_texts}`.
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The cases | `crates/lab/src/recording/cases.rs` (new): `regression_cases(plan, entries, cache, ocr, failures) -> LabResult<CaseSet>`, `CaseSet::files`, `CaseSet::answer`, `cases_dir_name`; the scene's regions from the admitted package's declared targets (`read_regions`), the bare canvas (`bare_canvas_pages`), the refusal (`case_failed`) |
+| The run | `crates/lab/src/regression_case.rs` unchanged: `run_regression_case_on_bundle` is called on every case and once on the bare canvas |
+| The order of the checks | `crates/lab/src/recording_api.rs`: `self_checks` runs the checks before `cases` (`package_checks`, the earlier body, returning `PackageChecked` with the frames read back) and then `cases` through the same `Runner`; `Checked{package, cases}`; `generate_and_write` writes the set after the package (`container::replace_dir_in_place`) and answers `lab.cases`; `package_without_cases` (`cfg(test)`) for the byte-for-byte test |
+| The write | `crates/lab/src/recording/container.rs`: `replace_dir_in_place` (as `replace_in_place` for a file), `free_name` (the free `<name>.<kind>-<unix_ms>` that `set_aside_name` now calls), `write_new_file` |
+| The failures' place | `crates/lab/src/recording/crosscheck.rs`: `Locus::case`, `Locus::checks`, `Locus::with_case`; `crates/lab/src/recording/ready.rs`: `ReadyDetails::case`, `ReadyDetails::checks` (never read from a pre-check's refusal) |
+| The words | `crates/lab/src/codes.rs`: `ReadyCheck::Cases`, `LabCode::RecordCaseFailed`, `LabCode::RecordCaseBareCanvas`, `CaseLimit`; `crates/actingcommand-contract/src/outcome/keys.rs`: the key `regression_problem` |
+| Texts | [lab-recording.md](lab-recording.md): item 10 of "Self-checks", the new "Regression cases written with the package", "Writing", "Output", "Error codes", and in "What a recording still lacks" the two examples, the self-checks, `checks_after`, a self-check item's `details` and the row `ready`; [resource-regression-case.md](resource-regression-case.md): what a case the Runtime writes holds; the rows `record stop` and `record ready` of [lab-operations.json](lab-operations.json) (`output`, `notes`; no `help` changes); `apps/actinglab-mcp/MANUAL.md`, section 8 |
+
+**Codes and words.**
+
+| Word | What it says | Refuses, warns or informs | Exit |
+|---|---|---|---|
+| `cases` (`ready_check`) | the self-check of the regression cases, the last | informs | |
+| `record_case_failed` (lab, error, `regression_problem` required) | a regression case made from the recording does not pass on the package generated | refuses `record stop`; an item of `record ready` | 3 (`record ready` exits 0) |
+| `record_case_bare_canvas` (lab, warning, no values) | a case's page is also a page the bare canvas answers | warns (`lab.cases.warnings`) | 0 |
+| `self_agreement` (`case_limit`, new closed vocabulary) | the cases were made from the frames the package was built from | informs (`lab.cases.limits`) | 0 |
+| key `regression_problem` (`vocab:regression_problem`) | the word of a failing case's first failed check, in `record_case_failed`'s values | | |
+
+A case not proven is named with the runner's own reasons (`regression_not_run`: `ocr_unavailable`,
+`frames_required`): no new word. The decision the slice adds reads the verdict word of
+`regression_verdict`, no code. The outcome-code index is regenerated.
+
+**Tests** (`crates/lab/src/gate_463_s210.rs`, exec gate map "#463 S2-10"; recordings made as stage
+one makes them, synthetic 160x90 screens, colour marks, no OCR model, no clock): five cases from
+three steps, the final screen and an ending, each in the contract's form and passing from disk on
+the written package (1); the package byte for byte the one the checks before `cases` build (2); no
+scene holds a pixel no target reads, no scene-rule warning (3); a page told apart by another page's
+forbidden target passes (4); the dry run writes nothing and lists five, the regeneration replaces
+the set and keeps the old one (5); two failing cases listed by `record ready`, `record stop`
+refusing the first and writing nothing (6); an OCR page without a model, written and not proven
+with `ocr_unavailable` (7); a black square's page, written with `record_case_bare_canvas` (8); a
+dropped middle step has no case and each `source` is exactly the recording and the step (9).
+Adapted, as the requirement changes what they pin (the eighth check in `checks` and
+`checks_after`): `EVERY_CHECK` of `gate_463_s21`, `gate_463_s21c`, `gate_463_s26` and actinglab's
+`gate_463_s21b`; the
+`checks_after` of `gate_463_s21c` (five assertions) and `gate_463_s2_train` (one) after a check that
+failed before the final package. No golden changes; no test leaves a gate map.
+
+**What is not changed.** The package `record stop` writes, byte for byte; every other self-check's
+judgement, order and code; RC-1's reader and runner; every stored frame. Nothing proposes a region,
+a choice or a value, and no image is reviewed or refused for its content. No ledger record,
+configuration key or Runtime interface revision.
+
+**Found while building** (for the coordinator). The case's page detection evaluates every page of
+the package, and the cross-check never did: it judges each page on its own frames, and a later
+page that passes on the screen before its step only warns (`arrival_unconfirmed`), the usual
+ending's page on an ending's frames too (`ending_usual_insensitive`). A recording whose earlier
+page's marks also hold on a later recorded screen (a colour mark on a background the screens share,
+as several gates' fixtures mark the first page) makes that screen's case a `page_conflict`, so
+`record stop` now refuses such a recording, as the work order rules for any failing case.
+
+**At deploy.** Nothing to configure.
+
 ### 1.442 Slice #463 S2-6 (0.12.68): a choice in a step, marked first and refined later; its pending item in `record ready` (Workflow #463; the owner's direction on board #463 on 11-15, that a choice inside a step be singled out by marking the step first and refined afterwards, and her approval the same day of the three-stage blueprint of package making; the rules below are the coordinator's rulings in the work order and in the work order of the half-built piece it ports, not the owner's words; coordinator work order `rd-1116/brief-463-s26-select-unrefined.md`, stacked on pull request #1780, the Lab display train)
 
 This section takes 1.442, the number the work order gives; it follows §1.437, the last section of

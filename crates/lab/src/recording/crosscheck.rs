@@ -21,6 +21,7 @@ use super::select::{
 use super::store::{blocked, invalid, with_details};
 use crate::LabOcr;
 use crate::codes::{EndingAgainst, EndingProblem, LabCode, ReadyCheck, ReadyCheckStop};
+use crate::regression_case::RegressionCheck;
 use actingcommand_contract::outcome::{Detail, Outcome};
 use actingcommand_contract::{
     InputAction, LabError, LabResult, SEGMENTED_SWIPE_BRAKE_DISTANCE_PX,
@@ -62,6 +63,10 @@ pub(crate) struct Locus {
     pub(crate) page: Option<String>,
     pub(crate) target: Option<String>,
     pub(crate) outcome_key: Option<String>,
+    /// #463 S2-10: the regression case a failure of the self-check `cases` is about (its id), and
+    /// the checks of it that failed, as the runner answered them.
+    pub(crate) case: Option<String>,
+    pub(crate) checks: Vec<RegressionCheck>,
 }
 
 impl Locus {
@@ -104,6 +109,13 @@ impl Locus {
     /// target that reads a select slot's name.
     pub(crate) fn with_target(mut self, target: &str) -> Self {
         self.target = Some(target.to_string());
+        self
+    }
+
+    /// #463 S2-10: about the regression case `case`, whose checks `checks` failed.
+    pub(crate) fn with_case(mut self, case: &str, checks: Vec<RegressionCheck>) -> Self {
+        self.case = Some(case.to_string());
+        self.checks = checks;
         self
     }
 }

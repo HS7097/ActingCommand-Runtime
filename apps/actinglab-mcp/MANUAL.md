@@ -451,6 +451,22 @@ naming this file.
   value chooses as before), which `ac_goals_set` sets on an application by name; a package
   generated again from an older recording with a select gains that variable, so its content hash
   changes and its bundle declares `package` 14.
+  #463 S2-10 (0.12.69; `contracts/lab-recording.md`, "Regression cases written with the package"):
+  `ac_record_stop` writes the package's regression cases beside it,
+  `lab/out/<package_id>.cases/<case id>/` (`case.json` and `scene.png`, the case contract's form):
+  one per step with a press and a page, on the frame its press was sent on, one for the final
+  screen and one per ending, each a black canvas with the regions every recognition target of the
+  package reads pasted where they are, never a whole frame. Its last self-check, `cases`, runs
+  each on the package first: a case that fails is not written and the stop refuses
+  `record_case_failed` (`regression_problem`, most often `page_conflict`: two pages of the package
+  pass on one recorded screen), nothing written; `ac_record_ready` lists every failing case (`what`
+  `cases`, with the case's id and the runner's failed checks in `details`). The answer's
+  `lab.cases` names the directory, `counts` by kind, the `ids`, `not_proven` (a case run in part,
+  with the runner's reasons, `ocr_unavailable` without an OCR model), `warnings`
+  (`record_case_bare_canvas`: its page is also what the bare canvas answers) and `limits`
+  `["self_agreement"]`: the cases were made from the frames the package was built from and say
+  nothing about screens it did not meet. A regeneration replaces the set whole and keeps the
+  earlier one beside it; `dry_run` writes nothing and lists what would be.
 - **Offline scenes of another size** (Workflow #392 DA-5cd, 0.12.67, as the train of DA-5ab and
   DA-5cd leaves it; `contracts/display-adapter.md` section 12). `ac_recognize`, `ac_detect_page`,
   `ac_current_page`, `ac_is_visible`, `ac_lab_observe` on a saved scene, `ac_tap_target` and

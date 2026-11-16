@@ -239,15 +239,21 @@ pub(crate) fn write_lab_dir(
 /// #464 P4: the name an existing `<name>` is set aside as, `<name>.old-<unix_ms>`: the first
 /// millisecond from now no file of `parent` holds, so that no kept file is ever overwritten.
 fn set_aside_name(parent: &Path, name: &str, written: &[String]) -> LabResult<PathBuf> {
+    free_name(parent, name, "old", written)
+}
+
+/// `<name>.<kind>-<unix_ms>` beside `<name>` in `parent`, the first millisecond from now no entry of
+/// `parent` holds (#464 P4's set-aside name; #463 S2-10: and a new directory's part name too).
+fn free_name(parent: &Path, name: &str, kind: &str, written: &[String]) -> LabResult<PathBuf> {
     let mut stamp = now_unix_ms();
     loop {
-        let candidate = parent.join(format!("{name}.old-{stamp}"));
+        let candidate = parent.join(format!("{name}.{kind}-{stamp}"));
         match fs::symlink_metadata(&candidate) {
             Err(error) if error.kind() == ErrorKind::NotFound => return Ok(candidate),
             Ok(_) => {
                 stamp = stamp.checked_add(1).ok_or_else(|| {
                     state_io(format!(
-                        "no free name to set {name} aside in {}",
+                        "no free name {name}.{kind}-<unix_ms> in {}",
                         parent.display()
                     ))
                 })?;
@@ -376,4 +382,121 @@ pub(crate) fn replace_in_place(
     // #464 P4: the output an earlier stop wrote stays beside the new one.
     kept.extend(old.map(|old| old.display().to_string()));
     Ok(replaces)
+}
+
+/// #463 S2-10 (`contracts/lab-recording.md`, "Regression cases written with the package"): writes
+/// the directory `target` whole, holding `files` (each a `/`-separated path below it and its
+/// bytes), as [`replace_in_place`] writes a file: the new set into a directory of its own beside
+/// it, `<name>.part-<unix_ms>` (a name no entry of the parent holds), then an existing `target` set
+/// aside as `<name>.old-<unix_ms>` and kept, never deleted, and the new directory renamed to
+/// `target`. Returns the directory set aside, when one was. `target`'s name only ever changes by
+/// rename, so a reader finds the old set, the new one or none, never part of one. Every failed step
+/// is `record_state_io_failed` naming what was written (`written` before it, then the part
+/// directory); when the new directory cannot be renamed into place the old one is renamed back
+/// (`restored`).
+pub(crate) fn replace_dir_in_place(
+    target: &Path,
+    files: &[(String, Vec<u8>)],
+    written: &[String],
+) -> LabResult<Option<String>> {
+    let (parent, name) = match (
+        target.parent(),
+        target.file_name().and_then(|name| name.to_str()),
+    ) {
+        (Some(parent), Some(name)) => (parent, name),
+        _ => {
+            return Err(state_io(format!(
+                "{} names no directory in a directory",
+                target.display()
+            )));
+        }
+    };
+    let mut written = written.to_vec();
+    let replaces = match fs::symlink_metadata(target) {
+        Err(error) if error.kind() == ErrorKind::NotFound => false,
+        Ok(metadata) if metadata.is_dir() => true,
+        Ok(_) => {
+            return Err(written_details(
+                state_io(format!(
+                    "{} is not a directory; it is left untouched",
+                    target.display()
+                )),
+                &written,
+                json!({"stage": "replace_inspect"}),
+            ));
+        }
+        Err(error) => {
+            return Err(written_details(
+                state_io(format!("failed to inspect {}: {error}", target.display())),
+                &written,
+                json!({"stage": "replace_inspect"}),
+            ));
+        }
+    };
+    let part = free_name(parent, name, "part", &written)?;
+    let part_display = part.display().to_string();
+    fs::create_dir(&part).map_err(|error| {
+        written_details(
+            state_io(format!("failed to create {part_display}: {error}")),
+            &written,
+            json!({"stage": "replace_write"}),
+        )
+    })?;
+    written.push(part_display.clone());
+    for (relative, bytes) in files {
+        let file = relative
+            .split('/')
+            .fold(part.clone(), |path, segment| path.join(segment));
+        write_new_file(&file, bytes).map_err(|error| {
+            written_details(
+                state_io(format!("failed to write {}: {error}", file.display())),
+                &written,
+                json!({"stage": "replace_write"}),
+            )
+        })?;
+    }
+    let old = if replaces {
+        let old = set_aside_name(parent, name, &written)?;
+        fs::rename(target, &old).map_err(|error| {
+            written_details(
+                state_io(format!(
+                    "failed to set {} aside as {} (left in place): {error}",
+                    target.display(),
+                    old.display()
+                )),
+                &written,
+                json!({"stage": "replace_set_aside"}),
+            )
+        })?;
+        Some(old)
+    } else {
+        None
+    };
+    if let Err(error) = fs::rename(&part, target) {
+        let restored = old.as_ref().map(|old| fs::rename(old, target).is_ok());
+        let left: Vec<String> = old
+            .iter()
+            .filter(|_| restored != Some(true))
+            .map(|old| old.display().to_string())
+            .collect();
+        return Err(written_details(
+            state_io(format!(
+                "failed to rename {part_display} to {}: {error}",
+                target.display()
+            )),
+            &written,
+            json!({"stage": "replace_rename", "restored": restored, "left_files": left}),
+        ));
+    }
+    Ok(old.map(|old| old.display().to_string()))
+}
+
+/// A new file `path` holding `bytes`, its directories created first, flushed to the disk.
+fn write_new_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    if let Some(directory) = path.parent() {
+        fs::create_dir_all(directory)?;
+    }
+    let mut file = OpenOptions::new().write(true).create_new(true).open(path)?;
+    file.write_all(bytes)?;
+    file.sync_all()
 }
