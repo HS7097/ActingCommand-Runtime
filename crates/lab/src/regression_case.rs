@@ -642,7 +642,7 @@ impl Construction {
 
 impl PatchRect {
     fn holds(&self, x: u64, y: u64) -> bool {
-        x >= self.x && x < self.x + self.width && y >= self.y && y < self.y + self.height
+        (self.x..self.x + self.width).contains(&x) && (self.y..self.y + self.height).contains(&y)
     }
 }
 
@@ -1102,9 +1102,11 @@ impl Reader {
                 expectations.not_evaluated.push(pointer(at, name));
             }
         }
+        // An empty `recognize` declares nothing.
         let declares = expect.iter().any(|(name, value)| {
             EXPECT_MEMBERS.contains(&name.as_str())
-                && !(name == "recognize" && value.as_array().is_some_and(Vec::is_empty))
+                && (name != "recognize"
+                    || value.as_array().is_none_or(|entries| !entries.is_empty()))
         });
         if !declares {
             self.fail(
