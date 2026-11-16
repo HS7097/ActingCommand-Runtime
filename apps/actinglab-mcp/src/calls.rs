@@ -343,6 +343,13 @@ pub(crate) fn prepare(
             return Err(invalid(member, ArgumentProblem::Unknown).into());
         };
         checked(param, value).map_err(|problem| invalid(member, problem))?;
+        // Workflow #434 LW-1: a word outside the closed list the schema gives (`tools::WORDS`) is
+        // refused as a table enum's is, before anything is sent.
+        if let Some(words) = tools::words(row, member)?
+            && !within(value, &words)
+        {
+            return Err(invalid(member, ArgumentProblem::NotRecognised).into());
+        }
         if flag_like(value) {
             // As `serve` refuses it (actinglab's `cli_module::words::from_json`, `not_a_flag`).
             return Err(cli_line::usage_invalid(
@@ -452,6 +459,20 @@ fn checked(param: &Param, value: &Value) -> Result<(), ArgumentProblem> {
             }
         }
         (false, value) => one(value),
+    }
+}
+
+/// Workflow #434 LW-1: whether `value`, a text or a list of texts (`checked` held its type), is
+/// one of `words`, or holds only them.
+fn within(value: &Value, words: &[String]) -> bool {
+    let one = |value: &Value| {
+        value
+            .as_str()
+            .is_some_and(|text| words.iter().any(|word| word == text))
+    };
+    match value {
+        Value::Array(items) => items.iter().all(one),
+        other => one(other),
     }
 }
 

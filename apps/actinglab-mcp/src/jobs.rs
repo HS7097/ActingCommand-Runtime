@@ -213,6 +213,21 @@ impl Jobs {
 }
 
 impl Job {
+    /// Tests only (Workflow #434 LW-1 fix round 2; it replaces fix round 1's constructor of an
+    /// ended job, so that the slice's gate makes a run's job with [`Jobs::start`] as `ac_run_start`
+    /// does): waits until the job's thread ended it, as [`Self::wait_until`] waits but with no
+    /// deadline and so no clock, which a gate reads none of; for a body that returns at once.
+    #[cfg(test)]
+    pub(crate) fn wait_ended(&self) {
+        let mut state = lock(&self.state);
+        while state.ended.is_none() {
+            state = self
+                .changed
+                .wait(state)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+        }
+    }
+
     pub(crate) fn phase(&self) -> &'static str {
         lock(&self.state).phase
     }

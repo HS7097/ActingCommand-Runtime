@@ -437,9 +437,10 @@ enum Ended {
     Failure(Failure),
 }
 
-/// Workflow #434 LAB-5B1, test builds only: [`parse`]'s refusal of the words [`dispatch_within`]
+/// Workflow #434 LAB-5B1 (test builds and, since Workflow #434 LW-1, the feature `test-hooks`, for
+/// `core_ops::handed_refusal`): [`parse`]'s refusal of the words [`dispatch_within`]
 /// is given (`inline`: those [`dispatch_rows_on`] is given, beside the rows), if any.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-hooks"))]
 pub(crate) fn parse_refusal(arguments: &[OsString], inline: bool) -> Option<Outcome> {
     parse(arguments, inline).err()
 }
