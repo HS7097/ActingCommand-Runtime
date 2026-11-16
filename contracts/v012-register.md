@@ -32212,9 +32212,13 @@ it. No outcome code or word is added; the texts of `display_map_unresolved` and 
 `input_scale_unsupported` say that a Lab operation's input now leaves under the frame's map (the
 index regenerated). On a display of the base's size every answer, record and input is as before.
 
-**An installer of 0.12.66.** The plan's edges are the component interface ranges, which no revision
-of this slice moves: an installer of 0.12.66 installs 0.12.67 as a build of the same ranges. The
-Lab and the Runtime of 0.12.67 ship in one build.
+**An installer of 0.12.66.** The plan's edges are the component interface ranges, and this slice
+itself moves none of them; the release it ships in, 0.12.67, raises `runtime-client` to [3, 10]
+(§1.433), and revision 10 is also where this slice's widened projection belongs (a client library
+below 10 judges the receipt of a projection reduced to the base size invalid;
+[component-interfaces.md](component-interfaces.md), row 10 of `runtime-client`), so an installer
+of 0.12.66 ([3, 9]) installs 0.12.67 ([3, 10]) because the two ranges meet. The Lab and the
+Runtime of 0.12.67 ship in one build.
 
 **Tests.** `crates/execution-kernel/src/tests/gate_392_da5ab.rs`: a 96×64 package on frames three
 and one and a half times its base, made by nearest neighbour from a base frame whose features lie
