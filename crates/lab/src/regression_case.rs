@@ -9,17 +9,22 @@
 //!   with its word, and a case with a problem evaluates nothing. Every other expectation of the
 //!   format is read and answered `not_run` (`not_evaluated`), never passed. A case of another
 //!   `schema_version` is not run, with the warning `case_schema_unsupported`; it is no failure.
-//! - **The runner** ([`RegressionPackage::run`]) checks the scene against its construction and
-//!   evaluates the expectations with the kernel's own read-only recognition engine, the one the
-//!   offline `current-page` and `recognize` use: [`ReadonlyRecognitionEngine::current_page`] (the
-//!   kernel's `detect_current_page_frames`, which answers a conflict when several pages match) and
-//!   [`ReadonlyRecognitionEngine::recognize`] (the kernel's `SceneEvaluation::evaluate_target`).
-//!   Nothing is evaluated a second way here. A page or a target that needs text recognition where
-//!   no model is available, or several frames of target consensus, is `not_run` with its word.
-//! - **One call** ([`run_regression_case`]): a package directory, a case's `case.json` and its scene
-//!   as bytes, and the Lab's OCR; it answers the case's verdict. `actinglab resource regression`
-//!   runs a checkout's cases with the same parts; nothing here reads a command line or writes a
-//!   file.
+//!   Fix round 1: the case's top level is open: a member of it the contract does not name is read
+//!   past and named once in the case's warning `case_member_unknown`, never a failure.
+//! - **The runner** ([`RegressionPackage::run`]) checks that the case is of the package (its
+//!   `package_id` is the one the package's control declares), then the scene against its
+//!   construction, and evaluates the expectations with the kernel's own read-only recognition
+//!   engine, the one the offline `current-page` and `recognize` use:
+//!   [`ReadonlyRecognitionEngine::current_page`] (the kernel's `detect_current_page_frames`, which
+//!   answers a conflict when several pages match) and [`ReadonlyRecognitionEngine::recognize`]
+//!   (the kernel's `SceneEvaluation::evaluate_target`). Nothing is evaluated a second way here. A
+//!   page or a target that needs text recognition where no model is available, or several frames
+//!   of target consensus, is `not_run` with its word.
+//! - **One call** ([`run_regression_case_on_bundle`], fix round 1): a package already loaded (what
+//!   `record stop`'s self-checks hold), a case's `case.json` and its scene as bytes, and the Lab's
+//!   OCR; it answers the case's verdict. [`run_regression_case`] admits a package directory and
+//!   calls it. `actinglab resource regression` runs a checkout's cases with the same parts; nothing
+//!   here reads a command line or writes a file.
 
 use crate::codes::{
     LabCode, RegressionNotRun, RegressionProblem, RegressionResult, RegressionVerdict,
@@ -27,10 +32,11 @@ use crate::codes::{
 use crate::ocr::LabOcr;
 use crate::{package_base, scene_in_base};
 use actingcommand_contract::outcome::{Detail, Outcome, VocabularyToken};
-use actingcommand_contract::{ContainedTaskRequest, LabResult};
+use actingcommand_contract::{ContainedTaskRequest, LabErrorClass, LabResult};
 use actingcommand_execution_kernel::{
     ExternallyVerifiedBundle, ReadonlyRecognitionEngine, RecognizeResponse,
 };
+use actingcommand_pack_containment::LoadedBundle;
 use actingcommand_page_detector::PageDetector;
 use actingcommand_recognition::Scene;
 use actingcommand_recognition_pack::RecognitionEvaluator;
@@ -59,7 +65,8 @@ const SCENE_SHA256_AT: &str = "/scene_construction/scene_sha256";
 const CANVAS_AT: &str = "/scene_construction/canvas";
 const PACKAGE_AT: &str = "/package_id";
 
-/// The members of a case (a closed object).
+/// The members of a case's top level the contract names. Fix round 1: the top level is open; any
+/// other member is read past with the warning `case_member_unknown`.
 const TOP_MEMBERS: [&str; 9] = [
     "schema_version",
     "id",
@@ -101,7 +108,8 @@ const NOT_EVALUATED: [&str; 7] = [
     "after",
 ];
 
-/// A case of this contract as read from its `case.json`: what the runner evaluates, checked.
+/// A case of this contract as read from its `case.json`: what the runner evaluates, checked, and
+/// the warnings of reading it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegressionCase {
     id: String,
@@ -109,6 +117,9 @@ pub struct RegressionCase {
     scene: String,
     construction: Construction,
     expectations: Expectations,
+    /// Fix round 1: `case_member_unknown` for each member of its top level the contract does not
+    /// name, first among the warnings of its verdict.
+    warnings: Vec<RegressionWarning>,
 }
 
 /// `scene_construction`, checked.
@@ -162,6 +173,8 @@ pub struct RegressionPackage {
     evaluator: RecognitionEvaluator,
     detector: PageDetector,
     ocr: LabOcr,
+    /// Fix round 1: the `package_id` the package's control declares, `None` when it declares none.
+    package_id: Option<String>,
 }
 
 /// One check of a case: where in the case (a JSON pointer, `""` the whole document), its result,
@@ -189,9 +202,23 @@ pub struct RegressionCheck {
     /// A target expectation: what was expected and what the kernel answered.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target: Option<RegressionTargetCheck>,
+    /// Fix round 1: what the case states and what was found, for a check that compares the two
+    /// (`scene_sha256_mismatch`, `package_id_mismatch`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mismatch: Option<RegressionMismatch>,
     /// The text of the reader, the loader or the kernel, for people.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
+}
+
+/// Fix round 1: the two values a check compared: `case` what the case states (its
+/// `scene_construction.scene_sha256`, its `package_id`), `found` what was found (the SHA-256 of
+/// the scene file's bytes; the `package_id` the package's control declares, `null` when it declares
+/// none).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RegressionMismatch {
+    pub case: String,
+    pub found: Option<String>,
 }
 
 /// The page expectation of a check: `expected` the page (`null`: no page), `recognized` the page
@@ -246,12 +273,36 @@ pub struct RegressionCounts {
 }
 
 /// The verdict of the case `case_json` with its scene `scene_png` on the package at `package_dir`,
-/// read, admitted and evaluated as `resource regression` does each of a checkout's cases. The
-/// case is read first (a case of another schema or one the reader refuses answers so, and nothing
-/// else is done), then the package is admitted, then the scene checked and the expectations
-/// evaluated. Nothing is written.
+/// admitted and evaluated as `resource regression` does each of a checkout's cases: the package is
+/// admitted ([`RegressionPackage::load`]'s admission) and the case run on it by
+/// [`run_regression_case_on_bundle`]; a package that is missing or refused answers the case's own
+/// verdict when the reader refuses it or it is of another schema, else the case refused by the
+/// package's check. Nothing is written.
 pub fn run_regression_case(
     package_dir: &Path,
+    case_json: &[u8],
+    scene_png: &[u8],
+    ocr: &LabOcr,
+) -> RegressionCaseVerdict {
+    match admit(package_dir, ocr) {
+        Ok(admitted) => {
+            run_regression_case_on_bundle(admitted.loaded_bundle(), case_json, scene_png, ocr)
+        }
+        Err(check) => match read_regression_case(case_json) {
+            Ok(case) => case.refused(check),
+            Err(verdict) => verdict,
+        },
+    }
+}
+
+/// Fix round 1 (for `record stop`, which has its package loaded in memory): the verdict of the case
+/// `case_json` with its scene `scene_png` on the package `bundle` already loaded (the kernel's
+/// admission of it, as `record stop`'s self-checks hold it), evaluated with `ocr`. The case is read
+/// first (a case of another schema or one the reader refuses answers so, and nothing else is done),
+/// then the package's evaluator and page set taken ([`RegressionPackage::from_bundle`]), then the
+/// case run ([`RegressionPackage::run`]). Nothing is written and no file is read.
+pub fn run_regression_case_on_bundle(
+    bundle: &LoadedBundle,
     case_json: &[u8],
     scene_png: &[u8],
     ocr: &LabOcr,
@@ -260,7 +311,7 @@ pub fn run_regression_case(
         Ok(case) => case,
         Err(verdict) => return verdict,
     };
-    match RegressionPackage::load(package_dir, ocr) {
+    match RegressionPackage::from_bundle(bundle, ocr) {
         Ok(package) => package.run(&case, scene_png),
         Err(check) => case.refused(check),
     }
@@ -306,8 +357,7 @@ pub fn read_regression_case(case_json: &[u8]) -> Result<RegressionCase, Regressi
         version => {
             let mut warning = Outcome::new(LabCode::CaseSchemaUnsupported);
             if let Some(Value::String(version)) = version
-                && version.len() <= NAME_MAX_BYTES
-                && !version.chars().any(char::is_control)
+                && is_key_name(version)
             {
                 warning = warning.schema_version(version.as_str());
             }
@@ -321,8 +371,8 @@ pub fn read_regression_case(case_json: &[u8]) -> Result<RegressionCase, Regressi
         }
     }
     let mut reader = Reader::default();
-    reader.closed(&document, "", &TOP_MEMBERS);
-    let id = reader.text(&document, "", "id");
+    reader.open_top(&document);
+    let id = reader.string_member(&document, "", "id");
     let package_id = reader.file_name(&document, "", "package_id");
     let scene = reader.file_name(&document, "", "scene");
     let construction = reader.construction(&document);
@@ -337,6 +387,7 @@ pub fn read_regression_case(case_json: &[u8]) -> Result<RegressionCase, Regressi
                 scene,
                 construction,
                 expectations,
+                warnings: reader.warnings,
             })
         }
         _ => Err(RegressionCaseVerdict {
@@ -344,7 +395,7 @@ pub fn read_regression_case(case_json: &[u8]) -> Result<RegressionCase, Regressi
             package_id: text_of("package_id"),
             verdict: RegressionVerdict::Failed,
             checks: reader.problems,
-            warnings: Vec::new(),
+            warnings: reader.warnings,
         }),
     }
 }
@@ -366,81 +417,125 @@ impl RegressionCase {
     }
 
     /// The verdict of this case when `check` refused it before its scene was evaluated: its scene
-    /// file is missing, or its package is missing or refused (`failed`).
+    /// file is missing, or its package is missing or refused (`failed`), with the warnings of
+    /// reading it.
     pub fn refused(&self, check: RegressionCheck) -> RegressionCaseVerdict {
-        RegressionCaseVerdict::refused(Some(self.id.clone()), Some(self.package_id.clone()), check)
+        RegressionCaseVerdict {
+            warnings: self.warnings.clone(),
+            ..RegressionCaseVerdict::refused(
+                Some(self.id.clone()),
+                Some(self.package_id.clone()),
+                check,
+            )
+        }
     }
 
-    /// The verdict of this case from its checks and warnings.
+    /// The verdict of this case from its checks and the warnings of running it, after the
+    /// warnings of reading it.
     fn verdict(
         &self,
         checks: Vec<RegressionCheck>,
         warnings: Vec<RegressionWarning>,
     ) -> RegressionCaseVerdict {
+        let mut all = self.warnings.clone();
+        all.extend(warnings);
         RegressionCaseVerdict {
             id: Some(self.id.clone()),
             package_id: Some(self.package_id.clone()),
             verdict: verdict_of(&checks),
             checks,
-            warnings,
+            warnings: all,
         }
     }
+}
+
+/// The admission of the package at `package_dir` as the offline commands admit theirs
+/// (`ExternallyVerifiedBundle::load_path`, the vision provider `ocr` gives, the admission deadline
+/// of a contained task). A directory that is not there is `package_missing`; a refusal
+/// `package_refused`.
+fn admit(package_dir: &Path, ocr: &LabOcr) -> Result<ExternallyVerifiedBundle, RegressionCheck> {
+    if !package_dir.is_dir() {
+        return Err(RegressionCheck::failed(
+            PACKAGE_AT,
+            RegressionProblem::PackageMissing,
+            Some(format!("{} is no directory", package_dir.display())),
+        ));
+    }
+    let deadline = Instant::now()
+        .checked_add(Duration::from_millis(
+            ContainedTaskRequest::DEFAULT_RESPONSE_DEADLINE_MS,
+        ))
+        .ok_or_else(|| package_refused("the admission deadline overflows the clock".to_owned()))?;
+    ExternallyVerifiedBundle::load_path(PACKAGE_LABEL, package_dir, false, ocr.provider(), deadline)
+        .map_err(|error| package_refused(error.to_string()))
+}
+
+/// The check `package_refused` with the loader's text `detail`.
+fn package_refused(detail: String) -> RegressionCheck {
+    RegressionCheck::failed(PACKAGE_AT, RegressionProblem::PackageRefused, Some(detail))
 }
 
 impl RegressionPackage {
     /// Admits the package at `package_dir` as the offline commands admit theirs
     /// (`ExternallyVerifiedBundle::load_path`, the vision provider `ocr` gives, the admission
-    /// deadline of a contained task), with its evaluator and its page set, which must agree. A
-    /// directory that is not there is `package_missing`; any other refusal `package_refused`.
+    /// deadline of a contained task) and takes it as [`Self::from_bundle`] does. A directory that
+    /// is not there is `package_missing`; any other refusal `package_refused`.
     pub fn load(package_dir: &Path, ocr: &LabOcr) -> Result<Self, RegressionCheck> {
-        if !package_dir.is_dir() {
-            return Err(RegressionCheck::failed(
-                PACKAGE_AT,
-                RegressionProblem::PackageMissing,
-                Some(format!("{} is no directory", package_dir.display())),
-            ));
-        }
-        let refused = |detail: String| {
-            RegressionCheck::failed(PACKAGE_AT, RegressionProblem::PackageRefused, Some(detail))
-        };
-        let deadline = Instant::now()
-            .checked_add(Duration::from_millis(
-                ContainedTaskRequest::DEFAULT_RESPONSE_DEADLINE_MS,
-            ))
-            .ok_or_else(|| refused("the admission deadline overflows the clock".to_owned()))?;
-        let admitted = ExternallyVerifiedBundle::load_path(
-            PACKAGE_LABEL,
-            package_dir,
-            false,
-            ocr.provider(),
-            deadline,
-        )
-        .map_err(|error| refused(error.to_string()))?;
-        let loaded = admitted.loaded_bundle();
-        let evaluator = loaded
-            .evaluator()
-            .cloned()
-            .ok_or_else(|| refused("the package gives no recognition evaluator".to_owned()))?;
-        let detector = loaded
+        let admitted = admit(package_dir, ocr)?;
+        Self::from_bundle(admitted.loaded_bundle(), ocr)
+    }
+
+    /// Fix round 1: the package `bundle` already loaded, with its evaluator and its page set, which
+    /// must agree, the `package_id` its control declares, and `ocr` for the expectations that need
+    /// text recognition. A package without an evaluator or a page set, or whose two do not agree,
+    /// is `package_refused`.
+    pub fn from_bundle(bundle: &LoadedBundle, ocr: &LabOcr) -> Result<Self, RegressionCheck> {
+        let evaluator = bundle.evaluator().cloned().ok_or_else(|| {
+            package_refused("the package gives no recognition evaluator".to_owned())
+        })?;
+        let detector = bundle
             .detector()
             .cloned()
-            .ok_or_else(|| refused("the package gives no page set".to_owned()))?;
+            .ok_or_else(|| package_refused("the package gives no page set".to_owned()))?;
         detector
             .validate(&evaluator)
-            .map_err(|error| refused(error.to_string()))?;
+            .map_err(|error| package_refused(error.to_string()))?;
+        let package_id = bundle
+            .control()
+            .and_then(|control| control.get("package_id"))
+            .and_then(Value::as_str)
+            .map(str::to_owned);
         Ok(Self {
             evaluator,
             detector,
             ocr: ocr.clone(),
+            package_id,
         })
     }
 
-    /// The verdict of `case` with its scene `scene_png` on this package: the scene against its
-    /// construction (a scene that does not hold evaluates nothing), the warning
-    /// `resource_regression_scene_outside_rects` when pixels outside the rectangles are not the
-    /// canvas colour, then each expectation in the order of the case: the page, the targets, and
-    /// the expectations not evaluated.
+    /// The verdict of `case` with its scene `scene_png` on this package: fix round 1, the case's
+    /// `package_id` against the one the package declares (a case of another package evaluates
+    /// nothing); the scene against its construction (a scene that does not hold evaluates
+    /// nothing), the warning `resource_regression_scene_outside_rects` when pixels outside the
+    /// rectangles are not the canvas colour, then each expectation in the order of the case: the
+    /// page, the targets, and the expectations not evaluated.
     pub fn run(&self, case: &RegressionCase, scene_png: &[u8]) -> RegressionCaseVerdict {
+        if self.package_id.as_deref() != Some(case.package_id.as_str()) {
+            let declared = self
+                .package_id
+                .as_deref()
+                .map_or_else(|| "none".to_owned(), |declared| format!("{declared:?}"));
+            let refused = RegressionCheck::failed(
+                PACKAGE_AT,
+                RegressionProblem::PackageIdMismatch,
+                Some(format!(
+                    "the case names the package {:?}; the package's control declares {declared}",
+                    case.package_id
+                )),
+            )
+            .with_mismatch(case.package_id.clone(), self.package_id.clone());
+            return case.verdict(vec![refused], Vec::new());
+        }
         let scene = match case.construction.scene(scene_png) {
             Ok(scene) => scene,
             Err(problems) => return case.verdict(problems, Vec::new()),
@@ -454,15 +549,18 @@ impl RegressionPackage {
         }
         // Workflow #392 DA-5cd: the scene in its package's coordinate space, brought there as the
         // offline commands bring a stored image (`scene_in_base`); one that cannot be evaluates
-        // nothing.
+        // nothing. Fix round 1, one cause per word, told apart by the refusal's class: the frame
+        // gate refuses a scene's size as a usage refusal (`lab_scene_size_unsupported`, with the
+        // gate's word), and a frame it could not read at all is relayed as a device error.
         let scene = match scene_in_base(package_base(&self.evaluator), scene) {
             Ok((scene, _)) => scene,
             Err(error) => {
-                let refused = RegressionCheck::failed(
-                    SCENE_AT,
-                    RegressionProblem::SceneSizeUnsupported,
-                    Some(error.message),
-                );
+                let problem = if matches!(error.class, LabErrorClass::UsageValidation) {
+                    RegressionProblem::SceneSizeUnsupported
+                } else {
+                    RegressionProblem::SceneGateUnreadable
+                };
+                let refused = RegressionCheck::failed(SCENE_AT, problem, Some(error.message));
                 return case.verdict(vec![refused], warnings);
             }
         };
@@ -602,11 +700,16 @@ impl Construction {
         let mut problems = Vec::new();
         let actual = format!("{:x}", Sha256::digest(png));
         if actual != self.scene_sha256 {
-            problems.push(RegressionCheck::failed(
-                SCENE_SHA256_AT,
-                RegressionProblem::SceneSha256Mismatch,
-                Some(format!("the scene's bytes have the sha256 {actual}")),
-            ));
+            // Fix round 1: both values, so a reader sees at once what kind of difference it is.
+            let detail = format!("the scene's bytes have the sha256 {actual}");
+            problems.push(
+                RegressionCheck::failed(
+                    SCENE_SHA256_AT,
+                    RegressionProblem::SceneSha256Mismatch,
+                    Some(detail),
+                )
+                .with_mismatch(self.scene_sha256.clone(), Some(actual)),
+            );
         }
         match actingcommand_device::capture::parse_png_dimensions(png) {
             Err(error) => problems.push(RegressionCheck::failed(
@@ -642,8 +745,9 @@ impl Construction {
     fn outside_rects(&self, scene: &Scene) -> usize {
         let width = u64::from(self.canvas.width);
         let mut outside = 0;
-        for (index, pixel) in (0_u64..).zip(scene.rgb8_pixels().chunks_exact(3)) {
-            if pixel == self.canvas.fill.as_slice() {
+        let (pixels, _) = scene.rgb8_pixels().as_chunks::<3>();
+        for (index, pixel) in (0_u64..).zip(pixels) {
+            if *pixel == self.canvas.fill {
                 continue;
             }
             let (x, y) = (index % width, index / width);
@@ -670,6 +774,7 @@ impl RegressionCheck {
             reason: None,
             page: None,
             target: None,
+            mismatch: None,
             detail: None,
         }
     }
@@ -707,6 +812,13 @@ impl RegressionCheck {
     fn with_target(self, target: RegressionTargetCheck) -> Self {
         Self {
             target: Some(target),
+            ..self
+        }
+    }
+
+    fn with_mismatch(self, case: String, found: Option<String>) -> Self {
+        Self {
+            mismatch: Some(RegressionMismatch { case, found }),
             ..self
         }
     }
@@ -758,16 +870,34 @@ fn verdict_of(checks: &[RegressionCheck]) -> RegressionVerdict {
     }
 }
 
-/// What the reader found wrong, each a failed check.
+/// What the reader found wrong, each a failed check, and (fix round 1) the warnings of reading.
 #[derive(Default)]
 struct Reader {
     problems: Vec<RegressionCheck>,
+    warnings: Vec<RegressionWarning>,
 }
 
 impl Reader {
     fn fail(&mut self, at: &str, problem: RegressionProblem, detail: String) {
         self.problems
             .push(RegressionCheck::failed(at, problem, Some(detail)));
+    }
+
+    /// Fix round 1: the case's top level `document` is open. Each member of it the contract does
+    /// not name is read past and named once in the warning `case_member_unknown` (`member`, when
+    /// its name is one the key table takes), never a failure: the repositories' own runners read
+    /// past such a member too.
+    fn open_top(&mut self, document: &Map<String, Value>) {
+        for name in document.keys() {
+            if TOP_MEMBERS.contains(&name.as_str()) {
+                continue;
+            }
+            let mut warning = Outcome::new(LabCode::CaseMemberUnknown);
+            if is_key_name(name) {
+                warning = warning.member(name.as_str());
+            }
+            self.warnings.push(RegressionWarning { outcome: warning });
+        }
     }
 
     /// Every member of the closed object `object` at `at` that is not one of `members` is
@@ -823,7 +953,12 @@ impl Reader {
     }
 
     /// The member `name` of `object`, a text that is not empty.
-    fn text(&mut self, object: &Map<String, Value>, at: &str, name: &str) -> Option<String> {
+    fn string_member(
+        &mut self,
+        object: &Map<String, Value>,
+        at: &str,
+        name: &str,
+    ) -> Option<String> {
         match self.required(object, at, name)? {
             Value::String(text) if !text.is_empty() => Some(text.clone()),
             _ => {
@@ -840,7 +975,7 @@ impl Reader {
     /// The member `name` of `object`, one name of a file or a directory: no separator, no drive,
     /// not `.` or `..`.
     fn file_name(&mut self, object: &Map<String, Value>, at: &str, name: &str) -> Option<String> {
-        let text = self.text(object, at, name)?;
+        let text = self.string_member(object, at, name)?;
         let single = text != "."
             && text != ".."
             && !text.contains(['/', '\\', ':'])
@@ -885,7 +1020,7 @@ impl Reader {
         let at = "/scene_construction";
         let construction = self.object(document, "", "scene_construction")?;
         self.closed(construction, at, &CONSTRUCTION_MEMBERS);
-        if let Some(kind) = self.text(construction, at, "kind")
+        if let Some(kind) = self.string_member(construction, at, "kind")
             && kind != SCENE_KIND
         {
             self.fail(
@@ -896,7 +1031,7 @@ impl Reader {
         }
         let canvas = self.canvas(construction, at);
         let rects = self.rects(construction, at, canvas);
-        let scene_sha256 = match self.text(construction, at, "scene_sha256") {
+        let scene_sha256 = match self.string_member(construction, at, "scene_sha256") {
             Some(hex)
                 if hex.len() == 64
                     && hex
@@ -1144,7 +1279,7 @@ impl Reader {
             return None;
         };
         self.closed(entry, at, &RECOGNIZE_MEMBERS);
-        let target = self.text(entry, at, "target");
+        let target = self.string_member(entry, at, "target");
         let passed = match self.required(entry, at, "passed")? {
             Value::Bool(passed) => Some(*passed),
             _ => {
@@ -1162,6 +1297,12 @@ impl Reader {
             passed: passed?,
         })
     }
+}
+
+/// Whether `text` is a value the key table takes for a key of type name: at most
+/// [`NAME_MAX_BYTES`] bytes, no control character.
+fn is_key_name(text: &str) -> bool {
+    text.len() <= NAME_MAX_BYTES && !text.chars().any(char::is_control)
 }
 
 /// The JSON pointer of the member `name` of the object at `parent` (RFC 6901).

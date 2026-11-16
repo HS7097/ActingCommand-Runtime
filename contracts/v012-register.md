@@ -32150,6 +32150,59 @@ case of the tests, is evaluated as it is.
 
 **At deploy.** Nothing to configure: the operation runs from the Tools and reads a checkout.
 
+**Fix round 1** (coordinator work order `rd-1116/brief-463-rc1-fix1.md`, after the independent
+review `rd-1116/review-1793.md` on `efde021d` and CI on it, the coordinator's rulings R1 to R5).
+
+- *The two red checks* (R1). The scene rule's loop reads the pixels with `as_chunks::<3>()`
+  (clippy's `chunks_exact_to_as_chunks`); the reader's method `text`, which the workspace guard
+  `lab_input_face_is_semantic_input_executor` took for `LabInputPort::text`, is `string_member`.
+- *A failing run's answer is delivered* (R2). The answer no longer carries every case whole. A row
+  is a case, short: `{path, id, package_id, verdict, checks, warnings?}`, its `checks` only those
+  that did not pass, each with its word and what it names and without its `detail`. When a case
+  failed, the refusal's details are `repo`, `counts`, `failed_total` (the cases that did not pass:
+  failed and partial), `listed` and `cases`, the rows of the first of them up to the operation's
+  bound `ROWS_LISTED_MAX` (10), the failed cases first, and the message names the first failed
+  case: the Lab's own line and the MCP server's answer always fit and say which cases failed
+  first. A success answers `counts`, and the rows of every selected case only when `--game`,
+  `--case` or `--package-id` asked for them; `after_child` keeps `counts` beside an exported
+  success line (the member `failed` is gone).
+- *What the reader is strict about* (R3). The top level of a case is open: a member of it the
+  contract does not name is read past and named once in the case's new warning
+  `case_member_unknown` (lab, `member` optional); inside `scene_construction`, `expect`,
+  `expect.observe` and a `recognize` entry an unknown member stays `member_unknown`.
+  `scene_sha256` stays the SHA-256 of the scene file's bytes and a mismatch a failure; the contract
+  says that the value of the cases written before it was never checked by anything, and the check
+  carries `mismatch` `{case, found}`, both values. A run with partial cases answers once the new
+  warning `resource_regression_partial` (actinglab, `count`), exit 0 when no case failed. The
+  case's `package_id` is checked against the one its package's control declares, before anything
+  else: the new word `package_id_mismatch`, with both in `mismatch`. A scene the frame gate could
+  not read at all is the new word `scene_gate_unreadable`, told from `scene_size_unsupported` by
+  the refusal's class (`LabErrorClass::UsageValidation` for a size).
+- *For the next slice* (R4). `run_regression_case_on_bundle(bundle: &LoadedBundle, case_json:
+  &[u8], scene_png: &[u8], ocr: &LabOcr) -> RegressionCaseVerdict` runs a case on a package already
+  loaded, through `RegressionPackage::from_bundle(bundle, ocr)`; `run_regression_case` by directory
+  admits the package and calls it, and `RegressionPackage::load` takes the admitted package by
+  `from_bundle`.
+- *Texts* (R5). The contract and the catalog say the exit status on each line: `resource
+  regression` refusing `resource_regression_failed` exits 1 on actinglab's own line and 2 on the
+  `--via` line. The contract, the operation table's row, the MCP manual and `after_child` say the
+  new answer. The row's `help` is shortened to 150 bytes (`host-lab`'s `lab_ops_table_complete`
+  holds every help to 1 to 160 bytes; it had 168).
+- *Codes and words.* New codes `case_member_unknown` (lab, warning, exit 0) and
+  `resource_regression_partial` (actinglab, warning, `count`, exit 0 when no case failed); new
+  words of `regression_problem` `package_id_mismatch` and `scene_gate_unreadable`. The outcome-code
+  index is regenerated.
+- *Tests* (`gate_463_rc1.rs`, apps gate map "#463 RC-1 fix round 1"). New: text recognition
+  unavailable (`ocr_unavailable`, the case `partial`); target consensus over two frames
+  (`frames_required`); a scene smaller than its package (`scene_size_unsupported`); a package
+  missing from the checkout (`package_missing`); `--game` and `--package-id`; the refusal of a
+  filter that selects no case; the top-level unknown member's warning; the partial warning; the
+  `package_id` mismatch; a failing run of the bound plus two failed cases, listing the first
+  `ROWS_LISTED_MAX`. Adapted, as the requirement changes what they pin: the sha256 test (both
+  values), the other-schema test (its rows asked for with `--game`), the three-case test (the one
+  row of the case that did not pass), `writes_nothing` (the checkout it ran on, byte for byte, and
+  nothing beside it). No test leaves a gate map.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

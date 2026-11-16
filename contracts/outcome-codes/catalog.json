@@ -5535,6 +5535,9 @@
         "scene_size_unsupported": {
           "description": "The scene cannot be brought to its package's coordinate space as the offline commands bring a stored image there (they refuse it lab_scene_size_unsupported)."
         },
+        "scene_gate_unreadable": {
+          "description": "Fix round 1: the kernel's frame gate for a Lab frame could not read the scene at all (no size of it is refused: the offline commands relay it as a device error)."
+        },
         "rect_outside_canvas": {
           "description": "A rectangle of scene_construction.rects does not lie inside the canvas."
         },
@@ -5543,6 +5546,9 @@
         },
         "package_refused": {
           "description": "The kernel's admission refused the package, or it gives no evaluator or page set."
+        },
+        "package_id_mismatch": {
+          "description": "Fix round 1: the case's package_id is not the one its package's control declares."
         },
         "page_conflict": {
           "description": "Several pages of the package matched the scene."

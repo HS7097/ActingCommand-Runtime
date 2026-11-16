@@ -11,7 +11,7 @@
 //!   rows of today's `ac_record_stop`, `ac_lab_observe` and `ac_lab_do`, each with the parts its
 //!   exported line keeps inline and whether a capture records a client action. The operation
 //!   table cannot say either (see the table). #463 RC-1: and `resource regression`, which keeps
-//!   its counts and its failed cases.
+//!   its counts (fix round 1: a failing run's line is bounded by its operation and fits).
 //! - **The client action after a capture** ([`client_action`]; today's `author` and
 //!   `record_action`): once the child of a call of `observe` or `do` with `capture` true answered,
 //!   whatever its `dry_run` says (the coordinator's ruling 2 of 2026-11-13: as today's server
@@ -78,9 +78,11 @@ const FRAME_PARTS: [&str; 5] = [
     "next_frame",
     "after_attachment",
 ];
-/// #463 RC-1: the parts of a `resource regression` line kept beside its export, in this order: the
-/// counts of the cases' verdicts and the paths of the failed cases (`cases` is what grows).
-const REGRESSION_PARTS: [&str; 2] = ["counts", "failed"];
+/// #463 RC-1: the parts of a `resource regression` success line kept beside its export: the counts
+/// of the cases' verdicts (`cases`, the rows a filter asked for, is what grows). Fix round 1: a
+/// failing run's line lists at most its operation's bound of rows, so it fits and is never
+/// exported, as no failure line is.
+const REGRESSION_PARTS: [&str; 1] = ["counts"];
 
 /// What a line written whole to the export keeps inline beside `{req_id, export, overflowed}`.
 #[derive(Debug, Clone, Copy)]

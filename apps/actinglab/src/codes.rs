@@ -163,9 +163,14 @@ actingcommand_contract::outcome_codes! {
         // ---- end of #463 S3-7
         // ---- #463 RC-1 (pending): `actinglab resource regression`
         // (contracts/resource-regression-case.md, "The operation").
-        /// Error. At least one regression case of the checkout failed; every selected case was run
-        /// and the details are the whole answer (no keys).
+        /// Error. At least one regression case of the checkout failed; every selected case was run.
+        /// Fix round 1: the details are the counts and the short rows of the first cases that did
+        /// not pass, failed first, at most `ROWS_LISTED_MAX` (no keys). Exit 1 on actinglab's own
+        /// line, 2 on the `--via` line.
         ResourceRegressionFailed => "resource_regression_failed": error / none,
+        /// Warning. #463 RC-1 fix round 1: cases of the run are partial: what ran passed and
+        /// something did not run (key `count`: how many); a run with no failed case succeeds.
+        ResourceRegressionPartial => "resource_regression_partial": warning / none,
         // ---- end of #463 RC-1
         // ---- Workflow #411 B34 (slice E4, pending): `package check` warns on a click box of one
         // point.

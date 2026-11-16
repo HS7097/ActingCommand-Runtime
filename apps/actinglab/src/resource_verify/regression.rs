@@ -13,19 +13,27 @@
 //!   readable `case.json` is a case of its own, `failed` (`case_missing`), unless `--package-id`
 //!   is given, since its package is not known. No case selected is refused.
 //! - **The package** of a case is admitted once per run, however many cases name it.
-//! - **The answer**: `repo`, `counts`, `failed` (the paths of the failed cases) and `cases`, each
-//!   with its `path`, `game` and `case` beside its verdict; a case's warnings are also written to
-//!   stderr as developer lines. When a case failed, the answer is the details of the refusal
-//!   `resource_regression_failed` (exit 1 on actinglab's own line); otherwise it is the result.
+//! - **The answer** (fix round 1: it always fits and says which cases failed first): `repo` and
+//!   `counts`; a short row of a case ([`CaseRow`]) is its `path`, `id`, `package_id`, verdict, the
+//!   checks that did not pass (each with its word and what it names, without its `detail`) and its
+//!   warnings. When a case failed, the answer is the details of the refusal
+//!   `resource_regression_failed` (exit 1 on actinglab's own line, 2 on the `--via` line) and its
+//!   `cases` are the rows of the cases that did not pass, the failed ones first, at most
+//!   [`ROWS_LISTED_MAX`], with `failed_total` (how many did not pass) and `listed`. Otherwise it is
+//!   the result, with `cases` only when `--game`, `--case` or `--package-id` asked for them: every
+//!   selected case's row. Partial cases are said aloud: the warning `resource_regression_partial`
+//!   with their count, in `warnings`. A case's warnings are also written to stderr as developer
+//!   lines.
 //! - It reads only: nothing is written, no Runtime is reached, no device is touched.
 
 use crate::cli_module::PROGRAM;
 use crate::codes::ActinglabCode;
 use crate::{CliError, CliOutcome, ErrorKind, FlagArgs, GlobalOptions};
+use actingcommand_contract::outcome::Outcome;
 use actingcommand_lab::{
     LabOcr, REGRESSION_CASE_FILE, RegressionCase, RegressionCaseVerdict, RegressionCheck,
-    RegressionCounts, RegressionPackage, RegressionProblem, RegressionVerdict,
-    read_regression_case,
+    RegressionCounts, RegressionPackage, RegressionProblem, RegressionResult, RegressionVerdict,
+    RegressionWarning, read_regression_case,
 };
 use actingcommand_lab_ops::cli_line;
 use serde::Serialize;
@@ -41,6 +49,10 @@ pub(crate) const REGRESSION_FLAGS: [&str; 3] = ["--repo", "--case", "--package-i
 /// packages, by `package_id`.
 const REGRESSION_DIRECTORY: &str = "regression";
 const PACKS_DIRECTORY: &str = "packs";
+/// Fix round 1: the most rows of cases that did not pass a failing run lists, the failed ones
+/// first; the rest are counted in `failed_total` and left out, so that the refusal fits the Lab's
+/// own line and the MCP server's answer budget whatever the number of cases.
+pub(crate) const ROWS_LISTED_MAX: usize = 10;
 
 pub(crate) fn regression_options() -> [&'static str; 4] {
     [
@@ -66,24 +78,42 @@ struct CaseDirectory {
     path: PathBuf,
 }
 
-/// One case of the answer: where it is, and its verdict.
-#[derive(Serialize)]
-struct CaseAnswer {
-    /// `regression/<game>/<case>`, relative to the checkout.
+/// One case run: where it is (`regression/<game>/<case>`, relative to the checkout) and its
+/// verdict.
+struct CaseRun {
     path: String,
-    game: String,
-    case: String,
-    #[serde(flatten)]
     verdict: RegressionCaseVerdict,
 }
 
-/// The answer: the counts, the failed cases' paths, then every case.
+/// Fix round 1: one case of the answer, short: where it is, its `id` and `package_id` (`null`
+/// when its `case.json` gives none as text), its verdict, the checks that did not pass (failed or
+/// not run, each with its word and what it names: its place `at`, the page, the target, the two
+/// values compared; without the `detail` text) and its warnings. Never the case's document.
+#[derive(Serialize)]
+struct CaseRow {
+    path: String,
+    id: Option<String>,
+    package_id: Option<String>,
+    verdict: &'static str,
+    checks: Vec<RegressionCheck>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    warnings: Vec<RegressionWarning>,
+}
+
+/// The answer: the counts; when a case failed, how many did not pass and how many rows are listed;
+/// the rows (see the module header); the run's warnings.
 #[derive(Serialize)]
 struct RegressionAnswer {
     repo: String,
     counts: RegressionCounts,
-    failed: Vec<String>,
-    cases: Vec<CaseAnswer>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    failed_total: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    listed: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cases: Option<Vec<CaseRow>>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    warnings: Vec<Value>,
 }
 
 /// The packages a run admitted, by `package_id`, each once.
@@ -97,59 +127,119 @@ pub(crate) fn run_resource_regression(
     let request = parse_request(global, flags)?;
     let ocr = crate::offline_ocr::lab_ocr();
     let mut packages = Packages::new();
-    let mut cases = Vec::new();
+    let mut runs = Vec::new();
     for directory in case_directories(&request)? {
-        if let Some(case) = run_case(&request, directory, &mut packages, ocr) {
-            cases.push(case);
+        if let Some(run) = run_case(&request, directory, &mut packages, ocr) {
+            runs.push(run);
         }
     }
-    if cases.is_empty() {
+    if runs.is_empty() {
         return Err(CliError::usage(format!(
             "resource regression found no case under {} that its filters select",
             request.repo.join(REGRESSION_DIRECTORY).display()
         )));
     }
-    for case in &cases {
-        for warning in &case.verdict.warnings {
+    for run in &runs {
+        for warning in &run.verdict.warnings {
             eprintln!(
                 "{}",
-                cli_line::developer_text(PROGRAM, &warning.outcome, Some(case.path.as_str()))
+                cli_line::developer_text(PROGRAM, &warning.outcome, Some(run.path.as_str()))
             );
         }
     }
-    let counts = RegressionCounts::of(cases.iter().map(|case| &case.verdict));
-    let failed = cases
+    let counts = RegressionCounts::of(runs.iter().map(|run| &run.verdict));
+    // Fix round 1: partial cases are said aloud, never passed silently.
+    let mut warnings = Vec::new();
+    if counts.partial > 0 {
+        let partial = Outcome::new(ActinglabCode::ResourceRegressionPartial).count(counts.partial);
+        eprintln!("{}", cli_line::developer_text(PROGRAM, &partial, None));
+        warnings.push(cli_line::warning(&partial));
+    }
+    let repo = request.repo.display().to_string();
+    if counts.failed == 0 {
+        let asked =
+            request.game.is_some() || request.case.is_some() || request.package_id.is_some();
+        let answer = RegressionAnswer {
+            repo,
+            counts,
+            failed_total: None,
+            listed: None,
+            cases: asked.then(|| runs.iter().map(CaseRow::of).collect()),
+            warnings,
+        };
+        return answer_value(&answer);
+    }
+    // Fix round 1: the cases that did not pass, the failed ones first, each group in the order of
+    // their paths; the first `ROWS_LISTED_MAX` of them are listed.
+    let did_not_pass = [RegressionVerdict::Failed, RegressionVerdict::Partial]
+        .into_iter()
+        .flat_map(|verdict| {
+            runs.iter()
+                .filter(move |run| run.verdict.verdict == verdict)
+        })
+        .collect::<Vec<_>>();
+    let rows = did_not_pass
         .iter()
-        .filter(|case| case.verdict.verdict == RegressionVerdict::Failed)
-        .map(|case| case.path.clone())
+        .copied()
+        .take(ROWS_LISTED_MAX)
+        .map(CaseRow::of)
         .collect::<Vec<_>>();
     let message = format!(
-        "{} of {} regression cases failed ({}); the details are the answer",
-        failed.len(),
+        "{} of {} regression cases failed, the first {}; the details list the first {} of the {} \
+         cases that did not pass, the failed ones first",
+        counts.failed,
         counts.cases,
-        failed.join(", ")
+        rows.first().map_or("", |row| row.path.as_str()),
+        rows.len(),
+        did_not_pass.len()
     );
     let answer = RegressionAnswer {
-        repo: request.repo.display().to_string(),
+        repo,
         counts,
-        failed,
-        cases,
+        failed_total: Some(did_not_pass.len()),
+        listed: Some(rows.len()),
+        cases: Some(rows),
+        warnings,
     };
-    let value = serde_json::to_value(&answer).map_err(|error| {
-        CliError::device(format!(
-            "the answer of resource regression does not serialize: {error}"
-        ))
-    })?;
-    if counts.failed == 0 {
-        return Ok(value);
-    }
     Err(CliError::new(
         ErrorKind::UsageValidation,
         ActinglabCode::ResourceRegressionFailed.as_str(),
         message,
         &[],
     )
-    .with_details(value))
+    .with_details(answer_value(&answer)?))
+}
+
+/// `answer` as the command's JSON value.
+fn answer_value(answer: &RegressionAnswer) -> CliOutcome<Value> {
+    serde_json::to_value(answer).map_err(|error| {
+        CliError::device(format!(
+            "the answer of resource regression does not serialize: {error}"
+        ))
+    })
+}
+
+impl CaseRow {
+    /// The short row of the case run `run`.
+    fn of(run: &CaseRun) -> Self {
+        let verdict = &run.verdict;
+        Self {
+            path: run.path.clone(),
+            id: verdict.id.clone(),
+            package_id: verdict.package_id.clone(),
+            verdict: verdict.verdict.as_str(),
+            checks: verdict
+                .checks
+                .iter()
+                .filter(|check| check.result != RegressionResult::Passed)
+                .map(|check| RegressionCheck {
+                    detail: None,
+                    ..check.clone()
+                })
+                .collect(),
+            warnings: verdict.warnings.clone(),
+        }
+    }
 }
 
 /// The usage checks, before anything is read: the global options that name a device, a Runtime,
@@ -265,7 +355,7 @@ fn run_case(
     directory: CaseDirectory,
     packages: &mut Packages,
     ocr: &LabOcr,
-) -> Option<CaseAnswer> {
+) -> Option<CaseRun> {
     let path = format!(
         "{REGRESSION_DIRECTORY}/{}/{}",
         directory.game, directory.case
@@ -306,12 +396,7 @@ fn run_case(
             }
         },
     };
-    Some(CaseAnswer {
-        path,
-        game: directory.game,
-        case: directory.case,
-        verdict,
-    })
+    Some(CaseRun { path, verdict })
 }
 
 /// The verdict of the read case `case` of the directory `directory`: its scene read, its package

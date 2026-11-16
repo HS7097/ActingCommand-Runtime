@@ -291,6 +291,22 @@
       "description": "#463 RC-1 (contracts/resource-regression-case.md, the scene rule): count pixels of a regression case's scene that lie outside every rectangle of its scene_construction are not the canvas colour (scene_construction.canvas.fill). The case still runs and its verdict does not change for it; the warning is among the case's warnings.",
       "common_causes": "A hand-made scene pasted more of the source frame than its rectangles name, or the rectangles do not name every patch; the canvas colour in case.json is not the one the scene was drawn on.",
       "handling": "List every pasted patch in scene_construction.rects, or paste only what they name onto a canvas of the fill colour, and update scene_sha256 with the scene's new bytes."
+    },
+    "case_member_unknown": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "lab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "member": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.69",
+      "description": "#463 RC-1 fix round 1 (contracts/resource-regression-case.md, the reader): a member of a regression case's top level that the contract does not name. The top level is open: the reader reads past it and names it once in this warning among the case's warnings, first; the case is read and run as if it were not there and its verdict does not change for it (resource regression exits 0 for it). member is its name, when it is a text of at most 256 bytes without a control character. Inside the parts the runner evaluates (scene_construction, expect, expect.observe, an entry of expect.recognize) an unknown member stays the failure member_unknown.",
+      "common_causes": "The repository writes a member of its own into its cases (a note, a reviewer, a date) that its own runner ignores, or a member of a later version of the format.",
+      "handling": "Nothing to do when the member is the repository's own note. If it was meant as one of the contract's members, correct its name."
     }
   },
   "locations": {

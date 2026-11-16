@@ -94,6 +94,10 @@ actingcommand_contract::outcome_codes! {
         /// `scene_construction` are not the canvas colour (key `count`: how many); the case still
         /// runs.
         ResourceRegressionSceneOutsideRects => "resource_regression_scene_outside_rects": warning / none,
+        /// Warning. #463 RC-1 fix round 1: a member of a regression case's top level that the
+        /// contract does not name is read past, never a failure (optional key `member`: its name);
+        /// the case still runs.
+        CaseMemberUnknown => "case_member_unknown": warning / none,
     }
 }
 
@@ -451,12 +455,17 @@ actingcommand_contract::outcome_vocabulary! {
         /// The scene cannot be brought to its package's coordinate space as the offline commands
         /// bring a stored image there (they refuse it `lab_scene_size_unsupported`).
         SceneSizeUnsupported => "scene_size_unsupported",
+        /// Fix round 1: the kernel's frame gate for a Lab frame could not read the scene at all
+        /// (no size of it is refused: the offline commands relay it as a device error).
+        SceneGateUnreadable => "scene_gate_unreadable",
         /// A rectangle of `scene_construction.rects` does not lie inside the canvas.
         RectOutsideCanvas => "rect_outside_canvas",
         /// The case's package is no directory.
         PackageMissing => "package_missing",
         /// The kernel's admission refused the package, or it gives no evaluator or page set.
         PackageRefused => "package_refused",
+        /// Fix round 1: the case's `package_id` is not the one its package's control declares.
+        PackageIdMismatch => "package_id_mismatch",
         /// Several pages of the package matched the scene.
         PageConflict => "page_conflict",
         /// The kernel recognised another page, or none, than the case expects.
