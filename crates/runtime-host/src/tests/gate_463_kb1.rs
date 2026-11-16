@@ -16,6 +16,15 @@
 //!   refused `application_not_foreground` and nothing reaches the device; with the assigned one in
 //!   front the key reaches it.
 //!
+//! Fix round 1 (the coordinator's rulings R2, R3 and R5 of 11-16):
+//!
+//! - A back key the Nemu input refuses before it sends anything because its library lacks the key
+//!   calls (the device's refusal `input_unsupported`, which the fake input answers here) is denied
+//!   `nemu_input_capability_unsupported`: nothing performed, the input's failure record says its
+//!   effect not performed, and the lease is kept.
+//! - On an instance whose input is `adb_shell_input`, another key is refused before anything is
+//!   sent and before an intent is written, as on the Nemu input; the back key reaches the device.
+//!
 //! Nothing here sleeps or reads a clock.
 
 use super::*;
@@ -59,6 +68,38 @@ fn observed_frame(client: &mut TestClient) -> InputFrameReference {
         width: observation.width(),
         height: observation.height(),
     }
+}
+
+/// Fix round 1: a host whose one instance is configured with the touch backend `touch` and the
+/// capture backend `capture` (neutral values), on the fake device `state`.
+fn configured_host(
+    root: &TempDir,
+    state: &Arc<FakeState>,
+    touch: &str,
+    capture: &str,
+) -> RuntimeHost {
+    let provider = FakeProvider::one(ALIAS, instance_id(), Arc::clone(state));
+    let resolved = provider
+        .resolve(ALIAS)
+        .expect("the instance")
+        .with_configuration(EffectiveDeviceConfiguration {
+            input_backend: touch.to_owned(),
+            capture_backend: capture.to_owned(),
+            input_adb: "<sealed-test>".to_owned(),
+            capture_adb: "<sealed-test>".to_owned(),
+            configured_serial: None,
+            resolved_serial: "TESTSERIAL0463".to_owned(),
+            input_command_timeout_ms: 5_000,
+            capture_command_timeout_ms: 5_000,
+            capture_timeout_ms: 5_000,
+            configured_mumu_root: None,
+            configured_capture_dll: None,
+        });
+    RuntimeHost::start(
+        config(root),
+        Arc::new(provider.with_resolved_for(ALIAS, resolved)),
+    )
+    .expect("runtime host")
 }
 
 /// `action` under `token`, on `frame` when one is given; its receipt.
@@ -301,5 +342,130 @@ fn kb1_the_foreground_gate_holds_a_key_as_it_holds_a_tap() {
         RuntimeReceiptState::Completed
     );
     drop(client);
+    host.close().expect("close host");
+}
+
+// Fix round 1 (R2, R5): on an instance whose input is the emulator's own, the back key on a frame
+// the Runtime captured, which its input refuses before it sends anything because the library lacks
+// the key calls (the device's refusal `input_unsupported`), is the capability's refusal: denied
+// `nemu_input_capability_unsupported`, nothing performed on the device, the input's one failure
+// record saying its effect not performed (nothing recorded as indeterminate, nothing committed),
+// and the lease kept, as for a key the host refuses itself.
+#[test]
+fn kb1_fix1_a_key_the_library_cannot_send_is_denied_and_recorded_not_performed() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    *state.input_error_once.lock().expect("one-shot input error") =
+        Some(DeviceError::fatal("neutral library without the key calls").with_input_unsupported());
+    let host = configured_host(&root, &state, "nemu_ipc", "nemu_ipc");
+    let mut observer = TestClient::connect(&host);
+    let frame = observed_frame(&mut observer);
+    let mut client = TestClient::connect(&host);
+    let (_, token) = client.acquire(ALIAS);
+
+    let receipt = input(&mut client, &token, Some(frame), back());
+    assert_eq!(receipt.state(), RuntimeReceiptState::Denied, "{receipt:?}");
+    assert_eq!(
+        receipt.outcome().code().as_str(),
+        UNSUPPORTED,
+        "{receipt:?}"
+    );
+    assert_eq!(
+        state.input_count.load(Ordering::Acquire),
+        0,
+        "nothing performed"
+    );
+    let events = host
+        .query_persisted_events_for_test(EventQuery::default())
+        .expect("the ledger");
+    let effects = events
+        .iter()
+        .filter_map(|event| match event.payload() {
+            EventPayload::Input(InputPayload::Failed(failed)) => Some(failed.effect_disposition()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        effects,
+        [EffectDisposition::NotPerformed],
+        "the input's record"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| event.event_type() == EventType::InputCommitted),
+        "nothing committed"
+    );
+    let release = client.request(RuntimeOperation::ReleaseLease { token });
+    assert_eq!(
+        client.send(&release).state(),
+        RuntimeReceiptState::Completed,
+        "the lease was kept"
+    );
+    drop(observer);
+    drop(client);
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close host");
+}
+
+// Fix round 1 (R3, R5): on an instance whose input is `adb_shell_input`, which sends the back key
+// alone, another key (by its word, its Android code and a word of no key) is refused before
+// anything is sent and before an intent is written, as on the Nemu input: denied
+// `nemu_input_capability_unsupported`, no input record in the ledger, nothing on the device. The
+// back key is then completed and reaches the device once.
+#[test]
+fn kb1_fix1_adb_shell_input_refuses_another_key_before_its_intent() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let host = configured_host(&root, &state, "adb_shell_input", "adb");
+    let mut client = TestClient::connect(&host);
+    let (_, token) = client.acquire(ALIAS);
+
+    for key in ["home", "3", "neutral"] {
+        let receipt = input(
+            &mut client,
+            &token,
+            None,
+            InputAction::Key {
+                key: key.to_owned(),
+            },
+        );
+        assert_eq!(
+            receipt.state(),
+            RuntimeReceiptState::Denied,
+            "{key}: {receipt:?}"
+        );
+        assert_eq!(
+            receipt.outcome().code().as_str(),
+            UNSUPPORTED,
+            "{key}: {receipt:?}"
+        );
+    }
+    let events = host
+        .query_persisted_events_for_test(EventQuery::default())
+        .expect("the ledger");
+    assert!(
+        !events.iter().any(|event| matches!(
+            event.event_type(),
+            EventType::InputIntent | EventType::InputFailed | EventType::InputCommitted
+        )),
+        "no input record"
+    );
+    assert!(device_inputs(&state).is_empty(), "nothing was sent");
+
+    let receipt = input(&mut client, &token, None, back());
+    assert_eq!(
+        receipt.state(),
+        RuntimeReceiptState::Completed,
+        "{receipt:?}"
+    );
+    assert_eq!(device_inputs(&state), [back()], "the back key, once");
+    let release = client.request(RuntimeOperation::ReleaseLease { token });
+    assert_eq!(
+        client.send(&release).state(),
+        RuntimeReceiptState::Completed
+    );
+    drop(client);
+    assert!(host.fatal_error().expect("runtime health").is_none());
     host.close().expect("close host");
 }

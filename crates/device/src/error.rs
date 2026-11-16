@@ -632,9 +632,31 @@ struct StoredDeviceEvidence {
     input_check_stop: Option<crate::InputCheckStop>,
     /// #402 HS-3: why a paired Nemu open found no application index.
     nemu_app_index_problem: Option<NemuAppIndexProblem>,
+    /// Workflow #463 KB-1 fix round 1 (R2): the backend refused the input before it sent
+    /// anything, because it does not perform it.
+    input_unsupported: bool,
 }
 
 impl DeviceError {
+    /// Workflow #463 KB-1 fix round 1 (the coordinator's ruling R2 of 11-16): this error as the
+    /// refusal of an input its backend does not perform, made before anything was sent (the Nemu
+    /// input's key on an emulator library without the key calls). Not a device failure: the
+    /// Runtime answers it as the input capability's denial, nothing performed.
+    pub fn with_input_unsupported(mut self) -> Self {
+        self.evidence
+            .get_or_insert_with(Default::default)
+            .input_unsupported = true;
+        self
+    }
+
+    /// Workflow #463 KB-1 fix round 1 (R2): whether the backend refused the input before it sent
+    /// anything, because it does not perform it ([`Self::with_input_unsupported`]).
+    pub fn input_unsupported(&self) -> bool {
+        self.evidence
+            .as_deref()
+            .is_some_and(|evidence| evidence.input_unsupported)
+    }
+
     /// ISO-2b (#419 R1, ISO-M row E08): an input that its operation check
     /// ([`crate::InputOperationCheck`]) stopped because the work that admitted it ended
     /// (`stop`), not because the device failed. The input cannot go on, so the error is fatal to

@@ -66,6 +66,9 @@ pub(super) struct FakeDevice {
     pub(super) touched_displays: Vec<i32>,
     /// Workflow #463 KB-1: whether the library offers the two key calls.
     pub(super) key_calls: bool,
+    /// Workflow #463 KB-1 fix round 1: what the native key down and key up return; 0 confirms.
+    pub(super) key_down_code: i32,
+    pub(super) key_up_code: i32,
 }
 
 impl FakeDevice {
@@ -90,6 +93,8 @@ impl FakeDevice {
             calls: Vec::new(),
             touched_displays: Vec::new(),
             key_calls: true,
+            key_down_code: 0,
+            key_up_code: 0,
         }
     }
 
@@ -190,11 +195,16 @@ impl NemuTouchPort for FakeDevice {
 
     fn key_native(&mut self, call: NemuKeyCall) -> DeviceResult<i32> {
         self.touched_displays.push(self.display);
-        self.calls.push(match call {
-            NemuKeyCall::Down(vendor_key) => Call::KeyDown(vendor_key),
-            NemuKeyCall::Up(vendor_key) => Call::KeyUp(vendor_key),
-        });
-        Ok(0)
+        Ok(match call {
+            NemuKeyCall::Down(vendor_key) => {
+                self.calls.push(Call::KeyDown(vendor_key));
+                self.key_down_code
+            }
+            NemuKeyCall::Up(vendor_key) => {
+                self.calls.push(Call::KeyUp(vendor_key));
+                self.key_up_code
+            }
+        })
     }
 }
 

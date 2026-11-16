@@ -10,7 +10,8 @@ use actingcommand_contract::{
     RuntimeInstanceStatus, RuntimeReceipt, RuntimeReceiptState, RuntimeResult,
 };
 use actingcommand_device::{
-    CaptureBackendChoice, Frame, NemuInputSupport, TouchBackendChoice, combine_operation_and_close,
+    CaptureBackendChoice, DeviceKey, Frame, NemuInputSupport, TouchBackendChoice,
+    combine_operation_and_close,
 };
 use actingcommand_lab::{
     AfterCapture, AttachFrameRequest, CapturedFrame, ClickEffect, ClickPlan, CommitClickRequest,
@@ -1564,9 +1565,11 @@ pub(crate) fn run_direct_input(
 /// (`input.key`, `input.text`). Decided by that table, the fact the Runtime's refusal rests on,
 /// not by the refusal's code. Any other failure, or a status read that fails, is answered as it
 /// is. Workflow #463 KB-1 (register §1.447): the table says `input.key` supported on the
-/// emulator's own input, `nemu_ipc`, and on `adb_shell_input`, which send the back key alone, so a
-/// refused key there carries no hint (the refusal, `nemu_input_capability_unsupported` on the
-/// former, stays); it still says `input.text` unsupported there, and `input.key` on `minitouch`.
+/// emulator's own input, `nemu_ipc`, and on `adb_shell_input`, which send the back key alone; it
+/// still says `input.text` unsupported there, and `input.key` on `minitouch`. Fix round 1 (the
+/// coordinator's ruling R3 of 11-16): a refused key outside the key vocabulary (`DeviceKey`) on
+/// an input that sends that vocabulary alone (`DeviceKey::sent_alone_by`, the input the table
+/// names) carries the hint that this input sends only `back`, and what presses instead.
 fn with_unsendable_hint(
     mut error: CliError,
     instance: &str,
@@ -1576,13 +1579,27 @@ fn with_unsendable_hint(
         DirectInputCommand::Key(_) => (EmulatorCapability::InputKey, "key"),
         DirectInputCommand::Text(_) => (EmulatorCapability::InputText, "text"),
     };
-    let Some(input) = unsupported_input(instance, capability) else {
+    let Some((input, implemented)) = table_input(instance, capability) else {
         return error;
     };
-    let hint = format!(
-        "this instance's input ({input}) sends no {sent}: press the screen's own control \
-         instead, with tap x y or do --capture with the package's element"
-    );
+    let hint = if !implemented {
+        format!(
+            "this instance's input ({input}) sends no {sent}: press the screen's own control \
+             instead, with tap x y or do --capture with the package's element"
+        )
+    } else if let DirectInputCommand::Key(key) = command
+        && DeviceKey::named(key).is_none()
+        && TouchBackendChoice::parse(&input).is_ok_and(DeviceKey::sent_alone_by)
+    {
+        format!(
+            "this instance's input ({input}) sends only {back}: send key {back}, or press the \
+             screen's own control instead, with tap x y or do --capture with the package's \
+             element",
+            back = DeviceKey::Back.word()
+        )
+    } else {
+        return error;
+    };
     let mut details = match error.details.take() {
         Some(Value::Object(details)) => details,
         Some(other) => serde_json::Map::from_iter([("details".to_owned(), other)]),
@@ -1593,10 +1610,11 @@ fn with_unsendable_hint(
 }
 
 /// Workflow #434 LW-1 fix round 1: the input `instance`'s capability table names for
-/// `capability` (its `evidence_ref`, the configured touch backend), when the table says that input
-/// does not implement it; `None` when it does, when the status lists no table for the instance, or
-/// when the status cannot be read.
-fn unsupported_input(instance: &str, capability: EmulatorCapability) -> Option<String> {
+/// `capability` (its `evidence_ref`, the configured touch backend), with whether the table says
+/// that input implements it (Workflow #463 KB-1 fix round 1: `false` exactly where it says
+/// unsupported); `None` when the status lists no table for the instance, or when the status cannot
+/// be read.
+fn table_input(instance: &str, capability: EmulatorCapability) -> Option<(String, bool)> {
     let state_root = runtime_state_root().ok()?;
     let client = RuntimeClient::connect(crate::lab_client_config(state_root)).ok()?;
     let status = client.status().ok()?;
@@ -1606,8 +1624,10 @@ fn unsupported_input(instance: &str, capability: EmulatorCapability) -> Option<S
         .find(|row| row.instance_alias() == instance)?
         .capabilities()?
         .evidence(capability);
-    (evidence.implementation() == Some(EmulatorCapabilityImplementation::Unsupported))
-        .then(|| evidence.evidence_ref().to_owned())
+    Some((
+        evidence.evidence_ref().to_owned(),
+        evidence.implementation() != Some(EmulatorCapabilityImplementation::Unsupported),
+    ))
 }
 
 // The command owns its input receipt before closing the proxy.

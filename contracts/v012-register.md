@@ -32608,7 +32608,7 @@ of both, with the coordinator's dispositions; for §1.436 and this section alike
   `da5_train_fix1_a_recorded_do_whose_frame_before_the_press_fails_presses_and_writes_nothing`. No
   code, word, key, member or revision is added.
 
-### 1.447 Slice #463 KB-1 (0.12.69): an emulator instance can send the back key (Workflow #463; the owner's ruling on board #463 of the night of 11-15 that a package made from a recording may hold a step that presses the back key, which the agent adds after recording; the read-only study `rd-1116/report-463-key-step-study.md` and the coordinator's rulings at its end and of 11-16 evening, not the owner's words; coordinator work order `rd-1116/brief-463-kb1-nemu-key.md`, stacked on #1778 at `c7eaabaf`)
+### 1.447 Slice #463 KB-1 (0.12.69): an emulator instance can send the back key (Workflow #463; the owner's ruling on board #463 of the night of 11-15 that a package made from a recording may hold a step that presses the back key, which the agent adds after recording; the read-only study `rd-1116/report-463-key-step-study.md` and the coordinator's rulings at its end and of 11-16 evening, not the owner's words; coordinator work order `rd-1116/brief-463-kb1-nemu-key.md`; first stacked on #1778 at `c7eaabaf`, since fix round 1 on main at `dc4c3622`, #1778 merged)
 
 This section takes 1.447, the number the work order gives. It ships in 0.12.69. The package's key
 step (KP-1) and the recording's (KR-1) are other slices; this one makes the key go out.
@@ -32735,6 +32735,89 @@ says `input.key` supported).
 in) and `actinglab key back` (`ac_key` with `back`) reach the device on a frame the Runtime
 captured; whether the vendor's code 158 is the back key the emulator expects is checked by the
 coordinator's one press on an idle emulator.
+
+**Fix round 1** (coordinator work order `rd-1116/brief-463-kb1-fix1.md`, after the independent
+review `rd-1116/review-1790.md`, with the coordinator's rulings R1 to R5; #1778 merged, main
+merged in, the section's title names the base). (1) A key that may be down is released (R1, the
+review's must-fix 2). Between the key down and the key up the worker checks once more; when that
+check failed (the deadline, the lease's fence, the caller's wait having given up) the key up was
+not sent and nothing remembered it. The Nemu input's state now records the key it pressed last
+(`PressedKey`: its vendor code, and `MayBeDown` from just before its key down, `UpAttempted` from
+just before its key up, `Released` once the key up answers 0), as it records the finger
+(`Contact`). The reset (`reset_contact`) sends one key up for a key that may be down, after the
+finger's lift, as it lifts a finger; the close (`close_input_contact`) does so under the close's
+fence and check, and a key up already attempted without an answer fails the close unconfirmed, as
+a finger's does. While a key may be down the frame's fence (`frame_fence`) refuses every input on
+a frame (`contact_unconfirmed`, as for a contact), the display is not invalidated, and the
+connection does not count as never pressed (`connection_unpressed`). What the record says of such
+a key's effect is what it says of a touch in the same situation: the error is unconfirmed and the
+input's effect `indeterminate`, and the host settles the unconfirmed resources as for a touch. The
+key up after a failed key down is unchanged. A touch makes the same calls as before; of its path
+only `frame_fence` changed (one more check of the state, no call). (2) A library without the key calls refuses, it does not fail (R2,
+the review's (b) and (l)). The worker refuses the key before any call as before, now as the input
+capability's refusal (`DeviceError::with_input_unsupported`, carried by the kernel's failure as
+`ExecutionFailureContext::input_unsupported`); the host answers it, its resources confirmed and
+nothing merged into it, as its own refusal: `nemu_input_capability_unsupported`, receipt `denied`,
+the input's record's effect `not_performed`, the lease kept (the session the kernel closes after any
+input failure is closed as before). The decision reads that typed fact, no code. The capability
+table is built as before, without opening the library; [runtime-interface.md](runtime-interface.md)
+says the refusal in the row of `nemu_ipc`. (3) Only the back key, refused the same way everywhere
+(R3, the review's (o) and (p)). On an instance whose configured touch backend sends the key
+vocabulary alone (`DeviceKey::sent_alone_by`: `nemu_ipc` and `adb_shell_input`) the host refuses
+every other key before anything is sent and before an intent is written, with the Nemu input's
+refusal (`nemu_input_capability_unsupported`, `denied`); before, `adb_shell_input` failed it in the
+backend after its intent, `indeterminate`. The Lab's hint of a refused `key`: where the table says
+the input does not implement `input.key`, as before; where the input it names sends the key
+vocabulary alone and the key is outside it (`DeviceKey::named`), that this input sends only `back`,
+and what presses instead; decided by the vocabulary and the table, not by the refusal's code. (4)
+Texts: [application-lifecycle.md](application-lifecycle.md), "The foreground gate" (a key passes it
+as a tap does, so an agent cannot leave another application with `key back`:
+`application_not_foreground`), the outcome catalog's `common_causes` and `handling` of
+`nemu_input_capability_unsupported` (index regenerated), the MCP manual's sentence, the row `key` of
+`lab-operations.json` and [actinglab-capabilities.md](actinglab-capabilities.md).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| KB1-8 | `PressedKey` in the Nemu input's state; reset, close, fence, display invalidation and `connection_unpressed` read it | device behaviour | KB-1 fix 1 | `crates/device` `capture/nemu_input.rs` | touch calls unchanged |
+| KB1-9 | `DeviceError::with_input_unsupported`, `ExecutionFailureContext::input_unsupported` | device and kernel accessors (no code, no word) | KB-1 fix 1 | `crates/device` `error.rs`, `crates/execution-kernel` `error.rs` | the host's denial of the library's refusal |
+| KB1-10 | `DeviceKey::sent_alone_by`; the host's refusal of a key outside the vocabulary before its intent | device function, host behaviour | KB-1 fix 1 | `crates/device` `input.rs`, `crates/runtime-host` `host/input.rs` | `adb_shell_input` as `nemu_ipc` |
+| KB1-11 | the Lab's hint of a key outside the vocabulary on such an input | Lab command behaviour | KB-1 fix 1 | `apps/actinglab` `device_commands.rs` | |
+
+No outcome code, value key or word is added; `nemu_input_capability_unsupported` keeps its key, its
+category and its words and covers the two new situations in its text.
+
+*Tests of fix round 1* (gate map `contracts/test-gates/exec.toml`, the row "#463 KB-1 fix round 1"):
+in `crates/device/src/capture/nemu_input/gate_463_kb1.rs`, on HS-4's fake device, whose key calls
+now answer the code a test gives them, `kb1_fix1_a_failed_key_down_still_sends_the_key_up` (a key
+down answering 7 fails the key with its code, the key up is called once with 158, the key is
+released and the next long tap is admitted) and
+`kb1_fix1_a_key_left_down_is_lifted_by_the_next_reset_and_fences_input_until_then` (a check with no
+time left at the final up: the key fails unconfirmed after its key down alone and is recorded
+`MayBeDown`; a long tap and another back key on a current frame are refused, nothing called; the
+next reset, without a frame, sends one key up and releases it, the finger untouched; the next long
+tap is admitted); in `crates/execution-kernel/src/session/gate_463_kb1.rs`,
+`kb1_fix1_the_kernel_hands_a_key_with_its_steps_context_to_the_input_on_its_frame` (`execute_action`
+hands the back key with a step's context to the input's `key_in_frame` with that context, whose
+check's answer comes back, and without one to its `key`). Gate map `contracts/test-gates/host.toml`,
+the row "#463 KB-1 fix round 1": in `crates/runtime-host/src/tests/gate_463_kb1.rs`,
+`kb1_fix1_a_key_the_library_cannot_send_is_denied_and_recorded_not_performed` (on an instance
+configured `nemu_ipc`, the back key on a captured frame whose input answers the library's refusal:
+`denied`, `nemu_input_capability_unsupported`, no input performed, the one input record's effect
+`not_performed`, nothing committed, the lease kept) and
+`kb1_fix1_adb_shell_input_refuses_another_key_before_its_intent` (configured `adb_shell_input`:
+`home`, `3` and a word of no key `denied` `nemu_input_capability_unsupported`, no input record of
+any kind in the ledger, nothing on the device; then the back key completed, the device's one
+input); in `crates/runtime-host/src/provider/gate_463_kb1.rs`,
+`kb1_fix1_the_registry_input_hands_a_key_on_its_frame_to_the_input_as_one` (the registry's
+diagnostic wrapper, held as the kernel holds it, hands a key on its frame to the wrapped input's
+`key_in_frame` with the step's context and the plain key to its `key`). No fake provider opens a
+Nemu session, so the frame-bound key path is tested in its two halves, the kernel's and the
+registry's. Changed, not added, because the rulings change what they pin:
+`kb1_a_library_without_the_key_calls_answers_as_before` (R2: the refusal is the capability's,
+`input_unsupported`, nothing unconfirmed, no key recorded; the name stays true: the answer is again
+the denial of before this slice) and
+`runtime_input_proxy::lw1_fix2_key_and_text_on_an_input_that_sends_neither_hint_what_presses_instead`
+(R3: `key home` on the Nemu instance now carries the hint that the input sends only `back`).
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

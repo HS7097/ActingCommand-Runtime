@@ -27,6 +27,10 @@ use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+// Workflow #463 KB-1 fix round 1: a key on its step's frame reaches the input as one.
+#[cfg(test)]
+mod gate_463_kb1;
+
 const SESSION_CHANNEL_CAPACITY: usize = 8;
 
 #[derive(Debug, Clone, PartialEq, Eq)]

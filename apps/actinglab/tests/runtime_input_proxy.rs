@@ -4948,8 +4948,11 @@ fn lw1_fix2_a_plain_press_whose_frame_cannot_be_captured_again_answers_the_first
 /// 11-16, a refused key's hint follows the capability table as that slice changes it): the Nemu
 /// input sends the back key and its row says `input.key` supported, so the key is `home`, which it
 /// does not send: refused `nemu_input_capability_unsupported` as before, nothing captured (no
-/// frame is taken for a key the input does not send on one), and no `details.hint`, the table
-/// saying the input implements `input.key`; `text` as before.
+/// frame is taken for a key the input does not send on one); `text` as before. Adapted by KB-1 fix
+/// round 1 (the coordinator's rulings R3 and R5 of 11-16: a refused key no longer answers with no
+/// hint at all): the table saying the input implements `input.key` and the input sending the key
+/// vocabulary alone, the hint of `key home` says that this input sends only `back`, and what
+/// presses instead.
 #[test]
 fn lw1_fix2_key_and_text_on_an_input_that_sends_neither_hint_what_presses_instead() {
     let root = TempDir::new().expect("tempdir");
@@ -4962,8 +4965,8 @@ fn lw1_fix2_key_and_text_on_an_input_that_sends_neither_hint_what_presses_instea
     let host = l3_host(&runtime_root, &state, b"lab-lw1-fix2-key-and-text-hint");
 
     for (command, word, unsent) in [
-        ("key", "home", None),
-        ("text", "neutral", Some("sends no text:")),
+        ("key", "home", "sends only back: send key back, or"),
+        ("text", "neutral", "sends no text:"),
     ] {
         let (_, failed) = run_actinglab_failure_json(
             &config,
@@ -4979,13 +4982,6 @@ fn lw1_fix2_key_and_text_on_an_input_that_sends_neither_hint_what_presses_instea
             lw1_input_error(&failed).contains("nemu_input_capability_unsupported"),
             "{command}: the Runtime's refusal: {failed}"
         );
-        let Some(unsent) = unsent else {
-            assert!(
-                failed["details"].get("hint").is_none(),
-                "{command}: no hint where the table says the input sends keys: {failed}"
-            );
-            continue;
-        };
         let hint = failed["details"]["hint"].as_str().unwrap_or_default();
         assert!(
             hint.starts_with("this instance's input (nemu_ipc) ")

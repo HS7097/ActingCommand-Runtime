@@ -382,12 +382,15 @@ keys reach the device depends on the instance's touch backend, and its capabilit
 | Touch backend | Keys it sends | Every other key | How |
 |---|---|---|---|
 | `maatouch` | every key it is given | — | its `k <key> o` command |
-| `nemu_ipc` | the back key alone: `back`, or Android's `4` or `KEYCODE_BACK` (actinglab's `key back` sends `4`) | refused by the host before anything is sent, `nemu_input_capability_unsupported` (`denied`) | the emulator library's `nemu_input_event_key_down` and `nemu_input_event_key_up` with the key code of the vendor's header (Linux `KEY_BACK`, 158), on the step's frame as a tap (without a frame `nemu_input_frame_required`, `denied`); a library without the two calls sends no key: the input fails in the backend before any call (`input_backend_operation_failed`) |
-| `adb_shell_input` | the back key alone, the same three spellings | fails in the backend before anything reaches the device (`input_backend_operation_failed`) | one `adb shell input keyevent KEYCODE_BACK`, the path its taps take |
+| `nemu_ipc` | the back key alone: `back`, or Android's `4` or `KEYCODE_BACK` (actinglab's `key back` sends `4`) | refused by the host before anything is sent, `nemu_input_capability_unsupported` (`denied`) | the emulator library's `nemu_input_event_key_down` and `nemu_input_event_key_up` with the key code of the vendor's header (Linux `KEY_BACK`, 158), on the step's frame as a tap (without a frame `nemu_input_frame_required`, `denied`); fix round 1: on a library without the two calls the key is refused when it is sent, `nemu_input_capability_unsupported` (`denied`), nothing sent and nothing recorded as indeterminate (its input record's effect `not_performed`) |
+| `adb_shell_input` | the back key alone, the same three spellings | fix round 1: refused by the host before anything is sent and before an intent is written, `nemu_input_capability_unsupported` (`denied`), as on `nemu_ipc` | one `adb shell input keyevent KEYCODE_BACK`, the path its taps take |
 | `minitouch` | none | fails in the backend before anything reaches the device (`input_backend_operation_failed`) | — |
 
 A key that fails in the backend is recorded as any backend failure of an input is (on a physical
-instance its effect is `indeterminate`).
+instance its effect is `indeterminate`). Fix round 1: a key the Nemu input may have left down (its
+key up not called, or called without a confirmed answer) is recorded so in the input's state, as a
+contact that may be down is: every input on a frame is refused until a reset or the session's close
+sends its key up.
 
 `Text` stays `maatouch`'s alone (refused on `nemu_ipc` with `nemu_input_capability_unsupported`).
 A key passes the foreground gate a tap passes: on a physical instance it is refused

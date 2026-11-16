@@ -352,6 +352,16 @@ impl DeviceKey {
             Self::Back => "KEYCODE_BACK",
         }
     }
+
+    /// Workflow #463 KB-1 fix round 1 (the coordinator's ruling R3 of 11-16): whether the touch
+    /// backend `backend` sends the keys of this vocabulary alone, refusing every other key before
+    /// anything is sent: the emulator's own input (`nemu_ipc`) and `adb_shell_input`.
+    pub const fn sent_alone_by(backend: crate::TouchBackendChoice) -> bool {
+        matches!(
+            backend,
+            crate::TouchBackendChoice::NemuIpc | crate::TouchBackendChoice::AdbShellInput
+        )
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

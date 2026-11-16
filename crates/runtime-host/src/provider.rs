@@ -5,6 +5,9 @@ mod fixtures;
 // HS-4 (#402): the capability table names what the Nemu input performs.
 #[cfg(test)]
 mod gate_hs4;
+// Workflow #463 KB-1 fix round 1: the registry's input hands a key on its frame on as one.
+#[cfg(test)]
+mod gate_463_kb1;
 
 use crate::codes::{HostCode, HostLocation};
 use crate::{RuntimeHostError, RuntimeHostResult};

@@ -268,10 +268,14 @@ naming this file.
   KB-1, 0.12.69) and no text: `ac_key` with `back` takes the path of a press above (the status
   read, one capture, the key sent on that frame, the one retry, the warnings); `ac_key` with any
   other key and `ac_text` answer `nemu_input_capability_unsupported` there, nothing sent, and the
-  Runtime has no other way to send another key on it. Where the instance's capability table says
+  Runtime has no other way to send another key on it; `adb_shell_input` sends the back key alone
+  too and refuses another key so (KB-1 fix round 1). Where the instance's capability table says
   its input does not implement `input.key` or `input.text` (`minitouch` sends no key; no input but
   `maatouch` sends text), the refusal's `details.hint` says what to press instead (the screen's
-  own control: `ac_tap`, or `ac_do` with `capture` on a package's element).
+  own control: `ac_tap`, or `ac_do` with `capture` on a package's element); where its input sends
+  the back key alone, the hint of another key says that it sends only `back`, and the same.
+  A `key back` is held by the foreground gate as a tap is: it cannot leave another application
+  (`application_not_foreground`).
   `ac_tap_target` and
   `ac_navigate` only plan on a saved frame (`scene` with `dry_run`) and press nothing anywhere,
   as their command line does: `ac_do` with `capture` and the package's element, or `tap` with a

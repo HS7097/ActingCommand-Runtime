@@ -4212,3 +4212,13 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_463_kb1::kb1_the_foreground_gate_holds_a_key_as_it_holds_a_tap",
 ]
 incident = ["#463 KB-1"]
+
+# Workflow #463 KB-1 fix round 1 (0.12.69; register §1.447; brief rd-1116/brief-463-kb1-fix1.md, the coordinator's rulings R2, R3 and R5 after review-1790): on an instance configured nemu_ipc, the back key on a captured frame whose input answers the library's refusal (input_unsupported) is denied nemu_input_capability_unsupported, no input performed, the one input record's effect not_performed, nothing committed, the lease kept (1); on an instance configured adb_shell_input, home, 3 and a word of no key are denied nemu_input_capability_unsupported with no input record of any kind and nothing on the device, then the back key is completed, the device's one input (2); the registry's diagnostic wrapper, held as the kernel holds an input, hands a key on its frame to the wrapped input's key_in_frame with the step's context (its check's answer comes back) and the plain key to its key (3)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_463_kb1::kb1_fix1_a_key_the_library_cannot_send_is_denied_and_recorded_not_performed",
+    "actingcommand-runtime-host::lib::tests::gate_463_kb1::kb1_fix1_adb_shell_input_refuses_another_key_before_its_intent",
+    "actingcommand-runtime-host::lib::provider::gate_463_kb1::kb1_fix1_the_registry_input_hands_a_key_on_its_frame_to_the_input_as_one",
+]
+incident = ["#463 KB-1"]

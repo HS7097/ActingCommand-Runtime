@@ -3744,3 +3744,13 @@ tests = [
     "actingcommand-device::lib::touch::tests::kb1_adb_shell_input_sends_the_back_key_as_one_keyevent",
 ]
 incident = ["#463 KB-1"]
+
+# Workflow #463 KB-1 fix round 1 (0.12.69; register §1.447; brief rd-1116/brief-463-kb1-fix1.md, the coordinator's rulings R1, R2 and R5 after review-1790): on HS-4's fake Nemu device, whose key calls answer the code a test gives them, a key down answering 7 fails the key with its code and the key up is still called once with 158, the key released and the next long tap admitted (1); a check with no time left at the final up fails the key unconfirmed after its key down alone, the key recorded MayBeDown, a long tap and another back key on a current frame refused by the fence with nothing called, the next reset without a frame sends one key up and releases it, the finger untouched, and the next long tap is admitted (2); the kernel's execute_action hands the back key with a step's context to the input's key_in_frame with that context (its check's answer comes back) and without one to its key (3). Changed, not added (the row "#463 KB-1"): kb1_a_library_without_the_key_calls_answers_as_before also asserts the refusal is the capability's (input_unsupported), nothing unconfirmed, no key recorded (R2)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-device::lib::capture::nemu_input::gate_463_kb1::kb1_fix1_a_failed_key_down_still_sends_the_key_up",
+    "actingcommand-device::lib::capture::nemu_input::gate_463_kb1::kb1_fix1_a_key_left_down_is_lifted_by_the_next_reset_and_fences_input_until_then",
+    "actingcommand-execution-kernel::lib::session::gate_463_kb1::kb1_fix1_the_kernel_hands_a_key_with_its_steps_context_to_the_input_on_its_frame",
+]
+incident = ["#463 KB-1"]
