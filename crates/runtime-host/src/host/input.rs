@@ -717,7 +717,7 @@ impl HostShared {
                     token,
                     target,
                     connection_id,
-                    preparation_links,
+                    preparation_links.clone(),
                     &admission,
                 ) {
                     Ok(Ok(())) => {}
@@ -730,6 +730,43 @@ impl HostShared {
                         return CriticalActionReport::Failed {
                             error: failure,
                             effect: EffectDisposition::Indeterminate,
+                        };
+                    }
+                    // Workflow #475 (`contracts/read-session-resource-close.md`): the key lapsed
+                    // between its validation and this close, and the lapsed lease refused the
+                    // close before it began (`expiry_close_refused`). Nothing was closed and no
+                    // command was sent. As at the lease's expiry (#458) the refusal is recorded
+                    // once, fences the instance whose session it is only and is owed under the
+                    // key (`fence_expired_close_of`), still under the admission guard; the key's
+                    // end (the command's own clean-up, the run's or the ladder's, or the expiry)
+                    // makes the close once the lease has ended. The command answers the refusal
+                    // as its own failure, before its step, as a lapsed key at its step does. A
+                    // failure of the Runtime itself in the fence (its record) stays fatal.
+                    // Fix round 1: the refusal the close met was made fatal where the close path
+                    // built it (`retire_instance_resources`), so the command answers with a
+                    // refusal of its own that is not: the scheduler's `lease_expired` naming the
+                    // key's lease, built as its step builds one (below), at this preparation.
+                    Err(refused) if self.expiry_close_refused(&refused.error) => {
+                        if let Err(error) = self.fence_expired_close_of(
+                            token,
+                            target,
+                            *refused.error,
+                            preparation_links,
+                        ) {
+                            return CriticalActionReport::Failed {
+                                error: ActionFailure::poison(error),
+                                effect: EffectDisposition::Indeterminate,
+                            };
+                        }
+                        return CriticalActionReport::Failed {
+                            error: ActionFailure::scheduler(
+                                RuntimeHostError::scheduler(
+                                    HostLocation::PrepareApplicationResources,
+                                    &SchedulerError::LeaseExpired,
+                                )
+                                .naming_lease(token.lease_id()),
+                            ),
+                            effect: EffectDisposition::NotPerformed,
                         };
                     }
                     Err(failure) => {

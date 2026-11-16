@@ -23780,6 +23780,27 @@
       "description": "The switch that brings a member of a device group of several to the front before its run failed at one of its steps (Workflow #437 MAPP-2a, contracts/device-group.md \"The switch before a run\"): alias is the member to run, application_switch_step the step, failure_code the step's own code and application_id the package the step concerned (the member's own for foreground_read, startup_package and lease_renewal, the stopped member's for stop). The step's failure is its cause. The switch reads the package in front through the member's registration, stops another member's application under the run's key with that member's records, and runs the member's startup package on the run's key, which it hands back to the run unrenewed; since 0.12.60 (MAPP-2d) the run then renews its lease to its own response deadline and the heartbeat reserve before its task (step lease_renewal). In 0.12.59 the switch has no caller: no run goes through it and nothing settles a run with this code; an instance alone on its device never meets it.",
       "common_causes": "Several applications declared on one device (device_group in instances[]): the device's ADB query did not answer, the application in front could not be force-stopped, the member's startup package did not reach its home page, the run's key had too little time left for the startup package to start, or the run's lease was lost before its renewal after the startup package.",
       "handling": "Read the step and its cause. For foreground_read, check the emulator's ADB connection. For stop, check the stopped member's application and its records. For startup_package, run the member's startup package by hand and check that it reaches its home page within its response deadline. For lease_renewal, read the lease's records (actingctl status shows the device's holder): the member's application is at its home and the task is tried again after the member's switch cooldown."
+    },
+    "device_held_for_member_close": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "alias": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.67",
+      "description": "A request of a member of a device group of several that asks for the device was refused because another member of the device is fenced for resources of its own whose state could not be confirmed (a close, an ADB check's clean-up or a contained failure left them so; Workflow #437 G1, contracts/device-group.md \"A failure stays where it belongs\"; Workflow #403): alias is that fenced member. The device is held for it and given to no other member until a preparation of that member whose self-check passes lifts its fence. The request asked for the device at once or as a person's or a client's work: a client's AcquireLease, a Lab operation, a policy dispatch admitted in the same moment, a direct run, an input or application command, a self-check, a resume, a backend switch (as the cause of backend_switch_refused instance_busy), or the member's own connection preparation at the start (recorded once as that preparation's failure, which leaves the member unavailable; since the G1 fix rounds the lease sweep queues that preparation once the fence is lifted, on an idle device (no lease, no takeover cooldown, no queued entry eligible now), as a self-check claim of the Runtime's own that the device's worker makes on its key). It is refused with scheduler.denied under the request, projected as lease_busy; nothing was granted and nothing ran. A claim of the member that already waited in the device's queue, a client's QueueLease and the Runtime's own routine and internal claims (a ladder, a startup package, an autostart) wait in their places instead, and are granted once the fence is lifted; the start preparation the lease sweep queues is a self-check claim, of the operator's class whoever asks for it, so asked while the device is held it is refused at once with this code and its member stays owed; so does an operator's claim that met the device's admission guard taken, and when its wait ends while the device is still held, its lease_queue_expired names this code as its cause. A fence whose close was refused before it began and then confirmed holds nothing of the kind, nor does a fence whose resources were confirmed. An instance alone on its device, the fenced member itself and a member whose own fence holds the device too never meet it.",
+      "common_causes": "Several applications declared on one device (device_group in instances[]), and the close of another application's session could not be confirmed, so that application is fenced: its fence waits for its ladder, its recheck or a person.",
+      "handling": "Nothing was performed. Lift the fence of the member alias names: run its self-check (actingctl selfcheck), or resume it; actingctl status shows its resource_fence, and each held member's device_held. Then ask again."
     }
   },
   "locations": {
@@ -30944,6 +30965,70 @@
       "status": "active",
       "since": "0.12.53",
       "description": "A Runtime host operation (#428 SCHED-C1d): a record of the tagged program fact host.capped_episodes, after an evaluated cycle that changed a capped episode and once by a start that found the fact."
+    },
+    "list_held_start_preparations": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.67",
+      "description": "A Runtime host operation (Workflow #437 G1 fix round 2): the lease sweep's read of the members of a device group of several whose start preparation the device's hold for another member's unconfirmed close refused and whose preparation is not queued yet."
+    },
+    "read_held_start_preparation_pause": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.67",
+      "description": "A Runtime host operation (Workflow #437 G1 fix round 2): the lease sweep's read of whether such a member's scheduling is paused with a released pause, which passes it over as the start does."
+    },
+    "read_held_start_preparation_device": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.67",
+      "description": "A Runtime host operation (Workflow #437 G1 fix round 2): the lease sweep's read of whether such a member's device is idle (no lease holds it, no takeover cooldown runs and, since the train's fix round 1, no entry of its queue is eligible now, each by its own member's gate) before it queues the member's start preparation."
+    },
+    "mark_held_start_preparation_queued": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.67",
+      "description": "A Runtime host operation (Workflow #437 G1 fix round 2): the lease sweep marks such a member's start preparation as queued, so that no second claim of it is queued while one waits or runs."
+    },
+    "queue_held_start_preparation": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.67",
+      "description": "A Runtime host operation (Workflow #437 G1 fix round 2): the lease sweep queues such a member's start preparation on one self-check claim of the Runtime's own on the device's queue, which the member's worker runs once it is granted."
+    },
+    "read_held_start_preparation_claim_ttl": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.67",
+      "description": "A Runtime host operation (Workflow #437 G1 fix round 2): the read of the scheduler's lease time for the self-check claim of such a member's start preparation."
+    },
+    "settle_held_start_preparation": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.67",
+      "description": "A Runtime host operation (Workflow #437 G1 fix round 2): after the device's queue refused the self-check claim of such a member's start preparation, the member is owed it again when the refusal is device_held_for_member_close (another member's fence holds the device again; since the train's fix round 1 read from the refusal's own code), and owes nothing more otherwise."
+    },
+    "run_held_start_preparation": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.67",
+      "description": "A Runtime host operation (Workflow #437 G1 fix round 2): such a member's start preparation on its self-check claim's key on the device's worker, under the device's admission guard, and the key's release; a member that owes none any more, or whose pause is released, runs nothing."
     }
   }
 }
