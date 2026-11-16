@@ -113,7 +113,7 @@ pub(crate) fn run_resource_regression(
         for warning in &case.verdict.warnings {
             eprintln!(
                 "{}",
-                cli_line::developer_text(PROGRAM, &warning.outcome, Some(&case.path))
+                cli_line::developer_text(PROGRAM, &warning.outcome, Some(case.path.as_str()))
             );
         }
     }

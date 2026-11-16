@@ -155,7 +155,8 @@ naming this file.
     `warnings`. `ac_record_stop` keeps its four binding parts together under `lab`, and
     `ac_lab_observe` and `ac_do` their frame parts (`frame_coordinates`, `frame_path`, `preview`,
     `next_frame`, `after_attachment`) each in turn, while the answer still fits. An exported `ac_record_stop`
-    answer goes to `ac_record_draft` as `record_stop_export` (`{path, sha256}`);
+    answer goes to `ac_record_draft` as `record_stop_export` (`{path, sha256}`). #463 RC-1
+    (0.12.69): `ac_resource_regression` keeps `counts` and `failed`, each in turn, the same way;
   - any other line, a refusal and a child's failure line too, that does not fit with its text
     repeated is sent in `structuredContent` alone, beside a summary text `{outcome,
     structured_content_only, warnings?, warnings_omitted?, truncated?, narrow}` (from protocol
@@ -349,6 +350,14 @@ naming this file.
   the check, and wrote nothing; with `dry_run` nothing is written in the checkout. Its `value` is
   `"pending"` or a number of the pack's own: a decision that names the origin `model` is refused
   (`value_origin_model`).
+- **Regression cases** (#463 RC-1, 0.12.69; `contracts/resource-regression-case.md`).
+  `ac_resource_regression` (`repo`, `game`, `case`, `package_id`) runs the regression cases of a
+  resource repository's checkout offline, through a child: each case `regression/<game>/<case>/`
+  on its package `packs/<package_id>/`, with the kernel's page detection and target evaluation,
+  answering each case's verdict (`passed`, `failed`, `partial`, `not_run`) with its checks, the
+  counts and the paths of the failed cases. It reads only. A failed case makes the call the refusal
+  `resource_regression_failed`, whose details are the whole answer; a case of another schema is
+  `not_run` with the warning `case_schema_unsupported` and fails nothing.
 - **Busy** is `job_capacity_exhausted` with `limit_count`: a call that would start a job while
   `--jobs` jobs run (default 8), or that needs a child while all `--children` children (default 8)
   are working. It is refused, not queued, and nothing is sent: call again later. More calls at

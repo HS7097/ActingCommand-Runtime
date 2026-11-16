@@ -27,7 +27,10 @@ actinglab [--json] resource verify --repo <checkout> --source-repository <owner>
     then hold it too, and the zip's `interfaces.json` declares `package` [10, 10];
   - `packs/<package_id>/`, the bundle index v4 `path` form;
   - `declaration-exclusions.json`;
-  - `regression/`, the regression cases (their checks arrive with Workflow #411 RV-2a).
+  - `regression/`, the regression cases. Their contract, reader and runner are
+    [resource-regression-case.md](resource-regression-case.md) (#463 RC-1), and `resource
+    regression` runs them offline; this command only checks that their files are the committed
+    ones: the step that runs them here (Workflow #411 RV-2a) is not built yet.
 
   It knows no other layout and no game: the game is `applications.json`'s `game`.
 - **`--repo`** is the top of a Git work tree (a linked worktree is fine) whose HEAD is the commit
@@ -479,8 +482,9 @@ The repository wrapper keeps what is the repository's policy, not a Runtime rule
 
 - **What versions the command:** its capability entry (`capabilities` lists `resource verify`
   with `report_schema: "actinglab.resource-verify.v1"`), the report's `schema_version`, and the
-  regression case contract's `schema_version`. The first Tools release that ships the command and
-  the cases a repository needs is that repository's minimum pin.
+  regression case contract's `schema_version` (`actingcommand.resource-regression-case.v1`,
+  [resource-regression-case.md](resource-regression-case.md)). The first Tools release that ships
+  the command and the cases a repository needs is that repository's minimum pin.
 - **A pin that predates the command.** The wrapper verifies the local Tools against the pin first,
   then reads `capabilities`. With no `resource verify`, or an unknown `report_schema`, it stops and
   names the minimum release; it never falls back to earlier steps silently. A repository keeps its
@@ -489,5 +493,7 @@ The repository wrapper keeps what is the repository's policy, not a Runtime rule
   production applies. After each Runtime deployment the three repositories bump the Tools pin to
   that release, with a passing `verify`, so the pin never lags production by more than one
   deployment (coordinator decision D5, 2026-10-19).
-- **A newer verify, older cases.** An unknown case `schema_version` fails as a case refusal; it is
-  never skipped.
+- **A newer verify, older cases.** A case of another `schema_version` is never skipped silently:
+  the runner answers it `not_run` with the warning `case_schema_unsupported` and it fails nothing
+  (#463 RC-1, [resource-regression-case.md](resource-regression-case.md), "The reader"). What this
+  command does with such a case is decided with its step, RV-2a, not built yet.
