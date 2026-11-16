@@ -377,6 +377,20 @@ actingcommand_contract::outcome_vocabulary! {
     }
 }
 
+// #463 S2-1c: why a self-check `record ready` ran stopped at a failure short of its end, so that the
+// failures it lists may not be all it has (`checks[].reason`).
+actingcommand_contract::outcome_vocabulary! {
+    /// Why a self-check stopped short of its end (`ready_check_stop`).
+    pub enum ReadyCheckStop: "ready_check_stop" {
+        /// The check judges the generated package as one, in stages each built on the one before
+        /// (`admission`, `final_package`): its first refusal leaves no stage after it to judge.
+        WholePackage => "whole_package",
+        /// The check met an error that is none of its verdicts (a target the evaluator cannot
+        /// evaluate, a stored frame it cannot decode): what it would judge after it is not judged.
+        CheckError => "check_error",
+    }
+}
+
 // #463 S2-1: what `record ready` warns of, never blocking (`warnings[].what`).
 actingcommand_contract::outcome_vocabulary! {
     /// A warning of `record ready` (`ready_warning`).

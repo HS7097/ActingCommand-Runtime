@@ -20,7 +20,7 @@ use super::select::{
 };
 use super::store::{blocked, invalid, with_details};
 use crate::LabOcr;
-use crate::codes::{EndingAgainst, EndingProblem, LabCode};
+use crate::codes::{EndingAgainst, EndingProblem, LabCode, ReadyCheck, ReadyCheckStop};
 use actingcommand_contract::outcome::{Detail, Outcome};
 use actingcommand_contract::{
     InputAction, LabError, LabResult, SEGMENTED_SWIPE_BRAKE_DISTANCE_PX,
@@ -50,6 +50,134 @@ const OVERLAY_PERCENT: u16 = 45;
 
 /// The live frames of the recording by sha256, read back after their sha256 check.
 pub(crate) type FrameCache = BTreeMap<String, LoadedFrame>;
+
+/// #463 S2-1c (`contracts/lab-recording.md`, "Self-checks", "What a recording still lacks"): where
+/// a self-check's failure is: the step it is about (its serial number and its number in the
+/// package), the frames it failed on, and the page or the target it is about; for an ending, its
+/// outcome key and its page. Empty for a refusal of the package as a whole.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct Locus {
+    pub(crate) step: Option<(u32, u32)>,
+    pub(crate) frames: Vec<String>,
+    pub(crate) page: Option<String>,
+    pub(crate) target: Option<String>,
+    pub(crate) outcome_key: Option<String>,
+}
+
+impl Locus {
+    /// On the package step `step`.
+    pub(crate) fn on_step(step: &PlanStep) -> Self {
+        Self {
+            step: Some((step.step.index, step.number)),
+            ..Self::default()
+        }
+    }
+
+    /// On the ending `ending`, which is no step: its outcome key and its page.
+    pub(crate) fn on_ending(ending: &PlanEnding) -> Self {
+        Self {
+            page: Some(ending.page.clone()),
+            outcome_key: Some(ending.ending.outcome_key.clone()),
+            ..Self::default()
+        }
+    }
+
+    /// On the frame `frame`.
+    pub(crate) fn with_frame(mut self, frame: &RecordedFrame) -> Self {
+        self.frames = vec![frame.frame_id.clone()];
+        self
+    }
+
+    /// On the frames `frames`.
+    pub(crate) fn with_frames(mut self, frames: &[String]) -> Self {
+        self.frames = frames.to_vec();
+        self
+    }
+
+    /// About the page `page`.
+    pub(crate) fn with_page(mut self, page: &str) -> Self {
+        self.page = Some(page.to_string());
+        self
+    }
+
+    /// About the target `target`: a template's crop, the mark a click follows.
+    pub(crate) fn with_target(mut self, target: &str) -> Self {
+        self.target = Some(target.to_string());
+        self
+    }
+}
+
+/// #463 S2-1c: one failure a self-check met: where it is, and the refusal `record stop` answers for
+/// it.
+#[derive(Debug, Clone)]
+pub(crate) struct CheckFailure {
+    pub(crate) locus: Locus,
+    pub(crate) error: LabError,
+}
+
+/// #463 S2-1c: one self-check that ran: its failures, in the order it met them, and, when it did not
+/// go to its end, why (`stopped`); its last failure is then the one it stopped at.
+#[derive(Debug, Clone)]
+pub(crate) struct CheckRun {
+    pub(crate) check: ReadyCheck,
+    pub(crate) failures: Vec<CheckFailure>,
+    pub(crate) stopped: Option<ReadyCheckStop>,
+}
+
+/// #463 S2-1c: how a self-check meets a failure, one implementation for its two callers. `record
+/// stop` (`first`) ends the check at its first failure, which is its refusal, as before; `record
+/// ready` (`every`) collects every failure and the check goes on to the next thing it judges. An
+/// error that is none of the check's verdicts (a target the evaluator cannot evaluate, a frame it
+/// cannot decode) is no failure met here: it ends the check for both.
+#[derive(Debug)]
+pub(crate) struct Failures {
+    every: bool,
+    found: Vec<CheckFailure>,
+}
+
+impl Failures {
+    /// `record stop`'s: the first failure is the refusal.
+    pub(crate) const fn first() -> Self {
+        Self {
+            every: false,
+            found: Vec::new(),
+        }
+    }
+
+    /// `record ready`'s: every failure is collected.
+    pub(crate) const fn every() -> Self {
+        Self {
+            every: true,
+            found: Vec::new(),
+        }
+    }
+
+    /// Whether every failure is collected (`record ready`).
+    pub(crate) const fn collects(&self) -> bool {
+        self.every
+    }
+
+    /// The failure `error` at `locus`: for `record stop` the refusal (`Err`), for `record ready`
+    /// collected (`Ok`), and the check goes on.
+    pub(crate) fn fail(&mut self, locus: Locus, error: LabError) -> LabResult<()> {
+        if self.every {
+            self.found.push(CheckFailure { locus, error });
+            Ok(())
+        } else {
+            Err(error)
+        }
+    }
+
+    /// How many failures were collected so far.
+    pub(crate) fn count(&self) -> usize {
+        self.found.len()
+    }
+
+    /// The failures collected so far, which are no longer held here.
+    pub(crate) fn take(&mut self) -> Vec<CheckFailure> {
+        std::mem::take(&mut self.found)
+    }
+}
 
 fn admission_failed(stage: &str, message: String, mut details: Value) -> LabError {
     if let Some(object) = details.as_object_mut() {
@@ -176,6 +304,17 @@ pub(crate) struct FirstDecision {
     pub(crate) warning: Option<Value>,
 }
 
+impl FirstDecision {
+    /// #463 S2-1c: what the first decision answers once `record ready` collected a failure of it:
+    /// no decision. It is never read: a failed self-check leaves the final package unbuilt.
+    const fn undecided() -> Self {
+        Self {
+            value: Value::Null,
+            warning: None,
+        }
+    }
+}
+
 fn not_evaluated_warning(reason: &str, message: &str) -> Value {
     json!({
         "code": "first_decision_not_evaluated",
@@ -216,13 +355,16 @@ fn followed_rect(
 /// simulated when the Lab has no OCR model (Workflow #396 LAB-3: `lab_ocr_unavailable`);
 /// otherwise the first step's primary frame must give the first click, inside its rectangle.
 /// Workflow #396 REC-4: when that click follows a template, every live frame of step 1 must give
-/// it inside the box the template gives on that frame (`evaluator` evaluates the template).
+/// it inside the box the template gives on that frame (`evaluator` evaluates the template). #463
+/// S2-1c: each frame's decision is one judgement; a frame that fails it is a failure `failures`
+/// meets (step 1, that frame), and under `record ready` the other frames are still judged.
 pub(crate) fn first_decision(
     prepared: &PreparedContainedTask,
     plan: &Plan,
     cache: &FrameCache,
     ocr: &LabOcr,
     evaluator: &RecognitionEvaluator,
+    failures: &mut Failures,
 ) -> LabResult<FirstDecision> {
     let first = plan
         .steps
@@ -245,23 +387,31 @@ pub(crate) fn first_decision(
             )
         })
     };
+    let on = |frame: &RecordedFrame| Locus::on_step(first).with_frame(frame);
     if plan.has_application_step() {
         let frame = plan
             .steps
             .iter()
             .find_map(PlanStep::primary)
             .ok_or_else(|| invalid("validation_failed", "the package has no frame"))?;
-        let result = simulate(frame)?;
-        let refused = matches!(&result.decision, OfflineDecision::Refused { code, .. } if code.as_str() == APPLICATION_REFUSAL);
-        if !refused || result.capture_count != 0 {
-            return Err(admission_failed(
-                "first_decision",
-                format!(
-                    "a package with an application step must be refused offline with \
-                     {APPLICATION_REFUSAL} before any capture"
-                ),
-                json!({"decision": result.decision, "capture_count": result.capture_count}),
-            ));
+        // One decision on one frame: the run refuses the package before any capture.
+        let decided = simulate(frame).and_then(|result| {
+            let refused = matches!(&result.decision, OfflineDecision::Refused { code, .. } if code.as_str() == APPLICATION_REFUSAL);
+            if !refused || result.capture_count != 0 {
+                return Err(admission_failed(
+                    "first_decision",
+                    format!(
+                        "a package with an application step must be refused offline with \
+                         {APPLICATION_REFUSAL} before any capture"
+                    ),
+                    json!({"decision": result.decision, "capture_count": result.capture_count}),
+                ));
+            }
+            Ok(())
+        });
+        if let Err(error) = decided {
+            failures.fail(on(frame), error)?;
+            return Ok(FirstDecision::undecided());
         }
         // Only a click of step 1 is left unsimulated; an application step 1 has nothing to
         // simulate offline.
@@ -307,29 +457,38 @@ pub(crate) fn first_decision(
     // #463 R1: a select at step 1 decides on its primary frame by the kernel's dry run; a slot it
     // selects is then simulated as the run taps it, and an empty decision is the run's normal end.
     if let Some(select) = &first.step.select {
-        return select_first_decision(prepared, plan, first, select, frame, cache);
+        return select_first_decision(prepared, plan, first, select, frame, cache, failures);
     }
-    let result = simulate(frame)?;
+    let start = failures.count();
+    // The primary frame's decision is the one the answer shows.
+    let primary = match simulate(frame) {
+        Ok(result) => Some(result),
+        Err(error) => {
+            failures.fail(on(frame), error)?;
+            None
+        }
+    };
     let operation = plan.operation_id(first);
     let click = first.step.click.as_ref();
     let follow = click.and_then(|click| click.follow.as_ref());
     // Workflow #396 REC-4: a click that follows a template clicks the box the template gives
-    // on the frame, so every live frame of step 1 is simulated, each against its own box.
-    let checked = match follow {
-        None => vec![(frame, result.clone())],
-        Some(_) => {
-            let mut checked = Vec::new();
-            for live in first.live_frames() {
-                let decision = if live.sha256 == frame.sha256 && live.frame_id == frame.frame_id {
-                    result.clone()
-                } else {
-                    simulate(live)?
-                };
-                checked.push((live, decision));
+    // on the frame, so every live frame of step 1 is simulated, each against its own box. #463
+    // S2-1c: a frame whose simulation failed is judged no further.
+    let mut checked = Vec::new();
+    if follow.is_none() {
+        checked.extend(primary.iter().map(|result| (frame, result.clone())));
+    } else {
+        for live in first.live_frames() {
+            if live.sha256 == frame.sha256 && live.frame_id == frame.frame_id {
+                checked.extend(primary.iter().map(|result| (live, result.clone())));
+                continue;
             }
-            checked
+            match simulate(live) {
+                Ok(decision) => checked.push((live, decision)),
+                Err(error) => failures.fail(on(live), error)?,
+            }
         }
-    };
+    }
     let point_in = |x: i32, y: i32, rect: RecordRect| {
         x >= rect.x
             && y >= rect.y
@@ -481,17 +640,27 @@ pub(crate) fn first_decision(
                     checked_frame.frame_id, follow.mark_id
                 ),
             };
-            return Err(admission_failed(
-                "first_decision",
-                message,
-                json!({
-                    "decision": checked_result.decision,
-                    "frame": checked_frame.frame_id,
-                    "rect": rect
-                }),
-            ));
+            let mut locus = Locus::on_step(first).with_frame(checked_frame);
+            if let Some(follow) = follow {
+                locus = locus.with_target(&follow.mark_id);
+            }
+            failures.fail(
+                locus,
+                admission_failed(
+                    "first_decision",
+                    message,
+                    json!({
+                        "decision": checked_result.decision,
+                        "frame": checked_frame.frame_id,
+                        "rect": rect
+                    }),
+                ),
+            )?;
         }
     }
+    let Some(result) = primary.filter(|_| failures.count() == start) else {
+        return Ok(FirstDecision::undecided());
+    };
     let mut value = serde_json::to_value(&result.decision).map_err(|error| {
         invalid(
             "validation_failed",
@@ -520,7 +689,9 @@ fn rect_holds(x: i32, y: i32, rect: RecordRect) -> bool {
 /// then the tap the offline simulation of the package makes (`simulate_contained_task_at`, the
 /// confirmation on the same frame), inside that slot's click box; an empty decision is the run's
 /// normal end with the `on_empty` key, which the simulation does not report
-/// (`offline_simulation_executed_step_invariant`).
+/// (`offline_simulation_executed_step_invariant`). #463 S2-1c: one frame's decision, each part
+/// read from the one before, so its first failure is the step's only one (`failures`: step 1, its
+/// primary frame).
 fn select_first_decision(
     prepared: &PreparedContainedTask,
     plan: &Plan,
@@ -528,28 +699,35 @@ fn select_first_decision(
     select: &StepSelect,
     frame: &RecordedFrame,
     cache: &FrameCache,
+    failures: &mut Failures,
 ) -> LabResult<FirstDecision> {
     let operation = plan.operation_id(first);
     let loaded = cached(cache, frame)?;
-    let decided = decide(
+    let mut refuse = |error: LabError| -> LabResult<FirstDecision> {
+        failures.fail(Locus::on_step(first).with_frame(frame), error)?;
+        Ok(FirstDecision::undecided())
+    };
+    let decided = match decide(
         prepared,
         &operation,
         &loaded.frame,
         None,
         plan.generated_at_unix_ms,
-    )?
-    .map_err(|failure| {
-        admission_failed(
-            "first_decision",
-            format!(
-                "the dry run of step 1's select fails on its primary frame {}",
-                frame.frame_id
-            ),
-            json!({"frame": frame.frame_id, "failure": failure}),
-        )
-    })?;
+    )? {
+        Ok(decided) => decided,
+        Err(failure) => {
+            return refuse(admission_failed(
+                "first_decision",
+                format!(
+                    "the dry run of step 1's select fails on its primary frame {}",
+                    frame.frame_id
+                ),
+                json!({"frame": frame.frame_id, "failure": failure}),
+            ));
+        }
+    };
     if !decided.unread.is_empty() {
-        return Err(admission_failed(
+        return refuse(admission_failed(
             "first_decision",
             format!(
                 "on its primary frame {} a slot of step 1's select reads no known name",
@@ -581,7 +759,7 @@ fn select_first_decision(
             });
         }
         other => {
-            return Err(admission_failed(
+            return refuse(admission_failed(
                 "first_decision",
                 format!(
                     "on its primary frame {} the select of step 1 selects no slot, and the run \
@@ -598,18 +776,20 @@ fn select_first_decision(
             format!("the dry run of step 1 selected slot {slot}, which it lacks"),
         )
     })?;
-    let result = simulate_contained_task_at(
+    let result = match simulate_contained_task_at(
         prepared,
         vec![device_frame(loaded)?],
         plan.generated_at_unix_ms,
-    )
-    .map_err(|error| {
-        admission_failed(
-            "first_decision",
-            format!("the offline simulation failed: {error}"),
-            json!({"code": error.code().as_str(), "detail": error.detail()}),
-        )
-    })?;
+    ) {
+        Ok(result) => result,
+        Err(error) => {
+            return refuse(admission_failed(
+                "first_decision",
+                format!("the offline simulation failed: {error}"),
+                json!({"code": error.code().as_str(), "detail": error.detail()}),
+            ));
+        }
+    };
     let inside = matches!(
         &result.decision,
         OfflineDecision::WouldClick {
@@ -619,7 +799,7 @@ fn select_first_decision(
         } if *operation_label == operation && rect_holds(*x, *y, rect)
     );
     if !inside {
-        return Err(admission_failed(
+        return refuse(admission_failed(
             "first_decision",
             format!(
                 "on its primary frame, step 1 must tap {operation} inside slot {slot}, the slot its \
@@ -692,12 +872,15 @@ fn select_mismatch(
 /// on the frame (the page rule and the layout share it), every slot's name reads a known name, and
 /// on the primary frame the pressed name selects a slot, the slot the recorded press hit. Each
 /// frame's decisions are listed; any other frame is `record_step_self_mismatch`. Without an OCR
-/// model nothing is called and the step is undetermined.
+/// model nothing is called and the step is undetermined. #463 S2-1c: each frame's decision is one
+/// judgement, its parts read from the one before; a frame that fails it is a failure `failures`
+/// meets (the step, the frame, its page), and under `record ready` the next frame is judged.
 pub(crate) fn select_checks(
     prepared: &PreparedContainedTask,
     plan: &Plan,
     cache: &FrameCache,
     ocr: &LabOcr,
+    failures: &mut Failures,
 ) -> LabResult<SelectChecks> {
     let mut selects = Vec::new();
     let mut not_evaluated = Vec::new();
@@ -736,6 +919,11 @@ pub(crate) fn select_checks(
         let mut frames = Vec::new();
         for frame in step.live_frames() {
             let loaded = cached(cache, frame)?;
+            let on = || Locus {
+                page: step.page.clone(),
+                ..Locus::on_step(step).with_frame(frame)
+            };
+            // The kernel's dry run: a decision, or the frame's `self_test_error`.
             let run = |document: Option<&Value>| {
                 decide(
                     prepared,
@@ -744,34 +932,54 @@ pub(crate) fn select_checks(
                     document,
                     plan.generated_at_unix_ms,
                 )
-                .and_then(|decided| {
+                .map(|decided| {
                     decided.map_err(|failure| {
                         select_mismatch(step, frame, SELF_TEST_ERROR, json!({"failure": failure}))
                     })
                 })
             };
-            let default = run(None)?;
-            if let Some((slot, cause)) = default.unread.first() {
-                return Err(select_mismatch(
-                    step,
-                    frame,
-                    NAME_UNREAD,
-                    json!({"slot": slot, "cause": cause, "default": default.kind}),
-                ));
-            }
-            let pressed = match &override_document {
-                None => default.kind,
-                Some(document) => run(Some(document))?.kind,
+            let default = match run(None)? {
+                Ok(default) => default,
+                Err(mismatch) => {
+                    failures.fail(on(), mismatch)?;
+                    continue;
+                }
             };
-            if frame.role == "primary" {
-                let slot = pressed.slot().ok_or_else(|| {
+            if let Some((slot, cause)) = default.unread.first() {
+                failures.fail(
+                    on(),
                     select_mismatch(
                         step,
                         frame,
-                        PRESSED_ABSENT,
-                        json!({"pressed": spec.pressed_name(), "decision": pressed}),
-                    )
-                })?;
+                        NAME_UNREAD,
+                        json!({"slot": slot, "cause": cause, "default": default.kind}),
+                    ),
+                )?;
+                continue;
+            }
+            let pressed = match &override_document {
+                None => default.kind,
+                Some(document) => match run(Some(document))? {
+                    Ok(decided) => decided.kind,
+                    Err(mismatch) => {
+                        failures.fail(on(), mismatch)?;
+                        continue;
+                    }
+                },
+            };
+            if frame.role == "primary" {
+                let Some(slot) = pressed.slot() else {
+                    failures.fail(
+                        on(),
+                        select_mismatch(
+                            step,
+                            frame,
+                            PRESSED_ABSENT,
+                            json!({"pressed": spec.pressed_name(), "decision": pressed}),
+                        ),
+                    )?;
+                    continue;
+                };
                 if let Some(point) = executed {
                     let rect = default.clicks.get(&slot).copied().ok_or_else(|| {
                         invalid(
@@ -780,12 +988,16 @@ pub(crate) fn select_checks(
                         )
                     })?;
                     if !rect_holds(point.x, point.y, rect) {
-                        return Err(select_mismatch(
-                            step,
-                            frame,
-                            PRESS_MISMATCH,
-                            json!({"slot": slot, "click_rect": rect, "point": point}),
-                        ));
+                        failures.fail(
+                            on(),
+                            select_mismatch(
+                                step,
+                                frame,
+                                PRESS_MISMATCH,
+                                json!({"slot": slot, "click_rect": rect, "point": point}),
+                            ),
+                        )?;
+                        continue;
                     }
                 }
             }
@@ -981,7 +1193,9 @@ impl Evaluation<'_> {
     }
 }
 
-/// The cross-check results the output and the package provenance carry.
+/// The cross-check results the output and the package provenance carry. #463 S2-1c: empty
+/// (`Default`) once `record ready` collected a failure of the cross-check, when nothing reads them.
+#[derive(Default)]
 pub(crate) struct CrossCheck {
     pub(crate) warnings: Vec<Value>,
     pub(crate) arrival_by_time_window: Vec<u32>,
@@ -1289,10 +1503,15 @@ fn skip_target_insensitive(
 /// recorded twice with the same click is `same_as` with one `arrival_unconfirmed` (c), and an
 /// undetermined evaluation is a warning (e). Every pair of frames and page is evaluated once and
 /// any refusal comes before every warning (f); the step before a run (d) is the arrival gate.
+/// #463 S2-1c: each page against each screen is one judgement; one that fails is a failure
+/// `failures` meets (a: the optional step, the frames its page passes on, its page; b: the skip
+/// target, the optional step's frames it passes on, its page), and under `record ready` the next
+/// is judged; a member whose skip target failed has no gate result.
 fn optional_checks(
     evaluation: &Evaluation<'_>,
     plan: &Plan,
     cache: &FrameCache,
+    failures: &mut Failures,
 ) -> LabResult<OptionalChecks> {
     let mut checks = OptionalChecks::default();
     for run in &plan.runs {
@@ -1336,7 +1555,11 @@ fn optional_checks(
                         && step.step.click.as_ref().map(|click| click.rect)
                             == other_step.step.click.as_ref().map(|click| click.rect);
                     if !same_click {
-                        return Err(optional_ambiguous(step, page, kind, other_step, &matched));
+                        failures.fail(
+                            Locus::on_step(step).with_frames(&matched).with_page(page),
+                            optional_ambiguous(step, page, kind, other_step, &matched),
+                        )?;
+                        continue;
                     }
                     same_pairs.insert((member.min(other), member.max(other)));
                     same_pages.insert((other, member), matched);
@@ -1364,7 +1587,13 @@ fn optional_checks(
                 &step.live_frames(),
             )?;
             if !matched.is_empty() {
-                return Err(skip_target_insensitive(skip, skip_page, step, &matched));
+                failures.fail(
+                    Locus::on_step(skip)
+                        .with_frames(&matched)
+                        .with_page(skip_page),
+                    skip_target_insensitive(skip, skip_page, step, &matched),
+                )?;
+                continue;
             }
             let result = if undetermined.is_empty() {
                 "distinct"
@@ -1446,18 +1675,24 @@ fn names_changed_after_press(
         .collect()
 }
 
-/// Section 4.6 item 4 (self and arrival gates) and a15 item 5 (entry overlay).
+/// Section 4.6 item 4 (self and arrival gates) and a15 item 5 (entry overlay). #463 S2-1c: each
+/// page on each of its frames, each guard on each frame and each optional page against each screen
+/// is one judgement; one that fails is a failure `failures` meets (the step, the frame, the page or
+/// the guard's mark), and under `record ready` the next is judged. The arrival gates and the entry
+/// overlay only warn: once a failure is collected they are not evaluated, and nothing is answered.
 pub(crate) fn cross_check(
     plan: &Plan,
     evaluator: &RecognitionEvaluator,
     cache: &FrameCache,
     ocr: &LabOcr,
+    failures: &mut Failures,
 ) -> LabResult<CrossCheck> {
     let evaluation = Evaluation {
         plan,
         evaluator,
         ocr_available: ocr.ocr_provider().is_some(),
     };
+    let start = failures.count();
     let mut partial = false;
     let mut own = Vec::new();
     let mut margins: BTreeMap<(u32, String, String), f64> = BTreeMap::new();
@@ -1493,7 +1728,11 @@ pub(crate) fn cross_check(
                 let result =
                     evaluation.page(&cached(cache, frame)?.scene, &required, &forbidden)?;
                 if result.verdict == PageVerdict::NoMatch {
-                    return Err(self_mismatch(step, &page, frame, &result));
+                    failures.fail(
+                        Locus::on_step(step).with_frame(frame).with_page(&page),
+                        self_mismatch(step, &page, frame, &result),
+                    )?;
+                    continue;
                 }
                 partial |= result.verdict == PageVerdict::Undetermined;
                 for (target, margin) in result.margins {
@@ -1551,7 +1790,13 @@ pub(crate) fn cross_check(
                     "not_found"
                 }
                 Some(refused) => {
-                    return Err(guard_mismatch(step, &follow.mark_id, frame, &refused));
+                    failures.fail(
+                        Locus::on_step(step)
+                            .with_frame(frame)
+                            .with_target(&follow.mark_id),
+                        guard_mismatch(step, &follow.mark_id, frame, &refused),
+                    )?;
+                    continue;
                 }
             };
             results.push(json!({"frame_id": frame.frame_id, "result": result}));
@@ -1569,8 +1814,12 @@ pub(crate) fn cross_check(
     }
 
     // Workflow #339 section 4.7: the optional steps, refusals before any warning.
-    let optional = optional_checks(&evaluation, plan, cache)?;
+    let optional = optional_checks(&evaluation, plan, cache, failures)?;
     partial |= optional.partial;
+    // #463 S2-1c: what follows only warns, and a failure leaves nothing that reads it.
+    if failures.count() > start {
+        return Ok(CrossCheck::default());
+    }
 
     // b. the arrival gate after every effect, on the frames of its own step
     let mut warnings = Vec::new();
@@ -1923,12 +2172,15 @@ fn ending_ambiguous(ending: &PlanEnding, screen: &EndingScreen<'_>, frames: &[St
 /// `ocr_alone_unchecked`. Every refusal comes before every warning. The usual ending's page passing
 /// on an ending's frames is the warning `ending_usual_insensitive`; any other undetermined
 /// evaluation (OCR without a model) the warning `ending_ambiguity_not_evaluated`, and the
-/// cross-check is then `partially_evaluated`.
+/// cross-check is then `partially_evaluated`. #463 S2-1c: each ending's page on each of its own
+/// frames and against each screen is one judgement; one that fails is a failure `failures` meets
+/// (the ending's outcome key and page, the frames), and under `record ready` the next is judged.
 pub(crate) fn ending_checks(
     plan: &Plan,
     evaluator: &RecognitionEvaluator,
     cache: &FrameCache,
     ocr: &LabOcr,
+    failures: &mut Failures,
 ) -> LabResult<EndingChecks> {
     let mut checks = EndingChecks {
         endings: Vec::new(),
@@ -1957,7 +2209,11 @@ pub(crate) fn ending_checks(
         for frame in &own_frames {
             let result = evaluation.page(&cached(cache, frame)?.scene, &ending.required, &[])?;
             if result.verdict == PageVerdict::NoMatch {
-                return Err(ending_self_mismatch(ending, frame, &result));
+                failures.fail(
+                    Locus::on_ending(ending).with_frame(frame),
+                    ending_self_mismatch(ending, frame, &result),
+                )?;
+                continue;
             }
             checks.partial |= result.verdict == PageVerdict::Undetermined;
             own.push(json!({"frame_id": frame.frame_id, "result": result.verdict.as_str()}));
@@ -1998,13 +2254,21 @@ pub(crate) fn ending_checks(
             let (matched, undetermined) =
                 page_on_frames(&evaluation, cache, &ending.required, &[], &screen.frames)?;
             if !matched.is_empty() {
-                return Err(ending_ambiguous(ending, screen, &matched));
+                failures.fail(
+                    Locus::on_ending(ending).with_frames(&matched),
+                    ending_ambiguous(ending, screen, &matched),
+                )?;
+                continue;
             }
             // Fix 1: an ending only OCR marks tell apart, which no model checked, could turn a
             // failure into a silent success: refused; one with a mark of another family is the
             // warning below.
             if !undetermined.is_empty() && ocr_alone {
-                return Err(ending_unchecked(ending, screen, &undetermined));
+                failures.fail(
+                    Locus::on_ending(ending).with_frames(&undetermined),
+                    ending_unchecked(ending, screen, &undetermined),
+                )?;
+                continue;
             }
             if !undetermined.is_empty() {
                 checks.partial = true;

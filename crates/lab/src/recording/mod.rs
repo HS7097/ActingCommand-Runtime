@@ -52,6 +52,6 @@ pub use hold::{
 pub use lock::RecordingLock;
 pub use model::*;
 pub use ready::{
-    PressPointOnly, ReadyDetails, ReadyItem, ReadyMark, ReadyOptionConflict, ReadySources,
-    ReadyWarningItem, RecordReadyOutcome,
+    PressPointOnly, ReadyCheckRun, ReadyDetails, ReadyItem, ReadyMark, ReadyOptionConflict,
+    ReadySources, ReadyWarningItem, RecordReadyOutcome,
 };
