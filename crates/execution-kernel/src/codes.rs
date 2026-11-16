@@ -148,6 +148,10 @@ actingcommand_contract::outcome_codes! {
         // `artifact_id`). The owner's ruling on board #463: the ladder starts at once, by
         // `pack_logic`, as for `page_confirmation_failed` (register §1.372).
         ContainedTaskLinearUnrecordedScreen => "contained_task_linear_unrecorded_screen": error / pack_logic_mismatch,
+        // Workflow #463 KP-1: the run of a linear package with a key step on an instance whose input
+        // does not send that key, as its capability table declares; refused after `RunStarted` and
+        // before any capture, input or effect intent (key `pack_operation_id`, the first key step).
+        ContainedTaskLinearKeyUnsupported => "contained_task_linear_key_unsupported": error / declaration_error,
         // Workflow #390 EXEC-2: a declared stability wait ended before its frames held (keys
         // `pack_operation_id`, `timeout_ms`).
         ContainedTaskInputStabilityUnconfirmed => "contained_task_input_stability_unconfirmed": error / pack_logic_mismatch,

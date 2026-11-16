@@ -2177,6 +2177,27 @@
       "common_causes": "A result the recording never met: a dialog nobody recorded (a balance that is not enough, a notice, a confirmation), or a page a game update added, shown after the step's click. Also a static screen nobody declared that outlasted the failed wait and the closing decision (a connecting overlay, a slow loading screen).",
       "handling": "Take the pinned frame as a file: artifact_id is no material reference by itself; actinglab run evidence <request_id> lists the run's frames as material references <seq>:<event_id>:<artifact_id>, and the one whose last part is this artifact_id is the pinned frame; actinglab material <ref> --out <dir> writes it as <dir>/<sha256>.png (the MCP tool ac_material with mode export writes the same file). Take it in time: a pinned frame nobody confirmed as read is removed once frame_retention_evidence_max_age_days (a top-level key, 15 by default) have passed since its ingestion, and one confirmed as read at the ledger store's next pass. A screen that ends the business after the path's last press (too little balance, nothing to collect) is an ending of the recording, its message left on the screen: on the stopped recording, actinglab record mark --ending --frame <png> --outcome-key <key> with a mark of that screen only (such as --template of its message) adds it, and actinglab record stop regenerates the package, which then ends that run Completed on the screen with that key; a frame of another resolution that is a pure scale of the recording's is converted by the Lab itself, so give the file as written. A pop-up after which the path goes on (a notice, a reward) is an optional step of the recording: on the stopped recording, actinglab record mark --optional-after <k> --frame <png> with a mark of the pop-up only (such as --template of its title) and the click that closes it inserts it after step k, the step whose press the run met it after, its frame taken and converted as an ending's; k is that step's serial number in the recording, not the number inside the package that pack_operation_id carries (step_<nn>_click or step_<nn>_select): in actinglab record status, find the row whose artifact_step is the number nn (02 is 2) and take its index; actinglab record stop then checks it as every optional step and regenerates the package, whose runs press it when it shows and go on as before when it does not. Every other answer is a new recording: a result after an earlier press or a branch that continues the business (a step and a page). A slow screen is declared as a page or a loading page. A changed package content lifts the pause at the pair's next due evaluation; actingd suspended and ac_diagnose list the paused pair until then."
     },
+    "contained_task_linear_key_unsupported": {
+      "category": "error",
+      "ladder_class": "declaration_error",
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "uncertain": false,
+      "values": {
+        "pack_operation_id": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.69",
+      "description": "Workflow #463 KP-1: a linear_steps package declares a key step (its operation's effect \"key\": {\"key\": \"back\"}), and the input of the instance it runs on does not send that key, as the instance's capability table declares (the row input.key says its configured input does not implement it). The run asks once, after RunStarted and before any capture, input or effect intent, and ends here: nothing was sent and no effect was intended, so no record of the run calls an effect indeterminate. pack_operation_id names the package's first key step. A runtime without a capability table (an instance whose provider declares none, a fixture, the offline simulation) refuses nothing here; the input path still answers for every key it is sent.",
+      "common_causes": "The instance's touch backend sends no key: the emulator's own input (nemu_ipc) in a build that does not send the back key on it, minitouch, or an instance switched to such a backend. The package was made with a back-key step (an agent added it to a recording) for an instance whose input sends keys.",
+      "handling": "Read the instance's capability table (actingctl status, or ac_status: the instance's capabilities, the row input.key and its evidence_ref, the configured touch backend). Run the package on an instance whose input sends the key, or configure the instance's touch backend to one that does (maatouch sends keys). Or record the step again as a press of the screen's own control instead of the back key. A scheduled run fails the same way at every dispatch until one of these changes."
+    },
     "contained_task_input_stability_unconfirmed": {
       "category": "error",
       "ladder_class": "pack_logic_mismatch",

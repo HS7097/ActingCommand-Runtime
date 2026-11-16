@@ -2518,6 +2518,66 @@ pub enum ApplicationEffectSupport {
     Unsupported,
 }
 
+/// Workflow #463 KP-1 (`contracts/linear-steps.md`, "Key steps"): the key a `linear_steps` key
+/// step presses, the package's closed vocabulary of one word. The owner's ruling on board #463
+/// names the back key; the coordinator's: no other key and no text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StepKey {
+    /// `back`: the system back key.
+    Back,
+}
+
+impl StepKey {
+    /// Every key of the vocabulary.
+    pub const ALL: [Self; 1] = [Self::Back];
+
+    /// The word a package writes (`"key": {"key": "back"}`).
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Back => "back",
+        }
+    }
+
+    /// The key of the input request that presses it: Android's key code, the form the Lab's
+    /// `key back` sends (`KEYCODE_BACK`, 4) and MaaTouch's key command reads.
+    pub const fn input_key(self) -> &'static str {
+        match self {
+            Self::Back => "4",
+        }
+    }
+
+    /// The key `word` names, when the vocabulary has it.
+    pub fn from_word(word: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|key| key.as_str() == word)
+    }
+
+    /// The key `action` presses, when it presses one of the vocabulary's.
+    pub fn of_action(action: &InputAction) -> Option<Self> {
+        match action {
+            InputAction::Key { key } => Self::ALL.into_iter().find(|step| step.input_key() == key),
+            _ => None,
+        }
+    }
+
+    /// The input action that presses it.
+    pub fn action(self) -> InputAction {
+        InputAction::Key {
+            key: self.input_key().to_owned(),
+        }
+    }
+}
+
+/// Workflow #463 KP-1 (`contracts/linear-steps.md`, "Key steps"): whether the input of a run's
+/// instance sends a key step's key, as the instance's backends declare it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyInputSupport {
+    /// The input sends the key, or nothing the runtime knows says that it does not.
+    Supported,
+    /// The instance's capability table says its input does not implement keys (`input.key`).
+    Unsupported,
+}
+
 /// Workflow #373 NAV-6 (model M-373 v1.1 §6): what a runtime did with a frame that did not give
 /// the running package what it awaited.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2794,6 +2854,15 @@ pub trait ContainedTaskRuntime {
         _action: ApplicationLifecycleAction,
     ) -> Result<ApplicationEffectSupport, Self::Error> {
         Ok(ApplicationEffectSupport::Unsupported)
+    }
+
+    /// Workflow #463 KP-1 (`contracts/linear-steps.md`, "Key steps"): whether this runtime's
+    /// instance sends `key`, asked once by a run of a package with a key step, after `RunStarted`
+    /// and before any capture, input or effect intent; `Unsupported` refuses the run there. The
+    /// host answers from the capability table the instance's backends declare (`input.key`); a
+    /// runtime without one (offline simulation, fixtures) answers `Supported`.
+    fn key_input_support(&mut self, _key: StepKey) -> Result<KeyInputSupport, Self::Error> {
+        Ok(KeyInputSupport::Supported)
     }
 
     /// Workflow #308: the instance fact snapshot and the evaluation instant of one select step.
@@ -3943,7 +4012,10 @@ impl PreparedContainedTask {
                     self.control.execution_mode != linear::LINEAR_STEPS
                         || operation.application.is_none()
                 })
-                .any(|operation| operation.click.is_some() || operation.select.is_some());
+                // Workflow #463 KP-1: a key step sends an input too.
+                .any(|operation| {
+                    operation.click.is_some() || operation.select.is_some() || operation.key.is_some()
+                });
         (capture, input)
     }
 
@@ -5179,6 +5251,9 @@ impl PreparedContainedTask {
             let plan = self
                 .program
                 .validate_linear(&self.control, &self.detector)?;
+            // Workflow #463 KP-1 (`contracts/linear-steps.md`, "Key steps"): a key the instance's
+            // input cannot send refuses the run here, before any capture, input or effect intent.
+            self.refuse_unsendable_key(runtime, &plan)?;
             return self.run_linear_steps(
                 runtime,
                 ocr_collector,
@@ -9685,6 +9760,17 @@ impl TaskProgram {
                     ),
                 ));
             }
+            // Workflow #463 KP-1: a key step is a `linear_steps` declaration.
+            if operation.key.is_some() {
+                return Err(ContainedTaskError::with_detail(
+                    ExecutionKernelCode::ContainedTaskOperationInvalid.code(),
+                    format!(
+                        "operation={} key requires {}",
+                        operation.id,
+                        linear::LINEAR_STEPS
+                    ),
+                ));
+            }
             let destination_pages = operation.destination_pages()?;
             validate_page_references(&control.game, &destination_pages, detector)?;
             validate_page_set_overlap(
@@ -11525,6 +11611,15 @@ struct TaskApplicationEffect {
     action: ApplicationLifecycleAction,
 }
 
+/// Workflow #463 KP-1 (`contracts/linear-steps.md`, "Key steps"): the `key` effect of a
+/// `linear_steps` operation as the package writes it, `{"key": "back"}`. Its word is held to the
+/// vocabulary ([`StepKey`]) when the step plan is admitted (`key_unknown`).
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TaskKeyEffect {
+    key: String,
+}
+
 #[derive(Debug, Deserialize)]
 struct TaskOperation {
     id: String,
@@ -11533,12 +11628,15 @@ struct TaskOperation {
     to: Option<PageDeclaration>,
     #[serde(default)]
     expect_after: Option<TaskOperationExpectation>,
-    /// Exactly one of `click`, `application`, `select` and (#411 B36/B19) `wait` carries the
-    /// effect.
+    /// Exactly one of `click`, `application`, `select`, (#411 B36/B19) `wait` and (Workflow #463
+    /// KP-1, `linear_steps` only) `key` carries the effect.
     #[serde(default)]
     click: Option<TaskClick>,
     #[serde(default)]
     application: Option<TaskApplicationEffect>,
+    /// Workflow #463 KP-1: a key step presses one key of the vocabulary on its page.
+    #[serde(default)]
+    key: Option<TaskKeyEffect>,
     /// A select step (Workflow #308): a candidate of a layout chosen by a policy document.
     #[serde(default)]
     select: Option<selection::TaskSelect>,
@@ -11761,6 +11859,17 @@ impl TaskOperation {
                 match &self.guard {
                     Some(guard) => guard.validate(self, control),
                     None => Err(ContainedTaskError::new(
+                        ExecutionKernelCode::ContainedTaskGuardMissing.code(),
+                    )),
+                }
+            }
+            // Workflow #463 KP-1: a key step's page is recognised by its declared guard before the
+            // key is sent, as a click's is; it has no coordinate, so it is never a trusted one. Its
+            // word and its mode are the step plan's (`validate_linear`, the page-graph refusal).
+            (None, None, None) if self.key.is_some() => {
+                match (&self.guard, self.unguarded_trusted_coordinate) {
+                    (Some(guard), false) => guard.validate(self, control),
+                    _ => Err(ContainedTaskError::new(
                         ExecutionKernelCode::ContainedTaskGuardMissing.code(),
                     )),
                 }

@@ -5632,6 +5632,32 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
         Ok(ApplicationEffectSupport::Performed)
     }
 
+    /// Workflow #463 KP-1 (`contracts/linear-steps.md`, "Key steps"): whether the run's instance
+    /// sends a key step's key, read from the capability table its backends declare: `Unsupported`
+    /// where the row `input.key` says the configured input does not implement it; `Supported`
+    /// where it says it does or where the provider declares no table (a fixture), whose input path
+    /// still answers for every key it is sent. The table has one row for every key, so `_key`
+    /// decides nothing here.
+    fn key_input_support(
+        &mut self,
+        _key: actingcommand_execution_kernel::StepKey,
+    ) -> Result<actingcommand_execution_kernel::KeyInputSupport, Self::Error> {
+        use actingcommand_contract::{EmulatorCapability, EmulatorCapabilityImplementation};
+        use actingcommand_execution_kernel::KeyInputSupport;
+        self.ensure_active()?;
+        let registered = self.host.resolve_instance(self.instance_alias)?;
+        let resolved = self.host.resolve_registered_backend(&registered)?;
+        let unsupported = resolved.capabilities().is_some_and(|table| {
+            table.evidence(EmulatorCapability::InputKey).implementation()
+                == Some(EmulatorCapabilityImplementation::Unsupported)
+        });
+        Ok(if unsupported {
+            KeyInputSupport::Unsupported
+        } else {
+            KeyInputSupport::Supported
+        })
+    }
+
     fn record(&mut self, mut trace: ContainedTaskTrace) -> Result<(), Self::Error> {
         self.kernel_clock_read()?;
         // Workflow #308: the interpreter does not return a `run_ending` select record's failure
