@@ -515,7 +515,7 @@ fn s314_a_pack_ready_to_place_answers_the_passed_trial_of_its_content() {
         serialized["trial"]["record"]["end"]["outcome_key"],
         BUSINESS_END
     );
-    assert_eq!(serialized["trial"]["record"]["matched"], true);
+    assert_eq!(serialized["trial"]["record"]["matched"], json!(true));
 
     // The train (R1): a later trial of the same content that ended normally, but on another end
     // than the one it expected, did not pass; the earlier pass stays on record.
@@ -905,7 +905,7 @@ fn s314_train_a_failed_run_answers_failed() {
     );
     let serialized = serde_json::to_value(placed).expect("the row");
     assert_eq!(serialized["trial"]["state"], "failed");
-    assert_eq!(serialized["trial"]["passed_on_record"], false);
+    assert_eq!(serialized["trial"]["passed_on_record"], json!(false));
 }
 
 #[test]
