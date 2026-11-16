@@ -32168,6 +32168,44 @@ lifts a hold or enables a package.
 `run_through`, the latest trial of the content it adopted, the two warnings, and where a value is
 registered.
 
+**Train** (coordinator work order `rd-1116/brief-463-train-stage3.md`; the train of S3-12 and
+S3-14 in pull request #1783, which carries this section's head `71e6f4b6` and §1.446's `96e6ea2d`,
+merged in that order after main `a91e657c`, then made one by the coordinator's rulings R1 to R7,
+not the owner's words, and the review of #1783). What it changed of this section, with §1.446
+(S3-14):
+- *One judgement of a passed trial (R1).* `PackTrialRecord::passed` in
+  `standard_pack_trial.rs`, beside `unexpected_end`: a trial passed when its run ended on an end the
+  package declares (`end.outcome` `success`) and, where it was given `--expect`, on that end
+  (`matched` not `false`); without an expectation any declared end passes. This section's closure
+  in `adopted_trial` is gone; [standard-pack-trial.md](standard-pack-trial.md), "The record", "A
+  trial that passed", defines it, and [standard-pack-authoring.md](standard-pack-authoring.md)
+  refers to it. The rule is this section's own; §1.446's (`end.outcome` alone) is gone.
+- *One summary of a content's trials (R2).* `AdoptTrial`, `AdoptTrialRecord`, `TrialNotRead` and
+  `adopted_trial` left `adopt.rs`: the trial module's `trial_summary` builds `TrialSummary`
+  (`state`, `content_hash_prefix`, `record` as `TrialReference` {`authorization`, `at_unix_ms`,
+  `request_id`, `end`, `matched?`}, the new `passed_on_record`, `other_content`) or `TrialNotRead`
+  (`outcome`, `text`), which `review.trial` and `review.trial_not_read` answer and §1.446's row
+  answers too. `not_tried` is warned while `passed_on_record` is false; a content that passed once
+  and failed since reads `failed` and `true` (the review's point (l)). The `Serialize` of
+  `TrialState` and the helper `cause_of` moved to the trial module with it. The vocabulary
+  `trial_state`, its enum (this section's names, `NoRecord` for `none`), its catalog entry and its
+  `pub use` are this section's, once; §1.446's copies went in the merge.
+- *Texts.* [standard-pack-authoring.md](standard-pack-authoring.md), "The trial and the two
+  warnings": `passed_on_record`, the reference to the trial's definition, and the sentence on when
+  `next` names `bindings.json` now says what the code does (also for a rule judged by its
+  `produces` and `consumes` whose entry's amount is `"pending"` or whose pool's valuation is
+  `"pending"` or missing); the row `standard-pack adopt` of the operation table; the catalog's
+  texts of `trial_state`.
+- *Tests* (`gate_463_s312.rs`, exec gate map "#463 stage three, the train of S3-12 and S3-14"):
+  `s312_train_an_end_other_than_the_expected_one_is_failed`,
+  `s312_train_passed_once_and_failed_since_shows_both`,
+  `s312_train_an_unreadable_record_answers_trial_not_read`,
+  `s312_train_a_first_business_adoption_warns_enabling_and_a_bare_replace_does_not` and
+  `s312_train_next_items_are_objects_with_a_path` (the review's list (h)). This section's seven
+  tests are unchanged.
+- *What does not move (R7).* What adoption checks, writes and refuses; the trial's records, writer,
+  reader and store; readiness. No code or key is added; no word beyond §1.446's.
+
 ### 1.446 Slice #463 S3-14 (0.12.68): `standard-pack status` says where each pack of a game root stands (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making, whose stage three shows each package's states: formed, its running conditions met or what is missing, tried or not, enabled and under which authorization; the design `rd-1115/pack-stage3-design.md`, §2.3 "One read for one package and for a whole game root" and §4.2 "S3-14"; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1116/brief-463-s314-pack-status.md`, read on main `40abd08b`)
 
 The coordinator gave this slice 1.446. It ships in 0.12.68.
@@ -32262,6 +32300,72 @@ configuration key.
 
 **At deploy.** Nothing to configure. Through MCP the tool is `ac_standard_pack_status` of the
 Lab's MCP server, listed with the authoring module and served by a `serve` child.
+
+**Train** (coordinator work order `rd-1116/brief-463-train-stage3.md`; the train of S3-12 and
+S3-14 in pull request #1783, which carries §1.445's head `71e6f4b6` and this section's `96e6ea2d`,
+merged in that order after main `a91e657c`, then made one by the coordinator's rulings R1 to R7,
+not the owner's words, and the review of #1785). What it changed of this section, with §1.445
+(S3-12):
+- *The vocabulary collision.* Both slices defined `trial_state` (an enum `TrialState`, its catalog
+  entry, its `pub use`, its `Serialize`). §1.445's is kept, once; this section's went in the merge
+  (`NotTried` is §1.445's `NoRecord`, the word `none` as before).
+- *One judgement of a passed trial (R1).* The row's `trial.state` is judged by
+  `PackTrialRecord::passed`, §1.445's rule ([standard-pack-trial.md](standard-pack-trial.md), "A
+  trial that passed"): a run that ended normally on another end than the one its trial expected is
+  `failed`, no longer `passed`. "Decided here" above no longer holds for `trial.state`.
+- *One summary (R2).* `PackTrial` and `PackTrial::of` are gone: `trial` is the trial module's
+  `TrialSummary` (`state`, `content_hash_prefix`, `record` {`authorization`, `at_unix_ms`,
+  `request_id`, `end`, `matched?`}, `passed_on_record`, `other_content`), §1.445's shape, built by
+  `trial_summary`; the record's members moved under `record`, and `authorization` and
+  `passed_on_record` are new to this row.
+- *One content identity (R3).* `formed.content_hash_prefix` and `formed.checkout` are named by the
+  trial module's `content_hash_prefix_of` over the directory read as a trial reads one
+  (containment's `snapshot_content_directory`); the row's own prefix of `measure_content_hash` is
+  gone (the same digits for a directory). The refusal of an unknown `--package-id` and the
+  absolute path are the trial module's `argument_refused` and `absolute`, each now with two
+  callers; the row's copies are gone.
+- *An unreadable record refuses no root (R4).* A pack one of whose trial records the reader refuses
+  answers `trial_not_read` (`outcome`, `text`; §1.445's one shape and member name) and no `trial`;
+  the other packs are answered. `trial_record_unreadable` no longer refuses the row.
+- *`stage_state` says only what the row knows (R5).* Two words: `not_judged` (admitted, and the
+  composer refuses the root's `schedule.json`, as `enabled.state` `not_judged`) and `supporting`
+  (admitted, a supporting part no rule names, `enabled.state` `not_scheduled`); `can_be_tried` is
+  left for a held pack and one nothing places. The counts `stage_states` follow (`not_admitted`,
+  `not_judged`, `can_be_tried`, `supporting`, `enabled`). A row member `held` (`{reason,
+  reference?}`) shows a pack's hold whenever the accepted `schedule.json` holds it, so a held pack in
+  a supporting role, whose S2 holds by its role, shows it on its own row: `PackPlacement` gains
+  `held`, from `Context::hold_entry`, which `Context::held` now calls too; the readiness's
+  judgement and answer do not change (R7).
+- *The journals (R6).* Still not read, and the texts now say why exactly: their reader is private
+  to the rescue module (`install::journal`, `pub(crate)`) and `crates/lab-rescue` is built for
+  Windows only (the review's correction of "Where the code corrected the design" above; the
+  architecture guard matters only for a row placed in the rescue module). The next slice reads
+  them; nothing of that is built here.
+- *Words.* `stage_state` gains `not_judged` and `supporting`; `authorization_unrecorded`'s
+  `journals_not_read` and `stage_state`'s `can_be_tried` are said again. No code, no key; the index
+  is current.
+- *Texts.* [standard-pack-schedule.md](standard-pack-schedule.md), "Where a pack stands": `held`,
+  `trial`, `trial_not_read`, `stage_state`, `enabled.authorization`, the words, and the sentence on
+  `conditions` (items of a root judged without an installation, so `ready_to_place` at best); the
+  row `standard-pack status` of the operation table; the MCP manual; the command count of both
+  READMEs (107, as the command inventory already says).
+- *Tests* (`gate_463_s314.rs`). Renamed, their placement journal fixture removed (nothing read it):
+  `s314_a_pack_placed_under_a_journal_that_names_it_answers_journals_not_read` is
+  `s314_an_enabled_pack_answers_not_recorded_with_journals_not_read`;
+  `s314_a_pack_that_runs_unnamed_by_any_journal_answers_not_recorded` is
+  `s314_every_pack_answers_not_recorded_with_journals_not_read`, which now asserts the two words
+  for every pack. Adapted: `s314_a_pack_ready_to_place_answers_the_passed_trial_of_its_content`
+  (its passed trial expected the end it reached, `matched` true; then a later trial of that
+  content that ended normally on another end than expected is `failed`, `passed_on_record` true:
+  it tells R1's rule), `s314_the_counts_add_up` (the return-home pack is `supporting`) and
+  `s314_a_trial_record_of_other_content_does_not_count` (the record under `record`, the summary's
+  shape). New (exec gate map "#463 stage three, the train of S3-12 and S3-14"):
+  `s314_train_a_refused_schedule_is_not_judged`, `s314_train_a_pack_no_rule_names_is_not_placed`,
+  `s314_train_a_pack_the_loader_refuses_is_not_admitted`, `s314_train_a_failed_run_answers_failed`,
+  `s314_train_a_supporting_pack_stands_supporting_and_shows_its_hold`,
+  `s314_train_repo_measures_the_checkout_pack` and
+  `s314_train_an_unreadable_record_leaves_only_its_pack_not_read`. None of these names was on main,
+  so none needs a retirement.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

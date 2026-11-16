@@ -520,28 +520,33 @@ recording was checked offline, and that the content was tried on a real applicat
   first 12 hex digits of the content hash (`content_hash_prefix`, the contract crate's
   `content_directory_digest` of each file's SHA-256, one function the trial calls too) of the files
   the adoption writes into `packs/<package_id>/` (or, under `--dry-run`, would write), so a trial of
-  that directory, which is what a trial tries, records the same prefix. Its members: `state`
-  (`passed`, `failed` or `none`, the vocabulary `trial_state`), `content_hash_prefix`, `record`
-  (the latest record of this content: `authorization`, `at_unix_ms`, `request_id`, `end` as the
-  record keeps it, and `matched` when the trial named the end it expected; absent with `none`)
-  and `other_content` (a record of another content of the same package id is on record; it counts
-  for nothing). A trial `passed` when its run ended normally (`end.outcome` `success`) and, when it
-  named an expected end, on that end (`matched` not `false`); `failed` otherwise. A record of the
-  directory as an earlier adoption wrote it, before a change (a new recording, a repaired package),
-  is another content.
+  that directory, which is what a trial tries, records the same prefix. It is the trial's one
+  summary of a content's trials (the train of S3-12 and S3-14,
+  [standard-pack-trial.md](standard-pack-trial.md), "What the records say of one content"), which
+  `standard-pack status` answers too: `state` (`passed`, `failed` or `none`, the vocabulary
+  `trial_state`), `content_hash_prefix`, `record` (the latest record of this content:
+  `authorization`, `at_unix_ms`, `request_id`, `end` as the record keeps it, and `matched` when the
+  trial named the end it expected; absent with `none`), `passed_on_record` (whether any record of
+  this content passed) and `other_content` (a record of another content of the same package id is
+  on record; it counts for nothing). Whether a trial passed is what
+  [standard-pack-trial.md](standard-pack-trial.md), "A trial that passed", says; this answer
+  defines nothing of its own. A record of the directory as an earlier adoption wrote it, before a
+  change (a new recording, a repaired package), is another content.
 - When the reader refuses the package's records (a file of a record's name that is no record,
   `trial_record_unreadable` with its word, or the directory not listed), `review.trial` is absent
   and `review.trial_not_read` carries `outcome`, the reader's refusal with its code, and `text`, the
-  same in words; the adoption is the same without it, as `readiness_not_judged` is, and `not_tried`
-  is not warned, since whether this content was tried is not known.
+  same in words (the trial's one shape, which the status row answers too); the adoption is the same
+  without it, as `readiness_not_judged` is, and `not_tried` is not warned, since whether this
+  content was tried is not known.
 - Two warnings, appended to `warnings`, refuse nothing and change nothing of what is written:
   `enabling_needs_authorization` (`package_id`) when there is a decision and its class runs
   (`business` or `maintenance`), which lifts the package's hold where it had one: adoption enables
   nothing, and the placement that does asks for `--authorization` and for `--enables` naming the
   package when it enters scheduling or takes a new supporting role there; a held decision, and an
   adoption without a decision, which keeps the package's role, do not warn it. `not_tried`
-  (`package_id`) when no record of this content passed (an earlier passed record of the same content
-  keeps it away even when a later one failed; `trial` shows the latest).
+  (`package_id`) when no record of this content passed (`trial.passed_on_record` false: an earlier
+  passed record of the same content keeps it away even when a later one failed, and `trial` then
+  reads `state` `failed` with `passed_on_record` `true`).
 - `next` names `ours/model/bindings.json` (the model's `acmodel.bindings.v1`, relative to
   `--repo`) when the adopted rule has no value yet: it writes no `fixed_value_milli` and
   `waits_for_value` is answered. Its `fixed_value` holds the rule's id and the two ways a value gets
@@ -551,9 +556,12 @@ recording was checked offline, and that the content was tried on a real applicat
   model's writer `acmodel bindings apply` writes into the rule with `fixed_value_origin: "model"`;
   and `hand_entry` `{rule_id, status: "", ref: ""}`, an entry of `hand` that registers a number
   written by hand into the rule's `fixed_value_milli` (adopt `--replace --decide` with
-  `{fixed_value_milli, origin: "pack"}`), how it was had and where it comes from. A rule with its
-  value, a rule judged by its `produces` and `consumes`, a follower of a chain, a manual request and
-  a package without a rule name nothing of it.
+  `{fixed_value_milli, origin: "pack"}`), how it was had and where it comes from. It is named
+  whenever `waits_for_value` is answered and the rule writes no fixed value: so also for a rule
+  judged by its `produces` and `consumes` when an entry's amount is `"pending"` or its pool's
+  valuation is `"pending"` or missing ("A pending value"). A rule with its value, a rule whose
+  every `produces` and `consumes` entry has its amount on a valued pool, a follower of a chain, a
+  manual request and a package without a rule name nothing of it.
 
 Nothing here starts a trial, lifts a hold or enables a package: a passed trial is not an
 authorization, and a trial is the trial's own act under the owner's authorization
