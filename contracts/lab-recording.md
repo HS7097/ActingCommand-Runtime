@@ -889,6 +889,8 @@ stop` generates the package:
 | `on_empty_key_of_ending` | #463 R2 fix 1: the `on_empty` key is the outcome key of an ending of the recording, a select declared after the ending ("Endings"); at `record stop` the ending's own check refuses the pair (`record_ending_invalid`, `key_of_select`) |
 | `choice_not_refined` | #463 S2-6, `record stop` and its dry run only (the code of `record ready`'s item `select_unrefined`): a step marked as holding a choice has no select yet ("Marking a choice first") |
 | `no_choice` | #463 S2-6 fix round 1: the request's `choice: false` names a step that is not marked as holding a choice, so there is nothing to take off ("Marking a choice first") |
+| `drop_of_choice` | #463 stage two, train, fix round: `drop_step` names a step that holds a choice, marked as holding one or refined by a select, the last step too; withdraw the choice first ("Steps, frames and remediation") |
+| `transition_of_choice` | #463 stage two, train, fix round: `to_transition` names a step that holds a choice; a page transition holds none, so the conversion would lose it; withdraw the choice first ("Steps, frames and remediation") |
 
 **The mark-time self-test**, on every live frame of the step, is the kernel's own dry run of the
 select step (`dry_run_select`, called, never copied) on a probe package: the step alone as `record
@@ -1085,7 +1087,14 @@ the mark is kept in the recording and listed by `record ready`, so it is never l
   none (`on_final_step`). Beside a transition `choice` is `record_transition_has_click`, as a click
   is; beside a step operation `validation_failed`; beside an ending `record_ending_invalid` and
   beside an inserted optional step `record_optional_after_invalid`, both `with_other_change` naming
-  `choice`.
+  `choice`. #463 stage two, train, fix round (the coordinator's ruling; §1.440, "Fix round of the
+  train"): a step that holds a choice, marked or refined by a select, is not dropped, the last step
+  too (`drop_of_choice`): the press may have chosen the item that was already selected, so that the
+  frames show no change, and it still matters to a run handed another value; and it is not
+  converted into a page transition (`transition_of_choice`), which holds no choice. Both refuse with
+  nothing written; withdraw the choice first (`choice: false` where the step carries the mark, and
+  `clear_select` where a select refines it), then drop or convert the step ("Steps, frames and
+  remediation").
 - **Refining** is declaring the step's select ("Selecting in a list"), whole, on that step, as on any
   step whose press is recorded: the recorded press becomes the select's click when it lies in the
   slot `pressed` selects on the primary frame (`select_press_mismatch` otherwise: give `pressed` the
@@ -1569,6 +1578,16 @@ arrival: `record mark --frame` without `--step` then targets that open step exac
   file:
   - `--drop-step n` marks step n `dropped`; its marks free their ids; the previous step is
     unchanged. A mark of step n reused by another step is refused (`record_mark_in_use`).
+  - #463 stage two, train, fix round (0.12.68; [v012-register.md](v012-register.md) §1.440, "Fix
+    round of the train"; the coordinator's ruling): a step n that holds a choice, marked as holding
+    one or refined by a select ("Marking a choice first", "Selecting in a list"), is not dropped,
+    the last effective step too: `record_select_invalid` with `select_problem: drop_of_choice`
+    (exit 3, `details.step`), nothing written. It is checked once step n is found effective and
+    before anything else of the drop: before the last step is told from the others, the stored
+    frames are compared and the marks are found reused. A press that chose the item already
+    selected changes nothing on the screen and still matters to a run handed another value, so
+    the frames cannot tell it. To drop such a step, withdraw the choice first (`choice: false`
+    where the step carries the mark, and `clear_select` where a select refines it), then drop it.
   - #463 S2-7 (0.12.68; [v012-register.md](v012-register.md) §1.440; stage two of package making on
     board #463, "this press did nothing"): `--drop-step n` also takes an effective step n before the
     last one when the frames the recording stored do not contradict that its press changed nothing.
@@ -1629,7 +1648,12 @@ arrival: `record mark --frame` without `--step` then targets that open step exac
     click and no transition yet). Its frames (roles `transition`/`transition_sample`), marks and reused
     ids move into `steps[m].transition` with `source:"converted_from_step"`,
     `converted_step:n`; step n stays in the file with `converted_to_transition:true`. The
-    next frame opens a new step. Any unmet condition is `record_to_transition_invalid`.
+    next frame opens a new step. Any unmet condition is `record_to_transition_invalid`. #463
+    stage two, train, fix round (§1.440, "Fix round of the train"): once every one of them is met,
+    a step n that holds a choice is not converted, since a page transition holds no choice and the
+    mark would be lost: `record_select_invalid` with `select_problem: transition_of_choice` (exit
+    3, `details.step`), nothing written (a select step has its click, so it is refused as a step
+    with a click before that). Withdraw the choice first, as for a drop.
 - Step operations cannot be combined with marks, clicks, samples, frames, pages or
   transitions.
 
@@ -2830,11 +2854,10 @@ today's server (`actingctl mcp-serve`) has no such tool.
   that serial number alone (a step that does not exist, is dropped or was converted is
   `record_step_not_found`, 3, before `record ready`'s checks run; #463 stage two, train: a step
   dropped before the last, #463 S2-7, as the last one, and a step `restore_step` gave back is
-  listed again). `steps_total` is how many
-  effective steps the recording has, answered or not. With `--step` too the recording's whole
-  readiness is evaluated, its self-checks included, on every call, so that the step's `missing` is
-  what `record ready` answers for it: reading a long recording step by step runs them once per
-  step.
+  listed again). `steps_total` is how many effective steps the recording has, answered or not.
+  With `--step` too the recording's whole readiness is evaluated, its self-checks included, on
+  every call, so that the step's `missing` is what `record ready` answers for it: reading a long
+  recording step by step runs them once per step.
 - **It changes nothing recorded.** It takes no recording lock, reaches no Runtime and writes no
   file of the recording but its previews: the step table, the frames, the crops, the manifests and
   the session header keep their bytes. It does not create the session state directory.

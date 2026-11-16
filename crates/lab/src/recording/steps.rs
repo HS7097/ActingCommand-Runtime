@@ -4363,7 +4363,11 @@ pub(crate) fn apply_step_action(
             let index = action
                 .step
                 .ok_or_else(|| invalid("validation_failed", "--drop-step needs the step number"))?;
-            effective_step(recording, index)?;
+            // #463 stage two, train, fix round (the coordinator's ruling): a step that holds a
+            // choice is not dropped, the last one too, before its frames are compared.
+            if holds_choice(effective_step(recording, index)?) {
+                return Err(drop_of_choice(index));
+            }
             // #463 S2-7: a step before the last effective one is dropped only when the frames stage
             // one stored do not contradict that its press changed nothing (fix round 1: by two
             // comparisons, `press_changed_nothing`); the last one as before.
@@ -4792,6 +4796,47 @@ fn restore_step(recording: &mut LabRecording, index: u32) -> LabResult<()> {
     Ok(())
 }
 
+/// #463 stage two, train, fix round (`contracts/lab-recording.md`, "Steps, frames and
+/// remediation"): whether `step` holds a choice: marked as holding one (#463 S2-6) or refined by a
+/// select (#463 R1).
+fn holds_choice(step: &RecordingStep) -> bool {
+    step.choice.is_some() || step.select.is_some()
+}
+
+/// #463 stage two, train, fix round: `drop_step` names step `index`, which holds a choice (the
+/// coordinator's ruling: a press that chose the item already selected changes nothing on the
+/// screen and still matters to a run handed another value); nothing is written.
+fn drop_of_choice(index: u32) -> LabError {
+    select_invalid(
+        Some(index),
+        SelectProblem::DropOfChoice,
+        format!(
+            "step {index} holds a choice (it is marked as holding one, or a select refines it), and \
+             a step that holds a choice is not dropped: its press may have chosen the item already \
+             selected, which changes nothing on the screen and still matters to a run handed \
+             another value; to drop it, withdraw the choice first (record mark --step {index} with \
+             choice false where the step carries the mark, and clear_select where a select refines \
+             it), then drop the step; nothing was written"
+        ),
+    )
+}
+
+/// #463 stage two, train, fix round: `to_transition` names step `index`, which holds a choice; a
+/// page transition holds none, so the conversion would lose it; nothing is written.
+fn transition_of_choice(index: u32) -> LabError {
+    select_invalid(
+        Some(index),
+        SelectProblem::TransitionOfChoice,
+        format!(
+            "step {index} holds a choice (it is marked as holding one, or a select refines it), and \
+             a page transition holds no choice, so converting the step would lose it; withdraw the \
+             choice first (record mark --step {index} with choice false where the step carries the \
+             mark, and clear_select where a select refines it), then convert the step; nothing was \
+             written"
+        ),
+    )
+}
+
 fn to_transition_invalid(index: u32, reason: &str) -> LabError {
     with_details(
         blocked(
@@ -4845,6 +4890,11 @@ fn to_transition(recording: &mut LabRecording, index: u32) -> LabResult<()> {
     }
     if target.transition.is_some() {
         return Err(to_transition_invalid(index, "previous_step_has_transition"));
+    }
+    // #463 stage two, train, fix round: a step that holds a choice is not converted, after every
+    // other refusal of the conversion (a select step has its click, `step_has_effect` above).
+    if holds_choice(step) {
+        return Err(transition_of_choice(index));
     }
     let step = step_mut(recording, index)?;
     let mut frames = std::mem::take(&mut step.frames);

@@ -109,9 +109,10 @@ const CYAN: [u8; 3] = [20, 230, 230];
 const WHITE: [u8; 3] = [255, 255, 255];
 const POISON: [u8; 3] = [7, 7, 7];
 const ALPHA_KEY: &str = "neutral_task_alpha";
-const BRAVO_KEY: &str = "neutral_task_bravo";
+// #463 stage two, train, fix round: the second ending's key and mark are the train's gate's too.
+pub(crate) const BRAVO_KEY: &str = "neutral_task_bravo";
 const ALPHA_MARK: &str = "ending/alpha";
-const BRAVO_MARK: &str = "ending/bravo";
+pub(crate) const BRAVO_MARK: &str = "ending/bravo";
 const TEXT_MARK: &str = "ending/text";
 /// The made-up OCR model the marks and the select name; only the scripted model ever reads.
 const MODEL_SHA256: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -510,7 +511,8 @@ impl Bench {
     // as the command leaves it), then the endings `alpha` (a magenta square and its colour mark,
     // frame f0007) and `bravo` (a cyan square and its colour mark, and an OCR mark over its patch
     // of the poison colour, frame f0008), taken from frames as "Marking after stop" takes them.
-    fn with_endings() -> Self {
+    // #463 stage two, train, fix round: the train's gate reads it too.
+    pub(crate) fn with_endings() -> Self {
         let bench = Self::marked();
         let stopped = record_stop(&bench.lock, &RecordStopOptions::default(), &bench.ocr)
             .unwrap_or_else(|error| {
@@ -541,8 +543,9 @@ impl Bench {
     }
 
     // Fix round 1: the colour mark `mark` of ending `ending` (0-based, in the order taken)
-    // expecting white, written into the step table in place.
-    fn break_ending_mark(&self, ending: usize, mark: &str) {
+    // expecting white, written into the step table in place. #463 stage two, train, fix round: the
+    // train's gate breaks one too.
+    pub(crate) fn break_ending_mark(&self, ending: usize, mark: &str) {
         let mut recording = self.recording();
         let entry = recording["endings"][ending]["marks"]
             .as_array_mut()

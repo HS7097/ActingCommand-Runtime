@@ -32926,17 +32926,83 @@ found where it meets the others; no code of this section changed:
 - *The self-checks* (§1.443) run on the package of the effective steps (`generate::survey` reads
   `effective_steps`), so a step dropped before the last is no step of any of them, as a dropped
   last step is not.
-- *A step marked as holding a choice* (§1.442) and the drop: the drop reads neither the mark nor a
-  select. A marked step whose press (a recorded point tap, or once refined the select's click, its
-  rectangle as the step table holds it) the stored frames do not contradict as "changed nothing" by
-  the two comparisons is dropped as any other press: the mark, and a select that refines it, stay
-  in the file with the step; the step is then no effective step, so `record ready` no longer lists
-  its `select_unrefined` and the package declares no variable for it; `restore_step` gives it
-  back. A choice usually changes the screen, which the comparisons then see; the train adds no rule
-  for it.
+- *A step marked as holding a choice* (§1.442) and the drop (corrected by the fix round of the
+  train, below): a step that holds a choice, marked as holding one or refined by a select, is not
+  dropped, the last step too (`record_select_invalid` with `drop_of_choice`), and not converted into
+  a page transition (`transition_of_choice`); nothing is written, and the choice is withdrawn first.
+  The train itself had read neither the mark nor a select in the drop and added no rule, so such a
+  step whose stored frames did not contradict "changed nothing" was dropped as any other press, its
+  `select_unrefined` and its variable gone from `record ready` and the package with it; the fix
+  round's rule replaces that.
 - *Texts.* The summary of [lab-recording.md](lab-recording.md) names this section with the three
   others in one paragraph, and "What a recording still lacks" keeps this section's bullet on a
   dropped or converted step after §1.443's sentences on the order.
+
+**Fix round of the train** (coordinator work order `rd-1116/brief-463-train-stage2-fix1.md`; the
+independent review of the train at `e564402b`, `rd-1116/review-train-stage2.md`, its must-fix items 1
+to 3 and three of its further points; the rule is the coordinator's ruling, not the owner's words).
+What this round changed:
+- *A step that holds a choice is not dropped* (the coordinator's ruling; review item 1). The
+  realistic trap: a recorded choice that pressed the item already selected; the stored frames show
+  no change, and the press still matters to a run handed another value. `drop_step` of a step that
+  holds a choice, marked as holding one (§1.442) or refined by a select (`steps.rs`,
+  `holds_choice`), is refused `record_select_invalid` with the new `select_problem` word
+  `drop_of_choice` (the function of that name), `details.step`, nothing written. It is checked once the step
+  is found effective and before anything else of the drop (the last step told from the others,
+  `press_changed_nothing`, the marks found reused), so it holds for the last effective step too: one
+  rule, where until now a last step with a select or a mark was dropped. Its text says how to go on:
+  withdraw the choice first (`choice: false` where the step carries the mark, `clear_select` where a
+  select refines it), then drop. Every other refusal of the drop keeps its code, after this one;
+  `restore_step`, and what a dropped step is to `record review`, `record ready` and the generated
+  package, are unchanged. The reverse order was refused already (a dropped step takes no mark and
+  no select, `record_step_not_found`), and no recording on disk holds a dropped step with a choice:
+  §1.440 and §1.442 ship together in 0.12.68.
+- *Nor converted into a page transition* (review: `--to-transition` reads no mark). `to_transition`
+  of a step that holds a choice is refused `record_select_invalid` with the new word
+  `transition_of_choice` (the function of that name), nothing written. It is checked after every other
+  condition of the conversion, so that each refusal it had keeps its code: a select step has its
+  click and is `record_to_transition_invalid` with `step_has_effect` as before, and the new word
+  meets a step marked as holding a choice without a press (the open last step of an active
+  recording takes the mark), whose mark the conversion dropped silently until now.
+- *Codes and words.*
+
+  | Name | Kind | Refuses or warns | Exit | Who reads it |
+  |---|---|---|---|---|
+  | `drop_of_choice` (vocabulary `select_problem` of the existing `record_select_invalid`, error / none) | new word | refuses `drop_step` of a step that holds a choice, the last step too; nothing written | 3 on a `--via` line (safety); 1 on actinglab's own line and through `serve --stdio --front mcp`, as the code's other words | the agent marking a draft: withdraw the choice first |
+  | `transition_of_choice` (the same vocabulary) | new word | refuses `to_transition` of a step that holds a choice, once every other condition of the conversion is met; nothing written | as `drop_of_choice` | the same agent |
+
+  No code is added; `SelectProblem` (`crates/lab/src/codes.rs`), the catalog's `select_problem`
+  vocabulary and the texts of `record_select_invalid` (`contracts/outcome-codes/lab.json`) name the
+  two words; the index's `--check` says current, so it is not regenerated.
+- *Texts* (review item 2). [lab-recording.md](lab-recording.md): the `select_problem` table's two
+  rows, "Marking a choice first" ("Its rules"), "Steps, frames and remediation" (the drop and the
+  conversion); the operation table's `record mark` notes and its `drop_step` note (`to_transition`
+  has no note); the MCP manual's paragraph of S2-7; this section's and §1.442's "Train" paragraphs,
+  which said the step is dropped and no rule was added. Two lines the review found too long and too
+  short are rewrapped, no word changed: the MCP manual's paragraph of `ac_record_review` and
+  "Reviewing a recording step by step: `record review`".
+- *Tests* (exec gate map, the new row "#463 stage two, train, fix round"):
+  `gate_463_s27.rs` `s27_train_fix_a_step_holding_a_choice_is_dropped_only_once_the_choice_is_withdrawn`
+  (step 2 of three presses whose frames do not contradict "changed nothing", marked as holding a
+  choice, and on a second recording marked and refined by a select beside a template mark:
+  `drop_of_choice` with step 2, every file byte for byte; withdrawn, dropped);
+  `gate_463_r1.rs` `r1_train_fix_a_select_on_the_last_step_is_not_dropped` (the open last step
+  with a select: `drop_of_choice`, the recording byte for byte);
+  `gate_463_s27.rs` `s27_train_fix_a_step_marked_as_holding_a_choice_is_not_converted_into_a_transition`
+  (`transition_of_choice` with step 3, every file byte for byte);
+  `gate_463_s22.rs` `s22_train_fix_a_frame_whose_file_is_gone_has_no_path_and_one_warning`
+  (§1.439's fix round 1, its third item untested until now: with `no_preview`, f0008, step 3's screen
+  after and step 4's screen before, without its file: `path` `null` on both, every other frame its
+  file, `frame_file_missing` naming f0008 once; `step` 4 alone the same). Adapted, because the
+  review's answer 2 found what it could not prove:
+  `s2_train_each_step_reviews_exactly_its_items_of_the_one_readiness_judgement` (§1.439's "Train")
+  now stands on §1.443's bench stopped with its two endings (`Bench::with_endings`,
+  `break_ending_mark`, `BRAVO_KEY` and `BRAVO_MARK` made `pub(crate)` for it), the locale taken out
+  being the one its package was generated with; its second reading adds step 3's mark expecting
+  another colour and the second ending's colour mark expecting white: `record ready` lists step 1's
+  two failures, step 3's `cross_check` and the ending's `record_step_self_mismatch` (no step), and
+  `record review` lists step 1's two on step 1, step 3's on step 3, none on steps 2 and 4, and the
+  ending's on no step. Its first reading is as before. No golden changes; no test leaves a gate map.
 
 ### 1.442 Slice #463 S2-6 (0.12.68): a choice in a step, marked first and refined later; its pending item in `record ready` (Workflow #463; the owner's direction on board #463 on 11-15, that a choice inside a step be singled out by marking the step first and refined afterwards, and her approval the same day of the three-stage blueprint of package making; the rules below are the coordinator's rulings in the work order and in the work order of the half-built piece it ports, not the owner's words; coordinator work order `rd-1116/brief-463-s26-select-unrefined.md`, stacked on pull request #1780, the Lab display train)
 
@@ -33118,9 +33184,12 @@ meets the others; no code of this section changed:
   passes them, as this section's `s26_refining_the_choice_ends_its_item_and_the_package_holds_its_variable`
   asks (`ready`, nothing missing, nothing in `checks_after`; under §1.443 `checks` names the seven,
   each complete), read against the joined code.
-- *The drop* (§1.440): a step marked as holding a choice is dropped before the last as any press
-  whose stored frames do not contradict that it changed nothing; its mark stays in the file with
-  it, and while it is dropped `record ready` does not list it (§1.440's "Train").
+- *The drop* (§1.440; corrected by §1.440's "Fix round of the train"): a step that holds a choice,
+  marked as holding one or refined by a select, is not dropped, before the last or as the last
+  (`record_select_invalid` with `drop_of_choice`), and not converted into a page transition
+  (`transition_of_choice`); nothing is written, and the choice is withdrawn first (`choice: false`
+  where the step carries the mark, `clear_select` where a select refines it). So a drop never takes
+  a choice's `select_unrefined` out of `record ready` or its variable out of the package.
 
 ### 1.443 Slice #463 S2-1c (0.12.68): `record ready` lists every failure of each self-check, not only the first (Workflow #463; the owner asked on board #463 for one complete list of what a recording still lacks, as the work order's "Why" says; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1116/brief-463-s21c-selfchecks-list-all.md`, begun on the branch of the train of #392 DA-5, #1780, at `b157951c`; it stands on main, into which that train was merged (`a91e657c`), and fix round 1 merged main `dc4c3622`)
 

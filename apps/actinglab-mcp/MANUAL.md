@@ -356,19 +356,19 @@ naming this file.
   is every item of `ac_record_ready`'s one judgement that names the step, a pre-check's
   (`select_unrefined` among them) or, once no pre-check fails, each self-check failure; an item
   that names no step is no step's; `choice` is the step's choice mark on a step marked as holding a
-  choice; a step dropped before the last is not listed, one `restore_step` gave back is. An application operation's `outcome` is its
-  manifest row's: `indeterminate` with attempts and no completed receipt. Unless `no_preview`, it
-  writes a preview of each screen under the recording's `lab/preview/` (`s<nn>-before.png`,
-  `s<nn>-after.png`, their absolute paths in `preview`): a copy of the stored frame with the press
-  and the step's boxes drawn
-  (recognize boxes green, the press box orange, other marks blue; on the screen after the next
-  step's). Nothing recorded changes and no stored frame carries a box; a frame whose bytes do not
-  match its sha256 is `record_frame_hash_mismatch` and no preview is written; every call writes
-  its previews anew and none is ever removed. A frame whose file is not there has `path` `null`
-  and is named in the warning `frame_file_missing`, as `ac_record_frames` answers it. It takes no
-  lock. `steps_total` counts every effective step: an answer over the budget is written whole to
-  the export directory (section 5); `step` answers one step, so read a long recording step by step
-  (each call evaluates the whole recording's readiness, its self-checks too).
+  choice; a step dropped before the last is not listed, one `restore_step` gave back is. An
+  application operation's `outcome` is its manifest row's: `indeterminate` with attempts and no
+  completed receipt. Unless `no_preview`, it writes a preview of each screen under the recording's
+  `lab/preview/` (`s<nn>-before.png`, `s<nn>-after.png`, their absolute paths in `preview`): a copy
+  of the stored frame with the press and the step's boxes drawn (recognize boxes green, the press
+  box orange, other marks blue; on the screen after the next step's). Nothing recorded changes and
+  no stored frame carries a box; a frame whose bytes do not match its sha256 is
+  `record_frame_hash_mismatch` and no preview is written; every call writes its previews anew and
+  none is ever removed. A frame whose file is not there has `path` `null` and is named in the
+  warning `frame_file_missing`, as `ac_record_frames` answers it. It takes no lock. `steps_total`
+  counts every effective step: an answer over the budget is written whole to the export directory
+  (section 5); `step` answers one step, so read a long recording step by step (each call evaluates
+  the whole recording's readiness, its self-checks too).
   #463 S2-5 (0.12.65; `contracts/lab-recording.md`, "Drawing a box"): stage two marks a draft with
   boxes: `ac_record_mark` with `box` (`recognize=x1,y1:x2,y2` or `press=x1,y1:x2,y2`, two opposite
   corners in the frame's pixels; or `boxes` in `request_json`) on any step. A recognize box is a
@@ -418,7 +418,13 @@ naming this file.
   or `next_screen_differs`, and for the last two `drop_comparison` `frame` or `press_region`.
   `{"kind": "restore_step", "step": n}` gives a dropped step back (`record_mark_rejected` when a
   mark it reuses or forbids is gone since). Nothing is proposed: the agent names the frame and the
-  step.
+  step. The train's fix round (0.12.68): a step that holds a choice (marked with `choice`, or
+  refined by a `select`) is not dropped, the last step too, before any frame is compared
+  (`record_select_invalid` with `select_problem` `drop_of_choice`): its press may have chosen the
+  item already selected, which the frames do not show and which still matters to a run handed
+  another value. Nor is it turned into a page transition (`to_transition`,
+  `transition_of_choice`). Nothing is written; withdraw the choice first (`choice: false` where
+  the step carries the mark, `clear_select` where a select refines it), then drop or convert it.
   #463 S2-6 (0.12.68; `contracts/lab-recording.md`, "Marking a choice first"): a step that chooses
   one item among several is marked first and refined later. `ac_record_mark` with a
   `request_json` that names the step and holds `"choice": true` (beside the step's marks if you

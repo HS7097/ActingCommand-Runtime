@@ -35,9 +35,20 @@
 //   `sample_frame_ids`.
 // - `s27_fix1_a_transition_given_a_file_and_a_frame_id_is_refused`: `validation_failed`.
 // - `s27_fix1_each_refusal_of_restore_step_writes_nothing`.
+// Fix round of the train of #463 stage two (the coordinator's ruling; register §1.440, "Fix round of
+// the train"): a step that holds a choice, marked as holding one (#463 S2-6) or refined by a select
+// (#463 R1), is neither dropped nor converted into a page transition.
+// - `s27_train_fix_a_step_holding_a_choice_is_dropped_only_once_the_choice_is_withdrawn`: an
+//   unrefined choice and a refined select on a press whose frames do not contradict that it changed
+//   nothing: `record_select_invalid` with `drop_of_choice`, nothing written; withdrawn, dropped.
+// - `s27_train_fix_a_step_marked_as_holding_a_choice_is_not_converted_into_a_transition`:
+//   `record_select_invalid` with `transition_of_choice`, nothing written.
+// The last step with a select is gate_463_r1's
+// `r1_train_fix_a_select_on_the_last_step_is_not_dropped`.
 // Frames are synthetic 160x90 screens of flat gray with squares of gray noise (fix round 1: and a
 // cell painted over); no Runtime, no device; the tests read no clock and never sleep.
 
+use crate::codes::SelectProblem;
 use crate::recording::store::{hex_sha256, lab_dir, old_record_path, recording_path};
 use crate::{
     AfterCapture, AttachFrameRequest, CapturedFrame, ClickEffect, ClickPlan, CommitClickRequest,
@@ -1180,4 +1191,120 @@ fn s27_fix1_each_refusal_of_restore_step_writes_nothing() {
             "{details}"
         );
     }
+}
+
+// Fix round of the train of #463 stage two (the coordinator's ruling; register §1.440, "Fix round of
+// the train").
+
+// A select of two slots on the 160x90 screens, its names read by a made-up OCR model: the Lab of
+// these tests has none, so the select's self-test is not evaluated, and a select on a step whose
+// press is recorded is taken.
+fn list_select() -> Value {
+    json!({
+        "slots": [{"rect": rect(40, 30, 36, 36), "name": rect(42, 56, 32, 8)},
+                  {"rect": rect(90, 30, 36, 36), "name": rect(92, 56, 32, 8)}],
+        "read": {"languages": ["en"], "timeout_ms": 1000, "minimum_confidence_milli": 800,
+                 "model_ref": "neutral-ocr",
+                 "model_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+        "names": [{"id": "item_a", "aliases": ["ALPHA"]}, {"id": "item_b", "aliases": ["BRAVO"]}],
+        "match": {"max_distance": 1, "minimum_margin": 1},
+        "wanted": {"name": "list_item", "default": "item_b"}
+    })
+}
+
+// The details of a `record_select_invalid` refusal whose `select_problem` is `word`, in the details
+// and in the outcome's values.
+fn of_choice(error: LabError, word: &str) -> Value {
+    assert_eq!(
+        error.code,
+        LabCode::RecordSelectInvalid.as_str(),
+        "{}: {:?}",
+        error.message,
+        error.details
+    );
+    let details = error.details.expect("details");
+    assert_eq!(details["select_problem"], word, "{details}");
+    assert_eq!(
+        details["outcome"]["values"]["select_problem"], word,
+        "{details}"
+    );
+    details
+}
+
+// The work order's first test: on the idle recording, step 2's stored frames do not contradict that
+// its press changed nothing (its frames before and after it and the third press's frame before it
+// the second screen), as in the fourth test, which drops such a press. Marked as holding a choice and
+// not refined, and on a second recording made the same way marked and refined by a select (beside
+// a template mark that guards it), `drop_step` of step 2 is `record_select_invalid` with
+// `drop_of_choice` naming step 2, and every file stays byte for byte as it was. The choice
+// withdrawn (`choice: false`, and on the refined step `clear_select` too), `drop_step` drops it.
+#[test]
+fn s27_train_fix_a_step_holding_a_choice_is_dropped_only_once_the_choice_is_withdrawn() {
+    let drop_step_2 = json!({"step_action": {"kind": "drop_step", "step": 2}});
+    let unrefined = idle_recording();
+    unrefined.marked(json!({"step": 2, "choice": true}));
+    let refined = idle_recording();
+    refined.marked(json!({
+        "step": 2,
+        "add": [template("ui/idle", BUTTONS[1])],
+        "choice": true
+    }));
+    refined.marked(json!({"step": 2, "select": list_select()}));
+    let recorded = refined.recording();
+    let step = step_of(&recorded, 2);
+    assert!(step["choice"]["marked_at_unix_ms"].is_u64(), "{recorded}");
+    assert_eq!(step["select"]["declaration"], list_select(), "{recorded}");
+    for (bench, withdrawal) in [
+        (&unrefined, json!({"step": 2, "choice": false})),
+        (
+            &refined,
+            json!({"step": 2, "choice": false, "clear_select": true}),
+        ),
+    ] {
+        let before = bench.files();
+        let details = of_choice(
+            bench
+                .mark(drop_step_2.clone())
+                .expect_err("a step that holds a choice"),
+            SelectProblem::DropOfChoice.as_str(),
+        );
+        assert_eq!(details["step"], 2, "{details}");
+        assert_eq!(bench.files(), before, "a file changed");
+
+        bench.marked(withdrawal);
+        let dropped = bench.marked(drop_step_2.clone());
+        assert_eq!(dropped.status, "step_dropped");
+        assert_eq!(dropped.step, Some(2));
+        let stored = bench.recording();
+        assert_eq!(step_of(&stored, 2)["dropped"], true, "{stored}");
+    }
+}
+
+// The work order's third test: two presses and the final screen, each step with a page; the final
+// step, which has no press (an active recording's open step takes the mark), is marked as holding a
+// choice and meets every other condition of the conversion. `to_transition` of it is
+// `record_select_invalid` with `transition_of_choice` naming step 3, and every file stays byte for
+// byte as it was.
+#[test]
+fn s27_train_fix_a_step_marked_as_holding_a_choice_is_not_converted_into_a_transition() {
+    let bench = Bench::new();
+    bench.press(
+        &tap_at(POINTS[0], one_capture_after()),
+        vec![screen(0), screen(1)],
+    );
+    bench.press(
+        &tap_at(POINTS[1], one_capture_after()),
+        vec![screen(1), screen(2)],
+    );
+    bench.pages(&[(1, "first", 0), (2, "second", 1), (3, "done", 2)]);
+    bench.marked(json!({"step": 3, "choice": true}));
+    let before = bench.files();
+    let details = of_choice(
+        bench
+            .mark(json!({"step_action": {"kind": "to_transition", "step": 3}}))
+            .expect_err("a step that holds a choice"),
+        SelectProblem::TransitionOfChoice.as_str(),
+    );
+    assert_eq!(details["step"], 3, "{details}");
+    assert_eq!(bench.files(), before, "a file changed");
 }
