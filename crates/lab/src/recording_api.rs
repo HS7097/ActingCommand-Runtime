@@ -43,13 +43,14 @@ use crate::recording::ready::{
     generator_warnings, known, lack_items, packaged, point_press_warnings, ready_outcome,
     with_size_item,
 };
+use crate::recording::review::{RecordReviewOutcome, RecordReviewRequest, review_outcome};
 use crate::recording::select::{not_evaluated_id, validate_select_request};
 use crate::recording::steps::{
     Arrival, ArrivalMode, FrameMeta, Session, application_action, application_with_click,
     apply_ending, apply_marks, apply_optional_after, apply_step_action, apply_transition, arrive,
     arrive_after_press, check_device_arrival, commit_application, commit_click,
-    default_recording_defaults, effective_indices, has_marks, lab_unavailable, live_primary,
-    name_after_frame, new_recording, not_active, note_after_capture, open_session,
+    default_recording_defaults, effective_indices, effective_step, has_marks, lab_unavailable,
+    live_primary, name_after_frame, new_recording, not_active, note_after_capture, open_session,
     open_session_for_marks, open_step, path_order, plan_application, plan_click, plan_press,
     remove_inserted, save, step_ref, stopped_change, to_json,
 };
@@ -413,11 +414,23 @@ pub fn record_ready(
     ocr: &LabOcr,
 ) -> LabResult<RecordReadyOutcome> {
     let (recording, session) = ready_recording(state_dir, instance, record_id)?;
-    let mut warnings = point_press_warnings(&recording);
-    if let Some(artifact) = recording.artifact.as_ref().filter(|_| packaged(&recording)) {
+    ready_of(&recording, session, options, ocr)
+}
+
+/// #463 S2-2: the answer of `record ready` for `recording`, read by [`ready_recording`], its
+/// session's state `session`: the body of [`record_ready`], so that `record review` takes each
+/// step's items from this one function, on the recording it reads once.
+fn ready_of(
+    recording: &LabRecording,
+    session: String,
+    options: &RecordStopOptions,
+    ocr: &LabOcr,
+) -> LabResult<RecordReadyOutcome> {
+    let mut warnings = point_press_warnings(recording);
+    if let Some(artifact) = recording.artifact.as_ref().filter(|_| packaged(recording)) {
         warnings.extend(option_conflict_warnings(artifact, options)?);
         return Ok(ready_outcome(
-            &recording,
+            recording,
             session,
             Vec::new(),
             warnings,
@@ -429,14 +442,14 @@ pub fn record_ready(
     // `record stop` does.
     let (settings, sources) = match &recording.artifact {
         Some(artifact) if recording.status == "stopped" => regeneration_settings(artifact, options),
-        _ => stop_settings(&recording, options),
+        _ => stop_settings(recording, options),
     };
     // Workflow #392 DA-5cd: a recording whose frames are not the base size is listed first (fix
     // round 1: `size_not_base`, `record_size_not_base`); `record stop` refuses it before its
     // self-checks, so none of them runs.
-    let not_base = recording_not_base(&recording);
-    let (missing, checks_after) = match survey(&recording, &settings)? {
-        Survey::Lacking(lacks) => (lack_items(&recording, &lacks)?, ReadyCheck::ALL.to_vec()),
+    let not_base = recording_not_base(recording);
+    let (missing, checks_after) = match survey(recording, &settings)? {
+        Survey::Lacking(lacks) => (lack_items(recording, &lacks)?, ReadyCheck::ALL.to_vec()),
         Survey::Planned(_) if not_base.is_some() => (Vec::new(), ReadyCheck::ALL.to_vec()),
         Survey::Planned(plan) => match self_checks(&plan, ocr) {
             Ok(checked) => {
@@ -456,20 +469,49 @@ pub fn record_ready(
                     .skip(1)
                     .collect::<Vec<_>>();
                 (
-                    vec![check_item(&recording, failure.check, &failure.error)],
+                    vec![check_item(recording, failure.check, &failure.error)],
                     after,
                 )
             }
         },
     };
     Ok(ready_outcome(
-        &recording,
+        recording,
         session,
         with_size_item(not_base.as_ref(), missing),
         warnings,
         &checks_after,
         sources,
     ))
+}
+
+/// #463 S2-2 (`contracts/lab-recording.md`, "Reviewing a recording step by step: `record
+/// review`"): `record review [--record-id <id>] [--step <k>] [--no-preview]`, each effective step
+/// of the recording `record ready` reads (the instance's, or the active, archived or stopped one
+/// `request.record_id` names; [`ready_recording`]), or the one `request.step` names, as the screen
+/// before, the press and the screen after, as the step table holds them, with its items of `record
+/// ready` (the answer of [`ready_of`], the one function `record ready` answers with, given
+/// `options` as `record ready` is given them). Offline, under no lock; nothing recorded is written:
+/// unless `request.no_preview`, the previews are written under the recording's `lab/preview/`
+/// (`review::review_outcome`). A step that does not exist, is dropped or was converted is
+/// `record_step_not_found`; a stored frame a preview is drawn on whose bytes do not match its
+/// sha256 is `record_frame_hash_mismatch`, and then no preview is written. Fix round 1: `options`
+/// are the game, server and locale the command line gives `record review` as it gives them `record
+/// ready`, so that a recording without a locale of its own is reviewed with its self-checks run;
+/// a frame whose file is not there is answered without a path and named in `frame_file_missing`.
+pub fn record_review(
+    state_dir: &Path,
+    instance: &str,
+    request: &RecordReviewRequest,
+    options: &RecordStopOptions,
+    ocr: &LabOcr,
+) -> LabResult<RecordReviewOutcome> {
+    let (recording, session) = ready_recording(state_dir, instance, request.record_id.as_deref())?;
+    if let Some(step) = request.step {
+        effective_step(&recording, step)?;
+    }
+    let ready = ready_of(&recording, session, options, ocr)?;
+    review_outcome(state_dir, &recording, ready, request)
 }
 
 /// #463 S2-1: the recording `record ready` reads and its session's state as `record status` says
@@ -3258,8 +3300,9 @@ fn transition_view(transition: &StepTransition) -> TransitionView {
     }
 }
 
-/// `declared` (no outcome yet), `executed` (Performed) or `indeterminate`.
-fn click_outcome(click: &StepClick) -> &'static str {
+/// `declared` (no outcome yet), `executed` (Performed) or `indeterminate`. #463 S2-2: `record
+/// review` names a press's outcome with it too.
+pub(crate) fn click_outcome(click: &StepClick) -> &'static str {
     match &click.execution {
         None => "declared",
         Some(execution) if execution.effect == "performed" => "executed",

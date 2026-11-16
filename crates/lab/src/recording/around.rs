@@ -43,8 +43,9 @@ const DEFAULT_BEFORE: u64 = 3;
 const DEFAULT_AFTER: u64 = 10;
 const MAX_FRAMES: u64 = 100;
 
-/// The warning of a listed frame whose file is not where the manifest names it.
-const FRAME_FILE_MISSING: &str = "frame_file_missing";
+/// The warning of a listed frame whose file is not where the manifest names it. #463 S2-2 fix round
+/// 1: `record review` warns of such a frame with it too.
+pub(crate) const FRAME_FILE_MISSING: &str = "frame_file_missing";
 /// The warning of a press sent on a capture its command did not store
 /// (`sent_on_unstored_capture`): `press.frame` is the stored frame its step names instead.
 const PRESS_FRAME_NOT_STORED: &str = "press_frame_not_stored";
@@ -119,10 +120,11 @@ pub struct RecordFramesWarning {
     pub frame_ids: Vec<String>,
 }
 
-/// One frame of the sequence and the step it is stored under.
-struct Stored<'a> {
-    frame: &'a RecordedFrame,
-    step: u32,
+/// One frame of the sequence and the step it is stored under. #463 S2-2: `record review` reads the
+/// same sequence.
+pub(crate) struct Stored<'a> {
+    pub(crate) frame: &'a RecordedFrame,
+    pub(crate) step: u32,
 }
 
 /// What the step table holds of a step's press.
@@ -323,7 +325,7 @@ fn press_record(step: &RecordingStep) -> Pressed<'_> {
 
 /// Every frame the step table stores under a step, its page transition's too, in the order of its
 /// frame ids' numbers, each with its step.
-fn sequence_of(recording: &LabRecording) -> Vec<Stored<'_>> {
+pub(crate) fn sequence_of(recording: &LabRecording) -> Vec<Stored<'_>> {
     let mut sequence = Vec::new();
     for step in &recording.steps {
         let transition = match &step.transition {
@@ -349,8 +351,13 @@ fn arrival_number(frame_id: &str) -> u32 {
 }
 
 /// The absolute path of `frame`'s stored file in the recording's directory `dir`, as the archive's
-/// manifest names it; `None`, and its id added to `missing`, when no file is there.
-fn located(dir: &Path, frame: &RecordedFrame, missing: &mut Vec<String>) -> Option<String> {
+/// manifest names it; `None`, and its id added to `missing`, when no file is there. #463 S2-2 fix
+/// round 1: `record review` gives each frame's path by it.
+pub(crate) fn located(
+    dir: &Path,
+    frame: &RecordedFrame,
+    missing: &mut Vec<String>,
+) -> Option<String> {
     let path = stored_frame_path(dir, frame);
     if Path::new(&path).is_file() {
         Some(path)
