@@ -4,10 +4,11 @@
 
 use crate::codes::{ExecutionKernelCode, ExecutionKernelLocation};
 use crate::{
-    DriveNavigationClick, DriveSemanticInput, ExternallyVerifiedBundle, drive_rect_center,
+    ContainedTaskCode, ContainedTaskError, DriveNavigationClick, DriveSemanticInput,
+    ExternallyVerifiedBundle, drive_rect_center, lab_scene_on_base,
 };
 use actingcommand_contract::codes::{ContractLocation, PageProjectionCode};
-use actingcommand_contract::outcome::{Code, Location};
+use actingcommand_contract::outcome::{Code, Location, Outcome};
 use actingcommand_contract::page_projection::{
     self as projection, ActionKey, ElementInput, ElementResolution, ElementRole, FieldInput,
     FrameIdentity, Geometry, MissingTarget, NotEvaluatedReason, PageProjection, Privacy,
@@ -32,6 +33,10 @@ pub struct OnlineObservationError {
     stage: Location,
     cause: String,
     ppocr_diagnostics: PpocrDiagnostics,
+    /// Workflow #392 DA-5ab: the outcome with the values its code declares, for a frame the
+    /// display map refuses (`display_map_unresolved` with its `display_problem`, its `stage` and
+    /// the frame's and the base's sizes); `None` for every other failure.
+    values: Option<Box<Outcome>>,
 }
 impl std::fmt::Debug for OnlineObservationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -45,8 +50,28 @@ impl OnlineObservationError {
             stage,
             cause: cause.to_string(),
             ppocr_diagnostics: Vec::new(),
+            values: None,
         }
     }
+
+    /// Workflow #392 DA-5ab: a frame of the observation the frame gate refuses, with the run's
+    /// code for it and the values that code carries, at the frame's decoding.
+    fn frame_refused(error: &ContainedTaskError) -> Self {
+        let code = match error.code() {
+            ContainedTaskCode::Registered(code) => code,
+            ContainedTaskCode::Host { .. } => ExecutionKernelCode::ObservationFrameInvalid.code(),
+        };
+        let mut refused = Self::new(
+            code,
+            ExecutionKernelLocation::DecodeObservationFrame.location(),
+            "the frame does not map onto the package's base",
+        );
+        if error.has_values() {
+            refused.values = Some(Box::new(error.outcome()));
+        }
+        refused
+    }
+
     pub const fn code(&self) -> Code {
         self.code
     }
@@ -55,6 +80,11 @@ impl OnlineObservationError {
     }
     pub fn cause(&self) -> &str {
         &self.cause
+    }
+
+    /// Workflow #392 DA-5ab: the outcome with its values, when the failure carries them.
+    pub fn values(&self) -> Option<&Outcome> {
+        self.values.as_deref()
     }
 
     pub fn ppocr_diagnostics(&self) -> &PpocrDiagnostics {
@@ -411,6 +441,18 @@ impl PreparedPageObservation {
         })
     }
 
+    /// Workflow #392 DA-5ab: the package's base (width, height), the coordinate space of its
+    /// projection: every frame of its observations is brought to it and every coordinate of a Lab
+    /// operation on it is given in it.
+    pub fn base(&self) -> (u32, u32) {
+        let metadata = self
+            .bundle
+            .loaded_bundle()
+            .projection_metadata()
+            .expect("admitted metadata");
+        (metadata.catalog().width, metadata.catalog().height)
+    }
+
     /// #411 Lab L5: the frames each online observation of this package takes.
     pub fn frame_plan(&self) -> ObservationFramePlan {
         self.frame_plan
@@ -578,14 +620,15 @@ impl PreparedPageObservation {
             ))
             .into());
         }
-        let scenes = frames
+        let decoded = frames
             .iter()
             .map(|png| Scene::from_png(png).map_err(|error| decode_error(error.to_string())))
             .collect::<Result<Vec<_>, _>>()?;
-        let scene = scenes.last().expect("one frame at least");
-        if scenes
+        let current = decoded.last().expect("one frame at least");
+        let device = (current.width(), current.height());
+        if decoded
             .iter()
-            .any(|sample| sample.width() != scene.width() || sample.height() != scene.height())
+            .any(|sample| (sample.width(), sample.height()) != device)
         {
             return Err(OnlineObservationError::new(
                 ExecutionKernelCode::RecognitionSampleGeometryChanged.code(),
@@ -594,6 +637,25 @@ impl PreparedPageObservation {
             )
             .into());
         }
+        // Workflow #392 DA-5ab (`contracts/display-adapter.md` section 11): every frame is brought
+        // to the package's base as a run's frame is, and evaluated and projected there; a frame of
+        // the base's size is used as it is. The projection's frame is the device frame's artifact
+        // at the base's size.
+        let base = (metadata.catalog().width, metadata.catalog().height);
+        let scenes = decoded
+            .into_iter()
+            .map(|scene| on_base(base, scene))
+            .collect::<Result<Vec<_>, _>>()?;
+        let scene = scenes.last().expect("one frame at least");
+        let frame = if device == base {
+            frame
+        } else {
+            FrameIdentity {
+                width: scene.width(),
+                height: scene.height(),
+                ..frame
+            }
+        };
         let scene_set = scenes.iter().collect::<Vec<_>>();
         let sample_facts = std::cell::RefCell::new(ObservationFacts::default());
         let sample_reports = std::cell::RefCell::new(PpocrDiagnostics::new());
@@ -847,6 +909,28 @@ impl PreparedPageObservation {
                                     }
                                 }
                             }
+                            // Workflow #392 DA-5ab: a further transaction shows the observation's
+                            // device frame size, and is then brought to the base as its frames
+                            // were.
+                            if transaction
+                                .iter()
+                                .any(|sample| (sample.width(), sample.height()) != device)
+                            {
+                                changed = true;
+                                break;
+                            }
+                            let mut mapped = Vec::with_capacity(transaction.len());
+                            for sample in transaction {
+                                match on_base(base, sample) {
+                                    Ok(based) => mapped.push(based),
+                                    Err(error) => {
+                                        return Err(error
+                                            .with_ppocr_diagnostics(ppocr_diagnostics)
+                                            .into());
+                                    }
+                                }
+                            }
+                            let mut transaction = mapped;
                             if !self.shows_page(
                                 &transaction,
                                 &matched_pages[0],
@@ -1160,6 +1244,18 @@ pub fn observation_fields(
         }
     }
     fields
+}
+
+/// Workflow #392 DA-5ab (`contracts/display-adapter.md` section 11): an observation's frame on its
+/// package's base `base` (width, height), by the frame gate's own map and resample
+/// ([`lab_scene_on_base`]): a frame of the base's size as it is, a pure scale's scale frame; a
+/// frame the map refuses fails the observation with the run's code for it and its values.
+fn on_base(base: (u32, u32), scene: Scene) -> Result<Scene, OnlineObservationError> {
+    match lab_scene_on_base(base, &scene) {
+        Ok(None) => Ok(scene),
+        Ok(Some(mapped)) => Ok(mapped.scene),
+        Err(error) => Err(OnlineObservationError::frame_refused(&error)),
+    }
 }
 
 fn fact_error(error: impl ToString) -> OnlineObservationError {

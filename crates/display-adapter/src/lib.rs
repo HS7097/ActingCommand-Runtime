@@ -55,6 +55,8 @@ mod gate_392_da1;
 mod gate_392_da3;
 #[cfg(test)]
 mod gate_392_da3b;
+#[cfg(test)]
+mod gate_392_da5ab;
 
 /// A point in one of the adapter's spaces, in pixels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -515,6 +517,20 @@ impl DisplayMapStale {
     }
 }
 
+/// Workflow #392 DA-5ab: why an input made in base coordinates does not leave for the device
+/// under a map ([`DisplayMap::send_input`]); nothing is sent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InputSendError {
+    /// The input side does not send under this map, or the input does not map
+    /// (`display_map_unresolved` at stage `display_input_map`).
+    Unresolved(DisplayMapUnresolved),
+    /// The input was decided on a frame of another size than the map's (`display_map_stale`).
+    Stale(DisplayMapStale),
+    /// A mapped point outside the device frame or its device box (the kernel's
+    /// `contained_task_input_out_of_bounds`).
+    OutOfBounds,
+}
+
 const NO_INSETS: CaptureInsets = CaptureInsets {
     left: 0,
     top: 0,
@@ -959,6 +975,30 @@ impl DisplayMap {
                 current: self.frame,
             })
         }
+    }
+
+    /// Workflow #392 DA-5ab (`contracts/display-adapter.md` sections 10 and 11): the one exit an
+    /// input made in base coordinates takes to the device, a run's (DA-3) and a Lab operation's
+    /// alike: the input side must send under this map ([`Self::admit_input`]), the map must be
+    /// the one of the frame the input was decided on when that frame's size `decided` is known
+    /// ([`Self::current_for`]), and the input then leaves in the logical display's coordinates
+    /// ([`Self::device_input`], each point inside the device box of its input box in `boxes`).
+    pub fn send_input(
+        &self,
+        action: &InputAction,
+        boxes: &[Rect],
+        decided: Option<CaptureExtent>,
+    ) -> Result<InputAction, InputSendError> {
+        self.admit_input(action)
+            .map_err(InputSendError::Unresolved)?;
+        if let Some(decided) = decided {
+            self.current_for(decided).map_err(InputSendError::Stale)?;
+        }
+        self.device_input(action, boxes, InputCoordinates::Display)
+            .map_err(|error| match error {
+                InputMapError::Unresolved(refusal) => InputSendError::Unresolved(refusal),
+                InputMapError::OutOfBounds => InputSendError::OutOfBounds,
+            })
     }
 
     /// Workflow #392 DA-3 (model 392 v1.2 §4.6, §6.1, §6.2, §6.4, §6.7): `action`, made in base

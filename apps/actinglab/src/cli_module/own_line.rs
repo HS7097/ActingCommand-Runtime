@@ -17,8 +17,10 @@
 //! - **Failure.** `{"outcome": {code, category: "error", values}, "message", "details"}`: the code
 //!   is actinglab's own; `values` are those of the outcome of the same code the details carry (the
 //!   details are one, or their member `outcome` is one: `resource verify`'s report, a refusal whose
-//!   details are `{outcome}`), else the members of the details whose names the outcome catalog
-//!   registers as that code's values (none for a code the catalog does not list); `message` is the
+//!   details are `{outcome}`; Workflow #392 DA-5cd fix round 1: or the same in their member
+//!   `details`, where a refusal's trace carries the refusal's own), else the members of the details
+//!   whose names the outcome catalog registers as that code's values (none for a code the catalog
+//!   does not list); `message` is the
 //!   error's message; `details` its details, nested whole and never flattened (some carry an
 //!   `outcome` of their own), absent when the error has none. Exit 1, and the developer line
 //!   `ERROR actinglab: <code> … <message>` on stderr.
@@ -200,14 +202,23 @@ fn received(spelling: &str, details: Option<&Value>) -> Result<Outcome, String> 
 /// The values of the outcome of the code `spelling` that `details` carries: `details` itself when
 /// it is one, else its member `outcome` when that is one (Workflow #434 LAB-2b fix 1: a refusal
 /// that nests its values, as `resource verify`'s report or the `{outcome}` of the Lab's OCR, touch
-/// and standard-pack refusals, keeps them on the line). `None` when it carries none.
+/// and standard-pack refusals, keeps them on the line); Workflow #392 DA-5cd fix round 1: else the
+/// same one level deeper, in the member `details` of a refusal's trace (`detect-page`,
+/// `tap-target` and `navigate` carry the refusal's own details there,
+/// `commands::semantic_ledger`). `None` when it carries none.
 fn nested_values<'a>(spelling: &str, details: Option<&'a Value>) -> Option<&'a Map<String, Value>> {
     let details = details?;
-    [Some(details), details.get(OUTCOME)]
-        .into_iter()
-        .flatten()
-        .filter(|outcome| outcome.get(CODE_MEMBER).and_then(Value::as_str) == Some(spelling))
-        .find_map(|outcome| outcome.get(VALUES_MEMBER).and_then(Value::as_object))
+    let traced = details.get(DETAILS);
+    [
+        Some(details),
+        details.get(OUTCOME),
+        traced,
+        traced.and_then(|traced| traced.get(OUTCOME)),
+    ]
+    .into_iter()
+    .flatten()
+    .filter(|outcome| outcome.get(CODE_MEMBER).and_then(Value::as_str) == Some(spelling))
+    .find_map(|outcome| outcome.get(VALUES_MEMBER).and_then(Value::as_object))
 }
 
 /// The members of `details` whose names the outcome catalog registers as the values of the code

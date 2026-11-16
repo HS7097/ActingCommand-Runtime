@@ -104,7 +104,16 @@ pub(crate) fn check_frame_size(
     frame: &LoadedFrame,
     label: &str,
 ) -> LabResult<()> {
-    let actual = frame.size();
+    check_size(expected, frame.size(), label)
+}
+
+/// [`check_frame_size`] of a frame known by its size `actual` (Workflow #392 DA-5, the train: a
+/// frame a recording path took and judges before it sends or writes anything).
+pub(crate) fn check_size(
+    expected: Option<RecordSize>,
+    actual: RecordSize,
+    label: &str,
+) -> LabResult<()> {
     match expected {
         Some(expected) if expected != actual => Err(with_details(
             blocked(

@@ -43,6 +43,10 @@ pub const REMEDY_CHOICES_SNAPSHOT_PREFIX: &str = "remedy-choices:";
 /// rows say during which periods a task package may be scheduled; written by a person, an agent or
 /// the operator and checked by the Runtime's row rule.
 pub const PACK_SCHEDULE_FACT_KEY: &str = "session.pack.schedule";
+/// Workflow #392 DA-A (`contracts/instance-fact-store.md`, "Display facts"): an instance's device
+/// frame as the Runtime records it, one `record_list` row `{width, height}`. Workflow #392 DA-5cd:
+/// the Lab's `record start` reads it to learn the instance's display.
+pub const DISPLAY_FRAME_EXTENT_FACT_KEY: &str = "display.frame_extent";
 
 /// The `<task_id>` of a `session.task.<task_id>.priority_offset` key; `None` for any other key.
 /// The task identifier's own charset is checked by the Runtime when the offset is published.
