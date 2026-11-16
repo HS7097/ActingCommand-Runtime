@@ -418,6 +418,24 @@ naming this file.
   counts. The placement journals are not read here: `enabled.authorization` is `not_recorded`
   with `journals_not_read`, never an authorization guessed. `packs` grows with the root: an answer
   over the budget is written whole to the export directory; `package_id` reads one pack.
+- **The package declaration** (Workflow #477 PC-1, 0.12.68; `contracts/pack-catalog.md`).
+  `ac_standard_pack_catalog` (`root`, `plan`) builds or brings up to date a game root's
+  `pack-catalog.json`, through a child: an entry for every package of `bundle.json`, a new entry's
+  display from a leftover `ui.json` and its `consumes` and `produces` the union over the package's
+  rules in `schedule.json`; an entry already there is kept as written and its differences from the
+  rules are answered (`differences`, each also a `standard_pack_catalog_schedule_differs`
+  warning). With `plan` it writes nothing and answers the `document` it would write; without it,
+  it writes the file atomically (`status` `written`, or `unchanged` when the file holds those
+  bytes). `root` is a resource repository's checkout (`applications.json` and `packs/`: the game
+  from `applications.json`, the registry the build's `package_bundle` makes, the file written at
+  the checkout's root, to be committed there) or a built game root (`bundle.json`), never a root
+  inside an installation (`standard_pack_catalog_root_refused`): an installed root takes the file
+  through `ac_standard_pack_build` and `ac_place`. What it leaves out of an existing file (an entry
+  of a package no longer registered, a pool `schedule.json` no longer declares) is answered in
+  `removed` and `dropped` and warned of (`standard_pack_catalog_left_out`). Do not edit the file by
+  hand. `ac_packs` answers each
+  game's `index` (per pool the packages that produce and consume it) and each composed row's
+  `catalog`; `ac_standard_pack_check` answers the root's `catalog` note and the file's warnings.
 - **Busy** is `job_capacity_exhausted` with `limit_count`: a call that would start a job while
   `--jobs` jobs run (default 8), or that needs a child while all `--children` children (default 8)
   are working. It is refused, not queued, and nothing is sent: call again later. More calls at

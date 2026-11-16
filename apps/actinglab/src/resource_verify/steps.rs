@@ -20,9 +20,9 @@ use crate::{CliError, FlagArgs};
 use actingcommand_contract::codes::{ContractCode, SharedCode};
 use actingcommand_contract::outcome::{IoOp, Outcome, RawSource};
 use actingcommand_contract::{
-    STANDARD_PACK_DISPLAY_LAYOUT_FILE, STANDARD_PACK_GOALS_FILE, STANDARD_PACK_LOADING_DIRECTORY,
-    STANDARD_PACK_LOADING_FILE, STANDARD_PACK_NOTICES_DIRECTORY, STANDARD_PACK_SCHEDULE_FILE,
-    STANDARD_PACK_TABLES_DIRECTORY, STANDARD_PACK_UI_FILE,
+    STANDARD_PACK_CATALOG_FILE, STANDARD_PACK_DISPLAY_LAYOUT_FILE, STANDARD_PACK_GOALS_FILE,
+    STANDARD_PACK_LOADING_DIRECTORY, STANDARD_PACK_LOADING_FILE, STANDARD_PACK_NOTICES_DIRECTORY,
+    STANDARD_PACK_SCHEDULE_FILE, STANDARD_PACK_TABLES_DIRECTORY,
 };
 use serde::Serialize;
 use serde::de::{DeserializeSeed, MapAccess, SeqAccess, Visitor};
@@ -55,13 +55,14 @@ const ROOT_INPUTS: [&str; 7] = [
 ];
 /// Workflow #464 P2: the root files `standard-pack build` reads besides [`ROOT_INPUTS`], and the
 /// root directories it reads: every other input its bundle carries, so that each is the committed
-/// blob and none is an ignored file (fix round 1: `ui.json` too).
+/// blob and none is an ignored file (fix round 1: `ui.json` too; Workflow #477 PC-1:
+/// `pack-catalog.json`, which replaced it).
 const BUILD_ROOT_INPUTS: [&str; 5] = [
     STANDARD_PACK_SCHEDULE_FILE,
     STANDARD_PACK_DISPLAY_LAYOUT_FILE,
     STANDARD_PACK_LOADING_FILE,
     STANDARD_PACK_GOALS_FILE,
-    STANDARD_PACK_UI_FILE,
+    STANDARD_PACK_CATALOG_FILE,
 ];
 const BUILD_ROOT_DIRECTORIES: [&str; 3] = [
     STANDARD_PACK_LOADING_DIRECTORY,

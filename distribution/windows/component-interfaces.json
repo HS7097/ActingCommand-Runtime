@@ -6,7 +6,7 @@
     "install-control": [0, 0],
     "ledger": [3, 8],
     "runtime-client": [3, 11],
-    "package": [3, 15],
+    "package": [3, 16],
     "runtime-outcomes": [1, 1]
   }
 }

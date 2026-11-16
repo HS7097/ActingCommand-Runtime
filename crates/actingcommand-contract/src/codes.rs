@@ -491,6 +491,39 @@ crate::outcome_codes! {
         // irreversible until it reads (keys `game`, `package_id`). The policy composer finds
         // it; the Runtime's workbench records it once and the resource tools report it.
         StandardPackPackageUnreadable => "standard_pack_package_unreadable": warning / declaration_error,
+        // Workflow #477 PC-1 (register §1.438; contracts/pack-catalog.md): a game root without
+        // `pack-catalog.json`, a note of `standard-pack check` (keys `game`, `path`); not a
+        // defect, a root's declaration being written over time.
+        StandardPackCatalogAbsent => "standard_pack_catalog_absent": info / none,
+        // PC-1: how many packages of a game root's `bundle.json` its `pack-catalog.json` lists no
+        // entry for, a note of `standard-pack check` (keys `game`, `path`, `count`); the list is
+        // the answer's.
+        StandardPackCatalogCoverage => "standard_pack_catalog_coverage": info / none,
+        // PC-1: a defect of the display part of a game root's `pack-catalog.json` (keys `game`,
+        // `path`, `standard_pack_problem`, `json_pointer`); the package shows with its id and
+        // everything runs. `packs`, `standard-pack check` and `standard-pack catalog` report it.
+        StandardPackCatalogDisplayInvalid => "standard_pack_catalog_display_invalid": warning / declaration_error,
+        // PC-1 fix round 1: `standard-pack catalog` left out of the file it writes something the
+        // root no longer declares (keys `game`, `path`, `standard_pack_problem`
+        // `package_not_listed` for an entry or `catalog_pool_undeclared` for a pool, `json_pointer`
+        // in the existing file, `package_id`; `pool_id` for a pool); the answer's `removed` or
+        // `dropped` lists it too.
+        StandardPackCatalogLeftOut => "standard_pack_catalog_left_out": warning / declaration_error,
+        // PC-1: a pool a package consumes or produces that one of the two files lacks: a rule of
+        // the package in `schedule.json` names it and the package's entry does not list it, or
+        // the reverse (keys `game`, `package_id`, `pool_id`, `catalog_side`,
+        // `catalog_difference`; `task_id` the rule when one names it).
+        StandardPackCatalogScheduleDiffers => "standard_pack_catalog_schedule_differs": warning / declaration_error,
+        // PC-1: `standard-pack catalog` refuses a root that lies inside an installation (keys
+        // `path`, `install_root`): an installed root takes the file through the build and
+        // `place`.
+        StandardPackCatalogRootRefused => "standard_pack_catalog_root_refused": error / none,
+        // PC-1: `standard-pack catalog` could not write `pack-catalog.json` (key `path`); the OS
+        // error is the cause, and the file in place is as it was.
+        StandardPackCatalogWriteFailed => "standard_pack_catalog_write_failed": error / none,
+        // PC-1: a game root still holds `ui.json`, which no program reads any more; its content
+        // belongs in the display part of `pack-catalog.json` (keys `game`, `path`).
+        StandardPackUiRetired => "standard_pack_ui_retired": warning / declaration_error,
         // Workflow #373 NAV-6: a standard-pack root file breaks its shape, a limit or a
         // reference (keys `game`, `path`, `standard_pack_problem`, `json_pointer`). The Runtime's
         // root reader and check-config report it; the resource tools share the same check.

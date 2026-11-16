@@ -92,12 +92,15 @@ pub(crate) fn instructions(budget_s: u64) -> String {
 /// #463 S2-13: its row `record frames` (`ac_record_frames`), through a `serve` child.
 /// #463 S3-14: its row `standard-pack status` (`ac_standard_pack_status`), through a `serve`
 /// child.
-pub(crate) const ACTINGLAB_SLICES: [&str; 15] = [
+/// Workflow #477 PC-1 (`477-PC1`): its row `standard-pack catalog` (`ac_standard_pack_catalog`),
+/// through a `serve` child.
+pub(crate) const ACTINGLAB_SLICES: [&str; 16] = [
     "463-S2-13",
     "463-S21",
     "463-S3-14",
     "463-V3",
     "464-P3",
+    "477-PC1",
     "LAB-1",
     "LAB-1b",
     "LAB-2",

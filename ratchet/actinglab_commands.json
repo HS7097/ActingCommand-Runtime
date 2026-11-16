@@ -139,6 +139,7 @@
     "standard-pack ready",
     "standard-pack trial",
     "standard-pack status",
+    "standard-pack catalog",
     "runtime reset",
     "runtime observe",
     "session status",

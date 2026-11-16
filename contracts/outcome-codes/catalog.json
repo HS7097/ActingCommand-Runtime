@@ -1809,6 +1809,14 @@
       "type": "list<name>",
       "description": "Package ids a standard-pack registry lost since it was last read."
     },
+    "catalog_side": {
+      "type": "vocab:catalog_side",
+      "description": "The side of a package's business part in a game root's pack-catalog.json a pool stands on (Workflow #477 PC-1)."
+    },
+    "catalog_difference": {
+      "type": "vocab:catalog_difference",
+      "description": "Which of a game root's pack-catalog.json and schedule.json lacks a pool a package consumes or produces (Workflow #477 PC-1)."
+    },
     "schedule_sha256": {
       "type": "hash",
       "description": "The sha256 of the schedule.json of a standard-pack game root the scheduler workbench composed (ROUT-L RL-1b)."
@@ -6986,7 +6994,7 @@
       }
     },
     "standard_pack_problem": {
-      "description": "What is wrong with a standard-pack root file (Workflow #373 NAV-6), table file (Workflow #357 DB-1), pack's loading copy (Workflow #407 LOAD-1), bundle's notices directory (Workflow #444 NOTICES-1) or the variables a game root's packages declare (Workflow #463 V1).",
+      "description": "What is wrong with a standard-pack root file (Workflow #373 NAV-6), table file (Workflow #357 DB-1), pack's loading copy (Workflow #407 LOAD-1), bundle's notices directory (Workflow #444 NOTICES-1), the variables a game root's packages declare (Workflow #463 V1) or a game root's pack-catalog.json (Workflow #477 PC-1).",
       "tokens": {
         "malformed": {
           "description": "The file is not JSON of the file's shape and version; for a table, not canonical JSON either (a floating point number, an unsafe integer or a duplicate key)."
@@ -6998,7 +7006,7 @@
           "description": "bundle.json breaks the bundle index rules."
         },
         "bundle_missing": {
-          "description": "The game root holds interrupts.json, navigation.json, pages.json, (Workflow #392 DA-4) display-layout.json, (Workflow #357 DB-1) a tables directory or, for the readers of ui.json (Workflow #429 R-11, since 0.12.36), ui.json but no bundle.json."
+          "description": "The game root holds interrupts.json, navigation.json, pages.json, (Workflow #392 DA-4) display-layout.json, (Workflow #357 DB-1) a tables directory or, for the readers of pack-catalog.json (Workflow #477 PC-1, since 0.12.68; before it of ui.json, Workflow #429 R-11), pack-catalog.json but no bundle.json."
         },
         "pages_missing": {
           "description": "The game root holds interrupts.json or navigation.json but no pages.json."
@@ -7096,17 +7104,20 @@
         "display_layout_invalid": {
           "description": "display-layout.json breaks one of its rules: its correction.radius_px is above 64 (Workflow #392 DA-4, model 392 v1.2 section 4.1)."
         },
-        "ui_out_of_limits": {
-          "description": "ui.json is larger than 256 KiB, or one of its lists, maps, words or texts is outside its limit (Workflow #429 R-11, since 0.12.36)."
+        "catalog_out_of_limits": {
+          "description": "pack-catalog.json is larger than 1 MiB, or one of its lists, texts, locales, words, pool ids or amounts is outside its limit, at the pointer of what exceeds: an error in the business part and of the file as a whole, a warning in the display part (Workflow #477 PC-1, since 0.12.68). It replaced ui_out_of_limits of ui.json (Workflow #429 R-11), which no program reads any more."
         },
-        "ui_duplicate": {
-          "description": "ui.json lists a group id, a pack's package_id, a risk word of one pack or an aspect ratio twice (Workflow #429 R-11, since 0.12.36)."
+        "catalog_duplicate": {
+          "description": "pack-catalog.json lists a package_id twice or a pool twice on one side of an entry (errors), or a group id, a risk word of one package or an aspect ratio twice (warnings), at the later one (Workflow #477 PC-1, since 0.12.68). It replaced ui_duplicate of ui.json."
         },
-        "ui_group_unknown": {
-          "description": "A pack's group in ui.json is not an id of its groups (Workflow #429 R-11, since 0.12.36)."
+        "catalog_pool_undeclared": {
+          "description": "A pool of a package's consumes or produces in pack-catalog.json is not a pool the game root's schedule.json declares, or the root has no schedule.json (an error; Workflow #477 PC-1, since 0.12.68)."
         },
-        "ui_parameter_undeclared": {
-          "description": "A name under a pack's parameters in ui.json is not a parameter the package declares (Workflow #429 R-11, since 0.12.36); Workflow #463 V1 superseded R-10: a package's variables carry their own texts, so parameters names nothing and every name is this word."
+        "catalog_group_unknown": {
+          "description": "A package's group in pack-catalog.json is not an id of its groups (a warning: the package shows with its id; Workflow #477 PC-1, since 0.12.68). It replaced ui_group_unknown of ui.json."
+        },
+        "catalog_text_missing": {
+          "description": "A group of pack-catalog.json without title, or a package entry that writes a display member without title or summary (a warning: the package shows with its id; Workflow #477 PC-1, since 0.12.68). ui_parameter_undeclared of ui.json went with that file: the catalog has no parameters member, a package's variables carry their own texts."
         },
         "loading_target_invalid": {
           "description": "A target of loading.json or of a pack's loading copy has an id that is not loading/<name> or that the file declares twice, or a template target's template is not loading/<file>.png (Workflow #407 LOAD-1, since 0.12.37)."
@@ -7221,6 +7232,28 @@
         },
         "variable_undeclared": {
           "description": "A bundle zip whose packs declare variables in their control.json declares a package interface maximum below 14. Refused by the installer's place at interfaces.json (Workflow #463 V1 fix round 1, since 0.12.61)."
+        }
+      }
+    },
+    "catalog_side": {
+      "description": "The side of a package's business part in a game root's pack-catalog.json (Workflow #477 PC-1).",
+      "tokens": {
+        "consumes": {
+          "description": "The pools the package spends when it runs."
+        },
+        "produces": {
+          "description": "The pools the package earns when it runs."
+        }
+      }
+    },
+    "catalog_difference": {
+      "description": "Which of a game root's two files lacks a pool a package consumes or produces (Workflow #477 PC-1).",
+      "tokens": {
+        "catalog_lacks": {
+          "description": "A rule of the package in schedule.json names the pool on that side and the package's entry in pack-catalog.json does not list it."
+        },
+        "schedule_lacks": {
+          "description": "The package's entry in pack-catalog.json lists the pool on that side and no rule of the package in schedule.json names it there."
         }
       }
     },
