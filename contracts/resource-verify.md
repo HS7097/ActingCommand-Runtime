@@ -436,6 +436,7 @@ as an element of its array.
 | 14 | control | `variables` of the document, whatever it holds, as the installer's `place` reads it (`variable_undeclared` below 14) | V1, §1.378; [package-variables.md](package-variables.md) |
 | 14 | root | `goals.json`, by its presence at the zip's root, as `place` reads it (`goal_undeclared` below 14), whatever version it holds | G-R1, §1.356 (12, version 1); V1 fix round 3, §1.378 (14, version 2) |
 | 15 | control and its entry task | an ending page, in a pack whose `control.json` `execution_mode` is `linear_steps` only: a page of a `terminal_pages` under `mappings` of the `scheduling_outcome` of the task file of the control's `entry_task_id` (`resources/operations/<entry_task_id>/task.json`, the package's program; no other task file of the pack) that is none of that task's `target_page` (one page or a set) and none of the `from` of its `operations` whose `select` holds an `on_empty` (absent or `null`, none), each page compared with the prefix `<game>/`, the control's `game`, taken off where it is written. That is the kernel's own test of an admitted package (`PreparedContainedTask::declares_linear_endings`, `canonical_page_anchor`), a reader private to the kernel crate, which actinglab does not depend on, so the table reads the same members | K2, §1.380; [linear-steps.md](linear-steps.md), "Endings"; P2b, §1.385 |
+| 16 | root | `pack-catalog.json`, by its presence at the zip's root (`CATALOG_PACKAGE_REVISION`), so that an installer that knows no such root file refuses the zip at its `package` edge; `place` asks nothing of it | PC-1 fix round 1, §1.438; [pack-catalog.md](pack-catalog.md), "Interface" |
 
 Revisions 13 and 14 (after the train 0.12.61a; register §1.376): no content needs 12 any more.
 Revision 12 brought version 1 of `goals.json`, which this build reads no more; revision 14 brought
@@ -452,8 +453,8 @@ nothing admits. A terminal page in a task file that is not the entry task's need
 admission reads it as the package's program.
 
 Nothing else needs a revision: a game root's `tables/` (row 6: no member of a pack reads them),
-`pack-catalog.json` (§1.438: no revision; `ui.json`, §1.240, before it), the other root files and
-every other file of a pack need 3. A
+`ui.json` (§1.240; no zip carries it since §1.438), the other root files and every other file of a
+pack need 3. A
 member is found by its name, its file and its place, not by the declaration reader, and where an
 older member of the same name exists, by the value or the condition that tells them apart. Fix
 round 2: a member the table counts under a holder is matched by the name of its direct holder

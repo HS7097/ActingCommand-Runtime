@@ -545,7 +545,7 @@ fn catalog_report(
             let catalog =
                 match parse_standard_pack_catalog(&bytes, game, &checked.registry, Some(&pools)) {
                     Ok(catalog) => catalog,
-                    Err(issues) => return Err(catalog_refused(game, &path, issues)),
+                    Err(issues) => return Err(catalog_refused(game, root, issues)),
                 };
             for issue in catalog.display_issues() {
                 warnings.push(catalog_display_outcome(game, &path, issue));
@@ -570,19 +570,21 @@ fn catalog_report(
     Ok(report)
 }
 
-/// Workflow #477 PC-1: a `pack-catalog.json` at `path` the reader refuses (`issues`, its errors in
-/// the reader's order): `standard_pack_root_invalid` with the first.
+/// Workflow #477 PC-1: the `pack-catalog.json` of the game root `root` that the reader, or the
+/// writer's merge, refuses (`issues`, its errors in the reader's order): `standard_pack_root_invalid`
+/// with the first, at the file of `root` it names (fix round 1: the writer's merge names
+/// `schedule.json` for a rule's pool that file does not declare).
 pub(crate) fn catalog_refused(
     game: &str,
-    path: &Path,
+    root: &Path,
     issues: Vec<StandardPackRootIssue>,
 ) -> LabError {
     match issues.into_iter().next() {
-        Some(first) => root_invalid(game, path, &first),
+        Some(first) => root_invalid(game, &root.join(first.file), &first),
         // The reader refuses with at least one error; a refusal without one is the whole file's.
         None => root_invalid(
             game,
-            path,
+            &root.join(STANDARD_PACK_CATALOG_FILE),
             &StandardPackRootIssue {
                 file: STANDARD_PACK_CATALOG_FILE,
                 problem: StandardPackProblem::Malformed,

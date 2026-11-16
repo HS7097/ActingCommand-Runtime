@@ -17,17 +17,19 @@
 //!   `produces`), each a list of `{pool_id, quantity?}`, the pool one that the root's
 //!   `schedule.json` declares and the quantity `{"kind": "constant", "amount": N}` or
 //!   `{"kind": "pending"}` (absent: the relation is known, the amount is not stated). There is no
-//!   value member in this version: a member the reader does not know is an error at its pointer,
-//!   so that a later version adds the value under its own schema.
+//!   value member in this version: a member the reader does not know at the document's own level,
+//!   on an entry, on a pool or on a quantity is an error at its pointer, so that a later version
+//!   adds the value under its own schema.
 //!
 //! [`parse_standard_pack_catalog`] reads it. A defect of the file as a whole or of its business
 //! part is an error (`standard_pack_root_invalid` where a tool reports it): the root's declaration
 //! is wrong. A defect of the display part is a warning
 //! ([`StandardPackCatalog::display_issues`]): the group, the `display` block or the package's
-//! display it touches is left out, and the package shows with its id, as R-11 fell back. The
-//! index both ways ([`StandardPackCatalog::index`]) is computed by the reader and never stored.
-//! [`standard_pack_catalog_differences`] compares the business part with the rules of
-//! `schedule.json`, and [`merge_standard_pack_catalog`] is the writer's one rule.
+//! display it touches is left out, and the package shows with its id, as R-11 fell back. Fix round
+//! 1 (the owner's answer 6): a member a group or `display` does not know is such a display defect,
+//! not an error. The index both ways ([`StandardPackCatalog::index`]) is computed by the reader and
+//! never stored. [`standard_pack_catalog_differences`] compares the business part with the rules
+//! of `schedule.json`, and [`merge_standard_pack_catalog`] is the writer's one rule.
 //!
 //! The Runtime never reads the file: only the Lab's tools (`packs`, `standard-pack check`,
 //! `standard-pack catalog`, `standard-pack build` and the installer's `place`) do. Every text,
@@ -40,7 +42,9 @@ use crate::standard_pack::{
     STANDARD_PACK_BUNDLE_FILE, StandardPackProblem, StandardPackRegistry, StandardPackRoot,
     StandardPackRootBytes, StandardPackRootIssue, read_standard_pack_root,
 };
-use crate::standard_pack_schedule::{ScheduleRule, StandardPackSchedule};
+use crate::standard_pack_schedule::{
+    STANDARD_PACK_SCHEDULE_FILE, ScheduleRule, StandardPackSchedule,
+};
 use serde::de::{self, DeserializeSeed, Deserializer, MapAccess, SeqAccess, Visitor};
 use serde::{Serialize, Serializer};
 use serde_json::{Map, Number, Value, json};
@@ -88,6 +92,11 @@ pub const MAX_PACK_CATALOG_POOLS: usize = 256;
 pub const MAX_PACK_CATALOG_POOL_ID_BYTES: usize = 128;
 /// The largest constant `amount`: the largest integer every JSON reader keeps exactly.
 pub const MAX_PACK_CATALOG_AMOUNT: u64 = (1 << 53) - 1;
+/// Fix round 1 (`contracts/component-interfaces.md`, the `package` row 16): the `package` revision a
+/// bundle that carries `pack-catalog.json` declares, so that an installer of an earlier build, which
+/// knows no such root file, refuses the bundle at its `package` edge and not as a member it does
+/// not know.
+pub const CATALOG_PACKAGE_REVISION: u64 = 16;
 
 /// The members of the document.
 const DOCUMENT_MEMBERS: [&str; 5] = ["schema_version", "game", "groups", "display", "packs"];
@@ -311,8 +320,9 @@ pub fn standard_pack_schedule_pools(schedule: &StandardPackSchedule) -> BTreeSet
 /// - `catalog_out_of_limits`: the file is larger than [`MAX_STANDARD_PACK_CATALOG_BYTES`], or
 ///   `packs`, a `consumes` or `produces` list or a `pool_id` is outside its limit;
 /// - `malformed`: no JSON or no object, a member repeated in one object, a member the reader does
-///   not know anywhere in the file (a value member included), a business or document member that
-///   is missing or not of its type, a `schema_version` other than
+///   not know at the document's own level, on an entry, on a pool or on a quantity (a value member
+///   included), a business or document member that is missing or not of its type, a
+///   `schema_version` other than
 ///   [`STANDARD_PACK_CATALOG_SCHEMA_VERSION`], a quantity that is not exactly one of its two forms;
 /// - `game_mismatch`: `game` is not the directory's;
 /// - `package_not_listed`: a `package_id` the registry does not hold;
@@ -321,8 +331,9 @@ pub fn standard_pack_schedule_pools(schedule: &StandardPackSchedule) -> BTreeSet
 /// - `catalog_pool_undeclared`: a `pool_id` the root's `schedule.json` does not declare.
 ///
 /// A file without an error reads ([`StandardPackCatalog`]); its display defects are warnings
-/// ([`StandardPackCatalog::display_issues`]): `malformed` (a display member not of its type, an
-/// aspect ratio not `<w>:<h>`), `catalog_out_of_limits` (a list, a text, a locale or a word
+/// ([`StandardPackCatalog::display_issues`]): `malformed` (a display member not of its type, a
+/// member a group or `display` does not know (fix round 1), an aspect ratio not `<w>:<h>`),
+/// `catalog_out_of_limits` (a list, a text, a locale or a word
 /// outside its limit), `catalog_duplicate` (a group id, a risk word of one package or an aspect
 /// ratio twice), `catalog_group_unknown` (a package's `group` is no group's id) and
 /// `catalog_text_missing` (a group without `title`, or a package that writes a display member
@@ -536,11 +547,23 @@ impl Check<'_> {
     }
 
     /// Every member of `object` (at `pointer`) that is not one of `known` is `malformed` at its
-    /// pointer: the reader knows every member it reads.
+    /// pointer, an error: the reader knows every member it reads at the document's own level, on
+    /// an entry, on a pool and on a quantity.
     fn unknown(&mut self, object: &Map<String, Value>, pointer: &str, known: &[&str]) {
         for name in object.keys() {
             if !known.contains(&name.as_str()) {
                 self.error(StandardPackProblem::Malformed, at(pointer, name));
+            }
+        }
+    }
+
+    /// Fix round 1 (the owner's answer 6): every member of the display object `object` (a group or
+    /// `display`, at `pointer`) that is not one of `known` is `malformed` at its pointer, a
+    /// warning: the object is left out and everything still runs.
+    fn unknown_display(&mut self, object: &Map<String, Value>, pointer: &str, known: &[&str]) {
+        for name in object.keys() {
+            if !known.contains(&name.as_str()) {
+                self.warn(StandardPackProblem::Malformed, at(pointer, name));
             }
         }
     }
@@ -580,8 +603,8 @@ impl Check<'_> {
     }
 
     /// `groups`: each `{id, title}`. The groups without a defect, as written, and the ids of every
-    /// group whose id is a word given once (a package naming a group with a defective title still
-    /// finds it).
+    /// group whose id is a word given once (a package naming a group with a defective title, or
+    /// with a member a group does not know, still finds it).
     fn groups(&mut self, value: &Value) -> (Vec<Value>, BTreeSet<String>) {
         let mut kept = Vec::new();
         let mut ids = BTreeSet::new();
@@ -598,8 +621,8 @@ impl Check<'_> {
                 self.warn(StandardPackProblem::Malformed, pointer);
                 continue;
             };
-            self.unknown(object, &pointer, &GROUP_MEMBERS);
             let before = self.defects;
+            self.unknown_display(object, &pointer, &GROUP_MEMBERS);
             let id = match object.get("id") {
                 None => {
                     self.warn(StandardPackProblem::Malformed, at(&pointer, "id"));
@@ -634,8 +657,8 @@ impl Check<'_> {
             self.warn(StandardPackProblem::Malformed, POINTER);
             return None;
         };
-        self.unknown(object, POINTER, &DISPLAY_BLOCK_MEMBERS);
         let before = self.defects;
+        self.unknown_display(object, POINTER, &DISPLAY_BLOCK_MEMBERS);
         match object.get("aspect_ratios") {
             None => self.warn(StandardPackProblem::Malformed, at(POINTER, "aspect_ratios")),
             Some(ratios) => self.aspect_ratios(ratios, &at(POINTER, "aspect_ratios")),
@@ -1115,6 +1138,42 @@ fn schedule_union(
         .collect()
 }
 
+/// Fix round 1 (the independent review): each pool a rule of `schedule` names on a side
+/// ([`rule_pools`] reads the same items) that `declared` does not hold, the rule's package one of
+/// `fresh` (the packages the writer gives a new entry, whose pools are their rules'), as
+/// `catalog_pool_undeclared` in `schedule.json` at the rule's pool
+/// (`/rules/<i>/<side>/<j>/pool_id`, the reader keeping the rules and their items in the file's
+/// order), in the file's order, at most [`MAX_STANDARD_PACK_CATALOG_ISSUES`].
+fn undeclared_rule_pools(
+    schedule: Option<&StandardPackSchedule>,
+    declared: &BTreeSet<String>,
+    fresh: &BTreeSet<&str>,
+) -> Vec<StandardPackRootIssue> {
+    let mut issues = Vec::new();
+    let rules = schedule.into_iter().flat_map(|schedule| &schedule.rules);
+    for (index, rule) in rules.enumerate() {
+        if !fresh.contains(rule.package_id.as_str()) {
+            continue;
+        }
+        for side in CatalogSide::ALL.iter().copied() {
+            let items = rule.body.get(side.as_str()).and_then(Value::as_array);
+            for (position, item) in items.into_iter().flatten().enumerate() {
+                let Some(pool_id) = item.get("pool_id").and_then(Value::as_str) else {
+                    continue;
+                };
+                if !declared.contains(pool_id) && issues.len() < MAX_STANDARD_PACK_CATALOG_ISSUES {
+                    issues.push(StandardPackRootIssue::new(
+                        STANDARD_PACK_SCHEDULE_FILE,
+                        StandardPackProblem::CatalogPoolUndeclared,
+                        format!("/rules/{index}/{}/{position}/pool_id", side.as_str()),
+                    ));
+                }
+            }
+        }
+    }
+    issues
+}
+
 /// A pool of the business part as the file writes it.
 fn pool_value(pool: &CatalogPool) -> Value {
     let mut value = Map::new();
@@ -1141,6 +1200,40 @@ pub struct CatalogDropped {
     pub pool_id: String,
 }
 
+/// Fix round 1 (the independent review): one thing [`merge_standard_pack_catalog`] left out of the
+/// file it writes because the root no longer declares it, by the reader's word, at its pointer in
+/// the existing file: the entry of a package `bundle.json` no longer registers
+/// (`package_not_listed`, at its `package_id`; no pool), or a pool of a kept entry that
+/// `schedule.json` no longer declares (`catalog_pool_undeclared`, at its `pool_id`). Each is also in
+/// [`StandardPackCatalogMerge::removed`] or [`StandardPackCatalogMerge::dropped`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CatalogLeftOut {
+    pub problem: StandardPackProblem,
+    pub package_id: String,
+    /// The pool left out; `None` for an entry.
+    pub pool_id: Option<String>,
+    /// What was left out, in the existing file.
+    pub pointer: String,
+}
+
+impl CatalogLeftOut {
+    /// The warning `standard_pack_catalog_left_out` of the game root of `game` whose
+    /// `pack-catalog.json` is at `path`: the problem, the pointer in the existing file, the
+    /// package and, for a pool, the pool.
+    pub fn outcome(&self, game: &str, path: &Path) -> Outcome {
+        let outcome = Outcome::new(SharedCode::StandardPackCatalogLeftOut)
+            .game(game)
+            .path(path)
+            .standard_pack_problem(self.problem)
+            .json_pointer(self.pointer.clone())
+            .package_id(self.package_id.as_str());
+        match &self.pool_id {
+            Some(pool_id) => outcome.pool_id(pool_id.as_str()),
+            None => outcome,
+        }
+    }
+}
+
 /// What [`merge_standard_pack_catalog`] makes of a game root.
 #[derive(Debug, Clone, PartialEq)]
 pub struct StandardPackCatalogMerge {
@@ -1156,6 +1249,9 @@ pub struct StandardPackCatalogMerge {
     pub removed: Vec<String>,
     /// The pools of kept entries that `schedule.json` no longer declares, left out.
     pub dropped: Vec<CatalogDropped>,
+    /// Fix round 1: each entry of [`Self::removed`] and each pool of [`Self::dropped`] with its
+    /// pointer in the existing file, in that file's order (a writer warns of each).
+    pub left_out: Vec<CatalogLeftOut>,
     /// Every difference between the written entries and the rules of `schedule.json`
     /// ([`standard_pack_catalog_differences`]); a new entry has none, so these are the kept
     /// entries'.
@@ -1183,11 +1279,15 @@ pub struct StandardPackCatalogMerge {
 ///   reported ([`StandardPackCatalogMerge::differences`]). What no longer holds is left out and
 ///   reported: the entry of a package the registry no longer holds
 ///   ([`StandardPackCatalogMerge::removed`]) and a pool `schedule.json` no longer declares
-///   ([`StandardPackCatalogMerge::dropped`]).
+///   ([`StandardPackCatalogMerge::dropped`]), each with its pointer in the existing file (fix
+///   round 1, [`StandardPackCatalogMerge::left_out`]).
 ///
 /// An existing catalog the reader refuses for anything but those two references is not brought up
-/// to date: its errors are the answer. The written bytes are read back by the reader, and its
-/// errors (none, for a merge that holds) are the answer too.
+/// to date: its errors are the answer. Fix round 1: so is each pool a rule of a package that gets a
+/// new entry names and `schedule.json` does not declare, `catalog_pool_undeclared` in
+/// `schedule.json` at the rule's pool (`/rules/<i>/<side>/<j>/pool_id`), the file the pool is
+/// missing from ([`undeclared_rule_pools`]). The written bytes are read back by the reader, and
+/// its errors (none, for a merge that holds) are the answer too.
 pub fn merge_standard_pack_catalog(
     game: &str,
     registry: &StandardPackRegistry,
@@ -1223,14 +1323,16 @@ pub fn merge_standard_pack_catalog(
     let mut kept = Vec::new();
     let mut removed = Vec::new();
     let mut dropped = Vec::new();
+    let mut left_out = Vec::new();
     let mut packs = Vec::new();
     let mut listed = BTreeSet::new();
-    for entry in existing
+    for (index, entry) in existing
         .as_ref()
         .and_then(|document| document.get("packs"))
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
+        .enumerate()
     {
         let Some(object) = entry.as_object() else {
             continue;
@@ -1238,14 +1340,25 @@ pub fn merge_standard_pack_catalog(
         let Some(package_id) = object.get("package_id").and_then(Value::as_str) else {
             continue;
         };
+        let pointer = format!("/packs/{index}");
         if registry.get(package_id).is_none() {
             removed.push(package_id.to_owned());
+            left_out.push(CatalogLeftOut {
+                problem: StandardPackProblem::PackageNotListed,
+                package_id: package_id.to_owned(),
+                pool_id: None,
+                pointer: at(&pointer, "package_id"),
+            });
             continue;
         }
         let mut written = object.clone();
         for side in CatalogSide::ALL.iter().copied() {
+            let at_side = at(&pointer, side.as_str());
             if let Some(Value::Array(items)) = written.get_mut(side.as_str()) {
+                let mut position = 0_usize;
                 items.retain(|item| {
+                    let at_pool = format!("{at_side}/{position}/pool_id");
+                    position += 1;
                     let pool_id = item
                         .get("pool_id")
                         .and_then(Value::as_str)
@@ -1257,6 +1370,12 @@ pub fn merge_standard_pack_catalog(
                             side,
                             pool_id: pool_id.to_owned(),
                         });
+                        left_out.push(CatalogLeftOut {
+                            problem: StandardPackProblem::CatalogPoolUndeclared,
+                            package_id: package_id.to_owned(),
+                            pool_id: Some(pool_id.to_owned()),
+                            pointer: at_pool,
+                        });
                     }
                     declared
                 });
@@ -1265,6 +1384,16 @@ pub fn merge_standard_pack_catalog(
         listed.insert(package_id.to_owned());
         kept.push(package_id.to_owned());
         packs.push(Value::Object(written));
+    }
+    // Fix round 1: a new entry's pools are its rules'; one that `schedule.json` does not declare is
+    // refused there, where it is missing, before anything is made.
+    let fresh = registry
+        .package_ids()
+        .filter(|package_id| !listed.contains(*package_id))
+        .collect::<BTreeSet<_>>();
+    let undeclared = undeclared_rule_pools(schedule, &pools, &fresh);
+    if !undeclared.is_empty() {
+        return Err(undeclared);
     }
     let ui_packs = retired_ui
         .and_then(|ui| ui.get("packs"))
@@ -1343,6 +1472,7 @@ pub fn merge_standard_pack_catalog(
         kept,
         removed,
         dropped,
+        left_out,
         differences,
         display_from_ui,
     })

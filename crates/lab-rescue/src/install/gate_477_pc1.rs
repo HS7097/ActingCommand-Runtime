@@ -7,7 +7,8 @@
 // none; a game root that still holds `ui.json`, which no program reads any more, has it set aside
 // by the placement (kept beside, `undo` puts it back); a bundle whose catalog is wrong in its
 // business part is refused `pack_invalid` caused by `standard_pack_root_invalid` at its pointer,
-// before anything is held or written.
+// before anything is held or written; fix round 1: so is a bundle that still carries `ui.json`,
+// `pack_invalid` naming that member.
 // The machine is the fake host of `fixture.rs` with its fake Runtime and fake clock: no device, no
 // sleep; every root is a temporary folder with neutral files.
 
@@ -54,9 +55,11 @@ fn catalog_bytes(package_id: &str) -> Vec<u8> {
 }
 
 /// One neutral bundle zip of [`GAME`]: the pack [`PACK`] and its `pack-catalog.json` when it
-/// carries one.
+/// carries one; fix round 1: and a `ui.json` when it carries one, as a zip built before 0.12.68
+/// would.
 struct Bundle {
     catalog: Option<Vec<u8>>,
+    ui: Option<&'static [u8]>,
 }
 
 impl Bundle {
@@ -93,6 +96,9 @@ impl Bundle {
         ];
         if let Some(catalog) = &self.catalog {
             entries.push(("pack-catalog.json".to_owned(), catalog.clone()));
+        }
+        if let Some(ui) = self.ui {
+            entries.push(("ui.json".to_owned(), ui.to_vec()));
         }
         let mut writer = zip::ZipWriter::new(fs::File::create(path).expect("create the bundle"));
         for (name, bytes) in entries {
@@ -284,6 +290,7 @@ fn pc1_the_catalog_is_placed_with_its_digest_and_retired_and_an_installed_ui_jso
     let first = temp.path().join("neutral-catalog.zip");
     Bundle {
         catalog: Some(catalog.clone()),
+        ui: None,
     }
     .write(&first);
 
@@ -334,7 +341,11 @@ fn pc1_the_catalog_is_placed_with_its_digest_and_retired_and_an_installed_ui_jso
     );
 
     let later = temp.path().join("neutral-plain.zip");
-    Bundle { catalog: None }.write(&later);
+    Bundle {
+        catalog: None,
+        ui: None,
+    }
+    .write(&later);
     let (planned, exit) = place(&host, &root, &later, true);
     assert_eq!(exit, 0, "{planned}");
     assert_eq!(
@@ -379,6 +390,7 @@ fn pc1_a_bundle_whose_catalog_is_wrong_in_its_business_part_is_refused_before_th
     let zip = temp.path().join("neutral-wrong.zip");
     Bundle {
         catalog: Some(catalog_bytes("neutral.absent")),
+        ui: None,
     }
     .write(&zip);
 
@@ -404,6 +416,51 @@ fn pc1_a_bundle_whose_catalog_is_wrong_in_its_business_part_is_refused_before_th
         "{cause}"
     );
     assert_eq!(cause["game"], GAME, "{cause}");
+    assert!(
+        calls_of(&host, "pause ").is_empty(),
+        "{:?}",
+        host.runtime.calls.borrow()
+    );
+    assert_eq!(journals(&root).len(), before.len());
+    assert!(
+        fs::read_dir(&game_root)
+            .expect("the game root")
+            .next()
+            .is_none(),
+        "the game root holds nothing"
+    );
+}
+
+// Fix round 1, the review's missing test: a bundle zip that still carries `ui.json` (as one built
+// before 0.12.68 would), which no layout knows any more, is refused in the plan, `pack_invalid`
+// with `path` the zip's member `ui.json`: no pause, no journal, nothing in the game root.
+#[test]
+fn pc1_a_bundle_that_carries_ui_json_is_refused_in_the_plan_before_the_hold() {
+    let temp = TempDir::new().expect("tempdir");
+    let host = FakeHost::new(&temp.path().join("work"));
+    let (root, game_root) = prepared(temp.path(), &host);
+    let before = journals(&root);
+    let zip = temp.path().join("neutral-ui.zip");
+    Bundle {
+        catalog: None,
+        ui: Some(RETIRED_UI),
+    }
+    .write(&zip);
+
+    let (refused, exit) = place(&host, &root, &zip, false);
+
+    assert_eq!(exit, 1, "{refused}");
+    assert_eq!(top_code(&refused), "install_command_refused", "{refused}");
+    assert_eq!(
+        refused["outcome"]["values"]["install_refusal"],
+        "pack_invalid"
+    );
+    let canonical = fs::canonicalize(&zip).expect("the canonical bundle");
+    assert_eq!(
+        refused["outcome"]["values"]["path"],
+        json!(canonical.join("ui.json").to_string_lossy()),
+        "{refused}"
+    );
     assert!(
         calls_of(&host, "pause ").is_empty(),
         "{:?}",

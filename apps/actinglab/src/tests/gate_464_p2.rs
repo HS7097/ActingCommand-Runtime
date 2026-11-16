@@ -677,8 +677,11 @@ fn p2_tables_are_carried_and_listed_and_a_refused_table_fails_the_build() {
 // file the catalog replaced, which no program reads any more): `pack-catalog.json` is a root file
 // of the standard package root (contracts/package-reference.md), which `place` places with its
 // digest and sets aside when a zip carries none, so the build carries a commit's
-// `pack-catalog.json` byte for byte, `build.json` lists it among the root files and it needs no
-// revision; a commit's leftover `ui.json` is not carried and is the bundle step's warning
+// `pack-catalog.json` byte for byte and `build.json` lists it among the root files; since fix round
+// 1 (contracts/component-interfaces.md, the `package` row 16) the zip that carries it declares
+// `package` [16, 16] (it needed none before, and this assertion read [3, 3]), so that an installer
+// that knows no such file refuses the zip at its `package` edge; a commit's leftover `ui.json` is
+// not carried and is the bundle step's warning
 // `standard_pack_ui_retired`; a catalog its reader (`parse_standard_pack_catalog`) refuses in its
 // business part against the zip's `bundle.json` (a package the bundle does not register) fails the
 // build with the reader's refusal, `standard_pack_root_invalid` naming the file,
@@ -714,8 +717,9 @@ fn p2_pack_catalog_is_carried_and_one_wrong_in_its_business_part_fails_the_build
     let entries = zip_entries(&fixture.out("catalog").join(zip_name(&head)));
     assert_eq!(entries.get("pack-catalog.json"), Some(&catalog));
     assert!(!entries.contains_key("ui.json"), "{:?}", entries.keys());
-    assert_eq!(declared_package(&entries), json!([3, 3]));
+    assert_eq!(declared_package(&entries), json!([16, 16]));
     let document = fixture.build_json("catalog");
+    assert_eq!(document["package"], json!([16, 16]));
     assert_eq!(
         document["root_files"],
         json!([

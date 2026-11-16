@@ -28,8 +28,8 @@ Each choice below follows one of the owner's answers for this slice (board #477,
 3. **No value in this slice**: only what is produced and what is consumed. Hence: there is no value
    member, and the reader refuses one ("Strictness").
 4. **The scheduler (the Runtime) does not read the file in this slice.** Hence: no Runtime
-   component opens it, no interface revision moves, and a change of the file triggers no
-   composition.
+   component opens it, and a change of the file triggers no composition. (Fix round 1: a zip that
+   carries it declares `package` 16, the installer's boundary, not the Runtime's: "Interface".)
 5. **The file is written by tools, not edited by hand.** Hence: `actinglab standard-pack catalog`
    ("Who writes it"); the adoption of a new package and the model's writer write entries in later
    slices.
@@ -38,11 +38,14 @@ Each choice below follows one of the owner's answers for this slice (board #477,
 
 ## The file
 
-`pack-catalog.json` is an optional root file of the game root,
-`<standard_packs.root>/<game>/pack-catalog.json` in an installation and the root's top in a
-resource repository's working copy, beside `bundle.json`, by the root-file rule
+`pack-catalog.json` is an optional root file of the game root, by the root-file rule
 ([package-reference.md](package-reference.md), "Standard package root", "Naming"):
-`schema_version` `actingcommand.pack-catalog.v1` and `game` equal to the directory's name.
+`<standard_packs.root>/<game>/pack-catalog.json` beside `bundle.json` in an installation, and in a
+resource repository the file at its checkout's root, beside `applications.json` and `packs/`
+(fix round 1: a checkout holds no `bundle.json`, which the build makes of those two, and the build
+carries the file from there into the zip's root). `schema_version` is
+`actingcommand.pack-catalog.v1` and `game` the root's game: the directory's name in an
+installation, the `game` of `applications.json` (the zip's `bundle.json`'s) for a checkout.
 
 ```text
 {schema_version: "actingcommand.pack-catalog.v1", game,
@@ -93,10 +96,11 @@ run of the package uses up and brings in; it is the input of the index and of th
 
 ### Strictness
 
-A member the reader does not know is an error at its JSON pointer, wherever it stands, in the
-display part too: so a later slice adds the value under its own schema step (a `value` member, at
-the document, on an entry, on a pool or on a quantity, is refused today), and a misspelt member is
-never read as absent.
+A member the reader does not know at the document's own level, on an entry, on a pool or on a
+quantity is an error at its JSON pointer: so a later slice adds the value under its own schema
+step (a `value` member there is refused today), and a misspelt member is never read as absent.
+Fix round 1 (the owner's answer 6): a member a group or `display` does not know is a display
+defect, a warning, and that group or that `display` is left out ("Warnings: a display defect").
 
 ## What is wrong
 
@@ -107,7 +111,7 @@ document), at most 64 in the reader's order:
 
 | Problem | When |
 |---|---|
-| `malformed` | the file is no JSON or no object; a member repeated in one object; a member the reader does not know; a document or business member missing or not of its type; a `schema_version` other than `actingcommand.pack-catalog.v1`; a quantity that is not exactly one of its two forms (`kind` another word, `amount` missing, 0, above 2^53 - 1 or beside `pending`) |
+| `malformed` | the file is no JSON or no object; a member repeated in one object; a member the reader does not know at the document's own level, on an entry, on a pool or on a quantity; a document or business member missing or not of its type; a `schema_version` other than `actingcommand.pack-catalog.v1`; a quantity that is not exactly one of its two forms (`kind` another word, `amount` missing, 0, above 2^53 - 1 or beside `pending`) |
 | `game_mismatch` | `game` is not the directory's |
 | `package_not_listed` | a `package_id` the root's `bundle.json` does not register |
 | `catalog_duplicate` | a `package_id` listed twice, or a pool twice on one side of an entry (at the later one) |
@@ -126,7 +130,7 @@ display is left out, so that package shows by its `package_id`, as R-11 fell bac
 
 | Problem | When |
 |---|---|
-| `malformed` | a display member not of its type (a text that is no object, a word that is no string), an aspect ratio not `<w>:<h>`, `display` without `aspect_ratios`, a group without `id` |
+| `malformed` | a display member not of its type (a text that is no object, a word that is no string), (fix round 1) a member a group or `display` does not know, an aspect ratio not `<w>:<h>`, `display` without `aspect_ratios`, a group without `id` |
 | `catalog_text_missing` | a group without `title`, or an entry that writes a display member without `title` or `summary` |
 | `catalog_group_unknown` | an entry's `group` is no group's `id` |
 | `catalog_duplicate` | a group id, a risk word of one entry or an aspect ratio written twice |
@@ -207,8 +211,8 @@ it is `bundle_missing`).
 - **`actinglab standard-pack build`** carries a commit's file into the zip byte for byte, checked
   against the zip's `bundle.json` and the repository's `schedule.json`: an error of its business
   part fails the `bundle` step, and nothing is built ([resource-verify.md](resource-verify.md)).
-  `build.json` lists it among the root files. It needs no `package` revision: the Runtime reads no
-  member of it.
+  `build.json` lists it among the root files. Fix round 1: a zip that carries it declares
+  `package` [16, 16] ("Interface").
 - **The installer's `place`** ([install-cli.md](install-cli.md)): the file is the last root file of
   the layout, placed with its SHA-256 as its item's digest, and set aside as
   `pack-catalog.json.old-<ms>` when a later zip carries none; a zip whose file is wrong in its
@@ -217,12 +221,26 @@ it is `bundle_missing`).
 
 ## Who writes it
 
-`actinglab standard-pack catalog --root <game root> [--plan]` (the Lab's MCP tool
+`actinglab standard-pack catalog --root <root> [--plan]` (the Lab's MCP tool
 `ac_standard_pack_catalog`, `root` and `plan`, through a `serve` child), so that nobody edits the
-file by hand. It builds or brings up to date the file from what the root already declares, by one
-rule (`merge_standard_pack_catalog` of the contract crate):
+file by hand. Fix round 1: `--root` takes either of two directories.
 
-- An entry for every package of `bundle.json`: the entries already in the file first, in its order,
+- **A resource repository's checkout**, the way to write a repository's file: a directory that holds
+  `applications.json` and no `bundle.json`. Its game is the `game` of `applications.json`; its
+  registry is the `bundle.json` the build's own function, `package_bundle`, makes of
+  `applications.json` and the directories of `packs/` (a file there, such as a `README.md`, is no
+  package and is passed over, as the build passes it over), made in a scratch directory of the
+  system's temporary folder (the packages copied there, following links as the build does) and
+  removed before the line answers. The file is written at the checkout's root, where the build
+  carries it from; the directory's own name does not matter. Commit it with the checkout.
+- **A built game root** outside an installation: a directory that holds `bundle.json`, named as its
+  game, whose registry is that file's (the form of the first round).
+
+A directory that holds neither is `standard_pack_root_invalid`, `bundle_missing`, at `bundle.json`.
+It builds or brings up to date the file from what the root already declares, by one rule
+(`merge_standard_pack_catalog` of the contract crate):
+
+- An entry for every package of the registry: the entries already in the file first, in its order,
   each **kept as written**, display and business part; then one new entry per package without one,
   in the registry's order.
 - A new entry's display is the leftover `ui.json`'s entry for the package (`title`, `summary`,
@@ -233,21 +251,30 @@ rule (`merge_standard_pack_catalog` of the contract crate):
   absent.
 - **An entry already there is never overwritten**: its differences from the rules are answered
   (`differences`) and are warnings. What no longer holds is left out and answered: the entry of a
-  package `bundle.json` no longer registers (`removed`) and a pool of a kept entry `schedule.json`
-  no longer declares (`dropped`). A file wrong in anything else is not brought up to date: the
-  line is refused with its first error.
+  package the registry no longer holds (`removed`) and a pool of a kept entry `schedule.json` no
+  longer declares (`dropped`); fix round 1: each is also the warning
+  `standard_pack_catalog_left_out` (`game`, `path`, `standard_pack_problem` `package_not_listed`
+  or `catalog_pool_undeclared`, `json_pointer` in the existing file, `package_id`, and `pool_id`
+  for a pool), in the existing file's order, after the display defects and before the
+  differences. A file wrong in anything else is not brought up to date: the line is refused with
+  its first error. Fix round 1: so is a rule of a package that is to get a new entry when it names
+  a pool `schedule.json` does not declare: `standard_pack_root_invalid` at `schedule.json`, the
+  file the pool is missing from, `catalog_pool_undeclared` at the rule's
+  `/rules/<i>/<side>/<j>/pool_id`.
 - With `--plan` it writes nothing and answers the `document` it would write (`status` `planned`).
   Without it, it writes the file atomically (a `.part` beside it, synced and renamed over it) when
   its bytes differ (`written`), and leaves it as it is when they do not (`unchanged`); a second run
   changes nothing. The answer also names `path`, `changed`, `added`, `kept` and `display_from_ui`.
-- The root is given by its path: a repository's working copy or a scratch copy, its directory named
-  as its game. One inside an installation is refused, `standard_pack_catalog_root_refused` (`path`,
+- A root inside an installation is refused, `standard_pack_catalog_root_refused` (`path`,
   `install_root`), before anything is read: an installed root takes the file through the build and
   `place`. A failed write is `standard_pack_catalog_write_failed` (`path`, the OS error its cause);
-  the file in place is then as it was.
-- It reads the root's `bundle.json`, `schedule.json`, `pack-catalog.json` and `ui.json` only,
-  writes only `pack-catalog.json` and deletes nothing: a leftover `ui.json` stays, with its
-  warning. Under the global `--dry-run` the line without `--plan` is `dry_run_unsupported`
+  the file in place is then as it was. Fix round 1: it is of the class device or instance (exit
+  status 4 on the command line), as the Lab's other local write failures, not a usage refusal; so
+  is an OS failure of a checkout's `packs/` or of the scratch directory (`foreign_os_error`).
+- Of the root it reads `bundle.json` (of a checkout, `applications.json` and `packs/` instead),
+  `schedule.json`, `pack-catalog.json` and `ui.json` only; in the root it writes only
+  `pack-catalog.json` and deletes nothing: a leftover `ui.json` stays, with its warning. Under the
+  global `--dry-run` the line without `--plan` is `dry_run_unsupported`
   ([actinglab-dry-run.md](actinglab-dry-run.md)).
 
 ## `ui.json` is retired
@@ -262,13 +289,22 @@ no layout knows. The four words of its reader (`ui_out_of_limits`, `ui_duplicate
 
 ## Interface
 
-No interface revision moves ([component-interfaces.md](component-interfaces.md)): the Runtime reads
-no member of the file, so no `package` revision is needed to carry it, and the `packs` answer is
-the Lab's offline read, which no revision covers. Its new members (`index` on a game, `catalog` on a
-row) are added beside the old ones; a client that reads the answer by member name (the console)
-ignores them and keeps reading `ui` and `display` as before. A game's `ui` is now `{groups, packs}`
-(R-11 gave the whole `ui.json`, whose `groups` and `packs` it was): the members a client read are
-where they were.
+**`package` 16** (fix round 1; [component-interfaces.md](component-interfaces.md), the `package` row
+16): the Runtime reads no member of the file, but an installer of 0.12.67 or earlier knows no root
+file of that name and would refuse a zip that carries it as a member no layout knows
+(`pack_invalid`), not at the interface's boundary. So a zip that carries `pack-catalog.json`
+declares `package` [16, 16] (the contract crate's `CATALOG_PACKAGE_REVISION`; `standard-pack build`
+counts it by the file's presence at the zip's root), this build declares [3, 16], and an earlier
+installer refuses such a zip at its `package` edge (`interface_edge`), in the plan, before the
+hold. This build's `place` does not refuse a zip that carries the file and declares less: no such
+zip is built (the build that writes the file declares 16), and the boundary that matters is the
+earlier installer's.
+
+The `packs` answer is the Lab's offline read, which no revision covers. Its new members (`index` on
+a game, `catalog` on a row) are added beside the old ones; a client that reads the answer by member
+name (the console) ignores them and keeps reading `ui` and `display` as before. A game's `ui` is
+now `{groups, packs}` (R-11 gave the whole `ui.json`, whose `groups` and `packs` it was): the
+members a client read are where they were.
 
 ## What the later slices add
 

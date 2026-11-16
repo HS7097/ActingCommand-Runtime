@@ -55,10 +55,13 @@
 //! package directory holds when it is collected; a run is answered by its end state.
 //!
 //! Workflow #477 PC-1 (contracts/pack-catalog.md, "Who writes it"; register §1.438): `actinglab
-//! standard-pack catalog --root <game root> [--plan]` builds or brings up to date a game root's
+//! standard-pack catalog --root <root> [--plan]` builds or brings up to date a game root's
 //! `pack-catalog.json` from what the root declares (the resource tooling's
 //! `write_standard_pack_catalog`): with `--plan` it writes nothing and answers the document; without
-//! it, it writes the file atomically. Under the global `--dry-run` only `--plan` runs.
+//! it, it writes the file atomically. Under the global `--dry-run` only `--plan` runs. Fix round 1:
+//! `--root` is a resource repository's checkout (the game from its `applications.json`, the
+//! registry the build's `package_bundle` makes of its `packs/`, the file written at its root) or a
+//! built game root (`bundle.json`, its directory named as its game).
 
 use crate::{CliError, CliOutcome, ErrorKind, FlagArgs, GlobalOptions};
 use actingcommand_contract::codes::{ContractCode, ContractLocation};
@@ -186,7 +189,7 @@ pub(crate) fn adopt_options() -> [&'static str; 8] {
 /// Workflow #477 PC-1: the flags of `standard-pack catalog`.
 pub(crate) fn catalog_options() -> [&'static str; 2] {
     [
-        "--root <a game root of a repository's working copy or a scratch copy: <game>/ with bundle.json; never inside an installation>",
+        "--root <a resource repository's checkout (applications.json and packs/; the file is written at its root) or a built game root (<game>/ with bundle.json); never inside an installation>",
         "--plan (answers the pack-catalog.json it would write; writes nothing)",
     ]
 }

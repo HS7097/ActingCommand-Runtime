@@ -226,11 +226,13 @@ impl StandardPackCatalogReport {
 }
 
 /// Workflow #477 PC-1 (contracts/pack-catalog.md, "Who writes it"): `actinglab standard-pack
-/// catalog --root <game root> [--plan]`.
+/// catalog --root <root> [--plan]`.
 #[derive(Debug, Clone)]
 pub struct StandardPackCatalogRequest {
-    /// A game root given by its path: a repository's working copy of one or a scratch copy, its
-    /// directory named as its game; never one inside an installation.
+    /// Fix round 1: a resource repository's checkout (`applications.json` and `packs/`, no
+    /// `bundle.json`; its game from `applications.json`, its registry made by the build's
+    /// `package_bundle`), or a built game root (`bundle.json`, its directory named as its game);
+    /// never one inside an installation.
     pub root: PathBuf,
     /// `--plan`: write nothing, answer the document the line would write.
     pub plan: bool,
@@ -264,8 +266,9 @@ pub struct StandardPackCatalogResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub document: Option<Value>,
     /// One `standard_pack_catalog_display_invalid` per display defect of the written document,
-    /// one `standard_pack_catalog_schedule_differs` per difference, and `standard_pack_ui_retired`
-    /// when the root still holds `ui.json`.
+    /// (fix round 1) one `standard_pack_catalog_left_out` per entry of `removed` and per pool of
+    /// `dropped`, in the existing file's order, one `standard_pack_catalog_schedule_differs` per
+    /// difference, and `standard_pack_ui_retired` when the root still holds `ui.json`.
     pub warnings: Vec<actingcommand_contract::outcome::Outcome>,
 }
 

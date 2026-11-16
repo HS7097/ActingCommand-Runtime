@@ -981,7 +981,9 @@ data files beside its package directories, one directory per game below the conf
   `actingctl packs` and `ac_packs`, `actinglab standard-pack check`, `standard-pack build` and the
   installer's `place`; the Runtime's root reader, its startup and run preparation, the policy crate
   and check-config never read it, so the file never changes a run. It is written by `actinglab
-  standard-pack catalog`, not by hand. The file makes a directory a game root for its readers, so
+  standard-pack catalog`, not by hand: on a resource repository's checkout (fix round 1) it writes
+  the file at the checkout's root, from which the build carries it, and a zip that carries it
+  declares `package` 16. The file makes a directory a game root for its readers, so
   `pack-catalog.json` without `bundle.json` is `bundle_missing`.
 - **`ui.json`** (Workflow #429 R-11, 0.12.36 to 0.12.67; `v012-register.md` §1.240) is retired:
   `pack-catalog.json` replaced it outright (the owner's answer 1 on board #477), its display part

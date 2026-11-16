@@ -35,12 +35,13 @@ use actingcommand_contract::codes::{ContractCode, SharedCode};
 use actingcommand_contract::outcome::{IoOp, Outcome, RawSource};
 use actingcommand_contract::{
     BundleIndex, BundleMaintenance, CatalogBusiness, DeclaredCapabilities, InstalledProcess,
-    IrreversiblePackages, MAX_STANDARD_PACK_CATALOG_BYTES, ProvidedCapability,
-    STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_CATALOG_FILE, STANDARD_PACK_DISPLAY_LAYOUT_FILE,
-    STANDARD_PACK_INTERRUPTS_FILE, STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_PAGES_FILE,
-    STANDARD_PACK_RETIRED_UI_FILE, STANDARD_PACK_SCHEDULE_FILE, STANDARD_PACK_TABLES_DIRECTORY,
-    StandardPackCatalog, StandardPackCatalogIndex, StandardPackRegistry, StandardPackRoot,
-    StandardPackRootBytes, StandardPackRootIssue, StandardPackTableReport, catalog_display_outcome,
+    IrreversiblePackages, MAX_STANDARD_PACK_CATALOG_BYTES, MAX_STANDARD_PACK_SCHEDULE_BYTES,
+    ProvidedCapability, STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_CATALOG_FILE,
+    STANDARD_PACK_DISPLAY_LAYOUT_FILE, STANDARD_PACK_INTERRUPTS_FILE,
+    STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_PAGES_FILE, STANDARD_PACK_RETIRED_UI_FILE,
+    STANDARD_PACK_SCHEDULE_FILE, STANDARD_PACK_TABLES_DIRECTORY, StandardPackCatalog,
+    StandardPackCatalogIndex, StandardPackRegistry, StandardPackRoot, StandardPackRootBytes,
+    StandardPackRootIssue, StandardPackTableReport, catalog_display_outcome,
     parse_standard_pack_catalog, parse_standard_pack_schedule, read_standard_pack_root,
     read_standard_pack_root_with_catalog, read_standard_pack_tables, retired_ui_outcome,
     standard_pack_schedule_pools,
@@ -775,7 +776,15 @@ impl Rows {
             let directory = root.join(&game);
             match schedule_game(&directory, &game) {
                 Ok(Some(files)) => {
-                    let pools = schedule_pools(files.schedule.as_deref());
+                    // Fix round 1: `schedule.json` is parsed for the catalog's pools only when the
+                    // root holds the catalog (this runs on every status read).
+                    let pools = if fs::symlink_metadata(directory.join(STANDARD_PACK_CATALOG_FILE))
+                        .is_ok()
+                    {
+                        schedule_pools(files.schedule.as_deref())
+                    } else {
+                        None
+                    };
                     if let Some(catalog) =
                         self.game_catalog(&directory, &game, &files.root.registry, pools.as_ref())
                     {
@@ -1092,11 +1101,16 @@ impl Rows {
                         }
                     };
                     // `schedule.json` is read for the catalog's pools only when the root holds the
-                    // catalog, so that a root without it answers as before.
+                    // catalog, so that a root without it answers as before; fix round 1: read
+                    // under its size limit (one byte more says it is larger, which its reader
+                    // refuses, and then no pool is judged).
                     let has_catalog =
                         fs::symlink_metadata(directory.join(STANDARD_PACK_CATALOG_FILE)).is_ok();
                     let pools = if has_catalog {
-                        match fs::read(directory.join(STANDARD_PACK_SCHEDULE_FILE)) {
+                        match read_capped(
+                            &directory.join(STANDARD_PACK_SCHEDULE_FILE),
+                            MAX_STANDARD_PACK_SCHEDULE_BYTES as u64,
+                        ) {
                             Ok(schedule) => schedule_pools(Some(schedule.as_slice())),
                             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                                 schedule_pools(None)

@@ -503,6 +503,12 @@ crate::outcome_codes! {
         // `path`, `standard_pack_problem`, `json_pointer`); the package shows with its id and
         // everything runs. `packs`, `standard-pack check` and `standard-pack catalog` report it.
         StandardPackCatalogDisplayInvalid => "standard_pack_catalog_display_invalid": warning / declaration_error,
+        // PC-1 fix round 1: `standard-pack catalog` left out of the file it writes something the
+        // root no longer declares (keys `game`, `path`, `standard_pack_problem`
+        // `package_not_listed` for an entry or `catalog_pool_undeclared` for a pool, `json_pointer`
+        // in the existing file, `package_id`; `pool_id` for a pool); the answer's `removed` or
+        // `dropped` lists it too.
+        StandardPackCatalogLeftOut => "standard_pack_catalog_left_out": warning / declaration_error,
         // PC-1: a pool a package consumes or produces that one of the two files lacks: a rule of
         // the package in `schedule.json` names it and the package's entry does not list it, or
         // the reverse (keys `game`, `package_id`, `pool_id`, `catalog_side`,

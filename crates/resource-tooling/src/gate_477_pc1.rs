@@ -19,6 +19,16 @@
 //   root inside an installation;
 // - the composition of the root is the same, by its catalog hash and its rules digest, with and
 //   without the file: nothing the Runtime runs reads it.
+// Fix round 1 (coordinator work order `rd-1116/brief-477-pc1-fix2.md`, after the independent
+// review):
+// - the writer takes a resource repository's checkout, a directory not named as its game with
+//   `applications.json`, `packs/` (and a `README.md` there) and `schedule.json` but no
+//   `bundle.json`: the game from `applications.json`, the registry the build's `package_bundle`
+//   makes, the file written at the checkout's root and nothing else written there;
+// - what the writer leaves out (an entry of a package `bundle.json` does not register, a pool
+//   `schedule.json` does not declare) is answered in `removed` and `dropped` and warned of,
+//   `standard_pack_catalog_left_out` with the word, the package, the pool and the pointer in the
+//   existing file.
 // A made-up game `neutral`, server `test`, 16x9; every package, pool, rule and text is a
 // placeholder. No clock is read and nothing sleeps.
 
@@ -261,6 +271,7 @@ fn check(game_root: &Path) -> StandardPackCheckResponse {
 fn pc1_warnings(warnings: &[Outcome]) -> Vec<Value> {
     let codes = [
         SharedCode::StandardPackCatalogDisplayInvalid,
+        SharedCode::StandardPackCatalogLeftOut,
         SharedCode::StandardPackCatalogScheduleDiffers,
         SharedCode::StandardPackUiRetired,
     ];
@@ -599,6 +610,126 @@ fn pc1_the_writer_keeps_an_entry_reports_its_differences_and_refuses_an_installa
         json!(absolute(&installation))
     );
     assert!(!inside.join(CATALOG).exists());
+}
+
+/// The names of the entries of `directory`, sorted.
+fn names(directory: &Path) -> Vec<String> {
+    let mut names = fs::read_dir(directory)
+        .expect("the directory")
+        .map(|entry| {
+            entry
+                .expect("an entry")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect::<Vec<_>>();
+    names.sort();
+    names
+}
+
+/// Fix round 1, the review's first must-fix: the writer on a resource repository's checkout, a
+/// directory named `checkout-not-named-as-game` holding `applications.json` (game `neutral`),
+/// `packs/` with both packages' directories and a `README.md`, and `schedule.json`; no
+/// `bundle.json`. The answer's game is `applications.json`'s, both packages get an entry (the
+/// registry the build's `package_bundle` makes, the `README.md` no package), the file is written at
+/// the checkout's root with the same document a built root of the same packages gets, and the
+/// checkout holds nothing else new: no `bundle.json`, no scratch.
+#[test]
+fn pc1_the_writer_takes_a_resource_repository_s_checkout() {
+    let temp = TempDir::new().expect("temporary directory");
+    let checkout = temp.path().join("checkout-not-named-as-game");
+    write_json(
+        &checkout.join("applications.json"),
+        &json!({
+            "schema_version": "actingcommand.applications.v1",
+            "game": GAME,
+            "servers": {SERVER: {"application_id": "com.example.neutral", "label": "Test"}}
+        }),
+    );
+    for package_id in [COLLECT, SPEND] {
+        write_pack(&checkout.join("packs").join(package_id), package_id);
+    }
+    fs::write(checkout.join("packs").join("README.md"), b"# packs\n").expect("README.md");
+    write_json(&checkout.join("schedule.json"), &schedule());
+
+    let answer = write(&checkout, false);
+
+    assert_eq!(answer.status, "written");
+    assert_eq!(answer.game, GAME);
+    assert_eq!(answer.root, absolute(&checkout));
+    assert_eq!(answer.path, absolute(&checkout.join(CATALOG)));
+    assert_eq!(answer.added, vec![COLLECT.to_owned(), SPEND.to_owned()]);
+    assert!(answer.warnings.is_empty(), "{:?}", answer.warnings);
+    assert_eq!(
+        read_json(&checkout.join(CATALOG)),
+        json!({
+            "schema_version": "actingcommand.pack-catalog.v1",
+            "game": GAME,
+            "packs": [
+                {"package_id": COLLECT, "consumes": [],
+                 "produces": [{"pool_id": POINTS, "quantity": {"kind": "constant", "amount": 2}}]},
+                {"package_id": SPEND,
+                 "consumes": [{"pool_id": POINTS, "quantity": {"kind": "constant", "amount": 1}}],
+                 "produces": []}
+            ]
+        })
+    );
+    assert_eq!(
+        names(&checkout),
+        ["applications.json", CATALOG, "packs", "schedule.json"],
+        "the checkout holds only the file it did not hold before"
+    );
+    assert_eq!(
+        names(&checkout.join("packs")),
+        ["README.md", COLLECT, SPEND]
+    );
+}
+
+/// Fix round 1, the review's "may fix": what the writer leaves out of a file it brings up to date is
+/// answered and warned of. The existing file's entry of `COLLECT` lists a pool `schedule.json` does
+/// not declare and its second entry is of a package `bundle.json` does not register: the written
+/// file keeps `COLLECT` without that pool and lists no entry for the other package; the answer's
+/// `dropped` and `removed` name them; and each is one `standard_pack_catalog_left_out`, in the
+/// existing file's order, with its word, package, pool and pointer there.
+#[test]
+fn pc1_the_writer_warns_of_what_it_removes_and_drops() {
+    let (_temp, root) = working_root();
+    let mut collect = matching_entry(COLLECT);
+    collect["produces"]
+        .as_array_mut()
+        .expect("the produces")
+        .push(json!({"pool_id": "pool.neutral.gone"}));
+    let gone = json!({"package_id": "neutral.gone", "consumes": [], "produces": []});
+    write_json(&root.join(CATALOG), &catalog(json!([collect, gone])));
+
+    let answer = write(&root, false);
+
+    assert_eq!(answer.status, "written");
+    assert_eq!(answer.kept, vec![COLLECT.to_owned()]);
+    assert_eq!(answer.added, vec![SPEND.to_owned()]);
+    assert_eq!(answer.removed, vec!["neutral.gone".to_owned()]);
+    assert_eq!(
+        serde_json::to_value(&answer.dropped).expect("the dropped pools"),
+        json!([{"package_id": COLLECT, "side": "produces", "pool_id": "pool.neutral.gone"}])
+    );
+    let written = read_json(&root.join(CATALOG));
+    assert_eq!(written["packs"][0], matching_entry(COLLECT));
+    assert_eq!(written["packs"][1]["package_id"], SPEND);
+    assert_eq!(written["packs"].as_array().map(Vec::len), Some(2));
+    let path = absolute(&root.join(CATALOG));
+    assert_eq!(
+        pc1_warnings(&answer.warnings),
+        vec![
+            json!({"code": "standard_pack_catalog_left_out", "values": {
+                "game": GAME, "path": path, "standard_pack_problem": "catalog_pool_undeclared",
+                "json_pointer": "/packs/0/produces/1/pool_id", "package_id": COLLECT,
+                "pool_id": "pool.neutral.gone"}}),
+            json!({"code": "standard_pack_catalog_left_out", "values": {
+                "game": GAME, "path": path, "standard_pack_problem": "package_not_listed",
+                "json_pointer": "/packs/1/package_id", "package_id": "neutral.gone"}}),
+        ]
+    );
 }
 
 /// The composition: the root composed for one bound instance gives the same catalog hash and the

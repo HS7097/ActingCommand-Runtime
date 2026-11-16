@@ -1231,8 +1231,9 @@ the rescue face:
   `<zip>\interfaces.json` with the first such pack's `package_id`, in the plan), and (fix round 3,
   `goals.json` version 2, the only version this build reads) a zip that carries `goals.json`
   declares 14 at least (`goal_undeclared`, as before at 12); from 0.12.68 (Workflow #477 PC-1,
-  [pack-catalog.md](pack-catalog.md), no `package` revision: the Runtime reads no member of it)
-  the package declaration `pack-catalog.json` is the last root file of the layout, placed with
+  [pack-catalog.md](pack-catalog.md); fix round 1: a zip that carries it declares `package` 16,
+  which an installer of 0.12.67 or earlier refuses at its `package` edge, and this `place` asks no
+  revision of it) the package declaration `pack-catalog.json` is the last root file of the layout, placed with
   its SHA-256 as its item's digest and, when the zip no longer carries it, set aside as
   `pack-catalog.json.old-<ms>` as the other root files are; a zip whose `pack-catalog.json` is
   wrong in its business part against the zip's `bundle.json` and `schedule.json` is refused
