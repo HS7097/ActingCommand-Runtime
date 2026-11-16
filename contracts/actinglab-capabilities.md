@@ -109,7 +109,8 @@ when that backend is `nemu_ipc` (`runtime-host` `host/nemu_input.rs`, `nemu_inpu
 the configured `input_backend`); the table has no member of its own for it (one would be an
 interface revision). A status that cannot be read stops no press: it is sent without a frame, as
 before LW-1, and the Runtime refuses it where the input needs one (`nemu_input_frame_required`);
-the answer's `touch_backend_warnings` says the status was not read. A frame the Runtime no longer
+the answer's `touch_backend_warnings` says the status was not read (fix round 2: a refusal's is
+in its `details`, the Runtime's refusal of that press too). A frame the Runtime no longer
 holds when the press names it (`input_frame_unavailable`) is captured once more and the press
 sent once more under the same lease, once (`input_frame_captured_twice`). `key` and `text` stay
 refused there (`nemu_input_capability_unsupported`); their refusal carries `details.hint`, what

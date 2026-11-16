@@ -768,7 +768,10 @@ pub(crate) fn run_direct_touch(
 /// press"): when the Runtime no longer held the frame the press names ([`input_frame_unavailable`],
 /// nothing sent), one capture more and the press sent once more on it, through the same proxy,
 /// under the same lease, once: a second refusal of any kind is the command's answer. The answer
-/// then says `input_frame_captured_twice`.
+/// then says `input_frame_captured_twice`. Fix round 2 (the review's must-fix 2, the coordinator's
+/// choice): the warning of a status read that failed is in the answer of a press that fails after
+/// it too, as `details.touch_backend_warnings` ([`with_touch_backend_warnings`]): above all the
+/// Runtime's refusal of a press sent without a frame on an input that needs one.
 fn send_direct_touch_command(
     global: &GlobalOptions,
     config: &UserConfig,
@@ -778,17 +781,18 @@ fn send_direct_touch_command(
 ) -> CliOutcome<Value> {
     let instance_alias = resolve_instance_id(global, config).map_err(input_not_submitted)?;
     let state_root = runtime_state_root().map_err(input_not_submitted)?;
-    let mut warnings = Vec::new();
-    let needs_frame = match press_needs_frame(&state_root, &instance_alias, &command.action()) {
-        Ok(needs_frame) => needs_frame,
-        Err(unread) => {
-            warnings.push(format!(
-                "the instance's status could not be read ({unread}), so the press was sent \
-                 without a frame; an input that presses only on one refuses it"
-            ));
-            false
-        }
-    };
+    let (needs_frame, warnings) =
+        match press_needs_frame(&state_root, &instance_alias, &command.action()) {
+            Ok(needs_frame) => (needs_frame, Vec::new()),
+            Err(unread) => (
+                false,
+                vec![format!(
+                    "the instance's status could not be read ({unread}), so the press is sent \
+                     without a frame; an input that presses only on one refuses it"
+                )],
+            ),
+        };
+    let warned = |error: CliError| with_touch_backend_warnings(error, &warnings);
     let endpoint = runtime_capture_backend::RuntimeCaptureEndpoint::new(
         instance_alias.clone(),
         state_root.clone(),
@@ -799,12 +803,12 @@ fn send_direct_touch_command(
         None
     };
     let client = RuntimeClient::connect(crate::lab_client_config(&state_root))
-        .map_err(|error| input_not_submitted(CliError::device(error.to_string())))?;
+        .map_err(|error| warned(input_not_submitted(CliError::device(error.to_string()))))?;
     // The lease's failure is answered as `open_cli_runtime_input_proxy` answers it.
     let mut proxy = RuntimeInputProxy::connect(client, &instance_alias).map_err(|error| {
-        input_not_submitted(CliError::device(
+        warned(input_not_submitted(CliError::device(
             runtime_input_backend::device_error(error).to_string(),
-        ))
+        )))
     })?;
     let mut operation = proxy.input_with_frame(command.action(), frame);
     let mut captured_twice = false;
@@ -838,7 +842,8 @@ fn send_direct_touch_command(
     let input_outcome = finish_direct_input(
         operation.map_err(runtime_input_backend::device_error),
         close,
-    )?;
+    )
+    .map_err(warned)?;
     let mut answer = direct_touch_answer(
         &instance_alias,
         command,
@@ -918,6 +923,25 @@ fn press_capability(action: &InputAction) -> Option<EmulatorCapability> {
         InputAction::Swipe { .. } => Some(EmulatorCapability::InputSwipe),
         _ => None,
     }
+}
+
+/// Workflow #434 LW-1 fix round 2 (register §1.435; the review's must-fix 2, the coordinator's
+/// choice): `error`, a plain press's failure after its status read, with that read's `warnings`
+/// (empty when the status was read) as `details.touch_backend_warnings`, the member the answer of
+/// a press that was sent carries them in: the Runtime's refusal of a press sent without a frame on
+/// an input that needs one (`nemu_input_frame_required`) says that the status was not read, which
+/// is when it matters most. Object details keep their members, other details move to `details`.
+fn with_touch_backend_warnings(mut error: CliError, warnings: &[String]) -> CliError {
+    if warnings.is_empty() {
+        return error;
+    }
+    let mut details = match error.details.take() {
+        Some(Value::Object(details)) => details,
+        Some(other) => serde_json::Map::from_iter([("details".to_owned(), other)]),
+        None => serde_json::Map::new(),
+    };
+    details.insert("touch_backend_warnings".to_owned(), json!(warnings));
+    error.with_details(Value::Object(details))
 }
 
 /// The answer of a direct touch command that sent its input.

@@ -31442,10 +31442,10 @@ have the origin `lab`". Nothing changed; the MCP manual, section 8, says it.
 | LW1-1 | the refusal of `tap-target` and `navigate` without `--dry-run`, and their rows' `help` and `notes` | message text, table text (no code, no key, no member) | LW-1 | `crates/lab` `drive.rs`; `contracts/lab-operations.json` | the code stays `validation_failed`; the tools' description is the row's help |
 | LW1-2 | `ac_run_start` with `wait` and `ac_run_show`'s `job.line`: `events_total`, `truncated`, `rest`, without `events` | MCP answer members (no code) | LW-1 | `apps/actinglab-mcp` `budget::run_line` | the command line's line unchanged |
 | LW1-3 | `tools::WORDS`: `enum` in the schema of five parameters, refused `not_recognised` before anything is sent | MCP schema and argument check (no code, no word) | LW-1 | `apps/actinglab-mcp` `tools.rs`, `calls.rs` | words from `overview::Section::ALL` and the catalog's vocabularies |
-| LW1-4 | `tap`, `swipe`, `long-tap` without `--record`: a `Status` read on every instance; on a Nemu-input instance one capture, the press on its frame, `input_frame` in the answer; fix round 1: the one retry on a lost frame (`input_frame_captured_twice`), a press sent without a frame after a failed status read (`touch_backend_warnings`) | Lab command behaviour and answer members (no code, no request kind) | LW-1 | `apps/actinglab` `device_commands.rs` | `Status` and `ObserveReadonly` were already the rows' requests |
+| LW1-4 | `tap`, `swipe`, `long-tap` without `--record`: a `Status` read on every instance; on a Nemu-input instance one capture, the press on its frame, `input_frame` in the answer; fix round 1: the one retry on a lost frame (`input_frame_captured_twice`), a press sent without a frame after a failed status read (`touch_backend_warnings`); fix round 2: on a failure after that read, the Runtime's refusal of the press too, the same warning as `details.touch_backend_warnings` | Lab command behaviour and answer members (no code, no request kind) | LW-1 | `apps/actinglab` `device_commands.rs` | `Status` and `ObserveReadonly` were already the rows' requests |
 | LW1-5 | `common_causes` and `handling` of `nemu_input_capability_unsupported` and `nemu_input_frame_required` | outcome catalog text (index regenerated) | LW-1 | `contracts/outcome-codes` | no key, word or status changes |
 | LW1-6 | `lab_ops::core_ops::handed_refusal` and the thirteen `parse_refusal` in test builds and with the feature `test-hooks` (fix round 1; every build before it) | `lab-ops` function (parse only) | LW-1 | `crates/lab-ops` | read by the walk |
-| LW1-7 | fix round 1: `details.hint` on the refusal of `key` and `text` where the instance's capability table says its input does not implement `input.key` or `input.text` | Lab answer member (no code, no word) | LW-1 fix round 1 | `apps/actinglab` `device_commands.rs` | decided by the capability table, not by the refusal's code |
+| LW1-7 | fix round 1: `details.hint` on the refusal of `key` and `text` where the instance's capability table says its input does not implement `input.key` or `input.text` (one `Status` read after the failure) | Lab answer member (no code, no word) | LW-1 fix round 1 | `apps/actinglab` `device_commands.rs`; fix round 2: `contracts/lab-operations.json` | decided by the capability table, not by the refusal's code; fix round 2: the rows `key` and `text` declare that read, `Status` in their `requests`, and name `details.hint` in their `notes` |
 | LW1-8 | fix round 1: `tap-target` and `navigate`: their rows' `writes` false and `requests` none, their capabilities' needs `offline`, `read_only`, not in the lease-holding examples; `runtime-interface.md` no longer names them as senders of `Input` | table, capability and contract text (no code, no member) | LW-1 fix round 1 | `contracts/lab-operations.json`, `apps/actinglab` `capabilities.rs`, `session_contracts.rs` | MCP's `readOnlyHint` of the two tools follows `writes` |
 
 **What is not added.** No outcome code, value key, word, configuration key, request kind, record
@@ -31527,6 +31527,52 @@ sends every list parameter as a list of two and holds `LEFT_OUT`, a list of its 
 row parameters the tools leave out and the names outside the table the command lines of the rows
 served in the server's process take (`core_reads::EXCEPTIONS`). The drive test's bindings are
 renamed (the compile error).
+
+**Fix round 2** (coordinator work order `rd-1116/brief-434-lw1-fix3.md`, after the second
+independent review `rd-1116/review-1779-fix1.md` and the coordinator's rulings on it; the CI run
+on fix round 1's head `9d18747b`, read once, had passed every job that had ended, `host-lab` and
+`build` not yet ended). (1) The rows `key` and `text` declare the request they now make: `Status`
+in their `requests` (after a failure the command reads the status once, for `details.hint`), and
+LW1-7 above says so. (2) The coordinator's choice of the review's must-fix 2: the warning of a
+status read that failed is in the answer of a press that fails after it too, as
+`details.touch_backend_warnings` (`device_commands.rs`, `with_touch_backend_warnings`): above all
+the Runtime's refusal of the press sent without a frame on an input that needs one
+(`nemu_input_frame_required`), when "the status was not read" matters most. The warning's text
+now says the press "is sent" without a frame ("was sent" before): it is also in the answer of a
+press whose connection or lease failed before anything was sent. The sentence on it in the MCP
+manual and in [actinglab-capabilities.md](actinglab-capabilities.md) names the refusal's
+`details`. (3) The operation table says what the answers carry: the `notes` of
+`tap`, `swipe` and `long-tap` name the status read on every instance, the warning of a failed one
+(`touch_backend_warnings`, a failure's `details.touch_backend_warnings`) and
+`input_frame_captured_twice`; those of `key` and the new ones of `text` name `details.hint`; the
+rows `tap-target` and `navigate` need no Runtime (`runtime` `offline`, as their capabilities say
+since fix round 1); the MCP manual lists `words` among what no tool takes. (4) The tests, below.
+No code, word, key or request kind is added; a failure's `details` gain `touch_backend_warnings`,
+the member the answer of a sent press had; the table changes only these rows' `requests`,
+`runtime` and `notes`.
+
+*Tests of fix round 2* (gate map `contracts/test-gates/apps.toml`, the row "#434 LW-1 fix round
+2"), in `apps/actinglab/tests/runtime_input_proxy.rs`, on the fake Runtime host:
+`lw1_fix2_a_plain_press_refused_for_another_cause_is_neither_captured_nor_sent_again` (the device
+shows another application, the Runtime refuses the press on its held frame for that,
+`application_not_foreground`: the answer at once, one `command.rejected`, one capture, no second,
+no tap; so the one retry tells the frame's refusal from every other);
+`lw1_fix2_a_press_whose_status_read_fails_on_a_frame_input_is_refused_with_the_warning` (on a
+Nemu-input instance the status read's connection closed at once: the press goes without a frame,
+the Runtime refuses it `nemu_input_frame_required`, and the refusal's details carry the one
+warning, whose text is asserted); `lw1_fix2_a_plain_press_whose_frame_cannot_be_captured_again_answers_the_first_refusal`
+(the frame lost once and the capture taken again fails: the first refusal,
+`input_frame_unavailable`, is the answer, the capture's error appended to its message, the lease
+released, no tap); `lw1_fix2_key_and_text_on_an_input_that_sends_neither_hint_what_presses_instead`
+(`key` and `text` on a Nemu-input instance: refused `nemu_input_capability_unsupported`, each
+refusal's `details.hint` naming that input, which of the two it does not send and `tap x y` and
+`do --capture`). Changed, not added: `lw1_fix_a_plain_press_whose_frame_is_lost_twice_is_refused_after_one_retry`
+asserts that the answered refusal is the frame's (`input_frame_unavailable`);
+`lw1_fix_a_plain_press_whose_status_read_fails_is_sent_without_a_frame` asserts the warning's
+text; `lw1_a_finished_runs_answer_fits_with_its_state_outcome_and_the_rest` makes the run's job
+as `ac_run_start` makes it, by `jobs::Jobs::start` under the run's request id as a run's job, and
+waits for it with `jobs::Job::wait_ended` (test builds only, no clock), which replaces fix round
+1's constructor of an ended job.
 
 **At deploy.** Nothing to configure. An agent sees: `ac_tap_target` and `ac_navigate` described as
 planning only, and read-only; a finished run's answer without its records; five parameters with

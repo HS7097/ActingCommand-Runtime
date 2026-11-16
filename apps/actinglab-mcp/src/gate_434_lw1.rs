@@ -15,10 +15,12 @@
 //!   terminal, `events_total` 400, `truncated` naming what was left out (`/events`, and the
 //!   official OCR read where it does not fit beside them) and `rest` the calls that read it
 //!   (`ac_run_evidence` with the request id, `ac_events` with the correlation id), both tools this
-//!   server offers; an OCR read that fits stays. Fix round 1 (the review's (f)): the run's job is a
-//!   `jobs::Job` that ended with that line, answered through the functions the server calls,
-//!   `server::job_answer` (as `ac_run_start` with `wait` answers it) and `server::with_job` (as
-//!   `ac_run_show` of the run answers it).
+//!   server offers; an OCR read that fits stays. Fix round 1 (the review's (f)): the run's job is
+//!   answered through the functions the server calls, `server::job_answer` (as `ac_run_start` with
+//!   `wait` answers it) and `server::with_job` (as `ac_run_show` of the run answers it). Fix round 2
+//!   (the second review's (f)): the job is made as `ac_run_start` makes it, by `jobs::Jobs::start`
+//!   under the run's request id as a run's job, its body answering that line, and waited for
+//!   (`jobs::Job::wait_ended`, no clock) until it ended.
 //! - `lw1_every_schema_property_reaches_its_operation` (item 3): every property of every tool's
 //!   input schema, each with every word its schema lists (else a made-up value of its row's type;
 //!   fix round 1: a list parameter always as a list of two, each listed word in one of them),
@@ -302,8 +304,27 @@ fn lw1_a_finished_runs_answer_fits_with_its_state_outcome_and_the_rest() {
             calls::sent(&ended, ERA).is_err(),
             "setup: the run's whole line is over the budget"
         );
-        // The run's job of this process (a run's: its handle the run's request id), ended with it.
-        let job = jobs::Job::ended_with(REQUEST, "ac_run_start", true, ended.clone());
+        // The run's job of this process, made as `ac_run_start` makes it (`server::run_start`):
+        // started by `jobs::Jobs::start` under the run's request id, a run's job, its body
+        // answering the run's line; waited for until it ended.
+        let process_jobs = jobs::Jobs::new(
+            jobs::Limits {
+                running: 1,
+                kept: 1,
+            },
+            0,
+        );
+        let line = ended.clone();
+        let job = process_jobs
+            .start(REQUEST.to_owned(), "ac_run_start", true, move || line)
+            .expect("the run's job starts");
+        job.wait_ended();
+        assert!(
+            process_jobs
+                .find(REQUEST)
+                .is_some_and(|kept| kept.run && kept.finished()),
+            "setup: kept under the run's request id, a run's job, ended"
+        );
 
         // `ac_run_start` with `wait`, the run ended within it: answered as the server answers it.
         let answered = server::job_answer(&job, false, ERA);

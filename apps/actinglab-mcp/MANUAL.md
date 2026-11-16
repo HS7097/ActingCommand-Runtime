@@ -38,7 +38,9 @@ naming this file.
   `ac_deploy` and `ac_rollback` take no `detach` (section 9). These are the only parameters of a
   row a tool leaves out; the command line also takes `actinglab`'s global options, a positional
   given as its flag (`--id`, `--instance`) and `devices bind`'s own `--root` (the server hands on
-  the root it runs from), which no tool needs.
+  the root it runs from), which no tool needs. No tool takes `words` either (Workflow #434 LW-1):
+  the further words a row handed on before Workflow #434 LAB-5B4, which no row declares and a row
+  served in the server's own process refuses by name.
 - **Closed word lists** (Workflow #434 LW-1, 0.12.67). Where an operation takes only the words of
   a closed list for a parameter the table types as text, the schema lists them (`enum`; for a
   list its items' `enum`): `ac_status`'s `sections` (the overview's blocks; `daemon` and
@@ -241,7 +243,8 @@ naming this file.
   more under the same lease, once (`input_frame_captured_twice`); a second refusal is the answer.
   A status read that fails stops no press: the press is sent without a frame, as before this
   slice (an input that needs one is refused by the Runtime itself, `nemu_input_frame_required`),
-  and the answer's `touch_backend_warnings` says so. Such an instance sends no key and no text:
+  and the answer's `touch_backend_warnings` says so (a refusal's is in its `details`, the
+  Runtime's refusal of that press too). Such an instance sends no key and no text:
   `ac_key` and `ac_text` answer `nemu_input_capability_unsupported` there, nothing sent, and the
   Runtime has no other way to send a key on it; the refusal's `details.hint` says what to press
   instead (the screen's own control: `ac_tap`, or `ac_do` with `capture` on a package's element).

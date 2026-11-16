@@ -2455,3 +2455,14 @@ tests = [
     "actingcommand-actinglab::runtime_input_proxy::lw1_fix_a_plain_press_whose_status_read_fails_is_sent_without_a_frame",
 ]
 incident = ["#434 LW-1"]
+
+# Workflow #434 LW-1 fix round 2 (0.12.67; register §1.435, "Fix round 2"; brief rd-1116/brief-434-lw1-fix3.md after the second review rd-1116/review-1779-fix1.md): with the fake Runtime host, tap 0 0 without --record on an instance whose input is nemu_ipc. The device shows another application: the Runtime refuses the press on its held frame application_not_foreground, which is the answer at once (device_error, the lease released): one command.rejected, one capture and no second, the ledger capture, lease, release, no tap (1). Behind a relay that closes the status read's connection at once: the press is sent without a frame and the Runtime refuses it nemu_input_frame_required (device_error, receipt_unavailable, the lease released), the refusal's details.touch_backend_warnings holding the one warning that the status could not be read and the press is sent without a frame; no tap, no capture, no input (2). Behind a relay that makes the Runtime lose the press's frame once, the capture taken again fails in the backend: the answer is the first refusal (device_error, input_frame_unavailable, receipt_unavailable, the lease released) with the capture's error appended to its message; no tap, three captures, the ledger capture, capture, lease, capture_failed, release (3). key back and text neutral on that instance are refused nemu_input_capability_unsupported, each refusal's details.hint naming nemu_ipc, the input it does not send, the screen's own control, tap x y and do --capture (4). Changed, not added: the twice-lost test of the row above asserts its refusal is input_frame_unavailable, the failed-status test the warning's text, and the run answer of the LW-1 row makes the run's job with jobs::Jobs::start as ac_run_start does
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::runtime_input_proxy::lw1_fix2_a_plain_press_refused_for_another_cause_is_neither_captured_nor_sent_again",
+    "actingcommand-actinglab::runtime_input_proxy::lw1_fix2_a_press_whose_status_read_fails_on_a_frame_input_is_refused_with_the_warning",
+    "actingcommand-actinglab::runtime_input_proxy::lw1_fix2_a_plain_press_whose_frame_cannot_be_captured_again_answers_the_first_refusal",
+    "actingcommand-actinglab::runtime_input_proxy::lw1_fix2_key_and_text_on_an_input_that_sends_neither_hint_what_presses_instead",
+]
+incident = ["#434 LW-1"]

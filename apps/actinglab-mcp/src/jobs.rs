@@ -213,22 +213,18 @@ impl Jobs {
 }
 
 impl Job {
-    /// Tests only (Workflow #434 LW-1 fix round 1): a job under `handle` that already ended with
-    /// `ended`, as [`Jobs::start`]'s thread leaves one (`done` or `failed`), its line not yet
-    /// handed out; no thread, no clock.
+    /// Tests only (Workflow #434 LW-1 fix round 2; it replaces fix round 1's constructor of an
+    /// ended job, so that the slice's gate makes a run's job with [`Jobs::start`] as `ac_run_start`
+    /// does): waits until the job's thread ended it, as [`Self::wait_until`] waits but with no
+    /// deadline and so no clock, which a gate reads none of; for a body that returns at once.
     #[cfg(test)]
-    pub(crate) fn ended_with(handle: &str, kind: &str, run: bool, ended: Finished) -> Self {
-        Self {
-            handle: handle.to_owned(),
-            kind: kind.to_owned(),
-            run,
-            state: Mutex::new(JobState {
-                phase: if ended.is_error { FAILED } else { DONE },
-                ended: Some(ended),
-                collected: false,
-                issued: false,
-            }),
-            changed: Condvar::new(),
+    pub(crate) fn wait_ended(&self) {
+        let mut state = lock(&self.state);
+        while state.ended.is_none() {
+            state = self
+                .changed
+                .wait(state)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
         }
     }
 
