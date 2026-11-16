@@ -40,9 +40,9 @@ here.
 
 | Active codes | Codes |
 |---|---:|
-| `common_causes` and `handling` both written | 744 |
+| `common_causes` and `handling` both written | 746 |
 | one of the two written, the other `TBD` or empty | 4 |
-| neither written (`TBD` or empty) | 3148 |
+| neither written (`TBD` or empty) | 3146 |
 | `settled` | 154 |
 | `pending` | 3742 |
 | all active codes | 3896 |
@@ -58,7 +58,7 @@ here.
 | [actinglab-mcp](actinglab-mcp.md) | 3 | 2 | 2 | 0 |
 | [actingledger](actingledger.md) | 4 | 4 | 0 | 0 |
 | [artifact-store](artifact-store.md) | 77 | 77 | 2 | 0 |
-| [contract](contract.md) | 925 | 901 | 159 | 32 |
+| [contract](contract.md) | 925 | 901 | 160 | 32 |
 | [device](device.md) | 33 | 33 | 27 | 23 |
 | [display-adapter](display-adapter.md) | 2 | 2 | 0 | 0 |
 | [execution-kernel](execution-kernel.md) | 204 | 201 | 30 | 0 |
@@ -77,9 +77,9 @@ here.
 | [runtime-client](runtime-client.md) | 211 | 209 | 5 | 0 |
 | [runtime-config](runtime-config.md) | 11 | 11 | 11 | 0 |
 | [runtime-database](runtime-database.md) | 51 | 51 | 2 | 0 |
-| [runtime-host](runtime-host.md) | 1158 | 1111 | 188 | 6 |
+| [runtime-host](runtime-host.md) | 1158 | 1111 | 189 | 6 |
 | [runtime-state](runtime-state.md) | 176 | 176 | 0 | 0 |
 | [scheduler](scheduler.md) | 14 | 14 | 0 | 0 |
 | [selection-policy](selection-policy.md) | 27 | 27 | 0 | 0 |
 | [vision-ffi](vision-ffi.md) | 4 | 4 | 1 | 0 |
-| all | 3984 | 3896 | 744 | 154 |
+| all | 3984 | 3896 | 746 | 154 |

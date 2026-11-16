@@ -1052,6 +1052,16 @@ sentence fails that test.
       always true through MCP (section 5), and since LAB-6S0 run detached as `Lab-MCP`. Since
       Workflow #467 RPT-1 (0.12.61) `report export` takes no `out` either: its archive is always
       written into the export directory (the coordinator's ruling Q7).
+    - *Closed word lists* (Workflow #434 LW-1, 0.12.67; register §1.435; one table,
+      `tools::WORDS`): where a row's operation takes only the words of a closed list for a
+      parameter the table types as text, the schema lists them (`enum`; for a list its items'
+      `enum`) and a call with another word is refused before anything is sent (`arguments_invalid`,
+      `not_recognised`), as a table enum is: `status`'s `sections` (the overview's blocks,
+      `lab_ops::overview::Section::ALL`) and `events`' `type`, `event_type` and
+      `exclude_event_types` (the catalog's vocabulary `event_type`) and `origin_module` (the
+      vocabulary `origin_module`). Before, the schema offered any text and the operation's parser
+      refused a word outside its list as `actingctl_usage_invalid` `not_recognised`, naming neither
+      the word nor the list.
     - *Refused before anything is sent or written,* with the argument as the call names it: as
       `arguments_invalid`, a member the row does not declare and a parameter the front gives
       itself (`unknown`), a member of the wrong type (`wrong_type`; text that is none of its
@@ -1102,6 +1112,16 @@ sentence fails that test.
       Runtime request id, which outlives the process (with the row's `wait`, the call waits as
       long, within the budget, for the run's end). After an interrupted call a caller reads first
       (`ac_status`, `ac_run_show`) and never sends the write again, as the instructions say.
+    - *A run's line* (Workflow #434 LW-1, 0.12.67; register §1.435). The line of a run's job, the
+      line `run start` gives (its receipt, every ledger record of the run's correlation as
+      `events` with payloads, its official OCR reads, its outcome), is never sent whole: the
+      answer of `ac_run_start` with `wait` and the job's `line` that `ac_run_show` carries are it
+      without `events`, counted (`events_total`), with `truncated` (JSON pointers of what was left
+      out: `/events`, and the OCR reads where they do not fit beside the rest) and `rest` (the calls
+      that read it: `ac_run_evidence` with the run's request id, `ac_events` with its correlation id
+      and `detail` `payload`). Before, `ac_run_show` carried the whole line as the job's `line`,
+      and a run that went far (100 KB to 500 KB) answered `output_budget_exceeded` there and with
+      `wait`.
     - *A line that does not fit after its work was done* (the work order's point 10) is never cut
       and never lost: the call answers `output_budget_exceeded` (`actual_bytes`, `limit_bytes`)
       with its job's `handle`, the job keeps the line unread, and `ac_run_show` of the handle

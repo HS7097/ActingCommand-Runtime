@@ -688,8 +688,6 @@ pub(crate) fn session_access_contract() -> Value {
                     "stream --input-relay",
                     "stream --input-event <action,args>",
                     "stream --relay-event <action,args>",
-                    "tap-target",
-                    "navigate",
                     "recover except --stale-capture"
                 ]
             }
@@ -1172,8 +1170,6 @@ pub(crate) fn session_api_contract() -> Value {
                     "stream --input-relay",
                     "stream --input-event <action,args>",
                     "stream --relay-event <action,args>",
-                    "tap-target",
-                    "navigate",
                     "recover except --stale-capture"
                 ]
             },

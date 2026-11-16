@@ -2894,8 +2894,8 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A code several owners emit with one meaning (contract-owned, A2a D3): nemu input frame required.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "common_causes": "A tap, a long tap, a swipe or a segmented drag sent without a frame reference to an instance whose input is the emulator's own interface (touch_backend nemu_ipc), which presses only on a frame the Runtime captured and committed.",
+      "handling": "Nothing was sent. Send the press with the reference of a frame the Runtime captured: actinglab's tap, swipe and long-tap capture one first on such an instance since Workflow #434 LW-1 (0.12.67), as a recorded press and do with capture always did; a client of its own captures (ObserveReadonly) and names that frame."
     },
     "ocr_field_low_confidence": {
       "category": "error",

@@ -202,8 +202,11 @@ pub(crate) fn command_capabilities() -> Vec<Value> {
         command_cap("current-page", ["device"], "available"),
         command_cap("is-visible", ["device"], "available"),
         command_cap("locate", ["device"], "available"),
-        command_cap("tap-target", ["device"], "available"),
-        command_cap("navigate", ["device"], "available"),
+        // Workflow #434 LW-1 fix round 1 (register §1.435): they only plan, on a saved frame
+        // (`--scene` with `--dry-run`), and press nothing; `do --capture` and `ensure --capture`
+        // press.
+        command_cap("tap-target", ["offline", "read_only"], "available"),
+        command_cap("navigate", ["offline", "read_only"], "available"),
         command_cap("stream", ["device"], "available"),
         command_cap("lab validate", ["offline"], "available"),
         command_cap("lab run", ["device"], "available"),
@@ -381,7 +384,7 @@ pub(crate) fn session_layer_capability_contract() -> Value {
             },
             "control": {
                 "requires_lease": true,
-                "examples": ["tap", "swipe", "long-tap", "key", "text", "stream --input-relay", "stream --input-event <action,args>", "stream --relay-event <action,args>", "session app launch", "session app stop", "session app force-stop", "session app restart", "session instance app launch", "session instance app stop", "session instance app force-stop", "session instance app restart", "tap-target", "navigate", "recover except --stale-capture", "do --capture --record", "session app <launch|restart|stop|force-stop> --record", "session instance app <launch|restart|stop|force-stop> --record"]
+                "examples": ["tap", "swipe", "long-tap", "key", "text", "stream --input-relay", "stream --input-event <action,args>", "stream --relay-event <action,args>", "session app launch", "session app stop", "session app force-stop", "session app restart", "session instance app launch", "session instance app stop", "session instance app force-stop", "session instance app restart", "recover except --stale-capture", "do --capture --record", "session app <launch|restart|stop|force-stop> --record", "session instance app <launch|restart|stop|force-stop> --record"]
             }
         },
         "safety": {

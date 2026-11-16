@@ -81,6 +81,20 @@ pub(super) fn capture_runtime_observation(
     Ok((frame, input_frame_reference(&observation)))
 }
 
+/// Workflow #434 LW-1 fix round 1 (register §1.435): the request [`capture_runtime_observation`]
+/// sends (`ObserveReadonly`, one read-only observation through the resident Runtime), answered with
+/// the reference of the frame the Runtime committed for it alone ([`input_frame_reference`]): the
+/// frame is neither read back nor verified. A plain `tap`, `swipe` or `long-tap` names it and plans
+/// nothing on its pixels.
+pub(super) fn observe_runtime_frame_reference(
+    endpoint: &RuntimeCaptureEndpoint,
+) -> DeviceResult<Option<InputFrameReference>> {
+    let client = RuntimeClient::connect(crate::lab_client_config(&endpoint.state_root))
+        .map_err(|error| DeviceError::fatal(error.to_string()))?;
+    let observation = readonly_observation(&client, &endpoint.instance_alias)?;
+    Ok(input_frame_reference(&observation))
+}
+
 /// One read-only observation of `instance_alias` through `client`.
 fn readonly_observation(
     client: &RuntimeClient,

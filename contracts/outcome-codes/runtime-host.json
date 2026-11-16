@@ -10187,8 +10187,8 @@
       "status": "active",
       "since": "0.12.0",
       "description": "The Runtime host reports nemu input capability unsupported.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "common_causes": "A key or a text sent to an instance whose input is the emulator's own interface (touch_backend nemu_ipc), which performs taps, long taps, swipes, the segmented drags and the reset, and no key and no text (the instance's capability table says input.key and input.text unsupported).",
+      "handling": "Nothing was sent. Press the screen's own control instead: a tap, or do with capture on the package's element; the Runtime has no other way to send a key on such an instance (its recovery ladder sends none: a recovery package's presses, an application restart, an emulator restart). An instance whose touch_backend is maatouch sends keys and text (Workflow #434 LW-1)."
     },
     "nemu_input_deadline_overflow": {
       "category": "error",

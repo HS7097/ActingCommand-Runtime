@@ -586,7 +586,7 @@ column means. 925 codes.
 | `navigation_page_drift` | error | pack_logic_mismatch | 0.12.0 | active | pending | TBD | A code several owners emit with one meaning (contract-owned, A2a D3): navigation page drift. |
 | `navigation_target_not_visible` | error | pack_logic_mismatch | 0.12.0 | active | pending | TBD | A code several owners emit with one meaning (contract-owned, A2a D3): navigation target not visible. |
 | `nemu_app_index_requires_paired_input` | error | none | 0.12.0 | retired | pending | TBD | Retired (#402 HS-3). |
-| `nemu_input_frame_required` | error | none | 0.12.0 | active | pending | TBD | A code several owners emit with one meaning (contract-owned, A2a D3): nemu input frame required. |
+| `nemu_input_frame_required` | error | none | 0.12.0 | active | pending | written | A code several owners emit with one meaning (contract-owned, A2a D3): nemu input frame required. |
 | `not_implemented` | error | none | 0.12.0 | active | pending | TBD | A code several owners emit with one meaning (contract-owned, A2a D3): not implemented. |
 | `observation_fact_encode_failed` | error | none | 0.12.0 | active | pending | TBD | Runtime contract validation refused a value: observation fact encode failed. |
 | `ocr_field_low_confidence` | error | pack_logic_mismatch | 0.12.0 | active | pending | written | A required OCR field's text resolved, but its observation's confidence was missing or below the minimum_confidence its OCR target declares, so the field stayed… |
