@@ -213,6 +213,10 @@ mod gate_463_s213;
 // them and, in an installation, the instance's game and server from its configuration.
 #[path = "gate_463_s21b.rs"]
 mod gate_463_s21b;
+// #463 S2-2 fix round 1: `record review` refuses a dry run that would write its previews before
+// the recording is read, and reads the package's game, server and locale as `record ready` does.
+#[path = "gate_463_s22.rs"]
+mod gate_463_s22;
 // Workflow #464 P2: `standard-pack build` builds a game's standard pack from one commit on the
 // steps of `resource verify`, whose report is as before.
 #[path = "gate_464_p2.rs"]

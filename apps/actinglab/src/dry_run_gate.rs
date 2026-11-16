@@ -144,9 +144,17 @@ const RECORD_FORMS: &[(&str, Mode)] = &[
     ("ready", Mode::NoEffect),
     // #463 S2-13: it reads the step table only.
     ("frames", Mode::NoEffect),
+    // #463 S2-2: its previews are files written; with `--no-preview` it writes nothing.
+    ("review", Mode::Mixed(REVIEW_FORMS)),
     ("build-task", Mode::Refused("resource_production_retired")),
     ("promote", Mode::Refused("resource_production_retired")),
     ("publish", Mode::Refused("resource_production_retired")),
+];
+// #463 S2-2: `record review --no-preview` reads and writes nothing; without it the previews are
+// files written, so it is refused after the flags, before the recording is read.
+const REVIEW_FORMS: &[(&str, Mode)] = &[
+    ("--no-preview", Mode::NoEffect),
+    ("without --no-preview", UNSUPPORTED),
 ];
 // Workflow #463 S3-11: `--plan` reads and writes nothing; the run sends one run and writes its
 // record, and `--collect` writes the record, so both are refused after the flags.
@@ -315,6 +323,9 @@ const DECLARATIONS: &[(&str, Mode)] = &[
     // and `--collect` are refused.
     ("standard-pack trial", Mode::Mixed(TRIAL_FORMS)),
     ("standard-pack catalog", Mode::Mixed(CATALOG_FORMS)),
+    // #463 S2-2: `--no-preview` writes nothing; without it the previews are files written.
+    ("record review", Mode::Mixed(REVIEW_FORMS)),
+    ("session record review", Mode::Mixed(REVIEW_FORMS)),
     // no_effect
     ("version", Mode::NoEffect),
     ("doctor", Mode::NoEffect),

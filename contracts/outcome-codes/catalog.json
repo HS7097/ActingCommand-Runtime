@@ -2875,6 +2875,14 @@
     "trial_collect_problem": {
       "type": "vocab:trial_collect_problem",
       "description": "Why the run a trial's --collect names is not a trial's run: its facts do not name the trial's package or the instance the trial is for, or (fix round 2) do not show a run sent by hand on the Lab's channel (Workflow #463 S3-11, since 0.12.65)."
+    },
+    "drop_problem": {
+      "type": "vocab:drop_problem",
+      "description": "Why record mark's drop_step does not drop a step before the last of a Lab recording: the stored frames do not hold what the comparison needs, or they show a change at its press (#463 S2-7, since 0.12.68; fix round 1: the tool refuses only what the stored frames contradict, whether the press mattered is the agent's judgement)."
+    },
+    "drop_comparison": {
+      "type": "vocab:drop_comparison",
+      "description": "Which of the two comparisons of two stored frames showed the change for which record mark's drop_step refuses a step before the last (record_drop_unproven with drop_problem screen_changed or next_screen_differs): the whole frame or the neighbourhood of the press (#463 S2-7 fix round 1, since 0.12.68)."
     }
   },
   "vocabularies": {
@@ -5200,6 +5208,12 @@
         },
         "on_empty_key_of_ending": {
           "description": "The on_empty key is the outcome key of an ending of the recording (#463 R2 fix 1)."
+        },
+        "choice_not_refined": {
+          "description": "record stop meets a step marked as holding a choice that no select refines yet: it knows no names, so no package is generated (#463 S2-6)."
+        },
+        "no_choice": {
+          "description": "A request's choice false names a step that is not marked as holding a choice, so there is nothing to take off (#463 S2-6 fix round 1)."
         }
       }
     },
@@ -5398,6 +5412,9 @@
         },
         "size_not_base": {
           "description": "Workflow #392 DA-5cd fix round 1: the recording holds frames that are not the base size (record_size_not_base)."
+        },
+        "select_unrefined": {
+          "description": "#463 S2-6: a step marked as holding a choice that no select refines yet (record_select_invalid, choice_not_refined)."
         }
       }
     },
@@ -5461,6 +5478,21 @@
         },
         "installation_config": {
           "description": "The configuration of the installation the program runs from: the instance's row of policy.facts.instances (game and server only)."
+        }
+      }
+    },
+    "ready_check_stop": {
+      "description": "Why a self-check record ready ran stopped at a failure short of its end, so that the failures missing lists of it may not be all it has, in checks[].reason (#463 S2-1c).",
+      "source": {
+        "file": "crates/lab/src/codes.rs",
+        "enum": "ReadyCheckStop"
+      },
+      "tokens": {
+        "whole_package": {
+          "description": "The check judges the generated package as one, in stages each built on the one before (admission, final_package): its first refusal leaves no stage after it to judge."
+        },
+        "check_error": {
+          "description": "The check met an error that is none of its verdicts (a target the evaluator cannot evaluate, a stored frame it cannot decode): what it would judge after it is not judged."
         }
       }
     },
@@ -10922,6 +10954,41 @@
       "tokens": {
         "journals_not_read": {
           "description": "The placement journals were not read: their reader is private to the Lab's rescue module (install::journal, pub(crate)), and that crate is built for Windows only (the train of S3-12 and S3-14). A later slice reads them."
+        }
+      }
+    },
+    "drop_problem": {
+      "description": "Why record mark's drop_step does not drop a step before the last of a Lab recording, the value drop_problem of record_drop_unproven (#463 S2-7, contracts/lab-recording.md \"Steps, frames and remediation\", since 0.12.68): the stored frames do not hold what the comparison needs, or they show a change. Fix round 1: two frames are the same screen when two comparisons hold, the whole frame and the neighbourhood of the press (its rectangle grown by one cell of the whole-frame grid on every side), each by the measure stage one calls a screen still by, frame_change_milli at most FRAME_CHANGE_MAX_MILLI (1500); a change smaller than that measure sees is not seen, and whether the press mattered is the agent's judgement.",
+      "review": "pending",
+      "source": {
+        "file": "crates/lab/src/codes.rs",
+        "enum": "DropProblem"
+      },
+      "tokens": {
+        "frames_not_recorded": {
+          "description": "The step has no press on record with the stored frame it was sent on and the stored frame after it (no click performed by tap, swipe or long-tap --record, a press sent on a capture that was not stored, an application operation), or a frame the comparison needs is not on record."
+        },
+        "screen_changed": {
+          "description": "The stored frames show a change: the frame after the press differs from the frame before it by more than the frame-change bound, by one of the two comparisons (drop_comparison)."
+        },
+        "next_screen_differs": {
+          "description": "The stored frames show a change: the next step's frame before its press differs from the frame before this press by more than the frame-change bound, by one of the two comparisons (drop_comparison)."
+        }
+      }
+    },
+    "drop_comparison": {
+      "description": "Which of the two comparisons of two stored frames showed the change for which record mark's drop_step refuses a step before the last, the value drop_comparison of record_drop_unproven beside drop_problem screen_changed or next_screen_differs (#463 S2-7 fix round 1, contracts/lab-recording.md \"Steps, frames and remediation\", since 0.12.68). The whole frame is compared first.",
+      "review": "pending",
+      "source": {
+        "file": "crates/lab/src/codes.rs",
+        "enum": "DropComparison"
+      },
+      "tokens": {
+        "frame": {
+          "description": "The whole frame, by the frame-change measure (a grid of 16 by 9 cells over the frame, the mean colour of each cell)."
+        },
+        "press_region": {
+          "description": "The neighbourhood of the press: its rectangle (a point is a rectangle of one pixel, a swipe the rectangle spanned by its two ends) grown on every side by one cell of the whole-frame grid at the recording's size and clamped to the frame, by the same measure over that region."
         }
       }
     }

@@ -35,8 +35,8 @@ use super::model::{
 };
 use super::select::{
     OTHER_PAGE_PASSES, SELECT_REJECTION_ID, SELF_TEST_ERROR, SelectChecked, SelectFrame,
-    SelectProbe, check_select_rules, check_step_select, clear_select, declare_select, probe_marks,
-    select_invalid,
+    SelectProbe, apply_choice, check_select_rules, check_step_select, clear_select, declare_select,
+    probe_marks, select_invalid,
 };
 use super::store::{
     LabFile, OldRecordView, blocked, create_recording, invalid, lab_dir, load_lab, now_unix_ms,
@@ -44,14 +44,18 @@ use super::store::{
     write_content_addressed,
 };
 use crate::LabOcr;
-use crate::codes::{LabCode, OptionalAfterProblem, SelectProblem};
+use crate::codes::{DropComparison, DropProblem, LabCode, OptionalAfterProblem, SelectProblem};
 use crate::display_base::{RECORDING_BASE_SIZE, admit_recording_frame};
 use crate::recording_api::{change_digest, unchanged_for};
+use actingcommand_contract::outcome::{Detail, Outcome};
 use actingcommand_contract::{
     InputSamplingEvidence, LabError, LabResult, SEGMENTED_SWIPE_BRAKE_DISTANCE_PX,
 };
 use actingcommand_execution_kernel::{DriveDraw, path_drag_bounds_hold, sampling_algorithm_name};
-use actingcommand_recognition::color_digest::{ColorDigest, frame_change_milli};
+use actingcommand_recognition::Rect;
+use actingcommand_recognition::color_digest::{
+    ColorDigest, FRAME_CHANGE_COLUMNS, FRAME_CHANGE_ROWS, frame_change_digest, frame_change_milli,
+};
 use actingcommand_recognition_pack::PackRect;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -752,6 +756,7 @@ fn new_step(index: u32, frames: Vec<RecordedFrame>) -> RecordingStep {
         forbidden: Vec::new(),
         anchor: None,
         select: None,
+        choice: None,
         inserted_after: None,
         transition: None,
         closed: false,
@@ -1107,31 +1112,8 @@ fn add_marks(
     let now = now_unix_ms();
     for spec in specs {
         validate_mark_id(&spec.id)?;
-        if !in_use.insert(spec.id.clone()) {
-            return Err(with_details(
-                blocked(
-                    "record_mark_id_conflict",
-                    format!("mark id '{}' is already used in this recording", spec.id),
-                ),
-                json!({"id": spec.id}),
-            ));
-        }
         // #411 Lab B-9: a value test's side targets share the package's id space.
-        for target_id in spec_target_ids(spec).into_iter().skip(1) {
-            if !in_use.insert(target_id.clone()) {
-                return Err(with_details(
-                    blocked(
-                        "record_mark_id_conflict",
-                        format!(
-                            "value test '{}' declares the OCR target '{target_id}', an id already \
-                             used in this recording",
-                            spec.id
-                        ),
-                    ),
-                    json!({"id": spec.id, "target_id": target_id}),
-                ));
-            }
-        }
+        claim_mark_ids(&mut in_use, &spec_target_ids(spec))?;
         let prepared = match prepare_mark(
             spec,
             primary,
@@ -1151,21 +1133,7 @@ fn add_marks(
         // made, so that the answer of `record mark` carries the word the file does.
         mark.initiator.clone_from(&session.initiator);
         if let (Some(crop), Some(png)) = (mark.crop.as_mut(), prepared.crop_png) {
-            if let Some(owner) = assets.get(&crop.asset)
-                && owner != &spec.id
-            {
-                return Err(with_details(
-                    blocked(
-                        "record_asset_name_conflict",
-                        format!(
-                            "template '{}' maps to {} which template '{owner}' already uses",
-                            spec.id, crop.asset
-                        ),
-                    ),
-                    json!({"id": spec.id, "asset": crop.asset, "existing": owner}),
-                ));
-            }
-            assets.insert(crop.asset.clone(), spec.id.clone());
+            claim_asset_name(&mut assets, &spec.id, &crop.asset)?;
             crop.path = crop_store_path(&session.lab_dir, &crop.sha256)
                 .display()
                 .to_string();
@@ -1174,6 +1142,61 @@ fn add_marks(
         batch.added_ids.insert(spec.id.clone());
         batch.own.push(mark);
     }
+    Ok(())
+}
+
+/// The one check of a mark's target ids entering the recording's id space `in_use`, claimed in
+/// order: `target_ids` holds the mark's id first, then (#411 Lab B-9) a value test's side target
+/// ids; one already in use is `record_mark_id_conflict`. #463 S2-7 fix round 1 (review (d)): its
+/// two callers are a new mark of `record mark` ([`add_marks`]) and a dropped step's mark given back
+/// ([`restore_step`]).
+fn claim_mark_ids(in_use: &mut BTreeSet<String>, target_ids: &[String]) -> LabResult<()> {
+    let Some((id, sides)) = target_ids.split_first() else {
+        return Ok(());
+    };
+    if !in_use.insert(id.clone()) {
+        return Err(with_details(
+            blocked(
+                "record_mark_id_conflict",
+                format!("mark id '{id}' is already used in this recording"),
+            ),
+            json!({"id": id}),
+        ));
+    }
+    for target_id in sides {
+        if !in_use.insert(target_id.clone()) {
+            return Err(with_details(
+                blocked(
+                    "record_mark_id_conflict",
+                    format!(
+                        "value test '{id}' declares the OCR target '{target_id}', an id already \
+                         used in this recording"
+                    ),
+                ),
+                json!({"id": id, "target_id": target_id}),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// The one check of a template mark's asset name: `assets` maps each asset name of the recording to
+/// the mark that has it; the name of another mark is `record_asset_name_conflict`, and the name is
+/// claimed for `id`. #463 S2-7 fix round 1 (review (d)): its two callers are [`add_marks`] and
+/// [`restore_step`].
+fn claim_asset_name(assets: &mut BTreeMap<String, String>, id: &str, asset: &str) -> LabResult<()> {
+    if let Some(owner) = assets.get(asset)
+        && owner.as_str() != id
+    {
+        return Err(with_details(
+            blocked(
+                "record_asset_name_conflict",
+                format!("template '{id}' maps to {asset} which template '{owner}' already uses"),
+            ),
+            json!({"id": id, "asset": asset, "existing": owner}),
+        ));
+    }
+    assets.insert(asset.to_owned(), id.to_owned());
     Ok(())
 }
 
@@ -1639,7 +1662,8 @@ pub(crate) fn apply_marks(
         // #463 R1 fix 1: a select is never dropped here. On an application step it is the
         // declaration's `with_application` (one beside an application operation of the same
         // request was refused before); on any other step without a frame it needs one, as a mark.
-        if request.select.is_some()
+        // #463 S2-6: so is a choice marked there.
+        if (request.select.is_some() || request.choice == Some(true))
             && let Some(action) = &application
         {
             return Err(select_invalid(
@@ -1664,6 +1688,7 @@ pub(crate) fn apply_marks(
             || request.anchor.is_some()
             || request.clear_anchor
             || !request.boxes.is_empty()
+            || request.choice.is_some()
             || (request.application.is_none() && request.optional.is_none());
         if needs_frame {
             return Err(with_details(
@@ -1913,7 +1938,16 @@ pub(crate) fn apply_marks(
         apply_click(session, request, target, &batch)?;
     }
     apply_optional(&mut session.recording, request, target)?;
-    // #463 R1: a select step keeps its rules whatever this command changed.
+    // #463 S2-6: a choice marked first, or its mark taken off; the last step of a stopped
+    // recording holds none.
+    let final_of_stopped = session.stopped && last_effective(&session.recording) == Some(target);
+    apply_choice(
+        step_mut(&mut session.recording, target)?,
+        request,
+        final_of_stopped,
+    )?;
+    // #463 R1: a select step keeps its rules whatever this command changed; #463 S2-6: so does a
+    // step marked as holding a choice, which a select refines.
     check_select_rules(effective_step(&session.recording, target)?)?;
 
     // #463 S2-5: the step's page as this command leaves it, which the self-test below and the
@@ -4058,7 +4092,7 @@ pub(crate) fn apply_transition(
         marks: Vec::new(),
         reused: Vec::new(),
     };
-    let (frame, samples, add, reuse, timeout_ms) = match spec {
+    let (frame, frame_id, samples, sample_frame_ids, add, reuse, timeout_ms) = match spec {
         TransitionSpec::Clear => {
             step_mut(&mut session.recording, index)?.transition = None;
             return Ok(applied);
@@ -4078,16 +4112,39 @@ pub(crate) fn apply_transition(
             add,
             reuse,
             timeout_ms,
-        } => (frame, samples, add, reuse, *timeout_ms),
+            frame_id,
+            sample_frame_ids,
+        } => (
+            frame,
+            frame_id,
+            samples,
+            sample_frame_ids,
+            add,
+            reuse,
+            *timeout_ms,
+        ),
     };
     validate_page_transition_timeout(timeout_ms)?;
     refuse_existing(index, existing.as_ref(), request.replace_transition)?;
-    let frame_path = frame.as_ref().ok_or_else(|| {
-        invalid(
-            "validation_failed",
-            "a page transition needs --frame <png> of the intermediate screen",
-        )
-    })?;
+    // #463 S2-7: the frame is a file or a frame this recording stored, never both.
+    let given = match (frame, frame_id) {
+        (Some(path), None) => FrameGiven::File(path.as_str()),
+        (None, Some(stored)) => FrameGiven::Stored(stored.as_str()),
+        (Some(_), Some(_)) => {
+            return Err(invalid(
+                "validation_failed",
+                "a page transition takes its frame as a PNG file (frame) or as a frame this \
+                 recording stored (frame_id), not both",
+            ));
+        }
+        (None, None) => {
+            return Err(invalid(
+                "validation_failed",
+                "a page transition needs --frame <png> of the intermediate screen, or (request \
+                 form) frame_id, a frame this recording stored",
+            ));
+        }
+    };
     if add.is_empty() && reuse.is_empty() {
         return Err(invalid(
             "validation_failed",
@@ -4100,18 +4157,22 @@ pub(crate) fn apply_transition(
         }
         _ => BTreeSet::new(),
     };
-    let local = FrameMeta::local();
-    let loaded = read_frame_file(frame_path)?;
-    let primary = admit_frame(session, loaded, "transition", &local, frame_path)?;
+    let primary = transition_frame(session, given, "transition", index)?;
     let mut frames = vec![primary.clone()];
-    for path in samples {
-        let loaded = read_frame_file(path)?;
-        frames.push(admit_frame(
+    let given_samples = samples
+        .iter()
+        .map(|path| FrameGiven::File(path.as_str()))
+        .chain(
+            sample_frame_ids
+                .iter()
+                .map(|stored| FrameGiven::Stored(stored.as_str())),
+        );
+    for sample in given_samples {
+        frames.push(transition_frame(
             session,
-            loaded,
+            sample,
             "transition_sample",
-            &local,
-            path,
+            index,
         )?);
     }
     let mut batch = MarkBatch {
@@ -4170,6 +4231,99 @@ fn refuse_existing(index: u32, existing: Option<&StepTransition>, replace: bool)
     }
 }
 
+/// #463 S2-7 (`contracts/lab-recording.md`, "Transitions"): where a frame of a page transition
+/// comes from: a PNG file (`frame`, `samples`), or a frame this recording stored, named by its id
+/// (`frame_id`, `sample_frame_ids`; the request form only).
+#[derive(Clone, Copy)]
+enum FrameGiven<'a> {
+    File(&'a str),
+    Stored(&'a str),
+}
+
+/// #463 S2-7: a frame of the page transition of step `step` in `role`, the one place a file and a
+/// stored frame meet. A file is read and decoded; a stored frame is found by its id
+/// ([`stored_frame`]; `record_frame_unknown` when the recording holds none of that id) and read back
+/// as stored, its sha256 checked (`record_frame_hash_mismatch`). Both are admitted by
+/// [`admit_frame`], with every check a file-given frame takes (the recording's base size, its
+/// size). A stored frame's entry is its own content-addressed file, the same path and sha256 (no
+/// copy is written, the file being there), with a frame id of its own and the stored frame's
+/// provenance, `source: "recording_frame"`.
+fn transition_frame(
+    session: &mut Session,
+    given: FrameGiven<'_>,
+    role: &str,
+    step: u32,
+) -> LabResult<RecordedFrame> {
+    match given {
+        FrameGiven::File(path) => {
+            let loaded = read_frame_file(path)?;
+            admit_frame(session, loaded, role, &FrameMeta::local(), path)
+        }
+        FrameGiven::Stored(frame_id) => {
+            let stored = stored_frame(&session.recording, frame_id)
+                .cloned()
+                .ok_or_else(|| frame_unknown(frame_id, step))?;
+            let loaded = read_stored_frame(&stored)?;
+            let RecordedFrame {
+                runtime_artifact,
+                capture_backend,
+                freshness,
+                scaled_from,
+                ..
+            } = stored;
+            let meta = FrameMeta {
+                source: RECORDING_FRAME_SOURCE.to_owned(),
+                runtime_artifact,
+                capture_backend,
+                freshness,
+            };
+            let label = format!("frame {frame_id}");
+            let mut entry = admit_frame(session, loaded, role, &meta, &label)?;
+            entry.scaled_from = scaled_from;
+            Ok(entry)
+        }
+    }
+}
+
+/// #463 S2-7: the frame `frame_id` this recording stored, wherever it is listed: a frame of a step
+/// (of any step, a superseded frame too), of a step's page transition, or of an ending; `None` when
+/// the recording holds no frame of that id.
+fn stored_frame<'r>(recording: &'r LabRecording, frame_id: &str) -> Option<&'r RecordedFrame> {
+    recording
+        .steps
+        .iter()
+        .flat_map(|step| {
+            let transition_frames = match &step.transition {
+                Some(StepTransition::Page { frames, .. }) => frames.as_slice(),
+                _ => &[][..],
+            };
+            step.frames.iter().chain(transition_frames)
+        })
+        .chain(
+            recording
+                .endings
+                .iter()
+                .flat_map(|ending| ending.frames.iter()),
+        )
+        .find(|frame| frame.frame_id == frame_id)
+}
+
+/// #463 S2-7: `record_frame_unknown`: the page transition of step `step` names by its id a frame
+/// the recording does not hold.
+fn frame_unknown(frame_id: &str, step: u32) -> LabError {
+    with_details(
+        blocked(
+            LabCode::RecordFrameUnknown.as_str(),
+            format!(
+                "the page transition of step {step} names frame {frame_id}, which this recording \
+                 does not hold; record status and record frames --step <k> list its frames; \
+                 nothing was written"
+            ),
+        ),
+        json!({"step": step, "frame_id": frame_id}),
+    )
+}
+
 fn step_not_last(index: u32, last: Option<u32>) -> LabError {
     with_details(
         blocked(
@@ -4183,7 +4337,8 @@ fn step_not_last(index: u32, last: Option<u32>) -> LabError {
     )
 }
 
-/// The step a `--drop-step`/`--reopen-step` names: effective and the last effective one.
+/// The step a `--reopen-step` names: effective and the last effective one. (#463 S2-7: `--drop-step`
+/// takes a step before the last too, `press_changed_nothing`.)
 fn last_named(recording: &LabRecording, step: Option<u32>, flag: &str) -> LabResult<u32> {
     let index =
         step.ok_or_else(|| invalid("validation_failed", format!("{flag} needs the step number")))?;
@@ -4205,7 +4360,16 @@ pub(crate) fn apply_step_action(
     let recording = &mut session.recording;
     match action.kind {
         StepActionKind::DropStep => {
-            let index = last_named(recording, action.step, "--drop-step")?;
+            let index = action
+                .step
+                .ok_or_else(|| invalid("validation_failed", "--drop-step needs the step number"))?;
+            effective_step(recording, index)?;
+            // #463 S2-7: a step before the last effective one is dropped only when the frames stage
+            // one stored do not contradict that its press changed nothing (fix round 1: by two
+            // comparisons, `press_changed_nothing`); the last one as before.
+            if last_effective(recording) != Some(index) {
+                press_changed_nothing(recording, index)?;
+            }
             let step = effective_step(recording, index)?;
             let ids = step
                 .marks
@@ -4295,7 +4459,337 @@ pub(crate) fn apply_step_action(
             to_transition(recording, index)?;
             Ok(("step_converted_to_transition", index))
         }
+        StepActionKind::RestoreStep => {
+            let index = action.step.ok_or_else(|| {
+                invalid("validation_failed", "restore_step needs the step number")
+            })?;
+            restore_step(recording, index)?;
+            Ok(("step_restored", index))
+        }
     }
+}
+
+/// #463 S2-7 fix round 1 (the coordinator's ruling R1; `contracts/lab-recording.md`, "Steps,
+/// frames and remediation"): how far the neighbourhood of a press reaches beyond the press's
+/// rectangle on every side, in cells of the whole-frame measure's grid ([`FRAME_CHANGE_COLUMNS`] by
+/// [`FRAME_CHANGE_ROWS`]) at the size of the recording's frames: one cell, 80 by 80 pixels at
+/// 1280x720.
+const PRESS_REGION_MARGIN_CELLS: u32 = 1;
+
+/// #463 S2-7 (`contracts/lab-recording.md`, "Steps, frames and remediation"): whether the frames
+/// stage one stored contradict that the press of step `index`, an effective step before the last,
+/// changed nothing; the tool refuses only what they contradict, and whether the press mattered is
+/// the agent's judgement. Its press is on record with the stored frame it was sent on
+/// (`before_frame`) and the stored frame after it (`after_frame`): a click performed by the command
+/// that made it (`tap`, `swipe`, `long-tap --record`) and sent on that stored frame. The frame
+/// after it is the same screen as the frame before it, and so is the frame the next effective
+/// step's press was sent on ([`screen_before`]). Fix round 1: two frames are the same screen when
+/// both comparisons of [`changed_by`] hold, the whole frame and the neighbourhood of the press
+/// ([`press_region`]), each by the one measure and bound stage one calls a screen still by
+/// ([`frame_unchanged`]: `frame_change_milli` at most `FRAME_CHANGE_MAX_MILLI`); a change smaller
+/// than that measure sees is not seen. Every frame is read back with its sha256 checked. Anything
+/// else is `record_drop_unproven` with its `drop_problem` and, for a change the frames show, the
+/// `drop_comparison` that showed it; nothing is proposed.
+fn press_changed_nothing(recording: &LabRecording, index: u32) -> LabResult<()> {
+    let step = effective_step(recording, index)?;
+    let click = step.click.as_ref().filter(|declared| declared.executed());
+    let press = click
+        .and_then(|declared| declared.execution.as_ref())
+        .filter(|execution| !execution.sent_on_unstored_capture);
+    let before_id = press.and_then(|execution| execution.before_frame.as_deref());
+    let after_id = press.and_then(|execution| execution.after_frame.as_deref());
+    let next = effective_indices(recording)
+        .into_iter()
+        .skip_while(|other| *other != index)
+        .nth(1);
+    let next_before = next
+        .and_then(|serial| step_ref(recording, serial))
+        .and_then(screen_before);
+    let known = json!({
+        "before_frame": before_id,
+        "after_frame": after_id,
+        "next_step": next,
+        "next_before_frame": next_before
+    });
+    let (Some(click), Some(before), Some(after), Some(next_frame)) = (
+        click,
+        before_id.and_then(|frame_id| stored_frame(recording, frame_id)),
+        after_id.and_then(|frame_id| stored_frame(recording, frame_id)),
+        next_before.and_then(|frame_id| stored_frame(recording, frame_id)),
+    ) else {
+        return Err(drop_unproven(
+            DropProblem::FramesNotRecorded,
+            None,
+            index,
+            format!(
+                "step {index} is not the last effective step, and the frames this recording stored \
+                 do not hold what the comparison needs: the press is not on record with the stored \
+                 frame it was sent on and the stored frame after it (as tap, swipe and long-tap \
+                 --record record a press), or the next step has no frame; nothing was written"
+            ),
+            known,
+        ));
+    };
+    let region = press_region(pressed_rect(click), before.width, before.height);
+    let before_digests = stored_digests(before, region)?;
+    if let Some((comparison, milli)) = changed_by(&before_digests, &stored_digests(after, region)?)?
+    {
+        return Err(drop_unproven(
+            DropProblem::ScreenChanged,
+            Some(comparison),
+            index,
+            format!(
+                "the stored frames show a change at the press of step {index}: the frame after it \
+                 ({}) differs from the frame before it ({}) by {milli} milli, more than the \
+                 frame-change bound, over the whole frame or over the neighbourhood of the press \
+                 (details drop_comparison); a step before the last is dropped only when its stored \
+                 frames show no change; nothing was written",
+                after.frame_id, before.frame_id
+            ),
+            with_change(known, milli),
+        ));
+    }
+    if let Some((comparison, milli)) =
+        changed_by(&before_digests, &stored_digests(next_frame, region)?)?
+    {
+        return Err(drop_unproven(
+            DropProblem::NextScreenDiffers,
+            Some(comparison),
+            index,
+            format!(
+                "the stored frames show a change after the press of step {index}: the frame the \
+                 next step's press was sent on ({}) differs from the frame before this press ({}) \
+                 by {milli} milli, more than the frame-change bound, over the whole frame or over \
+                 the neighbourhood of this press (details drop_comparison); nothing was written",
+                next_frame.frame_id, before.frame_id
+            ),
+            with_change(known, milli),
+        ));
+    }
+    Ok(())
+}
+
+/// #463 S2-7 fix round 1 (the coordinator's ruling R1): the press's rectangle as the step table
+/// holds it: the click's rectangle (a press by its point holds a rectangle of one pixel there), and
+/// for a drag (a recorded swipe) the rectangle spanned by its two ends, the click's rectangle and
+/// its `to`.
+fn pressed_rect(click: &StepClick) -> RecordRect {
+    let Some(ClickGesture::Drag { to, .. }) = click.gesture else {
+        return click.rect;
+    };
+    let from = click.rect;
+    let left = from.x.min(to.x);
+    let top = from.y.min(to.y);
+    let right =
+        (i64::from(from.x) + i64::from(from.width)).max(i64::from(to.x) + i64::from(to.width));
+    let bottom =
+        (i64::from(from.y) + i64::from(from.height)).max(i64::from(to.y) + i64::from(to.height));
+    let side = |end: i64, start: i32| i32::try_from(end - i64::from(start)).unwrap_or(i32::MAX);
+    RecordRect {
+        x: left,
+        y: top,
+        width: side(right, left),
+        height: side(bottom, top),
+    }
+}
+
+/// #463 S2-7 fix round 1 (the coordinator's ruling R1): the neighbourhood of the press `rect` on
+/// frames of `width` by `height`: the rectangle grown on every side by
+/// [`PRESS_REGION_MARGIN_CELLS`] cells of the whole-frame measure's grid at that size (a cell is
+/// `width / FRAME_CHANGE_COLUMNS` by `height / FRAME_CHANGE_ROWS` pixels, rounded up), clamped to
+/// the frame.
+fn press_region(rect: RecordRect, width: u32, height: u32) -> Rect {
+    let margin = |side: u32, cells: u32| {
+        i64::from(
+            side.saturating_mul(PRESS_REGION_MARGIN_CELLS)
+                .div_ceil(cells),
+        )
+    };
+    let (margin_x, margin_y) = (
+        margin(width, FRAME_CHANGE_COLUMNS),
+        margin(height, FRAME_CHANGE_ROWS),
+    );
+    let left = (i64::from(rect.x) - margin_x).max(0);
+    let top = (i64::from(rect.y) - margin_y).max(0);
+    let right = (i64::from(rect.x) + i64::from(rect.width) + margin_x).min(i64::from(width));
+    let bottom = (i64::from(rect.y) + i64::from(rect.height) + margin_y).min(i64::from(height));
+    let field = |value: i64| i32::try_from(value).unwrap_or(i32::MAX);
+    Rect {
+        x: field(left),
+        y: field(top),
+        width: field(right - left),
+        height: field(bottom - top),
+    }
+}
+
+/// #463 S2-7 fix round 1: the two frame-change digests of one stored frame, of the whole frame and
+/// of the neighbourhood of the press.
+struct ScreenDigests {
+    whole: ColorDigest,
+    press: ColorDigest,
+}
+
+/// #463 S2-7 fix round 1 (the coordinator's ruling R1): the first of the two comparisons by which
+/// the frames of `older` and `newer` are not the same screen, with the measure's value: the whole
+/// frame (`frame`), then the neighbourhood of the press (`press_region`), each by
+/// [`frame_unchanged`], the one measure and bound stage one calls a screen still by; `None` when
+/// both hold.
+fn changed_by(
+    older: &ScreenDigests,
+    newer: &ScreenDigests,
+) -> LabResult<Option<(DropComparison, u32)>> {
+    for (comparison, old, new) in [
+        (DropComparison::Frame, &older.whole, &newer.whole),
+        (DropComparison::PressRegion, &older.press, &newer.press),
+    ] {
+        let (unchanged, milli) = frame_unchanged(old, new)?;
+        if !unchanged {
+            return Ok(Some((comparison, milli)));
+        }
+    }
+    Ok(None)
+}
+
+/// #463 S2-7: the frame a step was pressed on, as the step table records it (its click's or its
+/// application operation's `before_frame`), else its live primary frame: the screen a run meets the
+/// step on.
+fn screen_before(step: &RecordingStep) -> Option<&str> {
+    step.click
+        .as_ref()
+        .and_then(|click| click.execution.as_ref())
+        .and_then(|execution| execution.before_frame.as_deref())
+        .or_else(|| {
+            step.application
+                .as_ref()
+                .and_then(|application| application.executed.as_ref())
+                .and_then(|executed| executed.before_frame.as_deref())
+        })
+        .or_else(|| live_primary(step).map(|frame| frame.frame_id.as_str()))
+}
+
+/// #463 S2-7: the stored frame `frame` read back once with its sha256 checked
+/// (`record_frame_hash_mismatch`), and (fix round 1) its two frame-change digests: of the whole
+/// frame ([`change_digest`], stage one's) and of the neighbourhood of the press `region`, by the same
+/// measure over that region (`frame_change_digest`); a digest that cannot be made is
+/// `record_frame_unreadable`, as there.
+fn stored_digests(frame: &RecordedFrame, region: Rect) -> LabResult<ScreenDigests> {
+    let loaded = read_stored_frame(frame)?;
+    let label = format!("frame {}", frame.frame_id);
+    let whole = change_digest(&loaded, &label)?;
+    let press = frame_change_digest(&loaded.scene, Some(region)).map_err(|error| {
+        invalid(
+            "record_frame_unreadable",
+            format!(
+                "failed to digest the neighbourhood of the press on {label} for the frame-change \
+                 measure: {error}"
+            ),
+        )
+    })?;
+    Ok(ScreenDigests { whole, press })
+}
+
+/// #463 S2-7: `details` with the frame-change measure's value of the two frames compared.
+fn with_change(mut details: Value, milli: u32) -> Value {
+    if let Some(object) = details.as_object_mut() {
+        object.insert("frame_change_milli".to_owned(), json!(milli));
+    }
+    details
+}
+
+/// #463 S2-7: `record_drop_unproven` with why, for step `step`, its details carrying the outcome
+/// with `drop_problem` and the members of `extra`. Fix round 1: with the `drop_comparison` that
+/// showed a change (`comparison`), in the details and in the outcome.
+fn drop_unproven(
+    problem: DropProblem,
+    comparison: Option<DropComparison>,
+    step: u32,
+    message: String,
+    extra: Value,
+) -> LabError {
+    let mut outcome = Outcome::new(LabCode::RecordDropUnproven).drop_problem(problem);
+    if let Some(comparison) = comparison {
+        outcome = outcome.drop_comparison(comparison);
+    }
+    let mut details = json!({
+        "step": step,
+        "drop_problem": problem.as_str(),
+        "outcome": outcome.envelope(Detail::Full)
+    });
+    if let Some(object) = details.as_object_mut() {
+        if let Some(comparison) = comparison {
+            object.insert("drop_comparison".to_owned(), json!(comparison.as_str()));
+        }
+        if let Some(extra) = extra.as_object() {
+            for (name, value) in extra {
+                object.insert(name.clone(), value.clone());
+            }
+        }
+    }
+    with_details(
+        blocked(LabCode::RecordDropUnproven.as_str(), message),
+        details,
+    )
+}
+
+/// #463 S2-7 (`contracts/lab-recording.md`, "Steps, frames and remediation"): `restore_step` undoes
+/// `drop_step`: step `index`, a dropped step, is effective again and the step table is what it was
+/// before the drop, when nothing else changed in between. Its marks take their ids and template
+/// asset names back, so an id or an asset name another mark took since is refused as a new mark's
+/// is, by the one check `add_marks` makes ([`claim_mark_ids`]: `record_mark_id_conflict`;
+/// [`claim_asset_name`]: `record_asset_name_conflict`); fix round 1 (the coordinator's ruling R2,
+/// review (k)): a mark it reuses (on its page or its page transition) or forbids that is no longer a
+/// step mark of an effective step is refused as the mark path refuses a missing source,
+/// `record_mark_rejected` with `reuse_source_missing` or `forbidden_source_missing` for each, so
+/// that the fault is told here and not by the next command; a step that is no dropped step is
+/// `record_step_not_found`. Nothing is changed on a refusal.
+fn restore_step(recording: &mut LabRecording, index: u32) -> LabResult<()> {
+    let step = step_ref(recording, index)
+        .filter(|step| step.dropped)
+        .ok_or_else(|| {
+            with_details(
+                blocked(
+                    "record_step_not_found",
+                    format!(
+                        "step {index} is no dropped step of the recording; restore_step gives back \
+                         a step drop_step dropped"
+                    ),
+                ),
+                json!({"step": index}),
+            )
+        })?;
+    let (transition_marks, transition_reused) = match &step.transition {
+        Some(StepTransition::Page { marks, reused, .. }) => (marks.as_slice(), reused.as_slice()),
+        _ => (&[][..], &[][..]),
+    };
+    let mut in_use = ids_in_use(recording, &BTreeSet::new());
+    let mut assets = template_assets(recording);
+    for mark in step.marks.iter().chain(transition_marks) {
+        claim_mark_ids(&mut in_use, &mark.target_ids())?;
+        if let Some(crop) = &mark.crop {
+            claim_asset_name(&mut assets, &mark.id, &crop.asset)?;
+        }
+    }
+    let sources = step
+        .reused
+        .iter()
+        .chain(transition_reused)
+        .map(|id| (id, "reuse_source_missing"))
+        .chain(
+            step.forbidden
+                .iter()
+                .map(|id| (id, "forbidden_source_missing")),
+        )
+        .collect::<Vec<_>>();
+    let missing = sources
+        .iter()
+        .filter(|(id, _)| find_step_mark(recording, id).is_none())
+        .map(|(id, word)| MarkRejection::new(id, word, json!({})))
+        .collect::<Vec<_>>();
+    if !missing.is_empty() {
+        return Err(rejected(&missing, sources.len()));
+    }
+    step_mut(recording, index)?.dropped = false;
+    Ok(())
 }
 
 fn to_transition_invalid(index: u32, reason: &str) -> LabError {

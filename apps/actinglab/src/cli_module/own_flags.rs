@@ -104,8 +104,8 @@ pub(crate) const STRICT_ROWS: [&str; 35] = [
 /// so they are strict too, by their list; no row of the two modules is lenient. Workflow #434
 /// LAB-5G4c: `record draft`, whose command that slice built, parsed by its list from the start.
 /// Workflow #449 REC-ARCH: `record archive` and `record reopen` the same. #463 S2-1: `record
-/// ready` too. #463 S2-13: and `record frames`.
-pub(crate) const READ_LIST_ROWS: [&str; 29] = [
+/// ready` too. #463 S2-13: and `record frames`. #463 S2-2: and `record review`.
+pub(crate) const READ_LIST_ROWS: [&str; 30] = [
     "touch-probe",
     "recover",
     "tap-target",
@@ -123,6 +123,7 @@ pub(crate) const READ_LIST_ROWS: [&str; 29] = [
     "record reopen",
     "record ready",
     "record frames",
+    "record review",
     "package validate",
     "package inspect",
     "package bundle",
@@ -456,6 +457,7 @@ pub(crate) fn reads(row: &str) -> Option<Reads> {
         "record reopen" => (&session_record::RECORD_REOPEN_READS, None),
         "record ready" => (&session_record::RECORD_READY_READS, None),
         "record frames" => (&session_record::RECORD_FRAMES_READS, None),
+        "record review" => (&session_record::RECORD_REVIEW_READS, None),
         "package validate" => (&package_cli::VALIDATE_READS, None),
         "package inspect" => (&lab_package_control::INSPECT_READS, None),
         "package bundle" => (&package_build::BUNDLE_READS, None),

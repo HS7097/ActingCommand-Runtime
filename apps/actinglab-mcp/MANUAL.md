@@ -304,8 +304,10 @@ naming this file.
   `state_dir`) lists at once
   everything a recording (the instance's, or the active, archived or stopped one `record_id`
   names) still lacks before `ac_record_stop` can make its package: every pre-check it fails, each
-  with its word (`what`) and the code `ac_record_stop` would answer, or, once none fails, the
-  refusal of a self-check; and its state, `material`, `draft`, `ready` or `packaged`. It only
+  with its word (`what`) and the code `ac_record_stop` would answer, or, once none fails, every
+  failure of each self-check (#463 S2-1c, 0.12.68: `ac_record_stop` answers the first; `checks`
+  says for each self-check that ran whether its list is complete, and why not); and its state,
+  `material`, `draft`, `ready` or `packaged`. It only
   reads, under no lock, also while another call holds the recording; it opens no Runtime
   connection and neither pauses nor releases the instance. #463 S2-1b (0.12.67): it also takes
   `game`, `server` and `locale` as `ac_record_stop` takes them (one out of its form is refused as
@@ -351,6 +353,30 @@ naming this file.
   `record_id`) lists the stored frames captured just before the frame a step's press was sent on
   and just after the press, with their paths, capture times and offsets from the press; it reads
   only and takes no lock.
+  #463 S2-2 (0.12.68; `contracts/lab-recording.md`, "Reviewing a recording step by step"):
+  `ac_record_review` (`record_id`, `step`, `no_preview`, `game`, `server`, `locale`, `state_dir`)
+  answers each step of the recording `ac_record_ready` reads as the screen before (`before`), what
+  was pressed (`press`) and the screen after (`after`, with `still` and `waited_ms` where the step
+  table holds them), the frames stored between, the step's marks and its items of
+  `ac_record_ready` (`missing`, given `game`, `server` and `locale` as `ac_record_ready` takes
+  them: a recording without a locale of its own runs no self-check until `locale` is given); a
+  member the step table does not hold is absent. The train of #463 stage two (0.12.68): `missing`
+  is every item of `ac_record_ready`'s one judgement that names the step, a pre-check's
+  (`select_unrefined` among them) or, once no pre-check fails, each self-check failure; an item
+  that names no step is no step's; `choice` is the step's choice mark on a step marked as holding a
+  choice; a step dropped before the last is not listed, one `restore_step` gave back is. An application operation's `outcome` is its
+  manifest row's: `indeterminate` with attempts and no completed receipt. Unless `no_preview`, it
+  writes a preview of each screen under the recording's `lab/preview/` (`s<nn>-before.png`,
+  `s<nn>-after.png`, their absolute paths in `preview`): a copy of the stored frame with the press
+  and the step's boxes drawn
+  (recognize boxes green, the press box orange, other marks blue; on the screen after the next
+  step's). Nothing recorded changes and no stored frame carries a box; a frame whose bytes do not
+  match its sha256 is `record_frame_hash_mismatch` and no preview is written; every call writes
+  its previews anew and none is ever removed. A frame whose file is not there has `path` `null`
+  and is named in the warning `frame_file_missing`, as `ac_record_frames` answers it. It takes no
+  lock. `steps_total` counts every effective step: an answer over the budget is written whole to
+  the export directory (section 5); `step` answers one step, so read a long recording step by step
+  (each call evaluates the whole recording's readiness, its self-checks too).
   #463 S2-5 (0.12.65; `contracts/lab-recording.md`, "Drawing a box"): stage two marks a draft with
   boxes: `ac_record_mark` with `box` (`recognize=x1,y1:x2,y2` or `press=x1,y1:x2,y2`, two opposite
   corners in the frame's pixels; or `boxes` in `request_json`) on any step. A recognize box is a
@@ -381,6 +407,42 @@ naming this file.
   `record`, `ac_do` and `ac_lab_observe` with `record`) judges the recording and the frame it took
   before it sends or writes anything, with these codes and `record_frame_size_mismatch` for a
   frame of another size than the recording already has; nothing is pressed first.
+  #463 S2-7 (0.12.68; `contracts/lab-recording.md`, "Transitions", "Steps, frames and
+  remediation"): in `request_json`, a page transition (`transition` `{"kind": "page", …}`) takes
+  `frame_id` in place of `frame` and `sample_frame_ids` beside `samples`: frames the recording
+  already stored, as `ac_record_frames` and `ac_record_status` list them (a loading screen stage
+  one captured between a press and the next step), read as stored with their sha256 checked; no
+  file is copied, and the package is the one the same image given as a file makes. An id the
+  recording does not hold is `record_frame_unknown`. `drop_step` (`step_action` `{"kind":
+  "drop_step", "step": n}`, or the row's `drop_step`) takes a step before the last when the stored
+  frames do not contradict that its press changed nothing: the frame after it, and the frame the
+  next step was pressed on, are the frame before it by two comparisons, each by the frame-change
+  measure stage one calls a screen still by, the whole frame and (fix round 1) the neighbourhood of
+  the press (its rectangle grown by one cell of the whole-frame grid, 80 pixels at 1280x720, on
+  every side). Each comparison averages 16 by 9 cells of its region, so a change confined to one or
+  two of them is not seen: a small change away from the press (a counter, a badge) is not seen.
+  Whether the press mattered is the agent's judgement; the tool refuses only what the frames
+  contradict: `record_drop_unproven` with `drop_problem` `frames_not_recorded`, `screen_changed`
+  or `next_screen_differs`, and for the last two `drop_comparison` `frame` or `press_region`.
+  `{"kind": "restore_step", "step": n}` gives a dropped step back (`record_mark_rejected` when a
+  mark it reuses or forbids is gone since). Nothing is proposed: the agent names the frame and the
+  step.
+  #463 S2-6 (0.12.68; `contracts/lab-recording.md`, "Marking a choice first"): a step that chooses
+  one item among several is marked first and refined later. `ac_record_mark` with a
+  `request_json` that names the step and holds `"choice": true` (beside the step's marks if you
+  like) marks it; the
+  press stage one recorded on the item you chose, a point tap included, is its demonstration.
+  Refine it later, on the active or the stopped recording, by declaring the step's `select` in a
+  request of its own ("Selecting in a list": the slots, how each name is read, the names, the match
+  and the wanted value; `pressed` the name the recorded press chose). Until then `ac_record_ready`
+  lists the step as `select_unrefined` (code `record_select_invalid`) and `ac_record_stop` refuses
+  it with `choice_not_refined`; `choice: false` takes the mark off (on a step without the mark it
+  is refused, `no_choice`; on a refined step the select stays). The mark only says the choice is
+  not refined yet: the wanted value of every select, marked first or given whole, is the package's
+  `ordered` variable of the select's wanted name, its default the select's default (a run given no
+  value chooses as before), which `ac_goals_set` sets on an application by name; a package
+  generated again from an older recording with a select gains that variable, so its content hash
+  changes and its bundle declares `package` 14.
 - **Offline scenes of another size** (Workflow #392 DA-5cd, 0.12.67, as the train of DA-5ab and
   DA-5cd leaves it; `contracts/display-adapter.md` section 12). `ac_recognize`, `ac_detect_page`,
   `ac_current_page`, `ac_is_visible`, `ac_lab_observe` on a saved scene, `ac_tap_target` and

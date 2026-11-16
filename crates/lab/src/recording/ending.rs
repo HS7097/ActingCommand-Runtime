@@ -87,6 +87,8 @@ fn other_members(request: &MarkRequest) -> Vec<&'static str> {
         ("clear_select", request.clear_select),
         // #463 S2-5: a box marks a step or presses its click.
         ("boxes", !request.boxes.is_empty()),
+        // #463 S2-6: a choice marks a step.
+        ("choice", request.choice.is_some()),
         // #463 R4: an inserted optional step is no ending either.
         ("optional_after", request.optional_after.is_some()),
         ("remove_inserted", request.remove_inserted.is_some()),

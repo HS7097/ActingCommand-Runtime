@@ -32782,6 +32782,662 @@ loses its two display cases, which the display test now asserts as warnings with
 [3, 3]); `gate_463_v1::v1_the_build_declares_package_through_revision_14` and the architecture
 test's `V0120` table read `package` [3, 16].
 
+### 1.439 Slice #463 S2-2 (0.12.68): `record review` answers each step of a recording as the screen before, the press and the screen after, with rendered previews (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making, whose stage two turns the recorded material into a package offline, and her rulings of the night of 11-15 there: the tool hands back the material and the agent decides, and a preview's boxes are rendered onto a copy while the stored frames carry no box; the design `rd-1115/pack-stage12-design.md`, B1.2 and B1.6, the row S2-2 of B5, of which `shared`, `suggestions` and `candidates` are not built; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1116/brief-463-s22-record-review.md`, stacked on the Lab display train, #1780, at its head `2ff33cb3d3`, its fix round 1 `b157951c06` merged)
+
+The coordinator gave this slice 1.439. It stands on the train of DA-5ab and DA-5cd (§1.436,
+§1.437, #1780; its fix round 1 merged) and ships in 0.12.68.
+
+**Why.** An agent saw a recording only as the step table (`record status`) and single frames on
+request (`record frames`, §1.426). This read lays each step out as the screen before, where the
+press went and the screen after, with the step's marks and its items of `record ready` (§1.425),
+and draws the press and the declared boxes on copies of the stored frames
+([lab-recording.md](lab-recording.md), "Reviewing a recording step by step: `record review`").
+
+**Established by reading** (the code's facts where the work order or the design said otherwise).
+- *What the step table holds.* A step holds no note (the design's S1-6 notes were not built), no
+  frame-change measure of a stored frame (stage one's after loop compares digests in memory and
+  stores none) and no list of the frames of the same screen (S2-5 measures a capture against the
+  step's live frame when a box is drawn, and stores the result nowhere). The work order's rule, a
+  member the step table does not hold is absent, never invented, decides: the answer has no `note`,
+  no `same_screen` and no change on a frame `between`.
+- *`runtime: none`.* As §1.426 found, the table's word is `offline`; the row says `offline`.
+- *The cut for MCP's budget.* `record frames` marks no cut: its sides are bounded by its request
+  and counted (`before_total`, `after_total`), and a child's success over the budget is written
+  whole to the export (`answer_exported`; no row of the server's `LAB_ROWS` keeps parts of it).
+  This read does the same: `steps` beside `steps_total`, `--step` for one step; the MCP server is
+  not changed.
+- *No drawing crate.* The design proposed `imageproc`; the work order adds no dependency (no
+  `cargo` here, so the lock file cannot be regenerated). The previews are drawn by plain pixel
+  writes on the frame `Frame::from_png` decodes and encoded with `Frame::encode_png_fast`, the
+  device crate's, which the Lab already uses for its crops.
+- *The screen before of a step without a press* (the final screen) is its live primary frame; a
+  press's is its `before_frame` as `record ready` names it (`ready::press_frame`).
+
+**What it builds.**
+
+| Part | Where |
+|---|---|
+| The read | `record_review` (`crates/lab/src/recording_api.rs`), which reads the recording with `ready_recording` and takes `record ready`'s answer from `ready_of`, the body of `record_ready` moved into a function of its own (`record_ready` calls it, its answer unchanged); `review_outcome`, `RecordReviewRequest`, `RecordReviewOutcome` and its parts (`crates/lab/src/recording/review.rs`, new); `around::sequence_of` and `Stored`, `ready::press_frame` and `one_pixel`, `recording_api::click_outcome` are `pub(crate)` |
+| The previews | `crates/lab/src/recording/preview.rs` (new): `render`, its colours and `press_radius`; written with `store::write_atomic` after `store::read_verified` of every frame drawn on |
+| The command | `record review` and `session record review`: `RECORD_REVIEW_READS`, the dispatch (no lock, no session directory created), `run_record_review` (`--step` read by `frames_number`, the options by `identity_options` of no flags, the dry-run refusal) (`apps/actinglab/src/commands/session_record.rs`) |
+| The registers | `own_flags::READ_LIST_ROWS` and `reads`, `engine::COMMANDS`, `words::BUILT_SLICES` and the Lab's MCP server's `ACTINGLAB_SLICES` (slice `463-S22`), the capability entries `record review` and `session record review` and their dry-run declarations (mixed: `--no-preview` `no_effect`, without it `dry_run_unsupported`) |
+| The table | the row `record review` (authoring, `runtime: offline`, `writes: true`, `help` 136 bytes), so that the Lab's MCP server offers `ac_record_review`; today's server (`actingctl mcp-serve`) gets nothing |
+| Texts | [lab-recording.md](lab-recording.md), "Reviewing a recording step by step: `record review`" (new), its file list and its opening; [actinglab-dry-run.md](actinglab-dry-run.md), the `record` row; `apps/actinglab-mcp/MANUAL.md`, "Recordings" |
+
+**Codes and words.** None is added and no fragment changes. A frame drawn on whose bytes do not
+match its sha256 is `record_frame_hash_mismatch` (3), as every read of a stored frame answers it,
+and then no preview is written; a step that does not exist, is dropped or was converted is
+`record_step_not_found` (3); no recording to read is `record_session_not_active`,
+`record_lab_unavailable` or `record_instance_mismatch`, as `record ready` answers; a preview that
+cannot be decoded or encoded is `record_frame_unreadable`, as a crop's is. No decision reads a
+code.
+
+**Tests.** `crates/lab/src/gate_463_s22.rs` (exec gate map "#463 S2-2"; S2-5's bench, no
+Runtime, no clock read): each step's before, press and after as the step table holds them, the
+tap's two captures between, no `note` and no `same_screen`; `step` answering one step as the whole
+answer has it and `record_step_not_found`; the seven previews under `lab/preview/` the answer names,
+each of its frame's size, every other file byte for byte; `--no-preview` writing no file; the
+pixels of the press and of a press box's and a recognize box's outline, the next step's box on the
+screen after, the stored frames unchanged; each step's `missing` equal to `record ready`'s items of
+that step; an archived recording reviewed the same, by the session header and by its id; a frame
+file with other bytes refused with no preview written, and the intact step reviewed alone.
+Adapted, as the requirement changes what it pins: `apps/actinglab/src/tests/gate_434_lab5b4.rs`,
+whose list of the own commands that refuse an unknown flag is held equal to `READ_LIST_ROWS` and
+the unrowed lists (34 now, `record review` after `record frames`). No test leaves the gate map.
+
+**What is not changed.** Any recorded file; the step table's format; `record ready`'s answer;
+`record stop`'s decisions and the generator; the recording lock; today's MCP server.
+
+**Fix round 1** (coordinator work order `rd-1116/brief-463-s22-fix1.md`, after the independent
+review of `324f9cad`, "may merge with one change"; main `a91e657c`, the Lab display train #1780,
+merged first; the rules are the coordinator's rulings).
+- *An application operation's outcome* (the review's change). The first build answered `declared`
+  for an operation with attempts and no completed receipt, which may have run. `review::press_of`
+  now names it by `archive::outcome_of`, the judgement the manifest's row `outcome` is (made
+  `pub(crate)`, with `archive::PERFORMED`), in the words `record status` names a click's:
+  `performed` is `executed`, `indeterminate` stays, none is `declared`. No second judgement.
+- *The identity flags of `record ready`.* `record review` reads `--game`, `--server` and `--locale`
+  (`RECORD_REVIEW_READS`, the row's parameters `game`, `server` and `locale`, so
+  `ac_record_review` takes them) and passes them through `session_record::identity_options`, the
+  function `record ready` reads and refuses them with, to the one readiness judgement (`ready_of`).
+  A recording without a locale of its own lists `locale` for the whole recording and runs no
+  self-check; given it, a self-check's refusal reaches the step it names.
+- *A frame file that is not there.* Every path of the answer (`before`, `after`, `between`) is
+  `around::located`'s, `record frames`' (made `pub(crate)`, with `FRAME_FILE_MISSING`): `null`
+  for a missing file, which the answer's new member `warnings` names once in `frame_file_missing`,
+  `record frames`' own warning, with `--no-preview` as without it. Without `--no-preview` a screen
+  before or after whose file is missing is refused as before, `record_frame_hash_mismatch`.
+- *Small things.* The answer's paths are `archive::display`'s (made `pub(crate)`); the copy in
+  `review.rs` is gone. The MCP manual says `steps_total` counts every effective step; the contract
+  says that `--step` evaluates the recording's whole readiness, self-checks included, on every
+  call, and that previews are written anew on every call and never removed by the tool.
+- *Codes and words.* None is added; `frame_file_missing` is `record frames`' warning word (§1.426),
+  not a catalog code. No decision reads a code.
+- *Tests* (`crates/lab/src/gate_463_s22.rs`, eight more, and
+  `apps/actinglab/src/tests/gate_463_s22.rs`, new, one; all in the gate "#463 S2-2"): an
+  application operation with attempts only is `indeterminate`, as its manifest row; a tap and a box
+  at the frame's bottom-right edge and a long press and a box of the whole frame at its top-left,
+  drawn inside the frame; a tap's cross where a long press has none, both rings; a colour mark's
+  region in the marks' colour; an application step with its receipt's screens; a dropped step
+  neither listed nor counted; a frame of another step left out of `between`; a self-check's item on
+  its step once the locale is given, as `record ready` lists it; the command line's refusal of
+  `--dry-run` without `--no-preview` before the recording is read. Adapted: the last test of the
+  first build reads a frame's `path` as nullable.
+
+**At deploy.** Nothing to configure. Recordings already on disk are read as they are: a press an
+earlier build recorded without `before_frame` or `after_frame` answers the step's live frame as its
+screen before and no screen after. Through MCP the tool is `ac_record_review` of the Lab's MCP
+server (`actinglab-mcp`).
+
+**Train** (coordinator work order `rd-1116/brief-463-train-stage2.md`; the train of #463 stage two
+in pull request #1784, which carries this section's head `f7708a61` (#1786), §1.440's `e6bc6fa3`
+(#1784), §1.442's `438f17b0` (#1787) and §1.443's `6c7b3b22` (#1788): main `dc4c3622` merged into
+the branch of #1784, then this section, §1.442 and §1.443 in that order, then main `3a17b927` (the
+release of 0.12.67); the rulings are the coordinator's, not the owner's words). What it changed of
+this section, with §1.440, §1.442 and §1.443:
+- *The one readiness judgement.* `ready_of`, the body of `record ready` this section moved so that
+  `record review` calls it, holds §1.443's judgement (every failure of each self-check, `checks`)
+  and §1.442's pre-check (`select_unrefined`); the merge took §1.443's body with this section's
+  reference to the recording. Neither command keeps a judgement of its own.
+- *A step's `missing`* is every item of that judgement that names the step: a pre-check's,
+  §1.442's `select_unrefined` among them, or, once no pre-check fails, each of §1.443's self-check
+  failures (their `Locus` names the step by the serial number `record mark --step` takes, the
+  number this section filters by); an item that names no step (a part of the identity, an ending's,
+  a template's crop, the package as a whole) is no step's. A failed pre-check runs no self-check
+  (§1.425, kept by §1.443), so the two kinds never stand in one answer.
+- *What a step shows.* The answer's step gains `choice` (`RecordReviewStep::choice`): §1.442's
+  choice mark as the step table holds it, on a step marked as holding a choice, absent otherwise
+  (the row's `output` names it). A refined choice's press is `press` as before, the select's click
+  as the step table holds it. A step §1.440 dropped before the last is no effective step and is not
+  listed, as a dropped last step is not; one `restore_step` gave back is listed again; the step
+  before a dropped one names in `after.step` the dropped step its frame is stored under, whose
+  screen the drop found the same as the one the next effective step was pressed on.
+- *Texts.* [lab-recording.md](lab-recording.md): its summary names the four slices in one
+  paragraph; this section's contract (`choice`, `missing`, `after.step`, dropped and restored steps)
+  and a sentence in "What a recording still lacks: `record ready`" naming the one function; the
+  row `record review`'s `output` and `notes`; the MCP manual's `ac_record_review`. No count the
+  manuals carry changes (only this section adds a row). The outcome-code index, regenerated after
+  the merges, counts 3895 active codes, 88 retired, 3983 in all (`--check`: current).
+- *Test* (`crates/lab/src/gate_463_s2_train.rs`; exec gate map row "#463 stage two, train"):
+  `s2_train_each_step_reviews_exactly_its_items_of_the_one_readiness_judgement`, on §1.443's bench
+  (its `Bench`, `INSTANCE`, `EVERY_CHECK` and `complete` made `pub(crate)` for it): step 2 marked as
+  holding a choice and not refined, step 1's mark expecting another colour, the recording's locale
+  taken out of the step table. `record ready` lists the locale (no step) and step 2's
+  `select_unrefined`, runs no self-check and names the seven in `checks_after`; `record review
+  --step k` of each step lists exactly the items that name k, step 2 with its choice mark, no step
+  the locale. With the mark taken off (`choice: false`) and `--locale` given, `record ready` lists
+  step 1's `first_decision` and `cross_check` failures, and `record review` of each step lists
+  exactly its items, step 1 those two. The work order asked for one recording whose one reading
+  lists both kinds; since a failed pre-check runs no self-check, the test reads it twice.
+
+### 1.440 Slice #463 S2-7 (0.12.68): a page transition from frames the recording stored; a press before the last that changed nothing can be dropped (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making, stage two of which turns the recorded material into a package offline, and her ruling of the night of 11-15 that the tool hands back the material and the agent decides; the design's table B1.5, its rows "these frames are a loading screen between two steps" and "this press did nothing"; the rules below are the coordinator's in the work order, not the owner's words; coordinator work order `rd-1116/brief-463-s27-transitions.md`, built on the branch of pull request #1780 at `2ff33cb3`)
+
+This section takes 1.440, the number the work order gives; it stands on pull request #1780 (§1.436,
+§1.437 and their train) and ships in 0.12.68. [lab-recording.md](lab-recording.md), "Transitions"
+and "Steps, frames and remediation", is its contract.
+
+**A transition from stored frames.** A `record mark` request's page transition takes `frame_id` in
+place of `frame`, and `sample_frame_ids` beside `samples`: frames the recording already stored
+(any step's frame, a superseded one included, a page transition's or an ending's), such as the
+loading screen stage one captured between a press and the next step. The request form only; the
+command line's `--transition page` takes files as before. A named frame is found by its id
+(`steps.rs`, `stored_frame`), read back as stored with its sha256 checked, and then taken by
+`admit_frame`, the function that takes a file's frame, with every check of it; the one place the
+two forms meet is `transition_frame`. Its entry in the transition is the stored file itself (the
+same path and sha256: the content-addressed write finds the file there and writes nothing), with a
+frame id of its own, the stored frame's provenance and `source: "recording_frame"`, the word S2-5
+gave a stored frame a step takes as its sample. The package is the one the same image given as a
+file makes: the generator names a transition's frames by their sha256 alone. A file-given transition
+is taken as before, by the same calls.
+
+**A press before the last that changed nothing.** `--drop-step n` (`step_action` `drop_step`)
+takes an effective step before the last one when the stored frames do not contradict that its
+press changed nothing (`steps.rs`, `press_changed_nothing`; fix round 1, below: by two
+comparisons): its press is on record with the stored frame it was sent on and the stored frame
+after it (`before_frame`, `after_frame`, performed, not `sent_on_unstored_capture`); the frame
+after it is the same screen as the frame before it; and the frame the next effective step was
+pressed on (its press's `before_frame`, else its live primary frame) is the same screen too. "The
+same screen" is the measure and bound by which stage one calls a screen still, not a second
+threshold: `frame_unchanged` (`steps.rs`, S2-5's), which asks `unchanged_for` (`recording_api.rs`,
+the after loop's) of `frame_change_milli` and `FRAME_CHANGE_MAX_MILLI`, 1500
+(`crates/recognition/src/color_digest.rs`). The step is then dropped as the last step is (kept in
+the file, `dropped: true`); the generator, which numbers the effective steps wherever a dropped one
+stands, leaves it out: the step before it presses and the run waits for the page of the step after
+it, the screen that press led to. The last effective step is dropped as before, by the same code
+and without these comparisons; before this slice a step before the last was
+`record_step_not_last`.
+
+**Undoing a drop.** The work order says the middle drop "can be undone as the existing drop can";
+no operation undid a drop (a dropped step is no effective step, so `--reopen-step` and every other
+operation refuse it `record_step_not_found`). The request form's `step_action` `restore_step`
+(`StepActionKind::RestoreStep`) is that undo, for any dropped step: it is effective again and,
+when nothing else changed in between, the step table is what it was before the drop but for
+`updated_at_unix_ms`; an id or a template asset
+name of its marks that another mark took since is refused as a new mark's is
+(`record_mark_id_conflict`, `record_asset_name_conflict`), and a step that is no dropped step is
+`record_step_not_found`; nothing is written then.
+
+**`record ready`.** Unchanged: it reads the effective steps, so a dropped step before the last is
+read as a dropped last step is (no item names it, the steps after it carry their package numbers
+without it); no state or word is added. `record review` is not on this branch.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| S27-1 | `transition.frame_id`, `transition.sample_frame_ids` of `actingcommand.lab-record-mark.v1` | request members, absent unless given | S2-7 | `crates/lab` `model.rs` `TransitionSpec::Page` | the request form only; a request without them is byte for byte what it was |
+| S27-2 | `step_action.kind` `restore_step` | request word | S2-7 | `crates/lab` `model.rs` `StepActionKind` | the request form only |
+| S27-3 | a page transition's frame entry taken from a stored frame | values of existing members | S2-7 | `crates/lab` `steps.rs` | `source: "recording_frame"`, the stored file's path and sha256 |
+
+**Codes and words.**
+
+| Name | Kind | Refuses or warns | Exit | Who reads it |
+|---|---|---|---|---|
+| `record_frame_unknown` (`lab`, error / none; no value; actinglab details `step`, `frame_id`) | new code | refuses a page transition whose `frame_id` or `sample_frame_ids` entry the recording does not hold; nothing written | 3 (safety class); 1 on actinglab's own line and through `serve --stdio --front mcp`, as every refusal there | the agent marking a draft, through the request form or `ac_record_mark` |
+| `record_drop_unproven` (`lab`, error / none; value `drop_problem`, required; actinglab details `step`, `before_frame`, `after_frame`, `next_step`, `next_before_frame`, `frame_change_milli` where known) | new code | refuses `drop_step` on a step before the last whose stored frames show a change at its press or do not hold what the comparison needs; nothing written | 3; 1 as above | the agent marking a draft |
+| `drop_problem` (key, `vocab:drop_problem`) and its vocabulary: `frames_not_recorded`, `screen_changed`, `next_screen_differs` | new key, new vocabulary (`crates/lab/src/codes.rs`, `DropProblem`) | the value of `record_drop_unproven` | — | the same agent: which of the three the frames show |
+
+A stored frame whose file no longer holds its sha256 is `record_frame_hash_mismatch`, as every
+stored frame read back. The index is regenerated.
+
+**What is not added.** No record member, schema, ledger revision, interface revision, configuration
+key, command-line flag or MCP parameter; the table changes the `record mark` row's `notes` and its
+`drop_step` note. The generator, `record ready` and stage one's recording are unchanged.
+
+**Tests** (`crates/lab/src/gate_463_s27.rs`; gate map `contracts/test-gates/exec.toml`, the row
+"#463 S2-7"; 160x90 screens, each of its own gray with a square of noise, the presses recorded by
+`record_press` with a fake Runtime): `s27_a_transition_from_a_stored_frame_writes_the_package_a_file_writes`
+(the loading capture named by its id is the transition's frame, the stored file itself, no frame
+file added; `record stop` writes the package the same image given as a file writes, but for the
+generation time); `s27_a_frame_id_the_recording_does_not_hold_is_refused` (as the frame and as a
+sample, nothing written); `s27_a_stored_frame_whose_file_no_longer_holds_its_bytes_is_refused`
+(`record_frame_hash_mismatch`, nothing written); `s27_a_middle_press_that_changed_nothing_is_dropped_renumbered_and_restored`
+(dropped; `restore_step` gives back every file and the step table but for its update time; dropped
+again, the package's steps 1 to 3 are the recorded steps 1, 3 and 4);
+`s27_a_middle_press_whose_screen_after_differs_is_refused` (`screen_changed`, the measure above the
+bound); `s27_a_middle_press_after_which_the_next_step_starts_elsewhere_is_refused`
+(`next_screen_differs`). The last step's drop is pinned, unchanged, by `gate_449_rec_arch`'s
+`s15_fix2_dropped_and_converted_steps_are_listed_and_not_in_the_material`. No test is adapted or
+retired.
+
+**At deploy.** Nothing to configure. An agent can name a stored loading frame as a transition's
+frame and drop a press whose stored frames show no change; everything else is as before.
+
+**Fix round 1** (coordinator work order `rd-1116/brief-463-s27-fix1.md`, its rulings R1 to R3; the
+independent review of pull request #1784 at `4f6b633c`, `rd-1116/review-1784.md`, its two must-fix
+items and its items (d), (h), (k) and (l); the parent pull request #1780 merged, main `a91e657c`
+merged into the branch, the conflicts in `contracts/test-gates/exec.toml`, this register and the
+imports of `crates/lab/src/recording/steps.rs` resolved with both sides kept).
+- *Two comparisons* (R1, review (l)). The whole-frame measure (16 by 9 cells, the mean colour of
+  each, the bound `FRAME_CHANGE_MAX_MILLI`) cannot see a change confined to a cell or two: at
+  1280x720 a cell is 80 by 80 pixels, and a counter, a badge or a switch that a press changed left
+  the press droppable. Now two frames are the same screen for a drop before the last when two
+  comparisons hold, both by that measure and that bound (`frame_unchanged` for each,
+  `steps.rs` `changed_by`): the whole frame (`change_digest`, as before), then the neighbourhood of
+  the press: the press's rectangle as the step table holds it (`pressed_rect`: `click.rect`, a
+  rectangle of one pixel for a press by its point; for a drag, a recorded swipe, the rectangle
+  spanned by `click.rect` and its `to`), grown on every side by `PRESS_REGION_MARGIN_CELLS` (1)
+  cells of the whole-frame grid at the size of the recording's frames (width /
+  `FRAME_CHANGE_COLUMNS` by height / `FRAME_CHANGE_ROWS`, rounded up: 80 by 80 pixels at
+  1280x720, 10 by 10 on the tests' 160x90) and clamped to the frame (`press_region`), the
+  frame-change digest taken over that region (`frame_change_digest` with a region, in
+  `stored_digests`, which reads each stored frame once with its sha256 checked). The same pair
+  applies to the frame the next step was pressed on (`next_screen_differs`), with the neighbourhood
+  of the dropped press. A press whose frames fail either is refused as before, `screen_changed` or
+  `next_screen_differs` ("the stored frames show a change"); the refusal names the comparison that
+  failed first, the whole frame being compared first, by the new key `drop_comparison` (in the
+  details and in the outcome's values): `frame` or `press_region`, and `frame_change_milli` is that
+  comparison's value. A change smaller than the measure sees is still not seen: each comparison
+  sees a change only when it adds up to more than 1.5 of the measure's 93 points a cell on average,
+  so a change confined to two cells is never seen, and a small change away from the press is not
+  seen by either.
+- *Texts* (must-fix 2). [lab-recording.md](lab-recording.md) (the summary and "Steps, frames and
+  remediation"), the MCP manual, the operation table's `record mark` notes and its `drop_step`
+  note, the catalog's texts of `record_drop_unproven`, `drop_problem` and its words, and this
+  section stop saying that the frames prove anything: the tool drops a press before the last only
+  when its stored frames do not contradict that it changed nothing, by the two comparisons; a change
+  smaller than the measure sees is not seen; whether a press mattered is the agent's judgement, the
+  tool only refuses what the frames contradict. The code keeps its name.
+- *`restore_step`* (R2, review (d) and (k)). Its check of ids and asset names is the one
+  `add_marks` makes, two functions with these two callers: `claim_mark_ids` (the id, then a value
+  test's side targets: `record_mark_id_conflict`) and `claim_asset_name`
+  (`record_asset_name_conflict`). A mark it reuses (on its page or on its page transition) or forbids
+  that is no longer an own mark of an effective step is refused as the mark path refuses a missing
+  source: `record_mark_rejected`, `details.marks[]` naming each with `reuse_source_missing` or
+  `forbidden_source_missing`, so that the fault is told at the restore and not by the next command.
+  The contract's sentence on the step table after a restore says "when nothing else changed in
+  between".
+- *Codes and words.*
+
+  | Name | Kind | Refuses or warns | Exit | Who reads it |
+  |---|---|---|---|---|
+  | `drop_comparison` (key, `vocab:drop_comparison`, optional value of `record_drop_unproven`) and its vocabulary: `frame`, `press_region` | new key, new vocabulary (`crates/lab/src/codes.rs`, `DropComparison`) | rides on the refusal `record_drop_unproven` with `screen_changed` or `next_screen_differs` | 3; 1 on actinglab's own line and through `serve --stdio --front mcp`, as before | the agent marking a draft: which comparison saw the change |
+
+  No code is added; the index is regenerated.
+- *Tests* (`crates/lab/src/gate_463_s27.rs`; gate map `exec.toml`, the row "#463 S2-7, fix round
+  1"; no test adapted or retired):
+  `s27_fix1_a_change_near_the_press_the_whole_frame_does_not_see_is_refused` (the cell holding the
+  pressed point painted over, its whole-frame measure above 0 and at most the bound:
+  `screen_changed` with `press_region`, the measure above the bound, nothing written; the test of
+  the second comparison); `s27_fix1_a_small_change_far_from_the_press_is_not_seen_and_the_press_is_dropped`
+  (a cell far from the press painted over: dropped, the stated limit pinned);
+  `s27_fix1_a_press_sent_on_a_capture_that_was_not_stored_is_frames_not_recorded`;
+  `s27_fix1_a_transition_takes_stored_samples_by_their_frame_ids` (the success path of
+  `sample_frame_ids`); `s27_fix1_a_transition_given_a_file_and_a_frame_id_is_refused`
+  (`validation_failed`); `s27_fix1_each_refusal_of_restore_step_writes_nothing` (an effective step
+  and an unknown one, no step, an id and an asset name taken since, a reused and a forbidden mark
+  gone since).
+
+**Train** (as §1.439's "Train": the train of #463 stage two in pull request #1784, this section's
+own, with §1.439 (#1786), §1.442 (#1787) and §1.443 (#1788)). What it changed of this section, or
+found where it meets the others; no code of this section changed:
+- *`record review`* is on the branch now (§1.439): a step this section dropped before the last is
+  not listed, as a dropped last step is not, and one `restore_step` gave back is listed again; the
+  step before a dropped one names in `after.step` the dropped step its frame is stored under.
+  "`record review` is not on this branch" above is history.
+- *The self-checks* (§1.443) run on the package of the effective steps (`generate::survey` reads
+  `effective_steps`), so a step dropped before the last is no step of any of them, as a dropped
+  last step is not.
+- *A step marked as holding a choice* (§1.442) and the drop: the drop reads neither the mark nor a
+  select. A marked step whose press (a recorded point tap, or once refined the select's click, its
+  rectangle as the step table holds it) the stored frames do not contradict as "changed nothing" by
+  the two comparisons is dropped as any other press: the mark, and a select that refines it, stay
+  in the file with the step; the step is then no effective step, so `record ready` no longer lists
+  its `select_unrefined` and the package declares no variable for it; `restore_step` gives it
+  back. A choice usually changes the screen, which the comparisons then see; the train adds no rule
+  for it.
+- *Texts.* The summary of [lab-recording.md](lab-recording.md) names this section with the three
+  others in one paragraph, and "What a recording still lacks" keeps this section's bullet on a
+  dropped or converted step after §1.443's sentences on the order.
+
+### 1.442 Slice #463 S2-6 (0.12.68): a choice in a step, marked first and refined later; its pending item in `record ready` (Workflow #463; the owner's direction on board #463 on 11-15, that a choice inside a step be singled out by marking the step first and refined afterwards, and her approval the same day of the three-stage blueprint of package making; the rules below are the coordinator's rulings in the work order and in the work order of the half-built piece it ports, not the owner's words; coordinator work order `rd-1116/brief-463-s26-select-unrefined.md`, stacked on pull request #1780, the Lab display train)
+
+This section takes 1.442, the number the work order gives; it follows §1.437, the last section of
+its parent. It ships in 0.12.68.
+
+**What it ports.** A piece built before stage one changed the recording base (V4, work order
+`rd-1115/brief-463-v4-select-variable.md`, never pushed) let an agent mark a step as holding a
+choice while recording and refine it later. Stage one now records the business by playing it
+(§1.402 and after: each press a step with its frame before and after), and stage two writes the
+business's meaning on the draft offline, with `record ready` (§1.425) listing what it still lacks.
+This slice brings the piece onto that base: the mark is made on the draft, its pending item is
+`record ready`'s, and what it ported, rewrote and left is listed below.
+
+**The rule** ([lab-recording.md](lab-recording.md), "Marking a choice first").
+- *The mark.* A `record mark` request's `choice` (request form only, as `select`): `true` marks the
+  step as holding a choice, `false` takes the mark off (fix round 1: on a step without the mark
+  `record_select_invalid` with `no_choice`), absent leaves it. The step keeps
+  `choice: {marked_at_unix_ms}` in `recording.json` (`RecordingStep::choice`, `StepChoice`; absent
+  on every step not marked, so a recording without one is byte for byte what it was); a mark given
+  again keeps its time; `record archive` and `record reopen` never rewrite it. The answer of
+  `record mark` (`MarkOutcome::choice`) and the step of `record status` (`StepView::choice`) carry
+  it. The demonstration is the step's own recorded press: a point tap of `tap --record` (`source:
+  "point"`) is taken over by the refining select as any recorded tap is (`declare_select`, R1's
+  path; nothing new).
+- *Its rules* are a select step's, with their words of `record_select_invalid`
+  (`check_select_rules` now holds a step with a select or a choice): not optional, no application
+  operation (also on the application entry step, which a choice is refused on before it needs a
+  frame), no retry, gesture or follow; on the last step of a stopped recording `on_final_step`
+  (`apply_choice`). Beside a transition it is `record_transition_has_click`, beside a step operation
+  `validation_failed`, beside an ending or an inserted optional step `with_other_change` naming
+  `choice` (the lists of other members in `ending.rs` and `inserted.rs`).
+- *Refining* is declaring the step's select, on the active or the stopped recording, the select R1
+  takes as it is; the mark stays beside it. `clear_select` leaves the choice to refine again;
+  `choice: false` on a refined step takes the mark off alone, and the package is the same (fix
+  round 1).
+- *The pending item.* The generator's pre-checks (`generate::survey`, §1.425's one implementation)
+  gain `unrefined_choices`: each effective step with a choice and no select is a failed pre-check,
+  the word `select_unrefined` of `ready_missing`, the refusal `record_select_invalid` with the new
+  `select_problem` word `choice_not_refined`. It is checked after the optional steps' positions and
+  before the select steps' rules, so within its step it comes after the effect and recognition
+  items. `record ready` lists it with its step, its number in the package and the frame its press
+  was sent on; `record stop` (its dry run and its regeneration) answers it as any first failed
+  pre-check, with `details.missing_total` and `details.hint`. A recording with it is a stage-two
+  write (`ready::stage_two_written`).
+- *The wanted value of every select* (fix round 1, the coordinator's ruling R1; the first round
+  declared it for a step marked as a choice only) is a variable of the package: `record stop`
+  declares, for each select step in path order, marked first or given whole, one `ordered` entry of
+  `control.json` `variables` ([package-variables.md](package-variables.md)): its name the select's
+  wanted name, its options the names (each titled by its first alias of 1 to 128 bytes, else its
+  id), 1 to `min(32, names)` values, its default `[wanted.default]`, the order the recording holds;
+  the step's policy document reads it through `keyed_fact` over
+  `session.dispatch.parameter.<name>` (`generate::choice_policy_document`, `choice_variable_json`),
+  one form for every select. A run handed no value chooses what R1's constant chose. The Lab's dry
+  runs of a select (`select::decide`: the mark-time self-test, the first decision, self-check item
+  8) read every variable at its default (`default_run_values`); the pressed name is decided with
+  R1's constant document (`select_policy_document`) holding it alone.
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The mark | `crates/lab/src/recording/model.rs` (`StepChoice`, `RecordingStep::choice`, `MarkRequest::choice`, `MarkOutcome::choice`, `StepView::choice`); `select.rs` (`apply_choice`, `check_select_rules`); `steps.rs` (`apply_marks`: the application entry step, the frame it needs, the mark applied before the rules); `recording_api.rs` (the request's form beside a step operation and a transition; the answer; the status view); `ending.rs`, `inserted.rs` (other members); actinglab's flag form names no `choice` (`session_record.rs`) |
+| The pending item | `generate.rs` (`unrefined_choices` in `survey`); `ready.rs` (`stage_two_written`); `codes.rs` (`ReadyMissing::SelectUnrefined`, `SelectProblem::ChoiceNotRefined`) |
+| The variable | `generate.rs` (`render`: `variables` and the policy of every select step, fix round 1); `select.rs` (`decide` reads `default_run_values`) |
+| Texts | [lab-recording.md](lab-recording.md) (the opening, `recording.json`, `record mark`'s answer, `record status`, "Selecting in a list", the new "Marking a choice first", "Marking after stop", the `record ready` words, "Pre-checks", "Pages and documents"); [package-variables.md](package-variables.md) ("Not built"); [lab-operations.json](lab-operations.json) (the notes of `record mark`'s `request`, `do`'s `mark_request` and `record ready`); `apps/actinglab-mcp/MANUAL.md`; the catalog |
+
+**Codes and words.** No outcome code is added.
+
+| Name | Kind | Refuses or warns | Exit | Who reads it |
+|---|---|---|---|---|
+| `select_unrefined` (vocabulary `ready_missing`) | new word | listed by `record ready`, which refuses nothing by it | 0 | the agent reading `record ready`; its item's `code` is `record_select_invalid` |
+| `choice_not_refined` (vocabulary `select_problem` of the existing `record_select_invalid`, error / none) | new word | refuses `record stop`, its dry run and its regeneration; nothing written | 3 on a `--via` line (safety); 1 on actinglab's own line and through `serve --stdio --front mcp` | the agent stopping the recording: refine the step or take its mark off |
+| `no_choice` (vocabulary `select_problem` of the existing `record_select_invalid`; fix round 1) | new word | refuses `record mark` whose `choice: false` names a step without the mark; nothing written | as `choice_not_refined` | the agent taking a mark off: there is none |
+
+No decision reads a code or a word. The catalog's two vocabularies and the texts of
+`record_select_invalid` are updated and the outcome-code index regenerated.
+
+**Tests** (`crates/lab/src/gate_463_s26.rs`, exec gate map "#463 S2-6"; recordings made as stage
+one makes them, `record_press` with a fake Runtime, on 96x64 lists whose names a scripted OCR
+provider reads): a choice not refined listed by `record ready` (`draft`, `select_unrefined` on
+f0001 alone) and refused by `record stop` and its dry run (`choice_not_refined`, `missing_total` 1,
+the hint, nothing written); refined, `ready`, and the package's variable, its policy reading it, the
+offline simulation tapping the default's slot and the kernel's dry run following a given order; the
+mark kept through `record archive` and `record reopen`; the point tap taken as the demonstration
+(`select_press_mismatch` for a name in the other slot, nothing written; the tap the select's click,
+`click_before` the point tap); a select given whole without the mark (fix round 1: holding the
+variable and the policy of the same select marked first, its run handed no value tapping the
+default's slot as before; the test renamed within this pull request, so none leaves the gate map of
+main). Fix round 1 adds six tests and adapts two R1 tests (below). No golden changes.
+
+**What was ported, rewritten and left.**
+- *Ported:* the request's `choice` and the step's mark with its time; a marked step keeping a
+  select step's rules with their words; `on_final_step` on a stopped recording's last step; the
+  refusals beside a transition, a step operation and an ending; refining by the select R1 takes;
+  the `ordered` variable, its declaration and the policy that reads it.
+- *Rewritten on today's base:* the refusal of `record stop` is a pre-check of `survey` with its
+  `ready_missing` word, answered as the first item with `missing_total`, where V4 refused in `plan`
+  with every step in `details.steps`; inserted optional steps (R4) and boxes (S2-5), which V4 did
+  not know, name or take a choice as their rules say; the pressed name is decided as R1 decides it,
+  with the policy holding it alone, where V4 handed the variable `[pressed]`. The first round
+  declared the variable only for a step marked as a choice; fix round 1 makes every select's wanted
+  value a variable, as V4 did, and adapts two R1 tests as V4 did.
+- *Left:* V4's list `unrefined_choices` beside `record status` (`record ready` is where it is
+  read); V4's `missing` members of a choice (`slots`, `read`, `names`, `match`, `wanted`, always the
+  same five); nothing proposes the choices or their boxes (the owner's rulings of 11-15).
+
+**Fix round 1** (coordinator work order `rd-1116/brief-463-s26-fix1.md`, after the independent
+review `rd-1116/review-1787.md`, the coordinator's rulings R1 to R5; main `a91e657c`, with the
+parent #1780 merged, merged in first).
+
+- *Every choice is a variable* (R1; the review's (l)). The first round's work order kept "a choice
+  fully given in one request as today", which made the mark decide whether a person can set a
+  choice's value: a hidden switch, the coordinator's mistake. `generate::render` now declares the
+  `ordered` variable for every select step (the filter on the mark is gone) and writes every select
+  step's policy document in the variable form (`choice_policy_document`; R1's
+  `select_policy_document` stays the base of that document and the constant the pressed name is
+  decided with). A run handed no value chooses what it chose before: the variable's default
+  `[wanted.default]` keeps the one name R1's gate kept, and the term scores every slot kept alike,
+  so the tie-break decides as before. The mark now means only "this choice is not refined yet".
+  Accepted with it ([lab-recording.md](lab-recording.md), "The wanted value is a variable of the
+  package"): a package generated again from an existing recording with a select gains `variables`
+  and the policy in the variable form, so its content hash changes, and it needs `package` 14; the
+  gate's `on_unknown` is `abort_evaluation` where R1's was `drop_candidate`, with no effect a run can
+  meet (a slot whose name reads no known name is left out before the policy); a recording with more
+  select steps than a package may declare variables (16) is refused at admission, by the existing
+  limit.
+- *Withdrawing a mark* (R2; the review's (m)). `choice: false` on a step without the mark is
+  refused, `record_select_invalid` with the new `select_problem` word `no_choice`, as R2 refuses
+  `clear_select` with nothing to take off (`no_select`); nothing is written. On a refined step it
+  takes off the mark and nothing else: the select stays, and the package is the same with the mark
+  or without it (`select::apply_choice`).
+- *The lint* (R3; the review's (k)). The arm `Some(true)` of `apply_choice` is
+  `step.choice.get_or_insert_with(…)`, which clippy's `collapsible_match` accepts and which keeps
+  the `match` exhaustive.
+- *Texts* (R4; the review's (j) and (l)). [lab-recording.md](lab-recording.md): the opening,
+  "Selecting in a list" (its opening, the `select_problem` table's `no_choice`, the policy document and
+  `control.json` of "What `record stop` generates", the paragraph "The wanted value is a variable of
+  the package" in place of the constant's, the `package` revision), "Marking a choice first" (the
+  mark, refining, what `record stop` generates for a choice) and "Pages and documents";
+  [package-variables.md](package-variables.md) ("Not built" and V4 under "What arrives later");
+  [lab-operations.json](lab-operations.json) (the note of `record mark`'s `request`);
+  `apps/actinglab-mcp/MANUAL.md`; the catalog's `no_choice` and the texts of
+  `record_select_invalid`; the index regenerated.
+- *Tests* (R5; the review's (h) and (m)). Adapted, as the requirement changes what they pin:
+  `gate_463_r1::r1_a_marked_select_is_accepted_generated_and_admitted` (the gate reads the variable,
+  the control declares it with the default `[item_b]`) and
+  `gate_463_r1::r1_a_default_changed_after_stop_regenerates_another_package` (the new default is the
+  variable's `[item_a]`); this slice's test 5 turned the other way round and renamed
+  `s26_a_select_given_whole_without_the_mark_holds_the_same_variable`. New in `gate_463_s26.rs`:
+  `s26_fix1_the_first_name_of_the_order_on_the_screen_is_chosen` (two names in an order, and
+  reversed, pin the term's sign), `s26_fix1_no_name_of_the_order_on_the_screen_ends_on_the_on_empty_key`,
+  `s26_fix1_choice_false_refuses_an_unmarked_step_and_takes_off_only_the_mark`,
+  `s26_fix1_a_marked_step_keeps_each_rule_of_a_select_step` (optional, application, retry, gesture,
+  follow), `s26_fix1_a_choice_is_marked_and_refined_on_a_stopped_recording` and
+  `s26_fix1_a_step_inserted_beside_a_marked_step_leaves_the_mark_where_it_was`; each once in the
+  exec gate map's row "#463 S2-6". No golden changes; no test leaves a gate map of main.
+
+**At deploy.** Nothing to configure. A recording made on an earlier build reads as before; one that
+holds a choice is not read by a build before 0.12.68. Fix round 1: a package `record stop` generates
+again from a recording with a select declares `variables` and needs `package` 14; the Runtime of
+this release admits it.
+
+**Train** (as §1.439's "Train": the train of #463 stage two in pull request #1784, with §1.439
+(#1786), §1.440 (#1784) and §1.443 (#1788)). What it changed of this section, or found where it
+meets the others; no code of this section changed:
+- *`record ready`.* This section's pre-check `select_unrefined` stands in the one readiness
+  judgement (§1.439's `ready_of`, with §1.443's self-checks): a failed pre-check runs no
+  self-check, so a recording with a choice not refined lists no self-check failure until the
+  choice is refined or its mark taken off.
+- *`record review`* (§1.439) lists `select_unrefined` in the `missing` of the step it names, and
+  shows the step's mark (`choice`, as the step table holds it); a refined choice's press is
+  `press`, the select's click as the step table holds it.
+- *The self-checks and the variables* (§1.443). Every check evaluates the generated package with
+  its variables at their defaults: the selects check decides by `select::decide`, which hands the
+  kernel's dry run `default_run_values` (the variable at `[default]`; its run of the pressed name
+  takes R1's document with that name), and the first decision and the final package simulate by
+  `simulate_contained_task_at`, which runs with `default_run_values` too. So a refined choice
+  passes them, as this section's `s26_refining_the_choice_ends_its_item_and_the_package_holds_its_variable`
+  asks (`ready`, nothing missing, nothing in `checks_after`; under §1.443 `checks` names the seven,
+  each complete), read against the joined code.
+- *The drop* (§1.440): a step marked as holding a choice is dropped before the last as any press
+  whose stored frames do not contradict that it changed nothing; its mark stays in the file with
+  it, and while it is dropped `record ready` does not list it (§1.440's "Train").
+
+### 1.443 Slice #463 S2-1c (0.12.68): `record ready` lists every failure of each self-check, not only the first (Workflow #463; the owner asked on board #463 for one complete list of what a recording still lacks, as the work order's "Why" says; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1116/brief-463-s21c-selfchecks-list-all.md`, begun on the branch of the train of #392 DA-5, #1780, at `b157951c`; it stands on main, into which that train was merged (`a91e657c`), and fix round 1 merged main `dc4c3622`)
+
+This section takes 1.443, the number the work order gives. It ships in 0.12.68.
+
+**Why.** `record ready` (§1.425) lists at once every pre-check a recording fails, but of the
+self-checks `record stop` runs once the pre-checks pass it listed one item: each check stopped at
+its first failure, and that failure ended them all. An agent that fixed one failure and asked again
+got the next: one round per failure.
+
+**The rule.**
+- Each self-check is one implementation with two callers (`crosscheck::Failures`). `record stop`
+  (`Failures::first`) ends at the first failure, which is its refusal, at the place and with the
+  code of before. `record ready` (`Failures::every`) notes each failure and the check goes on to
+  the next thing it judges. An error that is none of a check's verdicts ends the check for both.
+- Under `record ready` a check runs after a failed one when it reads nothing the failed one gave:
+  the first decision, the cross-check, the endings and the selects read only the frames and the
+  admitted package, so each runs whatever the others found; nothing runs after a failed `frames`
+  or `admission`; `final_package`, built of what every check before it gave, runs only when none
+  failed. The running order is that of before.
+- One failure is one item of `missing`: `what` the check, `code` the code `record stop` answers for
+  it, `step`, `artifact_step` and `frame_id` those of the step it is about (`frame_id` stays the
+  step's press frame, as for a pre-check's item), and in `details` where the check met it: `frames`,
+  `page`, `target` (a followed mark, a template whose crop cannot be read back), `outcome_key` with
+  the ending's `page`. An item of the package as a whole has no step and no `details`.
+- Order: the checks' running order; within a check by the step's serial number (items without a
+  step first), then by the first frame named (`f0009` before `f0010`), failures of one step and
+  frame in the order the check met them.
+- The answer's new member `checks[{check, complete, reason?}]` names each check that ran, in the
+  order they ran: `complete: true` when its items are all it has, `complete: false` with `reason`
+  (the new closed vocabulary `ready_check_stop`) when it stopped at its last listed failure. It is
+  empty when a pre-check fails (and on a packaged recording); when every check passed it names the
+  seven, each complete. `checks_after` names the checks that did not run, as before.
+
+**The checks** (for the work order's question: which listed every failure, which stopped at the
+first, and why one cannot go on):
+
+| check | before | now | why it cannot go on past a failure |
+|---|---|---|---|
+| `frames` | the first frame or crop it could not read back | every frame and every crop; any failure ends every later check, which reads every frame | — |
+| `admission` | the first refusal | the first refusal, `complete: false`, `whole_package` | admitted by the kernel, its evaluator: each stage built on the one before, and the kernel answers one refusal (fix round 1: rendering the package is no stage) |
+| `first_decision` | the first frame that failed | every live frame of step 1 a click that follows a mark is simulated on | a click that follows nothing, a select and a package with an application step judge one frame: one failure at most, the list complete |
+| `cross_check` | the first | every page on each of its own frames, every located-text guard on each frame, every optional page against each screen (7a) and the skip target against each optional step (7b); after a failure the arrival gates and the entry overlay, which only warn, are not evaluated | — |
+| `endings` | the first | every ending's page on each of its own frames and against each screen (`record_ending_ambiguous`, `ocr_alone_unchecked`) | — |
+| `selects` | the first | every live frame of every select step | within one frame each part reads the one before: one failure per frame |
+| `final_package` | the first refusal | the first refusal, `complete: false`, `whole_package` | encoded, expanded, admitted and decided again: each stage built on the one before |
+
+Any check but `frames` stops at an error that is none of its verdicts (`check_error`): what it
+would judge after it would be judged on no basis (fix round 1: `admission` and `final_package` too,
+where rendering the package judges nothing; before it, they named such an error `whole_package`).
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The collector | `crates/lab/src/recording/crosscheck.rs`: `Locus`, `CheckFailure`, `CheckRun`, `Failures` (`first`, `every`, `fail`); `first_decision`, `select_first_decision`, `select_checks`, `cross_check`, `optional_checks` and `ending_checks` take `&mut Failures`, a verdict's `return Err` now `failures.fail(…)?`; `FirstDecision::undecided`; `CrossCheck` is `Default` |
+| The running order | `crates/lab/src/recording_api.rs`: `self_checks(plan, ocr, failures)` with `Runner` and `SelfCheckFailures` (`into_refusal`, `record stop`'s refusal; `unreadable`, a `runtime_unavailable` failure `record ready` answers as its own error, as before); `admission`, `final_package` (`FinalPackage`); `load_package_inputs` with `read_package_frame` and `read_crop` |
+| The answer | `crates/lab/src/recording/ready.rs`: `ReadyCheckRun`, `RecordReadyOutcome::checks`, `check_items` (was `check_item`), `check_runs`, `every_check_complete`; `ReadyDetails::frames` and `target`, never read from a pre-check's refusal (`skip_deserializing`), so a pre-check's item is as before |
+| The words | `crates/lab/src/codes.rs`: `ReadyCheckStop` (`ready_check_stop`: `whole_package`, `check_error`); the catalog's vocabulary |
+| Texts | [lab-recording.md](lab-recording.md): "What a recording still lacks: `record ready`" (the second answer, a self-check item's `details`, "Order", "The self-checks" with the table of the two words, the rows `ready` and `packaged`) and "Self-checks" ("Every failure, for `record ready`"); the row `record ready` in [lab-operations.json](lab-operations.json), its output and notes |
+
+**Codes and words.** No outcome code is added. One closed vocabulary is added,
+`ready_check_stop`, two words, one cause each, used by no outcome key: a member of a read that
+exits 0, it neither refuses nor warns. The one decision the slice adds reads a class
+(`runtime_unavailable`), as `record ready` did. The outcome-code index lists codes, so it does not
+change (`ci/outcome_codes_index.py --check` finds it current).
+
+**Tests** (`crates/lab/src/gate_463_s21c.rs`, exec gate map "#463 S2-1c"; a recording made as stage
+one makes it, three taps through `record_press` with a fake Runtime on synthetic 160x90 screens,
+four steps marked with a colour mark each, then one mark broken in the step table; no clock read):
+the marks of steps 2 to 4 expecting another colour: three `cross_check` items by step, each with
+its frame and page, the checks before `final_package` complete, and `record stop --dry-run`
+refused `record_step_self_mismatch` for step 2 on f0003 as before; step 1's mark expecting another
+colour: the `first_decision` item, then the `cross_check` item, and `record stop` refused at the
+first decision; step 2's mark with a negative colour distance: one `admission` item,
+`complete: false` with `whole_package`, every later check in `checks_after`, `record stop` refused
+at admission; nothing broken: `ready`, every check complete. No test is adapted, no golden
+changes, no test leaves a gate map.
+
+**What is not changed.** Any check's decision; what `record stop` refuses and with which code; the
+pre-checks' list; the package generated. No ledger record, configuration key, Runtime interface
+revision or outcome code.
+
+**Fix round 1** (coordinator work order `rd-1116/brief-463-s21c-fix1.md`; the independent review of
+pull request #1788 at `72f6289d`, its points that may change and its list of untested cases (h), with
+the coordinator's dispositions; the rulings are the coordinator's, not the owner's words).
+- *Where a stopped check's own item stands* (review, point 1). The failure a check stopped at
+  (`complete: false`) is its last item, after the failures it met before it, as "stopped at the
+  last of them" says; it no longer sorts first as an item without a step (`ready::check_items`).
+- *One cause per word* (review, (l)). In `admission` and `final_package` rendering the package
+  judges nothing: an error there stops the check with `check_error`, as in every other check;
+  `whole_package` is only a refusal of their staged judgement (admitted by the kernel, its
+  evaluator; encoded, expanded, admitted and decided again). `self_checks` renders before it calls
+  `admission` and `final_package`, which now take the rendered files. Under `record stop` the
+  refusal is the one it was.
+- *Every unreadable slot of a frame* (review, point 3). `select_checks` lists each slot of a frame
+  whose name reads no known name, one failure each, its `target` the target that reads that slot's
+  name (`Plan::select_slot_target_id`, `select/step_ii/slot_kk`), so one read of `record ready`
+  lists them all; `record stop` answers the first, as before.
+- *Point 4 kept.* An ending's page that passes on the frame of a select step after whose press the
+  run awaits the endings is listed by `endings` and by `selects`, one cause in two items; the
+  contract says so.
+- *Texts.* [lab-recording.md](lab-recording.md), "What a recording still lacks": a self-check
+  item's `target` and which items have no `details`; "Order" (the stopped failure last, and that the
+  first item of a check is not necessarily the failure `record stop` answers: `frames` reads the
+  steps' frames before an ending's frames and the crops, and lists those, without a step, first);
+  "The self-checks" (each unreadable slot, point 4, the table of `ready_check_stop`); and "Every
+  failure, for `record ready`". The MCP manual's sentence on `ac_record_ready` says it lists every
+  failure of each self-check. In this section the heading (what the branch stands on), the
+  sentence on the index, the `admission` row and the sentence after the table of the checks.
+- *Tests* (`gate_463_s21c.rs`, exec gate map row "#463 S2-1c, fix round 1"; no test adapted,
+  retired or re-recorded). For the endings the bench is stopped with its package and takes two
+  endings from frames (`alpha`, f0007; `bravo`, with an OCR mark over a patch of a colour only its
+  screen shows, f0008); a scripted OCR model reads no text and fails on a frame showing that
+  colour. `s21c_fix1_failures_that_arrive_out_of_step_order_are_listed_by_step` (step 4's and the
+  first ending's stored frames damaged: the ending's item first; `record stop` refuses step 4's, the
+  first it met), `s21c_fix1_a_check_that_meets_an_error_says_check_error_and_lists_it_last` (the
+  first ending's mark broken, the second ending's OCR read failing: the verdict, then the error,
+  `check_error`), `s21c_fix1_a_final_package_that_stops_is_listed_with_whole_package` (the answer
+  built from runs: the final package is built of the plan, frames and crops every earlier check
+  passed, so no recording reaches its refusal), `s21c_fix1_the_endings_check_lists_every_ending_that_fails`,
+  `s21c_fix1_the_selects_check_lists_every_unread_slot_of_every_frame` (step 2 with a sample and a
+  select of two slots: four items, each with its slot's target) and
+  `s21c_fix1_a_pre_check_item_never_carries_frames_or_target` (a pre-check's refusal whose details
+  name `frames` and `target`: its item has neither).
+- No code, word, key or member is added; no check decides otherwise; the package generated is the
+  same.
+
+**Train** (as §1.439's "Train": the train of #463 stage two in pull request #1784, with §1.439
+(#1786), §1.440 (#1784) and §1.442 (#1787)). What it changed of this section, or found where it
+meets the others:
+- *One judgement, two commands.* The body of `record ready` this section changed is `ready_of`
+  (§1.439), which `record ready` and `record review` call; the merge of this section took its body
+  as it is, with §1.439's reference to the recording (`recording_api.rs`, the one conflict of Rust
+  code in the train). `record review` lists each self-check failure on the step its `Locus` names
+  and a failure of no step (an ending's, a template's crop, the package as a whole) on none.
+- *Choices* (§1.442): the selects check and the first decision evaluate every select step's
+  package variable at its default (§1.442's "Train"), so a refined choice passes them; a choice
+  not refined is a pre-check, and then no self-check runs.
+- *Dropped steps* (§1.440): a step dropped before the last is no step of the package the checks run
+  on, as a dropped last step is not.
+- *The bench.* `gate_463_s21c.rs`'s `Bench` (its field `ocr`, its `marked`, `state`, `break_mark`,
+  `recording`, `write_recording` and `mark_request`), `INSTANCE`, `EVERY_CHECK` and `complete` are
+  `pub(crate)`, for the train's test (§1.439's "Train"); no test of this section changed.
+- *Texts.* In [lab-recording.md](lab-recording.md), "What a recording still lacks", this section's
+  sentences on the order come before §1.440's bullet on a dropped or converted step.
+
 ### 1.444 Slice #463 S3-8, S3-9 (0.12.68): a direct run and a trial carry variable values (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, whose stage three puts a trial on a real application under her explicit authorization; the design `rd-1115/pack-stage3-design.md`, §4.2 "S3-8" and "S3-9" with §2.4; the rules below are the coordinator's rulings in the work order and in its take-over, not the owner's words; coordinator work orders `rd-1116/brief-463-s38-run-variables.md` and `rd-1116/brief-463-continue.md`, stacked on the host train #1778, `claude/437-g1-device-hold`)
 
 This section takes 1.444, the number the work order gives. It ships in 0.12.68. The slice was
