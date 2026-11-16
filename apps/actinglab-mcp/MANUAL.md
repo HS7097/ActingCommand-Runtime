@@ -35,7 +35,15 @@ naming this file.
   `ac_material` takes `export` and no `out`, `ac_frame` and `ac_report_export` take no `out`
   (section 6); `ac_run_show`
   and `ac_run_stop` take `wait_s`, `ac_events` and `ac_codes` take `cursor` (section 4);
-  `ac_deploy` and `ac_rollback` take no `detach` (section 9).
+  `ac_deploy` and `ac_rollback` take no `detach` (section 9). These are the only parameters of a
+  row a tool leaves out; the command line also takes `actinglab`'s global options and a
+  positional given as its flag (`--id`, `--instance`), which no tool needs.
+- **Closed word lists** (Workflow #434 LW-1, 0.12.67). Where an operation takes only the words of
+  a closed list for a parameter the table types as text, the schema lists them (`enum`; for a
+  list its items' `enum`): `ac_status`'s `sections` (the overview's blocks; `daemon` and
+  `incomplete` are always answered and are no section) and `ac_events`' `type`, `event_type`,
+  `exclude_event_types` (the ledger's event types) and `origin_module`. Another word is refused
+  before anything is sent (section 7).
 - **No tiers.** Every tool may be called. `--tier`, today's server's option, refuses the start.
 
 ## 2 How to start
@@ -88,10 +96,20 @@ naming this file.
   it again every second while the run is not found, admitted or running. A run a job of this
   process submits carries that job as `job` (`kind`, `job_phase`, and its `line` once it ended).
   A job's phase is `running`, `submitting` (a run's job), `done` or `failed`.
+- **A run's line** (Workflow #434 LW-1, 0.12.67). The line `run start` gives once its run ended
+  holds every ledger record of the run (`events`, with payloads: 100 KB to 500 KB for a run that
+  went far). This server never sends them: the job's `line` that `ac_run_show` carries and the
+  answer of `ac_run_start` with `wait` are that line without `events`, with `events_total` (how
+  many were left out), `truncated` (what was left out, as JSON pointers: `/events`, and
+  `/official_ocr_projection` or `/official_ocr_fields_projection` when the run's OCR reads did
+  not fit beside the rest) and `rest`, the calls that read it: `ac_run_evidence` with the run's
+  request id (its steps, page by page) and `ac_events` with its correlation id and `detail`
+  `payload` (its records). The receipt (state, outcome, `executed_steps`, `final_page`) and the
+  line's outcome stay. So the answer of a finished run fits, whatever it did.
 - **`ac_run_start`** without the row's `wait` answers at once `{handle, correlation_id,
   job_phase}` (`submitting`): the handle is the run's request id, and the run is submitted in a
   job. With `wait` the call waits up to that long, within the call budget, and answers the run's
-  line when the run ended by then, else the same handle.
+  line (as above) when the run ended by then, else the same handle.
 - **`ac_run_stop`** waits for its job up to `wait_s` (default 20, never more than the call
   budget), then answers the job's line, or its handle while it still runs. A run a job of this
   process still submits is only asked to stop (`cancel_only`).
@@ -124,6 +142,8 @@ naming this file.
     own order and marks the cut (`truncated`, and a cursor where the answer pages), or it writes
     the whole answer to the export directory (section 6) and answers its header with the warning
     `answer_exported`;
+  - a run's line, wherever this server gives it (`ac_run_start` with `wait`, the job of
+    `ac_run_show`), leaves the run's ledger records out and says so (section 4, "A run's line");
   - a child's success line (section 8) that does not fit is written whole to the export directory
     and answered `{req_id, export, overflowed: true}`, `answer_exported` first among its
     `warnings`. `ac_record_stop` keeps its four binding parts together under `lab`, and
@@ -195,13 +215,29 @@ naming this file.
   neither server sends the identity card or the client action before a write, the binding's
   `Lab-MCP` naming where it came from); and, on Windows, the rescue module's rows, for the root the
   server runs from, their journals recording `Lab-MCP` (`deploy` and `rollback` start a detached
-  run of their own and answer at once, section 9).
+  run of their own and answer at once, section 9). These requests keep the command line's
+  envelope until slice LAB-6S2-E (`contracts/lab-two-entries.md` §2.4 and its slice table): so a
+  run `ac_run_start` starts is listed with `origin` `cli` (`ac_runs`, `ac_run_show`), while its
+  command record's channel is `mcp`; from that slice on it is `lab`.
 - **Through a child**: every other row, by `actinglab.exe serve --stdio --front mcp`, the
   `actinglab.exe` beside the server's own file, as `Lab-MCP` (on each step and mark it adds to a
   recording). One call per child at a time. A child idle for `--child-idle` seconds (default 10)
   is ended by closing its input; no child is ever killed. After a call of `ac_lab_observe` or
   `ac_do` with `capture`, the server records the client action today's server records, naming the
   Lab request; its warnings join the line.
+- **Presses** (Workflow #434 LW-1, 0.12.67). `ac_tap`, `ac_swipe` and `ac_long_tap` without
+  `record` press on every instance. On an instance whose input is the emulator's own interface
+  (`touch_backend` `nemu_ipc`, which presses only on a frame the Runtime captured), the command
+  reads the instance's status and captures one frame first, and sends the press on it, as a
+  recorded press does: it costs one capture (an `ObserveReadonly`, its frame kept as a Lab
+  frame), and the answer names the frame (`input_frame`). Elsewhere nothing is captured. Such an
+  instance sends no key and no text: `ac_key` and `ac_text` answer
+  `nemu_input_capability_unsupported` there, nothing sent, and the Runtime has no other way to
+  send a key on it; press the screen's own control (`ac_tap`, or `ac_do` with `capture` on a
+  package's element) instead (`ac_codes` gives the code's handling). `ac_tap_target` and
+  `ac_navigate` only plan on a saved frame (`scene` with `dry_run`) and press nothing anywhere,
+  as their command line does: `ac_do` with `capture` and the package's element, or `tap` with a
+  point, presses a target on an instance, and `ac_ensure` with `capture` routes one to a page.
 - **Recordings** (Workflow #449 REC-ARCH, 0.12.59; `contracts/lab-recording.md`, "Archiving"). A
   recording belongs to the instance: while one is active, every call with `record` on that
   instance, whoever sends it, adds a step to it, and its answer's `record` names the recording it

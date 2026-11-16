@@ -41,7 +41,7 @@
 //! (`calls::Service::end_of_input`) and none is killed.
 
 use crate::budget;
-use crate::calls::{self, FrontMembers, Service};
+use crate::calls::{self, Finished, FrontMembers, Service};
 use crate::codes::McpCode;
 use crate::jobs::{self, Jobs, Limits};
 use crate::lock;
@@ -982,6 +982,13 @@ fn job_answer(asked: &Asked<'_>, job: &jobs::Job, read: bool) -> Answered {
             handle: Some(job.handle.clone()),
         };
     };
+    // Workflow #434 LW-1: a run's job (`ac_run_start` with `wait`) answers the run's line without
+    // its records ([`run_answer`]).
+    let ended = if job.run {
+        run_answer(&ended, &job.handle, asked.era)
+    } else {
+        ended
+    };
     match calls::sent(&ended, asked.era) {
         Ok(result) => {
             job.collect();
@@ -1071,7 +1078,7 @@ fn run_show(asked: &Asked<'_>, arguments: &Map<String, Value>, wait: Option<Dura
         },
     );
     asked.result(&match &job {
-        Some(job) => with_job(exit, job),
+        Some(job) => with_job(exit, job, asked.era),
         None => exit,
     })
 }
@@ -1082,18 +1089,72 @@ fn run_state(exit: &Exit) -> Option<ContainedRunState> {
     serde_json::from_value(state.clone()).ok()
 }
 
-/// A run's line with the job of this process that submits it, as `job`.
-fn with_job(mut exit: Exit, job: &jobs::Job) -> Exit {
-    if let Ok(Value::Object(line)) = &mut exit.line {
-        let mut member = Map::new();
-        member.insert(KIND.to_owned(), json!(job.kind));
-        member.insert(JOB_PHASE.to_owned(), json!(job.phase()));
-        if let Some(ended) = job.ended() {
-            member.insert(LINE.to_owned(), ended.line);
+/// A run's line with the job of this process that submits it, as `job` ([`with_run_job`]).
+fn with_job(exit: Exit, job: &jobs::Job, era: Era) -> Exit {
+    with_run_job(
+        exit,
+        &job.kind,
+        job.phase(),
+        job.ended().as_ref(),
+        &job.handle,
+        era,
+    )
+}
+
+/// Workflow #434 LW-1 (register §1.435): the run's line `exit` (`run show`'s: its state, its
+/// terminal with its outcome and counts) with the job of this process that submits the run, as
+/// `job`: its `kind`, its `job_phase` and, once it ended (`ended`), its line as a run's is
+/// answered ([`budget::run_line`] for the run of `request_id`): without the run's records, and
+/// without its official OCR reads where the answer would not fit with them. Before LW-1 `job.line`
+/// was the whole `run start` line, every record of the run with it, so that the answer of a run
+/// that went far never fit.
+pub(crate) fn with_run_job(
+    exit: Exit,
+    kind: &str,
+    phase: &str,
+    ended: Option<&Finished>,
+    request_id: &str,
+    era: Era,
+) -> Exit {
+    let attached = |keep_ocr: bool| {
+        let mut shown = exit.clone();
+        if let Ok(Value::Object(line)) = &mut shown.line {
+            let mut member = Map::new();
+            member.insert(KIND.to_owned(), json!(kind));
+            member.insert(JOB_PHASE.to_owned(), json!(phase));
+            if let Some(ended) = ended {
+                member.insert(
+                    LINE.to_owned(),
+                    budget::run_line(&ended.line, request_id, keep_ocr),
+                );
+            }
+            line.insert(JOB.to_owned(), Value::Object(member));
         }
-        line.insert(JOB.to_owned(), Value::Object(member));
+        shown
+    };
+    let whole = attached(true);
+    let fits = match &whole.line {
+        Ok(line) => budget::carried(line, era, whole.code != 0).is_ok(),
+        Err(_) => true,
+    };
+    if fits { whole } else { attached(false) }
+}
+
+/// Workflow #434 LW-1 (register §1.435): the line of a run's job that ended (`ended`, `run start`'s
+/// line for the run of `request_id`) as `ac_run_start` with `wait` answers it
+/// ([`budget::run_line`]): without the run's records, and without its official OCR reads where the
+/// answer would not fit with them.
+pub(crate) fn run_answer(ended: &Finished, request_id: &str, era: Era) -> Finished {
+    let shaped = |keep_ocr: bool| Finished {
+        line: budget::run_line(&ended.line, request_id, keep_ocr),
+        is_error: ended.is_error,
+    };
+    let whole = shaped(true);
+    if calls::sent(&whole, era).is_ok() {
+        whole
+    } else {
+        shaped(false)
     }
-    exit
 }
 
 /// Workflow #434 LAB-5G3 (work order point 5; today's `ac_run_pack`): `ac_run_start`. The jobs'

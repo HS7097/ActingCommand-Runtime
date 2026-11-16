@@ -107,9 +107,9 @@ pub fn record(log: &Path, capability: &str, why: &str, via: &str) -> Result<Valu
     Ok(json!({"path": log.display().to_string(), "gap": gap}))
 }
 
-/// Workflow #434 LAB-5B1, test builds only: [`parse`]'s refusal of the words [`dispatch`] is given
+/// Workflow #434 LAB-5B1 (in every build since Workflow #434 LW-1, for
+/// `core_ops::handed_refusal`): [`parse`]'s refusal of the words [`dispatch`] is given
 /// (its command's word first), if any.
-#[cfg(test)]
 pub(crate) fn parse_refusal(arguments: &[OsString]) -> Option<Outcome> {
     parse(&arguments[1..]).err()
 }

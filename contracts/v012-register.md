@@ -31212,6 +31212,144 @@ path under the input's request), `instance_resources_fenced`, and the lease's `l
 a failed input answers its own failure. A self-check, a resume or the fence's recheck lifts the
 fence.
 
+### 1.435 Slice #434 LW-1 (0.12.67): the MCP front can press a target, read a finished run and press on every instance (Workflow #434; the owner's rule for the Lab on board #434, 11-13, that what the Lab can do both its command line and its MCP front can do; the coordinator's walk of 11-16 through the Lab's MCP server on Runtime 0.12.65, five things that got in the way; the rules below are the coordinator's rulings in the work order and in its correction of item 1 the same day, not the owner's words; coordinator work order `rd-1116/brief-434-lw1-mcp-walk-findings.md`, read on main `381fe461`)
+
+This section takes 1.435, the number the work order gives: §1.431 is the highest on main
+`381fe461`, and three other slices being built take §1.432, §1.433 and §1.434. It ships in 0.12.67.
+
+**Item 1, `ac_tap_target` cannot press: the design, made honest.** The tool takes no `capture`
+because its row declares none, and the row declares none because its command line takes `--capture`
+only to refuse it: `actinglab tap-target` and `navigate` read their frame through the readers' input
+(`readonly_cli::READONLY_INPUT_READS`, `--capture` among `refused`), which refuses the retired legacy
+semantic capture ("use observe/do/ensure/wait") before anything; without `--capture` the Lab's
+kernel refused real execution "requires --capture" (`crates/lab/src/drive.rs`), a flag that is
+itself refused. So neither front presses with these two commands; their only path is `--scene` with
+`--dry-run` (§1.331, LAB-OCR-DL, its table "The rows", already said so). Built, as the coordinator's
+correction asks: the commands stay as they are; the kernel's refusal without `--dry-run` says that
+the command only plans on a saved scene and presses nothing, and names what presses a package's
+target on an instance (`do --capture` with `--package` and the target, an element, or `--tap x,y`)
+or routes one (`ensure --capture` with `--package` and `--to`); the rows' `help`, which is the tools'
+description, says that they plan on a saved frame, pressing nothing, and names `do` and `ensure`
+with capture, and their `notes` say why the rows declare no capture.
+
+*Every tool against its command.* For each offered row, the command-line parameters the tool's
+schema leaves out:
+- given by the front, and so no member of the tool (the manual, sections 1, 6 and 9): `material`'s,
+  `frame`'s and `report export`'s `out` (the server's export directory), `deploy`'s and
+  `rollback`'s `detach` (always true: they replace the server);
+- a positional given as its flag, the same parameter: `--id` (`run show`, `run evidence`), `--op`
+  and the installer's `--operation` (`op status`), `--dir` (`release verify`, `release stage`), and
+  `--instance` on every row with a positional instance (§1.307);
+- `devices bind`'s `--root`, the module's own root, which the server gives from where it runs;
+- `actinglab`'s global options, which its own commands' command lines hand on: every one a command
+  reads is a parameter of its row (the gates of LAB-5B2 and LAB-5B3 hold each read list to its row
+  in both directions: `dry_run`, `verbose`, `game` and `server` where they are read); the rest are
+  read by no command an offered row reaches, refused by the command (`regression`, `replay`,
+  `resource verify`, `scheduling …`, `package` offline) or retired (`--require-session`), and `--via`
+  is the front's own (`serve --front mcp`);
+- the flags a command reads only to refuse them: `--capture` of `tap-target`, `navigate` and the
+  four readers, `--touch-backend` of `touch-probe`, the legacy routing flags.
+No other absence keeps a tool from what its description says. The walk of item 3 pins the first group
+(`LEFT_OUT`), so that a later slice that leaves a row's parameter out of its tool decides it there.
+
+**Item 2, a finished run cannot be read: the bulk.** `run start`'s line once its run ended carries
+`RuntimeFlowOutput` whole: its receipt and `events`, every ledger record of the run's correlation in
+the forensic projection with payloads (`runtime-client` `flow_output`), 106 KB to 514 KB on the walk.
+`ac_run_start` with `wait` answered that line, and `ac_run_show` of a run a job of this process
+submitted carried it as `job.line` beside the run's status (`server.rs`, `with_job`), so both
+answered `output_budget_exceeded`; a run that failed early came back with few records and fitted. A
+run's status itself (`run show`, `actingcommand.run-status.v1`) is small. Built: wherever the server
+gives a run's job line (`server::run_answer` for `ac_run_start` with `wait`, `server::with_run_job`
+for `ac_run_show`), it is `budget::run_line`'s: every member but `events`, which is counted
+(`events_total`), `truncated` (JSON pointers of what was left out: `/events`, and
+`/official_ocr_projection` or `/official_ocr_fields_projection` when the run's OCR reads do not fit
+beside the rest, measured as the result is sent) and `rest`, the calls that read it
+(`ac_run_evidence` with the run's request id, its steps page by page; `ac_events` with the
+receipt's correlation id and `detail` `payload`, its records). The receipt (state, outcome,
+`task_result`, `executed_steps`, `final_page`) and the line's outcome stay; `ac_run_show` keeps the
+run's status (state, terminal, counts). The command line prints the line whole, as before.
+
+**Item 3, a parameter the schema offers and the operation refuses.** Read in the code: `ac_events`
+hands `exclude_event_types` on as `--exclude-event-types` (`core_reads::HANDED`) and `events`' parser
+takes it; what it refuses is a word that names no event type (`NotEventTypes`, `not_recognised`,
+the word not in the answer), while the schema offered any text. The coordinator's second example is
+the same: `ac_status`'s `sections` takes only the overview's block names (`daemon` and `incomplete`
+are always answered and are no section). Built: the front's one table `tools::WORDS` names the
+parameters whose operation takes only the words of a closed list the table types as text, each with
+its source: `status` `sections` (`lab_ops::overview::Section::ALL`), `events` `type`, `event_type`,
+`exclude_event_types` (the catalog vocabulary `event_type`, which the outcome guard holds equal to
+`EventType`) and `origin_module` (the vocabulary `origin_module`). The schema lists the words
+(`enum`, a list's items' `enum`) and the front refuses another word before anything is sent
+(`arguments_invalid`, `not_recognised`), as it refuses a table enum's.
+`lab_ops::core_ops::handed_refusal` runs the parser of a handed command line alone (the thirteen
+modules' `parse_refusal`, test builds only before, now in every build) for the walk.
+
+**Item 4, a plain press on an emulator whose input needs a frame.** The Nemu input performs a tap,
+a long tap, a swipe and the segmented drags only on a frame the Runtime captured
+(`NemuInputSupport::InFrame`; the host refuses one without, `nemu_input_frame_required`), and no key
+and no text (`nemu_input_capability_unsupported`). A recorded press captures before it and sends
+the press with the reference of that frame (#463 S1-1, `send_recorded_press`); a plain one sent
+none. Built, in `actinglab`'s `tap`, `swipe` and `long-tap` without `--record` (and so `ac_tap`,
+`ac_swipe` and `ac_long_tap` through a `serve` child): one `Status` read on the press's connection;
+where the instance's capability table names `nemu_ipc` as the input of the press's capability
+(`evidence_ref`, the configured touch backend), one capture through the Runtime (`ObserveReadonly`,
+on a connection of its own, as the recorded press takes it) and the press sent on that frame
+(`RuntimeInputBackend::input_receipt_on`); the answer names the frame (`input_frame`). Elsewhere, and
+for an instance listed without a capability table, nothing is captured and the press goes as
+before. The cost on such an instance is one capture, its frame kept as the Lab's frames are. A status
+read or a capture that fails is the command's failure, nothing pressed; a refusal of the frame
+(`input_frame_unavailable`) is answered as it is (the recorded press's one retry is not repeated
+here: it is a decision by a code's name that no class or word separates). *`key`:* the Nemu input
+sends no key, and the Runtime has no other way to send one on such an instance: the recovery ladder
+sends none (its rungs are a recovery package's presses, an application restart and an emulator
+restart). Not built: the refusal stays the Runtime's, and the catalog's entries of
+`nemu_input_capability_unsupported` and `nemu_input_frame_required` (their `common_causes` and
+`handling`, "TBD" before) say what happened and what presses instead; the manual says it.
+
+**Item 5, who started it: as designed.** A run `ac_run_start` starts is served in the MCP server's
+own process (`Front::Mcp`), whose requests bind `lab` with `Lab-MCP` and keep the command line's
+envelope `(Cli, Cli)` until LAB-6S2-E ([lab-two-entries.md](lab-two-entries.md) §2.4, the map M and
+the row LAB-6S2-B1 of its slice table): the Runtime records the request's command record on the
+channel `mcp` (M), and the run's origin, folded from the record type of its request
+(`cli.command`), is `cli`. The slice table's row LAB-6S2-E says that with it "the runs they start
+have the origin `lab`". Nothing changed; the MCP manual, section 8, says it.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| LW1-1 | the refusal of `tap-target` and `navigate` without `--dry-run`, and their rows' `help` and `notes` | message text, table text (no code, no key, no member) | LW-1 | `crates/lab` `drive.rs`; `contracts/lab-operations.json` | the code stays `validation_failed`; the tools' description is the row's help |
+| LW1-2 | `ac_run_start` with `wait` and `ac_run_show`'s `job.line`: `events_total`, `truncated`, `rest`, without `events` | MCP answer members (no code) | LW-1 | `apps/actinglab-mcp` `budget::run_line` | the command line's line unchanged |
+| LW1-3 | `tools::WORDS`: `enum` in the schema of five parameters, refused `not_recognised` before anything is sent | MCP schema and argument check (no code, no word) | LW-1 | `apps/actinglab-mcp` `tools.rs`, `calls.rs` | words from `overview::Section::ALL` and the catalog's vocabularies |
+| LW1-4 | `tap`, `swipe`, `long-tap` without `--record` on a Nemu-input instance: a `Status` read, one capture, the press on its frame, `input_frame` in the answer | Lab command behaviour and answer member (no code, no request kind) | LW-1 | `apps/actinglab` `device_commands.rs` | `Status` and `ObserveReadonly` were already the rows' requests |
+| LW1-5 | `common_causes` and `handling` of `nemu_input_capability_unsupported` and `nemu_input_frame_required` | outcome catalog text (index regenerated) | LW-1 | `contracts/outcome-codes` | no key, word or status changes |
+| LW1-6 | `lab_ops::core_ops::handed_refusal` and the thirteen `parse_refusal` in every build | `lab-ops` function (parse only) | LW-1 | `crates/lab-ops` | read by the walk |
+
+**What is not added.** No outcome code, value key, word, configuration key, request kind, record
+type, interface revision or ledger revision. No row parameter: the table changes only the two
+rows' `help` and the `notes` of `tap-target`, `navigate`, `tap`, `swipe`, `long-tap` and `key`.
+
+**Tests** (gate map `contracts/test-gates/apps.toml`, the row "#434 LW-1"):
+`lw1_tap_target_and_navigate_tools_say_they_only_plan` (the two tools take no `capture` and their
+description says they press nothing and names `do` and `ensure` with capture) and, in
+`crates/lab` (`drive::tests`), `lw1_tap_target_and_navigate_without_a_dry_run_name_what_presses`
+(item 1); `lw1_a_finished_runs_answer_fits_with_its_state_outcome_and_the_rest` (item 2: 400
+made-up records over the budget, both answers within it with the state, the terminal outcome,
+`events_total`, `truncated` and `rest`, an OCR read kept when it fits and left out when not);
+`lw1_every_schema_property_reaches_its_operation` (item 3: every property of every tool, every word
+its schema lists or a made-up value of its type, through the front's check, the core rows' constants
+and the handed parsers, no `unknown`, `wrong_type` or `not_recognised` but six pinned identifiers;
+before this slice it failed on `sections`, `type`, `event_type`, `exclude_event_types` and
+`origin_module`; the pinned list of what the tools leave out); in `apps/actinglab/tests/
+runtime_input_proxy.rs`, on the fake Runtime host,
+`lw1_a_plain_tap_on_an_instance_whose_input_needs_a_frame_presses_on_its_capture` and
+`lw1_a_plain_tap_on_an_instance_whose_input_needs_no_frame_captures_nothing` (item 4; the fake
+provider's Nemu instance now carries the registry's capability table). Adapted:
+`gate_434_lab5g2a::mcp_tools_from_op_table`, which pinned that no text parameter lists words: a
+parameter of `tools::WORDS` lists its words.
+
+**At deploy.** Nothing to configure. An agent sees: `ac_tap_target` and `ac_navigate` described as
+planning only; a finished run's answer without its records; five parameters with their words; a
+plain press that works on a Nemu-input instance at the cost of one capture.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

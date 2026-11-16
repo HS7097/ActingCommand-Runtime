@@ -1322,9 +1322,9 @@ fn parse(arguments: &[OsString]) -> Result<Flags, PacksError> {
     Ok(flags)
 }
 
-/// Workflow #434 LAB-5B1, test builds only: [`parse`]'s refusal of the words [`dispatch_within`]
+/// Workflow #434 LAB-5B1 (in every build since Workflow #434 LW-1, for
+/// `core_ops::handed_refusal`): [`parse`]'s refusal of the words [`dispatch_within`]
 /// is given (its command's word first), if any.
-#[cfg(test)]
 pub(crate) fn parse_refusal(arguments: &[OsString]) -> Option<Outcome> {
     parse(&arguments[1..]).err().map(|error| error.outcome())
 }

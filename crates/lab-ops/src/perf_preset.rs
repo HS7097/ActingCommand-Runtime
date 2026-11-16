@@ -166,9 +166,9 @@ pub fn dispatch_on(
     })
 }
 
-/// Workflow #434 LAB-5B1, test builds only: [`parse`]'s refusal of the words [`dispatch_on`] is
+/// Workflow #434 LAB-5B1 (in every build since Workflow #434 LW-1, for
+/// `core_ops::handed_refusal`): [`parse`]'s refusal of the words [`dispatch_on`] is
 /// given, if any.
-#[cfg(test)]
 pub(crate) fn parse_refusal(arguments: &[OsString]) -> Option<Outcome> {
     parse(arguments).err()
 }

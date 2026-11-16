@@ -2196,20 +2196,24 @@ impl ExecutionBackendProvider for FakeProvider {
             if !self.state.nemu_input.load(Ordering::Acquire) {
                 return resolved;
             }
-            // #411 Lab L3: an instance configured as a Nemu one (neutral test values).
-            resolved.with_configuration(actingcommand_contract::EffectiveDeviceConfiguration {
-                input_backend: "nemu_ipc".to_string(),
-                capture_backend: "nemu_ipc".to_string(),
-                input_adb: "<sealed-test>".to_string(),
-                capture_adb: "<sealed-test>".to_string(),
-                configured_serial: None,
-                resolved_serial: "TESTSERIAL0001".to_string(),
-                input_command_timeout_ms: 5_000,
-                capture_command_timeout_ms: 5_000,
-                capture_timeout_ms: 5_000,
-                configured_mumu_root: None,
-                configured_capture_dll: None,
-            })
+            // #411 Lab L3: an instance configured as a Nemu one (neutral test values). Workflow #434
+            // LW-1: with the capability table the Runtime's registry gives such an instance, which
+            // the status shows and a plain press reads.
+            resolved
+                .with_configuration(actingcommand_contract::EffectiveDeviceConfiguration {
+                    input_backend: "nemu_ipc".to_string(),
+                    capture_backend: "nemu_ipc".to_string(),
+                    input_adb: "<sealed-test>".to_string(),
+                    capture_adb: "<sealed-test>".to_string(),
+                    configured_serial: None,
+                    resolved_serial: "TESTSERIAL0001".to_string(),
+                    input_command_timeout_ms: 5_000,
+                    capture_command_timeout_ms: 5_000,
+                    capture_timeout_ms: 5_000,
+                    configured_mumu_root: None,
+                    configured_capture_dll: None,
+                })
+                .with_capabilities(nemu_capabilities())
         })
     }
 
@@ -4194,6 +4198,168 @@ fn s11_tap_record_sends_its_input_on_the_frame_captured_before_it() {
     assert_eq!(execution["effect"], "performed", "{recording}");
     assert_eq!(execution["before_frame"], "f0001", "{recording}");
     assert_eq!(execution["after_frame"], "f0002", "{recording}");
+}
+
+/// Workflow #434 LW-1: the capability table the Runtime's backend registry gives an instance whose
+/// input and capture are `nemu_ipc` (`runtime-host` `provider.rs`, `capability_profile`): each
+/// input row names the Nemu input as its evidence, `key` and `text` unsupported; neutral values.
+fn nemu_capabilities() -> actingcommand_contract::EmulatorCapabilityProfile {
+    use actingcommand_contract::{
+        EmulatorCapability, EmulatorCapabilityAvailability, EmulatorCapabilityEvidence,
+        EmulatorCapabilityImplementation, EmulatorCapabilityProfile, EmulatorVersionEvidence,
+        EmulatorVersionUnavailableReason,
+    };
+    let evidence = EmulatorCapability::ALL
+        .into_iter()
+        .map(|capability| {
+            let (supported, source) = match capability {
+                EmulatorCapability::InputKey | EmulatorCapability::InputText => (false, "nemu_ipc"),
+                EmulatorCapability::InputTap
+                | EmulatorCapability::InputLongTap
+                | EmulatorCapability::InputSwipe
+                | EmulatorCapability::InputSegmentedSwipe
+                | EmulatorCapability::InputReset
+                | EmulatorCapability::CaptureFrame => (true, "nemu_ipc"),
+                _ => (false, "execution_backend_registry"),
+            };
+            let (availability, implementation) = if supported {
+                (
+                    EmulatorCapabilityAvailability::Unverified,
+                    EmulatorCapabilityImplementation::Supported,
+                )
+            } else {
+                (
+                    EmulatorCapabilityAvailability::Unavailable,
+                    EmulatorCapabilityImplementation::Unsupported,
+                )
+            };
+            EmulatorCapabilityEvidence::new(capability, availability, "neutral evidence", source)
+                .and_then(|evidence| evidence.with_implementation(implementation))
+                .expect("capability evidence")
+        })
+        .collect();
+    EmulatorCapabilityProfile::new(
+        "neutral.registry",
+        EmulatorVersionEvidence::Unavailable {
+            reason: EmulatorVersionUnavailableReason::NotProbed,
+        },
+        evidence,
+    )
+    .expect("capability profile")
+}
+
+/// Workflow #434 LW-1: the Runtime's ledger of the host at `runtime_root`, in its order: each
+/// capture's frame and the frame each input's intent names (`None` for an input that names none).
+fn lw1_capture_and_input_wire(
+    runtime_root: &Path,
+) -> Vec<(&'static str, Option<actingcommand_contract::FrameId>)> {
+    let client = RuntimeClient::connect(RuntimeClientConfig::new(
+        runtime_root,
+        actingcommand_runtime_client::RuntimeChannel::Lab,
+        EventActor::Lab,
+        EventSource::Lab,
+    ))
+    .expect("Runtime client");
+    let events = client
+        .query_events(EventQuery::default(), ProjectionProfile::Forensic)
+        .expect("Runtime events");
+    drop(client);
+    events
+        .iter()
+        .filter_map(|event| match event.event_type {
+            EventType::CaptureCompleted => Some(("capture", event.links.frame_id().copied())),
+            EventType::InputIntent => Some((
+                "input",
+                match &event.payload {
+                    ProjectionPayload::Full(payload) => match payload.as_ref() {
+                        EventPayload::Input(InputPayload::Intent(intent)) => intent
+                            .provenance()
+                            .and_then(|provenance| provenance.before_frame_id),
+                        _ => None,
+                    },
+                    _ => None,
+                },
+            )),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Workflow #434 LW-1 (register §1.435): `tap 0 0` without `--record` on an instance whose input
+/// is the emulator's own (`nemu_ipc`, which presses only on a frame the Runtime captured and
+/// refuses a press without one, `nemu_input_frame_required`): the status names the Nemu input, so
+/// the command captures once and sends the press on that frame: it answers committed, one tap, one
+/// capture, the Runtime's ledger holds the capture and then the input whose intent names that
+/// capture's frame, and the answer names the frame (`input_frame`).
+#[test]
+fn lw1_a_plain_tap_on_an_instance_whose_input_needs_a_frame_presses_on_its_capture() {
+    let root = TempDir::new().expect("tempdir");
+    let runtime_root = root.path().join("runtime");
+    let local = root.path().join("local");
+    let config = root.path().join("actinglab.json");
+    fs::write(&config, "{}").expect("write config");
+    let state = Arc::new(FakeState::default());
+    state.nemu_input.store(true, Ordering::Release);
+    let host = l3_host(&runtime_root, &state, b"lab-lw1-plain-tap-nemu");
+    let tapped = run_actinglab_json(
+        &config,
+        &runtime_root,
+        &local,
+        ["--json", "--instance", "node.a", "tap", "0", "0"],
+    );
+    let wire = lw1_capture_and_input_wire(&runtime_root);
+    host.close().expect("close host");
+
+    assert_eq!(
+        tapped["input_outcome"]["input_stage"], "committed",
+        "{tapped}"
+    );
+    assert_eq!(state.taps.load(Ordering::Acquire), 1);
+    assert_eq!(state.captures.load(Ordering::Acquire), 1, "one capture");
+    let kinds = wire.iter().map(|(kind, _)| *kind).collect::<Vec<_>>();
+    assert_eq!(kinds, ["capture", "input"], "{wire:?}");
+    let frame = wire[0].1.expect("the capture names its frame");
+    assert_eq!(
+        wire[1].1,
+        Some(frame),
+        "the input names the frame captured before it"
+    );
+    assert_eq!(
+        tapped["input_frame"]["frame_id"],
+        json!(frame),
+        "the answer names it: {tapped}"
+    );
+}
+
+/// Workflow #434 LW-1: `tap 0 0` without `--record` on an instance whose input needs no frame (no
+/// Nemu input): nothing changes: no capture, the press sent without a frame (its intent names
+/// none), one tap, and the answer names no frame.
+#[test]
+fn lw1_a_plain_tap_on_an_instance_whose_input_needs_no_frame_captures_nothing() {
+    let root = TempDir::new().expect("tempdir");
+    let runtime_root = root.path().join("runtime");
+    let local = root.path().join("local");
+    let config = root.path().join("actinglab.json");
+    fs::write(&config, "{}").expect("write config");
+    let state = Arc::new(FakeState::default());
+    let host = l3_host(&runtime_root, &state, b"lab-lw1-plain-tap-adb");
+    let tapped = run_actinglab_json(
+        &config,
+        &runtime_root,
+        &local,
+        ["--json", "--instance", "node.a", "tap", "0", "0"],
+    );
+    let wire = lw1_capture_and_input_wire(&runtime_root);
+    host.close().expect("close host");
+
+    assert_eq!(
+        tapped["input_outcome"]["input_stage"], "committed",
+        "{tapped}"
+    );
+    assert_eq!(state.taps.load(Ordering::Acquire), 1);
+    assert_eq!(state.captures.load(Ordering::Acquire), 0, "no capture");
+    assert_eq!(wire, [("input", None)], "{wire:?}");
+    assert!(tapped.get("input_frame").is_none(), "{tapped}");
 }
 
 /// #463 S1-1 fix round 2 (B1): the backend fails the tap of `tap 0 0 --record` (a device-class

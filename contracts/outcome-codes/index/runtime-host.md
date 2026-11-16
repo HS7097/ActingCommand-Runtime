@@ -578,7 +578,7 @@ hand. The [summary](README.md) says what each column means. 1158 codes.
 | `nemu_app_index_missing` | error | none | 0.12.0 | active | pending | written | A paired Nemu open (touch and capture nemu_ipc) found no Nemu application index to open with. |
 | `nemu_application_identity_invalid` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports nemu application identity invalid. |
 | `nemu_close_instance_missing` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports nemu close instance missing. |
-| `nemu_input_capability_unsupported` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports nemu input capability unsupported. |
+| `nemu_input_capability_unsupported` | error | none | 0.12.0 | active | pending | written | The Runtime host reports nemu input capability unsupported. |
 | `nemu_input_deadline_overflow` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports nemu input deadline overflow. |
 | `nemu_input_requires_paired_capture` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports nemu input requires paired capture: a registration selects Nemu touch beside a capture backend other than Nemu. |
 | `nemu_input_task_deadline_missing` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports nemu input task deadline missing. |

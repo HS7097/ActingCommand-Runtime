@@ -6,9 +6,12 @@ use crate::{
     stream_input_relay_action,
 };
 use actingcommand_contract::{
-    InputAction, InputFrameReference, RuntimeReceipt, RuntimeReceiptState, RuntimeResult,
+    EmulatorCapability, InputAction, InputFrameReference, RuntimeInstanceStatus, RuntimeReceipt,
+    RuntimeReceiptState, RuntimeResult,
 };
-use actingcommand_device::{CaptureBackendChoice, Frame, combine_operation_and_close};
+use actingcommand_device::{
+    CaptureBackendChoice, Frame, NemuInputSupport, TouchBackendChoice, combine_operation_and_close,
+};
 use actingcommand_lab::{
     AfterCapture, AttachFrameRequest, CapturedFrame, ClickEffect, ClickPlan, CommitClickRequest,
     LAB_RECORDING_MAX_NEXT_FRAME_MS, LabInputPort, OpaqueJson, PlanClickRequest, PlannedSwipe,
@@ -598,7 +601,12 @@ impl DirectTouchCommand {
         &self,
         backend: &mut runtime_input_backend::RuntimeInputBackend,
     ) -> actingcommand_device::DeviceResult<RuntimeReceipt> {
-        let action = match *self {
+        backend.input_receipt(self.action())
+    }
+
+    /// The Runtime input action this command sends.
+    fn action(&self) -> InputAction {
+        match *self {
             Self::Tap { x, y } => InputAction::Tap { x, y },
             Self::Swipe {
                 x1,
@@ -614,8 +622,7 @@ impl DirectTouchCommand {
                 duration_ms,
             },
             Self::LongTap { x, y, duration_ms } => InputAction::LongTap { x, y, duration_ms },
-        };
-        backend.input_receipt(action)
+        }
     }
 
     fn to_json(&self) -> Value {
@@ -748,6 +755,11 @@ pub(crate) fn run_direct_touch(
     )
 }
 
+/// `tap`, `swipe` or `long-tap` without `--record`: the press through the Runtime's input proxy.
+/// Workflow #434 LW-1 (register §1.435): on an instance whose input presses it only on a frame the
+/// Runtime captured ([`press_frame`]), one capture first, and the press sent on that frame, as a
+/// recorded press sends it (#463 S1-1); the answer then names it (`input_frame`). On every other
+/// instance nothing is captured and the press is sent as before.
 fn send_direct_touch_command(
     global: &GlobalOptions,
     config: &UserConfig,
@@ -755,18 +767,89 @@ fn send_direct_touch_command(
     control_mode: &str,
     safety_gate: &str,
 ) -> CliOutcome<Value> {
-    let (mut backend, instance_alias) =
-        open_cli_runtime_input_proxy(global, config).map_err(input_not_submitted)?;
-    let operation = command.run(&mut backend);
+    let instance_alias = resolve_instance_id(global, config).map_err(input_not_submitted)?;
+    let state_root = runtime_state_root().map_err(input_not_submitted)?;
+    let client = RuntimeClient::connect(crate::lab_client_config(&state_root))
+        .map_err(|error| input_not_submitted(CliError::device(error.to_string())))?;
+    let action = command.action();
+    let frame =
+        press_frame(&client, &instance_alias, &action, state_root).map_err(input_not_submitted)?;
+    let mut backend = runtime_input_backend::RuntimeInputBackend::connect(client, &instance_alias)
+        .map_err(|error| input_not_submitted(CliError::device(error.to_string())))?;
+    let operation = backend.input_receipt_on(action, frame);
     let close = backend.close();
     let input_outcome = finish_direct_input(operation, close)?;
-    Ok(direct_touch_answer(
+    let mut answer = direct_touch_answer(
         &instance_alias,
         command,
         control_mode,
         safety_gate,
         input_outcome,
-    ))
+    );
+    if let Some(frame) = frame {
+        answer["input_frame"] = json!(frame);
+    }
+    Ok(answer)
+}
+
+/// Workflow #434 LW-1 (register §1.435): the frame a plain press of `action` on `instance` is sent
+/// on. The Nemu input (the emulator's own interface) performs a tap, a long tap, a swipe and the
+/// segmented drags only on a frame the Runtime captured and committed
+/// (`NemuInputSupport::InFrame`) and refuses one without (`nemu_input_frame_required`), so for
+/// such an action one `Status` read on the press's connection asks which input performs it: the
+/// instance's capability table names it (`evidence_ref` of the action's capability, the
+/// configured touch backend). When it is the Nemu input, one capture through the Runtime
+/// (`ObserveReadonly`, on a connection of its own, as a recorded press captures the frame before
+/// it) gives the frame, whose reference the press names; otherwise, and for an instance the status
+/// lists without a capability table, `None` and nothing is captured. A status read or a capture
+/// that fails is the command's failure, nothing pressed.
+fn press_frame(
+    client: &RuntimeClient,
+    instance: &str,
+    action: &InputAction,
+    state_root: std::path::PathBuf,
+) -> CliOutcome<Option<InputFrameReference>> {
+    let Some(capability) = press_capability(action) else {
+        return Ok(None);
+    };
+    if NemuInputSupport::of(action) != NemuInputSupport::InFrame {
+        return Ok(None);
+    }
+    let status = client
+        .status()
+        .map_err(|error| CliError::device(error.to_string()))?;
+    let nemu = status
+        .instances()
+        .iter()
+        .find(|row| row.instance_alias() == instance)
+        .and_then(RuntimeInstanceStatus::capabilities)
+        .is_some_and(|profile| {
+            profile.evidence(capability).evidence_ref() == TouchBackendChoice::NemuIpc.as_str()
+        });
+    if !nemu {
+        return Ok(None);
+    }
+    let endpoint =
+        runtime_capture_backend::RuntimeCaptureEndpoint::new(instance.to_owned(), state_root);
+    let (_, frame) = runtime_capture_backend::capture_runtime_observation(&endpoint)
+        .map_err(|error| CliError::device(error.to_string()))?;
+    frame.map(Some).ok_or_else(|| {
+        CliError::device(
+            "the Runtime's observation carries no frame reference, which a press on this \
+             instance's input names; nothing was pressed",
+        )
+    })
+}
+
+/// Workflow #434 LW-1: the capability of the instance's capability table that performs `action`,
+/// for the pointer inputs a plain press sends; `None` for every other action.
+fn press_capability(action: &InputAction) -> Option<EmulatorCapability> {
+    match action {
+        InputAction::Tap { .. } => Some(EmulatorCapability::InputTap),
+        InputAction::LongTap { .. } => Some(EmulatorCapability::InputLongTap),
+        InputAction::Swipe { .. } => Some(EmulatorCapability::InputSwipe),
+        _ => None,
+    }
 }
 
 /// The answer of a direct touch command that sent its input.
