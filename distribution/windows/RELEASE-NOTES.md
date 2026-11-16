@@ -9,6 +9,188 @@ Cargo.lock hash, Rust toolchain, target, build profile, Actions run/attempt and
 file identities are recorded in the accompanying `BUILD-MANIFEST.json`; the zip
 and artifact names bind the complete source SHA.
 
+## v0.12.67
+
+本版是 v0.12.66 之后的 4 次合并、6 张 PR：直接合并的 #1776（#463 S2-1b）和 #1779（#434 LW-1），Lab 的并车 #1780（#392 DA-5ab #1780 自己，带 DA-5cd #1781），宿主的并车 #1778（#437 G1 #1778 自己，带 #475 #1777）。
+两趟车除了各张的头和合并，有并车自己的提交：Lab 那趟把两片统一成一套（存图和在线帧走同一个缩图函数、回答只有一种 `frame_coordinates`、两个尺寸拒绝码各管各的、带录制的路在发出任何东西之前先核录制），
+再小修一轮；宿主那趟在两片都改了的几个函数上并好、补登记的 Train 段和一条测试，再小修一轮（改登记里说错的一句、「设备空闲」的判法、照拒绝自己的码定欠账、一条门测把子进程的报错接出来）。
+内容是：Lab 在分辨率不是包的基准尺寸的实例上能看、能点，说的是基准坐标；这种实例上不让录制；离线识别收同比例的大图；Lab 的 MCP 服务器在实机上碰到的五处；`record ready` 认得安装里的游戏和服；
+宿主又有五条「租约已过期、关会话被拒」的路只围住那一台；一台模拟器放几个应用之前要有的头一件，今天哪个安装都走不到。
+**生产上跑的是 v0.12.66（2026-11-16 14:54 起，经 Lab 救急模块部署）**：一台实例在跑调度的例行任务，其余实例暂停着、模拟器关着。从 v0.12.66 装本版：
+**Lab 救急模块的 `deploy` 和 `actingctl install` 两面都能装，不用任何标志，没有 `ledger_verify`，`defaults_diff` 没有一行，没有新文件**。**一个接口动了：`runtime-client` 到 [3, 10]**（最低值不动）；
+配置键没加，结果码加了 4 个。**部署前不留开着的录制**（见「部署和退路」）。**退回 v0.12.66 开着**；回去以后，在本版上开的录制读不了。
+
+- **为什么有这一版**：11-16 在真机实例上验了显示换算的三档，1280×720、1920×1080 和 3840×2160（看板 #392）：包内运行三档上换算和落点都对，但 Lab 自己的观察、点按和离线识别在每一种不是基准尺寸的显示上
+  都失败（`observation_projection_failed`，存图被拒），而在 3840×2160 的实例上开的录制会不声不响录成那个尺寸，出的包到别的实例上跑不了。同一次实走经 Lab 的 MCP 服务器碰到五处毛病（看板 #434）。
+  安装好的实例上 `record ready` 总说缺游戏、服、区域三样，前两样安装其实知道（看板 #463）。读 #461 的代码又看出五条路（看板 #475）。最后是一台模拟器放几个应用之前必须先有的几件里的头一件（看板 #437）。
+  - **v0.12.66 说明里「点后每张约 0.1 秒……这是预计，部署以后量一次」和「点后每张多快、钉有没有命中，部署以后读一次账本才知道」要改：量了**（v0.12.66 上线以后，看板 #463）：
+    录下的一下按之后，第一张截图在按下后 168 毫秒，之后约每 100 毫秒一张（88 到 114 毫秒）；Lab 的钉从 `artifact.pin_recorded` 到 `capture.completed` 1 到 4 毫秒（12 张都是，原来 720 到 755 毫秒）。
+    只量了一下点按；那一次按之前那一张 64 毫秒，没有出现「约 1.6 秒重开会话」，原因没查，那一句不改。
+
+- **在用的安装在部署时和以后碰到的**（逐条核过代码）：
+  - **Lab 在映射到基准的显示上**（DA-5ab）。显示是包的基准尺寸的纯缩放时（今天 1280×720 的包遇上 1920×1080 或 3840×2160），`observe --capture`、`do --capture`（元素、`--tap`、`--swipe`、声明操作、
+    录下的点击）和客户端的 `do --capture --dry-run`、`ensure --capture`、`wait --capture` 现在能用：设备帧用包内运行同一个帧闸缩到基准再认（`crates/execution-kernel/src/contained_task/display_gate.rs` 96–216）。
+    交出去的帧（`--with-frame`、`--preview`、操作后的附件）、回答里的每个框和点、`do` 收进来的点、矩形和滑动都在包的基准坐标里，发出之前按这一帧的映射换成设备坐标。
+    **`frame_coordinates` 有两种样子**（只在内核一处构造，`crates/execution-kernel/src/readonly.rs` 586 起）：基准尺寸的显示上是 `{device_pixels, orientation, applies_to}`，和以前逐字节一样；
+    映射的显示上是 `{space: "base", base_pixels, reduced_from, orientation, applies_to}`，`reduced_from` 是设备尺寸。智能体看回答里的这个成员：带 `space` 的就是基准坐标。`capture` 和 `ac_frame` 交出的
+    仍是设备原帧、设备像素；单发的 `tap`、`swipe`、`long-tap` 照旧是设备像素。Lab 的 MCP 手册「Coordinates」、服务器说明和第一代 `ac_lab_observe`、`ac_lab_do` 的说明都写了两种样子。
+    适配器不让按的比例（5/4 这类，缩放的两倍不是整数）：观察不拒；按在输入那一步拒 `display_map_unresolved`（`input_scale_unsupported`，阶段 `display_input_map`），什么都不发
+    （`crates/display-adapter/src/lib.rs` 948–962、986–1002）。**包内运行不变**：两次独立审查逐行对过帧闸和输入出口（基准、3 倍、3/2、5/4、别的比例、过期帧六种情形下的帧、识别输入、拒绝和设备点都没变），
+    并车以后那些文件一个字节没再动。
+  - **录制只在基准尺寸上做**（DA-5cd 和并车）。`record start` 先在自己的连接上读 Runtime 内存里这一台的 `display.frame_extent` 事实（`InstanceFactSnapshot`，最近一次任务的第一帧，不碰设备）；
+    上次看到的不是 1280×720，就在写录制的头、暂停调度之前拒 `record_display_not_base`（只留下会话目录和锁文件），拒绝里写明看到的尺寸和基准尺寸（`apps/actinglab/src/commands/record_hold.rs` 270–286、359–396）。
+    开始成功时回答带 `display_last_observed {width, height, observed_at_unix_ms}`（没看到过是 `null`）。这只是预警：没跑过任务、改过分辨率以后它不知道，所以录制的头写上 `base_size` 1280×720，
+    第一帧不是这个尺寸就在存下之前拒（`crates/lab/src/display_base.rs` 295–321）；每条带录制的路（`tap`、`swipe`、`long-tap --record`，`session app --record`，`do --capture --record`，`observe --capture --record`）
+    都在发出、写下任何东西之前先核这份录制和它取到的那一帧（334–367；`do --capture --record` 为此在按之前经 Runtime 多取一帧、不存，取失败是 `device_error`，什么都不按）。
+    三个码各管一件（§1.437 的表和码目录对过）：`record_display_not_base` 是这一台的显示不是基准尺寸、录制里还没有帧；`record_size_not_base` 是这份录制的帧不是基准尺寸，`record stop`（演练、重新生成也是）拒，
+    `record ready` 列成 `size_not_base`，不再往里加帧；`record_frame_size_mismatch` 是原有的码，一帧和录制已有的尺寸不同。
+    **本版写的录制头带 `base_size`，v0.12.66 读不了**（它读 `recording.json` 是严格的，v0.12.66 的 `crates/lab/src/recording/model.rs` 88–89）：退回以后，在本版上开的录制旧的 Lab 读不出来。
+    本版以前开的录制（头里没有基准）照旧读得了：`record status`、`record frames`、`record archive`、`record reopen` 不变；`record ready`、`record stop` 用旧的判法，只拒帧是基准比例的更大显示
+    （1920×1080 这类）的录制，别的照旧出包（`display_base.rs` 260–286）；要按的路上它的第一帧也先这样判一次。
+  - **离线识别收同比例的大图**（DA-5cd 和并车）：`recognize`、`detect-page`、`current-page`、`is-visible`、离线的 `observe`、`wait`，存图上的 `do`、`ensure`、`tap-target`、`navigate` 演练，
+    收和包同比例、不比包小、同朝向的存图（5/4 也收），用同一个函数缩到基准再判，回答带基准形的 `frame_coordinates`；别的尺寸拒 `lab_scene_size_unsupported`，带帧闸的原因词
+    （`layout_undeclared`、`scale_below_base`、`orientation_mismatch`）。基准尺寸的图回答逐字节不变。
+  - **Lab 的 MCP 服务器和 Lab 的普通按**（LW-1，§1.435 的五件逐件核过）：
+    1. `ac_tap_target`、`ac_navigate` 写明只在存下的帧上做规划、什么都不按：实机上按包里的目标用 `do --capture`（带 `--package` 和目标、元素或 `--tap x,y`），走路由用 `ensure --capture`（带 `--to`）；
+       两行 `writes` 为 false、`runtime` 为 `offline`、不发请求，MCP 标成只读。不带 `--dry-run` 时内核照旧拒 `validation_failed`，文字点名这两条路（`crates/lab/src/drive.rs`）。
+    2. `ac_run_start` 带 `wait`、`ac_run_show` 读本进程提交的运行：回答不再带整条关联的账本记录（`events`，实走时 106 到 514 KB），改给 `events_total`、`truncated`（拿掉的部分的 JSON 指针）和 `rest`
+       （`ac_run_evidence` 按请求号读步骤，`ac_events` 按关联号读记录）；回执（状态、结果、`task_result`、步数、终页）和运行的状态照留（`apps/actinglab-mcp/src/budget.rs` 210）。命令行照旧打印整行。
+       回执和警告不截，还放不下照旧答 `output_budget_exceeded`。
+    3. `ac_status` 的 `sections`，`ac_events` 的 `type`、`event_type`、`exclude_event_types`、`origin_module` 在参数表里列出能用的词（`enum`），词表外的词在发出之前就拒（`arguments_invalid`，`not_recognised`；
+       `apps/actinglab-mcp/src/tools.rs` 250）。
+    4. 普通 `tap`、`swipe`、`long-tap`（经 `serve` 子进程的 `ac_tap`、`ac_swipe`、`ac_long_tap` 同）：每个实例上先在自己的连接上读一次 `Status`；能力表说这下按的输入是模拟器自己的接口
+       （`evidence_ref` 为 `nemu_ipc`）时，经 Runtime 截一帧（只取帧的引用），在这一帧上按，回答写 `input_frame`；Runtime 已不持有那一帧（`input_frame_unavailable`）时重截一次、在同一个租约上再发一次，
+       只这一次，回答写 `input_frame_captured_twice`；别的实例什么都不截，照旧发出。读状态失败不拦按：不带帧发出，回答（失败时是拒绝的 `details`）的 `touch_backend_warnings` 写明
+       （`apps/actinglab/src/commands/device_commands.rs` 775–896）。**代价**：每次普通按多读一次状态，要帧的实例再多截一帧；Runtime 连得上却不应答时每步最多等 5 秒（`crates/runtime-client/src/client.rs` 89），
+       最坏约 20 秒以后才发出（连接、Health、绑定、Status 四步，独立审查的推算；那时按也发不成）。`key`、`text` 在这种输入上照旧被拒（`nemu_input_capability_unsupported`）；拒绝以后读一次状态，
+       能力表说不支持时 `details.hint` 写改用什么，码和退出码不变。
+    5. 经 MCP 发起的运行，来源照旧记成 `cli`：核过是设计如此（LAB-6S2-E 之前服务器进程里的请求信封是 (Cli, Cli)），MCP 手册第 8 节写明，没改。
+  - **`record ready` 认得游戏和服**（S2-1b）：收 `--game`、`--server`、`--locale`，读法、校验和 `record stop` 是同一个函数；给了就算知道，但 `record ready` 什么都不写，之后的 `record stop` 该给的照旧要给。
+    在安装里没给游戏和服时，取安装配置里这一台在 `policy.facts.instances` 的那一行，要么两样都取、要么都不取（`crates/lab/src/recording_api.rs` 268）；区域没有配置的地方。回答多了 `sources {game, server, locale}`，
+    词是 `command_line`、`recording`、`lab_config`、`installation_config` 之一，不知道是 `null`。已出过包的录制答包里的值，给的值不同时出警告 `record_stop_option_conflict`。
+    **`record stop` 在安装里什么都没给时，现在用安装配置那一行出包，以前拒 `record_locale_missing`**；旗标和录制里记着的永远优先。
+  - **宿主：平常什么都碰不到。**
+    - **#475**：「租约已过期、关会话被拒」又有五条路只围住那一台，不再停掉整个 Runtime：失败的运行把钥匙交给自己的恢复阶梯（`host/lease.rs` 2203–2224）、抢占的移交（`perform_transfer`，964；两处抢占 1149、1959）、
+      应用命令的准备（`host/input.rs` 737–770）、后端切换（`host/backend_switch.rs` 427–435、557）、成员切换（`host/switch.rs` 867–884，只有一台几个应用时走得到）。记录和 #458、#461 一样：`runtime.failed`
+      （阶段 `runtime_lifecycle_session_close`，点名钥匙的租约）、`instance_resources_fenced`（原因 `lease_expired`）、钥匙的结束；欠的那次关会话在钥匙结束时补一次，期间设备不交给任何人，别的实例照常派单。
+      调用方各答自己的：运行答它自己的失败（阶梯在关闭之后排队）；抢占要给的认领留在队里原位（`queued`）；应用命令以 `lease_expired` 失败，没有命令发到设备；后端切换答 `backend_switch_refused` 带 `instance_fenced`；
+      成员切换答 `application_switch_failed`（步骤 `stop`），被围的是被停的那个成员。认这个拒绝要操作名 `begin_destructive_resource_close` 和码 `lease_expired` 都对上、且不在停机中（`host/resource_close.rs` 492–497）。
+      围栏照旧由自检、恢复或围栏自己的复查解开。**仍然致命的**照旧：停机中的拒绝、没有围栏能接的拒绝，和这几条路上 Runtime 自己的故障（拒绝的记录写不进、锁中毒、所有者的日志或标识出错、调度的不变量出错、补关时出致命错）。
+      **第六处这一版没修**（看板 #475）：连接准备过程中在持有的钥匙下关会话（`prepare_connection_attempt`，`host/resource_close.rs` 2156 起，留着的会话的关闭在 2278），钥匙在准备过程中过期，拒绝照旧致命；
+      人做的自检、模拟器控制、恢复阶梯的准备、模拟器监视、后端切换的候选和恢复都走得到。
+    - **#437 G1：今天哪个安装都走不到**：加载配置时一律拒绝一台几个应用（`several_members_unsupported`，`apps/actingd/src/config/device_group.rs` 377–383）。为那一天加的：一个成员的关会话结果不知道（不是被拒）时，
+      它被围住，设备为它挡着（`ResourceFence::holds_device`，只在内存里），直到它的围栏由一次自检通过的准备解开：别的成员的认领留在原位；操作员类的请求当场被拒 `device_held_for_member_close`（`alias` 是被围的成员）；
+      派发等 `device_group_waiting` 的 `close_unconfirmed`；状态行带 `device_held {device_group_wait: close_unconfirmed, alias}`（`host/read_events.rs` 489、629）。开机准备被这道挡拒掉的成员，由租约清扫在解挡、
+      设备空闲（没有租约、没有冷却、队里没有现在够格的条目）以后排一个 Runtime 自己的自检认领，由那台设备自己的 worker 在认领的钥匙上做开机准备（主机任务 `HeldStartPreparation`，`host/resource_close.rs` 1589、1792），
+      清扫线程不做设备步骤。操作员的认领等到期限时设备还挡着，`lease_queue_expired` 的 `caused_by` 点名挡着设备的成员（`host/lease.rs` 4311 起）。关会话在开始之前就被拒的（A64、#456、#458、#461、#475）
+      照旧只围、不挡设备。一个成员自己的闸挡着的条目不再卡住同一台上别的成员（发放在设备的准入守卫和队列顺序锁下重选、重核，按那一条的请求号准备）。单独一台的实例：`device_held_for` 不拿锁直接答没有
+      （`host/device_group.rs` 153–160），队列选的还是同一条。
+
+- **改了什么**（Lab、MCP 服务器、内核、宿主）：
+  - **Lab**：DA-5ab（§1.436）的在线观察五条路都过内核的 `lab_scene_on_base`，Lab 操作的输入走 `lab_display_map` 和适配壳的 `DisplayMap::send_input`；DA-5cd（§1.437）的存图走 `crates/lab/src/display_base.rs`
+    的 `scene_in_base`，调同一个内核函数；基准尺寸只有一处（`STANDARD_PACK_BASE_SIZE`，`crates/actingcommand-contract/src/standard_pack_display.rs`）；录制头的 `LabRecording::base_size` 没有时不写出，
+    没有基准的录制写出来和以前逐字节一样；三个码由一个判断（`recording_not_base`）给。`detect-page`、`tap-target`、`navigate` 的拒绝在命令行和 MCP 上带出 `values`（`cli_module/own_line.rs`）。
+    S2-1b（§1.434）由一个函数定游戏和服（`package_identity`），安装那一行用 `packs` 现成的读法读（`crates/lab-ops/src/packs.rs` 437、502），只在前三处给不全时才打开，只取这一台的游戏和服，别的不留、不打印。
+  - **MCP 服务器**（LW-1）：`budget::run_line`、`tools::WORDS`、两个只规划的工具的元数据；`lab-ops` 给门测用的 `handed_refusal` 只在测试和特性 `test-hooks` 下编译，正式构建不带。
+  - **内核**（DA-5ab）：帧闸拆成 `frame_map` 和 `validate_pixels`，`validate_frame` 照旧调这两个（码、阶段、缩图参数不变）；包内运行的输入也走 `send_input` 这一个出口。`ContainedPageObservation::validate`
+    收的投影帧是观察帧本身，或同比例、不大于它的缩小帧，拒有一边为 0 的（`crates/actingcommand-contract/src/runtime/online_observation.rs` 296、324）；它只知道两个尺寸、不知道包，所以 5/4 的投影也收。
+  - **宿主**（#475 §1.432、G1 §1.433，并成一趟车）：五处都落到 `fence_expired_close_of`；欠的关会话按租约记（`BTreeMap<LeaseId, BTreeSet<InstanceId>>`，`host.rs` 6725，只在内存里），一个租约可以欠几个成员的。
+    G1 的挡：`ResourceFence::holds_device`、`device_held_for`、调度库的 `ClaimGate::DeviceHeld`（`crates/scheduler/src/lib.rs`）；发放在守卫下重选，`prepare_queued_grant_of` 只准备选中的那一条；
+    新的清扫步骤和主机任务见上；8 个新位置名。`host/facts.rs` 的显示事实键改用契约库的常量（同一个拼写）。门测 `gate_epoch_close` 把崩溃子进程的报错读回来写进失败信息，不改行为。
+
+- **部署和退路**：照 v0.12.66 那次的做法，用在线 v0.12.66 留下的那份 `actinglab` 跑 `release stage`、`deploy <提交> --plan` 预看、`deploy <提交> --detach` 实做，再用 `op status` 看结果。
+  救急模块（`crates/lab-rescue`）自 v0.12.66 只改了一个测试文件（`install/gate_429_r0b_pairing.rs`，钉 [3, 10]）。
+  - **部署前不留开着的录制**：状态里有暂停原因是 `lab-record-<毫秒>` 的实例，先对它 `record stop` 或 `record archive`。开着的录制按住那一台的调度；它的头里没有基准，到本版上按旧的判法走。
+  - 部署以后 `op status` 的 `mcp_servers_on_old_images` 照旧列出还跑在改名放到一边的旧映像上的 MCP 服务进程：本版没删请求种类，旧进程照样能用，但它们答的是旧的工具表和旧的运行回答
+    （没有词表、跑完的运行照旧可能超上限、`ac_record_ready` 没有三个新参数）；要新的，重开那个客户端的会话。
+  - **退路**：回 v0.12.66 用留着的 v0.12.66 那份 `actingctl install`（`install undo`、`install resume`、`install release-hold`）或救急模块的退回：账本的修订和记录种类都没变，`runtime-client` 的边
+    [3, 9] 和 [3, 10] 相交，回退门放行。退回之前把在本版上开的录制做完（`record stop` 出的包格式没变，v0.12.66 照用）：录制本身回去以后读不了。
+
+- **已知的限度**（各片审查和验收记录列的，逐条核过）：
+  - 不是基准尺寸的显示上不能录制：是拒绝，不是支持。`record start` 只知道 Runtime 上次看到的显示（最近一次任务的第一帧），没跑过任务、改过分辨率以后靠第一帧那一道核；它的拒绝写尺寸，不写看到的时间。
+  - `tap-target`、`navigate` 没有在线的路，只在存下的帧上做规划。
+  - 模拟器自己的输入（`nemu_ipc`）发不了 `key`、`text`，回答带改用什么的提示。
+  - 契约里 `record_*` 拒绝的退出码 3 是带 `--via` 那一行的；Lab 自己的命令行和经 `serve --stdio --front mcp` 都答 1（`apps/actinglab/src/cli_module/own_line.rs`）。`lab_scene_size_unsupported` 同样：
+    带 `--via` 那一行是 2，自己的命令行答 1。
+  - 一个游戏的启动包在 3840×2160 上冷启动停在标题页：服务器那一行小字缩下来以后分数贴着阈值，是资源侧的事，不是程序的。4K 一帧缩到基准多花的时间没量。
+  - #475 的第六处（见上）没修。G1 的 worker 跑被挡的开机准备时中途出错，「已排」的标记会一直留着，直到那个成员的一次准备拿到钥匙或租约、或 Runtime 重启，和围栏复查一样。
+  - 六片都没在真机上跑过；映射显示上的观察、点按和录制被拒，要等上线以后在 1920×1080 的实例上走一遍。
+
+配置：按代码、`distribution/windows/component-interfaces.json` 和 `contracts/component-interfaces.md` 核过：
+
+- 接口：**`runtime-client` 从 [3, 9] 升到 [3, 10]**（`component-interfaces.json` 8；契约表 `runtime-client` 第 10 行，`contracts/component-interfaces.md` 155）：状态回执的实例行多了可选成员 `device_held`
+  （`crates/actingcommand-contract/src/runtime.rs` 1654–1658），而 `RuntimeInstanceStatus` 拒未知成员（1620）。最低值留 3：加载时一律拒绝一台几个应用，今天没有安装能填出这个成员；放开一台多应用的那一片把最低值升到 10。
+  钉在修订 9 的客户端：不带这个成员的状态照旧解得开；带的那份整个解不开（`runtime_receipt_decode_failed`，锁住连接），今天出不来。**修订 10 也是投影放宽的那一版**（DA-5ab）：
+  显示不是包的基准尺寸时，观察的投影帧是缩到基准的帧，`ContainedPageObservation::validate` 收观察帧本身或同比例、不大于它的缩小帧（`crates/actingcommand-contract/src/runtime/online_observation.rs` 296、324）；
+  修订 10 以下的客户端库只收观察帧本身，判这种回执（`ObserveContainedPage`、`RunContainedLabOperation`）无效并锁住连接；基准尺寸的显示上没有差别（见「配对」）。其余逐行和 v0.12.66 一样：`actingd-config` [5, 33]、`install-selection` [1, 1]、
+  `install-control` [0, 0]、`ledger` [3, 8]、`package` [3, 15]、`runtime-outcomes` [1, 1]（`component-interfaces.json` 4–10）。没找到该升没升的：账本没有加记录种类、成员或修订（`crates/ledger` 一个文件没改）；
+  录制头的 `base_size` 不属于表里任何一个接口，旧版本读不了它写在「退回」里。
+- **Runtime 改了的文件**：宿主 `crates/runtime-host/src/` 的生产代码 `host.rs`、`codes.rs` 和 `host/` 下的 `backend_switch.rs`、`contained_task.rs`、`device_group.rs`、`facts.rs`、`host_claims.rs`、`input.rs`、
+  `lab_operation.rs`、`lease.rs`、`online_observation.rs`、`read_events.rs`、`resource_close.rs`、`resource_fence.rs`、`switch.rs`，测试 `tests.rs` 和 `tests/` 下的 `gate_392_da3.rs`、`gate_392_da5ab.rs`、`gate_437_g1.rs`、
+  `gate_458_close_isolates.rs`、`gate_epoch_close.rs`；调度库 `crates/scheduler/src/lib.rs`；内核 `crates/execution-kernel`（帧闸、在线观察、只读回答）；显示适配壳 `crates/display-adapter`；契约库 `crates/actingcommand-contract`；
+  `crates/policy/src/codes.rs`（一个词）。`crates/ledger`、`crates/runtime-client`、`crates/runtime-config`、`crates/resource-tooling`、`apps/actingd` 一个文件没改；`crates/lab-rescue` 只改了一个测试。
+- 配置键：没有加的、没有去掉的；`actingd.defaults.json` 一字没改，sha256 仍是 `e14b0ced7040a6d05046edddd9b0c8ee95a53de4b65d69fcc7d9dae17a433343`；两个配置模板和 `apps/actingd/src/config/manifest.rs` 没改。
+- 结果码：加了 4 个，没有 `retired`。按片：G1 加 `device_held_for_member_close`（runtime-host，error，拒，退出码 1）、`device_group_wait` 的词 `close_unconfirmed` 和 8 个位置名（`*held_start_preparation*`）；
+  DA-5cd 加 `lab_scene_size_unsupported`、`record_display_not_base`、`record_size_not_base`（lab，error，都是拒）和 `ready_missing` 的词 `size_not_base`；S2-1b 加词表 `ready_source`（4 个词，只在回答里）；
+  LW-1 只改了 `nemu_input_capability_unsupported`、`nemu_input_frame_required` 的 `common_causes`、`handling`；DA-5ab 只改了 `display_map_unresolved` 的说明（G1 也改了 `device_group_waiting` 的说明）。
+  合计 3981 个码（在用 3893，`retired` 88），1772 个位置、31 个分片；键 681，词表 259，词 2005；在用码按类别 error 3383、warning 156、info 212、success 125、fatal 17；审阅定稿的在用码 154 个。
+  本版的发布文件 `contracts/outcome-codes/released/0.12.67.json`：0 个码、0 个位置（新码都还没定稿）；索引由脚本生成，仍是 32 个文件，核过是最新的。
+- Lab 的操作表仍是 190 行，没加没减；改了 13 行：`do`（请求加 `ObserveReadonly`）、`ensure`、`wait`（输出加 `frame_coordinates`）、`key`、`text`（请求加 `Status`，说明写 `details.hint`）、`tap`、`swipe`、`long-tap`（说明）、
+  `tap-target`、`navigate`（说明，`writes` false、`runtime` `offline`、不发请求）、`record ready`（参数从 3 个到 6 个：`game`、`server`、`locale`；输出加 `sources`）、`record start`（请求加 `InstanceFactSnapshot`，
+  输出加 `display_last_observed`）、`record stop`（说明）。命令清单仍是 46 个顶层分派臂、106 条命令。Lab 的 MCP 服务器在 Windows 上仍是 163 个工具：五个参数加词表、`ac_record_ready` 多三个参数、
+  两个只规划的工具的说明和只读标记、运行的回答、服务器说明里的坐标；第一代 MCP 服务器仍是 46 个工具：`ac_lab_observe`、`ac_lab_do` 的说明和结果说明写两种 `frame_coordinates`，概览的结果说明加 `device_held`。
+  README 两种语言只把工具表标题改成 v0.12.67。两个压缩包的文件表不变（`.github/workflows/windows-remote-build.yml` 没改）：没有新文件、没有去掉的文件。
+- 不稳定表仍是 FLK-08、FLK-10、FLK-14、FLK-15、FLK-16（`ci/flaky-tests.toml`，本版没动）。看板 #71 另登记了 FLK-17（宿主的一条门测在宿主并车较早的头上红过一次，子进程的报错当时没留下；
+  这条测试现在把它读回来），没有镜像进这张表。
+
+升级与退回（救急模块部署、退回、撤销那几条路，`crates/lab-rescue/src/install/` 的 `plan.rs`、`update.rs` 自 v0.12.65 没改，v0.12.66 说明里引的行号对本版也对；`actinglab deploy` 和 `actingctl install` 走的都是它）：
+
+- **v0.12.66 的安装工具装本版：两面都能装，不用任何标志。** 计划的边：`ledger` 两边 [3, 8]，`previous_max_in_next` 过，`one_way` 不触发，`ledger_verify` 为 false（`install/plan.rs` 924）；`runtime-outcomes`、
+  `install-control` 的边过；**`runtime-client` 和 v0.12.66 那次不同**：`installer_meets_previous` 是安装工具 I [3, 9] 对在线的 Rp [3, 9]，`installer_meets_next` 是 I [3, 9] 对本版 R* [3, 10]，两个范围相交就过
+  （324–340），两条都过；`installer_knows_keys` 过；`defaults_diff`（583–607）没有一行；文件计划里没有 `new`；`package` 的 `bundle_max_in_next` 照旧每个游戏一条 `pack_declaration_unknown` 警告，不挡。
+- **本版第一次启动多写的**：没有。G1 的清扫步骤只在有成员欠准备时才排认领，单独一台的实例欠不出来；#475 只改租约结束那几条路；`config.selection` 的默认值哈希不变。v0.12.66 的配置文件照收；
+  `standard-pack check` 没改（`crates/resource-tooling` 没动），对今天的根答法相同。
+- **退回 v0.12.66**：回退门（`install/update.rs` 390–447）只放行这次部署替换掉的 v0.12.66；第 1 部分的边都过（`runtime-client` [3, 10] 和 [3, 9] 相交）；第 2 部分用 v0.12.66 自己的 `actingledger events`
+  读部署以来的每一页：本版不写新的记录种类，新码在旧的读者那里照原样读成收到的拼写（`crates/actingcommand-contract/src/outcome.rs` 690），过。
+  - 读不了的：**在本版上开的录制**（头里的 `base_size`，v0.12.66 读 `recording.json` 拒未知成员）。在映射显示上做的 Lab 操作，它的取证交给 v0.12.66 的 `resource restore` 校验时投影帧对不上，被拒；今天在跑调度的实例不在映射显示上。
+  - 本版设下的围栏、欠着的关会话、设备的挡和欠着的开机准备都只在内存里（`crates/runtime-host/src/host.rs` 6656、6719、6725）；退回要停下 Runtime，v0.12.66 起来时每一台照常准备、自检，没有带过去的。
+    账本里那几条记录（带 `lease_expired` 的 `runtime.failed`、`instance_resources_fenced`、租约的结束）是 #458 自 v0.12.60 起就写的同样记录，v0.12.66 照读。
+  - **除了在本版上开的录制，这些都不让安装的状态或日志对 v0.12.66 读不了。**
+
+配对：
+
+- **控制台 UI**（UI main `41600540` 钉 Runtime v0.12.63 `3581a8af`，`Cargo.toml` 41–46；它声明 `runtime-client` [3, 9]，`crates/acui-setup/component-interfaces.json` 8）：`ui_meets_next` 是 [3, 9] 对 [3, 10]，过。
+  碰得到它的有两样：
+  - 带 `device_held` 的状态：它钉的客户端库整份解不开，今天出不来（见「配置」）；不带的照旧。
+  - **映射显示上的投影**：它钉的库要投影帧和观察帧一样大，所以一个 `ObserveContainedPage` 或 `RunContainedLabOperation` 的回执，只要来自显示不是包的基准尺寸的实例，就被判无效并锁住那条连接
+    （v0.12.63 的 `crates/runtime-client/src/client/online_observation.rs` 104–127、`client/lab_operation.rs` 234–257）。控制台的 main 不发这两种请求（它的源码里没有），所以今天碰不到；基准尺寸的实例上什么都不变。
+    **控制台在对这种实例发观察或 Lab 操作之前，以及放开一台多应用的那一片（最低值升到 10）之前，必须改钉到本版或更新的 Runtime。**
+  - 认录制按住（`lab-record-<毫秒>`）的改动仍在控制台仓开着的 PR #182 里，读的时候没合进 main。
+- **部署工具包**（这次走 Lab 的行）：两个构建清单的 `speaks` 是 `actingd-config` [5, 33]、`install-selection` [1, 1]、`install-control` [0, 0]、`ledger` [3, 8]、**`runtime-client` [3, 10]**、`package` [3, 15]、
+  `runtime-outcomes` [1, 1]；默认值文件的哈希不变；`git diff --stat v0.12.66 <提交> -- apps/actingd/src/config/manifest.rs distribution/windows/actingd.defaults.json` 什么都不打印；不过的边没有，`runtime-client` 的两条边
+  写着 I [3, 9]、Rp [3, 9]、R* [3, 10]，都过；警告照旧是每个游戏一条 `package` 的 `bundle_max_in_next`；没有新文件、没有去掉的文件；运行中的 `actingctl.exe`（MCP 服务）、`actinglab-mcp.exe` 和做计划的
+  `actinglab` 改名放到一边，别的跑着的程序文件挡住，和 v0.12.66 一样；`standard-pack check` 不出新的警告码；启动日志不多一行；**部署前核没有开着的录制**。
+- **热放置工具包**：本版没有让它变的东西：`place`、`standard-pack check` 没改，`actingctl` 只改了 MCP 的工具说明和结果说明。重钉要换的照旧只是构建值；`actingd_config` 5,33 和默认值哈希不变。
+- **两个 MCP 服务器**：工具一个没增减；改的是参数表、说明和运行的回答（见「配置」）。旧映像上的进程照旧能用，答旧的工具表。
+
+运行上的变化：
+
+- 从 v0.12.66 部署，经 Lab 的 `release stage`、`deploy`、`op status`：不用标志，没有 `ledger_verify`，`defaults_diff` 没有行，没有新文件；`runtime-client` 的两条边都过；部署前不留开着的录制。
+- 分辨率不是 1280×720、但和它同比例的实例上，Lab 的观察、点按和离线识别能用，说的是基准坐标；包内运行不变。
+- 这种实例上不能录制：录制一律在 1280×720 的实例上做。
+- 普通按每次多读一次状态；模拟器自己的输入上先截一帧再按。
+- 安装里 `record ready`、`record stop` 不给游戏和服也行，区域仍要给。
+- 宿主又有五条路只围住那一台；一台几个应用时为成员挡设备，今天走不到。
+- 退回 v0.12.66 开着；本版上开的录制回去以后读不了。
+
+本版合并的 PR：
+
+- #1776 #463 S2-1b（登记 §1.434）：门行 `#463 S2-1b`（`gate_463_s21b`，12 条）。
+- #1779 #434 LW-1（§1.435）：门行 `#434 LW-1` 和两轮小修的行（13 条）。
+- #1780 #392 DA-5ab（§1.436，同时是 Lab 的并车）、#1781 #392 DA-5cd（§1.437）：门行 `#392 DA-5ab`（16 条，含改名的 DA-3 那一条）、`#392 DA-5cd`（19 条）、并车的 `#392 DA-5`（12 条）；
+  3 个测试名记进 `ci/retired-gates.toml`。
+- #1778 #437 G1（§1.433，同时是宿主的并车）、#1777 #475（§1.432）：门行 `#437 G1`（16 条）、`#475`（`gate_458_close_isolates` 的 `close475_*`，13 条）。
+
 ## v0.12.66
 
 本版是 v0.12.65 之后的 2 次合并、3 张 PR：截图提速的并车 #1772（#463 S1-10 #1772 自己，带 S1-9 #1773）和直接合并的 #1774（#461）。车上除了两张的头和合并，有两个并车自己的提交：

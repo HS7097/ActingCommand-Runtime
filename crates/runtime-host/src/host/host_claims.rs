@@ -27,6 +27,7 @@ use super::device_link::PendingLinkRestore;
 use super::emulator_autostart::PendingAutostart;
 use super::idle::PendingIdleAction;
 use super::recovery_ladder::PendingRecoveryLadder;
+use super::resource_close::PendingHeldStartPreparation;
 use super::resource_fence::PendingFenceRecheck;
 use super::startup_package::PendingStartupPackage;
 use super::*;
@@ -55,6 +56,10 @@ pub(super) enum HostClaimWork {
     FenceRecheck(PendingFenceRecheck),
     /// IDLE-1: one instance's idle action, on an emulator-control claim.
     IdleAction(Box<PendingIdleAction>),
+    /// Workflow #437 G1 fix round 2: the start's preparation of a member of a device group of
+    /// several that the device's hold for another member's unconfirmed close refused, queued by
+    /// the lease sweep once that hold has ended, on a self-check claim.
+    HeldStartPreparation(PendingHeldStartPreparation),
 }
 
 impl HostClaimWork {
@@ -70,6 +75,8 @@ impl HostClaimWork {
             Self::FenceRecheck(_) => HostLocation::RunResourceFenceRecheck.as_str(),
             // The payload runs the registered host operation of an idle action.
             Self::IdleAction(_) => crate::codes::IdleLocation::Action.as_str(),
+            // The payload runs the registered host operation of a held start preparation.
+            Self::HeldStartPreparation(_) => HostLocation::RunHeldStartPreparation.as_str(),
         }
     }
 }
@@ -263,6 +270,9 @@ impl HostShared {
             HostClaimWork::Autostart(pending) => self.run_autostart_claim(&pending, key),
             HostClaimWork::FenceRecheck(pending) => self.run_fence_recheck(&pending, key),
             HostClaimWork::IdleAction(pending) => self.run_idle_action(&pending, key),
+            HostClaimWork::HeldStartPreparation(pending) => {
+                self.run_held_start_preparation(&pending, key)
+            }
         }
     }
 
@@ -296,6 +306,7 @@ impl HostShared {
                     .issuer()
                     .issue_registered_instance(pending.instance_id),
             ),
+            HostClaimWork::HeldStartPreparation(pending) => pending.links.clone(),
         })
     }
 
