@@ -26,8 +26,9 @@ the recording resumes only that pause ("A recording holds its instance"). #463 S
 lists at once everything a recording still lacks before `record stop` can make its package, and its
 state ("What a recording still lacks: `record ready`"). #463 S2-6: a step that chooses one item among
 several is marked first as holding a choice and refined later by its select, the mark kept in the
-recording meanwhile and listed by `record ready` until it is refined; the refined choice's wanted
-value is a variable of the package ("Marking a choice first").
+recording meanwhile and listed by `record ready` until it is refined; the wanted value of every
+select, the refined choice's among them, is a variable of the package (fix round 1; "Marking a
+choice first", "The wanted value is a variable of the package").
 
 The recording state lives in the Lab state directory. Nothing in this document writes to
 the Runtime ledger; the clicks and application operations themselves are executed by the
@@ -764,9 +765,10 @@ the mark request of "One call per step"; no shortcut flag). `record stop` genera
 select step of a `linear_steps` task ([linear-steps.md](linear-steps.md), "Select steps"). A list
 that scrolls is a later slice; an ending added after the stop is #463 R2's ("Endings"). #463 S2-6
 (since 0.12.68, [v012-register.md](v012-register.md) §1.442): a step may be marked first as holding
-a choice and refined later by its select, and on such a step the wanted value is a variable of the
-package ("Marking a choice first"); a select given whole without the mark is generated as this
-section says.
+a choice and refined later by its select ("Marking a choice first"); fix round 1 (the coordinator's
+ruling R1): the wanted value of every select, marked first or given whole, is a variable of the
+package of kind `ordered` whose default is the recorded `wanted.default` ("The wanted value is a
+variable of the package" below), so the mark decides nothing in the package.
 
 ```json
 {"schema_version":"actingcommand.lab-record-mark.v1","step":3,
@@ -867,6 +869,7 @@ stop` generates the package:
 | `no_select` | #463 R2: `clear_select` names a step that has no select |
 | `on_empty_key_of_ending` | #463 R2 fix 1: the `on_empty` key is the outcome key of an ending of the recording, a select declared after the ending ("Endings"); at `record stop` the ending's own check refuses the pair (`record_ending_invalid`, `key_of_select`) |
 | `choice_not_refined` | #463 S2-6, `record stop` and its dry run only (the code of `record ready`'s item `select_unrefined`): a step marked as holding a choice has no select yet ("Marking a choice first") |
+| `no_choice` | #463 S2-6 fix round 1: the request's `choice: false` names a step that is not marked as holding a choice, so there is nothing to take off ("Marking a choice first") |
 
 **The mark-time self-test**, on every live frame of the step, is the kernel's own dry run of the
 select step (`dry_run_select`, called, never copied) on a probe package: the step alone as `record
@@ -917,7 +920,11 @@ took over, present only then. A step without a select has no key.
 - the operation `step_ii_select`: `from`, `to`, `expect_after` and `post_delay_ms` as a click step,
   `select: {"layout_id": "layout/step_ii", "policy": {"path": "policies/step_ii_select.json"},
   "on_empty": {"outcome_key": K}}` (with `confirm` when declared), the guard, no click and no retry;
-- `policies/step_ii_select.json`, the selection-policy document:
+- `policies/step_ii_select.json`, the selection-policy document (#463 S2-6 fix round 1: its gate
+  and its term read the package's variable of the wanted value, "The wanted value is a variable of
+  the package" below; `R` stands for `{"source": "keyed_fact", "fact_key":
+  "session.dispatch.parameter.list_item", "key_field": "name", "value_column": "rank", "absent":
+  {"type": "integer", "value": 0}}`):
 
   ```json
   {"schema_version": "actingcommand.selection-policy.v1", "policy_id": "step_ii_select",
@@ -926,14 +933,21 @@ took over, present only then. A step without a select has no key.
                       "insufficient": "<task_id>_step_ii_insufficient",
                       "ambiguous": "<task_id>_step_ii_ambiguous", "unknown": "<task_id>_step_ii_unknown"}},
    "fields": [{"name": "name", "value_type": {"type": "enum_string", "allowed": ["item_a", "item_b"]}}],
-   "facts": [],
+   "facts": [{"fact_key": "session.dispatch.parameter.list_item", "max_age_ms": 31536000000,
+              "minimum_confidence_milli": 1000,
+              "value_type": {"type": "record_list", "key_column": "key",
+                             "columns": {"rank": {"type": "integer"}}}}],
    "gates": [{"gate_id": "wanted.list_item",
-              "predicate": {"kind": "string_in", "value": {"source": "field", "field": "name"},
-                            "allowed": ["item_b"]},
-              "on_unknown": {"kind": "drop_candidate"}}],
-   "scoring": [], "selection": {"mode": "none_allowed", "required_count": 1},
+              "predicate": {"kind": "integer_at_least", "value": R, "threshold": 1},
+              "on_unknown": {"kind": "abort_evaluation"}}],
+   "scoring": [{"term_id": "rank.list_item", "value": R, "transform": {"kind": "identity"},
+                "weight_milli": -1000, "on_unknown": {"kind": "abort_evaluation"}}],
+   "selection": {"mode": "none_allowed", "required_count": 1},
    "tie_break": [{"kind": "candidate_id", "direction": "lowest_first"}]}
   ```
+
+- `control.json` `variables`, one entry per select step in path order (#463 S2-6 fix round 1;
+  "The wanted value is a variable of the package" below);
 
 - `scheduling_outcome`: after `<task_id>_done`, the mapping `{K, no_designated_effect, [step_ii]}`;
 - the step's provenance: the declaration, the pressed name, K, `marked_at_unix_ms` and the
@@ -942,17 +956,60 @@ took over, present only then. A step without a select has no key.
   (`frames[{frame_id, result: "undetermined"}]` without an OCR model);
 - the default task timeout adds `S` (one confirmation capture) per select step.
 
-**The wanted value is a constant of the package** until a later slice declares it as a variable:
-`control.json` has no `variables` member for it, and the one gate `wanted.<name>` keeps
-`allowed: [<default>]`. It is changed today by `record mark` on the step with the select declared
-again with another `wanted.default` (on a stopped recording too, "Marking after stop"), then `record
-stop` (`regenerated`); or, in the package, by that one line of the policy document. The gate's
-name and the ids already follow the parameter grammar, so that slice rewrites only that gate and
-adds the declaration. The recording keeps the wanted value's name in `select.wanted.name`; the
-package's gate is `wanted.<name>` and its field is `name`, the layout's identity feature. #463 S2-6:
-on a step marked as holding a choice the wanted value is the package's `ordered` variable of that
-name, and the policy document's gate reads it ("Marking a choice first", "What `record stop`
-generates for a choice").
+**The wanted value is a variable of the package** (#463 S2-6, since 0.12.68, register §1.442; fix
+round 1, the coordinator's ruling R1: of every select step, marked as a choice first or given whole;
+from R1 until then it was a constant of the package, the gate keeping `allowed: [<default>]`). The
+recording keeps the wanted value's name in `select.wanted.name`; the package's gate is
+`wanted.<name>` and its field is `name`, the layout's identity feature.
+
+- `control.json` `variables` holds one entry per select step, in path order
+  ([package-variables.md](package-variables.md), "The declaration"):
+
+  ```json
+  {"name": "list_item", "type": "ordered", "title": {"<locale>": "list_item"},
+   "options": [{"value": "item_a", "title": {"<locale>": "Item A"}},
+               {"value": "item_b", "title": {"<locale>": "Item B"}}],
+   "min_count": 1, "max_count": 2, "default": ["item_b"]}
+  ```
+
+  `name` is `wanted.name`; the options are the names in their order, each `value` its `id` and its
+  `title` its first alias of 1 to 128 bytes, else its `id`; the variable's own `title` is
+  `wanted.name`; every text is under the package's locale; nothing else is invented. A value is a
+  list of the names in an order of preference, 1 to `min(32, names)` of them, of which the run takes
+  the first the screen shows; the default is `[wanted.default]` alone, the order the recording holds.
+- The policy document reads it as a run is handed it ([package-variables.md](package-variables.md),
+  "The run" and "The overlay"): the value set on the application, else the default, overlaid as the
+  record list `session.dispatch.parameter.<name>` of rows `{key, rank}`, rank from 1; a run without
+  a dispatch (a direct run, a Lab run, the offline simulation and replay) reads the default. Its
+  `facts` declare that list (`max_age_ms` the fact bound, 31536000000; confidence 1000); its one gate
+  `wanted.<name>` keeps a name the list holds (`keyed_fact` rank at least 1, absent 0;
+  `abort_evaluation`, as a gate that reads a record list declares) and the term `rank.<name>`
+  (weight −1000) puts the first of the order first. None of the listed names on any slot is the
+  decision `empty`, the run's normal end with the `on_empty` key. **A run handed no value chooses
+  what the constant chose:** its gate keeps the default alone, as the constant's `allowed: [<default>]`
+  did, and the term gives every slot it keeps the same score, so the tie-break decides among them as
+  before.
+- The gate's `on_unknown` is `abort_evaluation` where the constant's was `drop_candidate`, with no
+  effect a run can meet: the field `name` is unknown only on a slot whose name reads no known name,
+  and the kernel leaves such a slot out before the policy (an empty decision beside it is `blocked`,
+  as before); the rank is never unknown, a name the list does not hold reading 0.
+- The value is set by name on an application (`goals set <inst> list_item '["item_b","item_a"]'`,
+  MCP `ac_goals_set`; [package-variables.md](package-variables.md), "Reading and setting a value by
+  name"). The default is changed by `record mark` on the step with the select declared again with
+  another `wanted.default` (on a stopped recording too, "Marking after stop"), then `record stop`
+  (`regenerated`); or, in the package, by the variable's `default` in `control.json`. A variable's
+  name is a name of the game root: two packages of one root that declare it differently are
+  `variable_conflict` there and neither applies.
+- The mark-time self-test, the first decision (self-check item 3) and item 8 decide the default's
+  choice with every variable of the package at its default, as a run without a dispatch reads it;
+  the pressed name is decided with R1's constant document holding the pressed name alone.
+- **What fix round 1 changes for a recording that exists** (accepted by the coordinator's ruling
+  R1): a package generated again from a recording made before it, with a select step, gains
+  `variables` in `control.json` and its policy document in the variable form, so its content hash
+  changes, and it needs the `package` revision variables need (14, "`package` revision" below). A
+  package declares at most 16 variables ([package-variables.md](package-variables.md), "The
+  declaration"), so a recording with more than 16 select steps is refused at the kernel's admission
+  (`variables_invalid`), as `record stop` reports a refused admission, by the existing limit.
 
 **Self-checks** (see "Self-checks"): admission by the kernel (the select-step rules of
 [linear-steps.md](linear-steps.md)), the first decision of a select at step 1 and item 8.
@@ -969,7 +1026,10 @@ content directory declares none, and the revision of a bundle is the packaging's
 repository's, and since Workflow #464 P2 the Lab's own `standard-pack build`, whose revision table
 counts a select step as 13, [resource-verify.md](resource-verify.md), "The `package` revision");
 an earlier Runtime refuses such a package at admission (`contained_task_linear_invalid`,
-`reason=operation_effect`).
+`reason=operation_effect`). #463 S2-6 fix round 1: such a package declares `variables` too (one per
+select step, above), so a bundle that holds it declares `package` 14
+([package-variables.md](package-variables.md), "Interface"), which the revision table of
+`standard-pack build` counts; `standard-pack adopt` copies `control.json` as it is.
 
 ### Marking a choice first
 
@@ -988,7 +1048,11 @@ the mark is kept in the recording and listed by `record ready`, so it is never l
 
 - **The mark.** The request's `choice` (request form only, as `select`: `record mark --request` or
   `--request-json`, MCP `ac_record_mark`, which hands the request on as it is, and the mark request
-  of "One call per step"): `true` marks the step, `false` takes the mark off, absent leaves it. It
+  of "One call per step"): `true` marks the step, `false` takes the mark off, absent leaves it.
+  Fix round 1 (the coordinator's ruling R2): `false` on a step that carries no mark has nothing to
+  take off and is refused, `record_select_invalid` with `no_choice` (exit 3), nothing written, as
+  `clear_select` on a step without a select is `no_select`. The mark means only "this choice is not
+  refined yet": it decides nothing in the package (fix round 1, ruling R1). It
   is taken on an active recording (a reopened one included) and on a stopped one ("Marking after
   stop"), on a step with a frame. The demonstration is the step's own press as stage one recorded
   it: a tap of `tap --record`, recorded by its point (`source: "point"`), is one, as is a click
@@ -1009,9 +1073,10 @@ the mark is kept in the recording and listed by `record ready`, so it is never l
   name the press chose), its own rectangle, source and mark kept in `select.click_before`, and the
   select is self-tested on the step's kept frames. A select given in the request that marks the
   choice refines it at once. The mark stays beside the select: a step with both is refined.
-  `clear_select` takes the select off and leaves the choice to refine again; `choice: false` takes
-  the mark off and leaves the select, generated then as "Selecting in a list" says. No tool proposes
-  the choices, the slots or the names: the agent declares them.
+  `clear_select` takes the select off and leaves the choice to refine again; `choice: false` on a
+  refined step takes the mark off and nothing else: the select stays, and since the wanted value of
+  every select is the package's variable (fix round 1) the package is the same with the mark or
+  without it. No tool proposes the choices, the slots or the names: the agent declares them.
 - **What is missing meanwhile.** `record ready` lists each effective step marked as holding a choice
   and without a select as an item of `missing` ("What a recording still lacks: `record ready`"):
   `what` `select_unrefined`, `code` `record_select_invalid`, the step, its number in the package and
@@ -1021,49 +1086,15 @@ the mark is kept in the recording and listed by `record ready`, so it is never l
   choice_not_refined`, `details.missing_total` and `details.hint: "record ready"`; nothing is written,
   and a stopped recording keeps the package it generated before. A marked choice knows no names, and a
   package never presses by position where a name can be read.
-- **What `record stop` generates for a choice.** The select step exactly as "Selecting in a list"
-  says, but for its wanted value, which is a variable of the package:
-  - `control.json` `variables`, one entry per such step in path order
-    ([package-variables.md](package-variables.md), "The declaration"):
-
-    ```json
-    {"name": "list_item", "type": "ordered", "title": {"<locale>": "list_item"},
-     "options": [{"value": "item_a", "title": {"<locale>": "Item A"}},
-                 {"value": "item_b", "title": {"<locale>": "Item B"}}],
-     "min_count": 1, "max_count": 2, "default": ["item_b"]}
-    ```
-
-    `name` is `wanted.name`; the options are the names in their order, each `value` its `id` and its
-    `title` its first alias of 1 to 128 bytes, else its `id`; the variable's own `title` is
-    `wanted.name`; every text is under the package's locale; nothing else is invented. A value is a
-    list of the names in an order of preference, 1 to `min(32, names)` of them, of which the run
-    takes the first the screen shows; the default is `[wanted.default]` alone, so a run handed nothing
-    chooses as the same select given without the mark chooses.
-  - The policy document reads it as a run is handed it ([package-variables.md](package-variables.md),
-    "The run" and "The overlay"): the value set on the application, else the default, overlaid as the
-    record list `session.dispatch.parameter.<name>` of rows `{key, rank}`, rank from 1; a run without
-    a dispatch (a direct run, a Lab run, the offline simulation and replay) reads the default. Its
-    `facts` declare that list (`max_age_ms` the fact bound, 31536000000; confidence 1000); its one
-    gate `wanted.<name>` keeps a name the list holds (`keyed_fact` rank at least 1, absent 0;
-    `abort_evaluation`, as a gate that reads a record list declares) and the term `rank.<name>`
-    (weight −1000) puts the first of the order first. None of the listed names on any slot is the
-    decision `empty`, the run's normal end with the `on_empty` key.
-  - The value is set by name on an application (`goals set <inst> list_item '["item_b","item_a"]'`,
-    MCP `ac_goals_set`; [package-variables.md](package-variables.md), "Reading and setting a value by
-    name"); the default changes with the select declared again with another `wanted.default`, then
-    `record stop`. A variable's name is a name of the game root: two packages of one root that
-    declare it differently are `variable_conflict` there and neither applies. A package declares at
-    most 16 variables; the kernel's admission refuses more (`variables_invalid`), as `record stop`
-    reports a refused admission.
-  - The mark-time self-test, the first decision (self-check item 3) and item 8 decide the default's
-    choice with every variable of the package at its default, as a run without a dispatch reads it;
-    the pressed name is decided, as for any select, with the policy holding the pressed name alone.
-  - A bundle whose package declares `variables` declares `package` 14
-    ([package-variables.md](package-variables.md), "Interface"), which the revision table of
-    `standard-pack build` counts; `record stop` writes no revision, and `standard-pack adopt` copies
-    `control.json` as it is.
-- A recording without a step marked so, a select given without the mark included, is generated byte
-  for byte as before.
+- **What `record stop` generates for a choice** is what it generates for the same select given
+  whole without the mark ("Selecting in a list"); the mark adds nothing to the package: the select
+  step, its wanted value the package's `ordered` variable whose default is the recorded
+  `[wanted.default]`, and the policy document that reads it ("The wanted value is a variable of the
+  package"). A run handed no value chooses what the select chose before this slice, when its wanted
+  value was a constant.
+- A recording without a select is generated byte for byte as before; one with a select gains the
+  variable form of fix round 1 ("The wanted value is a variable of the package", "What fix round 1
+  changes for a recording that exists").
 
 ### Endings
 
@@ -3614,9 +3645,10 @@ Numbers in page and operation ids have one width: two digits, or the digits of n
   `expect_after` and its `post_delay_ms` and no click; its layout is in `candidate_layouts[]`, its
   slots' targets in `ocr_targets[]` and its policy document is `policies/step_ii_select.json`
   ("Selecting in a list"). A recording without a select generates the same bytes as before.
-- #463 S2-6: `control.json` adds `variables`, one `ordered` entry per select step marked as holding a
-  choice, in path order, after `max_steps`, and such a step's policy document reads it ("Marking a
-  choice first"). A recording without such a step generates the same bytes as before.
+- #463 S2-6 (fix round 1: of every select step, marked as holding a choice or not): `control.json`
+  adds `variables`, one `ordered` entry per select step, in path order, after `max_steps`, and the
+  step's policy document reads it ("Selecting in a list", "The wanted value is a variable of the
+  package"). A recording without a select step generates the same bytes as before.
 - An application step's operation is `step_ii_app`: `application: {"action"}`,
   `expect_after.timeout_ms` the application arrival timeout A
   (`--application-arrival-timeout-ms`, default 90000), `post_delay_ms` 1000, no guard and no

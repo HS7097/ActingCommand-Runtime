@@ -183,6 +183,9 @@ actingcommand_contract::outcome_vocabulary! {
         /// #463 S2-6: `record stop` meets a step marked as holding a choice that no select refines
         /// yet: it knows no names, so no package is generated.
         ChoiceNotRefined => "choice_not_refined",
+        /// #463 S2-6 fix round 1: a request's `choice: false` names a step that is not marked as
+        /// holding a choice, so there is nothing to take off.
+        NoChoice => "no_choice",
     }
 }
 

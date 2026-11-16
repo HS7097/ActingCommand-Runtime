@@ -2,11 +2,11 @@
 
 //! #463 R1 (`contracts/lab-recording.md`, "Selecting in a list"): a recording step that chooses
 //! in a list of fixed slots by the name read in each slot. A request's `select` declares the slots,
-//! the OCR read of their names, the identity domain (`names`), the wanted value (`wanted`, a
-//! constant of the package until a later slice reads it as a variable) and the name the agent
-//! presses now (`pressed`); the step's click is then the click box of the slot the decision
-//! selects for the pressed name on the primary frame (`source: "select"`), which `do --capture
-//! --record` presses as any recorded click.
+//! the OCR read of their names, the identity domain (`names`), the wanted value (`wanted`; #463
+//! S2-6 fix round 1: in the package an `ordered` variable of its name, its default `[default]`)
+//! and the name the agent presses now (`pressed`); the step's click is then the click box of the
+//! slot the decision selects for the pressed name on the primary frame (`source: "select"`), which
+//! `do --capture --record` presses as any recorded click.
 //!
 //! The mark-time self-test is the kernel's own dry run of the select step (`dry_run_select`),
 //! called on a probe package that holds the step as `record stop` generates it: on every live
@@ -23,8 +23,10 @@
 //! step's select refines it later, on the active or the stopped recording, as a select is declared
 //! on any step whose press is recorded. A step marked so keeps a select step's rules from its mark
 //! on ([`check_select_rules`]); `record stop` generates no package while one is not refined (the
-//! pre-check `select_unrefined`, `generate::survey`), and on a refined one the wanted value is the
-//! package's `ordered` variable, which the self-test reads at its default ([`decide`]).
+//! pre-check `select_unrefined`, `generate::survey`). The mark means only that: fix round 1, the
+//! wanted value of every select step is the package's `ordered` variable, marked or not, which the
+//! self-test reads at its default ([`decide`]); `choice: false` on a step without the mark is
+//! refused (`no_choice`).
 
 use super::frames::{LoadedFrame, rect_inside};
 use super::generate::{
@@ -558,27 +560,38 @@ pub(crate) fn check_select_rules(step: &RecordingStep) -> LabResult<()> {
 
 /// #463 S2-6 (`contracts/lab-recording.md`, "Marking a choice first"): the request's `choice` on
 /// `step`: `true` marks it (a mark already there keeps its time), `false` takes the mark off,
-/// absent leaves it. A step marked so on the last step of a stopped recording (`final_of_stopped`)
-/// is refused as a select there is (`on_final_step`): the package ends on that page, which only
-/// recognizes. The rules the mark keeps beside the rest of the step are [`check_select_rules`]'s.
+/// absent leaves it. Fix round 1: `false` on a step without the mark has nothing to take off and
+/// is refused (`no_choice`), as `clear_select` on a step without a select is (`no_select`); on a
+/// refined step it takes off the mark alone, the select staying, and the package is the same. A
+/// step marked so on the last step of a stopped recording (`final_of_stopped`) is refused as a
+/// select there is (`on_final_step`): the package ends on that page, which only recognizes. The
+/// rules the mark keeps beside the rest of the step are [`check_select_rules`]'s.
 pub(crate) fn apply_choice(
     step: &mut RecordingStep,
     request: &MarkRequest,
     final_of_stopped: bool,
 ) -> LabResult<()> {
+    let index = step.index;
     match request.choice {
         None => {}
+        Some(false) if step.choice.is_none() => {
+            return Err(select_invalid(
+                Some(index),
+                SelectProblem::NoChoice,
+                format!(
+                    "step {index} is not marked as holding a choice, so choice false has nothing \
+                     to take off; nothing was written"
+                ),
+            ));
+        }
         Some(false) => step.choice = None,
         Some(true) => {
-            if step.choice.is_none() {
-                step.choice = Some(StepChoice {
-                    marked_at_unix_ms: now_unix_ms(),
-                });
-            }
+            step.choice.get_or_insert_with(|| StepChoice {
+                marked_at_unix_ms: now_unix_ms(),
+            });
         }
     }
     if step.choice.is_some() && final_of_stopped {
-        let index = step.index;
         return Err(select_invalid(
             Some(index),
             SelectProblem::OnFinalStep,
@@ -929,7 +942,7 @@ pub(crate) struct Decided {
 /// `override_document`, an empty fact snapshot and the instant `now_unix_ms`. #463 S2-6: the run
 /// reads what a run without a dispatch reads, every variable the package declares at its default
 /// (`default_run_values`; a package that declares none reads its parameters alone, as before), so
-/// the policy of a step marked as a choice reads its wanted value's default; the overlay is
+/// the policy of every select step (fix round 1) reads its wanted value's default; the overlay is
 /// observed at `now_unix_ms`, so the instant decides nothing. A refusal of the dry run (the frame
 /// shows another page, a name read fails, …) is its outcome, with the kernel's code and detail.
 pub(crate) fn decide(

@@ -32074,7 +32074,8 @@ This slice brings the piece onto that base: the mark is made on the draft, its p
 
 **The rule** ([lab-recording.md](lab-recording.md), "Marking a choice first").
 - *The mark.* A `record mark` request's `choice` (request form only, as `select`): `true` marks the
-  step as holding a choice, `false` takes the mark off, absent leaves it. The step keeps
+  step as holding a choice, `false` takes the mark off (fix round 1: on a step without the mark
+  `record_select_invalid` with `no_choice`), absent leaves it. The step keeps
   `choice: {marked_at_unix_ms}` in `recording.json` (`RecordingStep::choice`, `StepChoice`; absent
   on every step not marked, so a recording without one is byte for byte what it was); a mark given
   again keeps its time; `record archive` and `record reopen` never rewrite it. The answer of
@@ -32090,7 +32091,9 @@ This slice brings the piece onto that base: the mark is made on the draft, its p
   `validation_failed`, beside an ending or an inserted optional step `with_other_change` naming
   `choice` (the lists of other members in `ending.rs` and `inserted.rs`).
 - *Refining* is declaring the step's select, on the active or the stopped recording, the select R1
-  takes as it is; the mark stays beside it. `clear_select` leaves the choice to refine again.
+  takes as it is; the mark stays beside it. `clear_select` leaves the choice to refine again;
+  `choice: false` on a refined step takes the mark off alone, and the package is the same (fix
+  round 1).
 - *The pending item.* The generator's pre-checks (`generate::survey`, §1.425's one implementation)
   gain `unrefined_choices`: each effective step with a choice and no select is a failed pre-check,
   the word `select_unrefined` of `ready_missing`, the refusal `record_select_invalid` with the new
@@ -32100,16 +32103,18 @@ This slice brings the piece onto that base: the mark is made on the draft, its p
   was sent on; `record stop` (its dry run and its regeneration) answers it as any first failed
   pre-check, with `details.missing_total` and `details.hint`. A recording with it is a stage-two
   write (`ready::stage_two_written`).
-- *The wanted value of a refined choice* is a variable of the package: `record stop` declares, for
-  each select step marked as a choice in path order, one `ordered` entry of `control.json`
-  `variables` ([package-variables.md](package-variables.md)): its name the select's wanted name,
-  its options the names (each titled by its first alias of 1 to 128 bytes, else its id), 1 to
-  `min(32, names)` values, its default `[wanted.default]`; that step's policy document reads it
-  through `keyed_fact` over `session.dispatch.parameter.<name>` (`generate::choice_policy_document`,
-  `choice_variable_json`). A select given whole without the mark is generated as R1 generates it,
-  byte for byte. The Lab's dry runs of a select (`select::decide`: the mark-time self-test, the
-  first decision, self-check item 8) read every variable at its default
-  (`default_run_values`), which for a package without variables is what they read before.
+- *The wanted value of every select* (fix round 1, the coordinator's ruling R1; the first round
+  declared it for a step marked as a choice only) is a variable of the package: `record stop`
+  declares, for each select step in path order, marked first or given whole, one `ordered` entry of
+  `control.json` `variables` ([package-variables.md](package-variables.md)): its name the select's
+  wanted name, its options the names (each titled by its first alias of 1 to 128 bytes, else its
+  id), 1 to `min(32, names)` values, its default `[wanted.default]`, the order the recording holds;
+  the step's policy document reads it through `keyed_fact` over
+  `session.dispatch.parameter.<name>` (`generate::choice_policy_document`, `choice_variable_json`),
+  one form for every select. A run handed no value chooses what R1's constant chose. The Lab's dry
+  runs of a select (`select::decide`: the mark-time self-test, the first decision, self-check item
+  8) read every variable at its default (`default_run_values`); the pressed name is decided with
+  R1's constant document (`select_policy_document`) holding it alone.
 
 **Where it is built.**
 
@@ -32117,7 +32122,7 @@ This slice brings the piece onto that base: the mark is made on the draft, its p
 |---|---|
 | The mark | `crates/lab/src/recording/model.rs` (`StepChoice`, `RecordingStep::choice`, `MarkRequest::choice`, `MarkOutcome::choice`, `StepView::choice`); `select.rs` (`apply_choice`, `check_select_rules`); `steps.rs` (`apply_marks`: the application entry step, the frame it needs, the mark applied before the rules); `recording_api.rs` (the request's form beside a step operation and a transition; the answer; the status view); `ending.rs`, `inserted.rs` (other members); actinglab's flag form names no `choice` (`session_record.rs`) |
 | The pending item | `generate.rs` (`unrefined_choices` in `survey`); `ready.rs` (`stage_two_written`); `codes.rs` (`ReadyMissing::SelectUnrefined`, `SelectProblem::ChoiceNotRefined`) |
-| The variable | `generate.rs` (`render`: `variables` and the policy of a step marked as a choice); `select.rs` (`decide` reads `default_run_values`) |
+| The variable | `generate.rs` (`render`: `variables` and the policy of every select step, fix round 1); `select.rs` (`decide` reads `default_run_values`) |
 | Texts | [lab-recording.md](lab-recording.md) (the opening, `recording.json`, `record mark`'s answer, `record status`, "Selecting in a list", the new "Marking a choice first", "Marking after stop", the `record ready` words, "Pre-checks", "Pages and documents"); [package-variables.md](package-variables.md) ("Not built"); [lab-operations.json](lab-operations.json) (the notes of `record mark`'s `request`, `do`'s `mark_request` and `record ready`); `apps/actinglab-mcp/MANUAL.md`; the catalog |
 
 **Codes and words.** No outcome code is added.
@@ -32126,6 +32131,7 @@ This slice brings the piece onto that base: the mark is made on the draft, its p
 |---|---|---|---|---|
 | `select_unrefined` (vocabulary `ready_missing`) | new word | listed by `record ready`, which refuses nothing by it | 0 | the agent reading `record ready`; its item's `code` is `record_select_invalid` |
 | `choice_not_refined` (vocabulary `select_problem` of the existing `record_select_invalid`, error / none) | new word | refuses `record stop`, its dry run and its regeneration; nothing written | 3 on a `--via` line (safety); 1 on actinglab's own line and through `serve --stdio --front mcp` | the agent stopping the recording: refine the step or take its mark off |
+| `no_choice` (vocabulary `select_problem` of the existing `record_select_invalid`; fix round 1) | new word | refuses `record mark` whose `choice: false` names a step without the mark; nothing written | as `choice_not_refined` | the agent taking a mark off: there is none |
 
 No decision reads a code or a word. The catalog's two vocabularies and the texts of
 `record_select_invalid` are updated and the outcome-code index regenerated.
@@ -32138,9 +32144,10 @@ the hint, nothing written); refined, `ready`, and the package's variable, its po
 offline simulation tapping the default's slot and the kernel's dry run following a given order; the
 mark kept through `record archive` and `record reopen`; the point tap taken as the demonstration
 (`select_press_mismatch` for a name in the other slot, nothing written; the tap the select's click,
-`click_before` the point tap); a select given whole without the mark answering as before (no
-`choice`, no `variables`, R1's constant gate). No existing test is adapted; no golden changes; no
-test leaves a gate map.
+`click_before` the point tap); a select given whole without the mark (fix round 1: holding the
+variable and the policy of the same select marked first, its run handed no value tapping the
+default's slot as before; the test renamed within this pull request, so none leaves the gate map of
+main). Fix round 1 adds six tests and adapts two R1 tests (below). No golden changes.
 
 **What was ported, rewritten and left.**
 - *Ported:* the request's `choice` and the step's mark with its time; a marked step keeping a
@@ -32150,16 +32157,69 @@ test leaves a gate map.
 - *Rewritten on today's base:* the refusal of `record stop` is a pre-check of `survey` with its
   `ready_missing` word, answered as the first item with `missing_total`, where V4 refused in `plan`
   with every step in `details.steps`; inserted optional steps (R4) and boxes (S2-5), which V4 did
-  not know, name or take a choice as their rules say; the variable is declared only for a step
-  marked as a choice, since this work order keeps a select given whole as it is today (V4 made
-  every select's wanted value a variable and adapted two R1 tests); the pressed name is decided as
-  R1 decides it, with the policy holding it alone, where V4 handed the variable `[pressed]`.
+  not know, name or take a choice as their rules say; the pressed name is decided as R1 decides it,
+  with the policy holding it alone, where V4 handed the variable `[pressed]`. The first round
+  declared the variable only for a step marked as a choice; fix round 1 makes every select's wanted
+  value a variable, as V4 did, and adapts two R1 tests as V4 did.
 - *Left:* V4's list `unrefined_choices` beside `record status` (`record ready` is where it is
   read); V4's `missing` members of a choice (`slots`, `read`, `names`, `match`, `wanted`, always the
   same five); nothing proposes the choices or their boxes (the owner's rulings of 11-15).
 
+**Fix round 1** (coordinator work order `rd-1116/brief-463-s26-fix1.md`, after the independent
+review `rd-1116/review-1787.md`, the coordinator's rulings R1 to R5; main `a91e657c`, with the
+parent #1780 merged, merged in first).
+
+- *Every choice is a variable* (R1; the review's (l)). The first round's work order kept "a choice
+  fully given in one request as today", which made the mark decide whether a person can set a
+  choice's value: a hidden switch, the coordinator's mistake. `generate::render` now declares the
+  `ordered` variable for every select step (the filter on the mark is gone) and writes every select
+  step's policy document in the variable form (`choice_policy_document`; R1's
+  `select_policy_document` stays the base of that document and the constant the pressed name is
+  decided with). A run handed no value chooses what it chose before: the variable's default
+  `[wanted.default]` keeps the one name R1's gate kept, and the term scores every slot kept alike,
+  so the tie-break decides as before. The mark now means only "this choice is not refined yet".
+  Accepted with it ([lab-recording.md](lab-recording.md), "The wanted value is a variable of the
+  package"): a package generated again from an existing recording with a select gains `variables`
+  and the policy in the variable form, so its content hash changes, and it needs `package` 14; the
+  gate's `on_unknown` is `abort_evaluation` where R1's was `drop_candidate`, with no effect a run can
+  meet (a slot whose name reads no known name is left out before the policy); a recording with more
+  select steps than a package may declare variables (16) is refused at admission, by the existing
+  limit.
+- *Withdrawing a mark* (R2; the review's (m)). `choice: false` on a step without the mark is
+  refused, `record_select_invalid` with the new `select_problem` word `no_choice`, as R2 refuses
+  `clear_select` with nothing to take off (`no_select`); nothing is written. On a refined step it
+  takes off the mark and nothing else: the select stays, and the package is the same with the mark
+  or without it (`select::apply_choice`).
+- *The lint* (R3; the review's (k)). The arm `Some(true)` of `apply_choice` is
+  `step.choice.get_or_insert_with(…)`, which clippy's `collapsible_match` accepts and which keeps
+  the `match` exhaustive.
+- *Texts* (R4; the review's (j) and (l)). [lab-recording.md](lab-recording.md): the opening,
+  "Selecting in a list" (its opening, the `select_problem` table's `no_choice`, the policy document and
+  `control.json` of "What `record stop` generates", the paragraph "The wanted value is a variable of
+  the package" in place of the constant's, the `package` revision), "Marking a choice first" (the
+  mark, refining, what `record stop` generates for a choice) and "Pages and documents";
+  [package-variables.md](package-variables.md) ("Not built" and V4 under "What arrives later");
+  [lab-operations.json](lab-operations.json) (the note of `record mark`'s `request`);
+  `apps/actinglab-mcp/MANUAL.md`; the catalog's `no_choice` and the texts of
+  `record_select_invalid`; the index regenerated.
+- *Tests* (R5; the review's (h) and (m)). Adapted, as the requirement changes what they pin:
+  `gate_463_r1::r1_a_marked_select_is_accepted_generated_and_admitted` (the gate reads the variable,
+  the control declares it with the default `[item_b]`) and
+  `gate_463_r1::r1_a_default_changed_after_stop_regenerates_another_package` (the new default is the
+  variable's `[item_a]`); this slice's test 5 turned the other way round and renamed
+  `s26_a_select_given_whole_without_the_mark_holds_the_same_variable`. New in `gate_463_s26.rs`:
+  `s26_fix1_the_first_name_of_the_order_on_the_screen_is_chosen` (two names in an order, and
+  reversed, pin the term's sign), `s26_fix1_no_name_of_the_order_on_the_screen_ends_on_the_on_empty_key`,
+  `s26_fix1_choice_false_refuses_an_unmarked_step_and_takes_off_only_the_mark`,
+  `s26_fix1_a_marked_step_keeps_each_rule_of_a_select_step` (optional, application, retry, gesture,
+  follow), `s26_fix1_a_choice_is_marked_and_refined_on_a_stopped_recording` and
+  `s26_fix1_a_step_inserted_beside_a_marked_step_leaves_the_mark_where_it_was`; each once in the
+  exec gate map's row "#463 S2-6". No golden changes; no test leaves a gate map of main.
+
 **At deploy.** Nothing to configure. A recording made on an earlier build reads as before; one that
-holds a choice is not read by a build before 0.12.68.
+holds a choice is not read by a build before 0.12.68. Fix round 1: a package `record stop` generates
+again from a recording with a select declares `variables` and needs `package` 14; the Runtime of
+this release admits it.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

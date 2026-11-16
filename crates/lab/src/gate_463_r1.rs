@@ -548,13 +548,18 @@ fn r1_a_marked_select_is_accepted_generated_and_admitted() {
         ]),
         "{task}"
     );
+    // Adapted by #463 S2-6 fix round 1 (the coordinator's ruling R1: the wanted value of every
+    // select is a package variable of kind `ordered`, its default the recorded `[default]`): the
+    // one gate reads the variable `list_item` as a run is handed it, and the package declares it.
     let policy = document(&entries, POLICY);
+    let rank = json!({"source": "keyed_fact", "fact_key": "session.dispatch.parameter.list_item",
+                      "key_field": "name", "value_column": "rank",
+                      "absent": {"type": "integer", "value": 0}});
     assert_eq!(
         policy["gates"],
         json!([{"gate_id": "wanted.list_item",
-                "predicate": {"kind": "string_in", "value": {"source": "field", "field": "name"},
-                              "allowed": ["item_b"]},
-                "on_unknown": {"kind": "drop_candidate"}}]),
+                "predicate": {"kind": "integer_at_least", "value": rank, "threshold": 1},
+                "on_unknown": {"kind": "abort_evaluation"}}]),
         "{policy}"
     );
     assert_eq!(
@@ -565,7 +570,10 @@ fn r1_a_marked_select_is_accepted_generated_and_admitted() {
         policy["selection"],
         json!({"mode": "none_allowed", "required_count": 1})
     );
-    assert_eq!(document(&entries, "control.json").get("variables"), None);
+    assert_eq!(
+        document(&entries, "control.json")["variables"][0]["default"],
+        json!(["item_b"])
+    );
     assert_eq!(
         lab["selects"],
         json!([{"step": 1, "record_index": 1, "op": "step_01_select", "layout": "layout/step_01",
@@ -1081,8 +1089,9 @@ fn r1_the_on_empty_key_is_the_given_one_and_ends_an_empty_first_decision() {
 }
 
 // Item 3 of the brief: the stopped recording's wanted.default changed by record mark (the select
-// declared again), regenerated: the policy's one gate keeps the new default and the package's
-// content hash differs.
+// declared again), regenerated: the policy's one gate keeps the new default (#463 S2-6 fix round
+// 1: the default of the package's variable, which the gate reads) and the package's content hash
+// differs.
 #[test]
 fn r1_a_default_changed_after_stop_regenerates_another_package() {
     let recording = Recording::new();
@@ -1109,8 +1118,10 @@ fn r1_a_default_changed_after_stop_regenerates_another_package() {
         hex_sha256(&fs::read(regenerated["path"].as_str().expect("path")).expect("package"));
     assert_ne!(after, before, "the package's content changed");
     let entries = recording.package(&regenerated);
+    // Adapted by #463 S2-6 fix round 1 (the coordinator's ruling R1): the new default is the
+    // default of the package's variable `list_item`, which the policy's one gate reads.
     assert_eq!(
-        document(&entries, POLICY)["gates"][0]["predicate"]["allowed"],
+        document(&entries, "control.json")["variables"][0]["default"],
         json!(["item_a"])
     );
 }

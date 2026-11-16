@@ -382,9 +382,13 @@ naming this file.
   request of its own ("Selecting in a list": the slots, how each name is read, the names, the match
   and the wanted value; `pressed` the name the recorded press chose). Until then `ac_record_ready`
   lists the step as `select_unrefined` (code `record_select_invalid`) and `ac_record_stop` refuses
-  it with `choice_not_refined`; `choice: false` takes the mark off. On a refined choice the wanted
-  value is the package's `ordered` variable of the select's wanted name, its default the select's
-  default, which `ac_goals_set` sets on an application by name.
+  it with `choice_not_refined`; `choice: false` takes the mark off (on a step without the mark it
+  is refused, `no_choice`; on a refined step the select stays). The mark only says the choice is
+  not refined yet: the wanted value of every select, marked first or given whole, is the package's
+  `ordered` variable of the select's wanted name, its default the select's default (a run given no
+  value chooses as before), which `ac_goals_set` sets on an application by name; a package
+  generated again from an older recording with a select gains that variable, so its content hash
+  changes and its bundle declares `package` 14.
 - **Offline scenes of another size** (Workflow #392 DA-5cd, 0.12.67, as the train of DA-5ab and
   DA-5cd leaves it; `contracts/display-adapter.md` section 12). `ac_recognize`, `ac_detect_page`,
   `ac_current_page`, `ac_is_visible`, `ac_lab_observe` on a saved scene, `ac_tap_target` and

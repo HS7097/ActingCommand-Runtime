@@ -24,18 +24,42 @@
 //   the select's press: a pressed name in another slot is `select_press_mismatch`, nothing
 //   written; the name in the tapped slot turns the tap into the select's click, its press and its
 //   point as recorded kept beside the select.
-// - `s26_a_choice_given_whole_in_one_request_answers_as_before`: a select given whole without the
-//   mark: `ready`, no `choice` anywhere in the recording, and the package as R1 generates it (no
-//   variable, the one gate keeping the default).
+//
+// Fix round 1 (brief rd-1116/brief-463-s26-fix1.md, the coordinator's rulings R1, R2 and R5 on the
+// independent review): the wanted value of every select is the package's `ordered` variable whose
+// default is the recorded one, marked or not, so the mark means only "not refined yet"; `choice:
+// false` on a step without the mark is refused (`no_choice`).
+// - `s26_a_select_given_whole_without_the_mark_holds_the_same_variable` (the slice's test 5, turned
+//   the other way round by R1): a select given whole without the mark: `ready`, no `choice` in the
+//   recording, the package's variable and policy those of the same select marked first; a run handed
+//   no value taps the default's slot, as the constant of before did.
+// - `s26_fix1_the_first_name_of_the_order_on_the_screen_is_chosen`: handed `["item_a", "item_b"]`
+//   the select chooses item_a's slot, handed `["item_b", "item_a"]` item_b's (the term's sign).
+// - `s26_fix1_no_name_of_the_order_on_the_screen_ends_on_the_on_empty_key`: on a list showing
+//   item_a in both slots, the order `["item_b"]` selects nothing and decides the `on_empty` key.
+// - `s26_fix1_choice_false_refuses_an_unmarked_step_and_takes_off_only_the_mark`: on a step without
+//   the mark `record_select_invalid` with `no_choice`, nothing written; on a marked step not refined
+//   the mark goes and nothing is missing; on a refined step the mark goes and the select stays, the
+//   package holding its variable.
+// - `s26_fix1_a_marked_step_keeps_each_rule_of_a_select_step`: on a step marked as a choice an
+//   optional flag, an application operation, a click retry, a drag and a click that follows a mark
+//   are each refused with their words, nothing written.
+// - `s26_fix1_a_choice_is_marked_and_refined_on_a_stopped_recording`: on the stopped recording the
+//   last step takes no mark (`on_final_step`); step 1 takes it, is listed and refused by `record
+//   stop`, the package generated before kept; refined, it is `ready` and regenerated.
+// - `s26_fix1_a_step_inserted_beside_a_marked_step_leaves_the_mark_where_it_was`: an optional step
+//   inserted after the marked step 1 of the stopped recording takes the next serial number and no
+//   mark; step 1 keeps its mark as it was and is listed as before.
 //
 // Frames are synthetic: 96x64 pixels of flat gray. The scripted OCR provider reads one block per
 // marker pixel inside the requested region, its text chosen by the marker's gray value, at
 // confidence 0.9; a region without a marker reads nothing. Slot 0 is (8, 8, 32, 32) with its name
 // read in (10, 28, 28, 8), slot 1 (48, 8, 32, 32) with (50, 28, 28, 8); a name's marker stands at
 // (12 + 40k, 30): item_a (ALPHA) in slot 0, item_b (BRAVO) in slot 1. The color mark `state/page` on
-// a flat area recognizes the list page and guards the select. No device is used; the tests read no
-// clock and never sleep. Every expected value comes from the work order's lines and the values
-// above.
+// a flat area recognizes the list page and guards the select. Fix round 1: the pop-up inserted after
+// the stop is the flat screen with a square of gray 120 at (20, 50, 4, 4), its color mark
+// `popup/notice`, closed at (16, 20, 24, 16). No device is used; the tests read no clock and never
+// sleep. Every expected value comes from the work order's lines and the values above.
 
 use crate::codes::{LabCode, ReadyMissing, SelectProblem};
 use crate::recording::crosscheck::admit;
@@ -53,7 +77,8 @@ use actingcommand_contract::{
 };
 use actingcommand_device::{CaptureBackendName, Frame, PixelFormat};
 use actingcommand_execution_kernel::{
-    OfflineDecision, PreparedContainedTask, dry_run_select, simulate_contained_task_at,
+    OfflineDecision, PreparedContainedTask, SelectionDryRun, dry_run_select,
+    simulate_contained_task_at,
 };
 use actingcommand_pack_containment::{
     ContainmentLimits, ContentContainer, expand_content_container,
@@ -89,6 +114,11 @@ const VARIABLE_KEY: &str = "session.dispatch.parameter.list_item";
 const DRY_RUN_UNIX_MS: u64 = 1_700_000_100_000;
 // The point stage one taps on the list: inside slot 0, where item_a stands.
 const TAP: (i32, i32) = (20, 20);
+// Fix round 1: the key of the select's empty end, `<task_id>_not_found` by default.
+const NOT_FOUND: &str = "neutral_task_not_found";
+// Fix round 1: the pop-up's gray and its color mark.
+const POPUP_GRAY: u8 = 120;
+const POPUP_MARK: &str = "popup/notice";
 // The self-checks of `record stop`, in the order they run.
 const EVERY_CHECK: [&str; 7] = [
     "frames",
@@ -117,6 +147,10 @@ const fn rect(x: i32, y: i32, width: i32, height: i32) -> RecordRect {
 // The slots' rectangles and the regions their names are read in.
 const SLOTS: [RecordRect; 2] = [rect(8, 8, 32, 32), rect(48, 8, 32, 32)];
 const NAMES: [RecordRect; 2] = [rect(10, 28, 28, 8), rect(50, 28, 28, 8)];
+// Fix round 1: the next screen's noise patch, the pop-up's square and its close click.
+const PATCH: RecordRect = rect(40, 46, 12, 12);
+const POPUP_AREA: RecordRect = rect(20, 50, 4, 4);
+const POPUP_CLICK: RecordRect = rect(16, 20, 24, 16);
 
 // Reads one block per marker pixel of the requested region at confidence 0.9; a region without a
 // marker reads nothing, with no confidence.
@@ -226,9 +260,25 @@ fn png(values: &[u8]) -> Vec<u8> {
 
 // The list: item_a's marker in slot 0, item_b's in slot 1.
 fn list() -> Vec<u8> {
+    list_of([ALPHA, BRAVO])
+}
+
+// The list showing in slot `k` the name of the marker given for it.
+fn list_of(markers: [u8; 2]) -> Vec<u8> {
     let mut values = vec![BACKGROUND; (WIDTH * HEIGHT) as usize];
-    for (slot, marker) in (0_u32..).zip([ALPHA, BRAVO]) {
+    for (slot, marker) in (0_u32..).zip(markers) {
         values[(30 * WIDTH + 12 + 40 * slot) as usize] = marker;
+    }
+    png(&values)
+}
+
+// Fix round 1: the pop-up, the flat screen with the square of `POPUP_GRAY` on `POPUP_AREA`.
+fn popup() -> Vec<u8> {
+    let mut values = vec![BACKGROUND; (WIDTH * HEIGHT) as usize];
+    for row in POPUP_AREA.y..POPUP_AREA.y + POPUP_AREA.height {
+        for column in POPUP_AREA.x..POPUP_AREA.x + POPUP_AREA.width {
+            values[(row as u32 * WIDTH + column as u32) as usize] = POPUP_GRAY;
+        }
     }
     png(&values)
 }
@@ -500,6 +550,49 @@ impl Bench {
     fn recording(&self) -> Value {
         serde_json::from_slice(&self.recording_bytes()).expect("recording")
     }
+
+    // Fix round 1: the session file's status changed as the `record` command changes it, so that
+    // a stopped recording takes `record mark` ("Marking after stop").
+    fn session_status(&self, status: &str) {
+        let path = old_record_path(&self.state(), INSTANCE);
+        let mut session: Value =
+            serde_json::from_slice(&fs::read(&path).expect("session file")).expect("session");
+        session["status"] = json!(status);
+        fs::write(&path, serde_json::to_vec(&session).expect("session JSON"))
+            .expect("session file");
+    }
+
+    // Fix round 1: writes `bytes` as the frame file `name` on the caller's side and returns its
+    // path.
+    fn frame_file(&self, name: &str, bytes: &[u8]) -> String {
+        let path = self.temp.path().join(format!("{name}.png"));
+        fs::write(&path, bytes).expect("frame file");
+        path.display().to_string()
+    }
+
+    // Fix round 1: step 1 with its page mark and no choice, step 2 the next screen, generated by
+    // `record stop` and then stopped as the command leaves it.
+    fn stopped_without_a_choice(&self) -> Value {
+        self.press_on_the_list();
+        self.marked(json!({"step": 1, "add": [page_mark()]}));
+        self.mark_the_next_screen();
+        let generated = self.stop();
+        assert_eq!(generated["lab_status"], "generated", "{generated}");
+        self.session_status("stopped");
+        generated
+    }
+
+    // Fix round 1: step 1 marked as a choice and refined by the select with the default item_b,
+    // then `record stop`: the entries of the package it generated.
+    fn refined_package(&self) -> BTreeMap<String, Vec<u8>> {
+        self.press_on_the_list();
+        self.mark_the_choice();
+        self.mark_the_next_screen();
+        self.marked(json!({"step": 1, "select": select(Some("item_a"), "item_b")}));
+        let lab = self.stop();
+        assert_eq!(lab["lab_status"], "generated", "{lab}");
+        package(&lab)
+    }
 }
 
 // The entries of the package `record stop` wrote.
@@ -541,14 +634,33 @@ fn select_rejection(error: LabError, reason: &str) -> Value {
         .unwrap_or_else(|| panic!("no select {reason} rejection in {details}"))
 }
 
-// The slot the kernel's dry run of the package's select step chooses on `frame` with the variable
-// `list_item` handed `order`, at `DRY_RUN_UNIX_MS` on an instance snapshot without records; `None`
-// when it chooses none.
-fn chosen_with_order(
+// Fix round 1: the `select_problem` of a `record_select_invalid` refusal, its outcome carrying the
+// same word.
+fn select_problem(error: LabError) -> String {
+    assert_eq!(
+        error.code,
+        LabCode::RecordSelectInvalid.as_str(),
+        "{}",
+        error.message
+    );
+    let details = error.details.expect("details");
+    assert_eq!(
+        details["outcome"]["values"]["select_problem"], details["select_problem"],
+        "{details}"
+    );
+    details["select_problem"]
+        .as_str()
+        .expect("a word")
+        .to_owned()
+}
+
+// The kernel's dry run of the package's select step on `frame` with the variable `list_item`
+// handed `order`, at `DRY_RUN_UNIX_MS` on an instance snapshot without records.
+fn dry_run_with_order(
     prepared: &PreparedContainedTask,
     frame: &Frame,
     order: &[&str],
-) -> Option<u32> {
+) -> SelectionDryRun {
     let variables = prepared
         .given_variable_values(&[(WANTED.to_owned(), json!(order))])
         .expect("the variable takes the order");
@@ -563,7 +675,7 @@ fn chosen_with_order(
         },
         records: Vec::new(),
     };
-    let dry = dry_run_select(
+    dry_run_select(
         prepared,
         OPERATION,
         frame,
@@ -571,7 +683,17 @@ fn chosen_with_order(
         &parameters,
         None,
     )
-    .expect("the dry run of the select step");
+    .expect("the dry run of the select step")
+}
+
+// The slot the kernel's dry run of the package's select step chooses on `frame` with the variable
+// `list_item` handed `order`; `None` when it chooses none.
+fn chosen_with_order(
+    prepared: &PreparedContainedTask,
+    frame: &Frame,
+    order: &[&str],
+) -> Option<u32> {
+    let dry = dry_run_with_order(prepared, frame, order);
     dry.decision.selected.first().and_then(|id| {
         dry.candidate_projection
             .candidates()
@@ -785,8 +907,12 @@ fn s26_a_point_tap_of_stage_one_is_the_demonstration_of_the_choice() {
     );
 }
 
+// Fix round 1 (the coordinator's ruling R1 turns the slice's test 5 the other way round): a select
+// given whole in one request, without the mark, holds the variable and the policy of the same
+// select marked first and refined; a run handed no value taps the default's slot, as the constant
+// of before did.
 #[test]
-fn s26_a_choice_given_whole_in_one_request_answers_as_before() {
+fn s26_a_select_given_whole_without_the_mark_holds_the_same_variable() {
     let bench = Bench::new();
     bench.press_on_the_list();
     bench.marked(json!({
@@ -805,16 +931,282 @@ fn s26_a_choice_given_whole_in_one_request_answers_as_before() {
     let lab = bench.stop();
 
     assert_eq!(lab["lab_status"], "generated", "{lab}");
+    assert_eq!(lab["first_decision"]["status"], "would_click", "{lab}");
+    assert_eq!(lab["first_decision"]["slot"], 1, "{lab}");
     let entries = package(&lab);
-    assert_eq!(document(&entries, "control.json").get("variables"), None);
-    let policy = document(&entries, POLICY);
-    assert_eq!(policy["facts"], json!([]), "{policy}");
+    let control = document(&entries, "control.json");
+    assert_eq!(control["variables"][0]["name"], WANTED, "{control}");
     assert_eq!(
-        policy["gates"],
-        json!([{"gate_id": "wanted.list_item",
-                "predicate": {"kind": "string_in", "value": {"source": "field", "field": "name"},
-                              "allowed": ["item_b"]},
-                "on_unknown": {"kind": "drop_candidate"}}]),
+        control["variables"][0]["default"],
+        json!(["item_b"]),
+        "{control}"
+    );
+    let policy = document(&entries, POLICY);
+    assert_eq!(
+        policy["gates"][0]["predicate"]["value"]["fact_key"], VARIABLE_KEY,
         "{policy}"
     );
+    let marked = Bench::new().refined_package();
+    assert_eq!(
+        control["variables"],
+        document(&marked, "control.json")["variables"]
+    );
+    assert_eq!(policy, document(&marked, POLICY));
+
+    // A run handed no value reads the default and taps item_b's slot, the slot R1's constant gate
+    // chose.
+    let prepared =
+        admit(&entries, &bench.ocr).unwrap_or_else(|error| panic!("admission: {}", error.code));
+    let frame = Frame::from_png(list(), CaptureBackendName::AdbScreencap).expect("frame");
+    let decision = simulate_contained_task_at(&prepared, vec![frame], 1)
+        .expect("simulation")
+        .decision;
+    match decision {
+        OfflineDecision::WouldClick {
+            operation_label,
+            action: InputAction::Tap { x, y },
+            ..
+        } => {
+            assert_eq!(operation_label, OPERATION);
+            assert!(inside((x, y), SLOTS[1]), "{x},{y}");
+        }
+        other => panic!("not a tap: {other:?}"),
+    }
+}
+
+// Fix round 1 (R5, the review's (h)): two names in an order. The select chooses the first of the
+// order the screen shows, and with the order reversed the other one, which a term of the other sign
+// would not.
+#[test]
+fn s26_fix1_the_first_name_of_the_order_on_the_screen_is_chosen() {
+    let bench = Bench::new();
+    let entries = bench.refined_package();
+    let prepared =
+        admit(&entries, &bench.ocr).unwrap_or_else(|error| panic!("admission: {}", error.code));
+    let frame = Frame::from_png(list(), CaptureBackendName::AdbScreencap).expect("frame");
+
+    assert_eq!(
+        chosen_with_order(&prepared, &frame, &["item_a", "item_b"]),
+        Some(0)
+    );
+    assert_eq!(
+        chosen_with_order(&prepared, &frame, &["item_b", "item_a"]),
+        Some(1)
+    );
+}
+
+// Fix round 1 (R5, the review's (h)): no name of the order on the screen. On a list showing item_a
+// in both slots the order `["item_b"]` selects nothing and decides the select's empty end, its
+// `on_empty` key, the run's normal end there; the order `["item_a"]` selects on the same frame.
+#[test]
+fn s26_fix1_no_name_of_the_order_on_the_screen_ends_on_the_on_empty_key() {
+    let bench = Bench::new();
+    let entries = bench.refined_package();
+    let prepared =
+        admit(&entries, &bench.ocr).unwrap_or_else(|error| panic!("admission: {}", error.code));
+    let frame =
+        Frame::from_png(list_of([ALPHA, ALPHA]), CaptureBackendName::AdbScreencap).expect("frame");
+
+    let dry = dry_run_with_order(&prepared, &frame, &["item_b"]);
+
+    assert!(
+        dry.decision.selected.is_empty(),
+        "{:?}",
+        dry.decision.selected
+    );
+    assert_eq!(dry.decision.outcome_key, NOT_FOUND);
+    assert_eq!(
+        document(&entries, POLICY)["applies_to"]["outcome_keys"]["empty"],
+        NOT_FOUND
+    );
+    assert_eq!(chosen_with_order(&prepared, &frame, &["item_a"]), Some(0));
+}
+
+// Fix round 1 (R2, R5): `choice: false` on a step without the mark is `no_choice` and writes
+// nothing; on a step marked and not refined it takes the mark off, and nothing is missing then; on
+// a refined step it takes the mark off alone: the select stays and the package holds its variable.
+#[test]
+fn s26_fix1_choice_false_refuses_an_unmarked_step_and_takes_off_only_the_mark() {
+    let bench = Bench::new();
+    bench.press_on_the_list();
+    bench.marked(json!({"step": 1, "add": [page_mark()]}));
+    bench.mark_the_next_screen();
+
+    let before = bench.recording_bytes();
+    let error = bench
+        .mark(json!({"step": 1, "choice": false}))
+        .expect_err("no mark to take off");
+    assert_eq!(select_problem(error), SelectProblem::NoChoice.as_str());
+    assert_eq!(bench.recording_bytes(), before, "nothing written");
+
+    bench.marked(json!({"step": 1, "choice": true}));
+    assert_eq!(bench.ready()["missing"], json!([unrefined_item()]));
+    let withdrawn = bench.marked(json!({"step": 1, "choice": false}));
+    assert!(withdrawn.choice.is_none(), "the mark is taken off");
+    assert_eq!(bench.recording()["steps"][0].get("choice"), None);
+    let ready = bench.ready();
+    assert_eq!(ready["status"], "ready", "{ready}");
+    assert_eq!(ready["missing"], json!([]), "{ready}");
+
+    let refined = Bench::new();
+    refined.press_on_the_list();
+    refined.mark_the_choice();
+    refined.mark_the_next_screen();
+    refined.marked(json!({"step": 1, "select": select(Some("item_a"), "item_b")}));
+    let withdrawn = refined.marked(json!({"step": 1, "choice": false}));
+    assert!(withdrawn.choice.is_none(), "the mark is taken off");
+    let step = refined.recording()["steps"][0].clone();
+    assert_eq!(step.get("choice"), None, "{step}");
+    assert_eq!(
+        step["select"]["declaration"],
+        select(Some("item_a"), "item_b"),
+        "{step}"
+    );
+    assert_eq!(step["click"]["source"], "select", "{step}");
+    let lab = refined.stop();
+    assert_eq!(lab["lab_status"], "generated", "{lab}");
+    assert_eq!(
+        document(&package(&lab), "control.json")["variables"][0]["default"],
+        json!(["item_b"])
+    );
+}
+
+// Fix round 1 (R5, the review's (m)): a step marked as a choice keeps a select step's rules from its
+// mark on. Step 2, the open step, is marked; an optional flag, an application operation, a click
+// with a retry, a drag and a click that follows its template are then each refused with their
+// words, and nothing is written.
+#[test]
+fn s26_fix1_a_marked_step_keeps_each_rule_of_a_select_step() {
+    let bench = Bench::new();
+    bench.press_on_the_list();
+    bench.marked(json!({"step": 1, "add": [page_mark()]}));
+    bench.mark_the_next_screen();
+    let marked = bench.marked(json!({"step": 2, "choice": true}));
+    assert!(marked.choice.is_some(), "step 2 is marked");
+
+    let retry = json!({"max_attempts": 2, "interval_ms": 1000});
+    let cases = [
+        (
+            json!({"step": 2, "optional": true}),
+            SelectProblem::OnOptionalStep,
+        ),
+        (
+            json!({"step": 2, "application": {"action": "restart"}}),
+            SelectProblem::WithApplication,
+        ),
+        (
+            json!({"step": 2, "click": {"region": PATCH}, "retry": retry}),
+            SelectProblem::WithRetry,
+        ),
+        (
+            json!({"step": 2,
+                   "click": {"region": SLOTS[0], "drag_to": SLOTS[1], "duration_ms": 300}}),
+            SelectProblem::WithGesture,
+        ),
+        (
+            json!({"step": 2, "click": {"follow": "ui/next"}}),
+            SelectProblem::WithFollow,
+        ),
+    ];
+    for (value, problem) in cases {
+        let before = bench.recording_bytes();
+        let error = bench.mark(value).expect_err("a rule of a select step");
+        assert_eq!(select_problem(error), problem.as_str());
+        assert_eq!(bench.recording_bytes(), before, "nothing written");
+    }
+}
+
+// Fix round 1 (R5, the review's (m); "Marking a choice first", "Marking after stop"): on the stopped
+// recording the last step takes no mark (`on_final_step`), nothing written; step 1 takes it, is
+// listed by `record ready` and refused by `record stop`, which keeps the package it generated
+// before; refined on the stopped recording, it is `ready` and generated again with its variable.
+#[test]
+fn s26_fix1_a_choice_is_marked_and_refined_on_a_stopped_recording() {
+    let bench = Bench::new();
+    let generated = bench.stopped_without_a_choice();
+    let path = generated["path"].as_str().expect("package path").to_owned();
+    let generated_bytes = fs::read(&path).expect("package");
+
+    let before = bench.recording_bytes();
+    let error = bench
+        .mark(json!({"step": 2, "choice": true}))
+        .expect_err("the last step of the stopped recording");
+    assert_eq!(select_problem(error), SelectProblem::OnFinalStep.as_str());
+    assert_eq!(bench.recording_bytes(), before, "nothing written");
+
+    let marked = bench.marked(json!({"step": 1, "choice": true}));
+    assert!(marked.after_stop);
+    assert!(marked.choice.is_some(), "step 1 is marked");
+    let draft = bench.ready();
+    assert_eq!(draft["status"], "draft", "{draft}");
+    assert_eq!(draft["missing"], json!([unrefined_item()]), "{draft}");
+    let error = bench
+        .stop_with(false)
+        .expect_err("a choice not refined generates no package");
+    assert_eq!(
+        select_problem(error),
+        SelectProblem::ChoiceNotRefined.as_str()
+    );
+    assert_eq!(
+        fs::read(&path).expect("package"),
+        generated_bytes,
+        "the package generated before is kept"
+    );
+
+    let refined = bench.marked(json!({"step": 1, "select": select(Some("item_a"), "item_b")}));
+    assert!(refined.after_stop);
+    assert!(refined.choice.is_some(), "the mark stays beside the select");
+    let ready = bench.ready();
+    assert_eq!(ready["status"], "ready", "{ready}");
+    let regenerated = bench.stop();
+    assert_eq!(regenerated["lab_status"], "regenerated", "{regenerated}");
+    assert_eq!(
+        document(&package(&regenerated), "control.json")["variables"][0]["default"],
+        json!(["item_b"])
+    );
+}
+
+// Fix round 1 (R5, the review's (m)): an optional step inserted after the marked step 1 of the
+// stopped recording takes the next serial number and no mark; step 1 keeps its mark as it was, and
+// `record ready` still lists it by its serial number and its place in the package.
+#[test]
+fn s26_fix1_a_step_inserted_beside_a_marked_step_leaves_the_mark_where_it_was() {
+    let bench = Bench::new();
+    bench.stopped_without_a_choice();
+    bench.marked(json!({"step": 1, "choice": true}));
+    let mark = bench.recording()["steps"][0]["choice"].clone();
+    assert!(mark["marked_at_unix_ms"].is_u64(), "{mark}");
+
+    let inserted = bench.marked(json!({"optional_after": {
+        "step": 1,
+        "frame": bench.frame_file("popup", &popup()),
+        "page": "notice",
+        "add": [{"id": POPUP_MARK, "family": "color", "region": POPUP_AREA}],
+        "click": {"region": POPUP_CLICK},
+        "settle_ms": 1000
+    }}));
+    let inserted = serde_json::to_value(&inserted).expect("mark JSON");
+
+    assert_eq!(inserted["status"], "optional_step_inserted", "{inserted}");
+    assert_eq!(inserted["step"], 3, "{inserted}");
+    assert_eq!(inserted.get("choice"), None, "{inserted}");
+    let steps = bench.recording()["steps"].clone();
+    assert_eq!(steps[0]["index"], 1, "{steps}");
+    assert_eq!(steps[0]["choice"], mark, "{steps}");
+    assert_eq!(steps[1]["index"], 2, "{steps}");
+    assert_eq!(steps[1].get("choice"), None, "{steps}");
+    assert_eq!(steps[2]["index"], 3, "{steps}");
+    assert_eq!(steps[2]["inserted_after"], 1, "{steps}");
+    assert_eq!(steps[2].get("choice"), None, "{steps}");
+    let ready = bench.ready();
+    let unrefined = ready["missing"]
+        .as_array()
+        .expect("missing")
+        .iter()
+        .filter(|item| item["what"] == ReadyMissing::SelectUnrefined.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(unrefined.len(), 1, "{ready}");
+    assert_eq!(unrefined[0]["step"], 1, "{ready}");
+    assert_eq!(unrefined[0]["artifact_step"], 1, "{ready}");
+    assert_eq!(unrefined[0]["frame_id"], "f0001", "{ready}");
 }

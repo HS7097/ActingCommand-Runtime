@@ -347,9 +347,10 @@ pub struct RecordingStep {
     pub select: Option<StepSelect>,
     /// #463 S2-6 (`contracts/lab-recording.md`, "Marking a choice first"): the step is marked as
     /// holding a choice, marked first and refined later by its `select`; the mark stays beside the
-    /// select, and the select's wanted value is then the package's `ordered` variable. Absent on
-    /// every step not marked so, so that a recording without one is byte-identical to one an
-    /// earlier build wrote.
+    /// select and means only that the choice is not refined yet while the step has none (fix round
+    /// 1: the wanted value of every select is the package's `ordered` variable, marked or not).
+    /// Absent on every step not marked so, so that a recording without one is byte-identical to
+    /// one an earlier build wrote.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub choice: Option<StepChoice>,
     /// #463 R4: the recorded step after whose effect a stopped recording inserted this optional
@@ -1184,7 +1185,8 @@ pub struct MarkRequest {
     pub boxes: Vec<BoxSpec>,
     /// #463 S2-6 (request form only, as `select`; `contracts/lab-recording.md`, "Marking a choice
     /// first"): `true` marks the step as holding a choice, refined later by its `select`; `false`
-    /// takes the mark off; absent leaves it.
+    /// takes the mark off (fix round 1: on a step without it `record_select_invalid`,
+    /// `no_choice`); absent leaves it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub choice: Option<bool>,
 }
@@ -1211,9 +1213,9 @@ pub struct BoxSpec {
 /// #463 R1 (`contracts/lab-recording.md`, "Selecting in a list"): a select over fixed slots, the
 /// step's effect in place of a click. `record stop` generates its layout (`fixed_slots`, the one
 /// identity feature `name` over `names`), an OCR target per slot, the select operation with its
-/// `on_empty` end and the policy document whose one gate `wanted.<name>` keeps `default`; #463
-/// S2-6: on a step marked as a choice, the package's `ordered` variable `wanted.name`, whose
-/// default is `[default]`, and the policy document's gate reads it.
+/// `on_empty` end, the package's `ordered` variable `wanted.name` whose default is `[default]`
+/// (#463 S2-6, fix round 1: of every select, marked as a choice or not), and the policy document
+/// whose one gate `wanted.<name>` reads it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SelectSpec {
@@ -1297,9 +1299,8 @@ pub struct SelectMatchSpec {
     pub minimum_margin: u16,
 }
 
-/// #463 R1: the wanted value: its name and its default, a constant of the package; #463 S2-6: on
-/// a step marked as a choice, the package's `ordered` variable of that name, its default the one
-/// name `default`.
+/// #463 R1: the wanted value: its name and its default; #463 S2-6 fix round 1: in the package the
+/// `ordered` variable of that name, its default the one name `default`, on every select step.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SelectWantedSpec {
