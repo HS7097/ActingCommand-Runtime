@@ -270,16 +270,21 @@ fn journal(root: &Path, ms: u64, game: &str, reference: &str, enabled: &[&str], 
             json!(ms + FINISHED_AFTER_MS)
         }
     };
+    // The 0.12.69 train: the undo of a `pack_place` operation records, when it starts, the
+    // packages it makes enter and leave scheduling (Workflow #463 S3-18, `schedule_changes`): the
+    // undo of a placement that enabled packages lets them leave.
     let undo = match end {
         End::Undone => json!({
             "started_at_unix_ms": ms + 10,
             "finished_at_unix_ms": ms + 12,
-            "initiator": LAB_CLI
+            "initiator": LAB_CLI,
+            "schedule_changes": {"enters": [], "leaves": enabled}
         }),
         End::UndoBegun => json!({
             "started_at_unix_ms": ms + 10,
             "finished_at_unix_ms": null,
-            "initiator": LAB_CLI
+            "initiator": LAB_CLI,
+            "schedule_changes": {"enters": [], "leaves": enabled}
         }),
         End::Placed | End::PlacedNothing | End::Unfinished | End::RolledBack => Value::Null,
     };
