@@ -79,7 +79,9 @@ naming this file.
   `swipe` and an element in the base, and its `frame_path` and `preview` are the reduced frames.
   A display the base does not map to (another ratio, a smaller one) is refused
   `display_map_unresolved`; a press at a ratio the input side does not send under (5/4) is refused
-  `display_map_unresolved` (`input_scale_unsupported`), nothing sent. `ac_frame` is one frame of
+  `display_map_unresolved` (`input_scale_unsupported`), nothing sent. `ac_lab_observe` and `ac_do`
+  with `record` on such a display are refused `record_frame_size_mismatch` before anything is
+  written, until the recording on such a display has its own slice. `ac_frame` is one frame of
   the instance as the device gives it, of the device's size (3840×2160 on such a display), and the
   device commands (`ac_tap`, `ac_swipe`, `ac_long_tap`) take the device's own pixels.
 

@@ -4150,3 +4150,13 @@ tests = [
     "actingcommand-display-adapter::lib::gate_392_da5ab::da5ab_an_input_at_five_quarters_is_refused_before_anything_is_converted",
 ]
 incident = ["#392 DA-5ab"]
+
+# Workflow #392 DA-5ab fix round 1 (0.12.67; register §1.436; the coordinator's work order of 11-16 after the review of pull request #1780, point 5): on a 1920x1080 device, a 1280x720 package's element, the navigation edge of page_a drawn in the box (101, 50, 21, 11), is pressed at its projection's point (111, 55), the record keeping that geometry and the base input and its projection of the base's size, and the device receives (167, 83), inside the box's inward device box (152, 75) to (183, 91), exclusive (1); a declared operation whose click is that box draws its point in it from a seed (its draw's source region that box, the attempt's tap in it) and is confirmed, and the device receives the point at round_half_up(v · 3/2), inside the same device box (2); on a 1600x900 device the declared operation of the 1280x720 package (op_a, the tap (1, 0)) fails at its input with display_map_unresolved (input_scale_unsupported at display_input_map, frame 1600x900, base 1280x720), end failed, its attempt keeping the base tap and never reaching its input, nothing sent (3)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_392_da5ab::da5ab_fix1_an_element_at_three_halves_leaves_inside_its_device_box",
+    "actingcommand-runtime-host::lib::tests::gate_392_da5ab::da5ab_fix1_a_declared_operations_drawn_box_at_three_halves_leaves_inside_its_device_box",
+    "actingcommand-runtime-host::lib::tests::gate_392_da5ab::da5ab_fix1_a_declared_operation_on_a_device_five_quarters_the_base_sends_nothing",
+]
+incident = ["#392 DA-5ab"]

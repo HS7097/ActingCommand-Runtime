@@ -523,10 +523,15 @@ nothing changes, byte for byte.
   with the device's size) stays the device frame's reference. A verifier reads the device frame by
   that hash from the ledger, builds the map from its size and the base (the projection's size),
   finds that the map's scale frame is the projection's size, and recomputes the RGB8 hash as that
-  of the device frame resampled once under the map. `ContainedPageObservation::validate` takes a
-  projection frame that is the observation frame itself or of the base's ratio and no larger. No
-  record gains a member and no interface revision moves; the map is not recorded, since the frame's
-  size and the base settle it.
+  of the device frame resampled once under the map. `ContainedPageObservation::validate` (the
+  client's check of the receipt and of a Lab operation record's projections) takes a projection
+  frame that is the observation frame itself, or of its ratio, no larger and with no side of zero
+  (fix round 1: a zero side was taken before): what a pure scale brings that frame to. It knows the
+  two sizes and not the package, so it cannot know the package's base: any base of the frame's
+  ratio no larger than the frame passes, and so does a scale whose presses the input side does not
+  send (5/4, whose observation stands); that the projection is the package's base is the
+  verifier's, with the package. No record gains a member and no interface revision moves; the map
+  is not recorded, since the frame's size and the base settle it.
 - **Refusals.** A frame the map cannot take is refused with the code a run gives the same frame,
   `display_map_unresolved` at `display_map_build` with the frame's and the base's sizes: another
   ratio `layout_undeclared`, a frame smaller than the base `scale_below_base`, the other
@@ -545,13 +550,24 @@ nothing changes, byte for byte.
   in device pixels, as a run's does. The client's `ensure --capture` sends its route's inputs the
   same way. A recorded click (`do --capture --record`) is planned in the recording's coordinates:
   a recording whose frames are not of the package's base is refused before anything is pressed,
-  `record_frame_size_mismatch`; a recording made on such a display is closed by DA-5cd.
+  `record_frame_size_mismatch`; a recording made on such a display is closed by DA-5cd. Fix round
+  1: `observe --capture --record` is refused the same way on such a display: a recording whose
+  frames are not of the base before anything is captured, and a device frame of another size than
+  the base after the Runtime observed, before the frame file or the recording is written
+  (`record_frame_size_mismatch`, details `{frame, expected, actual}`), so no device frame enters a
+  recording beside an answer in the base. The device commands' `--record` (`capture`, `tap`,
+  `swipe`, `long-tap`) and `session app --record` record the device's frames and pixels, as they
+  speak them.
 - **The answers.** `frame_coordinates` on a mapped display is `{space: "base", base_pixels:
   [width, height], reduced_from: [device width, device height], orientation, applies_to}`; on a
   display of the base's size it is `{device_pixels, orientation, applies_to}` as before. The frame
   files and the previews an operation hands out (`observe --with-frame`, `--preview`, the after
-  attachment's `frame_path` and `preview`) are the frames brought to the base. The MCP front's
-  `ac_lab_observe` and `ac_do` answer the command line's line.
+  attachment's `frame_path` and `preview`) are the frames brought to the base. A client form's
+  `device.action` (the `--capture` form that sends its tap itself) is the point sent to the device;
+  on a mapped display `device.base_action` beside it is that point in the base (fix round 1). The
+  MCP front's `ac_lab_observe` and `ac_do` answer the command line's line, and the first-generation
+  server's `ac_lab_observe` and `ac_lab_do` (actingctl) say the same in their descriptions (fix
+  round 1).
 - **Not in this slice.** The recording on such a display (DA-5cd refuses `record start` there);
   the offline recognition of a scene of a pure scale (DA-5cd); the run evidence's recognised boxes,
   which stay in device-frame pixels (section 10, "Records").

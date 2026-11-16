@@ -21,7 +21,7 @@ use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tempfile::TempDir;
@@ -60,6 +60,8 @@ struct FakeState {
     foreground_other: AtomicBool,
     // #463 S1-9: the capture of this number (when not zero) fails in the backend.
     capture_fails_at: AtomicUsize,
+    // Workflow #392 DA-5ab fix round 1: the point of every tap the fake performed, in order.
+    tap_points: Mutex<Vec<(i32, i32)>>,
 }
 
 // Test plan E-3 G11 (§3.10): a manual Runtime clock. It moves only when a capture (or a wait of
@@ -2016,8 +2018,8 @@ impl InputBackend for FakeBackend {
     fn tap(
         &mut self,
         _witness: &actingcommand_contract::FencedWrite,
-        _x: i32,
-        _y: i32,
+        x: i32,
+        y: i32,
     ) -> DeviceResult<()> {
         self.state.tap_started.store(true, Ordering::Release);
         if self.state.tap_fails.load(Ordering::Acquire) {
@@ -2029,6 +2031,11 @@ impl InputBackend for FakeBackend {
         if delay_ms > 0 {
             thread::sleep(Duration::from_millis(delay_ms as u64));
         }
+        self.state
+            .tap_points
+            .lock()
+            .expect("fake tap points")
+            .push((x, y));
         self.state.taps.fetch_add(1, Ordering::AcqRel);
         Ok(())
     }
@@ -6049,5 +6056,410 @@ fn s19_the_retry_after_input_frame_unavailable_keeps_the_one_lease() {
             "capture", "capture", "lease", "capture", "input", "capture", "release"
         ],
         "{wire:?}"
+    );
+}
+
+// Workflow #392 DA-5ab fix round 1 (contracts/display-adapter.md section 11; register §1.436; the
+// coordinator's work order of 11-16 after the review of pull request #1780, point 5): the fake
+// device's frames are 3x3 and the package's base is 2x2, a pure scale of 3/2, so every frame the
+// Lab hands out or decides on is reduced to the base and every point it takes leaves for the
+// device at `round_half_up(v · 3/2)`: the base point (1, 1) as (2, 2). The package: `neutral/home`
+// (red on the first pixel) with the target `home_button` pressed in the whole frame, and the
+// navigation edge `home_to_page_a` to `neutral/page_a` (blue) pressed at (1, 1).
+fn da5ab_mapped_package(path: &Path) {
+    write_zip(path, &[
+        ("control.json", br#"{"game":"neutral","server":"test","package_id":"neutral.da5ab","entry_task_id":"task"}"#),
+        ("resources/manifest.json", br#"{"schema_version":"0.3","entry_task_id":"task"}"#),
+        ("resources/operations/task/task.json", br#"{}"#),
+        ("resources/recognition/neutral.test.pack.json", br#"{"schema_version":"0.3","coordinate_space":{"width":2,"height":2},"targets":[{"type":"color","id":"home_anchor","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0]},{"type":"color","id":"page_a_anchor","region":{"x":0,"y":0,"width":1,"height":1},"expected":[0,0,255]},{"type":"color","id":"home_button","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0],"click":{"x":0,"y":0,"width":2,"height":2}}]}"#),
+        ("resources/recognition/neutral.test.pages.json", br#"{"schema_version":"0.3","pages":[{"id":"neutral/home","required":["home_anchor"]},{"id":"neutral/page_a","required":["page_a_anchor"]}]}"#),
+        ("resources/navigation/neutral.test.navigation.json", br#"{"schema_version":"0.3","game":"neutral","server":"test","navigation":[{"id":"home_to_page_a","from_page":"neutral/home","to_page":"neutral/page_a","click":{"kind":"point","x":1,"y":1}}],"destructive_actions":[]}"#),
+    ]);
+}
+
+// Workflow #392 DA-5ab fix round 1: a Runtime host over the fake whose frames are 3x3.
+fn da5ab_mapped_host(runtime_root: &Path, state: &Arc<FakeState>, label: &[u8]) -> RuntimeHost {
+    let instance_id = *IdentifierIssuer::new()
+        .expect("identifier issuer")
+        .mint_instance_id()
+        .expect("instance id")
+        .transport();
+    RuntimeHost::start(
+        RuntimeHostConfig::new(runtime_root, label),
+        Arc::new(FakeProvider {
+            instance_alias: "node.a",
+            instance_id,
+            state: Arc::clone(state),
+            frame_size: 3,
+        }),
+    )
+    .expect("runtime host")
+}
+
+// Workflow #392 DA-5ab fix round 1: `frame_coordinates` of a 3x3 frame reduced to the 2x2 base.
+fn da5ab_base_coordinates() -> Value {
+    json!({
+        "space": "base",
+        "base_pixels": [2, 2],
+        "reduced_from": [3, 3],
+        "orientation": "square",
+        "applies_to": ["tap", "tap_rect", "swipe"],
+    })
+}
+
+// Workflow #392 DA-5ab fix round 1: a preview `{path, width, height, scale}` of the 2x2 base
+// frame, a JPEG file of that size, at scale 1.
+fn da5ab_assert_base_preview(preview: &Value, what: &str) {
+    use image::ImageDecoder;
+    let path = preview["path"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{what}: the preview's path: {preview}"));
+    let decoder = image::codecs::jpeg::JpegDecoder::new(std::io::Cursor::new(
+        fs::read(path).expect("the preview file"),
+    ))
+    .unwrap_or_else(|error| panic!("{what}: the preview is not a JPEG: {error}"));
+    assert_eq!(decoder.dimensions(), (2, 2), "{what}: {preview}");
+    assert_eq!(
+        (&preview["width"], &preview["height"], &preview["scale"]),
+        (&json!(2), &json!(2), &json!(1.0)),
+        "{what}: {preview}"
+    );
+}
+
+// Fix round 1, points 5 and 4 (`frame_coordinates`, the frame file and the preview an operation
+// hands out, an element's press): on the 3x3 device, `observe --capture` states the base
+// (`{space: base, base_pixels: [2, 2], reduced_from: [3, 3], ...}`), lists the element in the
+// base, and its `--with-frame` file and `--preview` are the 2x2 frame; `do <element> --capture`
+// states the base, records the base input (1, 1) and the device receives (2, 2); `do --tap 1,1
+// --capture --preview` likewise, its after attachment's preview the 2x2 frame.
+#[test]
+fn da5ab_fix1_observe_and_do_on_a_mapped_display_state_and_hand_out_the_base() {
+    let root = TempDir::new().expect("tempdir");
+    let runtime_root = root.path().join("runtime");
+    let local = root.path().join("local");
+    let config = root.path().join("actinglab.json");
+    fs::write(&config, "{}").expect("write config");
+    let package = root.path().join("mapped.zip");
+    da5ab_mapped_package(&package);
+    let package = package.to_str().expect("package path");
+    let frame = root.path().join("observed.png");
+    let state = Arc::new(FakeState::default());
+    let host = da5ab_mapped_host(&runtime_root, &state, b"lab-da5ab-fix1-observe-and-do");
+
+    let observed = run_actinglab_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "--instance",
+            "node.a",
+            "observe",
+            "--capture",
+            "--zip",
+            package,
+            "--verbose",
+        ],
+    );
+    assert_eq!(
+        observed["frame_coordinates"],
+        da5ab_base_coordinates(),
+        "{observed}"
+    );
+    assert_eq!(
+        observed["observation"]["page"], "neutral/home",
+        "{observed}"
+    );
+    let element = &observed["observation"]["elements"][0];
+    assert_eq!(element["resource_id"], "home_to_page_a", "{observed}");
+    assert_eq!(
+        element["input"]["rect"],
+        json!({"x": 1, "y": 1, "width": 1, "height": 1}),
+        "the element in the base: {observed}"
+    );
+    let element = element["id"].as_str().expect("the element's id").to_owned();
+
+    let handed_out = run_actinglab_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "--instance",
+            "node.a",
+            "observe",
+            "--capture",
+            "--zip",
+            package,
+            "--with-frame",
+            frame.to_str().expect("frame path"),
+            "--preview",
+        ],
+    );
+    assert_eq!(
+        handed_out["frame_coordinates"],
+        da5ab_base_coordinates(),
+        "{handed_out}"
+    );
+    let file = actingcommand_recognition::Scene::from_png(&fs::read(&frame).expect("frame file"))
+        .expect("the frame file is a PNG");
+    assert_eq!((file.width(), file.height()), (2, 2), "the base frame");
+    assert_eq!(
+        &file.rgb8_pixels()[..3],
+        &[255, 0, 0],
+        "the device's colour"
+    );
+    da5ab_assert_base_preview(&handed_out["preview"], "observe");
+
+    let pressed = run_actinglab_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "--instance",
+            "node.a",
+            "do",
+            &element,
+            "--capture",
+            "--zip",
+            package,
+            "--verbose",
+        ],
+    );
+    assert_eq!(pressed["executed"], true, "{pressed}");
+    assert_eq!(
+        pressed["frame_coordinates"],
+        da5ab_base_coordinates(),
+        "{pressed}"
+    );
+    assert_eq!(
+        pressed["operation_record"]["record"]["prepared"]["action"],
+        json!({"kind": "tap", "x": 1, "y": 1}),
+        "the base input: {pressed}"
+    );
+    assert_eq!(
+        *state.tap_points.lock().expect("fake tap points"),
+        [(2, 2)],
+        "the element's base point at 3/2"
+    );
+
+    let tapped = run_actinglab_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "--instance",
+            "node.a",
+            "do",
+            "--tap",
+            "1,1",
+            "--capture",
+            "--zip",
+            package,
+            "--preview",
+        ],
+    );
+    host.close().expect("close host");
+    assert_eq!(tapped["executed"], true, "{tapped}");
+    assert_eq!(
+        tapped["frame_coordinates"],
+        da5ab_base_coordinates(),
+        "{tapped}"
+    );
+    let attachment = &tapped["after_attachment"];
+    assert_eq!(attachment["kind"], "page_projection", "{attachment}");
+    da5ab_assert_base_preview(&attachment["preview"], "the after frame");
+    assert_eq!(
+        *state.tap_points.lock().expect("fake tap points"),
+        [(2, 2), (2, 2)],
+        "the tap's base point at 3/2"
+    );
+}
+
+// Fix round 1, point 5 (the client-side conversion of the `--capture` forms): on the 3x3 device,
+// `do home_button --capture --dry-run` decides on the 2x2 base frame and answers its click and
+// `frame_coordinates` in the base; `wait --capture --page neutral/home` arrives; `ensure --capture
+// --to neutral/page_a` presses the edge's base point (1, 1), which the device receives as (2, 2),
+// and arrives on the page shown after the tap.
+#[test]
+fn da5ab_fix1_the_capture_client_forms_on_a_mapped_display_decide_and_press_in_the_base() {
+    let root = TempDir::new().expect("tempdir");
+    let runtime_root = root.path().join("runtime");
+    let local = root.path().join("local");
+    let config = root.path().join("actinglab.json");
+    fs::write(&config, "{}").expect("write config");
+    let package = root.path().join("mapped.zip");
+    da5ab_mapped_package(&package);
+    let package = package.to_str().expect("package path");
+    let state = Arc::new(FakeState::default());
+    state.transition_after_tap.store(true, Ordering::Release);
+    let host = da5ab_mapped_host(&runtime_root, &state, b"lab-da5ab-fix1-client-forms");
+
+    let planned = run_actinglab_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "--instance",
+            "node.a",
+            "do",
+            "home_button",
+            "--capture",
+            "--dry-run",
+            "--zip",
+            package,
+            "--verbose",
+        ],
+    );
+    assert_eq!(planned["executed"], false, "{planned}");
+    assert_eq!(
+        planned["frame_coordinates"],
+        da5ab_base_coordinates(),
+        "{planned}"
+    );
+    assert_eq!(
+        planned["actual_click"]["rect"],
+        json!({"x": 0, "y": 0, "width": 2, "height": 2}),
+        "{planned}"
+    );
+    assert_eq!(
+        planned["actual_click"]["point"],
+        json!({"x": 1, "y": 1}),
+        "{planned}"
+    );
+
+    let waited = run_actinglab_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "--instance",
+            "node.a",
+            "wait",
+            "--capture",
+            "--page",
+            "neutral/home",
+            "--timeout-ms",
+            "100",
+            "--poll-ms",
+            "1",
+            "--zip",
+            package,
+        ],
+    );
+    assert_eq!(waited["state"], "arrived", "{waited}");
+    assert_eq!(waited["page"], "neutral/home", "{waited}");
+    assert_eq!(state.taps.load(Ordering::Acquire), 0);
+
+    let ensured = run_actinglab_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "--instance",
+            "node.a",
+            "ensure",
+            "--capture",
+            "--to",
+            "neutral/page_a",
+            "--step-timeout-ms",
+            "100",
+            "--poll-ms",
+            "1",
+            "--zip",
+            package,
+        ],
+    );
+    host.close().expect("close host");
+    assert_eq!(ensured["state"], "arrived", "{ensured}");
+    assert_eq!(ensured["page"], "neutral/page_a", "{ensured}");
+    assert_eq!(
+        *state.tap_points.lock().expect("fake tap points"),
+        [(2, 2)],
+        "the edge's base point at 3/2"
+    );
+}
+
+// Fix round 1, point 3: `observe --capture --record` on the 3x3 device of the 2x2 package is
+// refused `record_frame_size_mismatch` (details: the base expected, the device frame actual)
+// after the Runtime observed and before anything is written: the recording's file is as `record
+// start` wrote it. The recording starts while nothing listens, so it holds nothing.
+#[test]
+fn da5ab_fix1_a_recorded_observation_on_a_mapped_display_is_refused_and_nothing_is_recorded() {
+    let root = TempDir::new().expect("tempdir");
+    let runtime_root = root.path().join("runtime");
+    let local = root.path().join("local");
+    let config = root.path().join("actinglab.json");
+    fs::write(&config, "{}").expect("write config");
+    let package = root.path().join("mapped.zip");
+    da5ab_mapped_package(&package);
+    run_actinglab_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "--instance",
+            "node.a",
+            "record",
+            "start",
+            "--task-id",
+            "neutral_task",
+            "--record-id",
+            "record_da5ab",
+        ],
+    );
+    let recording = local
+        .join("ActingCommand")
+        .join("actinglab")
+        .join("session")
+        .join("record-artifacts")
+        .join("record_da5ab")
+        .join("lab")
+        .join("recording.json");
+    let before = fs::read(&recording).expect("the recording");
+    let state = Arc::new(FakeState::default());
+    let host = da5ab_mapped_host(&runtime_root, &state, b"lab-da5ab-fix1-observe-record");
+
+    let (exit_code, envelope) = run_actinglab_failure_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "--instance",
+            "node.a",
+            "observe",
+            "--capture",
+            "--zip",
+            package.to_str().expect("package path"),
+            "--record",
+        ],
+    );
+    host.close().expect("close host");
+    assert_eq!(exit_code, 1, "{envelope}");
+    assert_eq!(
+        envelope["outcome"]["code"], "record_frame_size_mismatch",
+        "{envelope}"
+    );
+    assert_eq!(
+        envelope["details"]["expected"],
+        json!({"width": 2, "height": 2}),
+        "{envelope}"
+    );
+    assert_eq!(
+        envelope["details"]["actual"],
+        json!({"width": 3, "height": 3}),
+        "{envelope}"
+    );
+    assert_eq!(
+        fs::read(&recording).expect("the recording"),
+        before,
+        "nothing recorded"
     );
 }

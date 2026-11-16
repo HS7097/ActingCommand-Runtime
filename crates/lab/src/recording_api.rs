@@ -1596,7 +1596,9 @@ pub fn record_frame_preflight(lock: &RecordingLock) -> LabResult<()> {
 /// recording whose frames are of another size (taken on a display of another size) would be
 /// pressed in the wrong space: it is refused before anything is pressed or written,
 /// `record_frame_size_mismatch`, as a frame of another size than the recording is. A recording
-/// of the base's size, and one without a frame yet, pass.
+/// of the base's size, and one without a frame yet, pass. Fix round 1: `observe --capture
+/// --record` makes the same check before it captures (with [`record_observation_base_check`]
+/// after it).
 pub fn record_press_base_check(lock: &RecordingLock, base: (u32, u32)) -> LabResult<()> {
     let session = open_session(lock)?;
     match session.recording.coordinate_space {
@@ -1604,8 +1606,8 @@ pub fn record_press_base_check(lock: &RecordingLock, base: (u32, u32)) -> LabRes
             blocked(
                 "record_frame_size_mismatch",
                 format!(
-                    "the recording is {}x{}, and a Lab operation presses in its package's base, \
-                     {}x{}",
+                    "the recording is {}x{}, and a Lab operation observes and presses in its \
+                     package's base, {}x{}",
                     space.width, space.height, base.0, base.1
                 ),
             ),
@@ -1617,6 +1619,34 @@ pub fn record_press_base_check(lock: &RecordingLock, base: (u32, u32)) -> LabRes
         )),
         _ => Ok(()),
     }
+}
+
+/// Workflow #392 DA-5ab fix round 1 (`contracts/display-adapter.md` section 11):
+/// `observe --capture --record` attaches the Runtime's frame to the recording as the device gave
+/// it, while its answer speaks its package's base `base` (width, height). On a display of another
+/// size (`device`, the observation frame's width and height) the recording would take a device
+/// frame beside an answer in the base: refused before anything is written,
+/// `record_frame_size_mismatch`, as the recorded press is ([`record_press_base_check`]), until the
+/// recording on such a display (DA-5cd). A frame of the base's size passes.
+pub fn record_observation_base_check(base: (u32, u32), device: (u32, u32)) -> LabResult<()> {
+    if device == base {
+        return Ok(());
+    }
+    Err(with_details(
+        blocked(
+            "record_frame_size_mismatch",
+            format!(
+                "the Runtime's frame is {}x{}, and a Lab observation speaks its package's base, \
+                 {}x{}; the recording takes no frame of another size",
+                device.0, device.1, base.0, base.1
+            ),
+        ),
+        json!({
+            "frame": "the Runtime observation's frame",
+            "expected": {"width": base.0, "height": base.1},
+            "actual": {"width": device.0, "height": device.1},
+        }),
+    ))
 }
 
 /// Records a frame from `capture --record` or `observe --capture --record`.

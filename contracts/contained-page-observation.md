@@ -149,8 +149,23 @@ observation with `display_map_unresolved` at `display_map_build` and the frame's
 sizes, the code a run gives the same frame, never `observation_projection_failed`. With
 `--capture`, `frame_coordinates` on such a display is `{space: "base", base_pixels: [width,
 height], reduced_from: [device width, device height], orientation, applies_to}`, and the
-`--with-frame` file and `--preview` are of the frame brought to the base. The frame attached to a
-recording with `--record` stays the device's frame (the recording is DA-5cd's).
+`--with-frame` file and `--preview` are of the frame brought to the base.
+
+DA-5ab fix round 1. *The client's check.* `ContainedPageObservation::validate` (the receipt's,
+and a Lab operation record's for each of its projections) takes a projection frame that is the
+observation's frame itself, or of that frame's ratio, no larger and with no side of zero: what a
+pure scale of the display adapter brings that frame to. It knows the two sizes and not the
+package, so it cannot know the package's base: any base of the frame's ratio no larger than the
+frame passes (640×360 on a 1280×720 frame, as a package of that base would project it), and so
+does a scale whose presses the adapter does not send (5/4: the observation stands, a press is
+refused at its input). That the projection is the package's base, and its RGB8 hash, a verifier
+establishes from the device frame and the package as above. *A recording.* `observe --capture
+--record` is refused on such a display, `record_frame_size_mismatch` (the refusal a recorded
+press of a recording of another size gets), until the recording on such a display (DA-5cd): a
+recording whose frames are not of the package's base before anything is captured, and, after the
+Runtime observed, a device frame of another size than the base before the frame file or the
+recording is written (details `{frame, expected: the base, actual: the device frame}`; the
+observation's debug terminal is `rejected`).
 
 0.12.28 LAB-SMALL (offline `observe`; `observe --capture` where named):
 - #411 B47: a candidate layout of the recognised page whose feature needs an OCR

@@ -3644,3 +3644,15 @@ tests = [
     "actingcommand-actinglab::runtime_input_proxy::s19_the_retry_after_input_frame_unavailable_keeps_the_one_lease",
 ]
 incident = ["#463 S1-9"]
+
+# Workflow #392 DA-5ab fix round 1 (0.12.67; register §1.436; contracts/display-adapter.md section 11; the coordinator's work order of 11-16 after the review of pull request #1780, points 3 and 5). The recording library: the recorded press's check of the recording passes a recording without a frame, refuses a 3x3 recording for a 2x2 base record_frame_size_mismatch (details frame, expected the recording's size, actual the base) and writes nothing, passes it for a 3x3 base (1); the recorded observation's check of the Runtime's frame passes a frame of the base's size and refuses a 3x3 or a 1920x1080 frame for a 2x2 or a 1280x720 base record_frame_size_mismatch (details expected the base, actual the device frame) (2). actinglab against the fake Runtime host whose frames are 3x3, a 2x2 package (a pure scale of 3/2): observe --capture states frame_coordinates {space base, base_pixels [2, 2], reduced_from [3, 3], orientation square, applies_to} and its element's rectangle in the base, its --with-frame file is the 2x2 frame and its --preview 2x2 at scale 1; do <element> --capture states the base, records the base input tap (1, 1), and the device receives (2, 2); do --tap 1,1 --capture --preview likewise, its after attachment's preview 2x2 (3); do --capture --dry-run answers the base statement and its click (0, 0, 2, 2) at (1, 1) in the base; wait --capture --page arrives; ensure --capture presses the edge's base point (1, 1), the device receives (2, 2), and arrives (4); observe --capture --record of a recording started while nothing listened is refused record_frame_size_mismatch (expected 2x2, actual 3x3), exit 1, and the recording's file is as record start wrote it (5)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-lab::lib::gate_392_da5ab::da5ab_fix1_a_recorded_press_takes_a_recording_of_its_packages_base_only",
+    "actingcommand-lab::lib::gate_392_da5ab::da5ab_fix1_a_recorded_observation_takes_a_frame_of_its_packages_base_only",
+    "actingcommand-actinglab::runtime_input_proxy::da5ab_fix1_observe_and_do_on_a_mapped_display_state_and_hand_out_the_base",
+    "actingcommand-actinglab::runtime_input_proxy::da5ab_fix1_the_capture_client_forms_on_a_mapped_display_decide_and_press_in_the_base",
+    "actingcommand-actinglab::runtime_input_proxy::da5ab_fix1_a_recorded_observation_on_a_mapped_display_is_refused_and_nothing_is_recorded",
+]
+incident = ["#392 DA-5ab"]

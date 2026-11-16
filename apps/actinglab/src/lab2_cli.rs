@@ -428,6 +428,15 @@ fn run_runtime_observe(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<V
             return super::contained_resources::finish_package_use(Err(error), reader.close());
         }
     };
+    // Workflow #392 DA-5ab fix round 1: the observation speaks its package's base; a recording of
+    // another size is refused before anything is captured, as the recorded press refuses it.
+    if let Some(lock) = record_lock.as_ref() {
+        let checked = super::contained_resources::online_base(&instance, reader.path())
+            .and_then(|base| actingcommand_lab::record_press_base_check(lock, base));
+        if let Err(error) = checked {
+            return super::contained_resources::finish_package_use(Err(error), reader.close());
+        }
+    }
     let session = begin_runtime_debug_session()?;
     start_runtime_debug_operation(&session, RuntimeDebugOperation::Observe)?;
     let result = (|| -> CliOutcome<Value> {
@@ -469,6 +478,37 @@ fn run_runtime_observe(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<V
             }
         };
         let observed = verified.observation();
+        // Workflow #392 DA-5ab fix round 1 (`contracts/display-adapter.md` section 11): a recorded
+        // observation on a display of another size than the package's base (its projection's
+        // frame) would put the device's frame into the recording beside an answer in the base. It
+        // is refused before the frame file or the recording is written, with the refusal the
+        // recorded press gives, until the recording on such a display (DA-5cd); the observation's
+        // terminal is `rejected`, as a failed `do` closes its own (`finish_runtime_debug_result`).
+        if record_lock.is_some()
+            && let Err(refused) = actingcommand_lab::record_observation_base_check(
+                (
+                    observed.projection.frame.width,
+                    observed.projection.frame.height,
+                ),
+                (observed.frame.width(), observed.frame.height()),
+            )
+        {
+            session
+                .record_event(RuntimeDebugEvent::rejected(
+                    RuntimeDebugOperation::Observe,
+                    EffectDisposition::NotPerformed,
+                    actingcommand_contract::outcome::Outcome::relayed(&refused.code)
+                        .code()
+                        .clone(),
+                ))
+                .map_err(|ledger| {
+                    CliError::device(format!(
+                        "{}; Runtime terminal ledger append failed: {ledger}",
+                        refused.message
+                    ))
+                })?;
+            return Err(refused);
+        }
         let mut payload = json!({
             "req_id": verified.receipt().request_id(),
             "state": observed.status,
@@ -634,17 +674,31 @@ fn run_runtime_do(
                 },
                 &[pack_box(actual_click.rect)],
             )?;
+            let InputAction::Tap {
+                x: sent_x,
+                y: sent_y,
+            } = &sent
+            else {
+                return Err(CliError::device("a tap leaves for the device as a tap"));
+            };
+            // Workflow #392 DA-5ab fix round 1: `action` is the point sent to the device; on a
+            // display that maps to the package's base, `base_action` beside it is that point in
+            // the base, where the click (`actual_click.point`) chose it.
+            let mut device = json!({
+                "executed": true,
+                "backend": "runtime_proxy",
+                "authority": "runtime_execution_kernel",
+                "action": {"type": "tap", "x": *sent_x, "y": *sent_y}
+            });
+            if loaded_scene.reduced_from.is_some() {
+                device["base_action"] = json!({"type": "tap", "x": point.x, "y": point.y});
+            }
             let action_id =
                 execute_runtime_debug_input(&session, instance, sent, loaded_scene.input_frame)?;
             (
                 serde_json::to_value(action_id)
                     .map_err(|error| CliError::device(error.to_string()))?,
-                json!({
-                    "executed": true,
-                    "backend": "runtime_proxy",
-                    "authority": "runtime_execution_kernel",
-                    "action": {"type": "tap", "x": point.x, "y": point.y}
-                }),
+                device,
             )
         };
         let after = if dry_run {

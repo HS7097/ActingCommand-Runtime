@@ -90,6 +90,10 @@ mod gate_463_s25_boxes;
 // #463 S2-5: boxes on a draft stage one recorded, its captures before a press as base images.
 #[cfg(test)]
 mod gate_463_s25_draft;
+// Workflow #392 DA-5ab fix round 1: a recording takes from a Lab operation only what is in its
+// package's base.
+#[cfg(test)]
+mod gate_392_da5ab;
 mod lab_run;
 mod lab_run_api;
 mod ledger_port;

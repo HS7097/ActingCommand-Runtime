@@ -31319,6 +31319,59 @@ statements of `frame_coordinates`, and `actinglab-mcp`'s `serve_calls` that `ac_
 **At deploy.** Nothing to configure. On an instance of the base's size nothing changes; on a mapped
 one the Lab's observations and presses work, in the base.
 
+**Fix round 1** (coordinator work order `rd-1116/brief-392-da5ab-fix2.md`, after the independent
+review of pull request #1780 at `cde05c59`, which found the contained run unchanged line by line;
+nothing here touches the run's frame gate or the run's input; main merged in before the push).
+- *The first-generation MCP server says the same.* `actingctl`'s `ac_lab_observe` and `ac_lab_do`
+  descriptions and the result schema they share (`apps/actingctl/src/mcp/tools.rs`,
+  `mcp/lab.rs`) state both forms of `frame_coordinates`, that on a mapped display the frames,
+  rectangles, points, `frame_path` and `preview` are the base's and `tap`, `tap_rect`, `swipe`, an
+  element and an operation are taken in it, and the 5/4 refusal. No test pins that text (`gate_406_t4`
+  pins `seed` and the sampling names, kept).
+- *The receipt's check.* `ContainedPageObservation::validate` refuses a projection frame with a
+  side of zero; otherwise it takes the observation frame itself or the frame reduced to a base of
+  its ratio no larger than it, the map a pure scale of the display adapter builds for that frame
+  without a declaration (contract: it knows the two sizes, not the package, so it cannot know the
+  package's base; see "Not done as written" below).
+- *A recorded observation on a mapped display is refused.* `observe --capture --record` makes the
+  recorded press's check of the recording (`record_press_base_check`) before it captures, and,
+  after the Runtime observed, `record_observation_base_check` refuses a device frame of another size
+  than the base (the projection's frame) before the frame file or the recording is written, both
+  `record_frame_size_mismatch` (details `{frame, expected, actual}`); its debug terminal is
+  `rejected`. The search for another recording path that mixes the two spaces found only `do
+  --capture --record`, closed by this slice; the device commands' and `session app`'s `--record`
+  record the device's frames and pixels. The code stays `record_frame_size_mismatch` this round;
+  the train that joins DA-5cd unifies it with that slice's code.
+- *`device.action`.* The client form of `do` that sends its own tap (`run_runtime_do`) answers
+  `device.action` with the point sent to the device and, on a mapped display, `device.base_action`
+  with the base point.
+- *The stale comment.* `crates/display-adapter/src/codes.rs` on `input_scale_unsupported` no longer
+  says a Lab declared operation is refused.
+- *Tests.* `crates/runtime-host/src/tests/gate_392_da5ab.rs`:
+  `da5ab_fix1_an_element_at_three_halves_leaves_inside_its_device_box`,
+  `da5ab_fix1_a_declared_operations_drawn_box_at_three_halves_leaves_inside_its_device_box`,
+  `da5ab_fix1_a_declared_operation_on_a_device_five_quarters_the_base_sends_nothing` (the case the
+  retired DA-3 test's `covered_by` claimed, now named there);
+  `crates/actingcommand-contract/src/runtime/gate_392_da5ab.rs` (the check of the projection
+  frame); `crates/lab/src/gate_392_da5ab.rs` (the recorded press's and the recorded observation's
+  checks); `apps/actinglab/tests/runtime_input_proxy.rs` on a fake device of 3x3 frames and a 2x2
+  package:
+  `da5ab_fix1_observe_and_do_on_a_mapped_display_state_and_hand_out_the_base` (`frame_coordinates`,
+  the element, the `--with-frame` file and the previews, the device's points),
+  `da5ab_fix1_the_capture_client_forms_on_a_mapped_display_decide_and_press_in_the_base` (`do
+  --capture --dry-run`, `wait`, `ensure`),
+  `da5ab_fix1_a_recorded_observation_on_a_mapped_display_is_refused_and_nothing_is_recorded`; the
+  fake records each tap's point. Gate maps: `host.toml`,
+  `contract.toml`, `exec.toml`, the rows "DA-5ab fix round 1". No test is adapted or retired; no
+  outcome code, word, key, member or revision is added.
+- *Not done as written.* The work order asked the check to take a reduced frame only at a ratio
+  the adapter's `admit_input` takes. The Runtime's own observation on a 5/4 display (the capture
+  side admits it, and this slice's test
+  `da5ab_a_lab_press_on_a_device_five_quarters_the_base_sends_nothing` relies on it, its press
+  refused at its input) projects such a frame, so that clause would
+  make the client refuse the Runtime's own receipt as an integrity failure (fatal); it is left for
+  the coordinator.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
