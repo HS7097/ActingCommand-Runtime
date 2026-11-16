@@ -36,6 +36,8 @@ use actingcommand_contract::{
 const ALIAS: &str = "neutral.instance";
 const NOT_FOREGROUND: &str = "application_not_foreground";
 const UNSUPPORTED: &str = "nemu_input_capability_unsupported";
+/// The key train: the refusal of a key `adb_shell_input` does not send.
+const KEY_UNSUPPORTED: &str = "input_key_unsupported";
 const FRAME_REQUIRED: &str = "nemu_input_frame_required";
 
 fn back() -> InputAction {
@@ -410,9 +412,11 @@ fn kb1_fix1_a_key_the_library_cannot_send_is_denied_and_recorded_not_performed()
 
 // Fix round 1 (R3, R5): on an instance whose input is `adb_shell_input`, which sends the back key
 // alone, another key (by its word, its Android code and a word of no key) is refused before
-// anything is sent and before an intent is written, as on the Nemu input: denied
-// `nemu_input_capability_unsupported`, no input record in the ledger, nothing on the device. The
-// back key is then completed and reaches the device once.
+// anything is sent and before an intent is written, as on the Nemu input: denied, no input record
+// in the ledger, nothing on the device. The back key is then completed and reaches the device
+// once. Adapted by the key train (register §1.447, "Train": the coordinator's correction of the
+// code, one code for one cause and no other backend's name): the refusal is
+// `input_key_unsupported`, the Nemu input keeping its own.
 #[test]
 fn kb1_fix1_adb_shell_input_refuses_another_key_before_its_intent() {
     let root = TempDir::new().expect("tempdir");
@@ -437,7 +441,7 @@ fn kb1_fix1_adb_shell_input_refuses_another_key_before_its_intent() {
         );
         assert_eq!(
             receipt.outcome().code().as_str(),
-            UNSUPPORTED,
+            KEY_UNSUPPORTED,
             "{key}: {receipt:?}"
         );
     }

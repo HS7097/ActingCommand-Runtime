@@ -269,7 +269,8 @@ naming this file.
   read, one capture, the key sent on that frame, the one retry, the warnings); `ac_key` with any
   other key and `ac_text` answer `nemu_input_capability_unsupported` there, nothing sent, and the
   Runtime has no other way to send another key on it; `adb_shell_input` sends the back key alone
-  too and refuses another key so (KB-1 fix round 1). Where the instance's capability table says
+  too and refuses another key before anything is sent, `input_key_unsupported` (KB-1 fix round 1,
+  the key train). Where the instance's capability table says
   its input does not implement `input.key` or `input.text` (`minitouch` sends no key; no input but
   `maatouch` sends text), the refusal's `details.hint` says what to press instead (the screen's
   own control: `ac_tap`, or `ac_do` with `capture` on a package's element); where its input sends

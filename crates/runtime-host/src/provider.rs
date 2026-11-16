@@ -1352,7 +1352,7 @@ fn capability_profile(
             (EmulatorCapability::InputKey, TouchBackendChoice::NemuIpc) =>
                 "Implementation selected for the back key alone (back), through the emulator library's key calls on a frame the Runtime captured; a library without those calls sends no key, and every other key is refused before it is sent. Version, assets, connection and device availability have not been verified. Execution requires the existing Runtime admission and backend checks.",
             (EmulatorCapability::InputKey, TouchBackendChoice::AdbShellInput) =>
-                "Implementation selected for the back key alone (back), as one input keyevent KEYCODE_BACK through adb shell; every other key fails in the backend before anything reaches the device. Version, assets, connection and device availability have not been verified. Execution requires the existing Runtime admission and backend checks.",
+                "Implementation selected for the back key alone (back), as one input keyevent KEYCODE_BACK through adb shell; every other key is refused before it is sent (input_key_unsupported). Version, assets, connection and device availability have not been verified. Execution requires the existing Runtime admission and backend checks.",
             _ => refusal,
         };
         EmulatorCapabilityEvidence::new(capability, availability, refusal, source)?

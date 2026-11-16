@@ -148,8 +148,9 @@ through `input motionevent`, from the device's Android SDK level 23 (Workflow #4
 T4 corrected this list, which named no segmented drag for `adb_shell_input` and no
 path drag), and (KB-1) the back key alone, as one `input keyevent KEYCODE_BACK` through the same
 `adb shell` path its taps take (fix round 1: every other key is refused by the Runtime before
-anything is sent and before an intent is written, `nemu_input_capability_unsupported`, as on
-`nemu_ipc`). The `gestures` lists name `key` only for the input that sends every key it is given
+anything is sent and before an intent is written, as on `nemu_ipc`; since the key train with its
+own code, `input_key_unsupported`, `nemu_ipc` keeping `nemu_input_capability_unsupported`).
+The `gestures` lists name `key` only for the input that sends every key it is given
 (`maatouch`); the back key of `nemu_ipc` and `adb_shell_input` is in the capability table's
 `input.key` row. A key passes the Runtime's foreground gate as a tap does (KB-1). The value lists of `schema control`
 (`capture_backend`, `touch_backend`) and `session instance registry`

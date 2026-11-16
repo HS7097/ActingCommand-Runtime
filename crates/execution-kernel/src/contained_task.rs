@@ -2545,10 +2545,19 @@ impl StepKey {
     }
 
     /// The key of the input request that presses it: Android's key code, the form the Lab's
-    /// `key back` sends (`KEYCODE_BACK`, 4) and MaaTouch's key command reads.
+    /// `key back` sends (`KEYCODE_BACK`, 4) and MaaTouch's key command reads. Workflow #463, the
+    /// key train: the device layer's vocabulary decides the spelling
+    /// ([`actingcommand_device::DeviceKey::android_code`]), so the key a step sends is one its
+    /// `DeviceKey::named` takes.
     pub const fn input_key(self) -> &'static str {
+        self.device_key().android_code()
+    }
+
+    /// Workflow #463, the key train: the device layer's key this key is
+    /// ([`actingcommand_device::DeviceKey`]).
+    pub const fn device_key(self) -> actingcommand_device::DeviceKey {
         match self {
-            Self::Back => "4",
+            Self::Back => actingcommand_device::DeviceKey::Back,
         }
     }
 

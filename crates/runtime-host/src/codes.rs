@@ -731,6 +731,10 @@ actingcommand_contract::outcome_codes! {
         HostTestObservationSinkLockPoisoned => "host_test_observation_sink_lock_poisoned": error / none,
         InputExecutionPlanInvalid => "input_execution_plan_invalid": error / none,
         InputFrameUnavailable => "input_frame_unavailable": error / none,
+        // Workflow #463, the key train (register §1.447, "Train"): a key the instance's input
+        // backend does not send, on an input other than the Nemu input that sends the back key
+        // alone (`adb_shell_input`); refused before anything is sent and before an intent.
+        InputKeyUnsupported => "input_key_unsupported": error / none,
         // Workflow #434 LAB-6S4a: `install_abort_state_invalid`, `install_fact_clock_overflow`,
         // `install_fact_field_invalid`, `install_identity_encode_failed`,
         // `install_identity_required`, `install_not_drained`, `install_owner_mismatch`,

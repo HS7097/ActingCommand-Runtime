@@ -24,12 +24,24 @@ pub(super) enum ApplicationKey {
 
 /// The refusal of an input the instance's input does not perform, nothing sent
 /// (`nemu_input_capability_unsupported`): HS-4's for the Nemu input before any intent, and
-/// (Workflow #463 KB-1 fix round 1, the coordinator's rulings R2 and R3 of 11-16) for a key outside
-/// the key vocabulary on an input that sends that vocabulary alone, and for a backend's own refusal
-/// made before it sent anything.
+/// (Workflow #463 KB-1 fix round 1, the coordinator's ruling R2 of 11-16) for the Nemu input's own
+/// refusal made before it sent anything (a library without the key calls).
 fn input_capability_refusal() -> RuntimeHostError {
     RuntimeHostError::request(
         HostCode::NemuInputCapabilityUnsupported,
+        HostLocation::ExecuteInput,
+        RuntimeErrorCode::InvalidRequest,
+    )
+}
+
+/// Workflow #463, the key train (register §1.447, "Train"; KB-1 fix round 1's ruling R3, whose
+/// code the coordinator corrected): the refusal of a key the instance's input backend does not
+/// send, on an input other than the Nemu input that sends the key vocabulary alone
+/// (`adb_shell_input`), before anything is sent and before an intent is written
+/// (`input_key_unsupported`). The Nemu input keeps its own refusal ([`input_capability_refusal`]).
+fn input_key_refusal() -> RuntimeHostError {
+    RuntimeHostError::request(
+        HostCode::InputKeyUnsupported,
         HostLocation::ExecuteInput,
         RuntimeErrorCode::InvalidRequest,
     )
@@ -122,18 +134,24 @@ impl HostShared {
         // Workflow #463 KB-1 fix round 1 (the coordinator's ruling R3 of 11-16): an input that
         // sends the keys of the key vocabulary alone (`DeviceKey::sent_alone_by`: the Nemu input
         // and `adb_shell_input`) refuses every other key here, before anything is sent and before
-        // an intent is written, with the Nemu input's refusal.
+        // an intent is written. The key train: the Nemu input with its own refusal, which covers
+        // that key there; `adb_shell_input` with `input_key_unsupported`.
         let key_outside_vocabulary = match action {
             InputAction::Key { key } if actingcommand_device::DeviceKey::named(key).is_none() => {
                 self.sends_key_vocabulary_alone(&resolved.instance_alias)?
             }
             _ => false,
         };
-        if nemu_support == Some(actingcommand_device::NemuInputSupport::Unsupported)
-            || key_outside_vocabulary
-        {
+        let refusal = if nemu_support == Some(actingcommand_device::NemuInputSupport::Unsupported) {
+            Some(input_capability_refusal())
+        } else if key_outside_vocabulary {
+            Some(input_key_refusal())
+        } else {
+            None
+        };
+        if let Some(refusal) = refusal {
             return Err(RequestFailure::request(
-                input_capability_refusal(),
+                refusal,
                 RuntimeReceiptState::Denied,
                 None,
             ));

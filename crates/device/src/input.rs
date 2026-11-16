@@ -329,20 +329,32 @@ pub enum DeviceKey {
 }
 
 impl DeviceKey {
+    /// Every key of the vocabulary.
+    pub const ALL: [Self; 1] = [Self::Back];
+
     /// The key an input request's `key` names: the word `back`, or the Android key event of the
-    /// back key as a client sends it today, its code `4` (actinglab's `key back`) or its name
-    /// `KEYCODE_BACK`; `None` for every other key.
+    /// back key as a client sends it today, its code `4` (actinglab's `key back`; a package's key
+    /// step, whose spelling is [`Self::android_code`]) or its name `KEYCODE_BACK`; `None` for every
+    /// other key.
     pub fn named(key: &str) -> Option<Self> {
-        match key {
-            "back" | "4" | "KEYCODE_BACK" => Some(Self::Back),
-            _ => None,
-        }
+        Self::ALL
+            .into_iter()
+            .find(|known| [known.word(), known.android_code(), known.android_name()].contains(&key))
     }
 
     /// The word of the vocabulary.
     pub const fn word(self) -> &'static str {
         match self {
             Self::Back => "back",
+        }
+    }
+
+    /// Workflow #463, the key train (register §1.447 and §1.448, "Train"): Android's key code of
+    /// the key, the spelling a package's key step sends (`StepKey::input_key` of the execution
+    /// kernel reads it here, so the two cannot disagree) and actinglab's `key back` sends.
+    pub const fn android_code(self) -> &'static str {
+        match self {
+            Self::Back => "4",
         }
     }
 

@@ -560,6 +560,30 @@ last attempt, and only a still screen that shows nothing the package declares en
 `contained_task_linear_unrecorded_screen` ("A screen the package never recorded" under "Failure
 codes").
 
+**On the device** (the key train, [v012-register.md](v012-register.md) §1.447 and §1.448, "Train").
+The key keeps its frame down to the device: the kernel's `linear_send_input` hands it with its
+frame's context to the runtime's `input`; the host's run (`RuntimeContainedTask::input`) names that
+frame in its input (`input_frame`; the input record's `before_frame_id`), and `HostShared::input`
+resolves it, holds the input to the foreground gate and sends it on the instance's session
+(`input_prepared_in_frame`). On the emulator's own input (`nemu_ipc`) the session hands the key
+with the step's committed frame to the input (`key_in_frame`, through the registry's diagnostic
+wrapper), whose worker presses it only on that frame (`press_key`: the frame's fence, the deadline,
+one key down and one key up with the vendor's code), and the host refuses a key without a frame
+there (`nemu_input_frame_required`). The key a step sends, `4`, is the device layer's own spelling
+of the back key (`DeviceKey::android_code`, which `DeviceKey::named` takes), so no input that sends
+the back key refuses a step's key for its spelling.
+
+**The foreground gate.** A key passes the gate a tap passes
+([application-lifecycle.md](application-lifecycle.md), "The foreground gate"): on a physical
+instance it is refused `application_not_foreground` (or `application_foreground_unknown`), nothing
+sent, unless the instance's assigned application is in front. A key step's guard has just
+recognised its page, a page of the run's own application, so in the ordinary case that application
+is in front and the gate passes the key; only another application come to the front between the
+guard and the key, or a foreground that cannot be read, refuses it, as it would refuse a tap there,
+and the run ends with that refusal (the step declares no retry). A key expects the assigned
+application in every run, a store update package's too: only a declared store step's plain tap
+expects the store.
+
 **A key the instance's input does not send.** A run of a package with a key step asks the runtime
 once, after `RunStarted` and before any capture, input or effect intent, whether the instance's
 input sends the key of the package's first key step. The host answers from the capability table the
@@ -574,6 +598,18 @@ for any input. Every run of a package asks for its own key steps, a layer the ho
 task (a prerequisite, return-home or entry recovery package) on the run's instance too. The code's
 class is `declaration_error` ([runtime-outcomes.md](runtime-outcomes.md): a package and what the
 run uses that do not fit, decided before any frame, the same on every run).
+
+**Which instances such a run starts on** (the key train). The host's capability table
+(`capability_profile`, `crates/runtime-host/src/provider.rs`) declares `input.key` for `maatouch`
+(every key), for `nemu_ipc` and `adb_shell_input` (the back key alone, the one word of the
+vocabulary), and not for `minitouch`. So a run with a key step starts on an instance whose touch
+backend is `maatouch`, `nemu_ipc` or `adb_shell_input`, and on `minitouch` it is refused at its
+start with `contained_task_linear_key_unsupported`, nothing captured and nothing sent. The table is
+built without opening the emulator's library, so on an installation whose library lacks the two key
+calls the run starts: the key step's guard passes, its effect intent is written, and the key is
+refused when it is sent, before any call of the library, as the input capability's denial. The
+run then ends failed with `nemu_input_capability_unsupported`, the input's own record saying its
+effect `not_performed`; nothing is recorded as indeterminate and the step is not tried again.
 
 **A scheduled task whose package has a key step, on such an instance** (fix round 1; the
 coordinator's ruling: this behaviour stays as it is in this slice, since changing what accumulates
