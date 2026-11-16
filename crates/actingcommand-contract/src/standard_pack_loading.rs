@@ -25,7 +25,7 @@
 //! copy and LOAD-3 runs it. The core names no page: every id is an opaque word.
 
 use crate::standard_pack::{StandardPackProblem, StandardPackRootIssue, standard_pack_page_id};
-use crate::standard_pack_ui::{at, read_document};
+use crate::standard_pack_catalog::{at, read_document};
 use serde_json::{Map, Value, json};
 use std::collections::BTreeSet;
 

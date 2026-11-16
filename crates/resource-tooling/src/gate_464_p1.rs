@@ -774,7 +774,8 @@ fn p1_a_first_adoption_writes_the_pack_directory_the_rule_and_the_requires_words
     assert_eq!(answer.status, "adopted");
     assert_eq!(answer.class, AdoptClass::Business);
     assert_eq!(answer.package_id, ADOPTED);
-    assert!(answer.review.run_through, "{:?}", answer.review);
+    // Workflow #463 S3-12: the offline review's rule, named for what it is.
+    assert!(answer.review.recording_checked, "{:?}", answer.review);
     assert_eq!(answer.review.record_id.as_deref(), Some(RECORD));
     assert_eq!(answer.rule, Some(adopted_rule(9_000)));
     assert_eq!(answer.requires_added, [BENEFIT_FIXED_VALUE_SUBSYSTEM]);
@@ -1309,7 +1310,7 @@ fn p1_the_held_and_the_maintenance_classes() {
     )
     .unwrap_or_else(|error| panic!("the held adoption: {error}"));
     assert_eq!(answer.class, AdoptClass::Held);
-    assert!(!answer.review.run_through);
+    assert!(!answer.review.recording_checked);
     assert_eq!(answer.rule, None);
     assert_eq!(answer.coverage, None);
     let schedule = fixture.schedule();
@@ -2604,7 +2605,7 @@ fn s34_a_first_adoption_by_the_held_reason_writes_what_the_held_document_writes(
     for answer in [&by_flags, &by_document] {
         assert_eq!(answer.status, "adopted");
         assert_eq!(answer.class, AdoptClass::Held);
-        assert!(!answer.review.run_through, "{:?}", answer.review);
+        assert!(!answer.review.recording_checked, "{:?}", answer.review);
         assert_eq!(answer.rule, None);
         assert_eq!(answer.held.as_ref(), Some(&entry));
         assert_eq!(answer.coverage, None);

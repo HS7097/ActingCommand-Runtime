@@ -27,6 +27,14 @@
 //! tables) go into the zip as `tables/<file>`, listed in its `bundle.json` `tables`, and into the
 //! installed root; and `interfaces.json` declares the `package` revision the zip's content needs
 //! (`revision.rs`). For `resource verify` every byte the step writes is what it wrote before.
+//!
+//! Workflow #477 PC-1 (register §1.438; contracts/pack-catalog.md): `standard-pack build` carries
+//! the repository's `pack-catalog.json` into the zip's root, byte for byte, when the contract
+//! crate's reader takes its business part against the zip's `bundle.json` and the repository's
+//! `schedule.json` (each error fails the step, `standard_pack_root_invalid`, and the file is not
+//! carried); the zip names it among its root files (`build.json`'s `root_files`), the installed
+//! root's check reads it, and its SHA-256 is the placement's item digest. `ui.json` is carried no
+//! more: a repository that still holds one gets the warning `standard_pack_ui_retired`.
 
 use super::revision::content_revision;
 use super::steps::{
@@ -40,9 +48,11 @@ use actingcommand_contract::codes::{ContractCode, SharedCode};
 use actingcommand_contract::outcome::{IoOp, Outcome, RawSource};
 use actingcommand_contract::{
     BundleIndex, BundleMaintenance, BundleSource, NOTICES_PACKAGE_REVISION,
-    STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_GOALS_FILE, STANDARD_PACK_NOTICES_DIRECTORY,
-    STANDARD_PACK_TABLES_DIRECTORY, STANDARD_PACK_UI_FILE, StandardPackRegistry,
-    notice_relative_path, parse_standard_pack_ui, read_standard_pack_tables,
+    STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_CATALOG_FILE, STANDARD_PACK_GOALS_FILE,
+    STANDARD_PACK_NOTICES_DIRECTORY, STANDARD_PACK_RETIRED_UI_FILE, STANDARD_PACK_SCHEDULE_FILE,
+    STANDARD_PACK_TABLES_DIRECTORY, StandardPackRegistry, notice_relative_path,
+    parse_standard_pack_catalog, parse_standard_pack_schedule, read_standard_pack_tables,
+    retired_ui_outcome, standard_pack_schedule_pools,
 };
 use actingcommand_resource_tooling::{
     PackageBundleRequest, ResourceToolingCode, StandardPackCheckRequest, StandardPackNotices,
@@ -256,11 +266,13 @@ fn lay_out(
         // The bundle root check named it already; the zip cannot hold a second one.
         return Ok(());
     }
-    // Workflow #464 P2: `standard-pack build` carries the repository's tables; fix round 1: and
-    // its `ui.json`, checked against the zip's `bundle.json`.
+    // Workflow #464 P2: `standard-pack build` carries the repository's tables; Workflow #477 PC-1:
+    // and its `pack-catalog.json`, read against the zip's `bundle.json` (fix round 1 carried
+    // `ui.json`, which nothing reads any more).
+    let mut carried_catalog = false;
     if inputs.steps_for == StepsFor::Build {
         carry_tables(inputs.repo, &game, &mut entries, run)?;
-        carry_ui(inputs.repo, &game, &mut entries, run)?;
+        carried_catalog = carry_catalog(inputs.repo, &game, &mut entries, run)?;
     }
     // Workflow #444 NOTICES-3: what the check of the installed root must count of the notices
     // directory the zip carries; nothing without it.
@@ -392,8 +404,10 @@ fn lay_out(
         Err(error) => run.fail(lab_failure(&error)),
         Ok(checked) => {
             let read_root_files = checked.root_files.iter().copied().collect::<BTreeSet<_>>();
+            // Workflow #477 PC-1: with the package declaration the build carried.
             let expected = std::iter::once("bundle.json")
                 .chain(root_files.iter().copied())
+                .chain(carried_catalog.then_some(STANDARD_PACK_CATALOG_FILE))
                 .collect::<BTreeSet<_>>();
             if read_root_files != expected
                 || checked.pack_count != index.packs.len()
@@ -506,22 +520,30 @@ fn carry_tables(
     Ok(())
 }
 
-/// Workflow #464 P2 fix round 1: the repository `repo`'s `ui.json`, a root file of the standard
-/// package root (contracts/package-reference.md, "Standard package root") that `place` places and
-/// sets aside when a zip carries none, carried into the zip's `entries` of `game` byte for byte
-/// when its reader, `parse_standard_pack_ui`, takes it against the zip's `bundle.json`. Each
-/// violation of a refused file fails the step as `standard_pack_root_invalid` (`game`, `path`,
-/// `standard_pack_problem`, `json_pointer`), and the file is not carried; a repository without the
-/// file leaves the entries as they are.
-fn carry_ui(
+/// Workflow #477 PC-1 (register §1.438; contracts/pack-catalog.md): the repository `repo`'s
+/// `pack-catalog.json`, a root file of the standard package root (contracts/package-reference.md,
+/// "Standard package root") that `place` places and sets aside when a zip carries none, carried
+/// into the zip's `entries` of `game` byte for byte when its reader, `parse_standard_pack_catalog`,
+/// takes its business part against the zip's `bundle.json` and the pools the repository's
+/// `schedule.json` declares (none without the file). Each error of a refused file fails the step
+/// as `standard_pack_root_invalid` (`game`, `path`, `standard_pack_problem`, `json_pointer`), and
+/// the file is not carried; its display defects are the installed root's check's warnings. A
+/// repository without the file leaves the entries as they are. A repository that still holds
+/// `ui.json` (Workflow #464 P2 fix round 1 carried it) gets the warning `standard_pack_ui_retired`:
+/// the zip never carries it. Answers whether the file was carried.
+fn carry_catalog(
     repo: &Path,
     game: &str,
     entries: &mut BTreeMap<String, Vec<u8>>,
     run: &mut StepRun,
-) -> Result<(), Outcome> {
-    let path = repo.join(STANDARD_PACK_UI_FILE);
+) -> Result<bool, Outcome> {
+    let retired = repo.join(STANDARD_PACK_RETIRED_UI_FILE);
+    if is_file(&retired) {
+        run.warn(retired_ui_outcome(game, &retired));
+    }
+    let path = repo.join(STANDARD_PACK_CATALOG_FILE);
     if !is_file(&path) {
-        return Ok(());
+        return Ok(false);
     }
     let bytes = fs::read(&path)
         .map_err(|error| read_failed(&path, &error, BundleProblem::RootFileDiffers))?;
@@ -529,9 +551,21 @@ fn carry_ui(
         .get(STANDARD_PACK_BUNDLE_FILE)
         .and_then(|index| StandardPackRegistry::from_bundle_bytes(index, game).ok())
         .ok_or_else(|| mismatch(STANDARD_PACK_BUNDLE_FILE, BundleProblem::IndexSchema))?;
-    match parse_standard_pack_ui(&bytes, game, &registry) {
+    // `package bundle` already composed the repository's `schedule.json`, so its reader takes it.
+    let schedule_path = repo.join(STANDARD_PACK_SCHEDULE_FILE);
+    let pools = if is_file(&schedule_path) {
+        let schedule = fs::read(&schedule_path)
+            .map_err(|error| read_failed(&schedule_path, &error, BundleProblem::RootFileDiffers))?;
+        parse_standard_pack_schedule(&schedule)
+            .ok()
+            .map(|schedule| standard_pack_schedule_pools(&schedule))
+    } else {
+        Some(BTreeSet::new())
+    };
+    match parse_standard_pack_catalog(&bytes, game, &registry, pools.as_ref()) {
         Ok(_) => {
-            entries.insert(STANDARD_PACK_UI_FILE.to_owned(), bytes);
+            entries.insert(STANDARD_PACK_CATALOG_FILE.to_owned(), bytes);
+            Ok(true)
         }
         Err(issues) => {
             for issue in issues {
@@ -543,9 +577,9 @@ fn carry_ui(
                         .json_pointer(pointer_value(&issue.pointer)),
                 );
             }
+            Ok(false)
         }
     }
-    Ok(())
 }
 
 /// The index and copy checks (`bundle.ps1:316-380`); every difference is recorded. `notices`:

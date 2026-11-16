@@ -44,6 +44,9 @@ pub mod runtime;
 pub mod runtime_fact;
 pub mod runtime_observation;
 pub mod standard_pack;
+// Workflow #477 PC-1 (since 0.12.68): a game root's package declaration `pack-catalog.json`, which
+// replaced Workflow #429 R-11's `ui.json`.
+pub mod standard_pack_catalog;
 // Workflow #392 DA-4: a game root's display declaration `display-layout.json` (model 392 §4.1).
 pub mod standard_pack_display;
 // Workflow #455 G-R1 (since 0.12.60): a game root's goal declaration `goals.json`.
@@ -56,8 +59,6 @@ pub mod standard_pack_notices;
 pub mod standard_pack_schedule;
 // Workflow #357 DB-1: the shared tables of a standard-pack game root (M-357a v1.1 §2).
 pub mod standard_pack_table;
-// Workflow #429 R-11: a game root's display metadata for clients, `ui.json`.
-pub mod standard_pack_ui;
 pub mod state;
 // STORE-FG-1 (since 0.12.29): a package's `control.json` `store_update` declaration.
 pub mod store_update;
@@ -93,13 +94,13 @@ pub use runtime::*;
 pub use runtime_fact::*;
 pub use runtime_observation::*;
 pub use standard_pack::*;
+pub use standard_pack_catalog::*;
 pub use standard_pack_display::*;
 pub use standard_pack_goals::*;
 pub use standard_pack_loading::*;
 pub use standard_pack_notices::*;
 pub use standard_pack_schedule::*;
 pub use standard_pack_table::*;
-pub use standard_pack_ui::*;
 pub use state::*;
 pub use store_update::*;
 pub use task_schema::TaskSchema;

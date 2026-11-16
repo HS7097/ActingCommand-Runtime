@@ -52,7 +52,25 @@
 //! as that; nothing is ever sent again. A passed trial is not an authorization to enable; a trial
 //! counts nothing toward a break-in; a trial is one run, sent once. Fix round 2: `--collect` takes
 //! only a run sent by hand on the Lab's channel; a run has one record, whatever content the
-//! package directory holds when it is collected; a run is answered by its end state.
+//! package directory holds when it is collected; a run is answered by its end state. Workflow
+//! #463 S3-8, S3-9 fix round 1: a run whose connection ended before any of its receipt came back
+//! is answered with `next` `{unconfirmed: no_receipt}`, never the line that reads the end later.
+//!
+//! Workflow #463 S3-14 (contracts/standard-pack-schedule.md, "Where a pack stands"; register
+//! §1.446): `actinglab standard-pack status --root <game root> [--repo <checkout game root>]
+//! [--package-id <id>] [--state-dir <dir>]` answers where each pack of the root stands (the
+//! resource tooling's `standard_pack_status`): formed, its readiness items and what is missing, the
+//! latest trial of its content, and whether the root's schedule enables it. It only reads; the
+//! placement journals, which the rescue module reads, are not read here (`journals_not_read`).
+//!
+//! Workflow #477 PC-1 (contracts/pack-catalog.md, "Who writes it"; register §1.438): `actinglab
+//! standard-pack catalog --root <root> [--plan]` builds or brings up to date a game root's
+//! `pack-catalog.json` from what the root declares (the resource tooling's
+//! `write_standard_pack_catalog`): with `--plan` it writes nothing and answers the document; without
+//! it, it writes the file atomically. Under the global `--dry-run` only `--plan` runs. Fix round 1:
+//! `--root` is a resource repository's checkout (the game from its `applications.json`, the
+//! registry the build's `package_bundle` makes of its `packs/`, the file written at its root) or a
+//! built game root (`bundle.json`, its directory named as its game).
 
 use crate::{CliError, CliOutcome, ErrorKind, FlagArgs, GlobalOptions};
 use actingcommand_contract::codes::{ContractCode, ContractLocation};
@@ -65,11 +83,13 @@ use actingcommand_lab_ops::wait::{Waited, wait_at_most};
 use actingcommand_lab_ops::{instance_selector, run_evidence, run_show, wait};
 use actingcommand_resource_tooling::{
     AdoptDecision, AdoptSource, AdoptWorktree, PackTrialRecord, ResourceToolingCode,
-    StandardPackAdoptRequest, StandardPackCheckRequest, StandardPackComposeRequest,
-    StandardPackReadyRequest, StandardPackTrialAnswer, StandardPackTrialRequest,
-    TrialCollectProblem, TrialRecordPlan, TrialRunEnd, check_standard_pack_root, check_trial_run,
+    StandardPackAdoptRequest, StandardPackCatalogRequest, StandardPackCheckRequest,
+    StandardPackComposeRequest, StandardPackReadyRequest, StandardPackStatusRequest,
+    StandardPackTrialAnswer, StandardPackTrialRequest, TrialCollectProblem, TrialRecordPlan,
+    TrialRunEnd, TrialRunUnconfirmed, check_standard_pack_root, check_trial_run,
     compose_standard_packs, judge_standard_pack_readiness, plan_standard_pack_trial,
-    standard_pack_adopt, trial_record_of_run, write_trial_record,
+    standard_pack_adopt, standard_pack_status, trial_record_of_run, write_standard_pack_catalog,
+    write_trial_record,
 };
 use actingcommand_runtime_client::{
     ContainedRunState, ContainedRunStatus, RunDispatch, RunKey, RunOrigin, RuntimeClient,
@@ -139,6 +159,14 @@ const WAIT_FLAG: &str = "--wait";
 pub(crate) const TRIAL_SWITCHES: [&str; 2] = ["--irreversible", "--plan"];
 /// Workflow #463 S3-10: the row's name, which its refusals name.
 const TRIAL: &str = "standard-pack trial";
+/// Workflow #463 S3-14: the flags `standard-pack status` takes, each once.
+pub(crate) const STATUS_FLAGS: [&str; 4] = ["--root", "--repo", "--package-id", "--state-dir"];
+/// Workflow #463 S3-14: the row's name, which its refusals name.
+const STATUS: &str = "standard-pack status";
+/// Workflow #477 PC-1: the flags `standard-pack catalog` takes, and the one of them that takes no
+/// value, which takes none from the next word but `true` or `false` (`FlagArgs::parse_switches`).
+pub(crate) const CATALOG_FLAGS: [&str; 2] = ["--root", "--plan"];
+pub(crate) const CATALOG_SWITCHES: [&str; 1] = ["--plan"];
 
 pub(crate) fn options() -> [&'static str; 1] {
     ["--root <installed game root: <standard_packs.root>/<game>>"]
@@ -172,13 +200,21 @@ pub(crate) fn adopt_options() -> [&'static str; 8] {
     ]
 }
 
+/// Workflow #477 PC-1: the flags of `standard-pack catalog`.
+pub(crate) fn catalog_options() -> [&'static str; 2] {
+    [
+        "--root <a resource repository's checkout (applications.json and packs/; the file is written at its root) or a built game root (<game>/ with bundle.json); never inside an installation>",
+        "--plan (answers the pack-catalog.json it would write; writes nothing)",
+    ]
+}
+
 /// Workflow #463 S3-10: the flags of `standard-pack trial`. Workflow #463 S3-11: the run's.
 pub(crate) fn trial_options() -> [&'static str; 11] {
     [
         "--instance <the instance the trial is for; the run is sent to it>",
         "--package <a pack directory: packs/<id> of a checkout or a placed pack; no container>",
         "--authorization <the owner's authorization reference, 1 to 1024 bytes; the run needs it>",
-        "--variable <name>=<json> (repeatable; judged by the plan; a run carries none yet)",
+        "--variable <name>=<json> (repeatable; judged by the plan; the run carries it)",
         "--expect <an outcome key the package declares; the run answers whether it matched>",
         "--irreversible (acknowledges a package the irreversible mark flags; its run needs it)",
         "--root <judges the mark; a pack it does not register is marked; without it not judged>",
@@ -186,6 +222,16 @@ pub(crate) fn trial_options() -> [&'static str; 11] {
         "--plan (the plan only; nothing is sent or written)",
         "--collect <request_id> (reads that run's end and records it; sends nothing)",
         "--wait <duration> (the longest the run is waited for; absent: until its receipt)",
+    ]
+}
+
+/// Workflow #463 S3-14: the flags of `standard-pack status`.
+pub(crate) fn status_options() -> [&'static str; 4] {
+    [
+        "--root <a game root, installed or a bundle laid out as one: <standard_packs.root>/<game>>",
+        "--repo <the game's working root in a checkout: each pack's packs/<id> content beside the root's>",
+        "--package-id <one pack of the root: its row alone; the counts stay the root's>",
+        "--state-dir <the Lab's state directory, where trial records are read; default actinglab's>",
     ]
 }
 
@@ -288,10 +334,55 @@ pub(crate) fn run_standard_pack(
         // Workflow #463 S3-10: the plan of a trial on a real application; Workflow #463 S3-11:
         // without `--plan`, its one run.
         "trial" => run_trial(global, args),
+        // Workflow #463 S3-14: where each pack of a game root stands; it only reads.
+        "status" => run_status(args),
+        // Workflow #477 PC-1: the writer of a game root's `pack-catalog.json`.
+        "catalog" => run_catalog(global, args),
         other => Err(CliError::usage(format!(
             "unknown standard-pack command: {other}"
         ))),
     }
+}
+
+/// Workflow #477 PC-1: `standard-pack catalog` (module doc). A flag off its list, a positional
+/// word, `--root` twice or without its value is a usage error before anything is read; under the
+/// global `--dry-run` the line without `--plan` is `dry_run_unsupported` (it writes the file), its
+/// read-only form `--plan`.
+fn run_catalog(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
+    let flags = FlagArgs::parse_switches(args, &CATALOG_SWITCHES);
+    if let Some(flag) = flags
+        .flags
+        .keys()
+        .find(|flag| !CATALOG_FLAGS.contains(&flag.as_str()))
+    {
+        return Err(CliError::usage(format!(
+            "standard-pack catalog does not accept {flag}"
+        )));
+    }
+    flags.expect_positionals("standard-pack catalog", 0)?;
+    for flag in CATALOG_FLAGS {
+        if flags.count(flag) > 1 {
+            return Err(CliError::usage(format!(
+                "standard-pack catalog takes {flag} once"
+            )));
+        }
+    }
+    let root = flags.required_path("--root")?;
+    let plan = flags.bool("--plan");
+    if !plan {
+        crate::dry_run_gate::refuse(
+            global,
+            "standard-pack catalog",
+            Some("standard-pack catalog --plan"),
+            Value::Null,
+        )?;
+    }
+    let response = write_standard_pack_catalog(StandardPackCatalogRequest { root, plan })?;
+    serde_json::to_value(response).map_err(|error| {
+        CliError::device(format!(
+            "failed to serialize the standard-pack catalog answer: {error}"
+        ))
+    })
 }
 
 /// Workflow #464 P1: `standard-pack adopt` (module doc). The recording `--record-id` names is the
@@ -353,6 +444,38 @@ fn run_adopt(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     )?;
     serde_json::to_value(response)
         .map_err(|error| CliError::device(format!("failed to serialize the adoption: {error}")))
+}
+
+/// Workflow #463 S3-14: `standard-pack status` (module doc). A flag off [`STATUS_FLAGS`], a
+/// positional word, a flag given twice and an option without its value are refused before
+/// anything is read; the state directory is `--state-dir`, or actinglab's own, where the trial
+/// keeps its records.
+fn run_status(args: &[String]) -> CliOutcome<Value> {
+    let flags = FlagArgs::parse_values(args)?;
+    if let Some(flag) = flags
+        .flags
+        .keys()
+        .find(|flag| !STATUS_FLAGS.contains(&flag.as_str()))
+    {
+        return Err(CliError::usage(format!("{STATUS} does not accept {flag}")));
+    }
+    flags.expect_positionals(STATUS, 0)?;
+    for flag in STATUS_FLAGS {
+        if flags.count(flag) > 1 {
+            return Err(CliError::usage(format!("{STATUS} takes {flag} once")));
+        }
+        if flags.given(flag) {
+            flags.required(flag)?;
+        }
+    }
+    let response = standard_pack_status(&StandardPackStatusRequest {
+        root: flags.required_path("--root")?,
+        repo: flags.optional_path("--repo"),
+        package_id: flags.optional("--package-id"),
+        state_dir: crate::session_state_dir_from_flags(&flags)?,
+    })?;
+    serde_json::to_value(response)
+        .map_err(|error| CliError::device(format!("failed to serialize the status: {error}")))
 }
 
 /// Workflow #463 S3-10: `standard-pack trial` (module doc). The flags' own refusals come first,
@@ -448,7 +571,7 @@ fn run_trial(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     }
     let plan = serde_json::to_value(&answer.plan).map_err(encode_failed)?;
     let run = TrialRun {
-        kept: check_trial_run(&answer, &request)?,
+        kept: check_trial_run(&answer)?,
         request: &request,
         answer: &answer,
         plan,
@@ -493,6 +616,11 @@ impl TrialRun<'_> {
             "package".to_owned(),
             Value::String(self.answer.plan.package.clone()),
         );
+        // Workflow #463 S3-8, S3-9: the values given, as `run start`'s `--variable` takes them, so
+        // that its own parser reads them into the request; none without one.
+        if !self.request.variables.is_empty() {
+            params.insert("variable".to_owned(), variable_words(self.request));
+        }
         let prepared = run_start_prepared(&params, client).map_err(|exit| self.not_sent(&exit))?;
         let request_id = prepared.request_id();
         let correlation_id = prepared.correlation_id();
@@ -536,11 +664,22 @@ impl TrialRun<'_> {
                 ErrorKind::DeviceInstance,
             ));
         }
+        // Workflow #463 S3-8, S3-9 fix round 1: nothing of the run's receipt came back, not even
+        // its header (the connection that carried the run ended first): the Runtime confirmed
+        // nothing of the run.
+        let unconfirmed = submitted.as_ref().is_err_and(|error| {
+            error.received_receipt().is_none() && error.receipt_header_io().is_some()
+        });
         // Otherwise the end is read: after a receipt, and after a result that is not known (no
         // receipt came back), on the same connection, which, lost, answers the read with the
         // client's failure at once and sends nothing.
-        let run = run_show::read(client, RunKey::RequestId(request_id))
-            .map_err(|error| self.unread(&error.outcome(), error.to_string(), &id, true))?;
+        let run = run_show::read(client, RunKey::RequestId(request_id)).map_err(|error| {
+            if unconfirmed {
+                self.unconfirmed(&error.outcome(), error.to_string(), &id)
+            } else {
+                self.unread(&error.outcome(), error.to_string(), &id, true)
+            }
+        })?;
         self.ended(client, &id, request_id, run, true)
     }
 
@@ -778,6 +917,33 @@ impl TrialRun<'_> {
         refusal(outcome, message, members, ErrorKind::DeviceInstance)
     }
 
+    /// Workflow #463 S3-8, S3-9 fix round 1: the refusal `outcome` (`message`) of the run `id`
+    /// whose connection ended before any of its receipt came back, so that the Runtime confirmed
+    /// nothing of it and its end could not be read: the members and `next`, which names no line
+    /// that reads the end later (a Runtime that never accepted the run would answer it `not_found`
+    /// for ever) but what is known, `unconfirmed` `no_receipt` (vocabulary
+    /// `trial_run_unconfirmed`). The client cannot tell a Runtime below `runtime-client` revision 11,
+    /// which ends the connection of a run with values without running anything, from one that
+    /// stopped while the run was in it; no probe of the Runtime's revision is made.
+    fn unconfirmed(&self, outcome: &Outcome, message: String, id: &str) -> CliError {
+        let mut members = self.members(true, Some(id));
+        members.insert(
+            "next".to_owned(),
+            json!({"unconfirmed": TrialRunUnconfirmed::NoReceipt.as_str()}),
+        );
+        refusal(
+            outcome,
+            format!(
+                "the trial's run {id} was sent and its connection ended before any of its receipt \
+                 came back: the Runtime confirmed nothing of it, so whether it was accepted or \
+                 started is not known, and no record was written; a Runtime below runtime-client \
+                 revision 11 ends the connection so on a run with values: {message}"
+            ),
+            members,
+            ErrorKind::DeviceInstance,
+        )
+    }
+
     /// The run `id` read in `state` without a terminal, so that no record was written (fix round 2:
     /// each cause its own code, as the next step differs). A run interrupted by a later Runtime
     /// start or takeover (`interrupted_unterminated`) is `trial_run_interrupted`, without `next`:
@@ -886,6 +1052,11 @@ impl TrialRun<'_> {
             "--authorization".to_owned(),
             self.kept.authorization.clone(),
         ];
+        // Workflow #463 S3-8, S3-9: the values the run was sent with, so that the record the
+        // later line writes names them.
+        for (name, value) in &self.request.variables {
+            words.extend(["--variable".to_owned(), format!("{name}={value}")]);
+        }
         if let Some(expected) = &plan.expect {
             words.extend(["--expect".to_owned(), expected.clone()]);
         }
@@ -932,6 +1103,19 @@ fn beside(mut error: CliError, members: Map<String, Value>) -> CliError {
         details.entry(name).or_insert(value);
     }
     error.with_details(Value::Object(details))
+}
+
+/// Workflow #463 S3-8, S3-9: the values the trial `request` gives, each `<name>=<json>` (the value
+/// as compact JSON), in the order given: the parameter `variable` of `run start`, as its command
+/// line and its MCP tool hand it on.
+fn variable_words(request: &StandardPackTrialRequest) -> Value {
+    Value::Array(
+        request
+            .variables
+            .iter()
+            .map(|(name, value)| Value::String(format!("{name}={value}")))
+            .collect(),
+    )
 }
 
 /// Workflow #463 S3-11: the end a trial's answer shows: the run's state as `run show` names it and

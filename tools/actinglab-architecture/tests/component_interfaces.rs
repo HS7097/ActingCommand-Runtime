@@ -147,7 +147,10 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   3) version 2 of `goals.json`, which a bundle that carries it declares with 14; a pack without
 ///   them keeps its revision, so [3, 14]. Workflow #463 K2 (0.12.61, register §1.380) raises it to
 ///   15: a `linear_steps` task's ending pages, which every Runtime before it refuses at admission
-///   (`reason=terminal_page`); a pack without one keeps its revision, so [3, 15].
+///   (`reason=terminal_page`); a pack without one keeps its revision, so [3, 15]. Workflow #477
+///   PC-1 fix round 1 (0.12.68, register §1.438) raises it to 16: a bundle zip's root file
+///   `pack-catalog.json`, which no reader of the Runtime opens and which an installer before it
+///   refuses as a member it does not know; a bundle without it keeps its revision, so [3, 16].
 /// - `runtime-client` [2, 2]: request v4, receipt v2; requests v1 to v3 are refused. Workflow
 ///   #429 R-0 (0.12.30, register §1.213) raises `max` to 3: the workbench's request kinds and
 ///   members; every revision-2 request is still answered as before, so [2, 3]. Workflow #429
@@ -173,14 +176,17 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   (0.12.67, register §1.433) raises `max` to 10: the status member `device_held`, which a
 ///   reader whose `max` is below 10 refuses (the status denies unknown members); no installation
 ///   can fill it while the load refuses every device group of several, so `min` stays: [3, 10].
+///   Workflow #463 S3-8 (0.12.68, register §1.444) raises `max` to 11: the request member
+///   `ContainedTaskRequest.variables`, which a Runtime of 10 or lower cannot decode; a request
+///   without it serializes and is answered as before and no answer changes, so [3, 11].
 /// - `runtime-outcomes` [1, 1]: the new interface of model-378 §10.
 const V0120: &[(&str, [u64; 2])] = &[
     ("actingd-config", [5, 33]),
     ("install-control", [0, 0]),
     ("install-selection", [1, 1]),
     ("ledger", [3, 8]),
-    ("package", [3, 15]),
-    ("runtime-client", [3, 10]),
+    ("package", [3, 16]),
+    ("runtime-client", [3, 11]),
     ("runtime-outcomes", [1, 1]),
 ];
 

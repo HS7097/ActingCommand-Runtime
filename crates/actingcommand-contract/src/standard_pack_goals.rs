@@ -49,9 +49,9 @@
 //! --goals` refuses one.
 
 use crate::standard_pack::{StandardPackProblem, StandardPackRootIssue};
-use crate::standard_pack_ui::{
-    MAX_PACK_UI_LOCALE_BYTES, MAX_PACK_UI_LOCALES, MAX_PACK_UI_SUMMARY_BYTES,
-    MAX_PACK_UI_TITLE_BYTES, at, read_document,
+use crate::standard_pack_catalog::{
+    MAX_PACK_CATALOG_LOCALE_BYTES, MAX_PACK_CATALOG_LOCALES, MAX_PACK_CATALOG_SUMMARY_BYTES,
+    MAX_PACK_CATALOG_TITLE_BYTES, at, read_document,
 };
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
@@ -932,21 +932,22 @@ impl Check {
         }
     }
 
-    /// A text: 1 to 16 locales of 1 to 35 bytes each, each text 1 to `max` bytes, as `ui.json`'s;
-    /// a count or a length outside is `goal_out_of_limits` at what exceeds.
+    /// A text: 1 to 16 locales of 1 to 35 bytes each, each text 1 to `max` bytes, as the display
+    /// texts of `pack-catalog.json` (`ui.json`'s before Workflow #477 PC-1); a count or a length
+    /// outside is `goal_out_of_limits` at what exceeds.
     pub(crate) fn text(&mut self, value: &Value, pointer: &str, max: usize) -> Option<GoalText> {
         let Some(locales) = value.as_object() else {
             self.malformed(pointer);
             return None;
         };
-        let mut complete = (1..=MAX_PACK_UI_LOCALES).contains(&locales.len());
+        let mut complete = (1..=MAX_PACK_CATALOG_LOCALES).contains(&locales.len());
         if !complete {
             self.out_of_limits(pointer);
         }
         let mut text = Vec::new();
         for (locale, value) in locales {
             let at_locale = at(pointer, locale);
-            if locale.is_empty() || locale.len() > MAX_PACK_UI_LOCALE_BYTES {
+            if locale.is_empty() || locale.len() > MAX_PACK_CATALOG_LOCALE_BYTES {
                 self.out_of_limits(at_locale);
                 complete = false;
                 continue;
@@ -966,13 +967,13 @@ impl Check {
         object: &Map<String, Value>,
         pointer: &str,
     ) -> Option<(GoalText, Option<GoalText>)> {
-        let title = object
-            .get("title")
-            .and_then(|title| self.text(title, &at(pointer, "title"), MAX_PACK_UI_TITLE_BYTES));
+        let title = object.get("title").and_then(|title| {
+            self.text(title, &at(pointer, "title"), MAX_PACK_CATALOG_TITLE_BYTES)
+        });
         let help = match object.get("help") {
             None => Some(None),
             Some(help) => self
-                .text(help, &at(pointer, "help"), MAX_PACK_UI_SUMMARY_BYTES)
+                .text(help, &at(pointer, "help"), MAX_PACK_CATALOG_SUMMARY_BYTES)
                 .map(Some),
         };
         Some((title?, help?))
@@ -1295,7 +1296,11 @@ impl Check {
                 self.option_value(value, &at(&at_option, "value"), &mut seen, option_value)
             });
             let title = option.get("title").and_then(|title| {
-                self.text(title, &at(&at_option, "title"), MAX_PACK_UI_TITLE_BYTES)
+                self.text(
+                    title,
+                    &at(&at_option, "title"),
+                    MAX_PACK_CATALOG_TITLE_BYTES,
+                )
             });
             let scale_milli = option
                 .get("scale_milli")
