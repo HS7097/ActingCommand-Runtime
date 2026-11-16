@@ -47,6 +47,10 @@
 // - `s22_fix1_a_self_checks_item_is_on_its_step_when_the_locale_is_given`: a recording without a
 //   locale of its own: no step's `missing` has an item; given the locale, the cross-check's refusal
 //   is step 2's item, as `record ready` lists it.
+// Fix round of the train of #463 stage two (register §1.440, "Fix round of the train"):
+// - `s22_train_fix_a_frame_whose_file_is_gone_has_no_path_and_one_warning`: with `no_preview`, a
+//   frame whose file is gone (step 3's screen after, step 4's screen before) answers `path` `null`
+//   on both steps and the warning `frame_file_missing` names it once.
 // No Runtime, no device; the tests read no clock and never sleep.
 
 use crate::gate_463_s25_draft::{self as draft, Bench, INSTANCE, POINTS};
@@ -1168,4 +1172,55 @@ fn s22_fix1_a_self_checks_item_is_on_its_step_when_the_locale_is_given() {
             step.missing
         );
     }
+}
+
+// The fix round of the train of #463 stage two (register §1.440, "Fix round of the train"; the
+// review of the train: fix round 1's third item had no test): with `no_preview`, a frame whose file
+// is gone is answered without a path and named once in the warning `frame_file_missing`. The file
+// of f0008, step 3's screen after and step 4's screen before, is moved out of the recording: both
+// answer `path` `null`, every other frame its file, and the warning names f0008 once; `step` 4
+// alone answers the same.
+#[test]
+fn s22_train_fix_a_frame_whose_file_is_gone_has_no_path_and_one_warning() {
+    let bench = three_presses();
+    let intact = review(&bench, &without_previews());
+    assert!(intact.warnings.is_empty(), "{:?}", intact.warnings);
+    let last = intact.steps[3]
+        .before
+        .as_ref()
+        .expect("step 4's screen before");
+    assert_eq!(last.frame_id, "f0008");
+    let file = last.path.clone().expect("the frame's file");
+    fs::rename(&file, bench.state().join("f0008-moved-away.png")).expect("the file moved away");
+
+    let warning = json!([{"code": "frame_file_missing", "frame_ids": ["f0008"]}]);
+    let json = serde_json::to_value(review(&bench, &without_previews())).expect("answer JSON");
+    assert_eq!(json["warnings"], warning, "{json}");
+    assert_eq!(json["steps"][2]["after"]["frame_id"], "f0008", "{json}");
+    assert_eq!(json["steps"][3]["before"]["frame_id"], "f0008", "{json}");
+    for step in json["steps"].as_array().expect("steps") {
+        let sides = [&step["before"], &step["after"]]
+            .into_iter()
+            .filter(|side| !side.is_null());
+        for frame in sides.chain(step["between"].as_array().expect("between")) {
+            assert_eq!(
+                frame["path"].is_null(),
+                frame["frame_id"] == "f0008",
+                "{frame}: {json}"
+            );
+        }
+        assert!(step["before"]["preview"].is_null(), "{json}");
+    }
+    let one = serde_json::to_value(review(
+        &bench,
+        &RecordReviewRequest {
+            step: Some(4),
+            no_preview: true,
+            ..RecordReviewRequest::default()
+        },
+    ))
+    .expect("answer JSON");
+    assert_eq!(one["steps"][0]["before"]["frame_id"], "f0008", "{one}");
+    assert_eq!(one["steps"][0]["before"]["path"], Value::Null, "{one}");
+    assert_eq!(one["warnings"], warning, "{one}");
 }

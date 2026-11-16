@@ -10,22 +10,26 @@
 // step is no step's.
 //
 // - `s2_train_each_step_reviews_exactly_its_items_of_the_one_readiness_judgement`: S2-1c's bench
-//   (`gate_463_s21c::Bench::marked`: four steps recorded as stage one records them, three taps and
-//   the final screen, each step with a colour mark on its square) with step 2 marked as holding a
-//   choice and not refined (S2-6), step 1's mark expecting another colour (two self-check failures
-//   on step 1, the first decision's and the cross-check's, as S2-1c's second test finds them) and
-//   the recording's own locale taken out of the step table. A pre-check that fails runs no
-//   self-check (S2-1's rule, which S2-1c keeps), so one reading cannot list both kinds of item: the
-//   recording is read twice. Without a locale, `record ready` lists the locale (an item of no step)
-//   and step 2's `select_unrefined`, and runs no self-check; `record review` of each step lists
-//   exactly that step's items (step 2 its `select_unrefined`, every other step none, no step the
-//   locale), and step 2 shows its choice mark as the step table holds it. Then, the mark taken off
-//   (`choice: false`, S2-6) and the locale given (`--locale`, as S2-2's fix round reads it),
-//   `record ready` lists step 1's two self-check failures and `record review` of step 1 lists
-//   exactly them, every other step none.
+//   (`gate_463_s21c::Bench`: four steps recorded as stage one records them, three taps and the final
+//   screen, each step with a colour mark on its square; fix round of the train: stopped with its
+//   package and taking its two endings, `alpha` and `bravo`, as `Bench::with_endings` takes them)
+//   with step 2 marked as holding a choice and not refined (S2-6), step 1's mark expecting another
+//   colour (two self-check failures on step 1, the first decision's and the cross-check's, as
+//   S2-1c's second test finds them) and the locale taken out of the step table (the stopped
+//   recording's: the one its package was generated with). A pre-check that fails runs no self-check
+//   (S2-1's rule, which S2-1c keeps), so one reading cannot list both kinds of item: the recording
+//   is read twice. Without a locale, `record ready` lists the locale (an item of no step) and step
+//   2's `select_unrefined`, and runs no self-check; `record review` of each step lists exactly that
+//   step's items (step 2 its `select_unrefined`, every other step none, no step the locale), and
+//   step 2 shows its choice mark as the step table holds it. Then, the mark taken off (`choice:
+//   false`, S2-6) and the locale given (`--locale`, as S2-2's fix round reads it), `record ready`
+//   lists step 1's two self-check failures, and (fix round of the train, the review's answer 2) step
+//   3's cross-check failure (its mark expecting another colour too) and the second ending's failure
+//   (its colour mark expecting white), which names no step; `record review` of each step lists
+//   exactly its items: step 1 its two, step 3 its one, steps 2 and 4 none, and no step the ending's.
 // No Runtime, no device; the test reads no clock and never sleeps.
 
-use crate::gate_463_s21c::{Bench, EVERY_CHECK, INSTANCE, complete};
+use crate::gate_463_s21c::{BRAVO_KEY, BRAVO_MARK, Bench, EVERY_CHECK, INSTANCE, complete};
 use crate::{RecordReviewRequest, RecordStopOptions, record_ready, record_review};
 use serde_json::{Value, json};
 
@@ -83,20 +87,30 @@ fn items_of(ready: &Value, step: u32) -> Value {
     )
 }
 
-// The work order's test of the train: a marked and unrefined choice on one step, two self-check
-// failures on another; each step's `record review` lists exactly that step's items of `record
-// ready`, and `record ready` lists them all, in the two readings the pre-checks allow.
+// The work order's test of the train: a marked and unrefined choice on one step, self-check
+// failures on two others and on an ending; each step's `record review` lists exactly that step's
+// items of `record ready`, and `record ready` lists them all, in the two readings the pre-checks
+// allow.
 #[test]
 fn s2_train_each_step_reviews_exactly_its_items_of_the_one_readiness_judgement() {
-    let bench = Bench::marked();
-    // S2-6: step 2 marked as holding a choice, not refined.
+    // Fix round of the train: stopped with its package and its two endings, so that a self-check
+    // failure names no step.
+    let bench = Bench::with_endings();
+    // S2-6: step 2 marked as holding a choice, not refined (marking after stop).
     bench.mark_request(json!({"step": 2, "choice": true}));
     // S2-1c: step 1's page no longer passes on its frame, so the first decision gives no click
     // there and the cross-check finds the page does not match its own frame.
     bench.break_mark(1, "expected", json!([255, 255, 255]));
-    // The recording's own locale taken out: the locale is an item of the whole recording.
+    // Fix round of the train: step 3's page no longer passes on its frame either (a cross-check
+    // failure on another step), and the second ending's page not on its own frame (a failure of
+    // the endings check, which names no step).
+    bench.break_mark(3, "expected", json!([255, 255, 255]));
+    bench.break_ending_mark(1, BRAVO_MARK);
+    // The locale taken out: the locale is an item of the whole recording. A stopped recording
+    // marked again generates with the locale its package was generated with, so that one goes too.
     let mut table = bench.recording();
     table["locale"] = Value::Null;
+    table["artifact"]["locale"] = Value::Null;
     bench.write_recording(&table);
     let mark = table["steps"]
         .as_array()
@@ -151,22 +165,65 @@ fn s2_train_each_step_reviews_exactly_its_items_of_the_one_readiness_judgement()
     };
     let second = ready(&bench, &with);
     assert_eq!(second["status"], "draft", "{second}");
-    let failures = json!([
-        {"order": 1, "step": 1, "artifact_step": 1, "frame_id": "f0001",
-         "what": "first_decision", "code": "record_artifact_admission_failed",
-         "details": {"frames": ["f0001"]}},
-        {"order": 2, "step": 1, "artifact_step": 1, "frame_id": "f0001",
-         "what": "cross_check", "code": "record_step_self_mismatch",
-         "details": {"page": "step_01", "frames": ["f0001"]}}
-    ]);
-    assert_eq!(second["missing"], failures, "{second}");
-    assert_eq!(second["missing_total"], 2, "{second}");
+    let first_decision = json!({
+        "order": 1, "step": 1, "artifact_step": 1, "frame_id": "f0001",
+        "what": "first_decision", "code": "record_artifact_admission_failed",
+        "details": {"frames": ["f0001"]}
+    });
+    let step_1_cross_check = json!({
+        "order": 2, "step": 1, "artifact_step": 1, "frame_id": "f0001",
+        "what": "cross_check", "code": "record_step_self_mismatch",
+        "details": {"page": "step_01", "frames": ["f0001"]}
+    });
+    let step_3_cross_check = json!({
+        "order": 3, "step": 3, "artifact_step": 3, "frame_id": "f0005",
+        "what": "cross_check", "code": "record_step_self_mismatch",
+        "details": {"page": "step_03", "frames": ["f0005"]}
+    });
+    let ending = json!({
+        "order": 4, "step": null, "artifact_step": null, "frame_id": null,
+        "what": "endings", "code": "record_step_self_mismatch",
+        "details": {"outcome_key": BRAVO_KEY, "page": "ending_02_bravo", "frames": ["f0008"]}
+    });
+    assert_eq!(
+        second["missing"],
+        json!([
+            first_decision,
+            step_1_cross_check,
+            step_3_cross_check,
+            ending
+        ]),
+        "{second}"
+    );
+    assert_eq!(second["missing_total"], 4, "{second}");
     assert_eq!(second["checks"], complete(&EVERY_CHECK[..6]), "{second}");
     assert_eq!(second["checks_after"], json!(["final_package"]), "{second}");
+    let mut listed = Vec::new();
     for step in 1..=4_u32 {
         let answer = reviewed(&bench, step, &with);
         assert_eq!(answer["missing"], items_of(&second, step), "step {step}");
         assert!(answer.get("choice").is_none(), "{answer}");
+        listed.extend(
+            answer["missing"]
+                .as_array()
+                .expect("missing")
+                .iter()
+                .cloned(),
+        );
     }
-    assert_eq!(reviewed(&bench, 1, &with)["missing"], failures);
+    // Self-check failures on two steps are told apart: step 1 lists its two, step 3 its one.
+    assert_eq!(
+        reviewed(&bench, 1, &with)["missing"],
+        json!([first_decision, step_1_cross_check])
+    );
+    assert_eq!(
+        reviewed(&bench, 3, &with)["missing"],
+        json!([step_3_cross_check])
+    );
+    // The ending's failure, which names no step, is no step's.
+    assert_eq!(
+        listed,
+        [first_decision, step_1_cross_check, step_3_cross_check],
+        "{second}"
+    );
 }

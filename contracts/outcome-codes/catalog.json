@@ -5214,6 +5214,12 @@
         },
         "no_choice": {
           "description": "A request's choice false names a step that is not marked as holding a choice, so there is nothing to take off (#463 S2-6 fix round 1)."
+        },
+        "drop_of_choice": {
+          "description": "drop_step names a step that holds a choice (marked as holding one, or refined by a select), the last step too: its press may have chosen the item already selected, which changes nothing on the screen and still matters to a run handed another value; the choice is withdrawn first (#463 stage two, train, fix round)."
+        },
+        "transition_of_choice": {
+          "description": "to_transition names a step that holds a choice (marked as holding one, or refined by a select): a page transition holds none, so the conversion would lose it; the choice is withdrawn first (#463 stage two, train, fix round)."
         }
       }
     },

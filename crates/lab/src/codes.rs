@@ -195,6 +195,15 @@ actingcommand_contract::outcome_vocabulary! {
         /// #463 S2-6 fix round 1: a request's `choice: false` names a step that is not marked as
         /// holding a choice, so there is nothing to take off.
         NoChoice => "no_choice",
+        /// #463 stage two, train, fix round: `drop_step` names a step that holds a choice (marked
+        /// as holding one, or refined by a select), the last step too: its press may have chosen
+        /// the item already selected, which changes nothing on the screen and still matters to a
+        /// run handed another value; the choice is withdrawn first.
+        DropOfChoice => "drop_of_choice",
+        /// #463 stage two, train, fix round: `to_transition` names a step that holds a choice: a
+        /// page transition holds none, so the conversion would lose it; the choice is withdrawn
+        /// first.
+        TransitionOfChoice => "transition_of_choice",
     }
 }
 

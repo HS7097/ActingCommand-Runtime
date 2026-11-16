@@ -24,6 +24,9 @@
 // gives it back; another step's page passing on the select's frame is refused at mark time; the
 // probe holds the select step record stop generates; a recording without a select is compared
 // with constants.
+//
+// Fix round of the train of #463 stage two (register §1.440, "Fix round of the train"): a select on
+// the last step is not dropped (`drop_of_choice`), nothing written.
 
 use crate::codes::{LabCode, SelectProblem};
 use crate::recording::crosscheck::admit;
@@ -1421,4 +1424,35 @@ fn r1_fix1_the_probe_holds_the_select_step_record_stop_generates() {
     };
     assert_eq!(package_task["operations"][0]["id"], "step_01_select");
     assert_eq!(operation(&probe_task), operation(&package_task));
+}
+
+// The fix round of the train of #463 stage two (the coordinator's ruling; register §1.440, "Fix
+// round of the train"; brief rd-1116/brief-463-train-stage2-fix1.md, its second test): a select on
+// the last step is not dropped either. Step 1, the open step and so the last effective one, takes
+// the select before its press, as the first test above marks it; until that round the last step
+// was dropped whatever it held. `drop_step` of it is `record_select_invalid` with `drop_of_choice`
+// naming step 1, and the recording stays byte for byte as it was.
+#[test]
+fn r1_train_fix_a_select_on_the_last_step_is_not_dropped() {
+    let recording = Recording::new();
+    recording
+        .mark(recording.step_one(
+            &list([Some(ALPHA), Some(BRAVO)]),
+            &[],
+            ("select", select(Some("item_a"), "item_b")),
+        ))
+        .unwrap_or_else(|error| panic!("record mark: {} {:?}", error.code, error.details));
+    assert_eq!(
+        recording.recording()["steps"][0]["select"]["declaration"],
+        select(Some("item_a"), "item_b")
+    );
+    let before = recording.recording_bytes();
+
+    let error = recording
+        .mark(json!({"step_action": {"kind": "drop_step", "step": 1}}))
+        .expect_err("the last step with a select");
+    let details = error.details.clone().expect("details");
+    assert_eq!(select_problem(error), SelectProblem::DropOfChoice.as_str());
+    assert_eq!(details["step"], 1, "{details}");
+    assert_eq!(recording.recording_bytes(), before, "nothing written");
 }
