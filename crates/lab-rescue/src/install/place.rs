@@ -56,6 +56,13 @@
 //!   `expected` and `given`). The journal's inputs record both (`authorization`, `enabled`). The
 //!   tool records the reference and grants nothing: it does not judge it, and a plan that lists
 //!   `enters` is no authorization.
+//! - **What the undo of a placement changes of scheduling** (Workflow #463 S3-18, [`undone`]):
+//!   before it moves anything, `undo` of a `pack_place` operation computes the plan's
+//!   `schedule_changes` from the game root as it is to the game root as the undo leaves it, by the
+//!   one judgement ([`ScheduleChanges::between`]) over sides built by the one reading of a game
+//!   root ([`side_read_by`]), the side after the undo reading at each place the undo changes what
+//!   it leaves there ([`undone_items`]). It answers it, warns when packages enter, or when the side
+//!   after the undo cannot be read, and records the two lists; it asks for no authorization.
 //! - **The operation** (`kind` `pack_place`, journalled) while a Runtime runs: the hold of the
 //!   instances bound to the bundle's game (`pause`), then each item that changes (`pack_item`:
 //!   written to
@@ -98,7 +105,9 @@
 use super::deploy::{StepEnd, hold_kept};
 use super::files;
 use super::host::Host;
-use super::journal::{Opening, Operation, PlannedStep, Previous, Step, StepKind, StepState};
+use super::journal::{
+    Opening, Operation, PlannedStep, Previous, Step, StepKind, StepState, UndoSchedule,
+};
 use super::manifest;
 use super::plan::Loaded;
 use super::programs::{self, Deadline};
@@ -579,6 +588,18 @@ impl ScheduleChanges {
             );
         }
         value
+    }
+
+    /// Workflow #463 S3-18: the changes of the undo of a placement ([`undone`]), whose second side
+    /// is the game root as the undo leaves it: `unread` names that side [`UNDONE_SIDE`] where the
+    /// plan names its second side, the zip's, `bundle`. Nothing else differs.
+    fn of_undo(mut self) -> Self {
+        for (side, _) in &mut self.unread {
+            if *side == "bundle" {
+                *side = UNDONE_SIDE;
+            }
+        }
+        self
     }
 }
 
@@ -1342,6 +1363,19 @@ fn read_root_file(path: &Path) -> Result<Option<Vec<u8>>, Outcome> {
 /// ([`declared_prerequisites`]). A file that cannot be read, or root files the reader refuses,
 /// leave the side unread; nothing is refused.
 fn installed_side(game: &str, game_root: &Path) -> Side {
+    side_read_by(game, game_root, read_root_file)
+}
+
+/// Workflow #463 S3-18: [`installed_side`]'s reading of the game root `game_root` of `game`, each
+/// file of it (its root files, each pack's `control.json`) given by `read_file` from its path
+/// (`None`: no such file): [`read_root_file`] for the game root as it is, and for the game root as
+/// the undo of a placement leaves it the file that will be there ([`undone`]). The one way a side
+/// of a game root is built; the classification is [`classified_side`]'s.
+fn side_read_by(
+    game: &str,
+    game_root: &Path,
+    read_file: impl Fn(&Path) -> Result<Option<Vec<u8>>, Outcome>,
+) -> Side {
     let mut present = BTreeMap::new();
     for name in [
         STANDARD_PACK_BUNDLE_FILE,
@@ -1351,7 +1385,7 @@ fn installed_side(game: &str, game_root: &Path) -> Side {
         STANDARD_PACK_DISPLAY_LAYOUT_FILE,
         STANDARD_PACK_SCHEDULE_FILE,
     ] {
-        match read_root_file(&game_root.join(name)) {
+        match read_file(&game_root.join(name)) {
             Ok(Some(bytes)) => {
                 present.insert(name, bytes);
             }
@@ -1389,7 +1423,7 @@ fn installed_side(game: &str, game_root: &Path) -> Side {
     };
     let prerequisites = match &root {
         Some(read) => match declared_prerequisites(&read.registry, |directory| {
-            read_root_file(&game_root.join(directory).join(PACK_CONTROL_FILE))
+            read_file(&game_root.join(directory).join(PACK_CONTROL_FILE))
         }) {
             Ok(declared) => declared,
             Err(failure) => return Side::unreadable(failure),
@@ -2678,4 +2712,220 @@ pub(crate) fn reverse_item(
         ItemState::Unchanged => {}
     }
     Ok(evidence)
+}
+
+/// Workflow #463 S3-18: the name `unread` gives the side of the game root as the undo of a
+/// placement leaves it ([`ScheduleChanges::of_undo`]).
+const UNDONE_SIDE: &str = "undone";
+
+/// Workflow #463 S3-18: what the undo of a `pack_place` operation changes of its game's
+/// scheduling ([`undone`]): the plan's `schedule_changes` from the game root as it is to the game
+/// root as the undo leaves it.
+pub(crate) struct UndoneScheduling {
+    /// The placement's game, as its `post_check` step records it; `None` when its journal holds
+    /// none that this build reads.
+    game: Option<String>,
+    changes: ScheduleChanges,
+}
+
+impl UndoneScheduling {
+    /// The answer's member `schedule_changes`, in the plan's form ([`ScheduleChanges::value`]):
+    /// `packages`, `enters`, `leaves` and `content_only` (none of the three lists when the game
+    /// root as the undo leaves it cannot be read), and `unread` (`installed`, [`UNDONE_SIDE`]).
+    pub(crate) fn value(&self) -> Value {
+        self.changes.value()
+    }
+
+    /// The undo's record of it ([`UndoSchedule`]): `enters` and `leaves`, both `None` when they
+    /// are not known.
+    pub(crate) fn record(&self) -> UndoSchedule {
+        UndoSchedule {
+            enters: self.changes.enters.clone(),
+            leaves: self
+                .changes
+                .enters
+                .as_ref()
+                .map(|_| self.changes.leaves.clone()),
+        }
+    }
+
+    /// Its warnings, each `install_caveat_noted` of `install_undo` with the game: when packages
+    /// enter, `undo_enters_scheduling` naming them (`names`, sorted); when no list is known,
+    /// `undo_scheduling_unknown`, caused by the failure of the game root as the undo leaves it;
+    /// none otherwise.
+    pub(crate) fn notes(&self) -> Vec<Outcome> {
+        let caveat = |word: InstallCaveat| {
+            let note = super::caveat(InstallLocation::Undo, word);
+            match &self.game {
+                Some(game) => note.game(game.clone()),
+                None => note,
+            }
+        };
+        match &self.changes.enters {
+            Some(enters) if enters.is_empty() => Vec::new(),
+            Some(enters) => {
+                vec![caveat(InstallCaveat::UndoEntersScheduling).names(enters.iter().cloned())]
+            }
+            None => {
+                let mut note = caveat(InstallCaveat::UndoSchedulingUnknown);
+                if let Some((_, failure)) = self
+                    .changes
+                    .unread
+                    .iter()
+                    .find(|(side, _)| *side == UNDONE_SIDE)
+                {
+                    note = note.caused_by(failure.clone());
+                }
+                vec![note]
+            }
+        }
+    }
+}
+
+/// Workflow #463 S3-18: the `pack_item` steps of a placement as its undo reverses them
+/// ([`undone_items`]), read on disk before the undo moves anything.
+struct Undone {
+    /// Each place the undo changes, with what it leaves there: `None` nothing (the placed item set
+    /// aside, no kept one to put back), else the path whose content comes back there (the kept
+    /// `.old-<ms>`).
+    sources: Vec<(PathBuf, Option<PathBuf>)>,
+    /// Those items with the state of what the undo does to each: `retire` (set aside, nothing put
+    /// back), `replace` (the kept one put back over the placed one) or `new` (the kept one put
+    /// back where nothing is), for the content of each pack ([`ScheduleChanges::between`]).
+    items: Vec<Item>,
+}
+
+/// Workflow #463 S3-18: what the undo leaves at the place of `item`, a `pack_item` step's intent,
+/// by the rules [`reverse_item`] reverses it by, read before anything is moved: `None` when it
+/// leaves the place as it is; `Some(None)` when it leaves nothing there; `Some(Some(old))` when
+/// the kept item `old` comes back there.
+fn undone_source(item: &Item) -> Result<Option<Option<PathBuf>>, Outcome> {
+    let dst = PathBuf::from(&item.dst);
+    let old = item
+        .old
+        .as_deref()
+        .map(PathBuf::from)
+        .filter(|old| old.exists());
+    Ok(match item.state {
+        // Put back only where nothing is.
+        ItemState::Retire => old.filter(|_| !dst.exists()).map(Some),
+        // The placed item set aside (only while it holds the placed content), then the kept one
+        // put back where nothing is.
+        ItemState::New | ItemState::Replace => {
+            let placed = dst.exists() && disk_digest(item.kind, &dst)? == item.digest;
+            match old {
+                Some(old) if placed || !dst.exists() => Some(Some(old)),
+                None if placed => Some(None),
+                _ => None,
+            }
+        }
+        ItemState::Unchanged => None,
+    })
+}
+
+/// Workflow #463 S3-18: the `pack_item` steps of `operation` the undo reverses (those started or
+/// done, as `install undo` walks them), each read by [`undone_source`]: the places it changes and
+/// the items with what it does to each ([`Undone`]). A step's intent that cannot be read, or a
+/// place whose content cannot be read, is the failure.
+fn undone_items(operation: &Operation<'_>) -> Result<Undone, Outcome> {
+    let mut reversed = Undone {
+        sources: Vec::new(),
+        items: Vec::new(),
+    };
+    for step in &operation.journal().steps {
+        if step.kind != StepKind::PackItem
+            || !matches!(step.state, StepState::Started | StepState::Done)
+        {
+            continue;
+        }
+        let item: Item = serde_json::from_value(step.intent.clone())
+            .map_err(|error| files::json_failure(&error))?;
+        let Some(source) = undone_source(&item)? else {
+            continue;
+        };
+        let dst = PathBuf::from(&item.dst);
+        let state = match (&source, dst.exists()) {
+            (None, _) => ItemState::Retire,
+            (Some(_), true) => ItemState::Replace,
+            (Some(_), false) => ItemState::New,
+        };
+        reversed.sources.push((dst, source));
+        reversed.items.push(Item { state, ..item });
+    }
+    Ok(reversed)
+}
+
+/// Workflow #463 S3-18: the file at `path` as the undo leaves it ([`Undone::sources`]): what comes
+/// back at a place the undo changes (below it, for a folder), nothing where it leaves nothing, and
+/// any other file as it is; each read as [`read_root_file`] reads a file of the game root.
+fn read_undone(
+    path: &Path,
+    sources: &[(PathBuf, Option<PathBuf>)],
+) -> Result<Option<Vec<u8>>, Outcome> {
+    for (dst, source) in sources {
+        let Ok(below) = path.strip_prefix(dst) else {
+            continue;
+        };
+        return match source {
+            None => Ok(None),
+            Some(source) if below.as_os_str().is_empty() => read_root_file(source),
+            Some(source) => read_root_file(&source.join(below)),
+        };
+    }
+    read_root_file(path)
+}
+
+/// Workflow #463 S3-18: the game and its game root the `post_check` step of the placement
+/// `operation` records ([`CheckIntent`]); a journal without one, or with one this build cannot
+/// read, is the failure.
+fn placed_game(operation: &Operation<'_>) -> Result<(String, PathBuf), Outcome> {
+    let path = operation.paths().journal(operation.id());
+    let step = operation
+        .journal()
+        .steps
+        .iter()
+        .find(|step| step.kind == StepKind::PostCheck && is_place_check(&step.intent))
+        .ok_or_else(|| super::journal::state_invalid(InstallLocation::Undo, path.clone(), None))?;
+    let intent: CheckIntent = serde_json::from_value(step.intent.clone())
+        .map_err(|error| files::json_failure(&error).path(&path))?;
+    Ok((intent.game, PathBuf::from(intent.game_root)))
+}
+
+/// Workflow #463 S3-18: what the undo of the `pack_place` operation `operation` changes of its
+/// game's scheduling, before it moves anything, by the plan's own [`ScheduleChanges::between`]:
+/// from the game root as it is ([`installed_side`]) to the game root as the undo leaves it, the
+/// same reading of the same files ([`side_read_by`]) where each place the undo changes reads what
+/// it leaves there ([`undone_items`], [`read_undone`]), with the content of each pack the undo
+/// changes ([`Undone::items`]). Read only, and it refuses nothing: a game root that cannot be read
+/// on either side is `unread` as in the plan, and with the side after the undo unread no list is
+/// known; a journal whose game root cannot be read leaves both sides unread.
+pub(crate) fn undone(operation: &Operation<'_>) -> UndoneScheduling {
+    let (game, game_root) = match placed_game(operation) {
+        Ok(placed) => placed,
+        Err(failure) => {
+            return UndoneScheduling {
+                game: None,
+                changes: ScheduleChanges::between(
+                    Side::unreadable(failure.clone()),
+                    Side::unreadable(failure),
+                    &[],
+                )
+                .of_undo(),
+            };
+        }
+    };
+    let before = installed_side(&game, &game_root);
+    let changes = match undone_items(operation) {
+        Ok(reversed) => {
+            let after = side_read_by(&game, &game_root, |path: &Path| {
+                read_undone(path, &reversed.sources)
+            });
+            ScheduleChanges::between(before, after, &reversed.items)
+        }
+        Err(failure) => ScheduleChanges::between(before, Side::unreadable(failure), &[]),
+    };
+    UndoneScheduling {
+        game: Some(game),
+        changes: changes.of_undo(),
+    }
 }

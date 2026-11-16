@@ -1343,7 +1343,9 @@ the rescue face:
     unchanged. The `undo` of a placement, with a Runtime or without one, asks for no
     authorization (Workflow #463 S3-2, since 0.12.64, does not change it): it restores the content
     the placement replaced, so a package the placement made leave scheduling is scheduled again,
-    and no record says under which authorization.
+    and no record says under which authorization. Since 0.12.69 (Workflow #463 S3-18) it says so
+    before, in its answer and on record ("The packages the undo of a placement makes enter or
+    leave scheduling", below), and still asks for none.
 
   The answer's steps are `plan` and `place`, with no `schedule`. While the operation is unfinished
   the watchdog stands aside (`pack_place` is off row 7a″'s pass list), so no Runtime starts on a
@@ -1493,6 +1495,66 @@ the rescue face:
     the reference, and never supplies one. `--enables` is the caller's statement that it knows
     which packages it is enabling; the plan's `enters` is what the tool holds it to. A plan that
     lists `enters` is not an authorization, and neither is a passed check.
+- **The packages the undo of a placement makes enter or leave scheduling** (Workflow #463 S3-18,
+  since 0.12.69; register §1.452; the coordinator's rulings on board #463, not the owner's
+  words). The `undo` of a placement restores what the placement replaced, so a package the
+  placement made leave scheduling (its rule removed, a hold added, a pack no longer carried) enters
+  again, and one the placement made enter leaves. The owner's rule is that no tool lets a package
+  enter scheduling by itself without the person seeing it; so the `undo` of a `pack_place`
+  operation says what it changes of scheduling, before, in its answer and on record.
+  - **The computation.** Before its first step (after the refusals it gives before it writes,
+    and, for a placement begun while no Runtime ran, under the writer lock and after the stopped
+    rule), the undo computes `schedule_changes` from the game root as it is to the game root as the
+    undo leaves it, by the placement plan's own judgement ("The packages a placement makes enter
+    or leave scheduling", above): the same classification of the same files, read as the plan
+    reads the installed game root, the side after the undo reading at each place the undo changes
+    what it leaves there, the kept `.old-<ms>` item that it puts back or nothing where it sets the
+    placed item aside and puts nothing back, by the rules of its `pack_item` steps it reverses (the
+    steps started or done; a place that holds neither the placed item nor nothing stays as it
+    is). Nothing is reversed or moved for it: the side after the undo is read where its files are
+    now. The game and its game root are those the operation's `post_check` step records.
+  - **What it answers.** `schedule_changes` has the plan's members with the plan's meaning:
+    `packages` (`before` is the game root as it is, `after` as the undo leaves it; `content` the
+    state of what the undo does to the pack: `retire` for a pack it sets aside with nothing put
+    back, `replace` for a kept pack put back over the placed one, `new` for a kept pack put back
+    where nothing is), `enters`, `leaves`, `content_only`, and `unread`, whose `root` is
+    `installed` (the game root as it is) or `undone` (as the undo leaves it). With the side after
+    the undo unread there is no list: `packages` and `unread` only, as in the plan. So the undo of
+    a placement that added two packs, each named by a rule, lists both in `leaves` and nothing in
+    `enters`; the undo of one that removed a pack's rule or held it lists that pack in `enters`;
+    the undo of one that only replaced a pack's content lists it in `content_only` alone.
+  - **The warnings**, each a note link of the answer's outcome (`outcome.causes`, relation
+    `note`; `install_caveat_noted` of `install_undo` with `game`), on the command line and through
+    MCP alike, exit 0, never a refusal: `undo_enters_scheduling` when `enters` is not empty, its
+    `names` those packages, sorted (the undo lets them enter scheduling, or take a supporting
+    role, again); `undo_scheduling_unknown` when the side after the undo could not be read, so no
+    list is answered, the failure of that side (`unread`'s `undone` entry) as its cause: what the
+    undo changes of scheduling is not known. One cause per word. The undo goes on as before in
+    both cases.
+  - **Before: `--plan`.** The rescue module's `undo <op> --plan` (the row's switch `plan`), for a
+    `pack_place` operation only (another kind is refused `actingctl_usage_invalid`, `unusable`,
+    `--plan`, once its journal is loaded and before anything else of its undo is judged;
+    `actingctl install undo` does not take the flag and refuses it as unknown, its face
+    unchanged), judges what the undo judges before its
+    first write, the same refusals in the same order (for a placement begun while no Runtime ran,
+    its stopped rule), but takes no writer lock and writes nothing, as no plan form does; then
+    answers `install_command_done` of `install_undo` (`install_operation_id`,
+    `installation_changed` `false`, the warnings above as notes) with `operation_id`, `reverses`
+    (the steps the undo would reverse, in its order, each `{n, kind, target}`) and
+    `schedule_changes`: the lists the undo, run next on the same root, answers.
+  - **In the answer** of the undo done: `schedule_changes` as computed before its first step,
+    beside `operation_id` and `kept`, and the warnings above as notes of its
+    `install_command_done`. An undo that goes on after it stopped computes them again from the
+    game root as it then is.
+  - **On record.** The journal's undo record gains `schedule_changes` `{enters, leaves}`, each the
+    sorted list, both `null` when they were not known, written with the record when the undo
+    starts (an undo that goes on after it stopped keeps the record it has); `op status <op>` shows
+    it with the journal. A record without it (the undo of another kind, or one an earlier build
+    wrote) loads and is shown without it.
+  - **What it does not do.** It asks for no authorization and records none: whether the undo of a
+    placement must name an authorization, as the placement does, is the owner's to rule and is
+    open. What the undo reverses, its order, its refusals, its writer lock and stopped rule, and
+    the undo of every other kind of operation are unchanged.
 - **`vision manifest --provider cpu|directml` and `vision check`** (Workflow #453 S7, since
   0.12.60; register §1.355; [vision-model-folders.md](vision-model-folders.md), "The manifest";
   the coordinator's rulings on board #453, not the owner's words). Two read-only rows, `runtime`
@@ -1922,7 +1984,11 @@ any other schema (`state_invalid`).
 
 The Lab's rescue module (LAB-3) adds two members after `installer`, which `actingctl install`
 never writes: `"initiator": "<word>"` (lab-two-entries.md §4.1) and `"one_way": true` (a one-way
-ledger edge it applied; absent otherwise); its undo record carries `"initiator"` too. Kinds
+ledger edge it applied; absent otherwise); its undo record carries `"initiator"` too, and
+(Workflow #463 S3-18, since 0.12.69) the undo record of a `pack_place` operation
+`"schedule_changes": {"enters": [...] | null, "leaves": [...] | null}` ("The packages the undo of
+a placement makes enter or leave scheduling"; absent in a record of any other kind and in one an
+earlier build wrote). Kinds
 `config_replace` and `pack_place` are the module's, and (Workflow #453 S4) `new`, whose inputs
 record the build, the folder it is copied from, the state root and the options, never the salt;
 its `record_state` step's undo sets `state.json` aside (there is no previous state); and (Workflow
@@ -3222,7 +3288,7 @@ the fragment registers, names the command.
 | Code | Category | Values |
 |---|---|---|
 | `install_command_done` | success | `operation`; `installation_changed` on a mutating command (`false`: nothing to do); `install_operation_id`, `commit_sha`, `tag`, `plan_id`, `count`, `game`, `alias`, `path`, `pid`, `owner_epoch`, `log` as the command has them |
-| `install_caveat_noted` | warning | `operation`, `install_caveat`; `commit_sha`, `count`, `game`, `package_id`, `config_key`, `path` as the caveat has them |
+| `install_caveat_noted` | warning | `operation`, `install_caveat`; `commit_sha`, `count`, `game`, `package_id`, `config_key`, `path`, `names` (Workflow #463 S3-18) as the caveat has them |
 | `install_command_refused` | error | `operation`, `install_refusal`; `release_checks`, `rollback_gate_parts`, `ledger_sequence`, `install_guards`, `plan_id`, `install_operation_id`, `commit_sha`, `path`, `pid`, `count`, `files`, `game`, `package_id`, `alias`, `aliases`, `config_key`, `hold_reason` (LAB-3), `server` and `instance_index` (INST-5) as the reason has them |
 | `install_operation_interrupted` | fatal | `operation`, `install_operation_id`: a step failed after a change on disk; the journal names `resume` and `undo`, and until one runs the root cannot run normally |
 | `watchdog_installer_unfinished` | warning | `install_operation_id` when known: the watchdog's decision row 7a″, also the cause of `start_runtime_refused` |
@@ -3314,6 +3380,14 @@ the fragment registers, names the command.
   and `game`, which only `install_pack_place` answers, each before the hold and any write; the
   existing `actingctl_usage_invalid` (`unusable`, `wrong_type`) for a malformed `--authorization`
   or `--enables`; no code, location or key is new.
+- **Workflow #463 S3-18** (since 0.12.69; "The Lab's rescue module", "The packages the undo of a
+  placement makes enter or leave scheduling"): `install_caveat` `undo_enters_scheduling` (`game`,
+  `names` the packages that enter, sorted) and `undo_scheduling_unknown` (`game`, the failure of
+  the game root as the undo leaves it as its cause), each a warning, exit 0, a note of
+  `install_command_done` of `install_undo` of a `pack_place` operation, done or planned
+  (`--plan`), which only the rescue module answers; `install_caveat_noted` takes the existing key
+  `names`; the existing `actingctl_usage_invalid` (`unusable`, `--plan`) for `--plan` of another
+  kind of operation; no code, location or key is new.
 - **`install_caveat`, INST-2**: `start_stalled`, `stop_terminal_unconfirmed`,
   `runs_not_continued`.
 - **`install_refusal`**: `not_single_location`, `layout_ab_unsupported`, `not_adopted`,

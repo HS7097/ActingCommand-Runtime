@@ -3226,10 +3226,11 @@
       "name": "undo",
       "module": "rescue",
       "params": [
-        {"name": "op", "form": "positional", "type": "operation_id", "required": true}
+        {"name": "op", "form": "positional", "type": "operation_id", "required": true},
+        {"name": "plan", "form": "switch", "type": "boolean", "required": false, "note": "#463 S3-18: only for a pack_place operation (another kind is refused unusable): the refusals the undo gives before its first write, then what it would reverse (reverses) and the packages it makes enter or leave scheduling (schedule_changes) with its warnings; nothing written, no writer lock taken"}
       ],
       "help": "Undoes one installer operation of this root by its journal.",
-      "output": "the undo's steps",
+      "output": "the undo's steps; of a pack_place operation also schedule_changes, and with plan only what it would reverse and schedule_changes",
       "writes": true,
       "irreversible": true,
       "runtime": "offline",
@@ -3238,7 +3239,7 @@
       "source": ["actingctl install undo"],
       "slice": "LAB-3",
       "status": "planned",
-      "notes": "LAB-3: install undo; the journal's undo record carries the initiator"
+      "notes": "LAB-3: install undo; the journal's undo record carries the initiator. #463 S3-18 (0.12.69): the undo of a pack_place operation computes, before its first step and by the placement plan's own judgement, the packages it makes enter or leave scheduling, from the game root as it is to the game root as it leaves it, and answers them as schedule_changes (packages, enters, leaves, content_only, unread; no list when the game root as it leaves it cannot be read); the warning install_caveat_noted undo_enters_scheduling names the packages that enter (names), undo_scheduling_unknown says that no list is known (the failure as its cause); the undo record gains schedule_changes {enters, leaves}, null when not known, which op status shows, a record an earlier build wrote loading without it; plan answers the same without undoing; the undo asks for no authorization, whether it must is open; the undo of every other kind is unchanged"
     },
     {
       "name": "op status",

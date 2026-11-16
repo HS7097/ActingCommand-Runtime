@@ -397,6 +397,14 @@ naming this file.
   the check, and wrote nothing; with `dry_run` nothing is written in the checkout. Its `value` is
   `"pending"` or a number of the pack's own: a decision that names the origin `model` is refused
   (`value_origin_model`).
+- **The undo of a placement** (Workflow #463 S3-18, 0.12.69; `contracts/install-cli.md`, "The
+  packages the undo of a placement makes enter or leave scheduling"). On Windows `ac_undo` of a
+  `pack_place` operation answers `schedule_changes`, the packages it makes enter or leave
+  scheduling, beside `kept`; `plan` true (that kind of operation only) answers them with
+  `reverses` and undoes nothing. Packages that enter are the warning `undo_enters_scheduling`
+  (`names`), a list that cannot be known `undo_scheduling_unknown`, each a note of the answer's
+  outcome (`outcome.causes`), not a refusal: report them with the answer. It asks for no
+  authorization.
 - **Busy** is `job_capacity_exhausted` with `limit_count`: a call that would start a job while
   `--jobs` jobs run (default 8), or that needs a child while all `--children` children (default 8)
   are working. It is refused, not queued, and nothing is sent: call again later. More calls at
