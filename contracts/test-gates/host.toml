@@ -2898,13 +2898,13 @@ tests = [
 ]
 incident = ["#392 DA-3"]
 
-# Workflow #392 DA-3 fix 1 (work order point 1; contracts/display-adapter.md section 10, "The Lab's declared operations"): a Lab declared operation of a 16x9 package tapping (1, 0) sends the literal tap on a 16x9 device and is confirmed; on a 32x18 device it fails at its input with display_map_unresolved (input_scale_unsupported at display_input_map, frame 32x18, base 16x9), its attempt keeps the base tap and never reached its input, and the device received nothing
+# Workflow #392 DA-3 fix 1 (work order point 1), adapted by DA-5ab (0.12.67; register §1.436; contracts/display-adapter.md section 11, which replaces DA-3's refusal of a Lab declared operation's input on a frame of another size): a Lab declared operation of a 16x9 package tapping (1, 0) sends the literal tap on a 16x9 device; on a 48x27 device, three times the package, the kernel recognises its page on the reduced frame and the device receives the tap (3, 0); either way the operation is confirmed and its attempt keeps the base tap
 [[gate]]
 coverage = "Y"
 tests = [
-    "actingcommand-runtime-host::lib::tests::gate_392_da3::da3_fix1_a_lab_declared_operation_sends_its_base_point_only_on_a_frame_of_its_package",
+    "actingcommand-runtime-host::lib::tests::gate_392_da3::da3_fix1_a_lab_declared_operation_sends_its_base_point_under_its_frames_map",
 ]
-incident = ["#392 DA-3"]
+incident = ["#392 DA-3", "#392 DA-5ab"]
 
 # Workflow #392 DA-3 fix 1 (work order point 2; contracts/display-adapter.md section 10, "The task evidence"): the task evidence of the three-input run on a 16x9, a 32x18 and a 48x27 device relates each of its three inputs linked to its step's effect intent, with no source_mismatch
 [[gate]]
@@ -4116,3 +4116,37 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_458_close_isolates::close461_a_record_that_cannot_be_appended_at_a_failed_inputs_close_still_stops_the_runtime",
 ]
 incident = ["#461"]
+
+# Workflow #392 DA-5ab (0.12.67; register §1.436; contracts/display-adapter.md section 11; the coordinator's work order of 11-16 on board #392, test "observation"): the Lab's online observation of a 96x64 package on frames three and one and a half times its base, made from the base frame by nearest neighbour (its features on whole 2x2 blocks, so the area average gives it back): the same page, the same rectangle of its element and the same projection, on a projection frame of the base's size naming the device frame's artifact, and the RGB8 hash of the base frame; on the base frame the frame is observed as it is (the projection's frame is the identity given, the RGB8 hash that of the frame's own pixels)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::tests::gate_392_da5ab::da5ab_an_observation_on_a_frame_three_and_one_and_a_half_times_the_base_sees_the_base",
+]
+incident = ["#392 DA-5ab"]
+
+# Workflow #392 DA-5ab (0.12.67; register §1.436; test "a display of another aspect, and one smaller than the base"): the Lab's online observation of a frame of another ratio, of one half the base and of the other orientation is refused with the code a run gives the same frame, display_map_unresolved with layout_undeclared, scale_below_base and orientation_mismatch at display_map_build and the frame's and the base's sizes, never observation_projection_failed
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::tests::gate_392_da5ab::da5ab_a_frame_of_another_ratio_or_smaller_than_the_base_is_the_runs_refusal",
+]
+incident = ["#392 DA-5ab"]
+
+# Workflow #392 DA-5ab (0.12.67; register §1.436; test "presses"): on a 1920x1080 device a Lab operation of a 1280x720 package sends the base point (640, 360) as (960, 540), the base column 1279 as 1919 and the swipe (0, 0) to (1279, 719) as (0, 0) to (1919, 1079) over 300 ms, its records keeping the base inputs and its projections of the base's size; at the adapter's one exit (DisplayMap::send_input), every point of a rectangle drawn in it leaves inside the rectangle's inward device box at round_half_up(v · 3/2), and an input decided on a frame of another size is display_map_stale
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_392_da5ab::da5ab_a_lab_press_on_a_device_three_halves_the_base_leaves_at_its_device_point",
+    "actingcommand-display-adapter::lib::gate_392_da5ab::da5ab_an_input_in_base_coordinates_leaves_at_three_halves_inside_its_device_box",
+]
+incident = ["#392 DA-5ab"]
+
+# Workflow #392 DA-5ab (0.12.67; register §1.436; test "presses", a ratio of 5/4): on a 1600x900 device a Lab operation of a 1280x720 package observes its page and fails at its input with display_map_unresolved (input_scale_unsupported at display_input_map, frame 1600x900, base 1280x720), nothing sent; at the adapter's one exit every input at 5/4 is that refusal
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_392_da5ab::da5ab_a_lab_press_on_a_device_five_quarters_the_base_sends_nothing",
+    "actingcommand-display-adapter::lib::gate_392_da5ab::da5ab_an_input_at_five_quarters_is_refused_before_anything_is_converted",
+]
+incident = ["#392 DA-5ab"]

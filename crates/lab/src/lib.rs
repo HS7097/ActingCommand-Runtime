@@ -189,6 +189,11 @@ pub use actingcommand_execution_kernel::{
     RunTableFailure, RunTables, replay_contained_task_with_tables, replay_scan_with_tables,
     simulate_contained_task_with_tables,
 };
+// Workflow #392 DA-5ab: a Runtime frame the Lab's client observes, on its package's base by the
+// frame gate's own map and resample, and the map its input leaves under (`DisplayMap::send_input`,
+// with the adapter's box and refusal), for actinglab's `--capture` forms and its frame files.
+pub use actingcommand_display_adapter::{DisplayMap, InputSendError, Rect as DisplayRect};
+pub use actingcommand_execution_kernel::{LabBaseScene, lab_display_map, lab_scene_on_base};
 
 pub struct Lab<P: LabPorts> {
     ports: P,

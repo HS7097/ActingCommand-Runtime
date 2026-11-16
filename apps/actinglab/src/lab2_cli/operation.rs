@@ -108,6 +108,15 @@ pub(super) fn run_contained_lab_do(global: &GlobalOptions, flags: &FlagArgs) -> 
         // #411 Lab L5: the frames the package's target consensus makes each of the operation's
         // observations take.
         let frames = super::super::contained_resources::online_frame_plan(&instance, path)?;
+        // Workflow #392 DA-5ab: the recorded press is planned in the recording's coordinates and
+        // the Lab operation takes its package's base; a recording of another size is refused
+        // before anything is pressed.
+        if let Some(lock) = record_lock.as_ref() {
+            actingcommand_lab::record_press_base_check(
+                lock,
+                super::super::contained_resources::online_base(&instance, path)?,
+            )?;
+        }
         let session = begin_runtime_debug_session()?;
         // `do --capture --record` (#463 L1): the planned step writes its marks, then sends the
         // input through the port below and records the Runtime's answer as before, and takes the
@@ -206,10 +215,20 @@ fn operation_answer(
         payload["arrival"] = json!(record.arrival);
     }
     // Workflow #410 item 1: the coordinate system of the frame the action's coordinates were
-    // chosen on (the before frame).
+    // chosen on (the before frame). Workflow #392 DA-5ab: the package's base, its before
+    // projection's frame, on a display of another size.
+    let base = prepared.before_projection.as_ref().map(|observed| {
+        (
+            observed.projection.frame.width,
+            observed.projection.frame.height,
+        )
+    });
     if let Some(before) = &prepared.before_frame {
-        payload["frame_coordinates"] =
-            super::frame::coordinates(before.observation.width(), before.observation.height());
+        let device = (before.observation.width(), before.observation.height());
+        payload["frame_coordinates"] = match base {
+            Some(base) => super::frame::observed_coordinates(base, device),
+            None => super::frame::coordinates(device.0, device.1),
+        };
     }
     if global.verbose || flags.bool("--verbose") || flags.bool("--pretty") {
         payload["operation_record"] = json!(operation);
@@ -239,6 +258,7 @@ fn operation_answer(
     // is in the details of a failure too.
     if let Some(attachment) = super::frame::after_attachment(
         record,
+        base,
         flags.bool("--preview"),
         projection_request.verbosity == ProjectionVerbosity::Min,
     )? {
@@ -545,7 +565,7 @@ fn run_declared_operation(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcom
         request
             .validate()
             .map_err(|error| CliError::usage(error.code().as_str()))?;
-        let task_timeout = declared_operation_admission(&instance, path, &operation_id)?;
+        let (task_timeout, base) = declared_operation_admission(&instance, path, &operation_id)?;
         // #411 Lab L5: the frames the package's target consensus makes an observation take; the
         // after projection's transaction is part of the receipt wait.
         let frames = super::super::contained_resources::online_frame_plan(&instance, path)?;
@@ -593,14 +613,17 @@ fn run_declared_operation(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcom
             "failure":record.failure, "cleanup_failure":record.cleanup_failure,
         });
         // Workflow #410 item 1: the coordinate system of the frame attempt 1 pressed on, else of
-        // the frame the operation took last.
+        // the frame the operation took last. Workflow #392 DA-5ab: the package's base, on a
+        // display of another size.
         if let Some(frame) = prepared
             .before_frame
             .as_ref()
             .or(record.after_frame.as_ref())
         {
-            payload["frame_coordinates"] =
-                super::frame::coordinates(frame.observation.width(), frame.observation.height());
+            payload["frame_coordinates"] = super::frame::observed_coordinates(
+                base,
+                (frame.observation.width(), frame.observation.height()),
+            );
         }
         if global.verbose || flags.bool("--verbose") || flags.bool("--pretty") {
             payload["operation_record"] = json!(operation);
@@ -622,6 +645,7 @@ fn run_declared_operation(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcom
         // after frame's path and preview path; in the details of a failure too.
         if let Some(attachment) = super::frame::after_attachment(
             record,
+            Some(base),
             flags.bool("--preview"),
             projection_request.verbosity == ProjectionVerbosity::Min,
         )? {
@@ -640,12 +664,13 @@ fn run_declared_operation(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcom
 /// its declared operation `operation_id`, as the Runtime admits them, before any Runtime
 /// connection: a package the kernel refuses is `package_invalid`, an operation it does not run
 /// this way (`contained_task_declared_operation_unknown`, `_unsupported`) its own code with its
-/// values as details; both exit 2. Answers the package's task timeout.
+/// values as details; both exit 2. Answers the package's task timeout and (Workflow #392 DA-5ab)
+/// its base, the size the Runtime brings the operation's frames to.
 fn declared_operation_admission(
     instance: &str,
     path: &std::path::Path,
     operation_id: &str,
-) -> CliOutcome<std::time::Duration> {
+) -> CliOutcome<(std::time::Duration, (u32, u32))> {
     let deadline = std::time::Instant::now()
         .checked_add(std::time::Duration::from_millis(
             ContainedTaskRequest::DEFAULT_RESPONSE_DEADLINE_MS,
@@ -665,8 +690,9 @@ fn declared_operation_admission(
         )
         .with_details(Value::Object(error.outcome().values().clone()))
     })?;
-    Ok(std::time::Duration::from_millis(
-        task.effective_timing().task_timeout.milliseconds,
+    Ok((
+        std::time::Duration::from_millis(task.effective_timing().task_timeout.milliseconds),
+        task.resolution(),
     ))
 }
 

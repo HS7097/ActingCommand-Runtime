@@ -1368,3 +1368,11 @@ test = "actingcommand-actingctl::gate::lab6s2b2::lab6s2b2_install_transition_rec
 ruling = "Workflow #434 LAB-6S4a (0.12.63; register §1.287, \"Slice LAB-6S4a\"; the coordinator's brief rd-1115/brief-434-lab6s4a-five-kinds.md and rulings N4 and N8 of the LAB-6 survey, board #434)"
 reason = "Removed with install-transition: it pinned the receipts of the transition's drain and of its ticket's commit, as the released console's installation helper decodes them. With install-control [0, 0] the helper negotiates revision 0 and takes its cold path, request-shutdown."
 covered_by = "actingcommand-actingctl::gate::lab6s2b2::lab6s2b2_request_shutdown_receipt_decodes_as_the_released_helper_decodes, in the same apps.toml row: the cold path's receipt, decoded as the helper decodes it."
+
+# host.toml, the row of Workflow #392 DA-3 fix 1, work order point 1.
+[[retired]]
+fragment = "host"
+test = "actingcommand-runtime-host::lib::tests::gate_392_da3::da3_fix1_a_lab_declared_operation_sends_its_base_point_only_on_a_frame_of_its_package"
+ruling = "Workflow #392 DA-5ab (0.12.67; register §1.436; contracts/display-adapter.md section 11; the coordinator's work order of 11-16 on board #392, which names this refusal as the one DA-5ab replaces)"
+reason = "Renamed: the test pinned that a Lab declared operation's input on a frame of another size than its package (32x18 for 16x9) is refused display_map_unresolved (input_scale_unsupported) and nothing is sent. DA-5ab sends that input under the frame's map through the run's own exit, so the refusal it pinned no longer exists; its identity half (the literal tap (1, 0) on a 16x9 device, confirmed) is kept."
+covered_by = "actingcommand-runtime-host::lib::tests::gate_392_da3::da3_fix1_a_lab_declared_operation_sends_its_base_point_under_its_frames_map, in the same host.toml row: on 16x9 the tap (1, 0), on 48x27 the tap (3, 0), both confirmed; the refusal that remains for a scale whose double is not whole is actingcommand-runtime-host::lib::tests::gate_392_da5ab::da5ab_a_lab_press_on_a_device_five_quarters_the_base_sends_nothing."

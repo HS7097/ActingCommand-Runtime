@@ -399,6 +399,13 @@ pub(super) fn online_frame_plan(
     online_observation(instance, path).map(|observation| observation.frame_plan())
 }
 
+/// Workflow #392 DA-5ab: the base (width, height) of the package at `path`, the coordinate space
+/// of its projection, which the Runtime brings a Lab operation's frames to and takes its
+/// coordinates in (`PreparedPageObservation::base`), from the same admission.
+pub(super) fn online_base(instance: &str, path: &std::path::Path) -> CliOutcome<(u32, u32)> {
+    online_observation(instance, path).map(|observation| observation.base())
+}
+
 /// #411 Lab L5b: the most frames and the longest waits one online `observe` of the package at
 /// `path` takes, its transaction and its page's candidate layout series (at most 25 frames), as
 /// the Runtime's kernel computes them from the same admission

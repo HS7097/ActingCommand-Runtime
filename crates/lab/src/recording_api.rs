@@ -1590,6 +1590,35 @@ pub fn record_frame_preflight(lock: &RecordingLock) -> LabResult<()> {
     check_device_arrival(&session.recording)
 }
 
+/// Workflow #392 DA-5ab (`contracts/display-adapter.md` section 11): `do --capture --record`
+/// presses the open step's point, planned in the recording's coordinates, through a Lab
+/// operation, which takes its coordinates in its package's base `base` (width, height). A
+/// recording whose frames are of another size (taken on a display of another size) would be
+/// pressed in the wrong space: it is refused before anything is pressed or written,
+/// `record_frame_size_mismatch`, as a frame of another size than the recording is. A recording
+/// of the base's size, and one without a frame yet, pass.
+pub fn record_press_base_check(lock: &RecordingLock, base: (u32, u32)) -> LabResult<()> {
+    let session = open_session(lock)?;
+    match session.recording.coordinate_space {
+        Some(space) if (space.width, space.height) != base => Err(with_details(
+            blocked(
+                "record_frame_size_mismatch",
+                format!(
+                    "the recording is {}x{}, and a Lab operation presses in its package's base, \
+                     {}x{}",
+                    space.width, space.height, base.0, base.1
+                ),
+            ),
+            json!({
+                "frame": "the package's base",
+                "expected": space,
+                "actual": {"width": base.0, "height": base.1},
+            }),
+        )),
+        _ => Ok(()),
+    }
+}
+
 /// Records a frame from `capture --record` or `observe --capture --record`.
 pub fn record_attach_frame(
     lock: &RecordingLock,

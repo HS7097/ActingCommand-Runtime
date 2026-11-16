@@ -131,6 +131,27 @@ itself is never in the answer. Both members are kept by Min and count toward its
 budget. `--preview` under the global `--dry-run` is refused like `--with-frame`
 (`dry_run_unsupported`).
 
+Workflow #392 DA-5ab (0.12.67; [display-adapter.md](display-adapter.md) section 11): the Runtime
+brings every frame of an online observation (its transaction's frames, and each further
+transaction of a candidate layout's series) to the package's base, the coordinate space of its
+projection, by the frame gate's own map and resample, and evaluates and projects there; a frame
+of the base's size is used as it is, byte for byte. Each frame of a transaction must still have
+the device size of its current frame (`recognition_sample_geometry_changed`; for a further
+transaction, `candidate_sample_page_or_geometry_changed`). The projection's frame identity is the
+device frame's artifact hash at the base's size: a verifier reads the device frame by that hash
+from the capture's artifact (the observation's `frame`, whose width and height are the device's),
+builds the map from the device size and the base, the projection's width and height (the identity
+or a pure scale, no declaration, no producer geometry), and finds that its scale frame is the
+projection's size; the RGB8 hash is that of the scale frame (the device frame resampled once under
+that map, area average). A frame the map cannot take (another ratio `layout_undeclared`, a frame
+smaller than the base `scale_below_base`, the other orientation `orientation_mismatch`) fails the
+observation with `display_map_unresolved` at `display_map_build` and the frame's and the base's
+sizes, the code a run gives the same frame, never `observation_projection_failed`. With
+`--capture`, `frame_coordinates` on such a display is `{space: "base", base_pixels: [width,
+height], reduced_from: [device width, device height], orientation, applies_to}`, and the
+`--with-frame` file and `--preview` are of the frame brought to the base. The frame attached to a
+recording with `--record` stays the device's frame (the recording is DA-5cd's).
+
 0.12.28 LAB-SMALL (offline `observe`; `observe --capture` where named):
 - #411 B47: a candidate layout of the recognised page whose feature needs an OCR
   or NN provider the Tools do not hold (`candidate_feature_provider_missing`)

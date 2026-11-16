@@ -69,6 +69,10 @@ pub(super) struct Lab2Scene {
     /// #411 Lab L3: the Runtime frame the scene was captured as, which an input planned on it
     /// names (`input_with_frame`); none for a scene file.
     input_frame: Option<InputFrameReference>,
+    /// Workflow #392 DA-5ab: the device size (width, height) the Runtime frames were reduced
+    /// from to the package's base ([`on_package_base`]); `None` when the frames are the device's
+    /// own (a display of the base's size, or a scene file).
+    reduced_from: Option<(u32, u32)>,
 }
 
 impl Lab2Scene {
@@ -490,11 +494,25 @@ fn run_runtime_observe(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<V
             payload["frame_path"] = json!(path.display().to_string());
         }
         // Workflow #410 item 1: the captured frame's coordinate system, and its preview when
-        // asked.
+        // asked. Workflow #392 DA-5ab: on a display of another size than the package's base (its
+        // projection's frame), the base space the frame was reduced to, and the reduced frame for
+        // the frame file and the preview.
+        let base = (
+            observed.projection.frame.width,
+            observed.projection.frame.height,
+        );
         payload["frame_coordinates"] =
-            frame::coordinates(observed.frame.width(), observed.frame.height());
-        if flags.bool("--preview") {
-            payload["preview"] = frame::preview(verified.png());
+            frame::observed_coordinates(base, (observed.frame.width(), observed.frame.height()));
+        let handed_out = if frame_file.is_some() || flags.bool("--preview") {
+            Some(
+                frame::handed_out_png(&observed.frame, verified.png(), Some(base))
+                    .map_err(CliError::device)?,
+            )
+        } else {
+            None
+        };
+        if let (true, Some(png)) = (flags.bool("--preview"), &handed_out) {
+            payload["preview"] = frame::preview(png);
         }
         // LAB-OBS-1 (register §1.228): the observation stands whatever page it matched, so its
         // terminal is `completed`, as do, ensure and wait close an answer that stands
@@ -537,8 +555,8 @@ fn run_runtime_observe(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<V
             })?;
         }
         // #411 A69 (P60): an answer that cannot be given writes no frame file.
-        if let Some(path) = &frame_file {
-            write_frame(path, verified.png())?;
+        if let (Some(path), Some(png)) = (&frame_file, &handed_out) {
+            write_frame(path, png)?;
         }
         Ok(projected)
     })();
@@ -607,15 +625,17 @@ fn run_runtime_do(
         let (action_id, device) = if dry_run {
             (Value::Null, json!({"executed": false, "mode": "dry_run"}))
         } else {
-            let action_id = execute_runtime_debug_input(
-                &session,
-                instance,
+            // Workflow #392 DA-5ab: the point is in the package's base.
+            let sent = sent_on_scene(
+                &loaded_scene,
                 InputAction::Tap {
                     x: point.x,
                     y: point.y,
                 },
-                loaded_scene.input_frame,
+                &[pack_box(actual_click.rect)],
             )?;
+            let action_id =
+                execute_runtime_debug_input(&session, instance, sent, loaded_scene.input_frame)?;
             (
                 serde_json::to_value(action_id)
                     .map_err(|error| CliError::device(error.to_string()))?,
@@ -660,11 +680,9 @@ fn run_runtime_do(
             "observation": page_detection_json(&after),
             "device": device,
             "arbitration": runtime_scheduler_projection(!dry_run),
-            // Workflow #410 item 1: the coordinate system of the frame the click was planned on.
-            "frame_coordinates": frame::coordinates(
-                loaded_scene.scene.width(),
-                loaded_scene.scene.height(),
-            ),
+            // Workflow #410 item 1: the coordinate system of the frame the click was planned on
+            // (Workflow #392 DA-5ab: the package's base on a display of another size).
+            "frame_coordinates": scene_coordinates(&loaded_scene),
         });
         // #411 Lab L5c: as offline `do` reports its frames (B-2 R4), only for a package that
         // declares target consensus.
@@ -926,7 +944,13 @@ fn execute_runtime_navigation_route(
                 &frame_regions,
             )?;
         }
-        let runtime_action = runtime_input_action(&input)?;
+        // Workflow #392 DA-5ab: the route's input is in the package's base; on a display of
+        // another size it leaves under the guard frame's map, or nothing is sent.
+        let runtime_action = sent_on_scene(
+            &guard_scene,
+            runtime_input_action(&input)?,
+            &semantic_boxes(&input),
+        )?;
         // #411 Lab L3: the input names the frame its guard was decided on, which a Nemu-input
         // instance requires (as online `do` passes its before frame).
         let action_id = execute_runtime_debug_input(
@@ -1201,7 +1225,127 @@ fn load_runtime_lab2_frames(
         evaluator.target_sample_interval_ms(),
     )
     .ok_or_else(|| CliError::package_invalid("target consensus frame count out of range"))?;
-    capture_runtime_frame_set(session, instance, plan, &mut thread::sleep)
+    let captured = capture_runtime_frame_set(session, instance, plan, &mut thread::sleep)?;
+    on_package_base(captured, evaluator)
+}
+
+/// Workflow #392 DA-5ab (`contracts/display-adapter.md` section 11): a `--capture` client form's
+/// frame set on its package's base, as the Runtime brings a Lab operation's frames there: each
+/// frame by the frame gate's own map and resample (`lab_scene_on_base`). On a display of the
+/// base's size the set is as it was; otherwise every frame is reduced and the device size is kept
+/// (`reduced_from`) for the form's input ([`sent_on_scene`]). A display the map cannot take is
+/// refused with the run's code for it and its values in `details`, before anything is decided.
+fn on_package_base(
+    mut loaded: Lab2Scene,
+    evaluator: &RecognitionEvaluator,
+) -> CliOutcome<Lab2Scene> {
+    let Some(space) = evaluator.pack().coordinate_space else {
+        return Ok(loaded);
+    };
+    let base = (space.width, space.height);
+    let device = (loaded.scene.width(), loaded.scene.height());
+    if device == base {
+        return Ok(loaded);
+    }
+    let reduce = |scene: &Scene| -> CliOutcome<Scene> {
+        match actingcommand_lab::lab_scene_on_base(base, scene) {
+            Ok(Some(reduced)) => Ok(reduced.scene),
+            Ok(None) => Ok(scene.clone()),
+            Err(error) => Err(CliError::new(
+                ErrorKind::DeviceInstance,
+                error.code().as_str(),
+                format!(
+                    "the Runtime's frame of {}x{} does not map onto the package's base of {}x{}",
+                    device.0, device.1, base.0, base.1
+                ),
+                &["device"],
+            )
+            .with_details(Value::Object(error.outcome().values().clone()))),
+        }
+    };
+    loaded.scene = reduce(&loaded.scene)?;
+    loaded.samples = loaded
+        .samples
+        .iter()
+        .map(reduce)
+        .collect::<CliOutcome<Vec<_>>>()?;
+    loaded.reduced_from = Some(device);
+    Ok(loaded)
+}
+
+/// Workflow #392 DA-5ab: `frame_coordinates` of a `--capture` client form's frame set: its
+/// package's base, reduced from the device's size on a display of another size.
+fn scene_coordinates(scene: &Lab2Scene) -> Value {
+    let base = (scene.scene.width(), scene.scene.height());
+    frame::observed_coordinates(base, scene.reduced_from.unwrap_or(base))
+}
+
+/// Workflow #392 DA-5ab: the input a `--capture` client form sends for `action`, made in its
+/// package's base on `scene`'s frame set and drawn in `boxes` (base pixels): `action` itself on a
+/// display of the base's size; otherwise under the frame's map through the run's own exit
+/// (`DisplayMap::send_input`), or refused with the run's code for it and its values in `details`,
+/// and nothing is sent.
+fn sent_on_scene(
+    scene: &Lab2Scene,
+    action: InputAction,
+    boxes: &[actingcommand_lab::DisplayRect],
+) -> CliOutcome<InputAction> {
+    let Some(device) = scene.reduced_from else {
+        return Ok(action);
+    };
+    let base = (scene.scene.width(), scene.scene.height());
+    let refused = |outcome: actingcommand_contract::outcome::Outcome| {
+        CliError::new(
+            ErrorKind::DeviceInstance,
+            outcome.code().as_str().to_owned(),
+            format!(
+                "the input does not leave for the device of {}x{} under the map of the \
+                 package's base of {}x{}; nothing was sent",
+                device.0, device.1, base.0, base.1
+            ),
+            &["device"],
+        )
+        .with_details(Value::Object(outcome.values().clone()))
+    };
+    let map = actingcommand_lab::lab_display_map(base, device)
+        .map_err(|error| refused(error.outcome()))?;
+    map.send_input(
+        &action,
+        boxes,
+        scene.input_frame.as_ref().and_then(|frame| {
+            actingcommand_contract::CaptureExtent::new(frame.width, frame.height)
+        }),
+    )
+    .map_err(|error| match error {
+        actingcommand_lab::InputSendError::Unresolved(refusal) => refused(refusal.outcome()),
+        actingcommand_lab::InputSendError::Stale(stale) => refused(stale.outcome()),
+        actingcommand_lab::InputSendError::OutOfBounds => CliError::device(format!(
+            "a point of the input lies outside the device frame of {}x{}; nothing was sent",
+            device.0, device.1
+        )),
+    })
+}
+
+/// Workflow #392 DA-5ab: the boxes (base pixels) a semantic input was drawn in: a tap's one, a
+/// drag's press and end.
+fn semantic_boxes(input: &SemanticInput) -> Vec<actingcommand_lab::DisplayRect> {
+    match input {
+        SemanticInput::Tap { rect, .. } => vec![pack_box(*rect)],
+        SemanticInput::Drag {
+            from_rect, to_rect, ..
+        } => vec![pack_box(*from_rect), pack_box(*to_rect)],
+        SemanticInput::TargetCenter { .. } | SemanticInput::TargetOffset { .. } => Vec::new(),
+    }
+}
+
+/// A package rectangle as the display adapter's box.
+fn pack_box(rect: PackRect) -> actingcommand_lab::DisplayRect {
+    actingcommand_lab::DisplayRect::new(
+        i64::from(rect.x),
+        i64::from(rect.y),
+        i64::from(rect.width),
+        i64::from(rect.height),
+    )
 }
 
 /// #411 Lab L5c: `plan`'s frames, each a read-only Runtime capture of its own, `pause` waiting
@@ -1363,6 +1507,7 @@ fn load_runtime_lab2_scene(
         frame_age_ms,
         png,
         input_frame,
+        reduced_from: None,
     };
     Ok((loaded, receipt))
 }
@@ -2959,6 +3104,7 @@ fn load_lab2_scene(
             frame_age_ms: 0,
             png: Some(png),
             input_frame: None,
+            reduced_from: None,
         });
     }
     Err(CliError::usage(

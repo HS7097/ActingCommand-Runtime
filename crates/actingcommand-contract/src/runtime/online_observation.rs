@@ -284,6 +284,19 @@ pub struct ContainedPageObservation {
     pub projection_event_id: EventId,
 }
 
+/// Workflow #392 DA-5ab (`contracts/display-adapter.md` section 11): whether an observation's
+/// projection frame of `projected` size (width, height) is its device frame of `device` size as the
+/// Lab observes it: the frame itself, or its scale frame on the package's base, the base's size,
+/// which the display adapter gives a frame of the base's ratio at least as large as the base and no
+/// other (a pure scale without a declaration).
+fn reduced_to(device: (u32, u32), projected: (u32, u32)) -> bool {
+    device == projected
+        || (device.0 >= projected.0
+            && device.1 >= projected.1
+            && u64::from(device.0) * u64::from(projected.1)
+                == u64::from(device.1) * u64::from(projected.0))
+}
+
 impl ContainedPageObservation {
     pub fn validate(&self) -> RuntimeContractResult<()> {
         self.frame.validate()?;
@@ -302,8 +315,10 @@ impl ContainedPageObservation {
             || self.projection.frame.kind != crate::page_projection::FrameKind::Artifact
             || self.frame.artifact().sha256.strip_prefix("sha256:")
                 != Some(self.projection.frame.sha256.as_str())
-            || self.projection.frame.width != self.frame.width()
-            || self.projection.frame.height != self.frame.height()
+            || !reduced_to(
+                (self.frame.width(), self.frame.height()),
+                (self.projection.frame.width, self.projection.frame.height),
+            )
             || (self.status == PageObservationStatus::Recognized) != self.projection.matched
             || self.projection.state
                 != match self.status {

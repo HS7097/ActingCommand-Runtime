@@ -16,15 +16,25 @@
 //! No image is ever put into an answer, only paths. A part that could not be written is answered
 //! as `{failure}` in its place (`lab_frame_export_failed`), and the answer still succeeds: with
 //! `do` the action has been performed.
+//!
+//! Workflow #392 DA-5ab (`contracts/display-adapter.md` section 11): on a display that is not the
+//! package's base size, the Lab speaks the base: `frame_coordinates` names the base space, its
+//! size and the device size the frame was reduced from ([`observed_coordinates`]), and the frame
+//! files and previews an operation hands out are the frames brought to the base
+//! ([`handed_out_png`]). On a display of the base's size nothing changes.
 
 use super::*;
 use actingcommand_artifact_store::read_projected_verified;
 use actingcommand_contract::page_projection::PageProjection;
-use actingcommand_contract::{LabOperationFrame, LabOperationRecord, PageObservationStatus};
+use actingcommand_contract::{
+    LabOperationFrame, LabOperationRecord, PageObservationStatus, ReadonlyObservation,
+};
+use actingcommand_device::{Frame, PixelFormat};
 use actingcommand_ledger::{MIN_PROJECTION_HARD_LIMIT_BYTES, MIN_PROJECTION_SOFT_LIMIT_BYTES};
 use image::RgbImage;
 use image::codecs::jpeg::JpegEncoder;
 use image::imageops::{self, FilterType};
+use std::borrow::Cow;
 // The crate root names `Path` for its tests only.
 use std::path::Path;
 
@@ -42,16 +52,69 @@ const FRAME_DIRECTORY: &str = "frames";
 /// than high, `portrait` when higher than wide, `square` otherwise; `applies_to` names the `do`
 /// arguments given in this system.
 pub(super) fn coordinates(width: u32, height: u32) -> Value {
-    let orientation = match width.cmp(&height) {
+    json!({
+        "device_pixels": [width, height],
+        "orientation": orientation(width, height),
+        "applies_to": COORDINATE_INPUTS,
+    })
+}
+
+/// `landscape` when wider than high, `portrait` when higher than wide, `square` otherwise.
+fn orientation(width: u32, height: u32) -> &'static str {
+    match width.cmp(&height) {
         std::cmp::Ordering::Greater => "landscape",
         std::cmp::Ordering::Less => "portrait",
         std::cmp::Ordering::Equal => "square",
-    };
+    }
+}
+
+/// Workflow #392 DA-5ab: `frame_coordinates` of a frame the Lab observed on a device of `device`
+/// size (width, height) for a package of base `base`. On a display of the base's size it is
+/// [`coordinates`] of that size, byte for byte. On any other the frame was reduced to the base and
+/// every coordinate of the answer and of `do` is the base's: `{space: "base", base_pixels:
+/// [width, height], reduced_from: [device width, device height], orientation, applies_to}`.
+pub(super) fn observed_coordinates(base: (u32, u32), device: (u32, u32)) -> Value {
+    if base == device {
+        return coordinates(device.0, device.1);
+    }
     json!({
-        "device_pixels": [width, height],
-        "orientation": orientation,
+        "space": "base",
+        "base_pixels": [base.0, base.1],
+        "reduced_from": [device.0, device.1],
+        "orientation": orientation(base.0, base.1),
         "applies_to": COORDINATE_INPUTS,
     })
+}
+
+/// Workflow #392 DA-5ab: the frame the Lab hands out for the Runtime frame `png` of `observation`,
+/// observed for a package of base `base`: the PNG itself on a display of the base's size or when
+/// the base is not known, byte for byte; otherwise the frame brought to the base by the frame
+/// gate's own map and resample (`lab_scene_on_base`), as a PNG. Why it could not be made, else.
+pub(super) fn handed_out_png<'a>(
+    observation: &ReadonlyObservation,
+    png: &'a [u8],
+    base: Option<(u32, u32)>,
+) -> Result<Cow<'a, [u8]>, String> {
+    let device = (observation.width(), observation.height());
+    let Some(base) = base.filter(|base| *base != device) else {
+        return Ok(Cow::Borrowed(png));
+    };
+    let scene = Scene::from_png(png).map_err(|error| error.to_string())?;
+    let reduced = actingcommand_lab::lab_scene_on_base(base, &scene)
+        .map_err(|error| error.code().to_string())?;
+    let Some(reduced) = reduced else {
+        return Ok(Cow::Borrowed(png));
+    };
+    Frame::from_pixels(
+        reduced.scene.width(),
+        reduced.scene.height(),
+        reduced.scene.rgb8_pixels().to_vec(),
+        PixelFormat::Rgb8,
+        crate::runtime_capture_backend::device_backend_name(observation.capture_backend()),
+    )
+    .and_then(|frame| frame.encode_png_fast())
+    .map(Cow::Owned)
+    .map_err(|error| error.to_string())
 }
 
 /// The preview's width and height for a `width` × `height` frame, and its scale (frame pixels
@@ -217,8 +280,13 @@ fn after_projection(mut projection: PageProjection, min: bool) -> CliOutcome<Val
 ///   preview, whether `--preview` was given or not.
 ///
 /// A part that could not be written is `{failure}` in its place.
+///
+/// Workflow #392 DA-5ab: with the package's base `base` known, the frame, its preview and its
+/// `frame_coordinates` are those of the after frame brought to the base ([`handed_out_png`],
+/// [`observed_coordinates`]); on a display of the base's size they are as before.
 pub(super) fn after_attachment(
     record: &LabOperationRecord,
+    base: Option<(u32, u32)>,
     preview_requested: bool,
     min: bool,
 ) -> CliOutcome<Option<Value>> {
@@ -229,24 +297,37 @@ pub(super) fn after_attachment(
         .after_projection
         .as_ref()
         .filter(|observed| observed.status == PageObservationStatus::Recognized);
+    let device = (frame.observation.width(), frame.observation.height());
+    let handed_out = |png: Vec<u8>| -> Result<Vec<u8>, ExportFailure> {
+        let reduced = match handed_out_png(&frame.observation, &png, base) {
+            Ok(Cow::Owned(reduced)) => Some(reduced),
+            Ok(Cow::Borrowed(_)) => None,
+            Err(text) => return Err(ExportFailure::text(text)),
+        };
+        Ok(reduced.unwrap_or(png))
+    };
     if let Some(observed) = known {
         let mut attachment = json!({
             "kind": "page_projection",
             "observation": after_projection(observed.projection.clone(), min)?,
         });
         if preview_requested {
-            attachment["preview"] = match operation_frame_png(frame) {
+            attachment["preview"] = match operation_frame_png(frame).and_then(handed_out) {
                 Ok(png) => preview(&png),
                 Err(failure) => failure.answer(),
             };
         }
         return Ok(Some(attachment));
     }
+    let statement = match base {
+        Some(base) => observed_coordinates(base, device),
+        None => coordinates(device.0, device.1),
+    };
     let mut attachment = json!({
         "kind": "frame",
-        "frame_coordinates": coordinates(frame.observation.width(), frame.observation.height()),
+        "frame_coordinates": statement,
     });
-    match operation_frame_png(frame) {
+    match operation_frame_png(frame).and_then(handed_out) {
         Ok(png) => {
             let name = format!("{}.png", hex_sha256(&png));
             attachment["frame_path"] = match frame_directory()
@@ -297,6 +378,30 @@ mod tests {
                 );
             }
         }
+    }
+
+    // Workflow #392 DA-5ab (`contracts/display-adapter.md` section 11; the coordinator's work
+    // order of 11-16, test "the answers' frame_coordinates"): on a display of the package's base
+    // size the statement is the frame's own, byte for byte as before; on a display that maps to
+    // the base it names the base space, its size and the device size the frame was reduced from,
+    // with the inputs given in it. The MCP front answers the same members
+    // (`actingcommand-actinglab-mcp::serve_calls::da5ab_the_mcp_front_answers_the_command_lines_base_coordinates`).
+    #[test]
+    fn da5ab_frame_coordinates_name_the_base_and_the_device_size_it_was_reduced_from() {
+        let on_base = observed_coordinates((1280, 720), (1280, 720));
+        assert_eq!(on_base, coordinates(1280, 720));
+        assert_eq!(
+            on_base.to_string(),
+            r#"{"device_pixels":[1280,720],"orientation":"landscape","applies_to":["tap","tap_rect","swipe"]}"#
+        );
+        assert_eq!(
+            observed_coordinates((1280, 720), (1920, 1080)).to_string(),
+            r#"{"space":"base","base_pixels":[1280,720],"reduced_from":[1920,1080],"orientation":"landscape","applies_to":["tap","tap_rect","swipe"]}"#
+        );
+        assert_eq!(
+            observed_coordinates((1280, 720), (3840, 2160)).to_string(),
+            r#"{"space":"base","base_pixels":[1280,720],"reduced_from":[3840,2160],"orientation":"landscape","applies_to":["tap","tap_rect","swipe"]}"#
+        );
     }
 
     #[test]

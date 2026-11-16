@@ -69,6 +69,19 @@ naming this file.
   Runtime 0.12.63, which retires it with the identity card): report them with it.
 - **`lab_operation_check_failed`**: the Runtime answered a Lab operation and a check after it
   failed. The operation may have taken effect: read its effect before you send it again.
+- **Coordinates** (Workflow #392 DA-5ab, Runtime 0.12.67; `contracts/display-adapter.md`
+  section 11): `ac_lab_observe` and `ac_do` answer what the command line answers, in the package's
+  base. On a display of the base's size their `frame_coordinates` is `{device_pixels,
+  orientation, applies_to}`, the device's own pixels. On a display that maps to the base (1920×1080
+  or 3840×2160 for a 1280×720 package) it is `{space: "base", base_pixels, reduced_from,
+  orientation, applies_to}`: every frame was reduced from the device size `reduced_from` to the
+  base, every rectangle and point of the answer is the base's, `ac_do` takes `tap`, `tap_rect`,
+  `swipe` and an element in the base, and its `frame_path` and `preview` are the reduced frames.
+  A display the base does not map to (another ratio, a smaller one) is refused
+  `display_map_unresolved`; a press at a ratio the input side does not send under (5/4) is refused
+  `display_map_unresolved` (`input_scale_unsupported`), nothing sent. `ac_frame` is one frame of
+  the instance as the device gives it, of the device's size (3840×2160 on such a display), and the
+  device commands (`ac_tap`, `ac_swipe`, `ac_long_tap`) take the device's own pixels.
 
 ## 4 Jobs, handles and cursors
 

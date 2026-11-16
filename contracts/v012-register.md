@@ -31212,6 +31212,113 @@ path under the input's request), `instance_resources_fenced`, and the lease's `l
 a failed input answers its own failure. A self-check, a resume or the fence's recheck lifts the
 fence.
 
+### 1.436 Slice #392 DA-5ab (0.12.67): the Lab observes and presses on a display that maps to its package's base, in the base coordinates (Workflow #392; the owner's decision 203 on board #392, one set of packages at the base size and a converter; the real check of 11-16 on the 3840×2160 and 1920×1080 instances, where a run recognised and pressed and the Lab's `observe --capture` and `do --capture` failed `observation_projection_failed` and a declared operation's press was refused `display_map_unresolved` (`input_scale_unsupported`); the read-only study of main `381fe461`; the rule is the coordinator's ruling under the owner's "what is not written follows the default" for #392, not the owner's words; coordinator work order `rd-1116/brief-392-da5ab-lab-on-mapped-display.md`, read on main `23161b3a`)
+
+This section takes 1.436, the number the work order gives: §1.431 is the highest on main
+`23161b3a`, and §1.432 to §1.435 and §1.437 are taken by slices being built at the same time. It
+ships in 0.12.67. [display-adapter.md](display-adapter.md) section 11 is its contract.
+
+**The rule.** On a display that maps to the package's base, the Lab speaks the base coordinates to
+an agent: the frames its observations and operations hand out, every rectangle and point of its
+answers, and every point, rectangle and swipe it takes are in the package's base space (1280×720
+for today's packages). The answer says so and names the device size the frame was reduced from. On
+a display of the base's size nothing changes, byte for byte.
+
+**The one implementation.** The kernel's frame gate (`Resolution::validate_frame`,
+`crates/execution-kernel/src/contained_task/display_gate.rs`) is split into its map (`frame_map`)
+and its map and resample over a frame's pixels and its producer's geometry (`validate_pixels`);
+the gate calls them as before. `lab_scene_on_base` and `lab_display_map` call the same two for a
+frame read back from its picture (no producer geometry, no game declaration, as the Lab's declared
+operations map). The input side's one exit is `DisplayMap::send_input` in the display adapter
+(`admit_input`, `current_for`, `device_input` to the logical display); the run's input
+(`RuntimeContainedTask::device_input`) and every Lab input take it, and the host maps its refusals
+with one function (`input_send_failure`). `actinglab`'s client forms reach the same functions
+through `actingcommand-lab`.
+
+**The live observations, every one through it.**
+
+| # | Observation | Where | Before this slice on a mapped display |
+|---|---|---|---|
+| D5-1 | `observe --capture`, its transaction and every further transaction of a candidate layout's series | the kernel's `PreparedPageObservation::evaluate_with_series` | `observation_projection_failed` |
+| D5-2 | a Lab operation's before observation, its after observation and each arrival sample (`do --capture` with an element, `--tap`, `--swipe`, a recorded click) | the host's `evaluate_lab_operation_frame` → `evaluate_frames` | `observation_projection_failed` at `before_projection` |
+| D5-3 | a declared operation's frames | the kernel's frame gate, as before | recognised |
+| D5-4 | a declared operation's after projection | `evaluate_lab_operation_frame` | `observation_projection_failed` |
+| D5-5 | the client's `--capture` forms: `do --capture --dry-run`, `ensure --capture` (its frame set, each guard frame and each poll), `wait --capture --page` and `--stable` | `actinglab`'s `load_runtime_lab2_frames` → `on_package_base` | refused, the scene's size does not match the pack |
+
+A frame the map cannot take is refused with the code a run gives the same frame,
+`display_map_unresolved` at `display_map_build` with `display_problem` (`layout_undeclared`,
+`scale_below_base`, `orientation_mismatch`) and the frame's and the base's sizes; the kernel's
+`OnlineObservationError` carries the values and the host relays them (`observation_kernel_error`).
+The client's forms answer it as `device_error` with the code and its values in `details`.
+
+**The projection's frame identity.** It names the device frame's artifact hash at the base's size.
+What the ledger holds settles it: the observation evidence's `frame` is the capture's artifact,
+with the device's size, and the projection's width and height are the base; a verifier reads the
+device frame by the hash, builds the map from the two sizes (the identity or a pure scale, no
+declaration, no producer geometry), finds that the scale frame is the projection's size, and
+recomputes `rgb8_sha256` as that of the device frame resampled once under the map (area average,
+REC-5). `ContainedPageObservation::validate` (the receipt's and the record's check) now takes a
+projection frame that is the observation's frame, or of its ratio and no larger.
+
+**The presses.** A selection's input (`--tap`, `--swipe`, an element's rectangle and point, a
+recorded click) and a declared operation's input are in the base. On a frame of the base's size
+they leave as taken; on any other through `DisplayMap::send_input` under the frame's map, each
+point inside the inward device box of its box (the selection's rectangles; a declared attempt's
+draw regions, as a run's step keeps them). At 3/2 the base point (640, 360) leaves as (960, 540) and
+the base column 1279 as 1919. A ratio the input side does not send under (a pure scale whose double
+is not whole, 5/4) refuses the operation at its `input` stage, `display_map_unresolved`
+(`input_scale_unsupported` at `display_input_map`), nothing sent. This replaces DA-3 fix 1's
+refusal of every declared operation's input on a frame of another size (`lab_input_scale_unsupported`,
+removed). `ensure --capture` sends its route's inputs the same way. A recorded click (`do --capture
+--record`) is planned in the recording's coordinates: a recording whose frames are not of the
+package's base is refused before anything is pressed or written, `record_frame_size_mismatch`
+(`actingcommand_lab::record_press_base_check`), so no recorded press leaves in the wrong space;
+the recording on such a display is DA-5cd's.
+
+**The answers.** `frame_coordinates` on a mapped display is `{space: "base", base_pixels: [width,
+height], reduced_from: [device width, device height], orientation, applies_to}`; on a display of
+the base's size `{device_pixels, orientation, applies_to}` as before. `observe --with-frame`,
+`--preview` and an operation's after attachment (`frame_path`, `preview`) hand out the frames
+brought to the base (`frame::handed_out_png`, encoded as PNG). `capture` and `ac_frame` hand out the
+device's own frame, of its size. The MCP front answers the command line's line; its manual and its
+instructions say so.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| D5-6 | `ContainedObservationEvidence` and `ContainedPageObservation` on a mapped display | values of existing members (no member, no format) | DA-5ab | 0.12.67 | `projection.frame` is the device artifact's hash at the base's size; `rgb8_sha256` the scale frame's; `frame` the device frame's reference; the validation takes a projection frame of the frame's ratio and no larger |
+| D5-7 | a Lab operation's records on a mapped display | values of existing members | DA-5ab | 0.12.67 | `prepared.action`, `prepared.geometry` and an attempt's `action` in the base; the input intent's input in device pixels, as a run's |
+| D5-8 | `frame_coordinates` of `actinglab`'s answers | answer member's value | DA-5ab | 0.12.67 | `{space, base_pixels, reduced_from, orientation, applies_to}` on a mapped display |
+
+**What does not change.** No record gains or loses a member, no format, schema, ledger revision or
+interface revision moves; the map is not recorded, since the device frame's size and the base settle
+it. No outcome code or word is added; the texts of `display_map_unresolved` and of the word
+`input_scale_unsupported` say that a Lab operation's input now leaves under the frame's map (the
+index regenerated). On a display of the base's size every answer, record and input is as before.
+
+**An installer of 0.12.66.** The plan's edges are the component interface ranges, which no revision
+of this slice moves: an installer of 0.12.66 installs 0.12.67 as a build of the same ranges. The
+Lab and the Runtime of 0.12.67 ship in one build.
+
+**Tests.** `crates/execution-kernel/src/tests/gate_392_da5ab.rs`: a 96×64 package on frames three
+and one and a half times its base, made by nearest neighbour from a base frame whose features lie
+on whole 2×2 blocks (so that the area average gives it back): the same page, rectangle and
+projection, the projection frame of the base's size, the base frame's RGB8 hash; the base frame
+observed as it is (D5-1); a frame of another ratio, of half the base and of the other orientation
+refused `display_map_unresolved` with its word, never a projection failure.
+`crates/runtime-host/src/tests/gate_392_da5ab.rs`: on a 1920×1080 fake device a 1280×720 package's
+`do` of (640, 360), (1279, 0) and a swipe to (1279, 719) reach the device at (960, 540), (1919, 0)
+and (1919, 1079), the records keeping the base and the projections of the base's size; on a
+1600×900 device the press is refused at `input`, nothing sent. `crates/display-adapter/src/
+gate_392_da5ab.rs`: `send_input` at 3/2 for a rectangle's every point, a swipe and a stale frame,
+and its refusal at 5/4. `gate_392_da3`'s declared operation test is adapted (it pinned the refusal
+this slice replaces; renamed, its old name retired in `ci/retired-gates.toml`): at 48×27 the tap
+(1, 0) leaves as (3, 0) and the operation is confirmed. `actinglab`'s `frame::tests` pins both
+statements of `frame_coordinates`, and `actinglab-mcp`'s `serve_calls` that `ac_lab_observe` and
+`ac_do` answer them. Gate maps: `host.toml` and `apps.toml`, the rows "#392 DA-5ab".
+
+**At deploy.** Nothing to configure. On an instance of the base's size nothing changes; on a mapped
+one the Lab's observations and presses work, in the base.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

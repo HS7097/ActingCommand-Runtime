@@ -12,11 +12,13 @@ onto whatever frame the device delivers. This document grows slice by slice:
 | DA-2b | translations and cropped frames (region mapping in recognition), the nearest correction window, the `anchor` member, the refusal of crossing positional boxes | later |
 | DA-4b-D | the declared safe area: declaration files of device models, an instance's model setting, the live change (Alice's ruling 69; it replaces DA-4b, which read a device's cutout) | section 9 |
 | DA-3 | the input side: every click and drag kind, `display_map_stale`, the crop offset and the turn undone for input | section 10, built in 0.12.59 for the identity and the pure scales whose double is a whole number (3/2, 2, 5/2, 3, …); every other pure scale waits for the slice that draws the input points in the device box |
-| DA-5 | task schema `0.10` and box references; the Lab | later |
+| DA-5ab | the Lab's online observation and its presses on a display that maps to its package's base, in the base coordinates | section 11, built in 0.12.67 |
+| DA-5 | task schema `0.10` and box references; the rest of the Lab (the offline recognition of a scene of a pure scale, a recording on a display that is not the base, DA-5cd) | later |
 
 From DA-2a every frame a run recognises passes the crate's map (section 8), and from DA-3 every
 input a run makes leaves through it (section 10); a 1280×720 package on a 1280×720 frame behaves
-exactly as before, byte for byte.
+exactly as before, byte for byte. From DA-5ab the Lab's online observations and operations take the
+same map and the same exit (section 11).
 
 ## 1 Spaces
 
@@ -157,7 +159,8 @@ The crate's registry is `crates/display-adapter/src/codes.rs`, its fragment
   `safe_area_unavailable` (section 8; DA-3 narrows `input_scale_unsupported` to a pure scale
   whose double is not a whole number, a vertical-brake drag under a scale, and a Lab declared
   operation's input on a frame of another size than its package; DA-3b takes the vertical-brake
-  drag out of it, section 10); DA-4b-D adds
+  drag out of it, section 10; DA-5ab takes the Lab declared operation out of it, whose input
+  leaves under the frame's map as a run's does, section 11); DA-4b-D adds
   `safe_area_declaration_invalid`,
   `safe_area_model_repeated`, `safe_area_model_undeclared` and `safe_area_form_undeclared`, with
   the optional values `path`, `other_path`, `json_pointer` and `config_key` (section 9.4).
@@ -181,7 +184,8 @@ DA-3.
   declaration for the whole run; every layer of the run (its prerequisite, entry recovery,
   interrupt and navigation packages) maps its frames under it. The mapping rule is built from it
   (`DisplayRule::from(&StandardPackDisplayLayout)`); the declaration's shape is the contract
-  crate's only. A run without a standard-pack root, and the Lab's dry runs, map without one.
+  crate's only. A run without a standard-pack root, and the Lab's dry runs, map without one, as
+  the Lab's online observations and operations do (section 11).
 - **The frame gate.** Every frame the kernel recognises passes one gate, at each of its six
   capture entries: the entry page, a navigation locate, a sample, a page frame, a reading's
   agreement frame and the Lab's dry-run select. The gate builds the frame's map from the frame's
@@ -471,13 +475,10 @@ vertical-brake drag under those scales too ("The vertical brake"), with no inter
   DA-3b: the same conversion turns a scaled vertical-brake step's effect intent into the drag with
   a pause and a brake sent, so the step pairs; an input that is not that drag still pairs with
   nothing.
-- **The Lab's declared operations.** A Lab declared operation's runtime reads no game
-  declaration, and its frames, read back from their pictures, carry no producer geometry: it
-  cannot know the map a run's input leaves under. It sends an input only on a frame of its
-  package's size, as the kernel made it; on any other frame the input is refused before anything
-  is sent, `display_map_unresolved` (`input_scale_unsupported`, stage `display_input_map`, the
-  frame's and the base's sizes), and only that operation fails, at its `input` stage. A base
-  coordinate never leaves for a scaled frame unchanged.
+- **The Lab's declared operations.** Until DA-5ab a Lab declared operation sent an input only on
+  a frame of its package's size and refused any other, `display_map_unresolved`
+  (`input_scale_unsupported`). DA-5ab replaces that refusal: its input leaves under the frame's
+  map as a run's does (section 11). A base coordinate never leaves for a scaled frame unchanged.
 - **The crop offset and the turn undone.** `DisplayMap::device_input` also adds a cropped frame's
   offset for a backend that takes display coordinates (`InputCoordinates::Display`) and undoes a
   turned frame's quarter turn for one that takes frame coordinates
@@ -492,4 +493,65 @@ vertical-brake drag under those scales too ("The vertical brake"), with no inter
   names one device box); a step that takes its next frame after `display_map_stale` within the
   run; a geometry change after the last frame was taken (the rotation verification slice); the
   pure scales whose double is not a whole number (the slice that draws the points in the device
-  box); a Lab declared operation on a scaled frame, and the Lab's own inputs (DA-5).
+  box); a Lab declared operation on a scaled frame, and the Lab's own inputs (DA-5ab, section 11).
+
+## 11 The Lab on a display that maps to the base (DA-5ab)
+
+Workflow #392 DA-5ab (0.12.67; register §1.436). The owner decided for screen adaptation one set of
+packages at the base size and a converter (board #392, decision 203); what the decision left
+unwritten follows the default, and the coordinator ruled under it: **on a display that maps to the
+package's base, the Lab speaks the base coordinates to an agent.** On a display of the base's size
+nothing changes, byte for byte.
+
+- **The one implementation.** A frame the Lab observes is read back from its picture, so it
+  carries no producer geometry, and the Lab reads no game declaration: its map is the frame
+  gate's map of section 8 built without either (the frame shows itself), so only the identity and
+  a pure scale map. The kernel's `lab_scene_on_base` brings such a frame to the base with the frame
+  gate's own code (its map and its one resample, area average); `lab_display_map` gives the same
+  map for an input. Neither is a copy: the frame gate itself is built on them.
+- **Every live observation.** The frames of these observations go through it, and are evaluated
+  and projected on the base: `observe --capture` (its transaction and every further transaction of
+  a candidate layout's series); a Lab operation's before observation, its after observation and
+  each arrival sample (`do --capture` with an element, `--tap`, `--swipe`, a recorded click); a
+  declared operation's frames (the kernel's frame gate, as before) and its after projection; and
+  the client's `--capture` forms, which evaluate Runtime captures in the Lab (`do --capture
+  --dry-run`, `ensure --capture` with its guard frames and its polls, `wait --capture --page` and
+  `--stable`). A plain `capture`, `ac_frame` and a device command's frame (`tap`, `swipe`,
+  `long-tap`, `key` and their `--record`) are the device's own frame and take device pixels.
+- **The projection's frame.** On a mapped display the projection's frame identity is the device
+  frame's artifact hash at the base's size, and the observation's `frame` (the capture's artifact,
+  with the device's size) stays the device frame's reference. A verifier reads the device frame by
+  that hash from the ledger, builds the map from its size and the base (the projection's size),
+  finds that the map's scale frame is the projection's size, and recomputes the RGB8 hash as that
+  of the device frame resampled once under the map. `ContainedPageObservation::validate` takes a
+  projection frame that is the observation frame itself or of the base's ratio and no larger. No
+  record gains a member and no interface revision moves; the map is not recorded, since the frame's
+  size and the base settle it.
+- **Refusals.** A frame the map cannot take is refused with the code a run gives the same frame,
+  `display_map_unresolved` at `display_map_build` with the frame's and the base's sizes: another
+  ratio `layout_undeclared`, a frame smaller than the base `scale_below_base`, the other
+  orientation `orientation_mismatch`. It is never `observation_projection_failed`.
+- **Presses.** Every point, rectangle and swipe a Lab operation takes is in the base: a
+  coordinate selection (`--tap`, `--swipe`, a recorded click), an element's press (its
+  projection's rectangle and point) and a declared operation's input (the kernel's, its draw's
+  boxes). On a frame of the base's size the input leaves as it was taken, byte for byte; on any
+  other it leaves through the run's own exit, `DisplayMap::send_input` (`admit_input`, the frame it
+  was decided on, `device_input` to the logical display, each point inside the inward device box of
+  its box): at 3/2 the base point (640, 360) is sent as (960, 540) and the base column 1279 as 1919.
+  A ratio the input side does not send under (a pure scale whose double is not a whole number, 5/4)
+  refuses the operation at its `input` stage, `display_map_unresolved` (`input_scale_unsupported`
+  at `display_input_map`), with nothing sent. The records keep the base input (the prepared
+  record's `action` and `geometry`, an attempt's `action`); the input intent records what was sent,
+  in device pixels, as a run's does. The client's `ensure --capture` sends its route's inputs the
+  same way. A recorded click (`do --capture --record`) is planned in the recording's coordinates:
+  a recording whose frames are not of the package's base is refused before anything is pressed,
+  `record_frame_size_mismatch`; a recording made on such a display is closed by DA-5cd.
+- **The answers.** `frame_coordinates` on a mapped display is `{space: "base", base_pixels:
+  [width, height], reduced_from: [device width, device height], orientation, applies_to}`; on a
+  display of the base's size it is `{device_pixels, orientation, applies_to}` as before. The frame
+  files and the previews an operation hands out (`observe --with-frame`, `--preview`, the after
+  attachment's `frame_path` and `preview`) are the frames brought to the base. The MCP front's
+  `ac_lab_observe` and `ac_do` answer the command line's line.
+- **Not in this slice.** The recording on such a display (DA-5cd refuses `record start` there);
+  the offline recognition of a scene of a pure scale (DA-5cd); the run evidence's recognised boxes,
+  which stay in device-frame pixels (section 10, "Records").
