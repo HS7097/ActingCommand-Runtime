@@ -3742,3 +3742,52 @@ tests = [
     "actingcommand-actinglab::bin:actinglab::tests::gate_463_s311::s38_a_trial_with_a_value_sends_it_and_its_record_names_it",
 ]
 incident = ["#463 S3-8", "#463 S3-9"]
+
+# #463 S3-12 (0.12.68; register §1.445; brief rd-1116/brief-463-s312-adopt-trial-review.md; design rd-1115/pack-stage3-design.md §4.2 "S3-12"; contracts/standard-pack-authoring.md, "The trial and the two warnings"): standard-pack adopt on P1's made-up resource repository names its offline review recording_checked, answers the latest trial of the content it writes as the trial's records keep it and warns before enabling, refusing nothing more. A business adoption of a recording checked offline: review.recording_checked true and no member run_through in the answer; a recording whose cross-check was partly evaluated, as a business rule: adopt_refused recording_unreviewed as before, its details' review recording_checked false and no run_through, its message saying the recording was not checked offline (1); no trial record: review.trial none, no record, other_content false, no trial_not_read, its content_hash_prefix the one standard-pack trial's plan measures of the packs/<package_id> the adoption wrote, not_tried warned once with the package's id (2); a trial of that directory recorded by the trial's plan, its run's checks and its writer, ended normally on the package's key, then the package adopted again with --replace and no decision: trial passed, the same prefix, the record's authorization, at_unix_ms, request_id and end, matched absent, no not_tried (3); the same with a failed run: failed, the record's end, not_tried warned once (4); a passed trial of another content of the same package id (an older directory): under --dry-run, trial none, no record, other_content true, its prefix not the older one, not_tried warned once (5); a held first adoption by the held reason warns no enabling_needs_authorization, and a business decision that lifts that hold (--replace) warns it once with the package's id, the answer business with no held entry (6); a business rule with "pending" alone under --dry-run: waits_for_value answered and next exactly [{path ours/model/bindings.json, fixed_value {rule_id, value_binding {value "", file schedule.json, rule_id, path /fixed_value_milli}, hand_entry {rule_id, status "", ref ""}}}]; with its value: no waits_for_value and next [] (7). Adapted (gate "#464 P1", "#463 S3-4"): gate_464_p1's first adoption, its held class and S3-4's first held adoption assert review.recording_checked where they asserted review.run_through (the member is renamed; the rule is the same).
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-resource-tooling::lib::gate_463_s312::s312_the_review_names_the_offline_check_and_no_run_through",
+    "actingcommand-resource-tooling::lib::gate_463_s312::s312_without_a_record_the_trial_is_none_and_not_tried_is_warned",
+    "actingcommand-resource-tooling::lib::gate_463_s312::s312_a_passed_record_of_this_content_answers_passed_and_not_tried_is_gone",
+    "actingcommand-resource-tooling::lib::gate_463_s312::s312_a_failed_record_of_this_content_answers_failed_and_not_tried_stays",
+    "actingcommand-resource-tooling::lib::gate_463_s312::s312_a_record_of_other_content_answers_none_and_says_so",
+    "actingcommand-resource-tooling::lib::gate_463_s312::s312_a_decision_that_lifts_a_hold_warns_that_enabling_needs_authorization",
+    "actingcommand-resource-tooling::lib::gate_463_s312::s312_next_names_bindings_json_only_when_the_rule_has_no_value",
+]
+incident = ["#463 S3-12"]
+
+# #463 S3-14 (0.12.68; register §1.446; brief rd-1116/brief-463-s314-pack-status.md; contracts/standard-pack-schedule.md, "Where a pack stands: `standard-pack status`"): one read of where each pack of a game root stands. One installed game root of five packs inside a made-up installation, and a state directory beside it with three trial records the trial's writer writes: the held pack is admitted, can_be_tried, enabled.state held, its only missing item S2 failing held with the hold's reason and reference (1); a pack the readiness answers ready_to_place answers the trial's own content prefix and the passed trial of that content, which expected the end it reached (matched true), with its request, its business end and its time; the train: a later trial of that content that ended normally on another end than the one it expected answers failed, matched false, passed_on_record true (2); a pack a rule enables is enabled with authorization not_recorded and authorization_unrecorded journals_not_read (3); every pack answers the same two words, the journals not read (4) (the train renamed 3 and 4 and removed their placement journal, which nothing read); the counts of each stage_state and each enabled.state are the numbers of rows with each word and add up to the five packs, the return-home pack supporting (adapted by the train, R5) (5); package_id answers the one row as the whole answer gives it and the root's counts, and a package id the root does not register is validation_failed naming --package-id not_recognised (6); a later failed record of another content leaves a pack's passed trial standing, and a pack whose only record names another content answers none (7); the installation, the game root and the state directory are byte for byte what they were (8); each row's conditions are the items standard-pack ready answers for the same root and its missing the failing ones (9).
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-resource-tooling::lib::gate_463_s314::s314_a_held_pack_can_be_tried_and_its_hold_is_missing",
+    "actingcommand-resource-tooling::lib::gate_463_s314::s314_a_pack_ready_to_place_answers_the_passed_trial_of_its_content",
+    "actingcommand-resource-tooling::lib::gate_463_s314::s314_an_enabled_pack_answers_not_recorded_with_journals_not_read",
+    "actingcommand-resource-tooling::lib::gate_463_s314::s314_every_pack_answers_not_recorded_with_journals_not_read",
+    "actingcommand-resource-tooling::lib::gate_463_s314::s314_the_counts_add_up",
+    "actingcommand-resource-tooling::lib::gate_463_s314::s314_package_id_answers_one_pack",
+    "actingcommand-resource-tooling::lib::gate_463_s314::s314_a_trial_record_of_other_content_does_not_count",
+    "actingcommand-resource-tooling::lib::gate_463_s314::s314_the_read_writes_nothing",
+    "actingcommand-resource-tooling::lib::gate_463_s314::s314_conditions_are_what_standard_pack_ready_answers",
+]
+incident = ["#463 S3-14"]
+
+# #463 stage three, the train of S3-12 and S3-14 (0.12.68; register §1.445 and §1.446, "Train"; brief rd-1116/brief-463-train-stage3.md, the coordinator's rulings R1 to R6 and the two reviews' smaller points; contracts/standard-pack-trial.md, "The record", contracts/standard-pack-authoring.md, "The trial and the two warnings", contracts/standard-pack-schedule.md, "Where a pack stands"): one judgement of a passed trial (PackTrialRecord::passed), one summary of a content's trials (trial_summary) answered by adoption and by the status row, the status row saying only what it knows. standard-pack adopt on P1's made-up repository: a trial given --expect of the package's key whose run ended normally on another end is failed, matched false, passed_on_record false, not_tried warned (1); a passed then a failed trial of the content adopted: failed, passed_on_record true, the latest record the failed one, no not_tried (2); a file of a record's name that is no record: no trial, trial_not_read with trial_record_unreadable undecodable, no not_tried (3); a first adoption by a business decision warns enabling_needs_authorization once, adopted again with --replace and no decision it does not (4); a checkout holding regression/, docs/PACKS.md and ours/coverage/business-v1.csv: next is exactly [{path regression/neutral/}, {path docs/PACKS.md}, {path ours/coverage/business-v1.csv}] (5). standard-pack status on S3-14's root: a schedule.json the composer refuses: every pack not_judged in stage_state and enabled.state, no hold, the counts five not_judged (6); a pack no rule names and nothing holds: not_placed, can_be_tried, S2 failing (7); a pack whose task the loader refuses: not_admitted, S1 failing (8); a failed run of a content: failed, passed_on_record false (9); the return-home pack stands supporting, and held in its supporting role shows its hold on its own row while the readiness's row names none (10); --repo measures the checkout's pack as the root's (the same prefix), null where the checkout has none, absent without --repo, and a --repo that is a file is validation_failed (11); a file of a record's name that is no record beside a pack's record: that pack answers trial_not_read (trial_record_unreadable undecodable) and no trial, the other packs are answered (12).
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-resource-tooling::lib::gate_463_s312::s312_train_an_end_other_than_the_expected_one_is_failed",
+    "actingcommand-resource-tooling::lib::gate_463_s312::s312_train_passed_once_and_failed_since_shows_both",
+    "actingcommand-resource-tooling::lib::gate_463_s312::s312_train_an_unreadable_record_answers_trial_not_read",
+    "actingcommand-resource-tooling::lib::gate_463_s312::s312_train_a_first_business_adoption_warns_enabling_and_a_bare_replace_does_not",
+    "actingcommand-resource-tooling::lib::gate_463_s312::s312_train_next_items_are_objects_with_a_path",
+    "actingcommand-resource-tooling::lib::gate_463_s314::s314_train_a_refused_schedule_is_not_judged",
+    "actingcommand-resource-tooling::lib::gate_463_s314::s314_train_a_pack_no_rule_names_is_not_placed",
+    "actingcommand-resource-tooling::lib::gate_463_s314::s314_train_a_pack_the_loader_refuses_is_not_admitted",
+    "actingcommand-resource-tooling::lib::gate_463_s314::s314_train_a_failed_run_answers_failed",
+    "actingcommand-resource-tooling::lib::gate_463_s314::s314_train_a_supporting_pack_stands_supporting_and_shows_its_hold",
+    "actingcommand-resource-tooling::lib::gate_463_s314::s314_train_repo_measures_the_checkout_pack",
+    "actingcommand-resource-tooling::lib::gate_463_s314::s314_train_an_unreadable_record_leaves_only_its_pack_not_read",
+]
+incident = ["#463 S3-12", "#463 S3-14"]

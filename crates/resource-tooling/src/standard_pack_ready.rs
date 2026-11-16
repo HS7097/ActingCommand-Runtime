@@ -69,11 +69,16 @@
 //! `package_id`, else by a `path` that is the pack's directory or lies under it (the root check of
 //! the variables names the declaring pack's `control.json` and no package id); the answer's
 //! `warnings` lists every warning as before. Nothing the items decide changes.
+//!
+//! Workflow #463 S3-14 (register §1.446): `standard-pack status` calls the one function through
+//! [`judge_readiness_and_placement`], which answers the same readiness and, per pack, its directory
+//! and whether the game's `schedule.json` enables it, from the classification S2 read, in the same
+//! reading of the root. Nothing the items decide, and nothing the readiness answers, changes.
 
 use crate::StandardPackCheckRequest;
 use crate::codes::{
-    ReadinessItem, ReadinessProblem, ReadinessRole, ReadinessState, ReadinessUnjudged,
-    ResourceToolingCode,
+    EnabledState, ReadinessItem, ReadinessProblem, ReadinessRole, ReadinessState,
+    ReadinessUnjudged, ResourceToolingCode,
 };
 use crate::package_directory::PACK_DEADLINE;
 use crate::standard_pack_check::{
@@ -418,6 +423,28 @@ type Admitted = BTreeMap<String, Result<NavigationPackageDescriptor, Outcome>>;
 pub fn judge_standard_pack_readiness(
     request: &StandardPackReadyRequest,
 ) -> LabResult<StandardPackReadiness> {
+    judge_readiness_and_placement(request).map(|(readiness, _)| readiness)
+}
+
+/// Workflow #463 S3-14 (register §1.446): what `standard-pack status` reads of one pack beyond its
+/// row of the readiness: the pack's directory in the game root, as the registry names it, and
+/// whether the game's `schedule.json` enables it, judged from the classification S2 judged by
+/// ([`Context::enabled_state`]), never read a second time. The train of S3-12 and S3-14 (register
+/// §1.446, "Train", ruling R5): and its hold as the accepted file's `held` entry writes it
+/// ([`Context::hold_entry`]), whatever S2 answers, so that a held pack in a supporting role, whose
+/// S2 holds by its role and whose row of the readiness names no hold, shows it on its own row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PackPlacement {
+    pub(crate) directory: PathBuf,
+    pub(crate) enabled: EnabledState,
+    pub(crate) held: Option<ReadinessHold>,
+}
+
+/// Workflow #463 S3-14: [`judge_standard_pack_readiness`]'s answer, unchanged, and each pack's
+/// [`PackPlacement`] by package id, from the same reading of the root.
+pub(crate) fn judge_readiness_and_placement(
+    request: &StandardPackReadyRequest,
+) -> LabResult<(StandardPackReadiness, BTreeMap<String, PackPlacement>)> {
     let root = std::path::absolute(&request.root)
         .map_err(|error| LabError::usage(format!("{}: {error}", request.root.display())))?;
     if !fs::metadata(&root).is_ok_and(|metadata| metadata.is_dir()) {
@@ -480,6 +507,7 @@ pub fn judge_standard_pack_readiness(
         warnings: &named,
     };
     let mut packs = Vec::new();
+    let mut placements = BTreeMap::new();
     for (package_id, admission) in &admitted {
         let entry = checked.root.registry.get(package_id).ok_or_else(|| {
             LabError::package_invalid(format!("{package_id} is no package of the bundle"))
@@ -490,10 +518,18 @@ pub fn judge_standard_pack_readiness(
             admitted: admission,
         };
         packs.push(context.judge(&pack));
+        placements.insert(
+            package_id.clone(),
+            PackPlacement {
+                directory: root.join(&entry.directory),
+                enabled: context.enabled_state(package_id),
+                held: context.hold_entry(package_id),
+            },
+        );
     }
     context.hold_followers(&mut packs);
     let count = |state: ReadinessState| packs.iter().filter(|pack| pack.readiness == state).count();
-    Ok(StandardPackReadiness {
+    let readiness = StandardPackReadiness {
         root: root.display().to_string(),
         game,
         installation: if installation.is_some() {
@@ -507,7 +543,8 @@ pub fn judge_standard_pack_readiness(
         not_scheduled: count(ReadinessState::NotScheduled),
         warnings,
         packs,
-    })
+    };
+    Ok((readiness, placements))
 }
 
 /// The game root as every reader reads it, and its bundle's maintenance entries.
@@ -1025,9 +1062,6 @@ impl Context<'_> {
     /// `held` (the classification reads that list, whose package ids are distinct); `None`
     /// otherwise. Its texts are copied as written and decide nothing.
     fn held(&self, package_id: &str, items: &[ReadinessAnswer]) -> Option<ReadinessHold> {
-        let Rules::Composed(rules) = self.rules else {
-            return None;
-        };
         let fails_held = items
             .iter()
             .find(|answer| answer.item == ReadinessItem::Classified)
@@ -1039,6 +1073,17 @@ impl Context<'_> {
         if !fails_held {
             return None;
         }
+        self.hold_entry(package_id)
+    }
+
+    /// The train of S3-12 and S3-14 (ruling R5): the hold of the pack `package_id` as its `held`
+    /// entry of the composer-accepted `schedule.json` writes it, whatever S2 answers; `None` when
+    /// the file holds it not, or the root holds no accepted file. [`Self::held`] answers it only
+    /// when S2 fails `held`.
+    fn hold_entry(&self, package_id: &str) -> Option<ReadinessHold> {
+        let Rules::Composed(rules) = self.rules else {
+            return None;
+        };
         rules
             .schedule
             .held
@@ -1095,6 +1140,23 @@ impl Context<'_> {
                 rules.maintenance.contains(package_id) && !rules.scheduled.contains(package_id)
             }
             Rules::Refused(_) => false,
+        }
+    }
+
+    /// Workflow #463 S3-14: whether the game's `schedule.json` enables the pack `package_id`, from
+    /// the classification S2 reads and in its order: `not_judged` when the composer refused the
+    /// file (S2 `composition_refused`; the Runtime then keeps the last schedule it accepted, which
+    /// this root does not tell); `enabled` when a rule names it and it is not held (S2 `scheduled`,
+    /// a supporting part beside it or not); `not_scheduled` for a supporting part no rule
+    /// dispatches ([`Self::supporting`], the readiness's own `not_scheduled`); `held` when it is
+    /// held; `not_placed` otherwise (no rule names it, or the root holds no `schedule.json`).
+    fn enabled_state(&self, package_id: &str) -> EnabledState {
+        match self.rules {
+            Rules::Refused(_) => EnabledState::NotJudged,
+            Rules::Composed(rules) if rules.scheduled.contains(package_id) => EnabledState::Enabled,
+            _ if self.supporting(package_id) => EnabledState::NotScheduled,
+            Rules::Composed(rules) if rules.held.contains(package_id) => EnabledState::Held,
+            Rules::Absent { .. } | Rules::Composed(_) => EnabledState::NotPlaced,
         }
     }
 

@@ -68,6 +68,12 @@ pub(crate) fn command_capabilities() -> Vec<Value> {
             ["offline", "running_runtime", "device"],
             "available",
         ),
+        // Workflow #463 S3-14: where each pack of a game root stands; reads only.
+        command_cap(
+            "standard-pack status",
+            ["offline", "read_only"],
+            "available",
+        ),
         command_cap("package fmt", ["offline"], "available"),
         command_cap("package edit", ["offline"], "available"),
         // Workflow #463 V3: what one package's control declaration declares; reads only.

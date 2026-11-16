@@ -10783,6 +10783,101 @@
           "description": "Fix round 2: the run was sent by hand on another channel than the Lab's (origin cli or ui); a trial's run is sent on the Lab's channel."
         }
       }
+    },
+    "trial_state": {
+      "description": "The latest trial of a content as the trial records of the state directory keep it, the state of the one summary of a content's trials: the member review.trial.state of standard-pack adopt (Workflow #463 S3-12, contracts/standard-pack-authoring.md \"The trial and the two warnings\") and trial.state of standard-pack status (S3-14, contracts/standard-pack-schedule.md \"Where a pack stands\"); each record judged as contracts/standard-pack-trial.md \"The record\" defines a trial that passed (the train of S3-12 and S3-14, since 0.12.68).",
+      "review": "pending",
+      "source": {
+        "file": "crates/resource-tooling/src/codes.rs",
+        "enum": "TrialState"
+      },
+      "tokens": {
+        "passed": {
+          "description": "The latest record of this content passed, as contracts/standard-pack-trial.md \"The record\" defines it: its run ended on an end the package declares (end.outcome success) and, when the trial was given an expectation (--expect), on that end (matched not false)."
+        },
+        "failed": {
+          "description": "The latest record of this content did not pass: its run failed or was cancelled, or ended normally on another end than the one the trial expected (matched false). passed_on_record says whether an earlier record of it passed."
+        },
+        "none": {
+          "description": "No record of this content is on record; a record of another content of the same package counts for nothing (other_content says whether there is one)."
+        }
+      }
+    },
+    "stage_state": {
+      "description": "Where a pack stands in stage three of package making, the member stage_state of standard-pack status and the counts stage_states, saying only what the row knows (Workflow #463 S3-14 and the train of S3-12 and S3-14, contracts/standard-pack-schedule.md \"Where a pack stands\", since 0.12.68).",
+      "review": "pending",
+      "source": {
+        "file": "crates/resource-tooling/src/codes.rs",
+        "enum": "StageState"
+      },
+      "tokens": {
+        "not_admitted": {
+          "description": "Its readiness item S1 does not hold: the Runtime's loader, or standard-pack check, refuses its admission."
+        },
+        "not_judged": {
+          "description": "The train of S3-12 and S3-14: admitted, and the composer refuses the root's schedule.json (enabled.state not_judged); the Runtime keeps the last schedule it accepted, which this root does not tell."
+        },
+        "can_be_tried": {
+          "description": "Admitted, and nothing of the root's accepted schedule.json enables it: it is held (enabled.state held) or no rule names it (not_placed)."
+        },
+        "supporting": {
+          "description": "The train of S3-12 and S3-14: admitted, and it plays a supporting part a root file gives it, used by other packs' runs, and no rule names it (enabled.state not_scheduled)."
+        },
+        "enabled": {
+          "description": "Admitted, and a rule of the root's schedule.json enables it (enabled.state enabled)."
+        }
+      }
+    },
+    "enabled_state": {
+      "description": "Whether the root's schedule.json enables a pack, judged from the classification its readiness item S2 reads, the member enabled.state of standard-pack status and the counts enabled_states (Workflow #463 S3-14, contracts/standard-pack-schedule.md \"Where a pack stands\", since 0.12.68).",
+      "review": "pending",
+      "source": {
+        "file": "crates/resource-tooling/src/codes.rs",
+        "enum": "EnabledState"
+      },
+      "tokens": {
+        "enabled": {
+          "description": "A rule names it and it is not held: the scheduler dispatches it by that rule, whatever supporting part it plays beside."
+        },
+        "held": {
+          "description": "schedule.json holds it, and no root file gives it a supporting part."
+        },
+        "not_placed": {
+          "description": "No rule names it, it is not held and no root file gives it a supporting part, or the root holds no schedule.json: nothing places it into scheduling."
+        },
+        "not_scheduled": {
+          "description": "It plays a supporting part a root file gives it and no rule dispatches it (the readiness's not_scheduled)."
+        },
+        "not_judged": {
+          "description": "The composer refuses the root's schedule.json, so no rule is classified (S2 composition_refused); the Runtime keeps the last schedule it accepted, which this root does not tell."
+        }
+      }
+    },
+    "pack_authorization": {
+      "description": "What standard-pack status says of the authorization a pack was enabled under, the member enabled.authorization (Workflow #463 S3-14, contracts/standard-pack-schedule.md \"Where a pack stands\", since 0.12.68).",
+      "review": "pending",
+      "source": {
+        "file": "crates/resource-tooling/src/codes.rs",
+        "enum": "PackAuthorization"
+      },
+      "tokens": {
+        "not_recorded": {
+          "description": "No placement journal read names the pack; enabled.authorization_unrecorded says why. The tool never infers an authorization."
+        }
+      }
+    },
+    "authorization_unrecorded": {
+      "description": "Why standard-pack status records no authorization for a pack, the member enabled.authorization_unrecorded (Workflow #463 S3-14, contracts/standard-pack-schedule.md \"Where a pack stands\", since 0.12.68).",
+      "review": "pending",
+      "source": {
+        "file": "crates/resource-tooling/src/codes.rs",
+        "enum": "AuthorizationUnrecorded"
+      },
+      "tokens": {
+        "journals_not_read": {
+          "description": "The placement journals were not read: their reader is private to the Lab's rescue module (install::journal, pub(crate)), and that crate is built for Windows only (the train of S3-12 and S3-14). A later slice reads them."
+        }
+      }
     }
   },
   "domains": {
@@ -13704,6 +13799,9 @@
       "display-adapter"
     ],
     "trial_": [
+      "resource-tooling"
+    ],
+    "enabling_": [
       "resource-tooling"
     ]
   },

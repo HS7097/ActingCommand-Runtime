@@ -208,6 +208,36 @@ installed root.
 | `end` | How the run ended, as its terminal says it: `outcome` (`success`, `failure`, `cancelled`), `outcome_key` (the business end), `final_page`, `failure_code`, `failure_values`, each when it has one. |
 | `matched` | Whether `end.outcome_key` is `plan.expect`; absent without `--expect`. |
 
+**A trial that passed** (Workflow #463, the train of S3-12 and S3-14, Runtime 0.12.68;
+[v012-register.md](v012-register.md) §1.445 and §1.446, "Train"; the coordinator's ruling, not the
+owner's words). A trial passed when its run ended on an end the package declares (`end.outcome`
+`success`, the run's own success) and, where the trial was given an expectation (`--expect`), on
+that end (`matched` is not `false`). A run that ended normally on another end than the expected one
+did not pass: the run itself succeeds, with `trial_end_unexpected` ("The end"), since the business
+ended another way, which is what a trial is there to find, but the trial did not pass. Without an
+expectation, ending on any declared end passes. One function judges it, the record's
+`PackTrialRecord::passed` (beside `unexpected_end`, which warns of the case it does not pass); every
+answer that says whether a trial passed calls it.
+
+**What the records say of one content** (the train). One function, `trial_summary`, builds from
+every record of a package (read by `trial_records`) the summary of one content that adoption's
+review (`review.trial`, [standard-pack-authoring.md](standard-pack-authoring.md), "The trial and
+the two warnings") and the status row (`trial`, [standard-pack-schedule.md](standard-pack-schedule.md),
+"Where a pack stands") both answer, member for member:
+
+| Member | What it is |
+|---|---|
+| `state` | `passed` or `failed`, the latest record of this content judged as above; `none` when no record names this content (the vocabulary `trial_state`). |
+| `content_hash_prefix` | The content: its 12 hex digits, named by the one function `content_hash_prefix_of`, which the plan, adoption and the status row call. |
+| `record` | The latest record of this content: `authorization`, `at_unix_ms`, `request_id`, `end` as the record keeps it, and `matched` when the trial was given an expectation; absent with `none`. |
+| `passed_on_record` | Whether any record of this content passed, so that a content that passed once and failed since reads `failed` and `true`. |
+| `other_content` | A record of another content of the same package is on record; it counts for nothing. |
+
+When the reader refuses the package's records (a file of a record's name that is no record, or the
+directory not listed), the answer carries instead `trial_not_read`, `{outcome, text}`: the reader's
+refusal with its code, and the same in words. Neither answer is refused for it, and every other
+part of it is answered as before.
+
 **The state directory's place.** A state directory that is, or lies inside, an installed root or a
 repository is refused `trial_state_dir_refused` with its `path` and the word `trial_state_place`:
 `installed_root` when a directory along its path (made absolute, and again with its nearest
@@ -289,7 +319,7 @@ when there is none. A file of a record's name that is not read as the record its
 the decoder's refusal as the cause) or `name_mismatch` (a record, but not of the package, the
 content and the time its name says): the reader answers no record of that package rather than pass
 over one. A file of another name, a `.part` among them, is no record. The status read (S3-14) and
-adopt's review (S3-12) are to call it. S3-11 fix round 2: `trial_record_of_run` answers, through
+adopt's review (S3-12) call it, both through `trial_summary` (above). S3-11 fix round 2: `trial_record_of_run` answers, through
 it, the file of the record of one run's request id, whatever content it names; the run calls it
 before the writer.
 

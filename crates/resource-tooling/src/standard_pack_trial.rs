@@ -25,6 +25,13 @@
 //! passed trial is not an authorization to enable; a trial counts nothing toward a break-in; a
 //! trial is one run, sent once.
 //!
+//! Workflow #463, the train of S3-12 and S3-14 (register §1.445 and §1.446, "Train"; the
+//! coordinator's rulings R1 to R4): [`PackTrialRecord::passed`] is the one judgement of a trial that
+//! passed, and [`trial_summary`] the one summary of a content's trials ([`TrialSummary`], or
+//! [`TrialNotRead`] when the reader refuses the package's records), which adoption's review and the
+//! status row both answer; [`content_hash_prefix_of`] is the one content identity the plan,
+//! adoption and the status row name a content by.
+//!
 //! - **One reading** (fix round 2). The package directory is read once, one bounded snapshot by
 //!   the containment crate's `snapshot_content_directory`, and every member of the plan but the
 //!   irreversible mark comes from those bytes: the content hash, the kernel's admission of them
@@ -57,12 +64,14 @@
 //!   module (`WriteSteps`), as the Runtime host's `place_once` takes its link, so that the tests
 //!   drive the paths the operating system's refusals take.
 
-use crate::codes::{ResourceToolingCode, TrialRecordProblem, TrialStatePlace};
+use crate::codes::{ResourceToolingCode, TrialRecordProblem, TrialState, TrialStatePlace};
 use crate::package_directory::PACK_DEADLINE;
 use crate::standard_pack_check::{read_bounded, root_invalid};
 use crate::standard_pack_goals::root_irreversibility;
 use actingcommand_contract::codes::ContractCode;
-use actingcommand_contract::outcome::{CauseRelation, CodeStr, Detail, IoOp, Outcome, RawSource};
+use actingcommand_contract::outcome::{
+    CauseRelation, CodeStr, Detail, IoOp, Outcome, OutcomeEnvelope, RawSource,
+};
 use actingcommand_contract::{
     LabError, LabErrorClass, LabResult, PackageVariable, ProvidedCapability,
     STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_DISPLAY_LAYOUT_FILE, STANDARD_PACK_INTERRUPTS_FILE,
@@ -114,8 +123,9 @@ const GIT_ENTRY: &str = ".git";
 const INSTALL_FOLDER: &str = "install";
 const INSTALLER_STATE_FILE: &str = "state.json";
 /// The words of the argument problems a refusal names, as the command line's are (the vocabulary
-/// `argument_problem`).
-const NOT_RECOGNISED: &str = "not_recognised";
+/// `argument_problem`); the train of S3-12 and S3-14 (ruling R3): `not_recognised` the status row's
+/// refusal of an unknown `--package-id` names too.
+pub(crate) const NOT_RECOGNISED: &str = "not_recognised";
 const OUT_OF_RANGE: &str = "out_of_range";
 const REPEATED: &str = "repeated";
 const UNUSABLE: &str = "unusable";
@@ -583,6 +593,18 @@ impl PackTrialRecord {
             None => warning,
         })
     }
+
+    /// Workflow #463, the train of S3-12 and S3-14 (the coordinator's ruling R1;
+    /// `contracts/standard-pack-trial.md`, "The record", "A trial that passed"): whether this trial
+    /// passed. It passed when its run ended on an end the package declares (`end.outcome`
+    /// `success`, the run's own success) and, where the trial was given an expectation
+    /// (`--expect`), on that end (`matched` not `false`). A run that ended normally on another end
+    /// than the one expected did not pass (the one [`Self::unexpected_end`] warns of); without an
+    /// expectation, ending on any declared end passes. The one judgement of it: adoption's review
+    /// and the status row read it through [`trial_summary`].
+    pub fn passed(&self) -> bool {
+        self.end.outcome == TaskOutcome::Success && self.matched != Some(false)
+    }
 }
 
 /// The reference `given`, `None` when none is given; given, it is not blank (`validation_failed`,
@@ -636,11 +658,7 @@ fn read_tried_package(package: &Path) -> LabResult<TriedPackage> {
     let entries = Containment::new()
         .snapshot_content_directory(package, deadline)
         .map_err(|error| invalid(&error))?;
-    let content_hash = content_directory_digest(
-        entries
-            .iter()
-            .map(|(path, bytes)| (path.as_str(), *Sha256Hash::digest(bytes).as_bytes())),
-    );
+    let content_hash_prefix = content_hash_prefix_of(&entries);
     let prepared =
         PreparedContainedTask::load_content_entries(TRIAL_LABEL, entries.clone(), None, deadline)
             .map_err(|error| invalid(&error))?;
@@ -673,10 +691,29 @@ fn read_tried_package(package: &Path) -> LabResult<TriedPackage> {
     )?;
     Ok(TriedPackage {
         package_id,
-        content_hash_prefix: content_hash.chars().take(CONTENT_PREFIX_DIGITS).collect(),
+        content_hash_prefix,
         ends: declared_ends(&prepared, &task),
         variables,
     })
+}
+
+/// Workflow #463 S3-12: the content prefix of the package files `entries` (each by its
+/// `/`-separated path relative to the package directory, with its bytes): the first
+/// [`CONTENT_PREFIX_DIGITS`] hex digits of the contract crate's `content_directory_digest` of each
+/// file's SHA-256, what containment's `measure_content_hash` computes for a directory. A trial
+/// keeps it of the directory it reads, and adoption of the files it writes into
+/// `packs/<package_id>/`, so that both name one content alike; the train of S3-12 and S3-14 (ruling
+/// R3): and the status row of each pack's directory and of the checkout's, each read as the trial
+/// reads its directory (containment's `snapshot_content_directory`).
+pub(crate) fn content_hash_prefix_of(entries: &BTreeMap<String, Vec<u8>>) -> String {
+    content_directory_digest(
+        entries
+            .iter()
+            .map(|(path, bytes)| (path.as_str(), *Sha256Hash::digest(bytes).as_bytes())),
+    )
+    .chars()
+    .take(CONTENT_PREFIX_DIGITS)
+    .collect()
 }
 
 /// The JSON of the file `relative` of the snapshot `entries` of the package `package`, a leading
@@ -1379,6 +1416,125 @@ pub fn latest_trial_record(
         .find(|record| record.plan.content_hash_prefix == content_hash_prefix))
 }
 
+/// Workflow #463, the train of S3-12 and S3-14 (the coordinator's ruling R2;
+/// `contracts/standard-pack-trial.md`, "The record", "What the records say of one content"): what
+/// the trial records of a package say of one content of it, built once by [`trial_summary`] and
+/// answered alike by adoption's review (`review.trial`) and by the status row (`trial`).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct TrialSummary {
+    /// The latest record of this content, judged by [`PackTrialRecord::passed`]: `passed` or
+    /// `failed`; `none` when no record names this content.
+    pub state: TrialState,
+    /// The content: the first [`CONTENT_PREFIX_DIGITS`] hex digits of its content hash.
+    pub content_hash_prefix: String,
+    /// The latest record of this content; absent with `none`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub record: Option<TrialReference>,
+    /// Whether any record of this content passed: a content that passed once and failed since
+    /// answers `state` `failed` and this `true`.
+    pub passed_on_record: bool,
+    /// A record of another content of the same package is on record; it counts for nothing here.
+    pub other_content: bool,
+}
+
+/// The train (ruling R2): the latest record of a content, by its reference: the authorization its
+/// run was sent under, the time it ended, its run, how it ended and whether that was the end
+/// expected, as the record keeps them.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct TrialReference {
+    /// The reference of the owner's authorization, as the record keeps it.
+    pub authorization: String,
+    /// When the trial ended; it names the record's file.
+    pub at_unix_ms: u64,
+    /// The trial's run.
+    pub request_id: String,
+    /// How the run ended, as the record keeps it: its business end is `outcome_key`.
+    pub end: TrialRunEnd,
+    /// Whether the end was the one the trial expected; absent when it named none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub matched: Option<bool>,
+}
+
+/// The train (rulings R2 and R4): the reader refused the package's trial records
+/// ([`trial_records`]: a file of a record's name that is no record, or the directory not listed),
+/// so whether the content was tried is not known. Adoption answers it as `review.trial_not_read`
+/// and the status row as the pack's `trial_not_read`; neither answer is refused for it.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct TrialNotRead {
+    /// The reader's refusal, with its code as the reader answered it.
+    pub outcome: Outcome,
+    /// The same in words.
+    pub text: String,
+}
+
+impl Serialize for TrialState {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+/// The train (ruling R2): the [`TrialSummary`] of the content `content_hash_prefix` of the package
+/// `package_id`, from every record of the package under `state_dir` read by [`trial_records`] (in
+/// the order the trials ended), each judged by [`PackTrialRecord::passed`]; a record of another
+/// content only sets `other_content`. When the reader refuses the package's records, why
+/// ([`TrialNotRead`]) and nothing else.
+pub fn trial_summary(
+    state_dir: &Path,
+    package_id: &str,
+    content_hash_prefix: &str,
+) -> Result<TrialSummary, TrialNotRead> {
+    let records = trial_records(state_dir, package_id).map_err(|error| TrialNotRead {
+        outcome: cause_of(&error),
+        text: format!(
+            "the trial records of {package_id} under {} were not read: {error}; whether the \
+             content {content_hash_prefix} was tried is not known",
+            state_dir.display()
+        ),
+    })?;
+    let mut latest = None;
+    let mut passed_on_record = false;
+    let mut other_content = false;
+    for record in records {
+        if record.plan.content_hash_prefix == content_hash_prefix {
+            passed_on_record |= record.passed();
+            latest = Some(record);
+        } else {
+            other_content = true;
+        }
+    }
+    let state = match &latest {
+        None => TrialState::NoRecord,
+        Some(record) if record.passed() => TrialState::Passed,
+        Some(_) => TrialState::Failed,
+    };
+    Ok(TrialSummary {
+        state,
+        content_hash_prefix: content_hash_prefix.to_owned(),
+        record: latest.map(|record| TrialReference {
+            authorization: record.plan.authorization,
+            at_unix_ms: record.at_unix_ms,
+            request_id: record.request_id,
+            end: record.end,
+            matched: record.matched,
+        }),
+        passed_on_record,
+        other_content,
+    })
+}
+
+/// The outcome a Lab error carries in its details, else the outcome of its code. The train of
+/// S3-12 and S3-14: moved here from adoption, which calls it too, so that [`trial_summary`] answers
+/// the reader's refusal as adoption answered it.
+pub(crate) fn cause_of(error: &LabError) -> Outcome {
+    error
+        .details
+        .as_ref()
+        .and_then(|details| details.get("outcome"))
+        .and_then(|outcome| serde_json::from_value::<OutcomeEnvelope>(outcome.clone()).ok())
+        .map(OutcomeEnvelope::into_outcome)
+        .unwrap_or_else(|| Outcome::relayed(&error.code))
+}
+
 /// Workflow #463 S3-11 fix round 2 (one run, one record): the file of the record of the run
 /// `request_id` among the trial records of the package `package_id` under `state_dir`
 /// ([`trial_records`], whose refusal of a file it answers), whatever content that record names;
@@ -1457,7 +1613,9 @@ fn names_directory(package_id: &str) -> bool {
     package_id.len() <= 256 && package_id_names_one_path_segment(package_id)
 }
 
-fn absolute(path: &Path) -> LabResult<PathBuf> {
+/// `path` made absolute; a path that cannot be is `validation_failed`. The train of S3-12 and
+/// S3-14 (ruling R3): the status row calls it too.
+pub(crate) fn absolute(path: &Path) -> LabResult<PathBuf> {
     std::path::absolute(path)
         .map_err(|error| LabError::usage(format!("{}: {error}", path.display())))
 }
@@ -1474,8 +1632,9 @@ fn refused(outcome: Outcome, message: String) -> LabError {
 }
 
 /// `validation_failed` naming the flag `flag` with the argument problem `problem`, as the command
-/// line's refusals name it.
-fn argument_refused(flag: &str, problem: &str, message: String) -> LabError {
+/// line's refusals name it. The train of S3-12 and S3-14 (ruling R3): the status row's refusal of
+/// an unknown `--package-id` is this one too.
+pub(crate) fn argument_refused(flag: &str, problem: &str, message: String) -> LabError {
     LabError::usage(message).with_details(json!({
         "argument": flag,
         "argument_problem": problem,

@@ -210,6 +210,34 @@ actingcommand_contract::outcome_codes! {
         /// `request_id`, `run_state`) and its terminal names no failure code; its record is written
         /// and the command fails as for a failed run.
         TrialEndUncoded => "trial_end_uncoded": error / none,
+        // Workflow #463 S3-12: what `actinglab standard-pack adopt` says before a package is
+        // enabled (contracts/standard-pack-authoring.md, "The trial and the two warnings"). Both
+        // ride in the adoption's `warnings` and refuse nothing.
+        /// Warning (Workflow #463 S3-12): the decision adopts the package in a class that runs
+        /// (business or maintenance), lifting its hold where it had one, so the placement that
+        /// enables it asks for `--authorization` and for `--enables` naming it (key `package_id`).
+        EnablingNeedsAuthorization => "enabling_needs_authorization": warning / none,
+        /// Warning (Workflow #463 S3-12): no passed trial of the content the adoption writes is on
+        /// record in its state directory (key `package_id`; the review's `trial` says what is).
+        NotTried => "not_tried": warning / none,
+    }
+}
+
+actingcommand_contract::outcome_vocabulary! {
+    /// Workflow #463 S3-12: the latest trial of the content an adoption writes, as the trial
+    /// records keep it (vocabulary `trial_state`, the member `review.trial.state` of `standard-pack
+    /// adopt`). The train of S3-12 and S3-14 (rulings R1, R2): the one vocabulary of a content's
+    /// trials, the `state` of the trial module's `TrialSummary`, which `standard-pack status`
+    /// answers as `trial.state` too; each record judged by `PackTrialRecord::passed`.
+    pub enum TrialState: "trial_state" {
+        /// The latest record of this content passed (`PackTrialRecord::passed`): its run ended on
+        /// an end the package declares and, when the trial named the end it expected, on that end.
+        Passed => "passed",
+        /// The latest record of this content is of a run that failed or was cancelled, or that
+        /// ended normally on another end than the one the trial expected.
+        Failed => "failed",
+        /// No record of this content is on record.
+        NoRecord => "none",
     }
 }
 
@@ -483,3 +511,70 @@ actingcommand_contract::outcome_vocabulary! {
     }
 }
 // ---- Workflow #464 P3: end ----
+
+// ---- Workflow #463 S3-14 (`contracts/standard-pack-schedule.md`, "Where a pack stands"): begin ----
+actingcommand_contract::outcome_vocabulary! {
+    /// Workflow #463 S3-14: where a pack stands in stage three of package making (the vocabulary
+    /// `stage_state`, the member `stage_state` of `standard-pack status`). The train of S3-12 and
+    /// S3-14 (ruling R5): it says only what the row knows.
+    pub enum StageState: "stage_state" {
+        /// Its readiness item S1 does not hold: the loader, or `standard-pack check`, refuses it.
+        NotAdmitted => "not_admitted",
+        /// The train (R5): admitted, and the composer refuses the root's `schedule.json`
+        /// (`enabled.state` `not_judged`): the Runtime keeps the last schedule it accepted, which
+        /// the root does not tell.
+        NotJudged => "not_judged",
+        /// Admitted, and nothing of the root's accepted `schedule.json` enables it: it is held
+        /// (`enabled.state` `held`), or no rule names it (`not_placed`).
+        CanBeTried => "can_be_tried",
+        /// The train (R5): admitted, and it plays a supporting part a root file gives it, used by
+        /// other packs' runs, and no rule names it (`enabled.state` `not_scheduled`).
+        Supporting => "supporting",
+        /// Admitted, and a rule of the root's `schedule.json` enables it (`enabled.state`
+        /// `enabled`).
+        Enabled => "enabled",
+    }
+}
+
+actingcommand_contract::outcome_vocabulary! {
+    /// Workflow #463 S3-14: whether the root's `schedule.json` enables a pack, judged from the
+    /// classification its readiness item S2 reads (the vocabulary `enabled_state`, the member
+    /// `enabled.state` of `standard-pack status`).
+    pub enum EnabledState: "enabled_state" {
+        /// A rule names it and it is not held: the scheduler dispatches it by that rule.
+        Enabled => "enabled",
+        /// `schedule.json` holds it, and no root file gives it a supporting part.
+        Held => "held",
+        /// No rule names it, it is not held and no root file gives it a supporting part, or the
+        /// root holds no `schedule.json`: nothing places it into scheduling.
+        NotPlaced => "not_placed",
+        /// It plays a supporting part a root file gives it and no rule dispatches it (the
+        /// readiness's `not_scheduled`).
+        NotScheduled => "not_scheduled",
+        /// The composer refuses the root's `schedule.json`, so no rule is classified (S2
+        /// `composition_refused`); the Runtime keeps the last schedule it accepted, which this root
+        /// does not tell.
+        NotJudged => "not_judged",
+    }
+}
+
+actingcommand_contract::outcome_vocabulary! {
+    /// Workflow #463 S3-14: what `standard-pack status` says of the authorization a pack was
+    /// enabled under (the vocabulary `pack_authorization`, the member `enabled.authorization`).
+    pub enum PackAuthorization: "pack_authorization" {
+        /// No placement journal read names the pack: the tool never infers an authorization.
+        NotRecorded => "not_recorded",
+    }
+}
+
+actingcommand_contract::outcome_vocabulary! {
+    /// Workflow #463 S3-14: why no authorization is recorded for a pack (the vocabulary
+    /// `authorization_unrecorded`, the member `enabled.authorization_unrecorded`).
+    pub enum AuthorizationUnrecorded: "authorization_unrecorded" {
+        /// The placement journals were not read: their reader is private to the Lab's rescue
+        /// module (`install::journal`, `pub(crate)`), and that crate is built for Windows only (the
+        /// train of S3-12 and S3-14, ruling R6). A later slice reads them.
+        JournalsNotRead => "journals_not_read",
+    }
+}
+// ---- Workflow #463 S3-14: end ----

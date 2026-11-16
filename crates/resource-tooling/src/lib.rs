@@ -150,6 +150,15 @@ mod gate_463_s310;
 #[cfg(test)]
 mod gate_463_s311;
 
+// Workflow #463 S3-12 (register §1.445): adoption names its offline review, shows the trial of
+// its content and warns before enabling.
+#[cfg(test)]
+mod gate_463_s312;
+
+// Workflow #463 S3-14 (register §1.446): where each pack of a game root stands.
+#[cfg(test)]
+mod gate_463_s314;
+
 mod maa_task_graph;
 // Workflow #444 NOTICES-3: a notices directory on disk, held to the contract crate's rules.
 mod notices_directory;
@@ -172,6 +181,8 @@ mod standard_pack_schedule;
 mod standard_pack_ready;
 // Workflow #463 S3-10: `standard-pack trial`, its plan, its refusals and its record.
 mod standard_pack_trial;
+// Workflow #463 S3-14: `standard-pack status`, where each pack of a game root stands.
+mod standard_pack_status;
 
 pub use adopt::{
     AdoptClass, AdoptCoverage, AdoptDecision, AdoptSource, AdoptWorktree, DerivedDrift,
@@ -227,12 +238,22 @@ pub use codes::{TrialRecordProblem, TrialStatePlace};
 // word of a collected run that is not the trial's; fix round 2: the record of a run, whatever its
 // content.
 pub use codes::TrialCollectProblem;
+// Workflow #463 S3-12: the latest trial of an adopted content, as adopt's review answers it; the
+// train of S3-12 and S3-14: the one summary of a content's trials, which adoption and the status
+// row answer alike (`TrialSummary`, `TrialReference`, `TrialNotRead`, `trial_summary`).
+pub use codes::TrialState;
 pub use standard_pack_trial::{
     CONTENT_PREFIX_DIGITS, MAX_AUTHORIZATION_BYTES, PACK_TRIAL_SCHEMA, PackTrialRecord,
     StandardPackTrialAnswer, StandardPackTrialRequest, TRIALS_DIRECTORY, TrialDeclaredEnd,
-    TrialEndKind, TrialIrreversible, TrialIrreversibleBasis, TrialPlan, TrialRecordPlan,
-    TrialRunEnd, TrialRunRequirement, TrialValueSource, TrialVariable, WrittenTrialRecord,
-    check_trial_run, check_trial_state_dir, installed_root_containing, latest_trial_record,
-    plan_standard_pack_trial, trial_record_of_run, trial_record_path, trial_records,
-    write_trial_record,
+    TrialEndKind, TrialIrreversible, TrialIrreversibleBasis, TrialNotRead, TrialPlan,
+    TrialRecordPlan, TrialReference, TrialRunEnd, TrialRunRequirement, TrialSummary,
+    TrialValueSource, TrialVariable, WrittenTrialRecord, check_trial_run, check_trial_state_dir,
+    installed_root_containing, latest_trial_record, plan_standard_pack_trial, trial_record_of_run,
+    trial_record_path, trial_records, trial_summary, write_trial_record,
+};
+// Workflow #463 S3-14: the one read of where each pack of a game root stands, and its words.
+pub use codes::{AuthorizationUnrecorded, EnabledState, PackAuthorization, StageState};
+pub use standard_pack_status::{
+    CheckoutContent, EnabledStateCounts, MissingItem, PackEnabled, PackFormed, PackStatus,
+    StageStateCounts, StandardPackStatus, StandardPackStatusRequest, standard_pack_status,
 };

@@ -53,6 +53,13 @@
 //! counts nothing toward a break-in; a trial is one run, sent once. Fix round 2: `--collect` takes
 //! only a run sent by hand on the Lab's channel; a run has one record, whatever content the
 //! package directory holds when it is collected; a run is answered by its end state.
+//!
+//! Workflow #463 S3-14 (contracts/standard-pack-schedule.md, "Where a pack stands"; register
+//! §1.446): `actinglab standard-pack status --root <game root> [--repo <checkout game root>]
+//! [--package-id <id>] [--state-dir <dir>]` answers where each pack of the root stands (the
+//! resource tooling's `standard_pack_status`): formed, its readiness items and what is missing, the
+//! latest trial of its content, and whether the root's schedule enables it. It only reads; the
+//! placement journals, which the rescue module reads, are not read here (`journals_not_read`).
 
 use crate::{CliError, CliOutcome, ErrorKind, FlagArgs, GlobalOptions};
 use actingcommand_contract::codes::{ContractCode, ContractLocation};
@@ -66,10 +73,11 @@ use actingcommand_lab_ops::{instance_selector, run_evidence, run_show, wait};
 use actingcommand_resource_tooling::{
     AdoptDecision, AdoptSource, AdoptWorktree, PackTrialRecord, ResourceToolingCode,
     StandardPackAdoptRequest, StandardPackCheckRequest, StandardPackComposeRequest,
-    StandardPackReadyRequest, StandardPackTrialAnswer, StandardPackTrialRequest,
-    TrialCollectProblem, TrialRecordPlan, TrialRunEnd, check_standard_pack_root, check_trial_run,
-    compose_standard_packs, judge_standard_pack_readiness, plan_standard_pack_trial,
-    standard_pack_adopt, trial_record_of_run, write_trial_record,
+    StandardPackReadyRequest, StandardPackStatusRequest, StandardPackTrialAnswer,
+    StandardPackTrialRequest, TrialCollectProblem, TrialRecordPlan, TrialRunEnd,
+    check_standard_pack_root, check_trial_run, compose_standard_packs,
+    judge_standard_pack_readiness, plan_standard_pack_trial, standard_pack_adopt,
+    standard_pack_status, trial_record_of_run, write_trial_record,
 };
 use actingcommand_runtime_client::{
     ContainedRunState, ContainedRunStatus, RunDispatch, RunKey, RunOrigin, RuntimeClient,
@@ -139,6 +147,10 @@ const WAIT_FLAG: &str = "--wait";
 pub(crate) const TRIAL_SWITCHES: [&str; 2] = ["--irreversible", "--plan"];
 /// Workflow #463 S3-10: the row's name, which its refusals name.
 const TRIAL: &str = "standard-pack trial";
+/// Workflow #463 S3-14: the flags `standard-pack status` takes, each once.
+pub(crate) const STATUS_FLAGS: [&str; 4] = ["--root", "--repo", "--package-id", "--state-dir"];
+/// Workflow #463 S3-14: the row's name, which its refusals name.
+const STATUS: &str = "standard-pack status";
 
 pub(crate) fn options() -> [&'static str; 1] {
     ["--root <installed game root: <standard_packs.root>/<game>>"]
@@ -186,6 +198,16 @@ pub(crate) fn trial_options() -> [&'static str; 11] {
         "--plan (the plan only; nothing is sent or written)",
         "--collect <request_id> (reads that run's end and records it; sends nothing)",
         "--wait <duration> (the longest the run is waited for; absent: until its receipt)",
+    ]
+}
+
+/// Workflow #463 S3-14: the flags of `standard-pack status`.
+pub(crate) fn status_options() -> [&'static str; 4] {
+    [
+        "--root <a game root, installed or a bundle laid out as one: <standard_packs.root>/<game>>",
+        "--repo <the game's working root in a checkout: each pack's packs/<id> content beside the root's>",
+        "--package-id <one pack of the root: its row alone; the counts stay the root's>",
+        "--state-dir <the Lab's state directory, where trial records are read; default actinglab's>",
     ]
 }
 
@@ -288,6 +310,8 @@ pub(crate) fn run_standard_pack(
         // Workflow #463 S3-10: the plan of a trial on a real application; Workflow #463 S3-11:
         // without `--plan`, its one run.
         "trial" => run_trial(global, args),
+        // Workflow #463 S3-14: where each pack of a game root stands; it only reads.
+        "status" => run_status(args),
         other => Err(CliError::usage(format!(
             "unknown standard-pack command: {other}"
         ))),
@@ -353,6 +377,38 @@ fn run_adopt(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     )?;
     serde_json::to_value(response)
         .map_err(|error| CliError::device(format!("failed to serialize the adoption: {error}")))
+}
+
+/// Workflow #463 S3-14: `standard-pack status` (module doc). A flag off [`STATUS_FLAGS`], a
+/// positional word, a flag given twice and an option without its value are refused before
+/// anything is read; the state directory is `--state-dir`, or actinglab's own, where the trial
+/// keeps its records.
+fn run_status(args: &[String]) -> CliOutcome<Value> {
+    let flags = FlagArgs::parse_values(args)?;
+    if let Some(flag) = flags
+        .flags
+        .keys()
+        .find(|flag| !STATUS_FLAGS.contains(&flag.as_str()))
+    {
+        return Err(CliError::usage(format!("{STATUS} does not accept {flag}")));
+    }
+    flags.expect_positionals(STATUS, 0)?;
+    for flag in STATUS_FLAGS {
+        if flags.count(flag) > 1 {
+            return Err(CliError::usage(format!("{STATUS} takes {flag} once")));
+        }
+        if flags.given(flag) {
+            flags.required(flag)?;
+        }
+    }
+    let response = standard_pack_status(&StandardPackStatusRequest {
+        root: flags.required_path("--root")?,
+        repo: flags.optional_path("--repo"),
+        package_id: flags.optional("--package-id"),
+        state_dir: crate::session_state_dir_from_flags(&flags)?,
+    })?;
+    serde_json::to_value(response)
+        .map_err(|error| CliError::device(format!("failed to serialize the status: {error}")))
 }
 
 /// Workflow #463 S3-10: `standard-pack trial` (module doc). The flags' own refusals come first,
