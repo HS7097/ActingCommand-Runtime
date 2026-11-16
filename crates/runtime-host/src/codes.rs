@@ -2722,6 +2722,9 @@ pub(crate) mod test_spellings {
             // refused close fail.
             CloseIsolatesOffForTest => "close_isolates_off_for_test",
             FailRefusedCloseRecordForTest => "fail_refused_close_record_for_test",
+            // Workflow #461: a test ends a client's connection as its thread does once its stream
+            // is gone.
+            EndConnectionForTest => "end_connection_for_test",
             // #411 A51: a test latches a condition in the Runtime's fatal state.
             MarkRuntimeFatalForTest => "mark_runtime_fatal_for_test",
             ObserveTestPerformanceControl => "observe_test_performance_control",

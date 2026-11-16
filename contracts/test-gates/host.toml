@@ -4105,3 +4105,14 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_469_d4b::d4b_a_real_evaluation_error_at_a_guard_or_a_when_still_starts_the_ladder_at_once",
 ]
 incident = ["#469 D4b"]
+
+# Workflow #461 (0.12.66; register §1.431; contracts/read-session-resource-close.md, contracts/runtime-outcomes.md "Device and kernel failures", contracts/device-group.md row 7): a close refused because the lease had already lapsed isolates that instance on two more paths, the gate of #456 and #458 (the fixture of gate_458_close_isolates: X and Y alone on their devices both on the Nemu IPC, the multi-Nemu gate, a manual Runtime clock, stuck recovery off; the lease sweep's expiry scan held, so the holder's own end, not the sweep, meets the lapsed lease). X's observation opens its session and a client's lease of X lapses with it open; the client's connection then closes and its end (end_connection, as the connection's thread runs it): no error, health clean, X alone fenced with lease_expired as its cause (one fence record naming X), the refusal recorded once naming X, X's lease and the stage runtime_lifecycle_session_close, X's lease released once by the disconnect and never expired, X's session closed once after that under a fenced close, then Y's direct run dispatched and completed (1); a safe reset under X's client lease lets the lease lapse while its write is in flight and then fails, its resources confirmed: the input fails backend_operation_failed, health clean, X alone fenced with lease_expired, the refusal recorded once under the input's request naming X, its lease and the stage, X's lease released once by the input's own end and never expired, X's session closed once after that under a fenced close whose record keeps no owner unconfirmed, Y's direct run completed and the host closes (2); with the record of the refused close made to fail (#458's test-only switch, the ledger's failure), the connection's end returns ledger_failure at fence_instance_resources, fatal and Global, which the Runtime holds latched, no instance fenced (3); the same switch on the failed input's path: the Runtime holds ledger_failure at fence_instance_resources latched, fatal and Global, no instance fenced (4)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_458_close_isolates::close461_a_disconnect_after_its_lease_lapsed_fences_only_its_instance_and_the_runtime_runs",
+    "actingcommand-runtime-host::lib::tests::gate_458_close_isolates::close461_an_input_whose_lease_lapsed_under_it_fails_alone_and_keeps_no_owner_unconfirmed",
+    "actingcommand-runtime-host::lib::tests::gate_458_close_isolates::close461_a_record_that_cannot_be_appended_at_a_disconnects_close_still_stops_the_runtime",
+    "actingcommand-runtime-host::lib::tests::gate_458_close_isolates::close461_a_record_that_cannot_be_appended_at_a_failed_inputs_close_still_stops_the_runtime",
+]
+incident = ["#461"]

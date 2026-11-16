@@ -244,7 +244,8 @@ mod gate_mapp1c;
 mod gate_mapp1d;
 // Workflows #456 and #458 (0.12.60; register §1.364): a close of one instance's session refused
 // before it began, at a lease's expiry or after a keyless observation's capture failure, fences
-// that instance only; the Runtime runs on.
+// that instance only; the Runtime runs on. Workflow #461 (0.12.66; register §1.431): so at a
+// client's disconnect and after a failed input, whose lease lapsed before the sweep met it.
 mod gate_458_close_isolates;
 // Workflow #463 U1 (0.12.60; register §1.372): a linear step on a screen its package never
 // recorded ends with its own code, names its frame and pauses only its own pair, at once.
