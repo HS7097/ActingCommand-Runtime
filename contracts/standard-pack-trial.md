@@ -47,14 +47,14 @@ the end later"). `--collect` or `--wait` beside `--plan`, and `--wait` beside `-
 coordinator's ruling of fix round 2): it needs no authorization and refuses nothing that only the
 run needs. What the run will require that the plan was not given, the plan says
 (`run_requires`); the refusals that belong to the run (an authorization missing, an irreversible
-package not acknowledged, a variable given) are the run's ("The run").
+package not acknowledged) are the run's ("The run").
 
 | Input | What it is |
 |---|---|
 | `<instance>` | The instance the trial is for. The plan shows it as given; a plan does not contact, resolve or read it. The run is sent to it, resolved as `run start` resolves it; `--collect` reads only a run on it. |
 | `--package` | The package directory tried ("The package"). |
 | `--authorization` | The reference of the owner's authorization ("The authorization"); optional for a plan, required by the run. |
-| `--variable` | A value of a variable the package declares, `<name>=<json>`, once per name ("The variables"); the plan shows it, and the run refuses it (a direct run carries no variable value yet). |
+| `--variable` | A value of a variable the package declares, `<name>=<json>`, once per name ("The variables"); the plan shows it, and the run sends it in its request (S3-8, S3-9, 0.12.68: a Runtime of `runtime-client` revision 11 is needed, "The run"). |
 | `--expect` | The outcome key the trial is expected to end with: one the package declares. The run answers whether its end matched it ("The end"). |
 | `--irreversible` | Acknowledges a package the irreversible mark flags ("The irreversible mark"); shown in the plan, required by the run of a marked package. |
 | `--root` | A game root, installed or a bundle laid out as one, its directory named as its game: the root the irreversible mark is judged over. A package it does not register counts as marked. |
@@ -129,9 +129,13 @@ taken exactly as given: a name the package does not declare, and a value the dec
 take or would take in part, are `validation_failed` naming `--variable` with `not_recognised`, the
 details carrying `variable_name` and, for a value, the judgement's word `variable_problem`
 (`not_an_option`, `out_of_range`, `off_step`, `type_changed`, `keys_removed`,
-`count_out_of_range`, `key_repeated`, or `keys_left_out` for a value taken in part). Only the
-package's declaration judges a trial's value; what a game root keeps from applying is a dispatch's
-matter.
+`count_out_of_range`, `key_repeated`, or `keys_left_out` for a value taken in part). The plan
+judges a trial's value by the package's declaration alone. The run's Runtime judges it again, as
+it judges every direct run's value (S3-8, 0.12.68; [package-variables.md](package-variables.md),
+"A direct run given values"): by the same declaration, and by whether the variable applies on the
+instance now, as the variable table a dispatch reads says it; a value it does not take is its
+refusal (`run_variable_undeclared`, `run_variable_not_applying`, `run_variable_value_refused`),
+answered as every refusal of the run is ("The run"), and nothing runs.
 
 ## The irreversible mark
 
@@ -203,6 +207,36 @@ installed root.
 | `request_id`, `run_id` | The run's request id, and its run id when it has one. |
 | `end` | How the run ended, as its terminal says it: `outcome` (`success`, `failure`, `cancelled`), `outcome_key` (the business end), `final_page`, `failure_code`, `failure_values`, each when it has one. |
 | `matched` | Whether `end.outcome_key` is `plan.expect`; absent without `--expect`. |
+
+**A trial that passed** (Workflow #463, the train of S3-12 and S3-14, Runtime 0.12.68;
+[v012-register.md](v012-register.md) §1.445 and §1.446, "Train"; the coordinator's ruling, not the
+owner's words). A trial passed when its run ended on an end the package declares (`end.outcome`
+`success`, the run's own success) and, where the trial was given an expectation (`--expect`), on
+that end (`matched` is not `false`). A run that ended normally on another end than the expected one
+did not pass: the run itself succeeds, with `trial_end_unexpected` ("The end"), since the business
+ended another way, which is what a trial is there to find, but the trial did not pass. Without an
+expectation, ending on any declared end passes. One function judges it, the record's
+`PackTrialRecord::passed` (beside `unexpected_end`, which warns of the case it does not pass); every
+answer that says whether a trial passed calls it.
+
+**What the records say of one content** (the train). One function, `trial_summary`, builds from
+every record of a package (read by `trial_records`) the summary of one content that adoption's
+review (`review.trial`, [standard-pack-authoring.md](standard-pack-authoring.md), "The trial and
+the two warnings") and the status row (`trial`, [standard-pack-schedule.md](standard-pack-schedule.md),
+"Where a pack stands") both answer, member for member:
+
+| Member | What it is |
+|---|---|
+| `state` | `passed` or `failed`, the latest record of this content judged as above; `none` when no record names this content (the vocabulary `trial_state`). |
+| `content_hash_prefix` | The content: its 12 hex digits, named by the one function `content_hash_prefix_of`, which the plan, adoption and the status row call. |
+| `record` | The latest record of this content: `authorization`, `at_unix_ms`, `request_id`, `end` as the record keeps it, and `matched` when the trial was given an expectation; absent with `none`. |
+| `passed_on_record` | Whether any record of this content passed, so that a content that passed once and failed since reads `failed` and `true`. |
+| `other_content` | A record of another content of the same package is on record; it counts for nothing. |
+
+When the reader refuses the package's records (a file of a record's name that is no record, or the
+directory not listed), the answer carries instead `trial_not_read`, `{outcome, text}`: the reader's
+refusal with its code, and the same in words. Neither answer is refused for it, and every other
+part of it is answered as before.
 
 **The state directory's place.** A state directory that is, or lies inside, an installed root or a
 repository is refused `trial_state_dir_refused` with its `path` and the word `trial_state_place`:
@@ -285,9 +319,9 @@ when there is none. A file of a record's name that is not read as the record its
 the decoder's refusal as the cause) or `name_mismatch` (a record, but not of the package, the
 content and the time its name says): the reader answers no record of that package rather than pass
 over one. A file of another name, a `.part` among them, is no record. The status read (S3-14) and
-adopt's review (S3-12) are to call it. S3-11 fix round 2: `trial_record_of_run` answers, through
-it, the file of the record of one run's request id, whatever content it names; the run calls it
-before the writer.
+adopt's review (S3-12) call it, both through `trial_summary` (above). S3-11 fix round 2:
+`trial_record_of_run` answers, through it, the file of the record of one run's request id,
+whatever content it names; the run calls it before the writer.
 
 ## The run
 
@@ -301,10 +335,11 @@ and before anything is written:
    - no `--authorization`: `trial_authorization_missing` (`package_id`);
    - a package the irreversible mark flags (`marked`) and no `--irreversible`:
      `trial_irreversible_unacknowledged` (`package_id`); a mark not judged (no `--root`) refuses
-     nothing;
-   - any `--variable`: `trial_variables_not_carried` (`package_id`, `variable_name`, the first
-     given): a direct run cannot carry variable values yet (the Runtime half and the Lab half are
-     later slices); the plan keeps showing them.
+     nothing.
+
+   S3-8, S3-9 (0.12.68): a `--variable` refuses nothing here any more; the run carries the values
+   the plan shows as given, and `trial_variables_not_carried`, which refused it while a direct run
+   could carry none, is retired (raised nowhere; its catalog entry stays, `retired`).
 
    The state directory refused is S3-10's `trial_state_dir_refused`, already the plan's. A record
    of this content at the run's millisecond already there is S3-10's `trial_record_exists`, which
@@ -316,8 +351,15 @@ and before anything is written:
 **One run, sent once.** The request is the one `run start` sends, made by its own function
 (`crates/lab-ops`, `core_ops::run_start_prepared`, called, not copied): the instance resolved by
 one status read, the package directory tried by its path made canonical, the longest deadline a
-run may have (`ContainedTaskRequest::MAX_RESPONSE_DEADLINE_MS`, 30 minutes), no recovery package. It
-is named by its `request_id` before it is sent, and submitted once. It is waited for as `run start`
+run may have (`ContainedTaskRequest::MAX_RESPONSE_DEADLINE_MS`, 30 minutes), no recovery package,
+and (S3-8, S3-9, 0.12.68) the values `--variable` gives, handed to `run start`'s own `variable`
+parameter, each `<name>=<the value as compact JSON>`, so that `run start`'s parser reads them into
+the request's `variables`; without `--variable` the request carries none and is the request of
+before. A run with values needs a Runtime of `runtime-client` revision 11: one below it cannot
+decode the request and ends the connection, nothing runs, and that is the client's failure,
+answered as a connection that ended before any of the run's receipt came back (below; fix round
+1: `next` `{unconfirmed: no_receipt}`). It is named by its `request_id` before it is sent, and
+submitted once. It is waited for as `run start`
 waits: without `--wait` to its receipt, the run's deadline and the client's margin bounding the
 wait (the longest wait `run start` allows, `run start` without `--wait`); with `--wait` up to that
 long (`wait::wait_at_most`), the run going on in the Runtime when the wait ends first. The client's
@@ -335,6 +377,14 @@ that did not come in time); nothing else is sent, and this command never sends t
   failure and sends nothing, and that failure is the answer, beside `request_id` and `next`;
   nothing is written and nothing is sent again. (A run the client saw cancelled comes back without
   its receipt, after the client's own reset; its end is read and recorded as a cancelled run's.)
+- (S3-8, S3-9 fix round 1) when nothing of the run's receipt came back, not even its header (the
+  connection that carried the run ended first), that `next` names no line that reads the end
+  later but what is known: `{unconfirmed: no_receipt}` (the vocabulary `trial_run_unconfirmed`).
+  The Runtime confirmed nothing of the run, so whether it was accepted or started is not known: a
+  Runtime below revision 11 ends the connection so on a run with values and runs nothing, and one
+  that stopped while the run was in it ends it too. The client cannot tell the two apart, and no
+  probe of the Runtime's revision is made. A `--collect` of a run the Runtime never had would
+  answer `trial_end_unread` `not_found` for ever, so it is not named.
 
 ## The end
 
@@ -390,8 +440,11 @@ recorded, which names the record. The answer:
   Each answers `end: {state}` beside the members.
 
 `next` is `{collect: [...]}`: the words of actinglab's command line after the program's name, the
-trial's own arguments (`--instance`, `--package`, `--authorization`, `--expect`, `--irreversible`,
-`--root`, `--state-dir` as the trial had them) with `--collect <request_id>`.
+trial's own arguments (`--instance`, `--package`, `--authorization`, since S3-8, S3-9 each
+`--variable` as the run was sent with it, `--expect`, `--irreversible`, `--root`, `--state-dir` as
+the trial had them) with `--collect <request_id>`. Fix round 1 of S3-8, S3-9: after a run nothing of
+whose receipt came back, `next` is `{unconfirmed: <word>}` instead (vocabulary
+`trial_run_unconfirmed`: `no_receipt`; "The run").
 
 ## Reading the end later
 
@@ -422,7 +475,9 @@ says which command sent it. Such a run, given to `--collect`, is recorded as a t
 know the content that ran: the run's facts name the package by its `package_id` and record no
 content digest (option 丙 of #336), and the trial keeps nothing before its record. The content a
 `--collect` records is the plan's, the package directory as read at the time of the `--collect`;
-when that directory changed after the run, the record names content that was not what ran. What
+when that directory changed after the run, the record names content that was not what ran. Nor
+can it know the values the run was given (S3-8, S3-9): a direct run records nothing of them, so
+the values a `--collect` records are its own line's `--variable`s, the ones `next` repeats. What
 holds: a run has one record. Before the writer, a record of the run's request id is looked for
 among the package's records whatever content it names, so a second `--collect` of a run that has
 its record, after the directory changed or not, is `trial_record_exists` naming that record and
@@ -456,7 +511,7 @@ the operating system refuses is `foreign_os_error`.
 | `trial_record_part_left` | The record is written and in place, but the `.part` its write created could not be removed. | warns |
 | `trial_authorization_missing` | (S3-11) The run was asked for without `--authorization`. | refuses |
 | `trial_irreversible_unacknowledged` | (S3-11) The mark flags the package and the run was asked for without `--irreversible`. | refuses |
-| `trial_variables_not_carried` | (S3-11) The run was asked for with a `--variable`, which a direct run cannot carry yet. | refuses |
+| `trial_variables_not_carried` | (S3-11; retired in 0.12.68 by S3-8, S3-9, raised nowhere) The run was asked for with a `--variable`, which a direct run could not carry before 0.12.68. | refused (retired) |
 | `trial_end_unexpected` | (S3-11) The run ended normally on another end than `--expect` named; the command succeeds. | warns |
 | `trial_end_unread` | (S3-11) The run has not ended yet (`run_state` `not_found`, `admitted`, `running`); no record was written; `next` reads it again later. | refuses |
 | `trial_collect_mismatch` | (S3-11) `--collect` names a run that is not a trial's run of this package on this instance (`trial_collect_problem`: `other_package`, `other_instance`; fix round 2: `scheduled`, `origin_unknown`, `other_channel`). | refuses |

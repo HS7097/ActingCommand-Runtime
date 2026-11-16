@@ -940,3 +940,20 @@ tests = [
     "actingcommand-contract::lib::runtime::gate_392_da5ab::da5ab_fix1_a_projection_frame_is_its_device_frame_or_that_frame_reduced_by_a_pure_scale",
 ]
 incident = ["#392 DA-5ab"]
+
+# Workflow #463 S3-8 (0.12.68; register §1.444; brief rd-1116/brief-463-s38-run-variables.md with the coordinator's ruling 1 of its take-over, rd-1116/brief-463-continue.md; contracts/runtime-interface.md, "The variable values of a contained run"; contracts/component-interfaces.md, the runtime-client row 11): ContainedTaskRequest's member variables ({name: json}). A request built as a run start without --variable builds it, and the same request given no values, encode byte for byte alike with no variables member, alone and in the run's envelope, and revision 10's encoding decodes into that request; values of the four kinds of a variable round-trip under variables by name, alone and in the run's envelope, and validate; sixteen values and names of 1 and 64 bytes pass; seventeen values are invalid_contained_task_variable_count, through with_variables and a decoded request's validate; an empty name and names outside [a-z][a-z0-9_]* or of 65 bytes are invalid_contained_task_variable_name, through with_variables, a decoded request's validate and the run's operation's validate alike
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-contract::lib::runtime::gate_463_s38::s38_a_request_without_values_is_todays_request_byte_for_byte",
+    "actingcommand-contract::lib::runtime::gate_463_s38::s38_a_request_with_values_round_trips",
+]
+incident = ["#463 S3-8"]
+
+# Workflow #463 S3-8, fix round 1 (0.12.68; register §1.444, "Fix round 1"; brief rd-1116/brief-463-s38-fix1.md; the review of #1789, its section (h); contracts/runtime-interface.md, "The variable values of a contained run"): a reader of the parent's revision refuses a request that carries the member. ContainedTaskRequest as revision 10 declared it (package_path, recovery with serde default, response_deadline_ms with its default, deny_unknown_fields, no variables) reads today's request without values member by member (the package path, no recovery, 120000), and refuses the request with one value, alone and as the run's envelope carries it, naming the unknown field variables
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-contract::lib::runtime::gate_463_s38::s38_fix1_a_reader_of_revision_ten_refuses_a_request_with_values",
+]
+incident = ["#463 S3-8"]

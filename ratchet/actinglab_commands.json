@@ -52,7 +52,7 @@
     "session <subcommand>",
     "run <subcommand>"
   ],
-  "command_count": 107,
+  "command_count": 109,
   "commands": [
     "help",
     "version",
@@ -139,6 +139,8 @@
     "standard-pack adopt",
     "standard-pack ready",
     "standard-pack trial",
+    "standard-pack status",
+    "standard-pack catalog",
     "runtime reset",
     "runtime observe",
     "session status",

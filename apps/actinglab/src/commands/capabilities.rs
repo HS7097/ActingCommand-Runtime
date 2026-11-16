@@ -70,6 +70,14 @@ pub(crate) fn command_capabilities() -> Vec<Value> {
             ["offline", "running_runtime", "device"],
             "available",
         ),
+        // Workflow #463 S3-14: where each pack of a game root stands; reads only.
+        command_cap(
+            "standard-pack status",
+            ["offline", "read_only"],
+            "available",
+        ),
+        // Workflow #477 PC-1: writes a game root's `pack-catalog.json` from what it declares.
+        command_cap("standard-pack catalog", ["offline"], "available"),
         command_cap("package fmt", ["offline"], "available"),
         command_cap("package edit", ["offline"], "available"),
         // Workflow #463 V3: what one package's control declaration declares; reads only.
@@ -159,6 +167,9 @@ pub(crate) fn command_capabilities() -> Vec<Value> {
             ["offline", "read_only"],
             "available",
         ),
+        // #463 S2-2: each step as the screen before, the press and the screen after; it writes its
+        // previews alone.
+        command_cap("session record review", ["offline"], "available"),
         command_cap("record", ["offline"], "available"),
         command_cap("record start", ["offline", "runtime_optional"], "available"),
         command_cap("record status", ["offline"], "available"),
@@ -180,6 +191,8 @@ pub(crate) fn command_capabilities() -> Vec<Value> {
         command_cap("record ready", ["offline", "read_only"], "available"),
         // #463 S2-13.
         command_cap("record frames", ["offline", "read_only"], "available"),
+        // #463 S2-2.
+        command_cap("record review", ["offline"], "available"),
         command_cap("capture --record", ["device"], "available"),
         command_cap("session capture --record", ["device"], "available"),
         command_cap("session app --record", ["device"], "available"),

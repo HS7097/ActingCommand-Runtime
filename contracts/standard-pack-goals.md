@@ -36,8 +36,9 @@ beside `bundle.json`, by the root-file rule ([package-reference.md](package-refe
 fix round 3; version 1, `actingcommand.goals.v1`, is what release 0.12.60 read) and `game` equal
 to the directory's name.
 
-- It is not `ui.json`: the Runtime must enforce types and ranges, and `ui.json` is display metadata
-  that no Runtime reader opens and that never changes a run.
+- It is not `ui.json` (since Workflow #477 PC-1, the display part of `pack-catalog.json`,
+  [pack-catalog.md](pack-catalog.md)): the Runtime must enforce types and ranges, and that file is
+  a declaration no Runtime reader opens and that never changes a run.
 - It is not a member of `schedule.json`: that reader refuses any eighth member, so an older Runtime
   would refuse the whole schedule.
 
@@ -143,11 +144,13 @@ Not in version 2: a slider, multiple choice and a table (later types or blocks),
 
 ## Texts and limits
 
-Texts have the shape and the bounds of `ui.json`'s ([package-reference.md](package-reference.md),
-`ui.json`, "Limits"): each text has 1 to 16 locales, each locale name 1 to 35 bytes. The words are
+Texts have the shape and the bounds that `ui.json`'s had and that the display part of
+`pack-catalog.json` keeps ([pack-catalog.md](pack-catalog.md), "Limits"; Workflow #477 PC-1):
+each text has 1 to 16 locales, each locale name 1 to 35 bytes. The words are
 this file's own: a list, a map or a text's locales of a count outside its limit, and a name, an
 option value, an id, a locale or a text of a length outside its limit, are `goal_out_of_limits` at
-what exceeds, as `ui.json` has `ui_out_of_limits` for its own (G-R1 fix round 1; before it this
+what exceeds, as `pack-catalog.json` has `catalog_out_of_limits` for its own (`ui.json` had
+`ui_out_of_limits`) (G-R1 fix round 1; before it this
 file said `malformed`). An integer outside the safe integers is not of its type (`malformed`), and
 a `scale_milli` outside its range is what the entry declares as its values (`goal_range_invalid`;
 "The checks"). The value types' limits Workflow #463 V1 moved to a package's `variables`

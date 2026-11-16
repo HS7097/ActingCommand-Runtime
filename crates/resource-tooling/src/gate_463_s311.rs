@@ -4,11 +4,12 @@
 // "The record"; coordinator work order rd-1115/brief-463-s311-trial-run.md, with what the review of
 // S3-10's third round left for this slice): the offline parts of the trial's run.
 // - `s311_the_runs_own_refusals_come_after_the_plan_in_their_order`: `check_trial_run` refuses a
-//   run without an authorization (`trial_authorization_missing`), a package the irreversible mark
-//   flags without `--irreversible` (`trial_irreversible_unacknowledged`) and any `--variable`
-//   (`trial_variables_not_carried`, the first name given), in that order, each naming the package;
-//   a mark not judged (no root) refuses nothing; an acknowledged mark passes; what passes is the
-//   plan as the record keeps it, the authorization as given.
+//   run without an authorization (`trial_authorization_missing`) and a package the irreversible
+//   mark flags without `--irreversible` (`trial_irreversible_unacknowledged`), in that order, each
+//   naming the package; a mark not judged (no root) refuses nothing; an acknowledged mark passes;
+//   what passes is the plan as the record keeps it, the authorization as given. Adapted by
+//   Workflow #463 S3-8, S3-9 (register §1.444): a `--variable` refuses nothing any more
+//   (`trial_variables_not_carried` is retired); the plan the record keeps names the value given.
 // - `s311_a_record_plan_holds_the_authorization_to_the_plans_bounds` (the review's item 3): the
 //   conversion of a plan into the record's plan refuses a blank authorization (`value_missing`),
 //   one of 1025 bytes (`out_of_range`) and one with a control character (`not_recognised`), each
@@ -232,7 +233,7 @@ fn request(package: &Path, state: &Path) -> StandardPackTrialRequest {
 fn checked(request: &StandardPackTrialRequest) -> Result<TrialRecordPlan, LabError> {
     let answer = plan_standard_pack_trial(request)
         .unwrap_or_else(|error| panic!("the plan: {}: {}", error.code, error.message));
-    check_trial_run(&answer, request)
+    check_trial_run(&answer)
 }
 
 /// The values of the refusal `error`, which must be `code` with its outcome in the details.
@@ -383,17 +384,18 @@ fn s311_the_runs_own_refusals_come_after_the_plan_in_their_order() {
         refused_with(&error, ResourceToolingCode::TrialIrreversibleUnacknowledged),
         json!({"package_id": TRIED})
     );
-    // Acknowledged, the variable is last.
-    let error = checked(&StandardPackTrialRequest {
+    // Acknowledged, a variable given refuses nothing (Workflow #463 S3-8, S3-9): the plan the
+    // record keeps names the value the run is sent with.
+    let given = checked(&StandardPackTrialRequest {
         root: Some(root.clone()),
         irreversible: true,
         variables: floor,
         ..request(&package, &state)
     })
-    .expect_err("a variable given");
+    .expect("a variable given passes");
     assert_eq!(
-        refused_with(&error, ResourceToolingCode::TrialVariablesNotCarried),
-        json!({"package_id": TRIED, "variable_name": "floor"})
+        serde_json::to_value(&given.variables).expect("the variables as JSON"),
+        json!([{"name": "floor", "value": 20, "source": "given"}])
     );
     // A marked package acknowledged, and a mark not judged, pass; the record keeps the plan.
     let acknowledged = checked(&StandardPackTrialRequest {

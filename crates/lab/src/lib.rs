@@ -84,20 +84,39 @@ mod gate_463_s17;
 // #463 S2-1: one read lists everything a recording still lacks before `record stop`.
 #[cfg(test)]
 mod gate_463_s21;
+// #463 S2-1c: `record ready` lists every failure of each self-check, and whether its list is all.
+#[cfg(test)]
+mod gate_463_s21c;
+// #463 stage two, train (S2-2, S2-7, S2-6, S2-1c): each step's `record review` lists exactly its
+// items of the one readiness judgement `record ready` answers with.
+#[cfg(test)]
+mod gate_463_s2_train;
 // #463 S2-13: `record frames` lists the stored frames just before and just after one step's press.
 #[cfg(test)]
 mod gate_463_s213;
+// #463 S2-2: `record review` answers each step as the screen before, the press and the screen
+// after, and writes its previews.
+#[cfg(test)]
+mod gate_463_s22;
 // #463 S2-5: boxes drawn on a recording step, a region to recognize by and a region to press.
 #[cfg(test)]
 mod gate_463_s25_boxes;
 // #463 S2-5: boxes on a draft stage one recorded, its captures before a press as base images.
 #[cfg(test)]
 mod gate_463_s25_draft;
+// #463 S2-7: a page transition named by frames the recording stored; a press before the last that
+// changed nothing dropped, and given back.
+#[cfg(test)]
+mod gate_463_s27;
 // Workflow #392 DA-5ab fix round 1: a recording takes from a Lab operation only what it can take;
 // the train of DA-5ab and DA-5cd (R4): every recording path judges the recording and the frame it
 // took before it sends or writes anything.
 #[cfg(test)]
 mod gate_392_da5ab;
+// #463 S2-6: a step marked first as holding a choice and refined later by its select; `record
+// ready` lists one not refined (`select_unrefined`).
+#[cfg(test)]
+mod gate_463_s26;
 mod lab_run;
 mod lab_run_api;
 mod ledger_port;

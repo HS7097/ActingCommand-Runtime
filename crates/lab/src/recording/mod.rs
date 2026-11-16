@@ -29,8 +29,12 @@ pub(crate) mod inserted;
 pub(crate) mod lock;
 pub(crate) mod marks;
 pub(crate) mod model;
+// #463 S2-2: a copy of a stored frame with a press and the declared boxes drawn on it.
+pub(crate) mod preview;
 // #463 S2-1: everything a recording still lacks before `record stop` can make its package.
 pub(crate) mod ready;
+// #463 S2-2: each step of a recording as the screen before, the press and the screen after.
+pub(crate) mod review;
 // #463 R1: a step that chooses in a list of fixed slots by the name read in each slot.
 pub(crate) mod select;
 pub(crate) mod steps;
@@ -52,6 +56,10 @@ pub use hold::{
 pub use lock::RecordingLock;
 pub use model::*;
 pub use ready::{
-    PressPointOnly, ReadyDetails, ReadyItem, ReadyMark, ReadyOptionConflict, ReadySources,
-    ReadyWarningItem, RecordReadyOutcome,
+    PressPointOnly, ReadyCheckRun, ReadyDetails, ReadyItem, ReadyMark, ReadyOptionConflict,
+    ReadySources, ReadyWarningItem, RecordReadyOutcome,
+};
+pub use review::{
+    RecordReviewAfter, RecordReviewBetween, RecordReviewFrame, RecordReviewOutcome,
+    RecordReviewPress, RecordReviewRequest, RecordReviewStep,
 };

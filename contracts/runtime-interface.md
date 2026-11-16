@@ -656,6 +656,59 @@ The client (`runtime-client` 9): `goal_view` and `edit_goal`. A Runtime that dec
 drops either request: the read reports `runtime_operation_unsupported`; the instruction a
 transport failure, whose effect `GoalView` reads back before it is sent again.
 
+### The variable values of a contained run
+
+Workflow #463 S3-8, S3-9 (register §1.444, since 0.12.68; `runtime-client` revision 11;
+[package-variables.md](package-variables.md), "Runs without a dispatch"). A direct run is given
+values for the variables its package declares, as a dispatch gives its run the values set on the
+application. Shape: `crates/actingcommand-contract`, `runtime.rs`, `ContainedTaskRequest`.
+
+| Member | Shape | Absent |
+|---|---|---|
+| `RunContainedTask`'s `request.variables?` | `{name: json}`: at most 16 values (a package declares at most 16 variables; more is `invalid_contained_task_variable_count`), each under a name of a variable's form (1 to 64 bytes of `[a-z][a-z0-9_]*`; another is `invalid_contained_task_variable_name`): the contract's check, so a client cannot build such a request (actinglab's `run start` answers too many values `--variable` `out_of_range`, since fix round 1, and a name out of form `--variable` `not_recognised`, before anything is sent) and the Runtime refuses one it receives, Denied, before reading the package | when no value is given: the request is then byte for byte the request of revision 10, and every variable reads its default |
+
+**The judgement**, in the run's preparation, after its package and its prerequisite chain are
+read and before any record, claim or lease (`check_run_variables`), each value in the order of its
+name, each refusal Denied with `invalid_request`, the package's `package_id` and the value's
+`variable_name`, nothing run:
+
+1. a name the package declares no variable of: `run_variable_undeclared`;
+2. a variable that does not apply on the instance now, as the variable table a dispatch reads says
+   it (`VariableTable::root_word` for the instance's game, as the policy's inputs bind it; with a
+   composed standard pack the scheduler workbench's table, else the one the last evaluation's
+   remedy table built, else none; an instance bound to no game, or a game no check judges, is
+   `root_unchecked`): `run_variable_not_applying` with that word as `variable_problem`;
+3. a value the variable does not take whole, judged by the dispatch's own function (the policy
+   crate's `resolve_variable`, the value given as the application's stored entry, set through the
+   request's channel at the Runtime's clock): `run_variable_value_refused` with the judgement's
+   word as `variable_problem` (`not_an_option`, `out_of_range`, `off_step`, `type_changed`,
+   `key_repeated`, `keys_removed`, `count_out_of_range`, or `keys_left_out` for an `ordered` value
+   a dispatch would take in part);
+4. a judgement that gives neither the value nor a word, which cannot happen (for an entry whose
+   setter is known and a variable that applies, `resolve_variable` answers the value or the default
+   with its word): `run_variable_unjudged` (the 0.12.68 train's fix round), this run alone refused
+   and the Runtime going on.
+
+**The overlay.** The values pass into the run's parameters where a dispatch's values pass
+(`execute_contained_task_with_lease`: `dispatched_variable_values` and `with_variables`, one
+line for both), so the package reads each as `session.dispatch.parameter.<name>` with its kind's
+type, exactly as it reads a dispatched value; a variable not given reads its default. A request
+without values reads every default (`default_run_values`), as before. Nothing of the values is
+recorded with the run: a direct run's command record carries no parameters, and no ledger member
+is added.
+
+**An older Runtime.** A Runtime below revision 11 cannot decode a request that carries
+`variables` (the request denies unknown members): it ends the connection without a receipt,
+nothing runs, and the client reports the connection ended before its receipt. Nothing on the wire
+tells a client the Runtime's revision before a request (`runtime-info.json`, `Health`, `Status`
+and `ChannelBound` carry none), so no client asks first; in an installation the Lab and the
+Runtime come from one build. A request without values is answered by every Runtime as before.
+
+The Lab: `run start --variable <name>=<json>` (repeatable, read by the scan replay's own parser)
+and `standard-pack trial --variable` ([standard-pack-trial.md](standard-pack-trial.md), "The
+run") send the values; their MCP tools `ac_run_start` and `ac_standard_pack_trial` take
+`variable` as a list.
+
 ### Instance fact key families
 
 `fact_key_family(key)` in the contract looks only at a key's spelling and returns one
@@ -900,7 +953,7 @@ handles it, and `via` keeps what the ledger already shows today (the `client.act
 | new: `perf-status [--instance <alias\|instance_id\|ADB port>]` (#385 P-m) | PerformanceStatus (records nothing); a given `--instance` is resolved with one Status read | general read | actingctl; `ac_overview` answers the same object as its block `performance`; the status' `instances` narrowed to the one instance; actingd absent: the client's failure, exit 1; success `runtime_performance_reported` |
 | new: `fact-refresh [--instance <alias\|instance_id\|ADB port>]` (#384 D2-S5) | FactRefreshStatus (records nothing); a given `--instance` is resolved with one Status read | general read | actingctl; `ac_overview` answers the same object as its block `fact_refresh`; the status' `instances` narrowed to the one instance; actingd absent: the client's failure, exit 1; success `runtime_fact_refresh_reported` |
 | new: `schedule [--instance <alias\|instance_id\|ADB port>]` (#386 SR-6b, MCP-19b; register §1.144) | ScheduleExplanation with `candidates: true` (records nothing); a given `--instance` is resolved with one Status read | general read | actingctl; `ac_schedule` answers the same object; the answer verbatim, narrowed to the one instance's entry; actingd absent: the client's failure, exit 1; success `runtime_schedule_reported` |
-| new: `packs` (#389 MCP-11, before U-3) | not a request: reads the selected configuration generation (`install\active.json` → its configuration file); from U-3 also the loaded-pack table through RuntimeFactSnapshot; Workflow #357 DB-1 (`v012-register.md` §1.65 TB4): with `standard_packs.root` set, also `standard_packs {root, games [{game, tables}]}`, the tables of each sound game root as check-config lists them; ROUT-L RL-1c (#411): in composer mode (no `policy.catalog`) the installation rows are the procedures the scheduler workbench composes from the bound games' `schedule.json` ([standard-pack-schedule.md](standard-pack-schedule.md), "The readers of composer mode"); Workflow #429 R-11 (`v012-register.md` §1.240, since 0.12.36, offline, no revision): each game of `standard_packs` also carries `ui` (its `ui.json` as written, when it keeps its rules) and `display` (that file's `display`), and each composed installation row `task_ids` (the composed tasks that run its package, in id order, until SS-7's schedule view), `irreversible` (derived as the Runtime derives it: an entry of the package's `control.json` `provides` declares `irreversible: true`, [remedies.md](remedies.md) §2.2; absent with `package_binding_unreadable` when the control file cannot be read) and, from its game's valid `ui.json`, `ui` (the file's entry for the package) and `display`; without `ui.json` a row is as before plus `task_ids` and `irreversible`, and a client shows the `package_id`; a refused `ui.json` adds its `standard_pack_root_invalid` warnings and changes no row ([package-reference.md](package-reference.md), "Standard package root", `ui.json`); a catalog-mode binding carries none of the four | general read (offline, no `--state-root`) | actingctl; `ac_packs` (new) |
+| new: `packs` (#389 MCP-11, before U-3) | not a request: reads the selected configuration generation (`install\active.json` → its configuration file); from U-3 also the loaded-pack table through RuntimeFactSnapshot; Workflow #357 DB-1 (`v012-register.md` §1.65 TB4): with `standard_packs.root` set, also `standard_packs {root, games [{game, tables}]}`, the tables of each sound game root as check-config lists them; ROUT-L RL-1c (#411): in composer mode (no `policy.catalog`) the installation rows are the procedures the scheduler workbench composes from the bound games' `schedule.json` ([standard-pack-schedule.md](standard-pack-schedule.md), "The readers of composer mode"); Workflow #429 R-11 (`v012-register.md` §1.240, since 0.12.36, offline, no revision): each game of `standard_packs` also carries `ui` (its `ui.json` as written, when it keeps its rules) and `display` (that file's `display`), and each composed installation row `task_ids` (the composed tasks that run its package, in id order, until SS-7's schedule view), `irreversible` (derived as the Runtime derives it: an entry of the package's `control.json` `provides` declares `irreversible: true`, [remedies.md](remedies.md) §2.2; absent with `package_binding_unreadable` when the control file cannot be read) and, from its game's valid `ui.json`, `ui` (the file's entry for the package) and `display`; without `ui.json` a row is as before plus `task_ids` and `irreversible`, and a client shows the `package_id`; a refused `ui.json` adds its `standard_pack_root_invalid` warnings and changes no row; a catalog-mode binding carries none of the four; Workflow #477 PC-1 (`v012-register.md` §1.438, since 0.12.68, offline, no revision): `pack-catalog.json` replaced `ui.json`, which nothing reads any more ([pack-catalog.md](pack-catalog.md)): a game's `ui` is the file's display part as a client reads it, `{groups, packs}` (the groups and the package displays that keep their rules, as written), `display` the file's `display` and `index` `{producing, consuming}` (per pool the packages that produce or consume it, computed, never stored); a composed row's `ui` is its package's display members, `display` its game's and `catalog` `{consumes, produces}` its package's business part; without the file a row is as before plus `task_ids` and `irreversible`; a file wrong in its business part adds one `standard_pack_root_invalid` warning per error and changes no row; a display defect is `standard_pack_catalog_display_invalid` and that package shows by its id; a root that still holds `ui.json` gets `standard_pack_ui_retired`; a catalog-mode binding carries none of these | general read (offline, no `--state-root`) | actingctl; `ac_packs` (new) |
 | new: `codes <code>`, `codes [--prefix <text>] [--owner <owner>] [--limit <1-100>] [--cursor <next_cursor>]` (#389 MCP-14, before U-3) | not a request: reads the outcome catalog the build embeds | general read (offline, no `--state-root`) | actingctl; `ac_outcome_code` (new); one code answers its catalog entry as the catalog holds it with its `code`, the list `{codes: [{code, category, ladder_class, status}], next_cursor?}` in name order; success `outcome_codes_reported`; refusals `outcome_code_unknown`, `cursor_invalid`, `outcome_catalog_unreadable` |
 | new: `capability-gap --capability <text> --why <text>` (#410 item 6) | not a request: appends one line to the user's local log `%LOCALAPPDATA%\ActingCommand\actingctl\capability-gaps.jsonl` | general instruction (local only, no `--state-root`, no Runtime, no ledger record) | actingctl; `ac_capability_gap` (new); each text one line, `capability` 1–120 and `why` 1–500 characters; answers `{path, gap: {schema_version, recorded_at_unix_ms, via, capability, why}}`, `via` `cli` or `mcp`; success `actingctl_capability_gap_recorded`; refusals `actingctl_usage_invalid`, `actingctl_capability_gap_write_failed`; nothing reads the log back and nothing sends it anywhere |
 | new: `run evidence (--request-id <id> \| --run-id <id>) [--from-step <n>] [--limit <1-100>] [--detail full\|summary]` (#389 MCP-6, before U-3; `--detail` #411 A42) | QueryEvents (Forensic) by the run's request_id, after the run is found as `ac_get_run` finds it; #411 A42: only the record types the evidence folds, page by page, none kept; the frames and the overlay are material refs read with ReadMaterial (`ac_material`) | general read | actingctl; `ac_run_evidence` (new); `{request_id, run_id?, task_id?, steps: [{step_index, page, targets: [{target, matched, box?}], action?: {kind, point?, rect?}, frames: [{ref}]}], final: {page?, frame_ref?}, next_step?, overlay?: {ref}}`; #411 A42: with `--detail summary` each step is `{step_index, page, kind?, started_unix_ms, duration_ms?, frames_total, frame_sequence?, finished?, failure_code?}` and the page holds up to 100 steps by default; the output shape is the client's only; success `run_evidence_reported`; refusals `run_unknown`, `actingctl_usage_invalid` |

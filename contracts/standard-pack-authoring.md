@@ -35,7 +35,7 @@ check and writes nothing in the checkout ("`--dry-run`" below).
 | `--held-reason` | The decision of the class `held` without a document: its reason ("A held decision by two flags" below). Not with `--decide`. |
 | `--held-reference` | With `--held-reason` only: that decision's reference. |
 | `--replace` | Adopt a package adopted before again ("Repeating" below). |
-| `--state-dir` | The Lab's state directory, as the recording commands take it (default actinglab's session directory): it holds the recordings, the kept copies (`adopt/`) and the check trees (`adopt-check/`). With `--replace` it must lie on the checkout's volume, since the replaced directory is moved into it. |
+| `--state-dir` | The Lab's state directory, as the recording commands take it (default actinglab's session directory): it holds the recordings, the kept copies (`adopt/`) and the check trees (`adopt-check/`), and (Workflow #463 S3-12) the trial records adoption reads (`trials/`, "The trial and the two warnings"). With `--replace` it must lie on the checkout's volume, since the replaced directory is moved into it. |
 
 ## The decision document
 
@@ -145,9 +145,14 @@ decision whose `value` names the origin `model` is refused `value_origin_model` 
 written: only the model's export writes `model`; give the number with `pack`, or `pending`. A rule
 adopt meets again that already carries `fixed_value_origin: "model"` keeps its value and its origin
 whatever the decision names, and the answer reports both members in `model_kept`; adopt does not
-remove the origin and does not copy it to another rule. Today no writer of `model` exists (the
-model's export writes thresholds only), so no rule carries it and the Lab does not write it; the
-provenance listing of `standard-pack check` therefore shows which values wait for the model.
+remove the origin and does not copy it to another rule. The model's writer is `acmodel bindings
+apply` (Workflow #463 S3-12 corrected this sentence, which said that no writer of `model` exists):
+a value binding of the repository's `ours/model/bindings.json` names the rule, and the writer
+writes the value the model exports into its `fixed_value_milli` with `fixed_value_origin:
+"model"`; a number written by hand is registered there as a hand entry with its `status` and its
+`ref`, and carries no origin. The Lab never writes `model`; the provenance listing of
+`standard-pack check` shows which values are the pack's and which the model's. A rule adopted
+without a value names that file in `next` ("The answer").
 
 ## A pending value
 
@@ -258,7 +263,7 @@ the repository and keeps no copy.
 | A class `business` beside a maintenance role a root file adopt does not write gives the package ("One role") | `decision_invalid` | `path`, `json_pointer` `/class` |
 | A class `maintenance` by its `uses` alone beside the package's business rule, a rule the composer judges by its value ("One role") | `business_rule_in_the_way` | `entry` `schedule.json`, `json_pointer` `/rules/<i>`, `package_id`; the message names the rule's id |
 | Without a decision, no held entry of the package in `schedule.json` beside its `maintenance.json` entry ("One role", "If a call was interrupted") | `repository_invalid` | `entry` `maintenance.json`, `json_pointer` the entry, `package_id` |
-| A class other than `held` needs a package run through: its entry task's provenance a recording's, the cross-check `passed`, the first decision evaluated (no `first_decision_not_evaluated` warning, no application step) and no step whose click needs review | `recording_unreviewed` | `package_id`; the details carry `review` |
+| A class other than `held` needs a recording checked offline (`review.recording_checked`, "The trial and the two warnings"): its entry task's provenance a recording's, the cross-check `passed`, the first decision evaluated (no `first_decision_not_evaluated` warning, no application step) and no step whose click needs review | `recording_unreviewed` | `package_id`; the details carry `review`; the message says that the recording was not checked offline |
 | No text of the package holds an absolute local path (a drive or network path, the state directory, the checkout) | `local_path` | `entry` the file, `json_pointer` the string |
 | A root file adopt must change is in the canonical form ("The canonical form") | `root_file_not_canonical` | `entry` |
 | The checkout's check tree is no link, the tool's own and free, and no directory beside it named as one a call makes the tree whole in is a link (below) | `check_tree_link`, `check_tree_unmarked`, `check_tree_busy` | `path` the check tree, or that directory |
@@ -459,7 +464,9 @@ with the version control.
 
 The repository's own items adopt does not write are named in `next` when the checkout holds them:
 a regression case (`regression/<game>/`), the catalog section (`docs/PACKS.md`) and the census row
-(`ours/coverage/business-v1.csv`).
+(`ours/coverage/business-v1.csv`). Workflow #463 S3-12: and, whether the checkout holds it or not,
+`ours/model/bindings.json` while the adopted rule has no value yet ("The trial and the two
+warnings").
 
 ## Repeating (`--replace`)
 
@@ -475,23 +482,90 @@ with the written and the derived value, and never written.
 ## `--dry-run`
 
 Every check runs, the check tree under `<state>/adopt-check/` included; the answer is `validated`
-with `written` empty and `would_write` what an adoption would write, and its `readiness` judged as
-an adoption's is ("The answer"); nothing is written in the repository and no copy is kept
+with `written` empty and `would_write` what an adoption would write, and its `readiness` judged and
+its `review.trial` read as an adoption's are ("The answer"); nothing is written in the repository
+and no copy is kept
 ([actinglab-dry-run.md](actinglab-dry-run.md)).
 
 ## The answer
 
 `status` (`adopted` or `validated`), `dry_run`, `repo`, `game`, `server`, `package_id`,
 `entry_task_id`, `class`, `replaced`, `review` (`recorded`, `record_id`, `cross_check`,
-`first_decision_evaluated`, `steps_needing_review`, `run_through`), `rule`, `held` and
+`first_decision_evaluated`, `steps_needing_review`, `recording_checked`, and `trial` or
+`trial_not_read`; "The trial and the two warnings" below), `rule`, `held` and
 `maintenance` as written, `removed_entries` and `replaced_entries` ("One role"),
 `requires_added`, `given`, `derived` (each `member`, `value`, `from` and, where it says more,
 `how`), `derived_drift`, `model_kept`, `coverage` (a business rule: `complete`, `pending`,
 `undeclared` or `follower`, as the composer counts the file's judged rules), `waits_for_value` and
 `value_not_judged` (`because` `follower` or `manual_request`, and `text`; "A pending value"),
-`warnings` (every warning of the check, the game's included, each once), `written` (in the order
-it was renamed into place), `would_write`, `kept`, `check_tree`, `readiness` or
-`readiness_not_judged` (below) and `next`.
+`warnings` (every warning of the check, the game's included, each once, then adoption's own two,
+below), `written` (in the order it was renamed into place), `would_write`, `kept`, `check_tree`,
+`readiness` or `readiness_not_judged` (below) and `next` (each item `{path}`; Workflow #463 S3-12:
+`ours/model/bindings.json` with `fixed_value` too, below).
+
+**The trial and the two warnings** (Workflow #463 S3-12, Runtime 0.12.68;
+[v012-register.md](v012-register.md) §1.445). Two things are told apart by name: that the
+recording was checked offline, and that the content was tried on a real application.
+
+- `review.recording_checked` (named `run_through` before this slice; no member of that name is
+  left) is the offline review of ruling 2 on #464, its rule unchanged: the entry task's provenance
+  a recording's, the cross-check `passed`, the first decision evaluated, no step whose click needs
+  review. It says nothing of a run on a device. A class other than `held` still needs it
+  (`recording_unreviewed`, "The checks").
+- `review.trial` is the latest trial of the content this adoption writes, as
+  [standard-pack-trial.md](standard-pack-trial.md) records trials: the records of the package under
+  the state directory the adoption is given (`--state-dir`, default actinglab's session directory,
+  the trial's own default), `<state>/trials/<package_id>/`, read by the trial's own reader
+  (`trial_records`, in the order the trials ended). The content is named as a trial names it: the
+  first 12 hex digits of the content hash (`content_hash_prefix`, the contract crate's
+  `content_directory_digest` of each file's SHA-256, one function the trial calls too) of the files
+  the adoption writes into `packs/<package_id>/` (or, under `--dry-run`, would write), so a trial of
+  that directory, which is what a trial tries, records the same prefix. It is the trial's one
+  summary of a content's trials (the train of S3-12 and S3-14,
+  [standard-pack-trial.md](standard-pack-trial.md), "What the records say of one content"), which
+  `standard-pack status` answers too: `state` (`passed`, `failed` or `none`, the vocabulary
+  `trial_state`), `content_hash_prefix`, `record` (the latest record of this content:
+  `authorization`, `at_unix_ms`, `request_id`, `end` as the record keeps it, and `matched` when the
+  trial named the end it expected; absent with `none`), `passed_on_record` (whether any record of
+  this content passed) and `other_content` (a record of another content of the same package id is
+  on record; it counts for nothing). Whether a trial passed is what
+  [standard-pack-trial.md](standard-pack-trial.md), "A trial that passed", says; this answer
+  defines nothing of its own. A record of the directory as an earlier adoption wrote it, before a
+  change (a new recording, a repaired package), is another content.
+- When the reader refuses the package's records (a file of a record's name that is no record,
+  `trial_record_unreadable` with its word, or the directory not listed), `review.trial` is absent
+  and `review.trial_not_read` carries `outcome`, the reader's refusal with its code, and `text`, the
+  same in words (the trial's one shape, which the status row answers too); the adoption is the same
+  without it, as `readiness_not_judged` is, and `not_tried` is not warned, since whether this
+  content was tried is not known.
+- Two warnings, appended to `warnings`, refuse nothing and change nothing of what is written:
+  `enabling_needs_authorization` (`package_id`) when there is a decision and its class runs
+  (`business` or `maintenance`), which lifts the package's hold where it had one: adoption enables
+  nothing, and the placement that does asks for `--authorization` and for `--enables` naming the
+  package when it enters scheduling or takes a new supporting role there; a held decision, and an
+  adoption without a decision, which keeps the package's role, do not warn it. `not_tried`
+  (`package_id`) when no record of this content passed (`trial.passed_on_record` false: an earlier
+  passed record of the same content keeps it away even when a later one failed, and `trial` then
+  reads `state` `failed` with `passed_on_record` `true`).
+- `next` names `ours/model/bindings.json` (the model's `acmodel.bindings.v1`, relative to
+  `--repo`) when the adopted rule has no value yet: it writes no `fixed_value_milli` and
+  `waits_for_value` is answered. Its `fixed_value` holds the rule's id and the two ways a value gets
+  there, each the entry as that file writes it, the texts adopt cannot know left blank:
+  `value_binding` `{value: "", file: "schedule.json", rule_id, path: "/fixed_value_milli"}`, an
+  entry of `bindings` whose `value` names a value of the model's `exports.json` and which the
+  model's writer `acmodel bindings apply` writes into the rule with `fixed_value_origin: "model"`;
+  and `hand_entry` `{rule_id, status: "", ref: ""}`, an entry of `hand` that registers a number
+  written by hand into the rule's `fixed_value_milli` (adopt `--replace --decide` with
+  `{fixed_value_milli, origin: "pack"}`), how it was had and where it comes from. It is named
+  whenever `waits_for_value` is answered and the rule writes no fixed value: so also for a rule
+  judged by its `produces` and `consumes` when an entry's amount is `"pending"` or its pool's
+  valuation is `"pending"` or missing ("A pending value"). A rule with its value, a rule whose
+  every `produces` and `consumes` entry has its amount on a valued pool, a follower of a chain, a
+  manual request and a package without a rule name nothing of it.
+
+Nothing here starts a trial, lifts a hold or enables a package: a passed trial is not an
+authorization, and a trial is the trial's own act under the owner's authorization
+([standard-pack-trial.md](standard-pack-trial.md), "Never by itself").
 
 **The adopted pack's readiness** (Workflow #463 S3-5, Runtime 0.12.63;
 [v012-register.md](v012-register.md) §1.412). `readiness` is the adopted pack's row of the
