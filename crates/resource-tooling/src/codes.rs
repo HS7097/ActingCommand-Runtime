@@ -263,6 +263,21 @@ actingcommand_contract::outcome_vocabulary! {
 }
 
 actingcommand_contract::outcome_vocabulary! {
+    /// Workflow #463 S3-8, S3-9 fix round 1 (contracts/standard-pack-trial.md, "The run"): what
+    /// the answer of a trial's run knows of a run the Runtime confirmed nothing of (vocabulary
+    /// `trial_run_unconfirmed`, the member `next.unconfirmed`), said in the place of the line that
+    /// reads the end later, which such a run may never have.
+    pub enum TrialRunUnconfirmed: "trial_run_unconfirmed" {
+        /// The run's request was written and the connection that carried it ended before any of
+        /// its receipt came back: the Runtime confirmed nothing of the run, and whether it was
+        /// accepted or started is not known. A Runtime below `runtime-client` revision 11 ends the
+        /// connection so on a run with values, running nothing; one that stopped while the run was
+        /// in it ends it too.
+        NoReceipt => "no_receipt",
+    }
+}
+
+actingcommand_contract::outcome_vocabulary! {
     /// Workflow #463 S3-10: where a state directory refused for trial records lies (vocabulary
     /// `trial_state_place`, the value `trial_state_place` of `trial_state_dir_refused`).
     pub enum TrialStatePlace: "trial_state_place" {

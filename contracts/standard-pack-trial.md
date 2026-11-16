@@ -357,7 +357,8 @@ parameter, each `<name>=<the value as compact JSON>`, so that `run start`'s pars
 the request's `variables`; without `--variable` the request carries none and is the request of
 before. A run with values needs a Runtime of `runtime-client` revision 11: one below it cannot
 decode the request and ends the connection, nothing runs, and that is the client's failure,
-answered as every lost connection below. It is named by its `request_id` before it is sent, and
+answered as a connection that ended before any of the run's receipt came back (below; fix round
+1: `next` `{unconfirmed: no_receipt}`). It is named by its `request_id` before it is sent, and
 submitted once. It is waited for as `run start`
 waits: without `--wait` to its receipt, the run's deadline and the client's margin bounding the
 wait (the longest wait `run start` allows, `run start` without `--wait`); with `--wait` up to that
@@ -376,6 +377,14 @@ that did not come in time); nothing else is sent, and this command never sends t
   failure and sends nothing, and that failure is the answer, beside `request_id` and `next`;
   nothing is written and nothing is sent again. (A run the client saw cancelled comes back without
   its receipt, after the client's own reset; its end is read and recorded as a cancelled run's.)
+- (S3-8, S3-9 fix round 1) when nothing of the run's receipt came back, not even its header (the
+  connection that carried the run ended first), that `next` names no line that reads the end
+  later but what is known: `{unconfirmed: no_receipt}` (the vocabulary `trial_run_unconfirmed`).
+  The Runtime confirmed nothing of the run, so whether it was accepted or started is not known: a
+  Runtime below revision 11 ends the connection so on a run with values and runs nothing, and one
+  that stopped while the run was in it ends it too. The client cannot tell the two apart, and no
+  probe of the Runtime's revision is made. A `--collect` of a run the Runtime never had would
+  answer `trial_end_unread` `not_found` for ever, so it is not named.
 
 ## The end
 
@@ -433,7 +442,9 @@ recorded, which names the record. The answer:
 `next` is `{collect: [...]}`: the words of actinglab's command line after the program's name, the
 trial's own arguments (`--instance`, `--package`, `--authorization`, since S3-8, S3-9 each
 `--variable` as the run was sent with it, `--expect`, `--irreversible`, `--root`, `--state-dir` as
-the trial had them) with `--collect <request_id>`.
+the trial had them) with `--collect <request_id>`. Fix round 1 of S3-8, S3-9: after a run nothing of
+whose receipt came back, `next` is `{unconfirmed: <word>}` instead (vocabulary
+`trial_run_unconfirmed`: `no_receipt`; "The run").
 
 ## Reading the end later
 

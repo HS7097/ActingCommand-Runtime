@@ -4213,3 +4213,13 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_463_s38::s38_host_without_values_the_run_reads_the_defaults",
 ]
 incident = ["#463 S3-8"]
+
+# Workflow #463 S3-8, fix round 1 (0.12.68; register §1.444, "Fix round 1"; brief rd-1116/brief-463-s38-fix1.md; the review of #1789, its section (h); contracts/package-variables.md, "Runs without a dispatch"; contracts/runtime-interface.md, "The variable values of a contained run"): the refusals no test reached, each Denied with nothing pressed, no run reaching its execution and no task.package_admitted more in the ledger than before the run, on the fixture of the row "Workflow #463 S3-8". The root's goals.json uses the name pick for a heading, so pick does not apply in the game root (goal_name_conflict, as the workbench's table says): item_a is run_variable_not_applying with package_id, variable_name pick and variable_problem goal_name_conflict (1); the package also declares order (ordered, options item_a and item_b, 0 to 2 keys), which applies: ["item_a", "item_z"], which the variable would take in part, is run_variable_value_refused with variable_name order and variable_problem keys_left_out (2); a request frame whose variables hold seventeen values, written as raw JSON past the contract's constructor, is Denied at the door invalid_contained_task_variable_count (3). Adapted (row "Workflow #463 S3-8"): its tests 2 and 3 also assert the ledger's admissions unchanged
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_463_s38::s38_fix1_a_variable_that_does_not_apply_is_refused_before_admission",
+    "actingcommand-runtime-host::lib::tests::gate_463_s38::s38_fix1_a_value_taken_only_in_part_is_refused",
+    "actingcommand-runtime-host::lib::tests::gate_463_s38::s38_fix1_seventeen_values_in_a_raw_request_are_refused_at_the_door",
+]
+incident = ["#463 S3-8"]

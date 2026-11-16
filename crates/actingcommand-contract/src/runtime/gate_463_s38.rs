@@ -13,6 +13,12 @@
 //   names of 1 and 64 bytes pass; seventeen values are `invalid_contained_task_variable_count`, an
 //   empty name and names outside a variable's form `invalid_contained_task_variable_name`, given
 //   through `with_variables` and decoded from the wire alike.
+// Fix round 1 (rd-1116/brief-463-s38-fix1.md; the review of #1789, its section (h)):
+// - `s38_fix1_a_reader_of_revision_ten_refuses_a_request_with_values`: `ContainedTaskRequest` as
+//   revision 10 declared it (the parent's tree: the same three members with the defaults a reader
+//   reads, `deny_unknown_fields`, and no `variables`) reads today's request without values, member
+//   by member, and refuses one with values, alone and as the run's envelope carries it, naming the
+//   unknown member `variables`.
 
 use super::*;
 use serde_json::{Value, json};
@@ -182,6 +188,51 @@ fn s38_a_request_with_values_round_trips() {
             )
             .validate(),
             name_code,
+        );
+    }
+}
+
+/// Fix round 1: `ContainedTaskRequest` as revision 10 declared it, before S3-8, for its reader: its
+/// three members with the attributes a reader reads (their defaults), `deny_unknown_fields`, and
+/// no `variables`.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RevisionTenRequest {
+    package_path: String,
+    #[serde(default)]
+    recovery: Option<ContainedTaskRecoveryBinding>,
+    #[serde(default = "default_contained_task_response_deadline_ms")]
+    response_deadline_ms: u64,
+}
+
+#[test]
+fn s38_fix1_a_reader_of_revision_ten_refuses_a_request_with_values() {
+    // Today's request without values: revision 10 reads it, member by member.
+    let read: RevisionTenRequest = serde_json::from_value(wire(&todays()))
+        .expect("revision 10 reads a request without values");
+    assert_eq!(read.package_path, PACKAGE);
+    assert!(read.recovery.is_none());
+    assert_eq!(read.response_deadline_ms, 120_000);
+
+    // With a value, alone and as the run's envelope carries it: refused for the member.
+    let given = todays()
+        .with_variables(BTreeMap::from([("pick".to_owned(), json!("item_a"))]))
+        .expect("one value");
+    let ids = IdentifierIssuer::new().expect("identifier issuer");
+    let carried = wire(&run(&ids, given.clone()))["operation"]["request"].clone();
+    assert_eq!(
+        carried,
+        wire(&given),
+        "the envelope carries the request as it is"
+    );
+    for encoded in [wire(&given), carried] {
+        let error = match serde_json::from_value::<RevisionTenRequest>(encoded) {
+            Ok(_) => panic!("revision 10 read a request with values"),
+            Err(error) => error.to_string(),
+        };
+        assert!(
+            error.contains("unknown field `variables`"),
+            "revision 10's refusal: {error}"
         );
     }
 }

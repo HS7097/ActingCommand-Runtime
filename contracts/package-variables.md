@@ -444,7 +444,8 @@ warned.
 
 **Runs without a dispatch.** A direct run whose request gives no value (since S3-8 a direct run
 may be given values, below), a run the host starts itself, a Lab run and the offline replay read
-every variable at its default and record nothing, as parameters do (`default_run_values`). The Lab's scan replay (`actinglab replay --select <operation> --scan
+every variable at its default and record nothing, as parameters do (`default_run_values`). The
+Lab's scan replay (`actinglab replay --select <operation> --scan
 <file>`) takes `--variable <name>=<json>`, the counterpart of `--parameter`: the value replaces the
 variable's default when the declaration takes it exactly as given; a name the package does not
 declare, a value it does not take, or a right side that is no JSON is `validation_failed` naming
@@ -472,8 +473,9 @@ its values, as it records nothing of its parameters: its command record carries 
 and recording them would need a new ledger member, which S3-8 does not add. actinglab's `run
 start --variable <name>=<json>` (repeatable) reads the values with the scan replay's own parser
 (`lab_ops::core_ops::parse_variables`, one function for the three commands) before anything is
-sent, and without `--variable` sends the request of revision 10 byte for byte; `standard-pack
-trial` sends the values its plan shows ([standard-pack-trial.md](standard-pack-trial.md), "The
+sent (fix round 1: more than 16 of them are `--variable` `out_of_range`, the word of a count out
+of its range), and without `--variable` sends the request of revision 10 byte for byte;
+`standard-pack trial` sends the values its plan shows ([standard-pack-trial.md](standard-pack-trial.md), "The
 run"). A Runtime below revision 11 cannot decode a request that carries values: it ends the
 connection, nothing runs, and the client reports the connection ended.
 

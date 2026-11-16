@@ -949,3 +949,11 @@ tests = [
     "actingcommand-contract::lib::runtime::gate_463_s38::s38_a_request_with_values_round_trips",
 ]
 incident = ["#463 S3-8"]
+
+# Workflow #463 S3-8, fix round 1 (0.12.68; register §1.444, "Fix round 1"; brief rd-1116/brief-463-s38-fix1.md; the review of #1789, its section (h); contracts/runtime-interface.md, "The variable values of a contained run"): a reader of the parent's revision refuses a request that carries the member. ContainedTaskRequest as revision 10 declared it (package_path, recovery with serde default, response_deadline_ms with its default, deny_unknown_fields, no variables) reads today's request without values member by member (the package path, no recovery, 120000), and refuses the request with one value, alone and as the run's envelope carries it, naming the unknown field variables
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-contract::lib::runtime::gate_463_s38::s38_fix1_a_reader_of_revision_ten_refuses_a_request_with_values",
+]
+incident = ["#463 S3-8"]

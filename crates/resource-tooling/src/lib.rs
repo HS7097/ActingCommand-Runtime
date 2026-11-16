@@ -238,6 +238,9 @@ pub use codes::{TrialRecordProblem, TrialStatePlace};
 // word of a collected run that is not the trial's; fix round 2: the record of a run, whatever its
 // content.
 pub use codes::TrialCollectProblem;
+// Workflow #463 S3-8, S3-9 fix round 1: what the answer of a trial's run knows of a run the
+// Runtime confirmed nothing of.
+pub use codes::TrialRunUnconfirmed;
 // Workflow #463 S3-12: the latest trial of an adopted content, as adopt's review answers it; the
 // train of S3-12 and S3-14: the one summary of a content's trials, which adoption and the status
 // row answer alike (`TrialSummary`, `TrialReference`, `TrialNotRead`, `trial_summary`).

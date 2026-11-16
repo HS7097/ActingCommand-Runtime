@@ -7832,18 +7832,23 @@ impl HostShared {
             let resolved = actingcommand_policy::resolve_variable(variable, Some(&entry), None);
             match (resolved.source, resolved.problem) {
                 (actingcommand_contract::VariableSource::Set, None) => {}
-                // A value whose setter is known and whose variable applies always has its word
-                // when it is not taken whole; `type_changed` names a value of no kind it takes.
-                (_, problem) => {
+                // Not taken, or taken only in part (`keys_left_out`): the judgement's word.
+                (_, Some(problem)) => {
                     return Err(run_variable_refused(
                         HostCode::RunVariableValueRefused,
                         package_id,
                         name,
-                        Some(
-                            problem.unwrap_or(actingcommand_contract::VariableProblem::TypeChanged),
-                        ),
+                        Some(problem),
                     ));
                 }
+                // Fix round 1: not reachable. Given an entry whose setter is known and no root
+                // word, `resolve_variable` answers `set` (with `keys_left_out` when it took the
+                // value in part) or the default with the judgement's word, never a default
+                // without a word.
+                (_, None) => unreachable!(
+                    "resolve_variable answered a given value of an applying variable with its \
+                     default and no word"
+                ),
             }
         }
         Ok(())
@@ -7851,12 +7856,14 @@ impl HostShared {
 
     /// Workflow #463 S3-8: the variable table a dispatch reads now: the scheduler workbench's with
     /// a composed standard pack, else the one the last evaluation's remedy table built, else an
-    /// empty one, by which no game's root is judged (`root_unchecked`).
+    /// empty one, by which no game's root is judged (`root_unchecked`). Fix round 1: the
+    /// workbench's table is read by the function the policy cycle reads it by
+    /// (`standard_pack_variables`), which copies nothing of the roots.
     fn run_variable_table(
         &self,
     ) -> Result<std::sync::Arc<actingcommand_policy::VariableTable>, RequestFailure> {
-        if let Some(roots) = self.standard_pack_goal_roots()? {
-            return Ok(roots.table);
+        if let Some(table) = self.standard_pack_variables()? {
+            return Ok(table);
         }
         let policy = lock(self.policy()?, HostLocation::CheckRunVariables)?;
         Ok(std::sync::Arc::new(

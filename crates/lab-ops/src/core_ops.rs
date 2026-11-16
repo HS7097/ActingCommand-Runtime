@@ -1213,7 +1213,10 @@ pub fn parse_variables<'a>(
 }
 
 /// Workflow #463 S3-9: the values `run start`'s `--variable` gives, by name, read by
-/// [`parse_variables`] before anything is sent; a refusal is `--variable` with its word.
+/// [`parse_variables`] before anything is sent; a refusal is `--variable` with its word. Fix round
+/// 1: more values than a package can declare variables
+/// ([`actingcommand_contract::MAX_PACKAGE_VARIABLES`]) are `--variable` `out_of_range`, the word
+/// of a count out of its range, before anything is read.
 fn run_variables(params: Params<'_>) -> Result<std::collections::BTreeMap<String, Value>, Exit> {
     let texts = list_of(params, "variable").unwrap_or_default();
     let given =
@@ -1223,6 +1226,18 @@ fn run_variables(params: Params<'_>) -> Result<std::collections::BTreeMap<String
                 Some(refusal.message.as_str()),
             )
         })?;
+    if given.len() > actingcommand_contract::MAX_PACKAGE_VARIABLES {
+        let message = format!(
+            "{RUN_START} takes at most {} --variable values, as many as a package can declare \
+             variables; {} were given",
+            actingcommand_contract::MAX_PACKAGE_VARIABLES,
+            given.len()
+        );
+        return Err(cli_line::failure(
+            &cli_line::usage_invalid(Some("--variable"), ArgumentProblem::OutOfRange),
+            Some(message.as_str()),
+        ));
+    }
     Ok(given.into_iter().collect())
 }
 
@@ -1259,8 +1274,9 @@ fn run_start_request(
     if variables.is_empty() {
         return Ok((alias, request));
     }
-    // More values than a package can declare variables, or a name outside a variable's form: the
-    // contract's own check of the request, before anything is sent.
+    // A name outside a variable's form: the contract's own check of the request, before anything
+    // is sent (fix round 1: too many values are refused `out_of_range` before, by
+    // [`run_variables`]; the contract checks the count again).
     let request = request
         .with_variables(variables)
         .map_err(|_| usage("--variable", ArgumentProblem::NotRecognised))?;

@@ -10784,6 +10784,19 @@
         }
       }
     },
+    "trial_run_unconfirmed": {
+      "description": "What the answer of a trial's run knows of a run the Runtime confirmed nothing of, the member next.unconfirmed, said in the place of the line that reads the end later (next.collect), which such a run may never have (Workflow #463 S3-8, S3-9 fix round 1, contracts/standard-pack-trial.md \"The run\", since 0.12.68).",
+      "review": "pending",
+      "source": {
+        "file": "crates/resource-tooling/src/codes.rs",
+        "enum": "TrialRunUnconfirmed"
+      },
+      "tokens": {
+        "no_receipt": {
+          "description": "The run's request was written and the connection that carried it ended before any of its receipt came back: the Runtime confirmed nothing of the run, and whether it was accepted or started is not known. A Runtime below runtime-client revision 11 ends the connection so on a run with values, running nothing; one that stopped while the run was in it ends it too. No record is written."
+        }
+      }
+    },
     "trial_state": {
       "description": "The latest trial of a content as the trial records of the state directory keep it, the state of the one summary of a content's trials: the member review.trial.state of standard-pack adopt (Workflow #463 S3-12, contracts/standard-pack-authoring.md \"The trial and the two warnings\") and trial.state of standard-pack status (S3-14, contracts/standard-pack-schedule.md \"Where a pack stands\"); each record judged as contracts/standard-pack-trial.md \"The record\" defines a trial that passed (the train of S3-12 and S3-14, since 0.12.68).",
       "review": "pending",

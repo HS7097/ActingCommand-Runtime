@@ -665,7 +665,7 @@ application. Shape: `crates/actingcommand-contract`, `runtime.rs`, `ContainedTas
 
 | Member | Shape | Absent |
 |---|---|---|
-| `RunContainedTask`'s `request.variables?` | `{name: json}`: at most 16 values (a package declares at most 16 variables; more is `invalid_contained_task_variable_count`), each under a name of a variable's form (1 to 64 bytes of `[a-z][a-z0-9_]*`; another is `invalid_contained_task_variable_name`): the contract's check, so a client cannot build such a request (actinglab's `run start` answers it `--variable` `not_recognised` before anything is sent) and the Runtime refuses one it receives, Denied, before reading the package | when no value is given: the request is then byte for byte the request of revision 10, and every variable reads its default |
+| `RunContainedTask`'s `request.variables?` | `{name: json}`: at most 16 values (a package declares at most 16 variables; more is `invalid_contained_task_variable_count`), each under a name of a variable's form (1 to 64 bytes of `[a-z][a-z0-9_]*`; another is `invalid_contained_task_variable_name`): the contract's check, so a client cannot build such a request (actinglab's `run start` answers too many values `--variable` `out_of_range`, since fix round 1, and a name out of form `--variable` `not_recognised`, before anything is sent) and the Runtime refuses one it receives, Denied, before reading the package | when no value is given: the request is then byte for byte the request of revision 10, and every variable reads its default |
 
 **The judgement**, in the run's preparation, after its package and its prerequisite chain are
 read and before any record, claim or lease (`check_run_variables`), each value in the order of its

@@ -52,7 +52,9 @@
 //! as that; nothing is ever sent again. A passed trial is not an authorization to enable; a trial
 //! counts nothing toward a break-in; a trial is one run, sent once. Fix round 2: `--collect` takes
 //! only a run sent by hand on the Lab's channel; a run has one record, whatever content the
-//! package directory holds when it is collected; a run is answered by its end state.
+//! package directory holds when it is collected; a run is answered by its end state. Workflow
+//! #463 S3-8, S3-9 fix round 1: a run whose connection ended before any of its receipt came back
+//! is answered with `next` `{unconfirmed: no_receipt}`, never the line that reads the end later.
 //!
 //! Workflow #463 S3-14 (contracts/standard-pack-schedule.md, "Where a pack stands"; register
 //! §1.446): `actinglab standard-pack status --root <game root> [--repo <checkout game root>]
@@ -75,7 +77,7 @@ use actingcommand_resource_tooling::{
     StandardPackAdoptRequest, StandardPackCheckRequest, StandardPackComposeRequest,
     StandardPackReadyRequest, StandardPackStatusRequest, StandardPackTrialAnswer,
     StandardPackTrialRequest, TrialCollectProblem, TrialRecordPlan, TrialRunEnd,
-    check_standard_pack_root, check_trial_run, compose_standard_packs,
+    TrialRunUnconfirmed, check_standard_pack_root, check_trial_run, compose_standard_packs,
     judge_standard_pack_readiness, plan_standard_pack_trial, standard_pack_adopt,
     standard_pack_status, trial_record_of_run, write_trial_record,
 };
@@ -597,11 +599,22 @@ impl TrialRun<'_> {
                 ErrorKind::DeviceInstance,
             ));
         }
+        // Workflow #463 S3-8, S3-9 fix round 1: nothing of the run's receipt came back, not even
+        // its header (the connection that carried the run ended first): the Runtime confirmed
+        // nothing of the run.
+        let unconfirmed = submitted.as_ref().err().is_some_and(|error| {
+            error.received_receipt().is_none() && error.receipt_header_io().is_some()
+        });
         // Otherwise the end is read: after a receipt, and after a result that is not known (no
         // receipt came back), on the same connection, which, lost, answers the read with the
         // client's failure at once and sends nothing.
-        let run = run_show::read(client, RunKey::RequestId(request_id))
-            .map_err(|error| self.unread(&error.outcome(), error.to_string(), &id, true))?;
+        let run = run_show::read(client, RunKey::RequestId(request_id)).map_err(|error| {
+            if unconfirmed {
+                self.unconfirmed(&error.outcome(), error.to_string(), &id)
+            } else {
+                self.unread(&error.outcome(), error.to_string(), &id, true)
+            }
+        })?;
         self.ended(client, &id, request_id, run, true)
     }
 
@@ -837,6 +850,33 @@ impl TrialRun<'_> {
         let mut members = self.members(sent, Some(id));
         members.insert("next".to_owned(), self.collect_line(id));
         refusal(outcome, message, members, ErrorKind::DeviceInstance)
+    }
+
+    /// Workflow #463 S3-8, S3-9 fix round 1: the refusal `outcome` (`message`) of the run `id`
+    /// whose connection ended before any of its receipt came back, so that the Runtime confirmed
+    /// nothing of it and its end could not be read: the members and `next`, which names no line
+    /// that reads the end later (a Runtime that never accepted the run would answer it `not_found`
+    /// for ever) but what is known, `unconfirmed` `no_receipt` (vocabulary
+    /// `trial_run_unconfirmed`). The client cannot tell a Runtime below `runtime-client` revision 11,
+    /// which ends the connection of a run with values without running anything, from one that
+    /// stopped while the run was in it; no probe of the Runtime's revision is made.
+    fn unconfirmed(&self, outcome: &Outcome, message: String, id: &str) -> CliError {
+        let mut members = self.members(true, Some(id));
+        members.insert(
+            "next".to_owned(),
+            json!({"unconfirmed": TrialRunUnconfirmed::NoReceipt.as_str()}),
+        );
+        refusal(
+            outcome,
+            format!(
+                "the trial's run {id} was sent and its connection ended before any of its receipt \
+                 came back: the Runtime confirmed nothing of it, so whether it was accepted or \
+                 started is not known, and no record was written; a Runtime below runtime-client \
+                 revision 11 ends the connection so on a run with values: {message}"
+            ),
+            members,
+            ErrorKind::DeviceInstance,
+        )
     }
 
     /// The run `id` read in `state` without a terminal, so that no record was written (fix round 2:

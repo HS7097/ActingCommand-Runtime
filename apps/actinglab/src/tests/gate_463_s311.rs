@@ -24,8 +24,10 @@
 // - `s311_a_failed_run_records_its_code_and_no_key`: the run's code and values on top, no key,
 //   `matched` false, the record written with the code and no key;
 // - `s311_an_unknown_result_sends_nothing_again_and_writes_no_record`: the connection closed after
-//   the run's request left: the client's failure with the request id and the line that reads the
-//   end later; nothing more on the connection and no record;
+//   the run's request left: the client's failure with the request id; nothing more on the
+//   connection and no record (adapted by Workflow #463 S3-8, S3-9 fix round 1, register §1.444:
+//   `next` is `{unconfirmed: no_receipt}`, not the line that reads the end later, since the Runtime
+//   confirmed nothing of the run);
 // - `s311_a_wait_that_runs_out_writes_no_record_and_collect_records_it_once`: `--wait 0ms` answers
 //   `command_wait_expired` with the request id and `next`, writes nothing; that line, run against
 //   the Runtime's ledger of that run, sends nothing, records the end once, and a second
@@ -1077,13 +1079,11 @@ fn s311_an_unknown_result_sends_nothing_again_and_writes_no_record() {
     let request_id = sent_request_id(&record.connections[0]);
     assert_eq!(details["request_id"], request_id.as_str(), "{shown}");
     assert_eq!(details["sent"], true, "{shown}");
-    let next = details["next"]["collect"]
-        .as_array()
-        .cloned()
-        .expect("the line that reads the end later");
+    // Adapted by Workflow #463 S3-8, S3-9 fix round 1: nothing of the run's receipt came back, so
+    // `next` names no line that reads the end later, but what is known.
     assert_eq!(
-        next[next.len() - 2..],
-        [json!("--collect"), json!(request_id)],
+        details["next"],
+        json!({"unconfirmed": "no_receipt"}),
         "{shown}"
     );
     assert!(!context.trials().exists(), "a record was written");

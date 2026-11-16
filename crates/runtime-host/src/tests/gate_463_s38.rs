@@ -21,18 +21,36 @@
 //   after its one tap and its snapshots are overlaid with `item_a`.
 // - `s38_host_a_value_the_variable_does_not_take_is_refused_before_admission`: `item_z`:
 //   Denied `run_variable_value_refused` with the package, the name and `not_an_option`; no tap, no
-//   run parameters read, no record of the run's admission.
+//   run parameters read, no record of the run's admission (fix round 1: the ledger holds no
+//   `task.package_admitted` more than before the run).
 // - `s38_host_an_undeclared_name_is_refused`: a value under `other`: Denied
 //   `run_variable_undeclared` with the package and the name; nothing ran.
 // - `s38_host_without_values_the_run_reads_the_defaults`: no value: the run completes and reads
 //   `item_b`.
+// Fix round 1 (rd-1116/brief-463-s38-fix1.md; the review of #1789, its section (h)); each refusal
+// as above: Denied, nothing pressed, no run read its parameters, no admission in the ledger:
+// - `s38_fix1_a_variable_that_does_not_apply_is_refused_before_admission`: the root's
+//   `goals.json` uses the name `pick` for a heading, so `pick` does not apply in game A's root
+//   (`goal_name_conflict`, as the workbench judged it): `item_a` is refused
+//   `run_variable_not_applying` with the package, the name and that word.
+// - `s38_fix1_a_value_taken_only_in_part_is_refused`: the package also declares `order` (`ordered`,
+//   the options `item_a` and `item_b`), which applies; `["item_a", "item_z"]`, of which the
+//   variable would take `item_a` alone, is refused `run_variable_value_refused` with
+//   `keys_left_out`, as the goal's edit refuses it.
+// - `s38_fix1_seventeen_values_in_a_raw_request_are_refused_at_the_door`: a request frame whose
+//   `variables` holds seventeen values, one more than a package can declare variables, written as
+//   raw JSON past the contract's own constructor: Denied `invalid_contained_task_variable_count`
+//   by the contract's check of the request at the door.
 
 use super::gate_442_rem1::write_package;
 use super::gate_rl1b::{
     GAME_A, POOL_A, SERVER_A, bundle, pool, profiles, resources, rule, write_json,
 };
 use super::*;
-use actingcommand_contract::{FactContent, FactValue, InstanceFactContext, InstanceFactSnapshot};
+use actingcommand_contract::{
+    FactContent, FactValue, InstanceFactContext, InstanceFactSnapshot, MAX_PACKAGE_VARIABLES,
+    VariableProblem,
+};
 use serde_json::{Value, json};
 use std::fs;
 
@@ -52,9 +70,44 @@ fn variables() -> Value {
             "default": "item_b"}])
 }
 
+// Fix round 1: [`variables`] and `order`, an `ordered` variable of the options `item_a` and
+// `item_b`.
+fn variables_with_order() -> Value {
+    let order = json!({"name": "order", "type": "ordered", "title": {"en": "Order"},
+                       "options": [{"value": "item_a", "title": {"en": "Item A"}},
+                                   {"value": "item_b", "title": {"en": "Item B"}}],
+                       "min_count": 0, "max_count": 2, "default": ["item_b"]});
+    let mut declared = variables();
+    declared
+        .as_array_mut()
+        .expect("the declared variables are a list")
+        .push(order);
+    declared
+}
+
 // Places the game root below `packs`: its bundle, its `schedule.json` with the one rule, and the
 // package, whose control declaration declares [`variables`].
 fn place_game_root(packs: &Path) {
+    place_game_root_declaring(packs, variables());
+}
+
+// Fix round 1: [`place_game_root`], the root's `goals.json` using the name `pick` for a heading.
+fn place_with_goals_taking_pick(packs: &Path) {
+    place_game_root(packs);
+    write_json(
+        &packs.join(GAME_A).join("goals.json"),
+        &json!({"schema_version": "actingcommand.goals.v2", "game": GAME_A,
+                "entries": [{"name": "pick", "type": "heading", "title": {"en": "Pick"}}]}),
+    );
+}
+
+// Fix round 1: [`place_game_root`], the package declaring [`variables_with_order`].
+fn place_with_order(packs: &Path) {
+    place_game_root_declaring(packs, variables_with_order());
+}
+
+// The game root of [`place_game_root`], its package's control declaration declaring `declared`.
+fn place_game_root_declaring(packs: &Path, declared: Value) {
     let game = packs.join(GAME_A);
     write_json(
         &game.join("bundle.json"),
@@ -90,7 +143,7 @@ fn place_game_root(packs: &Path) {
     let mut control: Value =
         serde_json::from_slice(&fs::read(&control_path).expect("the control declaration"))
             .expect("control JSON");
-    control["variables"] = variables();
+    control["variables"] = declared;
     write_json(&control_path, &control);
 }
 
@@ -124,9 +177,17 @@ impl Scene {
     // The host over the game root, after one evaluation: the workbench judged the root and `pick`
     // applies in game A.
     fn new() -> Self {
+        let scene = Self::with(place_game_root);
+        assert_eq!(scene.root_word("pick"), None, "pick applies");
+        scene
+    }
+
+    // Fix round 1: the host over the game root `place` places below its standard-pack root, after
+    // one evaluation: the workbench judged the root.
+    fn with(place: impl FnOnce(&Path)) -> Self {
         let state_root = TempDir::new().expect("state root");
         let packs = TempDir::new().expect("standard-pack root");
-        place_game_root(packs.path());
+        place(packs.path());
         let device = Arc::new(FakeState::default());
         // A direct run needs a device instance whose display is observed (Workflow #392 DA-A).
         device.physical_task_geometry.store(true, Ordering::Release);
@@ -176,27 +237,23 @@ impl Scene {
             .expect("the workbench's roots")
             .expect("a composed standard pack");
         assert!(roots.roots.contains_key(GAME_A), "the root is judged");
-        assert_eq!(roots.table.root_word(GAME_A, "pick"), None, "pick applies");
         scene
     }
 
-    fn sample_capacity(&self) {
+    // Fix round 1: the word that keeps the variable `name` from applying in game A's root, as the
+    // workbench's table says it (`None`: it applies).
+    fn root_word(&self, name: &str) -> Option<VariableProblem> {
         self.host
-            .capacity_sampler_for_test()
-            .expect("capacity owner")()
-        .expect("capacity sample");
+            .standard_pack_goal_roots()
+            .expect("the workbench's roots")
+            .expect("a composed standard pack")
+            .table
+            .root_word(GAME_A, name)
     }
 
-    // One direct run of the package with the values `given`, on a connection of its own; the
-    // device shows `home` until the run's tap, then `result`. Its receipt.
-    fn run(&self, given: &[(&str, Value)]) -> RuntimeReceipt {
-        let taps = self.device.input_count.load(Ordering::Acquire);
-        *self.device.pixel_script.lock().expect("pixel script") =
-            Some(Arc::new(move |_: usize, inputs: usize| {
-                vec![(0, if inputs <= taps { HOME } else { RESULT })]
-            }));
-        self.sample_capacity();
-        let request = ContainedTaskRequest::new(
+    // The request of one direct run of the package with the values `given`.
+    fn request(&self, given: &[(&str, Value)]) -> ContainedTaskRequest {
+        ContainedTaskRequest::new(
             self.packs
                 .path()
                 .join(GAME_A)
@@ -211,7 +268,31 @@ impl Scene {
                 .map(|(name, value)| ((*name).to_owned(), value.clone()))
                 .collect(),
         )
-        .expect("the values' names are variables' names");
+        .expect("the values' names are variables' names")
+    }
+
+    // The device shows `home` until the next run's tap, then `result`.
+    fn script_device(&self) {
+        let taps = self.device.input_count.load(Ordering::Acquire);
+        *self.device.pixel_script.lock().expect("pixel script") =
+            Some(Arc::new(move |_: usize, inputs: usize| {
+                vec![(0, if inputs <= taps { HOME } else { RESULT })]
+            }));
+    }
+
+    fn sample_capacity(&self) {
+        self.host
+            .capacity_sampler_for_test()
+            .expect("capacity owner")()
+        .expect("capacity sample");
+    }
+
+    // One direct run of the package with the values `given`, on a connection of its own; the
+    // device shows `home` until the run's tap, then `result`. Its receipt.
+    fn run(&self, given: &[(&str, Value)]) -> RuntimeReceipt {
+        self.script_device();
+        self.sample_capacity();
+        let request = self.request(given);
         let mut client = TestClient::connect(&self.host);
         client.set_receipt_read_timeout();
         let run = client.request(RuntimeOperation::run_contained_task(
@@ -222,6 +303,28 @@ impl Scene {
         let receipt = client.send(&run);
         drop(client);
         receipt
+    }
+
+    // Fix round 1: how many runs the ledger records the admission of (`task.package_admitted`).
+    fn admitted(&self) -> usize {
+        self.host
+            .query_persisted_events_for_test(EventQuery::default())
+            .expect("the ledger's records")
+            .iter()
+            .filter(|event| {
+                matches!(
+                    event.payload(),
+                    EventPayload::Task(TaskPayload::Semantic(payload))
+                        if matches!(payload.fact(), TaskSemanticFact::PackageAdmitted { .. })
+                )
+            })
+            .count()
+    }
+
+    // What a refused run must leave as it was: the taps, the runs that read their parameters and
+    // (fix round 1) the admissions the ledger records.
+    fn counted(&self) -> (usize, usize, usize) {
+        (self.taps(), self.runs_read(), self.admitted())
     }
 
     // How many runs reached their execution and overlaid their snapshots.
@@ -270,15 +373,16 @@ fn overlaid_pick(scene: &Scene) -> Option<FactValue> {
         })
 }
 
-// A refused run: Denied with `code` on top and `values` among its values; no tap and no run read
-// its parameters since `taps` and `runs` were counted.
+// A refused run: Denied with `code` on top and `values` among its values; no tap, no run read its
+// parameters and (fix round 1) the ledger records no admission since `taps`, `runs` and
+// `admitted` were counted ([`Scene::counted`]).
 #[track_caller]
 fn refused(
     scene: &Scene,
     receipt: &RuntimeReceipt,
     code: &str,
     values: &[(&str, Value)],
-    (taps, runs): (usize, usize),
+    (taps, runs, admitted): (usize, usize, usize),
 ) {
     assert_eq!(receipt.state(), RuntimeReceiptState::Denied, "{receipt:?}");
     let outcome = receipt.outcome();
@@ -288,6 +392,11 @@ fn refused(
     }
     assert_eq!(scene.taps(), taps, "nothing was pressed");
     assert_eq!(scene.runs_read(), runs, "no run reached its execution");
+    assert_eq!(
+        scene.admitted(),
+        admitted,
+        "the ledger records no admission of the run"
+    );
 }
 
 #[test]
@@ -312,7 +421,7 @@ fn s38_host_a_given_value_is_what_the_package_reads() {
 #[test]
 fn s38_host_a_value_the_variable_does_not_take_is_refused_before_admission() {
     let scene = Scene::new();
-    let counted = (scene.taps(), scene.runs_read());
+    let counted = scene.counted();
     let receipt = scene.run(&[("pick", json!("item_z"))]);
     refused(
         &scene,
@@ -331,7 +440,7 @@ fn s38_host_a_value_the_variable_does_not_take_is_refused_before_admission() {
 #[test]
 fn s38_host_an_undeclared_name_is_refused() {
     let scene = Scene::new();
-    let counted = (scene.taps(), scene.runs_read());
+    let counted = scene.counted();
     let receipt = scene.run(&[("other", json!(1))]);
     refused(
         &scene,
@@ -359,6 +468,95 @@ fn s38_host_without_values_the_run_reads_the_defaults() {
         overlaid_pick(&scene),
         Some(FactValue::String("item_b".to_owned())),
         "the default is overlaid"
+    );
+    scene.close();
+}
+
+#[test]
+fn s38_fix1_a_variable_that_does_not_apply_is_refused_before_admission() {
+    let scene = Scene::with(place_with_goals_taking_pick);
+    assert_eq!(
+        scene.root_word("pick"),
+        Some(VariableProblem::GoalNameConflict),
+        "goals.json takes the name"
+    );
+    let counted = scene.counted();
+    let receipt = scene.run(&[("pick", json!("item_a"))]);
+    refused(
+        &scene,
+        &receipt,
+        "run_variable_not_applying",
+        &[
+            ("package_id", json!(TASK)),
+            ("variable_name", json!("pick")),
+            (
+                "variable_problem",
+                json!(VariableProblem::GoalNameConflict.as_str()),
+            ),
+        ],
+        counted,
+    );
+    scene.close();
+}
+
+#[test]
+fn s38_fix1_a_value_taken_only_in_part_is_refused() {
+    let scene = Scene::with(place_with_order);
+    assert_eq!(scene.root_word("pick"), None, "pick applies");
+    assert_eq!(scene.root_word("order"), None, "order applies");
+    let counted = scene.counted();
+    let receipt = scene.run(&[("order", json!(["item_a", "item_z"]))]);
+    refused(
+        &scene,
+        &receipt,
+        "run_variable_value_refused",
+        &[
+            ("package_id", json!(TASK)),
+            ("variable_name", json!("order")),
+            ("variable_problem", json!("keys_left_out")),
+        ],
+        counted,
+    );
+    scene.close();
+}
+
+#[test]
+fn s38_fix1_seventeen_values_in_a_raw_request_are_refused_at_the_door() {
+    let scene = Scene::new();
+    scene.script_device();
+    scene.sample_capacity();
+    let counted = scene.counted();
+    let mut client = TestClient::connect(&scene.host);
+    client.set_receipt_read_timeout();
+    let run = client.request(RuntimeOperation::run_contained_task(
+        INSTANCE,
+        client.ids.mint_holder_id().expect("holder"),
+        scene.request(&[]),
+    ));
+    // The contract's constructor refuses seventeen values, so they are written into the request's
+    // JSON: each under a name of a variable's form.
+    let mut wire = serde_json::to_value(&run).expect("the run's request as JSON");
+    wire["operation"]["request"]["variables"] = Value::Object(
+        (0..=MAX_PACKAGE_VARIABLES)
+            .map(|index| (format!("v{index:02}"), json!(index)))
+            .collect(),
+    );
+    write_frame(&mut client.stream, &wire, DEFAULT_RUNTIME_MAX_FRAME_BYTES)
+        .expect("write the request frame");
+    let frame = match read_frame(&mut client.stream, DEFAULT_RUNTIME_MAX_FRAME_BYTES)
+        .expect("read the receipt frame")
+    {
+        FrameRead::Data(frame) => frame,
+        FrameRead::Idle | FrameRead::Closed => panic!("the Runtime wrote no receipt"),
+    };
+    drop(client);
+    let receipt: RuntimeReceipt = serde_json::from_slice(&frame).expect("a receipt");
+    refused(
+        &scene,
+        &receipt,
+        "invalid_contained_task_variable_count",
+        &[],
+        counted,
     );
     scene.close();
 }
