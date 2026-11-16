@@ -2241,20 +2241,24 @@ impl ExecutionBackendProvider for FakeProvider {
             if !self.state.nemu_input.load(Ordering::Acquire) {
                 return resolved;
             }
-            // #411 Lab L3: an instance configured as a Nemu one (neutral test values).
-            resolved.with_configuration(actingcommand_contract::EffectiveDeviceConfiguration {
-                input_backend: "nemu_ipc".to_string(),
-                capture_backend: "nemu_ipc".to_string(),
-                input_adb: "<sealed-test>".to_string(),
-                capture_adb: "<sealed-test>".to_string(),
-                configured_serial: None,
-                resolved_serial: "TESTSERIAL0001".to_string(),
-                input_command_timeout_ms: 5_000,
-                capture_command_timeout_ms: 5_000,
-                capture_timeout_ms: 5_000,
-                configured_mumu_root: None,
-                configured_capture_dll: None,
-            })
+            // #411 Lab L3: an instance configured as a Nemu one (neutral test values). Workflow #434
+            // LW-1: with the capability table the Runtime's registry gives such an instance, which
+            // the status shows and a plain press reads.
+            resolved
+                .with_configuration(actingcommand_contract::EffectiveDeviceConfiguration {
+                    input_backend: "nemu_ipc".to_string(),
+                    capture_backend: "nemu_ipc".to_string(),
+                    input_adb: "<sealed-test>".to_string(),
+                    capture_adb: "<sealed-test>".to_string(),
+                    configured_serial: None,
+                    resolved_serial: "TESTSERIAL0001".to_string(),
+                    input_command_timeout_ms: 5_000,
+                    capture_command_timeout_ms: 5_000,
+                    capture_timeout_ms: 5_000,
+                    configured_mumu_root: None,
+                    configured_capture_dll: None,
+                })
+                .with_capabilities(nemu_capabilities())
         })
     }
 
@@ -4248,6 +4252,735 @@ fn s11_tap_record_sends_its_input_on_the_frame_captured_before_it() {
     assert_eq!(execution["effect"], "performed", "{recording}");
     assert_eq!(execution["before_frame"], "f0001", "{recording}");
     assert_eq!(execution["after_frame"], "f0002", "{recording}");
+}
+
+/// Workflow #434 LW-1: the capability table the Runtime's backend registry gives an instance whose
+/// input and capture are `nemu_ipc` (`runtime-host` `provider.rs`, `capability_profile`): each
+/// input row names the Nemu input as its evidence, `key` and `text` unsupported; neutral values.
+fn nemu_capabilities() -> actingcommand_contract::EmulatorCapabilityProfile {
+    use actingcommand_contract::{
+        EmulatorCapability, EmulatorCapabilityAvailability, EmulatorCapabilityEvidence,
+        EmulatorCapabilityImplementation, EmulatorCapabilityProfile, EmulatorVersionEvidence,
+        EmulatorVersionUnavailableReason,
+    };
+    let evidence = EmulatorCapability::ALL
+        .into_iter()
+        .map(|capability| {
+            let (supported, source) = match capability {
+                EmulatorCapability::InputKey | EmulatorCapability::InputText => (false, "nemu_ipc"),
+                EmulatorCapability::InputTap
+                | EmulatorCapability::InputLongTap
+                | EmulatorCapability::InputSwipe
+                | EmulatorCapability::InputSegmentedSwipe
+                | EmulatorCapability::InputReset
+                | EmulatorCapability::CaptureFrame => (true, "nemu_ipc"),
+                _ => (false, "execution_backend_registry"),
+            };
+            let (availability, implementation) = if supported {
+                (
+                    EmulatorCapabilityAvailability::Unverified,
+                    EmulatorCapabilityImplementation::Supported,
+                )
+            } else {
+                (
+                    EmulatorCapabilityAvailability::Unavailable,
+                    EmulatorCapabilityImplementation::Unsupported,
+                )
+            };
+            EmulatorCapabilityEvidence::new(capability, availability, "neutral evidence", source)
+                .and_then(|evidence| evidence.with_implementation(implementation))
+                .expect("capability evidence")
+        })
+        .collect();
+    EmulatorCapabilityProfile::new(
+        "neutral.registry",
+        EmulatorVersionEvidence::Unavailable {
+            reason: EmulatorVersionUnavailableReason::NotProbed,
+        },
+        evidence,
+    )
+    .expect("capability profile")
+}
+
+/// Workflow #434 LW-1: the Runtime's ledger of the host at `runtime_root`, in its order: each
+/// capture's frame and the frame each input's intent names (`None` for an input that names none).
+fn lw1_capture_and_input_wire(
+    runtime_root: &Path,
+) -> Vec<(&'static str, Option<actingcommand_contract::FrameId>)> {
+    let client = RuntimeClient::connect(RuntimeClientConfig::new(
+        runtime_root,
+        actingcommand_runtime_client::RuntimeChannel::Lab,
+        EventActor::Lab,
+        EventSource::Lab,
+    ))
+    .expect("Runtime client");
+    let events = client
+        .query_events(EventQuery::default(), ProjectionProfile::Forensic)
+        .expect("Runtime events");
+    drop(client);
+    events
+        .iter()
+        .filter_map(|event| match event.event_type {
+            EventType::CaptureCompleted => Some(("capture", event.links.frame_id().copied())),
+            EventType::InputIntent => Some((
+                "input",
+                match &event.payload {
+                    ProjectionPayload::Full(payload) => match payload.as_ref() {
+                        EventPayload::Input(InputPayload::Intent(intent)) => intent
+                            .provenance()
+                            .and_then(|provenance| provenance.before_frame_id),
+                        _ => None,
+                    },
+                    _ => None,
+                },
+            )),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Workflow #434 LW-1 (register §1.435): `tap 0 0` without `--record` on an instance whose input
+/// is the emulator's own (`nemu_ipc`, which presses only on a frame the Runtime captured and
+/// refuses a press without one, `nemu_input_frame_required`): the status names the Nemu input, so
+/// the command captures once and sends the press on that frame: it answers committed, one tap, one
+/// capture, the Runtime's ledger holds the capture and then the input whose intent names that
+/// capture's frame, and the answer names the frame (`input_frame`).
+#[test]
+fn lw1_a_plain_tap_on_an_instance_whose_input_needs_a_frame_presses_on_its_capture() {
+    let root = TempDir::new().expect("tempdir");
+    let runtime_root = root.path().join("runtime");
+    let local = root.path().join("local");
+    let config = root.path().join("actinglab.json");
+    fs::write(&config, "{}").expect("write config");
+    let state = Arc::new(FakeState::default());
+    state.nemu_input.store(true, Ordering::Release);
+    let host = l3_host(&runtime_root, &state, b"lab-lw1-plain-tap-nemu");
+    let tapped = run_actinglab_json(
+        &config,
+        &runtime_root,
+        &local,
+        ["--json", "--instance", "node.a", "tap", "0", "0"],
+    );
+    let wire = lw1_capture_and_input_wire(&runtime_root);
+    host.close().expect("close host");
+
+    assert_eq!(
+        tapped["input_outcome"]["input_stage"], "committed",
+        "{tapped}"
+    );
+    assert_eq!(state.taps.load(Ordering::Acquire), 1);
+    assert_eq!(state.captures.load(Ordering::Acquire), 1, "one capture");
+    let kinds = wire.iter().map(|(kind, _)| *kind).collect::<Vec<_>>();
+    assert_eq!(kinds, ["capture", "input"], "{wire:?}");
+    let frame = wire[0].1.expect("the capture names its frame");
+    assert_eq!(
+        wire[1].1,
+        Some(frame),
+        "the input names the frame captured before it"
+    );
+    assert_eq!(
+        tapped["input_frame"]["frame_id"],
+        json!(frame),
+        "the answer names it: {tapped}"
+    );
+}
+
+/// Workflow #434 LW-1: `tap 0 0` without `--record` on an instance whose input needs no frame (no
+/// Nemu input): nothing changes: no capture, the press sent without a frame (its intent names
+/// none), one tap, and the answer names no frame.
+#[test]
+fn lw1_a_plain_tap_on_an_instance_whose_input_needs_no_frame_captures_nothing() {
+    let root = TempDir::new().expect("tempdir");
+    let runtime_root = root.path().join("runtime");
+    let local = root.path().join("local");
+    let config = root.path().join("actinglab.json");
+    fs::write(&config, "{}").expect("write config");
+    let state = Arc::new(FakeState::default());
+    let host = l3_host(&runtime_root, &state, b"lab-lw1-plain-tap-adb");
+    let tapped = run_actinglab_json(
+        &config,
+        &runtime_root,
+        &local,
+        ["--json", "--instance", "node.a", "tap", "0", "0"],
+    );
+    let wire = lw1_capture_and_input_wire(&runtime_root);
+    host.close().expect("close host");
+
+    assert_eq!(
+        tapped["input_outcome"]["input_stage"], "committed",
+        "{tapped}"
+    );
+    assert_eq!(state.taps.load(Ordering::Acquire), 1);
+    assert_eq!(state.captures.load(Ordering::Acquire), 0, "no capture");
+    assert_eq!(wire, [("input", None)], "{wire:?}");
+    assert!(tapped.get("input_frame").is_none(), "{tapped}");
+}
+
+/// Workflow #434 LW-1 fix round 1: a loopback relay in front of the fake host of `runtime_root`,
+/// built as `s19_relay_observing` builds one, that makes the Runtime lose the frame a plain press
+/// names, once or twice. A plain press's connections on an instance whose input needs a frame are
+/// the status read (0), the capture (1), the press's own (2: its lease, its inputs and the lease's
+/// release) and, after its first input was refused for its frame, the second capture (3). Before
+/// the relay relays the press's connection it takes one keyless observation of `node.a` through
+/// `first`, so that the Runtime no longer holds the frame of the capture. With `second`: once the
+/// second capture's connection is accepted, the next bytes the command sends on the press's
+/// connection wait until the command has closed that capture's connection (it does so before it
+/// sends the press again), and the relay then takes one more observation through `second` before
+/// it relays them, so that the Runtime no longer holds the second capture's frame either. Each
+/// observer is a client connected to the host before the relay; the count is the observations
+/// that completed.
+fn lw1_relay_losing_frames(
+    runtime_root: &Path,
+    first: RuntimeClient,
+    second: Option<RuntimeClient>,
+) -> Arc<AtomicUsize> {
+    let info_path = runtime_root.join("runtime-info.json");
+    let mut info: Value =
+        serde_json::from_slice(&fs::read(&info_path).expect("the host's runtime-info"))
+            .expect("the host's runtime-info JSON");
+    let host = format!(
+        "{}:{}",
+        info["host"].as_str().expect("the host's address"),
+        info["port"].as_u64().expect("the host's port")
+    );
+    let relay = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("the relay's listener");
+    info["port"] = json!(relay.local_addr().expect("the relay's address").port());
+    fs::write(
+        &info_path,
+        serde_json::to_vec(&info).expect("the relay's runtime-info JSON"),
+    )
+    .expect("the relay's runtime-info");
+    let taken = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&taken);
+    let armed = Arc::new(AtomicBool::new(false));
+    let (signal, closed_seen) = std::sync::mpsc::channel::<()>();
+    let mut first_observer = Some(first);
+    let mut second_observer = second.map(|observer| (observer, closed_seen));
+    let mut closed_signal = Some(signal);
+    thread::spawn(move || {
+        for (index, accepted) in relay.incoming().enumerate() {
+            let Ok(command) = accepted else {
+                return;
+            };
+            if index == 2
+                && let Some(observer) = first_observer.take()
+                && observer.observe_readonly("node.a").is_ok()
+            {
+                counted.fetch_add(1, Ordering::SeqCst);
+            }
+            if index == 3 {
+                armed.store(true, Ordering::SeqCst);
+            }
+            let Ok(upstream) = std::net::TcpStream::connect(&host) else {
+                return;
+            };
+            let (Ok(command_reader), Ok(upstream_reader)) =
+                (command.try_clone(), upstream.try_clone())
+            else {
+                return;
+            };
+            match index {
+                2 => {
+                    let losing = second_observer.take();
+                    let pipe_armed = Arc::clone(&armed);
+                    let observed = Arc::clone(&counted);
+                    thread::spawn(move || {
+                        lw1_relay_pipe_losing(
+                            command_reader,
+                            upstream,
+                            losing,
+                            &pipe_armed,
+                            &observed,
+                        );
+                    });
+                }
+                3 => {
+                    let on_close = closed_signal.take();
+                    thread::spawn(move || {
+                        s17_relay_pipe(command_reader, upstream);
+                        if let Some(on_close) = on_close {
+                            on_close.send(()).ok();
+                        }
+                    });
+                }
+                _ => {
+                    thread::spawn(move || s17_relay_pipe(command_reader, upstream));
+                }
+            }
+            thread::spawn(move || s17_relay_pipe(upstream_reader, command));
+        }
+    });
+    taken
+}
+
+/// Workflow #434 LW-1 fix round 1: the command's direction of the press's connection behind
+/// `lw1_relay_losing_frames`: what `from` sends, to `to`, until `from` closes or a copy fails, and
+/// then `to`'s writing half shut (as `s17_relay_pipe`). With `losing`, once `armed`, the first bytes
+/// read wait until the second capture's connection was closed by the command, then one keyless
+/// observation of `node.a` through its client (counted in `observed` when it completed) before
+/// they are relayed.
+fn lw1_relay_pipe_losing(
+    mut from: std::net::TcpStream,
+    mut to: std::net::TcpStream,
+    mut losing: Option<(RuntimeClient, std::sync::mpsc::Receiver<()>)>,
+    armed: &AtomicBool,
+    observed: &AtomicUsize,
+) {
+    use std::io::Read;
+    let mut buffer = [0_u8; 16 * 1024];
+    loop {
+        let read = match from.read(&mut buffer) {
+            Ok(0) | Err(_) => break,
+            Ok(read) => read,
+        };
+        if armed.load(Ordering::SeqCst)
+            && let Some((observer, closed_seen)) = losing.take()
+        {
+            closed_seen.recv().ok();
+            if observer.observe_readonly("node.a").is_ok() {
+                observed.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+        if to.write_all(&buffer[..read]).is_err() {
+            break;
+        }
+    }
+    to.shutdown(std::net::Shutdown::Write).ok();
+}
+
+/// Workflow #434 LW-1 fix round 1 (the review's must-fix 1; `contracts/lab-recording.md`, "When
+/// the frame is gone before the press"): `tap 0 0` without `--record` on an instance whose input
+/// presses only on a frame the Runtime captured (`nemu_ipc`), behind a relay that makes the Runtime
+/// lose the frame the press names once (`lw1_relay_losing_frames`): the first input is refused
+/// (`input_frame_unavailable`, nothing sent, no intent), and the command captures once more and
+/// sends the press once more on that capture, through the same proxy, under the same lease. One
+/// tap; three captures (the command's two and the relay's one); the Runtime's ledger holds the
+/// capture, the relay's capture, one lease, the second capture, one input whose intent names the
+/// second capture's frame, and the lease's release; the answer is committed, names that frame and
+/// says `input_frame_captured_twice`.
+#[test]
+fn lw1_fix_a_plain_press_whose_frame_is_lost_is_sent_once_more_under_its_one_lease() {
+    let root = TempDir::new().expect("tempdir");
+    let runtime_root = root.path().join("runtime");
+    let local = root.path().join("local");
+    let config = root.path().join("actinglab.json");
+    fs::write(&config, "{}").expect("write config");
+    let state = Arc::new(FakeState::default());
+    state.nemu_input.store(true, Ordering::Release);
+    let host = l3_host(&runtime_root, &state, b"lab-lw1-fix-plain-tap-retry");
+    let taken = lw1_relay_losing_frames(&runtime_root, s17_client(&runtime_root), None);
+
+    let tapped = run_actinglab_json(
+        &config,
+        &runtime_root,
+        &local,
+        ["--json", "--instance", "node.a", "tap", "0", "0"],
+    );
+    let frames = lw1_capture_and_input_wire(&runtime_root);
+    let wire = s19_press_wire(&runtime_root);
+    host.close().expect("close host");
+
+    assert_eq!(
+        taken.load(Ordering::SeqCst),
+        1,
+        "the relay's observation completed"
+    );
+    assert_eq!(
+        tapped["input_outcome"]["input_stage"], "committed",
+        "{tapped}"
+    );
+    assert_eq!(tapped["input_frame_captured_twice"], true, "{tapped}");
+    assert_eq!(state.taps.load(Ordering::Acquire), 1);
+    assert_eq!(state.captures.load(Ordering::Acquire), 3);
+    assert_eq!(
+        wire,
+        ["capture", "capture", "lease", "capture", "input", "release"],
+        "{wire:?}"
+    );
+    let kinds = frames.iter().map(|(kind, _)| *kind).collect::<Vec<_>>();
+    assert_eq!(
+        kinds,
+        ["capture", "capture", "capture", "input"],
+        "{frames:?}"
+    );
+    let second = frames[2].1.expect("the second capture names its frame");
+    assert_eq!(
+        frames[3].1,
+        Some(second),
+        "the press is sent on the second capture"
+    );
+    assert_eq!(
+        tapped["input_frame"]["frame_id"],
+        json!(second),
+        "the answer names it: {tapped}"
+    );
+}
+
+/// Workflow #434 LW-1 fix round 1: as the test above, but the relay makes the Runtime lose the
+/// second capture's frame too: the second input is refused as the first was, and that refusal is
+/// the command's answer (`device_error`, the input outcome `receipt_unavailable`, the lease
+/// released): one retry, never a second. No tap; four captures (the command's two, the relay's
+/// two); the ledger holds the capture, the relay's, one lease, the second capture, the relay's
+/// second and the lease's release, and no input. Fix round 2 (the second review's (f)): the
+/// answered refusal is the frame's, `input_frame_unavailable`.
+#[test]
+fn lw1_fix_a_plain_press_whose_frame_is_lost_twice_is_refused_after_one_retry() {
+    let root = TempDir::new().expect("tempdir");
+    let runtime_root = root.path().join("runtime");
+    let local = root.path().join("local");
+    let config = root.path().join("actinglab.json");
+    fs::write(&config, "{}").expect("write config");
+    let state = Arc::new(FakeState::default());
+    state.nemu_input.store(true, Ordering::Release);
+    let host = l3_host(&runtime_root, &state, b"lab-lw1-fix-plain-tap-lost-twice");
+    let taken = lw1_relay_losing_frames(
+        &runtime_root,
+        s17_client(&runtime_root),
+        Some(s17_client(&runtime_root)),
+    );
+
+    let (_, failed) = run_actinglab_failure_json(
+        &config,
+        &runtime_root,
+        &local,
+        ["--json", "--instance", "node.a", "tap", "0", "0"],
+    );
+    let wire = s19_press_wire(&runtime_root);
+    host.close().expect("close host");
+
+    assert_eq!(
+        taken.load(Ordering::SeqCst),
+        2,
+        "the relay's two observations completed"
+    );
+    assert_eq!(failed["outcome"]["code"], "device_error", "{failed}");
+    assert_eq!(
+        failed["details"]["input_outcome"]["input_stage"], "receipt_unavailable",
+        "{failed}"
+    );
+    assert!(
+        lw1_input_error(&failed).contains("input_frame_unavailable"),
+        "the second refusal, the answer, is the frame's: {failed}"
+    );
+    assert_eq!(
+        failed["details"]["input_outcome"]["close_stage"], "succeeded",
+        "{failed}"
+    );
+    assert_eq!(state.taps.load(Ordering::Acquire), 0);
+    assert_eq!(state.captures.load(Ordering::Acquire), 4);
+    assert_eq!(
+        wire,
+        [
+            "capture", "capture", "lease", "capture", "capture", "release"
+        ],
+        "{wire:?}"
+    );
+}
+
+/// Workflow #434 LW-1 fix round 1 (the coordinator's ruling: a failed status read does not stop a
+/// press): `tap 0 0` without `--record` on an instance whose input needs no frame, behind the relay
+/// of `s17_relay_dropping` that closes the command's first connection, its status read, at once:
+/// the press is sent without a frame as before LW-1 and performed: committed, one tap, no capture,
+/// its intent names no frame, the answer names none, and its `touch_backend_warnings` says that
+/// the status could not be read. Fix round 2 (the second review's (f)): what the warning says,
+/// `lw1_assert_unread_status_warning`.
+#[test]
+fn lw1_fix_a_plain_press_whose_status_read_fails_is_sent_without_a_frame() {
+    let root = TempDir::new().expect("tempdir");
+    let runtime_root = root.path().join("runtime");
+    let local = root.path().join("local");
+    let config = root.path().join("actinglab.json");
+    fs::write(&config, "{}").expect("write config");
+    let state = Arc::new(FakeState::default());
+    let host = l3_host(
+        &runtime_root,
+        &state,
+        b"lab-lw1-fix-plain-tap-status-unread",
+    );
+    s17_relay_dropping(&runtime_root, 0);
+
+    let tapped = run_actinglab_json(
+        &config,
+        &runtime_root,
+        &local,
+        ["--json", "--instance", "node.a", "tap", "0", "0"],
+    );
+    let wire = lw1_capture_and_input_wire(&runtime_root);
+    host.close().expect("close host");
+
+    assert_eq!(
+        tapped["input_outcome"]["input_stage"], "committed",
+        "{tapped}"
+    );
+    assert_eq!(state.taps.load(Ordering::Acquire), 1);
+    assert_eq!(state.captures.load(Ordering::Acquire), 0, "no capture");
+    assert_eq!(wire, [("input", None)], "{wire:?}");
+    assert!(tapped.get("input_frame").is_none(), "{tapped}");
+    lw1_assert_unread_status_warning(&tapped["touch_backend_warnings"], &tapped);
+}
+
+/// Workflow #434 LW-1 fix round 2: the input error of a failed command's answer, its details'
+/// `input_outcome.input_error` (the Runtime's refusal as the client wrote it, with its host code);
+/// empty when there is none.
+fn lw1_input_error(failed: &Value) -> &str {
+    failed["details"]["input_outcome"]["input_error"]
+        .as_str()
+        .unwrap_or_default()
+}
+
+/// Workflow #434 LW-1 fix round 2 (the second review's (f)): `warnings` (of `answer`) is the one
+/// warning of a status read that failed: that the instance's status could not be read, so that the
+/// press is sent without a frame, which an input that presses only on one refuses.
+fn lw1_assert_unread_status_warning(warnings: &Value, answer: &Value) {
+    let listed = warnings.as_array().cloned().unwrap_or_default();
+    assert_eq!(listed.len(), 1, "one warning: {answer}");
+    let warning = listed[0].as_str().unwrap_or_default();
+    assert!(
+        warning.starts_with("the instance's status could not be read (")
+            && warning.contains("so the press is sent without a frame")
+            && warning.contains("an input that presses only on one refuses it"),
+        "the warning says the status was not read and the press went without a frame: {answer}"
+    );
+}
+
+/// Workflow #434 LW-1 fix round 2 (the review's must-fix 2, the coordinator's choice; the second
+/// review's (f)): `tap 0 0` without `--record` on an instance whose input presses only on a frame
+/// the Runtime captured (`nemu_ipc`), behind the relay of `s17_relay_dropping` that closes the
+/// command's first connection, its status read, at once: the press is sent without a frame, as
+/// before LW-1, and the Runtime refuses it (`nemu_input_frame_required`, nothing sent): the
+/// command answers that refusal (`device_error`, the input outcome `receipt_unavailable`, the
+/// lease released) with the warning of the unread status in its details
+/// (`details.touch_backend_warnings`); no tap, no capture, and the ledger holds no capture and no
+/// input.
+#[test]
+fn lw1_fix2_a_press_whose_status_read_fails_on_a_frame_input_is_refused_with_the_warning() {
+    let root = TempDir::new().expect("tempdir");
+    let runtime_root = root.path().join("runtime");
+    let local = root.path().join("local");
+    let config = root.path().join("actinglab.json");
+    fs::write(&config, "{}").expect("write config");
+    let state = Arc::new(FakeState::default());
+    state.nemu_input.store(true, Ordering::Release);
+    let host = l3_host(
+        &runtime_root,
+        &state,
+        b"lab-lw1-fix2-plain-tap-status-unread-nemu",
+    );
+    s17_relay_dropping(&runtime_root, 0);
+
+    let (_, failed) = run_actinglab_failure_json(
+        &config,
+        &runtime_root,
+        &local,
+        ["--json", "--instance", "node.a", "tap", "0", "0"],
+    );
+    let wire = lw1_capture_and_input_wire(&runtime_root);
+    host.close().expect("close host");
+
+    assert_eq!(failed["outcome"]["code"], "device_error", "{failed}");
+    assert_eq!(
+        failed["details"]["input_outcome"]["input_stage"], "receipt_unavailable",
+        "{failed}"
+    );
+    assert_eq!(
+        failed["details"]["input_outcome"]["close_stage"], "succeeded",
+        "{failed}"
+    );
+    assert!(
+        lw1_input_error(&failed).contains("nemu_input_frame_required"),
+        "the Runtime's refusal of a press without a frame: {failed}"
+    );
+    lw1_assert_unread_status_warning(&failed["details"]["touch_backend_warnings"], &failed);
+    assert_eq!(state.taps.load(Ordering::Acquire), 0);
+    assert_eq!(state.captures.load(Ordering::Acquire), 0, "no capture");
+    assert!(wire.is_empty(), "no capture, no input: {wire:?}");
+}
+
+/// Workflow #434 LW-1 fix round 2: the `command.rejected` records of the Runtime's ledger of the
+/// host at `runtime_root`: one for each input its foreground gate refused.
+fn lw1_rejected_inputs(runtime_root: &Path) -> usize {
+    let client = s17_client(runtime_root);
+    client
+        .query_events(EventQuery::default(), ProjectionProfile::Forensic)
+        .expect("Runtime events")
+        .iter()
+        .filter(|event| event.event_type == EventType::CommandRejected)
+        .count()
+}
+
+/// Workflow #434 LW-1 fix round 2 (the second review's (f): the retry must tell the frame's
+/// refusal from every other): `tap 0 0` without `--record` on an instance whose input presses only
+/// on a frame the Runtime captured (`nemu_ipc`), whose device shows another application than the
+/// assigned one, so that the Runtime refuses the press, sent on the frame it still holds, for
+/// another cause (`application_not_foreground`, nothing sent): that refusal is the answer at once
+/// (`device_error`, the lease released). One send (one `command.rejected`), one capture and no
+/// second: the ledger holds the capture, one lease and its release; no tap.
+#[test]
+fn lw1_fix2_a_plain_press_refused_for_another_cause_is_neither_captured_nor_sent_again() {
+    let root = TempDir::new().expect("tempdir");
+    let runtime_root = root.path().join("runtime");
+    let local = root.path().join("local");
+    let config = root.path().join("actinglab.json");
+    fs::write(&config, "{}").expect("write config");
+    let state = Arc::new(FakeState::default());
+    state.nemu_input.store(true, Ordering::Release);
+    state.foreground_other.store(true, Ordering::Release);
+    let host = l3_host(
+        &runtime_root,
+        &state,
+        b"lab-lw1-fix2-plain-tap-other-refusal",
+    );
+
+    let (_, failed) = run_actinglab_failure_json(
+        &config,
+        &runtime_root,
+        &local,
+        ["--json", "--instance", "node.a", "tap", "0", "0"],
+    );
+    let wire = s19_press_wire(&runtime_root);
+    let rejected = lw1_rejected_inputs(&runtime_root);
+    host.close().expect("close host");
+
+    assert_eq!(failed["outcome"]["code"], "device_error", "{failed}");
+    assert!(
+        lw1_input_error(&failed).contains("application_not_foreground"),
+        "the Runtime's refusal for another cause: {failed}"
+    );
+    assert_eq!(
+        failed["details"]["input_outcome"]["close_stage"], "succeeded",
+        "{failed}"
+    );
+    assert_eq!(rejected, 1, "the press was sent once");
+    assert_eq!(state.taps.load(Ordering::Acquire), 0);
+    assert_eq!(
+        state.captures.load(Ordering::Acquire),
+        1,
+        "no second capture"
+    );
+    assert_eq!(wire, ["capture", "lease", "release"], "{wire:?}");
+}
+
+/// Workflow #434 LW-1 fix round 2 (the second review's (f); `send_direct_touch_command`, the
+/// capture again that fails): `tap 0 0` without `--record` on an instance whose input presses only
+/// on a frame the Runtime captured (`nemu_ipc`), behind the relay of `lw1_relay_losing_frames`
+/// that makes the Runtime lose the press's frame once, and the capture taken again for it fails in
+/// the backend (the third capture: the command's, the relay's, the command's again): the answer is
+/// the first refusal (`device_error`, `input_frame_unavailable`, the input outcome
+/// `receipt_unavailable`, the lease released) with the capture's error appended to its message;
+/// the press is not sent again. No tap; three captures; the ledger holds the capture, the relay's,
+/// one lease, the failed capture and the lease's release.
+#[test]
+fn lw1_fix2_a_plain_press_whose_frame_cannot_be_captured_again_answers_the_first_refusal() {
+    let root = TempDir::new().expect("tempdir");
+    let runtime_root = root.path().join("runtime");
+    let local = root.path().join("local");
+    let config = root.path().join("actinglab.json");
+    fs::write(&config, "{}").expect("write config");
+    let state = Arc::new(FakeState::default());
+    state.nemu_input.store(true, Ordering::Release);
+    state.capture_fails_at.store(3, Ordering::Release);
+    let host = l3_host(
+        &runtime_root,
+        &state,
+        b"lab-lw1-fix2-plain-tap-recapture-fails",
+    );
+    let taken = lw1_relay_losing_frames(&runtime_root, s17_client(&runtime_root), None);
+
+    let (_, failed) = run_actinglab_failure_json(
+        &config,
+        &runtime_root,
+        &local,
+        ["--json", "--instance", "node.a", "tap", "0", "0"],
+    );
+    let wire = s19_press_wire(&runtime_root);
+    host.close().expect("close host");
+
+    assert_eq!(
+        taken.load(Ordering::SeqCst),
+        1,
+        "the relay's observation completed"
+    );
+    assert_eq!(failed["outcome"]["code"], "device_error", "{failed}");
+    let message = failed["message"].as_str().unwrap_or_default();
+    let Some((refusal, capture)) =
+        message.split_once("; the frame captured again for the press could not be taken: ")
+    else {
+        panic!("the capture's error is appended to the refusal: {failed}");
+    };
+    assert!(
+        refusal.contains("input_frame_unavailable"),
+        "the first refusal: {failed}"
+    );
+    assert!(!capture.is_empty(), "the capture's error: {failed}");
+    assert!(
+        lw1_input_error(&failed).contains("input_frame_unavailable"),
+        "{failed}"
+    );
+    assert_eq!(
+        failed["details"]["input_outcome"]["input_stage"], "receipt_unavailable",
+        "{failed}"
+    );
+    assert_eq!(
+        failed["details"]["input_outcome"]["close_stage"], "succeeded",
+        "{failed}"
+    );
+    assert_eq!(state.taps.load(Ordering::Acquire), 0);
+    assert_eq!(state.captures.load(Ordering::Acquire), 3);
+    assert_eq!(
+        wire,
+        ["capture", "capture", "lease", "capture_failed", "release"],
+        "{wire:?}"
+    );
+}
+
+/// Workflow #434 LW-1 fix round 2 (the second review's (f); fix round 1's `details.hint`): `key
+/// back` and `text neutral` on an instance whose input is the emulator's own (`nemu_ipc`, which
+/// sends neither; the status's capability table says `input.key` and `input.text` unsupported,
+/// with that input as their evidence): the Runtime refuses each
+/// (`nemu_input_capability_unsupported`, nothing sent), and the refusal's `details.hint` names
+/// that input, says which of the two it does not send and names what presses instead (`tap x y`,
+/// `do --capture`).
+#[test]
+fn lw1_fix2_key_and_text_on_an_input_that_sends_neither_hint_what_presses_instead() {
+    let root = TempDir::new().expect("tempdir");
+    let runtime_root = root.path().join("runtime");
+    let local = root.path().join("local");
+    let config = root.path().join("actinglab.json");
+    fs::write(&config, "{}").expect("write config");
+    let state = Arc::new(FakeState::default());
+    state.nemu_input.store(true, Ordering::Release);
+    let host = l3_host(&runtime_root, &state, b"lab-lw1-fix2-key-and-text-hint");
+
+    for (command, word, unsent) in [
+        ("key", "back", "sends no key:"),
+        ("text", "neutral", "sends no text:"),
+    ] {
+        let (_, failed) = run_actinglab_failure_json(
+            &config,
+            &runtime_root,
+            &local,
+            ["--json", "--instance", "node.a", command, word],
+        );
+        assert_eq!(
+            failed["outcome"]["code"], "device_error",
+            "{command}: {failed}"
+        );
+        assert!(
+            lw1_input_error(&failed).contains("nemu_input_capability_unsupported"),
+            "{command}: the Runtime's refusal: {failed}"
+        );
+        let hint = failed["details"]["hint"].as_str().unwrap_or_default();
+        assert!(
+            hint.starts_with("this instance's input (nemu_ipc) ")
+                && hint.contains(unsent)
+                && hint.contains("press the screen's own control instead")
+                && hint.contains("tap x y")
+                && hint.contains("do --capture"),
+            "{command}: its hint: {failed}"
+        );
+    }
+    host.close().expect("close host");
+    assert_eq!(state.taps.load(Ordering::Acquire), 0);
 }
 
 /// #463 S1-1 fix round 2 (B1): the backend fails the tap of `tap 0 0 --record` (a device-class

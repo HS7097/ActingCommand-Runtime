@@ -6,9 +6,12 @@ use crate::{
     stream_input_relay_action,
 };
 use actingcommand_contract::{
-    InputAction, InputFrameReference, RuntimeReceipt, RuntimeReceiptState, RuntimeResult,
+    EmulatorCapability, EmulatorCapabilityImplementation, InputAction, InputFrameReference,
+    RuntimeInstanceStatus, RuntimeReceipt, RuntimeReceiptState, RuntimeResult,
 };
-use actingcommand_device::{CaptureBackendChoice, Frame, combine_operation_and_close};
+use actingcommand_device::{
+    CaptureBackendChoice, Frame, NemuInputSupport, TouchBackendChoice, combine_operation_and_close,
+};
 use actingcommand_lab::{
     AfterCapture, AttachFrameRequest, CapturedFrame, ClickEffect, ClickPlan, CommitClickRequest,
     LAB_RECORDING_MAX_NEXT_FRAME_MS, LabInputPort, OpaqueJson, PlanClickRequest, PlannedSwipe,
@@ -598,7 +601,12 @@ impl DirectTouchCommand {
         &self,
         backend: &mut runtime_input_backend::RuntimeInputBackend,
     ) -> actingcommand_device::DeviceResult<RuntimeReceipt> {
-        let action = match *self {
+        backend.input_receipt(self.action())
+    }
+
+    /// The Runtime input action this command sends.
+    fn action(&self) -> InputAction {
+        match *self {
             Self::Tap { x, y } => InputAction::Tap { x, y },
             Self::Swipe {
                 x1,
@@ -614,8 +622,7 @@ impl DirectTouchCommand {
                 duration_ms,
             },
             Self::LongTap { x, y, duration_ms } => InputAction::LongTap { x, y, duration_ms },
-        };
-        backend.input_receipt(action)
+        }
     }
 
     fn to_json(&self) -> Value {
@@ -748,6 +755,23 @@ pub(crate) fn run_direct_touch(
     )
 }
 
+/// `tap`, `swipe` or `long-tap` without `--record`: the press through the Runtime's input proxy.
+/// Workflow #434 LW-1 (register §1.435): on every instance one status read first, on a connection
+/// of its own ([`press_needs_frame`]); on an instance whose input presses only on a frame the
+/// Runtime captured, one capture ([`press_frame`]: the frame's reference alone) and the press sent
+/// on that frame, as a recorded press sends it (#463 S1-1); the answer then names it
+/// (`input_frame`). On every other instance nothing is captured and the press is sent as before.
+/// Fix round 1 (the coordinator's ruling): a status read that fails stops nothing: the press is
+/// sent without a frame, as before LW-1 (an input that needs one is refused by the Runtime itself,
+/// `nemu_input_frame_required`), and the answer says so in `touch_backend_warnings`. Fix round 1
+/// (the review's must-fix 1, `contracts/lab-recording.md`, "When the frame is gone before the
+/// press"): when the Runtime no longer held the frame the press names ([`input_frame_unavailable`],
+/// nothing sent), one capture more and the press sent once more on it, through the same proxy,
+/// under the same lease, once: a second refusal of any kind is the command's answer. The answer
+/// then says `input_frame_captured_twice`. Fix round 2 (the review's must-fix 2, the coordinator's
+/// choice): the warning of a status read that failed is in the answer of a press that fails after
+/// it too, as `details.touch_backend_warnings` ([`with_touch_backend_warnings`]): above all the
+/// Runtime's refusal of a press sent without a frame on an input that needs one.
 fn send_direct_touch_command(
     global: &GlobalOptions,
     config: &UserConfig,
@@ -755,18 +779,169 @@ fn send_direct_touch_command(
     control_mode: &str,
     safety_gate: &str,
 ) -> CliOutcome<Value> {
-    let (mut backend, instance_alias) =
-        open_cli_runtime_input_proxy(global, config).map_err(input_not_submitted)?;
-    let operation = command.run(&mut backend);
-    let close = backend.close();
-    let input_outcome = finish_direct_input(operation, close)?;
-    Ok(direct_touch_answer(
+    let instance_alias = resolve_instance_id(global, config).map_err(input_not_submitted)?;
+    let state_root = runtime_state_root().map_err(input_not_submitted)?;
+    let (needs_frame, warnings) =
+        match press_needs_frame(&state_root, &instance_alias, &command.action()) {
+            Ok(needs_frame) => (needs_frame, Vec::new()),
+            Err(unread) => (
+                false,
+                vec![format!(
+                    "the instance's status could not be read ({unread}), so the press is sent \
+                     without a frame; an input that presses only on one refuses it"
+                )],
+            ),
+        };
+    let warned = |error: CliError| with_touch_backend_warnings(error, &warnings);
+    let endpoint = runtime_capture_backend::RuntimeCaptureEndpoint::new(
+        instance_alias.clone(),
+        state_root.clone(),
+    );
+    let mut frame = if needs_frame {
+        Some(press_frame(&endpoint).map_err(input_not_submitted)?)
+    } else {
+        None
+    };
+    let client = RuntimeClient::connect(crate::lab_client_config(&state_root))
+        .map_err(|error| warned(input_not_submitted(CliError::device(error.to_string()))))?;
+    // The lease's failure is answered as `open_cli_runtime_input_proxy` answers it.
+    let mut proxy = RuntimeInputProxy::connect(client, &instance_alias).map_err(|error| {
+        warned(input_not_submitted(CliError::device(
+            runtime_input_backend::device_error(error).to_string(),
+        )))
+    })?;
+    let mut operation = proxy.input_with_frame(command.action(), frame);
+    let mut captured_twice = false;
+    if frame.is_some() && operation.as_ref().is_err_and(input_frame_unavailable) {
+        match press_frame(&endpoint) {
+            Ok(again) => {
+                frame = Some(again);
+                captured_twice = true;
+                operation = proxy.input_with_frame(command.action(), frame);
+            }
+            Err(capture) => {
+                let close = proxy.close().map_err(runtime_input_backend::device_error);
+                let refused = finish_direct_input(
+                    operation.map_err(runtime_input_backend::device_error),
+                    close,
+                );
+                return Err(match refused {
+                    Ok(_) => capture,
+                    Err(mut refused) => {
+                        refused.message = format!(
+                            "{}; the frame captured again for the press could not be taken: {}",
+                            refused.message, capture.message
+                        );
+                        refused
+                    }
+                });
+            }
+        }
+    }
+    let close = proxy.close().map_err(runtime_input_backend::device_error);
+    let input_outcome = finish_direct_input(
+        operation.map_err(runtime_input_backend::device_error),
+        close,
+    )
+    .map_err(warned)?;
+    let mut answer = direct_touch_answer(
         &instance_alias,
         command,
         control_mode,
         safety_gate,
         input_outcome,
-    ))
+    );
+    if !warnings.is_empty() {
+        answer["touch_backend_warnings"] = json!(warnings);
+    }
+    if let Some(frame) = frame {
+        answer["input_frame"] = json!(frame);
+        answer["input_frame_captured_twice"] = json!(captured_twice);
+    }
+    Ok(answer)
+}
+
+/// Workflow #434 LW-1 (register §1.435): whether a plain press of `action` on `instance` is sent on
+/// a frame. The Nemu input (the emulator's own interface) performs a tap, a long tap, a swipe and
+/// the segmented drags only on a frame the Runtime captured and committed
+/// (`NemuInputSupport::InFrame`) and refuses one without (`nemu_input_frame_required`), so for
+/// such an action one `Status` read, on a connection of its own (fix round 1: a read that fails
+/// never leaves the press's connection dead), asks which input performs it: the instance's
+/// capability table names it (`evidence_ref` of the action's capability is the configured touch
+/// backend, `contracts/actinglab-capabilities.md`), and the press needs a frame when it is the
+/// Nemu input, as the Runtime decides (`runtime-host` `host/nemu_input.rs`, `nemu_input_check`).
+/// An instance the status lists without a capability table needs none. `Err` with the read's
+/// failure, which the caller answers by sending the press without a frame.
+fn press_needs_frame(
+    state_root: &std::path::Path,
+    instance: &str,
+    action: &InputAction,
+) -> Result<bool, RuntimeClientError> {
+    let Some(capability) = press_capability(action) else {
+        return Ok(false);
+    };
+    if NemuInputSupport::of(action) != NemuInputSupport::InFrame {
+        return Ok(false);
+    }
+    let client = RuntimeClient::connect(crate::lab_client_config(state_root))?;
+    let status = client.status()?;
+    Ok(status
+        .instances()
+        .iter()
+        .find(|row| row.instance_alias() == instance)
+        .and_then(RuntimeInstanceStatus::capabilities)
+        .is_some_and(|profile| {
+            profile.evidence(capability).evidence_ref() == TouchBackendChoice::NemuIpc.as_str()
+        }))
+}
+
+/// Workflow #434 LW-1 (register §1.435): the frame a plain press is sent on: one capture through
+/// the Runtime (`ObserveReadonly`, on a connection of its own, as a recorded press captures the
+/// frame before it), answered with the reference of the frame the Runtime committed for it (fix
+/// round 1: the reference alone, the frame neither read back nor verified, since the press names
+/// it and plans nothing on its pixels). A capture that fails, or that names no frame, is the
+/// command's failure, nothing pressed.
+fn press_frame(
+    endpoint: &runtime_capture_backend::RuntimeCaptureEndpoint,
+) -> CliOutcome<InputFrameReference> {
+    runtime_capture_backend::observe_runtime_frame_reference(endpoint)
+        .map_err(|error| CliError::device(error.to_string()))?
+        .ok_or_else(|| {
+            CliError::device(
+                "the Runtime's observation carries no frame reference, which a press on this \
+                 instance's input names; nothing was pressed",
+            )
+        })
+}
+
+/// Workflow #434 LW-1: the capability of the instance's capability table that performs `action`,
+/// for the pointer inputs a plain press sends; `None` for every other action.
+fn press_capability(action: &InputAction) -> Option<EmulatorCapability> {
+    match action {
+        InputAction::Tap { .. } => Some(EmulatorCapability::InputTap),
+        InputAction::LongTap { .. } => Some(EmulatorCapability::InputLongTap),
+        InputAction::Swipe { .. } => Some(EmulatorCapability::InputSwipe),
+        _ => None,
+    }
+}
+
+/// Workflow #434 LW-1 fix round 2 (register §1.435; the review's must-fix 2, the coordinator's
+/// choice): `error`, a plain press's failure after its status read, with that read's `warnings`
+/// (empty when the status was read) as `details.touch_backend_warnings`, the member the answer of
+/// a press that was sent carries them in: the Runtime's refusal of a press sent without a frame on
+/// an input that needs one (`nemu_input_frame_required`) says that the status was not read, which
+/// is when it matters most. Object details keep their members, other details move to `details`.
+fn with_touch_backend_warnings(mut error: CliError, warnings: &[String]) -> CliError {
+    if warnings.is_empty() {
+        return error;
+    }
+    let mut details = match error.details.take() {
+        Some(Value::Object(details)) => details,
+        Some(other) => serde_json::Map::from_iter([("details".to_owned(), other)]),
+        None => serde_json::Map::new(),
+    };
+    details.insert("touch_backend_warnings".to_owned(), json!(warnings));
+    error.with_details(Value::Object(details))
 }
 
 /// The answer of a direct touch command that sent its input.
@@ -1302,7 +1477,8 @@ pub(crate) fn run_direct_input(
         open_cli_runtime_input_proxy(global, &config).map_err(input_not_submitted)?;
     let operation = command.run(&mut backend);
     let close = backend.close();
-    let input_outcome = finish_direct_input(operation, close)?;
+    let input_outcome = finish_direct_input(operation, close)
+        .map_err(|error| with_unsendable_hint(error, &instance_alias, &command))?;
     Ok(json!({
         "status": "sent",
         "backend": "runtime_proxy",
@@ -1321,6 +1497,57 @@ pub(crate) fn run_direct_input(
         "action": command.to_json(),
         "input_outcome": input_outcome
     }))
+}
+
+/// Workflow #434 LW-1 fix round 1 (register §1.435; the review's (h)): `error`, the failure of
+/// `key` or `text` on `instance`, with its own hint, `details.hint`, of what to do instead when the
+/// instance's input cannot send that input at all: the instance's capability table (one `Status`
+/// read, on a connection of its own, after the failure) says the capability unsupported
+/// (`input.key`, `input.text`; the emulator's own input, `nemu_ipc`, sends neither, and the
+/// Runtime refuses it, `nemu_input_capability_unsupported`; the Runtime has no other way to send a
+/// key there). Decided by that table, the fact the Runtime's refusal rests on, not by the
+/// refusal's code. Any other failure, or a status read that fails, is answered as it is.
+fn with_unsendable_hint(
+    mut error: CliError,
+    instance: &str,
+    command: &DirectInputCommand,
+) -> CliError {
+    let (capability, sent) = match command {
+        DirectInputCommand::Key(_) => (EmulatorCapability::InputKey, "key"),
+        DirectInputCommand::Text(_) => (EmulatorCapability::InputText, "text"),
+    };
+    let Some(input) = unsupported_input(instance, capability) else {
+        return error;
+    };
+    let hint = format!(
+        "this instance's input ({input}) sends no {sent}: press the screen's own control \
+         instead, with tap x y or do --capture with the package's element"
+    );
+    let mut details = match error.details.take() {
+        Some(Value::Object(details)) => details,
+        Some(other) => serde_json::Map::from_iter([("details".to_owned(), other)]),
+        None => serde_json::Map::new(),
+    };
+    details.insert("hint".to_owned(), json!(hint));
+    error.with_details(Value::Object(details))
+}
+
+/// Workflow #434 LW-1 fix round 1: the input `instance`'s capability table names for
+/// `capability` (its `evidence_ref`, the configured touch backend), when the table says that input
+/// does not implement it; `None` when it does, when the status lists no table for the instance, or
+/// when the status cannot be read.
+fn unsupported_input(instance: &str, capability: EmulatorCapability) -> Option<String> {
+    let state_root = runtime_state_root().ok()?;
+    let client = RuntimeClient::connect(crate::lab_client_config(state_root)).ok()?;
+    let status = client.status().ok()?;
+    let evidence = status
+        .instances()
+        .iter()
+        .find(|row| row.instance_alias() == instance)?
+        .capabilities()?
+        .evidence(capability);
+    (evidence.implementation() == Some(EmulatorCapabilityImplementation::Unsupported))
+        .then(|| evidence.evidence_ref().to_owned())
 }
 
 // The command owns its input receipt before closing the proxy.

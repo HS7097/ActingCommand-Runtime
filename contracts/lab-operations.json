@@ -1311,7 +1311,7 @@
       "source": ["actinglab tap"],
       "slice": "LAB-2",
       "status": "planned",
-      "notes": "#463 S1-1 (contracts/lab-recording.md, Recording while playing): with record, the press is a step of the instance's recording; each screen is one capture through the Runtime as capture --record takes it, the ObserveReadonly read, and (fix round 2) the press is sent with the frame reference of the capture taken immediately before it; no request kind is new to the Runtime; #463 S1-2: after the press the screen is captured until it is still, one ObserveReadonly read per capture and at most 121 (1 + still_max_ms / interval_ms), every capture kept in the step the first opens, the last the screen after it. #463 S1-7 (0.12.64; contracts/lab-recording.md, A recording holds its instance): with record, one Status read before the press, on a connection of its own: record.warnings instance_not_held when the instance's scheduling is not paused, instance_hold_unread when the read got no answer"
+      "notes": "#463 S1-1 (contracts/lab-recording.md, Recording while playing): with record, the press is a step of the instance's recording; each screen is one capture through the Runtime as capture --record takes it, the ObserveReadonly read, and (fix round 2) the press is sent with the frame reference of the capture taken immediately before it; no request kind is new to the Runtime; #463 S1-2: after the press the screen is captured until it is still, one ObserveReadonly read per capture and at most 121 (1 + still_max_ms / interval_ms), every capture kept in the step the first opens, the last the screen after it. #463 S1-7 (0.12.64; contracts/lab-recording.md, A recording holds its instance): with record, one Status read before the press, on a connection of its own: record.warnings instance_not_held when the instance's scheduling is not paused, instance_hold_unread when the read got no answer. #434 LW-1 (0.12.67): without record, on an instance whose input is the emulator's own (its status's capability table names nemu_ipc for the press), one capture through the Runtime first, the ObserveReadonly read, and the press sent on that frame, as with record; the answer names it as input_frame; on every other instance nothing is captured. Fix rounds 1 and 2: without record, the Status read comes first on every instance, on a connection of its own; one that fails stops no press, which is sent without a frame (an input that needs one refuses it, nemu_input_frame_required), and the warning that the status was not read is the answer's touch_backend_warnings, or on a failure its details.touch_backend_warnings; when the Runtime no longer holds the captured frame (input_frame_unavailable, nothing sent), one capture more and the press sent once more under the same lease, a second refusal being the answer, and the answer's input_frame_captured_twice is true (false after one capture)"
     },
     {
       "name": "swipe",
@@ -1339,7 +1339,7 @@
       "source": ["actinglab swipe"],
       "slice": "LAB-2",
       "status": "planned",
-      "notes": "#463 S1-1 (contracts/lab-recording.md, Recording while playing): with record, the press is a step of the instance's recording; each screen is one capture through the Runtime as capture --record takes it, the ObserveReadonly read, and (fix round 2) the press is sent with the frame reference of the capture taken immediately before it; no request kind is new to the Runtime; #463 S1-2: after the press the screen is captured until it is still, one ObserveReadonly read per capture and at most 121 (1 + still_max_ms / interval_ms), every capture kept in the step the first opens, the last the screen after it. #463 S1-7 (0.12.64; contracts/lab-recording.md, A recording holds its instance): with record, one Status read before the press, on a connection of its own: record.warnings instance_not_held when the instance's scheduling is not paused, instance_hold_unread when the read got no answer"
+      "notes": "#463 S1-1 (contracts/lab-recording.md, Recording while playing): with record, the press is a step of the instance's recording; each screen is one capture through the Runtime as capture --record takes it, the ObserveReadonly read, and (fix round 2) the press is sent with the frame reference of the capture taken immediately before it; no request kind is new to the Runtime; #463 S1-2: after the press the screen is captured until it is still, one ObserveReadonly read per capture and at most 121 (1 + still_max_ms / interval_ms), every capture kept in the step the first opens, the last the screen after it. #463 S1-7 (0.12.64; contracts/lab-recording.md, A recording holds its instance): with record, one Status read before the press, on a connection of its own: record.warnings instance_not_held when the instance's scheduling is not paused, instance_hold_unread when the read got no answer. #434 LW-1 (0.12.67): without record, on an instance whose input is the emulator's own (its status's capability table names nemu_ipc for the press), one capture through the Runtime first, the ObserveReadonly read, and the press sent on that frame, as with record; the answer names it as input_frame; on every other instance nothing is captured. Fix rounds 1 and 2: without record, the Status read comes first on every instance, on a connection of its own; one that fails stops no press, which is sent without a frame (an input that needs one refuses it, nemu_input_frame_required), and the warning that the status was not read is the answer's touch_backend_warnings, or on a failure its details.touch_backend_warnings; when the Runtime no longer holds the captured frame (input_frame_unavailable, nothing sent), one capture more and the press sent once more under the same lease, a second refusal being the answer, and the answer's input_frame_captured_twice is true (false after one capture)"
     },
     {
       "name": "long-tap",
@@ -1365,7 +1365,7 @@
       "source": ["actinglab long-tap"],
       "slice": "LAB-2",
       "status": "planned",
-      "notes": "#463 S1-1 (contracts/lab-recording.md, Recording while playing): with record, the press is a step of the instance's recording; each screen is one capture through the Runtime as capture --record takes it, the ObserveReadonly read, and (fix round 2) the press is sent with the frame reference of the capture taken immediately before it; no request kind is new to the Runtime; #463 S1-2: after the press the screen is captured until it is still, one ObserveReadonly read per capture and at most 121 (1 + still_max_ms / interval_ms), every capture kept in the step the first opens, the last the screen after it. #463 S1-7 (0.12.64; contracts/lab-recording.md, A recording holds its instance): with record, one Status read before the press, on a connection of its own: record.warnings instance_not_held when the instance's scheduling is not paused, instance_hold_unread when the read got no answer"
+      "notes": "#463 S1-1 (contracts/lab-recording.md, Recording while playing): with record, the press is a step of the instance's recording; each screen is one capture through the Runtime as capture --record takes it, the ObserveReadonly read, and (fix round 2) the press is sent with the frame reference of the capture taken immediately before it; no request kind is new to the Runtime; #463 S1-2: after the press the screen is captured until it is still, one ObserveReadonly read per capture and at most 121 (1 + still_max_ms / interval_ms), every capture kept in the step the first opens, the last the screen after it. #463 S1-7 (0.12.64; contracts/lab-recording.md, A recording holds its instance): with record, one Status read before the press, on a connection of its own: record.warnings instance_not_held when the instance's scheduling is not paused, instance_hold_unread when the read got no answer. #434 LW-1 (0.12.67): without record, on an instance whose input is the emulator's own (its status's capability table names nemu_ipc for the press), one capture through the Runtime first, the ObserveReadonly read, and the press sent on that frame, as with record; the answer names it as input_frame; on every other instance nothing is captured. Fix rounds 1 and 2: without record, the Status read comes first on every instance, on a connection of its own; one that fails stops no press, which is sent without a frame (an input that needs one refuses it, nemu_input_frame_required), and the warning that the status was not read is the answer's touch_backend_warnings, or on a failure its details.touch_backend_warnings; when the Runtime no longer holds the captured frame (input_frame_unavailable, nothing sent), one capture more and the press sent once more under the same lease, a second refusal being the answer, and the answer's input_frame_captured_twice is true (false after one capture)"
     },
     {
       "name": "key",
@@ -1380,10 +1380,11 @@
       "irreversible": false,
       "runtime": "required",
       "entries": ["lab"],
-      "requests": ["AcquireLease", "QueueLease", "PollQueuedLease", "CancelQueuedLease", "RenewLease", "ReleaseLease", "Input"],
+      "requests": ["AcquireLease", "QueueLease", "PollQueuedLease", "CancelQueuedLease", "RenewLease", "ReleaseLease", "Input", "Status"],
       "source": ["actinglab key"],
       "slice": "LAB-2",
-      "status": "planned"
+      "status": "planned",
+      "notes": "#434 LW-1 (0.12.67): an instance whose input is the emulator's own (nemu_ipc) sends no key and no text: the Runtime refuses it, nemu_input_capability_unsupported, nothing sent, and has no other way to send a key there (its recovery ladder sends none); a tap on the screen's control presses instead. Fix rounds 1 and 2: after a failure, one Status read on a connection of its own; where the instance's capability table says its input does not implement input.key, the refusal carries details.hint, what presses instead (tap x y, or do --capture with the package's element); a read that fails leaves the refusal as it is"
     },
     {
       "name": "text",
@@ -1398,10 +1399,11 @@
       "irreversible": false,
       "runtime": "required",
       "entries": ["lab"],
-      "requests": ["AcquireLease", "QueueLease", "PollQueuedLease", "CancelQueuedLease", "RenewLease", "ReleaseLease", "Input"],
+      "requests": ["AcquireLease", "QueueLease", "PollQueuedLease", "CancelQueuedLease", "RenewLease", "ReleaseLease", "Input", "Status"],
       "source": ["actinglab text"],
       "slice": "LAB-2",
-      "status": "planned"
+      "status": "planned",
+      "notes": "#434 LW-1 fix rounds 1 and 2 (0.12.67): after a failure, one Status read on a connection of its own; where the instance's capability table says its input does not implement input.text (the emulator's own input, nemu_ipc, which the Runtime refuses it on, nemu_input_capability_unsupported, nothing sent), the refusal carries details.hint, what presses instead (tap x y, or do --capture with the package's element); a read that fails leaves the refusal as it is"
     },
     {
       "name": "touch-probe",
@@ -1585,16 +1587,17 @@
         {"name": "zip", "form": "option", "type": "file", "required": false, "note": "a published .zip; not with package"},
         {"name": "ocr_deadline_max", "form": "switch", "type": "boolean", "required": false, "note": "LAB-OCR-DL: with a saved scene only: each OCR target's timeout_ms is taken as 60000 for this evaluation, and the answer carries ocr_deadline_raised_to_ms; refused without scene"}
       ],
-      "help": "Recognizes one target of a package on an instance's current frame and taps it through the Runtime.",
+      "help": "Recognizes one target of a package on a saved frame and plans its tap, pressing nothing; do with capture presses a target on an instance.",
       "output": "as today's command",
-      "writes": true,
+      "writes": false,
       "irreversible": false,
-      "runtime": "required",
+      "runtime": "offline",
       "entries": ["lab"],
-      "requests": ["ObserveReadonly", "AcquireLease", "QueueLease", "PollQueuedLease", "CancelQueuedLease", "RenewLease", "ReleaseLease", "Input"],
+      "requests": [],
       "source": ["actinglab tap-target"],
       "slice": "LAB-2",
-      "status": "planned"
+      "status": "planned",
+      "notes": "#434 LW-1 (0.12.67): it plans on a saved scene only (scene with dry_run); its command refuses --capture, the retired legacy semantic capture, so the row declares no capture, and without dry_run it is refused, the refusal naming do --capture with the package and the target, an element, or a point. Fix round 1: so it writes nothing and sends the Runtime no request (before, the row declared the frame read, the lease and the input of the retired live press); fix round 2: and needs no Runtime (runtime offline, as its capability's needs offline and read_only say)"
     },
     {
       "name": "navigate",
@@ -1613,16 +1616,17 @@
         {"name": "zip", "form": "option", "type": "file", "required": false, "note": "a published .zip; not with package"},
         {"name": "ocr_deadline_max", "form": "switch", "type": "boolean", "required": false, "note": "LAB-OCR-DL: with a saved scene only: each OCR target's timeout_ms is taken as 60000 for this evaluation, and the answer carries ocr_deadline_raised_to_ms; refused without scene"}
       ],
-      "help": "Navigates an instance to a page along the package's navigation graph, pressing each route through the Runtime.",
+      "help": "Plans the route from a saved frame's page to a page along the package's navigation graph, pressing nothing; ensure with capture routes an instance.",
       "output": "as today's command",
-      "writes": true,
+      "writes": false,
       "irreversible": false,
-      "runtime": "required",
+      "runtime": "offline",
       "entries": ["lab"],
-      "requests": ["ObserveReadonly", "AcquireLease", "QueueLease", "PollQueuedLease", "CancelQueuedLease", "RenewLease", "ReleaseLease", "Input"],
+      "requests": [],
       "source": ["actinglab navigate"],
       "slice": "LAB-2",
-      "status": "planned"
+      "status": "planned",
+      "notes": "#434 LW-1 (0.12.67): it plans a route on a saved scene only (scene with dry_run); its command refuses --capture, the retired legacy semantic capture, so the row declares no capture, and without dry_run it is refused, the refusal naming ensure --capture with the package and the page. Fix round 1: so it writes nothing and sends the Runtime no request (before, the row declared the frame read, the lease and the input of the retired live press); fix round 2: and needs no Runtime (runtime offline, as its capability's needs offline and read_only say)"
     },
     {
       "name": "drill",
