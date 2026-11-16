@@ -392,7 +392,7 @@ fn record_trial_with(
     let answer = plan_standard_pack_trial(&tried)
         .unwrap_or_else(|error| panic!("the trial's plan: {error}"));
     let content = answer.plan.content_hash_prefix.clone();
-    let plan = check_trial_run(&answer, &tried)
+    let plan = check_trial_run(&answer)
         .unwrap_or_else(|error| panic!("the trial's run may be sent: {error}"));
     let record = PackTrialRecord::of_run(
         plan,

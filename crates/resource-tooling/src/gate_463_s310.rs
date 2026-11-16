@@ -936,3 +936,69 @@ fn s310_a_stored_record_whose_authorization_is_null_is_unreadable() {
         })
     );
 }
+
+/// The 0.12.68 train (register §1.444, "The 0.12.68 train"): since #463 S2-6 (§1.442) every
+/// choice of a generated package is an `ordered` variable whose default is the recorded order,
+/// and since S3-8, S3-9 (§1.444) a trial's values are judged against the package's declared
+/// variables and sent in its run. The tried package declares one such variable, written as stage
+/// two's own gate shows `record stop` writing it
+/// (`gate_463_s26::s26_refining_the_choice_ends_its_item_and_the_package_holds_its_variable`):
+/// a value the declaration allows is in the plan as given (the train's fix round: in the options'
+/// order and in the other); one naming an option the declaration does not offer is
+/// `validation_failed` naming `--variable`, the variable and `keys_left_out`.
+#[test]
+fn train_01268_a_generated_choice_variable_takes_an_allowed_order_and_refuses_another() {
+    let temp = TempDir::new().expect("a temporary directory");
+    let package = temp.path().join("packs").join(TRIED);
+    write_trial_package(&package);
+    let control_path = package.join("control.json");
+    let mut control: Value =
+        serde_json::from_slice(&fs::read(&control_path).expect("the control declaration"))
+            .expect("control JSON");
+    let title = |text: &str| json!({"en-US": text});
+    control["variables"] = json!([{
+        "name": "list_item",
+        "type": "ordered",
+        "title": title("list_item"),
+        "options": [{"value": "item_a", "title": title("ALPHA")},
+                    {"value": "item_b", "title": title("BRAVO")}],
+        "min_count": 1,
+        "max_count": 2,
+        "default": ["item_b"]
+    }]);
+    write_json(&control_path, &control);
+    let state = temp.path().join("state");
+    let given = |value: Value| StandardPackTrialRequest {
+        variables: vec![("list_item".to_owned(), value)],
+        ..request(&package, &state)
+    };
+
+    let answer = plan(&given(json!(["item_a", "item_b"])));
+    assert_eq!(
+        answer.plan.variables,
+        vec![TrialVariable {
+            name: "list_item".to_owned(),
+            value: json!(["item_a", "item_b"]),
+            source: TrialValueSource::Given,
+        }]
+    );
+    // The fix round of the train: an allowed value in an order other than the options' own is
+    // taken as given, in its own order.
+    let reordered = plan(&given(json!(["item_b", "item_a"])));
+    assert_eq!(
+        reordered.plan.variables,
+        vec![TrialVariable {
+            name: "list_item".to_owned(),
+            value: json!(["item_b", "item_a"]),
+            source: TrialValueSource::Given,
+        }]
+    );
+
+    let details = argument_refused(
+        &refusal(&given(json!(["item_a", "item_c"]))),
+        "--variable",
+        "not_recognised",
+    );
+    assert_eq!(details["variable_name"], "list_item", "{details}");
+    assert_eq!(details["variable_problem"], "keys_left_out", "{details}");
+}

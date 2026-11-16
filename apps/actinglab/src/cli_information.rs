@@ -187,6 +187,8 @@ pub(super) fn help_data() -> Value {
             "standard-pack trial": crate::standard_pack_cli::trial_options(),
             // Workflow #463 S3-14.
             "standard-pack status": crate::standard_pack_cli::status_options(),
+            // Workflow #477 PC-1.
+            "standard-pack catalog": crate::standard_pack_cli::catalog_options(),
             // Workflow #463 V3.
             "package variables": crate::package_cli::variables_options(),
             "package fmt": [

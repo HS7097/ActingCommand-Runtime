@@ -55,7 +55,7 @@ use crate::{
 /// The strict rows: [`accepted`] answers for each of them and, beside them, for the rows of
 /// [`CORE_STRICT_ROWS`] only. Workflow #464 P2: `standard-pack build`, checked against its list
 /// as `resource verify` is. Workflow #463 S3-14: `standard-pack status`, against its list.
-pub(crate) const STRICT_ROWS: [&str; 34] = [
+pub(crate) const STRICT_ROWS: [&str; 35] = [
     "tap",
     "swipe",
     "long-tap",
@@ -89,6 +89,8 @@ pub(crate) const STRICT_ROWS: [&str; 34] = [
     "standard-pack trial",
     // Workflow #463 S3-14.
     "standard-pack status",
+    // Workflow #477 PC-1.
+    "standard-pack catalog",
     "scheduling compile",
     "scheduling timeline",
     "regression",
@@ -102,8 +104,8 @@ pub(crate) const STRICT_ROWS: [&str; 34] = [
 /// so they are strict too, by their list; no row of the two modules is lenient. Workflow #434
 /// LAB-5G4c: `record draft`, whose command that slice built, parsed by its list from the start.
 /// Workflow #449 REC-ARCH: `record archive` and `record reopen` the same. #463 S2-1: `record
-/// ready` too. #463 S2-13: and `record frames`.
-pub(crate) const READ_LIST_ROWS: [&str; 29] = [
+/// ready` too. #463 S2-13: and `record frames`. #463 S2-2: and `record review`.
+pub(crate) const READ_LIST_ROWS: [&str; 30] = [
     "touch-probe",
     "recover",
     "tap-target",
@@ -121,6 +123,7 @@ pub(crate) const READ_LIST_ROWS: [&str; 29] = [
     "record reopen",
     "record ready",
     "record frames",
+    "record review",
     "package validate",
     "package inspect",
     "package bundle",
@@ -402,6 +405,12 @@ pub(crate) fn accepted(row: &str) -> Option<Accepted> {
             &standard_pack_cli::STATUS_SWITCHES,
             none,
         ),
+        // Workflow #477 PC-1.
+        "standard-pack catalog" => from_lists(
+            standard_pack_cli::CATALOG_FLAGS,
+            &standard_pack_cli::CATALOG_SWITCHES,
+            none,
+        ),
         "scheduling compile" => from_lists(scheduling_cli::COMPILE_FLAGS, &[], none),
         "scheduling timeline" => from_lists(scheduling_cli::TIMELINE_FLAGS, &[], none),
         "regression" => from_lists(recognition_regression::REGRESSION_FLAGS, &[], none),
@@ -452,6 +461,7 @@ pub(crate) fn reads(row: &str) -> Option<Reads> {
         "record reopen" => (&session_record::RECORD_REOPEN_READS, None),
         "record ready" => (&session_record::RECORD_READY_READS, None),
         "record frames" => (&session_record::RECORD_FRAMES_READS, None),
+        "record review" => (&session_record::RECORD_REVIEW_READS, None),
         "package validate" => (&package_cli::VALIDATE_READS, None),
         "package inspect" => (&lab_package_control::INSPECT_READS, None),
         "package bundle" => (&package_build::BUNDLE_READS, None),
@@ -498,7 +508,7 @@ pub(crate) const UNROWED_READS: [&FlagReads; 4] = [
 /// typed words in their form) and answers a line it cannot read with no candidate, ignoring none.
 /// Workflow #464 P2: `standard-pack build`, against its strict list. Workflow #463 S3-14:
 /// `standard-pack status`, against its strict list.
-pub(crate) const REFUSING_COMMANDS: [&str; 67] = [
+pub(crate) const REFUSING_COMMANDS: [&str; 68] = [
     "schema",
     "touch-probe",
     "tap",
@@ -560,6 +570,8 @@ pub(crate) const REFUSING_COMMANDS: [&str; 67] = [
     "standard-pack trial",
     // Workflow #463 S3-14: refuses every flag off its list and any positional.
     "standard-pack status",
+    // Workflow #477 PC-1: refuses every flag but `--root` and `--plan` and any positional.
+    "standard-pack catalog",
     "runtime reset",
     "runtime observe",
     "session backend",
