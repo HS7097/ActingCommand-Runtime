@@ -749,10 +749,46 @@ pub(crate) fn run_direct_touch(
     send_direct_touch_command(
         global,
         &config,
-        &command,
+        PlainPress::Touch(&command),
         "direct_trusted_manual",
         "not_required_for_manual_control",
     )
+}
+
+/// Workflow #463 KB-1 (register §1.447; the coordinator's ruling 2 of 11-16): what
+/// [`send_direct_touch_command`] sends: the press of `tap`, `swipe` or `long-tap` without
+/// `--record`, or the key of `key` (`text` keeps its own path, `run_direct_input`).
+#[derive(Clone, Copy)]
+enum PlainPress<'a> {
+    Touch(&'a DirectTouchCommand),
+    Key(&'a DirectInputCommand),
+}
+
+impl PlainPress<'_> {
+    /// The Runtime input action the command sends.
+    fn action(self) -> InputAction {
+        match self {
+            Self::Touch(command) => command.action(),
+            Self::Key(command) => command.action(),
+        }
+    }
+
+    /// The command's `action` member of its answer.
+    fn to_json(self) -> Value {
+        match self {
+            Self::Touch(command) => command.to_json(),
+            Self::Key(command) => command.to_json(),
+        }
+    }
+
+    /// The command's answer to the Runtime's refusal of its input: a key's with its hint
+    /// ([`with_unsendable_hint`]), a press's as it is.
+    fn refused(self, error: CliError, instance: &str) -> CliError {
+        match self {
+            Self::Touch(_) => error,
+            Self::Key(command) => with_unsendable_hint(error, instance, command),
+        }
+    }
 }
 
 /// `tap`, `swipe` or `long-tap` without `--record`: the press through the Runtime's input proxy.
@@ -771,11 +807,17 @@ pub(crate) fn run_direct_touch(
 /// then says `input_frame_captured_twice`. Fix round 2 (the review's must-fix 2, the coordinator's
 /// choice): the warning of a status read that failed is in the answer of a press that fails after
 /// it too, as `details.touch_backend_warnings` ([`with_touch_backend_warnings`]): above all the
-/// Runtime's refusal of a press sent without a frame on an input that needs one.
+/// Runtime's refusal of a press sent without a frame on an input that needs one. Workflow #463
+/// KB-1 (register §1.447; the coordinator's ruling 2 of 11-16): `key` is sent by this one path too
+/// ([`PlainPress::Key`]): where the instance's input sends the key only on a frame the Runtime
+/// captured (the Nemu input's back key), the status read, one capture, the key sent on that frame,
+/// the one retry and the warnings, as a press's; for a key no input sends on a frame, and on every
+/// other instance, nothing is captured and the key is sent as before; the Runtime's refusal of the
+/// key carries its hint ([`PlainPress::refused`]).
 fn send_direct_touch_command(
     global: &GlobalOptions,
     config: &UserConfig,
-    command: &DirectTouchCommand,
+    command: PlainPress<'_>,
     control_mode: &str,
     safety_gate: &str,
 ) -> CliOutcome<Value> {
@@ -832,7 +874,7 @@ fn send_direct_touch_command(
                             "{}; the frame captured again for the press could not be taken: {}",
                             refused.message, capture.message
                         );
-                        refused
+                        command.refused(refused, &instance_alias)
                     }
                 });
             }
@@ -843,10 +885,10 @@ fn send_direct_touch_command(
         operation.map_err(runtime_input_backend::device_error),
         close,
     )
-    .map_err(warned)?;
+    .map_err(|error| warned(command.refused(error, &instance_alias)))?;
     let mut answer = direct_touch_answer(
         &instance_alias,
-        command,
+        command.to_json(),
         control_mode,
         safety_gate,
         input_outcome,
@@ -862,9 +904,10 @@ fn send_direct_touch_command(
 }
 
 /// Workflow #434 LW-1 (register §1.435): whether a plain press of `action` on `instance` is sent on
-/// a frame. The Nemu input (the emulator's own interface) performs a tap, a long tap, a swipe and
-/// the segmented drags only on a frame the Runtime captured and committed
-/// (`NemuInputSupport::InFrame`) and refuses one without (`nemu_input_frame_required`), so for
+/// a frame. The Nemu input (the emulator's own interface) performs a tap, a long tap, a swipe,
+/// the segmented drags and (Workflow #463 KB-1) the back key only on a frame the Runtime captured
+/// and committed (`NemuInputSupport::InFrame`) and refuses one without
+/// (`nemu_input_frame_required`), so for
 /// such an action one `Status` read, on a connection of its own (fix round 1: a read that fails
 /// never leaves the press's connection dead), asks which input performs it: the instance's
 /// capability table names it (`evidence_ref` of the action's capability is the configured touch
@@ -915,12 +958,14 @@ fn press_frame(
 }
 
 /// Workflow #434 LW-1: the capability of the instance's capability table that performs `action`,
-/// for the pointer inputs a plain press sends; `None` for every other action.
+/// for the pointer inputs a plain press sends and (Workflow #463 KB-1) the key `key` sends; `None`
+/// for every other action.
 fn press_capability(action: &InputAction) -> Option<EmulatorCapability> {
     match action {
         InputAction::Tap { .. } => Some(EmulatorCapability::InputTap),
         InputAction::LongTap { .. } => Some(EmulatorCapability::InputLongTap),
         InputAction::Swipe { .. } => Some(EmulatorCapability::InputSwipe),
+        InputAction::Key { .. } => Some(EmulatorCapability::InputKey),
         _ => None,
     }
 }
@@ -944,10 +989,11 @@ fn with_touch_backend_warnings(mut error: CliError, warnings: &[String]) -> CliE
     error.with_details(Value::Object(details))
 }
 
-/// The answer of a direct touch command that sent its input.
+/// The answer of a direct touch command that sent its input, `action` the command's own
+/// (Workflow #463 KB-1: and of `key`, [`PlainPress`]).
 fn direct_touch_answer(
     instance_alias: &str,
-    command: &DirectTouchCommand,
+    action: Value,
     control_mode: &str,
     safety_gate: &str,
     input_outcome: Value,
@@ -967,7 +1013,7 @@ fn direct_touch_answer(
         "device_state": "runtime_owned",
         "screen_size": Value::Null,
         "handshake": Value::Null,
-        "action": command.to_json(),
+        "action": action,
         "input_outcome": input_outcome
     })
 }
@@ -1087,7 +1133,7 @@ fn run_recorded_touch(
     }
     let mut data = direct_touch_answer(
         &instance,
-        command,
+        command.to_json(),
         "direct_trusted_manual",
         "not_required_for_manual_control",
         input_outcome,
@@ -1473,6 +1519,18 @@ pub(crate) fn run_direct_input(
             command.to_json(),
         ));
     }
+    // Workflow #463 KB-1 (register §1.447; the coordinator's ruling 2 of 11-16): `key` is sent by
+    // the path of a plain press, which captures a frame first where the instance's input sends
+    // the key only on one; `text` stays as it was.
+    if let DirectInputCommand::Key(_) = &command {
+        return send_direct_touch_command(
+            global,
+            &config,
+            PlainPress::Key(&command),
+            "direct_trusted_manual",
+            "not_required_for_manual_control",
+        );
+    }
     let (mut backend, instance_alias) =
         open_cli_runtime_input_proxy(global, &config).map_err(input_not_submitted)?;
     let operation = command.run(&mut backend);
@@ -1503,10 +1561,12 @@ pub(crate) fn run_direct_input(
 /// `key` or `text` on `instance`, with its own hint, `details.hint`, of what to do instead when the
 /// instance's input cannot send that input at all: the instance's capability table (one `Status`
 /// read, on a connection of its own, after the failure) says the capability unsupported
-/// (`input.key`, `input.text`; the emulator's own input, `nemu_ipc`, sends neither, and the
-/// Runtime refuses it, `nemu_input_capability_unsupported`; the Runtime has no other way to send a
-/// key there). Decided by that table, the fact the Runtime's refusal rests on, not by the
-/// refusal's code. Any other failure, or a status read that fails, is answered as it is.
+/// (`input.key`, `input.text`). Decided by that table, the fact the Runtime's refusal rests on,
+/// not by the refusal's code. Any other failure, or a status read that fails, is answered as it
+/// is. Workflow #463 KB-1 (register §1.447): the table says `input.key` supported on the
+/// emulator's own input, `nemu_ipc`, and on `adb_shell_input`, which send the back key alone, so a
+/// refused key there carries no hint (the refusal, `nemu_input_capability_unsupported` on the
+/// former, stays); it still says `input.text` unsupported there, and `input.key` on `minitouch`.
 fn with_unsendable_hint(
     mut error: CliError,
     instance: &str,
@@ -1642,11 +1702,15 @@ impl DirectInputCommand {
         &self,
         backend: &mut runtime_input_backend::RuntimeInputBackend,
     ) -> actingcommand_device::DeviceResult<RuntimeReceipt> {
-        let action = match self {
+        backend.input_receipt(self.action())
+    }
+
+    /// The Runtime input action this command sends.
+    fn action(&self) -> InputAction {
+        match self {
             Self::Key(key) => InputAction::Key { key: key.clone() },
             Self::Text(text) => InputAction::Text { text: text.clone() },
-        };
-        backend.input_receipt(action)
+        }
     }
 
     fn to_json(&self) -> Value {

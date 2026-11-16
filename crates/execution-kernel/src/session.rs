@@ -2108,7 +2108,12 @@ fn execute_action(
                 None => backend.segmented_swipe_prepared(witness, plan),
             }
         }
-        PreparedInputAction::Direct(InputAction::Key { key }) => backend.key(witness, key),
+        // Workflow #463 KB-1: the Nemu input presses the back key on its step's frame, under its
+        // check, as a tap.
+        PreparedInputAction::Direct(InputAction::Key { key }) => match context {
+            Some(context) => backend.key_in_frame(witness, key, context),
+            None => backend.key(witness, key),
+        },
         PreparedInputAction::Direct(InputAction::Text { text }) => backend.text(witness, text),
         PreparedInputAction::Direct(InputAction::Reset) => match context {
             Some(context) => backend.reset_with_check(witness, context),

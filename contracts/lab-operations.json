@@ -1380,11 +1380,11 @@
       "irreversible": false,
       "runtime": "required",
       "entries": ["lab"],
-      "requests": ["AcquireLease", "QueueLease", "PollQueuedLease", "CancelQueuedLease", "RenewLease", "ReleaseLease", "Input", "Status"],
+      "requests": ["AcquireLease", "QueueLease", "PollQueuedLease", "CancelQueuedLease", "RenewLease", "ReleaseLease", "Input", "ObserveReadonly", "Status"],
       "source": ["actinglab key"],
       "slice": "LAB-2",
       "status": "planned",
-      "notes": "#434 LW-1 (0.12.67): an instance whose input is the emulator's own (nemu_ipc) sends no key and no text: the Runtime refuses it, nemu_input_capability_unsupported, nothing sent, and has no other way to send a key there (its recovery ladder sends none); a tap on the screen's control presses instead. Fix rounds 1 and 2: after a failure, one Status read on a connection of its own; where the instance's capability table says its input does not implement input.key, the refusal carries details.hint, what presses instead (tap x y, or do --capture with the package's element); a read that fails leaves the refusal as it is"
+      "notes": "#463 KB-1 (0.12.69): an instance whose input is the emulator's own (nemu_ipc) sends the back key alone, only on a frame the Runtime captured, and no other key: key is sent by the path of tap without record: for back (the Android code 4 it sends), one Status read on a connection of its own first; where the instance's capability table names nemu_ipc as the input of input.key, one capture through the Runtime, the ObserveReadonly read, and the key sent on that frame, the answer naming it as input_frame (input_frame_captured_twice after the one capture more when the Runtime no longer held it, input_frame_unavailable); a status read that fails stops nothing, the key is sent without a frame and the warning is the answer's touch_backend_warnings, or a failure's details.touch_backend_warnings; elsewhere, and for a key that input does not send (refused nemu_input_capability_unsupported, nothing sent; the Runtime has no other way to send it there), nothing is captured. adb_shell_input sends the back key too, maatouch every key, minitouch none. #434 LW-1 fix rounds 1 and 2: after a failure, one Status read on a connection of its own; where the instance's capability table says its input does not implement input.key (since KB-1 only minitouch's), the refusal carries details.hint, what presses instead (tap x y, or do --capture with the package's element); a read that fails leaves the refusal as it is"
     },
     {
       "name": "text",

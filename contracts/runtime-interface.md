@@ -373,6 +373,28 @@ facts: they kept reaching the Runtime from the counters with their envelopes unt
 Workflow #434 LAB-6S1b deleted the source gates (0.12.58); since then every client
 envelope sends them, the Lab's `targets set` and `facts publish` included.
 
+### The keys an input sends (Workflow #463 KB-1, 0.12.69; register §1.447)
+
+`Input` with the action `Key { key }` is unchanged on the wire (no interface revision); which
+keys reach the device depends on the instance's touch backend, and its capability table's row
+`input.key` says so:
+
+| Touch backend | Keys it sends | Every other key | How |
+|---|---|---|---|
+| `maatouch` | every key it is given | — | its `k <key> o` command |
+| `nemu_ipc` | the back key alone: `back`, or Android's `4` or `KEYCODE_BACK` (actinglab's `key back` sends `4`) | refused by the host before anything is sent, `nemu_input_capability_unsupported` (`denied`) | the emulator library's `nemu_input_event_key_down` and `nemu_input_event_key_up` with the key code of the vendor's header (Linux `KEY_BACK`, 158), on the step's frame as a tap (without a frame `nemu_input_frame_required`, `denied`); a library without the two calls sends no key: the input fails in the backend before any call (`input_backend_operation_failed`) |
+| `adb_shell_input` | the back key alone, the same three spellings | fails in the backend before anything reaches the device (`input_backend_operation_failed`) | one `adb shell input keyevent KEYCODE_BACK`, the path its taps take |
+| `minitouch` | none | fails in the backend before anything reaches the device (`input_backend_operation_failed`) | — |
+
+A key that fails in the backend is recorded as any backend failure of an input is (on a physical
+instance its effect is `indeterminate`).
+
+`Text` stays `maatouch`'s alone (refused on `nemu_ipc` with `nemu_input_capability_unsupported`).
+A key passes the foreground gate a tap passes: on a physical instance it is refused
+`application_not_foreground` (or `application_foreground_unknown`) unless the instance's assigned
+application is in front; text and the reset are not checked. The handset's wake key
+(`KEYCODE_WAKEUP`, the device state's own command) is not an `Input` and is unchanged.
+
 ### New request kinds
 
 | Kind | Block | Class | Sent by | G14 |

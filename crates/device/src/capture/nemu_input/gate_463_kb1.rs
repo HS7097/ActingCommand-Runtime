@@ -107,7 +107,15 @@ fn kb1_back_is_refused_before_any_call_off_its_frame_or_its_deadline() {
 // unsupported.
 #[test]
 fn kb1_another_key_and_text_are_refused_before_any_call() {
-    for key in ["home", "3", "KEYCODE_HOME", "BACK", "Back", "menu", "neutral"] {
+    for key in [
+        "home",
+        "3",
+        "KEYCODE_HOME",
+        "BACK",
+        "Back",
+        "menu",
+        "neutral",
+    ] {
         assert_eq!(
             NemuInputSupport::of(&InputAction::Key {
                 key: key.to_owned()

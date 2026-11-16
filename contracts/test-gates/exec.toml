@@ -3663,3 +3663,15 @@ tests = [
     "actingcommand-actinglab::bin:actinglab::tests::gate_463_s21b::s21b_a_packaged_recording_answers_what_its_package_holds",
 ]
 incident = ["#463 S2-1b"]
+
+# Workflow #463 KB-1 (0.12.69; register §1.447; brief rd-1116/brief-463-kb1-nemu-key.md and the coordinator's rulings of 11-16 evening; contracts/runtime-interface.md, The keys an input sends): on HS-4's fake Nemu device, which records the key calls and says whether the library has them, the back key (back, 4, KEYCODE_BACK) is InFrame and exactly one key down and one key up with the vendor's code 158 (Linux KEY_BACK, as the vendor's header external_renderer_ipc.h names the code space), on the frame's display, the contact untouched (1); without a frame, on a frame of an earlier display generation, or with a deadline no longer than the final up's reserve nothing is called, one millisecond more and both calls are made (2); every other key (home, 3, KEYCODE_HOME, BACK, Back, menu) is Unsupported and refused before any call with the error every key had before, and text is Unsupported (3); a library without the two key calls refuses the back key so, before any call (4); adb_shell_input hands the back key by each spelling to its shell child as one KEYCODE_BACK once connected, nothing before, and refuses another key with the error every key had before, no child (5)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-device::lib::capture::nemu_input::gate_463_kb1::kb1_back_is_one_key_down_and_one_key_up_with_the_vendors_code_on_the_frame",
+    "actingcommand-device::lib::capture::nemu_input::gate_463_kb1::kb1_back_is_refused_before_any_call_off_its_frame_or_its_deadline",
+    "actingcommand-device::lib::capture::nemu_input::gate_463_kb1::kb1_another_key_and_text_are_refused_before_any_call",
+    "actingcommand-device::lib::capture::nemu_input::gate_463_kb1::kb1_a_library_without_the_key_calls_answers_as_before",
+    "actingcommand-device::lib::touch::tests::kb1_adb_shell_input_sends_the_back_key_as_one_keyevent",
+]
+incident = ["#463 KB-1"]

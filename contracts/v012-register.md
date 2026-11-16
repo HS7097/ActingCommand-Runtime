@@ -32129,6 +32129,134 @@ their words; a plain press that reads the instance's status first on every insta
 Nemu-input instance at the cost of one capture (one more when the frame was lost before the press),
 and that is still sent, without a frame, when the status cannot be read.
 
+### 1.447 Slice #463 KB-1 (0.12.69): an emulator instance can send the back key (Workflow #463; the owner's ruling on board #463 of the night of 11-15 that a package made from a recording may hold a step that presses the back key, which the agent adds after recording; the read-only study `rd-1116/report-463-key-step-study.md` and the coordinator's rulings at its end and of 11-16 evening, not the owner's words; coordinator work order `rd-1116/brief-463-kb1-nemu-key.md`, stacked on #1778 at `c7eaabaf`)
+
+This section takes 1.447, the number the work order gives. It ships in 0.12.69. The package's key
+step (KP-1) and the recording's (KR-1) are other slices; this one makes the key go out.
+
+**The binding (`crates/device`).** Production's instances are emulators whose input is the
+emulator's own library (`nemu_ipc`); before this slice the host refused every key there before
+anything was sent (`nemu_input_capability_unsupported`). The library has two key calls the Runtime
+did not bind. Built: `nemu_input_event_key_down` and `nemu_input_event_key_up`, looked up by name
+beside the touch calls and optional (`NemuTouchPort::key_calls`: a library without both sends no
+key and answers the error every key had before, before any call). A key is the key down, then the
+key up, on the Nemu worker, under the input's check of its step (its lease, deadline and
+cancellation), on the step's committed frame as a tap: the frame's geometry fence and no contact
+left unresolved (`frame_fence`, the part of `perform_events` the touch and the key now share; the
+touch calls are unchanged), the deadline with the final up's reserve (`cover_deadline`), each call
+checked before it, on the display the frame's touches address. Once the key down was called the key
+up is called whatever it answered; a key up that is not confirmed leaves the input unconfirmed, as
+a finger up does. The view sends it as `NemuIpcCommand::InputKey` (`InputBackend::key_in_frame`,
+whose default is `key`; the kernel calls it with the step's context, and the registry's diagnostic
+wrapper forwards it).
+
+**The key code and the calls' parameters (established, not tried on a device).** The vendor's
+header of the library, `external_renderer_ipc.h` (published with the vendor's rights reserved in
+the repository `MaaXYZ/EmulatorExtras`, `Mumu/external_renderer_ipc/external_renderer_ipc.h`, its
+commit `9424dcbe` of 2024-08-15), declares `int nemu_input_event_key_down(int handle, int
+displayid, int key_code)` and `int nemu_input_event_key_up(int handle, int displayid, int
+key_code)`, 0 for success, and says that `key_code` is a code of Linux's
+`include/uapi/linux/input-event-codes.h`, where `KEY_BACK` is 158. The code is one named constant,
+`NEMU_KEY_BACK` (`capture/nemu_input.rs`), with that citation in its comment; nothing of the header
+is copied. The coordinator presses it once on an idle emulator after deployment.
+
+**One key: back.** The closed vocabulary `DeviceKey` (`crates/device` `input.rs`) has one key, the
+back key, named by the word `back` or by the two Android spellings a client sends today, `4`
+(actinglab's `key back`) and `KEYCODE_BACK`; nothing else. `NemuInputSupport::of` says a key it
+names `InFrame` and every other key and every `text` `Unsupported`, so the host refuses those as
+before and the back key without a frame `nemu_input_frame_required`.
+
+**The capability table.** `input.key` is supported on `nemu_ipc` and `adb_shell_input`, whose
+rows' failure semantics name the back key alone (the Nemu row: a library without the two calls
+sends no key; the table is built without opening the library), on `maatouch` (every key, as
+before) and not on `minitouch`; `input.text` stays `maatouch`'s alone. The Lab's hint of a refused
+`key` follows the table (`with_unsendable_hint`, unchanged): none on `nemu_ipc` or
+`adb_shell_input`, the hint on `minitouch`.
+
+**`adb_shell_input`.** The back key is one `adb -s <serial> shell input keyevent KEYCODE_BACK`
+(`Adb::shell_input_keyevent`), through the write path its taps take, once connected; every other
+key answers the fatal device error every key answered before, before anything is sent. `minitouch`
+is unchanged: every key answers a fatal device error ([runtime-interface.md](runtime-interface.md),
+"The keys an input sends").
+
+**The foreground gate.** A key is an input: on a physical instance it passes the gate a tap passes
+(`host/foreground_gate.rs`), a package's key and the Lab's `key` alike; text and the reset are not
+checked, as before.
+
+**The Lab's `key` (the coordinator's ruling 2 of 11-16).** Without it, `key back` from the Lab on
+an emulator instance would be refused `nemu_input_frame_required`, since it sent no frame. Built by
+the path a plain `tap` takes since #1779 (§1.435): `send_direct_touch_command` now sends a
+`PlainPress`, the press of `tap`, `swipe` and `long-tap` or the key of `key`, one implementation
+with two callers: the status read (for a key the Nemu input sends on a frame), where the capability
+table names `nemu_ipc` as the input of the action's capability (`press_capability`: `input.key` for
+a key) one capture and the key sent on that frame, the one retry on `input_frame_unavailable`, the
+warnings in the answer and in a refusal's details; the Runtime's refusal of a key carries its hint
+(`PlainPress::refused`). A key the Nemu input does not send is sent without a frame and refused, and
+on an instance whose input needs no frame nothing is captured; `text` and the stream's relay keep
+their path. The answer of `key` is the plain press's (`direct_touch_answer` takes the action's own
+member), with `input_frame` and `input_frame_captured_twice` where a frame was captured.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| KB1-1 | `DeviceKey` (`back`; `4`, `KEYCODE_BACK`), `InputBackend::key_in_frame` | device type and trait method (no code, no word in the catalog) | KB-1 | `crates/device` `input.rs` | the vocabulary of the keys a back-only input sends |
+| KB1-2 | the Nemu key calls on the frame (`NEMU_KEY_BACK` 158), `NemuIpcCommand::InputKey` | device behaviour | KB-1 | `crates/device` `capture/nemu_input.rs`, `capture.rs` | touch calls unchanged |
+| KB1-3 | `input keyevent KEYCODE_BACK` on `adb_shell_input` | device behaviour | KB-1 | `crates/device` `touch.rs`, `adb.rs` | |
+| KB1-4 | the capability rows `input.key` of `nemu_ipc` and `adb_shell_input`, supported, their failure semantics | status member values (no member) | KB-1 | `crates/runtime-host` `provider.rs` | no interface revision |
+| KB1-5 | a key passes the foreground gate | host behaviour | KB-1 | `crates/runtime-host` `host/foreground_gate.rs` | |
+| KB1-6 | the Lab's `key` on the plain press's path; the row `key`'s `requests` gain `ObserveReadonly` | Lab command behaviour and table | KB-1 | `apps/actinglab` `device_commands.rs`; `contracts/lab-operations.json` | the MCP manual's sentence follows |
+| KB1-7 | `common_causes` and `handling` of `nemu_input_capability_unsupported` and `nemu_input_frame_required` | outcome catalog text (index regenerated) | KB-1 | `contracts/outcome-codes` | no key, word or status changes |
+
+**What is not added.** No outcome code, value key, word of the catalog (the catalog has no key
+vocabulary; `DeviceKey` is the device crate's), configuration key, request kind, record type,
+interface revision or ledger revision. The input request's shape is unchanged (it carried a key
+already). A touch on every backend makes the same calls as before; `text` is refused as before; the
+handset's wake key is not an input and is unchanged.
+
+**Tests.** Gate map `contracts/test-gates/exec.toml`, the row "#463 KB-1": in
+`crates/device/src/capture/nemu_input/gate_463_kb1.rs`, on HS-4's fake device (which now records
+key calls and says whether the library has them):
+`kb1_back_is_one_key_down_and_one_key_up_with_the_vendors_code_on_the_frame` (by each of the three
+spellings: `InFrame`, exactly one key down and one key up with 158, on the frame's display, the
+contact untouched); `kb1_back_is_refused_before_any_call_off_its_frame_or_its_deadline` (no frame,
+a frame of an earlier display generation, a deadline no longer than the final up's reserve: no
+call; one millisecond more: both calls); `kb1_another_key_and_text_are_refused_before_any_call`
+(`home`, `3`, `KEYCODE_HOME`, `BACK`, `Back`, `menu`: `Unsupported`, the error every key had
+before, no call; `text` `Unsupported`); `kb1_a_library_without_the_key_calls_answers_as_before`;
+and in `crates/device/src/touch.rs`, `kb1_adb_shell_input_sends_the_back_key_as_one_keyevent` (the
+three spellings give one `KEYCODE_BACK` each to the shell child once connected, none before; another
+key the old error and no child). Gate map `contracts/test-gates/host.toml`, the row "#463 KB-1": in
+`crates/runtime-host/src/tests/gate_463_kb1.rs`,
+`kb1_the_capability_table_says_which_inputs_send_the_back_key` (minitouch none; `adb_shell_input`
+and `nemu_ipc` supported with the back key alone named, the Nemu row naming a library without the
+calls; `maatouch` every key; text `maatouch`'s alone; through a switch of backends);
+`kb1_the_host_sends_the_back_key_on_a_frame_of_a_nemu_input_and_refuses_the_rest` (on an instance
+configured `nemu_ipc`: `home`, `3`, a word of no key and a text refused
+`nemu_input_capability_unsupported`, the back key without a frame `nemu_input_frame_required`,
+nothing sent; on the frame of a keyless observation, completed and the device's one input the back
+key); `kb1_the_foreground_gate_holds_a_key_as_it_holds_a_tap` (another application in front: the
+back key and a tap refused `application_not_foreground`, nothing sent; the assigned one in front:
+the key completed). Gate map `contracts/test-gates/apps.toml`, the row "#463 KB-1": in
+`apps/actinglab/tests/runtime_input_proxy.rs`, on the fake Runtime host,
+`kb1_key_back_on_an_instance_whose_input_needs_a_frame_is_sent_on_its_capture` (committed, one
+key, one capture, the ledger's capture then the input naming its frame, `input_frame`) and
+`kb1_key_back_on_an_instance_whose_input_needs_no_frame_captures_nothing` (committed, one key, no
+capture, the input names no frame). Changed, not added, because the requirement changes what they
+pin: `provider::gate_hs4::hs4_capability_profile_matches_view` (the key it checks is `back`, and
+the Nemu row claims `input.key`); `tests::gate_hs2::hs2_capabilities_follow_switch` (its instance
+starts on `minitouch`, the input without a key, and the Nemu pair now has a key);
+`tests::lifecycle::runtime_status_lists_configured_instances_and_live_scheduler_state` (`input.key`
+and `input.text` checked apart: `adb_shell_input` supports the key);
+`runtime_input_proxy::lw1_fix2_key_and_text_on_an_input_that_sends_neither_hint_what_presses_instead`
+(the third test the ruling asks for, "another key is refused as the table says": `key home` on the
+Nemu instance is refused `nemu_input_capability_unsupported` with no `details.hint`, the table
+saying the input implements `input.key`, and nothing captured; `text` as before; the fake's table
+says `input.key` supported).
+
+**At deploy.** Nothing to configure. On an emulator instance a package's back key (once KP-1 is
+in) and `actinglab key back` (`ac_key` with `back`) reach the device on a frame the Runtime
+captured; whether the vendor's code 158 is the back key the emulator expects is checked by the
+coordinator's one press on an idle emulator.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

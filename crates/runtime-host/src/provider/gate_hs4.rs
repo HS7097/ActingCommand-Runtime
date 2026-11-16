@@ -3,14 +3,17 @@
 //! HS-4 (#402; design `rd-1031/backend-switch/model-backend-switch.md` §4.4; register §1.268):
 //! the capability table of an instance whose input is `nemu_ipc` says what the Nemu input
 //! performs, as the input declares it (`NemuInputSupport`, which the host's input gate and the
-//! kernel follow): the tap, the long tap, the swipe, the segmented drags and the reset, and
-//! neither `key` nor `text`. Nothing is opened: the table is built from the configured choices.
+//! kernel follow): the tap, the long tap, the swipe, the segmented drags and the reset, (Workflow
+//! #463 KB-1, register §1.447) the back key, and no `text`. Nothing is opened: the table is built
+//! from the configured choices.
 
 use super::*;
 use actingcommand_contract::{InputAction, InputPathPoint};
 use actingcommand_device::NemuInputSupport;
 
 /// One input action of every kind an input capability covers; none for another capability.
+/// Workflow #463 KB-1: the key is the back key, the one key the Nemu input's row claims (its
+/// failure semantics name it).
 fn actions_of(capability: EmulatorCapability) -> Vec<InputAction> {
     match capability {
         EmulatorCapability::InputTap => vec![InputAction::Tap { x: 10, y: 10 }],
@@ -66,7 +69,7 @@ fn actions_of(capability: EmulatorCapability) -> Vec<InputAction> {
             },
         ],
         EmulatorCapability::InputKey => vec![InputAction::Key {
-            key: "neutral".to_owned(),
+            key: "back".to_owned(),
         }],
         EmulatorCapability::InputText => vec![InputAction::Text {
             text: "neutral".to_owned(),
@@ -79,7 +82,8 @@ fn actions_of(capability: EmulatorCapability) -> Vec<InputAction> {
 // Each input capability the table claims for a Nemu instance is one the Nemu input performs for
 // every action of its kind, and each it refuses is one the input does not perform; the design's
 // list (§4.4) is the result: the long tap and the reset are now performed, and the segmented
-// drags, which the input performed already, are no longer left unclaimed.
+// drags, which the input performed already, are no longer left unclaimed. Workflow #463 KB-1: the
+// back key is performed and claimed.
 #[test]
 fn hs4_capability_profile_matches_view() {
     let profile = capability_profile(TouchBackendChoice::NemuIpc, CaptureBackendChoice::NemuIpc)
@@ -110,7 +114,7 @@ fn hs4_capability_profile_matches_view() {
             (EmulatorCapability::InputLongTap, true),
             (EmulatorCapability::InputSwipe, true),
             (EmulatorCapability::InputSegmentedSwipe, true),
-            (EmulatorCapability::InputKey, false),
+            (EmulatorCapability::InputKey, true),
             (EmulatorCapability::InputText, false),
             (EmulatorCapability::InputReset, true),
         ])

@@ -2,8 +2,7 @@
 
 use super::*;
 use crate::{
-    DeviceKey, InputBackend, InputSelectionContext, PreparedSegmentedSwipePlan,
-    SegmentedSwipeEvent,
+    DeviceKey, InputBackend, InputSelectionContext, PreparedSegmentedSwipePlan, SegmentedSwipeEvent,
 };
 use actingcommand_contract::{FencedWrite, InputAction};
 use std::ffi::{CString, c_char};
@@ -596,11 +595,12 @@ impl InputBackend for NemuInputView {
         context: &InputExecutionContext,
     ) -> DeviceResult<()> {
         self.require_attached()?;
-        self.owner.input(context, |response| NemuIpcCommand::InputKey {
-            key: key.to_owned(),
-            context: context.clone(),
-            response,
-        })
+        self.owner
+            .input(context, |response| NemuIpcCommand::InputKey {
+                key: key.to_owned(),
+                context: context.clone(),
+                response,
+            })
     }
     fn text(&mut self, _: &FencedWrite, _: &str) -> DeviceResult<()> {
         Err(unsupported())

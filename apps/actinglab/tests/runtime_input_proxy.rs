@@ -60,6 +60,8 @@ struct FakeState {
     foreground_other: AtomicBool,
     // #463 S1-9: the capture of this number (when not zero) fails in the backend.
     capture_fails_at: AtomicUsize,
+    // Workflow #463 KB-1: the keys the fake performed.
+    keys: AtomicUsize,
 }
 
 // Test plan E-3 G11 (§3.10): a manual Runtime clock. It moves only when a capture (or a wait of
@@ -2062,6 +2064,7 @@ impl InputBackend for FakeBackend {
         _witness: &actingcommand_contract::FencedWrite,
         _key: &str,
     ) -> DeviceResult<()> {
+        self.state.keys.fetch_add(1, Ordering::AcqRel);
         Ok(())
     }
 
@@ -4202,7 +4205,8 @@ fn s11_tap_record_sends_its_input_on_the_frame_captured_before_it() {
 
 /// Workflow #434 LW-1: the capability table the Runtime's backend registry gives an instance whose
 /// input and capture are `nemu_ipc` (`runtime-host` `provider.rs`, `capability_profile`): each
-/// input row names the Nemu input as its evidence, `key` and `text` unsupported; neutral values.
+/// input row names the Nemu input as its evidence, `text` unsupported; neutral values. Workflow
+/// #463 KB-1 (register §1.447): `key` supported (the back key alone).
 fn nemu_capabilities() -> actingcommand_contract::EmulatorCapabilityProfile {
     use actingcommand_contract::{
         EmulatorCapability, EmulatorCapabilityAvailability, EmulatorCapabilityEvidence,
@@ -4213,11 +4217,12 @@ fn nemu_capabilities() -> actingcommand_contract::EmulatorCapabilityProfile {
         .into_iter()
         .map(|capability| {
             let (supported, source) = match capability {
-                EmulatorCapability::InputKey | EmulatorCapability::InputText => (false, "nemu_ipc"),
+                EmulatorCapability::InputText => (false, "nemu_ipc"),
                 EmulatorCapability::InputTap
                 | EmulatorCapability::InputLongTap
                 | EmulatorCapability::InputSwipe
                 | EmulatorCapability::InputSegmentedSwipe
+                | EmulatorCapability::InputKey
                 | EmulatorCapability::InputReset
                 | EmulatorCapability::CaptureFrame => (true, "nemu_ipc"),
                 _ => (false, "execution_backend_registry"),
@@ -4885,7 +4890,12 @@ fn lw1_fix2_a_plain_press_whose_frame_cannot_be_captured_again_answers_the_first
 /// with that input as their evidence): the Runtime refuses each
 /// (`nemu_input_capability_unsupported`, nothing sent), and the refusal's `details.hint` names
 /// that input, says which of the two it does not send and names what presses instead (`tap x y`,
-/// `do --capture`).
+/// `do --capture`). Adapted by Workflow #463 KB-1 (register §1.447; the coordinator's ruling 2 of
+/// 11-16, a refused key's hint follows the capability table as that slice changes it): the Nemu
+/// input sends the back key and its row says `input.key` supported, so the key is `home`, which it
+/// does not send: refused `nemu_input_capability_unsupported` as before, nothing captured (no
+/// frame is taken for a key the input does not send on one), and no `details.hint`, the table
+/// saying the input implements `input.key`; `text` as before.
 #[test]
 fn lw1_fix2_key_and_text_on_an_input_that_sends_neither_hint_what_presses_instead() {
     let root = TempDir::new().expect("tempdir");
@@ -4898,8 +4908,8 @@ fn lw1_fix2_key_and_text_on_an_input_that_sends_neither_hint_what_presses_instea
     let host = l3_host(&runtime_root, &state, b"lab-lw1-fix2-key-and-text-hint");
 
     for (command, word, unsent) in [
-        ("key", "back", "sends no key:"),
-        ("text", "neutral", "sends no text:"),
+        ("key", "home", None),
+        ("text", "neutral", Some("sends no text:")),
     ] {
         let (_, failed) = run_actinglab_failure_json(
             &config,
@@ -4915,6 +4925,13 @@ fn lw1_fix2_key_and_text_on_an_input_that_sends_neither_hint_what_presses_instea
             lw1_input_error(&failed).contains("nemu_input_capability_unsupported"),
             "{command}: the Runtime's refusal: {failed}"
         );
+        let Some(unsent) = unsent else {
+            assert!(
+                failed["details"].get("hint").is_none(),
+                "{command}: no hint where the table says the input sends keys: {failed}"
+            );
+            continue;
+        };
         let hint = failed["details"]["hint"].as_str().unwrap_or_default();
         assert!(
             hint.starts_with("this instance's input (nemu_ipc) ")
@@ -4927,6 +4944,87 @@ fn lw1_fix2_key_and_text_on_an_input_that_sends_neither_hint_what_presses_instea
     }
     host.close().expect("close host");
     assert_eq!(state.taps.load(Ordering::Acquire), 0);
+    assert_eq!(state.keys.load(Ordering::Acquire), 0);
+    assert_eq!(
+        state.captures.load(Ordering::Acquire),
+        0,
+        "nothing captured"
+    );
+}
+
+/// Workflow #463 KB-1 (register §1.447; the coordinator's ruling 2 of 11-16): `key back` on an
+/// instance whose input is the emulator's own (`nemu_ipc`, which sends the back key only on a
+/// frame the Runtime captured and refuses it without one, `nemu_input_frame_required`) is sent by
+/// the path of a plain tap: the status names the Nemu input for `input.key`, so the command
+/// captures once and sends the key on that frame: it answers committed, one key, one capture, no
+/// tap, the Runtime's ledger holds the capture and then the input whose intent names that
+/// capture's frame, and the answer names the frame (`input_frame`, captured once).
+#[test]
+fn kb1_key_back_on_an_instance_whose_input_needs_a_frame_is_sent_on_its_capture() {
+    let root = TempDir::new().expect("tempdir");
+    let runtime_root = root.path().join("runtime");
+    let local = root.path().join("local");
+    let config = root.path().join("actinglab.json");
+    fs::write(&config, "{}").expect("write config");
+    let state = Arc::new(FakeState::default());
+    state.nemu_input.store(true, Ordering::Release);
+    let host = l3_host(&runtime_root, &state, b"lab-kb1-key-back-nemu");
+    let sent = run_actinglab_json(
+        &config,
+        &runtime_root,
+        &local,
+        ["--json", "--instance", "node.a", "key", "back"],
+    );
+    let wire = lw1_capture_and_input_wire(&runtime_root);
+    host.close().expect("close host");
+
+    assert_eq!(sent["input_outcome"]["input_stage"], "committed", "{sent}");
+    assert_eq!(sent["action"]["type"], "key", "{sent}");
+    assert_eq!(state.keys.load(Ordering::Acquire), 1, "one key");
+    assert_eq!(state.taps.load(Ordering::Acquire), 0);
+    assert_eq!(state.captures.load(Ordering::Acquire), 1, "one capture");
+    let kinds = wire.iter().map(|(kind, _)| *kind).collect::<Vec<_>>();
+    assert_eq!(kinds, ["capture", "input"], "{wire:?}");
+    let frame = wire[0].1.expect("the capture names its frame");
+    assert_eq!(
+        wire[1].1,
+        Some(frame),
+        "the key names the frame captured before it"
+    );
+    assert_eq!(
+        sent["input_frame"]["frame_id"],
+        json!(frame),
+        "the answer names it: {sent}"
+    );
+    assert_eq!(sent["input_frame_captured_twice"], false, "{sent}");
+}
+
+/// Workflow #463 KB-1 (register §1.447; the coordinator's ruling 2 of 11-16): `key back` on an
+/// instance whose input needs no frame (no Nemu input) is sent as before: no capture, the key sent
+/// without a frame (its intent names none), one key, and the answer names no frame.
+#[test]
+fn kb1_key_back_on_an_instance_whose_input_needs_no_frame_captures_nothing() {
+    let root = TempDir::new().expect("tempdir");
+    let runtime_root = root.path().join("runtime");
+    let local = root.path().join("local");
+    let config = root.path().join("actinglab.json");
+    fs::write(&config, "{}").expect("write config");
+    let state = Arc::new(FakeState::default());
+    let host = l3_host(&runtime_root, &state, b"lab-kb1-key-back-adb");
+    let sent = run_actinglab_json(
+        &config,
+        &runtime_root,
+        &local,
+        ["--json", "--instance", "node.a", "key", "back"],
+    );
+    let wire = lw1_capture_and_input_wire(&runtime_root);
+    host.close().expect("close host");
+
+    assert_eq!(sent["input_outcome"]["input_stage"], "committed", "{sent}");
+    assert_eq!(state.keys.load(Ordering::Acquire), 1, "one key");
+    assert_eq!(state.captures.load(Ordering::Acquire), 0, "no capture");
+    assert_eq!(wire, [("input", None)], "{wire:?}");
+    assert!(sent.get("input_frame").is_none(), "{sent}");
 }
 
 /// #463 S1-1 fix round 2 (B1): the backend fails the tap of `tap 0 0 --record` (a device-class

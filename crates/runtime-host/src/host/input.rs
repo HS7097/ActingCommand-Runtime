@@ -101,7 +101,8 @@ impl HostShared {
         // Workflow #308 SEL-L3b: the drag with a pause and a brake is a segmented plan too, which
         // the Nemu input performs as it performs the vertical-brake drag; Workflow #406 T3: and
         // the path drag. HS-4 (#402, design §4.4): and the long tap and the swipe, on their
-        // step's frame as the tap; the reset needs no frame. `key` and `text` stay refused.
+        // step's frame as the tap; the reset needs no frame. Workflow #463 KB-1: and the back key,
+        // on its step's frame as the tap; every other key and `text` stay refused.
         let nemu_support = input_check
             .as_ref()
             .map(|_| actingcommand_device::NemuInputSupport::of(action));

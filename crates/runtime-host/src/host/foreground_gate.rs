@@ -2,9 +2,10 @@
 
 //! The foreground application gate (Runtime slice #316-B3).
 //!
-//! Before any pointer input (tap, long tap, swipe, drag) reaches a physical instance, the host
-//! asks the ADB baseline which package Android reports in the foreground and refuses the
-//! input unless it is the instance's assigned `application_id`. The check sits in the single
+//! Before any pointer input (tap, long tap, swipe, drag) or (Workflow #463 KB-1, 0.12.69) any key
+//! reaches a physical instance, the host asks the ADB baseline which package Android reports in
+//! the foreground and refuses the input unless it is the instance's assigned `application_id`
+//! (text and the reset are not checked). The check sits in the single
 //! input choke point (`HostShared::input`), after the frame resolution and before the input is
 //! prepared, so one check covers the adb and the Nemu touch backends alike; the Runtime never
 //! taps into another application.
@@ -42,10 +43,11 @@ use actingcommand_device::DeviceResourceQuiescence;
 const GATE_OPERATION: HostLocation = HostLocation::RequireForegroundApplication;
 
 impl HostShared {
-    /// Refuses a pointer input whose foreground package is not the application it expects
-    /// (`store_tap`: the assigned application, or for a declared store step's tap the store,
-    /// which must still be allowed). Non-pointer actions (key, text, reset) and fixture instances
-    /// pass untouched.
+    /// Refuses a pointer input or a key whose foreground package is not the application it
+    /// expects (`store_tap`: the assigned application, or for a declared store step's tap the
+    /// store, which must still be allowed). Workflow #463 KB-1 (the coordinator's ruling of 11-16):
+    /// a key is an input and passes the gate a tap passes, a package's key and the Lab's `key`
+    /// alike. Text, the reset and fixture instances pass untouched.
     pub(super) fn require_foreground_application(
         &self,
         request: &ValidatedRuntimeRequest<'_>,
@@ -64,6 +66,7 @@ impl HostShared {
                     | InputAction::SingleTouchDragWithVerticalBrakeV1 { .. }
                     | InputAction::SingleTouchDragWithPauseAndBrakeV1 { .. }
                     | InputAction::SingleTouchPathDragV1 { .. }
+                    | InputAction::Key { .. }
             )
         {
             return Ok(());

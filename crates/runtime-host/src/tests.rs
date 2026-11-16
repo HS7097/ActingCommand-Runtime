@@ -274,6 +274,9 @@ mod gate_463_v2;
 // Workflow #463 V3 (0.12.61; register §1.383): an application's goals read and set by name
 // (`GoalView`, `EditGoal`).
 mod gate_463_v3;
+// Workflow #463 KB-1 (0.12.69; register §1.447): the capability table's key rows, the back key
+// sent on a frame of a Nemu input and every other key refused, and the foreground gate's key.
+mod gate_463_kb1;
 // Workflow #469 H2 (0.12.62; register §1.398): a paused pair's `policy_task_paused` says why it
 // was paused (`pause_cause`) and with which failure (`failure_code`), live, after a restart and in
 // `actingd suspended`; a backoff names the failure it follows.

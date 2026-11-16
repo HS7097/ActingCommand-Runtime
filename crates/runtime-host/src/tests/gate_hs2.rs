@@ -1092,8 +1092,10 @@ fn hs2_capabilities_follow_switch() {
         A,
         instance_id(),
         "neutral.application",
+        // Workflow #463 KB-1: minitouch, the input that sends no key (adb shell input sends the
+        // back key since then).
         TouchBackendConfig::new(adb.clone(), target.clone(), MaaTouchConfig::default())
-            .with_requested(TouchBackendChoice::AdbShellInput),
+            .with_requested(TouchBackendChoice::Minitouch),
         CaptureBackendConfig::new(adb, target).with_requested(CaptureBackendChoice::Adb),
     )
     .expect("registration")])
@@ -1116,7 +1118,7 @@ fn hs2_capabilities_follow_switch() {
             configuration.capture_backend.clone(),
         )
     };
-    assert!(!key_supported(&registry), "adb input has no key");
+    assert!(!key_supported(&registry), "minitouch has no key");
 
     // MaaTouch has keys: the table follows the switch, and so does the configuration.
     registry
@@ -1139,7 +1141,7 @@ fn hs2_capabilities_follow_switch() {
         ("maatouch".to_owned(), "adb".to_owned())
     );
 
-    // The Nemu pair: no key on the Nemu input.
+    // The Nemu pair: Workflow #463 KB-1, the Nemu input sends the back key, and its row says so.
     registry
         .switch_instance_backends(
             A,
@@ -1147,7 +1149,7 @@ fn hs2_capabilities_follow_switch() {
             CaptureBackendChoice::NemuIpc,
         )
         .expect("switch to the Nemu pair");
-    assert!(!key_supported(&registry));
+    assert!(key_supported(&registry));
     assert_eq!(
         backends(&registry),
         ("nemu_ipc".to_owned(), "nemu_ipc".to_owned())

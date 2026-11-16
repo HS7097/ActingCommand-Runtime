@@ -4158,3 +4158,13 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_437_g1::g1_another_members_claim_parked_behind_its_own_pause_leaves_the_held_preparation_queued",
 ]
 incident = ["#437 G1"]
+
+# Workflow #463 KB-1 (0.12.69; register §1.447; brief rd-1116/brief-463-kb1-nemu-key.md and the coordinator's rulings of 11-16 evening): the capability table of an instance through a switch of its backends: minitouch no key; adb_shell_input and nemu_ipc input.key supported, their failure semantics naming the back key alone and the Nemu row a library without the key calls; maatouch every key; input.text maatouch's alone (1). On an instance configured nemu_ipc: home, 3, a word of no key and a text refused nemu_input_capability_unsupported, the back key without a frame nemu_input_frame_required, nothing sent; the back key on the frame of a keyless observation completed, the device's one input the back key (2). With another application in front the back key and a tap are each refused application_not_foreground and nothing reaches the device; with the assigned one in front the back key is completed (3)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_463_kb1::kb1_the_capability_table_says_which_inputs_send_the_back_key",
+    "actingcommand-runtime-host::lib::tests::gate_463_kb1::kb1_the_host_sends_the_back_key_on_a_frame_of_a_nemu_input_and_refuses_the_rest",
+    "actingcommand-runtime-host::lib::tests::gate_463_kb1::kb1_the_foreground_gate_holds_a_key_as_it_holds_a_tap",
+]
+incident = ["#463 KB-1"]
