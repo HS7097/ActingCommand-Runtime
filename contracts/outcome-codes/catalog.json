@@ -5502,6 +5502,138 @@
         }
       }
     },
+    "regression_verdict": {
+      "description": "The verdict of one regression case, as the reader and runner of contracts/resource-regression-case.md answer it in verdict (#463 RC-1).",
+      "source": {
+        "file": "crates/lab/src/codes.rs",
+        "enum": "RegressionVerdict"
+      },
+      "tokens": {
+        "passed": {
+          "description": "Every check of the case ran and passed."
+        },
+        "failed": {
+          "description": "A check of the case failed: the reader's, the scene's, the package's or an expectation's."
+        },
+        "partial": {
+          "description": "What ran passed, and a check did not run."
+        },
+        "not_run": {
+          "description": "Nothing ran: the case is of another schema, or no expectation of it could be evaluated."
+        }
+      }
+    },
+    "regression_result": {
+      "description": "The result of one check of a regression case, in its checks[].result (#463 RC-1).",
+      "source": {
+        "file": "crates/lab/src/codes.rs",
+        "enum": "RegressionResult"
+      },
+      "tokens": {
+        "passed": {
+          "description": "The check held."
+        },
+        "failed": {
+          "description": "The check did not hold; its problem says why."
+        },
+        "not_run": {
+          "description": "The check was not run; its reason says why."
+        }
+      }
+    },
+    "regression_problem": {
+      "description": "Why a check of a regression case failed, in its checks[].problem (#463 RC-1): one word per cause.",
+      "source": {
+        "file": "crates/lab/src/codes.rs",
+        "enum": "RegressionProblem"
+      },
+      "tokens": {
+        "case_missing": {
+          "description": "The case's directory holds no case.json that can be read as a file."
+        },
+        "case_unreadable": {
+          "description": "case.json is no JSON object."
+        },
+        "member_missing": {
+          "description": "A member the contract requires is absent."
+        },
+        "member_unknown": {
+          "description": "A member the contract does not list for this object."
+        },
+        "member_invalid": {
+          "description": "A member of the wrong type, or out of its form."
+        },
+        "expect_empty": {
+          "description": "expect declares no expectation."
+        },
+        "scene_missing": {
+          "description": "The scene file the case names is not there or cannot be read."
+        },
+        "scene_unreadable": {
+          "description": "The scene's bytes are no PNG image that decodes."
+        },
+        "scene_sha256_mismatch": {
+          "description": "The SHA-256 of the scene's bytes is not scene_construction.scene_sha256."
+        },
+        "canvas_size_mismatch": {
+          "description": "The scene's size is not the canvas's."
+        },
+        "scene_size_unsupported": {
+          "description": "The scene cannot be brought to its package's coordinate space as the offline commands bring a stored image there (they refuse it lab_scene_size_unsupported)."
+        },
+        "scene_gate_unreadable": {
+          "description": "Fix round 1: the kernel's frame gate for a Lab frame could not read the scene at all (no size of it is refused: the offline commands relay it as a device error)."
+        },
+        "rect_outside_canvas": {
+          "description": "A rectangle of scene_construction.rects does not lie inside the canvas."
+        },
+        "package_missing": {
+          "description": "The case's package is no directory."
+        },
+        "package_refused": {
+          "description": "The kernel's admission refused the package, or it gives no evaluator or page set."
+        },
+        "package_id_mismatch": {
+          "description": "Fix round 1: the case's package_id is not the one its package's control declares."
+        },
+        "page_conflict": {
+          "description": "Several pages of the package matched the scene."
+        },
+        "page_mismatch": {
+          "description": "The kernel recognised another page, or none, than the case expects."
+        },
+        "page_detection_refused": {
+          "description": "The kernel's page detection refused the scene for another cause than a conflict."
+        },
+        "target_mismatch": {
+          "description": "The kernel's evaluation of a target is not the passed the case expects."
+        },
+        "target_click_only": {
+          "description": "The target is click-only, which is never evaluated on a scene."
+        },
+        "target_refused": {
+          "description": "The kernel refused evaluating the target (one the package does not declare, for one)."
+        }
+      }
+    },
+    "regression_not_run": {
+      "description": "Why a check of a regression case did not run, in its checks[].reason (#463 RC-1).",
+      "source": {
+        "file": "crates/lab/src/codes.rs",
+        "enum": "RegressionNotRun"
+      },
+      "tokens": {
+        "not_evaluated": {
+          "description": "This version of the runner reads the expectation and does not evaluate it."
+        },
+        "ocr_unavailable": {
+          "description": "Evaluating it needs text recognition, and the Lab has no OCR model."
+        },
+        "frames_required": {
+          "description": "The package's target consensus reads more frames than the case's one scene."
+        }
+      }
+    },
     "device_category": {
       "description": "The category of a device failure.",
       "source": {
@@ -11410,6 +11542,7 @@
       "actingctl"
     ],
     "case_": [
+      "lab",
       "pack-containment"
     ],
     "catalog_": [

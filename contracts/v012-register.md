@@ -34709,6 +34709,150 @@ no revision of it), so row 17's sentence on what `place` asks (10 and 14, never 
 was. The key step's key is now made from the number `DeviceKey::android_code` (§1.447, "Train,
 round 2"); the string it gives is the one it gave.
 
+### 1.450 Slice #463 RC-1 (0.12.69): the regression case of a resource repository as a contract of the Runtime, with a reader and an offline runner (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, whose stage two checks a package against its recorded material and whose stage three builds it; the read-only study `rd-1116/report-463-case-format-study.md` and the coordinator's rulings at its end; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1116/brief-463-rc1-regression-case-runner.md`, read on main `40abd08b`, taken over at its breakpoint under `rd-1116/brief-463-continue.md`)
+
+This section takes 1.450, the number the work order gives. It ships in 0.12.69.
+
+**Why.** A package of a resource repository comes with regression cases. Two repositories write
+them in one format, `actingcommand.resource-regression-case.v1`, and each runs them with a script of
+its own that calls the Lab's offline commands and works part of the kernel's rules out again in the
+script. Nothing in the Runtime read a case: no contract of the format, no reader, no runner;
+`resource verify` only checks that their files are the committed ones, and the step that was to run
+them (RV-2a) was never built. `record stop` is to write a package's cases and prove each passes
+before it writes it, and a build is to run them: both need one runner.
+
+**The rule** ([resource-regression-case.md](resource-regression-case.md)).
+- *The contract*: a case is `regression/<game>/<case>/` with `case.json` and its scene; every member
+  of the format is listed with whether this version evaluates it. Evaluated: the scene and its
+  construction (canvas, rectangles, the SHA-256 of the scene file's bytes), `expect.observe.page`
+  and `expect.recognize[]`. Every other expectation (`observe.candidates`, `entry`, `prerequisite`,
+  `step`, `terminal_outcome`, `terminal_effect`, `error_page`, `after`) is read and answered
+  `not_run` with `not_evaluated`, each at its place, never passed.
+- *The reader* is strict on what it evaluates: the top level, `scene_construction`, `canvas`, a
+  rectangle, `expect`, `expect.observe` and a `recognize` entry are closed objects; every problem is
+  a failed check with its word and the case evaluates nothing. Another `schema_version`, or none,
+  is `not_run` with the warning `case_schema_unsupported`: no failure, no refusal.
+- *The runner* calls the kernel's read-only recognition engine, the functions the offline commands
+  call: `ReadonlyRecognitionEngine::current_page` for the page (several pages matching is
+  `page_conflict`) and `ReadonlyRecognitionEngine::recognize` for each target. Nothing is evaluated
+  a second way. Text recognition without a model is `not_run` `ocr_unavailable` (the Lab's own
+  check), target consensus over several frames `not_run` `frames_required`.
+- *The verdict*: `failed` when a check failed, `passed` when every check passed, `partial` when what
+  ran passed and something did not run, `not_run` when nothing ran.
+- *The scene rule*: the pixels outside the rectangles are the canvas colour; a scene that breaks it
+  warns `resource_regression_scene_outside_rects` (`count`) and the case still runs. A case the
+  Runtime writes pastes the regions every target of the whole package reads on that frame.
+- *The operation* `resource regression --repo <checkout> [--game] [--case] [--package-id]` runs
+  the selected cases, each on `packs/<package_id>/` (admitted once per run), answers every verdict,
+  the counts and the failed paths, and refuses `resource_regression_failed` (exit 1 on actinglab's
+  own line) when a case failed. It reads only.
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The library | `crates/lab/src/regression_case.rs`: `read_regression_case(case_json) -> Result<RegressionCase, RegressionCaseVerdict>`, `RegressionPackage::load(package_dir, ocr) -> Result<RegressionPackage, RegressionCheck>`, `RegressionPackage::run(case, scene_png) -> RegressionCaseVerdict`, `run_regression_case(package_dir, case_json, scene_png, ocr) -> RegressionCaseVerdict` (the one call `record stop` will make), `RegressionCaseVerdict::refused`, `RegressionCounts::of`; exported by the crate with the words |
+| The words | `crates/lab/src/codes.rs`: `RegressionVerdict`, `RegressionResult`, `RegressionProblem`, `RegressionNotRun`, and `LabCode::CaseSchemaUnsupported`, `LabCode::ResourceRegressionSceneOutsideRects` |
+| The operation | `apps/actinglab/src/resource_verify/regression.rs` (`REGRESSION_FLAGS`, `run_resource_regression`), reached from `resource_runtime_support::run_resource`; `ActinglabCode::ResourceRegressionFailed` |
+| The row | `resource regression` in [lab-operations.json](lab-operations.json) (module authoring, slice `463-RC1`, writes false, offline); `engine::COMMANDS` 71, `own_flags::STRICT_ROWS` 34 and `REFUSING_COMMANDS` 67, `words::BUILT_SLICES` and the MCP server's `ACTINGLAB_SLICES` 15 each; the command inventory 107; capabilities (`offline`, `read_only`), dry run `no_effect`, help |
+| MCP | `ac_resource_regression` through a `serve` child; `after_child::LAB_ROWS` keeps `counts` and `failed` beside an exported success line |
+| Texts | the new [resource-regression-case.md](resource-regression-case.md); [resource-verify.md](resource-verify.md) (its sentences on `regression/`, the case contract's version and older cases point at the new contract, RV-2a still not built); [actinglab-dry-run.md](actinglab-dry-run.md), [actinglab-capabilities.md](actinglab-capabilities.md); `apps/actinglab-mcp/MANUAL.md`, sections 5 and 8 |
+
+**Codes and words.** Three codes. `case_schema_unsupported` (lab, warning, optional
+`schema_version`; the lab owner joins the domain `case_`): a case of another schema is not run,
+exit 0. `resource_regression_scene_outside_rects` (lab, warning, `count`): pixels outside the
+rectangles are not the canvas colour, exit 0. `resource_regression_failed` (actinglab, error, no
+values): a case failed, exit 1. Four closed vocabularies, used by no outcome key: `regression_verdict`
+(`passed`, `failed`, `partial`, `not_run`), `regression_result` (`passed`, `failed`, `not_run`),
+`regression_problem` (`case_missing`, `case_unreadable`, `member_missing`, `member_unknown`,
+`member_invalid`, `expect_empty`, `scene_missing`, `scene_unreadable`, `scene_sha256_mismatch`,
+`canvas_size_mismatch`, `scene_size_unsupported`, `rect_outside_canvas`, `package_missing`,
+`package_refused`,
+`page_conflict`, `page_mismatch`, `page_detection_refused`, `target_mismatch`,
+`target_click_only`, `target_refused`), `regression_not_run` (`not_evaluated`, `ocr_unavailable`,
+`frames_required`). The run refuses by the verdict word `failed`; no decision reads a code. The
+outcome-code index is regenerated.
+
+**Tests** (`apps/actinglab/src/tests/gate_463_rc1.rs`, apps gate map "#463 RC-1"; one neutral
+source package on a 4x1 canvas and synthetic cases over scenes of four pixels; no Runtime, no
+device, no OCR model, no clock): a case whose page is recognised passes, as answered; a second page
+matching fails with `page_conflict` and both pages; `recognize` entries expected present and
+absent, right and wrong each way; `scene_sha256_mismatch`, `canvas_size_mismatch` and
+`rect_outside_canvas`, each the one check; `entry` and `step` beside a passing page make the case
+`partial`; another and no schema are `not_run` with `case_schema_unsupported`, and a run holding
+one exits 0; one pixel outside the rectangles warns with `count` 1; the operation over three cases
+answers three verdicts, the counts and the failed path and exits 1, and 0 for the passing case
+alone; the checkout is byte for byte the same after a run. No test is adapted; no golden changes;
+no test leaves a gate map.
+
+**What is not changed.** `resource verify`'s steps and report, `standard-pack build`, the offline
+commands' answers and the kernel's evaluation. No ledger record, configuration key or Runtime
+interface revision.
+
+**Main merged before the push** (`a91e657c`, #1780, the train of #392 DA-5ab and DA-5cd, §1.436 and
+§1.437). On it the offline commands bring a stored scene to its package's `coordinate_space`
+before they evaluate it (`display_base::scene_in_base`: as it is at that size, a pure scale reduced
+to it, anything else refused `lab_scene_size_unsupported`). The runner takes the scene there by the
+same function, after the scene rule is checked on the case's own canvas, so it still calls what the
+offline commands call; a scene that function refuses is the problem `scene_size_unsupported`, one
+more word of `regression_problem`, and evaluates nothing. A scene of the package's size, every
+case of the tests, is evaluated as it is.
+
+**At deploy.** Nothing to configure: the operation runs from the Tools and reads a checkout.
+
+**Fix round 1** (coordinator work order `rd-1116/brief-463-rc1-fix1.md`, after the independent
+review `rd-1116/review-1793.md` on `efde021d` and CI on it, the coordinator's rulings R1 to R5).
+
+- *The two red checks* (R1). The scene rule's loop reads the pixels with `as_chunks::<3>()`
+  (clippy's `chunks_exact_to_as_chunks`); the reader's method `text`, which the workspace guard
+  `lab_input_face_is_semantic_input_executor` took for `LabInputPort::text`, is `string_member`.
+- *A failing run's answer is delivered* (R2). The answer no longer carries every case whole. A row
+  is a case, short: `{path, id, package_id, verdict, checks, warnings?}`, its `checks` only those
+  that did not pass, each with its word and what it names and without its `detail`. When a case
+  failed, the refusal's details are `repo`, `counts`, `failed_total` (the cases that did not pass:
+  failed and partial), `listed` and `cases`, the rows of the first of them up to the operation's
+  bound `ROWS_LISTED_MAX` (10), the failed cases first, and the message names the first failed
+  case: the Lab's own line and the MCP server's answer always fit and say which cases failed
+  first. A success answers `counts`, and the rows of every selected case only when `--game`,
+  `--case` or `--package-id` asked for them; `after_child` keeps `counts` beside an exported
+  success line (the member `failed` is gone).
+- *What the reader is strict about* (R3). The top level of a case is open: a member of it the
+  contract does not name is read past and named once in the case's new warning
+  `case_member_unknown` (lab, `member` optional); inside `scene_construction`, `expect`,
+  `expect.observe` and a `recognize` entry an unknown member stays `member_unknown`.
+  `scene_sha256` stays the SHA-256 of the scene file's bytes and a mismatch a failure; the contract
+  says that the value of the cases written before it was never checked by anything, and the check
+  carries `mismatch` `{case, found}`, both values. A run with partial cases answers once the new
+  warning `resource_regression_partial` (actinglab, `count`), exit 0 when no case failed. The
+  case's `package_id` is checked against the one its package's control declares, before anything
+  else: the new word `package_id_mismatch`, with both in `mismatch`. A scene the frame gate could
+  not read at all is the new word `scene_gate_unreadable`, told from `scene_size_unsupported` by
+  the refusal's class (`LabErrorClass::UsageValidation` for a size).
+- *For the next slice* (R4). `run_regression_case_on_bundle(bundle: &LoadedBundle, case_json:
+  &[u8], scene_png: &[u8], ocr: &LabOcr) -> RegressionCaseVerdict` runs a case on a package already
+  loaded, through `RegressionPackage::from_bundle(bundle, ocr)`; `run_regression_case` by directory
+  admits the package and calls it, and `RegressionPackage::load` takes the admitted package by
+  `from_bundle`.
+- *Texts* (R5). The contract and the catalog say the exit status on each line: `resource
+  regression` refusing `resource_regression_failed` exits 1 on actinglab's own line and 2 on the
+  `--via` line. The contract, the operation table's row, the MCP manual and `after_child` say the
+  new answer. The row's `help` is shortened to 150 bytes (`host-lab`'s `lab_ops_table_complete`
+  holds every help to 1 to 160 bytes; it had 168).
+- *Codes and words.* New codes `case_member_unknown` (lab, warning, exit 0) and
+  `resource_regression_partial` (actinglab, warning, `count`, exit 0 when no case failed); new
+  words of `regression_problem` `package_id_mismatch` and `scene_gate_unreadable`. The outcome-code
+  index is regenerated.
+- *Tests* (`gate_463_rc1.rs`, apps gate map "#463 RC-1 fix round 1"). New: text recognition
+  unavailable (`ocr_unavailable`, the case `partial`); target consensus over two frames
+  (`frames_required`); a scene smaller than its package (`scene_size_unsupported`); a package
+  missing from the checkout (`package_missing`); `--game` and `--package-id`; the refusal of a
+  filter that selects no case; the top-level unknown member's warning; the partial warning; the
+  `package_id` mismatch; a failing run of the bound plus two failed cases, listing the first
+  `ROWS_LISTED_MAX`. Adapted, as the requirement changes what they pin: the sha256 test (both
+  values), the other-schema test (its rows asked for with `--game`), the three-case test (the one
+  row of the case that did not pass), `writes_nothing` (the checkout it ran on, byte for byte, and
+  nothing beside it). No test leaves a gate map.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

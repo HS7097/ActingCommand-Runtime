@@ -253,6 +253,10 @@ mod gate_477_pc1;
 // `linear_steps` task has a key step.
 #[path = "gate_463_kp1.rs"]
 mod gate_463_kp1;
+// #463 RC-1: the regression case as a Runtime contract: its reader, its offline runner on the
+// kernel's recognition, and `resource regression` over a checkout's cases.
+#[path = "gate_463_rc1.rs"]
+mod gate_463_rc1;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
 use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{

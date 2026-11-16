@@ -22,9 +22,9 @@ here.
 
 | Status | Codes |
 |---|---:|
-| active | 3912 |
+| active | 3917 |
 | retired | 89 |
-| all | 4001 |
+| all | 4006 |
 
 ## Active codes by category
 
@@ -32,20 +32,20 @@ here.
 |---|---:|
 | success | 125 |
 | info | 214 |
-| warning | 162 |
-| error | 3394 |
+| warning | 166 |
+| error | 3395 |
 | fatal | 17 |
 
 ## Text and review of the active codes
 
 | Active codes | Codes |
 |---|---:|
-| `common_causes` and `handling` both written | 762 |
+| `common_causes` and `handling` both written | 767 |
 | one of the two written, the other `TBD` or empty | 4 |
 | neither written (`TBD` or empty) | 3146 |
 | `settled` | 154 |
-| `pending` | 3758 |
-| all active codes | 3912 |
+| `pending` | 3763 |
+| all active codes | 3917 |
 
 ## By owner
 
@@ -54,7 +54,7 @@ here.
 | [actingcommand-entry](actingcommand-entry.md) | 10 | 10 | 10 | 0 |
 | [actingctl](actingctl.md) | 204 | 199 | 40 | 8 |
 | [actingd](actingd.md) | 155 | 153 | 98 | 85 |
-| [actinglab](actinglab.md) | 44 | 43 | 43 | 0 |
+| [actinglab](actinglab.md) | 46 | 45 | 45 | 0 |
 | [actinglab-mcp](actinglab-mcp.md) | 3 | 2 | 2 | 0 |
 | [actingledger](actingledger.md) | 4 | 4 | 0 | 0 |
 | [artifact-store](artifact-store.md) | 77 | 77 | 2 | 0 |
@@ -63,7 +63,7 @@ here.
 | [display-adapter](display-adapter.md) | 2 | 2 | 0 | 0 |
 | [execution-kernel](execution-kernel.md) | 205 | 202 | 31 | 0 |
 | [host-metrics](host-metrics.md) | 17 | 17 | 0 | 0 |
-| [lab](lab.md) | 18 | 18 | 16 | 0 |
+| [lab](lab.md) | 21 | 21 | 19 | 0 |
 | [ledger](ledger.md) | 293 | 292 | 26 | 0 |
 | [ledger-forensics](ledger-forensics.md) | 52 | 52 | 0 | 0 |
 | [mcp-entry](mcp-entry.md) | 3 | 3 | 3 | 0 |
@@ -82,4 +82,4 @@ here.
 | [scheduler](scheduler.md) | 14 | 14 | 0 | 0 |
 | [selection-policy](selection-policy.md) | 27 | 27 | 0 | 0 |
 | [vision-ffi](vision-ffi.md) | 4 | 4 | 1 | 0 |
-| all | 4001 | 3912 | 762 | 154 |
+| all | 4006 | 3917 | 767 | 154 |

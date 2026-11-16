@@ -183,7 +183,9 @@ naming this file.
     `warnings`. `ac_record_stop` keeps its four binding parts together under `lab`, and
     `ac_lab_observe` and `ac_do` their frame parts (`frame_coordinates`, `frame_path`, `preview`,
     `next_frame`, `after_attachment`) each in turn, while the answer still fits. An exported `ac_record_stop`
-    answer goes to `ac_record_draft` as `record_stop_export` (`{path, sha256}`);
+    answer goes to `ac_record_draft` as `record_stop_export` (`{path, sha256}`). #463 RC-1
+    (0.12.69): `ac_resource_regression` keeps `counts` the same way (its refusal lists at most 10
+    rows and fits);
   - any other line, a refusal and a child's failure line too, that does not fit with its text
     repeated is sent in `structuredContent` alone, beside a summary text `{outcome,
     structured_content_only, warnings?, warnings_omitted?, truncated?, narrow}` (from protocol
@@ -513,6 +515,18 @@ naming this file.
   hand. `ac_packs` answers each
   game's `index` (per pool the packages that produce and consume it) and each composed row's
   `catalog`; `ac_standard_pack_check` answers the root's `catalog` note and the file's warnings.
+- **Regression cases** (#463 RC-1, 0.12.69; `contracts/resource-regression-case.md`).
+  `ac_resource_regression` (`repo`, `game`, `case`, `package_id`) runs the regression cases of a
+  resource repository's checkout offline, through a child: each case `regression/<game>/<case>/`
+  on its package `packs/<package_id>/`, with the kernel's page detection and target evaluation,
+  and answers the counts of the verdicts (`passed`, `failed`, `partial`, `not_run`); with `game`,
+  `case` or `package_id` also a short row of each case asked for (`path`, `id`, `package_id`,
+  `verdict`, the checks that did not pass with their words, its warnings). It reads only. A failed
+  case makes the call the refusal `resource_regression_failed`, whose details are the counts,
+  `failed_total`, `listed` and the rows of the first 10 cases that did not pass, the failed ones
+  first, so it always fits; partial cases add the warning `resource_regression_partial` with their
+  count; a case of another schema is `not_run` with the warning `case_schema_unsupported` and fails
+  nothing.
 - **Busy** is `job_capacity_exhausted` with `limit_count`: a call that would start a job while
   `--jobs` jobs run (default 8), or that needs a child while all `--children` children (default 8)
   are working. It is refused, not queued, and nothing is sent: call again later. More calls at

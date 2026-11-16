@@ -650,6 +650,36 @@
       "common_causes": "Another program removed or changed the build's work directory after the steps had checked it; the disk could not be read.",
       "handling": "The zip, SHA256SUMS and build.json are complete. Judge the readiness with actinglab standard-pack ready --root on the installed root once it can be read again, or build again into a new directory."
     },
+    "resource_regression_failed": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actinglab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.69",
+      "description": "#463 RC-1 (contracts/resource-regression-case.md, the operation): actinglab resource regression ran the regression cases of a checkout and at least one case's verdict is failed: a check of the reader, the scene, the package or an expectation failed, each with its word (regression_problem). Every selected case was run. Fix round 1: the details are the answer of a failing run, which always fits: repo, counts, failed_total (the cases that did not pass: failed and partial), listed and cases, a short row of each of the first listed of them, the failed cases first (at most 10; its path, id, package_id, verdict, the checks that did not pass with their words and what they name, its warnings), and warnings (resource_regression_partial when cases are partial). Nothing was written. Exit 1 on actinglab's own line and 2 on the --via line; a refusal through MCP.",
+      "common_causes": "A page or a target of the package no longer recognises its scene as the case expects, or several pages match it; the scene's bytes do not match scene_sha256 (the row names both values), its size the canvas, or a rectangle leaves the canvas; a member of case.json the contract does not list inside the parts it evaluates, or of the wrong type; the case's package is missing, its admission refuses it, or it declares another package_id.",
+      "handling": "Read the rows in details.cases, the failed cases first, and each check's at, problem and what it names; fix the package or the case and run resource regression again (with --case or --package-id to run one). When failed_total is more than listed, the rows left out are those after the listed ones; run again with --game, --case or --package-id to list others."
+    },
+    "resource_regression_partial": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "actinglab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "count": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.69",
+      "description": "#463 RC-1 fix round 1 (contracts/resource-regression-case.md, the operation): count cases of the run are partial: what of them ran passed and something did not run (an expectation this version does not evaluate, text recognition without a model, target consensus over several frames). Never passed silently: the run answers this warning once, in its warnings, beside the rows, and writes its developer line. A run with partial and no failed cases succeeds, exit 0 on actinglab's own line and on the --via line; with failed cases it is among the warnings of the refusal resource_regression_failed's details.",
+      "common_causes": "The cases declare expectations the runner does not evaluate yet (entry, prerequisite, step, terminal_outcome, terminal_effect, error_page, after, observe.candidates), or the Lab has no OCR model for a text target.",
+      "handling": "Nothing to do for an expectation this version does not evaluate. Run with --case, --package-id or --game to list the partial cases' rows and the words of what did not run; install the OCR model to evaluate text targets."
+    },
     "resource_check_release_retired": {
       "category": "error",
       "ladder_class": "none",

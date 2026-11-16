@@ -2633,6 +2633,28 @@
       "status": "planned"
     },
     {
+      "name": "resource regression",
+      "module": "authoring",
+      "params": [
+        {"name": "repo", "form": "option", "type": "dir", "required": true, "note": "a resource repository's checkout: its cases are regression/<game>/<case>/case.json, each run on the package packs/<package_id>/ its case.json names"},
+        {"name": "game", "form": "option", "type": "string", "required": false, "note": "actinglab's global --game: only the cases under regression/<game>/"},
+        {"name": "case", "form": "option", "type": "string", "required": false, "note": "only the cases whose directory regression/<game>/<case>/ has this name"},
+        {"name": "package_id", "form": "option", "type": "string", "required": false, "note": "only the cases whose case.json names this package_id"}
+      ],
+      "help": "Runs a resource repository checkout's regression cases offline on the kernel's page detection and target evaluation; answers the verdicts; reads only.",
+      "output": "repo; counts {cases, passed, failed, partial, not_run}; cases[{path, id, package_id, verdict (passed, failed, partial, not_run), checks: those that did not pass [{at, result, problem?, reason?, page?, target?, mismatch?}], warnings?}], only when game, case or package_id asked for them; warnings (resource_regression_partial with count, when cases are partial). When a case failed, the refusal resource_regression_failed whose details are repo, counts, failed_total (the cases that did not pass), listed and cases: the rows of the first 10 cases that did not pass, the failed ones first",
+      "writes": false,
+      "irreversible": false,
+      "runtime": "offline",
+      "entries": ["lab"],
+      "requests": [],
+      "source": ["actinglab resource regression"],
+      "new": "#463",
+      "slice": "463-RC1",
+      "status": "planned",
+      "notes": "#463 RC-1 (0.12.69; contracts/resource-regression-case.md): the reader and runner of the Lab (crates/lab regression_case: read_regression_case, RegressionPackage::load and run, run_regression_case) on the kernel's own read-only recognition engine, as offline current-page and recognize call it; a case of another schema_version is not_run with the warning case_schema_unsupported and fails nothing; a scene whose pixels outside its rectangles are not the canvas colour warns resource_regression_scene_outside_rects; a package is admitted once per run; nothing is written. Exit 1 on actinglab's own line when a case failed. The MCP server keeps counts beside an exported success line (rows a filter asked for). Fix round 1: a failing run's answer always fits and says which cases failed first (at most 10 short rows, failed_total and listed; a failure line is never exported); the top level of a case is open (case_member_unknown, a warning); partial cases warn resource_regression_partial; a case's package_id is checked against its package's (package_id_mismatch); --via exit 2 when a case failed"
+    },
+    {
       "name": "standard-pack build",
       "module": "authoring",
       "params": [

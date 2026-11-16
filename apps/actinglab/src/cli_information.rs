@@ -113,6 +113,8 @@ pub(super) fn help_data() -> Value {
         "command_options": {
             "resource validate": crate::resource_runtime_support::resource_declarations::options(),
             "resource verify": crate::resource_verify::options(),
+            // #463 RC-1.
+            "resource regression": crate::resource_verify::regression_options(),
             "resource catalog": ["--repo <repository root>", "--catalog <static catalog JSON>", "--catalog-server <server>", "--field <identity feature name>"],
             "package preflight": ["--package <directory | .zip | .json container>", "--zip <published .zip package>"],
             "package check": ["--package <directory | .zip | .json container>"],

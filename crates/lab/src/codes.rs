@@ -95,6 +95,18 @@ actingcommand_contract::outcome_codes! {
         /// fix round 1, key `drop_comparison`: which comparison showed the change); nothing is
         /// written (exit 3; actinglab details `step`).
         RecordDropUnproven => "record_drop_unproven": error / none,
+        /// Warning. #463 RC-1: a regression case's `case.json` declares another `schema_version`
+        /// than `actingcommand.resource-regression-case.v1`, or none; it is not run (verdict
+        /// `not_run`) and fails nothing (optional key `schema_version`: the one it declares).
+        CaseSchemaUnsupported => "case_schema_unsupported": warning / none,
+        /// Warning. #463 RC-1: pixels of a regression case's scene outside every rectangle of its
+        /// `scene_construction` are not the canvas colour (key `count`: how many); the case still
+        /// runs.
+        ResourceRegressionSceneOutsideRects => "resource_regression_scene_outside_rects": warning / none,
+        /// Warning. #463 RC-1 fix round 1: a member of a regression case's top level that the
+        /// contract does not name is read past, never a failure (optional key `member`: its name);
+        /// the case still runs.
+        CaseMemberUnknown => "case_member_unknown": warning / none,
     }
 }
 
@@ -425,6 +437,102 @@ actingcommand_contract::outcome_vocabulary! {
         /// A step's press is a single recorded point with no press region set: the package would
         /// press that exact pixel.
         PressPointOnly => "press_point_only",
+    }
+}
+
+// #463 RC-1: the verdict of a regression case (`contracts/resource-regression-case.md`).
+actingcommand_contract::outcome_vocabulary! {
+    /// The verdict of one regression case (`regression_verdict`).
+    pub enum RegressionVerdict: "regression_verdict" {
+        /// Every check of the case ran and passed.
+        Passed => "passed",
+        /// A check of the case failed: the reader's, the scene's, the package's or an
+        /// expectation's.
+        Failed => "failed",
+        /// What ran passed, and a check did not run.
+        Partial => "partial",
+        /// Nothing ran: the case is of another schema, or no expectation of it could be evaluated.
+        NotRun => "not_run",
+    }
+}
+
+// #463 RC-1: the result of one check of a regression case.
+actingcommand_contract::outcome_vocabulary! {
+    /// The result of one check of a regression case (`regression_result`).
+    pub enum RegressionResult: "regression_result" {
+        /// The check held.
+        Passed => "passed",
+        /// The check did not hold; its `problem` says why.
+        Failed => "failed",
+        /// The check was not run; its `reason` says why.
+        NotRun => "not_run",
+    }
+}
+
+// #463 RC-1: why a check of a regression case failed, one cause per word.
+actingcommand_contract::outcome_vocabulary! {
+    /// Why a check of a regression case failed (`regression_problem`).
+    pub enum RegressionProblem: "regression_problem" {
+        /// The case's directory holds no `case.json` that can be read as a file.
+        CaseMissing => "case_missing",
+        /// `case.json` is no JSON object.
+        CaseUnreadable => "case_unreadable",
+        /// A member the contract requires is absent.
+        MemberMissing => "member_missing",
+        /// A member the contract does not list for this object.
+        MemberUnknown => "member_unknown",
+        /// A member of the wrong type, or out of its form.
+        MemberInvalid => "member_invalid",
+        /// `expect` declares no expectation.
+        ExpectEmpty => "expect_empty",
+        /// The scene file the case names is not there or cannot be read.
+        SceneMissing => "scene_missing",
+        /// The scene's bytes are no PNG image that decodes.
+        SceneUnreadable => "scene_unreadable",
+        /// The SHA-256 of the scene's bytes is not `scene_construction.scene_sha256`.
+        SceneSha256Mismatch => "scene_sha256_mismatch",
+        /// The scene's size is not the canvas's.
+        CanvasSizeMismatch => "canvas_size_mismatch",
+        /// The scene cannot be brought to its package's coordinate space as the offline commands
+        /// bring a stored image there (they refuse it `lab_scene_size_unsupported`).
+        SceneSizeUnsupported => "scene_size_unsupported",
+        /// Fix round 1: the kernel's frame gate for a Lab frame could not read the scene at all
+        /// (no size of it is refused: the offline commands relay it as a device error).
+        SceneGateUnreadable => "scene_gate_unreadable",
+        /// A rectangle of `scene_construction.rects` does not lie inside the canvas.
+        RectOutsideCanvas => "rect_outside_canvas",
+        /// The case's package is no directory.
+        PackageMissing => "package_missing",
+        /// The kernel's admission refused the package, or it gives no evaluator or page set.
+        PackageRefused => "package_refused",
+        /// Fix round 1: the case's `package_id` is not the one its package's control declares.
+        PackageIdMismatch => "package_id_mismatch",
+        /// Several pages of the package matched the scene.
+        PageConflict => "page_conflict",
+        /// The kernel recognised another page, or none, than the case expects.
+        PageMismatch => "page_mismatch",
+        /// The kernel's page detection refused the scene for another cause than a conflict.
+        PageDetectionRefused => "page_detection_refused",
+        /// The kernel's evaluation of a target is not the `passed` the case expects.
+        TargetMismatch => "target_mismatch",
+        /// The target is click-only, which is never evaluated on a scene.
+        TargetClickOnly => "target_click_only",
+        /// The kernel refused evaluating the target (one the package does not declare, for
+        /// one).
+        TargetRefused => "target_refused",
+    }
+}
+
+// #463 RC-1: why a check of a regression case did not run.
+actingcommand_contract::outcome_vocabulary! {
+    /// Why a check of a regression case did not run (`regression_not_run`).
+    pub enum RegressionNotRun: "regression_not_run" {
+        /// This version of the runner reads the expectation and does not evaluate it.
+        NotEvaluated => "not_evaluated",
+        /// Evaluating it needs text recognition, and the Lab has no OCR model.
+        OcrUnavailable => "ocr_unavailable",
+        /// The package's target consensus reads more frames than the case's one scene.
+        FramesRequired => "frames_required",
     }
 }
 
