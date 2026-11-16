@@ -4,7 +4,7 @@ use crate::capture::{DeviceRotation, display_size_from_natural, read_device_rota
 use crate::{
     Adb, AdbBoundsAction, AdbBoundsCoordinate, AdbConfig, AdbInputBoundsContext,
     AdbInputConnectGeometry, DeviceCloseAuthority, DeviceError, DeviceErrorCategory,
-    DeviceErrorDiagnosticMessage, DeviceErrorSensitivity, DeviceInfo, DeviceLocation,
+    DeviceErrorDiagnosticMessage, DeviceErrorSensitivity, DeviceInfo, DeviceKey, DeviceLocation,
     DeviceResourceCloseOutcome, DeviceResourceQuiescence, DeviceResult, DeviceTarget,
     HandshakeInfo, InputBackend, MaaTouchBackend, MaaTouchConfig, MinitouchBackend,
     MinitouchConfig, PreparedSegmentedSwipePlan, SegmentedSwipeEvent,
@@ -1404,6 +1404,23 @@ impl AdbShellInputBackend {
         child(x, y)
     }
 
+    /// Workflow #463 KB-1: the key `key` handed to `child` by Android's name of it, when it is the
+    /// back key ([`DeviceKey`]) and the backend is connected; every other key is refused before
+    /// anything is sent, as every key was before.
+    fn key_with_child(
+        &self,
+        key: &str,
+        child: impl FnOnce(&str) -> DeviceResult<()>,
+    ) -> DeviceResult<()> {
+        let Some(key) = DeviceKey::named(key) else {
+            return Err(DeviceError::fatal(
+                "AdbShellInputBackend key input is outside A1 touch fallback scope",
+            ));
+        };
+        self.ensure_connected()?;
+        child(key.android_name())
+    }
+
     fn bounds_failure(
         &self,
         error: DeviceError,
@@ -1605,10 +1622,16 @@ impl InputBackend for AdbShellInputBackend {
         })
     }
 
-    fn key(&mut self, _witness: &FencedWrite, _key: &str) -> DeviceResult<()> {
-        Err(DeviceError::fatal(
-            "AdbShellInputBackend key input is outside A1 touch fallback scope",
-        ))
+    /// Workflow #463 KB-1: the back key as one `input keyevent` through the `adb shell` path its
+    /// taps take ([`Self::key_with_child`]).
+    fn key(&mut self, witness: &FencedWrite, key: &str) -> DeviceResult<()> {
+        let adb_config = self.adb_config.clone();
+        let serial = self.serial.clone();
+        self.key_with_child(key, move |name| {
+            Adb::new(adb_config)
+                .shell_input_keyevent(witness, &serial, name)
+                .map(|_| ())
+        })
     }
 
     fn text(&mut self, _witness: &FencedWrite, _text: &str) -> DeviceResult<()> {

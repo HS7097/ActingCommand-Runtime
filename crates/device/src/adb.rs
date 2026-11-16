@@ -377,6 +377,17 @@ impl Adb {
         self.run_write(witness, &["-s", serial, "shell", "input", "tap", &x, &y])
     }
 
+    /// Workflow #463 KB-1: one key event (`key`, Android's name of it) through the same
+    /// `adb shell input` path a tap takes.
+    pub fn shell_input_keyevent(
+        &self,
+        witness: &FencedWrite,
+        serial: &str,
+        key: &str,
+    ) -> DeviceResult<CommandOutput> {
+        self.run_write(witness, &["-s", serial, "shell", "input", "keyevent", key])
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn shell_input_swipe(
         &self,

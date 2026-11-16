@@ -36,6 +36,9 @@ pub(super) enum Call {
     Down(i32, i32),
     Up,
     Wait(u64),
+    /// Workflow #463 KB-1: a key down and a key up, with the vendor's key code.
+    KeyDown(i32),
+    KeyUp(i32),
 }
 
 /// The input's check: it always answers the same remaining time.
@@ -61,6 +64,8 @@ pub(super) struct FakeDevice {
     pub(super) calls: Vec<Call>,
     /// #402 HS-5a: the display each native contact call addressed, in order.
     pub(super) touched_displays: Vec<i32>,
+    /// Workflow #463 KB-1: whether the library offers the two key calls.
+    pub(super) key_calls: bool,
 }
 
 impl FakeDevice {
@@ -84,6 +89,7 @@ impl FakeDevice {
             up_code: 0,
             calls: Vec::new(),
             touched_displays: Vec::new(),
+            key_calls: true,
         }
     }
 
@@ -176,6 +182,19 @@ impl NemuTouchPort for FakeDevice {
             u64::try_from(duration.as_millis()).expect("a wait in milliseconds"),
         ));
         Ok(())
+    }
+
+    fn key_calls(&self) -> bool {
+        self.key_calls
+    }
+
+    fn key_native(&mut self, call: NemuKeyCall) -> DeviceResult<i32> {
+        self.touched_displays.push(self.display);
+        self.calls.push(match call {
+            NemuKeyCall::Down(vendor_key) => Call::KeyDown(vendor_key),
+            NemuKeyCall::Up(vendor_key) => Call::KeyUp(vendor_key),
+        });
+        Ok(0)
     }
 }
 

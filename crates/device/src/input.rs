@@ -318,6 +318,42 @@ fn append_maa_2_0_segment(
     }
 }
 
+/// Workflow #463 KB-1 (0.12.69; the owner's ruling on board #463: a package may press the back
+/// key): the keys an input sends that sends only the keys it names, the closed vocabulary of one
+/// word, `back`. The emulator's own input (`nemu_ipc`) and `adb_shell_input` send these and no
+/// other key; `maatouch` sends every key it is given, as before; `minitouch` sends none.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeviceKey {
+    /// The back key.
+    Back,
+}
+
+impl DeviceKey {
+    /// The key an input request's `key` names: the word `back`, or the Android key event of the
+    /// back key as a client sends it today, its code `4` (actinglab's `key back`) or its name
+    /// `KEYCODE_BACK`; `None` for every other key.
+    pub fn named(key: &str) -> Option<Self> {
+        match key {
+            "back" | "4" | "KEYCODE_BACK" => Some(Self::Back),
+            _ => None,
+        }
+    }
+
+    /// The word of the vocabulary.
+    pub const fn word(self) -> &'static str {
+        match self {
+            Self::Back => "back",
+        }
+    }
+
+    /// Android's name of the key, which `input keyevent` takes.
+    pub const fn android_name(self) -> &'static str {
+        match self {
+            Self::Back => "KEYCODE_BACK",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InputSelectionContext {
     pub backend: crate::TouchBackendName,
@@ -437,6 +473,18 @@ pub trait InputBackend {
     }
 
     fn key(&mut self, witness: &FencedWrite, key: &str) -> DeviceResult<()>;
+
+    /// Workflow #463 KB-1: the key `key` on the frame its step decided on, under the Runtime's
+    /// check of that step (the Nemu input presses its key so, as it presses a tap). A backend that
+    /// needs neither performs [`Self::key`].
+    fn key_in_frame(
+        &mut self,
+        witness: &FencedWrite,
+        key: &str,
+        _context: &crate::InputExecutionContext,
+    ) -> DeviceResult<()> {
+        self.key(witness, key)
+    }
 
     fn text(&mut self, witness: &FencedWrite, text: &str) -> DeviceResult<()>;
 
