@@ -408,8 +408,8 @@ naming this file.
   cannot be read), `enabled` (whether the root's schedule enables it) and `stage_state`
   (`not_admitted`, `not_judged`, `can_be_tried`, `supporting` or `enabled`), with the root's
   counts. The placement journals are not read here: `enabled.authorization` is `not_recorded`
-  with `journals_not_read`, never an authorization guessed. `packs` grows with the root: an answer over
-  the budget is written whole to the export directory; `package_id` reads one pack.
+  with `journals_not_read`, never an authorization guessed. `packs` grows with the root: an answer
+  over the budget is written whole to the export directory; `package_id` reads one pack.
 - **Busy** is `job_capacity_exhausted` with `limit_count`: a call that would start a job while
   `--jobs` jobs run (default 8), or that needs a child while all `--children` children (default 8)
   are working. It is refused, not queued, and nothing is sent: call again later. More calls at

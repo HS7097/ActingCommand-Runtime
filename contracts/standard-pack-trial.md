@@ -315,9 +315,9 @@ when there is none. A file of a record's name that is not read as the record its
 the decoder's refusal as the cause) or `name_mismatch` (a record, but not of the package, the
 content and the time its name says): the reader answers no record of that package rather than pass
 over one. A file of another name, a `.part` among them, is no record. The status read (S3-14) and
-adopt's review (S3-12) call it, both through `trial_summary` (above). S3-11 fix round 2: `trial_record_of_run` answers, through
-it, the file of the record of one run's request id, whatever content it names; the run calls it
-before the writer.
+adopt's review (S3-12) call it, both through `trial_summary` (above). S3-11 fix round 2:
+`trial_record_of_run` answers, through it, the file of the record of one run's request id,
+whatever content it names; the run calls it before the writer.
 
 ## The run
 
