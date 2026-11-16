@@ -203,7 +203,11 @@ ahead (`close_expired_lease_session_guarded`), as above. The failed input answer
 and retains no owner as unconfirmed: the close it owes is made after its lease ended, and while
 the fence holds the owner's resources stay `in_use`. During shutdown, where no fence may take the
 instance, and for a failure of the Runtime itself, these two paths keep their fatality as above
-(the failed input's clean-up then retains the owner as unconfirmed, as before). Workflow #475
+(the failed input's clean-up then records the failure, retains the owner as unconfirmed and
+latches, as before, except for a failure of the ledger itself, such as the refusal's record that
+cannot be appended: no record carries it, so the clean-up returns it unrecorded, before that
+retention, and the request's boundary latches it with the owner not retained; Workflow #475, fix
+round 2). Workflow #475
 (Runtime 0.12.67) does the same for five closes made under a held key whose lease lapsed before
 the lease sweep met it: a failed run's hand-over of its key to its admitted ladder
 (`hand_off_to_ladder`, a run whose lease lapsed before its end began, which no end phase

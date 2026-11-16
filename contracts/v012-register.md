@@ -31265,9 +31265,10 @@ close; memory only, as before.
 in flight on the lease, as the expiry's end does (`end_lease_device_use`): `begin_resource_close`
 asks the lease's time before the step, so a close under a lapsed lease with a write in flight would
 be owed under that write; no path reaches it today. A test proves that a claim waiting in the
-queue is not handed the device while the close is owed, and #461's fourth test asserts that its
-fatal path keeps the owner as unconfirmed. [runtime-outcomes.md](runtime-outcomes.md) says "before
-the lease sweep meets it" where it said "before the lease's expiry".
+queue is not handed the device while the close is owed, and #461's fourth test asserts what its
+fatal path does with the owner (fix round 2: it retains none, below).
+[runtime-outcomes.md](runtime-outcomes.md) says "before the lease sweep meets it" where it said
+"before the lease's expiry".
 
 **Which failures stay fatal.** As the two fixes kept them: a refusal during shutdown, a refusal no
 fence may take, and the Runtime's own failures in these paths (the refusal's record, a lock, the
@@ -31305,8 +31306,9 @@ and `close475_a_disconnects_owed_close_is_made_before_the_waiting_claim_is_grant
 hand-over's run fails a capture whose own close meets the lapse first and fences the instance
 (#456), so that test counts the hand-over's refusal after the run's terminal, and its fatal test
 asserts that nothing is fenced from there on. `close461_a_record_that_cannot_be_appended_at_a_failed_inputs_close_still_stops_the_runtime`
-gains one assertion (the owner kept unconfirmed, read through the test-only
-`RuntimeHost::owner_retained_unconfirmed_for_test`); no other existing test is adapted or retired.
+gains one assertion (since fix round 2: the owner not retained as unconfirmed, read through the
+test-only `RuntimeHost::owner_retained_unconfirmed_for_test`); no other existing test is adapted
+or retired.
 
 **What is not added.** No outcome code, value key, word, configuration key, record type, payload
 member, fact, wire shape, interface revision or ledger revision. The test-only switch
@@ -31360,6 +31362,33 @@ pre-emption a reset's write in flight deferred, made at the reset's end,
 map. (5) The texts: this section's numbers (§1.429 and §1.430 are #463 S1-9 and S1-10) and the
 table's rows for the application preparation and the member switch. No outcome code, word or key
 is added.
+
+**Fix round 2** (coordinator work order `rd-1116/brief-475-fix3.md`, after the pull request's CI
+run on the head of fix round 1, `15c9d98a`, failed one host test; the coordinator's rulings). The
+assertion this section added to
+`close461_a_record_that_cannot_be_appended_at_a_failed_inputs_close_still_stops_the_runtime` (the
+owner kept unconfirmed) stated what the program never did, on main as here: the review of #461 had
+read `finish_input_failure`'s `Err` arm as keeping the owner on that path. It does not. The
+failure there is the ledger's own (the refusal's record cannot be appended), and
+`append_lifecycle_failure` hands a ledger failure back instead of recording it (`host/lifecycle.rs`,
+the return of a `ledger_failure` before the record is built), so the arm's `?` on its record of the
+clean-up's failure (`host/resource_close.rs:1345-1350` at this fix's head) returns it before the
+arm's `retain_unconfirmed` (`:1351`) and its own latch. The input's poison reaches the request's
+boundary, whose `contain_failure` latches it (`latch_failure`) and retains nothing. Main at
+`8eb03787` (#461) has the same lines (`:1292-1299`), and no round of this fix changed them, nor
+`append_lifecycle_failure`: the arm keeps the owner for a failure it can record (the refusal itself
+before #461; today a refusal during shutdown, or one no fence may take). The test-only reader reads
+the owner's retention (`OwnerGuard::retained_resource_disposition`, set only by
+`retain_unconfirmed` and never undone) after the input's request has returned and before the
+host's own close, so its moment was not the cause. Of the work order's three answers it is the
+second: the assertion now states that the owner is not retained as unconfirmed, beside what the
+test already asserted (the ledger's failure latched, no instance fenced); the refused close began
+nothing, so no device step is left half done (§1.431, "The owner on the input's path"). The
+sentence of [read-session-resource-close.md](read-session-resource-close.md) that said the failed
+input's clean-up then keeps the owner, which §1.431's "Which failures stay fatal" says of the
+Runtime's own failures as well, is true except for a failure of the ledger itself; the contract
+now says so, and this section's two sentences on that assertion are corrected. No program
+behaviour, other test, outcome code, word or key changes. Main is merged locally afterwards.
 
 **At deploy.** Nothing to do. What an operator sees when it happens: the Runtime keeps running;
 the instance's row shows its resource fence with `lease_expired` as its cause; the ledger holds

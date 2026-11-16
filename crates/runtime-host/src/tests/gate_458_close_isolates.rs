@@ -1681,8 +1681,12 @@ fn close461_a_record_that_cannot_be_appended_at_a_disconnects_close_still_stops_
 /// its client lease lapse while its write is in flight and then fails, and the record of the
 /// refused close that would fence X cannot be appended (#458's test-only switch). The Runtime
 /// holds that failure latched, `ledger_failure` at `fence_instance_resources`, fatal and Global;
-/// no instance is fenced. Workflow #475 (the review of #461's fix, item 3): on this fatal path the
-/// failed input's clean-up keeps the owner as unconfirmed, as it did before #461.
+/// no instance is fenced. Workflow #475 fix round 2: and the owner is not retained as unconfirmed.
+/// The failure is the ledger's own, which no record carries (`append_lifecycle_failure` hands a
+/// ledger failure back), so the failed input's clean-up (`finish_input_failure`'s `Err` arm)
+/// returns it at its record, before the owner's retention it makes for a failure it can record
+/// (the refusal itself, before #461), and the request's boundary latches it (`contain_failure`),
+/// which retains nothing. The refused close began nothing, so no device step is left half done.
 #[test]
 fn close461_a_record_that_cannot_be_appended_at_a_failed_inputs_close_still_stops_the_runtime() {
     let fixture = Fixture::alone(&alone_ids(), false);
@@ -1714,11 +1718,11 @@ fn close461_a_record_that_cannot_be_appended_at_a_failed_inputs_close_still_stop
     assert_record_failure(&latched);
     assert!(fence_records(&all_events(&fixture.host)).is_empty());
     assert!(
-        fixture
+        !fixture
             .host
             .owner_retained_unconfirmed_for_test()
             .expect("the owner's disposition"),
-        "the fatal path keeps the owner as unconfirmed"
+        "the ledger's own failure is latched at the request's boundary, which retains no owner"
     );
     drop(scan);
     fixture.close_unchecked();
