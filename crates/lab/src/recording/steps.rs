@@ -45,6 +45,7 @@ use super::store::{
 };
 use crate::LabOcr;
 use crate::codes::{LabCode, OptionalAfterProblem, SelectProblem};
+use crate::display_base::admit_recording_frame;
 use crate::recording_api::{change_digest, unchanged_for};
 use actingcommand_contract::{
     InputSamplingEvidence, LabError, LabResult, SEGMENTED_SWIPE_BRAKE_DISTANCE_PX,
@@ -101,12 +102,15 @@ pub(crate) fn lab_unavailable(reason: &str) -> LabError {
     )
 }
 
+/// Workflow #392 DA-5cd fix round 1: `base_size` is the size its header names
+/// (`LabRecording::base_size`), the one its first frame must have.
 pub(crate) fn new_recording(
     old: &OldRecordView,
     defaults: RecordingDefaults,
     game: Option<String>,
     server: Option<String>,
     locale: Option<String>,
+    base_size: Option<RecordSize>,
 ) -> LabRecording {
     let now = now_unix_ms();
     LabRecording {
@@ -127,6 +131,7 @@ pub(crate) fn new_recording(
         artifact: None,
         amended_at_unix_ms: None,
         endings: Vec::new(),
+        base_size,
     }
 }
 
@@ -212,7 +217,7 @@ fn open_session_with(lock: &RecordingLock, allow_stopped: bool) -> LabResult<Ses
                 return Err(lab_unavailable("task_id_invalid_for_lab_package"));
             }
             (
-                new_recording(&old, default_recording_defaults(), None, None, None),
+                new_recording(&old, default_recording_defaults(), None, None, None, None),
                 true,
             )
         }
@@ -418,7 +423,12 @@ impl FrameMeta {
     }
 }
 
-/// Checks the size, queues the content-addressed write and keeps the decoded frame.
+/// Checks the size, queues the content-addressed write and keeps the decoded frame. Workflow #392
+/// DA-5cd fix round 1 (`contracts/lab-recording.md`, "A recording's size"): first, before
+/// anything of it is kept, the recording's size ([`admit_recording_frame`]): a first frame of
+/// another size than the base size the recording's header names is refused
+/// `record_display_not_base`, and every frame of a recording whose frames are not the base size
+/// `record_size_not_base`; the command then returns the refusal and writes nothing.
 fn admit_frame(
     session: &mut Session,
     loaded: LoadedFrame,
@@ -426,6 +436,7 @@ fn admit_frame(
     meta: &FrameMeta,
     label: &str,
 ) -> LabResult<RecordedFrame> {
+    admit_recording_frame(&session.recording, loaded.size())?;
     check_frame_size(session.recording.coordinate_space, &loaded, label)?;
     if session.recording.coordinate_space.is_none() {
         session.recording.coordinate_space = Some(loaded.size());

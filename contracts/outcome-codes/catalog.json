@@ -5387,6 +5387,9 @@
         },
         "ending_mark_missing": {
           "description": "An ending's page reuses a mark that is no mark of an effective step (record_mark_rejected, reuse_source_missing)."
+        },
+        "size_not_base": {
+          "description": "Workflow #392 DA-5cd fix round 1: the recording holds frames that are not the base size (record_size_not_base)."
         }
       }
     },

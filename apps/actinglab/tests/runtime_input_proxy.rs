@@ -62,6 +62,28 @@ struct FakeState {
     capture_fails_at: AtomicUsize,
     // Workflow #392 DA-5ab fix round 1: the point of every tap the fake performed, in order.
     tap_points: Mutex<Vec<(i32, i32)>>,
+    // Workflow #392 DA-5cd fix round 1: when set, the width and height of every frame served
+    // outside a Runtime-owned task's 16x9 geometry, instead of the provider's square frame.
+    frame_extent: OnceLock<(u32, u32)>,
+}
+
+/// Workflow #392 DA-5cd fix round 1 (`contracts/lab-recording.md`, "A recording's size"): the fake's
+/// state serving frames of `width` x `height`. The installed `record start` writes the base size
+/// 1280x720 in a recording's header and the recording's first frame must have it, so a test that
+/// records frames after a start is served frames of that size ([`base_frames`]).
+fn serving(width: u32, height: u32) -> Arc<FakeState> {
+    let state = FakeState::default();
+    state
+        .frame_extent
+        .set((width, height))
+        .expect("the fake's frame size, set once");
+    Arc::new(state)
+}
+
+/// Workflow #392 DA-5cd fix round 1: the fake's state serving frames of the base size 1280x720,
+/// the size a recording takes.
+fn base_frames() -> Arc<FakeState> {
+    serving(1280, 720)
 }
 
 // Test plan E-3 G11 (§3.10): a manual Runtime clock. It moves only when a capture (or a wait of
@@ -1427,7 +1449,9 @@ fn online_observe_cli_consumes_verified_projection_and_keeps_raw_offline_contrac
 // Workflow #411 Lab L4 (exec gate key 98, register §1.120 row L4-1): `observe --capture --record`
 // stores the backend that captured the Runtime frame in recording.json, named as
 // `capture --record` names it, where it stored `null`. The fake Runtime's frames come from
-// `adb_screencap`. Requirement basis: rd-1019/plan-lab-backends/plan.md §4 L4 R1.
+// `adb_screencap`. Requirement basis: rd-1019/plan-lab-backends/plan.md §4 L4 R1. Workflow #392
+// DA-5cd fix round 1: the recording's first frame must be the base size its start wrote, so the
+// fake serves 1280x720 frames and the package's coordinate space is that size.
 #[test]
 fn l4_observe_capture_record_stores_the_runtime_frames_capture_backend() {
     let root = TempDir::new().unwrap();
@@ -1440,11 +1464,11 @@ fn l4_observe_capture_record_stores_the_runtime_frames_capture_backend() {
         ("control.json", br#"{"game":"neutral","server":"test","package_id":"neutral.observation","entry_task_id":"task"}"#),
         ("resources/manifest.json", br#"{"entry_task_id":"task"}"#),
         ("resources/operations/task/task.json", br#"{}"#),
-        ("resources/recognition/neutral.test.pack.json", br#"{"schema_version":"0.3","coordinate_space":{"width":1,"height":1},"targets":[{"type":"color","id":"anchor","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0]}]}"#),
+        ("resources/recognition/neutral.test.pack.json", br#"{"schema_version":"0.3","coordinate_space":{"width":1280,"height":720},"targets":[{"type":"color","id":"anchor","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0]}]}"#),
         ("resources/recognition/neutral.test.pages.json", br#"{"schema_version":"0.3","pages":[{"id":"page","required":["anchor"]}]}"#),
         ("resources/navigation/neutral.test.navigation.json", br#"{"schema_version":"0.3","navigation":[]}"#),
     ]);
-    let state = Arc::new(FakeState::default());
+    let state = base_frames();
     let instance_id = *IdentifierIssuer::new()
         .unwrap()
         .mint_instance_id()
@@ -2138,7 +2162,11 @@ impl CaptureBackend for FakeCapture {
         let (width, height) = if self.state.physical_task_geometry.load(Ordering::Acquire) {
             (16, 9)
         } else {
-            (self.frame_size, self.frame_size)
+            self.state
+                .frame_extent
+                .get()
+                .copied()
+                .unwrap_or((self.frame_size, self.frame_size))
         };
         let pixels = (0..width * height).flat_map(|_| color).collect();
         Frame::from_pixels(
@@ -3905,19 +3933,27 @@ fn online_lab2_ensure_and_wait_use_runtime_authority_without_local_state() {
 }
 
 fn write_semantic_resources(root: &std::path::Path) {
+    write_semantic_resources_at(root, (1, 1));
+}
+
+/// The semantic resources of [`write_semantic_resources`] in the coordinate space `(width,
+/// height)` (Workflow #392 DA-5cd fix round 1: a recording's frames are 1280x720).
+fn write_semantic_resources_at(root: &std::path::Path, (width, height): (u32, u32)) {
     let recognition = root.join("recognition");
     let navigation = root.join("navigation");
     fs::create_dir_all(&recognition).expect("recognition dir");
     fs::create_dir_all(&navigation).expect("navigation dir");
     fs::write(
         recognition.join("fixture-game-a.s1.pack.json"),
-        r#"{
+        format!(
+            r#"{{
             "schema_version":"0.3",
-            "coordinate_space":{"width":1,"height":1},
+            "coordinate_space":{{"width":{width},"height":{height}}},
             "targets":[
-                {"type":"color","id":"home_button","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0],"click":{"x":10,"y":20,"width":4,"height":6}}
+                {{"type":"color","id":"home_button","region":{{"x":0,"y":0,"width":1,"height":1}},"expected":[255,0,0],"click":{{"x":10,"y":20,"width":4,"height":6}}}}
             ]
-        }"#,
+        }}"#
+        ),
     )
     .expect("recognition pack");
     fs::write(
@@ -4105,7 +4141,8 @@ fn s11_tap_record_sends_its_input_on_the_frame_captured_before_it() {
     let local = root.path().join("local");
     let config = root.path().join("actinglab.json");
     fs::write(&config, "{}").expect("write config");
-    let state = Arc::new(FakeState::default());
+    // Workflow #392 DA-5cd fix round 1: frames of the base size the recording's start wrote.
+    let state = base_frames();
     state.nemu_input.store(true, Ordering::Release);
     let host = l3_host(&runtime_root, &state, b"lab-s11-tap-record-frame");
     run_actinglab_json(
@@ -4215,7 +4252,8 @@ fn s11_tap_record_records_a_device_failure_of_the_input_as_indeterminate() {
     let local = root.path().join("local");
     let config = root.path().join("actinglab.json");
     fs::write(&config, "{}").expect("write config");
-    let state = Arc::new(FakeState::default());
+    // Workflow #392 DA-5cd fix round 1: frames of the base size the recording's start wrote.
+    let state = base_frames();
     state.tap_fails.store(true, Ordering::Release);
     let host = l3_host(&runtime_root, &state, b"lab-s11-tap-record-device-failure");
     run_actinglab_json(
@@ -4292,7 +4330,8 @@ fn s11_tap_record_answers_a_denied_input_as_tap_and_keeps_the_capture_before_it(
     let local = root.path().join("local");
     let config = root.path().join("actinglab.json");
     fs::write(&config, "{}").expect("write config");
-    let state = Arc::new(FakeState::default());
+    // Workflow #392 DA-5cd fix round 1: frames of the base size the recording's start wrote.
+    let state = base_frames();
     state.foreground_other.store(true, Ordering::Release);
     let host = l3_host(&runtime_root, &state, b"lab-s11-tap-record-denied-input");
     run_actinglab_json(
@@ -5364,7 +5403,8 @@ fn s17_record_start_and_archive_hold_and_release_the_instance_on_the_runtime() {
     let local = root.path().join("local");
     let config = root.path().join("actinglab.json");
     fs::write(&config, "{}").expect("write config");
-    let state = Arc::new(FakeState::default());
+    // Workflow #392 DA-5cd fix round 1: frames of the base size the recording's start wrote.
+    let state = base_frames();
     let host = l3_host(&runtime_root, &state, b"lab-s17-hold-and-release");
     let started = s17_record_start(&config, &runtime_root, &local);
     let client = s17_client(&runtime_root);
@@ -5433,7 +5473,8 @@ fn s17_a_press_on_an_instance_that_is_not_held_says_so() {
         json!(["no_runtime_listening"]),
         "{started}"
     );
-    let state = Arc::new(FakeState::default());
+    // Workflow #392 DA-5cd fix round 1: frames of the base size the recording's start wrote.
+    let state = base_frames();
     let host = l3_host(&runtime_root, &state, b"lab-s17-press-not-held");
 
     let unheld = s17_tap_record(&config, &runtime_root, &local);
@@ -5492,7 +5533,8 @@ fn s17_an_application_operation_on_an_instance_that_is_not_held_says_so() {
     fs::write(&config, "{}").expect("write config");
     let started = s17_record_start(&config, &runtime_root, &local);
     assert_eq!(started["hold"]["state"], "none", "{started}");
-    let state = Arc::new(FakeState::default());
+    // Workflow #392 DA-5cd fix round 1: frames of the base size the recording's start wrote.
+    let state = base_frames();
     let host = l3_host(&runtime_root, &state, b"lab-s17-application-not-held");
 
     let launched = run_actinglab_json(
@@ -5537,22 +5579,24 @@ fn s17_train_do_capture_record_on_an_instance_that_is_not_held_says_so() {
     let local = root.path().join("local");
     let config = root.path().join("actinglab.json");
     fs::write(&config, "{}").expect("write config");
+    // Workflow #392 DA-5cd fix round 1: the recording's first frame must be the base size its start
+    // wrote, so the fake serves 1280x720 frames and both packages' coordinate space is that size.
     let observe_package = root.path().join("observe.zip");
     write_zip(&observe_package, &[
         ("control.json", br#"{"game":"neutral","server":"test","package_id":"neutral.observation","entry_task_id":"task"}"#),
         ("resources/manifest.json", br#"{"entry_task_id":"task"}"#),
         ("resources/operations/task/task.json", br#"{}"#),
-        ("resources/recognition/neutral.test.pack.json", br#"{"schema_version":"0.3","coordinate_space":{"width":1,"height":1},"targets":[{"type":"color","id":"anchor","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0]}]}"#),
+        ("resources/recognition/neutral.test.pack.json", br#"{"schema_version":"0.3","coordinate_space":{"width":1280,"height":720},"targets":[{"type":"color","id":"anchor","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0]}]}"#),
         ("resources/recognition/neutral.test.pages.json", br#"{"schema_version":"0.3","pages":[{"id":"page","required":["anchor"]}]}"#),
         ("resources/navigation/neutral.test.navigation.json", br#"{"schema_version":"0.3","navigation":[]}"#),
     ]);
     let resources = root.path().join("resources");
     let semantic_package = root.path().join("semantic.zip");
-    write_semantic_resources(&resources);
+    write_semantic_resources_at(&resources, (1280, 720));
     write_semantic_package(&semantic_package, &resources);
     let started = s17_record_start(&config, &runtime_root, &local);
     assert_eq!(started["hold"]["state"], "none", "{started}");
-    let state = Arc::new(FakeState::default());
+    let state = base_frames();
     let host = l3_host(&runtime_root, &state, b"lab-train-s17-do-not-held");
 
     let observed = run_actinglab_json(
@@ -5664,7 +5708,8 @@ fn s17_fix_a_press_whose_hold_read_fails_is_made_and_says_so() {
     fs::write(&config, "{}").expect("write config");
     let started = s17_record_start(&config, &runtime_root, &local);
     assert_eq!(started["hold"]["state"], "none", "{started}");
-    let state = Arc::new(FakeState::default());
+    // Workflow #392 DA-5cd fix round 1: frames of the base size the recording's start wrote.
+    let state = base_frames();
     let host = l3_host(&runtime_root, &state, b"lab-fix-s17-hold-unread");
     // The command's connections: the capture before the press (0), the status read (1), the
     // press, the captures after it.
@@ -5743,7 +5788,8 @@ fn s19_a_recorded_press_releases_its_lease_after_the_last_capture_after_it() {
     let config = root.path().join("actinglab.json");
     fs::write(&config, "{}").expect("write config");
     s19_record_start(&config, &runtime_root, &local);
-    let state = Arc::new(FakeState::default());
+    // Workflow #392 DA-5cd fix round 1: frames of the base size the recording's start wrote.
+    let state = base_frames();
     state.nemu_input.store(true, Ordering::Release);
     let host = l3_host(&runtime_root, &state, b"lab-s19-lease-through-captures");
 
@@ -5804,7 +5850,8 @@ fn s19_a_capture_after_the_press_that_fails_is_recorded_and_the_lease_released()
     let config = root.path().join("actinglab.json");
     fs::write(&config, "{}").expect("write config");
     s19_record_start(&config, &runtime_root, &local);
-    let state = Arc::new(FakeState::default());
+    // Workflow #392 DA-5cd fix round 1: frames of the base size the recording's start wrote.
+    let state = base_frames();
     // The capture before the press (1), the first after it (2), the second after it (3).
     state.capture_fails_at.store(3, Ordering::Release);
     let host = l3_host(&runtime_root, &state, b"lab-s19-capture-after-fails");
@@ -5908,7 +5955,8 @@ fn s19_failed_tap(state: &Arc<FakeState>, label: &[u8]) -> (Value, Vec<&'static 
 /// says the release succeeded.
 #[test]
 fn s19_a_press_that_no_capture_follows_releases_its_lease_at_once() {
-    let state = Arc::new(FakeState::default());
+    // Workflow #392 DA-5cd fix round 1: frames of the base size the recording's start wrote.
+    let state = base_frames();
     state.tap_fails.store(true, Ordering::Release);
     let (failed, wire) = s19_failed_tap(&state, b"lab-s19-indeterminate-press");
     assert_eq!(
@@ -5918,7 +5966,7 @@ fn s19_a_press_that_no_capture_follows_releases_its_lease_at_once() {
     assert_eq!(state.captures.load(Ordering::Acquire), 1);
     assert_eq!(wire, ["capture", "lease", "input", "release"], "{wire:?}");
 
-    let state = Arc::new(FakeState::default());
+    let state = base_frames();
     state.foreground_other.store(true, Ordering::Release);
     let (failed, wire) = s19_failed_tap(&state, b"lab-s19-refused-input");
     assert_eq!(failed["outcome"]["code"], "device_error", "{failed}");
@@ -6001,7 +6049,8 @@ fn s19_the_retry_after_input_frame_unavailable_keeps_the_one_lease() {
     let config = root.path().join("actinglab.json");
     fs::write(&config, "{}").expect("write config");
     s19_record_start(&config, &runtime_root, &local);
-    let state = Arc::new(FakeState::default());
+    // Workflow #392 DA-5cd fix round 1: frames of the base size the recording's start wrote.
+    let state = base_frames();
     let host = l3_host(&runtime_root, &state, b"lab-s19-retry-one-lease");
     let taken = Arc::new(AtomicBool::new(false));
     // The command's connections: the capture before the press (0), the status read (1), the
@@ -6462,4 +6511,85 @@ fn da5ab_fix1_a_recorded_observation_on_a_mapped_display_is_refused_and_nothing_
         before,
         "nothing recorded"
     );
+}
+
+/// Workflow #392 DA-5cd fix round 1 (`contracts/lab-recording.md`, "A recording's size"): the
+/// installed `record start`, while nothing listens (so no display is known), writes the base size
+/// 1280x720 in the recording's header and no size; on the fake Runtime host, whose frames are
+/// 1920x1080, the recording's first frame, the capture before `tap 0 0 --record`, is refused
+/// `record_display_not_base` with its size and the base size (exit 1, as every refusal of
+/// actinglab's own line) before it is stored and before anything is pressed: one capture, no tap,
+/// the recording's header byte for byte as written and no other file beside it.
+#[test]
+fn da5cd_fix1_the_installed_start_writes_the_base_and_its_first_frame_is_checked() {
+    let root = TempDir::new().expect("tempdir");
+    let runtime_root = root.path().join("runtime");
+    let local = root.path().join("local");
+    let config = root.path().join("actinglab.json");
+    fs::write(&config, "{}").expect("write config");
+    s19_record_start(&config, &runtime_root, &local);
+    let lab = local
+        .join("ActingCommand")
+        .join("actinglab")
+        .join("session")
+        .join("record-artifacts")
+        .join("record_s11")
+        .join("lab");
+    let written = fs::read(lab.join("recording.json")).expect("the recording");
+    let header: Value = serde_json::from_slice(&written).expect("recording.json");
+    assert_eq!(
+        header["base_size"],
+        json!({"width": 1280, "height": 720}),
+        "{header}"
+    );
+    assert!(header["coordinate_space"].is_null(), "{header}");
+    let state = serving(1920, 1080);
+    let host = l3_host(&runtime_root, &state, b"lab-da5cd-fix1-first-frame");
+
+    let (exit_code, failed) = run_actinglab_failure_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "--instance",
+            "node.a",
+            "tap",
+            "0",
+            "0",
+            "--record",
+            "--after-ms",
+            "0",
+        ],
+    );
+    host.close().expect("close host");
+
+    assert_eq!(exit_code, 1, "{failed}");
+    assert_eq!(
+        failed["outcome"]["code"], "record_display_not_base",
+        "{failed}"
+    );
+    assert_eq!(
+        failed["outcome"]["values"],
+        json!({"frame_width": 1920, "frame_height": 1080, "base_width": 1280, "base_height": 720}),
+        "{failed}"
+    );
+    assert_eq!(state.captures.load(Ordering::Acquire), 1);
+    assert_eq!(state.taps.load(Ordering::Acquire), 0);
+    assert_eq!(
+        fs::read(lab.join("recording.json")).expect("the recording"),
+        written,
+        "the header as written"
+    );
+    let files = fs::read_dir(&lab)
+        .expect("the recording's directory")
+        .map(|entry| {
+            entry
+                .expect("an entry")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(files, ["recording.json"], "no frame stored");
 }

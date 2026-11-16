@@ -31492,6 +31492,168 @@ nothing here touches the run's frame gate or the run's input; main merged in bef
   make the client refuse the Runtime's own receipt as an integrity failure (fatal); it is left for
   the coordinator.
 
+### 1.437 Slice #392 DA-5cd (0.12.67): offline recognition takes a scene that is a pure scale of its package; a recording is refused on a display that is not the base size (Workflow #392; the owner's decision 203 on board #392, one set of packages at the base size and a converter; the real check of 11-16 on board #392 (decision 204) and the read-only study `rd-1116/report-392-lab-on-mapped-display-study.md`, its answers to questions 2 to 4, its slices (b) and (c), its doubt 4 and the coordinator's disposition at its end; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1116/brief-392-da5cd-offline-scale-and-record-refusal.md`, built on main `23161b3a`)
+
+This section takes 1.437, the number the work order gives: §1.431 is the highest on main
+`23161b3a`, and slices being built take §1.432 to §1.436. It ships in 0.12.67. DA-5ab, built at the
+same time, makes the Lab's live observation and presses work on a scaled display; this slice
+depends on none of its code.
+
+**What it closes (the real check of 11-16).** Offline, every Lab evaluation of a scene that was not
+its package's size was refused `validation_failed` ("scene dimensions … do not match pack
+coordinate_space"), so a frame captured on a 3840×2160 instance could not be examined. And a
+recording started on such an instance silently became a recording of that size (its first frame's,
+`recording.json`'s `coordinate_space`): its presses in device pixels, its boxes cutting templates at
+that size, and `record stop` building a package of it that every smaller instance refused
+`scale_below_base`.
+
+**Offline recognition** ([display-adapter.md](display-adapter.md) section 12). `recognize`,
+`detect-page`, `current-page` and `is-visible` (the Lab's `recognition_frames`), `tap-target
+--dry-run` and `navigate --dry-run` (the Lab's `drive`), offline `observe`, `do --dry-run`, `ensure
+--dry-run` and `wait` (actinglab's `load_lab2_scene`), and the Runtime captures of the client forms
+that press nothing, `do --capture --dry-run`, `ensure --capture --dry-run` and `wait --capture` (the
+study's doubt 2: they pass the same check), take every frame in the package's `coordinate_space`
+(`crates/lab/src/display_base.rs`, `scene_in_base`): a frame of that size as it is, its answer byte
+for byte as before; a frame whose map onto it (`DisplayMap::build`, no declaration, the frame its own
+display) is one under which a run sends its input (`DisplayMap::admit_input`: a pure scale whose
+double is a whole number) reduced to it by `resample_pixels` to the map's scale frame, the frame
+gate's two calls, and evaluated there; any other refused `lab_scene_size_unsupported`. An answer
+about a reduced frame names `scaled_from: {width, height}` (`SceneExtentResponse` in the kernel's
+read-only answers, the drive answers and the Lab-2 payloads; Min keeps it, as it keeps
+`frame_coordinates`), and every rectangle and point in it is in the coordinate space. The client
+forms that press (`do --capture`, `ensure --capture` without `--dry-run`, and the Lab's `tap-target`
+and `navigate` that press) keep the frame as captured: presses on a scaled display are DA-5ab's.
+
+**The base size and a recording** ([lab-recording.md](lab-recording.md), "A recording's size").
+Neither a standard package, a game root nor its `display-layout.json` declares a base of its own
+the Lab could read (each package declares its own `coordinate_space`; the root's display layout
+says how a game follows a display, not its base), so the base size has one named home:
+`STANDARD_PACK_BASE_SIZE` (1280×720) in `crates/actingcommand-contract/src/standard_pack_display.rs`.
+`record start` learns the instance's display from what the Runtime already knows, the instance's
+`display.frame_extent` fact (`DISPLAY_FRAME_EXTENT_FACT_KEY`, now named in the contract crate),
+read with one `InstanceFactSnapshot` on the start's own connection before the status read. Chosen
+over one capture at the start because it asks nothing of the device, so the start gains no device
+step that could fail in a new way, and a scripted or fixture Runtime answers it from memory; its
+limit: the fact is the device frame of the instance's latest contained task, so a display changed
+since is known only after a task has run on it, and an instance on which none has run, or a start
+while nothing listens, has no known display and starts (`display_extent` `null`; fix round 1:
+`display_last_observed`). A display of another size is refused `record_display_not_base` before
+anything is written or paused. `record stop` refuses, before anything is planned or written, a
+recording whose frames show a larger display of the base size's ratio (`larger_display_of_base_ratio`:
+the adapter maps it onto the base size as a pure scale); `record ready` lists it first as missing
+and runs no self-check (fix round 1: the code `record_size_not_base`, the word `size_not_base`).
+Nothing is converted; `record status`, `record frames` and `record archive` read such a recording
+as before.
+
+**Codes and words** (as fix round 1 leaves them).
+
+| Name | Kind | Refuses or warns | Exit | Who reads it |
+|---|---|---|---|---|
+| `lab_scene_size_unsupported` (`lab`, error / none; values `display_problem`, `frame_width`, `frame_height`, `base_width`, `base_height`, all required) | new code | refuses an offline scene that is neither the package's size nor an admitted pure scale of it; nothing evaluated | 2 on a `--via` line (usage); 1 on actinglab's own line and through `serve --stdio --front mcp` | the agent or person running an offline evaluation, through the command line or MCP; `display_problem` is the display adapter's existing word |
+| `record_display_not_base` (`lab`, error / none; values `frame_width`, `frame_height`, `base_width`, `base_height`, all required) | new code | this instance's display is not the base size: refuses `record start` on a display the Runtime last observed at another size, and (fix round 1) the first frame of a recording whose header names a base size, of another size; nothing recorded | 3 on a `--via` line (safety); 1 on actinglab's own line and through `serve --stdio --front mcp` | the agent or person recording, through the command line or MCP: record on an instance whose display is the base size |
+| `record_size_not_base` (`lab`, error / none; the same values; fix round 1) | new code | this recording holds frames that are not the base size: refuses `record stop` (dry run and regeneration too) and a frame added to such a recording | 3 on a `--via` line (safety); 1 on actinglab's own line and through `serve --stdio --front mcp` | the agent or person recording: archive it and record again on a display of the base size |
+| `size_not_base` (vocabulary `ready_missing`; fix round 1, was `display_not_base`) | new word | listed by `record ready` (never refuses by itself) | 0 | the agent reading `record ready`; its item's `code` is `record_size_not_base` |
+| `scaled_from` (answer member) | new member | neither | — | the reader of an offline answer |
+| `display_last_observed` (member of `record start`'s answer; fix round 1, was `display_extent`) | new member | neither | — | the reader of `record start`: the display the Runtime last observed and when, not the display now |
+| `base_size` (member of a recording's header, `recording.json`; fix round 1) | new member, absent when not written | neither | — | the Lab, at the recording's first frame and at `record stop` |
+
+**Tests.** In `apps/actinglab/src/tests/gate_392_da5cd.rs` (gate map `exec.toml`, the row "Workflow
+#392 DA-5cd"): one test per offline command (observe, do, ensure and wait on saved scenes,
+recognize, is-visible, detect-page, current-page, tap-target, navigate), each through
+`da5cd_offline_row` on an 8x4 package in 2x2 blocks: the frame enlarged 3 and 3/2 times by nearest
+neighbour (24x12, 12x6) answers as the 8x4 frame, identifiers, times and the scene's path aside,
+naming `scaled_from`; the 8x4 frame names none; 8x6, 4x2 and 10x5 are refused with
+`layout_undeclared`, `scale_below_base` and `input_scale_unsupported`; `recognize`'s enlarged answer
+is the 8x4 one and the member. In `gate_lab_l5c.rs`, its fake screen enlarged 3 times:
+`da5cd_do_capture_dry_run_plans_on_a_scaled_capture`, `da5cd_ensure_capture_dry_run_plans_on_a_scaled_capture`
+and `da5cd_wait_capture_arrives_on_a_scaled_capture`. Against the scripted Runtime:
+`da5cd_record_start_on_a_display_that_is_not_the_base_size_starts_nothing` (1920x1080: refused, the
+wire the handshake and `instance_fact_snapshot` only, no header, no recording, no file but the
+lock's) and `da5cd_record_start_on_a_display_of_the_base_size_starts_as_before`; and
+`da5cd_a_recording_of_another_display_is_listed_refused_and_still_read` (1920x1080 frames: `record
+ready`, `record stop`, `record status`, `record archive`). Adapted, as the requirement changes what
+they pin: the record starts of `gate_463_s17.rs` and `gate_463_s18.rs` that reach a Runtime now
+script the display read and expect `instance_fact_snapshot` before `status` (s17's place and wire
+helpers serve the new gate); nothing else they assert changes. No test is retired.
+
+**What a recording of another ratio is not.** In the first round this paragraph said what the
+review then called the hole: a recording smaller than the base size or of another ratio was not
+refused by `record stop`, and `record start` knew a display only from the Runtime's last
+observation, so a handset, a portrait display or a smaller display could still be recorded into a
+package of its own size without a word. Fix round 1 closes it with the check below: every
+recording `record start` makes names the base size in its header, its first frame of any other
+size is refused before it is stored, and `record stop` refuses any recording whose header names a
+base size and whose frames are of another size. Only a recording whose header names no base size
+(started before fix round 1, and the Lab's own test fixtures, whose frames are 96x64, 16x9 and the
+like) keeps the first round's judgement: refused only when its frames show a larger display of the
+base size's ratio.
+
+**Fix round 1** (coordinator work order `rd-1116/brief-392-da5cd-fix2.md`; the independent review
+`rd-1116/review-1781.md`, its sections (a), (b), (c), (f) and (g), and the coordinator's
+disposition at its end; the recording half only: the offline half meets #1780 and a later work
+order brings the two together).
+
+- *The base size in the header, checked at the first frame.* `LabRecording` gains `base_size`
+  (`Option<RecordSize>`, `#[serde(default, skip_serializing_if = "Option::is_none")]`, no schema
+  change), written by `record_start` from `RecordStartOptions::base_size`; actinglab's `record
+  start` fills it with `RECORDING_BASE_SIZE` (the contract crate's `STANDARD_PACK_BASE_SIZE` as a
+  recording's size; `crates/lab/src/display_base.rs`). Every frame that enters a recording passes
+  `admit_recording_frame` in `recording/steps.rs`'s `admit_frame`, before the size check and before
+  anything is queued: a first frame of another size than the header's base is refused
+  `record_display_not_base`, and every frame of a recording whose frames are not the base size
+  (`recording_not_base`) `record_size_not_base`; the command returns the refusal before it saves,
+  so no frame, no step and no header change is written. `record stop`, its dry run and its
+  regeneration, and `record ready`, judge with `recording_not_base`: a header with a base size,
+  frames of any other size; a header without one, the first round's `larger_display_of_base_ratio`.
+- *Two causes, two codes* (the coordinator's ruling, one cause per code): `record_display_not_base`
+  is this instance's display (the start and the first frame; nothing recorded; record on an instance
+  whose display is the base size); `record_size_not_base` (new) is this recording's frames
+  (`record stop`, `record ready`'s item, a frame added to it; archive it and record again). The word
+  `display_not_base` of `ready_missing` is renamed `size_not_base`, as its item's code changed.
+- *`record start`'s answer about the display.* `display_extent` is renamed `display_last_observed`
+  and carries the fact's `observed_at_unix_ms`: the display a task last observed, not the display
+  now. The start's refusal says what to do on an instance whose scheduling is paused, where no task
+  runs to observe the display again (resume its scheduling until a task has run, or start on
+  another instance at the base size), and that the first frame is checked in any case: the start's
+  check is an early warning, not the guard ([lab-recording.md](lab-recording.md), "A recording's
+  size").
+- *The values of `detect-page`, `tap-target` and `navigate`.* Their refusals carry the refusal's
+  own details as the member `details` of their trace (`commands::semantic_ledger`), one level
+  deeper than the line's values were read (`cli_module::own_line`, `nested_values`): the line now
+  also reads the outcome of the same code in that member, on the command line and through `serve
+  --stdio --front mcp`.
+- *One home for the fact's key.* runtime-host's `host/facts.rs` uses the contract crate's
+  `DISPLAY_FRAME_EXTENT_FACT_KEY` in place of its private constant of the same spelling.
+- *Tests.* In `gate_392_da5cd.rs`: `da5cd_fix1_record_start_writes_the_base_size_and_checks_the_first_frame`
+  (the unit tests' switch set to `RECORDING_BASE_SIZE`; nothing listens: the header's `base_size`
+  1280x720 and no size; first frames of 2400x1080, 640x360 and 1920x1080 refused
+  `record_display_not_base` with their sizes, the recording's files unchanged; 1280x720 opens step
+  1) and `da5cd_fix1_detect_page_tap_target_and_navigate_carry_their_values_through_mcp` (through
+  `serve --stdio --front mcp`, the three refusals of an 8x6 scene carry `lab_scene_size_unsupported`'s
+  values, exit 1); in `apps/actinglab/tests/runtime_input_proxy.rs`, through the installed
+  program, `da5cd_fix1_the_installed_start_writes_the_base_and_its_first_frame_is_checked` (the
+  header's `base_size` 1280x720; `tap 0 0 --record` on 1920x1080 frames refused
+  `record_display_not_base` with one capture, no tap, nothing written). Adapted, as the requirement
+  changes what they pin: `da5cd_record_start_on_a_display_of_the_base_size_starts_as_before`
+  (`display_last_observed` with its time) and `da5cd_a_recording_of_another_display_is_listed_refused_and_still_read`
+  (`size_not_base`, `record_size_not_base`, and a frame added to it refused); in
+  `runtime_input_proxy.rs`, the tests that start a recording with the installed program and then
+  record frames are served frames of 1280x720 (`base_frames`), and the two packages they observe
+  and press with take that coordinate space (L4, S1-1, S1-7 and S1-9 rows). actinglab's unit tests
+  start recordings without a base size (the test-only switch `recording_base_for_tests`, none by
+  default), and the Lab crate's fixtures name none: they keep the first round's judgement. No test
+  is retired.
+
+**What is not added.** No Runtime interface revision, no request or result shape, no configuration
+key, no ledger revision, no record type, no fact key (the display facts are DA-A's). The
+`record start` row of `contracts/lab-operations.json` names `InstanceFactSnapshot` among its
+requests.
+
+**At deploy.** Nothing to do. An offline answer about a reduced frame carries `scaled_from`; a
+`record start` on an instance whose last task ran at another size than 1280×720 is refused until
+the display is set back and a task has run on it; a recording started on this build takes a first
+frame of 1280×720 only. A recording made on an earlier build reads as before.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

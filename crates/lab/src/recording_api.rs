@@ -6,6 +6,7 @@
 
 use crate::LabOcr;
 use crate::codes::{LabCode, ReadyCheck, ReadySource};
+use crate::display_base::recording_not_base;
 use crate::recording::archive::{ARCHIVED, latest_manifest, read_recording};
 use crate::recording::boxes::{expanded_add, validate_boxes, with_press_click};
 use crate::recording::container::{
@@ -40,6 +41,7 @@ use crate::recording::model::{
 use crate::recording::ready::{
     Known, ReadyOptionConflict, ReadySources, ReadyWarningItem, RecordReadyOutcome, check_item,
     generator_warnings, known, lack_items, packaged, point_press_warnings, ready_outcome,
+    with_size_item,
 };
 use crate::recording::select::{not_evaluated_id, validate_select_request};
 use crate::recording::steps::{
@@ -118,12 +120,15 @@ pub fn record_start(
     if lab_dir(state_dir, &old.record_id).exists() {
         return Ok(unavailable("record_id_reused"));
     }
+    // Workflow #392 DA-5cd fix round 1: the header names the base size the options give, the size
+    // its first frame must have.
     let recording = new_recording(
         &old,
         defaults.clone(),
         options.game.clone(),
         options.server.clone(),
         options.locale.clone(),
+        options.base_size,
     );
     create_recording(state_dir, &recording)?;
     Ok(LabRecordingStart {
@@ -426,8 +431,13 @@ pub fn record_ready(
         Some(artifact) if recording.status == "stopped" => regeneration_settings(artifact, options),
         _ => stop_settings(&recording, options),
     };
+    // Workflow #392 DA-5cd: a recording whose frames are not the base size is listed first (fix
+    // round 1: `size_not_base`, `record_size_not_base`); `record stop` refuses it before its
+    // self-checks, so none of them runs.
+    let not_base = recording_not_base(&recording);
     let (missing, checks_after) = match survey(&recording, &settings)? {
         Survey::Lacking(lacks) => (lack_items(&recording, &lacks)?, ReadyCheck::ALL.to_vec()),
+        Survey::Planned(_) if not_base.is_some() => (Vec::new(), ReadyCheck::ALL.to_vec()),
         Survey::Planned(plan) => match self_checks(&plan, ocr) {
             Ok(checked) => {
                 warnings.extend(generator_warnings(&checked.warnings)?);
@@ -455,7 +465,7 @@ pub fn record_ready(
     Ok(ready_outcome(
         &recording,
         session,
-        missing,
+        with_size_item(not_base.as_ref(), missing),
         warnings,
         &checks_after,
         sources,
@@ -527,6 +537,11 @@ fn generate_and_write(
     ocr: &LabOcr,
     regenerate: bool,
 ) -> LabResult<RecordStopOutcome> {
+    // Workflow #392 DA-5cd: a recording whose frames are not the base size builds no package
+    // (fix round 1: `record_size_not_base`), before anything is planned or written.
+    if let Some(refusal) = recording_not_base(recording) {
+        return Err(refusal);
+    }
     let plan = generate_plan(recording, settings)?;
     let Checked {
         entries,

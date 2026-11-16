@@ -81,8 +81,15 @@
 //   its own pause, the resume denied: the stop stands (the header stopped, its hold kept), the
 //   failure's details carry `hold {kept: true}` and `next.release`, `record stop` with the instance
 //   and the state directory.
+// Workflow #392 DA-5cd (register §1.437), adapted as the requirement changes what they pin: a
+// `record start` that reaches the Runtime reads the instance's display first
+// (`instance_fact_snapshot`, the Runtime knowing none here), so its wire is the handshake,
+// `instance_fact_snapshot`, then what it was; nothing else these tests assert changes. Their place,
+// the scripted status, pause and instance and the wire helpers serve the slice's own gate
+// (`gate_392_da5cd`).
 // No device, no clock, no sleep; made-up aliases.
 
+use super::gate_392_da5cd::{DISPLAY_READ, display_known};
 use super::gate_434_lab5b4::{Isolated, printed};
 use super::*;
 use crate::commands::{Probed, not_reached};
@@ -100,10 +107,10 @@ use actingcommand_runtime_client::test_support::{
 use std::io;
 
 /// The made-up instance the recordings are of, and another one beside it.
-const INSTANCE: &str = "neutral.a";
+pub(super) const INSTANCE: &str = "neutral.a";
 const BESIDE: &str = "neutral.b";
 const TASK: &str = "neutral_task";
-const RECORD_ID: &str = "record_s17";
+pub(super) const RECORD_ID: &str = "record_s17";
 /// Another party's pause reason.
 const OTHER: &str = "operator";
 /// An own pause an earlier recording's end kept.
@@ -114,13 +121,13 @@ const HANDSHAKE: [&str; 2] = ["health", "bind_channel"];
 /// A temporary place: a missing configuration, no initiator variable, the session directory and
 /// the Runtime state root a scripted Runtime may be started on (none runs there yet). The state
 /// root's variable is put back first, then the isolated place's.
-struct Place {
+pub(super) struct Place {
     _runtime_env: RuntimeStateEnvGuard,
     isolated: Isolated,
 }
 
 impl Place {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         let isolated = Isolated::new();
         let runtime = isolated.temp.path().join("runtime");
         fs::create_dir_all(&runtime).expect("the Runtime state root");
@@ -130,11 +137,11 @@ impl Place {
         }
     }
 
-    fn runtime(&self) -> PathBuf {
+    pub(super) fn runtime(&self) -> PathBuf {
         self.isolated.temp.path().join("runtime")
     }
 
-    fn session(&self) -> String {
+    pub(super) fn session(&self) -> String {
         self.isolated.path("session")
     }
 
@@ -160,13 +167,13 @@ impl Place {
         (exit.code, answered)
     }
 
-    fn start(&self, record_id: &str, more: &[&str]) -> (u8, Value) {
+    pub(super) fn start(&self, record_id: &str, more: &[&str]) -> (u8, Value) {
         let mut words = vec!["--task-id", TASK, "--record-id", record_id];
         words.extend(more);
         self.record("start", &words)
     }
 
-    fn header_path(&self) -> PathBuf {
+    pub(super) fn header_path(&self) -> PathBuf {
         Path::new(&self.session()).join(format!("record-{INSTANCE}.json"))
     }
 
@@ -185,7 +192,7 @@ impl Place {
     }
 
     /// The recording directory of `record_id`.
-    fn recording_dir(&self, record_id: &str) -> PathBuf {
+    pub(super) fn recording_dir(&self, record_id: &str) -> PathBuf {
         Path::new(&self.session())
             .join("record-artifacts")
             .join(record_id)
@@ -222,7 +229,7 @@ fn instance_id() -> InstanceId {
 }
 
 /// One instance's status, paused with `pause` (its reason and revision) when given.
-fn instance(alias: &str, pause: Option<(&str, u64)>) -> RuntimeInstanceStatus {
+pub(super) fn instance(alias: &str, pause: Option<(&str, u64)>) -> RuntimeInstanceStatus {
     RuntimeInstanceStatus::new(alias, instance_id(), false, 0, false, false, false)
         .expect("instance status")
         .with_pause(pause.map(|(reason, revision)| InstancePauseState {
@@ -235,7 +242,7 @@ fn instance(alias: &str, pause: Option<(&str, u64)>) -> RuntimeInstanceStatus {
 }
 
 /// The scripted answer to a `Status`: `instances` in `owner_epoch`.
-fn status(
+pub(super) fn status(
     owner_epoch: OwnerEpoch,
     instances: Vec<RuntimeInstanceStatus>,
 ) -> impl FnOnce(&RuntimeRequest) -> ScriptedAnswer + Send + 'static {
@@ -253,7 +260,7 @@ fn scope() -> SchedulingPauseScope {
 }
 
 /// The scripted answer to the instance's `PauseScheduling`: paused at revision 3, nothing drained.
-fn paused(request: &RuntimeRequest) -> ScriptedAnswer {
+pub(super) fn paused(request: &RuntimeRequest) -> ScriptedAnswer {
     ScriptedAnswer::completed(
         request,
         RuntimeResult::SchedulingPaused {
@@ -306,12 +313,13 @@ fn denied(request: &RuntimeRequest, code: RuntimeErrorCode) -> ScriptedAnswer {
 /// A connection whose status shows the instance not paused and whose pause is denied.
 fn refusing_the_pause(owner_epoch: OwnerEpoch) -> ScriptedConnection {
     ScriptedConnection::new()
+        .request(display_known(None))
         .request(status(owner_epoch, vec![instance(INSTANCE, None)]))
         .request(|request| denied(request, RuntimeErrorCode::InvalidRequest))
 }
 
 /// The operation of each request a connection received, as the wire spells it.
-fn operations(record: &ScriptedConnectionRecord) -> Vec<String> {
+pub(super) fn operations(record: &ScriptedConnectionRecord) -> Vec<String> {
     record
         .requests
         .iter()
@@ -325,7 +333,7 @@ fn operations(record: &ScriptedConnectionRecord) -> Vec<String> {
 }
 
 /// The handshake, then `then`.
-fn wire(then: &[&str]) -> Vec<String> {
+pub(super) fn wire(then: &[&str]) -> Vec<String> {
     HANDSHAKE
         .iter()
         .chain(then)
@@ -334,7 +342,9 @@ fn wire(then: &[&str]) -> Vec<String> {
 }
 
 /// The instance pause a connection asked for: its scope, its reason and its drain.
-fn pause_asked(record: &ScriptedConnectionRecord) -> (SchedulingPauseScope, String, u64) {
+pub(super) fn pause_asked(
+    record: &ScriptedConnectionRecord,
+) -> (SchedulingPauseScope, String, u64) {
     record
         .requests
         .iter()
@@ -375,6 +385,7 @@ fn start_held(place: &Place) -> String {
     let runtime = ScriptedRuntime::start(&place.runtime(), |owner_epoch| {
         vec![
             ScriptedConnection::new()
+                .request(display_known(None))
                 .request(status(owner_epoch, vec![instance(INSTANCE, None)]))
                 .request(paused),
         ]
@@ -386,7 +397,7 @@ fn start_held(place: &Place) -> String {
     assert_eq!(record.connections.len(), 1);
     assert_eq!(
         operations(&record.connections[0]),
-        wire(&["status", "pause_scheduling"])
+        wire(&[DISPLAY_READ, "status", "pause_scheduling"])
     );
     let (_, reason, _) = pause_asked(&record.connections[0]);
     reason
@@ -399,6 +410,7 @@ fn s17_record_start_pauses_the_instance_with_its_own_reason() {
     let runtime = ScriptedRuntime::start(&place.runtime(), |owner_epoch| {
         vec![
             ScriptedConnection::new()
+                .request(display_known(None))
                 .request(status(owner_epoch, vec![instance(INSTANCE, None)]))
                 .request(paused),
         ]
@@ -411,7 +423,7 @@ fn s17_record_start_pauses_the_instance_with_its_own_reason() {
     assert_eq!(record.connections.len(), 1);
     assert_eq!(
         operations(&record.connections[0]),
-        wire(&["status", "pause_scheduling"])
+        wire(&[DISPLAY_READ, "status", "pause_scheduling"])
     );
     let header = place.header();
     let started_at = header["started_at_unix_ms"].as_u64().expect("its start");
@@ -441,10 +453,14 @@ fn s17_an_instance_paused_by_another_party_is_held_by_that_pause_and_never_resum
     let _guard = env_lock();
     let place = Place::new();
     let runtime = ScriptedRuntime::start(&place.runtime(), |owner_epoch| {
-        vec![ScriptedConnection::new().request(status(
-            owner_epoch,
-            vec![instance(INSTANCE, Some((OTHER, 5)))],
-        ))]
+        vec![
+            ScriptedConnection::new()
+                .request(display_known(None))
+                .request(status(
+                    owner_epoch,
+                    vec![instance(INSTANCE, Some((OTHER, 5)))],
+                )),
+        ]
     });
     let (code, started) = place.start(RECORD_ID, &[]);
     assert_eq!(code, 0, "{started}");
@@ -459,7 +475,10 @@ fn s17_an_instance_paused_by_another_party_is_held_by_that_pause_and_never_resum
         "a connection beyond the start's"
     );
     assert_eq!(record.connections.len(), 1);
-    assert_eq!(operations(&record.connections[0]), wire(&["status"]));
+    assert_eq!(
+        operations(&record.connections[0]),
+        wire(&[DISPLAY_READ, "status"])
+    );
     assert_eq!(
         started["record"]["hold"],
         json!({"reason": OTHER, "own": false}),
@@ -585,7 +604,7 @@ fn s17_a_refused_pause_starts_nothing() {
     for connection in &record.connections {
         assert_eq!(
             operations(connection),
-            wire(&["status", "pause_scheduling"])
+            wire(&[DISPLAY_READ, "status", "pause_scheduling"])
         );
     }
 }
@@ -746,6 +765,7 @@ fn s17_a_refused_stop_keeps_the_hold() {
     let runtime = ScriptedRuntime::start(&place.runtime(), |owner_epoch| {
         vec![
             ScriptedConnection::new()
+                .request(display_known(None))
                 .request(status(owner_epoch, vec![instance(INSTANCE, None)]))
                 .request(paused),
         ]
@@ -765,7 +785,7 @@ fn s17_a_refused_stop_keeps_the_hold() {
     assert_eq!(record.connections.len(), 1);
     assert_eq!(
         operations(&record.connections[0]),
-        wire(&["status", "pause_scheduling"])
+        wire(&[DISPLAY_READ, "status", "pause_scheduling"])
     );
     let header = place.header();
     assert_eq!(header["status"], "active", "{header}");
@@ -784,6 +804,7 @@ fn s17_record_start_force_takes_the_hold_over() {
         let shown = Arc::clone(&set);
         vec![
             ScriptedConnection::new()
+                .request(display_known(None))
                 .request(status(owner_epoch, vec![instance(INSTANCE, None)]))
                 .request(move |request| {
                     if let RuntimeOperation::PauseScheduling { pause_reason, .. } =
@@ -793,17 +814,19 @@ fn s17_record_start_force_takes_the_hold_over() {
                     }
                     paused(request)
                 }),
-            ScriptedConnection::new().request(move |request| {
-                let reason = shown
-                    .lock()
-                    .expect("the reason")
-                    .clone()
-                    .expect("the first start paused");
-                status(
-                    owner_epoch,
-                    vec![instance(INSTANCE, Some((reason.as_str(), 3)))],
-                )(request)
-            }),
+            ScriptedConnection::new()
+                .request(display_known(None))
+                .request(move |request| {
+                    let reason = shown
+                        .lock()
+                        .expect("the reason")
+                        .clone()
+                        .expect("the first start paused");
+                    status(
+                        owner_epoch,
+                        vec![instance(INSTANCE, Some((reason.as_str(), 3)))],
+                    )(request)
+                }),
         ]
     });
     let (code, first) = place.start("record_s17_first", &[]);
@@ -816,9 +839,12 @@ fn s17_record_start_force_takes_the_hold_over() {
     assert_eq!(record.connections.len(), 2);
     assert_eq!(
         operations(&record.connections[0]),
-        wire(&["status", "pause_scheduling"])
+        wire(&[DISPLAY_READ, "status", "pause_scheduling"])
     );
-    assert_eq!(operations(&record.connections[1]), wire(&["status"]));
+    assert_eq!(
+        operations(&record.connections[1]),
+        wire(&[DISPLAY_READ, "status"])
+    );
     let (_, own, _) = pause_asked(&record.connections[0]);
     let header = place.header();
     assert_eq!(header["record_id"], "record_s17_second", "{header}");
@@ -837,6 +863,7 @@ fn s17_a_lost_answer_to_the_pause_leaves_the_hold_for_record_stop() {
     let lost = ScriptedRuntime::start(&place.runtime(), |owner_epoch| {
         vec![
             ScriptedConnection::new()
+                .request(display_known(None))
                 .request(status(owner_epoch, vec![instance(INSTANCE, None)]))
                 .request(|_| ScriptedAnswer::Close),
         ]
@@ -850,7 +877,7 @@ fn s17_a_lost_answer_to_the_pause_leaves_the_hold_for_record_stop() {
     assert_eq!(record.connections.len(), 1);
     assert_eq!(
         operations(&record.connections[0]),
-        wire(&["status", "pause_scheduling"])
+        wire(&[DISPLAY_READ, "status", "pause_scheduling"])
     );
     let (_, own, _) = pause_asked(&record.connections[0]);
     // The header stays as written before the pause, naming the own hold; the failure carries it.
@@ -993,10 +1020,14 @@ fn s17_record_start_after_an_end_that_kept_its_hold_takes_it_over() {
         Some(json!({"reason": KEPT, "own": true, "kept": true})),
     ));
     let runtime = ScriptedRuntime::start(&place.runtime(), |owner_epoch| {
-        vec![ScriptedConnection::new().request(status(
-            owner_epoch,
-            vec![instance(INSTANCE, Some((KEPT, 2)))],
-        ))]
+        vec![
+            ScriptedConnection::new()
+                .request(display_known(None))
+                .request(status(
+                    owner_epoch,
+                    vec![instance(INSTANCE, Some((KEPT, 2)))],
+                )),
+        ]
     });
     // No --force: the earlier recording is not active.
     let (code, started) = place.start(RECORD_ID, &[]);
@@ -1005,7 +1036,10 @@ fn s17_record_start_after_an_end_that_kept_its_hold_takes_it_over() {
     assert_eq!(code, 0, "{started}");
     assert!(record.unscripted.is_empty(), "a connection beyond the one");
     assert_eq!(record.connections.len(), 1);
-    assert_eq!(operations(&record.connections[0]), wire(&["status"]));
+    assert_eq!(
+        operations(&record.connections[0]),
+        wire(&[DISPLAY_READ, "status"])
+    );
     let header = place.header();
     assert_eq!(header["record_id"], RECORD_ID, "{header}");
     assert_eq!(header["hold"], json!({"reason": KEPT, "own": true}));

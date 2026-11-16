@@ -11,7 +11,7 @@ pub use actingcommand_execution_kernel::{
     IsVisibleResponse, PageDetectionResponse, PageEvaluationResponse, PageTargetEvaluationResponse,
     PointResponse, RecognitionCoverageResponse, RecognizeClickOnlyResponse,
     RecognizeEvaluatedResponse, RecognizeResponse, RecoveryHintResponse, RectResponse,
-    TargetEvaluationResponse, TemplateEvaluationResponse,
+    SceneExtentResponse, TargetEvaluationResponse, TemplateEvaluationResponse,
 };
 
 pub struct ReadonlyRecognitionInput {

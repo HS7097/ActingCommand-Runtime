@@ -14,6 +14,7 @@ onto whatever frame the device delivers. This document grows slice by slice:
 | DA-3 | the input side: every click and drag kind, `display_map_stale`, the crop offset and the turn undone for input | section 10, built in 0.12.59 for the identity and the pure scales whose double is a whole number (3/2, 2, 5/2, 3, …); every other pure scale waits for the slice that draws the input points in the device box |
 | DA-5ab | the Lab's online observation and its presses on a display that maps to its package's base, in the base coordinates | section 11, built in 0.12.67 |
 | DA-5 | task schema `0.10` and box references; the rest of the Lab (the offline recognition of a scene of a pure scale, a recording on a display that is not the base, DA-5cd) | later |
+| DA-5cd | the Lab's offline recognition on a scene that is a pure scale of its package; the base size of a recording and the refusal of a recording on a display that is not the base size | section 12, 0.12.67 |
 
 From DA-2a every frame a run recognises passes the crate's map (section 8), and from DA-3 every
 input a run makes leaves through it (section 10); a 1280×720 package on a 1280×720 frame behaves
@@ -571,3 +572,54 @@ nothing changes, byte for byte.
 - **Not in this slice.** The recording on such a display (DA-5cd refuses `record start` there);
   the offline recognition of a scene of a pure scale (DA-5cd); the run evidence's recognised boxes,
   which stay in device-frame pixels (section 10, "Records").
+
+## 12 The Lab's offline scenes and the recording's size (DA-5cd)
+
+Workflow #392 DA-5cd (0.12.67; register §1.437). Two things the Lab did with a display that is not
+its package's size, now said and refused where they cannot hold. The Lab's live observation and
+its presses on such a display are DA-5ab's and are not in this section.
+
+- **An offline scene that is a pure scale of its package.** Every offline evaluation of a scene
+  takes it in its package's `coordinate_space` (the recognition pack's): `recognize`,
+  `detect-page`, `current-page`, `is-visible`, offline `observe`, `do --dry-run`, `ensure
+  --dry-run` and `wait` on saved scenes, `tap-target --dry-run` and `navigate --dry-run`, and the
+  Runtime captures of the client forms that press nothing (`do --capture --dry-run`, `ensure
+  --capture --dry-run`, `wait --capture`; the forms that press keep the frame as captured). A
+  scene of the coordinate space is evaluated as it is, and its answer is byte for byte the one
+  before this slice. A scene of another size is taken through the adapter as a run's frame gate
+  takes a frame (section 8): its map is built with no display declaration (a scene file carries no
+  producer geometry, so it is its own display), and the map must be one under which a run sends
+  its input (`DisplayMap::admit_input`, section 10: a pure scale whose double is a whole number,
+  3/2, 2, 5/2, 3, …). Then the scene is reduced once to the scale frame with the REC-5 primitive
+  (`resample_pixels`, area average, the same call as the gate's) and evaluated there: every
+  rectangle and point of the answer is in the coordinate space, and the answer names the size the
+  scene was reduced from, `scaled_from: {width, height}` (a frame set: each frame reduced, the
+  current frame's size named). Offline `observe` and `do` state the coordinate space in
+  `frame_coordinates`, and `observe --with-frame` writes the reduced frame. Any other scene is
+  refused before anything is evaluated, `lab_scene_size_unsupported` (exit 2), its values the
+  adapter's word `display_problem` (`layout_undeclared` another ratio, `scale_below_base` a scene
+  smaller than the package, `input_scale_unsupported` a ratio such as 5/4, `orientation_mismatch`
+  the package's other orientation), the scene's size (`frame_width`, `frame_height`) and the
+  package's (`base_width`, `base_height`); before this slice such a scene, and a pure scale too,
+  was refused `validation_failed` with the sizes in its message.
+- **The base size and a recording.** The base size is the `coordinate_space` every standard
+  package declares today, 1280×720. Nothing a package, a game root or its `display-layout.json`
+  declares names a base of its own, so it has one named home, the contract crate's
+  `STANDARD_PACK_BASE_SIZE`. A recording is made at the base size ([lab-recording.md](lab-recording.md),
+  "A recording's size"): `record start` reads the instance's display as the Runtime last observed
+  it (its `display.frame_extent` fact, [instance-fact-store.md](instance-fact-store.md), "Display
+  facts", one read from memory with no device step) and refuses a display of another size,
+  `record_display_not_base`, before anything is written or paused. That is an early warning; the
+  guard (fix round 1) is the recording's header: `record start` writes the base size in it
+  (`base_size`), and the first frame that enters the recording is checked against it before it is
+  stored, a frame of any other size refused `record_display_not_base` with nothing written. `record
+  stop` refuses a recording whose frames are not the base size, `record_size_not_base` (fix round 1:
+  a header that names a base size, frames of any other size; one that names none, made before,
+  frames of a larger display of the base size's ratio, a pure scale the adapter maps onto it), and
+  converts nothing.
+- **Still open.** Converting such a recording, or recording on a scaled display in base
+  coordinates (its frames reduced as they arrive, its presses mapped by section 10), is not done:
+  the study behind this slice proposes it as the larger form of its slice (c), and the recording's
+  refusal stands until the owner orders it. A display the Runtime does not know (no contained task
+  has run on the device, or nothing listens) no longer starts a recording of another size: the
+  start goes on, and the first frame is refused unless it is the base size (fix round 1).
