@@ -31699,18 +31699,67 @@ three answers are closes refused before they began: they settle through `settle_
 hold nothing, and the list of such closes now names #475 ([device-group.md](device-group.md), "A
 failure stays where it belongs"; `ResourceFence::close_unconfirmed` and `settle_refused_close` in
 `host/resource_fence.rs`). How each place, the other members, #475's `lease_busy` refusal and the
-locks meet this section's rules is §1.432's "Train". One more meeting was read and is not changed:
-a pre-emption's hand-over (`perform_transfer`, from `promote_idle_preemption` and
-`transfer_preempted_while_guarded`) reads the gates and prepares the transfer before it closes the
-holder's session; a close there that ends unconfirmed (not refused) marks the fence, and the
-transfer prepared before still hands the device to its claim, which may be another member's. It
-predates the train (with `Keep` it was the same; #475's `HolderEnd` changes only a refused close
-there). One test more, fix round 2's item 3:
+locks meet this section's rules is §1.432's "Train". One more meeting was read and needs no
+change: a pre-emption's hand-over (`perform_transfer`, from `promote_idle_preemption` and
+`transfer_preempted_while_guarded`) prepares the transfer before it closes the holder's session,
+but the entry it hands the device to always serves the holder's own member (`asks_preemption_of`,
+and `prepare_transfer_gated` on `Preempted`, in `crates/scheduler/src/lib.rs`), so a close there
+that ends unconfirmed and marks the fence gives the device to that fenced member's own client
+lease, which its own gate lets through, and never to another member. One test more, fix round 2's
+item 3:
 `g1_an_operator_claim_that_waits_out_its_bound_while_the_device_is_held_names_the_fenced_member`
 (gate map `host.toml`, "#437 G1"): a person's lease of A holds the device and a person's self-check
 of B waits for it; A is then fenced for an unconfirmed close; at its bound B's self-check is refused
 `lease_queue_expired` whose one `caused_by` link is `device_held_for_member_close` naming A, it was
 never granted, and its entry has left the queue.
+
+**Train, fix round 1** (coordinator work order `rd-1116/brief-train-host-fix1.md`, after the two
+independent reviews of the train and the coordinator's dispositions of them; main merged in
+afterwards). (1) **The pre-emption's hand-over.** The "Train" paragraph above said that a close
+there that ends unconfirmed may still hand the device to another member; it cannot, since the
+entry that receives a pre-emption serves the holder's own member, and the sentence now says so. No
+program behaviour changes for it. (2) **An idle device.** `queue_members_after_device_hold` queues a
+member's start preparation only on an idle device: no lease holds it, no takeover cooldown runs and
+no entry of its queue is eligible now by the scheduler's own judgement (`SeedScheduler::eligible_count`,
+the predicate `first_eligible` and the queue's grant use), each entry by its own member's gate as the
+pump reads the gates (`device_gates`, before the scheduler's lock). Before, any waiting entry kept
+the preparation back, so another member's routine claim parked behind its own pause or blackout kept
+it from ever being queued; an entry that waits eligible still keeps it back, so the claim is queued
+only when it is the device's next work. No read is added to the scheduler. (3) **The refusal's own
+code.** A claim of the step that the queue refuses keeps its member owed only when the refusal is
+`device_held_for_member_close` (a self-check claim is an operator's, refused at once by a hold that
+came back between the step's read and the claim); any other refusal settles what it owes, as before.
+The hold is not read a second time. (4) **Tests** (gate map `host.toml`, "#437 G1"):
+`g1_a_refused_close_whose_session_close_ahead_is_confirmed_holds_the_device_for_no_one` now pins the
+failure's code: the run's receipt is its own lease end's refusal of the lease the sweep had ended,
+`lease_mismatch` (the release validates a token that is no longer the device's, ISO-5a row B17; the
+code is not `lease_expired`, which the success terminal does not carry), and the lease A's run was
+granted has one `lease.expired` record;
+`g1_a_member_whose_start_preparation_the_hold_refused_is_prepared_again_once_the_fence_is_lifted`
+asserts that B's preparation is recorded under its claim's request, which was asked for and granted
+the device (fix round 1's preparation on the sweep's thread was recorded under links the sweep
+minted); `g1_an_operator_claim_that_waits_out_its_bound_while_the_device_is_held_names_the_fenced_member`
+gains the opposite case on a host of its own (no member fenced: the expiry carries `holder_kind`
+`client_lease` and no `caused_by` of `device_held_for_member_close`) and then releases A's lease once
+A is fenced, so that the expiry carries no `holder_kind` and only the hold kept B waiting (an
+operator's claim asked while the hold stands is refused at once, so B is first queued behind A's
+lease; both steps must land within B's bound, the product's 3 s wait for a self-check, as the fence
+already had to); new:
+`g1_another_members_claim_parked_behind_its_own_pause_leaves_the_held_preparation_queued`. (5)
+**Texts.** [scheduling-blackout.md](scheduling-blackout.md)'s table of "Complete silence" has the
+row of this step; the catalog's text of `device_held_for_member_close` and the comment of
+`request_host_claim` no longer say that every claim of the Runtime's own waits in place (the queued
+start preparation is a self-check claim, of the operator's class, and is refused at once while the
+device is held); the locations `read_held_start_preparation_device` and
+`settle_held_start_preparation` say the idle device and the refusal's code; the test switches of the
+refused closes name #475. The outcome-code index is regenerated. (6) **Recorded, not changed.** A
+worker that panics while it runs a held start preparation leaves the member's queued mark set: the
+step queues it no more until a preparation of the member is granted its key or lease (a person's
+self-check or resume, its ladder) or the Runtime restarts, as a panicking fence recheck leaves its
+own mark. (7) **The train's red check.** `gate_411_a65`'s test (a) failed on the train's head:
+its epoch-close child exited with 101 before its crash point; the child's error output was not
+kept, so the cause was not in the log. The crash child's error output is now read and named in
+that failure (`gate_epoch_close`); no program behaviour changes for it.
 
 ### 1.434 Slice #463 S2-1b (0.12.67): `record ready` knows the package's game, server and locale (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making, whose stage two turns the recorded material into a package offline; found when stages one and two were walked on an installed instance with 0.12.65; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1116/brief-463-s21b-record-ready-identity.md`, read on main `8eb03787`)
 
