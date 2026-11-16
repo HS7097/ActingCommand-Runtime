@@ -32059,6 +32059,86 @@ of both, with the coordinator's dispositions; for §1.436 and this section alike
   `da5_train_fix1_a_recorded_do_whose_frame_before_the_press_fails_presses_and_writes_nothing`. No
   code, word, key, member or revision is added.
 
+### 1.443 Slice #463 S2-1c (0.12.68): `record ready` lists every failure of each self-check, not only the first (Workflow #463; the owner asked on board #463 for one complete list of what a recording still lacks, as the work order's "Why" says; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1116/brief-463-s21c-selfchecks-list-all.md`, built on the branch of the train of #392 DA-5, #1780, at `b157951c`)
+
+This section takes 1.443, the number the work order gives. It ships in 0.12.68.
+
+**Why.** `record ready` (§1.425) lists at once every pre-check a recording fails, but of the
+self-checks `record stop` runs once the pre-checks pass it listed one item: each check stopped at
+its first failure, and that failure ended them all. An agent that fixed one failure and asked again
+got the next: one round per failure.
+
+**The rule.**
+- Each self-check is one implementation with two callers (`crosscheck::Failures`). `record stop`
+  (`Failures::first`) ends at the first failure, which is its refusal, at the place and with the
+  code of before. `record ready` (`Failures::every`) notes each failure and the check goes on to
+  the next thing it judges. An error that is none of a check's verdicts ends the check for both.
+- Under `record ready` a check runs after a failed one when it reads nothing the failed one gave:
+  the first decision, the cross-check, the endings and the selects read only the frames and the
+  admitted package, so each runs whatever the others found; nothing runs after a failed `frames`
+  or `admission`; `final_package`, built of what every check before it gave, runs only when none
+  failed. The running order is that of before.
+- One failure is one item of `missing`: `what` the check, `code` the code `record stop` answers for
+  it, `step`, `artifact_step` and `frame_id` those of the step it is about (`frame_id` stays the
+  step's press frame, as for a pre-check's item), and in `details` where the check met it: `frames`,
+  `page`, `target` (a followed mark, a template whose crop cannot be read back), `outcome_key` with
+  the ending's `page`. An item of the package as a whole has no step and no `details`.
+- Order: the checks' running order; within a check by the step's serial number (items without a
+  step first), then by the first frame named (`f0009` before `f0010`), failures of one step and
+  frame in the order the check met them.
+- The answer's new member `checks[{check, complete, reason?}]` names each check that ran, in the
+  order they ran: `complete: true` when its items are all it has, `complete: false` with `reason`
+  (the new closed vocabulary `ready_check_stop`) when it stopped at its last listed failure. It is
+  empty when a pre-check fails (and on a packaged recording); when every check passed it names the
+  seven, each complete. `checks_after` names the checks that did not run, as before.
+
+**The checks** (for the work order's question: which listed every failure, which stopped at the
+first, and why one cannot go on):
+
+| check | before | now | why it cannot go on past a failure |
+|---|---|---|---|
+| `frames` | the first frame or crop it could not read back | every frame and every crop; any failure ends every later check, which reads every frame | — |
+| `admission` | the first refusal | the first refusal, `complete: false`, `whole_package` | rendered, admitted by the kernel, its evaluator: each stage built on the one before, and the kernel answers one refusal |
+| `first_decision` | the first frame that failed | every live frame of step 1 a click that follows a mark is simulated on | a click that follows nothing, a select and a package with an application step judge one frame: one failure at most, the list complete |
+| `cross_check` | the first | every page on each of its own frames, every located-text guard on each frame, every optional page against each screen (7a) and the skip target against each optional step (7b); after a failure the arrival gates and the entry overlay, which only warn, are not evaluated | — |
+| `endings` | the first | every ending's page on each of its own frames and against each screen (`record_ending_ambiguous`, `ocr_alone_unchecked`) | — |
+| `selects` | the first | every live frame of every select step | within one frame each part reads the one before: one failure per frame |
+| `final_package` | the first refusal | the first refusal, `complete: false`, `whole_package` | encoded, expanded, admitted and decided again: each stage built on the one before |
+
+Any check but `frames`, `admission` and `final_package` stops at an error that is none of its
+verdicts (`check_error`): what it would judge after it would be judged on no basis.
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The collector | `crates/lab/src/recording/crosscheck.rs`: `Locus`, `CheckFailure`, `CheckRun`, `Failures` (`first`, `every`, `fail`); `first_decision`, `select_first_decision`, `select_checks`, `cross_check`, `optional_checks` and `ending_checks` take `&mut Failures`, a verdict's `return Err` now `failures.fail(…)?`; `FirstDecision::undecided`; `CrossCheck` is `Default` |
+| The running order | `crates/lab/src/recording_api.rs`: `self_checks(plan, ocr, failures)` with `Runner` and `SelfCheckFailures` (`into_refusal`, `record stop`'s refusal; `unreadable`, a `runtime_unavailable` failure `record ready` answers as its own error, as before); `admission`, `final_package` (`FinalPackage`); `load_package_inputs` with `read_package_frame` and `read_crop` |
+| The answer | `crates/lab/src/recording/ready.rs`: `ReadyCheckRun`, `RecordReadyOutcome::checks`, `check_items` (was `check_item`), `check_runs`, `every_check_complete`; `ReadyDetails::frames` and `target`, never read from a pre-check's refusal (`skip_deserializing`), so a pre-check's item is as before |
+| The words | `crates/lab/src/codes.rs`: `ReadyCheckStop` (`ready_check_stop`: `whole_package`, `check_error`); the catalog's vocabulary |
+| Texts | [lab-recording.md](lab-recording.md): "What a recording still lacks: `record ready`" (the second answer, a self-check item's `details`, "Order", "The self-checks" with the table of the two words, the rows `ready` and `packaged`) and "Self-checks" ("Every failure, for `record ready`"); the row `record ready` in [lab-operations.json](lab-operations.json), its output and notes |
+
+**Codes and words.** No outcome code is added. One closed vocabulary is added,
+`ready_check_stop`, two words, one cause each, used by no outcome key: a member of a read that
+exits 0, it neither refuses nor warns. The one decision the slice adds reads a class
+(`runtime_unavailable`), as `record ready` did. The outcome-code index is regenerated.
+
+**Tests** (`crates/lab/src/gate_463_s21c.rs`, exec gate map "#463 S2-1c"; a recording made as stage
+one makes it, three taps through `record_press` with a fake Runtime on synthetic 160x90 screens,
+four steps marked with a colour mark each, then one mark broken in the step table; no clock read):
+the marks of steps 2 to 4 expecting another colour: three `cross_check` items by step, each with
+its frame and page, the checks before `final_package` complete, and `record stop --dry-run`
+refused `record_step_self_mismatch` for step 2 on f0003 as before; step 1's mark expecting another
+colour: the `first_decision` item, then the `cross_check` item, and `record stop` refused at the
+first decision; step 2's mark with a negative colour distance: one `admission` item,
+`complete: false` with `whole_package`, every later check in `checks_after`, `record stop` refused
+at admission; nothing broken: `ready`, every check complete. No test is adapted, no golden
+changes, no test leaves a gate map.
+
+**What is not changed.** Any check's decision; what `record stop` refuses and with which code; the
+pre-checks' list; the package generated. No ledger record, configuration key, Runtime interface
+revision or outcome code.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

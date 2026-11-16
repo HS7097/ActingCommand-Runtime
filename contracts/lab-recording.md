@@ -3288,20 +3288,46 @@ and, once no pre-check fails, with the self-checks' failures (#463 S2-1c):
   The select and ending rules are those `record mark` holds when it takes a select or an ending,
   checked again where the package is generated ("Selecting in a list", "Endings"); the refusal's
   own word (`select_problem`, `ending_problem`) is the one `record stop` answers.
-- **The self-checks** (`checks_after` and the `what` of a self-check's refusal, the closed vocabulary
-  `ready_check`): when the recording fails no pre-check, `record ready` runs the self-checks
-  `record stop` runs, in the same order, on the package it would generate, written nowhere:
-  `frames` (every live frame and template crop read back with its sha256 and the recording's size,
-  the last row of "Pre-checks"), `admission` (item 2, with the evaluator), `first_decision` (item
-  3), `cross_check` (items 4, 5 and 7), `endings` (item 9), `selects` (item 8), `final_package`
-  (item 1, and items 2 and 3 again on the final package). Each stops at its first refusal, as it
-  does for `record stop`, and that refusal ends them, since a later check reads what an earlier one
-  built; it is the one item of `missing`, its `what` the check's name, its `code` its own, its
-  `step` and `artifact_step` those its details name (`record_index`, `step`) when it names a step,
-  without a `hint`. `checks_after` names the checks that did not run: all of them when a
-  pre-check fails, those after the refusing one when a self-check refuses, none when every one
-  ran. A failure to read the recording's files that is no check's refusal (class
-  `runtime_unavailable`) is the command's own error.
+- **The self-checks** (`checks`, `checks_after` and the `what` of a self-check's item, the closed
+  vocabulary `ready_check`): when the recording fails no pre-check, `record ready` runs the
+  self-checks `record stop` runs, in the same order, on the package it would generate, written
+  nowhere: `frames` (every live frame and template crop read back with its sha256 and the
+  recording's size, the last row of "Pre-checks"), `admission` (item 2, with the evaluator),
+  `first_decision` (item 3), `cross_check` (items 4, 5 and 7), `endings` (item 9), `selects` (item
+  8), `final_package` (item 1, and items 2 and 3 again on the final package). #463 S2-1c (0.12.68):
+  **each check lists every failure it meets, not only its first.** It is the one implementation
+  `record stop` runs ("Self-checks"): where `record stop` refuses at a check's first failure, as it
+  always has, `record ready` notes the failure and the check goes on to the next thing it judges.
+  One failure is one item of `missing`: its `what` the check's name, its `code` the code `record
+  stop` answers for it, its `step`, `artifact_step`, `frame_id` and `details` as above, without a
+  `hint`. What one judgement is, per check: `frames` each frame and each crop; `first_decision`
+  each live frame of step 1 that is simulated (a click that follows a mark: every live frame; a
+  click that follows nothing, a select and a package with an application step: one frame, so one
+  item at most); `cross_check` each page on each of its own frames, each located-text guard on each
+  frame, each optional page against each screen (item 7a) and the skip target against each
+  optional step (item 7b); `endings` each ending's page on each of its own frames and against each
+  screen; `selects` each live frame of each select step. Once the cross-check failed, its arrival
+  gates and entry overlay, which only warn, are not evaluated. A check runs after a failed one when
+  it reads nothing the failed one gave: `first_decision`, `cross_check`, `endings` and `selects`
+  read only the frames and the admitted package, so each runs whatever the others found; nothing
+  runs after a failed `frames` or `admission`, and `final_package`, built of what every check
+  before it gave, runs only when none failed. `checks` names each check that ran, in the order
+  they ran, `{check, complete, reason?}`: `complete: true` when the failures `missing` lists of it
+  are all it has (none, or every one), `complete: false` with `reason` when it stopped at the last
+  of them, so that an empty rest is not read as "nothing more"; `reason` is a word of the closed
+  vocabulary `ready_check_stop`:
+
+  | word | why the check stopped at its listed failure | checks |
+  |---|---|---|
+  | `whole_package` | the check judges the generated package as one, in stages each built on the one before (rendered, admitted by the kernel, its evaluator; encoded, expanded, admitted and decided again): its first refusal leaves no stage after it to judge | `admission`, `final_package` |
+  | `check_error` | the check met an error that is none of its verdicts (a target the evaluator cannot evaluate, a frame it cannot take): what it would judge after it would be judged on no basis | `first_decision`, `cross_check`, `endings`, `selects` |
+
+  `checks_after` names the checks that did not run, in the order they run: all of them when a
+  pre-check fails (`checks` is then empty), those a failed check left unrun (every later one after
+  a failed `frames` or `admission`, otherwise `final_package`), none when every one ran. A failure
+  to read the recording's files that is no check's verdict (class `runtime_unavailable`) is the
+  command's own error. `record stop` is unchanged: it answers the first failure of the first check
+  that meets one, with the code it answered before.
 - **`warnings`** never block: `press_point_only` (`{step, artifact_step, frame_id, what}`) for each
   effective step, in the order a run meets them, whose press is a single recorded point: a tap or
   a long press of `tap` or `long-tap --record` (`source: "point"`, a box of one pixel) that follows
@@ -3321,8 +3347,8 @@ and, once no pre-check fails, with the self-checks' failures (#463 S2-1c):
 |---|---|---|---|
 | `material` | nothing of stage two is written: no step carries a page name, a mark (own, reused or forbidden, an anchor, a click guard), a press region (a click other than a press `tap`, `swipe` or `long-tap --record` recorded, or one that follows a mark or declares a retry, or a press box: a press recorded by its point whose rectangle is no longer that one pixel, #463 S2-5), a choice (a select), an optional flag or a transition, and the recording took no ending | stage one: the presses with `--record`, `record archive` | the first such write (`record mark` on the reopened recording) |
 | `draft` | something of stage two is written, and `missing` is not empty | a stage-two write that leaves something missing | the last missing item done (`ready`) |
-| `ready` | `missing` is empty: every pre-check passes and every self-check: `record stop` would write the package | the last missing item done | `record stop` (`packaged`), or a write that leaves something missing (`draft`) |
-| `packaged` | stopped, its package written (`artifact`), and nothing changed since (no `amended_at_unix_ms`); nothing is checked again, `missing` and `checks_after` are empty; `sources` names what its package holds (#463 S2-1b fix round 1) | `record stop` | `record mark` after the stop ("Marking after stop"): then `ready` or `draft` by the rows above, until `record stop` generates the package again |
+| `ready` | `missing` is empty: every pre-check passes and every self-check (`checks` names all seven, each complete): `record stop` would write the package | the last missing item done | `record stop` (`packaged`), or a write that leaves something missing (`draft`) |
+| `packaged` | stopped, its package written (`artifact`), and nothing changed since (no `amended_at_unix_ms`); nothing is checked again, `missing`, `checks` and `checks_after` are empty; `sources` names what its package holds (#463 S2-1b fix round 1) | `record stop` | `record mark` after the stop ("Marking after stop"): then `ready` or `draft` by the rows above, until `record stop` generates the package again |
 
 `record archive` keeps a draft as it is (a manifest n+1); nothing done is lost. A recording made
 before this slice is read as it is.
@@ -3789,6 +3815,21 @@ guard execution still requires the corresponding frames, provider and Runtime ev
    `distinct`, `passes` or `not_evaluated`), as `lab.endings`, present only with an ending.
 
 Warnings never refuse. The provenance and the output carry the same warnings.
+
+**Every failure, for `record ready`** (#463 S2-1c, 0.12.68). Each check above is one
+implementation with two callers. `record stop` ends at the first failure of the first check that
+meets one, which is its refusal, with the code above, as it always has; `record ready` ("What a
+recording still lacks") runs the same code on the same package, notes each failure, goes on to the
+next thing the check judges and lists them all, each with the step, the frames and the page,
+target or ending it is about. Two kinds of failure end a check there too, and it says so
+(`checks[].complete: false`): admission (item 2) and the final package (item 1, and items 2 and 3
+again) judge the package as one, in stages each built on the one before, so their first refusal
+leaves no stage after it to judge (`whole_package`); and any check stops at an error that is none
+of its verdicts (`check_error`), since what it would judge after it would be judged on no basis.
+The first decision of a click that follows nothing, of a select and of a package with an
+application step judges one frame, so it has one failure at most. Once the cross-check failed, its
+arrival gates and entry overlay (items 4 and 5, warnings only) are not evaluated. No check decides
+otherwise than before, and the package generated is the same.
 
 ### Writing
 

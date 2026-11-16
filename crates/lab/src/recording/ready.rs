@@ -40,7 +40,8 @@ use serde_json::Value;
 /// the step after a stop, the pages after the last launch or restart, the parts of the package's
 /// identity that are not known, and the counts of a recording with too few or too many steps.
 /// Read from the refusal's `details`; for `ending_mark_missing`, whose refusal names the mark
-/// alone, `outcome_key` is the ending's. Empty for a self-check's refusal.
+/// alone, `outcome_key` is the ending's. #463 S2-1c: for a self-check's failure, `outcome_key`,
+/// `page`, `frames` and `target` say where the check met it, never read from its refusal.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ReadyDetails {
@@ -102,8 +103,8 @@ pub struct ReadyMark {
     pub problem: Option<String>,
 }
 
-/// One thing a recording still lacks: a pre-check of `record stop` it fails, or the refusal of a
-/// self-check (`what` the check's name).
+/// One thing a recording still lacks: a pre-check of `record stop` it fails, or (#463 S2-1c) one
+/// failure of a self-check (`what` the check's name).
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ReadyItem {
     /// 1..n, in the answer's order.
