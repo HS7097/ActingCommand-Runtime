@@ -352,7 +352,11 @@ naming this file.
   table holds them), the frames stored between, the step's marks and its items of
   `ac_record_ready` (`missing`, given `game`, `server` and `locale` as `ac_record_ready` takes
   them: a recording without a locale of its own runs no self-check until `locale` is given); a
-  member the step table does not hold is absent. An application operation's `outcome` is its
+  member the step table does not hold is absent. The train of #463 stage two (0.12.68): `missing`
+  is every item of `ac_record_ready`'s one judgement that names the step, a pre-check's
+  (`select_unrefined` among them) or, once no pre-check fails, each self-check failure; an item
+  that names no step is no step's; `choice` is the step's choice mark on a step marked as holding a
+  choice; a step dropped before the last is not listed, one `restore_step` gave back is. An application operation's `outcome` is its
   manifest row's: `indeterminate` with attempts and no completed receipt. Unless `no_preview`, it
   writes a preview of each screen under the recording's `lab/preview/` (`s<nn>-before.png`,
   `s<nn>-after.png`, their absolute paths in `preview`): a copy of the stored frame with the press

@@ -32719,6 +32719,47 @@ earlier build recorded without `before_frame` or `after_frame` answers the step'
 screen before and no screen after. Through MCP the tool is `ac_record_review` of the Lab's MCP
 server (`actinglab-mcp`).
 
+**Train** (coordinator work order `rd-1116/brief-463-train-stage2.md`; the train of #463 stage two
+in pull request #1784, which carries this section's head `f7708a61` (#1786), §1.440's `e6bc6fa3`
+(#1784), §1.442's `438f17b0` (#1787) and §1.443's `6c7b3b22` (#1788): main `dc4c3622` merged into
+the branch of #1784, then this section, §1.442 and §1.443 in that order, then main `3a17b927` (the
+release of 0.12.67); the rulings are the coordinator's, not the owner's words). What it changed of
+this section, with §1.440, §1.442 and §1.443:
+- *The one readiness judgement.* `ready_of`, the body of `record ready` this section moved so that
+  `record review` calls it, holds §1.443's judgement (every failure of each self-check, `checks`)
+  and §1.442's pre-check (`select_unrefined`); the merge took §1.443's body with this section's
+  reference to the recording. Neither command keeps a judgement of its own.
+- *A step's `missing`* is every item of that judgement that names the step: a pre-check's,
+  §1.442's `select_unrefined` among them, or, once no pre-check fails, each of §1.443's self-check
+  failures (their `Locus` names the step by the serial number `record mark --step` takes, the
+  number this section filters by); an item that names no step (a part of the identity, an ending's,
+  a template's crop, the package as a whole) is no step's. A failed pre-check runs no self-check
+  (§1.425, kept by §1.443), so the two kinds never stand in one answer.
+- *What a step shows.* The answer's step gains `choice` (`RecordReviewStep::choice`): §1.442's
+  choice mark as the step table holds it, on a step marked as holding a choice, absent otherwise
+  (the row's `output` names it). A refined choice's press is `press` as before, the select's click
+  as the step table holds it. A step §1.440 dropped before the last is no effective step and is not
+  listed, as a dropped last step is not; one `restore_step` gave back is listed again; the step
+  before a dropped one names in `after.step` the dropped step its frame is stored under, whose
+  screen the drop found the same as the one the next effective step was pressed on.
+- *Texts.* [lab-recording.md](lab-recording.md): its summary names the four slices in one
+  paragraph; this section's contract (`choice`, `missing`, `after.step`, dropped and restored steps)
+  and a sentence in "What a recording still lacks: `record ready`" naming the one function; the
+  row `record review`'s `output` and `notes`; the MCP manual's `ac_record_review`. No count the
+  manuals carry changes (only this section adds a row). The outcome-code index, regenerated after
+  the merges, counts 3895 active codes, 88 retired, 3983 in all (`--check`: current).
+- *Test* (`crates/lab/src/gate_463_s2_train.rs`; exec gate map row "#463 stage two, train"):
+  `s2_train_each_step_reviews_exactly_its_items_of_the_one_readiness_judgement`, on §1.443's bench
+  (its `Bench`, `INSTANCE`, `EVERY_CHECK` and `complete` made `pub(crate)` for it): step 2 marked as
+  holding a choice and not refined, step 1's mark expecting another colour, the recording's locale
+  taken out of the step table. `record ready` lists the locale (no step) and step 2's
+  `select_unrefined`, runs no self-check and names the seven in `checks_after`; `record review
+  --step k` of each step lists exactly the items that name k, step 2 with its choice mark, no step
+  the locale. With the mark taken off (`choice: false`) and `--locale` given, `record ready` lists
+  step 1's `first_decision` and `cross_check` failures, and `record review` of each step lists
+  exactly its items, step 1 those two. The work order asked for one recording whose one reading
+  lists both kinds; since a failed pre-check runs no self-check, the test reads it twice.
+
 ### 1.440 Slice #463 S2-7 (0.12.68): a page transition from frames the recording stored; a press before the last that changed nothing can be dropped (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making, stage two of which turns the recorded material into a package offline, and her ruling of the night of 11-15 that the tool hands back the material and the agent decides; the design's table B1.5, its rows "these frames are a loading screen between two steps" and "this press did nothing"; the rules below are the coordinator's in the work order, not the owner's words; coordinator work order `rd-1116/brief-463-s27-transitions.md`, built on the branch of pull request #1780 at `2ff33cb3`)
 
 This section takes 1.440, the number the work order gives; it stands on pull request #1780 (§1.436,
@@ -32874,6 +32915,28 @@ imports of `crates/lab/src/recording/steps.rs` resolved with both sides kept).
   (`validation_failed`); `s27_fix1_each_refusal_of_restore_step_writes_nothing` (an effective step
   and an unknown one, no step, an id and an asset name taken since, a reused and a forbidden mark
   gone since).
+
+**Train** (as §1.439's "Train": the train of #463 stage two in pull request #1784, this section's
+own, with §1.439 (#1786), §1.442 (#1787) and §1.443 (#1788)). What it changed of this section, or
+found where it meets the others; no code of this section changed:
+- *`record review`* is on the branch now (§1.439): a step this section dropped before the last is
+  not listed, as a dropped last step is not, and one `restore_step` gave back is listed again; the
+  step before a dropped one names in `after.step` the dropped step its frame is stored under.
+  "`record review` is not on this branch" above is history.
+- *The self-checks* (§1.443) run on the package of the effective steps (`generate::survey` reads
+  `effective_steps`), so a step dropped before the last is no step of any of them, as a dropped
+  last step is not.
+- *A step marked as holding a choice* (§1.442) and the drop: the drop reads neither the mark nor a
+  select. A marked step whose press (a recorded point tap, or once refined the select's click, its
+  rectangle as the step table holds it) the stored frames do not contradict as "changed nothing" by
+  the two comparisons is dropped as any other press: the mark, and a select that refines it, stay
+  in the file with the step; the step is then no effective step, so `record ready` no longer lists
+  its `select_unrefined` and the package declares no variable for it; `restore_step` gives it
+  back. A choice usually changes the screen, which the comparisons then see; the train adds no rule
+  for it.
+- *Texts.* The summary of [lab-recording.md](lab-recording.md) names this section with the three
+  others in one paragraph, and "What a recording still lacks" keeps this section's bullet on a
+  dropped or converted step after §1.443's sentences on the order.
 
 ### 1.442 Slice #463 S2-6 (0.12.68): a choice in a step, marked first and refined later; its pending item in `record ready` (Workflow #463; the owner's direction on board #463 on 11-15, that a choice inside a step be singled out by marking the step first and refined afterwards, and her approval the same day of the three-stage blueprint of package making; the rules below are the coordinator's rulings in the work order and in the work order of the half-built piece it ports, not the owner's words; coordinator work order `rd-1116/brief-463-s26-select-unrefined.md`, stacked on pull request #1780, the Lab display train)
 
@@ -33037,6 +33100,28 @@ holds a choice is not read by a build before 0.12.68. Fix round 1: a package `re
 again from a recording with a select declares `variables` and needs `package` 14; the Runtime of
 this release admits it.
 
+**Train** (as §1.439's "Train": the train of #463 stage two in pull request #1784, with §1.439
+(#1786), §1.440 (#1784) and §1.443 (#1788)). What it changed of this section, or found where it
+meets the others; no code of this section changed:
+- *`record ready`.* This section's pre-check `select_unrefined` stands in the one readiness
+  judgement (§1.439's `ready_of`, with §1.443's self-checks): a failed pre-check runs no
+  self-check, so a recording with a choice not refined lists no self-check failure until the
+  choice is refined or its mark taken off.
+- *`record review`* (§1.439) lists `select_unrefined` in the `missing` of the step it names, and
+  shows the step's mark (`choice`, as the step table holds it); a refined choice's press is
+  `press`, the select's click as the step table holds it.
+- *The self-checks and the variables* (§1.443). Every check evaluates the generated package with
+  its variables at their defaults: the selects check decides by `select::decide`, which hands the
+  kernel's dry run `default_run_values` (the variable at `[default]`; its run of the pressed name
+  takes R1's document with that name), and the first decision and the final package simulate by
+  `simulate_contained_task_at`, which runs with `default_run_values` too. So a refined choice
+  passes them, as this section's `s26_refining_the_choice_ends_its_item_and_the_package_holds_its_variable`
+  asks (`ready`, nothing missing, nothing in `checks_after`; under §1.443 `checks` names the seven,
+  each complete), read against the joined code.
+- *The drop* (§1.440): a step marked as holding a choice is dropped before the last as any press
+  whose stored frames do not contradict that it changed nothing; its mark stays in the file with
+  it, and while it is dropped `record ready` does not list it (§1.440's "Train").
+
 ### 1.443 Slice #463 S2-1c (0.12.68): `record ready` lists every failure of each self-check, not only the first (Workflow #463; the owner asked on board #463 for one complete list of what a recording still lacks, as the work order's "Why" says; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1116/brief-463-s21c-selfchecks-list-all.md`, begun on the branch of the train of #392 DA-5, #1780, at `b157951c`; it stands on main, into which that train was merged (`a91e657c`), and fix round 1 merged main `dc4c3622`)
 
 This section takes 1.443, the number the work order gives. It ships in 0.12.68.
@@ -33163,6 +33248,25 @@ the coordinator's dispositions; the rulings are the coordinator's, not the owner
   name `frames` and `target`: its item has neither).
 - No code, word, key or member is added; no check decides otherwise; the package generated is the
   same.
+
+**Train** (as §1.439's "Train": the train of #463 stage two in pull request #1784, with §1.439
+(#1786), §1.440 (#1784) and §1.442 (#1787)). What it changed of this section, or found where it
+meets the others:
+- *One judgement, two commands.* The body of `record ready` this section changed is `ready_of`
+  (§1.439), which `record ready` and `record review` call; the merge of this section took its body
+  as it is, with §1.439's reference to the recording (`recording_api.rs`, the one conflict of Rust
+  code in the train). `record review` lists each self-check failure on the step its `Locus` names
+  and a failure of no step (an ending's, a template's crop, the package as a whole) on none.
+- *Choices* (§1.442): the selects check and the first decision evaluate every select step's
+  package variable at its default (§1.442's "Train"), so a refined choice passes them; a choice
+  not refined is a pre-check, and then no self-check runs.
+- *Dropped steps* (§1.440): a step dropped before the last is no step of the package the checks run
+  on, as a dropped last step is not.
+- *The bench.* `gate_463_s21c.rs`'s `Bench` (its field `ocr`, its `marked`, `state`, `break_mark`,
+  `recording`, `write_recording` and `mark_request`), `INSTANCE`, `EVERY_CHECK` and `complete` are
+  `pub(crate)`, for the train's test (§1.439's "Train"); no test of this section changed.
+- *Texts.* In [lab-recording.md](lab-recording.md), "What a recording still lacks", this section's
+  sentences on the order come before §1.440's bullet on a dropped or converted step.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

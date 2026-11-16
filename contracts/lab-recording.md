@@ -2828,7 +2828,9 @@ today's server (`actingctl mcp-serve`) has no such tool.
   (the instance's, or the active, archived or stopped one `--record-id` names; the same refusals),
   read once. Every effective step in the order a run meets them, or with `--step <k>` the step of
   that serial number alone (a step that does not exist, is dropped or was converted is
-  `record_step_not_found`, 3, before `record ready`'s checks run). `steps_total` is how many
+  `record_step_not_found`, 3, before `record ready`'s checks run; #463 stage two, train: a step
+  dropped before the last, #463 S2-7, as the last one, and a step `restore_step` gave back is
+  listed again). `steps_total` is how many
   effective steps the recording has, answered or not. With `--step` too the recording's whole
   readiness is evaluated, its self-checks included, on every call, so that the step's `missing` is
   what `record ready` answers for it: reading a long recording step by step runs them once per
@@ -2858,7 +2860,9 @@ today's server (`actingctl mcp-serve`) has no such tool.
     and no completed receipt, since it may have run, and `declared` with neither); absent on a step
     without an effect;
   - `after`: the frame the click's execution or the application operation's receipt names as its
-    `after_frame`: `step` (the step it is stored under, the next step), `frame_id`, `path`,
+    `after_frame`: `step` (the step it is stored under, the next step; #463 stage two, train: when
+    the next step was dropped before the last, #463 S2-7, that dropped step, whose screen the drop
+    found the same as the one the next effective step was pressed on), `frame_id`, `path`,
     `preview`, and from its `after_capture` `still` (whether the captures after the press found the
     screen still; absent when no stillness test ran) and `waited_ms`; absent where none is named;
   - `between`: the frames stored between the screen before and the screen after, `{frame_id,
@@ -2866,13 +2870,24 @@ today's server (`actingctl mcp-serve`) has no such tool.
     entered after the screen before (the captures of the press's after loop it did not name);
   - `marks`: the step's own marks as stored (a recognize box is the template mark
     `box/<nn>/<x>_<y>_<w>_<h>`; a press box is `press.rect`);
+  - `choice` (#463 stage two, train): the step's choice mark as the step table holds it
+    (`{marked_at_unix_ms}`, "Marking a choice first"), on a step marked as holding a choice,
+    refined or not; absent on every other step. A refined choice's press is `press`, the select's
+    click as the step table holds it (`source` `select`; its `rect` the click box the select's
+    self-test gave the pressed name on the primary frame, or, without an OCR model, the recorded
+    one; the recorded point and its outcome kept);
   - `missing`: the step's items of `record ready`, as `record ready` answers them (the same
     function on the same recording, given the game, the server and the locale as `record ready`
     takes them: `--game`, `--server` and `--locale`, read and refused as `record ready` reads and
     refuses them, else the recording's, and for game and server the Lab's instance configuration's
     and the installation's). A part not known is an item of the whole recording, on no step, and
     then no self-check runs: a recording without a locale of its own is reviewed with `--locale`
-    for a self-check's refusal to reach the step it names.
+    for a self-check's refusal to reach the step it names. #463 stage two, train: every item of
+    `record ready` that names the step is the step's, a pre-check's (#463 S2-6's
+    `select_unrefined` among them) or, once no pre-check fails, each failure of each self-check
+    (#463 S2-1c); an item that names no step (a part of the identity, an ending's, a template's
+    crop, the package as a whole) is no step's. Since a failed pre-check runs no self-check, a
+    step's self-check items appear once the recording fails no pre-check.
 - **Warnings.** `warnings` is `[]`, or `[{"code": "frame_file_missing", "frame_ids": [...]}]`
   naming once, in the order the answer gives them, each frame whose file is not where the manifest
   names it, as `record frames` answers it; such a frame's `path` is `null`, with `--no-preview`
@@ -3443,7 +3458,10 @@ coordinator's). `record stop` refuses at the first pre-check a recording fails (
 agent would learn what a recording lacks one refusal at a time; `record ready` lists all of it at
 once. Through the Lab's MCP server (`actinglab-mcp`) it is `ac_record_ready` (`record_id`, `game`,
 `server`, `locale`, `state_dir`; [lab-operations.json](lab-operations.json), the row `record
-ready`); today's server (`actingctl mcp-serve`) has no such tool.
+ready`); today's server (`actingctl mcp-serve`) has no such tool. #463 stage two, train: its answer
+is one function's (`recording_api::ready_of`), which `record review` calls too and of which it
+gives each step the items that name it ("Reviewing a recording step by step: `record review`");
+neither command has a judgement of its own.
 
 - **Which recording.** The one `record status` reads: the recording the instance's session header
   names, archived or not; or, with `--record-id`, that recording: the header's, or one the header no
@@ -4346,7 +4364,7 @@ equal value is accepted.
 | exit | codes |
 |---|---|
 | 2 | `validation_failed` (Workflow #449 REC-ARCH fix 1: also `record archive --copy-to` empty, blank or relative), `record_flag_unsupported`, `record_flag_takes_no_value`, `record_state_dir_unsupported`, `record_frame_unreadable`, `record_transition_window_invalid`, `record_transition_has_click`, `record_application_action_invalid`, `record_application_with_click`, `record_optional_settle_invalid`, `record_locale_missing`, `record_lab_dir_invalid`, `record_requires_invalid` |
-| 3 | `record_session_not_active` (Workflow #390 LAB-2: also, with `details.reason: "recording_stopped"`, a change a stopped recording does not take), `record_lab_unavailable`, `record_instance_mismatch`, `record_step_not_found`, `record_step_not_last`, `record_step_frame_missing`, `record_step_frame_conflict`, `record_frame_size_mismatch`, `record_frame_hash_mismatch`, `record_mark_rejected`, `record_mark_id_conflict`, `record_mark_id_reserved`, `record_mark_in_use`, `record_asset_name_conflict`, `record_click_exists`, `record_click_executed`, `record_click_source_invalid`, `record_click_follow_invalid`, `record_click_rect_conflict`, `record_click_outside_step_rect` (#463 S2-5: also, with `details.reason: "recorded_point_outside_box"`, a press box that does not hold the point a press recorded by its point pressed), `record_step_click_missing`, `record_step_click_not_executed`, `record_gesture_execution_unsupported` (#411 Lab BD), `record_guard_family_invalid`, `record_append_failed_after_input`, `record_transition_without_click`, `record_transition_exists`, `record_to_transition_invalid`, `record_busy`, `record_application_entry_invalid`, `record_step_effect_exists`, `record_optional_first_step`, `record_optional_application`, `record_select_invalid` (#463 R1), `record_ending_invalid` (#463 R2), `record_optional_after_invalid` (#463 R4); stop: `record_no_steps`, `record_application_entry_not_first`, `record_step_without_recognition`, `record_final_step_has_click`, `record_too_many_steps`, `record_step_after_stop_invalid`, `record_application_without_home`, `record_click_follow_invalid`, `record_optional_first_step`, `record_optional_final_step`, `record_optional_application`, `record_optional_restart_segment_end`, `record_step_self_mismatch`, `record_optional_step_ambiguous`, `record_optional_skip_target_insensitive`, `record_select_invalid` (#463 R1), `record_ending_invalid`, `record_ending_ambiguous` (#463 R2), `record_artifact_admission_failed`, `record_requires_conflict`, `record_stop_option_conflict`, and (Workflow #449 REC-ARCH) `record_session_not_active` with `details.reason: "recording_archived"`, and (Workflow #392 DA-5cd fix round 1) `record_size_not_base`; start (Workflow #392 DA-5cd): `record_display_not_base`; every recording path before it sends anything (the train of DA-5): `record_display_not_base`, `record_size_not_base`, `record_frame_size_mismatch`; archive and reopen (Workflow #449 REC-ARCH): `record_session_not_active`, `record_session_active` (reopen), `record_not_archived`, `record_archive_target_not_empty`, `record_instance_mismatch`, `record_lab_unavailable` |
+| 3 | `record_session_not_active` (Workflow #390 LAB-2: also, with `details.reason: "recording_stopped"`, a change a stopped recording does not take), `record_lab_unavailable`, `record_instance_mismatch`, `record_step_not_found`, `record_step_not_last`, `record_step_frame_missing`, `record_step_frame_conflict`, `record_frame_size_mismatch`, `record_frame_hash_mismatch`, `record_mark_rejected`, `record_mark_id_conflict`, `record_mark_id_reserved`, `record_mark_in_use`, `record_asset_name_conflict`, `record_click_exists`, `record_click_executed`, `record_click_source_invalid`, `record_click_follow_invalid`, `record_click_rect_conflict`, `record_click_outside_step_rect` (#463 S2-5: also, with `details.reason: "recorded_point_outside_box"`, a press box that does not hold the point a press recorded by its point pressed), `record_step_click_missing`, `record_step_click_not_executed`, `record_gesture_execution_unsupported` (#411 Lab BD), `record_guard_family_invalid`, `record_append_failed_after_input`, `record_transition_without_click`, `record_transition_exists`, `record_to_transition_invalid`, `record_busy`, `record_application_entry_invalid`, `record_step_effect_exists`, `record_optional_first_step`, `record_optional_application`, `record_select_invalid` (#463 R1), `record_ending_invalid` (#463 R2), `record_optional_after_invalid` (#463 R4), `record_frame_unknown`, `record_drop_unproven` (#463 S2-7; the stage-two train named them here); stop: `record_no_steps`, `record_application_entry_not_first`, `record_step_without_recognition`, `record_final_step_has_click`, `record_too_many_steps`, `record_step_after_stop_invalid`, `record_application_without_home`, `record_click_follow_invalid`, `record_optional_first_step`, `record_optional_final_step`, `record_optional_application`, `record_optional_restart_segment_end`, `record_step_self_mismatch`, `record_optional_step_ambiguous`, `record_optional_skip_target_insensitive`, `record_select_invalid` (#463 R1), `record_ending_invalid`, `record_ending_ambiguous` (#463 R2), `record_artifact_admission_failed`, `record_requires_conflict`, `record_stop_option_conflict`, and (Workflow #449 REC-ARCH) `record_session_not_active` with `details.reason: "recording_archived"`, and (Workflow #392 DA-5cd fix round 1) `record_size_not_base`; start (Workflow #392 DA-5cd): `record_display_not_base`; every recording path before it sends anything (the train of DA-5): `record_display_not_base`, `record_size_not_base`, `record_frame_size_mismatch`; archive and reopen (Workflow #449 REC-ARCH): `record_session_not_active`, `record_session_active` (reopen), `record_not_archived`, `record_archive_target_not_empty`, `record_instance_mismatch`, `record_lab_unavailable` |
 | 4 | `record_click_indeterminate`, `record_click_performed_with_failure`, `record_application_indeterminate` |
 | 5 | `record_lock_failed`, `record_state_io_failed` (Lab state files cannot be read or written; Workflow #449 REC-ARCH: also a copy file that cannot be written), the state directory cannot be created, `record_archive_verify_failed` (Workflow #449 REC-ARCH) |
 | 6 | `record_stop_generation_not_implemented` (a build without the package generator; the #336 L4 build also for a recording with optional steps, `details.reason: "optional_steps"`) |
