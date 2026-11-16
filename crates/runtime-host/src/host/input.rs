@@ -22,6 +22,19 @@ pub(super) enum ApplicationKey {
     Ladder,
 }
 
+/// The refusal of an input the instance's input does not perform, nothing sent
+/// (`nemu_input_capability_unsupported`): HS-4's for the Nemu input before any intent, and
+/// (Workflow #463 KB-1 fix round 1, the coordinator's rulings R2 and R3 of 11-16) for a key outside
+/// the key vocabulary on an input that sends that vocabulary alone, and for a backend's own refusal
+/// made before it sent anything.
+fn input_capability_refusal() -> RuntimeHostError {
+    RuntimeHostError::request(
+        HostCode::NemuInputCapabilityUnsupported,
+        HostLocation::ExecuteInput,
+        RuntimeErrorCode::InvalidRequest,
+    )
+}
+
 /// Workflow #437 MAPP-2a: whose application an application command drives.
 #[derive(Clone, Copy)]
 enum ApplicationOf<'a> {
@@ -101,17 +114,26 @@ impl HostShared {
         // Workflow #308 SEL-L3b: the drag with a pause and a brake is a segmented plan too, which
         // the Nemu input performs as it performs the vertical-brake drag; Workflow #406 T3: and
         // the path drag. HS-4 (#402, design §4.4): and the long tap and the swipe, on their
-        // step's frame as the tap; the reset needs no frame. `key` and `text` stay refused.
+        // step's frame as the tap; the reset needs no frame. Workflow #463 KB-1: and the back key,
+        // on its step's frame as the tap; every other key and `text` stay refused.
         let nemu_support = input_check
             .as_ref()
             .map(|_| actingcommand_device::NemuInputSupport::of(action));
-        if nemu_support == Some(actingcommand_device::NemuInputSupport::Unsupported) {
+        // Workflow #463 KB-1 fix round 1 (the coordinator's ruling R3 of 11-16): an input that
+        // sends the keys of the key vocabulary alone (`DeviceKey::sent_alone_by`: the Nemu input
+        // and `adb_shell_input`) refuses every other key here, before anything is sent and before
+        // an intent is written, with the Nemu input's refusal.
+        let key_outside_vocabulary = match action {
+            InputAction::Key { key } if actingcommand_device::DeviceKey::named(key).is_none() => {
+                self.sends_key_vocabulary_alone(&resolved.instance_alias)?
+            }
+            _ => false,
+        };
+        if nemu_support == Some(actingcommand_device::NemuInputSupport::Unsupported)
+            || key_outside_vocabulary
+        {
             return Err(RequestFailure::request(
-                RuntimeHostError::request(
-                    HostCode::NemuInputCapabilityUnsupported,
-                    HostLocation::ExecuteInput,
-                    RuntimeErrorCode::InvalidRequest,
-                ),
+                input_capability_refusal(),
                 RuntimeReceiptState::Denied,
                 None,
             ));
@@ -235,6 +257,9 @@ impl HostShared {
         let failure_links = links;
         let action_for_worker = prepared_action;
         let mut destructive_step = None;
+        // Workflow #463 KB-1 fix round 1 (R2): the backend refused the input as its capability's
+        // refusal, before it sent anything; the input is then denied.
+        let mut capability_refused = false;
         // The outcome and its fact invalidations precede the next admission's intent freeze.
         // Acquire only after the device action: its lifecycle writes take this gate too.
         let outcome_fact_gate = RefCell::new(None);
@@ -371,6 +396,32 @@ impl HostShared {
                                 close_links,
                             ) {
                                 Ok(error) => {
+                                    // Workflow #463 KB-1 fix round 1 (the coordinator's ruling R2
+                                    // of 11-16): an input its backend refused before it sent
+                                    // anything, because it does not perform it (the Nemu input's
+                                    // key on an emulator library without the key calls), its
+                                    // resources not left unconfirmed and nothing merged into it,
+                                    // is the input capability's refusal, as the host's own before
+                                    // an intent: denied, its effect not performed, the lease kept.
+                                    if error.failure_context().input_unsupported()
+                                        && error.resource_quiescence()
+                                            != Some(ResourceQuiescence::Unconfirmed)
+                                        && error.secondary_code().is_none()
+                                        && error.lifecycle_causes().is_empty()
+                                        && error.cleanup_cause().is_none()
+                                    {
+                                        capability_refused = true;
+                                        return CriticalActionReport::Failed {
+                                            error: ActionFailure {
+                                                diagnostic: DiagnosticCode::CommandRejected,
+                                                effect: EffectDisposition::NotPerformed,
+                                                release_after: false,
+                                                destructive_started: false,
+                                                ..ActionFailure::backend(input_capability_refusal())
+                                            },
+                                            effect: EffectDisposition::NotPerformed,
+                                        };
+                                    }
                                     // ISO-2b (#419 R1, ISO-M row E08): an input that its
                                     // operation check stopped, its resources not left
                                     // unconfirmed, fails only its operation with the run's or
@@ -532,7 +583,12 @@ impl HostShared {
                 }
                 let release_after = error.release_after;
                 let failure = RequestFailure {
-                    state: RuntimeReceiptState::Failed,
+                    // Workflow #463 KB-1 fix round 1 (R2): a capability's refusal is a denial.
+                    state: if capability_refused {
+                        RuntimeReceiptState::Denied
+                    } else {
+                        RuntimeReceiptState::Failed
+                    },
                     terminal: Some(terminal(&outcome)),
                     error: Box::new(error.error),
                     poison_runtime: error.poison_runtime,
@@ -551,6 +607,24 @@ impl HostShared {
                 critical_execution_error(&error),
             )),
         }
+    }
+
+    /// Workflow #463 KB-1 fix round 1 (the coordinator's ruling R3 of 11-16): whether the touch
+    /// backend the instance `alias` is configured with sends the keys of the key vocabulary alone
+    /// (`DeviceKey::sent_alone_by`); `false` for an instance whose configuration names none.
+    fn sends_key_vocabulary_alone(&self, alias: &str) -> Result<bool, RequestFailure> {
+        let resolved = self.execution()?.resolve(alias).map_err(|error| {
+            RequestFailure::poison_without_terminal(RuntimeHostError::execution(
+                HostLocation::ExecuteInput,
+                &error,
+            ))
+        })?;
+        Ok(resolved
+            .configuration()
+            .and_then(|configuration| {
+                actingcommand_device::TouchBackendChoice::parse(&configuration.input_backend).ok()
+            })
+            .is_some_and(actingcommand_device::DeviceKey::sent_alone_by))
     }
 
     /// Drives the assigned application under an existing lease. `run_links` carries the task

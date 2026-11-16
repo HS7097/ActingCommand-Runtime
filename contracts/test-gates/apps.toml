@@ -2476,6 +2476,15 @@ tests = [
 ]
 incident = ["#392 DA-5ab"]
 
+# Workflow #463 KB-1 (0.12.69; register §1.447; the coordinator's ruling 2 of 11-16: the Lab's key on an input that needs a frame captures one first, by the path of a plain tap): with the fake Runtime host, key back on an instance whose input is nemu_ipc (its status's capability table names it for input.key) answers committed, one key, one capture, no tap, the ledger holds the capture, then the input whose intent names that capture's frame, which the answer names as input_frame, input_frame_captured_twice false (1); on an instance whose input needs no frame: committed, one key, no capture, the input names no frame, no input_frame (2). Changed, not added (the LW-1 fix round 2 row): lw1_fix2_key_and_text_on_an_input_that_sends_neither_hint_what_presses_instead sends key home, which the Nemu input does not send: refused nemu_input_capability_unsupported, nothing captured; KB-1 fix round 1 (R3, R5): its details.hint says this input (nemu_ipc) sends only back, send key back or press the screen's own control (tap x y, do --capture); text as before
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::runtime_input_proxy::kb1_key_back_on_an_instance_whose_input_needs_a_frame_is_sent_on_its_capture",
+    "actingcommand-actinglab::runtime_input_proxy::kb1_key_back_on_an_instance_whose_input_needs_no_frame_captures_nothing",
+]
+incident = ["#463 KB-1"]
+
 # Workflow #463 KP-1 fix round 1 (0.12.69; register §1.448; brief rd-1116/brief-463-kp1-fix1.md, its second and third points; contracts/resource-verify.md, "The package revision"; contracts/component-interfaces.md, the package row 17; contracts/linear-steps.md, "Key steps", "The source layout"): the revision table learns row 17; over zip entries that need 15 (an ending page of a linear_steps pack in another pack), an operation's key (an object) in a pack whose control.json execution_mode is linear_steps needs 17, the same key step in a navigable_route pack and a click step of a linear_steps pack stay 15; and on a pack directory whose linear_steps task has a key step (open, a trusted tap, then back, the back key guarded by a colour probe), actinglab package check answers exit 0, admitted with its package_id, and actinglab package bundle exit 0, written, the pack's task copied into packs/<package_id>/ with the key step as declared
 [[gate]]
 coverage = "Y"

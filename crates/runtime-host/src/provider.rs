@@ -5,6 +5,9 @@ mod fixtures;
 // HS-4 (#402): the capability table names what the Nemu input performs.
 #[cfg(test)]
 mod gate_hs4;
+// Workflow #463 KB-1 fix round 1: the registry's input hands a key on its frame on as one.
+#[cfg(test)]
+mod gate_463_kb1;
 
 use crate::codes::{HostCode, HostLocation};
 use crate::{RuntimeHostError, RuntimeHostResult};
@@ -1286,7 +1289,11 @@ fn entry_capability_profile(
 /// Records implementation/configuration only; this path never opens or probes a backend.
 ///
 /// HS-4 (#402, design §4.4): the Nemu input performs the tap, the long tap, the swipe, the
-/// segmented drags and the reset (`NemuInputSupport`), and neither `key` nor `text`.
+/// segmented drags and the reset (`NemuInputSupport`), and no `text`. Workflow #463 KB-1
+/// (0.12.69): `input.key` is supported on `maatouch`, which sends every key it is given, and on
+/// `nemu_ipc` and `adb_shell_input`, which send the back key alone (`DeviceKey`), as their row's
+/// failure semantics say (the Nemu input only where its library has the key calls, which this path
+/// does not open); `minitouch` sends none. `input.text` stays `maatouch`'s alone.
 fn capability_profile(
     input: TouchBackendChoice,
     capture: CaptureBackendChoice,
@@ -1311,7 +1318,15 @@ fn capability_profile(
                 ),
                 input.as_str(),
             ),
-            EmulatorCapability::InputKey | EmulatorCapability::InputText => (
+            EmulatorCapability::InputKey => (
+                matches!(
+                    input,
+                    TouchBackendChoice::MaaTouch | TouchBackendChoice::NemuIpc
+                        | TouchBackendChoice::AdbShellInput
+                ),
+                input.as_str(),
+            ),
+            EmulatorCapability::InputText => (
                 input == TouchBackendChoice::MaaTouch, input.as_str(),
             ),
             EmulatorCapability::CaptureFrame => (true, capture.as_str()),
@@ -1331,6 +1346,14 @@ fn capability_profile(
         } else {
             (EmulatorCapabilityImplementation::Unsupported, EmulatorCapabilityAvailability::Unavailable,
              "The registered backend does not implement this capability; it must not be executed through this capability claim.")
+        };
+        // Workflow #463 KB-1: an input that sends the back key alone says which key it sends.
+        let refusal = match (capability, input) {
+            (EmulatorCapability::InputKey, TouchBackendChoice::NemuIpc) =>
+                "Implementation selected for the back key alone (back), through the emulator library's key calls on a frame the Runtime captured; a library without those calls sends no key, and every other key is refused before it is sent. Version, assets, connection and device availability have not been verified. Execution requires the existing Runtime admission and backend checks.",
+            (EmulatorCapability::InputKey, TouchBackendChoice::AdbShellInput) =>
+                "Implementation selected for the back key alone (back), as one input keyevent KEYCODE_BACK through adb shell; every other key fails in the backend before anything reaches the device. Version, assets, connection and device availability have not been verified. Execution requires the existing Runtime admission and backend checks.",
+            _ => refusal,
         };
         EmulatorCapabilityEvidence::new(capability, availability, refusal, source)?
             .with_implementation(implementation)
@@ -1956,6 +1979,18 @@ impl InputBackend for DeviceRegistryInputDiagnosticBackend {
     fn key(&mut self, witness: &FencedWrite, key: &str) -> DeviceResult<()> {
         self.run(DeviceLocation::InputKey, |backend| {
             backend.key(witness, key)
+        })
+    }
+
+    /// Workflow #463 KB-1: the key on its step's frame, as the Nemu input presses it.
+    fn key_in_frame(
+        &mut self,
+        witness: &FencedWrite,
+        key: &str,
+        context: &actingcommand_device::InputExecutionContext,
+    ) -> DeviceResult<()> {
+        self.run(DeviceLocation::InputKey, |backend| {
+            backend.key_in_frame(witness, key, context)
         })
     }
 

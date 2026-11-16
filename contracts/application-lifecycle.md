@@ -153,8 +153,12 @@ Before any pointer input (`tap`, `long_tap`, `swipe`, `single_touch_drag_with_ve
 foreground package through ADB and compares it with the instance's `application_id`. The check
 sits in the single input choke point (`HostShared::input`, after the input-frame resolution and
 before the input is prepared), so one check covers the adb and the Nemu touch backends alike, for
-client `Input` requests and for every step of a contained task. `key`, `text` and `reset` inputs
-and fixture instances are not gated.
+client `Input` requests and for every step of a contained task. Since Workflow #463 KB-1
+(0.12.69, `v012-register.md` §1.447) a `key` input passes the same gate as a tap: a package's key
+step and the Lab's `key` alike. So an agent cannot leave another application with the back key:
+a `key back` while another package is in front is refused `application_not_foreground` (or
+`application_foreground_unknown`), nothing sent. `text` and `reset` inputs and fixture instances
+are not gated.
 
 - Query: `adb -s <serial> shell "{ dumpsys activity activities; echo ac_dumpsys_rc=$?; } | grep -e topResumedActivity= -e ResumedActivity: -e ac_dumpsys_rc="`
   (filtered on the device; a missing or non-integer `ac_dumpsys_rc=` status and a non-zero

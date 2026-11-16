@@ -108,7 +108,11 @@ as declared support with status `unverified`: `nemu_ipc` performs `tap`, (HS-4,
 (`single_touch_drag_with_vertical_brake_v1`,
 `single_touch_drag_with_pause_and_brake_v1` and, Workflow #406 T3, the path drag
 `single_touch_path_drag_v1`), only on a frame the Runtime captured
-(`nemu_input_frame_required`), and neither `key` nor `text`; its reset needs no
+(`nemu_input_frame_required`), (Workflow #463 KB-1, 0.12.69, §1.447) the back key alone
+(`back`: the emulator library's key down and key up, on such a frame too; a library without
+those two calls sends no key: fix round 1, the key is refused when it is sent,
+`nemu_input_capability_unsupported`, `denied`, nothing sent and nothing recorded as
+indeterminate), and no `text`; its reset needs no
 frame (`v012-register.md` §1.268). Workflow #434 LW-1 (0.12.67, §1.435): actinglab's `tap`,
 `swipe` and `long-tap` without `--record` read the instance's status once, on every instance,
 and, where its capability table names `nemu_ipc` as the input of the press, capture one frame
@@ -124,16 +128,30 @@ before LW-1, and the Runtime refuses it where the input needs one (`nemu_input_f
 the answer's `touch_backend_warnings` says the status was not read (fix round 2: a refusal's is
 in its `details`, the Runtime's refusal of that press too). A frame the Runtime no longer
 holds when the press names it (`input_frame_unavailable`) is captured once more and the press
-sent once more under the same lease, once (`input_frame_captured_twice`). `key` and `text` stay
-refused there (`nemu_input_capability_unsupported`); their refusal carries `details.hint`, what
-presses instead, where the capability table says the instance's input does not implement
-`input.key` or `input.text`; `maatouch` performs `tap`, `long_tap`, `swipe`,
-the three segmented drags, `key` and `text`; `minitouch` the same without `key`
-and `text`; `adb_shell_input` performs `tap`, `long_tap` (as a swipe that stays at
+sent once more under the same lease, once (`input_frame_captured_twice`). Every other key and
+`text` stay refused there (`nemu_input_capability_unsupported`, nothing sent). Workflow #463 KB-1
+(0.12.69, §1.447): actinglab's `key` is sent by that same path: where the capability table names
+`nemu_ipc` as the input of `input.key`, `key back` reads the status, captures one frame and is
+sent on it, with the one retry and the warnings of a press; a key that input does not send is
+sent without a frame and refused; elsewhere nothing is captured. The refusal of `key` and `text`
+carries `details.hint`, what presses instead, where the capability table says the instance's
+input does not implement `input.key` or `input.text` (since KB-1 the table says `input.key`
+supported on `nemu_ipc` and `adb_shell_input`, whose row's failure semantics name the back key
+alone; KB-1 fix round 1: a refused key outside the key vocabulary there, such as `key home`,
+carries the hint that this input sends only `back`, decided by the key vocabulary and the input
+the table names, not by the refusal's code); `maatouch` performs `tap`, `long_tap`, `swipe`,
+the three segmented drags, `key` (every key it is given) and `text`; `minitouch` the same without
+`key` and `text` (a key answers a fatal device error before anything is sent, and the table says
+`input.key` unsupported); `adb_shell_input` performs `tap`, `long_tap` (as a swipe that stays at
 its point), `swipe` and (Workflow #406 T3, plan Q18 (a)) the three segmented drags
 through `input motionevent`, from the device's Android SDK level 23 (Workflow #406
 T4 corrected this list, which named no segmented drag for `adb_shell_input` and no
-path drag). The value lists of `schema control`
+path drag), and (KB-1) the back key alone, as one `input keyevent KEYCODE_BACK` through the same
+`adb shell` path its taps take (fix round 1: every other key is refused by the Runtime before
+anything is sent and before an intent is written, `nemu_input_capability_unsupported`, as on
+`nemu_ipc`). The `gestures` lists name `key` only for the input that sends every key it is given
+(`maatouch`); the back key of `nemu_ipc` and `adb_shell_input` is in the capability table's
+`input.key` row. A key passes the Runtime's foreground gate as a tap does (KB-1). The value lists of `schema control`
 (`capture_backend`, `touch_backend`) and `session instance registry`
 (`capture_backends`, `touch_backends`) name the same explicit choices, without
 the automatic ones.

@@ -4203,6 +4203,26 @@ tests = [
 ]
 incident = ["#392 DA-5ab"]
 
+# Workflow #463 KB-1 (0.12.69; register §1.447; brief rd-1116/brief-463-kb1-nemu-key.md and the coordinator's rulings of 11-16 evening): the capability table of an instance through a switch of its backends: minitouch no key; adb_shell_input and nemu_ipc input.key supported, their failure semantics naming the back key alone and the Nemu row a library without the key calls; maatouch every key; input.text maatouch's alone (1). On an instance configured nemu_ipc: home, 3, a word of no key and a text refused nemu_input_capability_unsupported, the back key without a frame nemu_input_frame_required, nothing sent; the back key on the frame of a keyless observation completed, the device's one input the back key (2). With another application in front the back key and a tap are each refused application_not_foreground and nothing reaches the device; with the assigned one in front the back key is completed (3)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_463_kb1::kb1_the_capability_table_says_which_inputs_send_the_back_key",
+    "actingcommand-runtime-host::lib::tests::gate_463_kb1::kb1_the_host_sends_the_back_key_on_a_frame_of_a_nemu_input_and_refuses_the_rest",
+    "actingcommand-runtime-host::lib::tests::gate_463_kb1::kb1_the_foreground_gate_holds_a_key_as_it_holds_a_tap",
+]
+incident = ["#463 KB-1"]
+
+# Workflow #463 KB-1 fix round 1 (0.12.69; register §1.447; brief rd-1116/brief-463-kb1-fix1.md, the coordinator's rulings R2, R3 and R5 after review-1790): on an instance configured nemu_ipc, the back key on a captured frame whose input answers the library's refusal (input_unsupported) is denied nemu_input_capability_unsupported, no input performed, the one input record's effect not_performed, nothing committed, the lease kept (1); on an instance configured adb_shell_input, home, 3 and a word of no key are denied nemu_input_capability_unsupported with no input record of any kind and nothing on the device, then the back key is completed, the device's one input (2); the registry's diagnostic wrapper, held as the kernel holds an input, hands a key on its frame to the wrapped input's key_in_frame with the step's context (its check's answer comes back) and the plain key to its key (3)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_463_kb1::kb1_fix1_a_key_the_library_cannot_send_is_denied_and_recorded_not_performed",
+    "actingcommand-runtime-host::lib::tests::gate_463_kb1::kb1_fix1_adb_shell_input_refuses_another_key_before_its_intent",
+    "actingcommand-runtime-host::lib::provider::gate_463_kb1::kb1_fix1_the_registry_input_hands_a_key_on_its_frame_to_the_input_as_one",
+]
+incident = ["#463 KB-1"]
+
 # Workflow #463 KP-1 fix round 1 (0.12.69; register §1.448; brief rd-1116/brief-463-kp1-fix1.md, the independent review's host test; contracts/linear-steps.md, "Key steps", "A key the instance's input does not send"): a linear_steps source package whose second step back presses the back key, run directly through the host on a device instance whose capability table says input.key unsupported (the registry's form for an input other than MaaTouch), ends Failed with contained_task_linear_key_unsupported, its receipt and its one failed terminal naming pack_operation_id back; the device took no input, and the ledger holds no input record (InputIntent, InputCommitted, InputFailed) and no EffectIntent
 [[gate]]
 coverage = "Y"
