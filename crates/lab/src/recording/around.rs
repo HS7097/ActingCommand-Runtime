@@ -43,8 +43,9 @@ const DEFAULT_BEFORE: u64 = 3;
 const DEFAULT_AFTER: u64 = 10;
 const MAX_FRAMES: u64 = 100;
 
-/// The warning of a listed frame whose file is not where the manifest names it.
-const FRAME_FILE_MISSING: &str = "frame_file_missing";
+/// The warning of a listed frame whose file is not where the manifest names it. #463 S2-2 fix round
+/// 1: `record review` warns of such a frame with it too.
+pub(crate) const FRAME_FILE_MISSING: &str = "frame_file_missing";
 /// The warning of a press sent on a capture its command did not store
 /// (`sent_on_unstored_capture`): `press.frame` is the stored frame its step names instead.
 const PRESS_FRAME_NOT_STORED: &str = "press_frame_not_stored";
@@ -350,8 +351,13 @@ fn arrival_number(frame_id: &str) -> u32 {
 }
 
 /// The absolute path of `frame`'s stored file in the recording's directory `dir`, as the archive's
-/// manifest names it; `None`, and its id added to `missing`, when no file is there.
-fn located(dir: &Path, frame: &RecordedFrame, missing: &mut Vec<String>) -> Option<String> {
+/// manifest names it; `None`, and its id added to `missing`, when no file is there. #463 S2-2 fix
+/// round 1: `record review` gives each frame's path by it.
+pub(crate) fn located(
+    dir: &Path,
+    frame: &RecordedFrame,
+    missing: &mut Vec<String>,
+) -> Option<String> {
     let path = stored_frame_path(dir, frame);
     if Path::new(&path).is_file() {
         Some(path)

@@ -418,13 +418,15 @@ pub(crate) const RECORD_FRAMES_READS: FlagReads = FlagReads {
 };
 
 /// #463 S2-2: the flags `record review` reads: the recording named by its id (active, archived or
-/// stopped), the one step to answer and whether no preview is written.
+/// stopped), the one step to answer and whether no preview is written. Fix round 1: and the
+/// package's game, server and locale as `record ready` reads them (`--game` and `--server` are
+/// actinglab's global options), with which `record ready`'s items of each step are checked.
 pub(crate) const RECORD_REVIEW_READS: FlagReads = FlagReads {
     row: "record review",
     parts: &[
         &RECORD_SESSION_READS,
         &ReadPart {
-            options: &["--record-id", "--step"],
+            options: &["--record-id", "--step", "--game", "--server", "--locale"],
             switches: &["--no-preview"],
             refused: &[],
         },
@@ -3000,7 +3002,8 @@ fn record_stop_options(
 /// (`default_*`); and the reader of the game and server the installation the program runs from
 /// binds the instance to (`installed`, [`installed_identity`]), which fix round 1 calls only when
 /// the others do not give both (`recording_api::package_identity`). The recording's own come
-/// between the given ones and the Lab's (`record stop`'s settings).
+/// between the given ones and the Lab's (`record stop`'s settings). #463 S2-2 fix round 1: `record
+/// review` reads them by it too, as `record ready` does.
 fn identity_options(
     global: &GlobalOptions,
     config: &UserConfig,
@@ -3503,16 +3506,17 @@ fn frames_number<T: std::str::FromStr>(
 }
 
 /// #463 S2-2 (`contracts/lab-recording.md`, "Reviewing a recording step by step: `record
-/// review`"): `record review [--record-id <id>] [--step <k>] [--no-preview]`, offline and without
-/// the recording lock: each effective step of the recording `record ready` reads, or the one
-/// `--step` names, as the screen before, the press and the screen after, with its items of `record
-/// ready` and, without `--no-preview`, a preview of each screen written under the recording's
-/// `lab/preview/` (`record_review`). `--step` is read as `record frames` reads it
-/// (`frames_number`). The items are those `record ready` answers given none of its own flags: the
-/// game and server of actinglab's global options, else the recording's, the Lab's and the
-/// installation's (`identity_options` of no flags). Under `--dry-run` the previews are files
-/// written, so the form without `--no-preview` is refused `dry_run_unsupported` before anything of
-/// the recording is read; with it nothing is written (`no_effect`). The answer is the Lab's.
+/// review`"): `record review [--record-id <id>] [--step <k>] [--no-preview] [--game <g>] [--server
+/// <s>] [--locale <l>]`, offline and without the recording lock: each effective step of the
+/// recording `record ready` reads, or the one `--step` names, as the screen before, the press and
+/// the screen after, with its items of `record ready` and, without `--no-preview`, a preview of each
+/// screen written under the recording's `lab/preview/` (`record_review`). `--step` is read as
+/// `record frames` reads it (`frames_number`). Fix round 1: the items are those `record ready`
+/// answers given the same flags: `--game`, `--server` and `--locale`, read and refused by the
+/// function `record ready` reads them with (`identity_options`), else the recording's, the Lab's
+/// and the installation's. Under `--dry-run` the previews are files written, so the form without
+/// `--no-preview` is refused `dry_run_unsupported` before anything of the recording is read; with
+/// it nothing is written (`no_effect`). The answer is the Lab's.
 fn run_record_review(
     global: &GlobalOptions,
     config: &UserConfig,
@@ -3534,7 +3538,7 @@ fn run_record_review(
         step: frames_number(flags, "--step", "step")?,
         no_preview,
     };
-    let options = identity_options(global, config, &FlagArgs::default(), instance_id)?;
+    let options = identity_options(global, config, flags, instance_id)?;
     let outcome = record_review(
         state_dir,
         instance_id,

@@ -495,7 +495,10 @@ fn ready_of(
 /// unless `request.no_preview`, the previews are written under the recording's `lab/preview/`
 /// (`review::review_outcome`). A step that does not exist, is dropped or was converted is
 /// `record_step_not_found`; a stored frame a preview is drawn on whose bytes do not match its
-/// sha256 is `record_frame_hash_mismatch`, and then no preview is written.
+/// sha256 is `record_frame_hash_mismatch`, and then no preview is written. Fix round 1: `options`
+/// are the game, server and locale the command line gives `record review` as it gives them `record
+/// ready`, so that a recording without a locale of its own is reviewed with its self-checks run;
+/// a frame whose file is not there is answered without a path and named in `frame_file_missing`.
 pub fn record_review(
     state_dir: &Path,
     instance: &str,

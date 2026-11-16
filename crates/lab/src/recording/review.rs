@@ -19,9 +19,15 @@
 //!   `record_frame_hash_mismatch` and no preview is written. Each is then read and checked again,
 //!   drawn on a copy and written atomically (a temporary file, then a rename), so that two reviews
 //!   at once leave no torn file.
+//!
+//! Fix round 1 (the independent review of #1786): an application operation's outcome is the
+//! judgement the archive's manifest gives it (`archive::outcome_of`), `indeterminate` with attempts
+//! and no completed receipt; a frame whose file is not there is answered with no path and the
+//! warning `record frames` gives it (`around::located`, `frame_file_missing`); the answer's paths
+//! are the archive module's (`archive::display`).
 
-use super::archive::{step_kind, stored_frame_path};
-use super::around::{Stored, sequence_of};
+use super::archive::{PERFORMED, display, outcome_of, step_kind, stored_frame_path};
+use super::around::{FRAME_FILE_MISSING, RecordFramesWarning, Stored, located, sequence_of};
 use super::boxes::box_mark_id;
 use super::generate::effective_steps;
 use super::model::{
@@ -45,6 +51,10 @@ const PREVIEW_DIR: &str = "preview";
 /// The roles of a step's two previews, in their file names.
 const BEFORE: &str = "before";
 const AFTER: &str = "after";
+/// Fix round 1: a press's outcome in the words `record status` names a click's
+/// (`recording_api::click_outcome`): performed, and with no outcome on record.
+const EXECUTED: &str = "executed";
+const DECLARED: &str = "declared";
 
 /// `record review`: the recording (`record_id`, or the one the instance's session header names),
 /// the one step to answer (`step`, its serial number; `None`: every effective step) and whether no
@@ -67,6 +77,10 @@ pub struct RecordReviewOutcome {
     /// How many effective steps the recording has, answered or not: where the list may be cut, as
     /// `record frames` counts its sides, so that a long recording is read one step at a time.
     pub steps_total: usize,
+    /// Fix round 1: `frame_file_missing` naming each answered frame whose file is not there (its
+    /// `path` `null`), once, in the order the answer names them, as `record frames` warns; empty
+    /// when every file is there.
+    pub warnings: Vec<RecordFramesWarning>,
 }
 
 /// One step: its screen before, its press and its screen after, as the step table holds them.
@@ -100,8 +114,9 @@ pub struct RecordReviewStep {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct RecordReviewFrame {
     pub frame_id: String,
-    /// The frame's file, an absolute path, as the archive's manifest names it.
-    pub path: String,
+    /// The frame's file, an absolute path, as the archive's manifest names it; fix round 1: `null`
+    /// when no file is there (`frame_file_missing`).
+    pub path: Option<String>,
     pub preview: Option<String>,
 }
 
@@ -112,7 +127,8 @@ pub struct RecordReviewAfter {
     /// The serial number of the step the frame is stored under, the next step.
     pub step: u32,
     pub frame_id: String,
-    pub path: String,
+    /// As [`RecordReviewFrame::path`].
+    pub path: Option<String>,
     pub preview: Option<String>,
     /// Whether the captures after the press found the screen still (`after_capture.still`).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -127,14 +143,16 @@ pub struct RecordReviewAfter {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct RecordReviewBetween {
     pub frame_id: String,
-    pub path: String,
+    /// As [`RecordReviewFrame::path`].
+    pub path: Option<String>,
 }
 
 /// What a step pressed, as the step table holds it: a click's region (`rect`, one pixel for a
 /// press recorded by its point), its gesture, and, once performed, the point pressed, a swipe's
 /// end and the duration; or an application operation's action. `source` is the click's (`point`,
 /// `swipe`, ...) or the operation's (`executed`, `declared`); `outcome` is `declared`, `executed`
-/// or `indeterminate`, as `record status` names it.
+/// or `indeterminate`, as `record status` names a click's (fix round 1: an application operation's
+/// by the judgement of the archive's manifest, `application_outcome`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct RecordReviewPress {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -164,7 +182,8 @@ struct Planned<'a> {
 /// the answer of `record ready` for it, its session's state among it: each effective step, or the
 /// one `request.step` names (`record_step_not_found` for one that does not exist, is dropped or
 /// was converted), and, unless `request.no_preview`, the previews written under the recording's
-/// `lab/preview/` once every frame they are drawn on read and matched its sha256.
+/// `lab/preview/` once every frame they are drawn on read and matched its sha256. Fix round 1: a
+/// frame whose file is not there is answered without a path and named in `frame_file_missing`.
 pub(crate) fn review_outcome(
     state_dir: &Path,
     recording: &LabRecording,
@@ -187,6 +206,7 @@ pub(crate) fn review_outcome(
     };
     let sequence = sequence_of(recording);
     let mut planned = Vec::new();
+    let mut missing = Vec::new();
     let mut steps = Vec::with_capacity(listed.len());
     for (position, step) in listed {
         let before_at = before_position(step, &sequence);
@@ -208,11 +228,11 @@ pub(crate) fn review_outcome(
                     },
                     path: path.clone(),
                 });
-                absolute(&path)
+                display(&path)
             });
             RecordReviewFrame {
                 frame_id: frame.frame_id.clone(),
-                path: stored_frame_path(&dir, frame),
+                path: located(&dir, frame, &mut missing),
                 preview,
             }
         });
@@ -227,7 +247,7 @@ pub(crate) fn review_outcome(
                 .filter(|stored| stored.step == sequence[last].step)
                 .map(|stored| RecordReviewBetween {
                     frame_id: stored.frame.frame_id.clone(),
-                    path: stored_frame_path(&dir, stored.frame),
+                    path: located(&dir, stored.frame, &mut missing),
                 })
                 .collect(),
             _ => Vec::new(),
@@ -247,12 +267,12 @@ pub(crate) fn review_outcome(
                     },
                     path: path.clone(),
                 });
-                absolute(&path)
+                display(&path)
             });
             RecordReviewAfter {
                 step: next,
                 frame_id: frame.frame_id.clone(),
-                path: stored_frame_path(&dir, frame),
+                path: located(&dir, frame, &mut missing),
                 preview,
                 still: record.and_then(|record| record.still),
                 waited_ms: record.map(|record| record.waited_ms),
@@ -276,11 +296,24 @@ pub(crate) fn review_outcome(
         });
     }
     write_previews(&dir, &planned)?;
+    // A frame answered twice (a step's screen after is the next step's screen before) is named
+    // once.
+    let mut named = BTreeSet::new();
+    missing.retain(|frame_id| named.insert(frame_id.clone()));
+    let warnings = if missing.is_empty() {
+        Vec::new()
+    } else {
+        vec![RecordFramesWarning {
+            code: FRAME_FILE_MISSING,
+            frame_ids: missing,
+        }]
+    };
     Ok(RecordReviewOutcome {
         record_id: recording.record_id.clone(),
         session: ready.session,
         steps,
         steps_total: effective.len(),
+        warnings,
     })
 }
 
@@ -339,13 +372,20 @@ fn press_of(step: &RecordingStep) -> Option<RecordReviewPress> {
             gesture: None,
             application: Some(application.action.clone()),
             source: application.source.clone(),
-            outcome: if application.executed.is_some() {
-                "executed"
-            } else {
-                "declared"
-            }
-            .to_owned(),
+            outcome: application_outcome(step),
         })
+}
+
+/// Fix round 1: the outcome of the application operation of `step`, by the judgement the archive's
+/// manifest gives it (`archive::outcome_of`), in the words `record status` names a click's: its
+/// `performed` (a completed receipt is on record) is `executed`, its `indeterminate` (attempts and
+/// no completed receipt: the operation may have run) stays, and without either it is `declared`.
+fn application_outcome(step: &RecordingStep) -> String {
+    match outcome_of(step) {
+        Some(outcome) if outcome == PERFORMED => EXECUTED.to_owned(),
+        Some(outcome) => outcome,
+        None => DECLARED.to_owned(),
+    }
 }
 
 /// What is drawn of the press of `step` on its screen before: its performed click's point, by its
@@ -400,14 +440,6 @@ fn declared_boxes(step: &RecordingStep) -> Vec<(RecordRect, Colour)> {
 fn preview_path(dir: &Path, serial: u32, role: &str) -> PathBuf {
     dir.join(PREVIEW_DIR)
         .join(format!("s{serial:02}-{role}.png"))
-}
-
-/// The absolute form of `path` for the answer.
-fn absolute(path: &Path) -> String {
-    std::path::absolute(path)
-        .unwrap_or_else(|_| path.to_path_buf())
-        .display()
-        .to_string()
 }
 
 /// Writes `planned`: first every stored frame they are drawn on is read and its bytes checked

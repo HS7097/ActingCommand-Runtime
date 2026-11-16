@@ -2587,23 +2587,27 @@ every frame stored before that mark: on a recording marked after its presses it 
 ## Reviewing a recording step by step: `record review`
 
 ```
-record review [--record-id <id>] [--step <k>] [--no-preview] [--state-dir <dir>]
+record review [--record-id <id>] [--step <k>] [--no-preview] [--game <g>] [--server <s>]
+              [--locale <l>] [--state-dir <dir>]
 ```
 
 #463 S2-2 (0.12.68; the owner approved the three-stage blueprint of package making on board #463:
 stage two turns the recorded material into a package offline, the tool hands back the material and
 the agent decides; her ruling there: a preview's boxes are rendered onto a copy, and the stored
 frames carry no box; the rules here are the coordinator's). Through the Lab's MCP server
-(`actinglab-mcp`) it is `ac_record_review` (`record_id`, `step`, `no_preview`, `state_dir`;
-[lab-operations.json](lab-operations.json), the row `record review`); today's server (`actingctl
-mcp-serve`) has no such tool.
+(`actinglab-mcp`) it is `ac_record_review` (`record_id`, `step`, `no_preview`, `game`, `server`,
+`locale`, `state_dir`; [lab-operations.json](lab-operations.json), the row `record review`);
+today's server (`actingctl mcp-serve`) has no such tool.
 
 - **Which recording, which steps.** The recording `record ready` reads, found by the same function
   (the instance's, or the active, archived or stopped one `--record-id` names; the same refusals),
   read once. Every effective step in the order a run meets them, or with `--step <k>` the step of
   that serial number alone (a step that does not exist, is dropped or was converted is
   `record_step_not_found`, 3, before `record ready`'s checks run). `steps_total` is how many
-  effective steps the recording has, answered or not.
+  effective steps the recording has, answered or not. With `--step` too the recording's whole
+  readiness is evaluated, its self-checks included, on every call, so that the step's `missing` is
+  what `record ready` answers for it: reading a long recording step by step runs them once per
+  step.
 - **It changes nothing recorded.** It takes no recording lock, reaches no Runtime and writes no
   file of the recording but its previews: the step table, the frames, the crops, the manifests and
   the session header keep their bytes. It does not create the session state directory.
@@ -2616,14 +2620,18 @@ mcp-serve`) has no such tool.
   - `before`: the screen the press happened on, the press's `before_frame` as `record ready` names
     it (a click's execution's, else its last attempt's, else the application operation's receipt's),
     else, on a step without a press (the final screen), the step's live primary frame: `frame_id`,
-    `path` (the frame's file, absolute, as the manifest names it) and `preview` (the preview's
-    absolute path, or `null`); absent on a step without a frame (an entry launch);
+    `path` (the frame's file, absolute, as the manifest names it; `null` when no file is there, see
+    `warnings`) and `preview` (the preview's absolute path, or `null`); absent on a step without a
+    frame (an entry launch);
   - `press`: what was pressed: a click's `rect` (one pixel for a press recorded by its point, the
     press box once one is drawn), `gesture`, and once performed its `point`, `to_point` (a swipe's
     end; a long press's point again) and `duration_ms`; or an application operation's
     `application` (its action); `source` (the click's, `point`, `swipe`, ..., or the operation's,
     `executed` or `declared`) and `outcome` (`declared`, `executed` or `indeterminate`, as `record
-    status` names a click's); absent on a step without an effect;
+    status` names a click's; an application operation's by the judgement the archive's manifest
+    gives its row's `outcome`: `executed` with its completed receipt, `indeterminate` with attempts
+    and no completed receipt, since it may have run, and `declared` with neither); absent on a step
+    without an effect;
   - `after`: the frame the click's execution or the application operation's receipt names as its
     `after_frame`: `step` (the step it is stored under, the next step), `frame_id`, `path`,
     `preview`, and from its `after_capture` `still` (whether the captures after the press found the
@@ -2634,9 +2642,17 @@ mcp-serve`) has no such tool.
   - `marks`: the step's own marks as stored (a recognize box is the template mark
     `box/<nn>/<x>_<y>_<w>_<h>`; a press box is `press.rect`);
   - `missing`: the step's items of `record ready`, as `record ready` answers them (the same
-    function on the same recording, given the game and the server `record ready` takes without
-    flags of its own: actinglab's global `--game` and `--server`, else the recording's, the Lab's
-    instance configuration's and the installation's).
+    function on the same recording, given the game, the server and the locale as `record ready`
+    takes them: `--game`, `--server` and `--locale`, read and refused as `record ready` reads and
+    refuses them, else the recording's, and for game and server the Lab's instance configuration's
+    and the installation's). A part not known is an item of the whole recording, on no step, and
+    then no self-check runs: a recording without a locale of its own is reviewed with `--locale`
+    for a self-check's refusal to reach the step it names.
+- **Warnings.** `warnings` is `[]`, or `[{"code": "frame_file_missing", "frame_ids": [...]}]`
+  naming once, in the order the answer gives them, each frame whose file is not where the manifest
+  names it, as `record frames` answers it; such a frame's `path` is `null`, with `--no-preview`
+  as without it. Without `--no-preview` a screen before or after whose file is not there cannot
+  be drawn: it is refused as a frame that does not match (below).
 - **The previews.** Without `--no-preview`, each screen before and each screen after is written as
   a PNG under the recording's `lab/preview/`, named by the step's serial number and the role:
   `s<nn>-before.png`, `s<nn>-after.png` (two digits, more above 99), never under `frames/` or
@@ -2651,8 +2667,10 @@ mcp-serve`) has no such tool.
   press. Every frame a preview is drawn on is read and its sha256 checked before any preview is
   written: one whose bytes do not match is `record_frame_hash_mismatch` (3), as every read of a
   stored frame answers it, and no preview is written. Each is written through a temporary file and
-  a rename, so that two reviews at once leave no torn file; a later review writes them again. The
-  boxes exist only on the previews: no stored frame is written.
+  a rename, so that two reviews at once leave no torn file; every review writes the previews it
+  answers anew, over those of an earlier one, and the tool never removes a preview (one of a step
+  not answered, or dropped since, stays where it is, and no answer names it). The boxes exist only
+  on the previews: no stored frame is written.
 - **Through MCP and `--dry-run`.** A long recording's answer may outgrow the MCP server's budget:
   it is then written whole to the server's export directory with `answer_exported`; `steps_total`
   says how many steps there are, and `--step` reads them one at a time. Under actinglab's
@@ -2672,7 +2690,8 @@ mcp-serve`) has no such tool.
             "marks": [],
             "missing": [{"order": 1, "step": 1, "artifact_step": 1, "frame_id": "f0001",
                          "what": "page_recognition", "code": "record_step_without_recognition",
-                         "hint": "record mark --step 1 --template <id>=x,y,w,h"}]}]}
+                         "hint": "record mark --step 1 --template <id>=x,y,w,h"}]}],
+ "warnings": []}
 ```
 
 ## Optional steps

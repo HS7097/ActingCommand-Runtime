@@ -32125,6 +32125,42 @@ the unrowed lists (34 now, `record review` after `record frames`). No test leave
 **What is not changed.** Any recorded file; the step table's format; `record ready`'s answer;
 `record stop`'s decisions and the generator; the recording lock; today's MCP server.
 
+**Fix round 1** (coordinator work order `rd-1116/brief-463-s22-fix1.md`, after the independent
+review of `324f9cad`, "may merge with one change"; main `a91e657c`, the Lab display train #1780,
+merged first; the rules are the coordinator's rulings).
+- *An application operation's outcome* (the review's change). The first build answered `declared`
+  for an operation with attempts and no completed receipt, which may have run. `review::press_of`
+  now names it by `archive::outcome_of`, the judgement the manifest's row `outcome` is (made
+  `pub(crate)`, with `archive::PERFORMED`), in the words `record status` names a click's:
+  `performed` is `executed`, `indeterminate` stays, none is `declared`. No second judgement.
+- *The identity flags of `record ready`.* `record review` reads `--game`, `--server` and `--locale`
+  (`RECORD_REVIEW_READS`, the row's parameters `game`, `server` and `locale`, so
+  `ac_record_review` takes them) and passes them through `session_record::identity_options`, the
+  function `record ready` reads and refuses them with, to the one readiness judgement (`ready_of`).
+  A recording without a locale of its own lists `locale` for the whole recording and runs no
+  self-check; given it, a self-check's refusal reaches the step it names.
+- *A frame file that is not there.* Every path of the answer (`before`, `after`, `between`) is
+  `around::located`'s, `record frames`' (made `pub(crate)`, with `FRAME_FILE_MISSING`): `null`
+  for a missing file, which the answer's new member `warnings` names once in `frame_file_missing`,
+  `record frames`' own warning, with `--no-preview` as without it. Without `--no-preview` a screen
+  before or after whose file is missing is refused as before, `record_frame_hash_mismatch`.
+- *Small things.* The answer's paths are `archive::display`'s (made `pub(crate)`); the copy in
+  `review.rs` is gone. The MCP manual says `steps_total` counts every effective step; the contract
+  says that `--step` evaluates the recording's whole readiness, self-checks included, on every
+  call, and that previews are written anew on every call and never removed by the tool.
+- *Codes and words.* None is added; `frame_file_missing` is `record frames`' warning word (§1.426),
+  not a catalog code. No decision reads a code.
+- *Tests* (`crates/lab/src/gate_463_s22.rs`, eight more, and
+  `apps/actinglab/src/tests/gate_463_s22.rs`, new, one; all in the gate "#463 S2-2"): an
+  application operation with attempts only is `indeterminate`, as its manifest row; a tap and a box
+  at the frame's bottom-right edge and a long press and a box of the whole frame at its top-left,
+  drawn inside the frame; a tap's cross where a long press has none, both rings; a colour mark's
+  region in the marks' colour; an application step with its receipt's screens; a dropped step
+  neither listed nor counted; a frame of another step left out of `between`; a self-check's item on
+  its step once the locale is given, as `record ready` lists it; the command line's refusal of
+  `--dry-run` without `--no-preview` before the recording is read. Adapted: the last test of the
+  first build reads a frame's `path` as nullable.
+
 **At deploy.** Nothing to configure. Recordings already on disk are read as they are: a press an
 earlier build recorded without `before_frame` or `after_frame` answers the step's live frame as its
 screen before and no screen after. Through MCP the tool is `ac_record_review` of the Lab's MCP
