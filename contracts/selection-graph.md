@@ -1136,6 +1136,24 @@ admitted and before any frame is read, a name the package does not declare (any 
 package that declares none) or a value that is not one of its declared options is
 `not_recognised`. A package that declares no parameter replays exactly as before.
 
+Workflow #463 K-R3a: the kernel's `dry_run_scan_decide` dry-runs a select over a scan as far as
+its decision, for the Lab's self-test of a recorded scan select. It takes the step's own admitted
+`scan` (a step that declares none: `contained_task_select_invalid`), the frames as `dry_run_scan`
+takes them, and the snapshot, instant and run parameters as `dry_run_select` takes them, with no
+shared table. Without a target consensus a capture takes one frame and a viewport settles once two
+captures agree, so a forward run of viewports v0 … vn is the frames v0, v0, v1, v1, …, vn, vn. The
+session runs as a run's does to its coverage checks, then `Decide` (section Select over a scan)
+decides as the step does: the evaluator's abort, or the members evaluated once, and the
+unknown-instance rules. The result holds the session's account as `dry_run_scan` gives it, the
+decision, the unknown-instance check as the step's record carries it, and the chosen member when
+the decision selected one candidate and nothing blocks it (a selected candidate the scan holds no
+member for is `selection_evaluation_failed`, never a missing choice); nothing returns, confirms or
+is pressed, and a failure before the decision is the error. A draft policy in place of the sealed
+one is checked as `dry_run_select` checks one and then by every admission rule of a scan step that
+reads its policy, in admission's order: its last tie-break key `candidate_id lowest_first`, the
+mode `none_allowed` where the step declares `on_empty`, and the upper bound's inputs; else
+`contained_task_select_invalid` with the admission's detail.
+
 ## Judge step
 
 Workflow #428 S168-5b, written ahead of its code by S168-0 and corrected by its fixes
