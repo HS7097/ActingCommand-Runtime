@@ -25,6 +25,7 @@ use crate::codes::{
     LabCode, RegressionNotRun, RegressionProblem, RegressionResult, RegressionVerdict,
 };
 use crate::ocr::LabOcr;
+use crate::{package_base, scene_in_base};
 use actingcommand_contract::outcome::{Detail, Outcome, VocabularyToken};
 use actingcommand_contract::{ContainedTaskRequest, LabResult};
 use actingcommand_execution_kernel::{
@@ -451,6 +452,20 @@ impl RegressionPackage {
                 outcome: Outcome::new(LabCode::ResourceRegressionSceneOutsideRects).count(outside),
             });
         }
+        // Workflow #392 DA-5cd: the scene in its package's coordinate space, brought there as the
+        // offline commands bring a stored image (`scene_in_base`); one that cannot be evaluates
+        // nothing.
+        let scene = match scene_in_base(package_base(&self.evaluator), scene) {
+            Ok((scene, _)) => scene,
+            Err(error) => {
+                let refused = RegressionCheck::failed(
+                    SCENE_AT,
+                    RegressionProblem::SceneSizeUnsupported,
+                    Some(error.message),
+                );
+                return case.verdict(vec![refused], warnings);
+            }
+        };
         let engine = ReadonlyRecognitionEngine::new(self.evaluator.clone(), Vec::new());
         let mut checks = Vec::new();
         if let Some(expected) = &case.expectations.page {

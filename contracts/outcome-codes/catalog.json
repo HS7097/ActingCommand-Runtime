@@ -5532,6 +5532,9 @@
         "canvas_size_mismatch": {
           "description": "The scene's size is not the canvas's."
         },
+        "scene_size_unsupported": {
+          "description": "The scene cannot be brought to its package's coordinate space as the offline commands bring a stored image there (they refuse it lab_scene_size_unsupported)."
+        },
         "rect_outside_canvas": {
           "description": "A rectangle of scene_construction.rects does not lie inside the canvas."
         },

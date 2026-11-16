@@ -448,6 +448,9 @@ actingcommand_contract::outcome_vocabulary! {
         SceneSha256Mismatch => "scene_sha256_mismatch",
         /// The scene's size is not the canvas's.
         CanvasSizeMismatch => "canvas_size_mismatch",
+        /// The scene cannot be brought to its package's coordinate space as the offline commands
+        /// bring a stored image there (they refuse it `lab_scene_size_unsupported`).
+        SceneSizeUnsupported => "scene_size_unsupported",
         /// A rectangle of `scene_construction.rects` does not lie inside the canvas.
         RectOutsideCanvas => "rect_outside_canvas",
         /// The case's package is no directory.

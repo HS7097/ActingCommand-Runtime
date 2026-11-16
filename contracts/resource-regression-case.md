@@ -88,18 +88,23 @@ A directory that is not there is `package_missing`, any other refusal `package_r
    forbids cannot match on the bare canvas. A target that passes on the bare canvas (a dark
    colour, for one) and a target that needs several frames are reported where the case is
    written, not forced into one scene.
-3. **`expect.observe.page`** with the kernel's page detection: `ReadonlyRecognitionEngine::
+3. **The scene in its package's coordinate space**, brought there as the offline commands bring
+   a stored image (`scene_in_base`, `crates/lab`, Workflow #392 DA-5cd): a scene of the package's
+   `coordinate_space` as it is, a pure scale of it reduced to it. A scene it refuses (another
+   ratio, smaller, the other orientation; the offline commands refuse it
+   `lab_scene_size_unsupported`) is `scene_size_unsupported` and evaluates nothing.
+4. **`expect.observe.page`** with the kernel's page detection: `ReadonlyRecognitionEngine::
    current_page` (`crates/execution-kernel`, `readonly.rs`), the function offline `current-page`
    and `observe` call, which evaluates every target of every page and answers a conflict when
    several pages match. Several pages matching is `page_conflict` (every page named in
    `matched_pages`); another page, or none, than expected `page_mismatch`; any other refusal of the
    detection `page_detection_refused`.
-4. **Each entry of `expect.recognize`** with the kernel's target evaluation:
+5. **Each entry of `expect.recognize`** with the kernel's target evaluation:
    `ReadonlyRecognitionEngine::recognize`, the function offline `recognize` calls
    (`SceneEvaluation::evaluate_target`). Its `passed` other than expected is `target_mismatch`; a
    click-only target, which is never evaluated on a scene, `target_click_only`; a refusal (a target
    the package does not declare) `target_refused`.
-5. **The expectations not evaluated**, each `not_run` with `not_evaluated`.
+6. **The expectations not evaluated**, each `not_run` with `not_evaluated`.
 
 Nothing is evaluated a second way: the runner calls these two kernel functions and reads their
 answers. An evaluation the offline commands refuse is `not_run`, with its word:
@@ -166,7 +171,7 @@ actinglab [--json] [--game <game>] resource regression --repo <checkout> [--case
 | `resource_regression_scene_outside_rects` (lab), `count` | pixels outside the rectangles are not the canvas colour | warns | 0 |
 | `regression_verdict`: `passed`, `failed`, `partial`, `not_run` | a case's verdict | informs (`failed` makes the run refuse) | |
 | `regression_result`: `passed`, `failed`, `not_run` | a check's result | informs | |
-| `regression_problem`: `case_missing`, `case_unreadable`, `member_missing`, `member_unknown`, `member_invalid`, `expect_empty`, `scene_missing`, `scene_unreadable`, `scene_sha256_mismatch`, `canvas_size_mismatch`, `rect_outside_canvas`, `package_missing`, `package_refused`, `page_conflict`, `page_mismatch`, `page_detection_refused`, `target_mismatch`, `target_click_only`, `target_refused` | why a check failed, one cause each | fails the case | |
+| `regression_problem`: `case_missing`, `case_unreadable`, `member_missing`, `member_unknown`, `member_invalid`, `expect_empty`, `scene_missing`, `scene_unreadable`, `scene_sha256_mismatch`, `canvas_size_mismatch`, `scene_size_unsupported`, `rect_outside_canvas`, `package_missing`, `package_refused`, `page_conflict`, `page_mismatch`, `page_detection_refused`, `target_mismatch`, `target_click_only`, `target_refused` | why a check failed, one cause each | fails the case | |
 | `regression_not_run`: `not_evaluated`, `ocr_unavailable`, `frames_required` | why a check did not run | informs | |
 
 No decision reads a code: the run refuses by the verdict word `failed`.

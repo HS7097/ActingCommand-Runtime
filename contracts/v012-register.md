@@ -32116,7 +32116,8 @@ values): a case failed, exit 1. Four closed vocabularies, used by no outcome key
 (`passed`, `failed`, `partial`, `not_run`), `regression_result` (`passed`, `failed`, `not_run`),
 `regression_problem` (`case_missing`, `case_unreadable`, `member_missing`, `member_unknown`,
 `member_invalid`, `expect_empty`, `scene_missing`, `scene_unreadable`, `scene_sha256_mismatch`,
-`canvas_size_mismatch`, `rect_outside_canvas`, `package_missing`, `package_refused`,
+`canvas_size_mismatch`, `scene_size_unsupported`, `rect_outside_canvas`, `package_missing`,
+`package_refused`,
 `page_conflict`, `page_mismatch`, `page_detection_refused`, `target_mismatch`,
 `target_click_only`, `target_refused`), `regression_not_run` (`not_evaluated`, `ocr_unavailable`,
 `frames_required`). The run refuses by the verdict word `failed`; no decision reads a code. The
@@ -32137,6 +32138,15 @@ no test leaves a gate map.
 **What is not changed.** `resource verify`'s steps and report, `standard-pack build`, the offline
 commands' answers and the kernel's evaluation. No ledger record, configuration key or Runtime
 interface revision.
+
+**Main merged before the push** (`a91e657c`, #1780, the train of #392 DA-5ab and DA-5cd, §1.436 and
+§1.437). On it the offline commands bring a stored scene to its package's `coordinate_space`
+before they evaluate it (`display_base::scene_in_base`: as it is at that size, a pure scale reduced
+to it, anything else refused `lab_scene_size_unsupported`). The runner takes the scene there by the
+same function, after the scene rule is checked on the case's own canvas, so it still calls what the
+offline commands call; a scene that function refuses is the problem `scene_size_unsupported`, one
+more word of `regression_problem`, and evaluates nothing. A scene of the package's size, every
+case of the tests, is evaluated as it is.
 
 **At deploy.** Nothing to configure: the operation runs from the Tools and reads a checkout.
 
