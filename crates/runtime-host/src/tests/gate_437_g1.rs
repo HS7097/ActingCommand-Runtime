@@ -24,14 +24,18 @@
 //! contract's or the coordinator's ruling; every comparison is within one host. Neutral names only.
 
 use super::gate_403::status_fence;
-use super::instance_workers::all_events;
+use super::instance_workers::{all_events, phases, wait_until};
 use super::*;
 use crate::codes::HostCode;
 use crate::host::{ContainedTaskCheckpointPoint, HostClaimForTest};
-use actingcommand_contract::{HolderId, InstanceStuckRecovery};
-use actingcommand_policy::DeviceGroupWait;
+use actingcommand_contract::outcome::Outcome;
+use actingcommand_contract::{
+    DeviceHeldWait, HolderId, InstanceDeviceHeld, InstanceStuckRecovery, RecoveryTriggerStage,
+    RuntimeLifecyclePhase,
+};
+use actingcommand_policy::{DeviceGroupWait, PolicyCode};
 use actingcommand_scheduler::{ClaimKind, QueuedLease};
-use serde_json::json;
+use serde_json::{Value, json};
 
 const A: &str = POLICY_INSTANCE_ALIAS;
 const B: &str = POLICY_INSTANCE_ALIAS_B;
@@ -375,12 +379,13 @@ fn assert_held_for(receipt: &RuntimeReceipt, fenced: &str) {
 }
 
 /// A's direct run whose end work asks B's self-check claim (which waits for the device), sets
-/// A's capture close unconfirmed and lets A's lease lapse past its end grace, and one tick of the
-/// lease sweep, as MAPP-1d's lapse does: the close of A's session under the lapsed lease is
-/// refused and fences A, and the session close ahead that follows is unconfirmed, so A's close
-/// lease is kept. Then the clock moves past that close lease's time and one more tick ends it.
-/// Returns B's claim, which waited first.
-fn fence_a_and_lapse_its_close_lease(device: &Device) -> HostClaimForTest {
+/// A's capture close unconfirmed when `unconfirmed`, and, when `lapse`, lets A's lease lapse past
+/// its end grace and runs one tick of the lease sweep, as MAPP-1d's lapse does: the close of A's
+/// session under the lapsed lease is refused and fences A (#411 A64, a refused close), and the
+/// session close ahead that follows closes A's session, confirmed or not. Without `lapse` the run
+/// ends on its own lease, whose end closes A's session under it. Returns B's claim, which waited
+/// first.
+fn run_a_with_b_waiting(device: &Device, unconfirmed: bool, lapse: bool) -> HostClaimForTest {
     let package = device.run_package(A);
     let ids = IdentifierIssuer::new().expect("identifier issuer");
     let request = runtime_request(
@@ -405,13 +410,19 @@ fn fence_a_and_lapse_its_close_lease(device: &Device) -> HostClaimForTest {
                 let claim = host
                     .request_host_claim_for_test(B, ClaimKind::SelfCheck)
                     .expect("B's claim");
-                *a_state
-                    .capture_close_error
-                    .lock()
-                    .expect("capture close error") = Some(unconfirmed_close());
-                clock.advance(LAPSE_MS);
-                let swept = host.expire_due_leases_for_test();
-                sent.send((claim, swept)).expect("the lapse");
+                if unconfirmed {
+                    *a_state
+                        .capture_close_error
+                        .lock()
+                        .expect("capture close error") = Some(unconfirmed_close());
+                }
+                let swept = if lapse {
+                    clock.advance(LAPSE_MS);
+                    host.expire_due_leases_for_test()
+                } else {
+                    Ok(())
+                };
+                sent.send((claim, swept)).expect("the end work");
             },
         )
         .expect("arm A's end work");
@@ -420,7 +431,7 @@ fn fence_a_and_lapse_its_close_lease(device: &Device) -> HostClaimForTest {
         .process_request_for_test(&request, device.connection())
         .expect("A's run's receipt");
     assert_eq!(checkpoint.consumed(), 1, "A's run reached its end work");
-    let (claim, swept) = waited.recv_timeout(GATE_WAIT).expect("the lapse");
+    let (claim, swept) = waited.recv_timeout(GATE_WAIT).expect("the end work");
     assert!(swept.is_ok(), "the sweep's tick: {swept:?}");
     assert!(
         receipt
@@ -430,13 +441,22 @@ fn fence_a_and_lapse_its_close_lease(device: &Device) -> HostClaimForTest {
     );
     assert!(
         status_fence(&device.host, A).is_some(),
-        "the lapsed lease's refused close fenced A"
+        "A's refused or unconfirmed close fenced A"
     );
     assert_eq!(
         claim.queued.as_ref().map(QueuedLease::position),
         Some(1),
         "B's claim waited first for the device: {claim:?}"
     );
+    claim
+}
+
+/// [`run_a_with_b_waiting`] with A's capture close unconfirmed and A's lease lapsed: the session
+/// close ahead that follows the refused close is unconfirmed, so A's close lease is kept. Then the
+/// clock moves past that close lease's time and one more tick ends it. Returns B's claim, which
+/// waited first.
+fn fence_a_and_lapse_its_close_lease(device: &Device) -> HostClaimForTest {
+    let claim = run_a_with_b_waiting(device, true, true);
     assert_eq!(
         device.claims(B),
         (Some(ClaimKind::ResourceClose), vec![ClaimKind::SelfCheck]),
@@ -457,7 +477,10 @@ fn fence_a_and_lapse_its_close_lease(device: &Device) -> HostClaimForTest {
 /// place, and nothing of B was granted. No run is dispatched to B: a dispatch of B is refused with
 /// `device_group_waiting` `close_unconfirmed` naming A (the policy admission's hold of B), and B's
 /// direct run is refused `device_held_for_member_close`, naming A, and nothing of it ran. A stays
-/// fenced and the Runtime's health is clean.
+/// fenced and the Runtime's health is clean. Fix round 1: the refused close of the lapsed lease
+/// (at the expiry and at the run's end) holds nothing, so only the unconfirmed session close ahead
+/// can hold the device here: without its mark the end of the close lease would hand the device to
+/// B's claim and this test would fail.
 #[test]
 fn g1_a_members_unconfirmed_close_keeps_the_device_from_the_other_member_after_its_close_lease() {
     let device = Device::start();
@@ -728,6 +751,386 @@ fn g1_a_failure_of_the_runtimes_own_on_the_device_hold_is_still_fatal() {
         .expect("the Runtime's own failure is fatal");
     assert_eq!(fatal.code(), HostCode::RuntimeStatePoisoned.as_str());
     device.close_unchecked();
+}
+
+// ---- Rule 1, fix round 1.
+
+/// The device hold `Status` reports in `alias`'s row.
+fn status_device_held(device: &Device, alias: &str) -> Option<InstanceDeviceHeld> {
+    let receipt = device.process(RuntimeOperation::Status);
+    let Some(RuntimeResult::Status { status }) = receipt.result() else {
+        panic!("a status result: {receipt:?}");
+    };
+    status
+        .instances()
+        .iter()
+        .find(|instance| instance.instance_alias() == alias)
+        .expect("the instance's status row")
+        .device_held()
+        .cloned()
+}
+
+/// How many start preparations of `alias` ran (`instance_preparation_finished` at stage
+/// `startup_preparation` under the instance), and whether the last one passed.
+fn start_preparations(device: &Device, alias: &str) -> (usize, bool) {
+    let events = all_events(&device.host);
+    let finished = phases(&events)
+        .into_iter()
+        .filter(|(event, _)| event.links().instance_id() == Some(&device.ids[alias]))
+        .filter_map(|(_, phase)| match phase {
+            RuntimeLifecyclePhase::InstancePreparationFinished {
+                stage: RecoveryTriggerStage::StartupPreparation,
+                outcome,
+                ..
+            } => Some(outcome.is_none()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    (finished.len(), finished.last().copied().unwrap_or(false))
+}
+
+/// The review's must-fix 1: MAPP-1d's lapsed run lease whose session close ahead is confirmed. A's
+/// run's lease lapses in its end phase while B's claim waits; the close under the lapsed lease is
+/// refused and fences A (#411 A64), at the expiry and again at the run's end, and the session close
+/// ahead closes A's session, confirmed. A refused close holds nothing: B's claim is granted once
+/// A's session is closed, B's dispatch waits only for A's fence (`fenced`, not `close_unconfirmed`)
+/// and B's status row names no hold; once B's lease ends, a new lease of B is granted the device.
+#[test]
+fn g1_a_refused_close_whose_session_close_ahead_is_confirmed_holds_the_device_for_no_one() {
+    let device = Device::start();
+    let waiting = run_a_with_b_waiting(&device, false, true);
+    let token = waiting
+        .wait_for_grant(GATE_WAIT)
+        .expect("the grant slot")
+        .expect("B's claim is granted once A's session is closed");
+    assert_eq!(token.instance_id(), device.ids[B]);
+    device.release(&waiting, &token);
+    assert!(status_fence(&device.host, A).is_some(), "A stays fenced");
+    assert_eq!(
+        device
+            .host
+            .device_group_wait_for_test(B)
+            .expect("B's hold as the admission reads it"),
+        Some((DeviceGroupWait::Fenced, A.to_owned())),
+        "B's dispatch waits for A's fence, which holds no device"
+    );
+    assert_eq!(status_device_held(&device, B), None, "no hold in B's row");
+    let connection = device.connection();
+    let lease = device.acquire_on(B, connection);
+    let Some(RuntimeResult::LeaseGranted { token }) = lease.result() else {
+        panic!("a new lease of B is granted the device: {lease:?}");
+    };
+    assert_eq!(token.instance_id(), device.ids[B]);
+    device.release_on(token, connection);
+    device.assert_one_session_at_a_time();
+    device.assert_runs();
+    device.close_unchecked();
+}
+
+/// The review's (i): an ordinary lease's end whose close is unconfirmed, not a dedicated close
+/// lease. A's direct run ends on its own lease while B's claim waits; the close of A's session at
+/// that lease's end is unconfirmed and fences A. That end hands the device to no one: no lease
+/// holds it, B's claim waits first in its place and nothing of B was granted; a client's lease of B
+/// is refused `device_held_for_member_close` naming A; and B's status row says the device is held
+/// (`close_unconfirmed`, A), while A's and C's rows name no hold.
+#[test]
+fn g1_an_ordinary_lease_end_whose_close_is_unconfirmed_hands_the_device_to_no_one() {
+    let device = Device::start();
+    let waiting = run_a_with_b_waiting(&device, true, false);
+    assert_eq!(
+        device.claims(B),
+        (None, vec![ClaimKind::SelfCheck]),
+        "the end of A's run's lease hands the device to no one and B's claim waits in its place"
+    );
+    assert!(
+        waiting
+            .wait_for_grant(Duration::ZERO)
+            .expect("the grant slot")
+            .is_none(),
+        "B's claim is not granted"
+    );
+    assert_eq!(device.grants_to(B), 0, "nothing of B was granted");
+    assert_held_for(&device.acquire_on(B, device.connection()), A);
+    assert_eq!(device.grants_to(B), 0, "B's lease was not granted");
+    assert_eq!(
+        status_device_held(&device, B),
+        Some(InstanceDeviceHeld {
+            device_group_wait: DeviceHeldWait::CloseUnconfirmed,
+            alias: A.to_owned(),
+        }),
+        "B's status row says the device is held for A's unconfirmed close"
+    );
+    assert_eq!(
+        status_device_held(&device, A),
+        None,
+        "A's row keeps its fence"
+    );
+    assert_eq!(status_device_held(&device, C), None, "C is alone");
+    device.assert_one_session_at_a_time();
+    device.assert_runs();
+    device.close_unchecked();
+}
+
+/// Item 3 of fix round 1: a member whose start preparation the hold refused comes back by itself.
+/// While A is fenced for an unconfirmed close, B's start preparation (the daemon start's) is
+/// refused `device_held_for_member_close`, which leaves B unavailable, and the lease sweep's step
+/// does not make it again while A's fence stands. Once A's own self-check passes and lifts A's
+/// fence, that step gives B its start preparation again, once, and it passes; B's lease is then
+/// granted the device.
+#[test]
+fn g1_a_member_whose_start_preparation_the_hold_refused_is_prepared_again_once_the_fence_is_lifted()
+{
+    let device = Device::start();
+    // The fake's opens report a passed native open, so a self-check passes (gate_403).
+    for member in [A, B] {
+        device.states[member]
+            .observed_open
+            .store(true, Ordering::Release);
+    }
+    device
+        .host
+        .fence_instance_unconfirmed_for_test(A)
+        .expect("fence A for an unconfirmed close");
+    let refused = device
+        .host
+        .prepare_on_start_for_test(B)
+        .expect("B's start preparation");
+    assert_eq!(
+        refused.as_deref(),
+        Some(HostCode::DeviceHeldForMemberClose.as_str()),
+        "B's start preparation is refused while A's fence holds the device"
+    );
+    device
+        .host
+        .prepare_members_after_device_hold_for_test()
+        .expect("the sweep's step");
+    assert_eq!(
+        start_preparations(&device, B),
+        (0, false),
+        "B is not prepared again while A's fence stands"
+    );
+    let checked = device.process(RuntimeOperation::SelfCheckInstance {
+        instance_alias: A.to_owned(),
+    });
+    assert_eq!(
+        checked.state(),
+        RuntimeReceiptState::Completed,
+        "{checked:?}"
+    );
+    assert!(
+        status_fence(&device.host, A).is_none(),
+        "A's passing self-check lifted its fence"
+    );
+    device
+        .host
+        .prepare_members_after_device_hold_for_test()
+        .expect("the sweep's step");
+    wait_until("B's start preparation again", || {
+        start_preparations(&device, B).0 == 1
+    });
+    assert_eq!(
+        start_preparations(&device, B),
+        (1, true),
+        "B's start preparation ran again, once, and passed"
+    );
+    let connection = device.connection();
+    let lease = device.acquire_on(B, connection);
+    let Some(RuntimeResult::LeaseGranted { token }) = lease.result() else {
+        panic!("B's lease is granted the device: {lease:?}");
+    };
+    device.release_on(token, connection);
+    device.assert_one_session_at_a_time();
+    device.assert_runs();
+    device.close_unchecked();
+}
+
+// ---- A real policy cycle (fix round 1).
+
+const TASK_A: &str = "fixture.member-a";
+const TASK_B: &str = "fixture.member-b";
+const SEED: u64 = 11;
+
+/// One task of `instance`, due at every evaluation (a local interval clock of 1 ms), from the
+/// fixture catalog's generic task, as gate_mapp1b's.
+fn member_task(base: &Value, id: &str, instance: &str, priority: u32) -> Value {
+    let mut spec = base.clone();
+    spec["id"] = json!(id);
+    spec["scope"] = json!({"kind": "instance", "instance_id": instance});
+    spec["priority"] = json!(priority);
+    spec["trigger"] = json!({
+        "kind": "clock",
+        "schedule": {"kind": "interval", "clock_source": {"kind": "local"},
+                     "every_ms": 1, "anchor_ms": 0}
+    });
+    spec["cooldown_ms"] = json!(0);
+    spec["instance_overrides"] = json!([]);
+    spec["produces"] = json!([]);
+    spec["on_failure"]["escalation_threshold"] = json!(1000);
+    spec["loop_budget"] = json!({
+        "daily_limit": 48,
+        "window_iteration_limit": 48,
+        "max_runtime_ms": 300_000
+    });
+    spec
+}
+
+/// The catalog: TASK_A on A and TASK_B on B, under the fixture's game-wide activity profile with
+/// no interval between dispatches, as gate_mapp1b's.
+fn member_sources() -> CatalogSources {
+    let mut sources = policy_sources(1);
+    let mut document: Value = serde_json::from_slice(&sources.tasks.bytes).expect("fixture tasks");
+    let base = document["tasks"][0].clone();
+    document["tasks"] = json!([
+        member_task(&base, TASK_A, A, 300),
+        member_task(&base, TASK_B, B, 200),
+    ]);
+    sources.tasks.bytes = serde_json::to_vec_pretty(&document).expect("task bytes");
+    let mut activity: Value =
+        serde_json::from_slice(&sources.activity.bytes).expect("fixture activity");
+    let mut profile = activity["profiles"][1].clone();
+    profile["daily_budget"] = json!(48);
+    profile["max_window_iterations"] = json!(48);
+    profile["minimum_interval_ms"] = json!(1);
+    profile["maximum_interval_ms"] = json!(1);
+    activity["profiles"] = json!([profile]);
+    sources.activity.bytes = serde_json::to_vec_pretty(&activity).expect("activity bytes");
+    sources
+}
+
+/// A host whose instances A and B are the device group `GROUP` with the catalog of
+/// [`member_sources`] active, on a manual Runtime clock at the fixture's noon, stuck recovery off.
+struct Policy {
+    host: RuntimeHost,
+    clock: Arc<ManualRuntimeClock>,
+    facts: EvaluationFacts,
+    resources: EvaluationResources,
+    _root: TempDir,
+}
+
+impl Policy {
+    fn start() -> Self {
+        let root = TempDir::new().expect("tempdir");
+        let a = instance_id();
+        let b = instance_id();
+        let device = a.min(b);
+        let mut facts = policy_facts();
+        facts.outcomes.clear();
+        facts.instances.push(InstanceSnapshot {
+            instance_id: B.to_owned(),
+            server_id: "fixture-server-b".to_owned(),
+            game_id: "fixture-game-a".to_owned(),
+            host_id: "fixture-host-b".to_owned(),
+            available: true,
+            capability_operation_ids: vec!["operation.observe".to_owned()],
+            preferred_task_ids: Vec::new(),
+        });
+        let resources = pending_policy_resources();
+        let clock = Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 0));
+        let stuck_off = |alias: &str| {
+            (
+                alias.to_owned(),
+                InstanceStuckRecovery {
+                    enabled: false,
+                    cooldown_secs: 600,
+                },
+            )
+        };
+        let host = RuntimeHost::start(
+            config(&root)
+                .with_policy_inputs(PolicyInputSnapshot::new(facts.clone(), resources.clone()))
+                .with_runtime_clock(clock.clone())
+                .with_stuck_recovery(BTreeMap::from([stuck_off(A), stuck_off(B)]))
+                .with_device_keys(BTreeMap::from([(a, device), (b, device)]))
+                .with_device_group_names(BTreeMap::from([
+                    (A.to_owned(), GROUP.to_owned()),
+                    (B.to_owned(), GROUP.to_owned()),
+                ])),
+            Arc::new(FakeProvider::from_entries([
+                (A.to_owned(), a, Arc::new(FakeState::default())),
+                (B.to_owned(), b, Arc::new(FakeState::default())),
+            ])),
+        )
+        .expect("start the device group host");
+        host.activate_policy_catalog(&member_sources())
+            .expect("activate the catalog");
+        Self {
+            host,
+            clock,
+            facts,
+            resources,
+            _root: root,
+        }
+    }
+
+    /// One evaluation at `unix_ms`, the capacity sampled there first. The Runtime clock's
+    /// monotonic time does not move.
+    fn evaluate(&self, unix_ms: u64) -> PolicyCycle {
+        self.clock.set_unix_ms(unix_ms);
+        let sample_capacity = self
+            .host
+            .capacity_sampler_for_test()
+            .expect("capacity owner");
+        sample_capacity().expect("capacity sample");
+        self.host
+            .evaluate_policy_cycle_with_test_inputs(
+                &self.facts,
+                &self.resources,
+                EvaluationTime {
+                    unix_ms,
+                    monotonic_ms: unix_ms,
+                },
+                SEED,
+                PolicyTrigger::Recovery,
+            )
+            .unwrap_or_else(|error| panic!("evaluate at {unix_ms}: {error}"))
+    }
+}
+
+/// The review's (i): "no run is dispatched to the other member" through a real policy cycle, not
+/// a helper's read. A and B each have a task due at every evaluation, and A is fenced for an
+/// unconfirmed close. The cycle dispatches nothing to B: no dispatch intent names B, and the last
+/// reason of B's task is `device_group_waiting` with `device_group_wait` `close_unconfirmed`,
+/// naming A.
+#[test]
+fn g1_a_policy_cycle_dispatches_nothing_to_the_other_member_while_the_device_is_held() {
+    let policy = Policy::start();
+    policy
+        .host
+        .fence_instance_unconfirmed_for_test(A)
+        .expect("fence A for an unconfirmed close");
+    let cycle = policy.evaluate(POLICY_NOW_UNIX_MS);
+    let evaluation = cycle.evaluation.as_ref().expect("an evaluated cycle");
+    assert!(
+        !evaluation
+            .dispatch_intents
+            .iter()
+            .any(|intent| intent.instance_id == B),
+        "{:#?}",
+        evaluation.dispatch_intents
+    );
+    let decision = evaluation
+        .decisions
+        .iter()
+        .find(|decision| decision.task_id == TASK_B && decision.instance_id.as_deref() == Some(B))
+        .unwrap_or_else(|| panic!("a decision of {TASK_B} on {B}: {evaluation:#?}"));
+    let outcome: &Outcome = &decision
+        .reasons
+        .last()
+        .unwrap_or_else(|| panic!("a reason of {TASK_B}: {decision:?}"))
+        .outcome;
+    assert!(
+        outcome.is(PolicyCode::DeviceGroupWaiting),
+        "device_group_waiting: {outcome:?}"
+    );
+    assert_eq!(outcome.value("instance_id"), Some(&json!(B)), "{outcome:?}");
+    assert_eq!(outcome.value("alias"), Some(&json!(A)), "{outcome:?}");
+    assert_eq!(
+        outcome.value("device_group_wait"),
+        Some(&json!(DeviceGroupWait::CloseUnconfirmed.as_str())),
+        "{outcome:?}"
+    );
+    let Policy { host, .. } = policy;
+    let _closed = host.close();
 }
 
 // ---- Rule 2.

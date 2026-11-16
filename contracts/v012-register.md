@@ -31346,6 +31346,64 @@ routine claims as before, and its queue's grant chooses the same entry (a withhe
 still grants nothing); the pump's second choice under the guard reads the same entry it read
 before, which a lone instance's records show unchanged.
 
+**Fix round 1** (coordinator work order `rd-1116/brief-437-g1-fix2.md`, after the independent
+review of the pull request and the coordinator's disposition of it; main `23161b3a` merged in).
+(1) **A refused close holds nothing at the run's end either.** #411 A64's settlement of the
+lapsed lease at the run's end (`contained_task.rs`, the terminal's commit) settled through
+`settle_unconfirmed_resources` and marked the fence, so after MAPP-1d's confirmed session close
+ahead had handed the device to the other member, the device was held from the run's end until the
+fenced member's self-check. It now settles through `settle_refused_close`, as the expiry's does:
+the lease lapsed and its close was refused, no close left the session in doubt. Every other caller
+of `settle_unconfirmed_resources` was read: each is a close or a device step whose result is not
+known (a lease end's close, a dedicated close lease's, the session close ahead, a run's, an
+observation's or a probe's capture, an input, an application command, the application stop of a
+ladder, an idle action or a switch; `settle_unconfirmed_adb`'s ADB checks), or names no instance
+(the fenced write not reclaimed, which retains the owner as before). (2) **The gates under the
+guard.** A fence's mark is set under the device's admission guard (a lease end's or a close lease's
+close). `pump` reads `device_gates` again once it holds the guard and chooses, checks, prepares and
+grants with those only; its first read decides only whether to take the guard, and the entry it
+grants is the one chosen under the guard, prepared by its request. `request_host_claim` reads the
+gates only once its `try_lock` of the guard has succeeded, and refuses an operator claim there
+again when the device is held; without the guard the claim is only queued, and the pump judges it
+under the guard. Every other grant already read them under the guard (`acquire_lease_guarded`,
+`queue_lease` after its `try_lock`, `release_lease`, `end_lease_ordered`,
+`promote_idle_preemption`, `transfer_preempted_while_guarded`, the dedicated preparation lease,
+`device_held_by_another_member`). (3) **The members the hold refused come back by themselves.**
+Only the start's connection preparation is refused `device_held_for_member_close` with the
+member's availability withdrawn; such a member is recorded in `HostShared::start_preparations_held`
+(memory only, a leaf lock) and forgotten when any preparation of it is granted its lease. The
+lease sweep's new step `prepare_members_after_device_hold` gives it, once no other member's fence
+holds its device, under the device's admission guard (`try_lock`; a taken guard waits for the next
+tick) and on a free device (no lease, no waiting claim, no takeover cooldown), the start's own
+preparation again (`prepare_physical_instance_on_start`, whose guarded half is now
+`prepare_physical_instance_while_guarded`), as the start prepares again an instance whose
+preparation lease the takeover cooldown refused (Workflow #191 h2). No way to lift a fence is
+added. (4) **The other members' status rows.** `RuntimeInstanceStatus.device_held?`
+`{device_group_wait, alias}` (`InstanceDeviceHeld`, `DeviceHeldWait`, in
+`crates/actingcommand-contract`), `device_group_wait` `close_unconfirmed`, the word the dispatch
+gives, and `alias` the fenced member, filled by `control_plane_status_projection` from `device_held_for`; the Lab's overview row
+carries it ([runtime-interface.md](runtime-interface.md)). An answer without it is as before; no
+interface revision is raised. (5) **Two rules the coordinator accepted, written in
+[device-group.md](device-group.md), "A failure stays where it belongs":** two members both fenced
+for resources not confirmed each keep their own way out (a member whose own fence holds the device
+is judged by its own gate); and every fence that stands for resources of the member's whose state
+is not confirmed holds the device, whichever step left them so, with the list of the settlements
+that mark it (`settle_unconfirmed_resources`, `settle_unconfirmed_adb`, `fence_contained_failure`
+with unconfirmed resources) and of those that do not (`settle_refused_close`,
+`fence_application_backend_failure`). Row 7's rewritten sentence now says that no other member is
+given the device meanwhile but on its own way out when its own fence holds the device too. The
+catalog's texts of `device_held_for_member_close`, `close_unconfirmed` and `device_group_waiting`
+say the same; no code or word is added. (6) **Tests**, four more in `gate_437_g1.rs` (the gate map
+row "#437 G1"):
+`g1_a_refused_close_whose_session_close_ahead_is_confirmed_holds_the_device_for_no_one`,
+`g1_an_ordinary_lease_end_whose_close_is_unconfirmed_hands_the_device_to_no_one`,
+`g1_a_member_whose_start_preparation_the_hold_refused_is_prepared_again_once_the_fence_is_lifted`
+and `g1_a_policy_cycle_dispatches_nothing_to_the_other_member_while_the_device_is_held` (a real
+policy cycle on gate_mapp1b's catalog); the first test now holds the device only by the close
+path's mark, since the refused close's fence holds nothing. New test-only stand-ins:
+`prepare_on_start_for_test` and `prepare_members_after_device_hold_for_test`. (7) A comment line
+of 115 columns in `device_group.rs` is wrapped.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

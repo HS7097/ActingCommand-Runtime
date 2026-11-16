@@ -1650,6 +1650,11 @@ pub struct RuntimeInstanceStatus {
     /// self-check proves the close.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     resource_fence: Option<InstanceResourceFence>,
+    /// Workflow #437 G1 fix round 1 (register §1.433): the instance is a member of a device
+    /// group of several whose device is held for another member's unconfirmed close; absent
+    /// otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    device_held: Option<InstanceDeviceHeld>,
     /// Workflow #390 九处-1: the emulator's running state as the Runtime last read it; always
     /// answered, `{"state": "unknown"}` without a reading.
     #[serde(default)]
@@ -1740,6 +1745,28 @@ pub enum LadderBusyHoldKind {
     ScreenChanging,
 }
 
+/// Workflow #437 G1 fix round 1 (register §1.433; `contracts/device-group.md`, "A failure stays
+/// where it belongs"): why a member of a device group of several is given no device while another
+/// member's fence holds it. `device_group_wait` is the word the member's dispatch waits with
+/// (`device_group_waiting`), `alias` the member the device is held for. Memory only: read from the
+/// fences at the status read.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InstanceDeviceHeld {
+    pub device_group_wait: DeviceHeldWait,
+    pub alias: String,
+}
+
+/// The cause of an [`InstanceDeviceHeld`], spelled as the word of the vocabulary
+/// `device_group_wait` that the dispatch gives for it. `close_unconfirmed`: the other member's
+/// fence met an unconfirmed close of its own resources, and the device is held for it until that
+/// fence is lifted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeviceHeldWait {
+    CloseUnconfirmed,
+}
+
 impl RuntimeInstanceStatus {
     pub fn new(
         instance_alias: impl Into<String>,
@@ -1765,6 +1792,7 @@ impl RuntimeInstanceStatus {
             game_id: None,
             pause: None,
             resource_fence: None,
+            device_held: None,
             emulator_state: EmulatorRunningState::Unknown,
             ladder_busy_hold: None,
             activity: None,
@@ -1903,6 +1931,16 @@ impl RuntimeInstanceStatus {
 
     pub const fn resource_fence(&self) -> Option<&InstanceResourceFence> {
         self.resource_fence.as_ref()
+    }
+
+    /// Workflow #437 G1 fix round 1: this status with the member its device is held for.
+    pub fn with_device_held(mut self, device_held: Option<InstanceDeviceHeld>) -> Self {
+        self.device_held = device_held;
+        self
+    }
+
+    pub const fn device_held(&self) -> Option<&InstanceDeviceHeld> {
+        self.device_held.as_ref()
     }
 
     /// Workflow #390 九处-1: this status with the emulator's running state as the Runtime last

@@ -2317,6 +2317,7 @@ impl RuntimeHost {
             performance_suspended_for_test: Mutex::new(BTreeSet::new()),
             #[cfg(test)]
             ladder_after_release_for_test: Mutex::new(BTreeSet::new()),
+            start_preparations_held: Mutex::new(BTreeSet::new()),
             expired_lease_closes: Mutex::new(BTreeSet::new()),
             #[cfg(test)]
             close_isolates_off_for_test: AtomicBool::new(false),
@@ -3522,6 +3523,34 @@ impl RuntimeHost {
         Ok(shared
             .admission_device_group_hold(instance_id, now_unix_ms)?
             .map(|hold| (hold.wait, hold.alias)))
+    }
+
+    /// Workflow #437 G1 fix round 1: the start's preparation of `instance_alias` now, as the daemon
+    /// start makes it (`prepare_physical_instance_on_start`); the code its self-check failed with,
+    /// if any.
+    #[cfg(test)]
+    pub(crate) fn prepare_on_start_for_test(
+        &self,
+        instance_alias: &str,
+    ) -> RuntimeHostResult<Option<String>> {
+        let shared =
+            self.shared_ref(crate::codes::test_spellings::TestLocation::FenceInstanceForTest)?;
+        let instance_id = shared
+            .resolve_instance(instance_alias)
+            .map_err(|failure| *failure.error)?
+            .instance_id();
+        shared
+            .prepare_physical_instance_on_start(instance_alias, instance_id)
+            .map(|(selfcheck, _)| selfcheck.failure_code)
+    }
+
+    /// Workflow #437 G1 fix round 1: one run of the lease sweep's step that prepares again each
+    /// member whose start preparation the device's hold refused, once the hold has ended
+    /// (`prepare_members_after_device_hold`).
+    #[cfg(test)]
+    pub(crate) fn prepare_members_after_device_hold_for_test(&self) -> RuntimeHostResult<()> {
+        self.shared_ref(crate::codes::test_spellings::TestLocation::ExpireDueLeasesForTest)?
+            .prepare_members_after_device_hold()
     }
 
     /// Workflow #437 G1: the next read of whether a member's device is held for another member's
@@ -6638,6 +6667,12 @@ struct HostShared {
     // (`ladder_claim_awaits_release`).
     #[cfg(test)]
     ladder_after_release_for_test: Mutex<BTreeSet<InstanceId>>,
+    // Workflow #437 G1 fix round 1: the members of a device group of several whose start
+    // preparation the device's hold for another member's unconfirmed close refused, until a
+    // preparation of each is granted its lease (`prepare_members_after_device_hold`, the lease
+    // sweep's step, prepares them again once the hold has ended). A leaf lock. Memory only: a
+    // restart prepares every member.
+    start_preparations_held: Mutex<BTreeSet<InstanceId>>,
     // Workflow #458: the leases whose close at their expiry met the lapsed lease and fenced the
     // instance, until the lease's end closes the session (`close_expired_lease_session_guarded`).
     // A leaf lock. Memory only: a restart opens no session it would owe.
@@ -7318,6 +7353,13 @@ fn lease_sweep_loop(shared: Arc<HostShared>) -> RuntimeHostResult<()> {
             return Err(error);
         }
         if let Err(error) = shared.expire_agent_sessions() {
+            shared.fatal.mark(error.clone().into_fatal())?;
+            return Err(error);
+        }
+        // Workflow #437 G1 fix round 1: a member whose start preparation the device's hold for
+        // another member's unconfirmed close refused is prepared again once that hold has ended,
+        // on a free device.
+        if let Err(error) = shared.prepare_members_after_device_hold() {
             shared.fatal.mark(error.clone().into_fatal())?;
             return Err(error);
         }

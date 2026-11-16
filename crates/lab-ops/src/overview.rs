@@ -1070,6 +1070,12 @@ fn instance_row(
     if let Some(fence) = instance.resource_fence() {
         row.insert("resource_fence".to_owned(), json!(fence));
     }
+    // Workflow #437 G1 fix round 1: a member of a device group of several whose device is held
+    // for another member's unconfirmed close (`device_group_wait` `close_unconfirmed`, `alias` that
+    // member), the status member as the Runtime answers it.
+    if let Some(held) = instance.device_held() {
+        row.insert("device_held".to_owned(), json!(held));
+    }
     // #411 A35-S5: the instance's recovery ladder while it holds instead of climbing (what it
     // waits for, how long it has held, its limit), the status member as the Runtime answers it.
     if let Some(hold) = instance.ladder_busy_hold() {

@@ -3725,6 +3725,13 @@ impl HostShared {
                 return Err(lock_poison_error(HostLocation::PumpInstanceQueue));
             }
         };
+        // Workflow #437 G1 fix round 1: each member's gate, whether the device is held for another
+        // member's unconfirmed close included, is read again now that the device's admission guard
+        // is held: a fence that holds the device is marked under this guard (a lease end's close),
+        // so a gate read before it was marked never grants the device after it. The gates read
+        // above chose only whether to take the guard.
+        let guarded_gates = self.device_gates(instance_id)?;
+        let guarded_gate = |member: InstanceId| guarded_gates.gate_of(member);
         let order_lock = self
             .queue_order_lock(instance_id)
             .map_err(|failure| *failure.error)?;
@@ -3732,13 +3739,18 @@ impl HostShared {
         self.expire_queued_while_ordered(instance_id)
             .map_err(|failure| *failure.error)?;
         // Workflow #437 G1: the entry is chosen again under the device's admission guard and its
-        // queue-order lock, which every change of the device's queue takes, with the same gates and
-        // one clock reading; that entry, and no other, is prepared (by its request) and granted.
-        // An entry that changed since the read above was checked here; a business claim that was
-        // not the read's candidate asks for capacity here.
+        // queue-order lock, which every change of the device's queue takes, with the gates read
+        // under the guard and one clock reading; that entry, and no other, is prepared (by its
+        // request) and granted. The entry chosen before the guard is never granted by itself: an
+        // entry that changed since that read was checked here, and a business claim that was not
+        // that read's candidate asks for capacity here.
         let now_monotonic_ms = self.monotonic_ms()?;
-        let Some(chosen) =
-            self.queue_grant_choice(instance_id, gate, now_monotonic_ms, names_claims_member)?
+        let Some(chosen) = self.queue_grant_choice(
+            instance_id,
+            guarded_gate,
+            now_monotonic_ms,
+            names_claims_member,
+        )?
         else {
             return Ok(());
         };
@@ -3750,7 +3762,12 @@ impl HostShared {
             }
         }
         let prepared = lock(&self.scheduler, HostLocation::PrepareQueueGrant)?
-            .prepare_queued_grant_of(instance_id, chosen.request_id, gate, now_monotonic_ms)
+            .prepare_queued_grant_of(
+                instance_id,
+                chosen.request_id,
+                guarded_gate,
+                now_monotonic_ms,
+            )
             .map_err(|error| {
                 RuntimeHostError::scheduler(HostLocation::PrepareQueueGrant, &error)
             })?;
@@ -4102,9 +4119,6 @@ impl HostShared {
             priority: claim.priority,
             lease_ttl_ms: claim.lease_ttl_ms,
         };
-        // Workflow #437 MAPP-1d: each claim of the device's queue by its own member's gate.
-        let gates = self.device_gates(instance_id)?;
-        let gate = |member: InstanceId| gates.gate_of(member);
         // Review L5: business capacity is asked before an immediate grant; a refusal queues the
         // claim (writing nothing) instead of failing it, and the pump grants it later. A startup
         // claim is not asked (review C-1).
@@ -4125,6 +4139,29 @@ impl HostShared {
                 .map_err(RequestFailure::poison_without_terminal)?;
         let instance_guard = self.instance_guard(instance_id)?;
         let admission = self.try_lock_admission(&instance_guard, instance_id)?;
+        // Workflow #437 G1 fix round 1: whether the device is held for another member's
+        // unconfirmed close is read again once the device's admission guard is held, under which a
+        // fence that holds the device is marked (a lease end's close): an operator claim is then
+        // refused as above. Without the guard the claim is only queued, and the queue's grant
+        // judges it under the guard.
+        if admission.is_some()
+            && claim.kind.class() == ClaimClass::Operator
+            && let Some(held) = self.device_held_error(instance_id)?
+        {
+            self.append_lease_requested(&validated, &resolved)?;
+            return Err(self.scheduler_denied_error(
+                &validated,
+                Some(instance_id),
+                None,
+                resolved.audit_endpoint(),
+                held,
+            )?);
+        }
+        // Workflow #437 MAPP-1d: each claim of the device's queue by its own member's gate. G1 fix
+        // round 1: read once the guard is held, so that an immediate grant is judged by gates no
+        // fence marked under the guard can have changed since.
+        let gates = self.device_gates(instance_id)?;
+        let gate = |member: InstanceId| gates.gate_of(member);
         let order_lock = self.queue_order_lock(instance_id)?;
         let order = lock(&order_lock, HostLocation::LockInstanceQueueOrder)?;
         if admission.is_some() && capacity_free && !awaits_release {

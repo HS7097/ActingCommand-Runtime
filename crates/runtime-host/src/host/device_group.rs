@@ -328,10 +328,11 @@ impl HostShared {
     /// failure stays where it belongs", "Pause and hold"), in this order: another member's player
     /// hold (`player_hold`), Workflow #437 G1: another member's fence that holds the device for its
     /// unconfirmed close (`close_unconfirmed`), another member's fence (`fenced`), then another
-    /// member's holder of the device (`held`). `None` for an instance alone on its device, for a member that holds
-    /// the device itself (its own holder keeps its own code) and for a free device. The other
-    /// members are read in alias order; `player_held` and `fenced` answer by alias, read by the
-    /// caller at one moment with the member's own control gates, which come before this.
+    /// member's holder of the device (`held`). `None` for an instance alone on its device, for a
+    /// member that holds the device itself (its own holder keeps its own code) and for a free
+    /// device. The other members are read in alias order; `player_held` and `fenced` answer by
+    /// alias, read by the caller at one moment with the member's own control gates, which come
+    /// before this.
     pub(super) fn device_group_hold(
         &self,
         instance_id: InstanceId,

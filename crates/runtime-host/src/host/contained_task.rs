@@ -11699,11 +11699,14 @@ impl HostShared {
             }
             // #411 A64 (ruling C-43): the lapsed lease of the run's end fences its instance (the
             // Workflow #403 instance path); one already fenced by the sweep's expiry stays as it is.
+            // Workflow #437 G1 fix round 1: the lease lapsed and its close was refused; no close
+            // left the session in doubt, so the fence is a refused close's and holds no device of a
+            // group of several (the close that follows, if unconfirmed, does).
             if let (Some(mut lapse), Some(fence_links)) = (lapsed, fence_links) {
                 lapse.lifecycle.instance_id = Some(token.instance_id());
                 lapse.lifecycle.resource_quiescence = Some(ResourceQuiescence::Unconfirmed);
                 match self
-                    .settle_unconfirmed_resources(&lapse, Some(token.instance_id()), fence_links)
+                    .settle_refused_close(&lapse, Some(token.instance_id()), fence_links)
                     .map_err(RequestFailure::poison_without_terminal)?
                 {
                     UnconfirmedResources::Fenced(_) => {}
