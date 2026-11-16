@@ -15,13 +15,13 @@ use crate::{
 use actingcommand_device::{CaptureBackendName, Frame, PixelFormat};
 use actingcommand_lab::{
     ApplicationSpec, ArchiveCopyFrames, BoxSpec, BoxUse, ClickRetry, ClickSpec, EndingSpec,
-    LAB_RECORD_MARK_SCHEMA, MarkFamily, MarkRequest, MarkSpec, OptionalAfterSpec,
-    RecordArchiveOptions, RecordFramesRequest, RecordPoint, RecordRect, RecordReopenOptions,
-    RecordStartOptions, RecordStopOptions, RecordingHold, RecordingLock, StepAction,
-    StepActionKind, TemplateScalesSpec, TransitionSpec, parse_mark_request, record_archive,
-    record_archive_copy, record_archive_warnings, record_frames, record_hold_status,
-    record_instance_check, record_mark, record_ready, record_reopen, record_start,
-    record_start_defaults, record_status, record_stop, record_stop_close,
+    InstalledIdentity, InstalledRow, LAB_RECORD_MARK_SCHEMA, MarkFamily, MarkRequest, MarkSpec,
+    OptionalAfterSpec, RecordArchiveOptions, RecordFramesRequest, RecordPoint, RecordRect,
+    RecordReopenOptions, RecordStartOptions, RecordStopOptions, RecordingHold, RecordingLock,
+    StepAction, StepActionKind, TemplateScalesSpec, TransitionSpec, parse_mark_request,
+    record_archive, record_archive_copy, record_archive_warnings, record_frames,
+    record_hold_status, record_instance_check, record_mark, record_ready, record_reopen,
+    record_start, record_start_defaults, record_status, record_stop, record_stop_close,
 };
 use actingcommand_recognition::{MatchMetric, Rect as RecognitionRect};
 use actingcommand_resource_tooling::canonical_locale;
@@ -2921,10 +2921,12 @@ fn record_stop_options(
 /// #463 S2-1b: the options that name the package's game, server and locale, read alike by `record
 /// stop` and by `record ready` (which checks with them and writes none of them): `--game` and
 /// `--server` (actinglab's global options) and `--locale` as given, each canonical, one out of its
-/// form refused `validation_failed` (exit 2) on both commands; the Lab's instance configuration's
-/// game and server (`default_*`); and the game and server the installation the program runs from
-/// binds the instance to (`installed_*`, [`installed_identity`]). The recording's own come between
-/// the given ones and the Lab's (`record stop`'s settings).
+/// form refused `validation_failed` on both commands (exit 1 on actinglab's own line, as every
+/// refusal: `cli_module::own_line`); the Lab's instance configuration's game and server
+/// (`default_*`); and the reader of the game and server the installation the program runs from
+/// binds the instance to (`installed`, [`installed_identity`]), which fix round 1 calls only when
+/// the others do not give both (`recording_api::package_identity`). The recording's own come
+/// between the given ones and the Lab's (`record stop`'s settings).
 fn identity_options(
     global: &GlobalOptions,
     config: &UserConfig,
@@ -2951,15 +2953,14 @@ fn identity_options(
         .and_then(|instance| instance.server.clone())
         .map(|server| canonical_server(&server))
         .transpose()?;
-    let (installed_game, installed_server) = installed_identity(instance_id);
+    let instance = instance_id.to_owned();
     Ok(RecordStopOptions {
         game,
         server,
         locale,
         default_game,
         default_server,
-        installed_game,
-        installed_server,
+        installed: InstalledRow::new(move || installed_identity(&instance)),
         ..RecordStopOptions::default()
     })
 }
@@ -2970,23 +2971,48 @@ fn identity_options(
 /// `actinglab`'s and MCP's `packs` (`lab_ops::packs::instance_binding`, the instance's row of
 /// `policy.facts.instances`), each value canonical. Outside an installation, or where the
 /// installation cannot be located, its configuration cannot be read, names no such instance or
-/// row, or names a value out of its form, the part is not known, as it was before: nothing is
-/// refused, and nothing of the configuration is printed or logged.
-fn installed_identity(instance_id: &str) -> (Option<String>, Option<String>) {
+/// row, or names a value out of its form, there is no row (fix round 1: the row gives both parts
+/// or neither): nothing is refused, and nothing of the configuration is kept, printed or logged.
+/// Called only when it is needed (`recording_api::package_identity`).
+fn installed_identity(instance_id: &str) -> Option<InstalledIdentity> {
+    #[cfg(test)]
+    installed_reads::add();
     let Some(Ok(location)) = crate::cli_module::place::installation_location() else {
-        return (None, None);
+        return None;
     };
     let Ok(Some(binding)) = actingcommand_lab_ops::packs::instance_binding(
         location.installation.as_ref(),
         &location.config,
         instance_id,
     ) else {
-        return (None, None);
+        return None;
     };
-    (
-        canonical_game(&binding.game_id).ok(),
-        canonical_server(&binding.server_id).ok(),
-    )
+    Some(InstalledIdentity {
+        game: canonical_game(&binding.game_id).ok()?,
+        server: canonical_server(&binding.server_id).ok()?,
+    })
+}
+
+/// Test-only (#463 S2-1b fix round 1): how many times this thread called [`installed_identity`],
+/// the one place `record ready` and `record stop` locate the installation and open its
+/// configuration, so that a test tells whether a command opened it.
+#[cfg(test)]
+pub(crate) mod installed_reads {
+    use std::cell::Cell;
+
+    thread_local! {
+        static READS: Cell<usize> = const { Cell::new(0) };
+    }
+
+    /// The calls so far on this thread.
+    pub(crate) fn count() -> usize {
+        READS.with(Cell::get)
+    }
+
+    /// One more call.
+    pub(super) fn add() {
+        READS.with(|reads| reads.set(reads.get() + 1));
+    }
 }
 
 /// A single-valued flag with a value: given twice or without a value is a usage error.

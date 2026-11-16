@@ -234,9 +234,14 @@ naming this file.
   there, `validation_failed`); each part is the one given, else what the recording holds, else
   (game and server) the Lab's instance configuration, else (game and server) the instance's row of
   `policy.facts.instances` in the configuration of the installation the program runs from, which
-  `ac_record_stop` reads too; `sources` names where each came from (`command_line`, `recording`,
-  `lab_config`, `installation_config`, or `null` when not known, then it is missing). It writes
-  none of them on the recording: give `ac_record_stop` the ones you gave it. #463 L1 (0.12.60;
+  `ac_record_stop` reads too; that row gives both game and server or neither (when the others give
+  one of the two, the row gives the other only if it holds the same value for the given one; the
+  configuration is opened only when the others do not give both); `sources` names where each came
+  from (`command_line`, `recording`, `lab_config`, `installation_config`, or `null` when not known,
+  then it is missing). It writes none of them on the recording: give `ac_record_stop` the ones you
+  gave it. On a packaged recording `sources` names what its package holds, and a given part with
+  another value is the warning `record_stop_option_conflict` (`{code, field, recorded, given}`),
+  which `ac_record_stop` would refuse. #463 L1 (0.12.60;
   `contracts/lab-recording.md`, "One call per step"): `ac_do` with `capture` and `record` records a
   whole step in one call:
   `mark_request_json` (or `mark_request`, a file) is the `record mark` request of the open step,

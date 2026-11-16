@@ -935,7 +935,8 @@ pub(crate) fn survey(recording: &LabRecording, settings: &StopSettings) -> LabRe
                 "record_locale_missing",
                 format!(
                     "the package needs its game, server and locale; missing: {}; give them on \
-                     record start or record stop (--game, --server, --locale)",
+                     record start or record stop (--game, --server, --locale) to build with \
+                     them, or to record ready to check with them (it writes them nowhere)",
                     missing.join(", ")
                 ),
             ),

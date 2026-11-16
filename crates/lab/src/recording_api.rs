@@ -38,8 +38,8 @@ use crate::recording::model::{
     TransitionSpec, TransitionView,
 };
 use crate::recording::ready::{
-    ReadySources, RecordReadyOutcome, check_item, generator_warnings, known, lack_items, packaged,
-    point_press_warnings, ready_outcome,
+    Known, ReadyOptionConflict, ReadySources, ReadyWarningItem, RecordReadyOutcome, check_item,
+    generator_warnings, known, lack_items, packaged, point_press_warnings, ready_outcome,
 };
 use crate::recording::select::{not_evaluated_id, validate_select_request};
 use crate::recording::steps::{
@@ -252,33 +252,63 @@ pub fn record_stop(
     generate_and_write(state_dir, &old, &recording, &settings, options, ocr, false)
 }
 
+/// #463 S2-1b, fix round 1: the package's game and server of an active recording, each with the
+/// place it came from, decided by this one function for `record stop` and `record ready`. Each is
+/// the first that `record stop` gives, the recording holds or the Lab's instance configuration
+/// (`default_*`) gives. Then the instance's row of the installation's configuration
+/// (`installed`) counts only whole: its reader is called only when those do not give both; when
+/// they give neither, the row gives both; when they give one, the row gives the other only if its
+/// value of the given one is that one; otherwise nothing is taken from it and the part stays
+/// missing.
+fn package_identity(recording: &LabRecording, options: &RecordStopOptions) -> (Known, Known) {
+    let game = known(&[
+        (options.game.as_ref(), ReadySource::CommandLine),
+        (recording.game.as_ref(), ReadySource::Recording),
+        (options.default_game.as_ref(), ReadySource::LabConfig),
+    ]);
+    let server = known(&[
+        (options.server.as_ref(), ReadySource::CommandLine),
+        (recording.server.as_ref(), ReadySource::Recording),
+        (options.default_server.as_ref(), ReadySource::LabConfig),
+    ]);
+    if game.0.is_some() && server.0.is_some() {
+        return (game, server);
+    }
+    let Some(row) = options.installed.read() else {
+        return (game, server);
+    };
+    // The row agrees with the part that is given (none is given: it agrees).
+    let agrees = game.0.as_ref().is_none_or(|given| *given == row.game)
+        && server.0.as_ref().is_none_or(|given| *given == row.server);
+    if !agrees {
+        return (game, server);
+    }
+    let installed = |value: String| (Some(value), Some(ReadySource::InstallationConfig));
+    (
+        if game.0.is_some() {
+            game
+        } else {
+            installed(row.game)
+        },
+        if server.0.is_some() {
+            server
+        } else {
+            installed(row.server)
+        },
+    )
+}
+
 /// The generation options of an active recording: each option `record stop` gives, otherwise the
 /// recording's game, server and locale, otherwise (game and server) the Lab's instance
-/// configuration's (`default_*`), otherwise (#463 S2-1b) the installation's configuration's
-/// (`installed_*`), and the default arrival timeouts; with where the game, the server and the
-/// locale came from. #463 S2-1: `record ready` reads them too.
+/// configuration's (`default_*`), otherwise (#463 S2-1b) the installation's configuration's row,
+/// taken whole or not at all ([`package_identity`], fix round 1), and the default arrival
+/// timeouts; with where the game, the server and the locale came from. #463 S2-1: `record ready`
+/// reads them too.
 fn stop_settings(
     recording: &LabRecording,
     options: &RecordStopOptions,
 ) -> (StopSettings, ReadySources) {
-    let (game, game_source) = known(&[
-        (options.game.as_ref(), ReadySource::CommandLine),
-        (recording.game.as_ref(), ReadySource::Recording),
-        (options.default_game.as_ref(), ReadySource::LabConfig),
-        (
-            options.installed_game.as_ref(),
-            ReadySource::InstallationConfig,
-        ),
-    ]);
-    let (server, server_source) = known(&[
-        (options.server.as_ref(), ReadySource::CommandLine),
-        (recording.server.as_ref(), ReadySource::Recording),
-        (options.default_server.as_ref(), ReadySource::LabConfig),
-        (
-            options.installed_server.as_ref(),
-            ReadySource::InstallationConfig,
-        ),
-    ]);
+    let ((game, game_source), (server, server_source)) = package_identity(recording, options);
     let (locale, locale_source) = known(&[
         (options.locale.as_ref(), ReadySource::CommandLine),
         (recording.locale.as_ref(), ReadySource::Recording),
@@ -366,7 +396,10 @@ fn regeneration_settings(
 /// command's own. #463 S2-1b: `options` hold what `record stop` would hold: the game, server and
 /// locale the command line gives `record ready`, and the Lab's and the installation's
 /// configuration's game and server; the answer's `sources` says where each part came from. None
-/// of them is written on the recording.
+/// of them is written on the recording. Fix round 1: a packaged recording answers what its package
+/// holds (`sources`), and each given part that is not its package's is the warning
+/// `record_stop_option_conflict` ([`option_conflict_warnings`]), the refusal `record stop` would
+/// give it.
 pub fn record_ready(
     state_dir: &Path,
     instance: &str,
@@ -376,22 +409,23 @@ pub fn record_ready(
 ) -> LabResult<RecordReadyOutcome> {
     let (recording, session) = ready_recording(state_dir, instance, record_id)?;
     let mut warnings = point_press_warnings(&recording);
-    // A stopped recording marked again generates with what its package was generated with, as
-    // `record stop` does.
-    let (settings, sources) = match &recording.artifact {
-        Some(artifact) if recording.status == "stopped" => regeneration_settings(artifact, options),
-        _ => stop_settings(&recording, options),
-    };
-    if packaged(&recording) {
+    if let Some(artifact) = recording.artifact.as_ref().filter(|_| packaged(&recording)) {
+        warnings.extend(option_conflict_warnings(artifact, options)?);
         return Ok(ready_outcome(
             &recording,
             session,
             Vec::new(),
             warnings,
             &[],
-            sources,
+            package_sources(artifact),
         ));
     }
+    // A stopped recording marked again generates with what its package was generated with, as
+    // `record stop` does.
+    let (settings, sources) = match &recording.artifact {
+        Some(artifact) if recording.status == "stopped" => regeneration_settings(artifact, options),
+        _ => stop_settings(&recording, options),
+    };
     let (missing, checks_after) = match survey(&recording, &settings)? {
         Survey::Lacking(lacks) => (lack_items(&recording, &lacks)?, ReadyCheck::ALL.to_vec()),
         Survey::Planned(plan) => match self_checks(&plan, ocr) {
@@ -1110,15 +1144,83 @@ fn binding_requires(plan: &Plan) -> Vec<String> {
     items
 }
 
+/// The code of a generation option given to a stopped recording with a value other than the one
+/// its package was generated with: `record stop`'s refusal, and (#463 S2-1b fix round 1) `record
+/// ready`'s warning on a packaged recording.
+const OPTION_CONFLICT: &str = "record_stop_option_conflict";
+
 /// A stopped recording is not generated again: a generation option given with a value other
 /// than the one its package was generated with is `record_stop_option_conflict` (exit 3)
 /// instead of being ignored; an equal value is accepted. A value the package did not record
-/// (a package generated before the field existed) cannot be equal and conflicts too.
+/// (a package generated before the field existed) cannot be equal and conflicts too. The first
+/// conflict [`option_conflicts`] finds is refused.
 fn refuse_option_conflict(
     recording: &LabRecording,
     artifact: &RecordingArtifact,
     options: &RecordStopOptions,
 ) -> LabResult<()> {
+    let Some((field, recorded, given)) = option_conflicts(artifact, options).into_iter().next()
+    else {
+        return Ok(());
+    };
+    Err(LabError::safety_blocked(
+        OPTION_CONFLICT,
+        format!(
+            "the package of recording {} was generated with {field} {}; the given {field} \
+             {given} would need a new package, and a stopped recording is not generated again; \
+             nothing was written",
+            recording.record_id,
+            recorded
+                .as_ref()
+                .map_or_else(|| "unrecorded".to_string(), Value::to_string)
+        ),
+        &["session_record"],
+    )
+    .with_details(json!({"field": field, "recorded": recorded, "given": given})))
+}
+
+/// #463 S2-1b fix round 1: what [`refuse_option_conflict`] holds against a stopped recording's
+/// package, for `record ready` on a packaged recording: each generation option given with a value
+/// other than the one the package was generated with, in the order `record stop` checks them, as a
+/// warning whose members are the code and the details `record stop` would refuse the first with.
+fn option_conflict_warnings(
+    artifact: &RecordingArtifact,
+    options: &RecordStopOptions,
+) -> LabResult<Vec<ReadyWarningItem>> {
+    option_conflicts(artifact, options)
+        .into_iter()
+        .map(|(field, recorded, given)| {
+            Ok(ReadyWarningItem::OptionConflict(ReadyOptionConflict {
+                code: OPTION_CONFLICT.to_string(),
+                field: field.to_string(),
+                recorded: recorded
+                    .as_ref()
+                    .map(OpaqueJson::from_serializable)
+                    .transpose()?,
+                given: OpaqueJson::from_serializable(&given)?,
+            }))
+        })
+        .collect()
+}
+
+/// #463 S2-1b fix round 1: where the parts of a packaged recording's identity are, for `record
+/// ready`: `recording` for each part its package holds.
+fn package_sources(artifact: &RecordingArtifact) -> ReadySources {
+    let held = |part: Option<&String>| part.map(|_| ReadySource::Recording);
+    ReadySources::of(
+        held(artifact.game.as_ref()),
+        held(artifact.server.as_ref()),
+        held(artifact.locale.as_ref()),
+    )
+}
+
+/// Each generation option `options` gives with a value other than the one `artifact`'s package
+/// was generated with, in the order `record stop` checks them: its field, the value the package
+/// recorded (`None` when it recorded none, which no given value equals) and the given one.
+fn option_conflicts(
+    artifact: &RecordingArtifact,
+    options: &RecordStopOptions,
+) -> Vec<(&'static str, Option<Value>, Value)> {
     let text = |value: &Option<String>| value.as_ref().map(|value| json!(value));
     let number = |value: Option<u64>| value.map(|value| json!(value));
     let fields = [
@@ -1146,29 +1248,13 @@ fn refuse_option_conflict(
             number(artifact.application_arrival_timeout_ms),
         ),
     ];
-    for (field, given, recorded) in fields {
-        let Some(given) = given else {
-            continue;
-        };
-        if recorded.as_ref() == Some(&given) {
-            continue;
-        }
-        return Err(LabError::safety_blocked(
-            "record_stop_option_conflict",
-            format!(
-                "the package of recording {} was generated with {field} {}; the given {field} \
-                 {given} would need a new package, and a stopped recording is not generated \
-                 again; nothing was written",
-                recording.record_id,
-                recorded
-                    .as_ref()
-                    .map_or_else(|| "unrecorded".to_string(), Value::to_string)
-            ),
-            &["session_record"],
-        )
-        .with_details(json!({"field": field, "recorded": recorded, "given": given})));
-    }
-    Ok(())
+    fields
+        .into_iter()
+        .filter_map(|(field, given, recorded)| {
+            let given = given?;
+            (recorded.as_ref() != Some(&given)).then_some((field, recorded, given))
+        })
+        .collect()
 }
 
 /// `record stop` on a stopped recording with a package: with `--lab-dir` the package is copied

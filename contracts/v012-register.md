@@ -31158,6 +31158,45 @@ and everything else it checks, writes or refuses. The first-generation MCP serve
 (`actingctl mcp-serve`) has no `ac_record_ready`; its `ac_record_stop` runs actinglab's command and
 so reads the installation too.
 
+**Fix round 1** (coordinator work order `rd-1116/brief-463-s21b-fix2.md`, after the independent
+review of `75a76e03` and the first CI run on it; the rules are the coordinator's rulings).
+- *The installation's row is one thing.* The first build took game and server each from the first
+  place that held it, so a flag or a recording giving game X and no server took the server of a
+  row binding game Y, and `record stop` built `X.<Y's server>` without a word. Now
+  `recording_api::package_identity`, the one function `record stop` and `record ready` decide by,
+  takes each part from the flag, the recording and the Lab's instance configuration as before,
+  then the row whole or not at all: both when those give neither; the other one when they give
+  one and the row's value of that one is the same; otherwise nothing, the part stays missing and
+  `record stop` refuses `record_locale_missing` as before §1.434. A row whose value is out of its
+  form is no row. `RecordStopOptions::installed` (an `InstalledRow`, the reader of an
+  `InstalledIdentity`) takes the place of `installed_game` and `installed_server`.
+- *Read only when needed.* The reader (`session_record::installed_identity`, which locates the
+  installation and opens its configuration) is called only when the flag, the recording and the
+  Lab's instance configuration do not give both game and server; test builds count its calls
+  (`session_record::installed_reads`).
+- *A packaged recording* answers what its package holds: `sources` `recording` for each part the
+  package holds, whatever is given. A given `--game`, `--server` or `--locale` with another value
+  is the warning `{code: "record_stop_option_conflict", field, recorded, given}`, the code and the
+  details `record stop` refuses it with; `recording_api::option_conflicts` is the one comparison both
+  use (`record stop` refuses the first, `record ready` warns of each). A warning, not a refusal,
+  because `record ready` refuses nothing the recording holds; it adds no code.
+- *Texts.* [lab-recording.md](lab-recording.md): the options `record ready` reads with, the row
+  taken whole, "not kept and not printed" for the rest of the configuration, the packaged
+  recording's sources and warning, the row of "Pre-checks"; the MCP manual and both rows' notes.
+  `record_locale_missing`'s message names `record ready` beside `record start` and `record stop`.
+- *Exit codes.* A refusal exits 1 on actinglab's own line whatever its class (`cli_module::own_line`:
+  every failure is category error, exit 1; the classes' exits 2 to 6 are the envelope's, on a
+  `--via` line only). The first build's tests asked 2 for `validation_failed` and
+  `record_locale_missing`; they now ask 1.
+- *Tests* (`gate_463_s21b.rs`, six more, each in the gate "#463 S2-1b"): a configuration that is a
+  folder, no JSON, without the instance's row, or with a server out of its form: game and server
+  missing, exit 0; the Lab's instance configuration over the row; the row taken whole, equal and
+  not, both ways, with `record stop`'s refusal; the configuration not opened when flags give both,
+  once each otherwise; `record ready` in an installation leaving the session directory and the
+  installation root byte for byte; a packaged recording's sources and warnings against `record
+  stop`'s refusal. Adapted: the third test lost its case of a flag's server beside the row's game
+  (now the whole-row test's), the fourth and fifth ask exit 1.
+
 **At deploy.** Nothing to configure: an installation's configuration already names each
 instance's game and server in `policy.facts.instances`.
 
