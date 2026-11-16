@@ -50,6 +50,17 @@ the earlier frames, passed before `scene`'s; #411 Lab B-2). `recognize`, `is-vis
 `tap-target` and `navigate`, which read one frame, every repeated option, `--scene` included,
 each before it reads anything.
 
+Workflow #392 DA-5, the train of DA-5ab and DA-5cd (0.12.67; [display-adapter.md](display-adapter.md)
+sections 11 and 12): a frame of another size than its package's base is taken by one function,
+whether it is a `--scene` file (the offline paths of the four verbs, `recognize`, `detect-page`,
+`current-page`, `is-visible`, and the dry runs of `tap-target` and `navigate`) or a Runtime capture
+(the `--capture` forms): a frame of the base's ratio, not smaller and in its orientation, is
+reduced to the base once, and the answer names `frame_coordinates` in the base form; any other is
+refused before anything is evaluated, `lab_scene_size_unsupported` (exit 2) for a `--scene` file
+and `display_map_unresolved` for a Runtime capture. A frame of the base's size answers as before.
+Every `--record` form judges the recording and the frame it took before anything is sent or
+written ([lab-recording.md](lab-recording.md), "A recording's size").
+
 Each command has `status`, `available`, `reason_code`, `needs`,
 `availability_scope: offline_declaration` and `dry_run_mode`, with
 `dry_run_refusal_code`, `dry_run_forms` or `dry_run_marker` as that mode requires

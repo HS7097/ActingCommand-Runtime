@@ -4,14 +4,17 @@
 //! "A recording's size"): what the Lab does with a scene or a recording that is not its package's
 //! size.
 //!
-//! - **Offline recognition.** A scene of its package's `coordinate_space` is evaluated as it is,
-//!   byte for byte as before. A scene that is a pure scale of it, at a ratio the display adapter
-//!   admits for a run, is reduced to it by the two calls a contained run's frame gate makes (the
-//!   adapter's map, `DisplayMap::build` with no display declaration and checked by
-//!   `DisplayMap::admit_input`, then one `resample_pixels` to the map's scale frame) and evaluated
-//!   there; the answer names the size it was reduced from (`scaled_from`) and every rectangle and
-//!   point in it is in the coordinate space. Any other scene is refused with
-//!   `lab_scene_size_unsupported`, the adapter's word for why in `display_problem`.
+//! - **Offline recognition.** A scene of its package's `coordinate_space` (its base) is evaluated
+//!   as it is, byte for byte as before. The train of DA-5 (register §1.436 and §1.437, "Train"):
+//!   any other scene is judged, reduced and answered exactly as a frame captured from a display of
+//!   its size is by the Lab's live observation (DA-5ab), by the same function, the kernel's frame
+//!   gate for a Lab frame (`lab_scene_on_base`: the gate's map, built with no producer geometry and
+//!   no game declaration, and its one resample): a scene of the base's ratio, not smaller and in
+//!   its orientation, is reduced to the base and evaluated there (a 5/4 one too: a read is not
+//!   refused for whether a press could land exactly), and the answer names the base and the size
+//!   it was reduced from (`frame_coordinates` in its base form, `FrameCoordinates::observed`);
+//!   every rectangle and point in it is the base's. A scene the gate refuses is refused
+//!   `lab_scene_size_unsupported`, the gate's word for why in `display_problem`.
 //! - **Recordings.** A recording is made at the base size (`STANDARD_PACK_BASE_SIZE`): the refusal
 //!   `record_display_not_base` (this instance's display is not the base size) of `record start` on
 //!   a display the Runtime last observed at another size and (fix round 1) of the first frame of a
@@ -19,88 +22,63 @@
 //!   (this recording holds frames that are not the base size) of `record stop`, `record ready`'s
 //!   item and a frame added to such a recording.
 
-use crate::SceneExtentResponse;
+use crate::FrameCoordinates;
 use crate::codes::LabCode;
 use crate::recording::model::{LabRecording, RecordSize};
-use actingcommand_contract::outcome::{Detail, Outcome};
+use actingcommand_contract::outcome::{Detail, Outcome, VocabularyToken};
 use actingcommand_contract::{
-    CaptureExtent, DisplayMapKind, InputAction, LabError, LabErrorClass, LabResult,
-    STANDARD_PACK_BASE_SIZE,
+    CaptureExtent, DisplayMapKind, LabError, LabErrorClass, LabResult, STANDARD_PACK_BASE_SIZE,
 };
 use actingcommand_device::{CaptureBackendName, Frame, PixelFormat};
-use actingcommand_display_adapter::{
-    DisplayMap, DisplayMapError, DisplayObservation, DisplayProblem,
-};
+use actingcommand_display_adapter::{DisplayMap, DisplayObservation, DisplayProblem};
+use actingcommand_execution_kernel::{ContainedTaskError, lab_scene_on_base};
 use actingcommand_recognition::Scene;
-use actingcommand_recognition::resample::resample_pixels;
 use actingcommand_recognition_pack::RecognitionEvaluator;
 use serde_json::json;
 
-/// The coordinate space `evaluator`'s package declares, the base a scene is reduced to; `None` when
-/// it declares none, and then every scene is evaluated as it is.
-pub fn package_base(evaluator: &RecognitionEvaluator) -> Option<CaptureExtent> {
+/// The base (width, height) `evaluator`'s package declares, its `coordinate_space`, which a scene
+/// is brought to; `None` when it declares none, and then every scene is evaluated as it is.
+pub fn package_base(evaluator: &RecognitionEvaluator) -> Option<(u32, u32)> {
     evaluator
         .pack()
         .coordinate_space
-        .and_then(|space| CaptureExtent::new(space.width, space.height))
+        .map(|space| (space.width, space.height))
 }
 
-/// `scene` in the coordinate space `base`: as it is when it is of that size (or `base` is `None`),
-/// reduced to it when it is a pure scale of it that a run admits, with the size it was reduced
-/// from; otherwise refused `lab_scene_size_unsupported` (see the module header).
+/// `scene` on the base `base` (see the module header): as it is when it is of the base's size, or
+/// `base` is `None`, with no `frame_coordinates`; otherwise brought to the base by the live
+/// observation's own function, the kernel's `lab_scene_on_base`, with `frame_coordinates` in its
+/// base form; a scene that function refuses is refused `lab_scene_size_unsupported`
+/// ([`scene_refused`]).
 pub fn scene_in_base(
-    base: Option<CaptureExtent>,
+    base: Option<(u32, u32)>,
     scene: Scene,
-) -> LabResult<(Scene, Option<SceneExtentResponse>)> {
+) -> LabResult<(Scene, Option<FrameCoordinates>)> {
     let Some(base) = base else {
         return Ok((scene, None));
     };
-    if (scene.width(), scene.height()) == (base.width(), base.height()) {
-        return Ok((scene, None));
+    let given = (scene.width(), scene.height());
+    match lab_scene_on_base(base, &scene) {
+        Ok(None) => Ok((scene, None)),
+        Ok(Some(reduced)) => Ok((reduced.scene, Some(FrameCoordinates::observed(base, given)))),
+        Err(refusal) => Err(scene_refused(&refusal, given, base)),
     }
-    let given = CaptureExtent::new(scene.width(), scene.height())
-        .ok_or_else(|| LabError::usage("the scene has no width or no height"))?;
-    let map = admitted_map(base, given).map_err(|problem| scene_refused(problem, given, base))?;
-    let target = map.scale_frame_extent();
-    let reduced = resample_pixels(
-        scene.rgb8_pixels(),
-        (given.width(), given.height()),
-        3,
-        (target.width(), target.height()),
-    )
-    .and_then(|pixels| Scene::from_rgb8(target.width(), target.height(), &pixels))
-    .map_err(|error| {
-        LabError::device(format!(
-            "failed to reduce the {}x{} scene to its package's {}x{}: {error}",
-            given.width(),
-            given.height(),
-            target.width(),
-            target.height()
-        ))
-    })?;
-    Ok((
-        reduced,
-        Some(SceneExtentResponse {
-            width: given.width(),
-            height: given.height(),
-        }),
-    ))
 }
 
 /// [`scene_in_base`] of every frame of a frame set, oldest first, the last the current frame; the
-/// size the current frame was reduced from.
+/// `frame_coordinates` of the current frame.
 pub fn frames_in_base(
-    base: Option<CaptureExtent>,
+    base: Option<(u32, u32)>,
     frames: Vec<Scene>,
-) -> LabResult<(Vec<Scene>, Option<SceneExtentResponse>)> {
-    let mut scaled_from = None;
+) -> LabResult<(Vec<Scene>, Option<FrameCoordinates>)> {
+    let mut coordinates = None;
     let mut reduced = Vec::with_capacity(frames.len());
     for scene in frames {
-        let (scene, from) = scene_in_base(base, scene)?;
-        scaled_from = from;
+        let (scene, stated) = scene_in_base(base, scene)?;
+        coordinates = stated;
         reduced.push(scene);
     }
-    Ok((reduced, scaled_from))
+    Ok((reduced, coordinates))
 }
 
 /// The PNG of a reduced scene, the frame an answer about it writes or previews.
@@ -116,58 +94,54 @@ pub fn scene_png(scene: &Scene) -> LabResult<Vec<u8>> {
     .map_err(|error| LabError::device(format!("failed to encode the reduced scene: {error}")))
 }
 
-/// The display adapter's map of a frame of `given` size that shows itself (no producer geometry,
-/// as a scene file has none) onto `base`, with no display declaration, when a run takes it: the
-/// map builds, and the input side sends under it (`DisplayMap::admit_input`, whose answer is the
-/// same for every input); otherwise the adapter's word for why.
-fn admitted_map(base: CaptureExtent, given: CaptureExtent) -> Result<DisplayMap, DisplayProblem> {
-    let observation = DisplayObservation {
-        frame: given,
-        display: given,
-        rotation: None,
-        crop: None,
-        insets: None,
+/// `lab_scene_size_unsupported` of a scene of `given` size (width, height) that the kernel's frame
+/// gate for a Lab frame refused for the base `base` (`refusal`, `display_map_unresolved` as the live
+/// observation answers it): the gate's own word for why, the `display_problem` its refusal carries
+/// (a value of that closed vocabulary, whose key bears the vocabulary's name), with the scene's size
+/// and the base's. A refusal that carries no such word (a frame the gate could not read at all) is
+/// no size of a scene: it is relayed as the device error it is, with its code in the text.
+fn scene_refused(refusal: &ContainedTaskError, given: (u32, u32), base: (u32, u32)) -> LabError {
+    let carried = refusal.outcome();
+    let problem = carried
+        .value(DisplayProblem::VOCABULARY)
+        .and_then(serde_json::Value::as_str)
+        .and_then(|word| {
+            DisplayProblem::ALL
+                .iter()
+                .copied()
+                .find(|problem| problem.as_str() == word)
+        });
+    let Some(problem) = problem else {
+        return LabError::device(format!(
+            "the {}x{} scene could not be brought to its package's base {}x{}: {}; nothing was \
+             evaluated",
+            given.0,
+            given.1,
+            base.0,
+            base.1,
+            refusal.code()
+        ));
     };
-    let map = DisplayMap::build(base, observation, None).map_err(|error| match error {
-        DisplayMapError::Unresolved(unresolved) => unresolved.problem,
-        // A frame of the package's other orientation whose rotation is unknown, as the kernel's
-        // frame gate reports it.
-        DisplayMapError::RotationUnknown => DisplayProblem::OrientationMismatch,
-        DisplayMapError::SafeAreaUnavailable => DisplayProblem::SafeAreaUnavailable,
-        // Not met here: the frame is its own display, of its own ratio.
-        DisplayMapError::FrameDisplayMismatch => DisplayProblem::LayoutUndeclared,
-    })?;
-    map.admit_input(&InputAction::Reset)
-        .map_err(|unresolved| unresolved.problem)?;
-    Ok(map)
-}
-
-/// `lab_scene_size_unsupported` of a scene of `given` size and a package of `base`, the adapter's
-/// word `problem` in its values.
-fn scene_refused(problem: DisplayProblem, given: CaptureExtent, base: CaptureExtent) -> LabError {
     let outcome = Outcome::new(LabCode::LabSceneSizeUnsupported)
         .display_problem(problem)
-        .frame_width(given.width())
-        .frame_height(given.height())
-        .base_width(base.width())
-        .base_height(base.height());
+        .frame_width(given.0)
+        .frame_height(given.1)
+        .base_width(base.0)
+        .base_height(base.1);
     LabError::new(
         LabErrorClass::UsageValidation,
         LabCode::LabSceneSizeUnsupported.as_str(),
         format!(
             "the scene is {}x{} and its package's coordinate_space {}x{}: a scene of that size, \
-             or a pure scale of it at a ratio the display adapter admits for a run, is evaluated; \
-             nothing was evaluated",
-            given.width(),
-            given.height(),
-            base.width(),
-            base.height()
+             or one the Lab's live observation would bring to it (its ratio, not smaller, its \
+             orientation), is evaluated; nothing was evaluated",
+            given.0, given.1, base.0, base.1
         ),
         &[],
     )
     .with_details(json!({
-        "scene": {"width": given.width(), "height": given.height()},
-        "coordinate_space": {"width": base.width(), "height": base.height()},
+        "scene": {"width": given.0, "height": given.1},
+        "coordinate_space": {"width": base.0, "height": base.1},
         "outcome": outcome.envelope(Detail::Full),
     }))
 }

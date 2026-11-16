@@ -13,13 +13,14 @@ onto whatever frame the device delivers. This document grows slice by slice:
 | DA-4b-D | the declared safe area: declaration files of device models, an instance's model setting, the live change (Alice's ruling 69; it replaces DA-4b, which read a device's cutout) | section 9 |
 | DA-3 | the input side: every click and drag kind, `display_map_stale`, the crop offset and the turn undone for input | section 10, built in 0.12.59 for the identity and the pure scales whose double is a whole number (3/2, 2, 5/2, 3, …); every other pure scale waits for the slice that draws the input points in the device box |
 | DA-5ab | the Lab's online observation and its presses on a display that maps to its package's base, in the base coordinates | section 11, built in 0.12.67 |
-| DA-5 | task schema `0.10` and box references; the rest of the Lab (the offline recognition of a scene of a pure scale, a recording on a display that is not the base, DA-5cd) | later |
-| DA-5cd | the Lab's offline recognition on a scene that is a pure scale of its package; the base size of a recording and the refusal of a recording on a display that is not the base size | section 12, 0.12.67 |
+| DA-5cd | the Lab's offline recognition on a stored scene of another size than its package; the base size of a recording and the refusal of a recording on a display that is not the base size | section 12, 0.12.67 |
+| DA-5 | task schema `0.10` and box references; the conversion of a recording made on a display that is not the base size | later |
 
 From DA-2a every frame a run recognises passes the crate's map (section 8), and from DA-3 every
 input a run makes leaves through it (section 10); a 1280×720 package on a 1280×720 frame behaves
 exactly as before, byte for byte. From DA-5ab the Lab's online observations and operations take the
-same map and the same exit (section 11).
+same map and the same exit (section 11), and from the train of DA-5ab and DA-5cd its stored scenes
+the same reduction as its live frames (section 12).
 
 ## 1 Spaces
 
@@ -549,16 +550,20 @@ nothing changes, byte for byte.
   at `display_input_map`), with nothing sent. The records keep the base input (the prepared
   record's `action` and `geometry`, an attempt's `action`); the input intent records what was sent,
   in device pixels, as a run's does. The client's `ensure --capture` sends its route's inputs the
-  same way. A recorded click (`do --capture --record`) is planned in the recording's coordinates:
-  a recording whose frames are not of the package's base is refused before anything is pressed,
-  `record_frame_size_mismatch`; a recording made on such a display is closed by DA-5cd. Fix round
-  1: `observe --capture --record` is refused the same way on such a display: a recording whose
-  frames are not of the base before anything is captured, and a device frame of another size than
-  the base after the Runtime observed, before the frame file or the recording is written
-  (`record_frame_size_mismatch`, details `{frame, expected, actual}`), so no device frame enters a
-  recording beside an answer in the base. The device commands' `--record` (`capture`, `tap`,
-  `swipe`, `long-tap`) and `session app --record` record the device's frames and pixels, as they
-  speak them.
+  same way. A recorded click (`do --capture --record`) is planned in the recording's coordinates.
+  The train of DA-5ab and DA-5cd (its rule R4; section 12, [lab-recording.md](lab-recording.md),
+  "A recording's size"): nothing recorded is sent before the recording is known to take it.
+  `do --capture --record` judges the recording as `record stop` judges it (`record_size_not_base`)
+  and one frame it captures through the Runtime before its press as a frame that enters the
+  recording (`record_display_not_base` for a recording without a frame, `record_frame_size_mismatch`
+  when the display changed during the recording), before anything is pressed or written; `observe
+  --capture --record` judges the recording before it captures and the Runtime's device frame after
+  it observed the same way, before the frame file or the recording is written. So no device frame
+  enters a recording beside an answer in the base, and no recorded press is sent on a display that
+  is not the recording's size. (DA-5ab and its fix round 1 refused both against the package's base,
+  `record_frame_size_mismatch`; the train replaced that check with the recording's own.) The device
+  commands' `--record` (`capture`, `tap`, `swipe`, `long-tap`) and `session app --record` record the
+  device's frames and pixels, as they speak them, under the same judgement.
 - **The answers.** `frame_coordinates` on a mapped display is `{space: "base", base_pixels:
   [width, height], reduced_from: [device width, device height], orientation, applies_to}`; on a
   display of the base's size it is `{device_pixels, orientation, applies_to}` as before. The frame
@@ -568,40 +573,45 @@ nothing changes, byte for byte.
   on a mapped display `device.base_action` beside it is that point in the base (fix round 1). The
   MCP front's `ac_lab_observe` and `ac_do` answer the command line's line, and the first-generation
   server's `ac_lab_observe` and `ac_lab_do` (actingctl) say the same in their descriptions (fix
-  round 1).
-- **Not in this slice.** The recording on such a display (DA-5cd refuses `record start` there);
-  the offline recognition of a scene of a pure scale (DA-5cd); the run evidence's recognised boxes,
-  which stay in device-frame pixels (section 10, "Records").
+  round 1). The train: `FrameCoordinates` (the kernel's) builds both forms, for these answers and
+  for the answers about a stored scene (section 12), which name the same base form when the scene
+  was reduced.
+- **Not in this section.** The stored scenes, which take the same function since the train
+  (section 12); the recording on such a display, which stays refused (section 12); the run
+  evidence's recognised boxes, which stay in device-frame pixels (section 10, "Records").
 
 ## 12 The Lab's offline scenes and the recording's size (DA-5cd)
 
-Workflow #392 DA-5cd (0.12.67; register §1.437). Two things the Lab did with a display that is not
-its package's size, now said and refused where they cannot hold. The Lab's live observation and
-its presses on such a display are DA-5ab's and are not in this section.
+Workflow #392 DA-5cd (0.12.67; register §1.437), as the train of DA-5ab and DA-5cd leaves it
+(register §1.436 and §1.437, "Train"). Two things the Lab did with a display that is not its
+package's size, now said and refused where they cannot hold. The Lab's live observation and its
+presses on such a display are section 11's.
 
-- **An offline scene that is a pure scale of its package.** Every offline evaluation of a scene
-  takes it in its package's `coordinate_space` (the recognition pack's): `recognize`,
-  `detect-page`, `current-page`, `is-visible`, offline `observe`, `do --dry-run`, `ensure
-  --dry-run` and `wait` on saved scenes, `tap-target --dry-run` and `navigate --dry-run`, and the
-  Runtime captures of the client forms that press nothing (`do --capture --dry-run`, `ensure
-  --capture --dry-run`, `wait --capture`; the forms that press keep the frame as captured). A
-  scene of the coordinate space is evaluated as it is, and its answer is byte for byte the one
-  before this slice. A scene of another size is taken through the adapter as a run's frame gate
-  takes a frame (section 8): its map is built with no display declaration (a scene file carries no
-  producer geometry, so it is its own display), and the map must be one under which a run sends
-  its input (`DisplayMap::admit_input`, section 10: a pure scale whose double is a whole number,
-  3/2, 2, 5/2, 3, …). Then the scene is reduced once to the scale frame with the REC-5 primitive
-  (`resample_pixels`, area average, the same call as the gate's) and evaluated there: every
-  rectangle and point of the answer is in the coordinate space, and the answer names the size the
-  scene was reduced from, `scaled_from: {width, height}` (a frame set: each frame reduced, the
-  current frame's size named). Offline `observe` and `do` state the coordinate space in
-  `frame_coordinates`, and `observe --with-frame` writes the reduced frame. Any other scene is
-  refused before anything is evaluated, `lab_scene_size_unsupported` (exit 2), its values the
-  adapter's word `display_problem` (`layout_undeclared` another ratio, `scale_below_base` a scene
-  smaller than the package, `input_scale_unsupported` a ratio such as 5/4, `orientation_mismatch`
-  the package's other orientation), the scene's size (`frame_width`, `frame_height`) and the
-  package's (`base_width`, `base_height`); before this slice such a scene, and a pure scale too,
-  was refused `validation_failed` with the sizes in its message.
+- **An offline scene of another size than its package.** Every offline evaluation of a scene, a
+  stored image, takes it in its package's `coordinate_space` (its base, the recognition pack's):
+  `recognize`, `detect-page`, `current-page`, `is-visible`, offline `observe`, `do --dry-run`,
+  `ensure --dry-run` and `wait` on saved scenes, `tap-target --dry-run` and `navigate --dry-run`. A
+  scene of the base's size is evaluated as it is, and its answer is byte for byte the one before
+  DA-5cd. Any other scene is judged, reduced and answered exactly as a frame of its size is by the
+  Lab's live observation (section 11), by the same function, the kernel's `lab_scene_on_base` (the
+  frame gate's map, built with no producer geometry and no game declaration, and its one
+  resample, area average): a scene of the base's ratio, not smaller and in its orientation, is
+  reduced once to the base and evaluated there, a 5/4 one too (whether a press could land exactly
+  is no reason to refuse a read; a press at 5/4 stays refused where presses are admitted, section
+  11). Every rectangle and point of the answer is the base's, and the answer names
+  `frame_coordinates` in section 11's base form (`{space: "base", base_pixels, reduced_from,
+  orientation, applies_to}`; a frame set: each frame reduced, the current frame's size named): an
+  answer that stated no `frame_coordinates` before states them for a reduced scene only, and
+  offline `observe` and `do`, which state them for every scene, state the base form for a reduced
+  one; `observe --with-frame` writes the reduced frame. Any other scene is refused before anything
+  is evaluated, `lab_scene_size_unsupported` (exit 2), its values the gate's word `display_problem`
+  (`layout_undeclared` another ratio, `scale_below_base` a scene smaller than the package,
+  `orientation_mismatch` the package's other orientation), the scene's size (`frame_width`,
+  `frame_height`) and the package's (`base_width`, `base_height`). Two refusals of a size, one cause
+  each: `lab_scene_size_unsupported` is a stored scene's, `display_map_unresolved` a live capture's
+  (section 11), and neither answers for the other's cause; the client's `--capture` forms reduce a
+  Runtime capture once, on section 11's path. Before DA-5cd such a scene was refused
+  `validation_failed` with the sizes in its message.
 - **The base size and a recording.** The base size is the `coordinate_space` every standard
   package declares today, 1280×720. Nothing a package, a game root or its `display-layout.json`
   declares names a base of its own, so it has one named home, the contract crate's
@@ -616,7 +626,20 @@ its presses on such a display are DA-5ab's and are not in this section.
   stop` refuses a recording whose frames are not the base size, `record_size_not_base` (fix round 1:
   a header that names a base size, frames of any other size; one that names none, made before,
   frames of a larger display of the base size's ratio, a pure scale the adapter maps onto it), and
-  converts nothing.
+  converts nothing. The train (its rule R4: nothing is sent before the recording is known to take
+  it): every path that records asks that judgement before anything goes to the device, and judges
+  the frame it took as a frame that enters the recording, whether or not it stores it: `tap`,
+  `swipe` and `long-tap --record` and `session app --record` before they capture (also when the
+  open step is marked, so that the frame before the press is not stored) and the frame before the
+  press; `do --capture --record` the frame it captures through the Runtime before its press;
+  `observe --capture --record` before it captures and the Runtime's frame after it observed (section
+  11, "Presses"). Three codes, one cause each: `record_display_not_base`, this instance's display
+  is not the base size and the recording has no frame yet (`record start`, by the display last
+  observed, and the first frame); `record_size_not_base`, this recording is not at the base size
+  (`record stop`, `record ready`'s item, a frame added to it, every recorded step before it sends
+  anything); `record_frame_size_mismatch`, a frame of another size than the recording already has
+  (the display changed during the recording). Recording on a display that is not the base size
+  stays refused: no recording is made of reduced frames.
 - **Still open.** Converting such a recording, or recording on a scaled display in base
   coordinates (its frames reduced as they arrive, its presses mapped by section 10), is not done:
   the study behind this slice proposes it as the larger form of its slice (c), and the recording's

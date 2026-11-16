@@ -109,13 +109,11 @@ pub(super) fn run_contained_lab_do(global: &GlobalOptions, flags: &FlagArgs) -> 
         // observations take.
         let frames = super::super::contained_resources::online_frame_plan(&instance, path)?;
         // Workflow #392 DA-5ab: the recorded press is planned in the recording's coordinates and
-        // the Lab operation takes its package's base; a recording of another size is refused
-        // before anything is pressed.
+        // the Lab operation takes its package's base. The train of DA-5 (R4): nothing is sent
+        // before the recording is known to take it: the recording's own judgement, then the
+        // frame captured before the press, judged as a frame that enters the recording is.
         if let Some(lock) = record_lock.as_ref() {
-            actingcommand_lab::record_press_base_check(
-                lock,
-                super::super::contained_resources::online_base(&instance, path)?,
-            )?;
+            recorded_press_check(lock, &instance)?;
         }
         let session = begin_runtime_debug_session()?;
         // `do --capture --record` (#463 L1): the planned step writes its marks, then sends the
@@ -813,6 +811,36 @@ fn recorded_click_selection(plan: &ClickPlan) -> CliOutcome<LabOperationSelectio
         }
     };
     Ok(LabOperationSelection::Coordinates { action })
+}
+
+/// Workflow #392 DA-5, the train of DA-5ab and DA-5cd (its rule R4; `contracts/lab-recording.md`,
+/// "A recording's size"): what `do --capture --record` checks before its press, so that nothing is
+/// sent before the recording is known to take it. First the one judgement `record stop` makes of
+/// the recording (`record_size_not_base`); then one frame of the instance through the Runtime, as
+/// `tap --record` captures the frame before its press, judged as a frame that enters the
+/// recording is (`record_display_not_base` for a recording without a frame,
+/// `record_size_not_base`, `record_frame_size_mismatch` when the display changed during the
+/// recording). The frame is not stored: the Lab operation takes its own before frame. A display
+/// that is not the base size is so refused before anything is pressed or written; a recording is
+/// never made of reduced frames.
+fn recorded_press_check(lock: &RecordingLock, instance: &str) -> CliOutcome<()> {
+    actingcommand_lab::record_size_check(lock)?;
+    let endpoint = crate::runtime_capture_backend::RuntimeCaptureEndpoint::new(
+        instance.to_owned(),
+        crate::runtime_state_root()?,
+    );
+    let captured = crate::commands::device_commands::runtime_captured_frame(&endpoint)?;
+    let frame = Scene::from_png(&captured.frame.png).map_err(|error| {
+        CliError::device(format!(
+            "the frame captured before the press cannot be read: {error}; nothing was pressed"
+        ))
+    })?;
+    actingcommand_lab::record_frame_check(
+        lock,
+        (frame.width(), frame.height()),
+        "the frame captured before the press",
+    )?;
+    Ok(())
 }
 
 fn selection(flags: &FlagArgs) -> CliOutcome<LabOperationSelection> {

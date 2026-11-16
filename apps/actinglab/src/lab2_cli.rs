@@ -34,13 +34,8 @@ mod operation;
 pub(crate) use operation::lab_operation_call_error;
 
 /// Workflow #410 item 1: the members an observe or do answer adds about its frame; Min never
-/// drops them. Workflow #392 DA-5cd: nor the size its frame was reduced from.
-const FRAME_MEMBERS: [&str; 4] = [
-    "frame_coordinates",
-    "preview",
-    "after_attachment",
-    "scaled_from",
-];
+/// drops them.
+const FRAME_MEMBERS: [&str; 3] = ["frame_coordinates", "preview", "after_attachment"];
 
 struct Lab2Ids {
     issuer: IdIssuer,
@@ -76,11 +71,9 @@ pub(super) struct Lab2Scene {
     input_frame: Option<InputFrameReference>,
     /// Workflow #392 DA-5ab: the device size (width, height) the Runtime frames were reduced
     /// from to the package's base ([`on_package_base`]); `None` when the frames are the device's
-    /// own (a display of the base's size, or a scene file).
+    /// own (a display of the base's size). The train of DA-5: also the size a stored scene was
+    /// reduced from ([`in_package_base`]), by the same function.
     reduced_from: Option<(u32, u32)>,
-    /// Workflow #392 DA-5cd: the size the frames were reduced from to the package's coordinate
-    /// space ([`in_package_base`]); none for frames of that size, and for frames not reduced.
-    scaled_from: Option<actingcommand_lab::SceneExtentResponse>,
 }
 
 impl Lab2Scene {
@@ -93,34 +86,38 @@ impl Lab2Scene {
     }
 }
 
-/// Workflow #392 DA-5cd (`contracts/display-adapter.md` section 12): `loaded`'s frames in the
-/// package's coordinate space: each reduced to it when it is a pure scale of it that a run admits,
-/// the frame's PNG then the reduced frame's, with the size the current frame was reduced from; a
-/// frame of that size as it is; any other refused `lab_scene_size_unsupported` before anything is
-/// evaluated. The offline frames are taken so, and the Runtime captures of a client form that
-/// presses nothing.
+/// Workflow #392 DA-5cd (`contracts/display-adapter.md` section 12): `loaded`'s frames, read from
+/// scene files, on the package's base. The train of DA-5 (R1): each judged, reduced and answered as
+/// a frame of its size the live observation captures is, by the same function
+/// (`actingcommand_lab::scene_in_base`, the kernel's `lab_scene_on_base`): a frame of the base's
+/// size as it is; one the live observation brings to the base reduced to it, the frame's PNG then
+/// the reduced frame's, and the size the current frame was reduced from kept (`reduced_from`); any
+/// other refused `lab_scene_size_unsupported` before anything is evaluated. Only the offline frames
+/// are taken so: a Runtime capture is reduced once, on DA-5ab's path ([`on_package_base`]).
 fn in_package_base(loaded: Lab2Scene, evaluator: &RecognitionEvaluator) -> CliOutcome<Lab2Scene> {
     let base = actingcommand_lab::package_base(evaluator);
-    let (scene, scaled_from) = actingcommand_lab::scene_in_base(base, loaded.scene)?;
+    let device = (loaded.scene.width(), loaded.scene.height());
+    let (scene, coordinates) = actingcommand_lab::scene_in_base(base, loaded.scene)?;
     let (samples, _) = actingcommand_lab::frames_in_base(base, loaded.samples)?;
-    let png = match scaled_from {
-        Some(_) => Some(actingcommand_lab::scene_png(&scene)?),
-        None => loaded.png,
+    let (png, reduced_from) = match coordinates {
+        Some(_) => (Some(actingcommand_lab::scene_png(&scene)?), Some(device)),
+        None => (loaded.png, None),
     };
     Ok(Lab2Scene {
         scene,
         samples,
         png,
-        scaled_from,
+        reduced_from,
         ..loaded
     })
 }
 
-/// Workflow #392 DA-5cd: an answer about `scene` names the size its frame was reduced from, when
-/// it was (`scaled_from`); every rectangle and point of it is in the package's coordinate space.
-fn attach_scaled_from(payload: &mut Value, scene: &Lab2Scene) {
-    if let Some(scaled_from) = scene.scaled_from {
-        payload["scaled_from"] = json!(scaled_from);
+/// Workflow #392 DA-5, the train (R2): an answer about `scene` that states no `frame_coordinates`
+/// of its own states them when its frames were reduced to the package's base, in the base form
+/// ([`scene_coordinates`]); on a frame of the base's size it is as it was.
+fn attach_reduced_coordinates(payload: &mut Value, scene: &Lab2Scene) {
+    if scene.reduced_from.is_some() {
+        payload["frame_coordinates"] = scene_coordinates(scene);
     }
 }
 
@@ -330,10 +327,9 @@ pub(crate) fn run_observe(global: &GlobalOptions, args: &[String]) -> CliOutcome
     if let Some((path, _)) = &frame_png {
         payload["frame_path"] = json!(path.display().to_string());
     }
-    // Workflow #410 item 1: the scene's coordinate system, and its preview when asked.
-    payload["frame_coordinates"] =
-        frame::coordinates(loaded_scene.scene.width(), loaded_scene.scene.height());
-    attach_scaled_from(&mut payload, &loaded_scene);
+    // Workflow #410 item 1: the scene's coordinate system, and its preview when asked. Workflow
+    // #392 DA-5, the train (R2): a scene reduced to the package's base states the base form.
+    payload["frame_coordinates"] = scene_coordinates(&loaded_scene);
     if flags.bool("--preview") {
         payload["preview"] = frame::scene_preview(&loaded_scene.scene, loaded_scene.png.as_deref());
     }
@@ -468,14 +464,14 @@ fn run_runtime_observe(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<V
             return super::contained_resources::finish_package_use(Err(error), reader.close());
         }
     };
-    // Workflow #392 DA-5ab fix round 1: the observation speaks its package's base; a recording of
-    // another size is refused before anything is captured, as the recorded press refuses it.
-    if let Some(lock) = record_lock.as_ref() {
-        let checked = super::contained_resources::online_base(&instance, reader.path())
-            .and_then(|base| actingcommand_lab::record_press_base_check(lock, base));
-        if let Err(error) = checked {
-            return super::contained_resources::finish_package_use(Err(error), reader.close());
-        }
+    // Workflow #392 DA-5ab fix round 1: the observation speaks its package's base. The train of
+    // DA-5 (R4): before anything is captured, the one judgement `record stop` makes of the
+    // recording; a recording whose frames are not the base size is refused
+    // (`record_size_not_base`), as the recorded press refuses it.
+    if let Some(lock) = record_lock.as_ref()
+        && let Err(error) = actingcommand_lab::record_size_check(lock)
+    {
+        return super::contained_resources::finish_package_use(Err(error), reader.close());
     }
     let session = begin_runtime_debug_session()?;
     start_runtime_debug_operation(&session, RuntimeDebugOperation::Observe)?;
@@ -519,18 +515,18 @@ fn run_runtime_observe(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<V
         };
         let observed = verified.observation();
         // Workflow #392 DA-5ab fix round 1 (`contracts/display-adapter.md` section 11): a recorded
-        // observation on a display of another size than the package's base (its projection's
-        // frame) would put the device's frame into the recording beside an answer in the base. It
-        // is refused before the frame file or the recording is written, with the refusal the
-        // recorded press gives, until the recording on such a display (DA-5cd); the observation's
-        // terminal is `rejected`, as a failed `do` closes its own (`finish_runtime_debug_result`).
-        if record_lock.is_some()
-            && let Err(refused) = actingcommand_lab::record_observation_base_check(
-                (
-                    observed.projection.frame.width,
-                    observed.projection.frame.height,
-                ),
+        // observation on a display of another size than the base would put the device's frame
+        // into the recording beside an answer in the base. The train of DA-5 (R4): the Runtime's
+        // frame is judged as a frame that enters the recording is, before the frame file or the
+        // recording is written (`record_display_not_base` for a recording without a frame,
+        // `record_size_not_base`, `record_frame_size_mismatch` when the display changed during
+        // the recording); the observation's terminal is then `rejected`, as a failed `do` closes
+        // its own (`finish_runtime_debug_result`).
+        if let Some(lock) = record_lock.as_ref()
+            && let Err(refused) = actingcommand_lab::record_frame_check(
+                lock,
                 (observed.frame.width(), observed.frame.height()),
+                "the Runtime observation's frame",
             )
         {
             session
@@ -659,14 +655,8 @@ fn run_runtime_do(
     start_runtime_debug_operation(&session, RuntimeDebugOperation::Do)?;
     let result = (|| -> CliOutcome<Value> {
         // #411 Lab L5c: the frame set the package's target consensus needs, decided on as the
-        // offline frames are; the click and the coordinates are the current frame's. Workflow #392
-        // DA-5cd: a dry run, which presses nothing, decides in the package's coordinate space.
+        // offline frames are; the click and the coordinates are the current frame's.
         let loaded_scene = load_runtime_lab2_frames(&session, instance, &evaluator)?;
-        let loaded_scene = if dry_run {
-            in_package_base(loaded_scene, &evaluator)?
-        } else {
-            loaded_scene
-        };
         let frames = loaded_scene.frames();
         let before = detect_current_page_over(&evaluator, &detector, &frames)?;
         let evaluation = evaluate_target_over(&evaluator, &frames, target)?;
@@ -784,7 +774,6 @@ fn run_runtime_do(
             // (Workflow #392 DA-5ab: the package's base on a display of another size).
             "frame_coordinates": scene_coordinates(&loaded_scene),
         });
-        attach_scaled_from(&mut payload, &loaded_scene);
         // #411 Lab L5c: as offline `do` reports its frames (B-2 R4), only for a package that
         // declares target consensus.
         if let Some(coverage) = offline_recognition_coverage(&evaluator, frames.len()) {
@@ -851,14 +840,8 @@ fn run_runtime_ensure(
     start_runtime_debug_operation(&session, RuntimeDebugOperation::Ensure)?;
     let result = (|| -> CliOutcome<Value> {
         let target_page = canonical_navigation_page(&graph, to);
-        // #411 Lab L5c: the frame set the package's target consensus needs. Workflow #392 DA-5cd:
-        // a dry run, which presses nothing, decides in the package's coordinate space.
+        // #411 Lab L5c: the frame set the package's target consensus needs.
         let scene = load_runtime_lab2_frames(&session, instance, &evaluator)?;
-        let scene = if dry_run {
-            in_package_base(scene, &evaluator)?
-        } else {
-            scene
-        };
         let start = detect_current_page_over(&evaluator, &detector, &scene.frames())?;
         if start.matched && start.page == target_page {
             let mut payload = json!({
@@ -873,7 +856,7 @@ fn run_runtime_ensure(
                 "backend": scene.backend,
                 "arbitration": runtime_scheduler_projection(false),
             });
-            attach_scaled_from(&mut payload, &scene);
+            attach_reduced_coordinates(&mut payload, &scene);
             return Ok(payload);
         }
         if !start.matched {
@@ -915,7 +898,7 @@ fn run_runtime_ensure(
                 "backend": scene.backend,
                 "arbitration": runtime_scheduler_projection(false),
             });
-            attach_scaled_from(&mut payload, &scene);
+            attach_reduced_coordinates(&mut payload, &scene);
             return Ok(payload);
         }
 
@@ -1225,12 +1208,8 @@ fn runtime_wait_for_page(
 ) -> CliOutcome<Value> {
     let started = Instant::now();
     loop {
-        // #411 Lab L5c: each poll takes one frame set. Workflow #392 DA-5cd: a wait presses
-        // nothing and decides in the package's coordinate space.
-        let scene = in_package_base(
-            load_runtime_lab2_frames(session, instance, evaluator)?,
-            evaluator,
-        )?;
+        // #411 Lab L5c: each poll takes one frame set.
+        let scene = load_runtime_lab2_frames(session, instance, evaluator)?;
         let outcome = detect_current_page_over(evaluator, detector, &scene.frames())?;
         if outcome.matched && outcome.page == page {
             let mut payload = json!({
@@ -1243,7 +1222,7 @@ fn runtime_wait_for_page(
                 "frame_age_ms": scene.frame_age_ms,
                 "backend": scene.backend
             });
-            attach_scaled_from(&mut payload, &scene);
+            attach_reduced_coordinates(&mut payload, &scene);
             return Ok(payload);
         }
         if started.elapsed() >= timeout {
@@ -1272,12 +1251,8 @@ fn runtime_wait_for_stable_target(
 ) -> CliOutcome<Value> {
     guard_stable_target(evaluator, target)?;
     let started = Instant::now();
-    // #411 Lab L5c: the baseline and each poll take one frame set. Workflow #392 DA-5cd: a wait
-    // presses nothing and decides in the package's coordinate space.
-    let first = in_package_base(
-        load_runtime_lab2_frames(session, instance, evaluator)?,
-        evaluator,
-    )?;
+    // #411 Lab L5c: the baseline and each poll take one frame set.
+    let first = load_runtime_lab2_frames(session, instance, evaluator)?;
     let mut previous = evaluate_target_over(evaluator, &first.frames(), target)?;
     if !previous.passed {
         return Err(CliError::safety_blocked(
@@ -1293,10 +1268,7 @@ fn runtime_wait_for_stable_target(
         })));
     }
     loop {
-        let next_scene = in_package_base(
-            load_runtime_lab2_frames(session, instance, evaluator)?,
-            evaluator,
-        )?;
+        let next_scene = load_runtime_lab2_frames(session, instance, evaluator)?;
         let current = evaluate_target_over(evaluator, &next_scene.frames(), target)?;
         if actingcommand_lab::target_evaluations_stable_for_wait(&previous, &current) {
             let mut payload = json!({
@@ -1309,7 +1281,7 @@ fn runtime_wait_for_stable_target(
                 "backend": next_scene.backend,
                 "evaluation": target_eval_json(&current)
             });
-            attach_scaled_from(&mut payload, &next_scene);
+            attach_reduced_coordinates(&mut payload, &next_scene);
             return Ok(payload);
         }
         if started.elapsed() >= timeout {
@@ -1634,7 +1606,6 @@ fn load_runtime_lab2_scene(
         png,
         input_frame,
         reduced_from: None,
-        scaled_from: None,
     };
     Ok((loaded, receipt))
 }
@@ -2386,13 +2357,10 @@ pub(crate) fn run_do(global: &GlobalOptions, args: &[String]) -> CliOutcome<Valu
             "observation": page_detection_json(&after),
             "device": device,
             "arbitration": isolated_offline_projection(),
-            // Workflow #410 item 1: the scene's coordinate system, which the planned click uses.
-            "frame_coordinates": frame::coordinates(
-                loaded_scene.scene.width(),
-                loaded_scene.scene.height(),
-            ),
+            // Workflow #410 item 1: the scene's coordinate system, which the planned click uses
+            // (Workflow #392 DA-5, the train: the base form on a scene reduced to the base).
+            "frame_coordinates": scene_coordinates(&loaded_scene),
         });
-        attach_scaled_from(&mut payload, &loaded_scene);
         if let Some(coverage) = offline_recognition_coverage(&evaluator, frames.len()) {
             payload["recognition_coverage"] = coverage;
         }
@@ -2451,7 +2419,7 @@ pub(crate) fn run_ensure(global: &GlobalOptions, args: &[String]) -> CliOutcome<
                 "backend": scene.backend,
                 "arbitration": isolated_offline_projection(),
             });
-            attach_scaled_from(&mut payload, &scene);
+            attach_reduced_coordinates(&mut payload, &scene);
             attach_env_resolved(&mut payload, &env_resolved);
             // Workflow #428 LAB-OCR-DL: the deadline the switch raised the OCR inference to.
             return super::offline_ocr::with_ocr_deadline(payload, ocr_deadline_max);
@@ -2497,7 +2465,7 @@ pub(crate) fn run_ensure(global: &GlobalOptions, args: &[String]) -> CliOutcome<
             "backend": scene.backend,
             "arbitration": isolated_offline_projection(),
         });
-        attach_scaled_from(&mut payload, &scene);
+        attach_reduced_coordinates(&mut payload, &scene);
         attach_env_resolved(&mut payload, &env_resolved);
         super::offline_ocr::with_ocr_deadline(payload, ocr_deadline_max)
     })();
@@ -3218,7 +3186,8 @@ fn load_lab2_scene(
                 "offline Lab-2 CLI verbs require --scene <png>",
             ));
         };
-        // Workflow #392 DA-5cd: a pure scale of the package's coordinate space is reduced to it.
+        // Workflow #392 DA-5cd: a pure scale of the package's coordinate space is reduced to it;
+        // the train of DA-5: as the live observation reduces a frame of its size.
         return in_package_base(
             Lab2Scene {
                 scene,
@@ -3237,7 +3206,6 @@ fn load_lab2_scene(
                 png: Some(png),
                 input_frame: None,
                 reduced_from: None,
-                scaled_from: None,
             },
             evaluator,
         );
@@ -3431,7 +3399,7 @@ fn wait_for_page(
                 "frame_age_ms": scene.frame_age_ms,
                 "backend": scene.backend
             });
-            attach_scaled_from(&mut payload, &scene);
+            attach_reduced_coordinates(&mut payload, &scene);
             return Ok(payload);
         }
         if started.elapsed() >= timing.timeout {
@@ -3496,7 +3464,7 @@ fn wait_for_stable_target(
                 "backend": next_scene.backend,
                 "evaluation": target_eval_json(&current)
             });
-            attach_scaled_from(&mut payload, &next_scene);
+            attach_reduced_coordinates(&mut payload, &next_scene);
             return Ok(payload);
         }
         if started.elapsed() >= timing.timeout {

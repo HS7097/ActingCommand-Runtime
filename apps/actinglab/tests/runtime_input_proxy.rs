@@ -65,6 +65,9 @@ struct FakeState {
     // Workflow #392 DA-5cd fix round 1: when set, the width and height of every frame served
     // outside a Runtime-owned task's 16x9 geometry, instead of the provider's square frame.
     frame_extent: OnceLock<(u32, u32)>,
+    // Workflow #392 DA-5, the train: when set, the display changed to this width and height,
+    // which every frame served from then on has (outside a Runtime-owned task's 16x9 geometry).
+    display_changed_to: Mutex<Option<(u32, u32)>>,
 }
 
 /// Workflow #392 DA-5cd fix round 1 (`contracts/lab-recording.md`, "A recording's size"): the fake's
@@ -2159,8 +2162,15 @@ impl CaptureBackend for FakeCapture {
         } else {
             [255, 0, 0]
         };
+        let changed = *self
+            .state
+            .display_changed_to
+            .lock()
+            .expect("the fake's changed display");
         let (width, height) = if self.state.physical_task_geometry.load(Ordering::Acquire) {
             (16, 9)
+        } else if let Some(extent) = changed {
+            extent
         } else {
             self.state
                 .frame_extent
@@ -6435,9 +6445,12 @@ fn da5ab_fix1_the_capture_client_forms_on_a_mapped_display_decide_and_press_in_t
 }
 
 // Fix round 1, point 3: `observe --capture --record` on the 3x3 device of the 2x2 package is
-// refused `record_frame_size_mismatch` (details: the base expected, the device frame actual)
-// after the Runtime observed and before anything is written: the recording's file is as `record
-// start` wrote it. The recording starts while nothing listens, so it holds nothing.
+// refused after the Runtime observed and before anything is written: the recording's file is as
+// `record start` wrote it. The recording starts while nothing listens, so it holds nothing.
+// Workflow #392 DA-5, the train (R4), adapted as the requirement changes what it pins: the
+// recording's base is the one its header names (the installed `record start` writes 1280x720),
+// not the package's, and the observed frame would be its first: `record_display_not_base`, its
+// values the device frame's size and the base size.
 #[test]
 fn da5ab_fix1_a_recorded_observation_on_a_mapped_display_is_refused_and_nothing_is_recorded() {
     let root = TempDir::new().expect("tempdir");
@@ -6493,23 +6506,164 @@ fn da5ab_fix1_a_recorded_observation_on_a_mapped_display_is_refused_and_nothing_
     host.close().expect("close host");
     assert_eq!(exit_code, 1, "{envelope}");
     assert_eq!(
-        envelope["outcome"]["code"], "record_frame_size_mismatch",
+        envelope["outcome"]["code"], "record_display_not_base",
         "{envelope}"
     );
     assert_eq!(
-        envelope["details"]["expected"],
-        json!({"width": 2, "height": 2}),
-        "{envelope}"
-    );
-    assert_eq!(
-        envelope["details"]["actual"],
-        json!({"width": 3, "height": 3}),
+        envelope["outcome"]["values"],
+        json!({"frame_width": 3, "frame_height": 3, "base_width": 1280, "base_height": 720}),
         "{envelope}"
     );
     assert_eq!(
         fs::read(&recording).expect("the recording"),
         before,
         "nothing recorded"
+    );
+    assert_eq!(state.taps.load(Ordering::Acquire), 0);
+}
+
+/// Workflow #392 DA-5, the train: the names and bytes of every file of the recording directory
+/// `lab`, in name order.
+fn da5_train_recording_files(lab: &Path) -> Vec<(String, Vec<u8>)> {
+    let mut files = fs::read_dir(lab)
+        .expect("the recording's directory")
+        .map(|entry| {
+            let entry = entry.expect("an entry");
+            let bytes = if entry.file_type().expect("its type").is_file() {
+                fs::read(entry.path()).expect("the file")
+            } else {
+                Vec::new()
+            };
+            (entry.file_name().to_string_lossy().into_owned(), bytes)
+        })
+        .collect::<Vec<_>>();
+    files.sort();
+    files
+}
+
+/// Workflow #392 DA-5, the train of DA-5ab and DA-5cd (R4; register §1.436 and §1.437, "Train";
+/// `contracts/lab-recording.md`, "A recording's size"): nothing recorded is sent or written once
+/// the display is not the recording's size. The installed `record start` (nothing listening)
+/// writes the base size 1280x720; on the fake host, whose frames are 1280x720, `observe --capture
+/// --record` takes the recording's first frame (step 1). The display then changes to 1920x1080, a
+/// display that maps to the 1280x720 packages: `do --capture --record --tap-rect 0,0,1,1` is
+/// refused `record_frame_size_mismatch` (the recording's 1280x720 expected, the 1920x1080 frame it
+/// captured before the press actual), exit 1, before anything is pressed; `observe --capture
+/// --record` is refused the same way after the Runtime observed, before anything is written; the
+/// recording's files are byte for byte as the first observation left them, and the device took no
+/// tap.
+#[test]
+fn da5_train_recorded_do_and_observe_after_the_display_changed_send_and_write_nothing() {
+    let root = TempDir::new().expect("tempdir");
+    let runtime_root = root.path().join("runtime");
+    let local = root.path().join("local");
+    let config = root.path().join("actinglab.json");
+    fs::write(&config, "{}").expect("write config");
+    let observe_package = root.path().join("observe.zip");
+    write_zip(&observe_package, &[
+        ("control.json", br#"{"game":"neutral","server":"test","package_id":"neutral.observation","entry_task_id":"task"}"#),
+        ("resources/manifest.json", br#"{"entry_task_id":"task"}"#),
+        ("resources/operations/task/task.json", br#"{}"#),
+        ("resources/recognition/neutral.test.pack.json", br#"{"schema_version":"0.3","coordinate_space":{"width":1280,"height":720},"targets":[{"type":"color","id":"anchor","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0]}]}"#),
+        ("resources/recognition/neutral.test.pages.json", br#"{"schema_version":"0.3","pages":[{"id":"page","required":["anchor"]}]}"#),
+        ("resources/navigation/neutral.test.navigation.json", br#"{"schema_version":"0.3","navigation":[]}"#),
+    ]);
+    let observe_package = observe_package.to_str().expect("observe package path");
+    let resources = root.path().join("resources");
+    let semantic_package = root.path().join("semantic.zip");
+    write_semantic_resources_at(&resources, (1280, 720));
+    write_semantic_package(&semantic_package, &resources);
+    let semantic_package = semantic_package.to_str().expect("semantic package path");
+    let started = s17_record_start(&config, &runtime_root, &local);
+    assert_eq!(started["hold"]["state"], "none", "{started}");
+    let state = base_frames();
+    let host = l3_host(&runtime_root, &state, b"lab-da5-train-display-changed");
+
+    let observed = run_actinglab_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "--instance",
+            "node.a",
+            "observe",
+            "--capture",
+            "--zip",
+            observe_package,
+            "--record",
+        ],
+    );
+    assert!(observed["record"]["frame"].is_object(), "{observed}");
+    let lab = local
+        .join("ActingCommand")
+        .join("actinglab")
+        .join("session")
+        .join("record-artifacts")
+        .join("record_s17")
+        .join("lab");
+    let before = da5_train_recording_files(&lab);
+
+    *state
+        .display_changed_to
+        .lock()
+        .expect("the fake's changed display") = Some((1920, 1080));
+    let (pressed_exit, pressed) = run_actinglab_failure_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "--instance",
+            "node.a",
+            "do",
+            "--capture",
+            "--zip",
+            semantic_package,
+            "--record",
+            "--tap-rect",
+            "0,0,1,1",
+        ],
+    );
+    let (observed_exit, refused) = run_actinglab_failure_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "--instance",
+            "node.a",
+            "observe",
+            "--capture",
+            "--zip",
+            observe_package,
+            "--record",
+        ],
+    );
+    host.close().expect("close host");
+
+    for (exit_code, envelope) in [(pressed_exit, &pressed), (observed_exit, &refused)] {
+        assert_eq!(exit_code, 1, "{envelope}");
+        assert_eq!(
+            envelope["outcome"]["code"], "record_frame_size_mismatch",
+            "{envelope}"
+        );
+        assert_eq!(
+            envelope["details"]["expected"],
+            json!({"width": 1280, "height": 720}),
+            "{envelope}"
+        );
+        assert_eq!(
+            envelope["details"]["actual"],
+            json!({"width": 1920, "height": 1080}),
+            "{envelope}"
+        );
+    }
+    assert_eq!(state.taps.load(Ordering::Acquire), 0, "nothing pressed");
+    assert_eq!(
+        da5_train_recording_files(&lab),
+        before,
+        "nothing recorded or written"
     );
 }
 

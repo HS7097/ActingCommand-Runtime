@@ -9,12 +9,18 @@
 //   --dry-run`, `wait`, `recognize`, `is-visible`, `detect-page`, `current-page`, `tap-target
 //   --dry-run`, `navigate --dry-run`), each through `da5cd_offline_row` on a synthetic 8x4 package
 //   whose frame is 2x2 blocks: the frame enlarged 3 times (24x12) and 3/2 times (12x6) by nearest
-//   neighbour gives the same answer as the 8x4 frame, its identifiers, times and the scene's path
-//   aside, and names `scaled_from` with its size; the 8x4 frame's answer names none; a frame of
-//   another ratio (8x6), one smaller than the package (4x2) and one at a ratio the display adapter
-//   admits for no run (10x5, 5/4) are each refused `lab_scene_size_unsupported` (exit 2) with the
-//   adapter's word, the scene's size and the package's. `recognize`, which holds no identifier,
-//   answers the enlarged frames exactly as the 8x4 one but for `scaled_from`.
+//   neighbour gives the same answer as the 8x4 frame, its identifiers, times, the scene's path and
+//   `frame_coordinates` aside; a frame of another ratio (8x6) and one smaller than the package
+//   (4x2) are each refused `lab_scene_size_unsupported` (exit 2) with the word of the frame gate
+//   that refused it, the scene's size and the package's. Adapted by the train of DA-5ab and
+//   DA-5cd (register §1.436 and §1.437, "Train"; its rules R1 and R2), as the requirement changes
+//   what they pin: the enlarged frames' answers name `frame_coordinates` in the base form
+//   (`{space: base, base_pixels: [8, 4], reduced_from: [the scene's size], orientation,
+//   applies_to}`) in place of DA-5cd's own member; the 8x4 frame's answer is as before (offline
+//   `observe` and `do` state the frame's own `{device_pixels: [8, 4], ...}`, the others none);
+//   and 5/4 (10x5) is no longer refused (the live observation takes it: the train's tests below).
+//   `recognize`, which holds no identifier, answers the enlarged frames exactly as the 8x4 one but
+//   for `frame_coordinates`.
 // - `da5cd_record_start_on_a_display_that_is_not_the_base_size_starts_nothing`: the scripted
 //   Runtime knows the instance's display at 1920x1080: `record start` fails
 //   `record_display_not_base` with the display's size and the base size, after the handshake and
@@ -42,6 +48,13 @@
 //   `serve --stdio --front mcp`, the refusal `lab_scene_size_unsupported` of `detect-page`,
 //   `tap-target` with `dry_run` and `navigate` with `dry_run` on a scene of another ratio carries
 //   its values on the line (exit 1, as every refusal of actinglab's own line).
+// The train of DA-5ab and DA-5cd (register §1.436 and §1.437, "Train"; rule R1: a stored image is
+// judged, reduced and answered as the live observation takes a frame of its size, 5/4 accepted):
+// - `da5_train_a_stored_five_quarters_scene_is_taken_by_detect_page`: `detect-page` on the 8x4
+//   frame enlarged 5/4 times (10x5, nearest neighbour; the entry page's block stays whole) detects
+//   the entry page and names `frame_coordinates` in the base form, `reduced_from` [10, 5].
+// - `da5_train_a_stored_five_quarters_scene_is_taken_by_a_dry_run`: `ensure --dry-run` to `page_a`
+//   on the same 10x5 scene plans its route from the entry page, with the same `frame_coordinates`.
 // Synthetic neutral packages and frames, temporary roots, a scripted Runtime on loopback; no
 // device, no clock, no sleep.
 
@@ -320,7 +333,8 @@ impl Offline {
 }
 
 /// The members a run mints or reads from where it runs (its identifiers, its times, the scene's
-/// path) and the slice's own member: what two answers on the same screen may differ in.
+/// path) and the member that states the frame's size (the train of DA-5: `frame_coordinates`, the
+/// base form on a reduced scene): what two answers on the same screen may differ in.
 const VOLATILE: [&str; 10] = [
     "req_id",
     "reco_id",
@@ -331,8 +345,30 @@ const VOLATILE: [&str; 10] = [
     "elapsed_ms",
     "evaluation_duration_ms",
     "frame_source",
-    "scaled_from",
+    "frame_coordinates",
 ];
+
+/// The train of DA-5 (R2): `frame_coordinates` of the 8x4 package's frame as it is, byte for byte
+/// what offline `observe` and `do` stated before.
+fn frame_own_coordinates() -> Value {
+    json!({
+        "device_pixels": [BASE.0, BASE.1],
+        "orientation": "landscape",
+        "applies_to": ["tap", "tap_rect", "swipe"]
+    })
+}
+
+/// The train of DA-5 (R2): `frame_coordinates` of a scene of `width` x `height` reduced to the 8x4
+/// package's base, the base form the live observation states.
+fn reduced_coordinates(width: u32, height: u32) -> Value {
+    json!({
+        "space": "base",
+        "base_pixels": [BASE.0, BASE.1],
+        "reduced_from": [width, height],
+        "orientation": "landscape",
+        "applies_to": ["tap", "tap_rect", "swipe"]
+    })
+}
 
 /// `answer` without its [`VOLATILE`] members, at every depth: what it decided.
 fn decision(answer: &Value) -> Value {
@@ -408,22 +444,41 @@ fn refused(context: &Offline, words: &[&str], width: u32, height: u32, problem: 
     );
 }
 
+/// Whether an offline command's answer on a frame of its package's size states the frame's
+/// `frame_coordinates` (offline `observe` and `do` do; the others state none).
+#[derive(Clone, Copy)]
+enum OwnCoordinates {
+    Stated,
+    None,
+}
+
 /// The slice's requirement for one offline command `words`, whose answer on the package's frame
 /// holds `expected` at the JSON pointer `pointer` (so that the comparison decides something): the
-/// frame enlarged 3 and 3/2 times answers as the package's frame, naming `scaled_from`; the
-/// package's frame names none; the three other sizes are refused.
-fn da5cd_offline_row(words: &[&str], pointer: &str, expected: Value) {
+/// frame enlarged 3 and 3/2 times answers as the package's frame, naming `frame_coordinates` in
+/// the base form (the train of DA-5, R2); the package's frame states
+/// the frame's own `frame_coordinates` where the command stated them before, and none otherwise
+/// (`own`); a scene of another ratio and one smaller than the package are refused.
+fn da5cd_offline_row(words: &[&str], pointer: &str, expected: Value, own: OwnCoordinates) {
     let context = Offline::new();
     let base_scene = context.scene(BASE.0, BASE.1);
     let base = answered(&context, words, &base_scene);
     assert_eq!(base.pointer(pointer), Some(&expected), "{words:?}: {base}");
-    assert!(base.get("scaled_from").is_none(), "{words:?}: {base}");
+    match own {
+        OwnCoordinates::Stated => assert_eq!(
+            base["frame_coordinates"],
+            frame_own_coordinates(),
+            "{words:?}: {base}"
+        ),
+        OwnCoordinates::None => {
+            assert!(base.get("frame_coordinates").is_none(), "{words:?}: {base}")
+        }
+    }
     for (width, height) in [(24, 12), (12, 6)] {
         let scene = context.scene(width, height);
         let scaled = answered(&context, words, &scene);
         assert_eq!(
-            scaled["scaled_from"],
-            json!({"width": width, "height": height}),
+            scaled["frame_coordinates"],
+            reduced_coordinates(width, height),
             "{words:?} on {width}x{height}: {scaled}"
         );
         assert_eq!(
@@ -434,12 +489,16 @@ fn da5cd_offline_row(words: &[&str], pointer: &str, expected: Value) {
     }
     refused(&context, words, 8, 6, "layout_undeclared");
     refused(&context, words, 4, 2, "scale_below_base");
-    refused(&context, words, 10, 5, "input_scale_unsupported");
 }
 
 #[test]
 fn da5cd_observe_takes_a_scaled_scene() {
-    da5cd_offline_row(&["observe", "--pretty"], "/page", json!(ENTRY_PAGE));
+    da5cd_offline_row(
+        &["observe", "--pretty"],
+        "/page",
+        json!(ENTRY_PAGE),
+        OwnCoordinates::Stated,
+    );
 }
 
 #[test]
@@ -448,6 +507,7 @@ fn da5cd_do_dry_run_takes_a_scaled_scene() {
         &["--dry-run", "do", "ui/free", "--pretty"],
         "/state",
         json!("planned"),
+        OwnCoordinates::Stated,
     );
 }
 
@@ -457,6 +517,7 @@ fn da5cd_ensure_dry_run_takes_a_scaled_scene() {
         &["--dry-run", "ensure", PAGE_A_PAGE, "--pretty"],
         "/state",
         json!("planned"),
+        OwnCoordinates::None,
     );
 }
 
@@ -473,13 +534,14 @@ fn da5cd_wait_takes_a_scaled_scene() {
         ],
         "/state",
         json!("arrived"),
+        OwnCoordinates::None,
     );
 }
 
 #[test]
 fn da5cd_recognize_takes_a_scaled_scene() {
     let words = ["recognize", "--target", "ui/free"];
-    da5cd_offline_row(&words, "/passed", json!(true));
+    da5cd_offline_row(&words, "/passed", json!(true), OwnCoordinates::None);
     // `recognize` holds no identifier: the enlarged frame's answer is the package frame's and the
     // member.
     let context = Offline::new();
@@ -490,24 +552,39 @@ fn da5cd_recognize_takes_a_scaled_scene() {
     let member = scaled
         .as_object_mut()
         .expect("recognize answers an object")
-        .remove("scaled_from");
-    assert_eq!(member, Some(json!({"width": 24, "height": 12})));
+        .remove("frame_coordinates");
+    assert_eq!(member, Some(reduced_coordinates(24, 12)));
     assert_eq!(scaled, base);
 }
 
 #[test]
 fn da5cd_is_visible_takes_a_scaled_scene() {
-    da5cd_offline_row(&["is-visible", "ui/free"], "/visible", json!(true));
+    da5cd_offline_row(
+        &["is-visible", "ui/free"],
+        "/visible",
+        json!(true),
+        OwnCoordinates::None,
+    );
 }
 
 #[test]
 fn da5cd_detect_page_takes_a_scaled_scene() {
-    da5cd_offline_row(&["detect-page"], "/page", json!(ENTRY_PAGE));
+    da5cd_offline_row(
+        &["detect-page"],
+        "/page",
+        json!(ENTRY_PAGE),
+        OwnCoordinates::None,
+    );
 }
 
 #[test]
 fn da5cd_current_page_takes_a_scaled_scene() {
-    da5cd_offline_row(&["current-page"], "/page", json!(ENTRY_PAGE));
+    da5cd_offline_row(
+        &["current-page"],
+        "/page",
+        json!(ENTRY_PAGE),
+        OwnCoordinates::None,
+    );
 }
 
 #[test]
@@ -516,6 +593,7 @@ fn da5cd_tap_target_dry_run_takes_a_scaled_scene() {
         &["--dry-run", "tap-target", "ui/free"],
         "/status",
         json!("planned"),
+        OwnCoordinates::None,
     );
 }
 
@@ -524,6 +602,42 @@ fn da5cd_navigate_dry_run_takes_a_scaled_scene() {
     da5cd_offline_row(
         &["--dry-run", "navigate", "--to", PAGE_A_PAGE],
         "/status",
+        json!("planned"),
+        OwnCoordinates::None,
+    );
+}
+
+/// The train of DA-5 (R1): a stored image 5/4 the package's size (10x5 for 8x4) is taken as the
+/// live observation takes a frame of that size, not refused: `words` answer `expected` at
+/// `pointer`, naming `frame_coordinates` in the base form, `reduced_from` [10, 5]. The 2x2 blocks
+/// do not stay whole at 5/4, but the entry page's mark (the top left block, the device's 3x3
+/// pixels) does: the entry page is detected.
+fn five_quarters_taken(words: &[&str], pointer: &str, expected: Value) {
+    let context = Offline::new();
+    let scene = context.scene(10, 5);
+    let answer = answered(&context, words, &scene);
+    assert_eq!(
+        answer.pointer(pointer),
+        Some(&expected),
+        "{words:?}: {answer}"
+    );
+    assert_eq!(
+        answer["frame_coordinates"],
+        reduced_coordinates(10, 5),
+        "{words:?}: {answer}"
+    );
+}
+
+#[test]
+fn da5_train_a_stored_five_quarters_scene_is_taken_by_detect_page() {
+    five_quarters_taken(&["detect-page"], "/page", json!(ENTRY_PAGE));
+}
+
+#[test]
+fn da5_train_a_stored_five_quarters_scene_is_taken_by_a_dry_run() {
+    five_quarters_taken(
+        &["--dry-run", "ensure", PAGE_A_PAGE, "--pretty"],
+        "/state",
         json!("planned"),
     );
 }

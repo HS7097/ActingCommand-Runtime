@@ -100,9 +100,11 @@ command deletes nothing and names the files it already wrote.
   resolution (`record_frame_size_mismatch`). #463 R2 fix 1: an ending's frame given at a pure
   scale of that size is converted to it, and its frame entry keeps `scaled_from: {width,
   height}`, the size it was given at ("Endings"). Workflow #392 DA-5cd: that size is the base
-  size, 1280×720 ("A recording's size"): `record start` refuses a display the Runtime knows at
-  another size, and `record stop` refuses a recording whose frames show a larger display of the
-  base size's ratio; the first frame still records it as the recording's `coordinate_space`.
+  size, 1280×720 ("A recording's size"): `record start` writes it in the recording's header and
+  refuses a display the Runtime last observed at another size, the first frame of another size is
+  refused, `record stop` refuses a recording not at the base size, and (the train of DA-5) every
+  path that records judges the recording and the frame it took before it sends anything; the
+  first frame still records it as the recording's `coordinate_space`.
 - Fields added later use `serde(default, skip_serializing_if)`: `application` (see
   "Application steps") and `optional` (see "Optional steps") are absent on steps without
   one; so are a click's `follow`, a template mark's `scales`, `mask` and `unique`, and a
@@ -2251,6 +2253,33 @@ smaller instance.
   (`record stop`, `record ready`'s item, a frame added to it); archive it and record again on a
   display of the base size. Both refuse; exit 3 on a `--via` line (the envelope), 1 on actinglab's
   own line and through `serve --stdio --front mcp`.
+- **Nothing is sent before the recording is known to take it** (the train of DA-5ab and DA-5cd,
+  its rule R4; register §1.436 and §1.437, "Train"). Every path that records asks, before anything
+  goes to the device, the one judgement `record stop` makes of the recording (the paragraph above
+  this one's), and judges the frame it took as a frame that enters the recording is, whether or not
+  that frame is stored:
+  - `tap`, `swipe` and `long-tap --record` and `session app --record` judge the recording before
+    they capture: one whose frames are not the base size is refused `record_size_not_base` and
+    nothing is captured, sent or written, also when the open step is marked and the frame before
+    the press would not be stored (the case DA-5cd's fix round left, where the press went first);
+    the frame before the press is judged as it enters (stored) or against the recording's size (not
+    stored);
+  - `do --capture --record` judges the recording, then captures one frame through the Runtime
+    before its press (as `tap --record` captures the frame before its press; it is not stored, the
+    Lab operation takes its own) and judges it, before anything is pressed or written;
+  - `observe --capture --record` judges the recording before it captures and the Runtime's device
+    frame after it observed, before its frame file or the recording is written.
+
+  Three codes, one cause each: `record_display_not_base`, this instance's display is not the base
+  size and the recording has no frame yet (`record start`, by the display last observed, and the
+  first frame, on every path); `record_size_not_base`, this recording is not at the base size (its
+  header's base says so or, without one, `record stop`'s judgement of its frames: `record stop`,
+  `record ready`'s item, a frame added to it, every recorded step before it sends anything);
+  `record_frame_size_mismatch`, a frame of another size than the recording already has (the display
+  changed during the recording), as before. DA-5ab's own checks of a recorded press and a recorded
+  observation against the Lab operation's package base (`record_frame_size_mismatch`,
+  [display-adapter.md](display-adapter.md) section 11) are replaced by these. A recording on a
+  display that is not the base size stays refused: no recording is made of reduced frames.
 - **Still open.** Converting such a recording, or recording on a scaled display in base
   coordinates (its frames reduced as they arrive, its presses mapped as a run maps them); the
   refusal stands until the owner orders that.
@@ -3216,7 +3245,7 @@ The answer:
 | `ending_key_taken` | an ending's outcome key is another ending's | `record_ending_invalid` |
 | `ending_page_taken` | an ending's page name is another ending's | `record_ending_invalid` |
 | `ending_mark_missing` | an ending's page reuses a mark of no effective step | `record_mark_rejected` |
-| `display_not_base` | (Workflow #392 DA-5cd) the recording's frames show a larger display of the base size's ratio ("A recording's size"); listed first, and then no self-check runs | `record_display_not_base` |
+| `size_not_base` | (Workflow #392 DA-5cd fix round 1, as the train of DA-5 words it) the recording is not at the base size: its header's base size and frames of another size, or, without one, frames that show a larger display of the base size's ratio ("A recording's size"); listed first, and then no self-check runs | `record_size_not_base` |
 
   The select and ending rules are those `record mark` holds when it takes a select or an ending,
   checked again where the package is generated ("Selecting in a list", "Endings"); the refusal's
@@ -3873,7 +3902,7 @@ equal value is accepted.
 | exit | codes |
 |---|---|
 | 2 | `validation_failed` (Workflow #449 REC-ARCH fix 1: also `record archive --copy-to` empty, blank or relative), `record_flag_unsupported`, `record_flag_takes_no_value`, `record_state_dir_unsupported`, `record_frame_unreadable`, `record_transition_window_invalid`, `record_transition_has_click`, `record_application_action_invalid`, `record_application_with_click`, `record_optional_settle_invalid`, `record_locale_missing`, `record_lab_dir_invalid`, `record_requires_invalid` |
-| 3 | `record_session_not_active` (Workflow #390 LAB-2: also, with `details.reason: "recording_stopped"`, a change a stopped recording does not take), `record_lab_unavailable`, `record_instance_mismatch`, `record_step_not_found`, `record_step_not_last`, `record_step_frame_missing`, `record_step_frame_conflict`, `record_frame_size_mismatch`, `record_frame_hash_mismatch`, `record_mark_rejected`, `record_mark_id_conflict`, `record_mark_id_reserved`, `record_mark_in_use`, `record_asset_name_conflict`, `record_click_exists`, `record_click_executed`, `record_click_source_invalid`, `record_click_follow_invalid`, `record_click_rect_conflict`, `record_click_outside_step_rect` (#463 S2-5: also, with `details.reason: "recorded_point_outside_box"`, a press box that does not hold the point a press recorded by its point pressed), `record_step_click_missing`, `record_step_click_not_executed`, `record_gesture_execution_unsupported` (#411 Lab BD), `record_guard_family_invalid`, `record_append_failed_after_input`, `record_transition_without_click`, `record_transition_exists`, `record_to_transition_invalid`, `record_busy`, `record_application_entry_invalid`, `record_step_effect_exists`, `record_optional_first_step`, `record_optional_application`, `record_select_invalid` (#463 R1), `record_ending_invalid` (#463 R2), `record_optional_after_invalid` (#463 R4); stop: `record_no_steps`, `record_application_entry_not_first`, `record_step_without_recognition`, `record_final_step_has_click`, `record_too_many_steps`, `record_step_after_stop_invalid`, `record_application_without_home`, `record_click_follow_invalid`, `record_optional_first_step`, `record_optional_final_step`, `record_optional_application`, `record_optional_restart_segment_end`, `record_step_self_mismatch`, `record_optional_step_ambiguous`, `record_optional_skip_target_insensitive`, `record_select_invalid` (#463 R1), `record_ending_invalid`, `record_ending_ambiguous` (#463 R2), `record_artifact_admission_failed`, `record_requires_conflict`, `record_stop_option_conflict`, and (Workflow #449 REC-ARCH) `record_session_not_active` with `details.reason: "recording_archived"`, and (Workflow #392 DA-5cd) `record_display_not_base`; start (Workflow #392 DA-5cd): `record_display_not_base`; archive and reopen (Workflow #449 REC-ARCH): `record_session_not_active`, `record_session_active` (reopen), `record_not_archived`, `record_archive_target_not_empty`, `record_instance_mismatch`, `record_lab_unavailable` |
+| 3 | `record_session_not_active` (Workflow #390 LAB-2: also, with `details.reason: "recording_stopped"`, a change a stopped recording does not take), `record_lab_unavailable`, `record_instance_mismatch`, `record_step_not_found`, `record_step_not_last`, `record_step_frame_missing`, `record_step_frame_conflict`, `record_frame_size_mismatch`, `record_frame_hash_mismatch`, `record_mark_rejected`, `record_mark_id_conflict`, `record_mark_id_reserved`, `record_mark_in_use`, `record_asset_name_conflict`, `record_click_exists`, `record_click_executed`, `record_click_source_invalid`, `record_click_follow_invalid`, `record_click_rect_conflict`, `record_click_outside_step_rect` (#463 S2-5: also, with `details.reason: "recorded_point_outside_box"`, a press box that does not hold the point a press recorded by its point pressed), `record_step_click_missing`, `record_step_click_not_executed`, `record_gesture_execution_unsupported` (#411 Lab BD), `record_guard_family_invalid`, `record_append_failed_after_input`, `record_transition_without_click`, `record_transition_exists`, `record_to_transition_invalid`, `record_busy`, `record_application_entry_invalid`, `record_step_effect_exists`, `record_optional_first_step`, `record_optional_application`, `record_select_invalid` (#463 R1), `record_ending_invalid` (#463 R2), `record_optional_after_invalid` (#463 R4); stop: `record_no_steps`, `record_application_entry_not_first`, `record_step_without_recognition`, `record_final_step_has_click`, `record_too_many_steps`, `record_step_after_stop_invalid`, `record_application_without_home`, `record_click_follow_invalid`, `record_optional_first_step`, `record_optional_final_step`, `record_optional_application`, `record_optional_restart_segment_end`, `record_step_self_mismatch`, `record_optional_step_ambiguous`, `record_optional_skip_target_insensitive`, `record_select_invalid` (#463 R1), `record_ending_invalid`, `record_ending_ambiguous` (#463 R2), `record_artifact_admission_failed`, `record_requires_conflict`, `record_stop_option_conflict`, and (Workflow #449 REC-ARCH) `record_session_not_active` with `details.reason: "recording_archived"`, and (Workflow #392 DA-5cd fix round 1) `record_size_not_base`; start (Workflow #392 DA-5cd): `record_display_not_base`; every recording path before it sends anything (the train of DA-5): `record_display_not_base`, `record_size_not_base`, `record_frame_size_mismatch`; archive and reopen (Workflow #449 REC-ARCH): `record_session_not_active`, `record_session_active` (reopen), `record_not_archived`, `record_archive_target_not_empty`, `record_instance_mismatch`, `record_lab_unavailable` |
 | 4 | `record_click_indeterminate`, `record_click_performed_with_failure`, `record_application_indeterminate` |
 | 5 | `record_lock_failed`, `record_state_io_failed` (Lab state files cannot be read or written; Workflow #449 REC-ARCH: also a copy file that cannot be written), the state directory cannot be created, `record_archive_verify_failed` (Workflow #449 REC-ARCH) |
 | 6 | `record_stop_generation_not_implemented` (a build without the package generator; the #336 L4 build also for a recording with optional steps, `details.reason: "optional_steps"`) |

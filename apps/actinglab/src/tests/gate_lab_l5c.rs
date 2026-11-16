@@ -19,13 +19,19 @@
 // forms that press nothing decide on a capture that is a pure scale of the package's coordinate
 // space as on the package's own size. The fake screen then shows its 3x1 frame enlarged by 3
 // (nearest neighbour, 9x3), which the Lab reduces back to 3x1 exactly.
+// The train of DA-5ab and DA-5cd (register §1.436 and §1.437, "Train"; rules R1 and R2) rewrote
+// the three to what the one path answers: a capture is reduced once, by DA-5ab's live path, and an
+// answer about a reduced capture names `frame_coordinates` in the base form (`{space: base,
+// base_pixels: [3, 1], reduced_from: [9, 3], orientation, applies_to}`) in place of DA-5cd's own
+// member; the 3x1 capture's answers are as before.
 // - `da5cd_do_capture_dry_run_plans_on_a_scaled_capture`: `do --capture --dry-run` plans the same
-//   page, guard evaluation, click and coordinates on the 9x3 capture as on the 3x1 one, its answer
-//   naming `scaled_from` {9, 3}, and the 3x1 one's naming none.
+//   page, guard evaluation and click on the 9x3 capture as on the 3x1 one; the 3x1 one states the
+//   frame's own `{device_pixels: [3, 1], ...}`, the 9x3 one the base form.
 // - `da5cd_ensure_capture_dry_run_plans_on_a_scaled_capture`: `ensure --capture --dry-run` plans the
-//   same route from the same page, with `scaled_from` {9, 3}.
+//   same route from the same page; the 9x3 capture's answer names the base form, the 3x1 one's no
+//   `frame_coordinates`.
 // - `da5cd_wait_capture_arrives_on_a_scaled_capture`: `wait --capture --page` arrives on the same
-//   page, with `scaled_from` {9, 3}.
+//   page; likewise.
 
 use super::*;
 use actingcommand_contract::{
@@ -656,9 +662,22 @@ fn l5c_a_package_without_consensus_captures_one_frame_as_before() {
     lab.close();
 }
 
+/// Workflow #392 DA-5, the train (R2): `frame_coordinates` of the 9x3 capture reduced to the
+/// package's 3x1 base, in the base form.
+fn da5_train_reduced_coordinates() -> Value {
+    json!({
+        "space": "base",
+        "base_pixels": [3, 1],
+        "reduced_from": [9, 3],
+        "orientation": "landscape",
+        "applies_to": ["tap", "tap_rect", "swipe"]
+    })
+}
+
 /// Workflow #392 DA-5cd: the answer of `words` on the entry page with its button, captured at the
-/// package's size and enlarged 3 times: the two answers, the second naming `scaled_from` {9, 3}
-/// and the first none; nothing pressed.
+/// package's size and enlarged 3 times: the two answers; nothing pressed. Adapted by the train of
+/// DA-5 (R1, R2): the capture is reduced once, on DA-5ab's path, and the enlarged capture's answer
+/// names `frame_coordinates` in the base form.
 fn da5cd_answers(lab: &Lab, words: &[&str], package: &str) -> (Value, Value) {
     let mut answers = Vec::new();
     for factor in [1, 3] {
@@ -670,16 +689,17 @@ fn da5cd_answers(lab: &Lab, words: &[&str], package: &str) -> (Value, Value) {
     }
     let scaled = answers.pop().expect("the enlarged capture's answer");
     let base = answers.pop().expect("the package size's answer");
-    assert!(base.get("scaled_from").is_none(), "{words:?}: {base}");
     assert_eq!(
-        scaled["scaled_from"],
-        json!({"width": 9, "height": 3}),
+        scaled["frame_coordinates"],
+        da5_train_reduced_coordinates(),
         "{words:?}: {scaled}"
     );
     (base, scaled)
 }
 
-/// Workflow #392 DA-5cd: `do --capture --dry-run` plans on the 9x3 capture as on the 3x1 one.
+/// Workflow #392 DA-5cd: `do --capture --dry-run` plans on the 9x3 capture as on the 3x1 one. The
+/// train of DA-5 (R2): the 3x1 capture's answer states the frame's own `frame_coordinates`, as
+/// before; the 9x3 one's the base form.
 #[test]
 fn da5cd_do_capture_dry_run_plans_on_a_scaled_capture() {
     let lab = Lab::new();
@@ -687,22 +707,27 @@ fn da5cd_do_capture_dry_run_plans_on_a_scaled_capture() {
     let (base, scaled) = da5cd_answers(&lab, &["do", "ui/button", "--dry-run"], &package);
     assert_eq!(base["state"], "planned", "{base}");
     assert_eq!(base["page"], ENTRY_PAGE, "{base}");
-    for member in ["state", "page", "actual_click", "frame_coordinates"] {
+    assert_eq!(
+        base["frame_coordinates"],
+        json!({
+            "device_pixels": [3, 1],
+            "orientation": "landscape",
+            "applies_to": ["tap", "tap_rect", "swipe"]
+        }),
+        "{base}"
+    );
+    for member in ["state", "page", "actual_click"] {
         assert_eq!(scaled[member], base[member], "{member}: {scaled}");
     }
     assert_eq!(
         scaled["guard_result"]["evaluation"], base["guard_result"]["evaluation"],
         "{scaled}"
     );
-    assert_eq!(
-        scaled["frame_coordinates"]["device_pixels"],
-        json!([3, 1]),
-        "{scaled}"
-    );
     lab.close();
 }
 
-/// Workflow #392 DA-5cd: `ensure --capture --dry-run` plans the same route on the 9x3 capture.
+/// Workflow #392 DA-5cd: `ensure --capture --dry-run` plans the same route on the 9x3 capture. The
+/// train of DA-5 (R2): the 3x1 capture's answer states no `frame_coordinates`, as before.
 #[test]
 fn da5cd_ensure_capture_dry_run_plans_on_a_scaled_capture() {
     let lab = Lab::new();
@@ -714,13 +739,15 @@ fn da5cd_ensure_capture_dry_run_plans_on_a_scaled_capture() {
     );
     assert_eq!(base["state"], "planned", "{base}");
     assert_eq!(base["page"], ENTRY_PAGE, "{base}");
+    assert!(base.get("frame_coordinates").is_none(), "{base}");
     for member in ["state", "page", "to", "route", "executed"] {
         assert_eq!(scaled[member], base[member], "{member}: {scaled}");
     }
     lab.close();
 }
 
-/// Workflow #392 DA-5cd: `wait --capture --page` arrives on the same page on the 9x3 capture.
+/// Workflow #392 DA-5cd: `wait --capture --page` arrives on the same page on the 9x3 capture. The
+/// train of DA-5 (R2): the 3x1 capture's answer states no `frame_coordinates`, as before.
 #[test]
 fn da5cd_wait_capture_arrives_on_a_scaled_capture() {
     let lab = Lab::new();
@@ -739,6 +766,7 @@ fn da5cd_wait_capture_arrives_on_a_scaled_capture() {
         &package,
     );
     assert_eq!(base["state"], "arrived", "{base}");
+    assert!(base.get("frame_coordinates").is_none(), "{base}");
     for member in ["state", "page", "matched"] {
         assert_eq!(scaled[member], base[member], "{member}: {scaled}");
     }

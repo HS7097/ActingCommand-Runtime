@@ -1,51 +1,72 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 // Workflow #392 DA-5ab fix round 1 (contracts/display-adapter.md section 11, "Presses" and "The
-// answers"; register §1.436; the coordinator's work order of 11-16 after the review of pull
-// request #1780, points 3 and 5): a Lab operation speaks its package's base, so the recording
-// takes from it only what is in the base.
-// - `da5ab_fix1_a_recorded_press_takes_a_recording_of_its_packages_base_only`: the check
-//   `do --capture --record` (and `observe --capture --record`, before it captures) makes of the
-//   recording: a recording without a frame passes; one whose frames are 3x3 is refused for a 2x2
-//   base, `record_frame_size_mismatch`, its details naming the recording's size as expected and
-//   the base as actual, and the recording's file is not written; for a 3x3 base it passes.
-// - `da5ab_fix1_a_recorded_observation_takes_a_frame_of_its_packages_base_only`: the check
-//   `observe --capture --record` makes of the Runtime's frame after it observed: a frame of the
-//   base's size passes; a 3x3 or a 1920x1080 frame for a 2x2 or a 1280x720 base is refused,
-//   `record_frame_size_mismatch`, its details naming the base as expected and the device frame as
-//   actual.
+// answers"; register §1.436): a Lab operation speaks its package's base, so the recording takes
+// from it only what it can take. Its two tests of DA-5ab's own checks against the package's base
+// (`da5ab_fix1_a_recorded_press_takes_a_recording_of_its_packages_base_only`,
+// `da5ab_fix1_a_recorded_observation_takes_a_frame_of_its_packages_base_only`) are retired by the
+// train of DA-5ab and DA-5cd (register §1.436 and §1.437, "Train"; ci/retired-gates.toml), whose
+// rule R4 replaces those checks with the recording's own judgement:
+// - `da5_train_a_frame_a_recording_path_took_is_judged_before_anything_is_written`: a recording
+//   whose header names the base size 1280x720 and that holds no frame passes the recording's
+//   judgement (`record_size_check`); a frame of 1920x1080 a path took before it sends anything
+//   (`record_frame_check`) is refused `record_display_not_base` (it would be the first frame),
+//   with its size and the base size; a frame of 1280x720 passes. Once the recording holds a frame
+//   of 1280x720, a frame of 1920x1080 is refused `record_frame_size_mismatch` (the display changed
+//   during the recording; the recording's size expected, the frame's actual) and the recording's
+//   judgement still passes. Nothing of the recording is written by any of them.
+// - `da5_train_a_recorded_press_on_a_recording_not_at_the_base_sends_nothing`: a recording whose
+//   header names no base size (one made before DA-5cd's fix round) and whose frames are 1920x1080,
+//   its open step marked so that the frame before a press would not be stored (the case DA-5cd's
+//   fix round left, where the press went first): the recording's judgement and a frame of its own
+//   size are each refused `record_size_not_base` with the frames' size and the base size, and
+//   `tap 0 0 --record` (`record_press`) is refused `record_size_not_base` before anything is
+//   captured or sent: the fake capture and the press are never called, and the recording's files
+//   are byte for byte as they were.
 // Frames are synthetic; no Runtime, no device, no clock read by the tests; the session header is
 // written as `record start` writes it.
 
-use crate::recording::store::{old_record_path, recording_path};
+use crate::recording::store::{lab_dir, old_record_path};
 use crate::{
-    AttachFrameRequest, RecordStartOptions, RecordingLock, record_attach_frame,
-    record_observation_base_check, record_press_base_check, record_start,
+    AfterCapture, AttachFrameRequest, CapturedFrame, ClickPlan, CommitClickRequest,
+    LAB_RECORD_MARK_SCHEMA, LabOcr, MarkFamily, MarkRequest, MarkSpec, PlanClickRequest,
+    PointPress, RECORDING_BASE_SIZE, RecordFramePorts, RecordPoint, RecordPressRequest, RecordRect,
+    RecordSize, RecordStartOptions, RecordingLock, record_attach_frame, record_frame_check,
+    record_mark, record_press, record_size_check, record_start,
 };
+use actingcommand_contract::{InputFrameReference, LabError, LabResult};
 use actingcommand_device::{CaptureBackendName, Frame, PixelFormat};
-use serde_json::json;
+use serde_json::{Value, json};
+use std::cell::RefCell;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 use tempfile::TempDir;
 
 const INSTANCE: &str = "neutral.instance";
-const RECORD_ID: &str = "record_0392_da5ab";
+const RECORD_ID: &str = "record_0392_da5_train";
 const TASK_ID: &str = "neutral_task";
 const STARTED_AT: u64 = 1_700_000_000_000;
+/// The label the checks name the frame they judge by.
+const LABEL: &str = "the frame the path took";
 
-/// A state directory with an active session of `INSTANCE` and its Lab recording, without a frame.
+/// A state directory with an active session of `INSTANCE` and its Lab recording, without a frame,
+/// and the recording lock held as one command holds it (dropped before the directory).
 struct Bench {
+    lock: RecordingLock,
+    ocr: LabOcr,
     temp: TempDir,
 }
 
 impl Bench {
-    fn new() -> Self {
-        let bench = Self {
-            temp: TempDir::new().expect("temporary directory"),
-        };
-        fs::create_dir_all(bench.state()).expect("state directory");
+    /// The recording started with `base` in its header (`None`: no base size, as a recording made
+    /// before DA-5cd's fix round).
+    fn new(base: Option<RecordSize>) -> Self {
+        let temp = TempDir::new().expect("temporary directory");
+        let state = temp.path().join("state");
+        fs::create_dir_all(&state).expect("state directory");
         fs::write(
-            old_record_path(&bench.state(), INSTANCE),
+            old_record_path(&state, INSTANCE),
             serde_json::to_vec(&json!({
                 "record_id": RECORD_ID,
                 "task_id": TASK_ID,
@@ -56,39 +77,34 @@ impl Bench {
             .expect("session JSON"),
         )
         .expect("session file");
+        let lock = RecordingLock::acquire(&state, INSTANCE, "gate_392_da5ab", "Lab-CLI")
+            .expect("recording lock");
+        let ocr = LabOcr::from_vision_root(&temp.path().join("no-vision"));
         let started = record_start(
-            &bench.lock(),
+            &lock,
             &RecordStartOptions {
                 game: Some("neutral".to_owned()),
                 server: Some("test".to_owned()),
                 locale: Some("en-US".to_owned()),
+                base_size: base,
                 ..RecordStartOptions::default()
             },
         )
         .expect("record start");
         assert_eq!(started.status, "active", "{started:?}");
-        bench
+        Self { lock, ocr, temp }
     }
 
     fn state(&self) -> PathBuf {
         self.temp.path().join("state")
     }
 
-    fn lock(&self) -> RecordingLock {
-        RecordingLock::acquire(&self.state(), INSTANCE, "gate_392_da5ab", "Lab-CLI")
-            .expect("recording lock")
-    }
-
-    fn recording_bytes(&self) -> Vec<u8> {
-        fs::read(recording_path(&self.state(), RECORD_ID)).expect("the recording's file")
-    }
-
-    /// A device frame of `size` x `size`, as `capture --record` attaches it.
-    fn attach(&self, size: u32) {
-        let pixels = (0..size * size).flat_map(|_| [200_u8, 40, 40]).collect();
+    /// A device frame of `width` x `height`, as `capture --record` attaches it.
+    fn attach(&self, width: u32, height: u32) {
+        let pixels = (0..width * height).flat_map(|_| [200_u8, 40, 40]).collect();
         let png = Frame::from_pixels(
-            size,
-            size,
+            width,
+            height,
             pixels,
             PixelFormat::Rgb8,
             CaptureBackendName::FixtureSimulation,
@@ -97,7 +113,7 @@ impl Bench {
         .encode_png_fast()
         .expect("fixture PNG");
         record_attach_frame(
-            &self.lock(),
+            &self.lock,
             AttachFrameRequest {
                 png,
                 source: "lab_capture".to_owned(),
@@ -108,59 +124,185 @@ impl Bench {
         )
         .unwrap_or_else(|error| panic!("frame: {}: {}", error.code, error.message));
     }
+
+    /// `record mark --step 1 --color square=0,0,40,40`: the open step marked.
+    fn mark_step_one(&self) {
+        let request = MarkRequest {
+            schema_version: LAB_RECORD_MARK_SCHEMA.to_owned(),
+            step: Some(1),
+            add: vec![MarkSpec::region_only(
+                "square".to_owned(),
+                MarkFamily::Color,
+                RecordRect {
+                    x: 0,
+                    y: 0,
+                    width: 40,
+                    height: 40,
+                },
+            )],
+            ..MarkRequest::default()
+        };
+        record_mark(&self.lock, &request, false, &self.ocr)
+            .unwrap_or_else(|error| panic!("mark: {}: {:?}", error.code, error.details));
+    }
+
+    /// Every file of the recording's directory, by its `/`-separated path relative to it, with its
+    /// bytes, in name order.
+    fn files(&self) -> Vec<(String, Vec<u8>)> {
+        files_under(&lab_dir(&self.state(), RECORD_ID))
+    }
+}
+
+/// Every file under `dir`, by its `/`-separated path relative to it, with its bytes, in name order.
+fn files_under(dir: &Path) -> Vec<(String, Vec<u8>)> {
+    let mut files = Vec::new();
+    let mut pending = vec![(dir.to_path_buf(), String::new())];
+    while let Some((path, prefix)) = pending.pop() {
+        for entry in fs::read_dir(&path).expect("directory") {
+            let entry = entry.expect("entry");
+            let name = format!("{prefix}{}", entry.file_name().to_string_lossy());
+            if entry.file_type().expect("file type").is_dir() {
+                pending.push((entry.path(), format!("{name}/")));
+            } else {
+                files.push((name, fs::read(entry.path()).expect("file")));
+            }
+        }
+    }
+    files.sort();
+    files
+}
+
+/// The values of a refusal's outcome, as its details carry them.
+fn values(error: &LabError) -> Value {
+    error.details.clone().unwrap_or(Value::Null)["outcome"]["values"].clone()
+}
+
+/// The values `record_display_not_base` and `record_size_not_base` carry for frames of `width` x
+/// `height` and the base size 1280x720.
+fn not_base_values(width: u32, height: u32) -> Value {
+    json!({"frame_width": width, "frame_height": height, "base_width": 1280, "base_height": 720})
+}
+
+/// The fake Runtime of a recorded press that must not be reached: each capture or wait it is
+/// asked for is logged and fails.
+struct Untouched<'a> {
+    log: &'a RefCell<Vec<String>>,
+}
+
+impl RecordFramePorts for Untouched<'_> {
+    fn wait(&mut self, duration: Duration) {
+        self.log
+            .borrow_mut()
+            .push(format!("wait {}", duration.as_millis()));
+    }
+
+    fn capture(&mut self) -> LabResult<CapturedFrame> {
+        self.log.borrow_mut().push("capture".to_owned());
+        Err(LabError::device("the test's fake Runtime captures nothing"))
+    }
+
+    fn elapsed(&mut self) -> Duration {
+        Duration::ZERO
+    }
 }
 
 #[test]
-fn da5ab_fix1_a_recorded_press_takes_a_recording_of_its_packages_base_only() {
-    let bench = Bench::new();
-    record_press_base_check(&bench.lock(), (2, 2))
+fn da5_train_a_frame_a_recording_path_took_is_judged_before_anything_is_written() {
+    let bench = Bench::new(Some(RECORDING_BASE_SIZE));
+    record_size_check(&bench.lock)
         .unwrap_or_else(|error| panic!("a recording without a frame: {}", error.message));
-    bench.attach(3);
-    let before = bench.recording_bytes();
-    let error =
-        record_press_base_check(&bench.lock(), (2, 2)).expect_err("a 3x3 recording for a 2x2 base");
+    let before = bench.files();
+    let first = record_frame_check(&bench.lock, (1920, 1080), LABEL)
+        .expect_err("a first frame of another size than the base");
+    assert_eq!(first.code, "record_display_not_base", "{}", first.message);
     assert_eq!(
-        error.code, "record_frame_size_mismatch",
+        values(&first),
+        not_base_values(1920, 1080),
         "{}",
-        error.message
+        first.message
+    );
+    record_frame_check(&bench.lock, (1280, 720), LABEL)
+        .unwrap_or_else(|error| panic!("a first frame of the base size: {}", error.message));
+    assert_eq!(bench.files(), before, "nothing written");
+
+    bench.attach(1280, 720);
+    let before = bench.files();
+    let changed = record_frame_check(&bench.lock, (1920, 1080), LABEL)
+        .expect_err("a frame of another size than the recording");
+    assert_eq!(
+        changed.code, "record_frame_size_mismatch",
+        "{}",
+        changed.message
     );
     assert_eq!(
-        error.details,
+        changed.details,
         Some(json!({
-            "frame": "the package's base",
-            "expected": {"width": 3, "height": 3},
-            "actual": {"width": 2, "height": 2},
+            "frame": LABEL,
+            "expected": {"width": 1280, "height": 720},
+            "actual": {"width": 1920, "height": 1080},
         })),
         "{}",
-        error.message
+        changed.message
     );
-    assert_eq!(bench.recording_bytes(), before, "nothing written");
-    record_press_base_check(&bench.lock(), (3, 3))
-        .unwrap_or_else(|error| panic!("a 3x3 recording for a 3x3 base: {}", error.message));
+    record_size_check(&bench.lock)
+        .unwrap_or_else(|error| panic!("a recording of the base size: {}", error.message));
+    record_frame_check(&bench.lock, (1280, 720), LABEL)
+        .unwrap_or_else(|error| panic!("a frame of the recording's size: {}", error.message));
+    assert_eq!(bench.files(), before, "nothing written");
 }
 
 #[test]
-fn da5ab_fix1_a_recorded_observation_takes_a_frame_of_its_packages_base_only() {
-    for base in [(2, 2), (1280, 720)] {
-        record_observation_base_check(base, base)
-            .unwrap_or_else(|error| panic!("{base:?} on {base:?}: {}", error.message));
-    }
-    for (base, device) in [((2, 2), (3, 3)), ((1280, 720), (1920, 1080))] {
-        let error = record_observation_base_check(base, device)
-            .expect_err("a device frame of another size than the base");
-        assert_eq!(
-            error.code, "record_frame_size_mismatch",
-            "{base:?} on {device:?}: {}",
-            error.message
-        );
-        assert_eq!(
-            error.details,
-            Some(json!({
-                "frame": "the Runtime observation's frame",
-                "expected": {"width": base.0, "height": base.1},
-                "actual": {"width": device.0, "height": device.1},
-            })),
-            "{base:?} on {device:?}"
-        );
-    }
+fn da5_train_a_recorded_press_on_a_recording_not_at_the_base_sends_nothing() {
+    let bench = Bench::new(None);
+    // A recording whose header names no base size takes its first frame's size, as one made on a
+    // display of 1920x1080 before DA-5cd's fix round did; its open step is marked, so the frame
+    // before a press would not be stored.
+    bench.attach(1920, 1080);
+    bench.mark_step_one();
+    let before = bench.files();
+
+    let judged = record_size_check(&bench.lock).expect_err("a recording not at the base size");
+    assert_eq!(judged.code, "record_size_not_base", "{}", judged.message);
+    assert_eq!(
+        values(&judged),
+        not_base_values(1920, 1080),
+        "{}",
+        judged.message
+    );
+    let framed = record_frame_check(&bench.lock, (1920, 1080), LABEL)
+        .expect_err("a frame of a recording not at the base size");
+    assert_eq!(framed.code, "record_size_not_base", "{}", framed.message);
+
+    let log = RefCell::new(Vec::new());
+    let mut ports = Untouched { log: &log };
+    let mut press =
+        |_plan: &ClickPlan, _frame: InputFrameReference| -> LabResult<CommitClickRequest> {
+            log.borrow_mut().push("press".to_owned());
+            Err(LabError::device("the test's fake Runtime presses nothing"))
+        };
+    let request = RecordPressRequest {
+        click: PlanClickRequest::default(),
+        point_press: Some(PointPress::Tap {
+            point: RecordPoint { x: 0, y: 0 },
+        }),
+        after: AfterCapture {
+            still_ms: Some(0),
+            ..AfterCapture::for_press(Some(0))
+        },
+    };
+    let pressed = record_press(&bench.lock, &request, &mut press, &mut ports)
+        .expect_err("a recorded press on a recording not at the base size");
+    assert_eq!(pressed.code, "record_size_not_base", "{}", pressed.message);
+    assert_eq!(
+        values(&pressed),
+        not_base_values(1920, 1080),
+        "{}",
+        pressed.message
+    );
+    assert!(
+        log.borrow().is_empty(),
+        "nothing captured or sent: {:?}",
+        log.borrow()
+    );
+    assert_eq!(bench.files(), before, "nothing written");
 }

@@ -65,10 +65,11 @@ actingcommand_contract::outcome_codes! {
         /// (`remove_inserted`), cannot be inserted or given up (key `optional_after_problem`:
         /// why); the command is refused and nothing is written (exit 3; actinglab details `step`).
         RecordOptionalAfterInvalid => "record_optional_after_invalid": error / none,
-        /// Error. Workflow #392 DA-5cd: an offline scene is neither of its package's
-        /// `coordinate_space` nor a pure scale of it the display adapter admits for a run (keys
-        /// `display_problem`: why, `frame_width`, `frame_height`: the scene's size, `base_width`,
-        /// `base_height`: the package's); nothing is evaluated (exit 2).
+        /// Error. Workflow #392 DA-5cd: an offline scene, a stored image, cannot be brought to its
+        /// package's `coordinate_space` by the frame gate the Lab's live observation uses (the
+        /// train of DA-5; keys `display_problem`: the gate's word for why, `frame_width`,
+        /// `frame_height`: the scene's size, `base_width`, `base_height`: the package's); nothing
+        /// is evaluated (exit 2).
         LabSceneSizeUnsupported => "lab_scene_size_unsupported": error / none,
         /// Error. Workflow #392 DA-5cd: this instance's display is not the base size: `record
         /// start` on an instance whose display the Runtime last observed at another size than the

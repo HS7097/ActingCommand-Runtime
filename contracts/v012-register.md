@@ -31492,6 +31492,52 @@ nothing here touches the run's frame gate or the run's input; main merged in bef
   make the client refuse the Runtime's own receipt as an integrity failure (fatal); it is left for
   the coordinator.
 
+**Train** (coordinator work order `rd-1116/brief-392-train-lab-display.md`; the train of DA-5ab and
+DA-5cd in pull request #1780, which carries this section's head `8ee87579` and §1.437's `7010e74e`,
+merged in that order on main `03258b33`, then made one by the coordinator's rulings R1 to R5, not
+the owner's words). What it changed of this section, with §1.437 (DA-5cd):
+- *One rule for a stored image (R1).* DA-5cd's stored scenes take this section's function:
+  `actingcommand_lab::scene_in_base` calls the kernel's `lab_scene_on_base`, and DA-5cd's own
+  `DisplayMap::build`, `admit_input` and `resample_pixels` sequence is gone. A Runtime capture of the
+  client's `--capture` forms is reduced once, by `on_package_base` (D5-5); DA-5cd's second reduction
+  of the forms that press nothing, outside `load_runtime_lab2_frames`, is gone.
+- *One answer (R2).* `frame_coordinates` is built in one place, the kernel's `FrameCoordinates`
+  (`readonly.rs`: `of_frame` the device form, `observed` the base form), which `actinglab`'s
+  `frame::coordinates` and `frame::observed_coordinates` serialize byte for byte as before; the
+  answers about a stored scene name it (§1.437). The live `ensure --capture` and `wait --capture`
+  answers, which stated none, state the base form when their frames were reduced.
+- *Recording (R4).* This section's checks of a recorded press and a recorded observation against
+  the Lab operation's package base (`record_press_base_check`, `record_observation_base_check`,
+  `record_frame_size_mismatch`) are replaced by the recording's own judgement, §1.437's:
+  `record_size_check` (the judgement `record stop` makes, `record_size_not_base`) and
+  `record_frame_check` (a frame a path took, judged as a frame that enters the recording:
+  `record_display_not_base` for a recording without a frame, `record_size_not_base`,
+  `record_frame_size_mismatch` for another size than the recording already has). `do --capture
+  --record` judges the recording, then captures one frame through the Runtime before its press (as
+  `tap --record` captures its frame before the press; not stored) and judges it, before anything is
+  pressed or written; `observe --capture --record` judges the recording before it captures and its
+  device frame after it observed. `contained_resources::online_base` went with the old checks.
+- *What does not move (R5).* The contained run: its frames, recognition input, refusals and device
+  points; no merge conflict reached `validate_frame`, `send_input` or their callers in the host,
+  and the train touched none of them. No outcome code or word beyond the two slices', no interface
+  revision, no record member.
+- *Tests.* `crates/lab/src/gate_392_da5ab.rs`: its two tests of the replaced checks are retired
+  (`ci/retired-gates.toml`) and two of the recording's judgement take their place
+  (`da5_train_a_frame_a_recording_path_took_is_judged_before_anything_is_written`,
+  `da5_train_a_recorded_press_on_a_recording_not_at_the_base_sends_nothing`);
+  `da5ab_fix1_a_recorded_observation_on_a_mapped_display_is_refused_and_nothing_is_recorded` is
+  adapted (the recording's header names the base 1280x720, so the 3x3 device frame, its first, is
+  `record_display_not_base`); `da5_train_recorded_do_and_observe_after_the_display_changed_send_and_write_nothing`
+  (`apps/actinglab/tests/runtime_input_proxy.rs`, the fake's display changed to 1920x1080 after a
+  first frame of 1280x720: `do --capture --record` and `observe --capture --record` refused
+  `record_frame_size_mismatch`, no tap, nothing written) is new. Gate map: `exec.toml`, the rows
+  "DA-5ab fix round 1" and "Workflow #392 DA-5, the train".
+- *Texts.* [display-adapter.md](display-adapter.md) section 11 ("Presses", "The answers", "Not in
+  this section"), [contained-lab-operation.md](contained-lab-operation.md),
+  [contained-page-observation.md](contained-page-observation.md), the MCP manual's "Coordinates",
+  the server's instructions and `actingctl`'s two descriptions; the text of `display_map_unresolved`
+  says a stored image is refused `lab_scene_size_unsupported` instead (the index regenerated).
+
 ### 1.437 Slice #392 DA-5cd (0.12.67): offline recognition takes a scene that is a pure scale of its package; a recording is refused on a display that is not the base size (Workflow #392; the owner's decision 203 on board #392, one set of packages at the base size and a converter; the real check of 11-16 on board #392 (decision 204) and the read-only study `rd-1116/report-392-lab-on-mapped-display-study.md`, its answers to questions 2 to 4, its slices (b) and (c), its doubt 4 and the coordinator's disposition at its end; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1116/brief-392-da5cd-offline-scale-and-record-refusal.md`, built on main `23161b3a`)
 
 This section takes 1.437, the number the work order gives: §1.431 is the highest on main
@@ -31653,6 +31699,55 @@ requests.
 `record start` on an instance whose last task ran at another size than 1280×720 is refused until
 the display is set back and a task has run on it; a recording started on this build takes a first
 frame of 1280×720 only. A recording made on an earlier build reads as before.
+
+**Train** (coordinator work order `rd-1116/brief-392-train-lab-display.md`; the train of DA-5ab and
+DA-5cd in pull request #1780, which carries §1.436's head `8ee87579` and this section's `7010e74e`,
+merged in that order on main `03258b33`, then made one by the coordinator's rulings R1 to R5, not
+the owner's words). What it changed of this section, with §1.436 (DA-5ab):
+- *One rule for a stored image (R1).* A stored scene is judged, reduced and answered exactly as a
+  frame of its size is by DA-5ab's live observation, by the same function: `scene_in_base` and
+  `frames_in_base` (`crates/lab/src/display_base.rs`) call the kernel's `lab_scene_on_base` (its
+  `frame_map` and `validate_pixels`); this section's own `DisplayMap::build`, `admit_input` and
+  `resample_pixels` sequence (`admitted_map`) is gone. So a scene is taken at every size the live
+  observation takes: of the base's ratio, not smaller, in its orientation, 5/4 too (whether a press
+  could land exactly is no reason to refuse a read; a press at 5/4 stays refused where presses are
+  admitted, §1.436). The `--capture` client forms that press nothing no longer reduce a second time
+  (`in_package_base` reads scene files only).
+- *One answer (R2).* The answer member of this section is gone everywhere (code, tests, contracts,
+  manuals, READMEs): an answer about a reduced scene names §1.436's `frame_coordinates` in the base
+  form, built by the kernel's `FrameCoordinates::observed` (`SceneExtentResponse` is gone; the
+  read-only and drive answers carry `frame_coordinates`, absent unless the scene was reduced; Min's
+  frame members are main's three again). An answer that stated `frame_coordinates` before (offline
+  `observe` and `do`) states the base form for a reduced scene; one that stated none states them
+  only for a reduced scene. At the base size every answer is byte for byte main's. The member
+  `scaled_from` of a recording's ending frame (#463 R2) is another member and stays.
+- *Two refusals of a size, one cause each (R3).* `lab_scene_size_unsupported` is a stored scene's,
+  with the word the frame gate's refusal carries (`layout_undeclared`, `scale_below_base`,
+  `orientation_mismatch`; no longer `input_scale_unsupported`); `display_map_unresolved` is a live
+  capture's (§1.436). Neither path answers the other's code.
+- *Recording (R4).* The hole this section's fix round left is closed: `record_before_frame` (`tap`,
+  `swipe` and `long-tap --record`, `session app --record`) asks `record stop`'s judgement before it
+  captures, so a recording whose header names no base size and whose frames `record stop` refuses
+  is refused `record_size_not_base` before anything is captured or sent, also when its open step is
+  marked; `do --capture --record` and `observe --capture --record` ask the same judgement and judge
+  the frame they took (§1.436). The three codes, one cause each: `record_display_not_base` (this
+  instance's display is not the base size and the recording has no frame yet), `record_size_not_base`
+  (this recording is not at the base size), `record_frame_size_mismatch` (a frame of another size
+  than the recording already has), as [lab-recording.md](lab-recording.md), "A recording's size",
+  now says; its ready table names the word `size_not_base` and its exit table `record_size_not_base`
+  for `record stop`. The test switch `recording_base_for_tests` is as it was.
+- *Tests.* `gate_392_da5cd.rs`'s ten offline rows are adapted (the enlarged scenes' answers name
+  `frame_coordinates` in the base form, the base scene's as before; 10x5 is no longer refused) and
+  `gate_lab_l5c.rs`'s three `da5cd_` tests rewritten to what the one path answers (the base form,
+  reduced once on DA-5ab's path), their names kept; new, `da5_train_a_stored_five_quarters_scene_is_taken_by_detect_page`
+  and `da5_train_a_stored_five_quarters_scene_is_taken_by_a_dry_run` (`ensure --dry-run`) on a 10x5
+  scene of the 8x4 package. Gate map: `exec.toml`, the rows "Workflow #392 DA-5cd" and "Workflow
+  #392 DA-5, the train".
+- *Texts.* [display-adapter.md](display-adapter.md) section 12 (this section's, numbered after
+  DA-5ab's 11 in the merge), [lab-recording.md](lab-recording.md), [actinglab-capabilities.md](actinglab-capabilities.md),
+  the MCP manual, both READMEs, the catalog's texts of `lab_scene_size_unsupported`,
+  `record_display_not_base` and `record_size_not_base` (the index regenerated). No code, word, key,
+  member or revision is added by the train.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

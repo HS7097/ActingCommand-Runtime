@@ -42,48 +42,28 @@ use std::path::Path;
 pub(super) const PREVIEW_LONG_EDGE: u32 = 1024;
 /// The preview's JPEG quality (1..=100).
 const PREVIEW_JPEG_QUALITY: u8 = 75;
-/// The `do` arguments whose coordinates are in the frame's coordinate system.
-const COORDINATE_INPUTS: [&str; 3] = ["tap", "tap_rect", "swipe"];
 /// The Lab frame directory below actinglab's state root.
 const FRAME_DIRECTORY: &str = "frames";
 
 /// `frame_coordinates` of a `width` × `height` frame: `{device_pixels: [width, height],
 /// orientation, applies_to}`, counted from the top-left pixel; `landscape` when the frame is wider
 /// than high, `portrait` when higher than wide, `square` otherwise; `applies_to` names the `do`
-/// arguments given in this system.
+/// arguments given in this system. Workflow #392 DA-5, the train: built by
+/// `FrameCoordinates::of_frame`, the one builder of both forms, which the offline answers of the
+/// Lab use too.
 pub(super) fn coordinates(width: u32, height: u32) -> Value {
-    json!({
-        "device_pixels": [width, height],
-        "orientation": orientation(width, height),
-        "applies_to": COORDINATE_INPUTS,
-    })
-}
-
-/// `landscape` when wider than high, `portrait` when higher than wide, `square` otherwise.
-fn orientation(width: u32, height: u32) -> &'static str {
-    match width.cmp(&height) {
-        std::cmp::Ordering::Greater => "landscape",
-        std::cmp::Ordering::Less => "portrait",
-        std::cmp::Ordering::Equal => "square",
-    }
+    json!(actingcommand_lab::FrameCoordinates::of_frame(width, height))
 }
 
 /// Workflow #392 DA-5ab: `frame_coordinates` of a frame the Lab observed on a device of `device`
 /// size (width, height) for a package of base `base`. On a display of the base's size it is
 /// [`coordinates`] of that size, byte for byte. On any other the frame was reduced to the base and
 /// every coordinate of the answer and of `do` is the base's: `{space: "base", base_pixels:
-/// [width, height], reduced_from: [device width, device height], orientation, applies_to}`.
+/// [width, height], reduced_from: [device width, device height], orientation, applies_to}`. The
+/// train of DA-5: built by `FrameCoordinates::observed`, as every answer about a reduced frame or
+/// stored image is (R2).
 pub(super) fn observed_coordinates(base: (u32, u32), device: (u32, u32)) -> Value {
-    if base == device {
-        return coordinates(device.0, device.1);
-    }
-    json!({
-        "space": "base",
-        "base_pixels": [base.0, base.1],
-        "reduced_from": [device.0, device.1],
-        "orientation": orientation(base.0, base.1),
-        "applies_to": COORDINATE_INPUTS,
-    })
+    json!(actingcommand_lab::FrameCoordinates::observed(base, device))
 }
 
 /// Workflow #392 DA-5ab: the frame the Lab hands out for the Runtime frame `png` of `observation`,

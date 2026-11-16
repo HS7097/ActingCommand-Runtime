@@ -8,10 +8,10 @@ use std::time::Duration;
 
 pub use actingcommand_execution_kernel::{
     ColorEvaluationResponse, DetectPageCheckResponse, DetectPageOutput, DetectPageResponse,
-    IsVisibleResponse, PageDetectionResponse, PageEvaluationResponse, PageTargetEvaluationResponse,
-    PointResponse, RecognitionCoverageResponse, RecognizeClickOnlyResponse,
-    RecognizeEvaluatedResponse, RecognizeResponse, RecoveryHintResponse, RectResponse,
-    SceneExtentResponse, TargetEvaluationResponse, TemplateEvaluationResponse,
+    FrameCoordinates, IsVisibleResponse, PageDetectionResponse, PageEvaluationResponse,
+    PageTargetEvaluationResponse, PointResponse, RecognitionCoverageResponse,
+    RecognizeClickOnlyResponse, RecognizeEvaluatedResponse, RecognizeResponse,
+    RecoveryHintResponse, RectResponse, TargetEvaluationResponse, TemplateEvaluationResponse,
 };
 
 pub struct ReadonlyRecognitionInput {

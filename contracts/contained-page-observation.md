@@ -160,12 +160,15 @@ frame passes (640×360 on a 1280×720 frame, as a package of that base would pro
 does a scale whose presses the adapter does not send (5/4: the observation stands, a press is
 refused at its input). That the projection is the package's base, and its RGB8 hash, a verifier
 establishes from the device frame and the package as above. *A recording.* `observe --capture
---record` is refused on such a display, `record_frame_size_mismatch` (the refusal a recorded
-press of a recording of another size gets), until the recording on such a display (DA-5cd): a
-recording whose frames are not of the package's base before anything is captured, and, after the
-Runtime observed, a device frame of another size than the base before the frame file or the
-recording is written (details `{frame, expected: the base, actual: the device frame}`; the
-observation's debug terminal is `rejected`).
+--record` is refused on such a display. The train of DA-5ab and DA-5cd (its rule R4;
+[lab-recording.md](lab-recording.md), "A recording's size"): before anything is captured, the
+recording is judged as `record stop` judges it (`record_size_not_base`), and, after the Runtime
+observed, its device frame is judged as a frame that enters the recording, before the frame file
+or the recording is written (`record_display_not_base` when the recording has no frame yet,
+`record_frame_size_mismatch` with details `{frame, expected: the recording's size, actual: the
+device frame}` when the display changed during the recording); the observation's debug terminal
+is then `rejected`. (DA-5ab's fix round 1 judged both against the package's base,
+`record_frame_size_mismatch`.)
 
 0.12.28 LAB-SMALL (offline `observe`; `observe --capture` where named):
 - #411 B47: a candidate layout of the recognised page whose feature needs an OCR

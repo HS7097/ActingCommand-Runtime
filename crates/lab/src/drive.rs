@@ -56,7 +56,9 @@ impl<P: LabPorts> Lab<P> {
         let scene = recognition_scene(self, &mut request.input)?;
         // Workflow #392 DA-5cd: a dry run plans in the package's coordinate space, on the scene
         // reduced to it when it is a pure scale of it; a press keeps the scene as it was given.
-        let (scene, scaled_from) = if request.dry_run {
+        // The train of DA-5: by the live observation's own reduction, and the answer names the
+        // base it was reduced to (`frame_coordinates`).
+        let (scene, frame_coordinates) = if request.dry_run {
             scene_in_base(package_base(&evaluator), scene)?
         } else {
             (scene, None)
@@ -142,7 +144,7 @@ impl<P: LabPorts> Lab<P> {
                 safety_gate: "navigation_only_default".to_string(),
                 device: None,
                 env_resolved,
-                scaled_from,
+                frame_coordinates,
             }
         } else {
             let input = SemanticInput::Tap {
@@ -177,7 +179,7 @@ impl<P: LabPorts> Lab<P> {
                 safety_gate: "navigation_only_default".to_string(),
                 device: Some(device),
                 env_resolved,
-                scaled_from: None,
+                frame_coordinates: None,
             }
         };
         Ok(response)
@@ -207,7 +209,9 @@ impl<P: LabPorts> Lab<P> {
         let scene = recognition_scene(self, &mut request.input)?;
         // Workflow #392 DA-5cd: a dry run plans in the package's coordinate space, on the scene
         // reduced to it when it is a pure scale of it; a route that presses keeps it as given.
-        let (scene, scaled_from) = if request.dry_run {
+        // The train of DA-5: by the live observation's own reduction, and the answer names the
+        // base it was reduced to (`frame_coordinates`).
+        let (scene, frame_coordinates) = if request.dry_run {
             scene_in_base(package_base(&evaluator), scene)?
         } else {
             (scene, None)
@@ -262,7 +266,7 @@ impl<P: LabPorts> Lab<P> {
                 steps: None,
                 safety_gate: None,
                 env_resolved,
-                scaled_from,
+                frame_coordinates,
             });
         }
 
@@ -303,7 +307,7 @@ impl<P: LabPorts> Lab<P> {
                 steps: None,
                 safety_gate: Some("navigation_only_default".to_string()),
                 env_resolved,
-                scaled_from,
+                frame_coordinates,
             });
         }
 
@@ -339,7 +343,7 @@ impl<P: LabPorts> Lab<P> {
             steps: Some(steps),
             safety_gate: Some("navigation_only_default".to_string()),
             env_resolved,
-            scaled_from: None,
+            frame_coordinates: None,
         })
     }
 }
@@ -699,7 +703,7 @@ fn standby_page_response() -> crate::PageDetectionResponse {
         env_resolved: Vec::new(),
         needs_detection: None,
         recognition_coverage: None,
-        scaled_from: None,
+        frame_coordinates: None,
     }
 }
 

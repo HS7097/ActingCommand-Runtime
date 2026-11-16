@@ -15,7 +15,9 @@ pub(crate) use actingcommand_execution_kernel::{
 
 impl<P: LabPorts> Lab<P> {
     /// Workflow #392 DA-5cd: the frames are evaluated in the package's coordinate space, a pure
-    /// scale of it reduced to it first (`display_base`); the answer names what it was reduced from.
+    /// scale of it reduced to it first (`display_base`); the train of DA-5: by the live
+    /// observation's own reduction, and the answer about a reduced frame names its base and what it
+    /// was reduced from (`frame_coordinates`). So `detect-page`, `current-page` and `is-visible`.
     pub fn recognize(
         &mut self,
         mut request: crate::RecognizeRequest,
@@ -23,7 +25,7 @@ impl<P: LabPorts> Lab<P> {
         let (evaluator, env_resolved) = load_evaluator(self, &mut request.input)?;
         let base = package_base(&evaluator);
         let engine = ReadonlyRecognitionEngine::new(evaluator, env_resolved);
-        let (frames, scaled_from) = if engine
+        let (frames, frame_coordinates) = if engine
             .target_requires_scene(&request.target)
             .map_err(readonly_error)?
         {
@@ -35,7 +37,7 @@ impl<P: LabPorts> Lab<P> {
             .recognize_frames(&request.target, &frame_refs(&frames))
             .map_err(readonly_error)?;
         if let crate::RecognizeResponse::Evaluated(evaluated) = &mut response {
-            evaluated.scaled_from = scaled_from;
+            evaluated.frame_coordinates = frame_coordinates;
         }
         Ok(response)
     }
@@ -51,7 +53,7 @@ impl<P: LabPorts> Lab<P> {
         )?;
         let base = package_base(&evaluator);
         let engine = ReadonlyRecognitionEngine::new(evaluator, env_resolved);
-        let (frames, scaled_from) = if request.check_pages {
+        let (frames, frame_coordinates) = if request.check_pages {
             (Vec::new(), None)
         } else {
             frames_in_base(base, recognition_frames(self, &mut request.input)?)?
@@ -60,7 +62,7 @@ impl<P: LabPorts> Lab<P> {
             .detect_page_frames(&detector, &frame_refs(&frames), request.check_pages)
             .map_err(readonly_error)?;
         if let crate::DetectPageResponse::Detection(detection) = &mut output.response {
-            detection.scaled_from = scaled_from;
+            detection.frame_coordinates = frame_coordinates;
         }
         Ok(output)
     }
@@ -74,14 +76,14 @@ impl<P: LabPorts> Lab<P> {
             &request.input,
             "semantic page commands require --pages or --resource-root --game",
         )?;
-        let (frames, scaled_from) = frames_in_base(
+        let (frames, frame_coordinates) = frames_in_base(
             package_base(&evaluator),
             recognition_frames(self, &mut request.input)?,
         )?;
         let mut response = ReadonlyRecognitionEngine::new(evaluator, env_resolved)
             .current_page_frames(&detector, &frame_refs(&frames))
             .map_err(readonly_error)?;
-        response.scaled_from = scaled_from;
+        response.frame_coordinates = frame_coordinates;
         Ok(response)
     }
 
@@ -92,7 +94,7 @@ impl<P: LabPorts> Lab<P> {
         let (evaluator, env_resolved) = load_evaluator(self, &mut request.input)?;
         let base = package_base(&evaluator);
         let engine = ReadonlyRecognitionEngine::new(evaluator, env_resolved);
-        let (frames, scaled_from) = if engine
+        let (frames, frame_coordinates) = if engine
             .target_requires_scene(&request.target)
             .map_err(readonly_error)?
         {
@@ -103,7 +105,7 @@ impl<P: LabPorts> Lab<P> {
         let mut response = engine
             .is_visible_frames(&request.target, &frame_refs(&frames))
             .map_err(readonly_error)?;
-        response.scaled_from = scaled_from;
+        response.frame_coordinates = frame_coordinates;
         Ok(response)
     }
 }
