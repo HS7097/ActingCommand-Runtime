@@ -137,7 +137,12 @@ pub static INSTALLER: [Handed; 11] = [
     handed("up", &["start"], &[Part::Root]),
     // The hold's reason is the module's own when the caller names none (`rescue::down`).
     handed("down", &["stop"], &[Part::Root, flag("reason", "--hold")]),
-    handed("undo", &["undo"], &[Part::Root, OPERATION, Part::Further]),
+    // Workflow #463 S3-18: `plan`, the plan form of the undo of a placement.
+    handed(
+        "undo",
+        &["undo"],
+        &[Part::Root, OPERATION, each("plan", "--plan"), Part::Further],
+    ),
     // Workflow #453 S12 fix round 1: `state_root_installation` is read by the module itself
     // (`rescue::op_status`), never handed on.
     handed(

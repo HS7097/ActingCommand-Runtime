@@ -2550,3 +2550,27 @@ tests = [
     "actingcommand-actinglab::bin:actinglab::tests::gate_463_rc1::rc1_fix1_a_failing_run_lists_the_cases_that_did_not_pass_up_to_its_bound",
 ]
 incident = ["#463 RC-1"]
+
+# Workflow #463 S3-18 (0.12.69; register §1.452; brief rd-1116/brief-463-s318-undo-schedule-changes.md; contracts/install-cli.md, "The Lab's rescue module", "The packages the undo of a placement makes enter or leave scheduling"): on the fake host with an installer of package [3, 10], bundles declaring [3, 3], with the fake Runtime running one instance bound to the game and with no Runtime, the Lab rescue module's undo of a pack_place operation and its plan form undo --plan: a placement that added two packs, each named by a rule, undone: leaves the two, enters and content_only empty, each scheduled before and absent after with content retire, no note (1); a placement that removed a pack's rule, undone: enters names it, unclassified before and scheduled after, the one note install_caveat_noted undo_enters_scheduling of install_undo with the game and names, the rule back, nothing asked of the Runtime (2); a content-only placement undone: content_only the pack with content replace, no note (3); the plan form leaves the root and the game root byte for byte, asks the Runtime nothing, answers installation_changed false and reverses from the last step, and the undo then answers the same schedule_changes and note; with no Runtime and an actingd under the root both are refused runtime_running with nothing written (4); the undo record carries schedule_changes {enters, leaves}, op status shows it, and the record without it loads and is answered without it (5); an undo that puts back a schedule.json the reader refuses answers packages and unread (undone, standard_pack_root_invalid schedule_invalid) and no list, the one note undo_scheduling_unknown caused by that failure, is done and records null lists (6); each of 1, 2, 3, 4 and 6 with a Runtime and without (7); the undo of an adopt answers kept, operation_id and outcome alone with its three values and no link and records no schedule_changes, --plan of it is refused unusable and actingctl install undo --plan unknown, nothing written (8)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-lab-rescue::lib::install::gate_463_s318::s318_the_undo_of_two_added_packs_lists_them_leaving_hot_and_cold",
+    "actingcommand-lab-rescue::lib::install::gate_463_s318::s318_the_undo_that_brings_a_pack_back_warns_and_names_it_hot_and_cold",
+    "actingcommand-lab-rescue::lib::install::gate_463_s318::s318_the_undo_of_a_content_only_placement_lists_the_pack_content_only_hot_and_cold",
+    "actingcommand-lab-rescue::lib::install::gate_463_s318::s318_the_plan_form_writes_nothing_and_answers_what_the_undo_answers_hot_and_cold",
+    "actingcommand-lab-rescue::lib::install::gate_463_s318::s318_the_record_carries_the_lists_and_one_without_them_loads",
+    "actingcommand-lab-rescue::lib::install::gate_463_s318::s318_an_undone_root_that_cannot_be_read_warns_unknown_and_is_undone_hot_and_cold",
+    "actingcommand-lab-rescue::lib::install::gate_463_s318::s318_the_undo_of_another_kind_answers_as_before",
+]
+incident = ["#463 S3-18"]
+
+# Workflow #463 S3-18 fix round 1 (0.12.69; register §1.452, "Fix round 1"; brief rd-1116/brief-01269-s318-fix1.md; contracts/install-cli.md, "The packages the undo of a placement makes enter or leave scheduling"): on the same fake host, with the fake Runtime running and with no Runtime: an undo of a placement that removed a pack's rule and replaced another's content, stopped by the fake host after it put schedule.json back and before it put the pack back, run again: its plan form and the undo done answer the record's schedule_changes {enters, leaves} and the warning undo_enters_scheduling naming the pack (not computed again from the half-undone root), the plan form's reverses without the step already undone, the pack then back; op resume of an undo that ended its steps and stopped before current.json was retired answers the record's lists and its related undo outcome carries the warning (1); a placement whose bundle carries no schedule.json set the game root's aside, undone, planned and done: the undo reads the kept file it puts back, the pack its rule names enters unclassified to scheduled and is warned of, schedule.json back byte for byte (2); a placement that made one pack leave, let another enter and added a third with no rule, undone, planned and done: enters the first, leaves the second and the third (absent after, content retire), the warning naming the first (3)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-lab-rescue::lib::install::gate_463_s318::s318_fix1_an_undo_run_again_answers_what_its_record_holds_hot_and_cold",
+    "actingcommand-lab-rescue::lib::install::gate_463_s318::s318_fix1_a_root_file_set_aside_comes_back_and_is_read_as_it_will_be_hot_and_cold",
+    "actingcommand-lab-rescue::lib::install::gate_463_s318::s318_fix1_an_undo_that_lets_one_pack_enter_and_others_leave_names_each_hot_and_cold",
+]
+incident = ["#463 S3-18"]
