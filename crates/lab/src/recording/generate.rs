@@ -18,8 +18,10 @@ use super::steps::path_order;
 use super::store::{blocked, invalid, with_details};
 use crate::codes::{ClickFollowProblem, ReadyMissing, SelectProblem};
 use actingcommand_contract::{
-    LabError, LabResult, SEGMENTED_SWIPE_BRAKE_DISTANCE_PX, SEGMENTED_SWIPE_BRAKE_DURATION_MS,
-    SEGMENTED_SWIPE_CORNER_HOLD_MS, SEGMENTED_SWIPE_HORIZONTAL_DURATION_MS, TaskSchema,
+    LabError, LabResult, MAX_FACT_TTL_MS, MAX_GOAL_ORDERED_COUNT, MAX_PACK_UI_TITLE_BYTES,
+    ORDERED_VARIABLE_KEY_COLUMN, ORDERED_VARIABLE_RANK_COLUMN, SEGMENTED_SWIPE_BRAKE_DISTANCE_PX,
+    SEGMENTED_SWIPE_BRAKE_DURATION_MS, SEGMENTED_SWIPE_CORNER_HOLD_MS,
+    SEGMENTED_SWIPE_HORIZONTAL_DURATION_MS, TaskSchema, VARIABLE_FACT_KEY_PREFIX,
     package_id_names_one_path_segment,
 };
 use actingcommand_execution_kernel::{linear_main_interface, prerequisite_package_id_valid};
@@ -693,6 +695,34 @@ fn select_rules(steps: &[PlanStep], task_id: &str, lacks: &mut Lacks) {
     }
 }
 
+/// #463 S2-6 (`contracts/lab-recording.md`, "Marking a choice first"): every step of the package
+/// marked as holding a choice that no select refines yet is a failed pre-check
+/// (`select_unrefined`; `record_select_invalid` with `choice_not_refined`), by step: a marked choice
+/// knows no names yet, and a package never presses by position where a name can be read.
+fn unrefined_choices(steps: &[PlanStep], lacks: &mut Lacks) {
+    for step in steps
+        .iter()
+        .filter(|step| step.step.choice.is_some() && step.step.select.is_none())
+    {
+        let index = step.step.index;
+        lacks.push(
+            ReadyMissing::SelectUnrefined,
+            plan_step_number(step),
+            select_invalid(
+                Some(index),
+                SelectProblem::ChoiceNotRefined,
+                format!(
+                    "step {index} is marked as holding a choice and no select refines it yet: a \
+                     marked choice knows no names, and a package never presses by position; \
+                     refine it with `record mark --step {index}` and its select (slots, read, \
+                     names, match, wanted), or take the mark off with choice false; nothing was \
+                     written"
+                ),
+            ),
+        );
+    }
+}
+
 /// The key of the usual ending, `<task_id>_done`.
 pub(crate) fn done_key(task_id: &str) -> String {
     format!("{task_id}_done")
@@ -1213,6 +1243,9 @@ pub(crate) fn survey(recording: &LabRecording, settings: &StopSettings) -> LabRe
         }
     }
     optional_positions(&steps, game, &mut lacks);
+    // #463 S2-6: a step marked as holding a choice and not refined by a select generates no
+    // package.
+    unrefined_choices(&steps, &mut lacks);
     // #463 R1: the rules a select step keeps from its marking on, checked again where the package
     // is generated.
     select_rules(&steps, &recording.task_id, &mut lacks);
@@ -2252,11 +2285,12 @@ fn select_layout_json(plan: &Plan, step: &PlanStep, select: &SelectSpec) -> LabR
 }
 
 /// #463 R1: the policy document of a select with `allowed` as its one gate's values: the
-/// `enum_string` field `name` over the names, the gate `wanted.<name>` keeping `allowed` (the
-/// wanted value's default; a constant of the package until a later slice reads it as a variable)
-/// and dropping an unknown name, `none_allowed` with one required candidate, the lowest candidate
-/// id first, and the `on_empty` key as the `empty` outcome key. The mark-time self-test evaluates
-/// the pressed name with the same document and the pressed name as `allowed`.
+/// `enum_string` field `name` over the names, the gate `wanted.<name>` keeping `allowed` and
+/// dropping an unknown name, `none_allowed` with one required candidate, the lowest candidate id
+/// first, and the `on_empty` key as the `empty` outcome key. #463 S2-6 fix round 1: the package's
+/// document is [`choice_policy_document`], which reads the wanted value from the package's
+/// variable and is built on this one; this one with the pressed name as `allowed` is what the
+/// mark-time self-test and self-check item 8 decide the pressed name with.
 pub(crate) fn select_policy_document(
     plan: &Plan,
     step: &PlanStep,
@@ -2297,6 +2331,88 @@ pub(crate) fn select_policy_document(
         "scoring": [],
         "selection": {"mode": "none_allowed", "required_count": 1},
         "tie_break": [{"kind": "candidate_id", "direction": "lowest_first"}]
+    })
+}
+
+/// #463 S2-6 (`contracts/lab-recording.md`, "Marking a choice first"; fix round 1: of every
+/// select step, marked as a choice or not): the policy document of a select step's package: R1's
+/// document ([`select_policy_document`]) whose wanted value is the package's variable of its name,
+/// as a run is handed it: the record list `session.dispatch.parameter.<name>` of rows
+/// `{key, rank}` (rank from 1). The one gate `wanted.<name>` keeps a name the list holds
+/// (`keyed_fact` rank at least 1, absent 0; `abort_evaluation`, as a gate that reads a record list
+/// declares) and the term `rank.<name>` (weight −1000) puts the first of the order first. With the
+/// variable's default `[default]` it keeps what R1's gate kept.
+fn choice_policy_document(plan: &Plan, step: &PlanStep, select: &SelectSpec) -> Value {
+    let wanted = &select.wanted.name;
+    let fact_key = format!("{VARIABLE_FACT_KEY_PREFIX}{wanted}");
+    let rank = json!({
+        "source": "keyed_fact",
+        "fact_key": fact_key,
+        "key_field": SELECT_FEATURE,
+        "value_column": ORDERED_VARIABLE_RANK_COLUMN,
+        "absent": {"type": "integer", "value": 0}
+    });
+    let mut document = select_policy_document(plan, step, select, &select.wanted.default);
+    document["facts"] = json!([{
+        "fact_key": fact_key,
+        "max_age_ms": MAX_FACT_TTL_MS,
+        "minimum_confidence_milli": 1000,
+        "value_type": {
+            "type": "record_list",
+            "key_column": ORDERED_VARIABLE_KEY_COLUMN,
+            "columns": {ORDERED_VARIABLE_RANK_COLUMN: {"type": "integer"}}
+        }
+    }]);
+    document["gates"] = json!([{
+        "gate_id": format!("wanted.{wanted}"),
+        "predicate": {"kind": "integer_at_least", "value": rank, "threshold": 1},
+        "on_unknown": {"kind": "abort_evaluation"}
+    }]);
+    document["scoring"] = json!([{
+        "term_id": format!("rank.{wanted}"),
+        "value": rank,
+        "transform": {"kind": "identity"},
+        "weight_milli": -1000,
+        "on_unknown": {"kind": "abort_evaluation"}
+    }]);
+    document
+}
+
+/// #463 S2-6: the package variable of the wanted value of a select step (fix round 1: of every
+/// one, marked as a choice or not; `contracts/package-variables.md`, "The declaration"): `ordered`,
+/// its name `wanted.name`, its options the names in their order (each its id, titled by its first
+/// alias that fits a title, else its id), one to `min(32, names)` of them in an order of
+/// preference, its default the one name `wanted.default`; its texts are under the package's locale
+/// and made of what the recording holds.
+fn choice_variable_json(plan: &Plan, select: &SelectSpec) -> Value {
+    let text = |value: &str| {
+        let mut text = Map::new();
+        text.insert(plan.locale.clone(), json!(value));
+        Value::Object(text)
+    };
+    let options = select
+        .names
+        .iter()
+        .map(|name| {
+            let title = name
+                .aliases
+                .iter()
+                .find(|alias| (1..=MAX_PACK_UI_TITLE_BYTES).contains(&alias.len()))
+                .map_or(name.id.as_str(), String::as_str);
+            json!({"value": name.id, "title": text(title)})
+        })
+        .collect::<Vec<_>>();
+    let max_count = u64::try_from(select.names.len())
+        .unwrap_or(MAX_GOAL_ORDERED_COUNT)
+        .min(MAX_GOAL_ORDERED_COUNT);
+    json!({
+        "name": select.wanted.name,
+        "type": "ordered",
+        "title": text(select.wanted.name.as_str()),
+        "options": options,
+        "min_count": 1,
+        "max_count": max_count,
+        "default": [select.wanted.default]
     })
 }
 
@@ -2452,6 +2568,7 @@ pub(crate) fn select_probe_plan(
         forbidden: Vec::new(),
         anchor: None,
         select: None,
+        choice: None,
         inserted_after: None,
         transition: None,
         closed: true,
@@ -2841,6 +2958,16 @@ pub(crate) fn render(
     control.insert("timeout_ms".into(), json!(plan.timeout_ms));
     control.insert("step_timeout_ms".into(), json!(plan.step_timeout_ms));
     control.insert("max_steps".into(), json!(effect_steps));
+    // #463 S2-6 fix round 1: one variable per select step, its wanted value, in path order, marked
+    // as a choice or not; the member is present only when the package has a select step.
+    let variables = plan
+        .select_steps()
+        .into_iter()
+        .map(|(_, select)| choice_variable_json(plan, &select.declaration))
+        .collect::<Vec<_>>();
+    if !variables.is_empty() {
+        control.insert("variables".into(), Value::Array(variables));
+    }
 
     let resources = json!({"schema_version": "1.0", "resources": [], "resource_count": 0});
 
@@ -2938,14 +3065,11 @@ pub(crate) fn render(
             "terminal_pages": [step.page_id()?]
         }));
         layouts.push(select_layout_json(plan, step, &select.declaration)?);
+        // #463 S2-6 fix round 1: every select step reads its wanted value from the package's
+        // variable, one policy form whether the step is marked as a choice or not.
         policies.push((
             plan.select_policy_path(step),
-            select_policy_document(
-                plan,
-                step,
-                &select.declaration,
-                &select.declaration.wanted.default,
-            ),
+            choice_policy_document(plan, step, &select.declaration),
         ));
     }
     // #463 R2: after the select steps' mappings, one per ending: its key on its page.

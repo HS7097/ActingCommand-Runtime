@@ -189,6 +189,12 @@ actingcommand_contract::outcome_vocabulary! {
         NoSelect => "no_select",
         /// #463 R2 fix 1: the `on_empty` key is the outcome key of an ending of the recording.
         OnEmptyKeyOfEnding => "on_empty_key_of_ending",
+        /// #463 S2-6: `record stop` meets a step marked as holding a choice that no select refines
+        /// yet: it knows no names, so no package is generated.
+        ChoiceNotRefined => "choice_not_refined",
+        /// #463 S2-6 fix round 1: a request's `choice: false` names a step that is not marked as
+        /// holding a choice, so there is nothing to take off.
+        NoChoice => "no_choice",
     }
 }
 
@@ -359,6 +365,9 @@ actingcommand_contract::outcome_vocabulary! {
         /// Workflow #392 DA-5cd fix round 1: the recording holds frames that are not the base size
         /// (`record_size_not_base`).
         SizeNotBase => "size_not_base",
+        /// #463 S2-6: a step marked as holding a choice that no select refines yet
+        /// (`record_select_invalid`, `choice_not_refined`).
+        SelectUnrefined => "select_unrefined",
     }
 }
 

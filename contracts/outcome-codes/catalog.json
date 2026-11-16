@@ -5200,6 +5200,12 @@
         },
         "on_empty_key_of_ending": {
           "description": "The on_empty key is the outcome key of an ending of the recording (#463 R2 fix 1)."
+        },
+        "choice_not_refined": {
+          "description": "record stop meets a step marked as holding a choice that no select refines yet: it knows no names, so no package is generated (#463 S2-6)."
+        },
+        "no_choice": {
+          "description": "A request's choice false names a step that is not marked as holding a choice, so there is nothing to take off (#463 S2-6 fix round 1)."
         }
       }
     },
@@ -5398,6 +5404,9 @@
         },
         "size_not_base": {
           "description": "Workflow #392 DA-5cd fix round 1: the recording holds frames that are not the base size (record_size_not_base)."
+        },
+        "select_unrefined": {
+          "description": "#463 S2-6: a step marked as holding a choice that no select refines yet (record_select_invalid, choice_not_refined)."
         }
       }
     },

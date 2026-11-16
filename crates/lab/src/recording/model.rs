@@ -345,6 +345,14 @@ pub struct RecordingStep {
     /// step.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub select: Option<StepSelect>,
+    /// #463 S2-6 (`contracts/lab-recording.md`, "Marking a choice first"): the step is marked as
+    /// holding a choice, marked first and refined later by its `select`; the mark stays beside the
+    /// select and means only that the choice is not refined yet while the step has none (fix round
+    /// 1: the wanted value of every select is the package's `ordered` variable, marked or not).
+    /// Absent on every step not marked so, so that a recording without one is byte-identical to
+    /// one an earlier build wrote.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub choice: Option<StepChoice>,
     /// #463 R4: the recorded step after whose effect a stopped recording inserted this optional
     /// step (`record mark --optional-after`): it runs after that step and after the steps inserted
     /// there before it. Absent on every other step, so that a recording without one is
@@ -365,6 +373,15 @@ pub struct RecordingStep {
 #[serde(deny_unknown_fields)]
 pub struct StepOptional {
     pub settle_ms: u64,
+    pub marked_at_unix_ms: u64,
+}
+
+/// #463 S2-6 (`contracts/lab-recording.md`, "Marking a choice first"): the mark of a step that
+/// holds a choice, kept in the recording from the moment it is marked; a mark given again keeps
+/// its time.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StepChoice {
     pub marked_at_unix_ms: u64,
 }
 
@@ -1166,6 +1183,12 @@ pub struct MarkRequest {
     /// absent on a request without one, which is then byte for byte what it was.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub boxes: Vec<BoxSpec>,
+    /// #463 S2-6 (request form only, as `select`; `contracts/lab-recording.md`, "Marking a choice
+    /// first"): `true` marks the step as holding a choice, refined later by its `select`; `false`
+    /// takes the mark off (fix round 1: on a step without it `record_select_invalid`,
+    /// `no_choice`); absent leaves it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub choice: Option<bool>,
 }
 
 /// #463 S2-5: what a box drawn on the step's primary frame is for: a region the step's page is
@@ -1190,7 +1213,9 @@ pub struct BoxSpec {
 /// #463 R1 (`contracts/lab-recording.md`, "Selecting in a list"): a select over fixed slots, the
 /// step's effect in place of a click. `record stop` generates its layout (`fixed_slots`, the one
 /// identity feature `name` over `names`), an OCR target per slot, the select operation with its
-/// `on_empty` end and the policy document whose one gate `wanted.<name>` keeps `default`.
+/// `on_empty` end, the package's `ordered` variable `wanted.name` whose default is `[default]`
+/// (#463 S2-6, fix round 1: of every select, marked as a choice or not), and the policy document
+/// whose one gate `wanted.<name>` reads it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SelectSpec {
@@ -1274,8 +1299,8 @@ pub struct SelectMatchSpec {
     pub minimum_margin: u16,
 }
 
-/// #463 R1: the wanted value: its name and its default, a constant of the package until a later
-/// slice reads it as a variable.
+/// #463 R1: the wanted value: its name and its default; #463 S2-6 fix round 1: in the package the
+/// `ordered` variable of that name, its default the one name `default`, on every select step.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SelectWantedSpec {
@@ -1664,6 +1689,9 @@ pub struct MarkOutcome {
     /// #463 S2-5: each box of the request, as the step took it; absent without one.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub boxes: Vec<BoxView>,
+    /// #463 S2-6: the step's choice mark, on a step marked as holding a choice.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub choice: Option<StepChoice>,
 }
 
 /// #463 S2-5: a box of the request as the step took it: its rectangle and, for a recognize box,
@@ -1822,6 +1850,10 @@ pub struct StepView {
     /// #463 R1: the step's select as the recording holds it, on a step that has one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub select: Option<StepSelect>,
+    /// #463 S2-6: the step's choice mark, on a step marked as holding a choice (refined when the
+    /// step has a select too; `record ready` lists one that is not, `select_unrefined`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub choice: Option<StepChoice>,
     /// #463 R4: the recorded step an inserted optional step runs after, on such a step only.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub inserted_after: Option<u32>,

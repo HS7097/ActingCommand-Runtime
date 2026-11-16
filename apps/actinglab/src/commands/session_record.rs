@@ -3710,6 +3710,9 @@ fn record_mark_request_from_flags(flags: &FlagArgs) -> CliOutcome<MarkRequest> {
             .iter()
             .map(|value| parse_record_mark_box(value.as_str()))
             .collect::<CliOutcome<Vec<_>>>()?,
+        // #463 S2-6: a choice is marked, and its mark taken off, by the request form only, as a
+        // select is declared.
+        choice: None,
     };
     // #463 R2: `--ending` makes `--frame`, `--sample`, `--page`, the marks (`--template`,
     // `--color`) and `--reuse` the ending's, with `--outcome-key`, as the request form's `ending`

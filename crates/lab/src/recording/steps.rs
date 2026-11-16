@@ -35,8 +35,8 @@ use super::model::{
 };
 use super::select::{
     OTHER_PAGE_PASSES, SELECT_REJECTION_ID, SELF_TEST_ERROR, SelectChecked, SelectFrame,
-    SelectProbe, check_select_rules, check_step_select, clear_select, declare_select, probe_marks,
-    select_invalid,
+    SelectProbe, apply_choice, check_select_rules, check_step_select, clear_select, declare_select,
+    probe_marks, select_invalid,
 };
 use super::store::{
     LabFile, OldRecordView, blocked, create_recording, invalid, lab_dir, load_lab, now_unix_ms,
@@ -756,6 +756,7 @@ fn new_step(index: u32, frames: Vec<RecordedFrame>) -> RecordingStep {
         forbidden: Vec::new(),
         anchor: None,
         select: None,
+        choice: None,
         inserted_after: None,
         transition: None,
         closed: false,
@@ -1661,7 +1662,8 @@ pub(crate) fn apply_marks(
         // #463 R1 fix 1: a select is never dropped here. On an application step it is the
         // declaration's `with_application` (one beside an application operation of the same
         // request was refused before); on any other step without a frame it needs one, as a mark.
-        if request.select.is_some()
+        // #463 S2-6: so is a choice marked there.
+        if (request.select.is_some() || request.choice == Some(true))
             && let Some(action) = &application
         {
             return Err(select_invalid(
@@ -1686,6 +1688,7 @@ pub(crate) fn apply_marks(
             || request.anchor.is_some()
             || request.clear_anchor
             || !request.boxes.is_empty()
+            || request.choice.is_some()
             || (request.application.is_none() && request.optional.is_none());
         if needs_frame {
             return Err(with_details(
@@ -1935,7 +1938,16 @@ pub(crate) fn apply_marks(
         apply_click(session, request, target, &batch)?;
     }
     apply_optional(&mut session.recording, request, target)?;
-    // #463 R1: a select step keeps its rules whatever this command changed.
+    // #463 S2-6: a choice marked first, or its mark taken off; the last step of a stopped
+    // recording holds none.
+    let final_of_stopped = session.stopped && last_effective(&session.recording) == Some(target);
+    apply_choice(
+        step_mut(&mut session.recording, target)?,
+        request,
+        final_of_stopped,
+    )?;
+    // #463 R1: a select step keeps its rules whatever this command changed; #463 S2-6: so does a
+    // step marked as holding a choice, which a select refines.
     check_select_rules(effective_step(&session.recording, target)?)?;
 
     // #463 S2-5: the step's page as this command leaves it, which the self-test below and the

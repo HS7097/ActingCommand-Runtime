@@ -73,8 +73,14 @@ root's accepted `goals.json` takes, which the Runtime's scheduler workbench read
   giving them values needs a member on a request (`ac_run_pack`, `--variable` on a run), which is
   the next slice's, built on V3, with its `runtime-client` revision. Only the offline scan replay
   takes `--variable`.
-- **No recording writes a variable.** Generating a variable from a recording's selection, and
-  editing its default after `record stop`, are slice V4.
+- **A recording writes a variable for every select.** Since #463 S2-6 (0.12.68, register §1.442;
+  fix round 1, the coordinator's ruling R1; [lab-recording.md](lab-recording.md), "Selecting in a
+  list" and "The wanted value is a variable of the package") `record stop` declares one `ordered`
+  variable per select step, marked first as holding a choice or given whole, its name the select's
+  wanted name, its options the select's names and its default the select's default alone, the
+  order the recording holds, and that step's policy reads it through `keyed_fact`; a run handed no
+  value chooses what the constant of before chose. Editing the options and the texts after `record
+  stop` other than by declaring the select again is not built.
 - **No table-backed list** (`from_table`), no `table` type and no value-test operand that reads a
   variable: later slices, each with its own revision.
 
@@ -572,7 +578,9 @@ bundle without them keeps its revision, and the Runtime declares [3, 14] ([3, 15
   `runtime-client` 9): reading, setting and clearing a value per application through the Lab's
   command line and MCP, and the view. Not in it: the values a live run without a dispatch is
   given, listed in the run's answer.
-- **V4** (the recording): a recording's selection generates its variable and the gate that reads
-  it; the default, the options and the texts can be edited after `record stop`.
+- **V4** (the recording): built by #463 S2-6 and its fix round 1 (0.12.68, register §1.442, "What
+  is built now, and what is not" above): every select of a recording generates its variable and the
+  gate that reads it, and its default is changed after `record stop` by declaring the select again.
+  Still to come: editing the options and the texts after `record stop`.
 - **V5** (the console) shows and sets the variables on the goal page; **V6** moves the resource
   repositories' numbers and lists out of capability parameters into variables.
