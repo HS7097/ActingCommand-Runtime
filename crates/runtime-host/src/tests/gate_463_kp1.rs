@@ -29,8 +29,8 @@ const KEY_UNSUPPORTED: &str =
 
 // Writes the package as a source package directory at `directory`: the tap `open` from `home` to
 // `list`, then the key step `back` from `list` to `done`, guarded by the mark; each expected within
-// 200 ms, no retry.
-fn write_package(directory: &Path) {
+// 200 ms, no retry. The key train's test (`gate_463_train_key`) runs it too.
+pub(super) fn write_package(directory: &Path) {
     let control = json!({
         "schema_version": "Lab-1y.control.v2",
         "package_id": "neutral.kp1.back",

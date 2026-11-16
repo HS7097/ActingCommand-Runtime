@@ -4213,7 +4213,7 @@ tests = [
 ]
 incident = ["#463 KB-1"]
 
-# Workflow #463 KB-1 fix round 1 (0.12.69; register §1.447; brief rd-1116/brief-463-kb1-fix1.md, the coordinator's rulings R2, R3 and R5 after review-1790): on an instance configured nemu_ipc, the back key on a captured frame whose input answers the library's refusal (input_unsupported) is denied nemu_input_capability_unsupported, no input performed, the one input record's effect not_performed, nothing committed, the lease kept (1); on an instance configured adb_shell_input, home, 3 and a word of no key are denied nemu_input_capability_unsupported with no input record of any kind and nothing on the device, then the back key is completed, the device's one input (2); the registry's diagnostic wrapper, held as the kernel holds an input, hands a key on its frame to the wrapped input's key_in_frame with the step's context (its check's answer comes back) and the plain key to its key (3)
+# Workflow #463 KB-1 fix round 1 (0.12.69; register §1.447; brief rd-1116/brief-463-kb1-fix1.md, the coordinator's rulings R2, R3 and R5 after review-1790): on an instance configured nemu_ipc, the back key on a captured frame whose input answers the library's refusal (input_unsupported) is denied nemu_input_capability_unsupported, no input performed, the one input record's effect not_performed, nothing committed, the lease kept (1); on an instance configured adb_shell_input, home, 3 and a word of no key are denied with no input record of any kind and nothing on the device, then the back key is completed, the device's one input (2; adapted by the key train, register §1.447 "Train": the denial is input_key_unsupported, the Nemu input keeping nemu_input_capability_unsupported); the registry's diagnostic wrapper, held as the kernel holds an input, hands a key on its frame to the wrapped input's key_in_frame with the step's context (its check's answer comes back) and the plain key to its key (3)
 [[gate]]
 coverage = "Y"
 tests = [
@@ -4230,3 +4230,11 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_463_kp1::kp1_fix1_an_input_without_the_key_refuses_the_run_with_no_input_and_no_intent",
 ]
 incident = ["#463 KP-1"]
+
+# Workflow #463, the key train (0.12.69; register §1.447 and §1.448, "Train"; brief rd-1116/brief-463-train-key.md, point 4; contracts/linear-steps.md, "Key steps", "On the device", "Which instances such a run starts on"): the kernel's back key (StepKey) is the device layer's (DeviceKey::named) and InFrame on the Nemu input; the Runtime's registry declares input.key for nemu_ipc and not for minitouch. KP-1's source package (open taps home into list, back presses the back key from list to done, guarded by the list's mark), loaded from its directory and run directly by the host on a device instance configured nemu_ipc whose capability table is the registry's: Completed on done after two steps, the device's inputs the tap then exactly one key, the kernel's back key; the key's one input record names the frame its step's intent names, the last frame captured before it and after the tap was committed, its source that step; no input failed (1). The same package on an instance configured minitouch with the registry's table: Failed with contained_task_linear_key_unsupported naming pack_operation_id back, no capture, no input, and no capture, input or effect-intent record in the ledger (2). The fake provider opens no Nemu session: the session's, the registry wrapper's and the worker's parts of the key are KB-1's tests
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_463_train_key::train_key_a_key_step_reaches_the_device_on_its_frame_or_is_refused_at_the_start",
+]
+incident = ["#463 KP-1", "#463 KB-1"]

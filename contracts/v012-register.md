@@ -32823,6 +32823,54 @@ the denial of before this slice) and
 `runtime_input_proxy::lw1_fix2_key_and_text_on_an_input_that_sends_neither_hint_what_presses_instead`
 (R3: `key home` on the Nemu instance now carries the hint that the input sends only `back`).
 
+**Train** (coordinator work order `rd-1116/brief-463-train-key.md`; the key train of this section
+and §1.448, KP-1, in pull request #1791, which carries §1.448's head `d8aaf8ec` and, merged into it,
+this section's `1305370c`, both on main `3a17b927`, which did not move; the rules are the
+coordinator's, not the owner's words). The two slices touch no Rust function in common; what the
+train read where they meet, and changed (no program behaviour but the one code below):
+- *The key keeps its frame, end to end.* KP-1's key step sends `Key` with its guard's frame context
+  (`linear_input`, `linear_send_input`) to `ContainedTaskRuntime::input`; the host's run
+  (`RuntimeContainedTask::input`) names that frame as the input's `input_frame`; `HostShared::input`
+  takes the back key `InFrame` on the Nemu input (`NemuInputSupport::of`), refuses it without a
+  frame (`nemu_input_frame_required`), resolves the frame, holds the key to the foreground gate,
+  writes the frame as the input record's `before_frame_id` and sends it by
+  `ExecutionKernel::input_prepared_in_frame`; the session's `execute_input` puts the committed
+  frame's geometry into the input's context and `execute_action` hands the key to `key_in_frame`,
+  through the registry's `DeviceRegistryInputDiagnosticBackend::key_in_frame`, to
+  `NemuInputView::key_in_frame`, `NemuIpcCommand::InputKey`, `NemuIpcWorkerState::input_key` and
+  `press_key` (the frame's fence). Nothing on that way drops the frame; nothing changed.
+- *One spelling.* KP-1's step sent `4` from a literal of its own (`StepKey::input_key`), this
+  section's vocabulary took `4` by another (`DeviceKey::named`). Now the device crate decides it:
+  `DeviceKey::android_code` (`4`) and `DeviceKey::ALL`; `named` takes a key's word, code and name
+  through the key's own functions (the same three spellings, nothing more), and `StepKey::input_key`
+  reads `DeviceKey::android_code` through `StepKey::device_key`. The strings are those of before.
+- *The code of `adb_shell_input`'s refusal* (the coordinator's correction of fix round 1's R3: one
+  code for one cause, and no code named after another backend). The catalog had no code for "the
+  instance's input backend does not send this key" that names no backend (`input_action_unsupported`
+  is a build that does not perform an action; `emulator_capability_unavailable` the emulator
+  control's admission), so the train registers `input_key_unsupported` (runtime-host): a key other
+  than the back key on an instance whose touch backend is `adb_shell_input`, refused by the host
+  before anything is sent and before an intent is written (receipt `denied`, no input record,
+  nothing performed; actinglab's `key` answers `device_error`, exit 4, its `input_error` naming the
+  code). The Nemu input keeps `nemu_input_capability_unsupported`, for its other keys, `text` and a
+  library without the key calls. The decision reads the input's support and the key vocabulary, no
+  code; the capability row of `adb_shell_input` and the texts that named the old code for it follow
+  ([runtime-interface.md](runtime-interface.md), [actinglab-capabilities.md](actinglab-capabilities.md),
+  the MCP manual, the row `key` of `lab-operations.json`, the catalog's text of
+  `nemu_input_capability_unsupported`); the index is regenerated. The Lab's hint is decided by the
+  vocabulary and the table, and is unchanged.
+- *The capability table and §1.448's refusal at a run's start; the foreground gate.* Said in §1.448,
+  "Train", and in [linear-steps.md](linear-steps.md), "Key steps".
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| KB1-12 | `DeviceKey::android_code`, `DeviceKey::ALL` (and KP-1's `StepKey::device_key`) | device and kernel functions (no code, no word) | the key train | `crates/device` `input.rs`, `crates/execution-kernel` `contained_task.rs` | one spelling of the back key |
+| KB1-13 | `input_key_unsupported` (runtime-host, error, ladder class `none`, since 0.12.69, review pending) | outcome code (index regenerated) | the key train | `crates/runtime-host` `codes.rs`, `host/input.rs`; `contracts/outcome-codes/runtime-host.json` | refuses, receipt `denied`; was `nemu_input_capability_unsupported` on `adb_shell_input` |
+
+Changed, not added, because the correction changes what it pins:
+`kb1_fix1_adb_shell_input_refuses_another_key_before_its_intent` (its three keys are denied
+`input_key_unsupported`; its gate row says so). The train's own test is §1.448's.
+
 ### 1.448 Slice #463 KP-1 (0.12.69): a linear package step that presses the back key (Workflow #463; the owner's ruling on board #463 that the back key is not recorded while playing and that the agent adds such a step in stage two or three; the read-only study `rd-1116/report-463-key-step-study.md`, sections (c), (e) and the slice KP-1 of (f), with the coordinator's rulings at its end; the rules below are the coordinator's rulings in the work order and on the takeover, not the owner's words; coordinator work order `rd-1116/brief-463-kp1-linear-key-step.md`, built on the branch of Workflow #437 G1, §1.433)
 
 The coordinator gave this slice 1.448 and the `package` revision 17: 16 is Workflow #477 PC-1's,
@@ -33023,6 +33071,54 @@ coordinator's rulings).
   `gate_463_kp1::kp1_fix1_package_check_and_package_bundle_take_a_pack_with_a_key_step` (on a pack
   directory with a key step, `package check` admits it and `package bundle` writes it with the key
   step as declared).
+
+**Train** (coordinator work order `rd-1116/brief-463-train-key.md`; the key train of this section
+and §1.447, KB-1, in this section's pull request #1791: its head `d8aaf8ec`, then §1.447's
+`1305370c` merged in, both on main `3a17b927`; the rules are the coordinator's, not the owner's
+words). Read in the joined tree:
+- *The key keeps its frame, and its spelling is the device layer's*: §1.447, "Train" (one spelling
+  now, `StepKey::input_key` reading `DeviceKey::android_code`).
+- *Which instances a run with a key step starts on.* With KB-1 the registry's table
+  (`capability_profile`) declares `input.key` for `maatouch` (every key), `nemu_ipc` and
+  `adb_shell_input` (the back key alone, this vocabulary's one word), not for `minitouch`; so such a
+  run starts on the first three and `refuse_unsendable_key` refuses it at its start on `minitouch`
+  (`contained_task_linear_key_unsupported`, nothing captured, nothing sent). "At deploy" above (only
+  MaaTouch declared `input.key`) no longer holds in this build: production's emulator instances run
+  the step. The table is built without opening the emulator's library, so on an installation whose
+  library lacks the two key calls the run starts, the guard passes, the effect intent is written,
+  and the key is refused when it is sent, before any call (KB-1's fix round 1): the run ends failed
+  with `nemu_input_capability_unsupported`, the input's record saying its effect `not_performed`;
+  nothing is recorded as indeterminate, and the step is not tried again (it declares no retry).
+  [linear-steps.md](linear-steps.md), "Key steps" ("Which instances such a run starts on"), and the
+  catalog's text of `contained_task_linear_key_unsupported` (which names the backends that send the
+  key, and `minitouch` as the cause) say so; the index is regenerated.
+- *The foreground gate.* KB-1 holds a key to the gate a tap passes. A key step's guard has just
+  recognised its page of the run's own application, so in the ordinary case that application is in
+  front and the gate passes the key; another application come to the front between the guard and
+  the key (or a foreground that cannot be read) refuses it `application_not_foreground` (or
+  `application_foreground_unknown`), nothing sent, and the run ends with that refusal. A key always
+  expects the assigned application, in a store update package's run too (only a declared store
+  step's plain tap expects the store). [linear-steps.md](linear-steps.md), "Key steps" ("On the
+  device", "The foreground gate").
+- *What the join touched of a click, an application action and a choice*: nothing of the kernel's
+  or the source parser's paths; on the device side `frame_fence` reads one more state for a touch
+  (KB-1's fix round 1, unchanged here). `StepKey::input_key` gives the string it gave.
+
+The train's test (host gate "#463, the key train"), in `crates/runtime-host/src/tests/gate_463_train_key.rs`:
+`train_key_a_key_step_reaches_the_device_on_its_frame_or_is_refused_at_the_start`. The kernel's back
+key is the device layer's (`DeviceKey::named`) and `InFrame` on the Nemu input; the registry declares
+`input.key` for `nemu_ipc` and not for `minitouch`. This section's source package (KP-1's host
+fixture, `gate_463_kp1::write_package`, now `pub(super)`), loaded from its directory and run directly
+by the host on a device instance configured `nemu_ipc` with the registry's table: Completed on `done`
+after two steps; the device takes the tap and exactly one key, the kernel's back key; the key's one
+input record names the frame its step's intent names, the last frame captured before it and after
+the tap was committed, and that step as its source; no input fails. The same package on an instance
+configured `minitouch` with the registry's table: Failed, `contained_task_linear_key_unsupported`
+naming `back`, nothing captured, nothing sent, and no capture, input or effect-intent record. Not
+reached: no fake provider opens a Nemu session (a `NemuSessionBackends` holds the vendor library's
+own session, which only the library opens), so below the host the key reaches the fake device as a
+plain key; the session's hand-over with its frame, the registry's wrapper and the worker's key down
+and key up on the scripted library stay KB-1's tests (§1.447).
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

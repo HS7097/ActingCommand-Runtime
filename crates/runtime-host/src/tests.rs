@@ -280,6 +280,9 @@ mod gate_463_v3;
 // Workflow #463 KB-1 (0.12.69; register §1.447): the capability table's key rows, the back key
 // sent on a frame of a Nemu input and every other key refused, and the foreground gate's key.
 mod gate_463_kb1;
+// Workflow #463, the key train (0.12.69; register §1.447 and §1.448, "Train"): a source package's
+// key step through the host to the device on its frame, or refused at its start.
+mod gate_463_train_key;
 // Workflow #469 H2 (0.12.62; register §1.398): a paused pair's `policy_task_paused` says why it
 // was paused (`pause_cause`) and with which failure (`failure_code`), live, after a restart and in
 // `actingd suspended`; a backoff names the failure it follows.
