@@ -18,7 +18,7 @@ use super::steps::path_order;
 use super::store::{blocked, invalid, with_details};
 use crate::codes::{ClickFollowProblem, ReadyMissing, SelectProblem};
 use actingcommand_contract::{
-    LabError, LabResult, MAX_FACT_TTL_MS, MAX_GOAL_ORDERED_COUNT, MAX_PACK_UI_TITLE_BYTES,
+    LabError, LabResult, MAX_FACT_TTL_MS, MAX_GOAL_ORDERED_COUNT, MAX_PACK_CATALOG_TITLE_BYTES,
     ORDERED_VARIABLE_KEY_COLUMN, ORDERED_VARIABLE_RANK_COLUMN, SEGMENTED_SWIPE_BRAKE_DISTANCE_PX,
     SEGMENTED_SWIPE_BRAKE_DURATION_MS, SEGMENTED_SWIPE_CORNER_HOLD_MS,
     SEGMENTED_SWIPE_HORIZONTAL_DURATION_MS, TaskSchema, VARIABLE_FACT_KEY_PREFIX,
@@ -2397,7 +2397,7 @@ fn choice_variable_json(plan: &Plan, select: &SelectSpec) -> Value {
             let title = name
                 .aliases
                 .iter()
-                .find(|alias| (1..=MAX_PACK_UI_TITLE_BYTES).contains(&alias.len()))
+                .find(|alias| (1..=MAX_PACK_CATALOG_TITLE_BYTES).contains(&alias.len()))
                 .map_or(name.id.as_str(), String::as_str);
             json!({"value": name.id, "title": text(title)})
         })
