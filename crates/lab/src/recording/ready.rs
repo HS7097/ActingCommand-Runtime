@@ -256,8 +256,9 @@ pub(crate) fn packaged(recording: &LabRecording) -> bool {
 /// reused or forbidden, an anchor, a click guard), a press region (a click that is no press stage
 /// one recorded: a tap or a long press by its point, a swipe; or one that follows a mark or
 /// declares a retry; #463 stage two, train 1: or a press box, a press recorded by its point whose
-/// rectangle is no longer that one pixel, the test [`point_press_warnings`] makes), a choice, an
-/// optional flag or a transition; or the recording took an ending.
+/// rectangle is no longer that one pixel, the test [`point_press_warnings`] makes), a choice (a
+/// select; #463 S2-6: or a step marked as holding a choice, refined or not), an optional flag or a
+/// transition; or the recording took an ending.
 fn stage_two_written(recording: &LabRecording) -> bool {
     !recording.endings.is_empty()
         || recording.steps.iter().any(|step| {
@@ -268,6 +269,7 @@ fn stage_two_written(recording: &LabRecording) -> bool {
                 || step.anchor.is_some()
                 || step.click_guard.is_some()
                 || step.select.is_some()
+                || step.choice.is_some()
                 || step.optional.is_some()
                 || step.transition.is_some()
                 || step.click.as_ref().is_some_and(|click| {

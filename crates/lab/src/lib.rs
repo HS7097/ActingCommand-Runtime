@@ -98,6 +98,10 @@ mod gate_463_s25_draft;
 // took before it sends or writes anything.
 #[cfg(test)]
 mod gate_392_da5ab;
+// #463 S2-6: a step marked first as holding a choice and refined later by its select; `record
+// ready` lists one not refined (`select_unrefined`).
+#[cfg(test)]
+mod gate_463_s26;
 mod lab_run;
 mod lab_run_api;
 mod ledger_port;

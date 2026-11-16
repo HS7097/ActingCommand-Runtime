@@ -73,8 +73,13 @@ root's accepted `goals.json` takes, which the Runtime's scheduler workbench read
   giving them values needs a member on a request (`ac_run_pack`, `--variable` on a run), which is
   the next slice's, built on V3, with its `runtime-client` revision. Only the offline scan replay
   takes `--variable`.
-- **No recording writes a variable.** Generating a variable from a recording's selection, and
-  editing its default after `record stop`, are slice V4.
+- **A recording writes a variable only for a choice.** Since #463 S2-6 (0.12.68, register §1.442;
+  [lab-recording.md](lab-recording.md), "Marking a choice first") `record stop` declares one `ordered`
+  variable per select step marked as holding a choice, its name the select's wanted name, its
+  options the select's names and its default the select's default alone, and that step's policy
+  reads it through `keyed_fact`; a select given without the mark keeps its wanted value a constant.
+  Editing the options and the texts after `record stop` other than by declaring the select again is
+  not built.
 - **No table-backed list** (`from_table`), no `table` type and no value-test operand that reads a
   variable: later slices, each with its own revision.
 

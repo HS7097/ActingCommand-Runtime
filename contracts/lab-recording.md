@@ -24,7 +24,10 @@ rectangle and no carrier package ("Recording while playing"). #463 S1-7: a recor
 instance: `record start` pauses the instance's scheduling with a reason of its own and the end of
 the recording resumes only that pause ("A recording holds its instance"). #463 S2-1: `record ready`
 lists at once everything a recording still lacks before `record stop` can make its package, and its
-state ("What a recording still lacks: `record ready`").
+state ("What a recording still lacks: `record ready`"). #463 S2-6: a step that chooses one item among
+several is marked first as holding a choice and refined later by its select, the mark kept in the
+recording meanwhile and listed by `record ready` until it is refined; the refined choice's wanted
+value is a variable of the package ("Marking a choice first").
 
 The recording state lives in the Lab state directory. Nothing in this document writes to
 the Runtime ledger; the clicks and application operations themselves are executed by the
@@ -141,7 +144,10 @@ command deletes nothing and names the files it already wrote.
   failed capture ended. #463 S1-5 (since 0.12.64): an application operation's completed receipt
   keeps `executed_at_unix_ms`, when it was recorded (the Lab's clock, as a click execution's),
   absent on every operation an earlier build recorded ("Archiving", "The manifest",
-  `at_unix_ms`).
+  `at_unix_ms`). #463 S2-6 (since 0.12.68): a step's `choice` (`{marked_at_unix_ms}`, "Marking a
+  choice first") is absent on every step not marked as holding a choice, so a recording without one
+  is byte-identical to one an earlier build wrote; a build before 0.12.68 does not decode a
+  recording that holds one, `lab_recording_unreadable` as above.
 
 ## Commands
 
@@ -400,7 +406,9 @@ Rules:
 Output: `{status, record_id, step, step_opened, frame, samples, marks, reused, removed,
 click, application, transition, step_state{marks, frames, effect, transition, closed,
 optional, forbidden?, anchor?}, closed_step, dry_run, forbidden?, after_stop?, select?, ending?,
-removed_ending?, boxes?}` (#463 S2-5: `boxes`, the request's boxes as the step took them, is present
+removed_ending?, boxes?, choice?}` (#463 S2-6: `choice`, the step's choice mark
+`{marked_at_unix_ms}`, is present only on a step marked as holding a choice, "Marking a choice
+first"; #463 S2-5: `boxes`, the request's boxes as the step took them, is present
 only with boxes, "Drawing a box"; #463 R2: `ending`, the ending the command took, and `removed_ending`, the one it
 gave up, are present only then; such an answer names no step, its `status` is `ending_recorded` or
 `ending_removed`, `marks_validated` with `--dry-run`; "Endings"; #463 R4: an optional step
@@ -430,9 +438,14 @@ reason}`, or
          application{action, cli_verb, source, executed, attempts[], needs_review}|null,
          optional: null | {settle_ms},
          transition: null | {kind:"page", frames, marks, timeout_ms, source} | {kind:"window", min_ms, max_ms},
-         closed, closed_by, forbidden?, anchor?, select?, inserted_after?}],
+         closed, closed_by, forbidden?, anchor?, select?, choice?, inserted_after?}],
  artifact|null, amended_at_unix_ms?, endings?, record_flag_state_dir, record_flag_reachable}
 ```
+
+#463 S2-6: a step's `choice` (`{marked_at_unix_ms}`) is present only on a step marked as holding a
+choice, as `recording.json` holds it, refined when the step has a `select` too ("Marking a choice
+first"). What a recording still lacks, a choice not refined among it, is read with `record ready`
+(`select_unrefined`); `record status` keeps no list of its own.
 
 #463 R4: `steps` are listed in the order a run meets them: the steps recorded on the path by their
 serial numbers, each followed by the optional steps inserted after it after the stop, by theirs (the
@@ -749,8 +762,11 @@ choose in a list of fixed slots on one screen by the name read in each slot: the
 `select` (request form only, `record mark --request` or `--request-json`, MCP `ac_record_mark`, and
 the mark request of "One call per step"; no shortcut flag). `record stop` generates it as the
 select step of a `linear_steps` task ([linear-steps.md](linear-steps.md), "Select steps"). A list
-that scrolls and the declaration of the wanted value as a variable are later slices; an ending added
-after the stop is #463 R2's ("Endings").
+that scrolls is a later slice; an ending added after the stop is #463 R2's ("Endings"). #463 S2-6
+(since 0.12.68, [v012-register.md](v012-register.md) §1.442): a step may be marked first as holding
+a choice and refined later by its select, and on such a step the wanted value is a variable of the
+package ("Marking a choice first"); a select given whole without the mark is generated as this
+section says.
 
 ```json
 {"schema_version":"actingcommand.lab-record-mark.v1","step":3,
@@ -850,6 +866,7 @@ stop` generates the package:
 | `kernel_refused` | the kernel's admission refuses the select step as `record stop` generates it (`details.loader_code`, the kernel's code, and `details.detail`): a bound of the read only the kernel checks ("What the Lab reads, and what only the kernel admits") |
 | `no_select` | #463 R2: `clear_select` names a step that has no select |
 | `on_empty_key_of_ending` | #463 R2 fix 1: the `on_empty` key is the outcome key of an ending of the recording, a select declared after the ending ("Endings"); at `record stop` the ending's own check refuses the pair (`record_ending_invalid`, `key_of_select`) |
+| `choice_not_refined` | #463 S2-6, `record stop` and its dry run only (the code of `record ready`'s item `select_unrefined`): a step marked as holding a choice has no select yet ("Marking a choice first") |
 
 **The mark-time self-test**, on every live frame of the step, is the kernel's own dry run of the
 select step (`dry_run_select`, called, never copied) on a probe package: the step alone as `record
@@ -932,7 +949,10 @@ again with another `wanted.default` (on a stopped recording too, "Marking after 
 stop` (`regenerated`); or, in the package, by that one line of the policy document. The gate's
 name and the ids already follow the parameter grammar, so that slice rewrites only that gate and
 adds the declaration. The recording keeps the wanted value's name in `select.wanted.name`; the
-package's gate is `wanted.<name>` and its field is `name`, the layout's identity feature.
+package's gate is `wanted.<name>` and its field is `name`, the layout's identity feature. #463 S2-6:
+on a step marked as holding a choice the wanted value is the package's `ordered` variable of that
+name, and the policy document's gate reads it ("Marking a choice first", "What `record stop`
+generates for a choice").
 
 **Self-checks** (see "Self-checks"): admission by the kernel (the select-step rules of
 [linear-steps.md](linear-steps.md)), the first decision of a select at step 1 and item 8.
@@ -950,6 +970,100 @@ repository's, and since Workflow #464 P2 the Lab's own `standard-pack build`, wh
 counts a select step as 13, [resource-verify.md](resource-verify.md), "The `package` revision");
 an earlier Runtime refuses such a package at admission (`contained_task_linear_invalid`,
 `reason=operation_effect`).
+
+### Marking a choice first
+
+#463 S2-6 (since 0.12.68, [v012-register.md](v012-register.md) §1.442; the owner's direction on
+board #463 on 11-15: a choice inside a step is singled out by marking that the step holds one, and
+refined afterwards; the rules here are the coordinator's). Stage one records the business by playing
+it: the press on the item chosen is a press like any other. Stage two marks, on the draft, that the
+step holds a choice, and refines later what the choices are and how each is recognized; until then
+the mark is kept in the recording and listed by `record ready`, so it is never lost.
+
+```json
+{"schema_version":"actingcommand.lab-record-mark.v1","step":3,
+ "add":[{"id":"ui/list_title","family":"template","region":{"x":40,"y":20,"width":160,"height":32}}],
+ "choice":true}
+```
+
+- **The mark.** The request's `choice` (request form only, as `select`: `record mark --request` or
+  `--request-json`, MCP `ac_record_mark`, which hands the request on as it is, and the mark request
+  of "One call per step"): `true` marks the step, `false` takes the mark off, absent leaves it. It
+  is taken on an active recording (a reopened one included) and on a stopped one ("Marking after
+  stop"), on a step with a frame. The demonstration is the step's own press as stage one recorded
+  it: a tap of `tap --record`, recorded by its point (`source: "point"`), is one, as is a click
+  recorded any other way. `recording.json` keeps `choice: {marked_at_unix_ms}` on the step (a mark
+  given again keeps its time; `record archive` and `record reopen` never rewrite it); the answer of
+  `record mark` and the step in `record status` carry it.
+- **Its rules** are a select step's, with their words of `record_select_invalid` ("Selecting in a
+  list"): a step marked so is not optional (`on_optional_step`), has no application operation
+  (`with_application`, also on the application entry step) and its click declares no retry, gesture
+  or follow (`with_retry`, `with_gesture`, `with_follow`); the last step of a stopped recording holds
+  none (`on_final_step`). Beside a transition `choice` is `record_transition_has_click`, as a click
+  is; beside a step operation `validation_failed`; beside an ending `record_ending_invalid` and
+  beside an inserted optional step `record_optional_after_invalid`, both `with_other_change` naming
+  `choice`.
+- **Refining** is declaring the step's select ("Selecting in a list"), whole, on that step, as on any
+  step whose press is recorded: the recorded press becomes the select's click when it lies in the
+  slot `pressed` selects on the primary frame (`select_press_mismatch` otherwise: give `pressed` the
+  name the press chose), its own rectangle, source and mark kept in `select.click_before`, and the
+  select is self-tested on the step's kept frames. A select given in the request that marks the
+  choice refines it at once. The mark stays beside the select: a step with both is refined.
+  `clear_select` takes the select off and leaves the choice to refine again; `choice: false` takes
+  the mark off and leaves the select, generated then as "Selecting in a list" says. No tool proposes
+  the choices, the slots or the names: the agent declares them.
+- **What is missing meanwhile.** `record ready` lists each effective step marked as holding a choice
+  and without a select as an item of `missing` ("What a recording still lacks: `record ready`"):
+  `what` `select_unrefined`, `code` `record_select_invalid`, the step, its number in the package and
+  the frame its press was sent on, in the order of the other items (by step; within the step after
+  its effect and its recognition). `record stop` and its dry run refuse it as any other item, with the
+  first item the generator meets: here `record_select_invalid` with `select_problem:
+  choice_not_refined`, `details.missing_total` and `details.hint: "record ready"`; nothing is written,
+  and a stopped recording keeps the package it generated before. A marked choice knows no names, and a
+  package never presses by position where a name can be read.
+- **What `record stop` generates for a choice.** The select step exactly as "Selecting in a list"
+  says, but for its wanted value, which is a variable of the package:
+  - `control.json` `variables`, one entry per such step in path order
+    ([package-variables.md](package-variables.md), "The declaration"):
+
+    ```json
+    {"name": "list_item", "type": "ordered", "title": {"<locale>": "list_item"},
+     "options": [{"value": "item_a", "title": {"<locale>": "Item A"}},
+                 {"value": "item_b", "title": {"<locale>": "Item B"}}],
+     "min_count": 1, "max_count": 2, "default": ["item_b"]}
+    ```
+
+    `name` is `wanted.name`; the options are the names in their order, each `value` its `id` and its
+    `title` its first alias of 1 to 128 bytes, else its `id`; the variable's own `title` is
+    `wanted.name`; every text is under the package's locale; nothing else is invented. A value is a
+    list of the names in an order of preference, 1 to `min(32, names)` of them, of which the run
+    takes the first the screen shows; the default is `[wanted.default]` alone, so a run handed nothing
+    chooses as the same select given without the mark chooses.
+  - The policy document reads it as a run is handed it ([package-variables.md](package-variables.md),
+    "The run" and "The overlay"): the value set on the application, else the default, overlaid as the
+    record list `session.dispatch.parameter.<name>` of rows `{key, rank}`, rank from 1; a run without
+    a dispatch (a direct run, a Lab run, the offline simulation and replay) reads the default. Its
+    `facts` declare that list (`max_age_ms` the fact bound, 31536000000; confidence 1000); its one
+    gate `wanted.<name>` keeps a name the list holds (`keyed_fact` rank at least 1, absent 0;
+    `abort_evaluation`, as a gate that reads a record list declares) and the term `rank.<name>`
+    (weight −1000) puts the first of the order first. None of the listed names on any slot is the
+    decision `empty`, the run's normal end with the `on_empty` key.
+  - The value is set by name on an application (`goals set <inst> list_item '["item_b","item_a"]'`,
+    MCP `ac_goals_set`; [package-variables.md](package-variables.md), "Reading and setting a value by
+    name"); the default changes with the select declared again with another `wanted.default`, then
+    `record stop`. A variable's name is a name of the game root: two packages of one root that
+    declare it differently are `variable_conflict` there and neither applies. A package declares at
+    most 16 variables; the kernel's admission refuses more (`variables_invalid`), as `record stop`
+    reports a refused admission.
+  - The mark-time self-test, the first decision (self-check item 3) and item 8 decide the default's
+    choice with every variable of the package at its default, as a run without a dispatch reads it;
+    the pressed name is decided, as for any select, with the policy holding the pressed name alone.
+  - A bundle whose package declares `variables` declares `package` 14
+    ([package-variables.md](package-variables.md), "Interface"), which the revision table of
+    `standard-pack build` counts; `record stop` writes no revision, and `standard-pack adopt` copies
+    `control.json` as it is.
+- A recording without a step marked so, a select given without the mark included, is generated byte
+  for byte as before.
 
 ### Endings
 
@@ -3246,6 +3360,7 @@ The answer:
 | `ending_page_taken` | an ending's page name is another ending's | `record_ending_invalid` |
 | `ending_mark_missing` | an ending's page reuses a mark of no effective step | `record_mark_rejected` |
 | `size_not_base` | (Workflow #392 DA-5cd fix round 1, as the train of DA-5 words it) the recording is not at the base size: its header's base size and frames of another size, or, without one, frames that show a larger display of the base size's ratio ("A recording's size"); listed first, and then no self-check runs | `record_size_not_base` |
+| `select_unrefined` | #463 S2-6: a step marked as holding a choice that no select refines yet ("Marking a choice first"); listed by its step, after the step's effect and recognition items | `record_select_invalid` (`choice_not_refined`) |
 
   The select and ending rules are those `record mark` holds when it takes a select or an ending,
   checked again where the package is generated ("Selecting in a list", "Endings"); the refusal's
@@ -3281,7 +3396,7 @@ The answer:
 
 | state | means | entered by | left by |
 |---|---|---|---|
-| `material` | nothing of stage two is written: no step carries a page name, a mark (own, reused or forbidden, an anchor, a click guard), a press region (a click other than a press `tap`, `swipe` or `long-tap --record` recorded, or one that follows a mark or declares a retry, or a press box: a press recorded by its point whose rectangle is no longer that one pixel, #463 S2-5), a choice (a select), an optional flag or a transition, and the recording took no ending | stage one: the presses with `--record`, `record archive` | the first such write (`record mark` on the reopened recording) |
+| `material` | nothing of stage two is written: no step carries a page name, a mark (own, reused or forbidden, an anchor, a click guard), a press region (a click other than a press `tap`, `swipe` or `long-tap --record` recorded, or one that follows a mark or declares a retry, or a press box: a press recorded by its point whose rectangle is no longer that one pixel, #463 S2-5), a choice (a select, or #463 S2-6 a step marked as holding a choice), an optional flag or a transition, and the recording took no ending | stage one: the presses with `--record`, `record archive` | the first such write (`record mark` on the reopened recording) |
 | `draft` | something of stage two is written, and `missing` is not empty | a stage-two write that leaves something missing | the last missing item done (`ready`) |
 | `ready` | `missing` is empty: every pre-check passes and every self-check: `record stop` would write the package | the last missing item done | `record stop` (`packaged`), or a write that leaves something missing (`draft`) |
 | `packaged` | stopped, its package written (`artifact`), and nothing changed since (no `amended_at_unix_ms`); nothing is checked again, `missing` and `checks_after` are empty; `sources` names what its package holds (#463 S2-1b fix round 1) | `record stop` | `record mark` after the stop ("Marking after stop"): then `ready` or `draft` by the rows above, until `record stop` generates the package again |
@@ -3341,7 +3456,9 @@ package it generated before. #463 R2: it also takes an ending ("Endings"), and g
 R4: it also takes an optional step after the effect of one of its steps, from a frame, and gives
 one up ("Inserting an optional step after stop"). #463 S2-5: it also takes boxes on its steps, and
 a press box on a tap or a long press recorded by its point gives that click its rectangle without
-`--reopen-step`, the press staying as recorded ("Drawing a box"). It takes no other new step (a frame that is not
+`--reopen-step`, the press staying as recorded ("Drawing a box"). #463 S2-6: it also takes a
+step's choice mark, and the select that refines it, on every step but its last ("Marking a choice
+first"). It takes no other new step (a frame that is not
 the targeted step's primary frame; an ending, "Endings", is not a step and is taken), no step
 operation and no application operation: each is
 `record_session_not_active` (exit 3) with `details{reason: "recording_stopped", change}`, and
@@ -3391,6 +3508,7 @@ order of its serial numbers. The rows below count steps by these numbers; where 
 | Workflow #339, in this order: step 1 is not optional (the entry gate checks only step 1); step n is not optional (every run ends on it); an application step is not optional (no conditional restart); the main interface after the last `launch` or `restart` (the first later step `linear_main_interface` recognizes) is not optional (`details{step, artifact_step}`) | `record_optional_first_step`, `record_optional_final_step`, `record_optional_application`, `record_optional_restart_segment_end` (3) |
 | `--timeout-ms`, `--arrival-timeout-ms` and `--application-arrival-timeout-ms` given explicitly lie in 1..=1800000 | `validation_failed` (2) |
 | every live frame and template crop still has its recorded sha256 and the recording's size | `record_frame_hash_mismatch`, `record_frame_size_mismatch` (3) |
+| #463 S2-6: every step marked as holding a choice is refined by its select (checked after the optional steps' positions and before the select steps' rules; "Marking a choice first") | `record_select_invalid`, `choice_not_refined` (3) |
 
 A `--requires` that does not start with `<game>.<server>.` adds the warning
 `requires_prefix_mismatch`. Steps whose click or application operation is marked
@@ -3487,6 +3605,9 @@ Numbers in page and operation ids have one width: two digits, or the digits of n
   `expect_after` and its `post_delay_ms` and no click; its layout is in `candidate_layouts[]`, its
   slots' targets in `ocr_targets[]` and its policy document is `policies/step_ii_select.json`
   ("Selecting in a list"). A recording without a select generates the same bytes as before.
+- #463 S2-6: `control.json` adds `variables`, one `ordered` entry per select step marked as holding a
+  choice, in path order, after `max_steps`, and such a step's policy document reads it ("Marking a
+  choice first"). A recording without such a step generates the same bytes as before.
 - An application step's operation is `step_ii_app`: `application: {"action"}`,
   `expect_after.timeout_ms` the application arrival timeout A
   (`--application-arrival-timeout-ms`, default 90000), `post_delay_ms` 1000, no guard and no

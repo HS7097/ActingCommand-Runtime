@@ -1455,6 +1455,7 @@ fn validate_mark_request(request: &MarkRequest) -> LabResult<()> {
         || request.application.is_some()
         || request.select.is_some()
         || request.clear_select
+        || request.choice.is_some()
         || page_rule;
     if request.step_action.is_some() {
         if marks_or_click
@@ -1478,6 +1479,7 @@ fn validate_mark_request(request: &MarkRequest) -> LabResult<()> {
             || request.application.is_some()
             || request.select.is_some()
             || request.clear_select
+            || request.choice.is_some()
         {
             return Err(invalid(
                 "record_transition_has_click",
@@ -1634,6 +1636,7 @@ fn mark_session(
         ending: None,
         removed_ending: None,
         boxes: Vec::new(),
+        choice: None,
     };
     // #463 R2: an ending of the stopped recording, taken from its frame or given up; it is no
     // step, so the answer names none.
@@ -1710,6 +1713,8 @@ fn mark_session(
         outcome.step_state = Some(step_state(recorded));
         // #463 R1: the step's select with its self-test.
         outcome.select = recorded.select.clone();
+        // #463 S2-6: the step's choice mark.
+        outcome.choice = recorded.choice.clone();
     }
     Ok(outcome)
 }
@@ -3353,6 +3358,8 @@ fn step_view(step: &RecordingStep, effective: &[u32]) -> StepView {
         anchor: step.anchor.clone(),
         // #463 R1: where an agent reads the select it declares again to change its default.
         select: step.select.clone(),
+        // #463 S2-6: the choice mark, refined when the step has a select too.
+        choice: step.choice.clone(),
         inserted_after: step.inserted_after,
     }
 }

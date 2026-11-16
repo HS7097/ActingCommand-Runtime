@@ -3718,3 +3718,15 @@ tests = [
     "actingcommand-actinglab::runtime_input_proxy::da5_train_recorded_do_and_observe_after_the_display_changed_send_and_write_nothing",
 ]
 incident = ["#392 DA-5"]
+
+# #463 S2-6 (0.12.68; register §1.442; brief rd-1116/brief-463-s26-select-unrefined.md, porting the half-built V4 of rd-1115/brief-463-v4-select-variable.md onto stage one's recording base; design rd-1115/pack-stage12-design.md, B3's row V4 and B5's row S2-6; contracts/lab-recording.md, "Marking a choice first" and "What a recording still lacks: record ready"): a step that chooses one item among several is marked first as holding a choice and refined later by its select. Recordings made as stage one makes them (tap --record through record_press with a fake Runtime, its captures and the caller's clock moving only by its waits, the press a point tap) on synthetic 96x64 lists of two slots whose names a scripted OCR provider reads: step 1 marked as a choice with its page mark, not refined: record ready draft with step 1's select_unrefined (code record_select_invalid) on f0001 alone and every self-check in checks_after; record stop and its dry run refused record_select_invalid with choice_not_refined, missing_total 1 and hint record ready, nothing written (1); refined by its select: ready, nothing missing; record stop generates a package whose control declares the ordered variable list_item (options the names titled by their aliases, 1 to 2 of them, default [item_b]) and whose policy reads session.dispatch.parameter.list_item; the offline simulation taps the default's slot 1 and the kernel's dry run handed [item_a] chooses slot 0, [item_b] slot 1 (2); archived, the item is still listed; reopened, the step keeps its mark as it was and the item, and refined it is ready (3); the recorded point tap is the select's press: a pressed name in the other slot is select_press_mismatch, nothing written; the name in the tapped slot makes the tap the select's click with its point as recorded and click_before the point tap (4); a select given whole without the mark: ready, no choice in the recording, no variables in the package and R1's constant gate (5)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-lab::lib::gate_463_s26::s26_a_choice_not_refined_is_missing_and_record_stop_refuses_it",
+    "actingcommand-lab::lib::gate_463_s26::s26_refining_the_choice_ends_its_item_and_the_package_holds_its_variable",
+    "actingcommand-lab::lib::gate_463_s26::s26_the_choice_mark_survives_an_archive_and_a_reopen",
+    "actingcommand-lab::lib::gate_463_s26::s26_a_point_tap_of_stage_one_is_the_demonstration_of_the_choice",
+    "actingcommand-lab::lib::gate_463_s26::s26_a_choice_given_whole_in_one_request_answers_as_before",
+]
+incident = ["#463 S2-6"]
