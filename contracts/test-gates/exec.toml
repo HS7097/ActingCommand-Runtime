@@ -3633,3 +3633,14 @@ tests = [
     "actingcommand-actinglab::bin:actinglab::tests::gate_463_s18::s18_record_start_from_an_installation_holds_its_instance",
 ]
 incident = ["#463 S1-8"]
+
+# #463 S1-9 (0.12.66; register §1.429; brief rd-1116/brief-463-s19-lease-through-after-captures.md; contracts/lab-recording.md, "Recording while playing", "The lease of a recorded press"): a recorded press keeps its input lease until the captures after it are done, then releases it, whatever the outcome. actinglab against the fake Runtime host (its recording started while nothing listened), the press's requests read from the host's ledger in its order from the capture before the press on (captures completed and failed, leases granted and released, input intents): tap --record --after-ms 0 --interval-ms 50 --still-ms 50 on an instance whose input is nemu_ipc, the screen unchanged: capture, lease, input, capture, capture, release; two captures after the press, still; input_outcome committed with close_stage succeeded; one tap, three captures (1); the second capture after the press fails in the fake backend (--still-ms 1000): capture, lease, input, capture, capture failed, release; the answer the capture's own error with details after {after_ms 0, taken true, captures 1}, record.after f0002 with one capture and unfinished, input_outcome close_stage succeeded; the step table's execution after_frame f0002 and after_capture unfinished (2); the fake backend fails the tap: record_click_indeterminate, capture, lease, input, release (the Runtime ends the lease of an input its backend failed), one capture; the input denied for another foreground application: device_error, capture, lease, release, the refusal's input_outcome close_stage succeeded, one capture, no tap (3); behind a relay that takes a keyless observation of the instance before it relays the command's third connection (the press's lease), the first input is refused input_frame_unavailable and the press is captured and sent again through the same proxy: capture, capture (the relay's), lease, capture, input, capture, release; record.before.captured_twice with before f0002, close_stage succeeded, one tap, four captures (4)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::runtime_input_proxy::s19_a_recorded_press_releases_its_lease_after_the_last_capture_after_it",
+    "actingcommand-actinglab::runtime_input_proxy::s19_a_capture_after_the_press_that_fails_is_recorded_and_the_lease_released",
+    "actingcommand-actinglab::runtime_input_proxy::s19_a_press_that_no_capture_follows_releases_its_lease_at_once",
+    "actingcommand-actinglab::runtime_input_proxy::s19_the_retry_after_input_frame_unavailable_keeps_the_one_lease",
+]
+incident = ["#463 S1-9"]

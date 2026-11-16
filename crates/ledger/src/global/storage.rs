@@ -6,6 +6,7 @@ use super::history::{HistorySelection, LabRelations};
 use super::index::{IndexPolicy, IndexRows};
 #[cfg(test)]
 use super::projection::EventIndexes;
+use super::projection::LabKeys;
 use super::retention::RetentionIndex;
 use super::{
     CommitStatistics, GlobalLedgerError, GlobalLedgerResult, LedgerAppendObservation,
@@ -237,6 +238,12 @@ pub(super) trait DurableStorage: Send + 'static {
     /// runs besides.
     fn lab_relations(&self, through: u64, seed: &LabRelations) -> GlobalLedgerResult<LabRelations>;
 
+    /// #463 S1-10: whether a committed Lab anchor through `through` names the request or the
+    /// correlation of `keys` (the first two relations of `LAB_RELATIONS`, the anchors
+    /// [`Self::lab_relations`] reads), by the link indexes of that request and that correlation;
+    /// the relation by a run is not looked up.
+    fn lab_anchor_names(&self, keys: &LabKeys, through: u64) -> GlobalLedgerResult<bool>;
+
     /// LN-5 (§3.2 step 3): the latest time of a committed record (#411 A24: the maximum, not
     /// the last record's), through the time index.
     fn latest_timestamp(&self) -> GlobalLedgerResult<Option<u64>>;
@@ -402,6 +409,9 @@ pub(super) struct EventStore<B> {
     /// #422 LN-TUNE, tests: counts the rows the store read and authenticated for history reads.
     #[cfg(test)]
     pub(super) history_rows_read: Option<Arc<std::sync::atomic::AtomicU64>>,
+    /// #463 S1-10, tests: counts the writer's reads of every Lab relation.
+    #[cfg(test)]
+    pub(super) lab_relations_reads: Option<Arc<std::sync::atomic::AtomicU64>>,
     pub(super) retention: RetentionIndex,
     pub(super) recovering_retention: bool,
     /// Workflow #383 AO-1: the running Runtime's write-failure state; `None` for an offline
@@ -529,6 +539,8 @@ impl SegmentStore {
             history_scan_rows: config.history_scan_rows,
             #[cfg(test)]
             history_rows_read: config.history_rows_read.clone(),
+            #[cfg(test)]
+            lab_relations_reads: config.lab_relations_reads.clone(),
             retention,
             recovering_retention,
             write_failure: None,
@@ -593,6 +605,8 @@ impl<B: DurableStorage> EventStore<B> {
             history_scan_rows: super::history::DEFAULT_HISTORY_SCAN_ROWS,
             #[cfg(test)]
             history_rows_read: None,
+            #[cfg(test)]
+            lab_relations_reads: None,
             retention: RetentionIndex::default(),
             recovering_retention: false,
             write_failure: None,
@@ -636,6 +650,7 @@ impl<B: DurableStorage> EventStore<B> {
         #[cfg(test)]
         {
             self.history_rows_read = config.history_rows_read.clone();
+            self.lab_relations_reads = config.lab_relations_reads.clone();
         }
         self.write_failure = config.write_failure.clone();
         match self.write_failure.clone() {
@@ -2081,6 +2096,14 @@ impl DurableStorage for SegmentStorage {
         relations.add_anchors(&self.events, through);
         relations.add_runs(&self.events, through);
         Ok(relations)
+    }
+
+    fn lab_anchor_names(&self, keys: &LabKeys, through: u64) -> GlobalLedgerResult<bool> {
+        // #463 S1-10: the request and correlation relations of its indexes (the first anchor of
+        // each id); the run's is left out.
+        Ok(self
+            .indexes
+            .lab_related(&LabKeys { run: None, ..*keys }, through))
     }
 
     fn latest_timestamp(&self) -> GlobalLedgerResult<Option<u64>> {
