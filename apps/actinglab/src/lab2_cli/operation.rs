@@ -822,22 +822,33 @@ fn recorded_click_selection(plan: &ClickPlan) -> CliOutcome<LabOperationSelectio
 /// `record_size_not_base`, `record_frame_size_mismatch` when the display changed during the
 /// recording). The frame is not stored: the Lab operation takes its own before frame. A display
 /// that is not the base size is so refused before anything is pressed or written; a recording is
-/// never made of reduced frames.
+/// never made of reduced frames. The train's fix round 1 (review B, (l)): the frame's width and
+/// height are the ones the Runtime's observation answers, in the reference of the frame it
+/// committed for it (`InputFrameReference`, as Workflow #434 LW-1's plain press takes it through
+/// `observe_runtime_frame_reference`, one `ObserveReadonly` on a connection of its own); the frame is
+/// neither read back nor decoded. A capture that fails, or an observation that names no frame, is
+/// `device_error`, and nothing is pressed or written.
 fn recorded_press_check(lock: &RecordingLock, instance: &str) -> CliOutcome<()> {
     actingcommand_lab::record_size_check(lock)?;
     let endpoint = crate::runtime_capture_backend::RuntimeCaptureEndpoint::new(
         instance.to_owned(),
         crate::runtime_state_root()?,
     );
-    let captured = crate::commands::device_commands::runtime_captured_frame(&endpoint)?;
-    let frame = Scene::from_png(&captured.frame.png).map_err(|error| {
-        CliError::device(format!(
-            "the frame captured before the press cannot be read: {error}; nothing was pressed"
-        ))
-    })?;
+    let frame = crate::runtime_capture_backend::observe_runtime_frame_reference(&endpoint)
+        .map_err(|error| {
+            CliError::device(format!(
+                "the frame before the press could not be captured: {error}; nothing was pressed"
+            ))
+        })?
+        .ok_or_else(|| {
+            CliError::device(
+                "the Runtime's observation before the press carries no frame reference, so its \
+                 size is not known; nothing was pressed",
+            )
+        })?;
     actingcommand_lab::record_frame_check(
         lock,
-        (frame.width(), frame.height()),
+        (frame.width, frame.height),
         "the frame captured before the press",
     )?;
     Ok(())

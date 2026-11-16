@@ -60,7 +60,8 @@ whether it is a `--scene` file (the offline paths of the four verbs, `recognize`
 `current-page`, `is-visible`, and the dry runs of `tap-target` and `navigate`) or a Runtime capture
 (the `--capture` forms): a frame of the base's ratio, not smaller and in its orientation, is
 reduced to the base once, and the answer names `frame_coordinates` in the base form; any other is
-refused before anything is evaluated, `lab_scene_size_unsupported` (exit 2) for a `--scene` file
+refused before anything is evaluated, `lab_scene_size_unsupported` (exit 2 on a `--via` line;
+actinglab's own line and `serve --stdio --front mcp` exit 1 for every refusal) for a `--scene` file
 and `display_map_unresolved` for a Runtime capture. A frame of the base's size answers as before.
 Every `--record` form judges the recording and the frame it took before anything is sent or
 written ([lab-recording.md](lab-recording.md), "A recording's size").
