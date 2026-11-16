@@ -449,7 +449,7 @@ fn refused(context: &Offline, words: &[&str], width: u32, height: u32, problem: 
 #[derive(Clone, Copy)]
 enum OwnCoordinates {
     Stated,
-    None,
+    Absent,
 }
 
 /// The slice's requirement for one offline command `words`, whose answer on the package's frame
@@ -469,7 +469,7 @@ fn da5cd_offline_row(words: &[&str], pointer: &str, expected: Value, own: OwnCoo
             frame_own_coordinates(),
             "{words:?}: {base}"
         ),
-        OwnCoordinates::None => {
+        OwnCoordinates::Absent => {
             assert!(base.get("frame_coordinates").is_none(), "{words:?}: {base}")
         }
     }
@@ -517,7 +517,7 @@ fn da5cd_ensure_dry_run_takes_a_scaled_scene() {
         &["--dry-run", "ensure", PAGE_A_PAGE, "--pretty"],
         "/state",
         json!("planned"),
-        OwnCoordinates::None,
+        OwnCoordinates::Absent,
     );
 }
 
@@ -534,14 +534,14 @@ fn da5cd_wait_takes_a_scaled_scene() {
         ],
         "/state",
         json!("arrived"),
-        OwnCoordinates::None,
+        OwnCoordinates::Absent,
     );
 }
 
 #[test]
 fn da5cd_recognize_takes_a_scaled_scene() {
     let words = ["recognize", "--target", "ui/free"];
-    da5cd_offline_row(&words, "/passed", json!(true), OwnCoordinates::None);
+    da5cd_offline_row(&words, "/passed", json!(true), OwnCoordinates::Absent);
     // `recognize` holds no identifier: the enlarged frame's answer is the package frame's and the
     // member.
     let context = Offline::new();
@@ -563,7 +563,7 @@ fn da5cd_is_visible_takes_a_scaled_scene() {
         &["is-visible", "ui/free"],
         "/visible",
         json!(true),
-        OwnCoordinates::None,
+        OwnCoordinates::Absent,
     );
 }
 
@@ -573,7 +573,7 @@ fn da5cd_detect_page_takes_a_scaled_scene() {
         &["detect-page"],
         "/page",
         json!(ENTRY_PAGE),
-        OwnCoordinates::None,
+        OwnCoordinates::Absent,
     );
 }
 
@@ -583,7 +583,7 @@ fn da5cd_current_page_takes_a_scaled_scene() {
         &["current-page"],
         "/page",
         json!(ENTRY_PAGE),
-        OwnCoordinates::None,
+        OwnCoordinates::Absent,
     );
 }
 
@@ -593,7 +593,7 @@ fn da5cd_tap_target_dry_run_takes_a_scaled_scene() {
         &["--dry-run", "tap-target", "ui/free"],
         "/status",
         json!("planned"),
-        OwnCoordinates::None,
+        OwnCoordinates::Absent,
     );
 }
 
@@ -603,7 +603,7 @@ fn da5cd_navigate_dry_run_takes_a_scaled_scene() {
         &["--dry-run", "navigate", "--to", PAGE_A_PAGE],
         "/status",
         json!("planned"),
-        OwnCoordinates::None,
+        OwnCoordinates::Absent,
     );
 }
 
