@@ -3275,3 +3275,8 @@ mod gate_114a;
 // `planned_stop` is no failure of the run-recovery grouping.
 #[path = "tests/gate_429_rg_stop.rs"]
 mod gate_429_rg_stop;
+// Workflow #463 S1-10 (register §1.430): a Lab pin's admission looks first whether a Lab anchor,
+// stored or staged, names its trigger's request or correlation, by index; it reads every Lab
+// relation only when none does, with the same answer, on both stores.
+#[path = "tests/gate_463_s110.rs"]
+mod gate_463_s110;
