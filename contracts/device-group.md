@@ -1101,10 +1101,10 @@ of a device group of several:
   `fence_contained_failure` when the contained failure's resources were left unconfirmed (an
   instance failure a boundary contains, a stopped run's failed reset). A fence whose resources are
   confirmed holds nothing: a close refused before it began (`settle_refused_close`: #411 A64 at
-  the lease's expiry and again at the run's end, Workflows #456, #458, #461) fences the member as
-  before, but the close that follows (the session close ahead) closes the session before the
-  device is handed on, and holds the device only if it, too, ends unconfirmed; and a fatal failure
-  of the member's own application backend whose resources were confirmed
+  the lease's expiry and again at the run's end, Workflows #456, #458, #461, #475) fences the
+  member as before, but the close that follows (the session close ahead) closes the session before
+  the device is handed on, and holds the device only if it, too, ends unconfirmed; and a fatal
+  failure of the member's own application backend whose resources were confirmed
   (`fence_application_backend_failure`, #411 A46). While the device is so held, it is given to no
   other member:
   - each other member's entries in the device's queue are judged by the gate `DeviceHeld`, which

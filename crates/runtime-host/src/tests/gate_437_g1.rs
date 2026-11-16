@@ -1207,6 +1207,69 @@ fn g1_a_policy_cycle_dispatches_nothing_to_the_other_member_while_the_device_is_
     let _closed = host.close();
 }
 
+// ---- The host train with #475 (G1 fix round 2's item 3, built without a test).
+
+/// An operator's claim that waits out its bound while the device is held for a fenced member
+/// names the hold. A person's lease of A holds the device, and a person's self-check of B (an
+/// operator claim, whose bound is the product's own wait for a self-check) waits for it in the
+/// device's queue; then A is fenced for an unconfirmed close, which holds the device for A. B's
+/// self-check is never granted: when its bound ends it is refused `lease_queue_expired`, whose one
+/// `caused_by` link is `device_held_for_member_close` naming A, and its entry has left the queue.
+#[test]
+fn g1_an_operator_claim_that_waits_out_its_bound_while_the_device_is_held_names_the_fenced_member()
+{
+    let device = Device::start();
+    let lease = device.acquire_on(A, device.connection());
+    assert!(
+        matches!(lease.result(), Some(RuntimeResult::LeaseGranted { .. })),
+        "a person's lease of A holds the device: {lease:?}"
+    );
+    let checked = thread::scope(|scope| {
+        let checking = scope.spawn(|| {
+            device.process(RuntimeOperation::SelfCheckInstance {
+                instance_alias: B.to_owned(),
+            })
+        });
+        wait_until("B's self-check waits for the device", || {
+            device.claims(B).1 == vec![ClaimKind::SelfCheck]
+        });
+        device
+            .host
+            .fence_instance_unconfirmed_for_test(A)
+            .expect("fence A for an unconfirmed close");
+        checking.join().expect("B's self-check")
+    });
+    assert_eq!(checked.state(), RuntimeReceiptState::Denied, "{checked:?}");
+    let outcome = checked.outcome();
+    assert_eq!(
+        outcome.code().as_str(),
+        "lease_queue_expired",
+        "{outcome:?}"
+    );
+    let causes = outcome
+        .causes()
+        .iter()
+        .filter(|link| link.relation().as_str() == "caused_by")
+        .map(|link| link.outcome())
+        .collect::<Vec<_>>();
+    let [held] = causes.as_slice() else {
+        panic!("one caused_by link: {outcome:?}");
+    };
+    assert_eq!(
+        held.code().as_str(),
+        HostCode::DeviceHeldForMemberClose.as_str(),
+        "{outcome:?}"
+    );
+    assert_eq!(held.value("alias"), Some(&json!(A)), "{outcome:?}");
+    assert_eq!(device.grants_to(B), 0, "B's self-check was never granted");
+    assert!(
+        device.claims(B).1.is_empty(),
+        "B's entry left the queue at its bound"
+    );
+    device.assert_runs();
+    device.close_unchecked();
+}
+
 // ---- Rule 2.
 
 /// A member's own wait on two members: during an observation of B on the free device, A's claim

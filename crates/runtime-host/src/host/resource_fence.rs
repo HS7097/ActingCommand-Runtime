@@ -106,8 +106,8 @@ pub(super) struct ResourceFence {
     /// Workflow #437 G1 (`contracts/device-group.md`, "A failure stays where it belongs"): a close
     /// of the instance's own resources ended unconfirmed while it was fenced (it fenced it, or met
     /// the fence), so the device of a member of a device group of several is held for it until the
-    /// fence is lifted. A close refused before it began (Workflows #456, #458, #461, #411 A64)
-    /// leaves the session to a close that follows and does not set it.
+    /// fence is lifted. A close refused before it began (Workflows #456, #458, #461, #475, #411
+    /// A64) leaves the session to a close that follows and does not set it.
     close_unconfirmed: bool,
 }
 
@@ -306,11 +306,11 @@ impl HostShared {
         self.settle_unconfirmed(error, instance_id, links, true)
     }
 
-    /// Workflows #456, #458, #461 and #411 A64: [`Self::settle_unconfirmed_resources`] of a close
-    /// refused before it began (`error`, marked unconfirmed by its caller): the instance is fenced
-    /// as an unconfirmed close fences it, but its session is left to the close that follows, so
-    /// the fence does not hold the device of a device group of several for it (Workflow #437 G1);
-    /// that close, if it ends unconfirmed, does.
+    /// Workflows #456, #458, #461, #475 and #411 A64: [`Self::settle_unconfirmed_resources`] of a
+    /// close refused before it began (`error`, marked unconfirmed by its caller): the instance is
+    /// fenced as an unconfirmed close fences it, but its session is left to the close that
+    /// follows, so the fence does not hold the device of a device group of several for it
+    /// (Workflow #437 G1); that close, if it ends unconfirmed, does.
     pub(super) fn settle_refused_close(
         &self,
         error: &RuntimeHostError,
