@@ -13,12 +13,13 @@ and artifact names bind the complete source SHA.
 
 本版是 v0.12.67 之后的 1 次合并、8 张 PR：0.12.68 列车 #1789（#463 S3-8、S3-9 自己），带 #477 PC-1 #1782、第三阶段的并车 #1783（#463 S3-12，带 S3-14 #1785）和第二阶段的并车 #1784（#463 S2-7，带 S2-2 #1786、S2-6 #1787、S2-1c #1788）。
 列车除了各张的头和合并，有自己的提交：命令数和 Lab 子进程的行数按合并后的表重算（两张各自把命令从 106 改成 107，合起来是 108）；加一条测试（第二阶段生成的挑选变量，试跑给允许的次序收下、给不允许的拒）；
-生成器跟上 PC-1 改了名的常量（`MAX_PACK_CATALOG_TITLE_BYTES`，值仍是 128）；再并进第二阶段并车的小修（带挑选的步不丢、不转成过渡）。登记 §1.441 留给以后的一片，本版没有。
+生成器跟上 PC-1 改了名的常量（`MAX_PACK_CATALOG_TITLE_BYTES`，值仍是 128）；再并进第二阶段并车的小修（带挑选的步不丢、不转成过渡）；最后是列车自己的小修
+（宿主判值里一处走不到的分支从 `unreachable!` 改成只拒这一次运行，改对一条写错了期望的 `record review` 测试，列车那条试跑测试多给一个不按选项次序的值，加一条宿主测试：直接运行带生成形状的 `ordered` 值）。登记 §1.441 留给以后的一片，本版没有。
 内容是：每个游戏根一份包声明 `pack-catalog.json`，取代 `ui.json`，派单不变；制包第二阶段的四片（逐步复看；过渡点名存下的帧，丢掉中间没改变画面的一下按；挑选先标后细化，每个挑选都是变量；`record ready` 的自检一次列全）；
 第三阶段的三片（收编看得到试跑；一次看一个游戏根里每个包走到哪一步；直接运行和试跑带变量的值）。
 **生产上跑的是 v0.12.67（2026-11-16 20:33 起，经 Lab 救急模块部署）**：一台实例在跑调度的例行任务，其余实例暂停着、模拟器关着。从 v0.12.67 装本版：
 **Lab 救急模块的 `deploy` 和 `actingctl install` 两面都能装，不用任何标志，没有 `ledger_verify`，`defaults_diff` 没有一行，没有新文件**。**两个接口动了：包格式 `package` 到 [3, 16]，`runtime-client` 到 [3, 11]**（最低值都不动）；
-配置键没加，结果码加了 17 个、1 个标成 `retired`。**部署前不留开着的录制**（见「部署和退路」）。**退回 v0.12.67 开着**；回去以后，带挑选标记的录制和带包声明文件的构建包旧版用不了。
+配置键没加，结果码加了 18 个、1 个标成 `retired`。**部署前不留开着的录制**（见「部署和退路」）。**退回 v0.12.67 开着**；回去以后，带挑选标记的录制和带包声明文件的构建包旧版用不了。
 
 - **为什么有这一版**：主人的制包蓝图分三段：录制；把录制离线做成包；把包带进运行。11-16 在真机实例上第一次从「开始录制」走到「出包」（看板 #463），看出第二、三段缺的：`record ready` 的每个自检一次只说一处不过；
   没有一处能看一步的前后帧、按在哪、框在哪；一个挑选得在一个请求里一次给全；中间多按的一下拿不掉；收编不说这份内容试过没有；没有一处能看出一个包走到哪一步；试跑和直接运行带不了变量的值。
@@ -70,7 +71,9 @@ and artifact names bind the complete source SHA.
     - **直接运行和试跑带值**：`run start --variable <名字>=<JSON>`（可重复，最多 16 个；`ac_run_start` 的 `variable` 是列表）；`standard-pack trial --variable` 现在照带（以前拒 `trial_variables_not_carried`，这个码标成 `retired`）。
       值到了 Runtime，和派单给包填变量走同一对函数（判值 `resolve_variable`，盖值 `dispatched_variable_values`）。拒绝一个原因一个码，都是拒、什么都不跑：Lab 在发出之前拒多于 16 个（`--variable` `out_of_range`）和写法不对的
       （`value_missing`、`not_recognised`、`repeated`），退出码 1；Runtime 在门口拒 `invalid_contained_task_variable_count`、`invalid_contained_task_variable_name`；读完包以后、在任何记录、认领和租约之前拒 `run_variable_undeclared`（包没声明这个变量）、
-      `run_variable_not_applying`（这个应用的根上不适用，带根的词）、`run_variable_value_refused`（值没被整个接受，带判断的词，`keys_left_out` 也算）（`crates/runtime-host/src/host/contained_task.rs` 7760–7855），都是 Denied，Lab 那一行退出码 1。
+      `run_variable_not_applying`（这个应用的根上不适用，带根的词）、`run_variable_value_refused`（值没被整个接受，带判断的词，`keys_left_out` 也算），
+      以及判值既没收下值、也没给词时的 `run_variable_unjudged`（照今天的判值走不到；它取代原来那处 `unreachable!`，那里一旦 panic，会在连接边界上停掉整个 Runtime，现在只拒这一次运行）
+      （`crates/runtime-host/src/host/contained_task.rs` 7761–7862），都是 Denied，Lab 那一行退出码 1。
       **不带值的请求和以前逐字节一样**（`ContainedTaskRequest::variables` 为空不写出，`crates/actingcommand-contract/src/runtime.rs` 2833–2834），走原来的默认值。试跑的运行连回执的头都没收到时，回答的 `next` 是 `{unconfirmed: no_receipt}`，
       不再给收结果的那一行（`apps/actinglab/src/standard_pack_cli.rs` 924–932）：客户端分不清是旧 Runtime 解不了这个请求还是 Runtime 中途停了，只说没收到回执。
   - **盘上的东西**：
@@ -125,14 +128,14 @@ and artifact names bind the complete source SHA.
 - **Runtime 改了的文件**：宿主 `crates/runtime-host/src/` 的生产代码 `codes.rs` 和 `host/contained_task.rs`，测试 `tests.rs` 和 `tests/gate_463_s38.rs`；内核 `crates/execution-kernel/src/contained_task/remedies.rs`（一个访问器）；
   契约库 `crates/actingcommand-contract`（请求成员和码、`standard_pack_catalog.rs` 取代 `standard_pack_ui.rs`、改了名的常量）。`crates/ledger`、`crates/runtime-client`、`crates/runtime-config`、`crates/policy`、`crates/scheduler`、`apps/actingd` 一个文件没改。
 - 配置键：没有加的、没有去掉的；`actingd.defaults.json` 一字没改，sha256 仍是 `e14b0ced7040a6d05046edddd9b0c8ee95a53de4b65d69fcc7d9dae17a433343`；两个配置模板和 `apps/actingd/src/config/manifest.rs` 没改。
-- 结果码：加了 17 个，1 个标成 `retired`。按片：PC-1 加 8 个契约码（`standard_pack_catalog_absent`、`standard_pack_catalog_coverage`，info；`standard_pack_catalog_display_invalid`、`standard_pack_catalog_schedule_differs`、
+- 结果码：加了 18 个，1 个标成 `retired`。按片：PC-1 加 8 个契约码（`standard_pack_catalog_absent`、`standard_pack_catalog_coverage`，info；`standard_pack_catalog_display_invalid`、`standard_pack_catalog_schedule_differs`、
   `standard_pack_catalog_left_out`、`standard_pack_ui_retired`，警告；`standard_pack_catalog_root_refused`、`standard_pack_catalog_write_failed`，拒，退出码 2 和 4），键和词表 `catalog_side`、`catalog_difference`，`standard_pack_problem` 换掉四个 `ui_*` 词、加五个 `catalog_*` 词；
   S2-7 加 `record_frame_unknown`、`record_drop_unproven`（lab，error，拒），键和词表 `drop_problem`（3 个词）、`drop_comparison`（2 个词），并车的小修给 `select_problem` 加 `drop_of_choice`、`transition_of_choice`；
   S2-6 加 `ready_missing` 的 `select_unrefined` 和 `select_problem` 的 `choice_not_refined`、`no_choice`；S2-1c 加词表 `ready_check_stop`（2 个词，只在回答里）；S2-2 没有新码；
-  S3-8/9 加 `invalid_contained_task_variable_count`、`invalid_contained_task_variable_name`（契约）、`run_variable_undeclared`、`run_variable_not_applying`、`run_variable_value_refused`（runtime-host），都是拒，位置名 `check_run_variables`，
+  S3-8/9 加 `invalid_contained_task_variable_count`、`invalid_contained_task_variable_name`（契约）、`run_variable_undeclared`、`run_variable_not_applying`、`run_variable_value_refused`（runtime-host），列车的小修再加 `run_variable_unjudged`（runtime-host），都是拒，位置名 `check_run_variables`，
   词表 `trial_run_unconfirmed`（`no_receipt`），`trial_variables_not_carried` 标成 `retired`（`retired_in` 0.12.68）；S3-12 加 `enabling_needs_authorization`、`not_tried`（resource-tooling，警告，退出码 0）和词表 `trial_state`；
   S3-14 加词表 `stage_state`、`enabled_state`、`pack_authorization`、`authorization_unrecorded`（只在回答里）。改了说明的：`adopt_refused`、`record_select_invalid`、`standard_pack_root_invalid`。
-  合计 3998 个码（在用 3909，`retired` 89），1773 个位置、31 个分片；键 685，词表 270，词 2038；在用码按类别 error 3391、warning 162、info 214、success 125、fatal 17；审阅定稿的在用码 154 个。
+  合计 3999 个码（在用 3910，`retired` 89），1773 个位置、31 个分片；键 685，词表 270，词 2038；在用码按类别 error 3392、warning 162、info 214、success 125、fatal 17；审阅定稿的在用码 154 个。
   本版的发布文件 `contracts/outcome-codes/released/0.12.68.json`：1 个码（标成 `retired` 的 `trial_variables_not_carried`）、0 个位置；索引由脚本生成，仍是 32 个文件，核过是最新的。
 - Lab 的操作表从 190 行到 193 行：加 `record review`（authoring，离线，写预览；参数 `instance`、`record_id`、`step`、`no_preview`、`state_dir`、`game`、`server`、`locale`）、`standard-pack catalog`（authoring，离线，写；`root`、`plan`）、
   `standard-pack status`（authoring，离线，只读；`root`、`repo`、`package_id`、`state_dir`）。改了 10 行：`run start`（加参数 `variable`）、`standard-pack trial`（`variable` 的说明、输出）、`standard-pack adopt`（`state_dir` 的说明、输出）、
@@ -183,7 +186,7 @@ and artifact names bind the complete source SHA.
 - #1782 #477 PC-1（登记 §1.438）：apps 门表 `#477 PC-1` 20 条；3 个测试名记进 `ci/retired-gates.toml`（两条 `ui.json` 读取的测试和 P2 那条带 `ui.json` 的构建测试）。
 - #1784 #463 S2-7（§1.440，同时是第二阶段的并车）：exec 门表 `#463 S2-7` 12 条，并车和它的小修 5 条；#1786 S2-2（§1.439）17 条；#1787 S2-6（§1.442）11 条；#1788 S2-1c（§1.443）10 条。
 - #1783 #463 S3-12（§1.445，同时是第三阶段的并车）：7 条，并车 12 条；#1785 S3-14（§1.446）9 条。
-- #1789 #463 S3-8、S3-9（§1.444，同时是 0.12.68 列车）：契约门表 3 条、宿主门表 7 条、exec 门表 3 条；列车自己 1 条。
+- #1789 #463 S3-8、S3-9（§1.444，同时是 0.12.68 列车）：契约门表 3 条、宿主门表 7 条、exec 门表 3 条；列车自己 2 条（exec、宿主门表各 1 条，exec 那条在列车的小修里多给一个不按选项次序的值）。
 
 ## v0.12.67
 
