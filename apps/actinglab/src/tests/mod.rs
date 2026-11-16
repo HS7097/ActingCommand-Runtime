@@ -257,6 +257,11 @@ mod gate_463_kp1;
 // kernel's recognition, and `resource regression` over a checkout's cases.
 #[path = "gate_463_rc1.rs"]
 mod gate_463_rc1;
+// Workflow #463 S3-15a: `standard-pack status --installation` answers the authorization each pack
+// was enabled under and each pair's suspension and break-in (the rescue module, Windows only).
+#[cfg(windows)]
+#[path = "gate_463_s315.rs"]
+mod gate_463_s315;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
 use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{

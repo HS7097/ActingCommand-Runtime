@@ -764,8 +764,9 @@ fn zip_digest(
 
 /// The configuration's standard-pack root: `standard_packs.root`, a relative one against the
 /// configuration file's folder (the root); a configuration without it refuses `pack_invalid`
-/// with the key.
-fn packs_root(paths: &Paths, config: &Value) -> Result<PathBuf, Outcome> {
+/// with the key. Workflow #463 S3-15a: `crate::rescue::placements_enabling` finds an installed
+/// game root by it too.
+pub(crate) fn packs_root(paths: &Paths, config: &Value) -> Result<PathBuf, Outcome> {
     let root = actingcommand_runtime_config::member(config, ROOT_KEY)
         .and_then(Value::as_str)
         .filter(|root| !root.is_empty())
@@ -1936,6 +1937,107 @@ pub(crate) fn authorize(
         reference: reference.clone(),
         enabled: given,
     })
+}
+
+/// Workflow #463 S3-15a (register §1.451; `contracts/install-cli.md`, "What the placements
+/// enabled"): one placement that enabled packages, as its journal records it: the reference of the
+/// authorization it named (as given), the initiator that began it, when it finished, and its
+/// operation id.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Enabling {
+    pub(crate) reference: String,
+    pub(crate) initiator: Option<actingcommand_lab_ops::initiator::Initiator>,
+    pub(crate) at_unix_ms: u64,
+    pub(crate) operation_id: String,
+}
+
+/// Workflow #463 S3-15a: what [`enabling`] read of a root's journals for one game.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct EnablingRead {
+    /// How many journals were read, of any kind.
+    pub(crate) read: usize,
+    /// The ids of the operations whose journal could not be read, oldest first.
+    pub(crate) unread: Vec<String>,
+    /// Per package id, the newest placement of the game that enabled it ([`placed_enabling`]).
+    pub(crate) by_package: BTreeMap<String, Enabling>,
+}
+
+/// Workflow #463 S3-15a: every journal of the root `paths`, oldest first, each read by the
+/// journal's own reader (`Operation::load`, as `op status` reads one): per package id, the newest
+/// placement of `game` that enabled it ([`placed_enabling`]). A journal that cannot be read is
+/// named in `unread` and hides none of the others; the operations folder that cannot be listed is
+/// the listing's failure.
+pub(crate) fn enabling(
+    host: &dyn Host,
+    paths: &Paths,
+    game: &str,
+) -> Result<EnablingRead, Outcome> {
+    let mut read = EnablingRead::default();
+    for operation_id in super::journal::operation_ids(paths)? {
+        let Ok(operation) = Operation::load(host, paths, &operation_id, InstallLocation::Status)
+        else {
+            read.unread.push(operation_id);
+            continue;
+        };
+        read.read += 1;
+        if let Some((enabled, by)) = placed_enabling(operation.journal(), game) {
+            for package_id in enabled {
+                read.by_package.insert(package_id, by.clone());
+            }
+        }
+    }
+    Ok(read)
+}
+
+/// Workflow #463 S3-15a: the packages a journal says a placement of `game` enabled, and that
+/// placement, when it counts: a `pack_place` operation of the game (its input `game`) that
+/// finished (`finished_at_unix_ms`) with every `pack_item` step `done`, was not undone (no `undo`
+/// record, begun or ended) and not rolled back (no `rollback` record), and whose inputs name the
+/// reference (`authorization`) and the packages (`enabled`, Workflow #463 S3-2). A placement that
+/// ended before it placed its items (its instances not idle in time) has its items `planned`; one
+/// whose check after the placement failed placed them and counts. A journal an earlier build began
+/// names neither input and enables nothing here; the tool never infers an authorization.
+fn placed_enabling(
+    journal: &super::journal::Journal,
+    game: &str,
+) -> Option<(Vec<String>, Enabling)> {
+    if journal.kind != OperationKind::PackPlace
+        || journal.inputs.get("game").and_then(Value::as_str) != Some(game)
+        || journal.undo.is_some()
+        || journal.rollback.is_some()
+    {
+        return None;
+    }
+    let at_unix_ms = journal.finished_at_unix_ms?;
+    if !journal
+        .steps
+        .iter()
+        .filter(|step| step.kind == StepKind::PackItem)
+        .all(|step| step.state == StepState::Done)
+    {
+        return None;
+    }
+    let reference = journal
+        .inputs
+        .get(AUTHORIZATION_INPUT)?
+        .as_str()?
+        .to_owned();
+    let enabled = journal
+        .inputs
+        .get(ENABLED_INPUT)?
+        .as_array()?
+        .iter()
+        .map(|package_id| package_id.as_str().map(str::to_owned))
+        .collect::<Option<Vec<_>>>()?;
+    Some((
+        enabled,
+        Enabling {
+            reference,
+            initiator: journal.initiator,
+            at_unix_ms,
+            operation_id: journal.operation_id.clone(),
+        },
+    ))
 }
 
 /// The post-placement check's intent.

@@ -63,6 +63,20 @@
 //! latest trial of its content, and whether the root's schedule enables it. It only reads; the
 //! placement journals, which the rescue module reads, are not read here (`journals_not_read`).
 //!
+//! Workflow #463 S3-15a (contracts/standard-pack-schedule.md, "Where a pack stands"; register
+//! §1.451): with `--installation` the line reads the installation actinglab runs from, located as
+//! every rescue row locates it (`lab_ops::locate`), and hands the resource tooling's status what
+//! it read ([`read_installation`]): first the rescue module's one read of its placement journals
+//! (`placements_enabling`), which refuses a `--root` that is not the installation's game root of
+//! its game before anything else is read; then one run of the installation's `actingd suspended`,
+//! started and bounded as `diagnose` starts it (`SuspensionReport::start` with `diagnose`'s CLI
+//! budget, its report read by `SuspensionReport::document`); and, when that report was read, the
+//! composed bindings as `actingctl packs` reads them. A build without the rescue module refuses
+//! `--installation` (`package_status_installation_unbuilt`). It writes nothing. Fix round 1
+//! (register §1.451, "Fix round 1"): the rescue module checks the root first; the child is started
+//! next and runs while the journals and the composed bindings are read; the child's outcome
+//! follows `ACTINGCOMMAND_DETAIL`.
+//!
 //! Workflow #477 PC-1 (contracts/pack-catalog.md, "Who writes it"; register §1.438): `actinglab
 //! standard-pack catalog --root <root> [--plan]` builds or brings up to date a game root's
 //! `pack-catalog.json` from what the root declares (the resource tooling's
@@ -85,20 +99,41 @@ use actingcommand_resource_tooling::{
     AdoptDecision, AdoptSource, AdoptWorktree, PackTrialRecord, ResourceToolingCode,
     StandardPackAdoptRequest, StandardPackCatalogRequest, StandardPackCheckRequest,
     StandardPackComposeRequest, StandardPackReadyRequest, StandardPackStatusRequest,
-    StandardPackTrialAnswer, StandardPackTrialRequest, TrialCollectProblem, TrialRecordPlan,
-    TrialRunEnd, TrialRunUnconfirmed, check_standard_pack_root, check_trial_run,
+    StandardPackTrialAnswer, StandardPackTrialRequest, StatusInstallation, TrialCollectProblem,
+    TrialRecordPlan, TrialRunEnd, TrialRunUnconfirmed, check_standard_pack_root, check_trial_run,
     compose_standard_packs, judge_standard_pack_readiness, plan_standard_pack_trial,
-    standard_pack_adopt, standard_pack_status, trial_record_of_run, write_standard_pack_catalog,
-    write_trial_record,
+    standard_pack_adopt, standard_pack_status_with, trial_record_of_run,
+    write_standard_pack_catalog, write_trial_record,
+};
+// Workflow #463 S3-15a: what `standard-pack status --installation` reads, where the rescue module
+// is built (Windows), and the refusal of a build without it.
+#[cfg(windows)]
+use actingcommand_lab_ops::diagnose::{CLI_READ_BUDGET, SuspensionReport};
+#[cfg(windows)]
+use actingcommand_lab_ops::locate::Location;
+#[cfg(windows)]
+use actingcommand_lab_ops::packs;
+#[cfg(windows)]
+use actingcommand_lab_rescue::rescue::{InstalledPlacements, placements_enabling};
+#[cfg(not(windows))]
+use actingcommand_resource_tooling::status_installation_unbuilt;
+#[cfg(windows)]
+use actingcommand_resource_tooling::{
+    ComposedBindings, InstallationJournals, InstallationPairs, PlacementAuthorization,
+    status_root_not_installed,
 };
 use actingcommand_runtime_client::{
     ContainedRunState, ContainedRunStatus, RunDispatch, RunKey, RunOrigin, RuntimeClient,
     RuntimeClientError,
 };
 use serde_json::{Map, Value, json};
+#[cfg(windows)]
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
+#[cfg(windows)]
+use std::time::Instant;
 
 /// Workflow #434 LAB-5B2: the flags `standard-pack check` takes.
 pub(crate) const CHECK_FLAGS: [&str; 1] = ["--root"];
@@ -159,8 +194,20 @@ const WAIT_FLAG: &str = "--wait";
 pub(crate) const TRIAL_SWITCHES: [&str; 2] = ["--irreversible", "--plan"];
 /// Workflow #463 S3-10: the row's name, which its refusals name.
 const TRIAL: &str = "standard-pack trial";
-/// Workflow #463 S3-14: the flags `standard-pack status` takes, each once.
-pub(crate) const STATUS_FLAGS: [&str; 4] = ["--root", "--repo", "--package-id", "--state-dir"];
+/// Workflow #463 S3-14: the flags `standard-pack status` takes, each once. Workflow #463 S3-15a:
+/// and `--installation`.
+pub(crate) const STATUS_FLAGS: [&str; 5] = [
+    "--root",
+    "--repo",
+    "--package-id",
+    "--state-dir",
+    INSTALLATION_FLAG,
+];
+/// Workflow #463 S3-15a: the switch that reads the installation actinglab runs from.
+const INSTALLATION_FLAG: &str = "--installation";
+/// Workflow #463 S3-15a: the flag of `standard-pack status` that takes no value, which takes none
+/// from the next word but `true` or `false` (`FlagArgs::parse_switches`).
+pub(crate) const STATUS_SWITCHES: [&str; 1] = [INSTALLATION_FLAG];
 /// Workflow #463 S3-14: the row's name, which its refusals name.
 const STATUS: &str = "standard-pack status";
 /// Workflow #477 PC-1: the flags `standard-pack catalog` takes, and the one of them that takes no
@@ -225,13 +272,15 @@ pub(crate) fn trial_options() -> [&'static str; 11] {
     ]
 }
 
-/// Workflow #463 S3-14: the flags of `standard-pack status`.
-pub(crate) fn status_options() -> [&'static str; 4] {
+/// Workflow #463 S3-14: the flags of `standard-pack status`. Workflow #463 S3-15a: and
+/// `--installation`.
+pub(crate) fn status_options() -> [&'static str; 5] {
     [
         "--root <a game root, installed or a bundle laid out as one: <standard_packs.root>/<game>>",
         "--repo <the game's working root in a checkout: each pack's packs/<id> content beside the root's>",
         "--package-id <one pack of the root: its row alone; the counts stay the root's>",
         "--state-dir <the Lab's state directory, where trial records are read; default actinglab's>",
+        "--installation (reads the installation actinglab runs from: its placement journals and one actingd suspended; --root must be its game root)",
     ]
 }
 
@@ -449,9 +498,11 @@ fn run_adopt(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
 /// Workflow #463 S3-14: `standard-pack status` (module doc). A flag off [`STATUS_FLAGS`], a
 /// positional word, a flag given twice and an option without its value are refused before
 /// anything is read; the state directory is `--state-dir`, or actinglab's own, where the trial
-/// keeps its records.
+/// keeps its records. Workflow #463 S3-15a: with `--installation`, what the line reads of the
+/// installation actinglab runs from ([`installation_here`]) is handed to the status; without it
+/// the answer is S3-14's.
 fn run_status(args: &[String]) -> CliOutcome<Value> {
-    let flags = FlagArgs::parse_values(args)?;
+    let flags = FlagArgs::parse_switches(args, &STATUS_SWITCHES);
     if let Some(flag) = flags
         .flags
         .keys()
@@ -464,18 +515,194 @@ fn run_status(args: &[String]) -> CliOutcome<Value> {
         if flags.count(flag) > 1 {
             return Err(CliError::usage(format!("{STATUS} takes {flag} once")));
         }
-        if flags.given(flag) {
+        if flag != INSTALLATION_FLAG && flags.given(flag) {
             flags.required(flag)?;
         }
     }
-    let response = standard_pack_status(&StandardPackStatusRequest {
+    let request = StandardPackStatusRequest {
         root: flags.required_path("--root")?,
         repo: flags.optional_path("--repo"),
         package_id: flags.optional("--package-id"),
         state_dir: crate::session_state_dir_from_flags(&flags)?,
-    })?;
+    };
+    let installation = if flags.bool(INSTALLATION_FLAG) {
+        Some(installation_here(&request.root)?)
+    } else {
+        None
+    };
+    let response = standard_pack_status_with(&request, installation.as_ref())?;
     serde_json::to_value(response)
         .map_err(|error| CliError::device(format!("failed to serialize the status: {error}")))
+}
+
+/// Workflow #463 S3-15a: what `--installation` reads of the installation actinglab runs from,
+/// located as every rescue row locates it ([`actingcommand_lab_ops::locate::locate`]), for the
+/// game root `root` ([`read_installation`]). A program that runs from no installation is refused
+/// by the location's own outcome.
+#[cfg(windows)]
+fn installation_here(root: &Path) -> CliOutcome<StatusInstallation> {
+    let location = actingcommand_lab_ops::locate::locate().map_err(|outcome| {
+        refusal(
+            &outcome,
+            format!("{STATUS} --installation: no installation located"),
+            Map::new(),
+            ErrorKind::DeviceInstance,
+        )
+    })?;
+    read_installation(&location, root)
+}
+
+/// Workflow #463 S3-15a: a build without the rescue module (it is built for Windows only) reads no
+/// installation: `package_status_installation_unbuilt`, before anything is read.
+#[cfg(not(windows))]
+fn installation_here(_root: &Path) -> CliOutcome<StatusInstallation> {
+    Err(status_installation_unbuilt())
+}
+
+/// Workflow #463 S3-15a (module doc): what `--installation` reads of the installation `location`
+/// for the game root `root`, in this order. The rescue module's check of the root
+/// (`placements_enabling`): a `--root` that is not the installation's game root of its game is
+/// refused there (`package_status_root_not_installed`), before any journal or the game root is read
+/// and before the child is started; a root or configuration it cannot read is refused with its
+/// outcome. Fix round 1: then the installation's own `actingd suspended` is started, so that its
+/// bound runs beside the readings that follow instead of after them: started as `diagnose` starts
+/// it (`SuspensionReport::start`, the program of the generation selected now, `--deadline-ms` the
+/// budget less its margin) and ended at `diagnose`'s CLI budget. While it runs, the placement
+/// journals (the rescue module's one read of them, `InstalledGameRoot::placements`; its refusal
+/// waits for the child, which is never left running, then refuses the line with its outcome) and
+/// the composed bindings ([`composed_bindings`]) are read. Then its report is read and judged by
+/// the one function a diagnosis reads it with (`SuspensionReport::document`, the state root
+/// `location`'s): a report not read leaves the pairs not read, with the child's outcome, and
+/// refuses nothing; the bindings are used only beside a report that was read. Fix round 1: the
+/// child's outcome and the bindings' refusal are given in the detail the process's line is
+/// (`ACTINGCOMMAND_DETAIL`; under `codes` their codes-only projection, no text).
+#[cfg(windows)]
+pub(crate) fn read_installation(
+    location: &Location,
+    root: &Path,
+) -> CliOutcome<StatusInstallation> {
+    let journals_refused = |outcome: Outcome| {
+        refusal(
+            &outcome,
+            format!("{STATUS} --installation: the placement journals were not read"),
+            Map::new(),
+            ErrorKind::DeviceInstance,
+        )
+    };
+    let installed = match placements_enabling(location, root).map_err(journals_refused)? {
+        InstalledPlacements::OtherRoot { installed } => {
+            return Err(status_root_not_installed(root, installed.as_deref()));
+        }
+        InstalledPlacements::Installed(installed) => installed,
+    };
+    let report = SuspensionReport::start(
+        Some(location.root.as_path()),
+        Instant::now() + CLI_READ_BUDGET,
+    );
+    let read = match installed.placements() {
+        Ok(read) => read,
+        Err(outcome) => {
+            // The line is refused: the child is waited for (ended at its bound when it still
+            // runs, as a diagnosis ends it), and its report is not read.
+            drop(report.document(None));
+            return Err(journals_refused(outcome));
+        }
+    };
+    let journals = InstallationJournals {
+        operations_read: read.operations_read,
+        operations_unread: read.operations_unread,
+        enabled_by: read
+            .enabled_by
+            .into_iter()
+            .map(|(package_id, by)| {
+                (
+                    package_id,
+                    PlacementAuthorization {
+                        reference: by.reference,
+                        initiator: by.initiator,
+                        at_unix_ms: by.at_unix_ms,
+                        operation_id: by.operation_id,
+                    },
+                )
+            })
+            .collect(),
+    };
+    let detail = cli_line::detail().unwrap_or(Detail::Full);
+    let in_detail = |outcome: Outcome| match detail {
+        Detail::Codes => outcome.codes_only(),
+        Detail::Full => outcome,
+    };
+    let bindings = composed_bindings(location, installed.game()).map_err(in_detail);
+    let pairs = match report.document(Some(location.state_root.as_path())) {
+        Ok(report) => InstallationPairs::Read { report, bindings },
+        Err(unread) => InstallationPairs::ReportNotRead(in_detail(unread.outcome)),
+    };
+    Ok(StatusInstallation { journals, pairs })
+}
+
+/// Workflow #463 S3-15a: the composed bindings of the installation `location`, each catalog task
+/// id with the package id it runs, as `actingctl packs` reads them (`lab_ops::packs`, its
+/// installation rows' `package_id` and `task_ids`: the procedures `package.<package_id>` the
+/// scheduler workbench composes for the configured instances, by the same composer); its refusal
+/// as the outcome. Fix round 1: and the warnings that reading gave which concern the game `game`
+/// (`ComposedBindings::warnings`): those that name the game (`game`), and those that name a path
+/// (`path`) below its game root under the standard-pack root the reading names.
+#[cfg(windows)]
+pub(crate) fn composed_bindings(
+    location: &Location,
+    game: &str,
+) -> Result<ComposedBindings, Outcome> {
+    let answer = packs::read_with_tables(
+        location.installation.as_ref(),
+        &location.config,
+        &packs::Query::default(),
+    )
+    .map_err(|error| error.outcome())?;
+    let document = serde_json::to_value(answer.packs()).map_err(|error| {
+        Outcome::new(ContractCode::ForeignDataError)
+            .raw_source(RawSource::Json)
+            .raw_text(error.to_string())
+    })?;
+    let mut tasks = BTreeMap::new();
+    for row in document
+        .get("installation")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let Some(package_id) = row.get("package_id").and_then(Value::as_str) else {
+            continue;
+        };
+        for task_id in row
+            .get("task_ids")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+        {
+            tasks.insert(task_id.to_owned(), package_id.to_owned());
+        }
+    }
+    let game_root = document
+        .get("standard_packs")
+        .and_then(|section| section.get("root"))
+        .and_then(Value::as_str)
+        .map(|root| Path::new(root).join(game));
+    let concerns_game = |warning: &&Outcome| {
+        warning.value("game").and_then(Value::as_str) == Some(game)
+            || warning
+                .value("path")
+                .and_then(Value::as_str)
+                .zip(game_root.as_deref())
+                .is_some_and(|(path, below)| Path::new(path).starts_with(below))
+    };
+    let warnings = answer
+        .warnings()
+        .iter()
+        .filter(concerns_game)
+        .cloned()
+        .collect();
+    Ok(ComposedBindings { tasks, warnings })
 }
 
 /// Workflow #463 S3-10: `standard-pack trial` (module doc). The flags' own refusals come first,

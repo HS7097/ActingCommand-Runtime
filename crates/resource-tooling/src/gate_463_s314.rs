@@ -51,8 +51,8 @@ use crate::codes::{
     ReadinessItem, ReadinessProblem, ReadinessState, ResourceToolingCode, TrialRecordProblem,
 };
 use crate::{
-    AuthorizationUnrecorded, EnabledState, EnabledStateCounts, ItemState, PackAuthorization,
-    PackStatus, PackTrialRecord, ReadinessHold, StageState, StageStateCounts,
+    AuthorizationUnrecorded, EnabledAuthorization, EnabledState, EnabledStateCounts, ItemState,
+    PackAuthorization, PackStatus, PackTrialRecord, ReadinessHold, StageState, StageStateCounts,
     StandardPackReadiness, StandardPackReadyRequest, StandardPackStatus, StandardPackStatusRequest,
     StandardPackTrialRequest, TrialRecordPlan, TrialRunEnd, TrialState,
     judge_standard_pack_readiness, plan_standard_pack_trial, standard_pack_status, trial_records,
@@ -550,10 +550,15 @@ fn s314_an_enabled_pack_answers_not_recorded_with_journals_not_read() {
     let placed = row(&answer, PLACED);
     assert_eq!(placed.stage_state, StageState::Enabled);
     assert_eq!(placed.enabled.state, EnabledState::Enabled);
-    assert_eq!(placed.enabled.authorization, PackAuthorization::NotRecorded);
+    // Workflow #463 S3-15a: the member's type holds a recorded authorization too; its JSON below
+    // is unchanged.
+    assert_eq!(
+        placed.enabled.authorization,
+        EnabledAuthorization::Unrecorded(PackAuthorization::NotRecorded)
+    );
     assert_eq!(
         placed.enabled.authorization_unrecorded,
-        AuthorizationUnrecorded::JournalsNotRead
+        Some(AuthorizationUnrecorded::JournalsNotRead)
     );
     let serialized = serde_json::to_value(placed).expect("the row");
     assert_eq!(
@@ -576,13 +581,13 @@ fn s314_every_pack_answers_not_recorded_with_journals_not_read() {
     for pack in &answer.packs {
         assert_eq!(
             pack.enabled.authorization,
-            PackAuthorization::NotRecorded,
+            EnabledAuthorization::Unrecorded(PackAuthorization::NotRecorded),
             "{}",
             pack.package_id
         );
         assert_eq!(
             pack.enabled.authorization_unrecorded,
-            AuthorizationUnrecorded::JournalsNotRead,
+            Some(AuthorizationUnrecorded::JournalsNotRead),
             "{}",
             pack.package_id
         );
