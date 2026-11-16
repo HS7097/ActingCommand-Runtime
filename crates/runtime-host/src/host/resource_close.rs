@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use super::host_claims::HostClaimWork;
 use super::lease::HostClaim;
 use super::policy_dispatch::scheduling_resume_selfcheck;
 use super::recovery_ladder::PendingRecoveryLadder;
@@ -1511,56 +1512,59 @@ impl HostShared {
         )
     }
 
-    /// Workflow #437 G1 fix round 1 (`contracts/device-group.md`, "A failure stays where it
-    /// belongs"): the lease sweep's step that gives each member of a device group of several whose
-    /// start preparation the device's hold refused (`device_held_for_member_close`, which left it
-    /// unavailable) its start preparation again once the fence that held the device is lifted, as
-    /// the start prepares again an instance whose preparation lease the device's takeover cooldown
-    /// refused once that cooldown ended (Workflow #191 h2): the same preparation
-    /// ([`Self::prepare_physical_instance_on_start`]'s, on a dedicated `daemon_start_preparation`
-    /// lease under the device's admission guard). A member stays owed while another member's
-    /// fence still holds its device, while the device's admission guard is taken, and while a
-    /// lease holds the device, a claim waits in its queue or its takeover cooldown runs, so that
-    /// the preparation takes the device only when nothing else asks for it; it is owed until a
-    /// preparation of it is granted its lease. Memory only: a restart prepares every member.
-    pub(super) fn prepare_members_after_device_hold(&self) -> RuntimeHostResult<()> {
+    /// Workflow #437 G1 fix rounds 1 and 2 (`contracts/device-group.md`, "A failure stays where
+    /// it belongs"): the lease sweep's step for each member of a device group of several whose
+    /// start preparation the device's hold refused (`device_held_for_member_close`, recorded once
+    /// as that preparation's failure, which left the member unavailable). Once the fence that held
+    /// the device is lifted and the device is free (no lease holds it, no claim waits, no takeover
+    /// cooldown runs), it only queues, for each such member, one self-check claim of the Runtime's
+    /// own (`queue_held_start_preparation`), as a fence's recheck is queued
+    /// (`queue_fence_recheck`); the member's worker makes the start's preparation on that claim's
+    /// key (`run_held_start_preparation`), so the sweep waits for no device step (Workflow #369
+    /// Q-8). A member is passed over while another member's fence holds its device, while its
+    /// scheduling is paused with a released pause (as the start passes it over; its resume
+    /// prepares it), inside a blackout of the member (a preparation the Runtime starts on its
+    /// own, as a recheck: `scheduling-blackout.md`, "Complete silence") and while the device is
+    /// not free; it stays owed and is looked at again at the next tick. A member whose claim waits
+    /// or runs is not queued again, and a member owes nothing once a preparation of it is granted
+    /// its key or lease. Memory only: a restart prepares every member.
+    pub(super) fn queue_members_after_device_hold(&self) -> RuntimeHostResult<()> {
+        if self.fatal.is_shutdown_requested() {
+            return Ok(());
+        }
         let owed = lock(
             &self.start_preparations_held,
-            HostLocation::ListPhysicalInstances,
+            HostLocation::ListHeldStartPreparations,
         )?
         .iter()
-        .copied()
+        .filter(|(_, held)| !held.queued)
+        .map(|(instance_id, held)| (*instance_id, held.instance_alias.clone()))
         .collect::<Vec<_>>();
-        for instance_id in owed {
-            if self.fatal.is_shutdown_requested() {
-                return Ok(());
-            }
+        for (instance_id, instance_alias) in owed {
             if self.device_held_for(instance_id)?.is_some() {
                 continue;
             }
-            let instance_guard = self
-                .instance_guard(instance_id)
-                .map_err(|failure| *failure.error)?;
-            let admission = match instance_guard.try_lock() {
-                Ok(guard) => guard,
-                Err(TryLockError::WouldBlock) => continue,
-                Err(TryLockError::Poisoned(_)) => {
-                    return Err(lock_poison_error(HostLocation::TryLockInstanceAdmission));
-                }
-            };
-            // Read again under the guard: a preparation of the member granted meanwhile (another
-            // tick's, a person's) settled what it owed.
-            let still_owed = lock(
-                &self.start_preparations_held,
-                HostLocation::ListPhysicalInstances,
+            let released = lock(
+                &self.scheduling_pause,
+                HostLocation::ReadHeldStartPreparationPause,
             )?
-            .contains(&instance_id);
-            if !still_owed {
+            .instance_state(&instance_alias)
+            .is_some_and(|pause| {
+                pause.stage == actingcommand_contract::InstancePauseStage::Released
+            });
+            if released
+                || self
+                    .blackout_covering(instance_id, &instance_alias)?
+                    .is_some()
+            {
                 continue;
             }
             let now_monotonic_ms = self.monotonic_ms()?;
             let free = {
-                let scheduler = lock(&self.scheduler, HostLocation::ListPhysicalInstances)?;
+                let scheduler = lock(
+                    &self.scheduler,
+                    HostLocation::ReadHeldStartPreparationDevice,
+                )?;
                 scheduler.active_lease(instance_id).is_none()
                     && scheduler.queued_count(instance_id) == 0
                     && !scheduler.cooldown_active(instance_id, now_monotonic_ms)
@@ -1568,18 +1572,241 @@ impl HostShared {
             if !free {
                 continue;
             }
-            let instance_alias = lock(
-                &self.registered_instances,
-                HostLocation::ListPhysicalInstances,
+            let marked = match lock(
+                &self.start_preparations_held,
+                HostLocation::MarkHeldStartPreparationQueued,
             )?
-            .get(&instance_id)
-            .map(|instance| instance.instance_alias.clone());
-            let Some(instance_alias) = instance_alias else {
-                continue;
+            .get_mut(&instance_id)
+            {
+                Some(held) if !held.queued => {
+                    held.queued = true;
+                    true
+                }
+                _ => false,
             };
-            self.prepare_physical_instance_while_guarded(&instance_alias, instance_id, &admission)?;
+            if marked {
+                self.queue_held_start_preparation(instance_id, &instance_alias)?;
+            }
         }
         Ok(())
+    }
+
+    /// Workflow #437 G1 fix round 2: queues the start's preparation of `instance_id` on one
+    /// self-check claim of the Runtime's own (a minted holder on the Runtime's fixed connection,
+    /// the scheduler's lease time), as `queue_fence_recheck` queues a recheck (no new claim kind):
+    /// granted at once or later in its place by the device's queue, it goes to the member's worker
+    /// (`HostClaimWork::HeldStartPreparation`, a payload of its own: a recheck's runs only for a
+    /// fence's wait for a person, which the member has not, and a link's restore reports to the
+    /// handset link machine). A claim the queue refuses is recorded once (`runtime.failed`, stage
+    /// `operation_cleanup`) and settles what the member owes: while another member's fence holds
+    /// the device again by then the member stays owed and is queued once that fence is lifted;
+    /// otherwise it owes nothing more and stays unavailable until a person's self-check or resume,
+    /// as after a failed preparation. Only a failure the Runtime does not survive is returned.
+    fn queue_held_start_preparation(
+        &self,
+        instance_id: InstanceId,
+        instance_alias: &str,
+    ) -> RuntimeHostResult<()> {
+        let resolved = lock(
+            &self.registered_instances,
+            HostLocation::QueueHeldStartPreparation,
+        )?
+        .get(&instance_id)
+        .cloned()
+        .ok_or_else(|| {
+            RuntimeHostError::fatal(
+                HostCode::RuntimeInstanceRegistryIncomplete,
+                HostLocation::QueueHeldStartPreparation,
+                RuntimeErrorCode::RuntimeHalted,
+            )
+        })?;
+        let issuer = self.events.issuer();
+        let holder_id = *issuer
+            .mint_holder_id()
+            .map_err(|_| runtime_identifier_error())?
+            .transport();
+        let causation_id = issuer
+            .mint_causation_id()
+            .map_err(|_| runtime_identifier_error())?;
+        let (actor, source) = scheduled_request_transport_origin(resolved.provenance());
+        let request = RuntimeRequest::new(
+            issuer
+                .mint_request_id()
+                .map_err(|_| runtime_identifier_error())?,
+            issuer
+                .mint_correlation_id()
+                .map_err(|_| runtime_identifier_error())?,
+            Some(causation_id),
+            actor,
+            source,
+            unix_ms_now()?,
+            RuntimeOperation::AcquireLease {
+                instance_alias: instance_alias.to_owned(),
+                holder_id,
+            },
+        )
+        .map_err(|_| {
+            RuntimeHostError::fatal(
+                HostCode::HostKeyRequestInvalid,
+                HostLocation::QueueHeldStartPreparation,
+                RuntimeErrorCode::RuntimeHalted,
+            )
+        })?;
+        let connection_id =
+            ConnectionId::new(STARTUP_PACKAGE_CONNECTION_VALUE).map_err(|error| {
+                RuntimeHostError::scheduler(HostLocation::QueueHeldStartPreparation, &error)
+            })?;
+        let lease_ttl_ms = lock(
+            &self.scheduler,
+            HostLocation::ReadHeldStartPreparationClaimTtl,
+        )?
+        .config()
+        .lease_ttl_ms;
+        let links = self
+            .events
+            .system_links()?
+            .with_instance_id(issuer.issue_registered_instance(instance_id))
+            .with_causation_id(causation_id);
+        let queued = self.request_host_claim_work(
+            HostClaim {
+                request: &request,
+                instance_alias,
+                holder_id,
+                connection_id,
+                kind: ClaimKind::SelfCheck,
+                priority: actingcommand_contract::LeasePriority::Normal,
+                lease_ttl_ms,
+            },
+            HostClaimWork::HeldStartPreparation(PendingHeldStartPreparation {
+                instance_alias: instance_alias.to_owned(),
+                instance_id,
+                links: links.clone(),
+            }),
+        );
+        match queued {
+            Ok(()) => Ok(()),
+            Err(failure) if failure.poison_runtime || failure.error.is_fatal() => {
+                Err(*failure.error)
+            }
+            Err(failure) => {
+                self.append_lifecycle_failure(
+                    RuntimeLifecycleFailureStage::OperationCleanup,
+                    RuntimeLifecycleFailure::Host(&failure.error),
+                    links,
+                    None,
+                )?;
+                let held_again = self.device_held_for(instance_id)?.is_some();
+                let mut owed = lock(
+                    &self.start_preparations_held,
+                    HostLocation::SettleHeldStartPreparation,
+                )?;
+                if held_again {
+                    if let Some(held) = owed.get_mut(&instance_id) {
+                        held.queued = false;
+                    }
+                } else {
+                    owed.remove(&instance_id);
+                }
+                Ok(())
+            }
+        }
+    }
+
+    /// Workflow #437 G1 fix round 2: a granted claim of [`Self::queue_held_start_preparation`] on
+    /// the member's worker: the start's preparation (stage `startup_preparation`, no emulator
+    /// status read first, as the start makes it) under the device's admission guard on the
+    /// claim's key, then the key's release, to the ladder a failed preparation admitted when it
+    /// admitted one (as a link's restore releases it). A member that owes no preparation any more
+    /// (a person's self-check or resume prepared it while the claim waited), or whose scheduling
+    /// is now paused with a released pause (it stays owed, and the sweep passes it over), runs
+    /// nothing and releases the key. A failed preparation is recorded as every preparation is
+    /// (`instance_preparation_finished` with its failure, the failing step's `runtime.failed`) and
+    /// leaves the member unavailable; nothing queues it again (its ladder, a person's self-check or
+    /// resume, or a restart prepares it). Only a fatal failure is returned.
+    pub(super) fn run_held_start_preparation(
+        &self,
+        pending: &PendingHeldStartPreparation,
+        key: super::host_claims::HostKey,
+    ) -> RuntimeHostResult<()> {
+        let instance_id = pending.instance_id;
+        let released = lock(
+            &self.scheduling_pause,
+            HostLocation::RunHeldStartPreparation,
+        )?
+        .instance_state(&pending.instance_alias)
+        .is_some_and(|pause| pause.stage == actingcommand_contract::InstancePauseStage::Released);
+        let owed = match lock(
+            &self.start_preparations_held,
+            HostLocation::RunHeldStartPreparation,
+        )?
+        .get_mut(&instance_id)
+        {
+            Some(held) if held.queued && released => {
+                held.queued = false;
+                false
+            }
+            Some(held) => held.queued,
+            None => false,
+        };
+        if !owed {
+            return self.release_host_key(&key);
+        }
+        let validated = key.request.validate().map_err(|_| {
+            RuntimeHostError::fatal(
+                HostCode::HostKeyRequestInvalid,
+                HostLocation::RunHeldStartPreparation,
+                RuntimeErrorCode::RuntimeHalted,
+            )
+        })?;
+        let links = self
+            .events
+            .request_links(&validated, Some(instance_id), None, None);
+        let instance_guard = self
+            .instance_guard(instance_id)
+            .map_err(|failure| *failure.error)?;
+        let prepared = {
+            let admission = lock(&instance_guard, HostLocation::RunHeldStartPreparation)?;
+            // Workflow #429 R-0b: the preparation shows as a self-check with its claim's request.
+            let _activity = self.begin_instance_activity(
+                instance_id,
+                super::instance_activity::ActivityStart::Selfcheck {
+                    request_id: Some(key.request.request_id()),
+                },
+            )?;
+            self.prepare_instance_connection_with_cooldown(
+                &pending.instance_alias,
+                instance_id,
+                links,
+                &admission,
+                actingcommand_contract::RecoveryTriggerStage::StartupPreparation,
+                PreparationLease::Held {
+                    token: &key.token,
+                    connection_id: key.connection_id,
+                },
+                EmulatorStatusRead::Skip,
+            )?
+        };
+        match prepared.ladder {
+            Some(ladder) => match self.release_to_preparation_ladder(
+                &validated,
+                key.request.request_id(),
+                &key.token,
+                key.connection_id,
+                ladder,
+            ) {
+                Ok(()) => Ok(()),
+                Err(failure) if failure.poison_runtime || failure.error.is_fatal() => {
+                    Err(*failure.error)
+                }
+                Err(failure) => self.append_lifecycle_failure(
+                    RuntimeLifecycleFailureStage::OperationCleanup,
+                    RuntimeLifecycleFailure::Host(&failure.error),
+                    pending.links.clone(),
+                    None,
+                ),
+            },
+            None => self.release_host_key(&key),
+        }
     }
 
     /// Trigger (d): `SelfCheckInstance` — the operator's manual reconnect and self-check of one
@@ -1899,15 +2126,20 @@ impl HostShared {
             } => Ok((token.clone(), connection_id)),
             // Workflow #437 G1: a member whose device is held for another member's unconfirmed
             // close opens nothing: its preparation's own lease is refused, naming that member.
-            // Fix round 1: the member is owed that preparation, which the lease sweep makes again
-            // once the hold has ended (`prepare_members_after_device_hold`).
+            // Fix rounds 1 and 2: the member is owed that preparation, which the lease sweep
+            // queues once the hold has ended (`queue_members_after_device_hold`); a member whose
+            // claim is queued already keeps it.
             PreparationLease::Dedicated(kind) => match self.device_held_error(instance_id)? {
                 Some(held) => {
                     lock(
                         &self.start_preparations_held,
                         HostLocation::PrepareInstanceConnection,
                     )?
-                    .insert(instance_id);
+                    .entry(instance_id)
+                    .or_insert_with(|| HeldStartPreparation {
+                        instance_alias: instance_alias.to_owned(),
+                        queued: false,
+                    });
                     Err(held)
                 }
                 None => self
@@ -1920,8 +2152,9 @@ impl HostShared {
             },
         };
         let (token, connection_id) = match granted {
-            // Workflow #437 G1 fix round 1: a preparation of the instance runs, so it owes none
-            // the device's hold refused before.
+            // Workflow #437 G1 fix round 1: a preparation of the instance runs (fix round 2: its
+            // queued one on its claim's key too), so it owes none the device's hold refused
+            // before.
             Ok(granted) => {
                 lock(
                     &self.start_preparations_held,
@@ -2385,4 +2618,25 @@ pub(super) enum PreparationLease<'a> {
         token: &'a LeaseToken,
         connection_id: ConnectionId,
     },
+}
+
+/// Workflow #437 G1 fix rounds 1 and 2 (`contracts/device-group.md`, "A failure stays where it
+/// belongs"): a member of a device group of several whose start preparation the device's hold for
+/// another member's unconfirmed close refused, owed that preparation until one of it is granted
+/// its key or lease (memory only).
+pub(super) struct HeldStartPreparation {
+    instance_alias: String,
+    /// Its self-check claim waits in the device's queue or runs on the member's worker
+    /// (`HostShared::queue_held_start_preparation`): the lease sweep queues no other.
+    queued: bool,
+}
+
+/// Workflow #437 G1 fix round 2: the start's preparation of a member the device's hold refused,
+/// queued on a self-check claim of the Runtime's own (no new claim kind) and made on that claim's
+/// key by the member's worker (`HostShared::run_held_start_preparation`).
+pub(super) struct PendingHeldStartPreparation {
+    pub(super) instance_alias: String,
+    pub(super) instance_id: InstanceId,
+    /// The member and the claim's causation: what a worker failure is recorded under.
+    pub(super) links: EventLinksDraft,
 }

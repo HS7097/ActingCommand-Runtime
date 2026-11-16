@@ -4292,23 +4292,35 @@ impl HostShared {
         let context = self.take_queued_context(&removed)?;
         let event = self.append_queue_terminal(&context, DiagnosticCode::LeaseQueueExpired)?;
         drop(order);
+        // Workflow #437 G1 fix round 2: a claim that met the device's admission guard taken was
+        // queued, and while another member's unconfirmed close holds the device its member's gate
+        // holds it in its place; when that hold stands as its wait ends, the expiry names it as
+        // its cause (`device_held_for_member_close`, the fenced member), so the person sees why.
+        let held = self
+            .device_held_error(context.instance.instance_id())
+            .map_err(RequestFailure::poison_without_terminal)?;
         // Q-4: a removed entry may leave an eligible one first on a free instance.
         self.pump(instance_id)?;
         let queue_position = removed.queued().position();
+        let expired = RuntimeHostError::request(
+            actingcommand_contract::codes::SharedCode::LeaseQueueExpired,
+            HostLocation::AwaitOperatorClaim,
+            RuntimeErrorCode::QueueExpired,
+        )
+        // Ledger revision 3: the record's outcome carries the wait as values.
+        .with_outcome_values(|outcome| {
+            let outcome = outcome.timeout_ms(cap_ms).queue_position(queue_position);
+            match holder_kind {
+                Some(kind) => outcome.holder_kind(crate::error::ClaimKindToken(kind)),
+                None => outcome,
+            }
+        });
+        let expired = match held {
+            Some(held) => expired.with_caused_by(held.outcome()),
+            None => expired,
+        };
         Err(RequestFailure::request(
-            RuntimeHostError::request(
-                actingcommand_contract::codes::SharedCode::LeaseQueueExpired,
-                HostLocation::AwaitOperatorClaim,
-                RuntimeErrorCode::QueueExpired,
-            )
-            // Ledger revision 3: the record's outcome carries the wait as values.
-            .with_outcome_values(|outcome| {
-                let outcome = outcome.timeout_ms(cap_ms).queue_position(queue_position);
-                match holder_kind {
-                    Some(kind) => outcome.holder_kind(crate::error::ClaimKindToken(kind)),
-                    None => outcome,
-                }
-            }),
+            expired,
             RuntimeReceiptState::Denied,
             Some(terminal(&event)),
         ))

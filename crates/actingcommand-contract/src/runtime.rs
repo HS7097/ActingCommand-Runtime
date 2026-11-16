@@ -96,7 +96,8 @@ pub use goals::*;
 // member, raises `min` to 4. Revision 8 (Workflow #434 LAB-6S1a, since 0.12.58): the optional
 // `initiator` of `BindChannel`, `ChannelBound` and the receipt, declared [3, 8]. Revision 9
 // (Workflow #463 V3, since 0.12.61): the request kinds `GoalView` and `EditGoal` with their results
-// (`goals.rs`), declared [3, 9].
+// (`goals.rs`), declared [3, 9]. Revision 10 (Workflow #437 G1 fix round 2, since 0.12.67): the
+// status member `RuntimeInstanceStatus.device_held` (`InstanceDeviceHeld`), declared [3, 10].
 pub const RUNTIME_REQUEST_SCHEMA_VERSION: &str = "actingcommand.runtime.request.v4";
 pub const RUNTIME_RECEIPT_SCHEMA_VERSION: &str = "actingcommand.runtime.receipt.v2";
 pub const RUNTIME_INFO_SCHEMA_VERSION: &str = "actingcommand.runtime.info.v1";
@@ -1650,9 +1651,9 @@ pub struct RuntimeInstanceStatus {
     /// self-check proves the close.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     resource_fence: Option<InstanceResourceFence>,
-    /// Workflow #437 G1 fix round 1 (register §1.433): the instance is a member of a device
-    /// group of several whose device is held for another member's unconfirmed close; absent
-    /// otherwise.
+    /// Workflow #437 G1 fix rounds 1 and 2 (register §1.433, `runtime-client` 10): the instance
+    /// is a member of a device group of several whose device is held for another member's
+    /// unconfirmed close; absent otherwise.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     device_held: Option<InstanceDeviceHeld>,
     /// Workflow #390 九处-1: the emulator's running state as the Runtime last read it; always
@@ -1749,7 +1750,8 @@ pub enum LadderBusyHoldKind {
 /// where it belongs"): why a member of a device group of several is given no device while another
 /// member's fence holds it. `device_group_wait` is the word the member's dispatch waits with
 /// (`device_group_waiting`), `alias` the member the device is held for. Memory only: read from the
-/// fences at the status read.
+/// fences at the status read. Interface anchor `runtime-client` revision 10
+/// (contracts/component-interfaces.md): a reader of 9 or lower refuses a status that carries it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct InstanceDeviceHeld {

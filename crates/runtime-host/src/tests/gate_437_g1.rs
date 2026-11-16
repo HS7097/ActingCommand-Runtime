@@ -378,14 +378,22 @@ fn assert_held_for(receipt: &RuntimeReceipt, fenced: &str) {
     assert_eq!(outcome.value("alias"), Some(&json!(fenced)), "{receipt:?}");
 }
 
+/// What A's run of [`run_a_with_b_waiting`] left: B's claim, which waited first; the kind of the
+/// device's holder right after its end work's sweep tick; and A's run's receipt.
+struct RunEnd {
+    claim: HostClaimForTest,
+    holder_after_sweep: Option<ClaimKind>,
+    receipt: RuntimeReceipt,
+}
+
 /// A's direct run whose end work asks B's self-check claim (which waits for the device), sets
 /// A's capture close unconfirmed when `unconfirmed`, and, when `lapse`, lets A's lease lapse past
 /// its end grace and runs one tick of the lease sweep, as MAPP-1d's lapse does: the close of A's
 /// session under the lapsed lease is refused and fences A (#411 A64, a refused close), and the
 /// session close ahead that follows closes A's session, confirmed or not. Without `lapse` the run
-/// ends on its own lease, whose end closes A's session under it. Returns B's claim, which waited
-/// first.
-fn run_a_with_b_waiting(device: &Device, unconfirmed: bool, lapse: bool) -> HostClaimForTest {
+/// ends on its own lease, whose end closes A's session under it. The end work reads the device's
+/// holder after its sweep tick.
+fn run_a_with_b_waiting(device: &Device, unconfirmed: bool, lapse: bool) -> RunEnd {
     let package = device.run_package(A);
     let ids = IdentifierIssuer::new().expect("identifier issuer");
     let request = runtime_request(
@@ -422,7 +430,8 @@ fn run_a_with_b_waiting(device: &Device, unconfirmed: bool, lapse: bool) -> Host
                 } else {
                     Ok(())
                 };
-                sent.send((claim, swept)).expect("the end work");
+                let holder = host.instance_claims_for_test(A).map(|(holder, _)| holder);
+                sent.send((claim, swept, holder)).expect("the end work");
             },
         )
         .expect("arm A's end work");
@@ -431,8 +440,9 @@ fn run_a_with_b_waiting(device: &Device, unconfirmed: bool, lapse: bool) -> Host
         .process_request_for_test(&request, device.connection())
         .expect("A's run's receipt");
     assert_eq!(checkpoint.consumed(), 1, "A's run reached its end work");
-    let (claim, swept) = waited.recv_timeout(GATE_WAIT).expect("the end work");
+    let (claim, swept, holder) = waited.recv_timeout(GATE_WAIT).expect("the end work");
     assert!(swept.is_ok(), "the sweep's tick: {swept:?}");
+    let holder_after_sweep = holder.expect("the device's holder after the sweep's tick");
     assert!(
         receipt
             .error_projection()
@@ -448,7 +458,11 @@ fn run_a_with_b_waiting(device: &Device, unconfirmed: bool, lapse: bool) -> Host
         Some(1),
         "B's claim waited first for the device: {claim:?}"
     );
-    claim
+    RunEnd {
+        claim,
+        holder_after_sweep,
+        receipt,
+    }
 }
 
 /// [`run_a_with_b_waiting`] with A's capture close unconfirmed and A's lease lapsed: the session
@@ -456,7 +470,7 @@ fn run_a_with_b_waiting(device: &Device, unconfirmed: bool, lapse: bool) -> Host
 /// clock moves past that close lease's time and one more tick ends it. Returns B's claim, which
 /// waited first.
 fn fence_a_and_lapse_its_close_lease(device: &Device) -> HostClaimForTest {
-    let claim = run_a_with_b_waiting(device, true, true);
+    let claim = run_a_with_b_waiting(device, true, true).claim;
     assert_eq!(
         device.claims(B),
         (Some(ClaimKind::ResourceClose), vec![ClaimKind::SelfCheck]),
@@ -789,16 +803,47 @@ fn start_preparations(device: &Device, alias: &str) -> (usize, bool) {
     (finished.len(), finished.last().copied().unwrap_or(false))
 }
 
+/// How many `runtime.failed` records under `alias` carry `device_held_for_member_close` (a
+/// preparation of it that the device's hold refused).
+fn held_failures(device: &Device, alias: &str) -> usize {
+    all_events(&device.host)
+        .iter()
+        .filter(|event| {
+            event.event_type() == EventType::RuntimeFailed
+                && event.links().instance_id() == Some(&device.ids[alias])
+                && event.payload().outcome().is_some_and(|outcome| {
+                    outcome.code().as_str() == HostCode::DeviceHeldForMemberClose.as_str()
+                })
+        })
+        .count()
+}
+
 /// The review's must-fix 1: MAPP-1d's lapsed run lease whose session close ahead is confirmed. A's
 /// run's lease lapses in its end phase while B's claim waits; the close under the lapsed lease is
 /// refused and fences A (#411 A64), at the expiry and again at the run's end, and the session close
-/// ahead closes A's session, confirmed. A refused close holds nothing: B's claim is granted once
-/// A's session is closed, B's dispatch waits only for A's fence (`fenced`, not `close_unconfirmed`)
-/// and B's status row names no hold; once B's lease ends, a new lease of B is granted the device.
+/// ahead closes A's session, confirmed. Fix round 2: the run's end really met the lapsed lease:
+/// right after the end work's sweep tick no lease of A's run holds the device, so the run's end
+/// found its lease gone (#411 A64's settlement at the run's end), and A's run does not complete
+/// (its own lease end met the lapsed lease too). A refused close holds nothing: B's claim is
+/// granted once A's session is closed, B's dispatch waits only for A's fence (`fenced`, not
+/// `close_unconfirmed`) and B's status row names no hold; once B's lease ends, a new lease of B is
+/// granted the device.
 #[test]
 fn g1_a_refused_close_whose_session_close_ahead_is_confirmed_holds_the_device_for_no_one() {
     let device = Device::start();
-    let waiting = run_a_with_b_waiting(&device, false, true);
+    let run = run_a_with_b_waiting(&device, false, true);
+    assert_ne!(
+        run.holder_after_sweep,
+        Some(ClaimKind::DirectTaskRun),
+        "the sweep's tick ended A's run's lapsed lease before the run's end"
+    );
+    assert_ne!(
+        run.receipt.state(),
+        RuntimeReceiptState::Completed,
+        "A's run's end met its lapsed lease: {:?}",
+        run.receipt
+    );
+    let waiting = run.claim;
     let token = waiting
         .wait_for_grant(GATE_WAIT)
         .expect("the grant slot")
@@ -836,7 +881,7 @@ fn g1_a_refused_close_whose_session_close_ahead_is_confirmed_holds_the_device_fo
 #[test]
 fn g1_an_ordinary_lease_end_whose_close_is_unconfirmed_hands_the_device_to_no_one() {
     let device = Device::start();
-    let waiting = run_a_with_b_waiting(&device, true, false);
+    let waiting = run_a_with_b_waiting(&device, true, false).claim;
     assert_eq!(
         device.claims(B),
         (None, vec![ClaimKind::SelfCheck]),
@@ -871,12 +916,15 @@ fn g1_an_ordinary_lease_end_whose_close_is_unconfirmed_hands_the_device_to_no_on
     device.close_unchecked();
 }
 
-/// Item 3 of fix round 1: a member whose start preparation the hold refused comes back by itself.
-/// While A is fenced for an unconfirmed close, B's start preparation (the daemon start's) is
-/// refused `device_held_for_member_close`, which leaves B unavailable, and the lease sweep's step
-/// does not make it again while A's fence stands. Once A's own self-check passes and lifts A's
-/// fence, that step gives B its start preparation again, once, and it passes; B's lease is then
-/// granted the device.
+/// Item 3 of fix round 1, as fix round 2 builds it: a member whose start preparation the hold
+/// refused comes back by itself, and the lease sweep only queues that preparation. While A is
+/// fenced for an unconfirmed close, B's start preparation (the daemon start's) is refused
+/// `device_held_for_member_close`, which leaves B unavailable: that failure is recorded once, and
+/// the sweep's step, run twice while A's fence stands, records no other, queues nothing for B and
+/// prepares nothing. Once A's own self-check passes and lifts A's fence, the step queues B's
+/// preparation on a self-check claim of the Runtime's own: B's worker makes it on that claim's key,
+/// once, it passes and the key is released; the step then queues nothing more for B. B's lease is
+/// then granted the device.
 #[test]
 fn g1_a_member_whose_start_preparation_the_hold_refused_is_prepared_again_once_the_fence_is_lifted()
 {
@@ -900,15 +948,27 @@ fn g1_a_member_whose_start_preparation_the_hold_refused_is_prepared_again_once_t
         Some(HostCode::DeviceHeldForMemberClose.as_str()),
         "B's start preparation is refused while A's fence holds the device"
     );
-    device
-        .host
-        .prepare_members_after_device_hold_for_test()
-        .expect("the sweep's step");
-    assert_eq!(
-        start_preparations(&device, B),
-        (0, false),
-        "B is not prepared again while A's fence stands"
-    );
+    for tick in 0..2 {
+        device
+            .host
+            .queue_members_after_device_hold_for_test()
+            .expect("the sweep's step");
+        assert_eq!(
+            held_failures(&device, B),
+            1,
+            "tick {tick}: B's refused preparation is recorded once"
+        );
+        assert_eq!(
+            device.claims(B),
+            (None, vec![]),
+            "tick {tick}: nothing is queued for B while A's fence stands"
+        );
+        assert_eq!(
+            start_preparations(&device, B),
+            (0, false),
+            "tick {tick}: B is not prepared while A's fence stands"
+        );
+    }
     let checked = device.process(RuntimeOperation::SelfCheckInstance {
         instance_alias: A.to_owned(),
     });
@@ -923,16 +983,30 @@ fn g1_a_member_whose_start_preparation_the_hold_refused_is_prepared_again_once_t
     );
     device
         .host
-        .prepare_members_after_device_hold_for_test()
+        .queue_members_after_device_hold_for_test()
         .expect("the sweep's step");
-    wait_until("B's start preparation again", || {
+    wait_until("B's start preparation on its claim's key", || {
         start_preparations(&device, B).0 == 1
+    });
+    wait_until("the key of B's preparation released", || {
+        device.claims(B) == (None, vec![])
     });
     assert_eq!(
         start_preparations(&device, B),
         (1, true),
         "B's start preparation ran again, once, and passed"
     );
+    device
+        .host
+        .queue_members_after_device_hold_for_test()
+        .expect("the sweep's step");
+    assert_eq!(
+        device.claims(B),
+        (None, vec![]),
+        "nothing more is queued for B"
+    );
+    assert_eq!(start_preparations(&device, B), (1, true));
+    assert_eq!(held_failures(&device, B), 1);
     let connection = device.connection();
     let lease = device.acquire_on(B, connection);
     let Some(RuntimeResult::LeaseGranted { token }) = lease.result() else {

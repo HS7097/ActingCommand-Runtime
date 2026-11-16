@@ -2601,6 +2601,18 @@ actingcommand_contract::outcome_locations! {
         // Workflow #437 MAPP-2a: the switch that brings a member of a device group of several to
         // the front before its run, and its parts.
         SwitchApplication => "switch_application",
+        // Workflow #437 G1 fix round 2: the lease sweep's step that queues the start preparation
+        // of a member the device's hold refused (its list of such members, the member's pause, the
+        // device's state, its mark as queued), the claim's queueing and lease time, the settlement
+        // of a claim the queue refused, and the preparation on the member's worker.
+        ListHeldStartPreparations => "list_held_start_preparations",
+        ReadHeldStartPreparationPause => "read_held_start_preparation_pause",
+        ReadHeldStartPreparationDevice => "read_held_start_preparation_device",
+        MarkHeldStartPreparationQueued => "mark_held_start_preparation_queued",
+        QueueHeldStartPreparation => "queue_held_start_preparation",
+        ReadHeldStartPreparationClaimTtl => "read_held_start_preparation_claim_ttl",
+        SettleHeldStartPreparation => "settle_held_start_preparation",
+        RunHeldStartPreparation => "run_held_start_preparation",
     }
 }
 

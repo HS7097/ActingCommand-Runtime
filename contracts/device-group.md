@@ -1123,20 +1123,33 @@ of a device group of several:
     self-check, a resume, a backend switch, a policy dispatch admitted in the same moment) is
     refused with `device_held_for_member_close`, `alias` the fenced member, `scheduler.denied`
     under the request, projected as `lease_busy`; so is the dedicated lease of its own connection
-    preparation at the start, recorded as that preparation's failure, which leaves the member
-    unavailable. Fix round 1: such a member comes back by itself: once the hold has ended, the
-    lease sweep gives it that start preparation again on the free device (no lease holds it, no
-    claim waits, no takeover cooldown runs), as the start prepares again an instance whose
-    preparation lease the takeover cooldown refused once that cooldown ended (Workflow #191 h2;
-    `prepare_members_after_device_hold`); it is owed until a preparation of it is granted its
-    lease (memory only);
+    preparation at the start, recorded once as that preparation's failure, which leaves the member
+    unavailable. Such a member comes back by itself (fix rounds 1 and 2): once the hold has ended
+    and the device is free (no lease holds it, no claim waits, no takeover cooldown runs), the
+    lease sweep only queues, as it queues a fence's recheck, one self-check claim of the Runtime's
+    own for it, and the device's worker makes the start's preparation on that claim's key
+    (`queue_members_after_device_hold`, `run_held_start_preparation`); the sweep waits for no
+    device step. A member is passed over while the hold stands, while its scheduling is paused
+    with a released pause (as the start passes it over; its resume prepares it) and inside a
+    blackout of it ([scheduling-blackout.md](scheduling-blackout.md), "Complete silence", as a
+    recheck is), and it is queued once: not again while its claim waits or runs, and never once a
+    preparation of it is granted its key or lease (memory only). A preparation that fails is
+    recorded as every preparation is and leaves the member unavailable, and nothing queues it
+    again (its ladder, a person's self-check or resume, or a restart prepares it); a claim the
+    queue refuses is recorded once and is queued again only after another member's hold that
+    stands by then has ended;
+  - an operator's claim of another member that met the device's admission guard taken waits in
+    the queue instead of being refused, held in its place; when its wait ends while the hold
+    stands, its refusal `lease_queue_expired` names the hold as its cause
+    (`device_held_for_member_close`, the fenced member; fix round 2);
   - its policy candidates wait `device_group_waiting` with `device_group_wait`
     `close_unconfirmed`, `alias` the fenced member (before `fenced`), in the decision, the not-run
     explanation and the admission's refusal; the fenced member keeps its own codes
     (`dispatch_resource_fenced`, its availability withheld by the self-check gate);
   - its row of `Status` (`actingctl status`, the Lab's overview) carries `device_held`
-    `{device_group_wait: close_unconfirmed, alias}`, `alias` the fenced member (fix round 1),
-    while the fenced member's own row carries its `resource_fence`;
+    `{device_group_wait: close_unconfirmed, alias}`, `alias` the fenced member (fix round 1;
+    `runtime-client` 10 since fix round 2, "Interfaces"), while the fenced member's own row
+    carries its `resource_fence`;
   - its keyless observation is refused and its monitor probe's round is not made, exactly as while
     another member's lease holds the device (`device_held_by_another_member`, rows 7 and 15);
   - no switch starts, since no run of it is granted.
@@ -1227,7 +1240,10 @@ of a device group of several:
 - **`runtime-client` does not move.** `Status` keeps its shape per instance: a waiting member's
   `not_running` row has `why` `device_group_waiting` with its values, and every request takes an
   alias, the member's. Showing the group in `Status` (a member `device_group?` per row) is proposed
-  for the console slice, which then raises `runtime-client`.
+  for the console slice, which then raises `runtime-client`. G1 fix round 2 (Runtime 0.12.67)
+  raises it to [3, 10] for the row's member `device_held` ("A failure stays where it belongs";
+  [component-interfaces.md](component-interfaces.md), row 10); its `min` rises to 10 in the slice
+  that lets a group of several load.
 - **`runtime-outcomes`:** new codes and words in the catalog only, and the optional value
   `failure_code` of the existing `dispatch_instance_cooldown`.
 - **Untouched:** `package`, `install-selection`, `install-control`, `install-cli`, `tools-layout`

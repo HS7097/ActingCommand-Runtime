@@ -31337,8 +31337,9 @@ is adapted or retired: the MAPP-1d and #458 tests that fence a member by a refus
 a confirmed one, or by an instance fault (`fence_instance_for_test`), hold nothing and keep their
 expectations.
 
-**What is not added.** No configuration key, record type, payload member, fact, tag, wire shape,
-state file, interface revision or ledger revision.
+**What is not added.** No configuration key, record type, payload member, fact, tag, state file or
+ledger revision. Fix round 1 adds one wire member (`RuntimeInstanceStatus.device_held`), and fix
+round 2 raises `runtime-client` to [3, 10] for it.
 
 **At deploy.** Nothing reachable for a group of several until the load accepts one. An instance
 alone on its device runs as before: it is never held for another member, its fences hold its
@@ -31382,8 +31383,9 @@ added. (4) **The other members' status rows.** `RuntimeInstanceStatus.device_hel
 `{device_group_wait, alias}` (`InstanceDeviceHeld`, `DeviceHeldWait`, in
 `crates/actingcommand-contract`), `device_group_wait` `close_unconfirmed`, the word the dispatch
 gives, and `alias` the fenced member, filled by `control_plane_status_projection` from `device_held_for`; the Lab's overview row
-carries it ([runtime-interface.md](runtime-interface.md)). An answer without it is as before; no
-interface revision is raised. (5) **Two rules the coordinator accepted, written in
+carries it ([runtime-interface.md](runtime-interface.md)). An answer without it is as before; a
+reader of `runtime-client` 9 or lower refuses one with it, so fix round 2 raises `runtime-client`
+to [3, 10]. (5) **Two rules the coordinator accepted, written in
 [device-group.md](device-group.md), "A failure stays where it belongs":** two members both fenced
 for resources not confirmed each keep their own way out (a member whose own fence holds the device
 is judged by its own gate); and every fence that stands for resources of the member's whose state
@@ -31403,6 +31405,68 @@ policy cycle on gate_mapp1b's catalog); the first test now holds the device only
 path's mark, since the refused close's fence holds nothing. New test-only stand-ins:
 `prepare_on_start_for_test` and `prepare_members_after_device_hold_for_test`. (7) A comment line
 of 115 columns in `device_group.rs` is wrapped.
+
+**Fix round 2** (coordinator work order `rd-1116/brief-437-g1-fix3.md`, after the second
+independent review and the coordinator's disposition of it; main still `03258b33`, nothing merged).
+(1) **`runtime-client` 10.** `RuntimeInstanceStatus` denies unknown members, so the member
+`device_held` that fix round 1 added is refused by a reader of revision 9 or lower; by the bump
+rule ([component-interfaces.md](component-interfaces.md), "Bump rule", as rows 5 and 6 did) its
+writer raises `max`: row 10 of the `runtime-client` table, `distribution/windows/component-interfaces.json`
+[3, 10], the anchor comment in `crates/actingcommand-contract/src/runtime.rs` and on
+`InstanceDeviceHeld`, the architecture test's pinned ranges (`component_interfaces.rs`) and
+`gate_429_r0b_pairing.rs`. `min` stays 3: no installation can fill the member while the load
+refuses every group of several; row 10 says that `min` rises to 10 in the slice that lets such a
+configuration load, since from then on a Runtime can send the member to a client that cannot read
+it. The README's sentence of declared interfaces names v0.12.10's and is left as it is. The texts
+that said no revision moves now say it does (this section's fix round 1 (4) and "What is not
+added", [runtime-interface.md](runtime-interface.md)'s row, [device-group.md](device-group.md),
+"Interfaces", and the `runtime-client` bullet of component-interfaces.md's MAPP rows). actingctl's
+MCP overview schema names `device_held` (`apps/actingctl/src/mcp/tools.rs`). (2) **The sweep
+queues; the device's worker prepares.** Fix round 1's step ran the start's preparation on the
+lease sweep's own thread, which the sweep's rule forbids (it waits for no device step, Workflow
+#369 Q-8). The step is now `queue_members_after_device_hold`: for each member the hold refused
+(`start_preparations_held`, now a map of member to its alias and whether its claim is queued),
+once no other member's fence holds the device, the member's pause is not released (as the start
+passes such a member over), no blackout covers it (a preparation the Runtime starts on its own, as
+a fence's recheck: `scheduling-blackout.md`, "Complete silence") and the device is free, it marks
+the member queued and queues one self-check claim of the Runtime's own (`queue_held_start_preparation`,
+built as `queue_fence_recheck` builds a recheck's: a minted holder on the Runtime's fixed connection,
+the scheduler's lease time, `request_host_claim_work`). The claim's payload is a new kind of host
+work, `HostClaimWork::HeldStartPreparation`: the existing kinds cannot carry it, since a recheck's
+payload runs only for a fence's wait for a person (the member has no fence) and a link restore's
+reports to the handset link machine. The device's worker runs it (`run_held_start_preparation`):
+the start's preparation (stage `startup_preparation`, no emulator status read first) under the
+device's admission guard on the claim's key, then the key's release, to the ladder a failed
+preparation admitted when it admitted one; a member that owes nothing any more, or whose pause is
+released by then (it stays owed), runs nothing and releases the key. No thread is added. A failed
+preparation is recorded as every preparation is (`instance_preparation_finished` with its failure,
+the failing step's `runtime.failed`), leaves the member unavailable and is not queued again: its
+grant ended what the member owed. A claim the queue refuses is recorded once (`runtime.failed`,
+stage `operation_cleanup`); the member is owed again only while another member's hold stands by
+then, otherwise it owes nothing more. So no member is queued every tick: one claim per refusal by
+the hold, none while one waits or runs. (3) **An operator's expiry names the hold.** An operator's
+claim that met the device's admission guard taken is queued and held in its place; when its wait
+ends (`await_operator_claim`) while the device is held for another member's unconfirmed close, its
+`lease_queue_expired` carries `device_held_for_member_close` (the fenced member) as its
+`caused_by`; the queue's own record is unchanged. (4) **Tests.**
+`g1_a_refused_close_whose_session_close_ahead_is_confirmed_holds_the_device_for_no_one` now also
+asserts that the run's end met the lapsed lease (no lease of A's run holds the device after the
+end work's sweep tick, and A's run does not complete);
+`g1_a_member_whose_start_preparation_the_hold_refused_is_prepared_again_once_the_fence_is_lifted`
+follows (2): while the hold stands the refused preparation is recorded once and two runs of the
+step queue and prepare nothing; once the fence is lifted the step queues B's claim, B's worker
+prepares B once on its key, the key is released and the step queues nothing more. New:
+`actingcommand-contract`'s `g1_status_device_held_round_trips_and_is_strict` (gate map
+`contract.toml`, "#437 G1"). `r0b_a_console_at_three_or_four_pairs_and_one_whose_max_is_two_is_refused`
+also pairs a console of [3, 9] with this build's [3, 10], and `r0b_the_build_declares_runtime_client_three_to_four`
+pins [3, 10]. The test-only step is now `queue_members_after_device_hold_for_test`. (5) **Locations.**
+Each lock and step of the new path has its own location (`list_held_start_preparations`,
+`read_held_start_preparation_pause`, `read_held_start_preparation_device`,
+`mark_held_start_preparation_queued`, `queue_held_start_preparation`,
+`read_held_start_preparation_claim_ttl`, `settle_held_start_preparation`,
+`run_held_start_preparation`), registered in the `runtime-host` fragment; the step borrows
+`list_physical_instances` no more. The catalog's text of `device_held_for_member_close` says
+the queueing and the expiry's cause; no code or word is added.
 
 ### 1.434 Slice #463 S2-1b (0.12.67): `record ready` knows the package's game, server and locale (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making, whose stage two turns the recorded material into a package offline; found when stages one and two were walked on an installed instance with 0.12.65; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1116/brief-463-s21b-record-ready-identity.md`, read on main `8eb03787`)
 

@@ -924,3 +924,11 @@ tests = [
     "actingcommand-runtime-client::lib::tests::gate_c2::s3_3_a_run_terminal_names_the_outcome_key_of_the_end_it_finished_on",
 ]
 incident = ["#463 S3-3"]
+
+# Workflow #437 G1 fix round 2 (0.12.67; register §1.433; brief rd-1116/brief-437-g1-fix3.md; contracts/component-interfaces.md, the runtime-client row 10; contracts/runtime-interface.md, RuntimeInstanceStatus.device_held): the status member device_held {device_group_wait: close_unconfirmed, alias} round-trips in its instance's row of a Status result, and a row without it has no device_held key; an unknown member of it and a word other than close_unconfirmed are refused
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-contract::lib::runtime::tests::g1_status_device_held_round_trips_and_is_strict",
+]
+incident = ["#437 G1"]
