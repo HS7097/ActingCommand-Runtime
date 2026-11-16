@@ -11,7 +11,9 @@ use actingcommand_contract::{
 use actingcommand_execution_kernel::DriveDraw;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::fmt;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 pub const LAB_RECORDING_SCHEMA: &str = "actingcommand.lab-recording.v1";
 pub const LAB_RECORD_MARK_SCHEMA: &str = "actingcommand.lab-record-mark.v1";
@@ -220,9 +222,63 @@ pub struct RecordingArtifact {
     pub generated_at_unix_ms: u64,
 }
 
+/// #463 S2-1b fix round 1: the game and server the instance's row of the configuration of the
+/// installation the program runs from binds it to, both canonical.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstalledIdentity {
+    pub game: String,
+    pub server: String,
+}
+
+/// #463 S2-1b fix round 1: what reads the installation's row: the row, or `None` when it cannot be
+/// read or gives no usable row.
+pub type ReadInstalled = dyn Fn() -> Option<InstalledIdentity> + Send + Sync;
+
+/// #463 S2-1b fix round 1: the instance's row of the configuration of the installation the program
+/// runs from, read only when it is needed: `record stop` and `record ready` call its reader only
+/// when the flags, the recording and the Lab's instance configuration do not give both the game
+/// and the server. The default has no reader and reads nothing (outside an installation).
+#[derive(Clone, Default)]
+pub struct InstalledRow(Option<Arc<ReadInstalled>>);
+
+impl InstalledRow {
+    /// A row that `read` reads when it is needed.
+    pub fn new(read: impl Fn() -> Option<InstalledIdentity> + Send + Sync + 'static) -> Self {
+        let read: Arc<ReadInstalled> = Arc::new(read);
+        Self(Some(read))
+    }
+
+    /// The row, read now; `None` without a reader or when the reader gives none.
+    pub(crate) fn read(&self) -> Option<InstalledIdentity> {
+        self.0.as_ref().and_then(|read| read())
+    }
+}
+
+impl fmt::Debug for InstalledRow {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self.0 {
+            Some(_) => "InstalledRow(reader)",
+            None => "InstalledRow(none)",
+        })
+    }
+}
+
+impl PartialEq for InstalledRow {
+    /// Equal when neither has a reader, or both have the same one.
+    fn eq(&self, other: &Self) -> bool {
+        match (&self.0, &other.0) {
+            (None, None) => true,
+            (Some(mine), Some(theirs)) => Arc::ptr_eq(mine, theirs),
+            _ => false,
+        }
+    }
+}
+
 /// `record stop` options (Workflow #336 L4). Game, server and locale are canonical; the
-/// explicit ones win over the recording's, which win over the `default_*` ones (the
-/// instance configuration).
+/// explicit ones win over the recording's, which win over the `default_*` ones (the Lab's
+/// instance configuration); then (#463 S2-1b, fix round 1) the instance's row of the configuration
+/// of the installation the program runs from (`installed`), taken whole or not at all. `record
+/// ready` reads with the same options.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct RecordStopOptions {
     pub lab_dir: Option<String>,
@@ -233,6 +289,9 @@ pub struct RecordStopOptions {
     pub locale: Option<String>,
     pub default_game: Option<String>,
     pub default_server: Option<String>,
+    /// #463 S2-1b: the instance's row of the configuration of the installation the program runs
+    /// from (its row of `policy.facts.instances`), last of all; fix round 1: read only when needed.
+    pub installed: InstalledRow,
     pub timeout_ms: Option<u64>,
     pub arrival_timeout_ms: Option<u64>,
     pub application_arrival_timeout_ms: Option<u64>,
