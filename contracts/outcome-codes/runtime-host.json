@@ -23869,6 +23869,28 @@
       "description": "A direct run gives a value of the variable variable_name of its package package_id, and the variable does not apply in the instance's game root now, as the variable table a dispatch reads says it (VariableTable::root_word): variable_problem is the root's word (declaration_conflict, goal_name_conflict, irreversible_by_root, package_unreadable, name_out_of_limits, cap_range, goals_unreadable, or root_unchecked while no check judges the game's root, an instance the configuration binds to no game included) (Workflow #463 S3-8). A dispatch hands such a variable no value from outside. Denied in the run's preparation, before any record, claim or lease: nothing ran.",
       "common_causes": "Packages of the game root that declare the name otherwise, a goals.json entry that takes the name, a package of the root that counts as able to do something irreversible, a game root that failed its check, or a game without a standard pack root.",
       "handling": "Read why in standard-pack check --root <game root> (or goals <inst>, which names the cause); run without the value, which reads the default, or repair the root first."
+    },
+    "run_variable_unjudged": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "package_id": "required",
+        "variable_name": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.68",
+      "description": "A direct run gives a value of the variable variable_name of its package package_id, the variable applies on the instance, and the dispatch's own judgement of the value (the policy crate's resolve_variable, the value as the application's stored entry set through the request's channel) gave neither the value taken nor a word, which cannot happen: given an entry whose setter is known and a variable that applies, that judgement answers the value (set) or the default with its word (Workflow #463 S3-8; the fix round of the 0.12.68 train). Denied in the run's preparation, before any record, claim or lease: nothing ran, and the Runtime and its other instances go on.",
+      "common_causes": "A defect of the Runtime: a change of resolve_variable that answers a given value with its default and no word.",
+      "handling": "Nothing was performed. Report it with the package and the variable's name; until it is fixed, run without the value, which reads the default."
     }
   },
   "locations": {

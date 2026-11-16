@@ -943,8 +943,9 @@ fn s310_a_stored_record_whose_authorization_is_null_is_unreadable() {
 /// variables and sent in its run. The tried package declares one such variable, written as stage
 /// two's own gate shows `record stop` writing it
 /// (`gate_463_s26::s26_refining_the_choice_ends_its_item_and_the_package_holds_its_variable`):
-/// a value the declaration allows is in the plan as given; one naming an option the declaration
-/// does not offer is `validation_failed` naming `--variable`, the variable and `keys_left_out`.
+/// a value the declaration allows is in the plan as given (the train's fix round: in the options'
+/// order and in the other); one naming an option the declaration does not offer is
+/// `validation_failed` naming `--variable`, the variable and `keys_left_out`.
 #[test]
 fn train_01268_a_generated_choice_variable_takes_an_allowed_order_and_refuses_another() {
     let temp = TempDir::new().expect("a temporary directory");
@@ -978,6 +979,17 @@ fn train_01268_a_generated_choice_variable_takes_an_allowed_order_and_refuses_an
         vec![TrialVariable {
             name: "list_item".to_owned(),
             value: json!(["item_a", "item_b"]),
+            source: TrialValueSource::Given,
+        }]
+    );
+    // The fix round of the train: an allowed value in an order other than the options' own is
+    // taken as given, in its own order.
+    let reordered = plan(&given(json!(["item_b", "item_a"])));
+    assert_eq!(
+        reordered.plan.variables,
+        vec![TrialVariable {
+            name: "list_item".to_owned(),
+            value: json!(["item_b", "item_a"]),
             source: TrialValueSource::Given,
         }]
     );

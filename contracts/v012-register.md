@@ -33586,6 +33586,7 @@ showed the value in its plan and then refused the run (`trial_variables_not_carr
 | `run_variable_undeclared` (runtime-host) | The package declares no variable of the name. | refuses, Denied | 1 on actinglab's line |
 | `run_variable_not_applying` (runtime-host) | The variable does not apply on the instance now (`variable_problem` the root's word). | refuses, Denied | 1 |
 | `run_variable_value_refused` (runtime-host) | The variable does not take the value whole (`variable_problem` the judgement's word). | refuses, Denied | 1 |
+| `run_variable_unjudged` (runtime-host; the fix round of the 0.12.68 train, below) | The judgement of the value gave neither the value nor a word, which cannot happen. | refuses, Denied | 1 |
 
 The location `check_run_variables` is added. No vocabulary and no key is added.
 `trial_variables_not_carried` is retired as the catalog retires a code: its fragment entry stays
@@ -33697,6 +33698,45 @@ map, "The 0.12.68 train"): a package directory declaring `list_item` as §1.442'
 `["item_b"]`); a trial's plan given `["item_a", "item_b"]` shows it `given`, and one given
 `["item_a", "item_c"]` is `validation_failed` naming `--variable` with `variable_name`
 `list_item` and `variable_problem` `keys_left_out`. No code, word, key or revision is added.
+
+**Fix round of the 0.12.68 train** (coordinator work order `rd-1116/brief-train-01268-fix1.md`,
+after the independent review of the train, `rd-1116/review-train-01268.md`: its first point and
+its two points that may be changed; on the train's head `61108b17`).
+
+- *What cannot be reached refuses; it does not panic.* The `unreachable!` of `check_run_variables`
+  (fix round 1, "What cannot be reached") is gone: a judgement that gives neither the value nor a
+  word is `run_variable_unjudged`, Denied, `invalid_request`, with `package_id` and
+  `variable_name`, before any record, claim or lease, as the check's other refusals, after them in
+  their order. A panic there was caught at the connection's boundary (`runtime_connection_panicked`)
+  and stopped the whole Runtime, every instance with it; the refusal stops this run alone. The
+  branch still cannot be reached (the host gives an entry whose setter is known and no root word,
+  and `resolve_variable` then answers `set` or the default with a word), so no test reaches it.
+- *Codes.* One code, `run_variable_unjudged` (runtime-host, error / none, pending, since 0.12.68):
+  it refuses, Denied; exit 1 on actinglab's line, as the check's other codes. No key, word,
+  vocabulary or location is added; the index is regenerated. Texts:
+  [runtime-interface.md](runtime-interface.md), "The judgement", its fourth item;
+  [package-variables.md](package-variables.md), "A direct run given values"; this section's table.
+- *A test of stage two that expected too little.* `gate_463_s22.rs`
+  `s22_train_fix_a_frame_whose_file_is_gone_has_no_path_and_one_warning` (§1.440, "Fix round of the
+  train") failed in `exec-tooling`: `record review` named f0003 and f0008, the test f0008 alone.
+  The code is right: frames are stored by their content (`lab/frames/<sha256>.png`), and f0003,
+  step 1's second capture between its press and its screen after, is the same screen as f0008, so
+  one file holds both and moving it away takes f0003's file too. The test now asserts, before the
+  move, that f0003's path is f0008's; after it, that both are `path` `null` wherever they are
+  answered, every other frame keeps its file, and `frame_file_missing` names f0003 and f0008 once
+  each, in the answer's order; `step` 4 alone names f0008 alone. §1.440's line on the test is read
+  with this one; the exec gate map's row says both.
+- *Tests.* The train's test above also gives `["item_b", "item_a"]`, allowed and not in the
+  options' order: the plan holds it as given, in that order (a judgement that sorted it back would
+  fail it); the exec gate map's row says so. New:
+  `crates/runtime-host/src/tests/gate_463_s38.rs`
+  `train_01268_fix1_an_allowed_order_of_a_generated_choice_is_what_the_package_reads` (host gate
+  map, "The 0.12.68 train, fix round"): on S3-8's fixture, the package declaring `list_item` as
+  stage two writes a choice, a direct run given `["item_b", "item_a"]` completes after its one tap
+  and reads `session.dispatch.parameter.list_item` as the rows `{key item_b, rank 1}` and
+  `{key item_a, rank 2}`; `overlaid_pick` now reads through the new `overlaid(scene, key)`.
+  Adapted (the requirement changes what it pins): the s22 test above. No golden changes; no test
+  leaves a gate map.
 
 ### 1.445 Slice #463 S3-12 (0.12.68): adoption shows the trial, names the offline review as what it is, and warns before enabling (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, and her rules that a package not run through on a real device stays held and that nothing is enabled without her explicit authorization; the design `rd-1115/pack-stage3-design.md`, §4.2 "S3-12", §2.1 "Missing" items 2 and 4, §2.2 "The value's source", §2.3 and §2.4; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1116/brief-463-s312-adopt-trial-review.md`, read on main `40abd08b`)
 

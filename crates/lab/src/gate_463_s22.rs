@@ -50,7 +50,9 @@
 // Fix round of the train of #463 stage two (register §1.440, "Fix round of the train"):
 // - `s22_train_fix_a_frame_whose_file_is_gone_has_no_path_and_one_warning`: with `no_preview`, a
 //   frame whose file is gone (step 3's screen after, step 4's screen before) answers `path` `null`
-//   on both steps and the warning `frame_file_missing` names it once.
+//   on both steps and the warning `frame_file_missing` names it once. Fix round of the 0.12.68
+//   train: f0003, the same screen stored in the same content-addressed file, is gone with it and
+//   named too.
 // No Runtime, no device; the tests read no clock and never sleep.
 
 use crate::gate_463_s25_draft::{self as draft, Bench, INSTANCE, POINTS};
@@ -1177,9 +1179,13 @@ fn s22_fix1_a_self_checks_item_is_on_its_step_when_the_locale_is_given() {
 // The fix round of the train of #463 stage two (register §1.440, "Fix round of the train"; the
 // review of the train: fix round 1's third item had no test): with `no_preview`, a frame whose file
 // is gone is answered without a path and named once in the warning `frame_file_missing`. The file
-// of f0008, step 3's screen after and step 4's screen before, is moved out of the recording: both
-// answer `path` `null`, every other frame its file, and the warning names f0008 once; `step` 4
-// alone answers the same.
+// of f0008, step 3's screen after and step 4's screen before, is moved out of the recording.
+// Fix round of the 0.12.68 train: frames are stored by their content (`lab/frames/<sha256>.png`),
+// and f0003, the second capture between step 1's press and its screen after, is screen 3 as f0008
+// is, so the two frames are one file and f0003's is gone with it (the test first expected f0008
+// alone). Both answer `path` `null` wherever they are answered, every other frame its file, and the
+// warning names f0003 and f0008 once each, in the order the answer names them; `step` 4 alone
+// answers f0008 without its path and names it alone.
 #[test]
 fn s22_train_fix_a_frame_whose_file_is_gone_has_no_path_and_one_warning() {
     let bench = three_presses();
@@ -1191,11 +1197,27 @@ fn s22_train_fix_a_frame_whose_file_is_gone_has_no_path_and_one_warning() {
         .expect("step 4's screen before");
     assert_eq!(last.frame_id, "f0008");
     let file = last.path.clone().expect("the frame's file");
+    // f0003 is stored in the one file of its content, f0008's.
+    let same_screen = &intact.steps[0].between[1];
+    assert_eq!(same_screen.frame_id, "f0003");
+    assert_eq!(
+        same_screen.path.as_ref(),
+        Some(&file),
+        "f0003 and f0008 are one file"
+    );
     fs::rename(&file, bench.state().join("f0008-moved-away.png")).expect("the file moved away");
 
-    let warning = json!([{"code": "frame_file_missing", "frame_ids": ["f0008"]}]);
+    let gone = ["f0003", "f0008"];
     let json = serde_json::to_value(review(&bench, &without_previews())).expect("answer JSON");
-    assert_eq!(json["warnings"], warning, "{json}");
+    assert_eq!(
+        json["warnings"],
+        json!([{"code": "frame_file_missing", "frame_ids": gone}]),
+        "{json}"
+    );
+    assert_eq!(
+        json["steps"][0]["between"][1]["frame_id"], "f0003",
+        "{json}"
+    );
     assert_eq!(json["steps"][2]["after"]["frame_id"], "f0008", "{json}");
     assert_eq!(json["steps"][3]["before"]["frame_id"], "f0008", "{json}");
     for step in json["steps"].as_array().expect("steps") {
@@ -1203,9 +1225,10 @@ fn s22_train_fix_a_frame_whose_file_is_gone_has_no_path_and_one_warning() {
             .into_iter()
             .filter(|side| !side.is_null());
         for frame in sides.chain(step["between"].as_array().expect("between")) {
+            let frame_id = frame["frame_id"].as_str().expect("a frame id");
             assert_eq!(
                 frame["path"].is_null(),
-                frame["frame_id"] == "f0008",
+                gone.contains(&frame_id),
                 "{frame}: {json}"
             );
         }
@@ -1222,5 +1245,9 @@ fn s22_train_fix_a_frame_whose_file_is_gone_has_no_path_and_one_warning() {
     .expect("answer JSON");
     assert_eq!(one["steps"][0]["before"]["frame_id"], "f0008", "{one}");
     assert_eq!(one["steps"][0]["before"]["path"], Value::Null, "{one}");
-    assert_eq!(one["warnings"], warning, "{one}");
+    assert_eq!(
+        one["warnings"],
+        json!([{"code": "frame_file_missing", "frame_ids": ["f0008"]}]),
+        "{one}"
+    );
 }

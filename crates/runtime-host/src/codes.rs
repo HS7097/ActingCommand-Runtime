@@ -1657,6 +1657,10 @@ actingcommand_contract::outcome_codes! {
         /// Error. The request gives a value of a variable that does not apply in the instance's
         /// game root now, as a dispatch's table says it (key `variable_problem` the root's word).
         RunVariableNotApplying => "run_variable_not_applying": error / none,
+        /// Error. Fix round of the 0.12.68 train: the judgement of a given value of an applying
+        /// variable (`resolve_variable`) gave neither the value nor a word, which cannot happen;
+        /// the run alone is refused instead of a panic that would stop the Runtime.
+        RunVariableUnjudged => "run_variable_unjudged": error / none,
         // ---- Workflow #463 S3-8: end
     }
 }

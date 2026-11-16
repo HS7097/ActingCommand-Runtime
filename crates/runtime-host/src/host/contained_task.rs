@@ -7756,7 +7756,8 @@ impl HostShared {
     /// judgement answers it (the policy crate's `resolve_variable`, the value given as the entry an
     /// application holds, set through the request's channel now), `run_variable_value_refused`
     /// with its word. Each is Denied with the package and the name. A request without values passes
-    /// unchanged and reads nothing.
+    /// unchanged and reads nothing. Fix round of the 0.12.68 train: a judgement that gives neither
+    /// the value nor a word, which cannot happen, is `run_variable_unjudged`, Denied as the others.
     fn check_run_variables(
         &self,
         request: &ValidatedRuntimeRequest<'_>,
@@ -7844,11 +7845,17 @@ impl HostShared {
                 // Fix round 1: not reachable. Given an entry whose setter is known and no root
                 // word, `resolve_variable` answers `set` (with `keys_left_out` when it took the
                 // value in part) or the default with the judgement's word, never a default
-                // without a word.
-                (_, None) => unreachable!(
-                    "resolve_variable answered a given value of an applying variable with its \
-                     default and no word"
-                ),
+                // without a word. Fix round of the 0.12.68 train: should it ever answer one, this
+                // run alone is refused (`run_variable_unjudged`), as the refusals above; a panic
+                // here would stop the whole Runtime at the connection's boundary.
+                (_, None) => {
+                    return Err(run_variable_refused(
+                        HostCode::RunVariableUnjudged,
+                        package_id,
+                        name,
+                        None,
+                    ));
+                }
             }
         }
         Ok(())
