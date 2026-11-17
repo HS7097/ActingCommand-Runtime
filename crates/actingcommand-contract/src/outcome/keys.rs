@@ -483,6 +483,8 @@ outcome_keys! {
     // pool stands on, and which of `pack-catalog.json` and `schedule.json` lacks it.
     catalog_side: vocab(catalog_side),
     catalog_difference: vocab(catalog_difference),
+    // Workflow #477 PC-2: why `standard-pack catalog` refuses a package its `refresh` names.
+    catalog_refresh_problem: vocab(catalog_refresh_problem),
     // ROUT-L RL-1b (frozen model v1.0 §3.8): what a game's `schedule.json` gave the scheduler
     // workbench: its sha256 and its rules, held and unclassified packages.
     schedule_sha256: hash,

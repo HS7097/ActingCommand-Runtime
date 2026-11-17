@@ -32,6 +32,19 @@
 //! `packs/`), `schedule.json`, `pack-catalog.json` and `ui.json`; in it, it writes only
 //! `pack-catalog.json` (and its `.part`) and deletes nothing: a leftover `ui.json` stays, and its
 //! warning with it.
+//!
+//! Workflow #477 PC-2 (register §1.462): `--refresh <package_id>` (repeatable) brings the named
+//! entries' business part up to date from their rules, their display and their place kept, and
+//! `--displays <file>` (an absolute path) replaces the named entries' displays whole by a display
+//! file's, both by the same rule ([`merge_standard_pack_catalog`] with its `CatalogEdits`). A
+//! package `--refresh` names that the registry does not hold, or names twice, is
+//! `standard_pack_catalog_refresh_refused`; a display file the catalog's own checks refuse is
+//! `standard_pack_catalog_display_refused`; either before anything is written. The answer gains
+//! `refreshed` and `display_written`, each only when its option is given, so that the line without
+//! them answers as before, byte for byte. Fix round 1: the display file carries its
+//! `schema_version` and may carry groups, which the line adds (`groups_added`, with `--displays`
+//! only); a `--refresh` id an answer could not name (over 256 bytes, or with a control character)
+//! is a usage error before the root is read, its value not echoed.
 
 use crate::standard_pack_check::{catalog_refused, read_bounded, root_invalid};
 use crate::{
@@ -39,9 +52,12 @@ use crate::{
     StandardPackRootFiles, installed_root_containing, package_bundle,
 };
 use actingcommand_contract::codes::{ContractCode, SharedCode};
-use actingcommand_contract::outcome::{Detail, IoOp, Outcome};
+use actingcommand_contract::outcome::{
+    Detail, IoOp, KeyKind, NAME_MAX_BYTES, Outcome, key_text_fits,
+};
 use actingcommand_contract::{
-    LabError, LabErrorClass, LabResult, STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_CATALOG_FILE,
+    CatalogDisplayFile, CatalogDisplayFileIssue, CatalogEdits, CatalogMergeRefusal, LabError,
+    LabErrorClass, LabResult, STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_CATALOG_FILE,
     STANDARD_PACK_RETIRED_UI_FILE, STANDARD_PACK_SCHEDULE_FILE, StandardPackProblem,
     StandardPackRegistry, StandardPackRootIssue, catalog_display_outcome,
     merge_standard_pack_catalog, parse_standard_pack_schedule, retired_ui_outcome,
@@ -72,6 +88,7 @@ static SCRATCH_COUNT: AtomicU64 = AtomicU64::new(0);
 pub fn write_standard_pack_catalog(
     request: StandardPackCatalogRequest,
 ) -> LabResult<StandardPackCatalogResponse> {
+    refresh_ids_fit(&request.refresh)?;
     let root = std::path::absolute(&request.root)
         .map_err(|error| LabError::usage(format!("{}: {error}", request.root.display())))?;
     if !fs::metadata(&root).is_ok_and(|metadata| metadata.is_dir()) {
@@ -109,16 +126,42 @@ pub fn write_standard_pack_catalog(
     let retired_document = retired
         .as_deref()
         .and_then(|bytes| serde_json::from_slice::<Value>(bytes).ok());
+    // PC-2: the display file, read whole; the contract crate checks it.
+    let displays = request
+        .displays
+        .as_deref()
+        .map(read_display_file)
+        .transpose()?;
+    let edits = CatalogEdits {
+        refresh: &request.refresh,
+        displays: displays.as_ref().map(|(path, bytes)| CatalogDisplayFile {
+            path: path.as_path(),
+            bytes: bytes.as_slice(),
+        }),
+    };
     let merge = merge_standard_pack_catalog(
         &game,
         &registry,
         schedule.as_ref(),
         existing.as_deref(),
         retired_document.as_ref(),
+        &edits,
     )
-    // Fix round 1: the first refusal names the file it is in (`schedule.json` for a rule's pool
-    // that file does not declare).
-    .map_err(|issues| catalog_refused(&game, &root, issues))?;
+    .map_err(|refusal| match refusal {
+        CatalogMergeRefusal::Refresh(refusal) => refused(
+            refusal.outcome(&game),
+            LabErrorClass::UsageValidation,
+            format!(
+                "--refresh {}: {} (standard-pack catalog brings up to date only an entry of a \
+                 package the root's registry holds, each named once)",
+                refusal.package_id, refusal.problem
+            ),
+        ),
+        // Fix round 1: the first refusal names the file it is in (`schedule.json` for a rule's
+        // pool that file does not declare).
+        CatalogMergeRefusal::Root(issues) => catalog_refused(&game, &root, issues),
+        CatalogMergeRefusal::Display { path, issues } => display_refused(&game, &path, issues),
+    })?;
     let changed = existing.as_deref() != Some(merge.bytes.as_slice());
     let mut warnings = merge
         .catalog
@@ -167,9 +210,79 @@ pub fn write_standard_pack_catalog(
         dropped: merge.dropped,
         differences: merge.differences,
         display_from_ui: merge.display_from_ui,
+        refreshed: (!request.refresh.is_empty()).then_some(merge.refreshed),
+        display_written: request.displays.is_some().then_some(merge.display_written),
+        groups_added: request.displays.is_some().then_some(merge.groups_added),
         document,
         warnings,
     })
+}
+
+/// Workflow #477 PC-2 fix round 1 (the independent review): each `--refresh` id is one an answer's
+/// `package_id` (a name of the key table: at most [`NAME_MAX_BYTES`] bytes, no control character)
+/// can carry; the first that is not is a usage error (`validation_failed`) before the root is read,
+/// naming the parameter, the id's place and its length, never its value.
+fn refresh_ids_fit(refresh: &[String]) -> LabResult<()> {
+    match refresh
+        .iter()
+        .enumerate()
+        .find(|(_, package_id)| !key_text_fits(KeyKind::Name, package_id))
+    {
+        Some((index, package_id)) => Err(LabError::usage(format!(
+            "--refresh value {} ({} bytes) is no package id: a package id is at most \
+             {NAME_MAX_BYTES} bytes, without a control character",
+            index + 1,
+            package_id.len()
+        ))),
+        None => Ok(()),
+    }
+}
+
+/// Workflow #477 PC-2: the display file `--displays` names, an absolute path, and its bytes. A
+/// relative path, a file that does not exist, cannot be read or exceeds the package input byte
+/// limit is a usage error naming it (`validation_failed`), as a root file's is; its content is the
+/// contract crate's to check.
+fn read_display_file(path: &Path) -> LabResult<(PathBuf, Vec<u8>)> {
+    if !path.is_absolute() {
+        return Err(LabError::usage(format!(
+            "--displays {} is no absolute path",
+            path.display()
+        )));
+    }
+    match read_bounded(path)? {
+        Some(bytes) => Ok((path.to_owned(), bytes)),
+        None => Err(LabError::usage(format!(
+            "--displays {}: no such file",
+            path.display()
+        ))),
+    }
+}
+
+/// Workflow #477 PC-2: the refusal `standard_pack_catalog_display_refused` of the display file at
+/// `path` of the game root of `game`, with its first error (the contract crate answers at least
+/// one), of the class usage or validation: the line names a file that cannot be written into the
+/// catalog as it stands.
+fn display_refused(game: &str, path: &Path, issues: Vec<CatalogDisplayFileIssue>) -> LabError {
+    let first = issues.into_iter().next().unwrap_or_else(whole_display_file);
+    refused(
+        first.outcome(game, path),
+        LabErrorClass::UsageValidation,
+        format!(
+            "{}: standard_pack_problem={} json_pointer={} (the display file is checked by the \
+             catalog's own display checks before anything is written)",
+            path.display(),
+            first.problem,
+            first.pointer
+        ),
+    )
+}
+
+/// The display file as a whole, `malformed`: a refusal without an error is the whole file's.
+fn whole_display_file() -> CatalogDisplayFileIssue {
+    CatalogDisplayFileIssue {
+        problem: StandardPackProblem::Malformed,
+        pointer: String::new(),
+    }
 }
 
 /// The game and the registry of the directory `root` (module doc). A directory that holds

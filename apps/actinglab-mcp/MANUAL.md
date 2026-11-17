@@ -666,7 +666,19 @@ naming this file.
   through `ac_standard_pack_build` and `ac_place`. What it leaves out of an existing file (an entry
   of a package no longer registered, a pool `schedule.json` no longer declares) is answered in
   `removed` and `dropped` and warned of (`standard_pack_catalog_left_out`). Do not edit the file by
-  hand. `ac_packs` answers each
+  hand. Workflow #477 PC-2 (0.12.71): `refresh`, a list of package ids, each once, brings each
+  named entry's `consumes` and `produces` up to date from its rules (the one way an entry's business
+  part is brought back to the rules), its display and its place kept, and answers `refreshed` (each
+  `{package_id, state replaced|agrees|added, before?, after}`); the order agents use is adopt held,
+  try, write the rule, then call with `refresh`. `displays`, an absolute path of a file
+  `{"schema_version": "actingcommand.pack-catalog-displays.v1", "groups"?: [{id, title}], "packs":
+  [{package_id, title, summary, group?, risk?}]}`, replaces each named entry's display whole and
+  answers `display_written`; a group the catalog does not hold is added after its groups and
+  answered in `groups_added`, one it holds with the same title is there already, one it holds with
+  another title is refused (`catalog_group_title_differs`), and no group is removed or renamed.
+  The file is checked by the catalog's own checks first. A package the registry does not hold
+  (`package_not_listed`), or named twice, is refused (`standard_pack_catalog_refresh_refused`,
+  `standard_pack_catalog_display_refused`) before anything is written. `ac_packs` answers each
   game's `index` (per pool the packages that produce and consume it) and each composed row's
   `catalog`; `ac_standard_pack_check` answers the root's `catalog` note and the file's warnings.
 - **Regression cases** (#463 RC-1, 0.12.69; `contracts/resource-regression-case.md`).

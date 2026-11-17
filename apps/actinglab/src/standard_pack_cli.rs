@@ -228,8 +228,13 @@ pub(crate) const STATUS_SWITCHES: [&str; 1] = [INSTALLATION_FLAG];
 const STATUS: &str = "standard-pack status";
 /// Workflow #477 PC-1: the flags `standard-pack catalog` takes, and the one of them that takes no
 /// value, which takes none from the next word but `true` or `false` (`FlagArgs::parse_switches`).
-pub(crate) const CATALOG_FLAGS: [&str; 2] = ["--root", "--plan"];
+/// Workflow #477 PC-2: and `--refresh`, repeatable, and `--displays`.
+pub(crate) const CATALOG_FLAGS: [&str; 4] = ["--root", "--plan", REFRESH_FLAG, DISPLAYS_FLAG];
 pub(crate) const CATALOG_SWITCHES: [&str; 1] = ["--plan"];
+/// Workflow #477 PC-2: the package whose entry's business part is brought up to date from its
+/// rules, once per package; and the display file whose entries replace named entries' displays.
+const REFRESH_FLAG: &str = "--refresh";
+const DISPLAYS_FLAG: &str = "--displays";
 
 pub(crate) fn options() -> [&'static str; 1] {
     ["--root <installed game root: <standard_packs.root>/<game>>"]
@@ -263,11 +268,14 @@ pub(crate) fn adopt_options() -> [&'static str; 8] {
     ]
 }
 
-/// Workflow #477 PC-1: the flags of `standard-pack catalog`.
-pub(crate) fn catalog_options() -> [&'static str; 2] {
+/// Workflow #477 PC-1: the flags of `standard-pack catalog`. Workflow #477 PC-2: `--refresh` and
+/// `--displays`.
+pub(crate) fn catalog_options() -> [&'static str; 4] {
     [
         "--root <a resource repository's checkout (applications.json and packs/; the file is written at its root) or a built game root (<game>/ with bundle.json); never inside an installation>",
         "--plan (answers the pack-catalog.json it would write; writes nothing)",
+        "--refresh <package_id> (repeatable, once per package: its entry's consumes and produces computed again from its rules, its display and its place kept; answered in refreshed, a package without an entry added; one the registry does not hold or named twice refused standard_pack_catalog_refresh_refused, package_not_listed or package_repeated)",
+        "--displays <absolute path of {schema_version: actingcommand.pack-catalog-displays.v1, groups?: [{id, title}], packs: [{package_id, title, summary, group?, risk?}]}> (each named entry's display replaced whole, its business part untouched; a group not in the catalog added, answered in groups_added; one there with another title refused)",
     ]
 }
 
@@ -412,7 +420,9 @@ pub(crate) fn run_standard_pack(
 /// Workflow #477 PC-1: `standard-pack catalog` (module doc). A flag off its list, a positional
 /// word, `--root` twice or without its value is a usage error before anything is read; under the
 /// global `--dry-run` the line without `--plan` is `dry_run_unsupported` (it writes the file), its
-/// read-only form `--plan`.
+/// read-only form `--plan`. Workflow #477 PC-2: `--refresh <package_id>` may be given once per
+/// package (the resource tooling refuses a package named twice, by its word), `--displays <file>`
+/// once; either without its value is a usage error before anything is read.
 fn run_catalog(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse_switches(args, &CATALOG_SWITCHES);
     if let Some(flag) = flags
@@ -426,7 +436,7 @@ fn run_catalog(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     }
     flags.expect_positionals("standard-pack catalog", 0)?;
     for flag in CATALOG_FLAGS {
-        if flags.count(flag) > 1 {
+        if flag != REFRESH_FLAG && flags.count(flag) > 1 {
             return Err(CliError::usage(format!(
                 "standard-pack catalog takes {flag} once"
             )));
@@ -434,6 +444,18 @@ fn run_catalog(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     }
     let root = flags.required_path("--root")?;
     let plan = flags.bool("--plan");
+    let refresh = flags.values(REFRESH_FLAG);
+    // A flag without its value takes `true` (`FlagArgs::parse_switches`), as `required` reads it.
+    if refresh.iter().any(|package_id| package_id == "true") {
+        return Err(CliError::usage(format!(
+            "missing {REFRESH_FLAG} <package_id>"
+        )));
+    }
+    let displays = if flags.given(DISPLAYS_FLAG) {
+        Some(flags.required_path(DISPLAYS_FLAG)?)
+    } else {
+        None
+    };
     if !plan {
         crate::dry_run_gate::refuse(
             global,
@@ -442,7 +464,12 @@ fn run_catalog(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
             Value::Null,
         )?;
     }
-    let response = write_standard_pack_catalog(StandardPackCatalogRequest { root, plan })?;
+    let response = write_standard_pack_catalog(StandardPackCatalogRequest {
+        root,
+        plan,
+        refresh,
+        displays,
+    })?;
     serde_json::to_value(response).map_err(|error| {
         CliError::device(format!(
             "failed to serialize the standard-pack catalog answer: {error}"

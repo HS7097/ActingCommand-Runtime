@@ -49,7 +49,9 @@ pub const ENVELOPE_MAX_BYTES: usize = 32 * 1024;
 /// #463 V2 fix round 2: public, the bound of an outcome's record form (a ledger record's reason),
 /// which a writer that must keep a record within it measures against.
 pub const ENVELOPE_BODY_BUDGET: usize = ENVELOPE_MAX_BYTES - 128;
-const NAME_MAX_BYTES: usize = 256;
+/// The longest value of a key of type name or id, in bytes. Workflow #477 PC-2 fix round 1: public,
+/// so that a usage refusal of a value [`key_text_fits`] does not take can state the bound.
+pub const NAME_MAX_BYTES: usize = 256;
 const PATH_MAX_BYTES: usize = 1024;
 const POINTER_MAX_BYTES: usize = 512;
 const URL_MAX_BYTES: usize = 2048;
@@ -955,6 +957,14 @@ pub fn key_kind(name: &str) -> Option<KeyKind> {
         .iter()
         .find(|spec| spec.name == name)
         .map(|spec| spec.kind)
+}
+
+/// Workflow #477 PC-2 fix round 1: whether `text` is a value the key table takes for a key of type
+/// `kind` (a debug build stops on one it does not take), by the table's own rule: a caller that
+/// builds an outcome from a text it was given (an argument, a member name of a file) asks first,
+/// and refuses or shortens what does not fit.
+pub fn key_text_fits(kind: KeyKind, text: &str) -> bool {
+    text_rule_broken(kind, text).is_none()
 }
 
 /// Whether an interface gets the full outcome or only its registered names (model section 7.1).
