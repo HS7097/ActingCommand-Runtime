@@ -275,6 +275,10 @@ mod gate_463_s315;
 // function (S3-17).
 #[path = "gate_463_ac1.rs"]
 mod gate_463_ac1;
+// #463 AD-1: `standard-pack adopt --record-id` reads its recording from `--session-state-dir`, only
+// reading it, and its answer counts the warnings of the root's other packages by code.
+#[path = "gate_463_ad1.rs"]
+mod gate_463_ad1;
 // #398 DB-2: `help <row> --json` answers the parameters of `devices` and `devices bind` as the
 // operation table this build embeds holds them, the call a client makes to learn what this Lab
 // can do (register §1.467).

@@ -15,13 +15,16 @@ use super::model::{
     ClickFollow, ClickGesture, MarkFamily, RecordRect, RecordedFrame, RecordedKey, SelectDecision,
     SelectFrameDecision, StepSelect,
 };
+use super::near::{NearThresholdAt, Nearest, TemplateNearThreshold, TemplateScore};
 use super::select::{
     NAME_UNREAD, PAGE_PASSES_ON_OTHER_FRAME, PRESS_MISMATCH, PRESSED_ABSENT, SELF_TEST_ERROR,
     decide, empty_end_key, on_empty_key,
 };
 use super::store::{blocked, invalid, with_details};
 use crate::LabOcr;
-use crate::codes::{EndingAgainst, EndingProblem, LabCode, ReadyCheck, ReadyCheckStop};
+use crate::codes::{
+    EndingAgainst, EndingProblem, LabCode, ReadyCheck, ReadyCheckStop, TemplateThresholdSide,
+};
 use crate::regression_case::RegressionCheck;
 use actingcommand_contract::outcome::{Detail, Outcome};
 use actingcommand_contract::{
@@ -1333,6 +1336,93 @@ struct PageResult {
     /// Workflow #390 LAB-2: the forbidden marks that pass.
     forbidden_passed: Vec<String>,
     margins: Vec<(String, f64)>,
+    /// #463 RM-1: whether a target the page names was undetermined (OCR without a model).
+    undetermined: bool,
+    /// #463 RM-1: each template mark the page names, required or forbidden, with its verdict and
+    /// its score.
+    templates: Vec<MarkScore>,
+}
+
+/// #463 RM-1: a template mark a page names on one frame: its id, whether the page forbids it,
+/// whether it passed, and its score and threshold.
+struct MarkScore {
+    id: String,
+    forbidden: bool,
+    passed: bool,
+    score: TemplateScore,
+}
+
+impl PageResult {
+    /// #463 RM-1: on a frame the page does not match, the one template mark its not matching rests
+    /// on: nothing else of the page fails or is undetermined there, no forbidden mark passes, and
+    /// the one required mark that fails is a template whose score lies below its threshold. `None`
+    /// on any other frame, where no single template tells the page from the screen.
+    fn held_apart_by(&self) -> Option<&MarkScore> {
+        if self.verdict != PageVerdict::NoMatch
+            || self.undetermined
+            || !self.forbidden_passed.is_empty()
+        {
+            return None;
+        }
+        let [only] = self.failed.as_slice() else {
+            return None;
+        };
+        self.templates
+            .iter()
+            .find(|mark| !mark.forbidden && mark.id == *only && !mark.score.at_or_above())
+    }
+}
+
+/// #463 RM-1: what the template marks of one page gave on the page's own frames: per mark it
+/// requires that passes there, and per mark it forbids that misses there, the score nearest its
+/// threshold.
+#[derive(Default)]
+struct OwnNearest {
+    passes: Nearest,
+    misses: Nearest,
+}
+
+impl OwnNearest {
+    /// The page's result on its own frame `frame`.
+    fn note(&mut self, result: &PageResult, frame: &RecordedFrame) {
+        for mark in &result.templates {
+            match (mark.forbidden, mark.passed, mark.score.at_or_above()) {
+                (false, true, true) => self.passes.note(&mark.id, frame, mark.score),
+                (true, false, false) => self.misses.note(&mark.id, frame, mark.score),
+                _ => {}
+            }
+        }
+    }
+
+    /// The warnings of the page at `at`: its required marks that pass and its forbidden marks that
+    /// miss by less than `bound`, judged by `record_step_self_mismatch`.
+    fn warnings(&self, bound: f64, at: &NearThresholdAt) -> Vec<TemplateNearThreshold> {
+        let mut warnings =
+            self.passes
+                .within(bound, TemplateThresholdSide::Passes, SELF_MISMATCH, at);
+        warnings.extend(self.misses.within(
+            bound,
+            TemplateThresholdSide::Misses,
+            SELF_MISMATCH,
+            at,
+        ));
+        warnings
+    }
+}
+
+/// #463 RM-1: the checks a warning `record_template_near_threshold` names, by the code each answers
+/// when its judgement fails (as `optional_ambiguity_not_evaluated` names its check).
+const SELF_MISMATCH: &str = "record_step_self_mismatch";
+const ARRIVAL_UNCONFIRMED: &str = "arrival_unconfirmed";
+const OPTIONAL_AMBIGUOUS: &str = "record_optional_step_ambiguous";
+const SKIP_TARGET_INSENSITIVE: &str = "record_optional_skip_target_insensitive";
+
+/// What one target gave on a scene: its verdict, its margin ([`evaluation_margin`]) and (#463 RM-1)
+/// a template's score and threshold.
+struct TargetResult {
+    verdict: Verdict,
+    margin: Option<f64>,
+    template: Option<TemplateScore>,
 }
 
 /// The margin of a target evaluation: score minus threshold, color distance limit minus
@@ -1360,18 +1450,23 @@ struct Evaluation<'a> {
 }
 
 impl Evaluation<'_> {
-    fn target(&self, scene: &Scene, id: &str) -> LabResult<(Verdict, Option<f64>)> {
+    fn target(&self, scene: &Scene, id: &str) -> LabResult<TargetResult> {
         let mark = self.plan.mark(id)?;
+        let derived = |verdict| TargetResult {
+            verdict,
+            margin: None,
+            template: None,
+        };
         match mark.family {
             // #411 Lab B-9: a value test reads OCR; with a model the admitted evaluator evaluates
             // it below, as any other target.
             MarkFamily::Ocr | MarkFamily::ValueTest if !self.ocr_available => {
-                Ok((Verdict::Undetermined, None))
+                Ok(derived(Verdict::Undetermined))
             }
             MarkFamily::Check => {
                 let mut members = Vec::new();
                 for member in mark.check_members() {
-                    members.push(self.target(scene, member)?.0);
+                    members.push(self.target(scene, member)?.verdict);
                 }
                 let verdict = if mark.all_of.is_some() {
                     if members.contains(&Verdict::Failed) {
@@ -1388,7 +1483,7 @@ impl Evaluation<'_> {
                 } else {
                     Verdict::Undetermined
                 };
-                Ok((verdict, None))
+                Ok(derived(verdict))
             }
             _ => {
                 // Workflow #390 LAB-2: a template that anchors a page is its `page/` target.
@@ -1408,7 +1503,14 @@ impl Evaluation<'_> {
                 } else {
                     Verdict::Failed
                 };
-                Ok((verdict, evaluation_margin(&evaluation)))
+                Ok(TargetResult {
+                    verdict,
+                    margin: evaluation_margin(&evaluation),
+                    template: evaluation.template.as_ref().map(|template| TemplateScore {
+                        score: template.score,
+                        threshold: template.threshold,
+                    }),
+                })
             }
         }
     }
@@ -1426,22 +1528,40 @@ impl Evaluation<'_> {
         let mut forbidden_passed = Vec::new();
         let mut undetermined = false;
         let mut margins = Vec::new();
+        let mut templates = Vec::new();
         for id in required {
-            let (verdict, margin) = self.target(scene, id)?;
-            match verdict {
+            let result = self.target(scene, id)?;
+            match result.verdict {
                 Verdict::Passed => {}
                 Verdict::Failed => failed.push(id.clone()),
                 Verdict::Undetermined => undetermined = true,
             }
-            if let Some(margin) = margin {
+            if let Some(margin) = result.margin {
                 margins.push((self.plan.target_id(id), margin));
+            }
+            if let Some(score) = result.template {
+                templates.push(MarkScore {
+                    id: id.clone(),
+                    forbidden: false,
+                    passed: result.verdict == Verdict::Passed,
+                    score,
+                });
             }
         }
         for id in forbidden {
-            match self.target(scene, id)?.0 {
+            let result = self.target(scene, id)?;
+            match result.verdict {
                 Verdict::Passed => forbidden_passed.push(id.clone()),
                 Verdict::Failed => {}
                 Verdict::Undetermined => undetermined = true,
+            }
+            if let Some(score) = result.template {
+                templates.push(MarkScore {
+                    id: id.clone(),
+                    forbidden: true,
+                    passed: result.verdict == Verdict::Passed,
+                    score,
+                });
             }
         }
         let verdict = if !failed.is_empty() || !forbidden_passed.is_empty() {
@@ -1456,6 +1576,8 @@ impl Evaluation<'_> {
             failed,
             forbidden_passed,
             margins,
+            undetermined,
+            templates,
         })
     }
 
@@ -1490,6 +1612,10 @@ pub(crate) struct CrossCheck {
     /// Workflow #339 section 4.7c: an optional step (index into `Plan::steps`) and the earlier
     /// step of its run recorded for the same pop-up.
     pub(crate) same_as: BTreeMap<usize, usize>,
+    /// #463 RM-1: the warnings `record_template_near_threshold` of the pages on their own frames,
+    /// the arrival gates and the optional steps, answered beside `warnings` and never written into
+    /// the package's provenance.
+    pub(crate) near_threshold: Vec<TemplateNearThreshold>,
 }
 
 const ARRIVAL_MESSAGE: &str = "Arrival unconfirmed: the screen the run waits for after this \
@@ -1636,27 +1762,42 @@ fn guard_mismatch(
     )
 }
 
-/// The frames a page matches on and the frames it is undetermined on.
+/// What a page gave on the frames of a screen it must not pass on: the frames it matches on, the
+/// frames it is undetermined on and (#463 RM-1), over the frames it does not match on because one
+/// template mark it requires alone fails there ([`PageResult::held_apart_by`]), that mark's score
+/// nearest its threshold.
+struct OnFrames {
+    matched: Vec<String>,
+    undetermined: Vec<String>,
+    held: Nearest,
+}
+
+/// The page of `required` and `forbidden` on `frames`.
 fn page_on_frames(
     evaluation: &Evaluation<'_>,
     cache: &FrameCache,
     required: &[String],
     forbidden: &[String],
     frames: &[&RecordedFrame],
-) -> LabResult<(Vec<String>, Vec<String>)> {
-    let mut matched = Vec::new();
-    let mut undetermined = Vec::new();
+) -> LabResult<OnFrames> {
+    let mut on = OnFrames {
+        matched: Vec::new(),
+        undetermined: Vec::new(),
+        held: Nearest::default(),
+    };
     for frame in frames {
-        match evaluation
-            .page(&cached(cache, frame)?.scene, required, forbidden)?
-            .verdict
-        {
-            PageVerdict::Match => matched.push(frame.frame_id.clone()),
-            PageVerdict::Undetermined => undetermined.push(frame.frame_id.clone()),
-            PageVerdict::NoMatch => {}
+        let result = evaluation.page(&cached(cache, frame)?.scene, required, forbidden)?;
+        match result.verdict {
+            PageVerdict::Match => on.matched.push(frame.frame_id.clone()),
+            PageVerdict::Undetermined => on.undetermined.push(frame.frame_id.clone()),
+            PageVerdict::NoMatch => {
+                if let Some(mark) = result.held_apart_by() {
+                    on.held.note(&mark.id, frame, mark.score);
+                }
+            }
         }
     }
-    Ok((matched, undetermined))
+    Ok(on)
 }
 
 /// What the optional-step checks leave when none refuses.
@@ -1668,6 +1809,9 @@ struct OptionalChecks {
     /// The skip target on each member's frames (`distinct` or `not_evaluated`), by step index.
     member_gates: BTreeMap<usize, &'static str>,
     partial: bool,
+    /// #463 RM-1: the template marks that tell an optional page, or the skip target, from a screen
+    /// it must not pass on by less than the bound.
+    near: Vec<TemplateNearThreshold>,
 }
 
 /// The screen a run may show when an optional page is absent (section 4.7a).
@@ -1793,11 +1937,16 @@ fn skip_target_insensitive(
 /// #463 S2-1c: each page against each screen is one judgement; one that fails is a failure
 /// `failures` meets (a: the optional step, the frames its page passes on, its page; b: the skip
 /// target, the optional step's frames it passes on, its page), and under `record ready` the next
-/// is judged; a member whose skip target failed has no gate result.
+/// is judged; a member whose skip target failed has no gate result. #463 RM-1: a page that does not
+/// pass on such a screen only because one template mark it requires misses there by less than
+/// `bound` is that mark's warning `record_template_near_threshold` (`misses`); fix round 2: but for
+/// the frames of another optional step closed by the same press ([`same_closing`]), on which c lets
+/// the page pass.
 fn optional_checks(
     evaluation: &Evaluation<'_>,
     plan: &Plan,
     cache: &FrameCache,
+    bound: f64,
     failures: &mut Failures,
 ) -> LabResult<OptionalChecks> {
     let mut checks = OptionalChecks::default();
@@ -1834,12 +1983,17 @@ fn optional_checks(
                 if frames.is_empty() {
                     continue;
                 }
-                let (matched, undetermined) =
-                    page_on_frames(evaluation, cache, &step.required, &step.forbidden, &frames)?;
+                let OnFrames {
+                    matched,
+                    undetermined,
+                    held,
+                } = page_on_frames(evaluation, cache, &step.required, &step.forbidden, &frames)?;
                 let other_step = &plan.steps[other];
+                // Section 4.7c: on the frames of another optional step of the run closed by the
+                // same press the page may pass (one pop-up recorded twice).
+                let same_click =
+                    matches!(kind, Against::OtherOptional) && same_closing(step, other_step);
                 if !matched.is_empty() {
-                    let same_click =
-                        matches!(kind, Against::OtherOptional) && same_closing(step, other_step);
                     if !same_click {
                         failures.fail(
                             Locus::on_step(step).with_frames(&matched).with_page(page),
@@ -1849,23 +2003,45 @@ fn optional_checks(
                     }
                     same_pairs.insert((member.min(other), member.max(other)));
                     same_pages.insert((other, member), matched);
-                } else if !undetermined.is_empty() {
-                    checks.partial = true;
-                    checks.warnings.push(json!({
-                        "code": "optional_ambiguity_not_evaluated",
-                        "check": "record_optional_step_ambiguous",
-                        "step": step.number,
-                        "page": page,
-                        "against": kind.as_str(),
-                        "frames": undetermined,
-                        "message": AMBIGUITY_NOT_EVALUATED_MESSAGE
-                    }));
+                } else {
+                    // #463 RM-1: told from that screen by one template mark alone; fix round 2:
+                    // not on a screen section 4.7c lets the page pass on, where it need not miss.
+                    if !same_click {
+                        checks.near.extend(held.within(
+                            bound,
+                            TemplateThresholdSide::Misses,
+                            OPTIONAL_AMBIGUOUS,
+                            &NearThresholdAt {
+                                step: Some(step.number),
+                                record_index: Some(step.step.index),
+                                page: Some(page.to_owned()),
+                                against: Some(kind.as_str().to_owned()),
+                                ..NearThresholdAt::default()
+                            },
+                        ));
+                    }
+                    if !undetermined.is_empty() {
+                        checks.partial = true;
+                        checks.warnings.push(json!({
+                            "code": "optional_ambiguity_not_evaluated",
+                            "check": "record_optional_step_ambiguous",
+                            "step": step.number,
+                            "page": page,
+                            "against": kind.as_str(),
+                            "frames": undetermined,
+                            "message": AMBIGUITY_NOT_EVALUATED_MESSAGE
+                        }));
+                    }
                 }
             }
         }
         for &member in &run.members {
             let step = &plan.steps[member];
-            let (matched, undetermined) = page_on_frames(
+            let OnFrames {
+                matched,
+                undetermined,
+                held,
+            } = page_on_frames(
                 evaluation,
                 cache,
                 &skip.required,
@@ -1881,6 +2057,19 @@ fn optional_checks(
                 )?;
                 continue;
             }
+            // #463 RM-1: the skip target told from the pop-up by one template mark alone.
+            checks.near.extend(held.within(
+                bound,
+                TemplateThresholdSide::Misses,
+                SKIP_TARGET_INSENSITIVE,
+                &NearThresholdAt {
+                    step: Some(skip.number),
+                    record_index: Some(skip.step.index),
+                    page: Some(skip_page.to_owned()),
+                    optional_step: Some(step.number),
+                    ..NearThresholdAt::default()
+                },
+            ));
             let result = if undetermined.is_empty() {
                 "distinct"
             } else {
@@ -1993,11 +2182,16 @@ fn names_changed_after_press(
 /// is one judgement; one that fails is a failure `failures` meets (the step, the frame, the page or
 /// the guard's mark), and under `record ready` the next is judged. The arrival gates and the entry
 /// overlay only warn: once a failure is collected they are not evaluated, and nothing is answered.
+/// #463 RM-1: a template mark a page requires that passes on the page's own frames, or one it
+/// forbids that misses there, by less than `bound`, and the one template mark an arrival gate or an
+/// optional step's page is told from a screen by, missing there by less than `bound`, is the
+/// warning `record_template_near_threshold` (`near_threshold`); it refuses nothing.
 pub(crate) fn cross_check(
     plan: &Plan,
     evaluator: &RecognitionEvaluator,
     cache: &FrameCache,
     ocr: &LabOcr,
+    bound: f64,
     failures: &mut Failures,
 ) -> LabResult<CrossCheck> {
     let evaluation = Evaluation {
@@ -2010,6 +2204,7 @@ pub(crate) fn cross_check(
     let mut own = Vec::new();
     let mut margins: BTreeMap<(u32, String, String), f64> = BTreeMap::new();
     let mut single_sample = Vec::new();
+    let mut near_threshold = Vec::new();
 
     // a. every page on its own live frames
     for step in &plan.steps {
@@ -2037,6 +2232,7 @@ pub(crate) fn cross_check(
         }
         for (page, required, forbidden, frames, transition) in pages {
             let mut results = Vec::new();
+            let mut nearest = OwnNearest::default();
             for frame in frames {
                 let result =
                     evaluation.page(&cached(cache, frame)?.scene, &required, &forbidden)?;
@@ -2048,6 +2244,7 @@ pub(crate) fn cross_check(
                     continue;
                 }
                 partial |= result.verdict == PageVerdict::Undetermined;
+                nearest.note(&result, frame);
                 for (target, margin) in result.margins {
                     let entry = margins
                         .entry((step.number, page.clone(), target))
@@ -2057,6 +2254,16 @@ pub(crate) fn cross_check(
                 results
                     .push(json!({"frame_id": frame.frame_id, "result": result.verdict.as_str()}));
             }
+            // #463 RM-1: the page's template marks on its own frames.
+            near_threshold.extend(nearest.warnings(
+                bound,
+                &NearThresholdAt {
+                    step: Some(step.number),
+                    record_index: Some(step.step.index),
+                    page: Some(page.clone()),
+                    ..NearThresholdAt::default()
+                },
+            ));
             own.push(json!({
                 "step": step.number,
                 "page": page,
@@ -2127,7 +2334,7 @@ pub(crate) fn cross_check(
     }
 
     // Workflow #339 section 4.7: the optional steps, refusals before any warning.
-    let optional = optional_checks(&evaluation, plan, cache, failures)?;
+    let optional = optional_checks(&evaluation, plan, cache, bound, failures)?;
     partial |= optional.partial;
     // #463 S2-1c: what follows only warns, and a failure leaves nothing that reads it.
     if failures.count() > start {
@@ -2175,17 +2382,30 @@ pub(crate) fn cross_check(
             gates.push(json!({"step": step.number, "gate": gate, "result": result}));
             continue;
         }
-        let mut matched = Vec::new();
-        let mut undetermined = Vec::new();
-        for frame in step.live_frames() {
-            match evaluation
-                .page(&cached(cache, frame)?.scene, &required, &gate_forbidden)?
-                .verdict
-            {
-                PageVerdict::Match => matched.push(frame.frame_id.clone()),
-                PageVerdict::Undetermined => undetermined.push(frame.frame_id.clone()),
-                PageVerdict::NoMatch => {}
-            }
+        let OnFrames {
+            matched,
+            undetermined,
+            held,
+        } = page_on_frames(
+            &evaluation,
+            cache,
+            &required,
+            &gate_forbidden,
+            &step.live_frames(),
+        )?;
+        // #463 RM-1: the gate told from this step's own screen by one template mark alone.
+        if matched.is_empty() {
+            near_threshold.extend(held.within(
+                bound,
+                TemplateThresholdSide::Misses,
+                ARRIVAL_UNCONFIRMED,
+                &NearThresholdAt {
+                    step: Some(step.number),
+                    record_index: Some(step.step.index),
+                    gate: Some(gate.clone()),
+                    ..NearThresholdAt::default()
+                },
+            ));
         }
         let result = if !matched.is_empty() {
             "passes_on_previous"
@@ -2227,6 +2447,7 @@ pub(crate) fn cross_check(
         gates.push(json!({"step": step.number, "gate": gate, "result": result}));
     }
     warnings.extend(optional.warnings);
+    near_threshold.extend(optional.near);
     for number in optional.arrival_by_time_window {
         if !arrival_by_time_window.contains(&number) {
             arrival_by_time_window.push(number);
@@ -2321,6 +2542,7 @@ pub(crate) fn cross_check(
         cross_check: Value::Object(cross_check),
         entry_overlay,
         same_as: optional.same_as,
+        near_threshold,
     })
 }
 
@@ -2349,13 +2571,19 @@ pub(crate) struct EndingChecks {
     pub(crate) endings: Vec<Value>,
     pub(crate) warnings: Vec<Value>,
     pub(crate) partial: bool,
+    /// #463 RM-1: the warnings `record_template_near_threshold` of the endings' pages on their own
+    /// frames and against the screens a run may show instead, and of the usual ending's page on
+    /// their frames; never written into the package's provenance.
+    pub(crate) near_threshold: Vec<TemplateNearThreshold>,
 }
 
 /// #463 R2: a recorded screen an ending's page is checked against: which (`against`), what names
-/// it in the refusal's details, and its live frames.
+/// it in the refusal's details, and its live frames; #463 RM-1: and what names it in a warning
+/// `record_template_near_threshold` (`at`), as `names` does.
 struct EndingScreen<'p> {
     against: EndingAgainst,
     names: Value,
+    at: NearThresholdAt,
     frames: Vec<&'p RecordedFrame>,
 }
 
@@ -2488,17 +2716,23 @@ fn ending_ambiguous(ending: &PlanEnding, screen: &EndingScreen<'_>, frames: &[St
 /// cross-check is then `partially_evaluated`. #463 S2-1c: each ending's page on each of its own
 /// frames and against each screen is one judgement; one that fails is a failure `failures` meets
 /// (the ending's outcome key and page, the frames), and under `record ready` the next is judged.
+/// #463 RM-1: a template mark an ending's page requires that passes on its own frames by less than
+/// `bound`, and the one template mark an ending's page, or the usual ending's page, is told from a
+/// screen by, missing there by less than `bound`, is the warning `record_template_near_threshold`
+/// (`near_threshold`); it refuses nothing.
 pub(crate) fn ending_checks(
     plan: &Plan,
     evaluator: &RecognitionEvaluator,
     cache: &FrameCache,
     ocr: &LabOcr,
+    bound: f64,
     failures: &mut Failures,
 ) -> LabResult<EndingChecks> {
     let mut checks = EndingChecks {
         endings: Vec::new(),
         warnings: Vec::new(),
         partial: false,
+        near_threshold: Vec::new(),
     };
     if plan.endings.is_empty() {
         return Ok(checks);
@@ -2519,6 +2753,7 @@ pub(crate) fn ending_checks(
         let ocr_alone = !evaluation.ocr_available && plan.rests_on_ocr(&ending.required)?;
         let own_frames = ending.live_frames();
         let mut own = Vec::new();
+        let mut nearest = OwnNearest::default();
         for frame in &own_frames {
             let result = evaluation.page(&cached(cache, frame)?.scene, &ending.required, &[])?;
             if result.verdict == PageVerdict::NoMatch {
@@ -2529,13 +2764,27 @@ pub(crate) fn ending_checks(
                 continue;
             }
             checks.partial |= result.verdict == PageVerdict::Undetermined;
+            nearest.note(&result, frame);
             own.push(json!({"frame_id": frame.frame_id, "result": result.verdict.as_str()}));
         }
+        // #463 RM-1: the ending's template marks on its own frames.
+        checks.near_threshold.extend(nearest.warnings(
+            bound,
+            &NearThresholdAt {
+                outcome_key: Some(key.to_owned()),
+                page: Some(ending.page.clone()),
+                ..NearThresholdAt::default()
+            },
+        ));
         let mut screens = Vec::new();
         for step in &awaiting {
             screens.push(EndingScreen {
                 against: EndingAgainst::Previous,
                 names: json!({"step": step.number}),
+                at: NearThresholdAt {
+                    step: Some(step.number),
+                    ..NearThresholdAt::default()
+                },
                 frames: if step.transition_page.is_some() {
                     step.transition_live_frames()
                 } else {
@@ -2546,6 +2795,10 @@ pub(crate) fn ending_checks(
         screens.push(EndingScreen {
             against: EndingAgainst::Usual,
             names: json!({"step": last.number}),
+            at: NearThresholdAt {
+                step: Some(last.number),
+                ..NearThresholdAt::default()
+            },
             frames: last.live_frames(),
         });
         for other in plan
@@ -2556,6 +2809,10 @@ pub(crate) fn ending_checks(
             screens.push(EndingScreen {
                 against: EndingAgainst::OtherEnding,
                 names: json!({"other_outcome_key": other.ending.outcome_key}),
+                at: NearThresholdAt {
+                    other_outcome_key: Some(other.ending.outcome_key.clone()),
+                    ..NearThresholdAt::default()
+                },
                 frames: other.live_frames(),
             });
         }
@@ -2564,8 +2821,11 @@ pub(crate) fn ending_checks(
             if screen.frames.is_empty() {
                 continue;
             }
-            let (matched, undetermined) =
-                page_on_frames(&evaluation, cache, &ending.required, &[], &screen.frames)?;
+            let OnFrames {
+                matched,
+                undetermined,
+                held,
+            } = page_on_frames(&evaluation, cache, &ending.required, &[], &screen.frames)?;
             if !matched.is_empty() {
                 failures.fail(
                     Locus::on_ending(ending).with_frames(&matched),
@@ -2583,6 +2843,18 @@ pub(crate) fn ending_checks(
                 )?;
                 continue;
             }
+            // #463 RM-1: the ending told from that screen by one template mark alone.
+            checks.near_threshold.extend(held.within(
+                bound,
+                TemplateThresholdSide::Misses,
+                LabCode::RecordEndingAmbiguous.as_str(),
+                &NearThresholdAt {
+                    against: Some(screen.against.as_str().to_owned()),
+                    outcome_key: Some(key.to_owned()),
+                    page: Some(ending.page.clone()),
+                    ..screen.at.clone()
+                },
+            ));
             if !undetermined.is_empty() {
                 checks.partial = true;
                 let mut warning = json!({
@@ -2604,13 +2876,32 @@ pub(crate) fn ending_checks(
                 checks.warnings.push(warning);
             }
         }
-        let (matched, undetermined) = page_on_frames(
+        let OnFrames {
+            matched,
+            undetermined,
+            held,
+        } = page_on_frames(
             &evaluation,
             cache,
             &last.required,
             &last.forbidden,
             &own_frames,
         )?;
+        // #463 RM-1: the usual ending's page told from this ending's screen by one template mark
+        // alone.
+        if matched.is_empty() {
+            checks.near_threshold.extend(held.within(
+                bound,
+                TemplateThresholdSide::Misses,
+                ENDING_USUAL_INSENSITIVE,
+                &NearThresholdAt {
+                    outcome_key: Some(key.to_owned()),
+                    page: Some(ending.page.clone()),
+                    usual_page: Some(usual_page.to_owned()),
+                    ..NearThresholdAt::default()
+                },
+            ));
+        }
         let usual = if !matched.is_empty() {
             checks.warnings.push(json!({
                 "code": ENDING_USUAL_INSENSITIVE,

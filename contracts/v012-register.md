@@ -37066,6 +37066,174 @@ else; main still `ca539cc7`, nothing merged).
   press, not the located box; without one it is refused `validation_failed` (no click field) after
   the drive record of its recognition, which carries the box, is written.
 
+### 1.464 Slice #463 AD-1 (0.12.72): adoption reads a recording from its own directory; its answer carries this package's warnings (Workflow #463; observed on production 0.12.70 by the channel that makes packages; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1117/brief-463-ad1-adopt-recording-dir.md`, on main `8caf51bb`)
+
+This section takes 1.464. It ships in 0.12.72.
+
+**Why.** A recording lives in the Lab's session directory, on one volume of that machine, and the
+resource repository's checkout on another. `standard-pack adopt --record-id` read the recording
+from the state directory it is given, and `--replace` moves the replaced pack directory (and, since
+AC-1, §1.461, the replaced case set) into that state directory, which must lie on the checkout's
+volume (`replace_across_volumes`). The two could not both hold, so the channel adopted by
+`--package`, and AC-1's cases and `record ready`'s judgement, which only an adoption by record id
+reaches, were never reached there. And the answer carried the warnings of the whole standard pack
+(some eighty `package_bundle_entry_page_unlisted` and `package_bundle_interrupt_page_shadowed` of
+other packages), 17 to 18 KiB through MCP, exported to a file at every call.
+
+**What the state directory was to each part** (read in the code): the recording by its id
+(`<state>/record-artifacts/<record>/lab/`, the line's own `lab_dir`) and `record ready`'s judgement
+of it (`AdoptLab::recording_ready` on the state directory); the check tree
+(`<state>/adopt-check/<checkout>/`); the kept copies (`<state>/adopt/<package_id>.old-<ms>/`,
+`<state>/adopt/<package_id>.cases.old-<ms>/`); the trial records of `review.trial`
+(`<state>/trials/<package_id>/`). The recording commands keep their recordings in their own
+session state directory: their `--state-dir`, else `ACTINGLAB_SESSION_STATE_DIR`, else actinglab's
+default `session` directory (`session_state_dir_from_flags`), the same default adopt takes.
+
+**The rule.**
+- *The option*: `standard-pack adopt --session-state-dir <dir>`, over MCP `session_state_dir` of
+  `ac_standard_pack_adopt` (a `dir` parameter of the table, so a relative path is refused
+  `not_absolute` as every path of the table is). Named after the recording commands' own word for
+  that directory, their session state directory (`ACTINGLAB_SESSION_STATE_DIR`,
+  `session_state_dir_from_flags`).
+- *With it*, `--record-id` reads its recording, its package, its cases and `record ready`'s
+  judgement from that directory, and only reads it; the check tree, both kept copies and the trial
+  records stay under the state directory. So AC-1 holds whole as when both are one directory, and
+  the path is one more of the local paths a package's text may not hold, as the state directory's
+  is (where it differs from it).
+- *Without it*, the recordings' directory is the state directory: every byte and every refusal as
+  before.
+- *Beside `--package`* it has no meaning (that package is read from its path): refused before
+  anything is read, `validation_failed` naming `--session-state-dir`, `argument_problem`
+  `conflicting`, exit 2, as `--held-reference` without `--held-reason` is (`conflicting`).
+- *The warnings*: each warning is read for the pack it names by the one rule a readiness row's
+  warnings are read by (`CheckWarning::read`, #463 S3-6: its `package_id` when that is a pack of
+  the root, else a `path` that is a pack's directory or under it), on the check tree's game root.
+  Those that name another package are left out of `warnings` and counted in
+  `other_packages_warnings` `{total, counts}` (`counts` by code); every other warning (of the
+  adopted package, of no package: a root-level finding, a rule's warning that names only its
+  `task_id`) is answered whole, in its order. `--dry-run` answers the same. No check changes.
+- *The advice* of `replace_across_volumes` (the pack directory's and the cases' kept place) and of
+  the steps after an interrupted call names `--session-state-dir` beside `--package`; its outcome,
+  its values and the place among the refusals are as before.
+- *`standard-pack status` and `standard-pack trial`* find no recording by its id (their state
+  directory is where the trial records are read and written): not changed.
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The option | `apps/actinglab/src/standard_pack_cli.rs`: `SESSION_STATE_DIR_FLAG` in `ADOPT_FLAGS` and `adopt_options`; `run_adopt` builds `lab_dir` from it (or the state directory) and refuses it beside `--package` |
+| The source | `crates/resource-tooling/src/adopt.rs`: `AdoptSource::Recording` gains `session_state_dir`, which `recorded_package` hands to `record ready`'s function and which joins the local-path needles where it is not the state directory |
+| The warnings | `standard_pack_ready::with_packs_named` (the readiness's own reading of the root and `CheckWarning::read`, called, not copied); `adopt::of_the_package` keeps or counts; `OtherPackagesWarnings`, exported |
+| Texts | [standard-pack-authoring.md](standard-pack-authoring.md), "The operation", "The answer", "The recordings' directory", "The warnings of other packages"; the table's row; `apps/actinglab-mcp/MANUAL.md`, "Adoption" |
+
+**Codes and words.** None. `other_packages_warnings`, `total` and `counts` are new members of the
+answer. No decision reads a code: a warning is kept or counted by the pack it names.
+
+**Tests** (`apps/actinglab/src/tests/gate_463_ad1.rs`, apps gate map "#463 AD-1"; recordings made
+as gate_463_ac1 makes them, made-up checkouts; no clock, no sleep): the four of the work order, as
+the gate map's comment lists them. Adapted for the new member only: `gate_464_p1`'s `recording` and
+`gate_463_ac1`'s `request` name `session_state_dir` (the state directory, as before). No golden
+changes; no test leaves a gate map.
+
+**What is not changed.** What adoption writes into the checkout, byte for byte; its refusals and
+their order; the answer's other members; adoption by `--package`; `record stop`'s
+`adoption_example`, which names the recording's own state directory as `--state-dir`.
+
+**At deploy.** Nothing to configure. An agent on a machine whose recordings and checkout lie on two
+volumes adopts by `--record-id <id> --session-state-dir <the recordings' directory> --state-dir
+<a directory on the checkout's volume>`, and `--replace` works there. That `--state-dir` lies
+outside the checkout: `standard-pack trial`, given the same directory, refuses one that is or lies
+inside a repository (`trial_state_dir_refused`, `trial_state_place` `repository`). It gives
+`standard-pack trial` and `standard-pack status` of the package that same `--state-dir` (fix round
+1): adoption reads `review.trial` from the trial records under its `--state-dir`, and a trial
+recorded under another directory (actinglab's session directory, the trial's default) is not read
+there, so the adoption would answer `review.trial` `none` and warn `not_tried` for a package that
+was tried.
+
+**Fix round 1** (coordinator work order `rd-1118/brief-463-ad1-fix1.md`, after the independent
+review `rd-1118/review-1813.md` on `17017461`, the coordinator's rulings; main `f0c64ae8`, the
+release commit of 0.12.71, merged).
+
+- *The texts that did not follow.* The contract's row of `--record-id` names the recordings'
+  directory; the table's note of `state_dir` names what it holds (the check tree, the kept copies,
+  the trial records) and that the recording is read there only without `session_state_dir`; the
+  advice of `replace_across_volumes` in the catalogue (`adopt_refused`'s description and the word's
+  own in the header) names `--session-state-dir` beside `--package`. The outcome-code index is
+  regenerated.
+- *The trial's records* (older than this slice; words only). The contract ("The recordings'
+  directory") and "At deploy" above say that `standard-pack trial` and `standard-pack status` are
+  given the same `--state-dir` as the adoption. Where a record is read or written is not changed.
+- *The reading that splits the warnings refuses nothing.* `with_packs_named` (the readiness's own
+  `read_root` of the check tree's `installed/<game>/`) refusing, after every check passed, no
+  longer refuses the adoption, as the readiness's own refusal does not (`readiness_not_judged`):
+  every warning is answered whole, in its order, then the new warning `adopt_warnings_not_split`
+  (`path` that root, the reader's refusal as its cause), and `other_packages_warnings` (now
+  optional) is absent. The readiness's word for what it did not judge is not taken: it is a member
+  of its own answer and `package_readiness_unjudged`, an information about a readiness item.
+- *What `standard-pack check` lists.* The contract says which command answers which warnings of the
+  check tree: `standard-pack check` on `installed/<game>/` its own, `package bundle` packaging's own
+  (`recognition_pack_undeclared` among them), which `check` does not list again.
+
+| Word | What it says | Refuses or warns | Exit (own line; `--via`; MCP) |
+|---|---|---|---|
+| `adopt_warnings_not_split` (resource-tooling, `path`) | the check tree's game root could not be read again to tell which package each warning names: every warning whole, `other_packages_warnings` absent | warns | 0; 0; the answer's `warnings` |
+
+No decision reads a code by name: the warnings are split, or not, by whether that reading answered.
+**Tests** (`gate_463_ad1.rs`, apps gate map "#463 AD-1 fix round 1"):
+`ad1_fix1_a_root_that_cannot_be_read_again_answers_every_warning_whole`: a recording adopted by
+record id into a checkout of three held packages with a warning each, by a worktree whose Lab runs
+the cases as actinglab's does and then makes the check tree's `bundle.json` unreadable, as another
+writer would: adopted, the three warnings whole in `warnings`, `adopt_warnings_not_split` last with
+its `path` and its cause `standard_pack_root_invalid`, no `other_packages_warnings`. Adapted, in
+what it holds and not in what it asserts of the answer: test 1's `--replace` goes through a
+worktree whose `rename` refuses any path under the recordings' directory and keeps every rename it
+was asked for; the test asserts that none touched that directory and that the old pack directory
+and the old cases were moved by it into the state directory. No golden changes; no test leaves a
+gate map.
+
+**The train of 0.12.72** (coordinator work order `rd-1118/brief-train-01272.md`). Before the
+merges each branch took its review's last texts: here "At deploy" above and the contract say that
+the `--state-dir` lies outside the checkout, the handling of `adopt_warnings_not_split` says to
+commit what was written before a `--replace` (`pack_dirty`), and the manual's sentence on other
+packages' warnings names the split that could not be made; on #1815's branch the manual, the
+table's rows of `record ready` and `record review` and the self-check's item 11 say that on a
+packaged recording `--template-margin-bound` is taken, its range checked, and without effect. Pull
+request #1813 (this slice) then takes main (#1814 PP-1, §1.465; #1809, the iOS bridge; #1817 DB-2,
+§1.467) and #1815 (#463 RM-1, §1.466), each by one merge commit, both sides whole: this register
+keeps §1.464 to §1.467, each once, in the order of their numbers; the apps gate map keeps this
+slice's two blocks before PP-1's, the exec gate map RM-1's block; the outcome-code index is
+regenerated. Where the slices meet:
+- *Adoption and `record ready`.* Adoption judges a recording by `record_ready_by_id` with
+  `RecordStopOptions::default()` (`LabAdoption::recording_ready`), so the bound of
+  `record_template_near_threshold` is RM-1's default, 0.03, never a caller's: neither
+  `standard-pack adopt` nor its tool takes `template_margin_bound`. RM-1 changed no signature
+  adoption calls; its new parameter (`bound` of `self_checks`, `package_checks`, `cross_check` and
+  `ending_checks`) and its new members (`RecordStopOptions::template_margin_bound`, the checks'
+  `near_threshold`, a review step's `warnings`) are named by every caller and initializer, all in
+  the Lab's crate and actinglab's record commands. A packaged recording, the only one adoption
+  takes, runs no self-check and is answered no such warning. A recording adoption refuses
+  `recording_not_current` carries `record ready`'s answer whole in `details.record_ready`, whose
+  `warnings` hold `record_template_near_threshold` as `record ready` lists it (every self-check
+  passed, or every one before `cases` and `cases` failed). Nothing else of adoption reads it: the
+  refusal is decided by the status alone, and no adoption is refused or warned because of it. No
+  change.
+- *The two warning lists.* This slice splits the warnings of the check tree (`standard-pack
+  check`'s and packaging's) and adoption's own. `record_template_near_threshold` is a warning of a
+  recording's self-checks, answered by `record stop`, `record ready` and `record review` alone and
+  written into neither the package nor the recording, so it is never among them and never counted
+  in `other_packages_warnings`. No change.
+- *The manual and the table.* The MCP manual's paragraphs and the table's rows of `record stop`,
+  `record ready`, `record review` and `standard-pack adopt` hold each slice's text whole beside
+  PP-1's and DB-2's. No row is added, removed or given another slice, module or status, so the
+  counts stay main's: 194 rows (every help text at most 160 bytes, the longest 159); on Windows 167
+  offered (54 by `core_ops`, 39 by the rescue module, 74 by children), elsewhere 128
+  ([lab-two-entries.md](lab-two-entries.md)); the ratchet's 46 dispatch arms and 109 commands. No
+  change.
+
+The outcome-code index is regenerated and current: 4024 codes, 3935 active, 89 retired. *Tests*:
+none added or adapted; no golden changes; no test leaves a gate map.
+
 ### 1.465 Slice #434 PP-1 (0.12.72): a rescue answer over the MCP budget is exported, not lost (Workflow #434; observed on production 0.12.70; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1117/brief-434-pp1-mcp-export.md`, on main `8caf51bb`)
 
 This section takes 1.465, the number its work order gives. It ships in 0.12.72.
@@ -37232,6 +37400,132 @@ configuration binds no instance to the game). This section's header bullet, its 
 and "Where it is built", the gate file's description and the comment of the gate map's row "#434
 PP-1" say the rule of fix round 1. No test and no golden changes; no gate map row changes but in
 its comment.
+
+### 1.466 Slice #463 RM-1 (0.12.72): a recording's self-check warns of a template mark that barely passes (Workflow #463; observed on production 0.12.70: a package made from a recording failed its first trials, one cause a template mark cut from a tab drawn with a moving highlight, which passed its threshold of 0.95 by 0.013 on the recording's own frames and read 0.947 on the device a moment later; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1117/brief-463-rm1-margin-warning.md`, on main `8caf51bb`)
+
+This section takes 1.466 (1.464 and 1.465 are held by other open slices of the same day).
+It ships in 0.12.72.
+
+**Why.** The stop's answer showed the margin (`cross_check.margins`) and said nothing of it; a margin
+that small is a fact the tool has at the stop and did not point out. The owner's rulings on stage
+two hold: the tool hands back material and proposes nothing.
+
+**What the self-checks computed per mark** (read in the code; the work order's item 1).
+
+| Where | What, on which frames, against what |
+|---|---|
+| `record mark`'s self-test (`crates/lab/src/recording/marks.rs`, `evaluate_mark`) | every live frame of the mark's step (primary and samples): a template's `min_score` and `margin` = min score − its threshold (its own or the recording's default), with `matched_rect` and `location_ambiguous`; a colour mark's `max_observed_distance` and `margin` = its limit − the largest distance; a colour digest's `mean_milli`, `max_cell` and `margin` = `{mean_milli, max_cell}`, the limits minus the worst values; an OCR mark, a value test and a check carry none. Answered in the mark's `self_test` (the `record mark` answer, `record status`, `record review`'s `marks`) |
+| `record stop`'s cross-check (`crates/lab/src/recording/crosscheck.rs`, `cross_check`, item 4 "Self") | every page on the live frames of its own step and every page transition on its frames, with the admitted evaluator: per required target the smallest `score − threshold` (template), `max_distance − distance` (colour) or `max_mean_milli − mean_milli` (colour digest), over the frames the page matched or was undetermined on; answered in `cross_check.margins[{step, page, target, min_margin}]`, also in the package's provenance. No check compares anything to a bound; forbidden targets, the arrival gates, the optional steps, the endings and the entry overlay answer verdicts only |
+| `record ready` | no margin: the self-checks' failures and warnings; the cross-check's result is not in its answer |
+| `record review` | the marks' `self_test` as stored; no margin of the self-checks |
+
+**The rule** (`contracts/lab-recording.md`, "Self-checks", item 11, "Near a threshold").
+- *The measure.* The self-checks keep, per template mark and per judgement, the frame on which its
+  score came nearest its threshold, on the side the judgement needs it (`crates/lab/src/recording/
+  near.rs`, `Nearest`, one implementation for every caller). `passes`: a template a page requires
+  that passes on the page's own frames (a step's page, its page transition, an ending's page),
+  the marks `cross_check.margins` lists. `misses`: a template a page forbids that misses on the
+  page's own frames (item 4, the forbidden marks, the one check that compares a mark against its
+  threshold from below); and, where a page must not pass on a screen and does not, the one template
+  mark its not passing rests on (every other mark it requires passes, none is undetermined, no mark
+  it forbids passes, that one fails with its score below its threshold): the arrival gate on the
+  frames of the step whose effect it awaits, an optional step's page against the step before its
+  run, the skip target and another optional step, the skip target on an optional step's frames,
+  an ending's page against `previous`, `usual` and `other_ending`, the usual ending's page on an
+  ending's frames. A page not passing because two marks fail is told apart by either and is not
+  judged so. The entry overlay, a darkened copy of step 1's frames, is not judged so.
+- *The warning.* `record_template_near_threshold` (warning, `ladder_class` none, `pending`, since
+  0.12.72): `{code, side, check, against?, step?, record_index?, page?, gate?, optional_step?,
+  outcome_key?, other_outcome_key?, usual_page?, mark_id, frame_id, score, threshold, margin, bound}`,
+  `side` a word of the new vocabulary `template_threshold_side` (`passes`, `misses`), `check` the code
+  the judgement answers when it fails (`record_step_self_mismatch`, `arrival_unconfirmed`,
+  `record_optional_step_ambiguous`, `record_optional_skip_target_insensitive`,
+  `record_ending_ambiguous`, `ending_usual_insensitive`, as `optional_ambiguity_not_evaluated`
+  names its check) with the members that check names its place by, `margin` the distance of the
+  score from the threshold, less than `bound`. No message, no proposal: the fact only.
+- *Where it is answered.* `record stop` and its dry run: `lab.warnings`, after the other warnings;
+  `record ready`: among its warnings, after `record stop`'s other warnings, once every self-check
+  passed (`ReadyWarningItem::NearThreshold`), its status, `missing` and `checks` unchanged; `record
+  review`: `steps[].warnings`, the warnings whose `record_index` is the step's (an ending's names no
+  step), absent when there is none. It is not written into the package's provenance (`warnings`
+  there are what they were), so the package is byte for byte the same whatever the bound.
+- *The bound* (the work order's item 4). The Lab gives its other self-check numbers as parameters
+  of the command with a default (`record stop --arrival-timeout-ms`, `record frames --before` and
+  `--after`, a mark's `--threshold`, `record start --template-threshold`); the Lab's configuration
+  (`user-config`) holds none. So the bound is `--template-margin-bound <d>` of `record stop`,
+  `record ready` and `record review` (`RecordStopOptions::template_margin_bound`, the operation
+  table's `template_margin_bound`, `decimal`), default `DEFAULT_TEMPLATE_MARGIN_BOUND` 0.03; a value
+  outside 0 to 1 is `validation_failed` before anything is read (the Lab's check, as for the
+  timeouts; a text that is no number is refused by actinglab's parse); 0 warns of nothing.
+- *What the other mark families have* (the work order's item 5; not warned in this slice). In the
+  same self-checks a colour mark's and a colour digest's distance to their limits is already
+  measured and answered: `cross_check.margins` (`max_distance − distance`, `max_mean_milli −
+  mean_milli`) and the mark's `self_test.margin` at mark time. OCR, value-test and check marks have
+  no such number.
+
+**Codes and words.**
+
+| Word | One cause | Refuses or warns | Exit |
+|---|---|---|---|
+| `record_template_near_threshold` | a template mark's score lies nearer its threshold than the bound on the side a self-check needs it on (`side`) | warns, never refuses | unchanged: 0 on actinglab's own line, on the `--via` line and through MCP |
+| `template_threshold_side` (`passes`, `misses`) | the side: it passes where it must pass, or misses where it must not pass | (a vocabulary) | none |
+
+No decision reads the code or the word: `record review` places a warning at a step by its typed
+variant and `record_index`, not by its code.
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The measure and the warning | `crates/lab/src/recording/near.rs` (new): `TemplateNearThreshold`, `NearThresholdAt`, `Nearest`, `template_margin_bound` |
+| The judgements | `crates/lab/src/recording/crosscheck.rs`: `Evaluation::target` keeps a template's score and threshold; `PageResult::held_apart_by`; `OwnNearest`; `page_on_frames` answers `OnFrames` with the held marks (the arrival gate now reads it too, as the optional steps and the endings did); `cross_check`, `optional_checks` and `ending_checks` take the bound |
+| The answers | `crates/lab/src/recording_api.rs`: the bound read by `record_stop` and `ready_of`, `self_checks` and `package_checks` carry it, `PackageChecked::near_threshold` kept out of the provenance and added to `lab.warnings`; `ready.rs` `ReadyWarningItem::NearThreshold`; `review.rs` `RecordReviewStep::warnings` |
+| The command line | `apps/actinglab/src/commands/session_record.rs`: `--template-margin-bound` in `RECORD_STOP_FLAGS`, `RECORD_READY_READS` and `RECORD_REVIEW_READS`; the usage texts of `record stop` (`lab2_cli.rs`, `session_contracts.rs`) |
+| Codes | `crates/lab/src/codes.rs`, `contracts/outcome-codes/lab.json`, the vocabulary in `contracts/outcome-codes/catalog.json`, the index regenerated |
+| Texts | `contracts/lab-recording.md` ("Package generation", "Self-checks" item 11, "Reviewing a recording step by step"); `contracts/lab-operations.json`, the rows `record stop`, `record ready`, `record review` |
+
+**Tests** (`crates/lab/src/gate_463_rm1.rs`, exec gate map "#463 RM-1"; synthetic gray screens with
+noise patches recorded offline, a perturbed patch's score read by the function the admitted
+evaluator reads it with; no OCR model, no clock): the five of the work order, as the gate map's
+comment lists them. Test 1 compares the package the stop writes with the bytes the self-checks
+build for the same plan with the bound 0 (`recording_api::package_with_bound`, test-only). No
+existing test is adapted; no golden changes; no test leaves a gate map.
+
+**What is not changed.** What passes and what refuses at `record mark`, `record ready` and `record
+stop`; every verdict of every self-check; the generated package, byte for byte; every answer but
+for the new warning (`steps[].warnings` of `record review` is absent where there is none). No
+record, no configuration key, no interface revision.
+
+**At deploy.** Nothing to configure. `record stop`, its dry run, `record ready` and `record review`
+answer the warning where a template mark lies within 0.03 of its threshold; `--template-margin-bound`
+changes the bound for one call.
+
+**Fix round 2** (coordinator work order `rd-1118/brief-463-rm1-fix2.md`, after the independent
+review of the pull request; the coordinator's rulings on the review's points, not the owner's
+words).
+- *Texts.* The usage of `record ready` and of `record review` names `[--template-margin-bound <d>]`
+  as `record stop`'s does, and their MCP parameter lists `template_margin_bound`. On a recording
+  whose package is made and that has not changed since (`packaged`; `record stop` answers it
+  `already_generated`) no self-check runs: the bound is taken, checked, and has no effect
+  (`contracts/lab-recording.md`, "Package generation" and "Self-checks" item 11; the manual; the
+  rows `record ready` and `record review`).
+- *A failing case no longer drops the warning.* When every self-check before `cases` passed, the
+  warnings `record_template_near_threshold` they found are carried with the failures of `cases` (a
+  case that misses, or an error that ends the check; `SelfCheckFailures::near_threshold`), and
+  `record ready` lists them after the generator's warnings and before the cases' own, as on a
+  recording that is ready; `record review` shows them at their steps. `record stop` still answers
+  the refusal alone.
+- *No warning where item 7c allows the pass.* An optional step's page on the frames of another
+  optional step of its run closed by the same press (`same_closing`: the same click rectangle, or
+  the same key on the same marks), where section 4.7c lets it pass as one pop-up recorded twice, is
+  not judged `misses` there.
+- *Tests.* Four more in `gate_463_rm1.rs` (the gate map's comment, items 6 to 9), each judgement
+  once with a gap of about 0.01 (warned) and once with about 0.05 (not warned): an optional page
+  against `previous` and the skip target; an optional page against `other_optional`, warned with
+  different presses and not with the same press; an ending's page against `previous`, `usual` and
+  `other_ending` and the usual page on an ending's frame; a page transition's and an ending's
+  template on their own frames (`passes`). No existing test is adapted. The older MCP server's
+  `record stop` is not changed (it is being removed).
 
 ### 1.467 #398 DB-2 (0.12.72): devices listed and bound before an installation is selected, by a key that outlives the adb session (Workflow #398; the rules below are the coordinator's rulings in the work order, not the owner's words, and the coordinator's addition of `--key-salt-env` sent during the work; coordinator work order `rd-1117/brief-398-db2-devices-before-install.md`, read on main `8caf51bb`, built on main `f0c64ae8`, the release of 0.12.71)
 
@@ -37404,9 +37698,12 @@ actinglab-mcp's `gate_434_lab5g2b` (the pinned `SUPPLIED` gains `devices bind` `
 `gate_434_lw1` (the reason of its `LEFT_OUT` entry for `devices bind` `root`). No golden changes;
 no test leaves a gate map.
 
-### 1.469 Slice #463 SC-1 (0.12.72): a select step's page is checked for uniqueness on every frame of the recording (Workflow #463; observed on production 0.12.71; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1118/brief-463-sc1-select-uniqueness.md`, on main `c47a32ff`)
+### 1.469 Slice #463 SC-1 (0.12.72): a select step's page is checked for uniqueness on every frame of the recording (Workflow #463; observed on production 0.12.71; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1118/brief-463-sc1-select-uniqueness.md`, on main `c47a32ff`, merged with main `98c1c0f1`, the 0.12.72 train of §1.464 and §1.466)
 
-This section takes 1.469, the number its work order gives. It ships in 0.12.72.
+This section takes 1.469, the number its work order gives. It ships in 0.12.72. Where the train
+meets it: §1.466's warning `record_template_near_threshold` is drawn from items 4, 7 and 9, and
+this slice's judgement in item 8 adds none; both read a page with the one evaluation of item 4
+(`Evaluation::page`), this slice its verdict alone.
 
 **Why.** A package made from a recording was adopted and tried on its emulator; the trial ended
 `contained_task_recognition_conflict` at its second step, a select step. The business starts a job

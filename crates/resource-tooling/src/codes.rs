@@ -227,6 +227,11 @@ actingcommand_contract::outcome_codes! {
         /// (keys `package_id`, `paths` those directories relative to `--repo`). It moves and
         /// removes nothing.
         AdoptCasesLeft => "adopt_cases_left": warning / none,
+        /// Warning (Workflow #463 AD-1 fix round 1): the check tree's game root could not be read
+        /// again to tell which package each warning of the adoption names (key `path`, that root;
+        /// the reader's refusal as its cause), so every warning is answered whole in `warnings`
+        /// and `other_packages_warnings` is absent. Nothing is refused.
+        AdoptWarningsNotSplit => "adopt_warnings_not_split": warning / none,
         // Workflow #463 S3-15a: the refusals of `actinglab standard-pack status --installation`
         // (contracts/standard-pack-schedule.md, "Where a pack stands"), each before the game
         // root, a journal or the suspension report is read.

@@ -209,6 +209,8 @@ pub use adopt::{
     AdoptCaseAt, AdoptCaseRun, AdoptCaseVerdict, AdoptCases, AdoptCasesRun, AdoptLab,
     CaseNotProven, ReadyNotRead, ReadyRefused, RecordingReady,
 };
+// Workflow #463 AD-1: the warnings an adoption counts, those that name another package.
+pub use adopt::OtherPackagesWarnings;
 pub use api::*;
 pub use authoring::*;
 pub use business_catalog::*;
