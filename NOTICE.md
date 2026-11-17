@@ -125,6 +125,15 @@ No source code of another automation project is in this repository. Where the Ru
 - Rust dependency license check: `wide` 1.7.1 and `safe_arch` 1.2.0 report `Zlib OR Apache-2.0 OR MIT`; `nasm-rs` 0.3.2 reports `MIT OR Apache-2.0`; `walkdir` 2.5.0 and `same-file` 1.0.6 report `Unlicense/MIT`. These are the licences stated in each crate's crates.io metadata, checked on 2026-10-13.
 - Notes: `wide` 0.7.33 and `safe_arch` 0.7.4 were already dependencies of other crates; `Cargo.lock` names both versions of each. `cc`, `log`, `winapi-util`, `bytemuck` and `sha2`, which these crates also use, were already dependencies.
 
+### The iOS device library of `acib`
+
+- Role (Workflow #479 ACIB-0): `apps/acib`, the iOS device bridge, reads iOS devices through the `idevice` library (usbmuxd, lockdown, the CoreDeviceProxy tunnel with the `jktcp` TCP stack, the remote service discovery handshake, the image mounter's read-only queries, the installation proxy's application lookup, for which the library also brings in `async_zip`), with TLS by `rustls` on `ring`, on a `tokio` runtime of its own. No other crate of the workspace uses them, and `acib.exe` is in neither the Runtime nor the Tools artifact: a pull request's build uploads it as an artifact of its own, and a release carries nothing of it.
+- Source: crates.io, compiled from source into `acib.exe` only; `Cargo.toml` pins `idevice` to exactly 0.1.68 and `Cargo.lock` pins each crate it brings in with its crates.io SHA-256 checksum. No source file is copied into this repository, and no code or build of another project (another iOS library or tool) is used: the owner allowed `idevice` alone as a dependency (board #479).
+- License text: `idevice` is MIT-licensed (its crates.io metadata states `MIT`). Its published package carries no licence file; the licence text is `LICENSE.txt` at the root of its repository, https://github.com/jkcoxson/idevice (the repository its crates.io metadata names).
+- Rust dependency license check: `idevice` 0.1.68 and `jktcp` 0.1.8 report `MIT` (their crates.io metadata, checked on 2026-11-17). Checked package by package on 2026-11-18 against each version's crates.io metadata: `acib` brings 63 crates.io packages into `Cargo.lock`, and none has a licence outside MIT, Apache-2.0, BSD, ISC, Zlib or Unicode, or a dual licence offering one of them; `ring` 0.17.14 reports `Apache-2.0 AND ISC`, both permissive.
+- Build: TLS is `rustls` 0.23.46 with the `ring` 0.17.14 provider (no `aws-lc`, no OpenSSL). Nothing is fetched at build time: every package comes from the crates.io registry with its checksum in `Cargo.lock`, `ring` compiles the C and pregenerated assembly sources it ships, with `cc`, and the `windows_*` 0.52.6 packages carry their import libraries in the package.
+- Notes: `idevice` is to be noted in the umbrella repository's licence matrix (board #479).
+
 Before any upstream code, assets, screenshots, templates, OCR data, or model files are copied, adapted, or merged, update this file with:
 
 - upstream project name
