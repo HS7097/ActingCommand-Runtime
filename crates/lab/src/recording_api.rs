@@ -1071,6 +1071,13 @@ fn self_checks(
     Ok(Checked { package, cases })
 }
 
+/// #463 S2-10: the package without its regression cases, as the self-checks before `cases` build
+/// it, for a test that compares it with the package `record stop` writes (S2-9a's test 6 reads it).
+#[cfg(test)]
+pub(crate) fn package_without_cases(plan: &Plan, ocr: &LabOcr) -> Option<Vec<u8>> {
+    package_checks(plan, ocr, &mut Runner::new(Failures::first())).map(|package| package.bytes)
+}
+
 /// The self-checks of [`self_checks`] before `cases`, in the order they run, with `runner`: the
 /// final package when every one passed; `None` when the checks end, `runner` holding why.
 fn package_checks(plan: &Plan, ocr: &LabOcr, runner: &mut Runner) -> Option<PackageChecked> {
