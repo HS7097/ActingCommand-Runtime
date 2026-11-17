@@ -220,6 +220,13 @@ actingcommand_contract::outcome_codes! {
         /// Warning (Workflow #463 S3-12): no passed trial of the content the adoption writes is on
         /// record in its state directory (key `package_id`; the review's `trial` says what is).
         NotTried => "not_tried": warning / none,
+        /// Warning (Workflow #463 AC-1 fix round 1): the adoption took no case (`cases.state`
+        /// `none_found` or `package_path`), and `regression/<game>/` holds cases of the package it
+        /// left as they are, neither moved nor run on the content it writes: cases an earlier
+        /// adoption took from a recording and the `.part` of a case an interrupted adoption left
+        /// (keys `package_id`, `paths` those directories relative to `--repo`). It moves and
+        /// removes nothing.
+        AdoptCasesLeft => "adopt_cases_left": warning / none,
         // Workflow #463 S3-15a: the refusals of `actinglab standard-pack status --installation`
         // (contracts/standard-pack-schedule.md, "Where a pack stands"), each before the game
         // root, a journal or the suspension report is read.
@@ -361,9 +368,14 @@ actingcommand_contract::outcome_vocabulary! {
         /// a recording of this package.
         CasePlaceTaken => "case_place_taken",
         /// Workflow #463 AC-1: a case of the recording fails on the package as this adoption
-        /// writes it (the one runner's verdict `failed`); the details list every such case as the
-        /// runner answers it.
+        /// writes it (the one runner's verdict `failed`); fix round 1: the details list the cases
+        /// that did not pass as `resource regression` lists them, by its one rule.
         CaseFailed => "case_failed",
+        /// Workflow #463 AC-1 fix round 1: `record ready`'s one function refused the recording
+        /// otherwise than as one the Lab cannot read whole (the state not read, the recording's
+        /// identity not its own, its answer not serialized): the recording is not judged, and
+        /// adoption takes none it did not judge (that refusal the cause).
+        RecordingNotJudged => "recording_not_judged",
     }
 }
 

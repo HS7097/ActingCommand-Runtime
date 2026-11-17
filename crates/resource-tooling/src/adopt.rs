@@ -380,19 +380,64 @@ pub trait AdoptWorktree {
 /// a recording or runs a case a second way.
 pub trait AdoptLab {
     /// `record ready`'s answer for the recording `record_id` of the state directory `state_dir`,
-    /// whatever instance it is of, by its one function called with no option given; `Err` when
-    /// the Lab cannot read the recording (its refusal).
-    fn recording_ready(&self, state_dir: &Path, record_id: &str) -> LabResult<RecordingReady>;
+    /// whatever instance it is of, by its one function called with no option given; when that
+    /// function answers none, its refusal, a recording the Lab cannot read whole told apart from
+    /// every other one ([`ReadyRefused`], fix round 1).
+    fn recording_ready(
+        &self,
+        state_dir: &Path,
+        record_id: &str,
+    ) -> Result<RecordingReady, ReadyRefused>;
 
-    /// The runner of regression cases on the package directory `package_dir`, which it admits
-    /// once as the runner admits a package: a function that answers the case of a directory (its
-    /// `case.json` read by the one reader, the scene it names) run on that package.
-    fn case_runner(&self, package_dir: &Path) -> AdoptCaseRunner<'_>;
+    /// The cases `cases`, each run by the one runner on the package directory `package_dir`,
+    /// which it admits once as the runner admits a package: each case's directory read as
+    /// `resource regression` reads a case of a checkout (its `case.json` by the one reader, the
+    /// scene it names), one run of each in the order given. Fix round 1: with the cases that did
+    /// not pass as `resource regression` lists them, by its one rule (the failed ones first, at
+    /// most its bound, each row without a check's `detail`); a refusal when that listing does not
+    /// serialize.
+    fn run_cases(&self, package_dir: &Path, cases: &[AdoptCaseAt]) -> LabResult<AdoptCasesRun>;
 }
 
-/// Workflow #463 AC-1: the runner of one package's cases ([`AdoptLab::case_runner`]): the case of
-/// a directory, run.
-pub type AdoptCaseRunner<'a> = Box<dyn Fn(&Path) -> AdoptCaseRun + 'a>;
+/// Workflow #463 AC-1 fix round 1 (the coordinator's ruling): why `record ready`'s function
+/// answered nothing for the recording, as adopt decides by it.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ReadyRefused {
+    /// The Lab cannot read the recording whole: its refusal carries the word
+    /// `lab_recording_unreadable` (a `recording.json` that does not decode as the Lab writes it,
+    /// made by hand or damaged). The check of the recording's own members judges it, as before
+    /// #463 S3-17, so that what adoption accepts and refuses does not move for such a recording.
+    Unreadable(LabError),
+    /// Every other refusal of that function (the state not read, `lab_recording_mismatch`, an
+    /// answer that does not serialize): the adoption is refused (`recording_not_judged`), that
+    /// refusal its cause, nothing written. A failure on the Lab's side is never a pass.
+    Failed(LabError),
+}
+
+/// Workflow #463 AC-1 fix round 1: a case of the recording's set to run ([`AdoptLab::run_cases`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdoptCaseAt {
+    /// Where the adoption writes it, `regression/<game>/<package_id>.<case>` relative to `--repo`:
+    /// the path its row names, as `resource regression` names a case of the checkout.
+    pub path: String,
+    /// Its directory in the recording's set, `out/<package_id>.cases/<case>/`.
+    pub directory: PathBuf,
+}
+
+/// Workflow #463 AC-1 fix round 1: the cases as the one runner ran them
+/// ([`AdoptLab::run_cases`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct AdoptCasesRun {
+    /// One run of each case, in the order given.
+    pub runs: Vec<AdoptCaseRun>,
+    /// How many of them did not pass (`failed` and `partial`), as `resource regression` counts
+    /// its `failed_total`.
+    pub not_passed: usize,
+    /// The rows of the first of those, as `resource regression` lists them: the failed ones
+    /// first, each group in the order given, at most its bound (`ROWS_LISTED_MAX`), each `{path,
+    /// id, package_id, verdict, checks, warnings?}` without a check's `detail`.
+    pub listed: Vec<Value>,
+}
 
 /// Workflow #463 S3-17: `record ready`'s answer for a recording, as adopt reads it.
 #[derive(Debug, Clone, PartialEq)]
@@ -419,20 +464,20 @@ pub enum AdoptCaseVerdict {
     },
 }
 
-/// Workflow #463 AC-1: one case as the one runner ran it.
-#[derive(Debug, Clone, PartialEq)]
+/// Workflow #463 AC-1: one case as the one runner ran it. Fix round 1: a failing case is listed
+/// as `resource regression` lists it ([`AdoptCasesRun::listed`]), so the run carries no answer of
+/// its own.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AdoptCaseRun {
     pub verdict: AdoptCaseVerdict,
-    /// The runner's answer of the case as it serializes it, `{id, package_id, verdict, checks,
-    /// warnings?}`.
-    pub answer: Value,
     /// The case's files as they were read and run, each by its name in the case's directory: its
     /// `case.json` and, when the reader read it, the scene it names. Written byte for byte.
     pub files: Vec<(String, Vec<u8>)>,
 }
 
 /// Workflow #463 S3-17: `record ready`'s function did not read the recording (its refusal), so the
-/// check of the recording's own members judged it, as before that slice.
+/// check of the recording's own members judged it, as before that slice. Fix round 1: only for a
+/// recording the Lab cannot read whole ([`ReadyRefused::Unreadable`]).
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ReadyNotRead {
     /// The function's refusal, with its code.
@@ -1244,6 +1289,14 @@ pub fn standard_pack_adopt(
         }
         _ => None,
     };
+    // Fix round 1: an adoption that takes no case (`none_found`, `package_path`) leaves the cases
+    // of the package the checkout holds as they are, neither moved nor run on this content: the
+    // earlier set a recording gave and a case's `.part`; it warns of them.
+    let cases_left = match taken {
+        Some(_) => Vec::new(),
+        None => CheckoutCases::read(&regression_dir, &regression_relative, &package_id)?
+            .left(&regression_relative),
+    };
     let coverage = match (&plan.rule, class) {
         (Some(rule), AdoptClass::Business) if plan.held.is_none() => {
             Some(rule_coverage(rule, &root.schedule.pools, &check.answer))
@@ -1310,6 +1363,15 @@ pub fn standard_pack_adopt(
             Outcome::new(ResourceToolingCode::NotTried),
             &package_id,
         ));
+    }
+    if !cases_left.is_empty() {
+        warnings.push(
+            named_package(
+                Outcome::new(ResourceToolingCode::AdoptCasesLeft),
+                &package_id,
+            )
+            .paths(cases_left.iter()),
+        );
     }
 
     // What it writes, in the order it renames it into place.
@@ -2118,10 +2180,11 @@ struct RecordedCases {
 /// `packaged` is refused `recording_not_current` with that function's answer in the details
 /// (`record_ready`, its list of what is missing among it). Where the two differ, the check of the
 /// recording's own members stays beside it: its schema and its `record_id`, first, as before; its
-/// `status` and `amended_at_unix_ms` when that function cannot read the recording (its refusal as
-/// the cause, or, when they pass, said as `ready_not_read`); and its artifact, which names the
-/// package by a `package_id` of one path segment and a container `zip` or `json`, and the
-/// package's file. Workflow #463 AC-1: with the cases that stop wrote beside the package.
+/// `status` and `amended_at_unix_ms` when that function cannot read the recording whole (its
+/// refusal as the cause, or, when they pass, said as `ready_not_read`); and its artifact, which
+/// names the package by a `package_id` of one path segment and a container `zip` or `json`, and
+/// the package's file. Workflow #463 AC-1: with the cases that stop wrote beside the package. Fix
+/// round 1: every other refusal of that function refuses the adoption, `recording_not_judged`.
 fn recorded_package(
     record_id: &str,
     lab_dir: &Path,
@@ -2185,9 +2248,24 @@ fn recorded_package(
                 "record_ready": ready.answer
             })));
         }
-        // The function cannot read the recording: the check of its own members judges it, kept
-        // beside the function for this difference.
-        Err(unread) => {
+        // Fix round 1 (the coordinator's ruling): a failure on the Lab's side is never a pass. The
+        // function failed otherwise than on a recording it cannot read whole: refused, its
+        // refusal the cause.
+        Err(ReadyRefused::Failed(error)) => {
+            return Err(refused(
+                adopt(AdoptProblem::RecordingNotJudged)
+                    .path(&path)
+                    .caused_by(cause_of(&error)),
+                format!(
+                    "record ready's function did not judge the recording {record_id} ({error}), \
+                     and adopt takes no recording it did not judge; run record ready --record-id \
+                     {record_id} to see why, then adopt again; nothing was written"
+                ),
+            ));
+        }
+        // The function cannot read the recording whole: the check of its own members judges it,
+        // kept beside the function for this difference.
+        Err(ReadyRefused::Unreadable(unread)) => {
             let cause = cause_of(&unread);
             let members = |member: &str, message: String| {
                 refused(
@@ -2372,6 +2450,18 @@ impl CheckoutCases {
         }
         Ok(found)
     }
+
+    /// Fix round 1: the directories of the package's cases that an adoption taking none leaves as
+    /// they are (the earlier set a recording gave and each case's `.part`), relative to the
+    /// checkout (`relative` is `regression/<game>`), in the order of their names.
+    fn left(&self, relative: &str) -> Vec<String> {
+        let mut names = self.recorded.iter().chain(&self.parts).collect::<Vec<_>>();
+        names.sort();
+        names
+            .into_iter()
+            .map(|name| format!("{relative}/{name}"))
+            .collect()
+    }
 }
 
 /// Workflow #463 AC-1 (`contracts/standard-pack-authoring.md`, "The cases"): whether `directory`
@@ -2508,9 +2598,10 @@ struct PlannedCase {
 /// (`case_name_invalid` otherwise, at the case in the recording); it is free or holds a case of
 /// the earlier set (`case_place_taken` at it otherwise). Then each case is run by the one runner
 /// on the package as this adoption writes it, admitted once (`lab`'s runner): a case whose
-/// verdict is `failed` refuses the adoption (`case_failed`, every failing case in the details as
-/// the runner answers it); `partial` and `not_run` cases are taken and named with the runner's
-/// words.
+/// verdict is `failed` refuses the adoption (`case_failed`; fix round 1: the details list the
+/// cases that did not pass as `resource regression` lists them, by its one rule, with
+/// `failed_total` and `listed`); `partial` and `not_run` cases are taken and named with the
+/// runner's words.
 fn plan_cases(inputs: &CaseInputs<'_>, lab: &dyn AdoptLab) -> LabResult<CasePlan> {
     let mut names = Vec::new();
     for case in &inputs.taken.names {
@@ -2546,17 +2637,34 @@ fn plan_cases(inputs: &CaseInputs<'_>, lab: &dyn AdoptLab) -> LabResult<CasePlan
         }
         names.push(name);
     }
-    let runner = lab.case_runner(inputs.package_dir);
-    let mut failed = Vec::new();
-    let mut failing = Vec::new();
+    let at = names
+        .iter()
+        .zip(&inputs.taken.names)
+        .map(|(name, case)| AdoptCaseAt {
+            path: format!("{}/{name}", inputs.regression_relative),
+            directory: inputs.taken.directory.join(case),
+        })
+        .collect::<Vec<_>>();
+    let ran = lab.run_cases(inputs.package_dir, &at)?;
+    if ran.runs.len() != at.len() {
+        return Err(LabError::device(format!(
+            "the Lab answered {} runs for the {} regression cases of the recording; nothing was \
+             written",
+            ran.runs.len(),
+            at.len()
+        )));
+    }
+    let mut failed = 0_usize;
+    let mut first_failed = None;
     let mut not_proven = Vec::new();
     let mut cases = Vec::new();
-    for (case, name) in inputs.taken.names.iter().zip(names) {
-        let run = runner(&inputs.taken.directory.join(case));
+    for ((case, name), run) in inputs.taken.names.iter().zip(names).zip(ran.runs) {
         match run.verdict {
             AdoptCaseVerdict::Failed => {
-                failing.push(case.clone());
-                failed.push(run.answer);
+                failed += 1;
+                if first_failed.is_none() {
+                    first_failed = Some(case);
+                }
                 continue;
             }
             AdoptCaseVerdict::Passed => {}
@@ -2573,22 +2681,30 @@ fn plan_cases(inputs: &CaseInputs<'_>, lab: &dyn AdoptLab) -> LabResult<CasePlan
             files: run.files,
         });
     }
-    if !failed.is_empty() {
+    // Fix round 1: the failing cases are listed by `resource regression`'s one rule, so that the
+    // refusal fits the Lab's own line and the MCP server's answer budget whatever their number.
+    if let Some(first) = first_failed {
         let outcome = named_package(adopt(AdoptProblem::CaseFailed), inputs.package_id)
             .path(&inputs.taken.directory)
-            .count(failed.len());
+            .count(failed);
         return Err(refused(
             outcome.clone(),
             format!(
-                "{} of the {} regression cases of the recording fail on the package as this \
-                 adoption writes it ({}); the details' cases list each as the runner answers it; \
-                 nothing was written",
-                failed.len(),
+                "{failed} of the {} regression cases of the recording fail on the package as this \
+                 adoption writes it, the first {first}; the details' cases list the first {} of \
+                 the {} cases that did not pass, the failed ones first, as resource regression \
+                 lists them; nothing was written",
                 inputs.taken.names.len(),
-                failing.join(", ")
+                ran.listed.len(),
+                ran.not_passed
             ),
         )
-        .with_details(json!({"outcome": outcome.envelope(Detail::Full), "cases": failed})));
+        .with_details(json!({
+            "outcome": outcome.envelope(Detail::Full),
+            "failed_total": ran.not_passed,
+            "listed": ran.listed.len(),
+            "cases": ran.listed
+        })));
     }
     Ok(CasePlan {
         from: inputs.taken.directory.clone(),

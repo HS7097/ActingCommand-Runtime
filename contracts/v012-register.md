@@ -36395,6 +36395,52 @@ check of the members judges them as before. No golden changes; no test leaves a 
 **At deploy.** Nothing to configure. A checkout's `regression/<game>/` gains the cases an adoption
 takes; `resource verify` and `standard-pack build` do not run them yet.
 
+**Fix round 1** (coordinator work order `rd-1117/brief-463-ac1-fix1.md`, after the independent
+review `rd-1117/review-1808.md` on `dbfdc483`, the coordinator's rulings; main `ca539cc7` merged).
+
+- *Main merged.* #1806 (#463 RC-2, §1.459) merged locally: the apps gate map keeps both blocks,
+  and this register keeps §1.459 whole, as main has it, before this section.
+- *A failure on the Lab's side is never a pass* (ruling 2). `AdoptLab::recording_ready` answers
+  `ReadyRefused` when `record ready`'s function answers nothing: `Unreadable` when the Lab's
+  refusal carries the word `lab_recording_unreadable` (`standard_pack_cli`'s `ready_refused`, by
+  the carried `reason`, never by the code), the one refusal the check of the recording's own
+  members still judges, said in `review.ready_not_read` as before, so that what adoption accepts
+  and refuses does not move for such a recording; `Failed` for every other refusal (the state not
+  read, `lab_recording_missing`, `lab_recording_mismatch`, an answer that does not serialize),
+  refused with the new word `recording_not_judged`, `path` the `recording.json`, the Lab's refusal
+  the cause, nothing written. P1's test Lab `NoLab` answers `Unreadable`.
+- *`case_failed` is bounded as the runner's own listing is* (ruling 3). The trait's `case_runner`
+  became `run_cases`: the set run at once, one run of each case, and beside them the cases that did
+  not pass listed by `resource regression`'s one rule, `resource_verify/regression.rs`'s
+  `not_passed` (its `ROWS_LISTED_MAX`, 10, the one constant; the failed cases first, rows without a
+  check's `detail`), which that operation and `LabAdoption` both call. The details are
+  `failed_total`, `listed` and `cases`, each row `{path, id, package_id, verdict, checks,
+  warnings?}` with `path` the directory `regression/<game>/<package_id>.<case>` the case would be
+  written to; the message names the first failing case. `AdoptCaseRun` carries no `answer`.
+- *One reading of a case directory* (the review's first "may change"). `regression.rs`'s
+  `case_of_directory`, beside the trait `CasePackages` (which cases are taken, the package a case
+  is run on): what a `case.json` that cannot be read, a missing scene and a refused package become,
+  with the files read. `resource regression` calls it with `CheckoutPackages` (`packs/<package_id>/`
+  admitted once per run, `--package-id`), adoption with `AdoptedPackage` (the package it writes,
+  every case taken); `adopted_case` and `run_read_case` are gone.
+- *What an adoption that takes no case leaves* (the review's second "may change"). With
+  `none_found` or `package_path` the checkout's `regression/<game>/` is read for the package's
+  cases as an adoption that takes cases reads it (`CheckoutCases::read`, a directory that cannot be
+  listed `repository_invalid`), and the earlier set from a recording and a case's `.part` are named
+  in the new warning `adopt_cases_left`; nothing is moved or removed.
+
+| Word | What it says | Refuses or warns | Exit (own line; `--via`; MCP) |
+|---|---|---|---|
+| `adopt_refused` `recording_not_judged` | `record ready`'s function refused the recording otherwise than as one the Lab cannot read whole | refuses | 1; 2; a refusal |
+| `adopt_cases_left` (resource-tooling, `package_id`, `paths`) | an adoption that took no case leaves cases of the package in `regression/<game>/`: an earlier adoption's from a recording, a case's `.part` | warns | 0; 0; the answer's `warnings` |
+
+No decision reads a code by name. The outcome-code index is regenerated. **Tests**
+(`gate_463_ac1.rs`, apps gate map "#463 AC-1 fix round 1"):
+`ac1_fix1_a_lab_failure_refuses_and_an_unreadable_recording_falls_back` and
+`ac1_fix1_failing_cases_beyond_the_bound_are_listed_as_resource_regression_lists_them`, as the gate
+map's comment lists them. No test is adapted in what it pins (P1's `NoLab` follows the trait); no
+golden changes; no test leaves a gate map.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

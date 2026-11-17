@@ -11,7 +11,10 @@ runner; this version builds the reader, the runner and the offline operation `re
 regression`, and nothing else. #463 AC-1 (0.12.71): `standard-pack adopt --record-id` runs each
 case of the recording by the same runner on the package it adopts before it writes the case into
 `regression/<game>/<package_id>.<case>/` ([standard-pack-authoring.md](standard-pack-authoring.md),
-"The cases").
+"The cases"); its fix round 1: it reads each case directory by the one reading `resource
+regression` reads one with (what a `case.json` that cannot be read, a missing scene and a refused
+package become), and its refusal `case_failed` lists the cases that did not pass by this
+operation's rule and bound ("The operation").
 
 ## A case
 

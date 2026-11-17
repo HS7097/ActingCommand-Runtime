@@ -198,10 +198,11 @@ pub use adopt::{
     ValueNotJudged, ValueWait, standard_pack_adopt,
 };
 // Workflow #463 AC-1: what adoption asks of the Lab (the one judgement of a recording, #463 S3-17,
-// and the one runner of a regression case), and the cases it answers.
+// and the one runner of a regression case), and the cases it answers; fix round 1: the cases run
+// as a set, listed by `resource regression`'s rule, and the judgement's refusal told apart.
 pub use adopt::{
-    AdoptCaseRun, AdoptCaseRunner, AdoptCaseVerdict, AdoptCases, AdoptLab, CaseNotProven,
-    ReadyNotRead, RecordingReady,
+    AdoptCaseAt, AdoptCaseRun, AdoptCaseVerdict, AdoptCases, AdoptCasesRun, AdoptLab,
+    CaseNotProven, ReadyNotRead, ReadyRefused, RecordingReady,
 };
 pub use api::*;
 pub use authoring::*;

@@ -2610,3 +2610,12 @@ tests = [
     "actingcommand-actinglab::bin:actinglab::tests::gate_463_ac1::ac1_s317_recording_unreviewed_against_record_ready",
 ]
 incident = ["#463 AC-1"]
+
+# #463 AC-1 fix round 1 (0.12.71; register §1.461, "Fix round 1"; brief rd-1117/brief-463-ac1-fix1.md, the coordinator's rulings 2 and 3; contracts/standard-pack-authoring.md, "The cases" and "One judgement of the recording"): a packaged recording record ready's own function refuses otherwise than as one the Lab cannot read whole (asked in a state directory where it is not, lab_recording_missing) is refused recording_not_judged, the Lab's refusal its cause, nothing written; the same recording with a member added to its recording.json by hand (lab_recording_unreadable) is judged by the check of its own members and adopted, said in review.ready_not_read (1); fifteen failing cases (two copies of each of a recording's five beside it, every scene changed after the stop) refuse case_failed with count 15, failed_total 15, listed and the rows the first ROWS_LISTED_MAX in the order of their names, each by the directory it would be written to, failed, without a check's detail; nothing written (2)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::tests::gate_463_ac1::ac1_fix1_a_lab_failure_refuses_and_an_unreadable_recording_falls_back",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_463_ac1::ac1_fix1_failing_cases_beyond_the_bound_are_listed_as_resource_regression_lists_them",
+]
+incident = ["#463 AC-1"]

@@ -10439,7 +10439,10 @@
           "description": "Workflow #463 AC-1 (since 0.12.71): the directory regression/<game>/<package_id>.<case> a case of the recording would be written to is there (names compared in ASCII lower case) and is no case an adoption took from a recording of this package (a case.json naming the package with a recording's source); adopt neither moves nor overwrites it. entry names it."
         },
         "case_failed": {
-          "description": "Workflow #463 AC-1 (since 0.12.71): a regression case of the recording, run by the one runner on the package as this adoption writes it, has the verdict failed; the details' cases list every failing case as the runner answers it, count their number, path the recording's cases directory."
+          "description": "Workflow #463 AC-1 (since 0.12.71): a regression case of the recording, run by the one runner on the package as this adoption writes it, has the verdict failed; count their number, path the recording's cases directory. Fix round 1: the details list the cases that did not pass as resource regression lists them, by its one rule: failed_total how many did not pass, cases the rows of the first of them, the failed ones first, at most resource regression's bound, without a check's detail, listed how many rows are given."
+        },
+        "recording_not_judged": {
+          "description": "Workflow #463 AC-1 fix round 1 (since 0.12.71): record ready's one function refused the recording otherwise than as one the Lab cannot read whole (the state not read, the recording's identity not its own, its answer not serialized), so the recording is not judged and adoption takes none it did not judge; the Lab's refusal is the cause, path the recording's recording.json."
         }
       }
     },

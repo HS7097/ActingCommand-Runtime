@@ -19,8 +19,9 @@
 //   cases are under `<state>/adopt/<package_id>.cases.old-<ms>/` byte for byte, the three new ones
 //   in the checkout, a case of the package written by hand untouched.
 // - `ac1_a_failing_case_refuses_and_writes_nothing`: the recording's package changed after its
-//   stop (every colour probe expects white): `case_failed`, the details listing all five cases as
-//   the runner answers them, `failed`; nothing written in the checkout and nothing kept.
+//   stop (every colour probe expects white): `case_failed`, the details listing all five cases
+//   (fix round 1: as `resource regression` lists them, each row with its id), `failed`; nothing
+//   written in the checkout and nothing kept.
 // - `ac1_a_destination_that_is_no_recordings_case_refuses_before_the_first_write`: a directory of a
 //   case's name holding a file by hand: `case_place_taken` naming it; nothing written.
 // - `ac1_the_dry_run_lists_the_cases_and_the_two_words_write_as_before`: `--dry-run` writes nothing
@@ -45,23 +46,37 @@
 //   its cross-check was partially evaluated: `record ready` answers packaged with nothing missing,
 //   the review, kept whole, refuses it for a business decision (`recording_unreviewed`) and takes it
 //   as held.
+// Fix round 1 (coordinator work order rd-1117/brief-463-ac1-fix1.md, its rulings 2 and 3):
+// - `ac1_fix1_a_lab_failure_refuses_and_an_unreadable_recording_falls_back`: a packaged recording
+//   the Lab's own function refuses otherwise than as one it cannot read whole (asked in a state
+//   directory where the recording is not, `lab_recording_missing`) is refused
+//   `recording_not_judged`, the Lab's refusal its cause, nothing written; the same recording with a
+//   member added to its `recording.json` by hand, which the Lab cannot read whole
+//   (`lab_recording_unreadable`), is judged by the check of its own members and adopted, said in
+//   `review.ready_not_read`.
+// - `ac1_fix1_failing_cases_beyond_the_bound_are_listed_as_resource_regression_lists_them`: fifteen
+//   failing cases (the five of a recording and two copies of each in its set, every scene changed
+//   after the stop): `case_failed` with `count` 15, `failed_total` 15, `listed` and the rows the
+//   first `ROWS_LISTED_MAX` in the order of their names, each a short row without a check's
+//   `detail`; nothing written.
 // No Runtime (the state root's variable names a folder that does not exist), no device, no clock,
 // no sleep: made-up recordings, checkouts and values.
 
 use super::env_lock;
 use super::gate_434_lab5b4::{Isolated, printed};
 use crate::cli_module::own_line;
+use crate::resource_verify::regression::ROWS_LISTED_MAX;
 use crate::standard_pack_cli::LabAdoption;
-use actingcommand_contract::canonical_json_bytes;
 use actingcommand_contract::outcome::Outcome;
+use actingcommand_contract::{LabResult, canonical_json_bytes};
 use actingcommand_device::{CaptureBackendName, Frame, PixelFormat};
 use actingcommand_lab::{
     AttachFrameRequest, ClickEffect, CommitClickRequest, OpaqueJson, PlanClickRequest, RecordRect,
     RecordingLock, record_attach_frame, record_commit_click, record_plan_click,
 };
 use actingcommand_resource_tooling::{
-    AdoptDecision, AdoptLab, AdoptSource, AdoptWorktree, StandardPackAdoptRequest,
-    standard_pack_adopt,
+    AdoptCaseAt, AdoptCasesRun, AdoptDecision, AdoptLab, AdoptSource, AdoptWorktree, ReadyRefused,
+    RecordingReady, StandardPackAdoptRequest, standard_pack_adopt,
 };
 use serde_json::{Value, json};
 use std::cell::Cell;
@@ -136,6 +151,39 @@ impl AdoptWorktree for StopsAfterTheFirstCase {
 
     fn lab(&self) -> &dyn AdoptLab {
         &LabAdoption
+    }
+}
+
+/// Fix round 1: [`Committed`] whose Lab asks `record ready`'s own function about the recording in
+/// another state directory, `elsewhere`, where it is not: the function refuses it with the Lab's
+/// `lab_recording_missing`, as when the recording was moved away after adoption read its
+/// `recording.json`, a failure of the Lab other than a recording it cannot read whole. Its cases
+/// are run by the Lab's own runner.
+struct RecordingGone {
+    elsewhere: PathBuf,
+}
+
+impl AdoptWorktree for RecordingGone {
+    fn changes_under(&self, _repo: &Path, _relative: &str) -> Result<Vec<String>, Outcome> {
+        Ok(Vec::new())
+    }
+
+    fn lab(&self) -> &dyn AdoptLab {
+        self
+    }
+}
+
+impl AdoptLab for RecordingGone {
+    fn recording_ready(
+        &self,
+        _state_dir: &Path,
+        record_id: &str,
+    ) -> Result<RecordingReady, ReadyRefused> {
+        LabAdoption.recording_ready(&self.elsewhere, record_id)
+    }
+
+    fn run_cases(&self, package_dir: &Path, cases: &[AdoptCaseAt]) -> LabResult<AdoptCasesRun> {
+        LabAdoption.run_cases(package_dir, cases)
     }
 }
 
@@ -1095,4 +1143,148 @@ fn ac1_s317_recording_unreviewed_against_record_ready() {
     let held = answered(&adopt_line(&repo, &state, "rec_ac1_partial", &[]));
     assert_eq!(held["class"], "held", "{held}");
     assert_eq!(held["review"]["recording_checked"], json!(false), "{held}");
+}
+
+#[test]
+fn ac1_fix1_a_lab_failure_refuses_and_an_unreadable_recording_falls_back() {
+    let _guard = env_lock();
+    let isolated = Isolated::new();
+    let state = isolated.path("session");
+    let repo = isolated.temp.path().join("repo");
+    checkout(&repo);
+    stopped_recording(&state, "rec_ac1_judged", 3);
+    let before = tree(&repo);
+
+    // `record ready`'s function refuses the packaged recording otherwise than as one it cannot
+    // read whole: a failure on the Lab's side is no pass.
+    let gone = RecordingGone {
+        elsewhere: isolated.temp.path().join("another-state"),
+    };
+    let error = standard_pack_adopt(
+        request(&repo, &state, "rec_ac1_judged", false, SECOND),
+        &gone,
+    )
+    .expect_err("a failure on the Lab's side refuses the adoption");
+    assert_eq!(error.code, "adopt_refused", "{error}");
+    let outcome = error
+        .details
+        .as_ref()
+        .and_then(|details| details.get("outcome"))
+        .cloned()
+        .unwrap_or_else(|| panic!("the refusal carries its outcome: {error}"));
+    assert_eq!(
+        outcome["values"]["adopt_problem"], "recording_not_judged",
+        "{error}"
+    );
+    let at = outcome["values"]["path"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the refusal names the recording: {error}"));
+    assert!(Path::new(at).ends_with("recording.json"), "{error}");
+    // The Lab's refusal is its cause, and the message says it.
+    assert!(
+        outcome["causes"]
+            .as_array()
+            .is_some_and(|causes| !causes.is_empty()),
+        "{error}"
+    );
+    assert!(error.message.contains("lab_recording_missing"), "{error}");
+    assert_eq!(tree(&repo), before, "nothing written in the checkout");
+    assert!(!Path::new(&state).join("adopt").exists(), "nothing kept");
+
+    // A member added to its `recording.json` by hand: the Lab cannot read it whole, so the check of
+    // its own members judges it (stopped, not marked again), and it is adopted, said in
+    // `review.ready_not_read`.
+    let file = lab_dir(&state, "rec_ac1_judged").join("recording.json");
+    let mut recording = serde_json::from_slice::<Value>(&fs::read(&file).expect("recording.json"))
+        .expect("recording.json reads");
+    recording["note"] = json!("edited by hand");
+    fs::write(
+        &file,
+        serde_json::to_vec_pretty(&recording).expect("recording.json writes"),
+    )
+    .expect("recording.json written");
+
+    let data = answered(&adopt_line(&repo, &state, "rec_ac1_judged", &[]));
+
+    assert_eq!(data["status"], "adopted", "{data}");
+    let text = data["review"]["ready_not_read"]["text"]
+        .as_str()
+        .unwrap_or_else(|| panic!("said in review.ready_not_read: {data}"));
+    assert!(text.contains("lab_recording_unreadable"), "{data}");
+    assert_eq!(data["cases"]["state"], "taken", "{data}");
+}
+
+#[test]
+fn ac1_fix1_failing_cases_beyond_the_bound_are_listed_as_resource_regression_lists_them() {
+    let _guard = env_lock();
+    let isolated = Isolated::new();
+    let state = isolated.path("session");
+    let repo = isolated.temp.path().join("repo");
+    checkout(&repo);
+    let ids = case_ids(&stopped_recording(&state, "rec_ac1_many", 5));
+    // Two copies of each case beside it in the recording's set: fifteen cases.
+    let set = recording_cases(&state, "rec_ac1_many");
+    for id in &ids {
+        let files = tree(&set.join(id));
+        for copy in ["copy_a", "copy_b"] {
+            let into = set.join(format!("{id}_{copy}"));
+            for (name, bytes) in &files {
+                let target = into.join(name);
+                fs::create_dir_all(target.parent().expect("a parent")).expect("the copy");
+                fs::write(&target, bytes).expect("a file of the copy");
+            }
+        }
+    }
+    let names = names_in(&set);
+    assert_eq!(names.len(), 15, "{names:?}");
+    // Every scene changed after the stop: no case's scene is the one its `case.json` pins.
+    for name in &names {
+        let case = serde_json::from_slice::<Value>(
+            &fs::read(set.join(name).join("case.json")).expect("case.json"),
+        )
+        .expect("case.json reads");
+        let scene = set
+            .join(name)
+            .join(case["scene"].as_str().expect("the case names its scene"));
+        let mut bytes = fs::read(&scene).expect("the scene");
+        bytes.push(0);
+        fs::write(&scene, bytes).expect("the scene changed");
+    }
+    let before = tree(&repo);
+
+    let result = adopt_line(&repo, &state, "rec_ac1_many", &[]);
+
+    let details = refused_with(&result, "adopt_refused");
+    let values = &details["outcome"]["values"];
+    assert_eq!(values["adopt_problem"], "case_failed", "{details}");
+    assert_eq!(values["count"], 15, "{details}");
+    assert_eq!(details["failed_total"], 15, "{details}");
+    assert_eq!(details["listed"], json!(ROWS_LISTED_MAX), "{details}");
+    let rows = details["cases"].as_array().expect("the rows listed");
+    // The first of them in the order of their names, each a short row as `resource regression`
+    // lists one: by the directory it would be written to, failed, and no check with its `detail`.
+    let expected = names
+        .iter()
+        .take(ROWS_LISTED_MAX)
+        .map(|name| json!(format!("regression/{GAME}/{}", case_directory(name))))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        rows.iter()
+            .map(|row| row["path"].clone())
+            .collect::<Vec<_>>(),
+        expected,
+        "{details}"
+    );
+    for row in rows {
+        assert_eq!(row["verdict"], "failed", "{row}");
+        assert_eq!(row["package_id"], PACKAGE, "{row}");
+        let checks = row["checks"].as_array().expect("the checks not passed");
+        assert!(!checks.is_empty(), "{row}");
+        assert!(
+            checks.iter().all(|check| check.get("detail").is_none()),
+            "{row}"
+        );
+    }
+    assert_eq!(tree(&repo), before, "nothing written in the checkout");
+    assert!(!Path::new(&state).join("adopt").exists(), "nothing kept");
 }

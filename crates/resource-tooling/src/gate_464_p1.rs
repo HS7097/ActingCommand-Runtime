@@ -67,7 +67,7 @@ use crate::{
     standard_pack_adopt,
 };
 // Workflow #463 AC-1: the Lab adoption asks, which these tests give as `NoLab`.
-use crate::{AdoptCaseRun, AdoptCaseRunner, AdoptLab, RecordingReady};
+use crate::{AdoptCaseAt, AdoptCasesRun, AdoptLab, ReadyRefused, RecordingReady};
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{LabError, LabResult, canonical_json_bytes};
@@ -164,20 +164,24 @@ impl Fixture {
 /// these tests. Their recordings are made up, no whole `actingcommand.lab-recording.v1`, which the
 /// Lab's own reader reads none of: `record ready`'s function reads none here either, so the check
 /// of a recording's own members judges it, as it did before that slice. No recording here holds a
-/// case, so no case is run.
+/// case, so no case is run. AC-1 fix round 1 (adapted, not changed in what the tests pin): it
+/// answers that it cannot read the recording whole, the one refusal the check of a recording's
+/// own members still judges, so that every test here keeps what it asserts.
 pub(crate) struct NoLab;
 
 impl AdoptLab for NoLab {
-    fn recording_ready(&self, _state_dir: &Path, _record_id: &str) -> LabResult<RecordingReady> {
-        Err(LabError::usage(
+    fn recording_ready(
+        &self,
+        _state_dir: &Path,
+        _record_id: &str,
+    ) -> Result<RecordingReady, ReadyRefused> {
+        Err(ReadyRefused::Unreadable(LabError::usage(
             "the recordings of these tests are made up: no reader of the Lab reads them",
-        ))
+        )))
     }
 
-    fn case_runner(&self, _package_dir: &Path) -> AdoptCaseRunner<'_> {
-        Box::new(|directory: &Path| -> AdoptCaseRun {
-            panic!("no case is run in these tests: {}", directory.display())
-        })
+    fn run_cases(&self, _package_dir: &Path, cases: &[AdoptCaseAt]) -> LabResult<AdoptCasesRun> {
+        panic!("no case is run in these tests: {cases:?}")
     }
 }
 

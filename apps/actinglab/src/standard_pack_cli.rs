@@ -106,18 +106,21 @@ use actingcommand_resource_tooling::{
     write_standard_pack_catalog, write_trial_record,
 };
 // Workflow #463 AC-1: the Lab's own parts adoption calls: `record ready`'s one function (#463
-// S3-17) and the one runner of a regression case.
+// S3-17) and the one runner of a regression case; fix round 1: `resource regression`'s one reading
+// of a case directory and its one listing of the cases that did not pass.
+use crate::resource_verify::regression::{
+    CasePackages, CaseRead, CaseRun, NotPassed, case_of_directory, not_passed,
+};
 use actingcommand_contract::{LabError, LabResult};
 use actingcommand_lab::{
-    REGRESSION_CASE_FILE, RecordStopOptions, RegressionCaseVerdict, RegressionCheck,
-    RegressionPackage, RegressionProblem, RegressionVerdict, read_regression_case,
-    record_ready_by_id,
+    RecordStopOptions, RegressionCaseVerdict, RegressionCheck, RegressionPackage,
+    RegressionVerdict, record_ready_by_id,
 };
 use actingcommand_resource_tooling::{
-    AdoptCaseRun, AdoptCaseRunner, AdoptCaseVerdict, AdoptLab, RecordingReady,
+    AdoptCaseAt, AdoptCaseRun, AdoptCaseVerdict, AdoptCasesRun, AdoptLab, ReadyRefused,
+    RecordingReady,
 };
 use std::collections::BTreeSet;
-use std::fs;
 // Workflow #463 S3-15a: what `standard-pack status --installation` reads, where the rescue module
 // is built (Windows), and the refusal of a build without it.
 #[cfg(windows)]
@@ -1537,18 +1540,24 @@ pub(crate) struct LabAdoption;
 
 impl AdoptLab for LabAdoption {
     /// `record ready`'s one function on the recording by its id (`record_ready_by_id`), with no
-    /// option given: adoption has no instance.
-    fn recording_ready(&self, state_dir: &Path, record_id: &str) -> LabResult<RecordingReady> {
+    /// option given: adoption has no instance. Fix round 1: its refusal told apart by the word it
+    /// carries ([`ready_refused`]); an answer that does not serialize is a failure of its own.
+    fn recording_ready(
+        &self,
+        state_dir: &Path,
+        record_id: &str,
+    ) -> Result<RecordingReady, ReadyRefused> {
         let ready = record_ready_by_id(
             state_dir,
             record_id,
             &RecordStopOptions::default(),
             crate::offline_ocr::lab_ocr(),
-        )?;
+        )
+        .map_err(ready_refused)?;
         let answer = serde_json::to_value(&ready).map_err(|error| {
-            LabError::device(format!(
+            ReadyRefused::Failed(LabError::device(format!(
                 "the answer of record ready does not serialize: {error}"
-            ))
+            )))
         })?;
         Ok(RecordingReady {
             packaged: ready.is_packaged(),
@@ -1557,71 +1566,86 @@ impl AdoptLab for LabAdoption {
     }
 
     /// The package directory admitted once as `resource regression` admits a checkout's package
-    /// (`RegressionPackage::load`), and each case run on it ([`adopted_case`]).
-    fn case_runner(&self, package_dir: &Path) -> AdoptCaseRunner<'_> {
-        let package = RegressionPackage::load(package_dir, crate::offline_ocr::lab_ocr());
-        Box::new(move |directory: &Path| adopted_case(&package, directory))
+    /// (`RegressionPackage::load`), and each case read and run on it as `resource regression`
+    /// reads and runs a case of a checkout (fix round 1: its one reading, [`case_of_directory`]),
+    /// every case taken; the cases that did not pass listed by its one rule ([`not_passed`]), each
+    /// row by the directory adoption writes it to.
+    fn run_cases(&self, package_dir: &Path, cases: &[AdoptCaseAt]) -> LabResult<AdoptCasesRun> {
+        let mut package = AdoptedPackage(RegressionPackage::load(
+            package_dir,
+            crate::offline_ocr::lab_ocr(),
+        ));
+        let mut runs = Vec::new();
+        let mut read = Vec::new();
+        for case in cases {
+            let CaseRead { verdict, files } = case_of_directory(&case.directory, &mut package)
+                .ok_or_else(|| {
+                    LabError::device(format!(
+                        "the case {} of the recording was not read",
+                        case.directory.display()
+                    ))
+                })?;
+            runs.push(case_run(&verdict, files));
+            read.push(CaseRun {
+                path: case.path.clone(),
+                verdict,
+            });
+        }
+        let NotPassed { total, rows } = not_passed(&read);
+        let listed = rows
+            .iter()
+            .map(serde_json::to_value)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| {
+                LabError::device(format!(
+                    "the rows of the cases that did not pass do not serialize: {error}"
+                ))
+            })?;
+        Ok(AdoptCasesRun {
+            runs,
+            not_passed: total,
+            listed,
+        })
     }
 }
 
-/// Workflow #463 AC-1: the case of the directory `directory` of a recording's set run on the
-/// adopted `package`, as `resource regression` runs a case of a checkout: its `case.json` read by
-/// the one reader (`case_missing` when it cannot be read), the scene it names read
-/// (`scene_missing`), the case run on the package (refused by the package's own check when the
-/// runner refused the package). Its files as read, `case.json` and the scene, for adoption to write
-/// byte for byte.
-fn adopted_case(
-    package: &Result<RegressionPackage, RegressionCheck>,
-    directory: &Path,
-) -> AdoptCaseRun {
-    let case_json = match fs::read(directory.join(REGRESSION_CASE_FILE)) {
-        Ok(bytes) => bytes,
-        Err(error) => {
-            let refused = RegressionCaseVerdict::refused(
-                None,
-                None,
-                RegressionCheck::failed(
-                    "",
-                    RegressionProblem::CaseMissing,
-                    Some(format!("{REGRESSION_CASE_FILE} cannot be read: {error}")),
-                ),
-            );
-            return case_run(&refused, Vec::new());
-        }
-    };
-    let case = match read_regression_case(&case_json) {
-        Ok(case) => case,
-        Err(verdict) => {
-            return case_run(&verdict, vec![(REGRESSION_CASE_FILE.to_owned(), case_json)]);
-        }
-    };
-    let scene = match fs::read(directory.join(case.scene())) {
-        Ok(scene) => scene,
-        Err(error) => {
-            let refused = case.refused(RegressionCheck::failed(
-                "/scene",
-                RegressionProblem::SceneMissing,
-                Some(format!("{} cannot be read: {error}", case.scene())),
-            ));
-            return case_run(&refused, vec![(REGRESSION_CASE_FILE.to_owned(), case_json)]);
-        }
-    };
-    let verdict = match package {
-        Ok(package) => package.run(&case, &scene),
-        Err(check) => case.refused(check.clone()),
-    };
-    case_run(
-        &verdict,
-        vec![
-            (REGRESSION_CASE_FILE.to_owned(), case_json),
-            (case.scene().to_owned(), scene),
-        ],
-    )
+/// Workflow #463 AC-1 fix round 1 (the coordinator's ruling): `record ready`'s refusal of a
+/// recording as adoption decides by it, by the word that refusal carries (`details.reason`,
+/// `contracts/lab-recording.md`): `lab_recording_unreadable`, a `recording.json` that does not
+/// decode as the Lab writes it, is [`ReadyRefused::Unreadable`]; every other refusal is
+/// [`ReadyRefused::Failed`].
+fn ready_refused(error: LabError) -> ReadyRefused {
+    let unreadable = error
+        .details
+        .as_ref()
+        .and_then(|details| details.get(LAB_UNAVAILABLE_WORD))
+        .and_then(Value::as_str)
+        == Some(LAB_RECORDING_UNREADABLE);
+    if unreadable {
+        ReadyRefused::Unreadable(error)
+    } else {
+        ReadyRefused::Failed(error)
+    }
 }
 
-/// Workflow #463 AC-1: `verdict` as adoption decides by it, with the runner's answer and `files`.
-/// A case not proven whole (`partial`, `not_run`) carries the runner's word for its verdict and
-/// its words for the checks that did not run, each once.
+/// Workflow #463 AC-1 fix round 1: the member of the details of the Lab's refusal of a recording
+/// that names why it is unavailable, and its word for a `recording.json` that does not decode.
+const LAB_UNAVAILABLE_WORD: &str = "reason";
+const LAB_RECORDING_UNREADABLE: &str = "lab_recording_unreadable";
+
+/// Workflow #463 AC-1 fix round 1: the one package an adoption's cases are run on, as the runner
+/// admitted it, whatever package a case names; every case is taken.
+struct AdoptedPackage(Result<RegressionPackage, RegressionCheck>);
+
+impl CasePackages for AdoptedPackage {
+    fn package(&mut self, _package_id: &str) -> &Result<RegressionPackage, RegressionCheck> {
+        &self.0
+    }
+}
+
+/// Workflow #463 AC-1: `verdict` as adoption decides by it, with `files`. A case not proven whole
+/// (`partial`, `not_run`) carries the runner's word for its verdict and its words for the checks
+/// that did not run, each once.
 fn case_run(verdict: &RegressionCaseVerdict, files: Vec<(String, Vec<u8>)>) -> AdoptCaseRun {
     let decided = match verdict.verdict {
         RegressionVerdict::Passed => AdoptCaseVerdict::Passed,
@@ -1638,12 +1662,8 @@ fn case_run(verdict: &RegressionCaseVerdict, files: Vec<(String, Vec<u8>)>) -> A
                 .collect(),
         },
     };
-    let answer = serde_json::to_value(verdict).unwrap_or_else(
-        |error| json!({"verdict": verdict.verdict.as_str(), "unserialized": error.to_string()}),
-    );
     AdoptCaseRun {
         verdict: decided,
-        answer,
         files,
     }
 }

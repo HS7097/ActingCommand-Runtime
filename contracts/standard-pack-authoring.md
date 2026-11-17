@@ -257,6 +257,7 @@ the repository and keeps no copy.
 |---|---|---|
 | `--repo` holds `applications.json` (its game and servers), `maintenance.json`, `packs/` and a `schedule.json` that reads; no `.part` of a root file is left ("If a call was interrupted") | `repository_invalid` | `entry`; for `schedule.json` the reader's `json_pointer` and its refusal as the cause |
 | The recording is as its last stop left it: `actingcommand.lab-recording.v1`, its `record_id`, `stopped`, not marked again since (`amended_at_unix_ms` absent or null), its package there. Workflow #463 S3-17: after its schema and its `record_id`, its status by `record ready`'s one function is `packaged` ("One judgement of the recording"); Workflow #463 AC-1: a cases directory beside its package can be listed | `recording_not_current` | `path` of `recording.json`, `member`; for a status other than `packaged` no `member`, the details' `record_ready` that function's answer; `path` the cases directory or its entry |
+| Workflow #463 AC-1 fix round 1: `record ready`'s one function judged the recording, or refused it only as one the Lab cannot read whole (`lab_recording_unreadable`, which the check of its own members above judges) | `recording_not_judged` | `path` of `recording.json`; that function's refusal as the cause |
 | The package is admitted as `package preflight` admits it, and its `package_id` names one directory `packs/<package_id>` that no root file reserves | `package_invalid` | `path`, the loader's refusal as the cause; or `package_id` |
 | Its game is `applications.json`'s and its server one of that file's | `package_mismatch` | `member` `game` or `server` |
 | No `packs/<package_id>.part` is left ("If a call was interrupted"); not adopted before (its directory, its rule, its held entry, its `maintenance.json` entry), or `--replace`; the kept copy's place free. Workflow #463 AC-1, when the adoption takes cases ("The cases"), after `packs/<package_id>.part`: no `.part` of a case of the package is left in `regression/<game>/`; after the rest: no case of the package an earlier adoption took from a recording is there, or `--replace`; with `--replace` the kept place of those cases free | `pack_exists` | `entry` the directory or its `.part`, or `json_pointer` of the entry; `path` of a taken place; without `--replace` the message names what the root files hold of the package, and when `schedule.json` and `maintenance.json` hold nothing of it beside its directory, either names the root file adopt does not write that gives it a role and what the call accepts for it, or says that an adoption was interrupted before it wrote the root files ("If a call was interrupted"); Workflow #463 AC-1: `entry` the earlier case or the case's `.part` (`regression/<game>/…`) and `package_id`, `path` the cases' kept place |
@@ -276,7 +277,7 @@ the repository and keeps no copy.
 | A business rule's value ("A pending value") | `decision_invalid` | `path`, `json_pointer` `/value` |
 | Workflow #463 AC-1, when the adoption takes cases ("The cases"): each case's directory `<package_id>.<case>` is one file name: the case's name holds no dot, the whole is one path segment, and with its `.part` it is at most 255 bytes | `case_name_invalid` | `path` the case in the recording, `package_id` |
 | Workflow #463 AC-1: each case's directory `regression/<game>/<package_id>.<case>` is free (names compared in ASCII lower case) or a case of the earlier set | `case_place_taken` | `entry` that directory, `package_id` |
-| Workflow #463 AC-1: no case fails on the package as this adoption writes it, each run by the one runner | `case_failed` | `path` the recording's cases directory, `count` the failing cases, `package_id`; the details' `cases` each failing case as the runner answers it |
+| Workflow #463 AC-1: no case fails on the package as this adoption writes it, each run by the one runner | `case_failed` | `path` the recording's cases directory, `count` the failing cases, `package_id`; fix round 1: the details list the cases that did not pass as `resource regression` lists them ("The cases"): `failed_total`, `listed`, `cases` |
 
 The check of the tree lays the tree as it would be written in the checkout's check tree,
 `<state>/adopt-check/<checkout>/`: the repository's pack directories with the package's own as it
@@ -470,7 +471,9 @@ of that call and gives the steps below, each of which a later call accepts:
   there); the cases of the recording it had renamed into place, in the order of their names; at
   most one `regression/<game>/<package_id>.<case>.part/`, whole or cut off. The next call that takes
   cases refuses as long as such a `.part` is there (`pack_exists` at it, `package_id`, before the
-  earlier adoption is looked at), its message saying what that call had done and the steps below.
+  earlier adoption is looked at), its message saying what that call had done and the steps below;
+  a call that takes none (`none_found`, `package_path`) refuses nothing for it and warns
+  `adopt_cases_left` naming it (fix round 1, "The cases").
   Without a `.part` it meets what any call that put its directory in place leaves: without
   `--replace` `pack_exists` (at `packs/<package_id>`, or at an earlier case of the package when the
   directory and the root files hold nothing of it); with `--replace` `pack_dirty` until
@@ -543,7 +546,7 @@ recording"), `rule`, `held` and
 `undeclared` or `follower`, as the composer counts the file's judged rules), `waits_for_value` and
 `value_not_judged` (`because` `follower` or `manual_request`, and `text`; "A pending value"),
 `warnings` (every warning of the check, the game's included, each once, then adoption's own two,
-below), `written` (in the order it was renamed into place), `would_write`, `kept`, `check_tree`,
+below, and, Workflow #463 AC-1 fix round 1, `adopt_cases_left`, "The cases"), `written` (in the order it was renamed into place), `would_write`, `kept`, `check_tree`,
 `readiness` or `readiness_not_judged` (below), `next` (each item `{path}`; Workflow #463 S3-12:
 `ours/model/bindings.json` with `fixed_value` too, below) and (Workflow #463 AC-1) `cases` ("The
 cases").
@@ -677,11 +680,18 @@ written. Adoption takes them into the checkout.
   package as this adoption writes it, the check tree's `packs-root/<package_id>/` (the very files
   it writes into `packs/<package_id>/`), admitted once by the runner (`RegressionPackage::load`;
   adoption's own admission hands it no admitted package), each case read by the one reader and its
-  scene read as `resource regression` reads a checkout's case. A case whose verdict is `failed`
-  refuses the adoption, nothing written: `case_failed`, its details' `cases` every failing case as
-  the runner answers it (`{id, package_id, verdict, checks, warnings?}`). `partial` and `not_run`
-  cases are taken and named in `cases.not_proven` (`{case, verdict, reasons}`, the runner's own
-  words: `regression_verdict` and `regression_not_run`).
+  scene read as `resource regression` reads a checkout's case (fix round 1: by its one reading of
+  a case directory, the one function both call). A case whose verdict is `failed` refuses the
+  adoption, nothing written: `case_failed`, its details listing the cases that did not pass as
+  `resource regression` lists them, by its one rule (fix round 1;
+  [resource-regression-case.md](resource-regression-case.md), "The operation"): `failed_total`, how
+  many did not pass (`failed` and `partial`); `cases`, the rows of the first of them, the failed
+  ones first, each group in the order of their names, at most that operation's bound (10), each
+  `{path, id, package_id, verdict, checks, warnings?}` with `path` the directory
+  `regression/<game>/<package_id>.<case>` it would be written to and its `checks` those that did
+  not pass, without their `detail`; `listed`, how many rows are given; the message names the first
+  failing case. `partial` and `not_run` cases are taken and named in `cases.not_proven` (`{case,
+  verdict, reasons}`, the runner's own words: `regression_verdict` and `regression_not_run`).
 - **Repeating.** A case is the earlier adoption's, which a later adoption of the package replaces,
   when it is a directory (no link) of `regression/<game>/` whose `case.json` is an object naming
   the package's `package_id` and whose `source` is a recording's in the form `record stop` writes:
@@ -693,7 +703,12 @@ written. Adoption takes them into the checkout.
   directory's kept copy (`<ms>` the call's time), which must be free (`pack_exists`, `path`) and on
   the checkout's volume (`replace_across_volumes`), then the new set is written. A case of the
   package written by hand (another `source`, or none) is never moved or rewritten. Nothing is
-  deleted in the checkout.
+  deleted in the checkout. Fix round 1: an adoption that takes no case (`none_found`,
+  `package_path`, with `--replace` or without) moves none and runs none, so the cases of the
+  package an earlier adoption took from a recording stay, though they may not match the content
+  it writes, and so does a case's `.part` an interrupted adoption left: it warns
+  `adopt_cases_left` (`package_id`, `paths` those directories relative to `--repo` in the order of
+  their names), and moves and removes nothing.
 - **Written last** ("What it writes"; what an interrupted call leaves, "If a call was
   interrupted"). A `.part` of a case of the package left in `regression/<game>/`
   (`<package_id>.<case>.part`) is refused `pack_exists` at it before the earlier adoption is looked
@@ -730,7 +745,13 @@ beside it for that difference only:
   function cannot read (no whole `actingcommand.lab-recording.v1` as the Lab writes it: made by
   hand, or damaged) is judged by the old check of its `status` and `amended_at_unix_ms`, kept, the
   function's refusal the cause of a refusal and, when they pass, said as `review.ready_not_read`
-  (`{outcome, text}`).
+  (`{outcome, text}`). Fix round 1 (the coordinator's ruling): that is the one refusal of the
+  function the old check judges, told by the word the Lab's refusal carries
+  (`lab_recording_unreadable`, [lab-recording.md](lab-recording.md)). A failure on the Lab's side
+  is never a pass: every other refusal of the function (the state not read, the recording's
+  identity not its own, `lab_recording_missing` or `lab_recording_mismatch`, its answer not
+  serialized) refuses the adoption `recording_not_judged`, `path` the `recording.json`, that
+  refusal its cause, nothing written.
 - `recording_unreviewed` is unchanged and whole: the function checks a packaged recording no
   further (`missing` empty), so it refuses none of the packaged recordings the review refuses (its
   cross-check not `passed`, its first decision not evaluated, a step needing review), and a package
@@ -748,10 +769,13 @@ beside it for that difference only:
 | `adopt_refused` `pack_exists` (new causes) | an earlier adoption's case of the package without `--replace`; a case's `.part` left; the cases' kept place taken | refuses | 1; 2; a refusal |
 | `adopt_refused` `replace_across_volumes` (new cause) | the cases' kept place on another volume | refuses | 1; 2; a refusal |
 | `adopt_refused` `recording_not_current` (new cause) | `record ready`'s status is not `packaged`; or the cases directory cannot be listed | refuses | 1; 2; a refusal |
+| `adopt_refused` `recording_not_judged` (fix round 1) | `record ready`'s function refused the recording otherwise than as one the Lab cannot read whole | refuses | 1; 2; a refusal |
+| `adopt_cases_left` (fix round 1) | an adoption that took no case leaves cases of the package in `regression/<game>/`, an earlier adoption's from a recording or a case's `.part` | warns | 0; 0; the answer's `warnings` |
 | `adopt_cases` `taken` | the recording's cases were read | informs | 0; 0; the answer |
 | `adopt_cases` `none_found` | the recording's last stop wrote no cases directory | informs | 0; 0; the answer |
 | `adopt_cases` `package_path` | the package was given by its path, which carries no case | informs | 0; 0; the answer |
 | `regression_verdict` `partial`, `not_run`; `regression_not_run` words | a case taken that the runner did not prove whole, in its own words | informs | 0; 0; the answer |
 
 No decision reads a code by name: adoption decides by the runner's verdict word and by the
-judgement's status word.
+judgement's status word; fix round 1: the Lab tells a recording it cannot read whole from its other
+refusals by the word its refusal carries (`reason` `lab_recording_unreadable`), never by its code.
