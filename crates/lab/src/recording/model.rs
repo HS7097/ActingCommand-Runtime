@@ -372,6 +372,11 @@ pub struct RecordStopOptions {
     pub arrival_timeout_ms: Option<u64>,
     pub application_arrival_timeout_ms: Option<u64>,
     pub dry_run: bool,
+    /// #463 RM-1 (`--template-margin-bound`): the bound below which a template mark's distance to
+    /// its threshold, on the side a self-check needs it on, is the warning
+    /// `record_template_near_threshold`; `None`: 0.03. `record ready` and `record review` read it
+    /// too; it changes nothing that passes or refuses, and nothing of the package.
+    pub template_margin_bound: Option<f64>,
 }
 
 /// The Lab part of `record stop`.

@@ -598,6 +598,17 @@ naming this file.
   one whose scrolling select reads the fold `holds_choice`; a fold over a key step, or onto a press
   whose effect is a key, is `fold_range_invalid`; and while a key stands the guard it gives back is
   in use (`record_mark_in_use` for its `remove`).
+  #463 RM-1 (0.12.72; `contracts/lab-recording.md`, "Self-checks", item 11): `ac_record_stop` (its
+  dry run too), `ac_record_ready` and `ac_record_review` take `template_margin_bound` (0 to 1,
+  default 0.03) and answer the warning `record_template_near_threshold` for a template mark whose
+  score lies nearer its threshold than that, on the side a self-check needs it on: `side` `passes`
+  (a mark a page requires passes on the page's own frames by less) or `misses` (a mark a page
+  forbids misses there, or the one template a page is told from a screen it must not pass on by
+  misses there, by less), with `check`, where it is, `mark_id`, `frame_id`, `score`, `threshold`,
+  `margin` and `bound`; in `lab.warnings` after the other warnings, among `ac_record_ready`'s
+  warnings once every self-check passed, at its step in `ac_record_review` (`steps[].warnings`). It
+  is the fact only, refuses nothing and changes no exit status; the package is the same whatever
+  the bound. What to do with a mark that barely passes is yours to decide.
 - **Offline scenes of another size** (Workflow #392 DA-5cd, 0.12.67, as the train of DA-5ab and
   DA-5cd leaves it; `contracts/display-adapter.md` section 12). `ac_recognize`, `ac_detect_page`,
   `ac_current_page`, `ac_is_visible`, `ac_lab_observe` on a saved scene, `ac_tap_target` and

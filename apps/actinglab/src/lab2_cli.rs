@@ -2941,6 +2941,7 @@ fn lab2_command_contracts() -> Vec<Lab2CommandContract> {
                 "--timeout-ms <ms>",
                 "--arrival-timeout-ms <ms>",
                 "--application-arrival-timeout-ms <ms>",
+                "--template-margin-bound <d>",
                 "--dry-run",
                 "--state-dir <dir>",
             ],

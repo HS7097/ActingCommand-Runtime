@@ -4151,3 +4151,15 @@ tests = [
     "actingcommand-execution-kernel::lib::tests::gate_463_rg1::rg1_a_template_target_is_answered_byte_for_byte_as_before",
 ]
 incident = ["#463 RG-1"]
+
+# #463 RM-1 (0.12.72; register §1.466; brief rd-1117/brief-463-rm1-margin-warning.md; contracts/lab-recording.md, "Self-checks", item 11, "Near a threshold"): a recording's self-checks warn of a template mark whose score lies nearer its threshold than the bound (--template-margin-bound, default 0.03), on the side a self-check needs it on, record_template_near_threshold, the fact only. Synthetic 96x64 gray screens with noise patches recorded offline by record mark, a perturbed patch with its 6x6 corner replaced and scored by the function the admitted evaluator scores with; no OCR model, no clock. Step 1's button passing its sample by about 0.01: the stop's dry run and the stop answer the warning {side passes, check record_step_self_mismatch, step 1, record_index 1, page, mark_id, the sample's frame, score, threshold, margin, bound 0.03}, its margin the cross-check's margins entry, the stop's warnings those of its dry run; record ready ready and, the warning taken out, what it answers with the bound 0; record review shows it at step 1 alone; the package written is byte for byte the package the self-checks build for the same plan with the bound 0, which answer no warning (1); passing by about 0.05, no warning from the dry run or record ready (2); with the bound 0.06 that recording warns of both marks with bound 0.06, in record ready and at each step of record review, with 0.005 the first recording of none, 1.5 validation_failed for record stop and record ready (3); step 2 forbidding step 1's button, which misses on step 2's frame by about 0.01 (side misses, record_step_self_mismatch, step 2), and, in another recording, step 2's page told from step 1's screen by its one template missing there by about 0.01 (side misses, arrival_unconfirmed, step 1, gate), each the one warning of its recording, none with the bound 0 (4); colour marks only: the dry run and record ready with the bound 1 as with the default, no warning, the package the same with the bounds 0 and 1 (5)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-lab::lib::gate_463_rm1::rm1_a_template_that_passes_its_frames_by_less_than_the_bound_is_warned_and_changes_nothing",
+    "actingcommand-lab::lib::gate_463_rm1::rm1_a_template_that_passes_by_more_than_the_bound_is_not_warned",
+    "actingcommand-lab::lib::gate_463_rm1::rm1_the_bound_given_another_value_is_the_bound_the_warning_follows",
+    "actingcommand-lab::lib::gate_463_rm1::rm1_a_template_that_must_not_pass_and_misses_by_less_than_the_bound_is_warned",
+    "actingcommand-lab::lib::gate_463_rm1::rm1_a_recording_without_template_marks_answers_as_with_any_bound",
+]
+incident = ["#463 RM-1"]

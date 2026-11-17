@@ -41,6 +41,7 @@ use crate::recording::model::{
     SelfTestStatus, StepClick, StepOptionalView, StepStateView, StepTransition, StepView,
     TransitionSpec, TransitionView,
 };
+use crate::recording::near::{TemplateNearThreshold, template_margin_bound};
 use crate::recording::ready::{
     Known, ReadyOptionConflict, ReadySources, ReadyWarningItem, RecordReadyOutcome, check_items,
     check_runs, every_check_complete, generator_warnings, known, lack_items, packaged,
@@ -215,6 +216,8 @@ pub fn record_stop(
     ] {
         validate_timeout_option(name, value)?;
     }
+    // #463 RM-1: a bound out of its range is refused before anything is read, as the timeouts are.
+    template_margin_bound(options.template_margin_bound)?;
     let none = RecordStopOutcome {
         lab_status: None,
         lab: None,
@@ -420,6 +423,8 @@ pub fn record_ready(
     options: &RecordStopOptions,
     ocr: &LabOcr,
 ) -> LabResult<RecordReadyOutcome> {
+    // #463 RM-1: a bound out of its range is refused before anything is read.
+    template_margin_bound(options.template_margin_bound)?;
     let (recording, session) = ready_recording(state_dir, instance, record_id)?;
     ready_of(&recording, session, options, ocr)
 }
@@ -433,6 +438,8 @@ fn ready_of(
     options: &RecordStopOptions,
     ocr: &LabOcr,
 ) -> LabResult<RecordReadyOutcome> {
+    // #463 RM-1: the bound the self-checks warn by, as `record stop` takes it.
+    let bound = template_margin_bound(options.template_margin_bound)?;
     let mut warnings = point_press_warnings(recording);
     if let Some(artifact) = recording.artifact.as_ref().filter(|_| packaged(recording)) {
         warnings.extend(option_conflict_warnings(artifact, options)?);
@@ -467,9 +474,19 @@ fn ready_of(
         }
         // #463 S2-1c: every failure of each self-check, each check that can go on past one going
         // on, and each check that ran saying whether its list is all it has.
-        Survey::Planned(plan) => match self_checks(&plan, ocr, Failures::every()) {
+        Survey::Planned(plan) => match self_checks(&plan, ocr, Failures::every(), bound) {
             Ok(checked) => {
                 warnings.extend(generator_warnings(&checked.package.warnings)?);
+                // #463 RM-1: a template mark near its threshold, as `record stop` answers it after
+                // its warnings.
+                warnings.extend(
+                    checked
+                        .package
+                        .near_threshold
+                        .iter()
+                        .cloned()
+                        .map(ReadyWarningItem::NearThreshold),
+                );
                 // #463 S2-10: a case's page recognised beside another page, as `record stop`
                 // names it.
                 warnings.extend(generator_warnings(checked.cases.ambiguity_warnings())?);
@@ -522,6 +539,8 @@ pub fn record_review(
     options: &RecordStopOptions,
     ocr: &LabOcr,
 ) -> LabResult<RecordReviewOutcome> {
+    // #463 RM-1: a bound out of its range is refused before anything is read.
+    template_margin_bound(options.template_margin_bound)?;
     let (recording, session) = ready_recording(state_dir, instance, request.record_id.as_deref())?;
     if let Some(step) = request.step {
         effective_step(&recording, step)?;
@@ -632,6 +651,7 @@ fn generate_and_write(
     if let Some(refusal) = recording_not_base(recording) {
         return Err(refusal);
     }
+    let bound = template_margin_bound(options.template_margin_bound)?;
     let plan = generate_plan(recording, settings)?;
     let Checked {
         package:
@@ -642,12 +662,14 @@ fn generate_and_write(
                 checks,
                 selects,
                 endings,
-                warnings,
+                mut warnings,
+                near_threshold,
                 final_decision,
                 ..
             },
         cases,
-    } = self_checks(&plan, ocr, Failures::first()).map_err(SelfCheckFailures::into_refusal)?;
+    } = self_checks(&plan, ocr, Failures::first(), bound)
+        .map_err(SelfCheckFailures::into_refusal)?;
 
     let ext = extension(kind);
     // Workflow #336 PKG-S5 (M-PKG v1.1 §3.5, D9): the package is `<package_id>.<ext>`, and a
@@ -864,6 +886,16 @@ fn generate_and_write(
             "application_arrival_timeout_ms": plan.application_arrival_timeout_ms
         }),
     );
+    // #463 RM-1: the warnings the package's provenance records, then the template marks near their
+    // threshold, which it does not record, so that the package is the same whatever the bound.
+    for warning in &near_threshold {
+        warnings.push(serde_json::to_value(warning).map_err(|error| {
+            invalid(
+                "validation_failed",
+                format!("failed to encode a record_template_near_threshold warning: {error}"),
+            )
+        })?);
+    }
     lab.insert("warnings".to_string(), json!(warnings));
     lab.insert(
         "arrival_by_time_window".to_string(),
@@ -934,6 +966,9 @@ struct PackageChecked {
     selects: SelectChecks,
     endings: EndingChecks,
     warnings: Vec<Value>,
+    /// #463 RM-1: the warnings `record_template_near_threshold` of the cross-check and the endings,
+    /// answered after `warnings` and never written into the package's provenance.
+    near_threshold: Vec<TemplateNearThreshold>,
     final_decision: FirstDecision,
     cache: FrameCache,
 }
@@ -1080,14 +1115,17 @@ impl Runner {
 /// nothing, so an error there stops the check with `check_error`, as in every other check; only a
 /// refusal of their staged judgement stops it with `whole_package`. #463 S2-10: the last check,
 /// `cases`, makes the regression cases of the final package and runs each on it; it reads the final
-/// package, so it runs only when every check before it passed.
+/// package, so it runs only when every check before it passed. #463 RM-1: `bound` is the bound the
+/// cross-check and the endings warn of a template mark near its threshold by; it changes no check's
+/// verdict and nothing of the package.
 fn self_checks(
     plan: &Plan,
     ocr: &LabOcr,
     failures: Failures,
+    bound: f64,
 ) -> Result<Checked, SelfCheckFailures> {
     let mut runner = Runner::new(failures);
-    let Some(package) = package_checks(plan, ocr, &mut runner) else {
+    let Some(package) = package_checks(plan, ocr, &mut runner, bound) else {
         return Err(runner.into_failures());
     };
     let built = regression_cases(
@@ -1113,12 +1151,38 @@ fn self_checks(
 /// it, for a test that compares it with the package `record stop` writes (S2-9a's test 6 reads it).
 #[cfg(test)]
 pub(crate) fn package_without_cases(plan: &Plan, ocr: &LabOcr) -> Option<Vec<u8>> {
-    package_checks(plan, ocr, &mut Runner::new(Failures::first())).map(|package| package.bytes)
+    package_checks(
+        plan,
+        ocr,
+        &mut Runner::new(Failures::first()),
+        crate::recording::near::DEFAULT_TEMPLATE_MARGIN_BOUND,
+    )
+    .map(|package| package.bytes)
+}
+
+/// #463 RM-1: the package the self-checks before `cases` build for `plan` with the bound `bound`,
+/// and the warnings `record_template_near_threshold` they answer beside it, for a test that compares
+/// the package built with one bound with the package `record stop` writes with another.
+#[cfg(test)]
+pub(crate) fn package_with_bound(
+    plan: &Plan,
+    ocr: &LabOcr,
+    bound: f64,
+) -> Option<(Vec<u8>, Vec<TemplateNearThreshold>)> {
+    package_checks(plan, ocr, &mut Runner::new(Failures::first()), bound)
+        .map(|package| (package.bytes, package.near_threshold))
 }
 
 /// The self-checks of [`self_checks`] before `cases`, in the order they run, with `runner`: the
-/// final package when every one passed; `None` when the checks end, `runner` holding why.
-fn package_checks(plan: &Plan, ocr: &LabOcr, runner: &mut Runner) -> Option<PackageChecked> {
+/// final package when every one passed; `None` when the checks end, `runner` holding why. #463
+/// RM-1: with the bound `bound` of the warnings `record_template_near_threshold`, which are kept
+/// out of the package's provenance.
+fn package_checks(
+    plan: &Plan,
+    ocr: &LabOcr,
+    runner: &mut Runner,
+    bound: f64,
+) -> Option<PackageChecked> {
     let inputs = load_package_inputs(plan, &mut runner.failures);
     let (cache, crops) = runner.last(ReadyCheck::Frames, ReadyCheckStop::CheckError, inputs)?;
     // Every later check reads every frame.
@@ -1167,7 +1231,7 @@ fn package_checks(plan: &Plan, ocr: &LabOcr, runner: &mut Runner) -> Option<Pack
     if runner.ends() {
         return None;
     }
-    let checks = cross_check(plan, evaluator, &cache, ocr, &mut runner.failures);
+    let checks = cross_check(plan, evaluator, &cache, ocr, bound, &mut runner.failures);
     let checks = runner.last(ReadyCheck::CrossCheck, ReadyCheckStop::CheckError, checks);
     if runner.ends() {
         return None;
@@ -1176,7 +1240,7 @@ fn package_checks(plan: &Plan, ocr: &LabOcr, runner: &mut Runner) -> Option<Pack
     // on no frame of a screen the run may show instead (an ending page that passes on a select
     // step's frames before its last press is the ending's refusal, not the select's); the result
     // is part of the cross-check, present only when the recording has an ending.
-    let endings = ending_checks(plan, evaluator, &cache, ocr, &mut runner.failures);
+    let endings = ending_checks(plan, evaluator, &cache, ocr, bound, &mut runner.failures);
     let endings = runner.last(ReadyCheck::Endings, ReadyCheckStop::CheckError, endings);
     if runner.ends() {
         return None;
@@ -1186,7 +1250,7 @@ fn package_checks(plan: &Plan, ocr: &LabOcr, runner: &mut Runner) -> Option<Pack
     let selects = select_checks(&first_prepared, plan, &cache, ocr, &mut runner.failures);
     let selects = runner.last(ReadyCheck::Selects, ReadyCheckStop::CheckError, selects);
     // The final package is built of what every check before it gave.
-    let (Some(decision), Some(mut checks), Some(endings), Some(selects)) =
+    let (Some(decision), Some(mut checks), Some(mut endings), Some(selects)) =
         (decision, checks, endings, selects)
     else {
         return None;
@@ -1194,6 +1258,9 @@ fn package_checks(plan: &Plan, ocr: &LabOcr, runner: &mut Runner) -> Option<Pack
     if runner.failed() {
         return None;
     }
+    // #463 RM-1: answered beside the warnings and kept out of the provenance below.
+    let mut near_threshold = std::mem::take(&mut checks.near_threshold);
+    near_threshold.append(&mut endings.near_threshold);
     if let Some(cross) = checks.cross_check.as_object_mut()
         && !endings.endings.is_empty()
     {
@@ -1253,6 +1320,7 @@ fn package_checks(plan: &Plan, ocr: &LabOcr, runner: &mut Runner) -> Option<Pack
         selects,
         endings,
         warnings,
+        near_threshold,
         final_decision,
         cache,
     })

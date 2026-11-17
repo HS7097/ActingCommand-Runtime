@@ -3534,7 +3534,11 @@ today's server (`actingctl mcp-serve`) has no such tool.
     `select_unrefined` among them) or, once no pre-check fails, each failure of each self-check
     (#463 S2-1c); an item that names no step (a part of the identity, an ending's, a template's
     crop, the package as a whole) is no step's. Since a failed pre-check runs no self-check, a
-    step's self-check items appear once the recording fails no pre-check.
+    step's self-check items appear once the recording fails no pre-check;
+  - `warnings` (#463 RM-1, 0.12.72): the warnings `record_template_near_threshold` of `record
+    ready` whose `record_index` is the step's ("Self-checks", item 11), as `record ready` answers
+    them with the `--template-margin-bound` it is given; absent when there is none, so that every
+    other step is answered as before.
 - **Warnings.** `warnings` is `[]`, or `[{"code": "frame_file_missing", "frame_ids": [...]}]`
   naming once, in the order the answer gives them, each frame whose file is not where the manifest
   names it, as `record frames` answers it; such a frame's `path` is `null`, with `--no-preview`
@@ -4399,8 +4403,13 @@ before this slice is read as it is.
 record stop [--lab-dir <dir>] [--package-id <id>] [--requires <package_id>]
             [--game <g>] [--server <s>] [--locale <l>]
             [--timeout-ms <ms>] [--arrival-timeout-ms <ms>] [--application-arrival-timeout-ms <ms>]
-            [--dry-run] [--state-dir <dir>]
+            [--template-margin-bound <d>] [--dry-run] [--state-dir <dir>]
 ```
+
+#463 RM-1 (0.12.72): `--template-margin-bound <d>` (0 to 1, default 0.03; `record ready` and `record
+review` take it too) is the bound of the warning `record_template_near_threshold` ("Self-checks",
+item 11); it changes nothing that passes or refuses and nothing of the package. A value outside 0
+to 1 is `validation_failed` before anything is read.
 
 `record stop` turns a recording with steps into one `linear_steps` package
 (`linear-steps.md`) in a content container (`package-reference.md`, "Containers"), checks it
@@ -4886,8 +4895,49 @@ guard execution still requires the corresponding frames, provider and Runtime ev
     recognised beside another page of the package is no miss (`record_case_page_ambiguous`, or
     `record_case_ambiguous_not_written` for a case with no target to pin; warnings). See
     "Regression cases written with the package" below.
+11. **Near a threshold** (#463 RM-1, 0.12.72; the coordinator's work order, after a package whose
+    template mark passed its recorded frames by 0.013 read 0.947 on the device a moment later).
+    Items 4, 7 and 9 already evaluate every template mark with the admitted evaluator, which gives
+    its score and its threshold on each frame they judge (`cross_check.margins` lists the smallest
+    `score − threshold` of each mark a page requires on its own frames, beside the colour and
+    colour digest marks' `limit − distance`). For each judgement they keep, per template mark, the
+    frame on which its score came nearest its threshold, on the side the judgement needs it:
+    - `passes`: a template mark a page requires (the marks `cross_check.margins` lists: a check
+      is no template, a member of an `any_of` check is not required on its own), on the live
+      frames of its own step, its page transition's on the transition's, and an ending's on the
+      ending's (items 4 and 9, "Self" and the ending's own frames);
+    - `misses`: a template mark a page forbids, on the page's own frames (item 4); and on the frames
+      of a screen a page must not pass on, the one template mark the page's not passing rests on,
+      on each frame where every other mark it requires passes, none is undetermined, no mark it
+      forbids passes and that one fails with its score below its threshold: the arrival gate on the
+      frames of the step after whose effect it is awaited (item 4), an optional step's page against
+      the step before its run, its skip target and another optional step of the run, the skip
+      target on an optional step's frames (item 7 a and b), an ending's page against `previous`,
+      `usual` and `other_ending`, and the usual ending's page on an ending's frames (item 9). A
+      screen on which the page passes is the check's own refusal or warning, as before; the entry
+      overlay (item 5), a darkened copy of step 1's frames, is not judged so.
 
-Warnings never refuse. The provenance and the output carry the same warnings.
+    A mark whose nearest score lies less than the bound from its threshold
+    (`--template-margin-bound`, default 0.03; 0 warns of nothing) is the warning
+    `record_template_near_threshold`: `{code, side, check, against?, step?, record_index?, page?,
+    gate?, optional_step?, outcome_key?, other_outcome_key?, usual_page?, mark_id, frame_id, score,
+    threshold, margin, bound}`, `side` a word of `template_threshold_side` (`passes` or `misses`),
+    `check` the code the judgement answers when it fails (`record_step_self_mismatch`,
+    `arrival_unconfirmed`, `record_optional_step_ambiguous`,
+    `record_optional_skip_target_insensitive`, `record_ending_ambiguous`,
+    `ending_usual_insensitive`) with the members that check names its place by, `frame_id` the
+    frame of the nearest score, `score` and `threshold` the evaluator's there, `margin` how far the
+    one lies from the other. It is the fact only: it proposes no mark, region or step, and it
+    refuses nothing (exit 0 on actinglab's own line, on the `--via` line and through MCP: a
+    warning changes no exit status). Colour, colour digest, OCR, value-test and check marks are
+    not judged so. `lab.warnings` lists these warnings after the others, `record ready` lists
+    them among its warnings once every self-check passed (its readiness unchanged), and `record
+    review` shows each at the step its `record_index` names (`steps[].warnings`, absent when none;
+    a warning of an ending names no step). The package's provenance does not carry them, so the
+    package is byte for byte the same whatever the bound.
+
+Warnings never refuse. The provenance and the output carry the same warnings, but (#463 RM-1)
+`record_template_near_threshold`, which only the output carries.
 
 **Every failure, for `record ready`** (#463 S2-1c, 0.12.68). Each check above is one
 implementation with two callers. `record stop` ends at the first failure of the first check that

@@ -150,6 +150,14 @@ actingcommand_contract::outcome_codes! {
         /// generated (key `key_problem`: why); the command is refused and nothing is written (exit
         /// 3; actinglab details `step`).
         RecordKeyInvalid => "record_key_invalid": error / none,
+        /// Warning. #463 RM-1: a template mark's score lies nearer its threshold than the bound
+        /// (`--template-margin-bound`, default 0.03), on the side a self-check of `record stop`
+        /// needs it on (`side`, a word of `template_threshold_side`): it passes where it must pass,
+        /// or misses where it must not pass, by less than the bound. `lab.warnings`, `record ready`
+        /// and `record review` name it with the mark, its step, its score, its threshold, the
+        /// margin and the bound; it refuses nothing, proposes nothing and is not written into the
+        /// package.
+        RecordTemplateNearThreshold => "record_template_near_threshold": warning / none,
     }
 }
 
@@ -533,6 +541,21 @@ actingcommand_contract::outcome_vocabulary! {
         /// A step's press is a single recorded point with no press region set: the package would
         /// press that exact pixel.
         PressPointOnly => "press_point_only",
+    }
+}
+
+// #463 RM-1: the side of its threshold a self-check of `record stop` needs a template mark on, which
+// the warning `record_template_near_threshold` names (`side`).
+actingcommand_contract::outcome_vocabulary! {
+    /// The side of its threshold a template mark lies on, nearer than the bound, where a self-check
+    /// needs it (`template_threshold_side`).
+    pub enum TemplateThresholdSide: "template_threshold_side" {
+        /// The check needs the mark to pass, and its score lies at or above its threshold by less
+        /// than the bound.
+        Passes => "passes",
+        /// The check needs the mark not to pass, and its score lies below its threshold by less
+        /// than the bound.
+        Misses => "misses",
     }
 }
 

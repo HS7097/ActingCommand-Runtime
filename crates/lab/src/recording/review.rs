@@ -42,10 +42,11 @@ use super::model::{
     AfterCaptureRecord, ClickGesture, LabRecording, RecordPoint, RecordRect, RecordedFrame,
     RecordedMark, RecordingStep, StepChoice, StepClick,
 };
+use super::near::TemplateNearThreshold;
 use super::preview::{
     Colour, Glyph, MARK_COLOUR, Overlay, PRESS_BOX_COLOUR, RECOGNIZE_BOX_COLOUR, render,
 };
-use super::ready::{ReadyItem, RecordReadyOutcome, one_pixel, press_frame};
+use super::ready::{ReadyItem, ReadyWarningItem, RecordReadyOutcome, one_pixel, press_frame};
 use super::scan::RecordReviewScan;
 use super::steps::{effective_step, live_primary, step_ref};
 use super::store::{lab_dir, read_verified, write_atomic};
@@ -136,6 +137,13 @@ pub struct RecordReviewStep {
     /// that name this step (#463 S2-6's `select_unrefined` among them) or, once none fails, every
     /// self-check's failure that names it (#463 S2-1c); an item that names no step is no step's.
     pub missing: Vec<ReadyItem>,
+    /// #463 RM-1: the warnings `record_template_near_threshold` of `record ready` whose judgement
+    /// names this step by its serial number (`record_index`: its page on its own frames, the
+    /// arrival gate after its effect, its optional page, or the skip target it is), as `record
+    /// ready` answers them; absent when there is none, so that a step without one is answered as
+    /// before. A warning of an ending names no step and is no step's.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<TemplateNearThreshold>,
 }
 
 /// #463 S2-8': one swipe folded into a press step's scrolling search, as that step's sheet lists
@@ -354,6 +362,18 @@ pub(crate) fn review_outcome(
                 .iter()
                 .filter(|item| item.step == Some(step.index))
                 .cloned()
+                .collect(),
+            warnings: ready
+                .warnings
+                .iter()
+                .filter_map(|warning| match warning {
+                    ReadyWarningItem::NearThreshold(near)
+                        if near.at.record_index == Some(step.index) =>
+                    {
+                        Some(near.clone())
+                    }
+                    _ => None,
+                })
                 .collect(),
         });
     }
