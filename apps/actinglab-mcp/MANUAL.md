@@ -40,10 +40,14 @@ naming this file.
   server records `cli`, as the row writes it without one), and takes `config`, a candidate
   configuration whose state root the binding goes into (fix round 1: then the install root's adb is
   that of the root this server's program runs from by its place, never read from an install
-  selection). These are the only parameters of a
-  row a tool leaves out; the command line also takes `actinglab`'s global options, a positional
-  given as its flag (`--id`, `--instance`) and `devices bind`'s own `--root` (the server hands on
-  the root it runs from), which no tool needs. No tool takes `words` either (Workflow #434 LW-1):
+  selection); `ac_devices` and `ac_devices_bind` take neither `key_salt` nor `key_salt_env`
+  (#398 DB-2, 0.12.72: a salt in a tool call stays in the client's transcript, and a variable of
+  this server's process is no caller's to name; through this server a row's `device_key` is made
+  with the installation's own secret, and `ac_devices_bind` takes `device_key` in place of
+  `handle`); `ac_devices_bind` takes no `root` (#398 DB-2 fix round 1: the row's parameter for
+  the command line's own `--root`; the server hands on the root it runs from). These are the only
+  parameters of a row a tool leaves out; the command line also takes `actinglab`'s global
+  options and a positional given as its flag (`--id`, `--instance`), which no tool needs. No tool takes `words` either (Workflow #434 LW-1):
   the further words a row handed on before Workflow #434 LAB-5B4, which no row declares and a row
   served in the server's own process refuses by name.
 - **Closed word lists** (Workflow #434 LW-1, 0.12.67). Where an operation takes only the words of
@@ -191,16 +195,41 @@ naming this file.
     answer goes to `ac_record_draft` as `record_stop_export` (`{path, sha256}`). #463 RC-1
     (0.12.69): `ac_resource_regression` keeps `counts` the same way (its refusal lists at most 10
     rows and fits);
+  - a rescue tool's success line (served in the server's own process, on Windows; section 8)
+    that the next point could send neither way (Workflow #434 PP-1, 0.12.72) is written whole to
+    the export directory and answered its header: the parts its tool keeps, `truncated`,
+    `export`, `warnings` (`answer_exported` first, the line's own after it) and the line's
+    `outcome`. `ac_place` (with `plan`, and a placement) keeps the plan's `schedule_changes` under
+    `plan`, as the line holds it, and its `next` (what a placement with no Runtime running tells
+    you to do next: `composition_at_start`, or `composition_at_start_once_bound` when the
+    configuration binds no instance to the game); `ac_undo` and `ac_op_resume`
+    their `reverses` (`ac_undo` with `plan`) and their `schedule_changes`, where the answer
+    carries them; `ac_op_status` its `unfinished`, `last_operations` and, with `op`, `journal`;
+    every other rescue tool, `ac_deploy` with `plan` among them, its outcome alone (with `plan`:
+    `plan_id`, `commit_sha`). A part is kept whole while the header still fits; else
+    `schedule_changes` without its rows `packages`, which `packages_total` counts, its four lists
+    `enters`, `leaves`, `content_only` and `unread` kept; else every list counted the same way
+    (`enters_total` and the others); a list (`reverses`, `last_operations`) is counted so too;
+    else the part is left out. `truncated` names, as JSON pointers into the file, every member of
+    the answer the header does not hold as the file does: each member left out (`/steps`, and
+    beside `schedule_changes` the plan's other members, `/plan/items` among them) and what a
+    reduced part left (`/plan/schedule_changes/packages`). The answer's own `warnings` and
+    `outcome` are not named there: every header carries them (its `warnings` begin with
+    `answer_exported`, or `material_export_failed`). Nothing is in the file that the header
+    neither holds nor names there. Read `schedule_changes` before you place: in the header, or in
+    the file where `truncated` names its lists. The call's job keeps the header, so `ac_run_show`
+    of its handle answers it with its `export`. A refusal is never exported, and no line that the
+    next point sends is;
   - any other line, a refusal and a child's failure line too, that does not fit with its text
     repeated is sent in `structuredContent` alone, beside a summary text `{outcome,
     structured_content_only, warnings?, warnings_omitted?, truncated?, narrow}` (from protocol
     2025-06-18 on);
-  - a line that fits neither way answers `output_budget_exceeded` (`actual_bytes`, `limit_bytes`)
-    and, for a call that ran as a job, the job's `handle`: its work was done, the job keeps the
-    line unread, and `ac_run_show` of the handle answers the same refusal with `job_phase` and
-    `summary` (`{outcome, members, warnings_total, truncated?}`, the line's own outcome saying
-    whether the work succeeded). Narrow the call (filters, a lower `limit`) to have the whole
-    answer.
+  - a line that fits neither way, a rescue tool's header too, answers `output_budget_exceeded`
+    (`actual_bytes`, `limit_bytes`) and, for a call that ran as a job, the job's `handle`: its
+    work was done, the job keeps the line unread, and `ac_run_show` of the handle answers the
+    same refusal with `job_phase` and `summary` (`{outcome, members, warnings_total,
+    truncated?}`, the line's own outcome saying whether the work succeeded). Narrow the call
+    (filters, a lower `limit`) to have the whole answer.
 
 ## 6 Exports
 
@@ -215,8 +244,10 @@ naming this file.
   file. `ac_report_export` (Workflow #467 RPT-1) always writes its problem report archive there,
   `problem-report-<YYYYMMDD-HHMMSS>Z-<8 hex>.zip`, and answers its `path`, `sha256` and `size`
   (`contracts/problem-report.md`). None of them takes `out`: the server gives its own directory.
-- A file that cannot be written is `material_export_failed`; on a child's overflow it is the first
-  warning instead, and the answer has no `export`.
+- A file that cannot be written is `material_export_failed`; on a child's overflow and on a rescue
+  tool's header (section 5; Workflow #434 PP-1) it is the first warning instead, and the answer
+  has no `export`: the header's parts are all of the answer there is, and a header that does not
+  fit even so answers `output_budget_exceeded` with its job's handle.
 - Every other row that takes a place on disk (an `out`, a `dir`, a `state_dir`) uses the place the
   caller gives, as an absolute path (section 7).
 

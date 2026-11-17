@@ -20,7 +20,8 @@
 //   is. Also `runs --instance <x>`, a `seed` above the signed range and a `decimal`.
 //   Fix 1 (rd-1108/arch-013/brief-lab5a-fix1.md, review-1569-findings.md): the other lines the
 //   further flags let through before stay accepted and go on as before (`words::KEPT_FLAGS`:
-//   `run show --id`, `run evidence --id`, `monitor set --instance`, `devices bind … --root`,
+//   `run show --id`, `run evidence --id`, `monitor set --instance`, `devices bind … --root` (the
+//   row's parameter `root` since #398 DB-2 fix round 1, whose `serve --stdio` line takes it),
 //   `op status --op|--operation`, `release verify|stage --dir`; a global option written with
 //   `_`); an option LAB-5A declared on a row it completed takes no word beginning with `--` as
 //   its value, as before (`words::COMPLETED_ROWS`), while one declared before takes it; the two
@@ -479,7 +480,8 @@ fn lab5a_rows_take_what_they_took() {
         (json!("neutral.b"), json!("repeated"))
     );
     // Fix 1: the other lines the further flags let through before, as before: a positional
-    // given as its flag fills it, `devices bind`'s `--root` goes on undeclared.
+    // given as its flag fills it, `devices bind`'s `--root` goes on (undeclared until #398 DB-2
+    // fix round 1, the row's `root` since).
     let kept: [(&[&str], Value); 4] = [
         (&["run", "show", "--id", RUN], json!({"id": RUN})),
         (
@@ -587,8 +589,8 @@ fn lab5a_rows_take_what_they_took() {
         (json!("--why"), json!("not_recognised"))
     );
     // Fix 1: `run evidence --id <id>` hands the id on as the positional did (`lab-ops` reads it
-    // and refuses the page's value, not a missing run), and `devices bind`'s `--root` reaches
-    // `devices`, which refuses one given twice.
+    // and refuses the page's value, not a missing run), and `devices bind`'s `--root` given twice
+    // is refused (by `devices` until #398 DB-2 fix round 1, by the words since, the same refusal).
     assert_eq!(
         module_refusal(&["run", "evidence", "--id", RUN, "--from-step", "4294967296"]),
         (json!("--from-step"), json!("out_of_range"))
@@ -732,12 +734,16 @@ fn lab5a_rows_take_what_they_took() {
         json!({"op": "debug-package", "params": {"package": "pack.zip", "frobnicate": true}}),
         json!({"op": "export-evidence", "params": {"out": "evidence.zip", "frobnicate": "1"}}),
         json!({"op": "recover", "params": {"instance": "neutral.a", "words": ["extra"]}}),
-        // Fix 1: a flag the command line hands on undeclared is no parameter.
-        json!({"op": "devices bind", "params": {"instance": "neutral.a", "root": "r"}}),
     ] {
         let answer = served(request.clone()).expect_err("an undeclared member is refused");
         assert_eq!(answer.1, unknown, "{request}");
     }
+    // Fix 1 had `devices bind`'s `root` refused here, a flag only the command line handed on;
+    // #398 DB-2 fix round 1 (adapted: the work order has `help devices bind` name it) declares it.
+    assert_eq!(
+        served(json!({"op": "devices bind", "params": {"instance": "neutral.a", "root": "r"}})),
+        Ok(json!({"instance": "neutral.a", "root": "r"}))
+    );
     assert_eq!(
         served(json!({"op": "watch", "params": {"after": 3, "event_type": "a.b"}})),
         Ok(json!({"after": 3, "event_type": "a.b"}))

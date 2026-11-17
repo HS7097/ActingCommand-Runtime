@@ -1842,6 +1842,39 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "device_key_unknown": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.72",
+      "description": "devices bind --device-key (the Lab's row devices bind with device_key, actingctl devices bind): no device adb lists now carries this device key under the salt given (--key-salt or --key-salt-env) or, without one, under the installation's own secret; nothing was written (#398 DB-2).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "device_row_unbindable": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "alias": "required",
+        "device_row_problem": "required",
+        "handle": "optional",
+        "device_link_state": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.72",
+      "description": "devices bind (by handle or by device key): the device row named cannot be the device of the handset alias, as device_row_problem says: adb reports it in another state than device, or its transport is not the one the handset declares; handle is the row's when it has one; with state_not_device, device_link_state is the row's state as its word (unauthorized, offline, no_permissions, other), never the row's text. Nothing was written (#398 DB-2, fix round 1).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "start_runtime_already_running": {
       "category": "error",
       "ladder_class": "none",

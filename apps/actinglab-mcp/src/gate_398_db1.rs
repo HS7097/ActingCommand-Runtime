@@ -7,7 +7,8 @@
 //!
 //! - `db1_t5_the_mcp_tool_takes_config_and_leaves_bound_via_out`: the tool of `devices bind`,
 //!   `ac_devices_bind`, has exactly `instance`, `handle` and `config` (a string whose description
-//!   asks for an absolute path), requires the first two and takes no other member; it has no
+//!   asks for an absolute path), requires the first two and takes no other member (#398 DB-2,
+//!   adapted: and `device_key`, the handle no longer required, register §1.467); it has no
 //!   `bound_via` (the front leaves it out, `tools::SUPPLIED`) and no `via`. The front hands an
 //!   absolute `config` on as given and adds no `bound_via`; a `bound_via` or a `via` sent is refused
 //!   `arguments_invalid`, `unknown`, as any argument the tool does not know.
@@ -55,12 +56,14 @@ fn db1_t5_the_mcp_tool_takes_config_and_leaves_bound_via_out() {
     let properties = schema["properties"]
         .as_object()
         .unwrap_or_else(|| panic!("{TOOL} has properties: {tool}"));
+    // #398 DB-2 (adapted: ruling 3 adds the device key in place of the handle, ruling 6 and the
+    // coordinator's addition leave both forms of its salt out).
     assert_eq!(
         properties
             .keys()
             .map(String::as_str)
             .collect::<BTreeSet<_>>(),
-        BTreeSet::from(["config", "handle", "instance"]),
+        BTreeSet::from(["config", "device_key", "handle", "instance"]),
         "{TOOL}: its members: {tool}"
     );
     assert_eq!(properties["config"]["type"], "string", "{tool}");
@@ -74,7 +77,8 @@ fn db1_t5_the_mcp_tool_takes_config_and_leaves_bound_via_out() {
         properties.get("bound_via").is_none() && properties.get("via").is_none(),
         "no channel through MCP: {tool}"
     );
-    assert_eq!(schema["required"], json!(["instance", "handle"]), "{tool}");
+    // #398 DB-2 (adapted: the handle is no longer required, the device key may take its place).
+    assert_eq!(schema["required"], json!(["instance"]), "{tool}");
     assert_eq!(schema["additionalProperties"], false, "{tool}");
 
     // What the front hands the serving code, and what it refuses.

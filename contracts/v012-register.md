@@ -37192,6 +37192,344 @@ was asked for; the test asserts that none touched that directory and that the ol
 and the old cases were moved by it into the state directory. No golden changes; no test leaves a
 gate map.
 
+### 1.465 Slice #434 PP-1 (0.12.72): a rescue answer over the MCP budget is exported, not lost (Workflow #434; observed on production 0.12.70; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1117/brief-434-pp1-mcp-export.md`, on main `8caf51bb`)
+
+This section takes 1.465, the number its work order gives. It ships in 0.12.72.
+
+**Why.** `ac_place` with `plan` true, a plan of 52 034 bytes beside the server's budget of 24 576,
+answered `{"handle":"mcp_job_…","outcome":{"code":"output_budget_exceeded","values":{"actual_bytes":52034,"limit_bytes":24576}}}`:
+no `answer_exported`, no file in the export directory, and `ac_run_show` of the handle gave the
+job's summary, the names of the line's members (`plan`, `instances`, `facts`, `steps`). The plan's
+`schedule_changes`, which packages a placement makes enter or leave scheduling, could not be read
+through MCP at all, and a placement is not made without reading it. The manual said that an answer
+over the budget is cut where its operation marks the cut or written whole beside its header.
+
+**Why it took neither way** (read in the code). `apps/actinglab-mcp/src/calls.rs`,
+`Service::line`: a core row's code is served inside `within_budget` and takes the server's budget
+(`core_ops::answer` with `Caller.budget`; its reads cut or export, `lab_ops::budget::exported`); a
+child's line goes through `after_child::answered` within the budget (the Lab overflow rule); a
+rescue row's (`Serving::Rescue`) went to `rescue_line`, outside `within_budget`, and the rescue
+module's code (`lab_rescue::rescue::answer_here`) takes no budget at all. Its line went from there,
+unshaped, through the job (`server::served_as_job`, `calls::finished`) to `server::job_answer`, whose
+measure (`calls::sent`, `budget::carried`) can only repeat a line as text or send it in
+`structuredContent` alone: neither fit, so `over_budget` answered `output_budget_exceeded` with the
+handle, and `ac_run_show` gave `budget::job_summary`, the member names. The comment on
+`rescue_line` said its budget was the core rows' (`call_result`), which only measures a line.
+
+**The rule.**
+- *Which lines* (`rescue_export::answered`, called by the new `Service::rescue` for every rescue
+  row within this server's budget in the call's era): a success line (exit code 0) that
+  `budget::carried` would send neither way. Every other line (a refusal, a failure, a line sent with
+  its text, a line sent in `structuredContent` alone) is answered as it is, byte for byte, and
+  nothing is written for it.
+- *The file*: the line whole through the server's export writer (`lab_ops::budget::write_json`,
+  `<sha256>.json` in `%TEMP%\actingcommand-mcp\materials`), as a child's line is written; its bytes
+  are `serde_json::to_vec` of the line.
+- *The header*: the parts its row keeps, each where the line holds it, then `truncated` when the
+  header leaves anything of the line to the file (since fix round 1 every member of the line the
+  header does not hold as the line does, the line's own `warnings` and `outcome` excepted, below),
+  then `export` (`{path, sha256, size}`), then `warnings`
+  (`answer_exported` with `path`, `actual_sha256` and `actual_bytes` first, by the child rule's own
+  function `after_child::answer_exported`, the line's own warnings after it), then the line's
+  `outcome`. No `overflowed` and no `req_id`: those are a child's (`{req_id, export, overflowed}`);
+  this is an operation of the server's own process answering its header beside the file.
+- *What each row keeps* (one table, `rescue_export::HEADERS`, JSON pointers into the line):
+
+| Row | Parts of the header |
+|---|---|
+| `place` (its plan form and a placement, both of whose lines carry the plan) | `/plan/schedule_changes`, `/next` (fix round 1: what a placement with no Runtime answering tells the caller to do next) |
+| `undo` (its plan form and an undo) | `/reverses` (the plan form's), `/schedule_changes` |
+| `op resume` (fix round 1; the end of an undo it finished, answered as the undo answered it) | what `undo` keeps, one constant `UNDONE`: `/reverses`, `/schedule_changes`, where its line carries them |
+| `op status` | `/unfinished`, `/last_operations`, `/journal` (with `op`): the members the manual names as its answer (section 9) |
+| every other rescue row, `deploy` and its plan form among them | none: of the line the outcome alone, which for `deploy --plan` names `plan_id` and `commit_sha`, `truncated` naming every other member (since fix round 1; `/steps` for `deploy --plan`); the manual names no member of that answer, and no summary is designed for it |
+
+- *One rule for every part* (`rescue_export::forms`): whole; for an object, without the members
+  that hold its rows (`ROWS`: `packages`, a row per package with its part before and after), each
+  counted in its place as `<name>_total`, its other members kept (for `schedule_changes` its four
+  lists `enters`, `leaves`, `content_only` and `unread`); then with every list it holds counted so;
+  for a list (`reverses`, `last_operations`), its count `<name>_total` in its place; a form equal to
+  the one before is not tried again. Parts are tried in the table's order, each in the first form
+  with which the header still fits (`budget::fits`, the measure the Lab overflow rule uses); a part
+  none of whose forms fits is left out. `truncated` names what went to the file, as JSON pointers
+  into the line, which is the file (since fix round 1 every member of the line the header does not
+  hold as the line does, below). It is the existing word with the meaning a run's line gives it
+  (LW-1, §1.435: what was left out, as JSON pointers), and `<name>_total` is the form a record's
+  list cut to its bound and a run's `events_total` already take.
+- *A file that cannot be written*: the writer's `material_export_failed` is the first warning in
+  place of `answer_exported`, and the header has no `export`, as a child's overflow answers it (the
+  manual, section 6); the header's parts and outcome are then all of the answer there is.
+- *A header that does not fit even so* is answered as every line over the budget is:
+  `output_budget_exceeded` (`actual_bytes`, `limit_bytes`) with the job's handle, the job keeping
+  the header, `ac_run_show` its summary.
+- *`ac_run_show`*: the job keeps the line `Service::line` gave, now the header, so `ac_run_show` of
+  its handle (`server::job_answer`, read) answers the header with its `export`; nothing in
+  `server.rs` or `jobs.rs` changed for it.
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The rescue row within the budget | `apps/actinglab-mcp/src/calls.rs`: `Service::rescue` (new), from `Service::line`'s `Serving::Rescue` arm |
+| The header, the table, the forms | `apps/actinglab-mcp/src/rescue_export.rs` (new): `answered`, `header`, `HEADERS`, `UNDONE` (fix round 1: what `undo`'s and `op resume`'s headers keep), `ROWS`, `forms`, `counted`, `put` |
+| What `truncated` names (fix round 1) | `apps/actinglab-mcp/src/rescue_export.rs`: `left_out`, the one function that writes it, and `CARRIED`, the line's `warnings` and `outcome`, which every header carries and `left_out` never names |
+| Shared with the child rule | `apps/actinglab-mcp/src/after_child.rs`: `answer_exported` and `listed` are `pub(crate)`, unchanged |
+| Texts | `apps/actinglab-mcp/MANUAL.md` section 5 (a rescue tool's header, its parts and forms, `ac_run_show`; a header that does not fit) and section 6 (`material_export_failed` on a rescue tool's header). The instructions (`tools::INSTRUCTIONS`) already say "in this process an operation answers its header beside the file", now true of the rescue rows too, and are unchanged |
+
+**Codes and words.** No code and no word: `answer_exported`, `material_export_failed`,
+`output_budget_exceeded` and `truncated` as they are registered and used. The member names
+`<list>_total` (`packages_total`, `enters_total`, `leaves_total`, `content_only_total`,
+`unread_total`, `reverses_total`, `last_operations_total`) are counts beside a list left to the file,
+no word of a vocabulary. No decision reads a code: the table is chosen by the operation row's name,
+as `after_child::LAB_ROWS` is.
+
+**Tests** (`apps/actinglab-mcp/src/gate_434_pp1.rs`, apps gate map "#434 PP-1"; the rescue
+module's lines scripted as `rescue::place` and `composite_exit`, the plan form of `install::undo`
+and `install::status` build them; no Runtime, no clock; exports in a temporary folder): the five
+of the work order, as the gate map's comment lists them. Test 3 makes the job as every served
+call's is (`jobs::Jobs::start`) and first pins, as its setup, the answer observed on production for
+the module's line as it came. No existing test is adapted; no golden changes; no test leaves a gate
+map.
+
+**What is not changed.** An answer within the budget, byte for byte (the trigger is the measure
+that sends, `budget::carried`, not the stricter `budget::fits`); the cut an operation marks by
+itself; a child's overflow answer (`after_child` only shares two functions); the export directory
+and its file naming; every refusal; what any operation does or writes in the installation (the
+rescue module is not touched); `server.rs`, `jobs.rs` and `budget.rs`; the instructions; the
+operation table; no interface revision, configuration key or outcome code.
+
+**At deploy.** Nothing to configure. An over-budget success of a rescue tool now answers its
+header and leaves the whole line in the export directory; `ac_place` with `plan` answers the plan's
+`schedule_changes` (or its lists, or their counts, with `truncated`) beside the file.
+
+**Fix round 1** (coordinator work order `rd-1117/brief-434-pp1-fix1.md`, after the independent
+review `rd-1117/review-1814.md`, its one point that must change and its two that may; main
+`f0c64ae8`, the release commit of 0.12.71, merged in). (1) The contract says what the code does:
+[lab-two-entries.md](lab-two-entries.md) §9.3, the item on a rescue row (the module keeps no budget
+of its own; the server answers its rows within the server's budget) and "The budget" (a rescue
+row's success that can be sent neither way is written whole and answered its header, the parts,
+`truncated`, `export`, `answer_exported` first; when the file cannot be written the header with
+`material_export_failed` first and no `export`; refusals and lines that fit as before), where they
+said the budget was the core rows' and that such a line answered `output_budget_exceeded`. (2)
+`truncated` names every member of the line the header does not hold as the line does, for every
+row, not only the parts the table names (`rescue_export::left_out`, the one function that writes
+it, also asked by the measure while a part's form is chosen, so the header that fits is the one
+answered): each member left out whole, at the top (`/instances`, `/facts`, `/steps`; for a row the
+table names no part of, every member) and beside a kept part on the way to it (the plan's
+`/plan/plan_id` … `/plan/items` beside `schedule_changes`), and of a part kept in a reduced form what
+that form left (`/plan/schedule_changes/packages`); with no part kept, the member on the way whole
+(`/plan`). The line's `warnings` and `outcome`, which every header carries, are never named
+(`CARRIED`); a member's name is escaped as a JSON pointer escapes it. So nothing is in the file
+that the header neither holds nor names. A form no longer carries its own list of what it left
+(`Form` is its place and value; two forms are told apart by their values). `place`'s header keeps
+`/next` after `/plan/schedule_changes`, by the same forms, so a placement with no Runtime answering
+keeps what it tells the caller to do next (`composition_at_start`, the module's `up`). (3) `op
+resume`'s header keeps what `undo`'s keeps (`UNDONE`: `/reverses`, `/schedule_changes`), where its
+line carries them; today it answers the `schedule_changes` of an undo it finished
+(`install::resume`). (4) Texts: the manual's section 5 (`ac_place`'s `next`, `ac_op_resume`, what
+`truncated` names), the module's description, this section's table.
+
+*Tests of fix round 1* (gate map `contracts/test-gates/apps.toml`, the row "#434 PP-1 fix round 1";
+the same gate file). `pp1_fix1_a_cold_placement_keeps_next_and_names_every_member_left_out`: a
+placement with no Runtime answering, scripted as `rescue::place_cold` and `composite_exit` answer it,
+over the budget: its header holds the plan's `schedule_changes` whole and `next` whole, `truncated`
+naming the plan's six other members and `/instances`, `/facts`, `/steps`; with `schedule_changes`
+counted, `next` still whole; and for it, `deploy --plan` and `op status` every member of the line
+but its warnings and outcome is held as the line holds it or named (itself or something inside
+it), and every pointer named is in the file. `pp1_fix1_op_resume_keeps_what_undo_keeps`: `op
+resume` of an undo that ended its steps (its `schedule_changes`, the undo's done linked as
+`related`) over the budget keeps `schedule_changes` without `packages`, `truncated`
+`/schedule_changes/packages`; a line carrying `reverses` too keeps both; for each line the header of
+`op resume`'s row is the one `undo`'s row gives. Adapted, because the work order changes what they
+pin: tests 1, 2 and 5 now pin `truncated` with the members their headers leave out (test 1's
+`place --plan`, `deploy --plan` and `op status` headers gain `truncated`, `/steps` for `deploy` and
+`/root`, `/packs`, `/leftovers` for `op status`; test 2's lists gain the plan's other members and
+the line's, `undo`'s `/operation_id`; test 5's header without its parts names `/plan`, `/instances`,
+`/facts`, `/steps`, and so does the job's summary); test 1's `deploy --plan` and `op status` lines
+moved into the functions `deploy_plan` and `op_status`, which the new test shares. No test leaves a
+gate map; no golden changes.
+
+**Fix round 2** (coordinator work order `rd-1118/brief-434-pp1-fix2.md`, after the second
+independent review `rd-1118/review-1814-fix1.md`, which found nothing that must change; texts
+only, no code changes behaviour). The contract (§9.3, "The budget") and the manual (section 5) say
+the exception `CARRIED` makes: the line's own `warnings` and `outcome` are carried by every header
+and not named in `truncated`. The manual names both values a placement with no Runtime answering
+can give as `next` (`composition_at_start`, `composition_at_start_once_bound` when the
+configuration binds no instance to the game). This section's header bullet, its table's last row
+and "Where it is built", the gate file's description and the comment of the gate map's row "#434
+PP-1" say the rule of fix round 1. No test and no golden changes; no gate map row changes but in
+its comment.
+
+### 1.467 #398 DB-2 (0.12.72): devices listed and bound before an installation is selected, by a key that outlives the adb session (Workflow #398; the rules below are the coordinator's rulings in the work order, not the owner's words, and the coordinator's addition of `--key-salt-env` sent during the work; coordinator work order `rd-1117/brief-398-db2-devices-before-install.md`, read on main `8caf51bb`, built on main `f0c64ae8`, the release of 0.12.71)
+
+This section takes 1.467 (1.464 to 1.466 are held by other open slices). It ships in 0.12.72.
+
+**Why.** DB-1 (§1.460) let `devices bind` name a candidate configuration, for the interface's
+installer. Its study of its phone page found what was still missing, each read in the code: the
+Lab's `devices` took no `--root` (`words::KEPT_FLAGS` names only `devices bind`'s) and needed a
+located state root (`core_ops::answer` answered the place's refusal first; `locate` finds no
+installed root for a program in `<root>\tools\` while `runtime\BUILD-MANIFEST.json` is not laid),
+and `devices list` required `--state-root`; a row's `handle` is the adb server's session number,
+which a replug or an adb restart changes between the person's choice and the bind; the installer
+could not tell whether the Lab it carries can do this; and `bind` found the device by its handle
+alone, so an `unauthorized` or `offline` phone, or an emulator's loopback row, could be bound to a
+handset (`devices::bound`), and check-config passed.
+
+**The rule** ([device-binding.md](device-binding.md), "Choosing a device": "Before an
+installation is selected", "Device keys", "Bind by key", "What a bind refuses", "What a client asks
+the Lab", "Through MCP").
+- *Listing without a selection* (ruling 1). `devices list` takes neither `--state-root` nor
+  `--config` now: it reads no binding, takes its adb as DB-1's candidate bind does
+  (`devices::candidate_adb`: `--root`, else the root the program runs from by its place, never an
+  install selection) and answers `bindings_unread` `state_root_unknown` beside the rows (a member of
+  its own; the one word says that no state root was given or located and no candidate named one).
+  `--config <file>` reads the bindings of the state root the candidate names (`--state-root`
+  beside it `conflicting`). The Lab's row `devices` declares `config` (file), `root` (dir),
+  `key_salt` and `key_salt_env`: where its place locates no state root it hands `devices` its line
+  without the module's state root and root (`core_ops::unlocated_words`) instead of the place's
+  refusal; with `config` the line carries neither (`core_ops::candidate_words`, built before the
+  place is asked); a `root` the call names stands for the module's (`core_ops::handed_words`).
+- *The device key* (ruling 2 and the addition). A row carries `device_key`, the contract's
+  fingerprint of the device's serial (`Sha256SecretFingerprinter`, field `device_serial`, the one
+  function the ledger uses; `devices::Keyer`): `sha256:` and 64 lowercase hexadecimal digits. Its
+  key: the caller's salt, 16 to 1024 bytes (the bounds actingd holds `secret_fingerprint_salt`
+  to), as `--key-salt <text>` or read from the variable `--key-salt-env <NAME>` names in the Lab's
+  own process (`devices::KeySalt`); else the selected or candidate configuration's
+  `secret_fingerprint_salt` when it is text of those bounds; else no key. Under the installation's
+  secret it is the fingerprint the ledger records. The salt and the variable's value are never
+  printed, logged or written (`KeySalt`'s `Debug` shows none; refusals name the flag only; no
+  `variable` value is set). A command line is visible to the user's other processes, so the
+  installer uses `--key-salt-env`.
+- *Bind by key* (ruling 3). `devices bind <alias> --device-key <key>` in place of the handle (the
+  row's `handle` is no longer required; neither `handle` `required`, both `--device-key`
+  `conflicting`; a salt without the key its flag `conflicting`), resolved against a fresh listing
+  under the salt given, else the installation's secret (neither: `--key-salt` `required`); no row
+  with the key `device_key_unknown`. The binding written is a bind by the row's handle's; the
+  answer is `{alias, device_key, handle?, model?, restart_required}` (and `config` against a
+  candidate).
+- *What a bind refuses* (ruling 4; it changes what `bind` accepted). Every bind, by handle or by key,
+  through every entry: a row whose adb state is not `device` (the authorized, online state), and
+  a row whose transport is not the handset's declared one (`device.transport`, `usb` when absent),
+  `device_row_unbindable` with `alias`, `device_row_problem` and the row's `handle` when it has
+  one, before anything is written (`devices::bindable`).
+- *What a client asks* (ruling 5). No interface name: the call that already prints a row of the
+  embedded operation table, `actinglab --json help devices` and `actinglab --json help devices
+  bind` (Workflow #434 CLI-HELP, §1.313; `command.params` with each parameter's `name`, `form`,
+  `type`, `required`), which runs nothing and sends nothing. The installer reads that `devices`
+  declares `root`, `key_salt` and `key_salt_env` and that `devices bind` declares `config` and
+  `device_key`. No operation was added and `component-interfaces.json` is untouched.
+- *Through MCP* (ruling 6). The Lab's MCP tools take what the table gives (`ac_devices`: `config`,
+  `root`; `ac_devices_bind`: `instance`, `handle`, `config`, `device_key`), but neither salt
+  form: `tools::SUPPLIED` gains `("devices" | "devices bind", "key_salt" | "key_salt_env",
+  Supplied::Nothing)`, refused `arguments_invalid` `unknown` when sent. Through MCP a device key is
+  made with the installation's own secret alone. `actingctl mcp-serve`'s `ac_devices`,
+  `ac_device_bind` take no new argument; its listing carries the keys of the installation's
+  secret, and its bind refuses as ruling 4 says.
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| Listing, key, bind by key, refusals | `crates/lab-ops/src/devices.rs`: `KeySalt`, `Keyer`, `secret_of`, `installation_secret`, `ListRequest`, `list_from` (`list` calls it), `rows`, `Against` (`Unnamed`, now public), `bind_against` (`bind`, `bind_candidate_from` and the command line call it), `Request`, `Chosen`, `Finder`, `key_maker`, `keyed`, `bindable`, `ConfigDevice.transport`, `Candidate.secret`; `parse` (its environment given), `dispatch_in` (`dispatch_with` calls it with `std::env::var_os`), the usage text (fix round 1 removed `BindByKey` and `bind_by_key`, which nothing called, and added `not_done`, `link_state`, `dispatch_unlocated`, `dispatch_unlocated_with`, `dispatch_answer`, `ListRequest.unlocated`) |
+| Codes and the word | `crates/lab-ops/src/codes.rs` (`DeviceKeyUnknown`, `DeviceRowUnbindable`, the vocabulary `DeviceRowProblem`); `crates/actingcommand-contract/src/outcome/keys.rs` (`device_row_problem`); `contracts/outcome-codes/catalog.json` (the key and the vocabulary); the actingctl fragment and the regenerated index |
+| The flags and the rows' lines | `crates/lab-ops/src/lib.rs` `flags_of`; `crates/lab-ops/src/core_reads.rs` (`devices`, `devices bind`); `crates/lab-ops/src/core_ops.rs` `unlocated_words`, `candidate_words`, `handed_words`, `answer` |
+| The MCP front | `apps/actinglab-mcp/src/tools.rs` `SUPPLIED`; `apps/actinglab-mcp/MANUAL.md` section 1 |
+| Texts | [lab-operations.json](lab-operations.json) (the two rows' parameters, `devices`' `help` and both rows' `notes`); [device-binding.md](device-binding.md) |
+
+**Codes and words.** Two codes, one key with its vocabulary, all pending, since 0.12.72:
+
+| Word | Its one situation | Refuses or warns | Exit status |
+|---|---|---|---|
+| `device_key_unknown` (code) | `devices bind --device-key`: no row adb lists now carries the key under the salt given or the installation's secret | refuses | 1 on the Lab's line and on `actingctl`'s, the same line through `serve --stdio`; a `--via` line never reaches `devices` (no command of actinglab's own); `isError` true through the Lab's MCP server (`actingctl mcp-serve` has no key bind) |
+| `device_row_unbindable` (code) with `device_row_problem` `state_not_device` | the row named is in another adb state than `device` (fix round 1: with `device_link_state`, the row's state as its word) | refuses | as above; through `actingctl mcp-serve`'s `ac_device_bind` `isError` true with class `runtime` (its existing classification by name, which this slice does not move) |
+| `device_row_unbindable` with `device_row_problem` `transport_mismatch` | the row's transport is not the handset's declared one | refuses | as above |
+
+The usage words, all of the settled `actingctl_usage_invalid` (refuses, exit 1 everywhere, `isError`
+true through MCP): `--key-salt` and `--key-salt-env` `out_of_range` (with `range_min` 16 and
+`range_max` 1024); `--key-salt-env` `not_recognised` (a name no variable can have) and `unusable`
+(an unset, empty or non-UTF-8 variable); `--key-salt-env` `conflicting` (both forms); the salt's
+flag `conflicting` on a bind without `--device-key`; `--key-salt` `required` (a bind by key with
+neither salt nor secret); `handle` `required` (a bind with neither handle nor key); `--device-key`
+`conflicting` (both). No decision reads a code by name.
+
+**Tests** (`crates/lab-ops/src/gate_398_db2.rs` for tests 1 to 4 and 6, and for test 5
+`apps/actinglab/src/tests/gate_398_db2.rs`, which reaches `help`; apps gate map "#398 DB-2"; a
+scripted `adb devices -l` listing answered only for the install root's adb, environments given
+by the test to `devices::dispatch_in`, so that the test process's own is neither read nor
+written; no clock): the six of the work order, the gate map's comment lists their assertions; the
+environment form is in tests 2 and 3. Test 6 is `db2_t6_an_installed_root_without_the_new_options_answers_todays_members`
+with RD-1c's tests, unchanged: none binds a row ruling 4 refuses. Adapted, as the requirement
+changes what they pin: actinglab-mcp's `gate_398_db1` (`ac_devices_bind`'s members gain
+`device_key`, `handle` no longer required), `gate_434_lab5g2b`'s `mcp_front_members_in_one_place`
+(the pinned `SUPPLIED`) and `gate_434_lw1`'s `LEFT_OUT` (both salt forms of both rows, with
+reasons). No golden changes; no test leaves a gate map.
+
+**What changes for an installed root without the new options.** Rulings 2 and 6 give each row of
+an installed root whose selected configuration holds its secret a `device_key`; every other member
+of the listing is as before, and the listing now reads that configuration (fix round 1: one that
+cannot be read or decoded is no refusal; the rows carry no key and the answer says so,
+`device_keys_unmade`). `bind` refuses the rows of ruling 4. Nothing else:
+`devices unbind`, the private file's format, check-config and the start are untouched, and no
+answer, outcome value, developer line or log names a serial.
+
+**At deploy.** Nothing to configure. The installer offers a phone once `help` shows the parameters
+above.
+
+**Fix round 1** (coordinator work order `rd-1118/brief-398-db2-fix1.md`, after the independent
+review `rd-1118/review-1817.md`, its two points that must change and five that may, as the
+coordinator ruled them; main `87b6003d`, which brought §1.465, merged in).
+- *Lint* (1). `devices::parse` hands a salt's flag to the usage refusal without an explicit
+  dereference (clippy `explicit_auto_deref`, where the lint job stopped).
+- *A listing never refuses for want of a key* (2; ruling 2: a configuration that cannot be read
+  provides no secret). An installed root whose selected configuration cannot be read or decoded
+  is listed: its rows without `device_key`, beside them `device_keys_unmade` `{why, cause}`, `why`
+  `config_unreadable` (the one word: the configuration that would provide the installation's
+  secret was not read), `cause` the reader's refusal (`config_read_failed` or
+  `config_decode_failed`, its `path`) as an outcome envelope in the line's detail. The older
+  `actingctl devices list --state-root` and `actingctl mcp-serve`'s `ac_devices` reach the same
+  code (`devices::list_from`) and answer the same; a configuration without the secret is no such
+  failure and answers as before, no key and no member. A bind there, by key with a salt or
+  without, is refused `config_read_failed` with its `path`: its alias is checked in that
+  configuration before any key is made, as a bind by handle's is; nothing is written.
+- *The real cause is kept* (3). `bindings_unread` is `{why, cause?}` now: `why`
+  `state_root_unknown` as before; `cause` the refusal of the place that located no state root,
+  which the Lab's row hands to `devices::dispatch_unlocated` (`core_ops::answer`), as an outcome
+  envelope; the command line's own listing without a state root asks no place and has `why`
+  alone.
+- *Every option in `help`* (4). `devices bind`'s `--root`, which only the command line handed on
+  (`words::KEPT_FLAGS`, `core_reads::EXCEPTIONS`, `Part::Further`), is the row's parameter `root`
+  (`dir`) now, so that `actinglab --json help devices bind` names it among `command.params`: its
+  command line writes it where `Part::Further` wrote it (after the module's root; beside a located
+  root `devices` refuses `--root` `repeated`, as before), `serve --stdio` takes it, and the Lab's
+  MCP tool leaves it out (`tools::SUPPLIED` `Supplied::Nothing`; the server hands on the root it
+  runs from, as before). Both entries it had as an undeclared flag are gone.
+- *The state of a refused row* (5). `device_row_unbindable` `state_not_device` carries
+  `device_link_state` (the existing key and vocabulary of a handset's link state): `unauthorized`,
+  `offline`, `no_permissions` for the listing's `no`, `other` for any other state
+  (`devices::link_state`; the link watch's `actingcommand_device::link_state_of_adb_state` reads
+  `adb track-devices`' whole state, and this crate does not build on that one); never the row's
+  text. The actingctl fragment lists the key, optional; the index is regenerated.
+- *Tests and dead code* (6, 7). A salt over the maximum is tested by both forms; `BindByKey` and
+  `bind_by_key`, which nothing called, are removed.
+
+| Word | Its one situation | Refuses, warns or tells | Exit status |
+|---|---|---|---|
+| `device_keys_unmade` (answer member) `why` `config_unreadable` | a listing's rows carry no key because the selected configuration, which provides the installation's secret, could not be read or decoded; `cause` the reader's refusal | tells (a member of a success) | 0 |
+| `bindings_unread` `cause` (answer member) | the refusal of the place that located no state root, beside `why` `state_root_unknown` | tells | 0 |
+| `device_link_state` on `device_row_unbindable` (existing key) | the state of the row refused `state_not_device` | refuses, as the code | 1, as the code |
+
+*Tests of fix round 1* (gate map `contracts/test-gates/apps.toml`, the row "#398 DB-2 fix round
+1"; `crates/lab-ops/src/gate_398_db2.rs`, the gate map's comment lists their assertions):
+`db2_fix1_an_installed_root_whose_configuration_cannot_be_read_lists_its_rows_without_keys`,
+`db2_fix1_bindings_unread_carries_the_refusal_of_the_place_that_located_no_state_root`,
+`db2_fix1_a_salt_longer_than_the_maximum_is_refused_by_both_forms`. Adapted, because the work
+order changes what they pin: `db2_t1` and `db2_t2` (`bindings_unread` `{why}`), `db2_t4` (the two
+rows refused for their state carry `device_link_state`, the `tcp` row none), `db2_t5` (`devices
+bind` declares `root`; each parameter's `written` pinned), actinglab's `gate_434_lab5a` (`serve
+--stdio` takes `devices bind`'s `root`, where fix 1 of LAB-5A refused it as undeclared),
+actinglab-mcp's `gate_434_lab5g2b` (the pinned `SUPPLIED` gains `devices bind` `root`) and
+`gate_434_lw1` (the reason of its `LEFT_OUT` entry for `devices bind` `root`). No golden changes;
+no test leaves a gate map.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

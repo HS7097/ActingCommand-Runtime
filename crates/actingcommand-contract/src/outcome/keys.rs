@@ -523,6 +523,8 @@ outcome_keys! {
     waited_ms: duration_ms,
     // Workflow #398 RD-1c: a device's handle in adb's list, `<transport>:<transport_id>`.
     handle: token,
+    // #398 DB-2: why a device row cannot be bound to a handset instance.
+    device_row_problem: vocab(device_row_problem),
     // ---- Workflow #385 P-m (the shadow measurement's codes, PERF §11): begin ----
     pacing_stage_from: vocab(pacing_stage),
     pacing_stage_to: vocab(pacing_stage),

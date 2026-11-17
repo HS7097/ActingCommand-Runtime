@@ -1973,6 +1973,10 @@
       "type": "token",
       "description": "A device's handle in adb's device list, <transport>:<transport_id>: the adb server's session number for the device, never a device value (Workflow #398 RD-1c)."
     },
+    "device_row_problem": {
+      "type": "vocab:device_row_problem",
+      "description": "Why a device row adb lists cannot be bound to a handset instance (#398 DB-2)."
+    },
     "need": {
       "type": "token",
       "description": "An opaque need a package's remedy declares, a token ^[a-z][a-z0-9_]{0,63}$ the Runtime only compares for equality (Workflow #411 B15)."
@@ -7152,6 +7156,17 @@
         },
         "unbound": {
           "description": "The private binding file binds no device to the handset instance."
+        }
+      }
+    },
+    "device_row_problem": {
+      "description": "Why a device row adb lists cannot be bound to a handset instance (#398 DB-2, contracts/device-binding.md, Choosing a device).",
+      "tokens": {
+        "state_not_device": {
+          "description": "adb reports the row in another state than device, the state of an authorized device that is online (unauthorized, offline, no permissions, authorizing, recovery and the like)."
+        },
+        "transport_mismatch": {
+          "description": "The row's transport is not the one the handset instance declares (device.transport, usb when it names none): a tcp row, an emulator's loopback row among them."
         }
       }
     },
@@ -14301,6 +14316,7 @@
     ]
   },
   "fragments": {
+    "acib": "apps/acib",
     "actingctl": "crates/lab-ops",
     "actingctl-app": "apps/actingctl",
     "actingd": "apps/actingd",
