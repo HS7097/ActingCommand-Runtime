@@ -36227,6 +36227,82 @@ kernel. Nothing proposes a region, a choice or a value.
 **At deploy.** Nothing to configure. A bundle `standard-pack build` makes of a package without an
 end mark declares `package` [18, 18], which an installer whose range ends below 18 refuses.
 
+### 1.459 Slice #463 RC-2 (0.12.71): the case reader reads past the notes of a scene's construction (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, whose stage two checks a package against its recorded material; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1117/brief-463-rc2-case-reader.md`, on main `240cdb1a`, the release of 0.12.70)
+
+This section takes 1.459, the next free number after 1.458 (1.455 is #463 CH-1's). It ships in
+0.12.71.
+
+**Why.** The resource repositories hold regression cases written by hand before the one reader
+existed (§1.450). Many carry, inside `scene_construction`, members the contract does not list, on
+`scene_construction` itself and in a rectangle: notes on how the scene image was made. The reader
+held `scene_construction`, its `canvas` and a rectangle closed, so each such case failed
+`member_unknown`; a run of `resource regression` over the repositories' checkouts failed cases for
+these members alone, and no scene's hash differed. What a case is run on is the scene file,
+pinned by `scene_sha256`; a note beside it changes nothing that is run. The agents about to make
+packages run `resource regression` over these checkouts and would read those failures as broken
+packs.
+
+**The rule** ([resource-regression-case.md](resource-regression-case.md), "A case", "The reader").
+- *Open*: `scene_construction`, its `canvas` and each rectangle are open the way the case's top
+  level is: a member the contract does not list is read past and named in the warning
+  `case_member_unknown`, one warning per place and name, never a failure.
+- *Closed*: `expect`, `expect.observe` and an entry of `expect.recognize` stay closed
+  (`member_unknown`, a failure, as before): a misspelt expectation is never read past.
+- *Listed members*: a wrong one stays `member_invalid`, a required one that is absent
+  `member_missing`.
+- *The warning says where*: `case_member_unknown` gains the optional value `json_pointer`, the
+  member's place, the JSON pointer a failure there would name (`/note` at the top level,
+  `/scene_construction/note`, `/scene_construction/canvas/<name>`,
+  `/scene_construction/rects/<index>/<name>`), when it is at most 512 bytes (the key table's bound
+  for a pointer); `member` stays its name, when it is at most 256 bytes without a control
+  character. The top level's warning gains `json_pointer` too (`/<name>`): one function reads every
+  open object. These warnings come first among the case's warnings, in the order read: the top
+  level's, then `scene_construction`'s, its canvas's and each rectangle's.
+
+**What it rests on** (read in the code). `Reader::construction`, `Reader::canvas` and
+`Reader::rects` build the case's `Construction` (the canvas's width, height and fill, each
+rectangle's x, y, width and height, `scene_sha256`) from the listed members alone; a rectangle's
+`content` is only checked to be a text. The runner evaluates nothing else of the construction:
+`Construction::scene` compares the SHA-256 of the scene file's bytes with `scene_sha256` and the
+PNG's size with the canvas's, `Construction::outside_rects` (the scene rule) reads the canvas's
+size and fill, the rectangles and the scene's pixels, and `RegressionPackage::run` then evaluates
+the scene. A member the contract does not list reaches none of them, so it changes no verdict. One
+limit, said in the contract: the scene rule counts `rects` alone, so a patch a hand-made case names
+only in such a member (a list of pasted regions beside `rects`) lies outside the rectangles to it
+and warns `resource_regression_scene_outside_rects`, as it is computed today; the reader is not
+taught those members.
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The reader | `crates/lab/src/regression_case.rs`: `Reader::open` (was `open_top`) reads the top level, `scene_construction`, `canvas` and each rectangle, and names each place (`pointer`, `is_key_pointer`, `POINTER_MAX_BYTES`); `Reader::closed` reads the expectations |
+| The code | the lab fragment's `case_member_unknown`: the optional value `json_pointer` and its texts |
+| Texts | [resource-regression-case.md](resource-regression-case.md): "A case", the sentence on closed objects, "The reader", the scene rule's sentence on its rectangles, the codes table; the row `resource regression` of [lab-operations.json](lab-operations.json) (its `notes`; no `help` change) |
+
+**Codes and words.** No new code or word. `case_member_unknown` (lab, warning, exit 0 on both of
+actinglab's lines) gains the optional value `json_pointer` (the key table's key of type pointer)
+and stands for a member the contract does not list, read past, of any of the four open objects; its
+`since` stays 0.12.69, the release that brought it. No decision reads a code. The outcome-code index
+is regenerated.
+
+**Tests** (`apps/actinglab/src/tests/gate_463_rc2.rs`, apps gate map "#463 RC-2"; RC-1's neutral
+package and checkout, whose fixture helpers become `pub(super)` for it; cases made up, no clock):
+the five of the work order, as the gate map's comment lists them. Adapted, as the requirement
+changes what it pins: `rc1_fix1_an_unknown_member_of_the_top_level_warns_and_fails_nothing`
+asserted that a `note` inside `scene_construction` fails `member_unknown`; it now asserts that the
+note is read past with the warning at `/scene_construction/note`, and that a `note` inside `expect`
+fails `member_unknown`. No golden changes; no test leaves a gate map.
+
+**What is not changed.** The verdict rules and their order, the runner, the scene rule and its
+warning, the hash check, what `record stop` writes (its cases carry no member the contract does not
+list, and so no such warning), how the top level is read (its warning gains `json_pointer`). No
+ledger record, configuration key or interface revision.
+
+**At deploy.** Nothing to configure. A case that failed `member_unknown` for such a note is now
+read and run: it answers what its scene gives, and the scene rule's warning where its scene holds
+more than its `rects` name.
+
 ### 1.461 Slice #463 AC-1 (0.12.71): adoption takes the recording's regression cases into the checkout, and judges the recording by the one judgement of `record ready` (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making, whose stage three takes the package into running; the design's S3-17; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1117/brief-463-ac1-adopt-cases.md`, read on main `240cdb1a`, the 0.12.70 release)
 
 This section takes 1.461, the number the coordinator gave after §1.459 and §1.460 were taken by

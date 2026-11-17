@@ -257,6 +257,10 @@ mod gate_463_kp1;
 // kernel's recognition, and `resource regression` over a checkout's cases.
 #[path = "gate_463_rc1.rs"]
 mod gate_463_rc1;
+// #463 RC-2: the case reader reads past the notes of a scene's construction, each named with its
+// place; the expectations stay closed.
+#[path = "gate_463_rc2.rs"]
+mod gate_463_rc2;
 // Workflow #463 S3-15a: `standard-pack status --installation` answers the authorization each pack
 // was enabled under and each pair's suspension and break-in (the rescue module, Windows only).
 #[cfg(windows)]
