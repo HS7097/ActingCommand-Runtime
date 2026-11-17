@@ -10,7 +10,10 @@
 //!   format is read and answered `not_run` (`not_evaluated`), never passed. A case of another
 //!   `schema_version` is not run, with the warning `case_schema_unsupported`; it is no failure.
 //!   Fix round 1: the case's top level is open: a member of it the contract does not name is read
-//!   past and named once in the case's warning `case_member_unknown`, never a failure.
+//!   past and named once in the case's warning `case_member_unknown`, never a failure. #463 RC-2:
+//!   so are `scene_construction`, its `canvas` and each rectangle (notes on how the scene was
+//!   made), the warning naming the member's place (`json_pointer`) beside its name; `expect`,
+//!   `expect.observe` and an entry of `expect.recognize` stay closed.
 //! - **The runner** ([`RegressionPackage::run`]) checks that the case is of the package (its
 //!   `package_id` is the one the package's control declares), then the scene against its
 //!   construction, and evaluates the expectations with the kernel's own read-only recognition
@@ -58,6 +61,8 @@ const MAX_CANVAS_PIXELS: u64 = 16 * 1024 * 1024;
 const PACKAGE_LABEL: &str = "resource_regression";
 /// The longest text of a key of type name.
 const NAME_MAX_BYTES: usize = 256;
+/// #463 RC-2: the longest text of a key of type pointer.
+const POINTER_MAX_BYTES: usize = 512;
 /// Where the page expectation and the scene's parts are in a case.
 const OBSERVE_PAGE_AT: &str = "/expect/observe/page";
 const SCENE_AT: &str = "/scene";
@@ -78,8 +83,9 @@ const TOP_MEMBERS: [&str; 9] = [
     "issue",
     "expect",
 ];
-/// The members of `scene_construction`, `canvas`, a rectangle, `expect`, `expect.observe` and an
-/// entry of `expect.recognize` (each a closed object).
+/// The members of `scene_construction`, `canvas` and a rectangle (#463 RC-2: each an open object,
+/// as the top level is), and of `expect`, `expect.observe` and an entry of `expect.recognize`
+/// (each a closed object).
 const CONSTRUCTION_MEMBERS: [&str; 4] = ["kind", "canvas", "rects", "scene_sha256"];
 const CANVAS_MEMBERS: [&str; 3] = ["width", "height", "fill"];
 const RECT_MEMBERS: [&str; 5] = ["x", "y", "width", "height", "content"];
@@ -118,7 +124,8 @@ pub struct RegressionCase {
     construction: Construction,
     expectations: Expectations,
     /// Fix round 1: `case_member_unknown` for each member of its top level the contract does not
-    /// name, first among the warnings of its verdict.
+    /// name (#463 RC-2: and of `scene_construction`, its `canvas` and each rectangle, once per
+    /// place and name, in the order read), first among the warnings of its verdict.
     warnings: Vec<RegressionWarning>,
 }
 
@@ -371,7 +378,7 @@ pub fn read_regression_case(case_json: &[u8]) -> Result<RegressionCase, Regressi
         }
     }
     let mut reader = Reader::default();
-    reader.open_top(&document);
+    reader.open(&document, "", &TOP_MEMBERS);
     let id = reader.string_member(&document, "", "id");
     let package_id = reader.file_name(&document, "", "package_id");
     let scene = reader.file_name(&document, "", "scene");
@@ -883,16 +890,23 @@ impl Reader {
             .push(RegressionCheck::failed(at, problem, Some(detail)));
     }
 
-    /// Fix round 1: the case's top level `document` is open. Each member of it the contract does
-    /// not name is read past and named once in the warning `case_member_unknown` (`member`, when
-    /// its name is one the key table takes), never a failure: the repositories' own runners read
-    /// past such a member too.
-    fn open_top(&mut self, document: &Map<String, Value>) {
-        for name in document.keys() {
-            if TOP_MEMBERS.contains(&name.as_str()) {
+    /// The open object `object` at `at`: the case's top level (fix round 1, `at` `""`) and (#463
+    /// RC-2) `scene_construction`, its `canvas` and each rectangle. Each member of it that is not
+    /// one of `members` is read past and named once in the warning `case_member_unknown`, never a
+    /// failure: `json_pointer` its place, the JSON pointer a failure there would name (`/note` at
+    /// the top level, `/scene_construction/note` inside), when the key table takes it, and
+    /// `member` its name, when the key table takes it. The repositories' own runners read past
+    /// such a member too, and nothing the runner evaluates is read from one.
+    fn open(&mut self, object: &Map<String, Value>, at: &str, members: &[&str]) {
+        for name in object.keys() {
+            if members.contains(&name.as_str()) {
                 continue;
             }
             let mut warning = Outcome::new(LabCode::CaseMemberUnknown);
+            let place = pointer(at, name);
+            if is_key_pointer(&place) {
+                warning = warning.json_pointer(place);
+            }
             if is_key_name(name) {
                 warning = warning.member(name.as_str());
             }
@@ -1019,7 +1033,7 @@ impl Reader {
     fn construction(&mut self, document: &Map<String, Value>) -> Option<Construction> {
         let at = "/scene_construction";
         let construction = self.object(document, "", "scene_construction")?;
-        self.closed(construction, at, &CONSTRUCTION_MEMBERS);
+        self.open(construction, at, &CONSTRUCTION_MEMBERS);
         if let Some(kind) = self.string_member(construction, at, "kind")
             && kind != SCENE_KIND
         {
@@ -1061,7 +1075,7 @@ impl Reader {
     fn canvas(&mut self, construction: &Map<String, Value>, at: &str) -> Option<Canvas> {
         let canvas = self.object(construction, at, "canvas")?;
         let canvas_at = pointer(at, "canvas");
-        self.closed(canvas, &canvas_at, &CANVAS_MEMBERS);
+        self.open(canvas, &canvas_at, &CANVAS_MEMBERS);
         let width = self.integer(canvas, &canvas_at, "width", 1, i64::from(u32::MAX));
         let height = self.integer(canvas, &canvas_at, "height", 1, i64::from(u32::MAX));
         let fill = match self.required(canvas, &canvas_at, "fill") {
@@ -1127,7 +1141,7 @@ impl Reader {
                 );
                 continue;
             };
-            self.closed(rect, &item_at, &RECT_MEMBERS);
+            self.open(rect, &item_at, &RECT_MEMBERS);
             let x = self.integer(
                 rect,
                 &item_at,
@@ -1303,6 +1317,12 @@ impl Reader {
 /// [`NAME_MAX_BYTES`] bytes, no control character.
 fn is_key_name(text: &str) -> bool {
     text.len() <= NAME_MAX_BYTES && !text.chars().any(char::is_control)
+}
+
+/// #463 RC-2: whether `place`, the JSON pointer of a member of a case (it begins with `/`), is a
+/// value the key table takes for a key of type pointer: at most [`POINTER_MAX_BYTES`] bytes.
+fn is_key_pointer(place: &str) -> bool {
+    place.len() <= POINTER_MAX_BYTES
 }
 
 /// The JSON pointer of the member `name` of the object at `parent` (RFC 6901).
