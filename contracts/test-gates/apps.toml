@@ -2650,3 +2650,14 @@ tests = [
     "actingcommand-actinglab::bin:actinglab::tests::gate_477_pc2::pc2_refresh_is_repeated_on_the_command_line_and_a_list_through_serve",
 ]
 incident = ["#477 PC-2"]
+
+# #463 AD-1 (0.12.72; register §1.464; brief rd-1117/brief-463-ad1-adopt-recording-dir.md; contracts/standard-pack-authoring.md, "The recordings' directory" and "The warnings of other packages"): standard-pack adopt --record-id with --session-state-dir reads its recording from that directory, only reading it: two recordings in one directory and the state directory in another, the first adopted by the command line (judged by record ready's function there, its five cases run and written byte for byte, the check tree under the state directory), then with --replace from the second the old pack directory and the old case set moved into the state directory's adopt/ and the new set written; every file and directory of the recordings' directory as before (1); without the option the recording outside the state directory is refused recording_not_current at the state directory's record-artifacts/<record>/lab/recording.json, nothing written (2); three held packages and a package adopted by --package, each with a remedy no package provides: the adopted package's package_bundle_remedy_invalid in warnings whole, no warning there naming another package, other_packages_warnings counting the three by code with its total, the dry run answering the same two members, and standard-pack check on the check tree's game root finding the three counted (3); --session-state-dir beside --package, in either order, is validation_failed naming it, argument_problem conflicting, exit 2, none of the line's paths made (4). Adapted for the new member of AdoptSource::Recording only: gate_464_p1's recording and gate_463_ac1's request
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::tests::gate_463_ad1::ad1_a_recording_in_its_own_directory_is_adopted_and_replaced_into_the_state_directory",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_463_ad1::ad1_without_the_option_a_recording_outside_the_state_directory_is_not_found",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_463_ad1::ad1_warnings_of_other_packages_are_counted_and_the_adopted_packages_answered_whole",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_463_ad1::ad1_the_option_beside_package_is_refused_before_anything_is_read",
+]
+incident = ["#463 AD-1"]

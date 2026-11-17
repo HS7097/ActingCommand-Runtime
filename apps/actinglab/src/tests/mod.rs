@@ -275,6 +275,10 @@ mod gate_463_s315;
 // function (S3-17).
 #[path = "gate_463_ac1.rs"]
 mod gate_463_ac1;
+// #463 AD-1: `standard-pack adopt --record-id` reads its recording from `--session-state-dir`, only
+// reading it, and its answer counts the warnings of the root's other packages by code.
+#[path = "gate_463_ad1.rs"]
+mod gate_463_ad1;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
 use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{

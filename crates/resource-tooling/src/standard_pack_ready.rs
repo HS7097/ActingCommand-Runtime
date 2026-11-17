@@ -547,6 +547,29 @@ pub(crate) fn judge_readiness_and_placement(
     Ok((readiness, placements))
 }
 
+/// Workflow #463 AD-1 (`contracts/standard-pack-authoring.md`, "The warnings of other packages"):
+/// each of `warnings` beside the pack of the game root `root` (of `game`) it names, by the one
+/// rule a row's warnings are read by ([`CheckWarning::read`]): `None` for one that names no pack
+/// of the root. The root is read as the readiness reads it; a root it cannot read is refused as
+/// the readiness refuses it.
+pub(crate) fn with_packs_named(
+    root: &Path,
+    game: &str,
+    warnings: &[Outcome],
+) -> LabResult<Vec<(Outcome, Option<String>)>> {
+    let checked = read_root(root, game)?;
+    Ok(warnings
+        .iter()
+        .map(|warning| {
+            let CheckWarning {
+                package_id,
+                outcome,
+            } = CheckWarning::read(warning, &checked.root, root);
+            (outcome, package_id)
+        })
+        .collect())
+}
+
 /// The game root as every reader reads it, and its bundle's maintenance entries.
 struct CheckedRoot {
     root: StandardPackRoot,

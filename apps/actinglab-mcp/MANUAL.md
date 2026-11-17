@@ -612,7 +612,9 @@ naming this file.
   `base_height`); a live capture the map cannot take is `display_map_unresolved` instead.
 - **Adoption** (Workflow #464 P1, 0.12.61; `contracts/standard-pack-authoring.md`).
   `ac_standard_pack_adopt` (`repo`, `record_id` or `package`, `decide`, or `held_reason` with an
-  optional `held_reference`, `replace`, `state_dir`) makes a stopped recording's package, or any
+  optional `held_reference`, `replace`, `state_dir`, and, #463 AD-1, 0.12.72, `session_state_dir`
+  beside `record_id`: the directory the recording is read from, only read, so that `state_dir`
+  may lie on the checkout's volume) makes a stopped recording's package, or any
   package, a member of its game's standard pack in a resource repository's checkout, through a
   child: the pack directory, its rule (or held entry, or maintenance entry) and the `requires`
   words, each derived member answered with where it came from. `held_reason` and `held_reference`
@@ -621,7 +623,9 @@ naming this file.
   Every check runs before the first write; a refusal is `adopt_refused`, its `adopt_problem` naming
   the check, and wrote nothing; with `dry_run` nothing is written in the checkout. Its `value` is
   `"pending"` or a number of the pack's own: a decision that names the origin `model` is refused
-  (`value_origin_model`).
+  (`value_origin_model`). Its `warnings` are those of the adopted package and of no package
+  (#463 AD-1, 0.12.72); those of the root's other packages are counted by code in
+  `other_packages_warnings` (`total`, `counts`).
 - **Where a pack stands** (#463 S3-14, 0.12.68; `contracts/standard-pack-schedule.md`, "Where a
   pack stands"). `ac_standard_pack_status` (`root`, `repo`, `package_id`, `state_dir`,
   `installation`) answers, for

@@ -103,10 +103,23 @@
 //!   artifact and its package's file, and the members' check when that function cannot read the
 //!   recording. The review (`recording_unreviewed`) stays whole: that function checks a packaged
 //!   recording no further.
+//! - **The recordings' own directory** (Workflow #463 AD-1, `contracts/standard-pack-authoring.md`,
+//!   "The recordings' directory"): with `--record-id` the recording, its package, its cases and
+//!   `record ready`'s judgement of it are read from the directory its source names
+//!   ([`AdoptSource::Recording`]'s `session_state_dir`: `--session-state-dir`, or the state
+//!   directory without it), and only read; everything adoption writes or moves (the check tree,
+//!   the kept copies of a replaced pack directory and of a replaced case set) stays under the state
+//!   directory, and the trial records are read there, as before.
+//! - **The warnings of other packages** (Workflow #463 AD-1, "The warnings of other packages"):
+//!   a warning that names another package of the root than the adopted one, by the one rule a
+//!   readiness row's warnings are read by (`standard_pack_ready::with_packs_named`), is counted by
+//!   its code in `other_packages_warnings`; every other warning (of the adopted package, or of no
+//!   package) is answered whole in `warnings`. No check changes.
 
 use crate::codes::{AdoptCasesState, AdoptProblem, ResourceToolingCode};
 use crate::package_directory::PACK_DEADLINE;
 use crate::standard_pack_check::{check_standard_pack_root_with_catalog, root_issue_outcome};
+use crate::standard_pack_ready::with_packs_named;
 use crate::standard_pack_trial::{
     TrialNotRead, TrialSummary, cause_of, content_hash_prefix_of, trial_summary,
 };
@@ -307,8 +320,15 @@ const BINDINGS_FILE: &str = "ours/model/bindings.json";
 #[derive(Debug, Clone)]
 pub enum AdoptSource {
     /// A stopped recording: its `record_id` and its Lab directory,
-    /// `<state>/record-artifacts/<record>/lab`, which holds `recording.json` and `out/`.
-    Recording { record_id: String, lab_dir: PathBuf },
+    /// `<recordings>/record-artifacts/<record>/lab`, which holds `recording.json` and `out/`.
+    /// Workflow #463 AD-1: `session_state_dir` is the directory the recordings are read from
+    /// (`--session-state-dir`, or the state directory when it is not given), where `record ready`'s
+    /// function reads the recording by its id; adoption only reads it.
+    Recording {
+        record_id: String,
+        lab_dir: PathBuf,
+        session_state_dir: PathBuf,
+    },
     /// A package by its path: a content directory, a `.zip` or a `.json` container.
     Package(PathBuf),
 }
@@ -331,7 +351,8 @@ pub enum AdoptDecision {
 
 /// Workflow #464 P1: `actinglab standard-pack adopt --repo <checkout> (--record-id <id> |
 /// --package <path>) [--decide <decision.json> | --held-reason <text> [--held-reference <text>]]
-/// [--replace] [--state-dir <dir>]` under the global `--dry-run`.
+/// [--replace] [--state-dir <dir>]` under the global `--dry-run`. Workflow #463 AD-1: and
+/// `[--session-state-dir <dir>]` with `--record-id`, carried by [`AdoptSource::Recording`].
 #[derive(Debug, Clone)]
 pub struct StandardPackAdoptRequest {
     pub repo: PathBuf,
@@ -339,7 +360,9 @@ pub struct StandardPackAdoptRequest {
     pub decision: Option<AdoptDecision>,
     pub replace: bool,
     pub dry_run: bool,
-    /// The Lab's state directory: the recordings, the kept copies and the check trees.
+    /// The Lab's state directory: the kept copies, the check trees and the trial records.
+    /// Workflow #463 AD-1: a recording is read from its source's own directory, which is this one
+    /// unless `--session-state-dir` names another.
     pub state_dir: PathBuf,
     /// The operation's time, which names its kept copy.
     pub at_unix_ms: u64,
@@ -379,8 +402,10 @@ pub trait AdoptWorktree {
 /// (`contracts/resource-regression-case.md`). actinglab gives the Lab's own; nothing here judges
 /// a recording or runs a case a second way.
 pub trait AdoptLab {
-    /// `record ready`'s answer for the recording `record_id` of the state directory `state_dir`,
-    /// whatever instance it is of, by its one function called with no option given; when that
+    /// `record ready`'s answer for the recording `record_id` of the state directory `state_dir`
+    /// (Workflow #463 AD-1: the directory the recordings are read from, the source's
+    /// `session_state_dir`), whatever instance it is of, by its one function called with no
+    /// option given; when that
     /// function answers none, its refusal, a recording the Lab cannot read whole told apart from
     /// every other one ([`ReadyRefused`], fix round 1).
     fn recording_ready(
@@ -754,6 +779,17 @@ pub struct ReadinessNotJudged {
     pub text: String,
 }
 
+/// Workflow #463 AD-1 (`contracts/standard-pack-authoring.md`, "The warnings of other packages"):
+/// the warnings of the check that name another package of the root than the adopted one, which
+/// the answer counts instead of giving each whole.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct OtherPackagesWarnings {
+    /// How many there are.
+    pub total: usize,
+    /// How many there are of each code, by the code.
+    pub counts: BTreeMap<String, usize>,
+}
+
 /// The answer of `standard-pack adopt`.
 #[derive(Debug, Clone, Serialize)]
 pub struct StandardPackAdoptResponse {
@@ -808,8 +844,12 @@ pub struct StandardPackAdoptResponse {
     /// manual request): why it is dispatched whatever its value; absent otherwise.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub value_not_judged: Option<ValueNotJudged>,
-    /// Every warning of the check, the game's included, each once.
+    /// Every warning of the check, the game's included, each once. Workflow #463 AD-1: but each
+    /// that names another package of the root, counted in `other_packages_warnings` instead.
     pub warnings: Vec<Outcome>,
+    /// Workflow #463 AD-1: the warnings of the check that name another package of the root than
+    /// the adopted one, counted by code.
+    pub other_packages_warnings: OtherPackagesWarnings,
     /// What it wrote in the repository, relative to it, in order; empty under `--dry-run`.
     pub written: Vec<String>,
     /// Under `--dry-run`: what it would write.
@@ -849,17 +889,24 @@ pub fn standard_pack_adopt(
     let state = absolute(&request.state_dir)?;
     let root = Repository::read(&repo)?;
     // Workflow #463 S3-17: a recording is judged by `record ready`'s one function; Workflow #463
-    // AC-1: with the cases its last stop wrote beside its package.
-    let (locator, record_id, recorded) = match &request.source {
-        AdoptSource::Recording { record_id, lab_dir } => {
-            let recorded = recorded_package(record_id, lab_dir, &state, worktree.lab())?;
+    // AC-1: with the cases its last stop wrote beside its package. Workflow #463 AD-1: all of it
+    // read from the directory the source names, which nothing here writes.
+    let (locator, record_id, recorded, recordings) = match &request.source {
+        AdoptSource::Recording {
+            record_id,
+            lab_dir,
+            session_state_dir,
+        } => {
+            let recordings = absolute(session_state_dir)?;
+            let recorded = recorded_package(record_id, lab_dir, &recordings, worktree.lab())?;
             (
                 recorded.package.clone(),
                 Some(record_id.clone()),
                 Some(recorded),
+                Some(recordings),
             )
         }
-        AdoptSource::Package(path) => (absolute(path)?, None, None),
+        AdoptSource::Package(path) => (absolute(path)?, None, None, None),
     };
     let package = Package::read(&locator)?;
     let game = package.descriptor.game().to_owned();
@@ -1006,8 +1053,9 @@ pub fn standard_pack_adopt(
         if checkout_volume != kept_volume {
             let instead = match &request.source {
                 AdoptSource::Recording { .. } => format!(
-                    "; the recording lies in this state directory, so with another --state-dir \
-                     give its package by its path instead of --record-id: --package {}",
+                    "; the recording may stay where it is: name its directory by \
+                     --session-state-dir (adopt only reads it) beside that --state-dir, or give \
+                     its package by its path instead of --record-id: --package {}",
                     locator.display()
                 ),
                 AdoptSource::Package(_) => String::new(),
@@ -1183,8 +1231,12 @@ pub fn standard_pack_adopt(
         .with_details(json!({"outcome": outcome.envelope(Detail::Full), "review": review})));
     }
 
-    // No absolute local path in the package's text.
-    let needles = [state.display().to_string(), repo.display().to_string()];
+    // No absolute local path in the package's text. Workflow #463 AD-1: the recordings' own
+    // directory is one too where it is not the state directory, as when both are one.
+    let mut needles = vec![state.display().to_string(), repo.display().to_string()];
+    if let Some(own) = recordings.as_ref().filter(|own| **own != state) {
+        needles.push(own.display().to_string());
+    }
     if let Some((entry, pointer)) = local_path(&package.files, &needles) {
         return Err(refused(
             adopt(AdoptProblem::LocalPath)
@@ -1373,6 +1425,12 @@ pub fn standard_pack_adopt(
             .paths(cases_left.iter()),
         );
     }
+    // Workflow #463 AD-1: each warning with the pack of the check tree's game root it names, by
+    // the one rule a readiness row's warnings are read by; those that name another package are
+    // counted by code, every other one is answered whole.
+    let named = with_packs_named(&check.installed, &root.game, &warnings)
+        .map_err(|error| composed(error, &check.tree))?;
+    let (answered_warnings, other_packages_warnings) = of_the_package(named, &package_id);
 
     // What it writes, in the order it renames it into place.
     let mut changed = vec![pack_relative.clone()];
@@ -1511,7 +1569,8 @@ pub fn standard_pack_adopt(
         coverage,
         waits_for_value,
         value_not_judged: not_judged,
-        warnings,
+        warnings: answered_warnings,
+        other_packages_warnings,
         written,
         would_write,
         kept,
@@ -1790,8 +1849,9 @@ fn new_directory_step(pack: &str, who: &str) -> String {
          with its --state-dir); or commit it, after which --replace moves it to its kept place \
          under the state directory's adopt/, so the state directory must lie on the checkout's \
          volume: give a --state-dir there (actinglab's default session directory may lie on \
-         another volume), and with another --state-dir give a recording's package by --package \
-         <its lab/out/ file> instead of --record-id"
+         another volume), and with another --state-dir name a recording's own directory by \
+         --session-state-dir, or give its package by --package <its lab/out/ file> instead of \
+         --record-id"
     )
 }
 
@@ -2176,7 +2236,8 @@ struct RecordedCases {
 
 /// The package a stopped recording's last stop generated, `<lab_dir>/out/<package_id>.<ext>`,
 /// when that stop is the recording's last change. Workflow #463 S3-17: the recording is judged by
-/// `record ready`'s one function (`lab`, on the state directory `state`): a status other than
+/// `record ready`'s one function (`lab`, on `recordings`, the directory the recordings are read
+/// from, Workflow #463 AD-1): a status other than
 /// `packaged` is refused `recording_not_current` with that function's answer in the details
 /// (`record_ready`, its list of what is missing among it). Where the two differ, the check of the
 /// recording's own members stays beside it: its schema and its `record_id`, first, as before; its
@@ -2188,7 +2249,7 @@ struct RecordedCases {
 fn recorded_package(
     record_id: &str,
     lab_dir: &Path,
-    state: &Path,
+    recordings: &Path,
     lab: &dyn AdoptLab,
 ) -> LabResult<Recorded> {
     let path = lab_dir.join(RECORDING_FILE);
@@ -2218,7 +2279,7 @@ fn recorded_package(
         ));
     }
     // Workflow #463 S3-17: the one judgement of what the recording still lacks, `record ready`'s.
-    let ready_not_read = match lab.recording_ready(state, record_id) {
+    let ready_not_read = match lab.recording_ready(recordings, record_id) {
         Ok(ready) if ready.packaged => None,
         Ok(ready) => {
             let status = ready
@@ -2550,7 +2611,8 @@ fn same_volume(
             "--replace moves the earlier cases of the package, {entry} among them, to their kept \
              place {}, and the checkout's volume {checkout_volume} is not the state directory's \
              {kept_volume}, where a directory cannot be renamed to; give a --state-dir on the \
-             checkout's volume {checkout_volume}; nothing was written",
+             checkout's volume {checkout_volume} (the recording may stay where it is: name its \
+             directory by --session-state-dir, which adopt only reads); nothing was written",
             kept.display()
         ),
     ))
@@ -2848,8 +2910,8 @@ impl Existing {
             let replace = "--replace moves the committed directory to its kept place under the \
                            state directory's adopt/, so the state directory must lie on the \
                            checkout's volume (a --state-dir there, and with another --state-dir \
-                           a recording's package by --package <its lab/out/ file> instead of \
-                           --record-id)";
+                           a recording's own directory by --session-state-dir, or its package \
+                           by --package <its lab/out/ file> instead of --record-id)";
             return match root.other_role_file(package_id) {
                 Some(file) => format!(
                     "{pack} is there and {file} gives {package_id} a maintenance role, while \
@@ -5181,6 +5243,31 @@ fn all_warnings(check: &Checked) -> Vec<Outcome> {
         }
     }
     all
+}
+
+/// Workflow #463 AD-1 (`contracts/standard-pack-authoring.md`, "The warnings of other packages"):
+/// the warnings `named`, each beside the pack it names ([`with_packs_named`]), as the answer gives
+/// them: whole and in their order, each that names the adopted package `package_id` or no package
+/// of the root; counted by code, each that names another package. None is left out.
+fn of_the_package(
+    named: Vec<(Outcome, Option<String>)>,
+    package_id: &str,
+) -> (Vec<Outcome>, OtherPackagesWarnings) {
+    let mut whole = Vec::new();
+    let mut others = OtherPackagesWarnings::default();
+    for (warning, pack) in named {
+        match pack {
+            Some(pack) if pack != package_id => {
+                others.total += 1;
+                *others
+                    .counts
+                    .entry(warning.code().as_str().to_owned())
+                    .or_default() += 1;
+            }
+            _ => whole.push(warning),
+        }
+    }
+    (whole, others)
 }
 
 /// What [`write_adoption`] writes.

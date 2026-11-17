@@ -37066,6 +37066,84 @@ else; main still `ca539cc7`, nothing merged).
   press, not the located box; without one it is refused `validation_failed` (no click field) after
   the drive record of its recognition, which carries the box, is written.
 
+### 1.464 Slice #463 AD-1 (0.12.72): adoption reads a recording from its own directory; its answer carries this package's warnings (Workflow #463; observed on production 0.12.70 by the channel that makes packages; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1117/brief-463-ad1-adopt-recording-dir.md`, on main `8caf51bb`)
+
+This section takes 1.464. It ships in 0.12.72.
+
+**Why.** A recording lives in the Lab's session directory, on one volume of that machine, and the
+resource repository's checkout on another. `standard-pack adopt --record-id` read the recording
+from the state directory it is given, and `--replace` moves the replaced pack directory (and, since
+AC-1, §1.461, the replaced case set) into that state directory, which must lie on the checkout's
+volume (`replace_across_volumes`). The two could not both hold, so the channel adopted by
+`--package`, and AC-1's cases and `record ready`'s judgement, which only an adoption by record id
+reaches, were never reached there. And the answer carried the warnings of the whole standard pack
+(some eighty `package_bundle_entry_page_unlisted` and `package_bundle_interrupt_page_shadowed` of
+other packages), 17 to 18 KiB through MCP, exported to a file at every call.
+
+**What the state directory was to each part** (read in the code): the recording by its id
+(`<state>/record-artifacts/<record>/lab/`, the line's own `lab_dir`) and `record ready`'s judgement
+of it (`AdoptLab::recording_ready` on the state directory); the check tree
+(`<state>/adopt-check/<checkout>/`); the kept copies (`<state>/adopt/<package_id>.old-<ms>/`,
+`<state>/adopt/<package_id>.cases.old-<ms>/`); the trial records of `review.trial`
+(`<state>/trials/<package_id>/`). The recording commands keep their recordings in their own
+session state directory: their `--state-dir`, else `ACTINGLAB_SESSION_STATE_DIR`, else actinglab's
+default `session` directory (`session_state_dir_from_flags`), the same default adopt takes.
+
+**The rule.**
+- *The option*: `standard-pack adopt --session-state-dir <dir>`, over MCP `session_state_dir` of
+  `ac_standard_pack_adopt` (a `dir` parameter of the table, so a relative path is refused
+  `not_absolute` as every path of the table is). Named after the recording commands' own word for
+  that directory, their session state directory (`ACTINGLAB_SESSION_STATE_DIR`,
+  `session_state_dir_from_flags`).
+- *With it*, `--record-id` reads its recording, its package, its cases and `record ready`'s
+  judgement from that directory, and only reads it; the check tree, both kept copies and the trial
+  records stay under the state directory. So AC-1 holds whole as when both are one directory, and
+  the path is one more of the local paths a package's text may not hold, as the state directory's
+  is (where it differs from it).
+- *Without it*, the recordings' directory is the state directory: every byte and every refusal as
+  before.
+- *Beside `--package`* it has no meaning (that package is read from its path): refused before
+  anything is read, `validation_failed` naming `--session-state-dir`, `argument_problem`
+  `conflicting`, exit 2, as `--held-reference` without `--held-reason` is (`conflicting`).
+- *The warnings*: each warning is read for the pack it names by the one rule a readiness row's
+  warnings are read by (`CheckWarning::read`, #463 S3-6: its `package_id` when that is a pack of
+  the root, else a `path` that is a pack's directory or under it), on the check tree's game root.
+  Those that name another package are left out of `warnings` and counted in
+  `other_packages_warnings` `{total, counts}` (`counts` by code); every other warning (of the
+  adopted package, of no package: a root-level finding, a rule's warning that names only its
+  `task_id`) is answered whole, in its order. `--dry-run` answers the same. No check changes.
+- *The advice* of `replace_across_volumes` (the pack directory's and the cases' kept place) and of
+  the steps after an interrupted call names `--session-state-dir` beside `--package`; its outcome,
+  its values and the place among the refusals are as before.
+- *`standard-pack status` and `standard-pack trial`* find no recording by its id (their state
+  directory is where the trial records are read and written): not changed.
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The option | `apps/actinglab/src/standard_pack_cli.rs`: `SESSION_STATE_DIR_FLAG` in `ADOPT_FLAGS` and `adopt_options`; `run_adopt` builds `lab_dir` from it (or the state directory) and refuses it beside `--package` |
+| The source | `crates/resource-tooling/src/adopt.rs`: `AdoptSource::Recording` gains `session_state_dir`, which `recorded_package` hands to `record ready`'s function and which joins the local-path needles where it is not the state directory |
+| The warnings | `standard_pack_ready::with_packs_named` (the readiness's own reading of the root and `CheckWarning::read`, called, not copied); `adopt::of_the_package` keeps or counts; `OtherPackagesWarnings`, exported |
+| Texts | [standard-pack-authoring.md](standard-pack-authoring.md), "The operation", "The answer", "The recordings' directory", "The warnings of other packages"; the table's row; `apps/actinglab-mcp/MANUAL.md`, "Adoption" |
+
+**Codes and words.** None. `other_packages_warnings`, `total` and `counts` are new members of the
+answer. No decision reads a code: a warning is kept or counted by the pack it names.
+
+**Tests** (`apps/actinglab/src/tests/gate_463_ad1.rs`, apps gate map "#463 AD-1"; recordings made
+as gate_463_ac1 makes them, made-up checkouts; no clock, no sleep): the four of the work order, as
+the gate map's comment lists them. Adapted for the new member only: `gate_464_p1`'s `recording` and
+`gate_463_ac1`'s `request` name `session_state_dir` (the state directory, as before). No golden
+changes; no test leaves a gate map.
+
+**What is not changed.** What adoption writes into the checkout, byte for byte; its refusals and
+their order; the answer's other members; adoption by `--package`; `record stop`'s
+`adoption_example`, which names the recording's own state directory as `--state-dir`.
+
+**At deploy.** Nothing to configure. An agent on a machine whose recordings and checkout lie on two
+volumes adopts by `--record-id <id> --session-state-dir <the recordings' directory> --state-dir
+<a directory on the checkout's volume>`, and `--replace` works there.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
