@@ -12,7 +12,8 @@
 //!
 //! `<n>` is the device's usbmuxd session number, as `acib devices` lists it. `<text>` is what the
 //! bundle identifiers asked for hold, at least three characters. `<m>` is the most identifiers
-//! `apps` names (at least 1). Anything else is refused with `command_line_invalid`.
+//! `apps` names (1 to [`MAX_MATCHING_LIMIT`]). Anything else is refused with
+//! `command_line_invalid`.
 
 use crate::answer::CommandName;
 
@@ -24,6 +25,9 @@ pub const SHORTEST_CONTAINS: usize = 3;
 /// The most bundle identifiers `apps` names when `--max-matching` does not say: more matching
 /// ones answer `too_many_matching` with the counts alone.
 pub const DEFAULT_MAX_MATCHING: usize = 5;
+/// The largest bound `--max-matching` takes: a larger one is refused with
+/// `command_line_invalid`, so no call names more identifiers than this.
+pub const MAX_MATCHING_LIMIT: usize = 20;
 
 /// What a command line asks.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -73,7 +77,7 @@ pub struct Invocation {
 
 /// The command line after the program's name; `None` when it is not one of the five commands
 /// with their options (an option given twice, an unknown option, a number that is not one, a
-/// text too short, a bound of 0).
+/// text too short, a bound of 0 or above [`MAX_MATCHING_LIMIT`]).
 pub fn parse(arguments: &[String]) -> Option<Invocation> {
     let (command, options) = arguments.split_first()?;
     let mut device = None;
@@ -91,7 +95,10 @@ pub fn parse(arguments: &[String]) -> Option<Invocation> {
             }
             "--contains" if contains.is_none() => contains = Some(text(value)?),
             "--max-matching" if max_matching.is_none() => {
-                max_matching = Some(number::<usize>(value).filter(|most| *most > 0)?);
+                max_matching = Some(
+                    number::<usize>(value)
+                        .filter(|most| (1..=MAX_MATCHING_LIMIT).contains(most))?,
+                );
             }
             _ => return None,
         }
@@ -213,7 +220,7 @@ mod tests {
     }
 
     /// `apps` needs `--device` and `--contains` of at least three characters (counted as
-    /// characters, not bytes) and takes `--max-matching` of at least 1 (default
+    /// characters, not bytes) and takes `--max-matching` of 1 to [`MAX_MATCHING_LIMIT`] (default
     /// [`DEFAULT_MAX_MATCHING`]); no other command takes `--contains` or `--max-matching`.
     #[test]
     fn the_apps_command_takes_a_text_of_three_characters_or_more() {
@@ -332,6 +339,34 @@ mod tests {
         ];
         for line in refused {
             assert_eq!(parsed(line), None, "{line:?}");
+        }
+    }
+
+    /// `--max-matching` takes at most 20: exactly the limit is taken, one more (or any larger
+    /// bound) is refused as a command line (`command_line_invalid`).
+    #[test]
+    fn max_matching_takes_its_limit_of_twenty_and_refuses_one_more() {
+        let line = |bound| {
+            parsed(&[
+                "apps",
+                "--device",
+                "3",
+                "--contains",
+                "game",
+                "--max-matching",
+                bound,
+            ])
+        };
+        assert_eq!(
+            line("20").map(|invocation| invocation.request),
+            Some(Request::Apps {
+                device: 3,
+                contains: "game".to_owned(),
+                max_matching: 20,
+            })
+        );
+        for bound in ["21", "10000", "18446744073709551616"] {
+            assert_eq!(line(bound), None, "--max-matching {bound}");
         }
     }
 

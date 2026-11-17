@@ -62,8 +62,8 @@ pub enum Problem {
     RsdHandshakeFailed,
     /// The installation proxy did not answer the list of the user's applications.
     AppsLookupFailed,
-    /// More bundle identifiers hold the text than `--max-matching` allows, or all of the user's
-    /// applications do: `apps` names none of them, only the two counts.
+    /// More bundle identifiers hold the text than `--max-matching` allows, or more than half of
+    /// the user's applications do: `apps` names none of them, only the two counts.
     TooManyMatching,
 }
 
@@ -341,10 +341,12 @@ pub struct Images {
 
 /// `acib apps --device <n> --contains <text> [--max-matching <m>]`: how many bundle identifiers
 /// of the user's applications hold the text (without regard to case) and how many user
-/// applications there are; and, when the matching ones are at most `<m>` and not all of the
-/// user's applications, those identifiers, sorted. Otherwise no identifier is named and the line
-/// answers `too_many_matching`: the whole list, or most of it, is never printed. Nothing else of
-/// a record is shown.
+/// applications there are; and those identifiers, sorted, only when the matching ones are at
+/// most `<m>` and at most half of the user's applications:
+/// `2 * matching_count <= user_applications`. Otherwise no identifier is named and the line
+/// answers `too_many_matching` with the two counts alone, so neither the whole list nor most of
+/// it is ever printed (all of them matching is more than half: a device whose one user
+/// application matches names none). Nothing else of a record is shown.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Apps {
     pub command: CommandName,
@@ -359,8 +361,8 @@ pub struct Apps {
 }
 
 impl Apps {
-    /// The answer for the bundle identifiers of all user applications, naming at most
-    /// `max_matching` of them.
+    /// The answer for the bundle identifiers of all user applications, naming the matching ones
+    /// only when they are at most `max_matching` and at most half of them.
     pub fn of<'a>(
         device: u32,
         contains: &str,
@@ -377,13 +379,12 @@ impl Apps {
             }
         }
         let matching_count = held.len();
-        let too_many = matching_count > max_matching
-            || (matching_count > 0 && matching_count == user_applications);
-        let (matching, problem) = if too_many {
-            (None, Some(Problem::TooManyMatching))
-        } else {
+        let named = matching_count <= max_matching && 2 * matching_count <= user_applications;
+        let (matching, problem) = if named {
             held.sort();
             (Some(held), None)
+        } else {
+            (None, Some(Problem::TooManyMatching))
         };
         Self {
             command: CommandName::Apps,
@@ -626,10 +627,12 @@ mod tests {
                         "com.example.GameOne",
                         "com.example.tool",
                         "com.example.game-two",
+                        "com.example.mail",
                         "com.example.endgame_x",
+                        "com.example.notes",
                     ],
                 )),
-                r#"{"command":"apps","device":3,"contains":"Game","matching":["com.example.GameOne","com.example.game-two","withheld"],"matching_count":3,"user_applications":4}"#,
+                r#"{"command":"apps","device":3,"contains":"Game","matching":["com.example.GameOne","com.example.game-two","withheld"],"matching_count":3,"user_applications":6}"#,
                 true,
             ),
             (
@@ -937,41 +940,78 @@ mod tests {
         );
     }
 
-    /// `apps` names the matching bundle identifiers only when they are at most the bound and
-    /// not all of the user's applications; otherwise its line holds the two counts and no
-    /// identifier, and answers `too_many_matching` (status 1).
+    /// `apps` names the matching bundle identifiers only when they are at most the bound and at
+    /// most half of the user's applications (`2 * matching_count <= user_applications`);
+    /// otherwise its line holds the two counts and no identifier, and answers
+    /// `too_many_matching` (status 1).
     #[test]
-    fn apps_names_no_identifier_when_more_than_the_bound_or_all_match() {
+    fn apps_names_no_identifier_when_more_than_the_bound_or_more_than_half_match() {
         const ONE: &str = "com.example.game-one";
         const TWO: &str = "com.example.game-two";
         const THREE: &str = "com.example.game-three";
-        const OTHER: &str = "com.example.tool";
+        const TOOL: &str = "com.example.tool";
+        const MAIL: &str = "com.example.mail";
+        const NOTES: &str = "com.example.notes";
         let cases = [
             (
                 2,
-                vec![ONE, TWO, OTHER],
+                vec![ONE, TWO, TOOL, MAIL],
                 Some(vec![ONE, TWO]),
                 2,
-                "as many as the bound",
+                "as many as the bound, half of them",
             ),
             (
                 2,
-                vec![ONE, TWO, THREE, OTHER],
+                vec![ONE, TWO, THREE, TOOL, MAIL, NOTES],
                 None,
                 3,
-                "one more than the bound",
+                "one more than the bound, half of them",
             ),
-            (1, vec![ONE, OTHER], Some(vec![ONE]), 1, "one, the bound"),
             (
                 1,
-                vec![ONE, TWO, OTHER],
+                vec![ONE, TOOL],
+                Some(vec![ONE]),
+                1,
+                "one, the bound, half",
+            ),
+            (
+                1,
+                vec![ONE, TWO, TOOL, MAIL],
                 None,
                 2,
-                "one more than a bound of one",
+                "one more than a bound of one, half of them",
+            ),
+            (
+                5,
+                vec![ONE, TWO, TOOL, MAIL],
+                Some(vec![ONE, TWO]),
+                2,
+                "half of four, within the bound",
+            ),
+            (
+                5,
+                vec![ONE, TWO, THREE, TOOL],
+                None,
+                3,
+                "one more than half of four, within the bound",
+            ),
+            (
+                5,
+                vec![ONE, TWO, TOOL, MAIL, NOTES],
+                Some(vec![ONE, TWO]),
+                2,
+                "at most half of five, within the bound",
+            ),
+            (
+                5,
+                vec![ONE, TWO, THREE, TOOL, MAIL],
+                None,
+                3,
+                "more than half of five, within the bound",
             ),
             (5, vec![ONE, TWO], None, 2, "all of them, within the bound"),
-            (5, vec![ONE], None, 1, "the only one"),
-            (5, vec![OTHER], Some(Vec::new()), 0, "none"),
+            (5, vec![ONE], None, 1, "the one user application matches"),
+            (5, vec![TOOL], Some(Vec::new()), 0, "none"),
             (5, Vec::new(), Some(Vec::new()), 0, "no user application"),
         ];
         for (bound, identifiers, named, count, case) in cases {

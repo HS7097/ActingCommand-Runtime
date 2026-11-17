@@ -22,7 +22,7 @@ installs no logger. A library error whose text could carry such a value is shown
 alone; a remote service's name or entitlement, or a member name of the image mounter's listing,
 that could carry one is shown as `withheld`. Which applications a person has installed is
 theirs: `apps` names only the ones whose bundle identifier holds the text asked for, and none
-when they are more than its bound or all of them.
+when they are more than its bound or more than half of the user's applications.
 
 ## The commands
 
@@ -52,19 +52,25 @@ Every command takes `--timeout-ms <ms>` (default 30000); a command not finished 
   signature alone, so a phone's answer that carries no signature for another reason (one that
   reports a failure otherwise than in an `Error` member, or one of a shape the library does not
   expect) reads `not_found` too; an answer with an `Error` member is a library error, `failed`.
-  `mounted` is `true` when the listing holds an entry or a lookup found an image, `false` only
-  when the listing answered an empty list and no query failed (and no lookup found an image),
-  and `"unknown"` for everything else. That an empty listing means nothing is mounted has not
+  `mounted` is `true` when the listing holds an entry, or when the listing failed and a lookup
+  found an image; `false` only when the listing answered an empty list, no lookup found an image
+  and no query failed; and `"unknown"` for everything else: an empty listing beside a lookup
+  that found an image is `"unknown"`, because the two answers disagree, and so is an empty
+  listing beside a failed query. That an empty listing means nothing is mounted has not
   been checked on a device that has a personalized image mounted. Nothing is mounted and
   nothing uploaded.
 - `acib apps --device <n> --contains <text> [--max-matching <m>]`: in a session, the
   installation proxy's list of the user's applications: how many bundle identifiers hold
   `<text>` (at least three characters, compared without regard to case) as `matching_count`, the
   count of all user applications as `user_applications`, and those identifiers, sorted, as
-  `matching`. `<m>` (at least 1, default 5) is the most identifiers named: when more hold the
-  text, or when all of the user's applications do, the line names none (no `matching`), keeps
-  the two counts and answers `too_many_matching` (status 1). So the whole list is never printed,
-  and nothing else of an application's record (no display name, path, version or signer).
+  `matching`. `<m>` (1 to 20, default 5; a larger bound is `command_line_invalid`) is the most
+  identifiers named. The identifiers are named only when the matching ones are at most `<m>`
+  and at most half of the user's applications (`2 * matching_count <= user_applications`);
+  otherwise the line names none (no `matching`), keeps the two counts and answers
+  `too_many_matching` (status 1). For example, with the default bound: 2 matching of 4 user
+  applications are named; 3 of 4, 6 of 40, or the one user application of a device matching,
+  are not. So neither the whole list nor most of it is ever printed, and nothing else of an
+  application's record (no display name, path, version or signer).
 
 The problem words: `command_line_invalid`, `async_runtime_failed`, `deadline_passed`,
 `usbmuxd_unreachable`, `usbmuxd_list_failed`, `device_not_listed`, `lockdown_unreachable`,

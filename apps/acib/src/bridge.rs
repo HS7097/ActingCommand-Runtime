@@ -216,7 +216,7 @@ async fn apps(number: u32, contains: &str, max_matching: usize) -> Result<Line, 
     .await?;
     let mut proxy = InstallationProxyClient::new(connection);
     // The records stay in this function: only the bundle identifiers that hold the text leave
-    // it, with the counts, and none when they are too many or all of them.
+    // it, with the counts, and none when they are more than the bound or more than half of them.
     let applications = proxy
         .get_apps(Some(USER_APPLICATIONS), None)
         .await
