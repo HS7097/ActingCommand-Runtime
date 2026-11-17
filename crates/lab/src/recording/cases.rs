@@ -26,8 +26,10 @@
 //!   3: without a text-recognition model for a text target the page detection reads, no case's page
 //!   is judged, which the warning `record_cases_ocr_unavailable` says once.
 //! - **Ambiguity is no miss** (the coordinator's ruling after the first round, R2's ruling 4 as its
-//!   precedent): a linear run never asks which page of the whole package a screen is, each step
-//!   waits for its own page. When the runner answers `page_conflict` and the case's page is among
+//!   precedent): a press step of a linear run waits for its own page and does not ask which page of
+//!   the whole package a screen is (#463 SC-1: a select step's confirmation does, and `record stop`'s
+//!   self-check item 8 refuses a select step's page that is not alone on a recorded frame before
+//!   the cases are made). When the runner answers `page_conflict` and the case's page is among
 //!   the pages matched, the case is made again without `expect.observe`: every target its page
 //!   requires, `passed: true`, and (fix round 3) every target it forbids, `passed: false`, so that
 //!   it states that this page holds on this scene; it is run again in that form before it is
@@ -83,13 +85,16 @@ const SELF_AGREEMENT_TEXT: &str = "These cases were made from the frames this pa
 const BARE_CANVAS_MESSAGE: &str = "The page this case expects is also what the package's page \
     detection answers on the bare canvas, with no patch at all: the case proves nothing of its \
     page. Give the page a mark of a bright or textured area of its own screen to make it prove it.";
-/// The text of the warning `record_case_page_ambiguous`, a case written without `observe`.
+/// The text of the warning `record_case_page_ambiguous`, a case written without `observe`. #463
+/// SC-1: what is so, a press step waits for its own page and a select step's confirmation asks.
 const AMBIGUOUS_MESSAGE: &str = "This case's page is recognised on its screen, but so are the \
-    other pages named here: a linear run waits for each step's own page and never asks which page \
-    of the package a screen is, so the case is written without expect.observe. It states that this \
-    page holds on this screen (every target the page requires passes, every target it forbids \
-    does not), which it passes. To make it prove its page too, tell the screens apart with a mark \
-    of this screen or a forbidden mark on the other page.";
+    other pages named here: a press step of a linear run waits for its own page and does not ask \
+    which page of the package a screen is, so the case is written without expect.observe. A select \
+    step's confirmation does ask, and fails on a screen where two pages pass; record stop refuses \
+    a select step's page that passes beside another page on a recorded frame before the cases are \
+    made. This case states that its page holds on this screen (every target the page requires \
+    passes, every target it forbids does not), which it passes. To make it prove its page too, \
+    tell the screens apart with a mark of this screen or a forbidden mark on the other page.";
 /// The text of the warning `record_case_ambiguous_not_written` (fix round 3).
 const AMBIGUOUS_UNWRITTEN_MESSAGE: &str = "This case's page is recognised on its screen, but so \
     are the other pages named here, and the page has no recognition target to pin: without \

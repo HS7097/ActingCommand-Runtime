@@ -36,9 +36,9 @@ use super::model::{
     StepTransition, ValueTestRight, value_test_side_id,
 };
 use super::select::{
-    OTHER_PAGE_PASSES, SELECT_REJECTION_ID, SELF_TEST_ERROR, SelectChecked, SelectFrame,
-    SelectProbe, apply_choice, check_select_rules, check_step_select, clear_select, declare_select,
-    probe_marks, select_invalid,
+    OTHER_PAGE_PASSES, PAGE_PASSES_ON_OTHER_FRAME, SELECT_REJECTION_ID, SELF_TEST_ERROR,
+    SelectChecked, SelectFrame, SelectProbe, apply_choice, check_select_rules, check_step_select,
+    clear_select, declare_select, probe_marks, select_invalid,
 };
 use super::store::{
     LabFile, OldRecordView, blocked, create_recording, invalid, lab_dir, load_lab, now_unix_ms,
@@ -1475,9 +1475,14 @@ fn forbidden_after(
 }
 
 /// Workflow #390 LAB-2: whether `mark` passes on one live frame, as its self-test evaluates it
-/// (a check from its members on that frame), with the error of an evaluation that failed.
+/// (a check from its members on that frame), with the error of an evaluation that failed. #463
+/// SC-1: with `batch`, the marks of the step as this command leaves it come first: a member of a
+/// check is looked up among its own marks before the recording's, and a template mark this
+/// command adds takes its crop from the batch, since neither is stored yet; without one, the
+/// recording's marks and stored crops alone, as before.
 fn mark_on_frame(
     session: &Session,
+    batch: Option<&MarkBatch>,
     mark: &RecordedMark,
     frame: &EvalFrame<'_>,
     ocr: &LabOcr,
@@ -1485,16 +1490,19 @@ fn mark_on_frame(
     if mark.family == MarkFamily::Check {
         let mut members = BTreeMap::new();
         for member in mark.check_members() {
-            let member_mark = find_step_mark(&session.recording, member).ok_or_else(|| {
-                invalid(
-                    "validation_failed",
-                    format!(
-                        "check '{}' names '{member}', which is not a step mark",
-                        mark.id
-                    ),
-                )
-            })?;
-            let (status, error) = mark_on_frame(session, &member_mark, frame, ocr)?;
+            let member_mark = batch
+                .and_then(|made| made.own.iter().find(|own| &own.id == member).cloned())
+                .or_else(|| find_step_mark(&session.recording, member))
+                .ok_or_else(|| {
+                    invalid(
+                        "validation_failed",
+                        format!(
+                            "check '{}' names '{member}', which is not a step mark",
+                            mark.id
+                        ),
+                    )
+                })?;
+            let (status, error) = mark_on_frame(session, batch, &member_mark, frame, ocr)?;
             if error.is_some() {
                 return Ok((status, error));
             }
@@ -1502,7 +1510,10 @@ fn mark_on_frame(
         }
         return Ok((derive_check(mark, &members, 1).0.status, None));
     }
-    let crop = stored_crop(mark)?;
+    let crop = match batch.and_then(|made| made.new_crops.get(&mark.id)) {
+        Some(bytes) => Some(bytes.clone()),
+        None => stored_crop(mark)?,
+    };
     let (test, failure) = evaluate_mark(
         mark,
         crop.as_deref(),
@@ -1551,7 +1562,7 @@ fn evaluate_forbidden(
         })?;
         let mut not_evaluated = false;
         for frame in &frames {
-            match mark_on_frame(session, &mark, frame, ocr)? {
+            match mark_on_frame(session, None, &mark, frame, ocr)? {
                 (_, Some(error)) => {
                     rejections.push(MarkRejection::new(
                         id,
@@ -2144,8 +2155,9 @@ struct PageCheck {
 /// command met before its self-test), a select's dry run of the step as `record stop` generates it
 /// (`select_frames`), and #463 R1 fix 1, once that passed, the pages of the other steps this mark
 /// knows, which must not pass on the select's frames (`other_pages_on_select_frames`; the pages of
-/// steps recorded later are `record stop`'s, self-check item 8). The refusals are in that order;
-/// none when the whole page holds on every frame.
+/// steps recorded later are `record stop`'s, self-check item 8), and #463 SC-1 the other way round,
+/// the select's page on the frames of those steps (`select_page_on_other_frames`). The refusals are
+/// in that order; none when the whole page holds on every frame.
 fn page_check(
     session: &Session,
     page: &PageInputs<'_>,
@@ -2203,6 +2215,8 @@ fn page_check(
             frames,
             ocr,
         )?);
+        // #463 SC-1: and the other way round, the select's page on the frames of those steps.
+        refusals.extend(select_page_on_other_frames(session, page, &own, ocr)?);
     }
     Ok(PageCheck {
         own,
@@ -2924,9 +2938,11 @@ enum PageOnFrame {
     Error { mark_id: String, error: Value },
 }
 
-/// #463 R1 fix 1: the page `required` and `forbidden` name, on `frame` ([`mark_on_frame`]).
+/// #463 R1 fix 1: the page `required` and `forbidden` name, on `frame` ([`mark_on_frame`]; #463
+/// SC-1: with `batch`, the step as this command leaves it).
 fn page_on_frame(
     session: &Session,
+    batch: Option<&MarkBatch>,
     marks: &BTreeMap<String, RecordedMark>,
     (required, forbidden): (&[String], &[String]),
     frame: &EvalFrame<'_>,
@@ -2941,7 +2957,7 @@ fn page_on_frame(
         let Some(mark) = marks.get(id) else {
             return Ok(PageOnFrame::Undetermined);
         };
-        match mark_on_frame(session, mark, frame, ocr)? {
+        match mark_on_frame(session, batch, mark, frame, ocr)? {
             (_, Some(error)) => {
                 return Ok(PageOnFrame::Error {
                     mark_id: id.clone(),
@@ -2973,21 +2989,7 @@ fn other_pages_on_select_frames(
     ocr: &LabOcr,
 ) -> LabResult<Vec<MarkRejection>> {
     let recording = &session.recording;
-    let mut marks = BTreeMap::new();
-    for step in recording.steps.iter().filter(|step| step.is_effective()) {
-        for mark in &step.marks {
-            marks.insert(mark.id.clone(), mark.clone());
-        }
-        if let Some(StepTransition::Page {
-            marks: transition_marks,
-            ..
-        }) = &step.transition
-        {
-            for mark in transition_marks {
-                marks.insert(mark.id.clone(), mark.clone());
-            }
-        }
-    }
+    let marks = page_marks(recording);
     let frames = live
         .iter()
         .map(|entry| {
@@ -3007,51 +3009,232 @@ fn other_pages_on_select_frames(
         .iter()
         .filter(|step| step.is_effective() && step.index != target)
     {
-        let mut pages = Vec::new();
-        if live_primary_sha(other).is_some() {
-            pages.push((false, page_required(other, &marks), other.forbidden.clone()));
-        }
-        if let Some(StepTransition::Page {
-            marks: transition_marks,
-            reused,
-            ..
-        }) = &other.transition
-        {
-            pages.push((
-                true,
-                required_ids(transition_marks, reused, &marks),
-                Vec::new(),
-            ));
-        }
-        for (transition, required, forbidden) in pages {
-            if required.is_empty() {
+        for known in pages_of(other, &marks) {
+            if known.required.is_empty() {
                 continue;
             }
             for frame in &frames {
                 match page_on_frame(
                     session,
+                    None,
                     &marks,
-                    (required.as_slice(), forbidden.as_slice()),
+                    (known.required.as_slice(), known.forbidden.as_slice()),
                     frame,
                     ocr,
                 )? {
                     PageOnFrame::Passes => rejections.push(MarkRejection::new(
                         SELECT_REJECTION_ID,
                         OTHER_PAGE_PASSES,
-                        json!({"frame_id": frame.id, "step": other.index, "transition": transition}),
+                        json!({
+                            "frame_id": frame.id,
+                            "step": known.step,
+                            "transition": known.transition
+                        }),
                     )),
                     PageOnFrame::Error { mark_id, error } => rejections.push(MarkRejection::new(
                         SELECT_REJECTION_ID,
                         SELF_TEST_ERROR,
                         json!({
                             "frame_id": frame.id,
-                            "step": other.index,
+                            "step": known.step,
                             "mark_id": mark_id,
                             "error": error
                         }),
                     )),
                     PageOnFrame::Fails | PageOnFrame::Undetermined => {}
                 }
+            }
+        }
+    }
+    Ok(rejections)
+}
+
+/// #463 R1 fix 1: every mark the pages of the recording's effective steps and of their page
+/// transitions name, by id: each step's own marks and each page transition's.
+fn page_marks(recording: &LabRecording) -> BTreeMap<String, RecordedMark> {
+    let mut marks = BTreeMap::new();
+    for step in recording.steps.iter().filter(|step| step.is_effective()) {
+        for mark in &step.marks {
+            marks.insert(mark.id.clone(), mark.clone());
+        }
+        if let Some(StepTransition::Page {
+            marks: transition_marks,
+            ..
+        }) = &step.transition
+        {
+            for mark in transition_marks {
+                marks.insert(mark.id.clone(), mark.clone());
+            }
+        }
+    }
+    marks
+}
+
+/// #463 R1 fix 1: one page a mark knows: the step it belongs to, whether it is the page of that
+/// step's page transition, and the marks it requires and forbids.
+struct KnownPage {
+    step: u32,
+    transition: bool,
+    required: Vec<String>,
+    forbidden: Vec<String>,
+}
+
+/// #463 R1 fix 1: the pages of `step` as the package names them (`marks`, every mark they name):
+/// its own page when it has a live primary frame, then its page transition's page.
+fn pages_of(step: &RecordingStep, marks: &BTreeMap<String, RecordedMark>) -> Vec<KnownPage> {
+    let mut pages = Vec::new();
+    if live_primary_sha(step).is_some() {
+        pages.push(KnownPage {
+            step: step.index,
+            transition: false,
+            required: page_required(step, marks),
+            forbidden: step.forbidden.clone(),
+        });
+    }
+    if let Some(StepTransition::Page {
+        marks: transition_marks,
+        reused,
+        ..
+    }) = &step.transition
+    {
+        pages.push(KnownPage {
+            step: step.index,
+            transition: true,
+            required: required_ids(transition_marks, reused, marks),
+            forbidden: Vec::new(),
+        });
+    }
+    pages
+}
+
+/// #463 SC-1 (`contracts/lab-recording.md`, "Selecting in a list"): the other way round of
+/// [`other_pages_on_select_frames`]. The page of the select step `page.target` as this command
+/// leaves it (its own marks `own`, the marks it reuses and those it forbids, `page`) on every live
+/// frame of every other effective step this mark knows and of every page transition, its own
+/// step's among them. On a frame it passes on, each other page the mark knows (another step's,
+/// a page transition's, the select step's own page transition's too) that passes there as well is
+/// `select_page_passes_on_other_frame`: `frame_id`; `select_step`; `step` and `transition`, the
+/// other page's step and whether it is its page transition's; `frame_step` and
+/// `frame_transition`, whose frame it is. The run's select confirms on a fresh frame that exactly
+/// one page of the package is recognised there, and on such a screen it would see two. A mark
+/// whose evaluation fails there is `self_test_error`; a page no mark decides there is not refused.
+fn select_page_on_other_frames(
+    session: &Session,
+    page: &PageInputs<'_>,
+    own: &[RecordedMark],
+    ocr: &LabOcr,
+) -> LabResult<Vec<MarkRejection>> {
+    let recording = &session.recording;
+    let target = page.target;
+    let mut marks = page_marks(recording);
+    for mark in own {
+        marks.insert(mark.id.clone(), mark.clone());
+    }
+    let mut select_step = effective_step(recording, target)?.clone();
+    select_step.marks = own.to_vec();
+    select_step.reused = page.batch.reused.clone();
+    let required = page_required(&select_step, &marks);
+    if required.is_empty() {
+        return Ok(Vec::new());
+    }
+    // The other pages the mark knows, and the frames of the recording but the select step's own,
+    // each with the step it belongs to and whether it is that step's page transition's.
+    let mut pages = Vec::new();
+    let mut frames = Vec::new();
+    for step in recording.steps.iter().filter(|step| step.is_effective()) {
+        pages.extend(
+            pages_of(step, &marks)
+                .into_iter()
+                .filter(|known| !known.required.is_empty())
+                .filter(|known| known.step != target || known.transition),
+        );
+        if step.index != target {
+            frames.extend(
+                step.frames
+                    .iter()
+                    .filter(|frame| !frame.superseded)
+                    .map(|frame| (step.index, false, frame)),
+            );
+        }
+        if let Some(StepTransition::Page {
+            frames: transition_frames,
+            ..
+        }) = &step.transition
+        {
+            frames.extend(
+                transition_frames
+                    .iter()
+                    .filter(|frame| !frame.superseded)
+                    .map(|frame| (step.index, true, frame)),
+            );
+        }
+    }
+    let mut rejections = Vec::new();
+    for (frame_step, frame_transition, entry) in frames {
+        let read;
+        let loaded = match session.cache.get(&entry.sha256) {
+            Some(loaded) => loaded,
+            None => {
+                read = read_stored_frame(entry)?;
+                &read
+            }
+        };
+        let frame = EvalFrame {
+            id: entry.frame_id.as_str(),
+            frame: loaded,
+        };
+        let evaluation_failed = |mark_id: String, error: Value| {
+            MarkRejection::new(
+                SELECT_REJECTION_ID,
+                SELF_TEST_ERROR,
+                json!({
+                    "frame_id": entry.frame_id,
+                    "step": frame_step,
+                    "mark_id": mark_id,
+                    "error": error
+                }),
+            )
+        };
+        match page_on_frame(
+            session,
+            Some(page.batch),
+            &marks,
+            (required.as_slice(), page.forbidden),
+            &frame,
+            ocr,
+        )? {
+            PageOnFrame::Passes => {}
+            PageOnFrame::Error { mark_id, error } => {
+                rejections.push(evaluation_failed(mark_id, error));
+                continue;
+            }
+            PageOnFrame::Fails | PageOnFrame::Undetermined => continue,
+        }
+        for known in &pages {
+            match page_on_frame(
+                session,
+                Some(page.batch),
+                &marks,
+                (known.required.as_slice(), known.forbidden.as_slice()),
+                &frame,
+                ocr,
+            )? {
+                PageOnFrame::Passes => rejections.push(MarkRejection::new(
+                    SELECT_REJECTION_ID,
+                    PAGE_PASSES_ON_OTHER_FRAME,
+                    json!({
+                        "frame_id": entry.frame_id,
+                        "select_step": target,
+                        "step": known.step,
+                        "transition": known.transition,
+                        "frame_step": frame_step,
+                        "frame_transition": frame_transition
+                    }),
+                )),
+                PageOnFrame::Error { mark_id, error } => {
+                    rejections.push(evaluation_failed(mark_id, error));
+                }
+                PageOnFrame::Fails | PageOnFrame::Undetermined => {}
             }
         }
     }

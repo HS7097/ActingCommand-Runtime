@@ -67,6 +67,8 @@ const PAGE: &str = "state/page";
 const NOT_FOUND: &str = "neutral_task_not_found";
 const POLICY: &str = "resources/operations/neutral_task/policies/step_01_select.json";
 const NEXT_SEED: u64 = 0x0463_0001;
+// #463 SC-1: the gray of the next screen's page area, far from the list's.
+const NEXT_PAGE_AREA: u8 = 170;
 
 // The gray value of a marker pixel and the name the provider reads from it.
 const ALPHA: u8 = 211;
@@ -224,13 +226,21 @@ fn decisions(frame_id: &str, pressed: Option<u32>, default: Option<u32>) -> Valu
     json!({"frame_id": frame_id, "pressed": kind(pressed), "default": kind(default)})
 }
 
-// The next screen: a noise patch at (40, 46), with no marker value.
+// The next screen: a noise patch at (40, 46), with no marker value. Adapted by #463 SC-1 (register
+// §1.469): its page area (2, 50, 4, 4), where the list's page mark stands, is the gray
+// `NEXT_PAGE_AREA`, so that the list's page does not pass on the next step's frame beside that
+// step's page, which a select on the list now refuses (`select_page_passes_on_other_frame`).
 fn next_screen() -> Vec<u8> {
     let mut noise = Noise(NEXT_SEED);
     let mut values = vec![BACKGROUND; (WIDTH * HEIGHT) as usize];
     for row in 0..12 {
         for column in 0..12 {
             values[((46 + row) * WIDTH + 40 + column) as usize] = noise.between(1, 199);
+        }
+    }
+    for row in 50..54 {
+        for column in 2..6 {
+            values[(row * WIDTH + column) as usize] = NEXT_PAGE_AREA;
         }
     }
     png(&values)

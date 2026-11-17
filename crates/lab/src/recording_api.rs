@@ -1182,8 +1182,16 @@ fn package_checks(plan: &Plan, ocr: &LabOcr, runner: &mut Runner) -> Option<Pack
         return None;
     }
     // #463 R1, self-check item 8: every select step decides on its own frames as recorded; the
-    // result is part of the cross-check, present only when the package has a select step.
-    let selects = select_checks(&first_prepared, plan, &cache, ocr, &mut runner.failures);
+    // result is part of the cross-check, present only when the package has a select step. #463
+    // SC-1: and its page is alone on every other frame of the recording it passes on.
+    let selects = select_checks(
+        &first_prepared,
+        plan,
+        &cache,
+        ocr,
+        evaluator,
+        &mut runner.failures,
+    );
     let selects = runner.last(ReadyCheck::Selects, ReadyCheckStop::CheckError, selects);
     // The final package is built of what every check before it gave.
     let (Some(decision), Some(mut checks), Some(endings), Some(selects)) =

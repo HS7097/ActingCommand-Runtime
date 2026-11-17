@@ -138,6 +138,9 @@ mod gate_463_kr1;
 // search and the scrolling choice.
 #[cfg(test)]
 mod gate_463_t70;
+// #463 SC-1: a select step's page is checked for uniqueness on every frame of the recording.
+#[cfg(test)]
+mod gate_463_sc1;
 mod lab_run;
 mod lab_run_api;
 mod ledger_port;

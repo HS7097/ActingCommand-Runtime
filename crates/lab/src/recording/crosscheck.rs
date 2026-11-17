@@ -16,8 +16,8 @@ use super::model::{
     SelectFrameDecision, StepSelect,
 };
 use super::select::{
-    NAME_UNREAD, PRESS_MISMATCH, PRESSED_ABSENT, SELF_TEST_ERROR, decide, empty_end_key,
-    on_empty_key,
+    NAME_UNREAD, PAGE_PASSES_ON_OTHER_FRAME, PRESS_MISMATCH, PRESSED_ABSENT, SELF_TEST_ERROR,
+    decide, empty_end_key, on_empty_key,
 };
 use super::store::{blocked, invalid, with_details};
 use crate::LabOcr;
@@ -958,14 +958,23 @@ fn select_mismatch(
 /// judgement, its parts read from the one before; a frame that fails it is a failure `failures`
 /// meets (the step, the frame, its page), and under `record ready` the next frame is judged. Fix
 /// round 1: a frame on which slots read no known name is one failure per such slot (the target that
-/// reads its name), so that one read lists them all.
+/// reads its name), so that one read lists them all. #463 SC-1: then the other way round, the
+/// step's page on every other live frame of the recording with `evaluator`, the evaluator of item 4
+/// ([`select_page_elsewhere`]), after the step's own frames, so that a failure on those is answered
+/// first.
 pub(crate) fn select_checks(
     prepared: &PreparedContainedTask,
     plan: &Plan,
     cache: &FrameCache,
     ocr: &LabOcr,
+    evaluator: &RecognitionEvaluator,
     failures: &mut Failures,
 ) -> LabResult<SelectChecks> {
+    let evaluation = Evaluation {
+        plan,
+        evaluator,
+        ocr_available: ocr.ocr_provider().is_some(),
+    };
     let mut selects = Vec::new();
     let mut not_evaluated = Vec::new();
     for (step, select) in plan.select_steps() {
@@ -1003,6 +1012,7 @@ pub(crate) fn select_checks(
                 failures,
                 &mut item,
             )?;
+            select_page_elsewhere(plan, step, &evaluation, cache, failures)?;
             selects.push(item);
             continue;
         }
@@ -1112,12 +1122,185 @@ pub(crate) fn select_checks(
             }));
         }
         item["frames"] = json!(frames);
+        select_page_elsewhere(plan, step, &evaluation, cache, failures)?;
         selects.push(item);
     }
     Ok(SelectChecks {
         selects,
         not_evaluated,
     })
+}
+
+/// #463 SC-1: where a page of the package comes from, or whose frame a frame is: a step's own (its
+/// package number and serial number), its page transition's (`transition`), or an ending's (its
+/// outcome key).
+#[derive(Clone, Copy)]
+enum SelectPageOwner<'p> {
+    Step {
+        step: &'p PlanStep,
+        transition: bool,
+    },
+    Ending(&'p PlanEnding),
+}
+
+impl SelectPageOwner<'_> {
+    /// The owner's members under `prefix` in a refusal's details: `<prefix>_step`,
+    /// `<prefix>_record_index` and `<prefix>_transition`, or `<prefix>_outcome_key`.
+    fn put(self, prefix: &str, details: &mut Map<String, Value>) {
+        match self {
+            Self::Step { step, transition } => {
+                details.insert(format!("{prefix}_step"), json!(step.number));
+                details.insert(format!("{prefix}_record_index"), json!(step.step.index));
+                details.insert(format!("{prefix}_transition"), json!(transition));
+            }
+            Self::Ending(ending) => {
+                details.insert(
+                    format!("{prefix}_outcome_key"),
+                    json!(ending.ending.outcome_key),
+                );
+            }
+        }
+    }
+
+    /// How the refusal's text names the owner.
+    fn named(self) -> String {
+        match self {
+            Self::Step {
+                step,
+                transition: false,
+            } => format!("step {}", step.step.index),
+            Self::Step {
+                step,
+                transition: true,
+            } => format!("the page transition of step {}", step.step.index),
+            Self::Ending(ending) => format!("the ending '{}'", ending.ending.outcome_key),
+        }
+    }
+}
+
+/// #463 SC-1: the select step `step`'s page `page` passes on the frame `frame` of `frame_owner`,
+/// and so does the page `other_page` of `page_owner`: `record_step_self_mismatch` with `reason`
+/// `select_page_passes_on_other_frame`, naming the select step, the frame and whose it is, and both
+/// pages and whose the other is.
+fn select_page_passes(
+    step: &PlanStep,
+    page: &str,
+    (frame, frame_owner): (&RecordedFrame, SelectPageOwner<'_>),
+    (other_page, page_owner): (&str, SelectPageOwner<'_>),
+) -> LabError {
+    let mut details = Map::new();
+    details.insert("step".to_string(), json!(step.number));
+    details.insert("record_index".to_string(), json!(step.step.index));
+    details.insert("frame_id".to_string(), json!(frame.frame_id));
+    details.insert("reason".to_string(), json!(PAGE_PASSES_ON_OTHER_FRAME));
+    details.insert("page".to_string(), json!(page));
+    details.insert("other_page".to_string(), json!(other_page));
+    page_owner.put("other", &mut details);
+    frame_owner.put("frame", &mut details);
+    with_details(
+        blocked(
+            "record_step_self_mismatch",
+            format!(
+                "the page {page} of the select of step {} passes on frame {} of {}, and so does \
+                 the page {other_page} of {}: the run's select confirms that one page of the \
+                 package alone is on its screen, and on such a screen it would see two",
+                step.step.index,
+                frame.frame_id,
+                frame_owner.named(),
+                page_owner.named()
+            ),
+        ),
+        Value::Object(details),
+    )
+}
+
+/// #463 SC-1, self-check item 8 the other way round (`contracts/lab-recording.md`, "Self-checks"):
+/// the page of the select step `step`, with `evaluation` (the evaluator of item 4), on every live
+/// frame of the recording but the step's own: every other step's, every page transition's (the
+/// step's own among them) and every ending's, in the package's order. The run's select confirms on
+/// a fresh frame that exactly one page of the whole package is recognised there; so on a frame the
+/// step's page matches, each other page of the package that matches there too (another step's, a
+/// page transition's, an ending's) is a failure `failures` meets
+/// ([`select_page_passes`]; the select step, that frame, its page), and under `record ready` the
+/// next is judged. A page the evaluation cannot decide there (OCR without a model; item 8 calls
+/// this with a model only) is no failure.
+fn select_page_elsewhere(
+    plan: &Plan,
+    step: &PlanStep,
+    evaluation: &Evaluation<'_>,
+    cache: &FrameCache,
+    failures: &mut Failures,
+) -> LabResult<()> {
+    let page = step.page_id()?;
+    let index = step.step.index;
+    // A page transition's page and an ending's forbid nothing.
+    let none: &[String] = &[];
+    let mut pages = Vec::new();
+    let mut frames = Vec::new();
+    for other in &plan.steps {
+        let own = SelectPageOwner::Step {
+            step: other,
+            transition: false,
+        };
+        let transition = SelectPageOwner::Step {
+            step: other,
+            transition: true,
+        };
+        if other.step.index != index {
+            if let Some(other_page) = &other.page {
+                pages.push((
+                    other_page.as_str(),
+                    other.required.as_slice(),
+                    other.forbidden.as_slice(),
+                    own,
+                ));
+            }
+            frames.extend(other.live_frames().into_iter().map(|frame| (frame, own)));
+        }
+        if let Some(transition_page) = &other.transition_page {
+            pages.push((
+                transition_page.as_str(),
+                other.transition_required.as_slice(),
+                none,
+                transition,
+            ));
+        }
+        frames.extend(
+            other
+                .transition_live_frames()
+                .into_iter()
+                .map(|frame| (frame, transition)),
+        );
+    }
+    for ending in &plan.endings {
+        let owner = SelectPageOwner::Ending(ending);
+        pages.push((
+            ending.page.as_str(),
+            ending.required.as_slice(),
+            none,
+            owner,
+        ));
+        frames.extend(ending.live_frames().into_iter().map(|frame| (frame, owner)));
+    }
+    for (frame, frame_owner) in frames {
+        let scene = &cached(cache, frame)?.scene;
+        if evaluation
+            .page(scene, &step.required, &step.forbidden)?
+            .verdict
+            != PageVerdict::Match
+        {
+            continue;
+        }
+        for &(other_page, required, forbidden, page_owner) in &pages {
+            if evaluation.page(scene, required, forbidden)?.verdict == PageVerdict::Match {
+                failures.fail(
+                    Locus::on_step(step).with_frame(frame).with_page(page),
+                    select_page_passes(step, page, (frame, frame_owner), (other_page, page_owner)),
+                )?;
+            }
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -117,9 +117,11 @@ actingcommand_contract::outcome_codes! {
         RecordCaseFailed => "record_case_failed": error / none,
         /// Warning. #463 S2-10, the coordinator's ruling after the first round (R2's ruling 4 as
         /// precedent): a regression case's page is recognised on its scene, but so is another page
-        /// of the package, which a linear run never asks; the case is written without
-        /// `expect.observe`, every target its page requires passing and (fix round 3) every target
-        /// it forbids failing. `record stop` and `record ready` name it, with the other pages.
+        /// of the package, which a press step of a linear run does not ask (#463 SC-1: a select
+        /// step's confirmation does, and `record stop` refuses that before the cases); the case is
+        /// written without `expect.observe`, every target its page requires passing and (fix round
+        /// 3) every target it forbids failing. `record stop` and `record ready` name it, with the
+        /// other pages.
         RecordCasePageAmbiguous => "record_case_page_ambiguous": warning / none,
         /// Warning. #463 S2-10: the page a regression case `record stop` wrote expects is also a
         /// page the bare canvas answers, the canvas with no patch at all, so the case proves
