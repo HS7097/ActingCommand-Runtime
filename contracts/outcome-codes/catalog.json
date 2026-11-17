@@ -1619,7 +1619,7 @@
     },
     "skip_reason": {
       "type": "vocab:emulator_autostart_skip_reason",
-      "description": "Why no autostart claim was requested for an instance where one would otherwise have been (WATCH-P, since 0.12.32: the emulator watch's restart or recognition; PAUSE-AUTO, since 0.12.34: the configured start at daemon start and IDLE-1's wake after stop_emulator, or why such a claim ended on its key without a Start; Workflow #429 R-7a registers player_held, R-7b first records it)."
+      "description": "Why no autostart claim was requested for an instance where one would otherwise have been (WATCH-P, since 0.12.32: the emulator watch's restart or recognition; PAUSE-AUTO, since 0.12.34: the configured start at daemon start and IDLE-1's wake after stop_emulator, or why such a claim ended on its key without a Start; Workflow #429 R-7a registers player_held, R-7b first records it; #480 PG-1, since 0.12.72: global_paused, the global pause)."
     },
     "duplicate_count": {
       "type": "integer",
@@ -6827,6 +6827,9 @@
         },
         "player_held": {
           "description": "The instance's player hold holds it, in any phase (Workflow #429 R-7a; R-7b first answers it): first before the instance's own pause (R-7a section 2.6). Recorded once per reason and revision."
+        },
+        "global_paused": {
+          "description": "The global scheduling pause holds it, a restored one included, and the instance carries no pause of its own (#480 PG-1, since 0.12.72; the owner's requirement on board #480: after pause all the Runtime starts no emulator by itself): the watch neither restarts nor recognizes it, neither the configured start at daemon start nor IDLE-1's wake after stop_emulator starts its emulator, and a claim of any of them requested before the pause ends on its key without a Start (the watch's taking no place in its bound, an idle wake's owed again). Recorded once per global pause revision, start and instance. Where the instance's own pause holds it too, instance_paused is recorded instead."
         },
         "start_emulator_off": {
           "description": "The instance's start_emulator in effect is off (#429 R-3, since 0.12.39): an autostart claim requested while it was on (the daemon start's, an IDLE-1 wake's, the emulator watch's restart) met it off on its key and released the key without a Start (the watch's request taking no place in its bound), or IDLE-1's wake after stop_emulator found it off and requested no claim: the wake ends without a Start and the instance is no longer kept closed. Recorded once per claim or wake."

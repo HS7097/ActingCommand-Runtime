@@ -1279,7 +1279,7 @@ tests = [
 ]
 incident = ["STORE-FG-2"]
 
-# Workflow #369 S6c (model-369-queue v3.1 §7 row 8, H-5; wave 13 coordinator ruling 6): the configured emulator start at daemon start is one autostart claim per stopped configured instance, held from the enqueue (status lease_active); it reads the operating system's connectivity status at once and every 5 s, starts once internet access is reported (network_ready with the wait) or at once on an unknown status (one network_status_unknown line), and after 600 s without internet access refuses the start with command.received, command.rejected and runtime.failed emulator_autostart_network_unready and releases its key, which never lapses while it waits; under a restored pause it is granted at once and starts (merge ledger :303; emu-watch, Alice's ruling 35: a pause never holds the emulator start), and a pause during the wait does not make it yield; an operator emulator control waiting on the instance supersedes it with no failure pair; a failed preparation after its start hands its key to the ladder by one transfer; two configured instances start in configuration order and the waiting claim renews its key; an emulator control whose provider step fails cancels the queued startup claim as a stop does (merge ledger :529, coordinator ruling on review #716 item 1)
+# Workflow #369 S6c (model-369-queue v3.1 §7 row 8, H-5; wave 13 coordinator ruling 6): the configured emulator start at daemon start is one autostart claim per stopped configured instance, held from the enqueue (status lease_active); it reads the operating system's connectivity status at once and every 5 s, starts once internet access is reported (network_ready with the wait) or at once on an unknown status (one network_status_unknown line), and after 600 s without internet access refuses the start with command.received, command.rejected and runtime.failed emulator_autostart_network_unready and releases its key, which never lapses while it waits (#480 PG-1, 0.12.72, retired the two tests of the claim under a restored pause and of a pause during the wait, merge ledger :303 and emu-watch's ruling 35: the global pause now holds the start as the instance's own pause does, gate_480_pg1); an operator emulator control waiting on the instance supersedes it with no failure pair; a failed preparation after its start hands its key to the ladder by one transfer; two configured instances start in configuration order and the waiting claim renews its key; an emulator control whose provider step fails cancels the queued startup claim as a stop does (merge ledger :529, coordinator ruling on review #716 item 1)
 [[gate]]
 key = "86"
 coverage = "Y"
@@ -1288,8 +1288,6 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_369_s6c::s6c_2_no_internet_then_internet_after_two_reads_starts_the_emulator",
     "actingcommand-runtime-host::lib::tests::gate_369_s6c::s6c_3_an_unknown_status_starts_at_once_with_one_line",
     "actingcommand-runtime-host::lib::tests::gate_369_s6c::s6c_4_no_internet_for_600_s_refuses_the_start_with_the_failure_pair",
-    "actingcommand-runtime-host::lib::tests::gate_369_s6c::s6c_5_under_a_restored_pause_the_claim_is_granted_at_once_and_starts",
-    "actingcommand-runtime-host::lib::tests::gate_369_s6c::s6c_6_a_pause_during_the_wait_does_not_hold_the_start",
     "actingcommand-runtime-host::lib::tests::gate_369_s6c::s6c_7_a_cli_start_during_the_wait_supersedes_the_claim",
     "actingcommand-runtime-host::lib::tests::gate_369_s6c::s6c_8_a_failed_preparation_hands_the_key_to_the_ladder",
     "actingcommand-runtime-host::lib::tests::gate_369_s6c::s6c_9_two_instances_start_in_configuration_order_and_the_waiting_claim_renews",
@@ -4285,3 +4283,52 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_463_ch1::startup_package_run_records_admitted_content",
 ]
 incident = ["#463 CH-1"]
+
+# #480 PG-1 (0.12.72; register §1.468; brief rd-1118/brief-480-pg1-pause-holds-automatic-starts.md; board #480, the owner's requirement of 11-17; production v0.12.70 on 11-17: under the global pause the emulator watch restarted the one instance without a pause of its own, and the instance pause a person then pressed was lifted when the watch's restart, which held the instance through its readiness wait, ended): under the global pause a configured instance with no pause of its own found stopped at every poll, one poll more than the restart bound, gets no restart claim, no Start, no queued or used-up record and one emulator_autostart_skipped (skip_reason global_paused, watch_kind restart) for the revision, the polls going on; a pending instance read running gets no recognition claim and one skip with watch_kind recognize and stays pending; an instance bound to the reported port with no self-check fact (a Start that failed at its ADB baseline) gets no recognition claim and one skip with watch_kind recognize (1); a daemon start under a restored global pause requests no configured start for either of two stopped instances, counts none, and each records its skip once with neither watch_kind nor idle_action (2); a watch restart claim requested before the global pause, holding its key while it waits for the network, ends at its next tick with no command record and no failure pair, starts nothing, records one skip, a poll under the pause records no second, and after the global resume the next poll's restart is the first of its window (3); a stop_emulator wake due under the global pause queues no wake and no claim over two checks, records one skip (idle_action stop_emulator), keeps the instance closed owing its wake, and after the global resume the next check wakes it and its configured start starts the emulator (4); after the global resume the next poll restarts the stopped emulator as the first restart of the window, and a new global pause records its own skip once (5); an instance both pauses hold records instance_paused once, and after its own resume under the global pause the next poll records global_paused once (6); an instance pause requested while an autostart claim holds the instance through a Start that outlasts the pause's grace (its readiness wait ending timed out) waits for that claim beyond the grace, ends released once the claim has ended and answers success, nothing lifted, its one record of host.scheduling_pause naming the instance (7); an instance pause whose grace a client's lease outlasts fails with scheduling_pause_release_busy naming no holder and is lifted (8); test (9), the first round's bound on that wait, is retired by fix round 1 (its R4′ test in the row below)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_480_pg1::pg1_1_under_the_global_pause_the_watch_restarts_nothing_and_records_one_skip",
+    "actingcommand-runtime-host::lib::tests::gate_480_pg1::pg1_1_under_the_global_pause_the_watch_recognizes_no_pending_instance",
+    "actingcommand-runtime-host::lib::tests::gate_480_pg1::pg1_1_under_the_global_pause_the_watch_recognizes_no_unprepared_instance",
+    "actingcommand-runtime-host::lib::tests::gate_480_pg1::pg1_2_a_daemon_start_under_a_restored_global_pause_requests_no_configured_start",
+    "actingcommand-runtime-host::lib::tests::gate_480_pg1::pg1_3_a_watch_restart_requested_before_the_global_pause_ends_on_its_key_refunded",
+    "actingcommand-runtime-host::lib::tests::gate_480_pg1::pg1_4_an_idle_wake_under_the_global_pause_stays_owed_and_is_taken_up_after_the_resume",
+    "actingcommand-runtime-host::lib::tests::gate_480_pg1::pg1_5_after_the_global_resume_the_next_poll_restarts_the_stopped_emulator",
+    "actingcommand-runtime-host::lib::tests::gate_480_pg1::pg1_6_an_instance_both_pauses_hold_records_its_own_pause_then_the_global_one",
+    "actingcommand-runtime-host::lib::tests::gate_480_pg1::pg1_7_an_instance_pause_stands_while_an_automatic_start_outlasts_its_grace",
+    "actingcommand-runtime-host::lib::tests::gate_480_pg1::pg1_8_an_instance_pause_still_fails_and_is_lifted_when_a_clients_lease_outlasts_its_grace",
+]
+incident = ["#480", "PG-1"]
+
+# #480 PG-1 fix round 1 (0.12.72; register §1.468, "Fix round 1"; brief rd-1118/brief-480-pg1-fix1.md, the coordinator's R4′ and R4″: a person's pause is never lifted because of the Runtime's own automatic claim; review rd-1118/review-1816.md, its sequences 2 and 4): a restart claim queued behind a client's lease that took the key between the watch's check and the claim's request neither fails nor lifts an instance pause, which waits for the lease, and once the client lets go the claim ends at its first tick without a Start, one skip instance_paused, the pause answering success, released, one record of host.scheduling_pause naming the instance (4a); outside the multi-Nemu gate a restart claim queued on the free instance behind its taken admission guard, the lease sweep held, lets the pause's dedicated close lease close the instance's open session and the pause answer success, and then ends without a Start (4b); an autostart claim that holds the instance ten minutes past its key and the 30 s after it, the sweep held, is waited for check after check with the stage still paused and nothing lifted, and once it ends the pause answers success, released (R4′); a stop requested during that wait answers scheduling_pause_kept_at_shutdown, the pause still paused and its one record naming the instance, and the next start restores it released (R4″); pause all pressed after a restart claim's last status read stops its Start: no Start, no command record, one skip global_paused (5)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_480_pg1::pg1_fix1_4a_an_automatic_claim_queued_behind_a_holder_neither_fails_nor_lifts_the_pause",
+    "actingcommand-runtime-host::lib::tests::gate_480_pg1::pg1_fix1_4b_outside_the_multi_nemu_gate_the_close_lease_passes_a_queued_automatic_claim",
+    "actingcommand-runtime-host::lib::tests::gate_480_pg1::pg1_fix1_r4_an_instance_pause_waits_for_an_automatic_start_past_every_bound",
+    "actingcommand-runtime-host::lib::tests::gate_480_pg1::pg1_fix1_r4b_a_shutdown_during_that_wait_keeps_the_pause_for_the_next_start",
+    "actingcommand-runtime-host::lib::tests::gate_480_pg1::pg1_fix1_5_a_pause_pressed_during_the_last_status_read_stops_the_start",
+]
+incident = ["#480", "PG-1"]
+
+# #480 PG-1 fix round 2 (0.12.72; register §1.468, "Fix round 2"; brief rd-1118/brief-480-pg1-fix2.md, item 1; the second review rd-1118/review-1816-fix1.md, its first point: R4″ judged on the moment of the shutdown, not on the check before): an autostart claim holds the instance (its Start driven, its key kept) and an instance pause's hand-back meets it; before the next check the claim lets the key go, a client takes it and a stop is requested: the pause fails with scheduling_pause_release_interrupted and is lifted, the record that set it and the record without it (1); a restart claim waits queued behind a client's lease and the hand-back meets the client's lease; before the next check the client lets go, the queue grants the restart claim, which keeps its key, and a stop is requested: the pause answers scheduling_pause_kept_at_shutdown, stays paused, and its one record of host.scheduling_pause names the instance (2)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_480_pg1::pg1_fix2_r4b_a_client_that_took_the_key_from_the_automatic_claim_lifts_the_pause_at_shutdown",
+    "actingcommand-runtime-host::lib::tests::gate_480_pg1::pg1_fix2_r4b_an_automatic_claim_that_took_the_key_from_a_client_keeps_the_pause_at_shutdown",
+]
+incident = ["#480", "PG-1"]
+
+# #480 PG-1 fix round 3 (0.12.72; register §1.468, "Fix round 3"; brief rd-1118/brief-480-pg1-fix3.md, the coordinator's R4″ completed and the ruling that a start a pause stopped was never a command; the third review rd-1118/review-1816-fix2.md): a restart claim waits queued behind a client's lease and the hand-back meets the client's lease; before the next check the client lets go, the queue grants the claim, which meets the pause at its first tick and ends without a Start, and only then is a stop requested: nothing is in the way, so the pause answers success, released, its one record of host.scheduling_pause naming the instance, one skip instance_paused, and the next start restores it (1); a restart claim whose Start waits for the instance's admission guard, which the test holds after the claim's last status read, meets pause all pressed meanwhile once the guard is let go: no Start, no runtime.instance_bound, under the claim's request no command.received, command.rejected or runtime.failed, its key granted once and released, one skip global_paused (2); the same with a person's pause of the instance, whose hand-back waits for the guard too: the claim leaves the same with its skip instance_paused, and the pause answers success, released, its one record naming the instance (3); a recognition claim of a pending instance past its last ask, which waits for the guard the test took just before its preparation, meets pause all pressed meanwhile: nothing bound, the endpoint pending, no emulator control, no command record or runtime.failed under the claim, its key released, one skip with watch_kind recognize and global_paused (4)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_480_pg1::pg1_fix3_r4b_a_shutdown_that_finds_nothing_in_the_way_keeps_the_pause",
+    "actingcommand-runtime-host::lib::tests::gate_480_pg1::pg1_fix3_a_global_pause_while_the_start_waits_for_the_guard_leaves_no_command",
+    "actingcommand-runtime-host::lib::tests::gate_480_pg1::pg1_fix3_an_instance_pause_while_the_start_waits_for_the_guard_leaves_no_command",
+    "actingcommand-runtime-host::lib::tests::gate_480_pg1::pg1_fix3_a_global_pause_while_the_recognition_waits_for_the_guard_binds_nothing",
+]
+incident = ["#480", "PG-1"]

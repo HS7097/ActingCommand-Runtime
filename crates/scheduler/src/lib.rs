@@ -123,8 +123,13 @@ pub enum ClaimKind {
     /// silence holds it (`ClaimGate::Silenced`).
     StartupPackage,
     /// A configured emulator start: at daemon start, and (emu-watch) the emulator watch's start
-    /// of a configured emulator it found stopped. A scheduling pause never holds it (Alice's
-    /// ruling 35); Workflow #386 SR-4a3: a blackout does (`ClaimGate::Silenced`).
+    /// of a configured emulator it found stopped. A scheduling pause never holds it in the queue
+    /// (ruling 35); Workflow #386 SR-4a3: a blackout does (`ClaimGate::Silenced`). The emulator is
+    /// not started under a pause all the same: the host's claim asks the pause on its key and ends
+    /// there without a Start (PAUSE-AUTO since 0.12.34 for the instance's own pause, #480 PG-1
+    /// since 0.12.72 for the global pause), so a queued one whose member the caller names
+    /// ([`MemberGates::autostart_ends_at_grant`]) refuses no pause's hand-back and no dedicated
+    /// lease.
     Autostart,
     /// A direct task run (CLI, console, MCP).
     DirectTaskRun,
@@ -207,8 +212,8 @@ impl ClaimKind {
 
     /// Q-3 (4): a routine entry is skipped while a pause holds. Since #369 S6b that includes the
     /// startup claim (H-4, M6; `scheduling-pause.md`); since emu-watch (Alice's ruling 35) the
-    /// autostart claim is no routine entry: a pause holds only dispatches, never the emulator
-    /// start.
+    /// autostart claim is no routine entry: in the queue a pause holds only dispatches, never the
+    /// emulator start, whose claim the host ends on its key under a pause (see `Autostart`).
     pub const fn gated_by_pause(self) -> bool {
         matches!(self.class(), ClaimClass::Routine)
     }
@@ -344,6 +349,15 @@ impl ClaimGate {
 pub trait MemberGates {
     /// The routine gate of `member`.
     fn gate_of(&self, member: InstanceId) -> ClaimGate;
+
+    /// #480 PG-1 (`contracts/scheduling-pause.md`, "Instance pause: three stages", (c)): whether a
+    /// queued autostart claim of `member` ends at its grant without a Start, as the caller reads
+    /// it with the gate (a scheduling pause holds `member`: the host's claim asks the pause on its
+    /// key and ends there). Such an entry refuses neither a pause's hand-back nor a dedicated
+    /// lease, and a dedicated lease does not wait behind it. None by default.
+    fn autostart_ends_at_grant(&self, _member: InstanceId) -> bool {
+        false
+    }
 }
 
 impl MemberGates for ClaimGate {
@@ -355,6 +369,39 @@ impl MemberGates for ClaimGate {
 impl<F: Fn(InstanceId) -> ClaimGate> MemberGates for F {
     fn gate_of(&self, member: InstanceId) -> ClaimGate {
         self(member)
+    }
+}
+
+/// #480 PG-1: `gates`, with the word that the queued autostart claims of `member` end at their
+/// grant without a Start ([`MemberGates::autostart_ends_at_grant`]): a scheduling pause holds
+/// `member`, as the caller read it with the gates.
+#[derive(Debug, Clone, Copy)]
+pub struct AutostartEndsAtGrant<G> {
+    pub gates: G,
+    pub member: InstanceId,
+}
+
+impl<G: MemberGates> MemberGates for AutostartEndsAtGrant<G> {
+    fn gate_of(&self, member: InstanceId) -> ClaimGate {
+        self.gates.gate_of(member)
+    }
+
+    fn autostart_ends_at_grant(&self, member: InstanceId) -> bool {
+        member == self.member
+    }
+}
+
+/// #480 PG-1: the queue a dedicated lease would jump, as [`ClaimGate::Open`] sees it, less the
+/// entries whose claim the caller says ends at its grant.
+struct DedicatedLeaseGate<'a>(&'a dyn MemberGates);
+
+impl MemberGates for DedicatedLeaseGate<'_> {
+    fn gate_of(&self, _member: InstanceId) -> ClaimGate {
+        ClaimGate::Open
+    }
+
+    fn autostart_ends_at_grant(&self, member: InstanceId) -> bool {
+        self.0.autostart_ends_at_grant(member)
     }
 }
 
@@ -666,6 +713,21 @@ impl QueueEntry {
     fn eligible(&self, gate: &dyn MemberGates, now_monotonic_ms: u64) -> bool {
         self.deadline_monotonic_ms > now_monotonic_ms
             && !gate.gate_of(self.instance_id).holds(self.kind)
+    }
+
+    /// #480 PG-1: an autostart entry whose claim the caller says ends at its grant without a
+    /// Start ([`MemberGates::autostart_ends_at_grant`]).
+    fn ends_at_grant(&self, gate: &dyn MemberGates) -> bool {
+        self.kind == ClaimKind::Autostart && gate.autostart_ends_at_grant(self.instance_id)
+    }
+
+    /// Workflow #369 §5.1 (review M-2): an entry that refuses a pause's hand-back or a dedicated
+    /// lease: one `gate` lets through, but the holding ladder's own continuation and (#480 PG-1)
+    /// an autostart entry that ends at its grant.
+    fn refuses_hand_back(&self, gate: &dyn MemberGates, now_monotonic_ms: u64) -> bool {
+        self.eligible(gate, now_monotonic_ms)
+            && !self.kind.holder_owned()
+            && !self.ends_at_grant(gate)
     }
 
     /// C3, Q-7, Workflow #437 MAPP-1: whether this entry asks the holder `lease` for a
@@ -1192,7 +1254,9 @@ impl SeedScheduler {
 
     /// [`Self::prepare_resource_close`] for a dedicated lease of `kind` (Workflow #369 Q-2).
     /// Workflow #369 §5.1 (review M-2): only an entry that `gate` lets through refuses it
-    /// (`TransferNotSafe`); a routine entry the pause holds back waits for the device.
+    /// (`TransferNotSafe`); a routine entry the pause holds back waits for the device. #480 PG-1:
+    /// an autostart entry whose member `gate` says its claim ends at its grant neither refuses it
+    /// nor is an entry ahead of it (`QueueAhead`): it is granted after the lease, in its place.
     #[allow(clippy::too_many_arguments)]
     pub fn prepare_dedicated_lease(
         &mut self,
@@ -1218,7 +1282,7 @@ impl SeedScheduler {
                 lease_ttl_ms,
                 kind,
             },
-            &ClaimGate::Open,
+            &DedicatedLeaseGate(&gate),
             now_monotonic_ms,
         )?;
         match &mut preparation {
@@ -1325,7 +1389,7 @@ impl SeedScheduler {
                     expires_at_monotonic_ms: lease.token.expires_at_monotonic_ms(),
                 });
             }
-            if let Some(ahead) = first_eligible(state, gate, now_monotonic_ms) {
+            if let Some(ahead) = first_ahead(state, gate, now_monotonic_ms) {
                 return Err(queue_ahead(state, ahead));
             }
             // Workflow #369 Q-3 (4) (S6c): while a pause holds the gate, a routine claim that
@@ -1786,9 +1850,11 @@ impl SeedScheduler {
 
     /// Workflow #369 §5.1 (review M-2): the entries on `instance_id` that refuse a pause release
     /// or a dedicated lease: those `gate` lets through, except the holding ladder's own
-    /// continuation (its ladder is the holder that the release already waits for). Workflow
-    /// #437 MAPP-1: on its device, whichever member each serves (a dedicated lease takes the
-    /// device); a pause of one member counts its own with [`Self::member_refusing_count`].
+    /// continuation (its ladder is the holder that the release already waits for) and (#480
+    /// PG-1) an autostart entry whose member `gate` says its claim ends at its grant
+    /// ([`MemberGates::autostart_ends_at_grant`]). Workflow #437 MAPP-1: on its device, whichever
+    /// member each serves (a dedicated lease takes the device); a pause of one member counts its
+    /// own with [`Self::member_refusing_count`].
     pub fn refusing_count(
         &self,
         instance_id: InstanceId,
@@ -1810,9 +1876,7 @@ impl SeedScheduler {
                 state
                     .queue
                     .iter()
-                    .filter(|entry| {
-                        entry.eligible(gate, now_monotonic_ms) && !entry.kind.holder_owned()
-                    })
+                    .filter(|entry| entry.refuses_hand_back(gate, now_monotonic_ms))
                     .count()
             })
     }
@@ -1836,8 +1900,7 @@ impl SeedScheduler {
                     .iter()
                     .filter(|entry| {
                         entry.instance_id == instance_id
-                            && entry.eligible(&gate, now_monotonic_ms)
-                            && !entry.kind.holder_owned()
+                            && entry.refuses_hand_back(&gate, now_monotonic_ms)
                     })
                     .count()
             })
@@ -3156,6 +3219,20 @@ fn first_eligible(
         .queue
         .iter()
         .position(|entry| entry.eligible(gate, now_monotonic_ms))
+}
+
+/// Q-3 (5): the entry an immediate try would jump: the first eligible one, but (#480 PG-1) an
+/// autostart entry whose claim the caller says ends at its grant
+/// ([`MemberGates::autostart_ends_at_grant`]; a dedicated lease's, else none).
+fn first_ahead(
+    state: &InstanceState,
+    gate: &dyn MemberGates,
+    now_monotonic_ms: u64,
+) -> Option<usize> {
+    state
+        .queue
+        .iter()
+        .position(|entry| entry.eligible(gate, now_monotonic_ms) && !entry.ends_at_grant(gate))
 }
 
 /// Q-3 (5): the refusal of an immediate try that would jump the entry at `position`.
