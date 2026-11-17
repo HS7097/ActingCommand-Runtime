@@ -114,7 +114,10 @@
 //!   a warning that names another package of the root than the adopted one, by the one rule a
 //!   readiness row's warnings are read by (`standard_pack_ready::with_packs_named`), is counted by
 //!   its code in `other_packages_warnings`; every other warning (of the adopted package, or of no
-//!   package) is answered whole in `warnings`. No check changes.
+//!   package) is answered whole in `warnings`. No check changes. Fix round 1: when the check
+//!   tree's game root cannot be read again for it, the adoption is not refused, as the readiness
+//!   is not by the same failure: every warning is answered whole, `other_packages_warnings` is
+//!   absent and the warning `adopt_warnings_not_split` says why.
 
 use crate::codes::{AdoptCasesState, AdoptProblem, ResourceToolingCode};
 use crate::package_directory::PACK_DEADLINE;
@@ -845,11 +848,14 @@ pub struct StandardPackAdoptResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub value_not_judged: Option<ValueNotJudged>,
     /// Every warning of the check, the game's included, each once. Workflow #463 AD-1: but each
-    /// that names another package of the root, counted in `other_packages_warnings` instead.
+    /// that names another package of the root, counted in `other_packages_warnings` instead. Fix
+    /// round 1: every one, then `adopt_warnings_not_split`, when the root could not be read again
+    /// to tell which package each names.
     pub warnings: Vec<Outcome>,
     /// Workflow #463 AD-1: the warnings of the check that name another package of the root than
-    /// the adopted one, counted by code.
-    pub other_packages_warnings: OtherPackagesWarnings,
+    /// the adopted one, counted by code. Fix round 1: absent beside `adopt_warnings_not_split`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub other_packages_warnings: Option<OtherPackagesWarnings>,
     /// What it wrote in the repository, relative to it, in order; empty under `--dry-run`.
     pub written: Vec<String>,
     /// Under `--dry-run`: what it would write.
@@ -1427,10 +1433,24 @@ pub fn standard_pack_adopt(
     }
     // Workflow #463 AD-1: each warning with the pack of the check tree's game root it names, by
     // the one rule a readiness row's warnings are read by; those that name another package are
-    // counted by code, every other one is answered whole.
-    let named = with_packs_named(&check.installed, &root.game, &warnings)
-        .map_err(|error| composed(error, &check.tree))?;
-    let (answered_warnings, other_packages_warnings) = of_the_package(named, &package_id);
+    // counted by code, every other one is answered whole. Fix round 1: a root that cannot be read
+    // again for it refuses nothing, as the readiness's own reading of it does not: every warning is
+    // answered whole, then `adopt_warnings_not_split` with that refusal as its cause, and no count.
+    let (answered_warnings, other_packages_warnings) =
+        match with_packs_named(&check.installed, &root.game, &warnings) {
+            Ok(named) => {
+                let (whole, others) = of_the_package(named, &package_id);
+                (whole, Some(others))
+            }
+            Err(error) => {
+                warnings.push(
+                    Outcome::new(ResourceToolingCode::AdoptWarningsNotSplit)
+                        .path(&check.installed)
+                        .caused_by(cause_of(&error)),
+                );
+                (warnings, None)
+            }
+        };
 
     // What it writes, in the order it renames it into place.
     let mut changed = vec![pack_relative.clone()];

@@ -33,7 +33,7 @@ check and writes nothing in the checkout ("`--dry-run`" below).
 | Input | What it is |
 |---|---|
 | `--repo` | The game's working root in the source layout: `applications.json` (its game and servers), `maintenance.json` (a list, `[]` when none), `packs/` (one directory per package) and the root files the repository holds (`schedule.json`, `pages.json`, `navigation.json`, `interrupts.json`, `display-layout.json`, `loading.json`, `goals.json`, `notices/`). |
-| `--record-id` | A stopped recording of the state directory, `<state>/record-artifacts/<record>/lab/`: its `recording.json` and the package its last stop generated, `out/<package_id>.<zip or json>`; Workflow #463 AC-1: and the regression cases that stop wrote beside it, `out/<package_id>.cases/` ("The cases"). |
+| `--record-id` | A stopped recording of the recordings' directory (Workflow #463 AD-1: `--session-state-dir`, or the state directory without it; "The recordings' directory"), `<recordings>/record-artifacts/<record>/lab/`: its `recording.json` and the package its last stop generated, `out/<package_id>.<zip or json>`; Workflow #463 AC-1: and the regression cases that stop wrote beside it, `out/<package_id>.cases/` ("The cases"). |
 | `--package` | Any package instead: a content directory, a `.zip` or a `.json` container; it carries no regression case. |
 | `--decide` | The decision document ("The decision document" below); a first adoption needs it or `--held-reason`. |
 | `--held-reason` | The decision of the class `held` without a document: its reason ("A held decision by two flags" below). Not with `--decide`. |
@@ -550,7 +550,8 @@ recording"), `rule`, `held` and
 `warnings` (every warning of the check, the game's included, each once, then adoption's own two,
 below, and, Workflow #463 AC-1 fix round 1, `adopt_cases_left`, "The cases"; Workflow #463 AD-1:
 but each that names another package of the root), `other_packages_warnings` (Workflow #463 AD-1:
-those, counted by code, "The warnings of other packages"), `written` (in the order it was renamed into place), `would_write`, `kept`, `check_tree`,
+those, counted by code, "The warnings of other packages"; fix round 1: absent beside
+`adopt_warnings_not_split`), `written` (in the order it was renamed into place), `would_write`, `kept`, `check_tree`,
 `readiness` or `readiness_not_judged` (below), `next` (each item `{path}`; Workflow #463 S3-12:
 `ours/model/bindings.json` with `fixed_value` too, below) and (Workflow #463 AC-1) `cases` ("The
 cases").
@@ -822,6 +823,14 @@ What the state directory is to each part:
   `argument_problem` `conflicting`, as `--held-reference` without `--held-reason` is.
 - `standard-pack status` and `standard-pack trial` find no recording by its id (their state
   directory is where the trial records are read and written) and are not changed.
+- Fix round 1 (the trial's records, older than this slice): `review.trial` is read from the trial
+  records under the state directory adoption is given, `<state>/trials/<package_id>/`, and
+  `standard-pack trial` writes its record under its own `--state-dir`, actinglab's session
+  directory when none is given. So where adoption is given a `--state-dir` of its own (one on the
+  checkout's volume, beside `--session-state-dir`), `standard-pack trial` and `standard-pack
+  status` of the package are given that same `--state-dir`: a trial recorded under another
+  directory is not read there, and the adoption answers `review.trial` `none` and warns
+  `not_tried` for a package that was tried. Where a record is read or written is not changed.
 - The advice of `replace_across_volumes`, and of the steps after an interrupted call, names
   `--session-state-dir` beside `--package`.
 
@@ -839,11 +848,27 @@ past which an agent read to find its own package's.
   package of the root (a root-level finding; a rule's warning that names only its `task_id`),
   adoption's own warnings among them.
 - `other_packages_warnings` `{total, counts}` holds those that name another package: `counts` how
-  many there are of each code, by the code, and `total` how many in all. None is dropped. The check
-  tree is kept until the next call on the checkout, and `standard-pack check --root` on its
-  `installed/<game>/` lists the check's warnings whole.
+  many there are of each code, by the code, and `total` how many in all. None is dropped. The
+  check tree is kept until the next call on the checkout. Its warnings are of two commands ("The
+  checks"): `standard-pack check --root` on its `installed/<game>/` lists whole the warnings of
+  that check; packaging's own warnings, which `package bundle` answers as it lays the bundle out
+  and which `standard-pack check` does not list again (`recognition_pack_undeclared` among them),
+  are answered whole in the `warnings` of `package bundle` (`actinglab package bundle`) of the
+  checkout's packs and root files as the check tree lays them out.
 - `--dry-run` answers the same two members. No check changes: what refused before refuses, and
   what warned before is answered whole or counted.
+- Fix round 1 (the coordinator's ruling after the independent review): the reading of the check
+  tree's game root that tells which package each warning names is the readiness's own reading of
+  it, after every check passed. When it refuses, the adoption is not refused, as the readiness is
+  not by the same failure ("The adopted pack's readiness", `readiness_not_judged`): every warning
+  is answered whole in `warnings`, in its order, then one more, `adopt_warnings_not_split` (`path`
+  that `installed/<game>/`, the reader's refusal as its cause), and `other_packages_warnings` is
+  absent. The adoption writes, or under `--dry-run` validates, as without it.
 
-No code or word is added: `other_packages_warnings`, `total` and `counts` are members of the
-answer.
+`other_packages_warnings`, `total` and `counts` are members of the answer. Fix round 1 adds one
+code, a warning: `adopt_warnings_not_split` (resource-tooling, `path`), which refuses nothing (exit
+0 on actinglab's line, in `warnings`). The readiness's word for what it did not judge is not taken
+for it: the readiness says it in a member of its own (`readiness_not_judged`) and in
+`package_readiness_unjudged`, an information of a readiness item of a pack, neither a warning of the
+adoption's answer about its warnings. No decision reads a code by name: the warnings are split, or
+not, by whether that reading answered.

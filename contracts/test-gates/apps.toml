@@ -2661,3 +2661,11 @@ tests = [
     "actingcommand-actinglab::bin:actinglab::tests::gate_463_ad1::ad1_the_option_beside_package_is_refused_before_anything_is_read",
 ]
 incident = ["#463 AD-1"]
+
+# #463 AD-1 fix round 1 (0.12.72; register §1.464, "Fix round 1"; brief rd-1118/brief-463-ad1-fix1.md; contracts/standard-pack-authoring.md, "The warnings of other packages"): a recording adopted by record id into a checkout of three held packages with a warning each, through a worktree whose Lab runs the cases as actinglab's does and then makes the check tree's installed/<game>/bundle.json unreadable, as another writer would: the adoption is not refused, the three warnings are in warnings whole, adopt_warnings_not_split last with path that root and the reader's refusal standard_pack_root_invalid as its cause, no other_packages_warnings, the pack written. Test (1) of the block above, adapted in what it holds: its --replace goes through a worktree whose rename refuses any path under the recordings' directory and keeps every rename asked of it; none touched that directory, and the old pack directory and the old cases reached the state directory by those renames
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::tests::gate_463_ad1::ad1_fix1_a_root_that_cannot_be_read_again_answers_every_warning_whole",
+]
+incident = ["#463 AD-1"]

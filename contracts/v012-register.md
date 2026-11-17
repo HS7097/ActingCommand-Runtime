@@ -37142,7 +37142,52 @@ their order; the answer's other members; adoption by `--package`; `record stop`'
 
 **At deploy.** Nothing to configure. An agent on a machine whose recordings and checkout lie on two
 volumes adopts by `--record-id <id> --session-state-dir <the recordings' directory> --state-dir
-<a directory on the checkout's volume>`, and `--replace` works there.
+<a directory on the checkout's volume>`, and `--replace` works there. It gives `standard-pack trial`
+and `standard-pack status` of the package that same `--state-dir` (fix round 1): adoption reads
+`review.trial` from the trial records under its `--state-dir`, and a trial recorded under another
+directory (actinglab's session directory, the trial's default) is not read there, so the adoption
+would answer `review.trial` `none` and warn `not_tried` for a package that was tried.
+
+**Fix round 1** (coordinator work order `rd-1118/brief-463-ad1-fix1.md`, after the independent
+review `rd-1118/review-1813.md` on `17017461`, the coordinator's rulings; main `f0c64ae8`, the
+release commit of 0.12.71, merged).
+
+- *The texts that did not follow.* The contract's row of `--record-id` names the recordings'
+  directory; the table's note of `state_dir` names what it holds (the check tree, the kept copies,
+  the trial records) and that the recording is read there only without `session_state_dir`; the
+  advice of `replace_across_volumes` in the catalogue (`adopt_refused`'s description and the word's
+  own in the header) names `--session-state-dir` beside `--package`. The outcome-code index is
+  regenerated.
+- *The trial's records* (older than this slice; words only). The contract ("The recordings'
+  directory") and "At deploy" above say that `standard-pack trial` and `standard-pack status` are
+  given the same `--state-dir` as the adoption. Where a record is read or written is not changed.
+- *The reading that splits the warnings refuses nothing.* `with_packs_named` (the readiness's own
+  `read_root` of the check tree's `installed/<game>/`) refusing, after every check passed, no
+  longer refuses the adoption, as the readiness's own refusal does not (`readiness_not_judged`):
+  every warning is answered whole, in its order, then the new warning `adopt_warnings_not_split`
+  (`path` that root, the reader's refusal as its cause), and `other_packages_warnings` (now
+  optional) is absent. The readiness's word for what it did not judge is not taken: it is a member
+  of its own answer and `package_readiness_unjudged`, an information about a readiness item.
+- *What `standard-pack check` lists.* The contract says which command answers which warnings of the
+  check tree: `standard-pack check` on `installed/<game>/` its own, `package bundle` packaging's own
+  (`recognition_pack_undeclared` among them), which `check` does not list again.
+
+| Word | What it says | Refuses or warns | Exit (own line; `--via`; MCP) |
+|---|---|---|---|
+| `adopt_warnings_not_split` (resource-tooling, `path`) | the check tree's game root could not be read again to tell which package each warning names: every warning whole, `other_packages_warnings` absent | warns | 0; 0; the answer's `warnings` |
+
+No decision reads a code by name: the warnings are split, or not, by whether that reading answered.
+**Tests** (`gate_463_ad1.rs`, apps gate map "#463 AD-1 fix round 1"):
+`ad1_fix1_a_root_that_cannot_be_read_again_answers_every_warning_whole`: a recording adopted by
+record id into a checkout of three held packages with a warning each, by a worktree whose Lab runs
+the cases as actinglab's does and then makes the check tree's `bundle.json` unreadable, as another
+writer would: adopted, the three warnings whole in `warnings`, `adopt_warnings_not_split` last with
+its `path` and its cause `standard_pack_root_invalid`, no `other_packages_warnings`. Adapted, in
+what it holds and not in what it asserts of the answer: test 1's `--replace` goes through a
+worktree whose `rename` refuses any path under the recordings' directory and keeps every rename it
+was asked for; the test asserts that none touched that directory and that the old pack directory
+and the old cases were moved by it into the state directory. No golden changes; no test leaves a
+gate map.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

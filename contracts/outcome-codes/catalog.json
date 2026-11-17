@@ -10436,7 +10436,7 @@
           "description": "schedule.json or maintenance.json must change and is not in the canonical form package fmt writes."
         },
         "replace_across_volumes": {
-          "description": "With --replace, the replaced pack directory's kept place under the state directory lies on another volume than the checkout, where it cannot be moved, or the volume cannot be told; a --state-dir on the checkout's volume is given instead (and a recording's package by --package). Workflow #463 AC-1 (since 0.12.71): so does the kept place of the earlier cases of the package (entry the first of them)."
+          "description": "With --replace, the replaced pack directory's kept place under the state directory lies on another volume than the checkout, where it cannot be moved, or the volume cannot be told; a --state-dir on the checkout's volume is given instead (and a recording's own directory by --session-state-dir, which adopt only reads, Workflow #463 AD-1 since 0.12.72, or its package by --package). Workflow #463 AC-1 (since 0.12.71): so does the kept place of the earlier cases of the package (entry the first of them)."
         },
         "check_tree_unmarked": {
           "description": "The place of the checkout's check tree under the state directory holds no marker the tool wrote, so it is not the tool's own scratch and nothing in it is touched."

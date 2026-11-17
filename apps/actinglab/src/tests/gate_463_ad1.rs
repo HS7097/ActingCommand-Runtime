@@ -29,6 +29,16 @@
 //   beside `--package` is `validation_failed`, exit 2, naming it, `argument_problem`
 //   `conflicting`, as `--held-reference` without `--held-reason` is; none of the paths the line
 //   names is made.
+// Fix round 1 (coordinator work order rd-1118/brief-463-ad1-fix1.md):
+// - the first test's `--replace` goes through a worktree whose `rename` refuses any path under the
+//   recordings' directory and keeps every rename asked of it: none touched that directory, and the
+//   old pack directory and the old cases reached the state directory by those renames;
+// - `ad1_fix1_a_root_that_cannot_be_read_again_answers_every_warning_whole`: a recording adopted by
+//   record id into a checkout of three held packages with a warning each, by a worktree whose Lab
+//   runs the cases as actinglab's does and then makes the check tree's `bundle.json` unreadable, as
+//   another writer would: the adoption is not refused; the three warnings are in `warnings` whole,
+//   `adopt_warnings_not_split` last, naming the check tree's game root with the reader's refusal
+//   `standard_pack_root_invalid` as its cause; no `other_packages_warnings`; the pack written.
 // No Runtime (the state root's variable names a folder that does not exist), no device, no clock,
 // no sleep: made-up recordings, checkouts and values.
 
@@ -36,19 +46,22 @@ use super::env_lock;
 use super::gate_434_lab5b4::{Isolated, printed};
 use crate::cli_module::own_line;
 use crate::standard_pack_cli::LabAdoption;
-use actingcommand_contract::canonical_json_bytes;
 use actingcommand_contract::outcome::Outcome;
+use actingcommand_contract::{LabResult, canonical_json_bytes};
 use actingcommand_device::{CaptureBackendName, Frame, PixelFormat};
 use actingcommand_lab::{
     AttachFrameRequest, ClickEffect, CommitClickRequest, OpaqueJson, PlanClickRequest, RecordRect,
     RecordingLock, record_attach_frame, record_commit_click, record_plan_click,
 };
 use actingcommand_resource_tooling::{
-    AdoptLab, AdoptSource, AdoptWorktree, StandardPackAdoptRequest, standard_pack_adopt,
+    AdoptCaseAt, AdoptCasesRun, AdoptDecision, AdoptLab, AdoptSource, AdoptWorktree, ReadyRefused,
+    RecordingReady, StandardPackAdoptRequest, standard_pack_adopt,
 };
 use serde_json::{Value, json};
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 
 const INSTANCE: &str = "neutral.a";
@@ -86,18 +99,98 @@ const OTHERS: [&str; 3] = [
 const ADOPTED: &str = "neutral.test.adopted";
 const REMEDY_INVALID: &str = "package_bundle_remedy_invalid";
 const UNPROVIDED: &str = "capability_nobody_provides";
+/// Fix round 1: the warning of an adoption whose warnings were not split.
+const NOT_SPLIT: &str = "adopt_warnings_not_split";
 
 /// The version control of a checkout whose every change is committed, and the Lab's own parts as
-/// actinglab gives them to adoption.
-struct Committed;
+/// actinglab gives them to adoption. Fix round 1: every rename adoption asks of it is kept, in
+/// order, and one from or to a path under `recordings`, the recordings' directory, is refused, so
+/// that the adoption fails if a rename of it touches that directory.
+struct Committed {
+    recordings: PathBuf,
+    renames: RefCell<Vec<(PathBuf, PathBuf)>>,
+}
+
+impl Committed {
+    /// The worktree that guards the recordings' directory `recordings`.
+    fn guarding(recordings: &str) -> Self {
+        Self {
+            recordings: PathBuf::from(recordings),
+            renames: RefCell::new(Vec::new()),
+        }
+    }
+
+    /// Whether the rename of `from` to `to` touches the recordings' directory.
+    fn touches(&self, from: &Path, to: &Path) -> bool {
+        from.starts_with(&self.recordings) || to.starts_with(&self.recordings)
+    }
+}
 
 impl AdoptWorktree for Committed {
     fn changes_under(&self, _repo: &Path, _relative: &str) -> Result<Vec<String>, Outcome> {
         Ok(Vec::new())
     }
 
+    fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
+        self.renames
+            .borrow_mut()
+            .push((from.to_path_buf(), to.to_path_buf()));
+        if self.touches(from, to) {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!(
+                    "a rename touches the recordings' directory: {} to {}",
+                    from.display(),
+                    to.display()
+                ),
+            ));
+        }
+        fs::rename(from, to)
+    }
+
     fn lab(&self) -> &dyn AdoptLab {
         &LabAdoption
+    }
+}
+
+/// Fix round 1: a checkout whose every change is committed and the Lab's own parts, but its run of
+/// the cases then makes the check tree's `installed/<game>/bundle.json` unreadable, as another
+/// writer would between the check of the tree and the reading of its game root that tells which
+/// package each warning names.
+struct Spoiling;
+
+impl AdoptWorktree for Spoiling {
+    fn changes_under(&self, _repo: &Path, _relative: &str) -> Result<Vec<String>, Outcome> {
+        Ok(Vec::new())
+    }
+
+    fn lab(&self) -> &dyn AdoptLab {
+        self
+    }
+}
+
+impl AdoptLab for Spoiling {
+    fn recording_ready(
+        &self,
+        state_dir: &Path,
+        record_id: &str,
+    ) -> Result<RecordingReady, ReadyRefused> {
+        LabAdoption.recording_ready(state_dir, record_id)
+    }
+
+    fn run_cases(&self, package_dir: &Path, cases: &[AdoptCaseAt]) -> LabResult<AdoptCasesRun> {
+        let ran = LabAdoption.run_cases(package_dir, cases);
+        // The package is run in `<check tree>/packs-root/<package_id>`.
+        let check_tree = package_dir
+            .parent()
+            .and_then(Path::parent)
+            .expect("the check tree");
+        fs::write(
+            check_tree.join("installed").join(GAME).join("bundle.json"),
+            b"{",
+        )
+        .expect("the check tree's bundle.json is overwritten");
+        ran
     }
 }
 
@@ -549,7 +642,9 @@ fn ad1_a_recording_in_its_own_directory_is_adopted_and_replaced_into_the_state_d
     let first_pack = tree(&repo.join("packs").join(PACKAGE));
     assert!(first_pack.contains_key("control.json"), "{first_pack:?}");
 
-    // Again with --replace, from the second recording of the same directory.
+    // Again with --replace, from the second recording of the same directory; fix round 1: through
+    // a worktree that refuses a rename under the recordings' directory.
+    let worktree = Committed::guarding(&session);
     let answer = standard_pack_adopt(
         StandardPackAdoptRequest {
             repo: repo.clone(),
@@ -564,7 +659,7 @@ fn ad1_a_recording_in_its_own_directory_is_adopted_and_replaced_into_the_state_d
             state_dir: PathBuf::from(&state),
             at_unix_ms: SECOND,
         },
-        &Committed,
+        &worktree,
     )
     .unwrap_or_else(|error| panic!("the package is adopted again: {error}"));
 
@@ -626,6 +721,24 @@ fn ad1_a_recording_in_its_own_directory_is_adopted_and_replaced_into_the_state_d
             tree(&recording_cases(&session, "rec_ad1_second").join(id)),
             "{id}"
         );
+    }
+
+    // Fix round 1: no rename of the adoption touched the recordings' directory, and the old pack
+    // directory and the old cases reached the state directory by its renames.
+    let renames = worktree.renames.borrow();
+    let touching = renames
+        .iter()
+        .filter(|(from, to)| worktree.touches(from, to))
+        .collect::<Vec<_>>();
+    assert!(touching.is_empty(), "{touching:?}");
+    let pack_moved = (repo.join("packs").join(PACKAGE), kept);
+    assert!(renames.contains(&pack_moved), "{renames:?}");
+    for id in &first {
+        let case_moved = (
+            regression.join(case_directory(id)),
+            cases_kept.join(case_directory(id)),
+        );
+        assert!(renames.contains(&case_moved), "{renames:?}");
     }
 
     // Nothing in the recordings' directory changed: every file and directory as it was.
@@ -810,4 +923,90 @@ fn ad1_the_option_beside_package_is_refused_before_anything_is_read() {
         !isolated.runtime.exists(),
         "a refusal reached the Runtime's state root"
     );
+}
+
+#[test]
+fn ad1_fix1_a_root_that_cannot_be_read_again_answers_every_warning_whole() {
+    let _guard = env_lock();
+    let isolated = Isolated::new();
+    let session = isolated.path("session");
+    let state = isolated.path("adoption-state");
+    let repo = isolated.temp.path().join("repo");
+    root_files(&repo);
+    for other in OTHERS {
+        remedy_pack(&repo.join("packs").join(other), other);
+    }
+    let held = OTHERS
+        .iter()
+        .map(|other| json!({"package_id": other, "reason": REASON}))
+        .collect::<Vec<_>>();
+    write_json(
+        &repo.join("schedule.json"),
+        &json!({"schema_version": "actingcommand.schedule.v1", "rules": [], "held": held}),
+    );
+    stopped_recording(&session, "rec_ad1_spoiled", 3);
+
+    let answer = standard_pack_adopt(
+        StandardPackAdoptRequest {
+            repo: repo.clone(),
+            source: AdoptSource::Recording {
+                record_id: "rec_ad1_spoiled".to_owned(),
+                lab_dir: lab_dir(&session, "rec_ad1_spoiled"),
+                session_state_dir: PathBuf::from(&session),
+            },
+            decision: Some(AdoptDecision::Held {
+                rationale: REASON.to_owned(),
+                reference: None,
+            }),
+            replace: false,
+            dry_run: false,
+            state_dir: PathBuf::from(&state),
+            at_unix_ms: SECOND,
+        },
+        &Spoiling,
+    )
+    .unwrap_or_else(|error| panic!("the adoption is not refused: {error}"));
+
+    let printed = serde_json::to_value(&answer).expect("the answer serializes");
+    assert_eq!(printed["status"], "adopted", "{printed}");
+    // The cases were run, and so the check tree's bundle.json made unreadable after the check.
+    assert_eq!(printed["cases"]["state"], "taken", "{printed}");
+    // No count: every warning whole, the three of the other packages among them.
+    assert!(
+        printed.get("other_packages_warnings").is_none(),
+        "{printed}"
+    );
+    let warnings = printed["warnings"].as_array().expect("the warnings");
+    let of_others = warnings
+        .iter()
+        .filter(|warning| {
+            warning["code"] == REMEDY_INVALID
+                && named_by(warning).is_some_and(|named| OTHERS.contains(&named))
+        })
+        .count();
+    assert_eq!(of_others, 3, "{printed}");
+    // One warning of its own, last: the check tree's game root it could not read again, and why.
+    let not_split = warnings
+        .iter()
+        .filter(|warning| warning["code"] == NOT_SPLIT)
+        .count();
+    assert_eq!(not_split, 1, "{printed}");
+    let last = warnings.last().expect("a warning");
+    assert_eq!(last["code"], NOT_SPLIT, "{printed}");
+    assert_eq!(last["category"], "warning", "{last}");
+    let check_tree = Path::new(printed["check_tree"].as_str().expect("the check tree"));
+    let root = last["values"]["path"].as_str().expect("the root it names");
+    assert_eq!(
+        PathBuf::from(root),
+        check_tree.join("installed").join(GAME),
+        "{last}"
+    );
+    assert_eq!(last["causes"][0]["relation"], "caused_by", "{last}");
+    assert_eq!(
+        last["causes"][0]["code"], "standard_pack_root_invalid",
+        "{last}"
+    );
+    // The adoption wrote as without it.
+    let written = tree(&repo.join("packs").join(PACKAGE));
+    assert!(written.contains_key("control.json"), "{written:?}");
 }
