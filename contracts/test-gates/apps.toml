@@ -2574,3 +2574,11 @@ tests = [
     "actingcommand-lab-rescue::lib::install::gate_463_s318::s318_fix1_an_undo_that_lets_one_pack_enter_and_others_leave_names_each_hot_and_cold",
 ]
 incident = ["#463 S3-18"]
+
+# #463 S2-9b (0.12.70; register §1.458; brief rd-1117/brief-463-s29b-scan-select-wanted.md, its ruling that the package row 18 is stated wherever a product states a package's revision from its content; contracts/resource-verify.md, "The package revision"; contracts/component-interfaces.md, the package row 18): the revision table learns row 18; over zip entries that need 17 (a key step of a linear_steps pack in another pack), an operation's select whose scan declares early_stop and no end needs 18, as does one whose end is null and the same scan in a linear_steps pack, and the same scan with its end stays 17
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::tests::gate_464_p2::p2_revision_18_a_select_scan_without_an_end",
+]
+incident = ["#463 S2-9b"]

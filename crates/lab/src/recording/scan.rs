@@ -23,9 +23,14 @@
 //! - **The self-checks of `record stop`** run the same on the package it generates
 //!   ([`scan_select_checks`], [`scan_first_decision`]).
 //!
-//! The second kind (`stop: "wanted"`, straight to a known item) is a later slice: it adds the
-//! value to `ScanStop`, lets `end` be absent for it ([`end_not_recorded`]), and adds `early_stop`
-//! where the scan is generated ([`add_scan_member`]).
+//! #463 S2-9b (`contracts/lab-recording.md`, "A scrolling choice: straight to the wanted item"):
+//! the second kind, `stop: "wanted"`. Stage one swiped forward until the wanted row showed and
+//! pressed it, so the list's end may never be on a recorded screen: such a select may declare no
+//! end mark (the owner's ruling on board #463, option A of question 221). Its scan stops early
+//! where the wanted item shows (`early_stop: "upper_bound"`); without an end it declares no `end`
+//! and no `on_empty` ([`ends_empty`]): found, it presses; where the list stops moving first, the
+//! run fails with the kernel's `selection_scan_early_stop_unreached`. The offline entry must stop
+//! early on the pressed name; a name no screen shows is not judged offline then.
 
 use super::crosscheck::{Failures, FirstDecision, FrameCache, Locus, evaluator_bundle};
 use super::fold::scan_invalid;
@@ -38,7 +43,7 @@ use super::model::{
     AfterCaptureRecord, ClickGesture, FoldAxis, FoldDirection, LabRecording, RecordPoint,
     RecordRect, RecordedFrame, RecordedMark, RecordingStep, ScanAbsentRun, ScanDecision,
     ScanMeasuredStep, ScanNumber, ScanNumberOrigin, ScanNumberSource, ScanNumberValue, ScanRegion,
-    ScanScreen, ScanScreenRole, ScanSelfTestOutcome, SelectFrameDecision, SelectRowsSpec,
+    ScanScreen, ScanScreenRole, ScanSelfTestOutcome, ScanStop, SelectFrameDecision, SelectRowsSpec,
     SelectScanSpec, SelectScanState, SelectSelfTest, SelectSpec, SelfTestStatus, StepScanFold,
     StepSelect,
 };
@@ -58,7 +63,8 @@ use actingcommand_contract::{
 };
 use actingcommand_device::{CaptureBackendName, Frame};
 use actingcommand_execution_kernel::{
-    ContainedTaskError, PreparedContainedTask, ScanDryRunDecided, dry_run_scan_decide,
+    ContainedTaskError, ExecutionKernelCode, PreparedContainedTask, ScanDryRunDecided,
+    dry_run_scan_decide,
 };
 use actingcommand_recognition::color_digest::FRAME_CHANGE_MAX_MILLI;
 use serde::Serialize;
@@ -92,11 +98,17 @@ const COVERAGE_INCOMPLETE: &str = "scan_coverage_incomplete";
 const POSITION_UNREAD: &str = "scan_position_unread";
 const DECISION_MISMATCH: &str = "scan_decision_mismatch";
 const ABSENT_NOT_EMPTY: &str = "scan_absent_not_empty";
+/// #463 S2-9b: the words of a scrolling select straight to the wanted item without an end mark: its
+/// smallest content step above twice its position tolerance plus one (mark time), and its wanted
+/// default on no screen after the first and the forward swipes (the self-check `selects`).
+const MIN_STEP_TOO_LARGE: &str = "scan_min_step_too_large";
+const DEFAULT_NOT_SHOWN: &str = "scan_default_not_shown";
 
 /// #463 S2-9a: a scrolling select's sheet in `record review`: its rows and scan as declared, the
 /// screens of the demonstration in order (the regions taken from each, the names read on each,
 /// the content offset of each screen the offline entry aligned), every number with its origin, and
 /// the offline entry's outcome, as the select's self-test left them.
+/// #463 S2-9b: the sheet adds `when_absent`, what a run does when the wanted item is in no row.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct RecordReviewScan {
     pub rows: SelectRowsSpec,
@@ -105,6 +117,36 @@ pub struct RecordReviewScan {
     pub numbers: Vec<ScanNumberValue>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub outcome: Option<ScanSelfTestOutcome>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub when_absent: Option<ScanWhenAbsent>,
+}
+
+/// #463 S2-9b: how a run of a scrolling select ends when the wanted item is in no row of its list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScanAbsentEnd {
+    /// The scan reads the list to its declared end, decides empty and the run ends normally with
+    /// the select's `on_empty` key.
+    EndsNormally,
+    /// The scan declares no end: the list stops moving before the early stop holds and the run
+    /// fails with the kernel's code.
+    Fails,
+}
+
+/// #463 S2-9b: what `record review` says of a scrolling select: its kind (`kind`, the request's
+/// `scan.stop`), whether it declares an end mark (`end_declared`), and what a run does when the
+/// wanted item is in no row (`run`): it ends normally with `outcome_key`, or it fails with the
+/// kernel's code `fails_with`. Absent for a select of the kind `end` without an end mark, which
+/// `record stop` refuses (`end_not_recorded`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ScanWhenAbsent {
+    pub kind: ScanStop,
+    pub end_declared: bool,
+    pub run: ScanAbsentEnd,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub outcome_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fails_with: Option<String>,
 }
 
 /// Whether `step`'s select scrolls: it declares `rows` (and `scan`).
@@ -112,6 +154,33 @@ pub(crate) fn scrolls(step: &RecordingStep) -> bool {
     step.select
         .as_ref()
         .is_some_and(|select| select.declaration.rows.is_some())
+}
+
+/// #463 S2-9b: whether `scan` goes straight to the wanted item and declares no end mark: it never
+/// reads its list to an end, so it decides only once its early stop holds.
+fn without_end(scan: &SelectScanSpec) -> bool {
+    scan.stop == Some(ScanStop::Wanted) && scan.end.is_none()
+}
+
+/// #463 S2-9b: whether `select` can end a run normally when the wanted name is in no row or slot
+/// (`on_empty`): every select but a scrolling one straight to the wanted item without an end mark,
+/// beside whose scan the kernel refuses `on_empty` (`contracts/selection-graph.md`, "A scan
+/// without an end").
+pub(crate) fn ends_empty(select: &SelectSpec) -> bool {
+    !select.scan.as_ref().is_some_and(without_end)
+}
+
+/// #463 S2-9b: the coverage the kernel's offline entry must give the pressed name: complete for
+/// the first kind; for the second, early stopped where the item shows, or complete when an end is
+/// declared and its check passes on that screen (the end check is made first on each screen).
+fn decided_coverage(scan: &SelectScanSpec) -> &'static [ScanCoverageState] {
+    match (scan.stop, scan.end) {
+        (Some(ScanStop::Wanted), None) => &[ScanCoverageState::EarlyStopped],
+        (Some(ScanStop::Wanted), Some(_)) => {
+            &[ScanCoverageState::EarlyStopped, ScanCoverageState::Complete]
+        }
+        _ => &[ScanCoverageState::Complete],
+    }
 }
 
 /// The rows and the scan of a scrolling select.
@@ -209,8 +278,9 @@ fn number_word(name: ScanNumber) -> String {
 /// excludes `slots` (`rows_with_slots`) and `confirm` (`confirm_with_rows`: the kernel confirms a
 /// scrolled choice itself); `rows` and `scan` go together; `scan.stop` is stated
 /// (`scan_stop_missing`). The Lab's own reading (a rectangle without width or height, a number of
-/// `numbers` the Lab does not know or of 0) is `validation_failed`. A stop of another kind is not
-/// built in this slice: the request does not decode (`validation_failed`).
+/// `numbers` the Lab does not know or of 0) is `validation_failed`; another word of `stop` does not
+/// decode (`validation_failed`). #463 S2-9b: a select straight to the wanted item without an end
+/// mark gives no `on_empty_key` (`on_empty_without_end`): it can end no run normally.
 pub(crate) fn validate_scan_shape(step: Option<u32>, select: &SelectSpec) -> LabResult<()> {
     let refuse = |problem: SelectProblem, message: &str| {
         select_invalid(step, problem, format!("{message}; nothing was written"))
@@ -236,7 +306,17 @@ pub(crate) fn validate_scan_shape(step: Option<u32>, select: &SelectSpec) -> Lab
         return Err(refuse(
             SelectProblem::ScanStopMissing,
             "the request's scan states no stop: say which kind of scrolling choice the step holds \
-             (\"end\": the list is read to its end, then chosen)",
+             (\"end\": the list is read to its end, then chosen; \"wanted\": the list is scrolled \
+             straight to the wanted item)",
+        ));
+    }
+    if without_end(scan) && select.on_empty_key.is_some() {
+        return Err(refuse(
+            SelectProblem::OnEmptyWithoutEnd,
+            "the request's select scrolls straight to the wanted item, declares no end mark and \
+             gives an on_empty_key: such a scan never reads the list to its end, so a run cannot \
+             end normally there; where the item is not found the run fails. Leave on_empty_key \
+             out, or record the list's end once and declare the end mark",
         ));
     }
     let rects = [
@@ -271,10 +351,11 @@ pub(crate) fn validate_scan_shape(step: Option<u32>, select: &SelectSpec) -> Lab
 
 /// #463 S2-9a: `record_scan_invalid` with `end_not_recorded` for a step whose scrolling select
 /// reads its list to its end and declares no end mark (`record ready`'s item
-/// `scan_end_not_recorded`); `None` for any other step.
+/// `scan_end_not_recorded`); `None` for any other step (#463 S2-9b: a select straight to the
+/// wanted item may declare none).
 pub(crate) fn end_not_recorded(step: &RecordingStep) -> Option<LabError> {
     let scan = step.select.as_ref()?.declaration.scan.as_ref()?;
-    if scan.end.is_some() {
+    if scan.end.is_some() || scan.stop == Some(ScanStop::Wanted) {
         return None;
     }
     let index = step.index;
@@ -318,8 +399,9 @@ pub(crate) fn first_screen(step: &PlanStep) -> Option<&RecordedFrame> {
         .map(|screen| &screen.frame)
 }
 
-/// #463 S2-9a: `record review`'s sheet of `step`'s scrolling select; `None` for any other step.
-pub(crate) fn review_sheet(step: &RecordingStep) -> Option<RecordReviewScan> {
+/// #463 S2-9a: `record review`'s sheet of `step`'s scrolling select, of the recording of the task
+/// `task_id`; `None` for any other step. #463 S2-9b: with `when_absent`.
+pub(crate) fn review_sheet(step: &RecordingStep, task_id: &str) -> Option<RecordReviewScan> {
     let select = step.select.as_ref()?;
     let state = select.scan.as_ref()?;
     let (rows, scan) = rows_and_scan(&select.declaration).ok()?;
@@ -329,6 +411,36 @@ pub(crate) fn review_sheet(step: &RecordingStep) -> Option<RecordReviewScan> {
         screens: state.screens.clone(),
         numbers: state.numbers.clone(),
         outcome: state.outcome.clone(),
+        when_absent: when_absent(task_id, &select.declaration, scan),
+    })
+}
+
+/// #463 S2-9b: what a run of the scrolling select `spec` (its scan `scan`) does when the wanted item
+/// is in no row: with an end mark it ends normally with the `on_empty` key; straight to the wanted
+/// item without one it fails `selection_scan_early_stop_unreached`; `None` for the kind `end`
+/// without an end mark, which generates no package.
+fn when_absent(task_id: &str, spec: &SelectSpec, scan: &SelectScanSpec) -> Option<ScanWhenAbsent> {
+    let kind = scan.stop?;
+    let end_declared = scan.end.is_some();
+    if end_declared {
+        return Some(ScanWhenAbsent {
+            kind,
+            end_declared,
+            run: ScanAbsentEnd::EndsNormally,
+            outcome_key: Some(on_empty_key(task_id, spec)),
+            fails_with: None,
+        });
+    }
+    (kind == ScanStop::Wanted).then(|| ScanWhenAbsent {
+        kind,
+        end_declared,
+        run: ScanAbsentEnd::Fails,
+        outcome_key: None,
+        fails_with: Some(
+            ExecutionKernelCode::SelectionScanEarlyStopUnreached
+                .as_str()
+                .to_owned(),
+        ),
     })
 }
 
@@ -397,8 +509,10 @@ fn relative(rows: SelectRowsSpec, rect: RecordRect) -> Value {
 /// advance a drag between one-pixel boxes at the first forward swipe's two points over its
 /// duration, the reposition the same drag, the tracked area the list, the signature the row, the
 /// start mark with `rewind: true` and the end mark. A scan that does not stop early declares no
-/// `early_stop` (the second kind adds it). Without an end mark (only the mark-time probe meets
-/// one: `record stop` refuses it first, `end_not_recorded`) the start mark stands in its place.
+/// `early_stop`. Without an end mark (only the mark-time probe meets one: `record stop` refuses it
+/// first, `end_not_recorded`) the start mark stands in its place. #463 S2-9b: a select straight to
+/// the wanted item adds `early_stop: "upper_bound"` after `bounds` and, without an end mark,
+/// declares no `end`.
 pub(crate) fn add_scan_member(
     declared: &mut Value,
     plan: &Plan,
@@ -410,7 +524,7 @@ pub(crate) fn add_scan_member(
     let number = |name: ScanNumber| state.number(name);
     let point = |at: RecordPoint| json!({"x": at.x, "y": at.y, "width": 1, "height": 1});
     let end = if scan.end.is_some() { END } else { START };
-    let member = json!({
+    let Value::Object(mut member) = json!({
         "identity_feature": SELECT_FEATURE,
         "axis": match state.axis {
             FoldAxis::Vertical => "vertical",
@@ -454,18 +568,31 @@ pub(crate) fn add_scan_member(
                 "max_cross_gap_px": number(ScanNumber::SpacingMaxCrossGapPx)
             }
         },
-        "start": {"check": target_id(plan, step, START), "rewind": true},
-        "end": {"check": target_id(plan, step, end)},
-        "bounds": {
+        "start": {"check": target_id(plan, step, START), "rewind": true}
+    }) else {
+        return Err(invalid("validation_failed", "a scan member is no object"));
+    };
+    if !without_end(scan) {
+        member.insert(
+            "end".to_owned(),
+            json!({"check": target_id(plan, step, end)}),
+        );
+    }
+    member.insert(
+        "bounds".to_owned(),
+        json!({
             "max_viewports": number(ScanNumber::MaxViewports),
             "max_reposition_viewports": number(ScanNumber::MaxRepositionViewports),
             "max_ms": number(ScanNumber::MaxMs)
-        }
-    });
+        }),
+    );
+    if scan.stop == Some(ScanStop::Wanted) {
+        member.insert("early_stop".to_owned(), json!("upper_bound"));
+    }
     declared
         .as_object_mut()
         .ok_or_else(|| invalid("validation_failed", "a select's declaration is no object"))?
-        .insert("scan".to_owned(), member);
+        .insert("scan".to_owned(), Value::Object(member));
     Ok(())
 }
 
@@ -709,11 +836,24 @@ impl Numbers<'_> {
         from: ScanNumberSource,
         measured: Option<u64>,
     ) -> LabResult<u64> {
+        self.take_labelled(name, from, measured, ScanNumberOrigin::Measured)
+    }
+
+    /// #463 S2-9b: [`Self::take`] of a number the Lab computes as `label` says (`derived` from a
+    /// stated formula over measured numbers, `default` a constant of the generator), which is its
+    /// origin when the request does not give it.
+    fn take_labelled(
+        &mut self,
+        name: ScanNumber,
+        from: ScanNumberSource,
+        measured: Option<u64>,
+        label: ScanNumberOrigin,
+    ) -> LabResult<u64> {
         let word = number_word(name);
         let given = self.given.get(word.as_str()).copied();
         let (value, origin) = match (given, measured) {
             (Some(value), _) => (value, ScanNumberOrigin::Given),
-            (None, Some(value)) => (value, ScanNumberOrigin::Measured),
+            (None, Some(value)) => (value, label),
             (None, None) => {
                 let index = self.index;
                 let mut refused = select_invalid(
@@ -779,9 +919,14 @@ fn swipe_duration(swipe: &RecordingStep) -> Option<u64> {
 /// across the axis, the last row from the list's trailing edge on the last screen after a forward
 /// swipe, each plus the tolerance) and the most anchors (that plus 2, at most 64), from the rows
 /// the screens show (`screens`; `None`, before they are read: the widest the list allows); the
-/// viewports, `2V` (at least 2, at most 128), and the return viewports, `2V` (at most 128), from the
-/// fold's swipes; and the scan's time, the viewports and the return viewports and one more, each an
-/// advance and its settle, and one screen's reads of every anchor.
+/// viewports, `2V` (at least 2, at most 128), and the return viewports, `2V` (at most 128), from
+/// the fold's swipes; and the scan's time, the viewports and the return viewports and one more,
+/// each an advance and its settle, and one screen's reads of every anchor. #463 S2-9b: for a scan
+/// without an end mark, whose demonstration stops at the wanted row, the numbers taken from the
+/// screens up to the list's end are `derived` instead: the trailing gap `b` (the kernel checks it
+/// only where an end check passes), the most anchors `(b / e + 2)` per column and no fewer than a
+/// screen showed plus 2 (at most 64), the viewports `2V + 2` (two more screens tell that the list
+/// stopped), the return viewports `2V` and the scan's time from those.
 fn scan_numbers(
     index: u32,
     spec: &SelectSpec,
@@ -895,7 +1040,16 @@ fn scan_numbers(
                 .map_or(widest, |found| pick(found).saturating_add(tolerance)),
         )
     };
-    numbers.take(
+    // #463 S2-9b: a scan without an end mark was demonstrated up to the wanted row, not to the
+    // list's end, so the numbers the first kind measures on the screens up to the end are derived
+    // from what its screens do show (`derived`), each by its stated formula below.
+    let endless = without_end(scan);
+    let label = if endless {
+        ScanNumberOrigin::Derived
+    } else {
+        ScanNumberOrigin::Measured
+    };
+    let columns = numbers.take(
         ScanNumber::SpacingColumns,
         ScanNumberSource::Screens,
         Some(measure.as_ref().map_or(1, |found| found.columns.max(1))),
@@ -905,11 +1059,22 @@ fn scan_numbers(
         ScanNumberSource::Screens,
         spaced(|measure| measure.axis_gap, unsigned(list_length)),
     )?;
-    numbers.take(
-        ScanNumber::SpacingMaxTrailingGapPx,
-        ScanNumberSource::Screens,
-        spaced(|measure| measure.trailing, unsigned(list_length)),
-    )?;
+    // #463 S2-9b: the kernel checks the trailing gap only on the screen where the end check passes,
+    // which a scan without an end never reaches: the widest the list allows, `b`.
+    if endless {
+        numbers.take_labelled(
+            ScanNumber::SpacingMaxTrailingGapPx,
+            ScanNumberSource::ListAndRow,
+            Some(unsigned(list_length)),
+            label,
+        )?;
+    } else {
+        numbers.take(
+            ScanNumber::SpacingMaxTrailingGapPx,
+            ScanNumberSource::Screens,
+            spaced(|measure| measure.trailing, unsigned(list_length)),
+        )?;
+    }
     numbers.take(
         ScanNumber::SpacingMaxCrossLeadPx,
         ScanNumberSource::Screens,
@@ -920,24 +1085,51 @@ fn scan_numbers(
         ScanNumberSource::Screens,
         spaced(|measure| measure.cross_gap, unsigned(list_cross)),
     )?;
-    let instances = numbers.take(
-        ScanNumber::MaxInstances,
-        ScanNumberSource::Screens,
-        Some(measure.as_ref().map_or(MAX_INSTANCES, |found| {
-            found.anchors.saturating_add(2).min(MAX_INSTANCES)
-        })),
-    )?;
-    let viewports = numbers.take(
+    let shown_anchors = measure.as_ref().map_or(MAX_INSTANCES, |found| {
+        found.anchors.saturating_add(2).min(MAX_INSTANCES)
+    });
+    let instances = if endless {
+        // #463 S2-9b: rows not shown may be shorter than those shown: as many rows as the list's
+        // length holds whole and the two its edges cut, `b / e + 2`, in each column, and no fewer
+        // than a screen showed plus 2, at most 64.
+        let fitting = (unsigned(list_length) / unsigned(row_length).max(1))
+            .saturating_add(2)
+            .saturating_mul(columns);
+        numbers.take_labelled(
+            ScanNumber::MaxInstances,
+            ScanNumberSource::ListAndRow,
+            Some(fitting.max(shown_anchors).min(MAX_INSTANCES)),
+            label,
+        )?
+    } else {
+        numbers.take(
+            ScanNumber::MaxInstances,
+            ScanNumberSource::Screens,
+            Some(shown_anchors),
+        )?
+    };
+    // #463 S2-9b: a scan without an end mark tells that the list stopped moving only on two more
+    // screens than its last new one, so its viewports allow two more beyond twice the screens shown
+    // up to the wanted row: `2V + 2`; its return viewports `2V`.
+    let stopping = if endless { 2 } else { 0 };
+    let viewports = numbers.take_labelled(
         ScanNumber::MaxViewports,
         ScanNumberSource::FoldSwipes,
-        Some(screen_count.saturating_mul(2).clamp(2, MAX_VIEWPORTS)),
+        Some(
+            screen_count
+                .saturating_mul(2)
+                .saturating_add(stopping)
+                .clamp(2, MAX_VIEWPORTS),
+        ),
+        label,
     )?;
-    let returns = numbers.take(
+    let returns = numbers.take_labelled(
         ScanNumber::MaxRepositionViewports,
         ScanNumberSource::FoldSwipes,
         Some(screen_count.saturating_mul(2).clamp(1, MAX_VIEWPORTS)),
+        label,
     )?;
-    numbers.take(
+    numbers.take_labelled(
         ScanNumber::MaxMs,
         ScanNumberSource::ScanMoves,
         Some(
@@ -947,6 +1139,7 @@ fn scan_numbers(
                 .saturating_mul(duration.saturating_add(timeout))
                 .saturating_add(instances.saturating_mul(spec.read.timeout_ms)),
         ),
+        label,
     )?;
     Ok(numbers.taken)
 }
@@ -1340,7 +1533,12 @@ fn widest(state: &SelectScanState, room: u64) -> SelectScanState {
 /// screen shows empty over complete coverage (`scan_absent_not_empty`); and on the step's own live
 /// frames the pressed name selecting a row whose click box holds the press (`select_pressed_absent`,
 /// `select_press_mismatch`). Without an end mark the offline entry is not run: `record ready`
-/// lists it (`scan_end_not_recorded`).
+/// lists it (`scan_end_not_recorded`). #463 S2-9b, straight to the wanted item: the offline entry
+/// over the forward screens must stop early on the pressed name ([`decided_coverage`]); without an
+/// end mark no name no screen shows is run (a scan without an end judges an absent item only where
+/// the list stops moving, on screens no demonstration recorded), and the smallest content step is at
+/// most twice the position tolerance plus one (`scan_min_step_too_large`), so that where the list
+/// stops on the device the run meets its own failure before the alignment's.
 pub(crate) fn check_scan_select(
     recording: &LabRecording,
     probe: SelectProbe,
@@ -1535,6 +1733,13 @@ pub(crate) fn check_scan_select(
     }
     state.screens.clone_from(&screens);
     state.numbers = scan_numbers(index, &spec, fold.axis, &swipes, Some(read_rows.as_slice()))?;
+    if let Some(rejection) = stop_window_rejection(scan, &state) {
+        return Ok(SelectChecked {
+            select: current,
+            click_rect: None,
+            rejections: vec![rejection],
+        });
+    }
 
     // The start and the end marks on the forward screens, by the package's own evaluator.
     let checked = admitted_probe(
@@ -1722,9 +1927,11 @@ pub(crate) fn check_scan_select(
         });
     }
 
-    // The kernel's offline entry over the forward screens, once the end of the list is declared:
-    // the content steps in the widest window, then the pressed name and a name no screen shows.
-    if scan.end.is_some() && rejections.is_empty() {
+    // The kernel's offline entry over the forward screens, once the end of the list is declared
+    // (#463 S2-9b: or the scan goes straight to the wanted item, and decides where it stops early):
+    // the content steps in the widest window, then the pressed name and, with an end, a name no
+    // screen shows.
+    if (scan.end.is_some() || scan.stop == Some(ScanStop::Wanted)) && rejections.is_empty() {
         let loaded = forward
             .iter()
             .map(|screen| loaded_of(&cache, &screen.frame))
@@ -1800,7 +2007,7 @@ pub(crate) fn check_scan_select(
                 ),
                 Ok(decided) => {
                     let run = offline_of(&decided)?;
-                    judge_pressed(&mut rejections, &run, spec.pressed_name());
+                    judge_pressed(&mut rejections, &run, spec.pressed_name(), scan);
                     for (screen, offset) in screens
                         .iter_mut()
                         .filter(|screen| screen.role != ScanScreenRole::Back)
@@ -1808,7 +2015,13 @@ pub(crate) fn check_scan_select(
                     {
                         screen.content_offset_px = Some(*offset);
                     }
-                    let absent = match absent_name(&spec, &screens) {
+                    // #463 S2-9b: without an end mark a name no screen shows is not judged here.
+                    let absent_run = if without_end(scan) {
+                        None
+                    } else {
+                        absent_name(&spec, &screens)
+                    };
+                    let absent = match absent_run {
                         None => None,
                         Some(name) => {
                             let document =
@@ -1882,10 +2095,39 @@ pub(crate) fn check_scan_select(
     })
 }
 
-/// The refusals of the offline run for the pressed name `pressed`: its coverage not complete,
-/// positions it could not read, a decision other than that name.
-fn judge_pressed(rejections: &mut Vec<MarkRejection>, run: &Offline, pressed: &str) {
-    if run.coverage != ScanCoverageState::Complete {
+/// #463 S2-9b: the refusal `scan_min_step_too_large` of a scan without an end mark whose smallest
+/// content step `m` exceeds `2t + 1`, `t` its position tolerance (both of `state`'s numbers). The
+/// kernel, where the list stops moving, meets the failure of a scan without an end
+/// (`selection_scan_early_stop_unreached`) when the last displacement is at most `t` or at least
+/// `m − t`, and the alignment's failure in between: with `m ≤ 2t + 1` there is no in between.
+/// `None` for every other scan.
+fn stop_window_rejection(scan: &SelectScanSpec, state: &SelectScanState) -> Option<MarkRejection> {
+    if !without_end(scan) {
+        return None;
+    }
+    let smallest = state.number(ScanNumber::AdvanceMinContentStepPx);
+    let tolerance = state.number(ScanNumber::PositionTolerancePx);
+    let most = tolerance.saturating_mul(2).saturating_add(1);
+    (smallest > most).then(|| {
+        MarkRejection::new(
+            SELECT_REJECTION_ID,
+            MIN_STEP_TOO_LARGE,
+            json!({"min_content_step_px": smallest, "position_tolerance_px": tolerance,
+                   "most": most}),
+        )
+    })
+}
+
+/// The refusals of the offline run for the pressed name `pressed` of the scan `scan`: its coverage
+/// not complete (#463 S2-9b: not the one [`decided_coverage`] gives the kind), positions it could
+/// not read, a decision other than that name.
+fn judge_pressed(
+    rejections: &mut Vec<MarkRejection>,
+    run: &Offline,
+    pressed: &str,
+    scan: &SelectScanSpec,
+) {
+    if !decided_coverage(scan).contains(&run.coverage) {
         rejections.push(MarkRejection::new(
             SELECT_REJECTION_ID,
             COVERAGE_INCOMPLETE,
@@ -1947,7 +2189,11 @@ fn mismatch(step: &PlanStep, frame_id: Option<&str>, reason: &str, detail: Value
 /// a known name; and the kernel's offline entry over the forward screens decides the pressed name
 /// over complete coverage with every position read, and a name no screen shows empty over complete
 /// coverage. Each failure is `record_step_self_mismatch` with its `reason`, met by `failures`; the
-/// step's entry (`item`) gains `frames` and `scan`.
+/// step's entry (`item`) gains `frames` and `scan`. #463 S2-9b, straight to the wanted item: the
+/// pressed name's run stops early ([`decided_coverage`]); without an end mark no name no screen
+/// shows is run, and the wanted default is a name read on the first screen or one after a forward
+/// swipe (`scan_default_not_shown`): a run with the package's default values could only find it
+/// beyond the recorded screens, where no offline entry can follow it.
 pub(crate) fn scan_select_checks(
     prepared: &PreparedContainedTask,
     plan: &Plan,
@@ -1957,6 +2203,7 @@ pub(crate) fn scan_select_checks(
     item: &mut Value,
 ) -> LabResult<()> {
     let spec = &select.declaration;
+    let (_, scan) = rows_and_scan(spec)?;
     let operation = plan.operation_id(step);
     let instant = plan.generated_at_unix_ms;
     let on = |frames: &[String]| Locus {
@@ -2055,6 +2302,8 @@ pub(crate) fn scan_select_checks(
     item["frames"] = json!(decisions);
 
     let mut screens = Vec::with_capacity(state.screens.len());
+    // #463 S2-9b: the names read on the first screen and those after a forward swipe.
+    let mut shown = BTreeSet::new();
     for screen in &state.screens {
         let ids = std::slice::from_ref(&screen.frame.frame_id);
         let frame_id = Some(screen.frame.frame_id.as_str());
@@ -2078,11 +2327,15 @@ pub(crate) fn scan_select_checks(
                         ),
                     )?;
                 }
+                let names = names_read(&decided, state.axis);
+                if screen.role != ScanScreenRole::Back {
+                    shown.extend(names.iter().cloned());
+                }
                 screens.push(json!({
                     "frame_id": screen.frame.frame_id,
                     "step": screen.step,
                     "role": screen.role,
-                    "names": names_read(&decided, state.axis)
+                    "names": names
                 }));
             }
         }
@@ -2113,7 +2366,7 @@ pub(crate) fn scan_select_checks(
         Ok(decided) => {
             let run = offline_of(&decided)?;
             let mut refusals = Vec::new();
-            judge_pressed(&mut refusals, &run, spec.pressed_name());
+            judge_pressed(&mut refusals, &run, spec.pressed_name(), scan);
             for refusal in refusals {
                 failures.fail(
                     on(ids.as_slice()),
@@ -2126,7 +2379,10 @@ pub(crate) fn scan_select_checks(
             result["steps"] = json!(content_steps(&state.screens, &run.offsets));
         }
     }
-    if let Some(name) = absent_name(spec, &state.screens) {
+    // #463 S2-9b: without an end mark a name no screen shows is not judged offline.
+    if !without_end(scan)
+        && let Some(name) = absent_name(spec, &state.screens)
+    {
         let document = select_policy_document(plan, step, spec, &name);
         match offline_entry(prepared, &operation, &loaded, Some(&document), instant)? {
             Err(failure) => failures.fail(
@@ -2162,6 +2418,19 @@ pub(crate) fn scan_select_checks(
             }
         }
     }
+    // #463 S2-9b: without an end mark a run with the package's default values finds its item only
+    // on the screens it reaches, which the demonstration must show.
+    if without_end(scan) && !shown.contains(spec.wanted.default.as_str()) {
+        failures.fail(
+            on(ids.as_slice()),
+            mismatch(
+                step,
+                first_id,
+                DEFAULT_NOT_SHOWN,
+                json!({"default": spec.wanted.default}),
+            ),
+        )?;
+    }
     item["scan"] = result;
     Ok(())
 }
@@ -2179,7 +2448,8 @@ fn first_decision_failed(message: String, mut details: Value) -> LabError {
 
 /// #463 S2-9a, self-check item 3 for a scrolling select at step 1: the kernel's offline entry over
 /// its forward screens with the package's variables at their defaults (the sealed policy) must
-/// cover the list completely and read every position; a decision that selects is
+/// cover the list completely (#463 S2-9b: straight to the wanted item, stop early there,
+/// [`decided_coverage`]) and read every position; a decision that selects is
 /// `{status: "would_select", operation_label, name, position, frames}` (its return, confirmation
 /// and tap follow on frames no recording holds), an empty one the run's normal end,
 /// `{status: "would_end_empty", operation_label, outcome_key, frames}`; anything else is
@@ -2224,7 +2494,9 @@ pub(crate) fn scan_first_decision(
         }
     };
     let run = offline_of(&decided)?;
-    if run.coverage != ScanCoverageState::Complete || !run.unknown.is_empty() {
+    // #463 S2-9b: a select straight to the wanted item decides where its scan stops early.
+    let (_, scan) = rows_and_scan(&select.declaration)?;
+    if !decided_coverage(scan).contains(&run.coverage) || !run.unknown.is_empty() {
         return refuse(first_decision_failed(
             "the offline entry of step 1's scrolling select does not read the whole list"
                 .to_owned(),

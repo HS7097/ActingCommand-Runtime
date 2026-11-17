@@ -71,5 +71,6 @@ pub use review::{
 };
 // #463 S2-8': a swipe folded into a press step's scrolling search, in that step's sheet.
 pub use review::RecordReviewFolded;
-// #463 S2-9a: a scrolling select's sheet in its step's `record review`.
-pub use scan::RecordReviewScan;
+// #463 S2-9a: a scrolling select's sheet in its step's `record review`; #463 S2-9b: what a run of
+// it does when the wanted item is in no row.
+pub use scan::{RecordReviewScan, ScanAbsentEnd, ScanWhenAbsent};

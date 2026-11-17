@@ -16,7 +16,8 @@ use super::model::{
     SelectFrameDecision, StepSelect,
 };
 use super::select::{
-    NAME_UNREAD, PRESS_MISMATCH, PRESSED_ABSENT, SELF_TEST_ERROR, decide, on_empty_key,
+    NAME_UNREAD, PRESS_MISMATCH, PRESSED_ABSENT, SELF_TEST_ERROR, decide, empty_end_key,
+    on_empty_key,
 };
 use super::store::{blocked, invalid, with_details};
 use crate::LabOcr;
@@ -920,7 +921,8 @@ pub(crate) fn select_checks(
             "layout": plan.select_layout_id(step),
             "wanted": spec.wanted,
             "pressed": spec.pressed_name(),
-            "on_empty_key": on_empty_key(&plan.task_id, spec)
+            // #463 S2-9b: `null` for a select that declares no `on_empty`.
+            "on_empty_key": empty_end_key(&plan.task_id, spec)
         });
         if ocr.ocr_provider().is_none() {
             not_evaluated.push(step.number);

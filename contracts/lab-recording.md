@@ -1285,7 +1285,7 @@ folded the swipes into the press step ("Folding swipes into a scrolling search")
 select then declares the choice over the list read across those screens, and `record stop`
 generates it as a select over a scan ([selection-graph.md](selection-graph.md), "Select over a
 scan"; [linear-steps.md](linear-steps.md), "Select steps"). This is the first kind; the second
-(straight to a known item) is a later slice.
+(straight to a known item) is #463 S2-9b's ("A scrolling choice: straight to the wanted item").
 
 ```json
 {"schema_version":"actingcommand.lab-record-mark.v1","step":7,
@@ -1307,8 +1307,8 @@ scan"; [linear-steps.md](linear-steps.md), "Select steps"). This is the first ki
   row of the list as its first screen shows it, the anchor that repeats in every row, the region a
   row's name is read in and the box a tap is drawn in (absent: the row). `scan {list, start, end?,
   stop, numbers?}`: the list's area, the start mark, the end mark, the kind of the choice (`stop`,
-  required: `"end"`, the list read to its end and then chosen, is this build's one value; another
-  value does not decode, `validation_failed`), and numbers given in place of the measured ones
+  required: `"end"`, the list read to its end and then chosen, or, #463 S2-9b, `"wanted"`, below;
+  another value does not decode, `validation_failed`), and numbers given in place of the measured ones
   (below). Every region is the agent's; no tool proposes one, a choice or a value. The select is
   declared, declared again and taken off (`clear_select`) as any select, on the active or the
   stopped recording ("Marking after stop"), and keeps a select step's rules.
@@ -1427,6 +1427,88 @@ scan"; [linear-steps.md](linear-steps.md), "Select steps"). This is the first ki
   it takes to settle after a drag; a list opened in its middle (the rewind toward the start mark);
   the drag's real displacement against the declared window; the return to the chosen row and its
   confirmation on a fresh frame; a list that loads more rows while it scrolls.
+
+### A scrolling choice: straight to the wanted item
+
+#463 S2-9b (since 0.12.70, [v012-register.md](v012-register.md) §1.458; the owner's rule on board
+#463 that a scrolling choice has two kinds, and her ruling there, option A of question 221, that a
+package of the second kind may carry no end mark: found, it presses; when the list stops moving
+and the wanted item was not found, the run fails with a named reason; the rules here are the
+coordinator's). When the wanted item is known, stage one swipes forward until its row shows and
+presses it: the list's end may never be on a recorded screen. The press step's select states it
+with `scan.stop: "wanted"`; everything else of the request is the first kind's ("A scrolling
+choice: reading the list to its end": `rows`, the list, the start mark, every region the agent's,
+the numbers the Lab measures, listed and given in their place).
+
+- **The end mark is optional.** Given (the demonstration reached the list's end once), the package
+  declares it and the step runs as the kernel runs a scan with an end and an early stop. Left out,
+  the package declares none ([selection-graph.md](selection-graph.md), "Select over a scan", "A scan
+  without an end"), and `record ready` lists no `scan_end_not_recorded` for it.
+- **What `record stop` generates**: the first kind's select step, its scan with `early_stop:
+  "upper_bound"` after `bounds` (it stops on the screen where the wanted item first shows); with an
+  end mark, `end` and R1's `on_empty` and its mapping; without one, no `end`, no `on_empty` and no
+  mapping of its key. **Such a package cannot end normally where the wanted item is not found: it
+  fails there with the kernel's `selection_scan_early_stop_unreached`, so an ending for "not in the
+  list" (`on_empty_key`) beside a scan without an end mark is refused at the mark**
+  (`record_select_invalid`, `select_problem: on_empty_without_end`, exit 3, nothing written), and
+  the rules of the `on_empty` key
+  (`on_empty_key_reserved`, `on_empty_key_taken`, `on_empty_key_of_ending`) do not apply to such a
+  select. **Where the wanted item may be absent on some days, record the list's end once and
+  declare the end mark: the run then ends normally with the `on_empty` key; the form without an end
+  mark is for an item that is always in the list** (its failure is a package-logic failure to the
+  scheduling policy and the default recovery ladder, [selection-graph.md](selection-graph.md)).
+- **The numbers**, taken as the first kind's (a given one wins, `origin: "given"`), but for a scan
+  without an end mark, whose demonstration stops at the wanted row and not at the list's end. A
+  number is labelled by what it is (`origin`; the coordinator's ruling after S2-9a's review):
+  `measured`, read off the agent's regions or the demonstration; `default`, a constant of the
+  generator; `derived`, a stated formula over measured numbers; `given`. The numbers the first kind
+  takes from the screens up to the list's end are `derived` here, each by its formula (`b` and `e`
+  the list's and the row's extents along the axis, `V` the first screen and the screens after a
+  forward swipe, up to the wanted row): the trailing gap `b` (`list_and_row`; the kernel checks it
+  only on the screen where an end check passes, which such a scan never reaches); the most anchors
+  `(b / e + 2)` in each column (as many rows as the list holds whole and the two its edges cut,
+  since rows not shown may be shorter), and no fewer than a screen showed plus 2, at most 64
+  (`list_and_row`); the viewports `2V + 2`, at most 128 (`fold_swipes`): the kernel tells that the
+  list stopped moving only on two more screens than its last new one, so the bound allows for them
+  beyond a list twice as long as the demonstration showed (a longer list without the item fails
+  `selection_scan_bounds_exceeded`; give `max_viewports` for it); the return viewports `2V`
+  (`fold_swipes`), and the scan's time from those (`scan_moves`). With an end mark the
+  demonstration reached the list's end, and the numbers are the first kind's. The smallest content
+  step `m` is at most `2t + 1`, `t` the position tolerance (the Lab writes `m` 1 and `t` at least
+  2, so only a given number can break it): where the list stops, the kernel reaches the
+  failure of a scan without an end when the last displacement is at most `t` or at least `m − t`
+  and the alignment's failure in between, so the self-test refuses a given `m` above `2t + 1`
+  (`record_mark_rejected`, `scan_min_step_too_large` with `min_content_step_px`,
+  `position_tolerance_px` and `most`). Both numbers are listed in `record review` with the others.
+- **The self-test at mark time** is the first kind's, but the kernel's offline entry over the first
+  screen and the screens after a forward swipe, with the package's variables at their defaults
+  (and the pressed name's constant policy when it is not the default), must stop early on the
+  pressed name: coverage `early_stopped` (with an end mark, `complete` too, where the end check
+  passes on the wanted item's screen; the kernel checks the end first on each screen), every
+  position read, the pressed name decided (`scan_coverage_incomplete`, `scan_position_unread`,
+  `scan_decision_mismatch`). No screen needs to show an end mark. With an end mark the run for a
+  name no screen shows is made as for the first kind (`scan_absent_not_empty`). **Without one it is
+  not made: such a scan judges an absent item only where the list stops moving, on screens beyond
+  the demonstration, which no recording holds and no offline entry can be fed; on the device it is
+  the kernel's `selection_scan_early_stop_unreached`.**
+- **The self-checks** (`first_decision`, `selects`) run the same: the pressed name's run stops early;
+  without an end mark no absent name is run, and the wanted default is a name read on the first
+  screen or on one after a forward swipe, else `selects` fails `record_step_self_mismatch` with the
+  reason `scan_default_not_shown` (`details.default`): a run with the package's default values
+  could find it only beyond the recorded screens. `record ready` lists it (`what: "selects"`) and
+  `record stop` refuses it. `lab.selects[]` carries `on_empty_key: null` for a select without an end
+  mark, and its `scan` no `absent`.
+- **The readers.** `record review`'s `scan` adds `when_absent {kind, end_declared, run,
+  outcome_key?, fails_with?}`: the kind (`scan.stop`), whether an end mark is declared, and what a
+  run does when the wanted item is in no row: `ends_normally` with `outcome_key` (an end mark
+  declared, either kind), or `fails` with `fails_with: "selection_scan_early_stop_unreached"` (the
+  second kind without one). Absent for the first kind without an end mark, which makes no package.
+- **The package format.** A package whose scan declares no `end` needs the `package` revision 18
+  ([component-interfaces.md](component-interfaces.md), row 18): `standard-pack build` counts it
+  ([resource-verify.md](resource-verify.md), "The `package` revision"); `record stop` writes no
+  `interfaces.json`. A package with an end mark keeps its revision.
+- **What cannot be judged offline**, for the trial on the device: the first kind's list, and a list
+  without the wanted item, which only the device shows stopping.
 
 ### Endings
 

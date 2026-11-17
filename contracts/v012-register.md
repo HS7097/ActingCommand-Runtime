@@ -35827,6 +35827,108 @@ likewise.
 
 **At deploy.** Nothing to configure.
 
+### 1.458 Slice #463 S2-9b (0.12.70): a scrolling choice straight to the wanted item (Workflow #463; the owner's rule on board #463 that a scrolling choice has two kinds, straight to the wanted item when it is known, her ruling there on 11-16, option A of question 221, that a package of the second kind may carry no end mark, found it presses and not found it fails with a named reason, and her ruling that no tool proposes a region, a choice or a value; the read-only study `rd-1116/report-463-scroll-refresh-study.md`, its slice 5 and Q1, the coordinator's rulings on the kernel slice's review and in the work order, not the owner's words; coordinator work order `rd-1117/brief-463-s29b-scan-select-wanted.md`; stacked on #463 S2-9a, §1.457, its branch at `553f6647`, with three merges first: #463 S2-10's fix round 3 `c49176f7`, #463 S2-8''s fix round 1 `ad4c39c1` and #463 K-b, K-c's fix round 1 `dfc9200e`, §1.453 and §1.454, which holds main's release 0.12.69 `6a257aed`)
+
+This section takes 1.458, the number the work order gives. It ships in 0.12.70.
+
+**Why.** S2-9a declares the first kind of scrolling choice; K-c lets a scan that declares
+`early_stop` leave out `end`. This slice lets the agent declare the second kind on the press step
+that holds the fold, `scan.stop: "wanted"`, its end mark optional, and makes `record stop` generate
+it as K-c's scan, self-tested and self-checked by the kernel's own offline entry.
+
+**The rule** ([lab-recording.md](lab-recording.md), "A scrolling choice: straight to the wanted
+item").
+- *The request*: S2-9a's, `stop` `"wanted"` (`ScanStop::Wanted`); `end` optional. An
+  `on_empty_key` beside a scan without an end is refused at the mark (`on_empty_without_end`): such
+  a package cannot end normally where the item is not found, it fails there with the kernel's
+  `selection_scan_early_stop_unreached`; the contract says so in one sentence, and says to authors
+  that where the item may be absent on some days the end mark and the ending are declared, the form
+  without an end mark being for an item that is always in the list.
+- *Generation*: `early_stop: "upper_bound"` after `bounds`; with an end mark `end`, R1's `on_empty`
+  and its mapping as S2-9a; without one no `end`, no `on_empty` and no mapping of its key (the list
+  page mapped beside no `on_empty` would be a terminal page on the path, which the kernel's
+  admission refuses, `contained_task_linear_invalid` `reason=terminal_page`); the key's rules (`on_empty_key_reserved`, `on_empty_key_taken`, `on_empty_key_of_ending`,
+  the ending's `key_of_select`) do not apply to such a select (`select::empty_end_key`). The first
+  kind's bytes are those S2-9a generates (the scan member is built in the same order).
+- *The numbers*: S2-9a's, but for a scan without an end mark, whose demonstration stops at the
+  wanted row. A number is labelled by what it is (the coordinator's ruling after S2-9a's review;
+  `ScanNumberOrigin` gains `default` and `derived` beside `measured` and `given`; S2-9a's own
+  numbers are relabelled by the round after this slice): the numbers S2-9a takes from the screens
+  up to the list's end have no such basis here and are `derived` from what the screens show, each
+  by its formula: the trailing gap `b` (the kernel checks it only where an end check passes), the
+  most anchors `(b / e + 2)` per column and no fewer than a screen showed plus 2 (rows not shown
+  may be shorter), `max_viewports` `2V + 2` (K-c's kernel tells that the list stopped on the second
+  forward viewport that repeats the one before it, two viewports beyond the last new one; the
+  coordinator's ruling on K-c's review), the return viewports `2V`, and `max_ms` from those. With
+  an end mark the demonstration reached the end and the numbers are S2-9a's. The self-test refuses a smallest content step `m` above `2t + 1`, `t` the position
+  tolerance (`scan_min_step_too_large`): where the list stops, the kernel reaches K-c's failure when
+  the last displacement is at most `t` or at least `m − t`, and the alignment's failure in between;
+  the Lab measures `m` 1 and `t` at least 2, so only a given number meets it. Both are listed in
+  `record review` as every number.
+- *The self-test and the self-checks*: S2-9a's, but the pressed name's offline run must stop early
+  (`early_stopped`; with an end mark `complete` too, the end check being made first on each
+  screen); without an end mark no absent name is run (it cannot be judged offline: such a scan
+  judges an absent item only where the list stops, beyond the recorded screens; on the device it is
+  K-c's failure), and the self-check `selects` refuses a wanted default that no forward screen shows
+  (`scan_default_not_shown`); `first_decision` of such a select at step 1 accepts `early_stopped`.
+- *The readers*: `record review`'s `scan` adds `when_absent {kind, end_declared, run,
+  outcome_key?, fails_with?}`; `lab.selects[]` and the step's provenance carry `on_empty_key: null`
+  for a select without an end mark.
+- *The package format*: the Lab's revision table gains row 18, as the kernel slice's review asked
+  before the first package without an end can be built: a task file's select whose `scan` declares
+  no `end` (absent or `null`), in a pack of any execution mode (`revision::scan_without_end`), so
+  `standard-pack build` declares [18, 18] for such a bundle; the interfaces' row 18 and
+  [resource-verify.md](resource-verify.md) say so. `record stop` writes no `interfaces.json`.
+
+**What the code holds against the work order, and what was decided here.**
+- *The default's run*: the work order asks the offline entry with the default values to stop early
+  with the pressed decision, and S2-9a runs the pressed name's constant policy when it is not the
+  default; the slice keeps that run and adds the check of its test 4, a default no forward screen
+  shows, in the self-check `selects`, not at mark time (the mark-time self-test is S2-9a's but for
+  the work order's differences).
+- *The merges*: S2-10's fix round 3 removed `recording_api::package_without_cases`, which its gate
+  no longer read and S2-9a's test 6 reads; the helper is kept (a commit of its own after the merge),
+  and S2-9a's gate is not changed. S2-8''s fix round 1 renamed its gate's helpers `tapped` and
+  `swiped`; S2-9a's gate and this slice's press through `press_at` and `drag_list`, so nothing more
+  was renamed.
+- *S2-9a's review*: its points on the end mark that passes before the last forward screen, the
+  swipe longer than the kernel admits and S2-9a's own number labels are the round after this
+  slice's; this slice changes none of those lines.
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The second kind | `crates/lab/src/recording/scan.rs`: `without_end`, `ends_empty`, `decided_coverage`, `stop_window_rejection`, `when_absent`, `ScanWhenAbsent`, `ScanAbsentEnd`; `validate_scan_shape`, `end_not_recorded`, `add_scan_member`, `scan_numbers`, `check_scan_select`, `judge_pressed`, `scan_select_checks`, `scan_first_decision`, `review_sheet` |
+| The members | `crates/lab/src/recording/model.rs`: `ScanStop::Wanted`, `ScanNumberOrigin::Default`, `ScanNumberOrigin::Derived`; `scan.rs` `Numbers::take_labelled` |
+| The key of `on_empty` | `select.rs` `empty_end_key` and `check_step_select`; `generate.rs` `select_rules`, `select_json`, the mappings, the provenance; `ending.rs` `ending_key_problem`; `crosscheck.rs` `select_checks` |
+| The revision | `apps/actinglab/src/resource_verify/revision.rs` `scan_without_end` |
+| Texts | [lab-recording.md](lab-recording.md): the new "A scrolling choice: straight to the wanted item" and two sentences of S2-9a's section; [resource-verify.md](resource-verify.md) row 18; [component-interfaces.md](component-interfaces.md) row 18; the row `record mark` of [lab-operations.json](lab-operations.json) (the `request` note and `notes`; no `help` change); `apps/actinglab-mcp/MANUAL.md`; the lab fragment, the catalog and the regenerated index |
+
+**Codes and words.**
+
+| Word | What it says | Refuses or warns | Exit |
+|---|---|---|---|
+| `select_problem` `on_empty_without_end` | an `on_empty_key` beside a scan straight to the wanted item without an end mark | refuses | 3 |
+| `record_mark_rejected` reason `scan_min_step_too_large` | a scan without an end mark whose smallest content step exceeds twice its position tolerance plus one | refuses | 3 |
+| `record_step_self_mismatch` reason `scan_default_not_shown` | a scan without an end mark whose wanted default no forward screen shows | refuses `record stop`, listed by `record ready` | 3 (0 for `record ready`) |
+
+The two reasons are details of existing codes, as S2-9a's are. No decision added reads a code by
+name; `when_absent.fails_with` relays the kernel's code by its constant. The outcome-code index is
+regenerated.
+
+**Tests** (`crates/lab/src/gate_463_s29b.rs`, exec gate map "#463 S2-9b"; one row test in
+`apps/actinglab/src/tests/gate_464_p2.rs`, `p2_revision_18_a_select_scan_without_an_end`, apps gate
+map "#463 S2-9b", whose base gains the entries that need 17): the five of the work order, as the
+gate maps' comments list them. No existing test is adapted; no golden changes; no test leaves a
+gate map.
+
+**What is not changed.** S2-9a's first kind and the bytes it generates; the fixed-slot select; the
+kernel. Nothing proposes a region, a choice or a value.
+
+**At deploy.** Nothing to configure. A bundle `standard-pack build` makes of a package without an
+end mark declares `package` [18, 18], which an installer whose range ends below 18 refuses.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

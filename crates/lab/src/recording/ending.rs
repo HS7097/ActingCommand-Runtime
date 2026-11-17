@@ -12,7 +12,7 @@
 
 use super::generate::done_key;
 use super::model::{LabRecording, MarkRequest, RecordingEnding};
-use super::select::{on_empty_key, on_empty_key_valid};
+use super::select::{empty_end_key, on_empty_key_valid};
 use super::steps::Session;
 use super::store::{blocked, invalid, page_name_valid, with_details};
 use crate::codes::{EndingProblem, LabCode, ReadyMissing};
@@ -186,9 +186,10 @@ pub(crate) fn ending_key_problem(
         .iter()
         .filter(|step| step.is_effective())
         .find(|step| {
-            step.select
-                .as_ref()
-                .is_some_and(|select| on_empty_key(&recording.task_id, &select.declaration) == key)
+            // #463 S2-9b: a select that declares no `on_empty` has no key.
+            step.select.as_ref().is_some_and(|select| {
+                empty_end_key(&recording.task_id, &select.declaration).as_deref() == Some(key)
+            })
         })
     {
         return Some((

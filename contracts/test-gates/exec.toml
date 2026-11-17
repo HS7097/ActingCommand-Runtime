@@ -4082,3 +4082,15 @@ tests = [
     "actingcommand-lab::lib::gate_463_s29a::s29a_the_regression_case_of_the_step_is_on_its_first_screen_and_passes",
 ]
 incident = ["#463 S2-9a"]
+
+# #463 S2-9b (0.12.70; register §1.458; brief rd-1117/brief-463-s29b-scan-select-wanted.md; the owner's option A of question 221 on board #463; contracts/lab-recording.md, "A scrolling choice: straight to the wanted item"): the second kind of scrolling choice, select with rows and scan {list, start, end?, stop: wanted}, on S2-9a's synthetic list, the wanted row india (row 8) first whole on the screen at offset 48; no clock. Two forward swipes and the press marked without an end: the click the pressed row's box, the offline entry over the three forward screens with the default values early_stopped over 10 positions deciding india (position 8), steps of 24 px, no absent run, screens without an end region, record ready ready, record stop generating the scan without end and with early_stop upper_bound, bounds 8, 6 and 42000 ms, the select without on_empty and the task's one mapping the done key, admitted, lab.selects with on_empty_key null and the same decision (1); three forward swipes to the end, one back and the press with the end given: the scan with end and early_stop, on_empty neutral_task_not_found, bounds 8, 8 and 42000 ms, india early_stopped and lima empty over complete coverage at mark time and in record stop (2); on_empty_key beside a scan without an end refused record_select_invalid on_empty_without_end, and a smallest step given 6 above 2 x 2 + 1 refused record_mark_rejected scan_min_step_too_large, nothing written (3); the wanted default lima on no screen, india pressed: the mark stands, record ready's one item selects (record_step_self_mismatch) on step 4, record stop and its dry run refused with reason scan_default_not_shown, nothing written (4); record review's sheet: stop wanted, no end, when_absent {wanted, false, fails, selection_scan_early_stop_unreached}, the window 1 to 72, tolerance 2, and derived (origin derived): trailing gap 80, anchors 12, viewports 8, return viewports 6, 42000 ms; with the end when_absent {wanted, true, ends_normally, neutral_task_not_found}, viewports 8 (5). S2-9a's gate (gate_463_s29a) untouched
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-lab::lib::gate_463_s29b::s29b_two_forward_swipes_and_the_press_without_an_end_stop_early_and_are_admitted",
+    "actingcommand-lab::lib::gate_463_s29b::s29b_with_an_end_given_the_scan_has_both_and_both_offline_runs_are_made",
+    "actingcommand-lab::lib::gate_463_s29b::s29b_an_ending_beside_a_scan_without_an_end_is_refused_at_the_mark",
+    "actingcommand-lab::lib::gate_463_s29b::s29b_a_wanted_default_no_screen_shows_fails_the_self_check",
+    "actingcommand-lab::lib::gate_463_s29b::s29b_record_review_says_the_kind_the_end_and_what_a_run_does_without_the_item",
+]
+incident = ["#463 S2-9b"]

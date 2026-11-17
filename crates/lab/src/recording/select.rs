@@ -104,6 +104,14 @@ pub(crate) fn on_empty_key(task_id: &str, select: &SelectSpec) -> String {
         .unwrap_or_else(|| format!("{task_id}_not_found"))
 }
 
+/// #463 S2-9b: the `on_empty` key of a select that ends a run normally when the wanted name is in
+/// no slot or row ([`on_empty_key`]); `None` for a scrolling select straight to the wanted item
+/// without an end mark, which declares no `on_empty` (`scan::ends_empty`), so that none of the
+/// key's rules applies to it.
+pub(crate) fn empty_end_key(task_id: &str, select: &SelectSpec) -> Option<String> {
+    super::scan::ends_empty(select).then(|| on_empty_key(task_id, select))
+}
+
 /// `^[a-z][a-z0-9_]{0,63}$`: the parameter grammar of a name's id and of the wanted value's name.
 fn name_id_valid(value: &str) -> bool {
     let bytes = value.as_bytes();
@@ -693,8 +701,11 @@ pub(crate) fn check_step_select(
             ),
         );
     }
-    let key = on_empty_key(&recording.task_id, spec);
-    if key == done_key(&recording.task_id) {
+    // #463 S2-9b: a select that declares no `on_empty` has no key to keep these rules.
+    let key = empty_end_key(&recording.task_id, spec);
+    if let Some(key) = &key
+        && *key == done_key(&recording.task_id)
+    {
         return refuse(
             SelectProblem::OnEmptyKeyReserved,
             format!("the on_empty key '{key}' is the usual ending's key"),
@@ -708,7 +719,9 @@ pub(crate) fn check_step_select(
         let Some(other_select) = &other.select else {
             continue;
         };
-        if on_empty_key(&recording.task_id, &other_select.declaration) == key {
+        if let Some(key) = &key
+            && empty_end_key(&recording.task_id, &other_select.declaration).as_ref() == Some(key)
+        {
             return refuse(
                 SelectProblem::OnEmptyKeyTaken,
                 format!(
@@ -729,10 +742,11 @@ pub(crate) fn check_step_select(
     }
     // #463 R2 fix 1: the key is no ending's, also for a select declared after the ending; the
     // ending's own check at record stop (`key_of_select`) would refuse it there otherwise.
-    if recording
-        .endings
-        .iter()
-        .any(|ending| ending.outcome_key == key)
+    if let Some(key) = &key
+        && recording
+            .endings
+            .iter()
+            .any(|ending| ending.outcome_key == *key)
     {
         return refuse(
             SelectProblem::OnEmptyKeyOfEnding,

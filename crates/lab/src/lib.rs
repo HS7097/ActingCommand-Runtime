@@ -127,6 +127,9 @@ mod gate_463_s28;
 // #463 S2-9a: a scrolling choice that reads the list to its end, over the swipes folded into it.
 #[cfg(test)]
 mod gate_463_s29a;
+// #463 S2-9b: a scrolling choice straight to the wanted item, its end mark optional.
+#[cfg(test)]
+mod gate_463_s29b;
 mod lab_run;
 mod lab_run_api;
 mod ledger_port;

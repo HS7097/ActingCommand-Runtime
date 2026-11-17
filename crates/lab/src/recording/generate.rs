@@ -15,7 +15,7 @@ use super::model::{
     SelectSpec, SelfTest, SelfTestMargin, SelfTestStatus, StepClick, StepOptional, StepSelect,
     StepTransition,
 };
-use super::select::{on_empty_key, select_invalid};
+use super::select::{empty_end_key, on_empty_key, select_invalid};
 use super::steps::path_order;
 use super::store::{blocked, invalid, with_details};
 use crate::codes::{ClickFollowProblem, ReadyMissing, SelectProblem};
@@ -672,19 +672,21 @@ fn select_rules(steps: &[PlanStep], task_id: &str, lacks: &mut Lacks) {
                 );
             }
         }
-        let key = on_empty_key(task_id, &select.declaration);
-        if key == done {
-            refuse(
-                ReadyMissing::SelectKeyReserved,
-                SelectProblem::OnEmptyKeyReserved,
-                format!("the on_empty key '{key}' of step {index} is the usual ending's key"),
-            );
-        } else if let Some(other) = keys.insert(key.clone(), index) {
-            refuse(
-                ReadyMissing::SelectKeyTaken,
-                SelectProblem::OnEmptyKeyTaken,
-                format!("the on_empty key '{key}' of step {index} is also step {other}'s"),
-            );
+        // #463 S2-9b: a select that declares no `on_empty` has no key to keep these rules.
+        if let Some(key) = empty_end_key(task_id, &select.declaration) {
+            if key == done {
+                refuse(
+                    ReadyMissing::SelectKeyReserved,
+                    SelectProblem::OnEmptyKeyReserved,
+                    format!("the on_empty key '{key}' of step {index} is the usual ending's key"),
+                );
+            } else if let Some(other) = keys.insert(key.clone(), index) {
+                refuse(
+                    ReadyMissing::SelectKeyTaken,
+                    SelectProblem::OnEmptyKeyTaken,
+                    format!("the on_empty key '{key}' of step {index} is also step {other}'s"),
+                );
+            }
         }
         let name = select.declaration.wanted.name.clone();
         if let Some(other) = wanted.insert(name.clone(), index) {
@@ -1923,14 +1925,15 @@ fn step_provenance(plan: &Plan, step: &PlanStep) -> LabResult<Value> {
         entry.insert("click".into(), provenance);
     }
     // #463 R1: only a select step records its select: the declaration, the name its demonstration
-    // pressed, its `on_empty` key and the decisions of its mark-time self-test.
+    // pressed, its `on_empty` key (#463 S2-9b: `null` for a select that declares none) and the
+    // decisions of its mark-time self-test.
     if let Some(select) = &step.step.select {
         entry.insert(
             "select".into(),
             json!({
                 "declaration": select.declaration,
                 "pressed": select.declaration.pressed_name(),
-                "on_empty_key": on_empty_key(&plan.task_id, &select.declaration),
+                "on_empty_key": empty_end_key(&plan.task_id, &select.declaration),
                 "marked_at_unix_ms": select.marked_at_unix_ms,
                 "self_test": select.self_test
             }),
@@ -2482,7 +2485,8 @@ fn choice_variable_json(plan: &Plan, select: &SelectSpec) -> Value {
 }
 
 /// #463 R1: the `select` of a select step's operation: its layout, its policy document, its
-/// `on_empty` key and, when declared, its confirmation.
+/// `on_empty` key (#463 S2-9b: none for a scrolling select straight to the wanted item without an
+/// end mark, beside whose scan the kernel refuses it) and, when declared, its confirmation.
 fn select_json(plan: &Plan, step: &PlanStep, select: &SelectSpec) -> Value {
     let mut declaration = Map::new();
     declaration.insert("layout_id".into(), json!(plan.select_layout_id(step)));
@@ -2490,10 +2494,9 @@ fn select_json(plan: &Plan, step: &PlanStep, select: &SelectSpec) -> Value {
         "policy".into(),
         json!({"path": plan.select_policy_path(step)}),
     );
-    declaration.insert(
-        "on_empty".into(),
-        json!({"outcome_key": on_empty_key(&plan.task_id, select)}),
-    );
+    if let Some(key) = empty_end_key(&plan.task_id, select) {
+        declaration.insert("on_empty".into(), json!({"outcome_key": key}));
+    }
     if let Some(confirm) = select.confirm {
         declaration.insert(
             "confirm".into(),
@@ -3119,7 +3122,9 @@ pub(crate) fn render(
     );
     task.insert("target_page".into(), json!(target));
     // #463 R1: after the usual ending, one mapping per select step: its `on_empty` key on its
-    // page, where an empty decision ends the run.
+    // page, where an empty decision ends the run. #463 S2-9b: none for a select that declares no
+    // `on_empty`: no run ends normally there, and its page mapped beside no `on_empty` would be a
+    // terminal page on the path, which the kernel's admission refuses.
     let mut mappings = vec![json!({
         "outcome_key": done_key(&plan.task_id),
         "effect": "no_designated_effect",
@@ -3128,11 +3133,13 @@ pub(crate) fn render(
     let mut layouts = Vec::new();
     let mut policies = Vec::new();
     for (step, select) in plan.select_steps() {
-        mappings.push(json!({
-            "outcome_key": on_empty_key(&plan.task_id, &select.declaration),
-            "effect": "no_designated_effect",
-            "terminal_pages": [step.page_id()?]
-        }));
+        if let Some(key) = empty_end_key(&plan.task_id, &select.declaration) {
+            mappings.push(json!({
+                "outcome_key": key,
+                "effect": "no_designated_effect",
+                "terminal_pages": [step.page_id()?]
+            }));
+        }
         // #463 S2-9a: a scrolling select's layout is the repeated anchor of its rows.
         layouts.push(match &select.scan {
             Some(scan) => super::scan::layout_json(plan, step, &select.declaration, scan)?,

@@ -341,7 +341,7 @@ pub(crate) fn review_outcome(
             marks: step.marks.clone(),
             choice: step.choice.clone(),
             folded,
-            scan: super::scan::review_sheet(step),
+            scan: super::scan::review_sheet(step, &recording.task_id),
             missing: ready
                 .missing
                 .iter()

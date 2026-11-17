@@ -391,7 +391,9 @@ revision any entry of its zip needs, 3 (the bundle formats of Runtime v0.12.0) w
 later one. The table holds what each `package` row of that document names (row 15, the ending
 pages of a `linear_steps` task, Workflow #463 K2, register §1.380, since Workflow #464 P2b,
 register §1.385, so the build computes 15 for a bundle it builds; row 17, a `linear_steps` task's
-key step, since Workflow #463 KP-1's fix round 1, register §1.448, so it computes 17); and, P2's
+key step, since Workflow #463 KP-1's fix round 1, register §1.448, so it computes 17; row 18, a
+select step's scan without an end, Workflow #463 K-c, register §1.454, since Workflow #463 S2-9b,
+register §1.458, so it computes 18); and, P2's
 fix round 1, what the
 register sections it cites and the B train's sections put into a revision (their members joined revision 6, "which BT-PK6
 declares", and DB-2 declared 6 in 0.12.37), each in the file it stands in and under its condition. The files of a pack: `control.json`; a task file
@@ -443,6 +445,7 @@ as an element of its array.
 | 15 | control and its entry task | an ending page, in a pack whose `control.json` `execution_mode` is `linear_steps` only: a page of a `terminal_pages` under `mappings` of the `scheduling_outcome` of the task file of the control's `entry_task_id` (`resources/operations/<entry_task_id>/task.json`, the package's program; no other task file of the pack) that is none of that task's `target_page` (one page or a set) and none of the `from` of its `operations` whose `select` holds an `on_empty` (absent or `null`, none), each page compared with the prefix `<game>/`, the control's `game`, taken off where it is written. That is the kernel's own test of an admitted package (`PreparedContainedTask::declares_linear_endings`, `canonical_page_anchor`), a reader private to the kernel crate, which actinglab does not depend on, so the table reads the same members | K2, §1.380; [linear-steps.md](linear-steps.md), "Endings"; P2b, §1.385 |
 | 16 | root | `pack-catalog.json`, by its presence at the zip's root (`CATALOG_PACKAGE_REVISION`), so that an installer that knows no such root file refuses the zip at its `package` edge; `place` asks nothing of it | PC-1 fix round 1, §1.438; [pack-catalog.md](pack-catalog.md), "Interface" |
 | 17 | task | `key` under `operations` when it holds an object (a key step), in a pack whose `control.json` `execution_mode` is `linear_steps` only (every build refuses a key in a page-graph task): where the kernel's admission finds it (`TaskOperation.key`; `TaskProgram::validate_linear`, `LinearEffect::Key`), as row 13 finds a select step | KP-1 fix round 1, §1.448; [linear-steps.md](linear-steps.md), "Key steps" |
+| 18 | task | a `scan` object under the `select` of an element of `operations` that declares no `end` (absent or `null`, as the declaration gate reads it), in a pack of any execution mode (a Runtime before 18 requires `end` in its declaration gate in every pack): a member left out, which no member row can find, so read on its own (`scan_without_end`); whether the scan declares `early_stop`, without which this build refuses it, is the gate's | K-c, §1.454; S2-9b, §1.458; [selection-graph.md](selection-graph.md), "A scan without an end" |
 
 Revisions 13 and 14 (after the train 0.12.61a; register §1.376): no content needs 12 any more.
 Revision 12 brought version 1 of `goals.json`, which this build reads no more; revision 14 brought

@@ -5252,6 +5252,9 @@
         },
         "scan_number_not_measured": {
           "description": "A number the Lab measures from the demonstration cannot be measured there (a swipe recorded without its after loop's record) and the request does not give it in scan.numbers (#463 S2-9a, since 0.12.70)."
+        },
+        "on_empty_without_end": {
+          "description": "A scrolling select straight to the wanted item (scan.stop wanted) that declares no end mark gives an on_empty_key: such a scan never reads its list to an end, so a run cannot end normally there; where the item is not found it fails with the kernel's selection_scan_early_stop_unreached (#463 S2-9b, since 0.12.70)."
         }
       }
     },

@@ -273,6 +273,10 @@ actingcommand_contract::outcome_vocabulary! {
         /// #463 S2-9a: a number the Lab measures from the demonstration cannot be measured there
         /// (a swipe recorded without its after loop's record) and the request does not give it.
         ScanNumberNotMeasured => "scan_number_not_measured",
+        /// #463 S2-9b: a scrolling select straight to the wanted item that declares no end mark
+        /// gives an `on_empty_key`: such a scan never reads its list to an end, so a run cannot end
+        /// normally there; where the item is not found it fails with the kernel's code.
+        OnEmptyWithoutEnd => "on_empty_without_end",
     }
 }
 

@@ -542,6 +542,22 @@ naming this file.
   `scan_selected` while the select stands: `clear_select` first, which keeps the fold. Inertia,
   settling, a list opened in its middle, the drag's real displacement and a list that loads while
   it scrolls are judged only by the trial on the device.
+  #463 S2-9b (0.12.70; `contracts/lab-recording.md`, "A scrolling choice: straight to the wanted
+  item"): when the wanted item is known, swipe forward until its row shows and press it; mark the
+  select with `"stop": "wanted"`. `end` is then optional: given, the package declares it; left out,
+  `ac_record_ready` lists no `scan_end_not_recorded`, and `ac_record_stop` generates the scan with
+  `early_stop` and without `end` or `on_empty`: found, the run presses; not found, it fails
+  `selection_scan_early_stop_unreached` where the list stops moving. So `on_empty_key` beside it is
+  refused (`record_select_invalid`, `on_empty_without_end`): where the item may be absent some days,
+  record the list's end once and declare the end mark, and the run ends normally. Without an end the
+  numbers taken from the screens up to the list's end are `derived` from what the screens show
+  (`origin: "derived"`: trailing gap the list's length, anchors `b / e + 2` per column,
+  `max_viewports` `2V + 2`, return viewports `2V`, `max_ms`), and the Lab refuses a given
+  `advance_min_content_step_px` above twice
+  `position_tolerance_px` plus one (`scan_min_step_too_large`); the offline entry must stop early on
+  the pressed name, no absent name is run (that is judged only on the device), and the self-check
+  refuses a wanted default no forward screen shows (`scan_default_not_shown`). `ac_record_review`'s
+  `scan.when_absent` says the kind, whether an end is declared and what a run does without the item.
 - **Offline scenes of another size** (Workflow #392 DA-5cd, 0.12.67, as the train of DA-5ab and
   DA-5cd leaves it; `contracts/display-adapter.md` section 12). `ac_recognize`, `ac_detect_page`,
   `ac_current_page`, `ac_is_visible`, `ac_lab_observe` on a saved scene, `ac_tap_target` and

@@ -1409,9 +1409,10 @@ impl SelectRowsSpec {
 /// #463 S2-9a: the list a scrolling select reads and its two ends, the agent's rectangles: the
 /// list's area (`list`), the start mark on the first screen (`start`) and the end mark on the
 /// last screen after a forward swipe (`end`; absent while the demonstration never reached the
-/// end, which `record ready` lists as `scan_end_not_recorded`); the kind of the choice (`stop`,
-/// required: `end`, the list read to its end, is this build's one value); and the numbers given in
-/// place of the ones the Lab measures (`numbers`, by name; absent: every one measured).
+/// end, which `record ready` lists as `scan_end_not_recorded` for the kind `end`; #463 S2-9b: the
+/// kind `wanted` may leave it out); the kind of the choice (`stop`, required: `end`, the list read
+/// to its end, or `wanted`, straight to the wanted item); and the numbers given in place of the
+/// ones the Lab measures (`numbers`, by name; absent: every one measured).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SelectScanSpec {
@@ -1426,12 +1427,15 @@ pub struct SelectScanSpec {
 }
 
 /// #463 S2-9a: the kind of a scrolling choice the agent states. `end`: what the list holds is not
-/// known, so it is read to its end and then chosen. (The kind that scrolls straight to a known
-/// item is a later slice's second value.)
+/// known, so it is read to its end and then chosen. #463 S2-9b (`contracts/lab-recording.md`, "A
+/// scrolling choice: straight to the wanted item"): `wanted`: the wanted item is known, so the
+/// list is scrolled straight to it, and the scan stops early where it shows (`early_stop`); its
+/// end mark may be left out.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ScanStop {
     End,
+    Wanted,
 }
 
 /// #463 S2-9a: one number of a scrolling select's scan or layout that the Lab measures from the
@@ -1462,12 +1466,17 @@ pub enum ScanNumber {
     MaxMs,
 }
 
-/// #463 S2-9a: whether a number was measured by the Lab or given in the request.
+/// #463 S2-9a: whether a number was measured by the Lab or given in the request. #463 S2-9b (the
+/// coordinator's ruling after S2-9a's review): a number is labelled by what it is: `measured`, read
+/// off the agent's regions or the demonstration; `default`, a constant of the generator the
+/// contract names; `derived`, a stated formula over measured numbers; `given`, the request's.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ScanNumberOrigin {
     Measured,
     Given,
+    Default,
+    Derived,
 }
 
 /// #463 S2-9a: what a number is measured from: the list's and the row's extents along the axis
