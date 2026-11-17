@@ -28,6 +28,19 @@
 //! - `pp1_an_export_directory_that_cannot_be_written` (test 5): `material_export_failed` first, no
 //!   `export`, the header's parts and outcome, nothing written; a header that does not fit even so
 //!   answers `output_budget_exceeded` with its job's handle, and `ac_run_show` its summary.
+//!
+//! Fix round 1 (coordinator work order `rd-1117/brief-434-pp1-fix1.md`, after the independent
+//! review): `truncated` names every member of the line the header does not hold as the line does,
+//! for every row, so tests 1, 2 and 5 now pin the members their headers leave to the file beside
+//! what they reduced; and two tests more:
+//!
+//! - `pp1_fix1_a_cold_placement_keeps_next_and_names_every_member_left_out` (item 2): a placement
+//!   with no Runtime answering keeps its `next` whole beside `schedule_changes`, whole or counted;
+//!   its header, `deploy --plan`'s and `op status`'s each hold or name every member of the line
+//!   but its warnings and outcome, and every pointer named is in the file.
+//! - `pp1_fix1_op_resume_keeps_what_undo_keeps` (item 3): `op resume` of an undo that ended its
+//!   steps keeps its `schedule_changes` by the same rule, and a line carrying `reverses` too keeps
+//!   both: the header `op resume`'s row gives a line is the one `undo`'s gives it.
 
 use crate::budget;
 use crate::calls::{self, Service};
@@ -35,7 +48,7 @@ use crate::jobs;
 use crate::protocol::{self, Era, LegacyVersion};
 use crate::rescue_export;
 use crate::server;
-use actingcommand_contract::outcome::Outcome;
+use actingcommand_contract::outcome::{CauseRelation, Outcome};
 use actingcommand_lab_ops::cli_line::{self, Exit};
 use actingcommand_lab_ops::codes::{ActingctlCode, InstallLocation, InstallRefusal};
 use serde_json::{Map, Value, json};
@@ -48,6 +61,11 @@ const ERA: Era = Era::Legacy(LegacyVersion::V20251125);
 const PLAN_ID: &str = "plan-0123456789abcdef";
 /// How many warnings of its own the line of test 5 carries, so that its header cannot fit.
 const NOISY: usize = 300;
+/// Fix round 1: the members of a placement's plan beside its `schedule_changes`, in the order
+/// [`placement_plan`] lists them.
+const PLAN_BESIDE: [&str; 6] = ["plan_id", "game", "game_root", "zip", "zip_sha256", "items"];
+/// Fix round 1: the members of `place`'s line beside its plan and `next`, in its order.
+const PLACE_BESIDE: [&str; 3] = ["instances", "facts", "steps"];
 
 fn object(value: Value) -> Map<String, Value> {
     match value {
@@ -165,6 +183,136 @@ fn place_plan(items: usize, changes: &Value) -> Exit {
     cli_line::success(members, &done(InstallLocation::PackPlace))
 }
 
+/// Fix round 1: a placement with no Runtime answering, as the rescue module answers it
+/// (`rescue::place_cold`, `composite_exit`): the plan, no instance bound, the facts, `next` naming
+/// the start in the module's words (`composition_at_start`, `up`), the steps `plan` and `place`,
+/// and `install_command_done` of `install_pack_place` that changed the installation.
+fn place_cold(items: usize, changes: &Value) -> Exit {
+    let plan = placement_plan(items, changes);
+    let members = object(json!({
+        "plan": plan,
+        "instances": [],
+        "facts": null,
+        "next": {"composition_at_start": ["up"]},
+        "steps": [
+            {
+                "step": "plan",
+                "outcome": {"code": "install_command_done", "category": "success"},
+                "result": plan,
+            },
+            {
+                "step": "place",
+                "outcome": {"code": "install_command_done", "category": "success"},
+                "result": {"operation_id": "op-4"},
+            },
+        ],
+    }));
+    let placed = Outcome::new(ActingctlCode::InstallCommandDone)
+        .operation(InstallLocation::PackPlace)
+        .install_operation_id("op-4")
+        .game("neutral")
+        .installation_changed(true);
+    cli_line::success(members, &placed)
+}
+
+/// `deploy --plan`'s line as the rescue module answers it: its steps `stage` and `plan`, the plan
+/// replacing 800 files, and `install_command_done` of `install_deploy`.
+fn deploy_plan() -> Exit {
+    let files = (0..800)
+        .map(|index| json!({"dst": format!("runtime/neutral-{index:04}.bin"), "action": "replace"}))
+        .collect::<Vec<_>>();
+    cli_line::success(
+        object(json!({
+            "steps": [
+                {"step": "stage", "outcome": {"code": "install_command_done"}, "result": {"kept": "0123abcd"}},
+                {"step": "plan", "outcome": {"code": "install_command_done"}, "result": {
+                    "plan_id": PLAN_ID,
+                    "kind": "update",
+                    "plan": {"files": files},
+                    "notice": {"replaced": 800, "added": 0},
+                }},
+            ],
+        })),
+        &done(InstallLocation::Deploy),
+    )
+}
+
+/// `op status`'s line with `op` as the rescue module answers it (`install::status`): the root, its
+/// 400 packs, no unfinished operation, the last operations, no leftovers and the operation's
+/// journal.
+fn op_status() -> Exit {
+    let packs = (0..400)
+        .map(|index| json!({"game": "neutral", "package_id": package(index), "sha256": "0".repeat(64)}))
+        .collect::<Vec<_>>();
+    cli_line::success(
+        object(json!({
+            "root": "C:\\ActingCommand",
+            "packs": packs,
+            "unfinished": null,
+            "last_operations": [
+                {"operation_id": "op-3", "kind": "pack_place", "result": "install_command_done", "undone": false},
+                {"operation_id": "op-2", "kind": "update", "result": "install_command_done", "undone": false},
+            ],
+            "leftovers": 0,
+            "journal": {
+                "operation_id": "op-3",
+                "kind": "pack_place",
+                "steps": [{"n": 1, "kind": "plan", "state": "done"}],
+            },
+        })),
+        &done(InstallLocation::Status),
+    )
+}
+
+/// Fix round 1: what a `place` header leaves of its line to the file, as `truncated` names it in
+/// the line's order: the plan's members beside `schedule_changes` ([`PLAN_BESIDE`]), then those
+/// of `schedule_changes` named in `within`, then the line's members beside the plan and `next`
+/// ([`PLACE_BESIDE`]).
+fn place_left(within: &[&str]) -> Value {
+    let plan = PLAN_BESIDE.map(|name| format!("/plan/{name}"));
+    let changes = within
+        .iter()
+        .map(|name| format!("/plan/schedule_changes/{name}"));
+    let beside = PLACE_BESIDE.map(|name| format!("/{name}"));
+    json!(
+        plan.into_iter()
+            .chain(changes)
+            .chain(beside)
+            .collect::<Vec<_>>()
+    )
+}
+
+/// Fix round 1: every member of `whole` but its `warnings` and `outcome` is in `header` as the line
+/// holds it, or the header's `truncated` names it or something inside it; and every pointer it
+/// names is in the file, which is `whole`.
+#[track_caller]
+fn assert_every_member_held_or_named(header: &Value, whole: &Value) {
+    let named = header["truncated"]
+        .as_array()
+        .map(|items| items.iter().filter_map(Value::as_str).collect::<Vec<_>>())
+        .unwrap_or_default();
+    for name in keys(whole) {
+        if ["warnings", "outcome"].contains(&name) {
+            continue;
+        }
+        let at = format!("/{name}");
+        let inside = format!("{at}/");
+        assert!(
+            header.get(name) == whole.get(name)
+                || named
+                    .iter()
+                    .any(|pointer| *pointer == at || pointer.starts_with(inside.as_str())),
+            "{name}: neither in the header nor named in truncated: {header}"
+        );
+    }
+    for pointer in named {
+        assert!(
+            whole.pointer(pointer).is_some(),
+            "{pointer}: named, so in the file: {header}"
+        );
+    }
+}
+
 /// The line `exit` the rescue module gave for the row `row`, as this server answers it in [`ERA`],
 /// its exports going to `exports` (`calls::Service::rescue`, once the module answered).
 fn shaped(exports: &Path, row: &str, exit: &Exit) -> Exit {
@@ -244,7 +392,7 @@ fn pp1_a_plan_over_the_budget_is_exported_whole_beside_what_must_be_read() {
     assert_exported_whole(&header, &whole, &exports);
     assert_eq!(
         keys(&header),
-        ["plan", "export", "warnings", "outcome"],
+        ["plan", "truncated", "export", "warnings", "outcome"],
         "{header}"
     );
     assert_eq!(keys(&header["plan"]), ["schedule_changes"], "{header}");
@@ -252,6 +400,8 @@ fn pp1_a_plan_over_the_budget_is_exported_whole_beside_what_must_be_read() {
         header["plan"]["schedule_changes"], changes,
         "schedule_changes whole, where the line holds it"
     );
+    // Fix round 1: the plan's other members and the line's beside the plan, named.
+    assert_eq!(header["truncated"], place_left(&[]), "{header}");
     assert_eq!(header["outcome"], whole["outcome"], "the line's outcome");
     assert_eq!(
         header["warnings"].as_array().map(Vec::len),
@@ -261,52 +411,21 @@ fn pp1_a_plan_over_the_budget_is_exported_whole_beside_what_must_be_read() {
     assert_eq!(assert_answered_with_its_text(&answered), header);
 
     // `deploy --plan`: the outcome alone beside the export (the manual names no member of it).
-    let files = (0..800)
-        .map(|index| json!({"dst": format!("runtime/neutral-{index:04}.bin"), "action": "replace"}))
-        .collect::<Vec<_>>();
-    let deploy = cli_line::success(
-        object(json!({
-            "steps": [
-                {"step": "stage", "outcome": {"code": "install_command_done"}, "result": {"kept": "0123abcd"}},
-                {"step": "plan", "outcome": {"code": "install_command_done"}, "result": {
-                    "plan_id": PLAN_ID,
-                    "kind": "update",
-                    "plan": {"files": files},
-                    "notice": {"replaced": 800, "added": 0},
-                }},
-            ],
-        })),
-        &done(InstallLocation::Deploy),
-    );
+    let deploy = deploy_plan();
     let whole = line_of(&deploy);
     assert!(budget::carried(&whole, ERA, false).is_err(), "setup");
     let header = line_of(&shaped(&exports, "deploy", &deploy));
     assert_exported_whole(&header, &whole, &exports);
-    assert_eq!(keys(&header), ["export", "warnings", "outcome"], "{header}");
+    assert_eq!(
+        keys(&header),
+        ["truncated", "export", "warnings", "outcome"],
+        "{header}"
+    );
+    assert_eq!(header["truncated"], json!(["/steps"]), "{header}");
     assert_eq!(header["outcome"], whole["outcome"]);
 
     // `op status`: the members the manual names as its answer.
-    let packs = (0..400)
-        .map(|index| json!({"game": "neutral", "package_id": package(index), "sha256": "0".repeat(64)}))
-        .collect::<Vec<_>>();
-    let status = cli_line::success(
-        object(json!({
-            "root": "C:\\ActingCommand",
-            "packs": packs,
-            "unfinished": null,
-            "last_operations": [
-                {"operation_id": "op-3", "kind": "pack_place", "result": "install_command_done", "undone": false},
-                {"operation_id": "op-2", "kind": "update", "result": "install_command_done", "undone": false},
-            ],
-            "leftovers": 0,
-            "journal": {
-                "operation_id": "op-3",
-                "kind": "pack_place",
-                "steps": [{"n": 1, "kind": "plan", "state": "done"}],
-            },
-        })),
-        &done(InstallLocation::Status),
-    );
+    let status = op_status();
     let whole = line_of(&status);
     assert!(budget::carried(&whole, ERA, false).is_err(), "setup");
     let header = line_of(&shaped(&exports, "op status", &status));
@@ -317,6 +436,7 @@ fn pp1_a_plan_over_the_budget_is_exported_whole_beside_what_must_be_read() {
             "unfinished",
             "last_operations",
             "journal",
+            "truncated",
             "export",
             "warnings",
             "outcome"
@@ -326,13 +446,17 @@ fn pp1_a_plan_over_the_budget_is_exported_whole_beside_what_must_be_read() {
     for member in ["unfinished", "last_operations", "journal", "outcome"] {
         assert_eq!(header[member], whole[member], "{member}: whole");
     }
+    assert_eq!(
+        header["truncated"],
+        json!(["/root", "/packs", "/leftovers"]),
+        "{header}"
+    );
 }
 
 #[test]
 fn pp1_a_larger_plan_keeps_the_four_lists_then_the_counts() {
     let temp = tempfile::tempdir().expect("tempdir");
     let exports = temp.path().join("materials");
-    let pointer = |name: &str| format!("/plan/schedule_changes/{name}");
 
     // `packages` does not fit: the four lists stay, `packages` counted in its place.
     let changes = schedule_changes(250, 2);
@@ -356,11 +480,7 @@ fn pp1_a_larger_plan_keeps_the_four_lists_then_the_counts() {
         }),
         "the four lists, packages counted: {header}"
     );
-    assert_eq!(
-        header["truncated"],
-        json!([pointer("packages")]),
-        "{header}"
-    );
+    assert_eq!(header["truncated"], place_left(&["packages"]), "{header}");
     assert_eq!(header["outcome"], whole["outcome"]);
     assert_answered_with_its_text(&shaped(&exports, "place", &exit));
 
@@ -393,13 +513,7 @@ fn pp1_a_larger_plan_keeps_the_four_lists_then_the_counts() {
     );
     assert_eq!(
         header["truncated"],
-        json!([
-            pointer("packages"),
-            pointer("enters"),
-            pointer("leaves"),
-            pointer("content_only"),
-            pointer("unread"),
-        ]),
+        place_left(&["packages", "enters", "leaves", "content_only", "unread"]),
         "{header}"
     );
     assert_eq!(header["outcome"], whole["outcome"]);
@@ -449,7 +563,7 @@ fn pp1_a_larger_plan_keeps_the_four_lists_then_the_counts() {
     );
     assert_eq!(
         header["truncated"],
-        json!(["/schedule_changes/packages"]),
+        json!(["/operation_id", "/schedule_changes/packages"]),
         "{header}"
     );
 }
@@ -594,10 +708,11 @@ fn pp1_an_export_directory_that_cannot_be_written() {
     assert!(header.get("export").is_none(), "no export: {header}");
     assert_eq!(
         keys(&header),
-        ["plan", "warnings", "outcome"],
+        ["plan", "truncated", "warnings", "outcome"],
         "the header's parts and outcome: {header}"
     );
     assert_eq!(header["plan"]["schedule_changes"], changes);
+    assert_eq!(header["truncated"], place_left(&[]), "{header}");
     assert_eq!(header["outcome"], whole["outcome"]);
     assert_eq!(assert_answered_with_its_text(&answered), header);
     assert_eq!(
@@ -627,10 +742,12 @@ fn pp1_an_export_directory_that_cannot_be_written() {
         header["warnings"][0]["outcome"]["code"], "material_export_failed",
         "first"
     );
+    // Fix round 1: nothing of the plan kept, so the plan is named whole, and the line's other
+    // members beside it.
+    let left = json!(["/plan", "/instances", "/facts", "/steps"]);
     assert_eq!(
-        header["truncated"],
-        json!(["/plan/schedule_changes"]),
-        "the part left to the line: {}",
+        header["truncated"], left,
+        "what the line holds and the header does not: {}",
         header["truncated"]
     );
     let ended = calls::finished(&answered);
@@ -668,11 +785,157 @@ fn pp1_an_export_directory_that_cannot_be_written() {
             &shown["summary"]["warnings_total"],
             &shown["summary"]["truncated"],
         ),
-        (
-            &whole["outcome"],
-            &json!(NOISY + 1),
-            &json!(["/plan/schedule_changes"]),
-        ),
+        (&whole["outcome"], &json!(NOISY + 1), &left),
         "the job's summary: {shown}"
+    );
+}
+
+#[test]
+fn pp1_fix1_a_cold_placement_keeps_next_and_names_every_member_left_out() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let exports = temp.path().join("materials");
+
+    // A placement with no Runtime answering: its `next` kept whole beside `schedule_changes`.
+    let changes = schedule_changes(4, 2);
+    let exit = place_cold(250, &changes);
+    let whole = line_of(&exit);
+    assert!(
+        budget::carried(&whole, ERA, false).is_err(),
+        "setup: the line fits neither way"
+    );
+    let answered = shaped(&exports, "place", &exit);
+    assert_eq!(answered.code, 0, "a success stays one");
+    let header = line_of(&answered);
+    assert_exported_whole(&header, &whole, &exports);
+    assert_eq!(
+        keys(&header),
+        ["plan", "next", "truncated", "export", "warnings", "outcome"],
+        "{header}"
+    );
+    assert_eq!(
+        header["next"],
+        json!({"composition_at_start": ["up"]}),
+        "next whole, what to do next: {header}"
+    );
+    assert_eq!(header["plan"]["schedule_changes"], changes, "{header}");
+    assert_eq!(header["truncated"], place_left(&[]), "{header}");
+    assert_eq!(header["outcome"], whole["outcome"], "the line's outcome");
+    assert_every_member_held_or_named(&header, &whole);
+    assert_eq!(assert_answered_with_its_text(&answered), header);
+
+    // `schedule_changes` so large that only its counts fit: `next` is still kept, by the same
+    // rule, after it.
+    let changes = schedule_changes(250, 1000);
+    let exit = place_cold(3, &changes);
+    let whole = line_of(&exit);
+    let header = line_of(&shaped(&exports, "place", &exit));
+    assert_exported_whole(&header, &whole, &exports);
+    assert_eq!(header["next"], whole["next"], "next whole: {header}");
+    assert_eq!(
+        header["plan"]["schedule_changes"]["enters_total"],
+        json!(1000),
+        "{header}"
+    );
+    assert_eq!(
+        header["truncated"],
+        place_left(&["packages", "enters", "leaves", "content_only", "unread"]),
+        "{header}"
+    );
+    assert_every_member_held_or_named(&header, &whole);
+
+    // Every row, not only the parts its table row names: a row with parts and one with none.
+    for (row, exit) in [("deploy", deploy_plan()), ("op status", op_status())] {
+        let whole = line_of(&exit);
+        assert!(budget::carried(&whole, ERA, false).is_err(), "setup: {row}");
+        let header = line_of(&shaped(&exports, row, &exit));
+        assert_exported_whole(&header, &whole, &exports);
+        assert_every_member_held_or_named(&header, &whole);
+    }
+}
+
+#[test]
+fn pp1_fix1_op_resume_keeps_what_undo_keeps() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let exports = temp.path().join("materials");
+
+    // `op resume` of the undo of a placement that ended its steps: the undo's end, linked, and the
+    // `schedule_changes` its record holds (`install::resume`, `resumed`).
+    let changes = schedule_changes(250, 2);
+    let undone = Outcome::new(ActingctlCode::InstallCommandDone)
+        .operation(InstallLocation::Undo)
+        .install_operation_id("op-3")
+        .installation_changed(true);
+    let resumed = Outcome::new(ActingctlCode::InstallCommandDone)
+        .operation(InstallLocation::Resume)
+        .install_operation_id("op-3")
+        .link(CauseRelation::Related, undone);
+    let resume = cli_line::success(object(json!({"schedule_changes": changes})), &resumed);
+    let whole = line_of(&resume);
+    assert!(
+        budget::carried(&whole, ERA, false).is_err(),
+        "setup: the line fits neither way"
+    );
+    let answered = shaped(&exports, "op resume", &resume);
+    assert_eq!(answered.code, 0, "a success stays one");
+    let header = line_of(&answered);
+    assert_exported_whole(&header, &whole, &exports);
+    assert_eq!(
+        keys(&header),
+        [
+            "schedule_changes",
+            "truncated",
+            "export",
+            "warnings",
+            "outcome"
+        ],
+        "{header}"
+    );
+    assert_eq!(
+        header["schedule_changes"],
+        json!({
+            "packages_total": 250,
+            "enters": changes["enters"],
+            "leaves": changes["leaves"],
+            "content_only": changes["content_only"],
+            "unread": changes["unread"],
+        }),
+        "the four lists, packages counted: {header}"
+    );
+    assert_eq!(
+        header["truncated"],
+        json!(["/schedule_changes/packages"]),
+        "{header}"
+    );
+    assert_eq!(header["outcome"], whole["outcome"], "the line's outcome");
+    assert_eq!(
+        header,
+        line_of(&shaped(&exports, "undo", &resume)),
+        "the header undo's row gives the same line"
+    );
+    assert_eq!(assert_answered_with_its_text(&answered), header);
+
+    // A line carrying `reverses` beside its `schedule_changes`: both kept, as `undo` keeps them.
+    let reverses = json!([
+        {"n": 3, "kind": "pack_item", "target": "packs/neutral.pack.0001"},
+        {"n": 2, "kind": "pack_item", "target": "packs/neutral.pack.0000"},
+    ]);
+    let carrying = cli_line::success(
+        object(json!({"reverses": reverses, "schedule_changes": changes})),
+        &resumed,
+    );
+    let whole = line_of(&carrying);
+    assert!(budget::carried(&whole, ERA, false).is_err(), "setup");
+    let header = line_of(&shaped(&exports, "op resume", &carrying));
+    assert_exported_whole(&header, &whole, &exports);
+    assert_eq!(header["reverses"], reverses, "reverses whole: {header}");
+    assert_eq!(
+        header["schedule_changes"]["packages_total"],
+        json!(250),
+        "{header}"
+    );
+    assert_eq!(
+        header,
+        line_of(&shaped(&exports, "undo", &carrying)),
+        "the header undo's row gives the same line"
     );
 }

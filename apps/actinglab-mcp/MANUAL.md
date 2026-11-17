@@ -193,21 +193,26 @@ naming this file.
     rows and fits);
   - a rescue tool's success line (served in the server's own process, on Windows; section 8)
     that the next point could send neither way (Workflow #434 PP-1, 0.12.72) is written whole to
-    the export directory and answered its header: the parts its tool keeps, `truncated` when one
-    of them was reduced or left to the file, `export`, `warnings` (`answer_exported` first, the
-    line's own after it) and the line's `outcome`. `ac_place` (with `plan`, and a placement)
-    keeps the plan's `schedule_changes` under `plan`, as the line holds it; `ac_undo` its
-    `reverses` (with `plan`) and its `schedule_changes`; `ac_op_status` its `unfinished`,
-    `last_operations` and, with `op`, `journal`; every other rescue tool, `ac_deploy` with `plan`
-    among them, its outcome alone (with `plan`: `plan_id`, `commit_sha`). A part is kept whole
-    while the header still fits; else `schedule_changes` without its rows `packages`, which
-    `packages_total` counts, its four lists `enters`, `leaves`, `content_only` and `unread` kept;
-    else every list counted the same way (`enters_total` and the others); a list (`reverses`,
-    `last_operations`) is counted so too; else the part is left out. `truncated` names what went
-    to the file as JSON pointers into it (`/plan/schedule_changes/packages`). Read
-    `schedule_changes` before you place: in the header, or in the file where `truncated` names its
-    lists. The call's job keeps the header, so `ac_run_show` of its handle answers it with its
-    `export`. A refusal is never exported, and no line that the next point sends is;
+    the export directory and answered its header: the parts its tool keeps, `truncated`,
+    `export`, `warnings` (`answer_exported` first, the line's own after it) and the line's
+    `outcome`. `ac_place` (with `plan`, and a placement) keeps the plan's `schedule_changes` under
+    `plan`, as the line holds it, and its `next` (what a placement with no Runtime running tells
+    you to do next, `composition_at_start`); `ac_undo` and `ac_op_resume`
+    their `reverses` (`ac_undo` with `plan`) and their `schedule_changes`, where the answer
+    carries them; `ac_op_status` its `unfinished`, `last_operations` and, with `op`, `journal`;
+    every other rescue tool, `ac_deploy` with `plan` among them, its outcome alone (with `plan`:
+    `plan_id`, `commit_sha`). A part is kept whole while the header still fits; else
+    `schedule_changes` without its rows `packages`, which `packages_total` counts, its four lists
+    `enters`, `leaves`, `content_only` and `unread` kept; else every list counted the same way
+    (`enters_total` and the others); a list (`reverses`, `last_operations`) is counted so too;
+    else the part is left out. `truncated` names, as JSON pointers into the file, every member of
+    the answer the header does not hold as the file does: each member left out (`/steps`, and
+    beside `schedule_changes` the plan's other members, `/plan/items` among them) and what a
+    reduced part left (`/plan/schedule_changes/packages`). Nothing is in the file that the header
+    neither holds nor names there. Read `schedule_changes` before you place: in the header, or in
+    the file where `truncated` names its lists. The call's job keeps the header, so `ac_run_show`
+    of its handle answers it with its `export`. A refusal is never exported, and no line that the
+    next point sends is;
   - any other line, a refusal and a child's failure line too, that does not fit with its text
     repeated is sent in `structuredContent` alone, beside a summary text `{outcome,
     structured_content_only, warnings?, warnings_omitted?, truncated?, narrow}` (from protocol

@@ -1014,9 +1014,10 @@ sentence fails that test.
       failed hook its failure (`agent_channel_failed`, refused). The server records no provenance
       for it (no identity card, no client action): the module makes its own connection on its own
       channel until LAB-6 (section 7) and records the initiator in its journal (section 4.3). The
-      budget is the core rows' (below). Each call runs as a job, as a core row's does since
-      LAB-5G3 (below): a start, a stop or a placement that outlasts the call budget answers its
-      job's handle.
+      module keeps no budget of its own: since Workflow #434 PP-1 (0.12.72; register §1.465) the
+      server answers its rows within the server's budget (`calls::Service::rescue`; "The budget",
+      below). Each call runs as a job, as a core row's does since LAB-5G3 (below): a start, a stop
+      or a placement that outlasts the call budget answers its job's handle.
     - *The answer* is the line `actinglab --json` prints for the same row and parameters (its
       members, `outcome`, `warnings`): the text content and, from 2025-06-18 on,
       `structuredContent`; `isError` is true exactly when the command line would exit non-zero
@@ -1045,7 +1046,23 @@ sentence fails that test.
       directory (`%TEMP%\actingcommand-mcp\materials`, `answer_exported`); a line that does not
       fit, of a row without shaping too, is sent once in `structuredContent` beside a summary
       text where the version has it, else answered `output_budget_exceeded` with the bytes it
-      takes and the limit: never cut silently, never sent over the limit.
+      takes and the limit: never cut silently, never sent over the limit. A rescue row's success
+      (exit code 0) that can be sent neither way (Workflow #434 PP-1, 0.12.72; register §1.465;
+      `rescue_export`) is written whole by the server's export writer (`<sha256>.json` in that
+      directory) and answered its header: the parts the header table names for its row
+      (`rescue_export::HEADERS`: `place` the plan's `schedule_changes` and the line's `next`;
+      `undo` and `op resume` `reverses` and `schedule_changes`, where the line carries them; `op
+      status` `unfinished`, `last_operations` and `journal`; every other row none), each whole
+      while the header fits, else without its rows (`packages`, counted `packages_total`), else
+      every list counted (`<name>_total`), else left to the file; `truncated`, JSON pointers into
+      the file of every member of the line the header does not hold as the line does (each
+      member left out, at the top and beside a kept part on the way to it, and what a reduced
+      part left), so that nothing is in the file that the header neither holds nor names; `export`
+      (`{path, sha256, size}`); `warnings`, `answer_exported` first and the line's own after it;
+      the line's `outcome`. When the file cannot be written, the header with
+      `material_export_failed` first and no `export`; a header that does not fit even so answers
+      `output_budget_exceeded` with its job's handle. A refusal of a rescue row, and every line of
+      one that fits, is answered as before.
     - *The front's own members* (one table, `tools::SUPPLIED`): `material` and `frame` take no
       `out`, the front gives its export directory; `material` takes the boolean `export` (true:
       the whole material is written there and the answer names the file; else its text is read)

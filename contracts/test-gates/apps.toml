@@ -2662,3 +2662,12 @@ tests = [
     "actingcommand-actinglab-mcp::bin:actinglab-mcp::gate_434_pp1::pp1_an_export_directory_that_cannot_be_written",
 ]
 incident = ["#434 PP-1"]
+
+# Workflow #434 PP-1 fix round 1 (0.12.72; register §1.465, "Fix round 1"; brief rd-1117/brief-434-pp1-fix1.md; apps/actinglab-mcp/MANUAL.md section 5): truncated names every member of the line the header does not hold as the line does, for every row (rescue_export::left_out), place keeps next, op resume keeps what undo keeps. A placement with no Runtime answering over the budget, scripted as rescue::place_cold answers it: its header holds the plan's schedule_changes and next whole, truncated naming the plan's other members, /instances, /facts and /steps; with schedule_changes counted, next still whole; for it, deploy --plan and op status every member of the line but warnings and outcome is held as the line holds it or named in truncated, and every pointer named is in the file. op resume of an undo that ended its steps keeps schedule_changes without packages, truncated /schedule_changes/packages; a line carrying reverses too keeps both; each header is the one undo's row gives the same line
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab-mcp::bin:actinglab-mcp::gate_434_pp1::pp1_fix1_a_cold_placement_keeps_next_and_names_every_member_left_out",
+    "actingcommand-actinglab-mcp::bin:actinglab-mcp::gate_434_pp1::pp1_fix1_op_resume_keeps_what_undo_keeps",
+]
+incident = ["#434 PP-1"]

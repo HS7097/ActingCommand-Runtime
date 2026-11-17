@@ -37109,8 +37109,9 @@ handle, and `ac_run_show` gave `budget::job_summary`, the member names. The comm
 
 | Row | Parts of the header |
 |---|---|
-| `place` (its plan form and a placement, both of whose lines carry the plan) | `/plan/schedule_changes` |
+| `place` (its plan form and a placement, both of whose lines carry the plan) | `/plan/schedule_changes`, `/next` (fix round 1: what a placement with no Runtime answering tells the caller to do next) |
 | `undo` (its plan form and an undo) | `/reverses` (the plan form's), `/schedule_changes` |
+| `op resume` (fix round 1; the end of an undo it finished, answered as the undo answered it) | what `undo` keeps, one constant `UNDONE`: `/reverses`, `/schedule_changes`, where its line carries them |
 | `op status` | `/unfinished`, `/last_operations`, `/journal` (with `op`): the members the manual names as its answer (section 9) |
 | every other rescue row, `deploy` and its plan form among them | none: the outcome alone, which for `deploy --plan` names `plan_id` and `commit_sha`; the manual names no member of that answer, and no summary is designed for it |
 
@@ -37122,10 +37123,10 @@ handle, and `ac_run_show` gave `budget::job_summary`, the member names. The comm
   the one before is not tried again. Parts are tried in the table's order, each in the first form
   with which the header still fits (`budget::fits`, the measure the Lab overflow rule uses); a part
   none of whose forms fits is left out. `truncated` names what went to the file, as JSON pointers
-  into the line, which is the file: `/plan/schedule_changes/packages`; with the counts each list's
-  pointer; a part left out its own pointer. It is the existing word with the meaning a run's line
-  gives it (LW-1, §1.435: what was left out, as JSON pointers), and `<name>_total` is the form a
-  record's list cut to its bound and a run's `events_total` already take.
+  into the line, which is the file (since fix round 1 every member of the line the header does not
+  hold as the line does, below). It is the existing word with the meaning a run's line gives it
+  (LW-1, §1.435: what was left out, as JSON pointers), and `<name>_total` is the form a record's
+  list cut to its bound and a run's `events_total` already take.
 - *A file that cannot be written*: the writer's `material_export_failed` is the first warning in
   place of `answer_exported`, and the header has no `export`, as a child's overflow answers it (the
   manual, section 6); the header's parts and outcome are then all of the answer there is.
@@ -37170,6 +37171,53 @@ operation table; no interface revision, configuration key or outcome code.
 **At deploy.** Nothing to configure. An over-budget success of a rescue tool now answers its
 header and leaves the whole line in the export directory; `ac_place` with `plan` answers the plan's
 `schedule_changes` (or its lists, or their counts, with `truncated`) beside the file.
+
+**Fix round 1** (coordinator work order `rd-1117/brief-434-pp1-fix1.md`, after the independent
+review `rd-1117/review-1814.md`, its one point that must change and its two that may; main
+`f0c64ae8`, the release commit of 0.12.71, merged in). (1) The contract says what the code does:
+[lab-two-entries.md](lab-two-entries.md) §9.3, the item on a rescue row (the module keeps no budget
+of its own; the server answers its rows within the server's budget) and "The budget" (a rescue
+row's success that can be sent neither way is written whole and answered its header, the parts,
+`truncated`, `export`, `answer_exported` first; when the file cannot be written the header with
+`material_export_failed` first and no `export`; refusals and lines that fit as before), where they
+said the budget was the core rows' and that such a line answered `output_budget_exceeded`. (2)
+`truncated` names every member of the line the header does not hold as the line does, for every
+row, not only the parts the table names (`rescue_export::left_out`, the one function that writes
+it, also asked by the measure while a part's form is chosen, so the header that fits is the one
+answered): each member left out whole, at the top (`/instances`, `/facts`, `/steps`; for a row the
+table names no part of, every member) and beside a kept part on the way to it (the plan's
+`/plan/plan_id` … `/plan/items` beside `schedule_changes`), and of a part kept in a reduced form what
+that form left (`/plan/schedule_changes/packages`); with no part kept, the member on the way whole
+(`/plan`). The line's `warnings` and `outcome`, which every header carries, are never named
+(`CARRIED`); a member's name is escaped as a JSON pointer escapes it. So nothing is in the file
+that the header neither holds nor names. A form no longer carries its own list of what it left
+(`Form` is its place and value; two forms are told apart by their values). `place`'s header keeps
+`/next` after `/plan/schedule_changes`, by the same forms, so a placement with no Runtime answering
+keeps what it tells the caller to do next (`composition_at_start`, the module's `up`). (3) `op
+resume`'s header keeps what `undo`'s keeps (`UNDONE`: `/reverses`, `/schedule_changes`), where its
+line carries them; today it answers the `schedule_changes` of an undo it finished
+(`install::resume`). (4) Texts: the manual's section 5 (`ac_place`'s `next`, `ac_op_resume`, what
+`truncated` names), the module's description, this section's table.
+
+*Tests of fix round 1* (gate map `contracts/test-gates/apps.toml`, the row "#434 PP-1 fix round 1";
+the same gate file). `pp1_fix1_a_cold_placement_keeps_next_and_names_every_member_left_out`: a
+placement with no Runtime answering, scripted as `rescue::place_cold` and `composite_exit` answer it,
+over the budget: its header holds the plan's `schedule_changes` whole and `next` whole, `truncated`
+naming the plan's six other members and `/instances`, `/facts`, `/steps`; with `schedule_changes`
+counted, `next` still whole; and for it, `deploy --plan` and `op status` every member of the line
+but its warnings and outcome is held as the line holds it or named (itself or something inside
+it), and every pointer named is in the file. `pp1_fix1_op_resume_keeps_what_undo_keeps`: `op
+resume` of an undo that ended its steps (its `schedule_changes`, the undo's done linked as
+`related`) over the budget keeps `schedule_changes` without `packages`, `truncated`
+`/schedule_changes/packages`; a line carrying `reverses` too keeps both; for each line the header of
+`op resume`'s row is the one `undo`'s row gives. Adapted, because the work order changes what they
+pin: tests 1, 2 and 5 now pin `truncated` with the members their headers leave out (test 1's
+`place --plan`, `deploy --plan` and `op status` headers gain `truncated`, `/steps` for `deploy` and
+`/root`, `/packs`, `/leftovers` for `op status`; test 2's lists gain the plan's other members and
+the line's, `undo`'s `/operation_id`; test 5's header without its parts names `/plan`, `/instances`,
+`/facts`, `/steps`, and so does the job's summary); test 1's `deploy --plan` and `op status` lines
+moved into the functions `deploy_plan` and `op_status`, which the new test shares. No test leaves a
+gate map; no golden changes.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
