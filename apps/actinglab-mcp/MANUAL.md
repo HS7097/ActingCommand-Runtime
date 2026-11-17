@@ -494,6 +494,24 @@ naming this file.
   earlier one beside it; `dry_run` writes nothing, and its `lab.would_write` names the cases'
   directory and each case after the package. The cases are written beside the package only;
   adoption does not take them into a repository yet (#463 AC-1, another slice).
+  #463 KR-1 (0.12.70; `contracts/lab-recording.md`, "Key steps"): the back key is not recorded
+  while playing; stage two or three adds it. `ac_record_mark` with `key` `back` (`request_json`
+  `"key": {"key": "back"}`) makes the step's one effect the back key, declared and never sent: on a
+  step without an effect it is declared; a click of the step, executed or declared, of any form, is
+  replaced only with `replace_click` (`record_step_effect_exists` otherwise) and kept whole inside
+  the key, the step's frames standing, and `no_key` (`"key": false`) takes the key back and gives
+  the click back exactly. It works on the active and the stopped recording (an archived one is
+  reopened first). Its guard is `click_guard`, which you name: `ac_record_ready` lists a key step
+  without one (`key_guard_missing`) and `ac_record_stop` refuses it (`record_key_invalid`,
+  `guard_missing`); no tool picks a guard for a key. Refused, nothing written: `record_key_invalid`
+  with `key_problem` `word_unknown` (back alone), `with_click`, `with_application`, `with_retry`
+  (send the key alone), `application_entry`, `application_step`, `holds_choice` (a select or a
+  choice mark on the step) or `step_not_effective`. A pop-up a run met is closed by the key with
+  `optional_after` and its `key` in place of `click` (both `with_click`; neither
+  `record_optional_after_invalid` `no_effect`, the word that replaces `no_click`). `ac_record_stop`
+  generates `step_<nn>_key`; its first decision at step 1 is `would_press_key`; the step has its
+  regression case on the frame of the press it replaced; `ac_record_review` answers its `press`
+  with `key` and `replaced` and draws no press; `ac_record_status` shows its `key`.
 - **Offline scenes of another size** (Workflow #392 DA-5cd, 0.12.67, as the train of DA-5ab and
   DA-5cd leaves it; `contracts/display-adapter.md` section 12). `ac_recognize`, `ac_detect_page`,
   `ac_current_page`, `ac_is_visible`, `ac_lab_observe` on a saved scene, `ac_tap_target` and

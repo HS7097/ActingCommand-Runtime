@@ -295,11 +295,11 @@ fn read_named(
 
 /// What the step table holds of the press of `step`: its click execution's time, point, end point
 /// and `before_frame`; without one, the time (#463 S1-5) and the `before_frame` of its application
-/// operation's completed receipt, when it names them, and no point.
+/// operation's completed receipt, when it names them, and no point. #463 KR-1: a key step's, the
+/// press its key replaced, whose frames stand.
 fn press_record(step: &RecordingStep) -> Pressed<'_> {
     if let Some(execution) = step
-        .click
-        .as_ref()
+        .recorded_click()
         .and_then(|click| click.execution.as_ref())
     {
         return Pressed {

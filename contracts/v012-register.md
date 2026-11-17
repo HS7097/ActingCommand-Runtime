@@ -35333,6 +35333,113 @@ release 0.12.68 (`ff74c80c`) merged first, in one merge commit; this section kee
   pack enters, two leave, one of them a pack the placement added with no rule, which the
   placement's own lists never named).
 
+### 1.449 Slice #463 KR-1 (0.12.70): a recording's step may press the back key, declared after the fact and never sent while recording (Workflow #463; the owner's ruling on board #463 of the night of 11-15 that the back key is not recorded while playing and that an agent adds such a step in stage two or three; the rules below are the coordinator's rulings in the work order and on the study of the key step, not the owner's words; coordinator work order `rd-1117/brief-463-kr1-record-key-step.md`, study `rd-1116/report-463-key-step-study.md`, part (d); stacked on #463 S2-10, §1.441, its branch at `c49176f7`, which holds main `26698590`, the 0.12.69 train with KB-1 and KP-1, §1.447 and §1.448)
+
+This section takes 1.449, the number the work order gives. It ships in 0.12.70.
+
+**Why.** Since 0.12.69 a package's step may press the back key ([linear-steps.md](linear-steps.md),
+"Key steps"), and such a step entered a package only by editing its source by hand. The agent now
+declares it on the recording, and `record stop` generates it with everything else.
+
+**The rule** ([lab-recording.md](lab-recording.md), "Key steps").
+- *The request*: `"key": null | {"key": "back"} | false` (`--key back`, `--no-key`); the word of the
+  closed vocabulary, `back` alone (the kernel's `StepKey`), checked at the request before anything
+  is read. `optional_after.key` closes an inserted pop-up in place of its click.
+- *Where it lands*, one effect per step, as an application operation: on a step without an effect,
+  declared; on a step with a click of any form, executed or declared, only with `replace_click`
+  (otherwise `record_step_effect_exists`, `effect: "click"`), the click kept whole inside the key
+  (`key.replaced`) and the step's frames standing; an executed click is replaced without
+  `--reopen-step`, which is new. Refused, nothing written, `record_key_invalid` with its word. Once
+  a step's effect is a key no other effect lands on it (`record_step_effect_exists`, `effect:
+  "key"`, from `record mark` and from `tap`, `swipe`, `long-tap`, `do --capture` and `session app`
+  with `record`, before anything is sent); a device frame on an open key step is
+  `record_step_click_not_executed`, an offline frame closes it, `--close-step` accepts it.
+- *Which recordings*: active and stopped (a key is none of the changes "Marking after stop"
+  refuses); an archived one is reopened first (`record_session_not_active`).
+- *The guard*: the click guard, named by the agent. A click step without a named guard is guarded by
+  the first template, colour, colour digest or check mark of its page the generator finds
+  (`generate::guard_target`), or pressed as a trusted coordinate on a page of OCR marks alone; a
+  key has no coordinate to trust and the generator picks none for it: `record ready` lists a key
+  step without one (`key_guard_missing`), `record stop` refuses it (`guard_missing`).
+- *Taking it back*: `key: false` gives back the click exactly; `recording.json` is byte for byte what
+  it was but for `updated_at_unix_ms` (on a stopped recording `amended_at_unix_ms` too), the package
+  generated afterwards the one before but for its generation time.
+- *Generation*: `step_<nn>_key` with `from`, `to`, `key`, the named guard, `expect_after` of the page
+  that follows, a click's `post_delay_ms`, `optional` and a page `transition` when the step has them;
+  no click, no retry, no input recheck. The task's `goal` names key steps (only when there is one),
+  `lab.key_steps` lists them (only then), the step's provenance records `key`. After an application
+  `stop` a key is `record_step_after_stop_invalid`, as a click is.
+- *The readers*: `record status` (`key`, `step_state.effect` `key_declared`); `record review` (`kind`
+  `key`, `press.key` and `press.replaced`, the replaced press's frames, no press drawn); `record
+  ready` (no `press_point_only`, a stage-two write); `record frames`, the archive's manifest and
+  S2-5's stage-one captures read the replaced press as the step's recorded press
+  (`RecordingStep::recorded_click`), the manifest's `kind` `key`; the first decision of a key step 1
+  is `would_press_key`; the cross-check judges the key step's page and its arrival as a click's,
+  and no check of a press's place applies; S2-10's cases give a key step its case on the frame of
+  the replaced press (`ready::press_frame`), or on its primary frame.
+- *Drop a press that changed nothing* (S2-7): a key step before the last is `record_drop_unproven`
+  `frames_not_recorded`, since its `click` is the key's and the stored frames show the press it
+  replaced, not the key; taking the key back first lets the press be judged as recorded.
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The members | `crates/lab/src/recording/model.rs`: `KeySpec`, `KeyRequest`, `RecordedKey`; `MarkRequest::key`, `OptionalAfterSpec::key`, `RecordingStep::key`, `MarkOutcome::key`, `StepView::key`; `RecordingStep::has_effect`, `RecordingStep::recorded_click` |
+| The rules of a key | `crates/lab/src/recording/key.rs` (new): `validate_key_request`, `validate_inserted_key`, `key_on_dropped`, `key_on_entry`, `apply_key`, `check_key_step`, `key_effect_exists`, `key_invalid` |
+| Where they are called | `crates/lab/src/recording/steps.rs`: `apply_marks` (the dropped step, the entry step, `apply_key` before the click, `check_key_step` after the select rules), `apply_click` (a click on a key step; a guard on a key step), `plan_arrival` (`key_arrival`), `plan_click`, `plan_press`, `plan_application`, `--close-step`, `to_transition`, `apply_transition` (an effect), `apply_optional_after` (the inserted key), `screen_before`; `effect_exists` and `holds_choice` made `pub(crate)`; `crates/lab/src/recording_api.rs`: `validate_mark_request`, `effect_state`, `step_view`, `mark_session`, `lab.key_steps`; `crates/lab/src/recording/inserted.rs`, `ending.rs`: the member `key` among the other members, `no_effect` |
+| Generation | `crates/lab/src/recording/generate.rs`: `PlanStep::has_effect`, `Plan::operation_id` (`key`), `key_guards` (the pre-check), `guard_target` (the named guard alone), `key_operation`, `key_steps_summary`, `step_provenance`, the goal, `effect_after_stop` |
+| The readers | `crosscheck.rs` (`key_first_decision`), `ready.rs` (`press_frame`, `stage_two_written`, the hint), `review.rs` (`press_of`, `click_press`, `after_record`), `around.rs` (`press_record`), `archive.rs` (`step_kind`, `relation`, `outcome_of`, `click_of`, `row_of`, `final_frame`), `boxes.rs` (`stage_one_captures`) |
+| The words | `crates/lab/src/codes.rs`: `LabCode::RecordKeyInvalid`, `KeyProblem`, `ReadyMissing::KeyGuardMissing`, `OptionalAfterProblem::NoEffect` (was `NoClick`); `crates/actingcommand-contract/src/outcome/keys.rs`: the key `key_problem` |
+| The command line | `apps/actinglab/src/commands/session_record.rs`: `--key`, `--no-key` (`RECORD_MARK_SHORTCUT_FLAGS`, `RECORD_MARK_SWITCHES`), `--key` beside `--optional-after` the inserted step's; the help's flag list (`lab2_cli.rs`) |
+| Texts | [lab-recording.md](lab-recording.md): the new "Key steps", the introduction, `recording.json`, `record mark` (its forms, `step_state.effect`, `key`), `record status`, "Inserting an optional step after stop" (`key`, `no_effect`), "Marking after stop", `record ready`'s words, the pre-checks, self-check item 3, the error codes; the row `record mark` of [lab-operations.json](lab-operations.json) (`key`, `no_key`, `help`, `notes`); `apps/actinglab-mcp/MANUAL.md`; the lab fragment, the catalog and the regenerated index |
+
+**Codes and words.**
+
+The exit is actinglab's own command line's, where every refusal exits 1 (the class's exit, 3, on a
+`--via` line).
+
+| Word | What it says | Refuses, warns or informs | Exit |
+|---|---|---|---|
+| `record_key_invalid` (lab, error, `key_problem` required) | a step's key cannot be declared or generated | refuses `record mark` and `record stop`; an item of `record ready` (`key_guard_missing`) | 1 |
+| `key_problem` `word_unknown` | the key's word is none of the vocabulary's | refuses | 1 |
+| `key_problem` `with_click` | a click beside the key, or an inserted step with both | refuses | 1 |
+| `key_problem` `with_application` | an application operation beside the key | refuses | 1 |
+| `key_problem` `with_retry` | a click retry beside the key | refuses | 1 |
+| `key_problem` `application_entry` | the step is the application entry step | refuses | 1 |
+| `key_problem` `application_step` | the step's effect is an application operation | refuses | 1 |
+| `key_problem` `holds_choice` | a key and a choice on one step | refuses | 1 |
+| `key_problem` `step_not_effective` | the step is dropped or converted | refuses | 1 |
+| `key_problem` `guard_missing` | a key step names no guard | refuses `record stop` | 1 |
+| `ready_missing` `key_guard_missing` | the same, as `record ready` lists it | informs (`record ready` answers) | 0 |
+| `optional_after_problem` `no_effect` (in place of `no_click`) | an inserted step declares neither a click nor a key | refuses | 1 |
+| `step_state.effect` `key_declared` | the step's effect is a key, declared | informs | 0 |
+
+A second effect without `replace_click` keeps its code, `record_step_effect_exists` (`effect`
+`click`, or `key` for an effect on a key step), and a device frame on an open key step
+`record_step_click_not_executed`. The decisions the slice adds read the request's members and the
+step's, no code. The outcome-code index is regenerated.
+
+**Tests** (`crates/lab/src/gate_463_kr1.rs`, exec gate map "#463 KR-1"; recordings made as stage one
+makes them, synthetic 160x90 screens, colour marks, no OCR model, no clock): an executed press
+replaced by the key, its record, the generated operation and its admission (1); `key: false` byte
+for byte, and the regenerated package but for its generation time (2); a key step without a guard
+listed and refused, then passing (3); each refusal, nothing written (4); a pop-up inserted after
+the stop closed by the key, both and neither refused (5); the last step with an effect a key step,
+its arrival the target page (6); step 1 a key step, the first decision `would_press_key` (7);
+`record review` of a key step (8); its regression case from disk (9); a word outside the
+vocabulary refused before the recording is read (10). Adapted, as the requirement changes what it
+pins: `gate_463_r4::r4_each_optional_after_problem_is_refused_with_its_word` (`no_effect` for the
+insertion without a click). No golden changes; no test leaves a gate map.
+
+**What is not changed.** A recording without a key and the package generated from it, byte for
+byte; the kernel, the host, the device layer and the source parser; S2-10's cases of steps without
+a key; nothing proposes a region, a choice, a value or a guard. No ledger record, configuration key
+or Runtime interface revision.
+
+**At deploy.** Nothing to configure. A recording that holds a key is not read by a Lab before
+0.12.70.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

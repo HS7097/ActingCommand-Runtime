@@ -195,6 +195,42 @@ pub struct OptionalAfterSpec {
     pub click: Option<ClickSpec>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub settle_ms: Option<u64>,
+    /// #463 KR-1 (`contracts/lab-recording.md`, "Key steps"): the key that closes the pop-up, in
+    /// place of `click` (exactly one of the two); absent on a request without it, which is then
+    /// byte for byte what it was.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<KeySpec>,
+}
+
+/// #463 KR-1 (`contracts/lab-recording.md`, "Key steps"): a key a step presses, `{"key": "back"}`,
+/// a word of the package's closed vocabulary of one word (the kernel's `StepKey`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct KeySpec {
+    pub key: String,
+}
+
+/// #463 KR-1: a request's `key`: `{"key": "back"}` declares the step's effect that key (`--key
+/// back`), `false` takes the step's key back (`--no-key`; `true` is refused); absent or `null`
+/// changes nothing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum KeyRequest {
+    Declare(KeySpec),
+    TakeBack(bool),
+}
+
+/// #463 KR-1 (`contracts/lab-recording.md`, "Key steps"): the key a step presses in place of a
+/// click, declared after the fact and never sent while recording: its word, when it was declared,
+/// and the click it replaced, kept whole (absent when the step had none), which taking the key back
+/// gives back as it was.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RecordedKey {
+    pub key: String,
+    pub declared_at_unix_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replaced: Option<StepClick>,
 }
 
 /// Written by `record stop` (#336 L4): the package generated from the recording. Workflow #336
@@ -331,6 +367,11 @@ pub struct RecordingStep {
     /// The application operation of the step (R24); a step has a click or this, not both.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub application: Option<StepApplication>,
+    /// #463 KR-1: the key the step presses in place of a click, with the click it replaced. Absent
+    /// on every step without one, so that a recording without a key is byte-identical to one an
+    /// earlier build wrote; an earlier build refuses one that holds it (unknown member).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<RecordedKey>,
     /// The step's page may not appear; the package then skips the step (Workflow #339).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub optional: Option<StepOptional>,
@@ -394,6 +435,19 @@ impl RecordingStep {
     /// The application entry step: an application operation and no frame (`from:"any"`).
     pub fn is_application_entry(&self) -> bool {
         self.application.is_some() && self.frames.is_empty()
+    }
+
+    /// #463 KR-1: whether the step has an effect: a click, an application operation or a key.
+    pub fn has_effect(&self) -> bool {
+        self.click.is_some() || self.application.is_some() || self.key.is_some()
+    }
+
+    /// #463 KR-1: the click the step table holds of the step's press: its click, or the click its
+    /// key replaced, whose frames (the screen before, the screens after) stand.
+    pub fn recorded_click(&self) -> Option<&StepClick> {
+        self.click
+            .as_ref()
+            .or_else(|| self.key.as_ref().and_then(|key| key.replaced.as_ref()))
     }
 }
 
@@ -1189,6 +1243,11 @@ pub struct MarkRequest {
     /// `no_choice`); absent leaves it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub choice: Option<bool>,
+    /// #463 KR-1 (`contracts/lab-recording.md`, "Key steps"): `{"key": "back"}` declares the step's
+    /// effect the back key (`--key back`), `false` takes it back (`--no-key`); absent or `null`
+    /// changes nothing, and a request without it is byte for byte what it was.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<KeyRequest>,
 }
 
 /// #463 S2-5: what a box drawn on the step's primary frame is for: a region the step's page is
@@ -1615,7 +1674,7 @@ pub struct StepStateView {
     pub marks: usize,
     pub frames: usize,
     /// `none`, `click_declared`, `click_executed`, `click_indeterminate`,
-    /// `application_declared` or `application_executed`.
+    /// `application_declared`, `application_executed` or (#463 KR-1) `key_declared`.
     pub effect: String,
     pub transition: Option<String>,
     pub closed: bool,
@@ -1692,6 +1751,9 @@ pub struct MarkOutcome {
     /// #463 S2-6: the step's choice mark, on a step marked as holding a choice.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub choice: Option<StepChoice>,
+    /// #463 KR-1: the step's key with the click it replaced, on a step that presses a key.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key: Option<RecordedKey>,
 }
 
 /// #463 S2-5: a box of the request as the step took it: its rectangle and, for a recognize box,
@@ -1857,6 +1919,10 @@ pub struct StepView {
     /// #463 R4: the recorded step an inserted optional step runs after, on such a step only.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub inserted_after: Option<u32>,
+    /// #463 KR-1: the step's key with the click it replaced, as the recording holds it, on a step
+    /// that presses a key.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key: Option<RecordedKey>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]

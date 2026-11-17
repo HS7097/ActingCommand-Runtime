@@ -2887,6 +2887,10 @@
     "regression_problem": {
       "type": "vocab:regression_problem",
       "description": "The word of the first failed check of a regression case record stop made from a recording for the package it generated, which misses on that package (record_case_failed; #463 S2-10, since 0.12.70); every failed check of the case is in the refusal's details."
+    },
+    "key_problem": {
+      "type": "vocab:key_problem",
+      "description": "Why a Lab recording step's key, the back key a step presses in place of a click, declared after the fact and never sent while recording, cannot be declared or generated (record_key_invalid; #463 KR-1, since 0.12.70)."
     }
   },
   "vocabularies": {
@@ -5309,8 +5313,8 @@
         "no_marks": {
           "description": "The inserted step adds and reuses no mark, so its page would recognize nothing."
         },
-        "no_click": {
-          "description": "The inserted step declares no click, so nothing would close its pop-up."
+        "no_effect": {
+          "description": "#463 KR-1 (since 0.12.70, in place of no_click): the inserted step declares no effect, neither a click nor a key, so nothing would close its pop-up."
         },
         "clears_optional": {
           "description": "The request clears optional on an inserted step: a step never recorded on the path stays optional."
@@ -5425,6 +5429,9 @@
         },
         "select_unrefined": {
           "description": "#463 S2-6: a step marked as holding a choice that no select refines yet (record_select_invalid, choice_not_refined)."
+        },
+        "key_guard_missing": {
+          "description": "#463 KR-1 (since 0.12.70): a step that presses a key names no guard (record_key_invalid, guard_missing)."
         }
       }
     },
@@ -5470,6 +5477,42 @@
       "tokens": {
         "self_agreement": {
           "description": "The cases were made from the frames the package was built from: that they pass shows the package recognises the screens it was recorded on and says nothing about screens it did not meet."
+        }
+      }
+    },
+    "key_problem": {
+      "description": "Why a Lab recording step's key, the back key a step presses in place of a click, declared after the fact and never sent while recording, cannot be declared or generated (record_key_invalid; #463 KR-1, since 0.12.70).",
+      "source": {
+        "file": "crates/lab/src/codes.rs",
+        "enum": "KeyProblem"
+      },
+      "tokens": {
+        "word_unknown": {
+          "description": "The key's word is none of the vocabulary's, which is back alone."
+        },
+        "with_click": {
+          "description": "The request declares a click beside the key (a rectangle, a source mark, a followed mark, a gesture or a press box), or an inserted step declares both a click and a key."
+        },
+        "with_application": {
+          "description": "The request declares an application operation beside the key."
+        },
+        "with_retry": {
+          "description": "The request declares a click retry beside the key: a key step declares no retry."
+        },
+        "application_entry": {
+          "description": "The step is the application entry step, which has no frame and no page to guard a key on."
+        },
+        "application_step": {
+          "description": "The step's effect is an application operation, declared or executed."
+        },
+        "holds_choice": {
+          "description": "A key and a choice on one step: the step holds a choice (a select or a choice mark), or the request gives one to a step with a key or beside a key."
+        },
+        "step_not_effective": {
+          "description": "The step is dropped or converted into a page transition."
+        },
+        "guard_missing": {
+          "description": "record stop meets a step that presses a key and names no guard: a key has no coordinate to trust, so its step is generated only with the guard the agent names."
         }
       }
     },

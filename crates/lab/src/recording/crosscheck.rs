@@ -12,7 +12,7 @@ use super::follow::followed_evaluation_box;
 use super::frames::LoadedFrame;
 use super::generate::{Plan, PlanEnding, PlanStep, follows_located_text, select_policy_document};
 use super::model::{
-    ClickFollow, ClickGesture, MarkFamily, RecordRect, RecordedFrame, SelectDecision,
+    ClickFollow, ClickGesture, MarkFamily, RecordRect, RecordedFrame, RecordedKey, SelectDecision,
     SelectFrameDecision, StepSelect,
 };
 use super::select::{
@@ -30,8 +30,8 @@ use actingcommand_contract::{
 };
 use actingcommand_device::{CaptureBackendName, Frame, PixelFormat};
 use actingcommand_execution_kernel::{
-    ExternallyVerifiedBundle, OfflineDecision, PreparedContainedTask, simulate_contained_task,
-    simulate_contained_task_at,
+    ExternallyVerifiedBundle, OfflineDecision, OfflineSimulationResult, PreparedContainedTask,
+    simulate_contained_task, simulate_contained_task_at,
 };
 use actingcommand_pack_containment::{
     ContainmentError, ContainmentLimits, ContentContainer, expand_content_container,
@@ -467,6 +467,10 @@ pub(crate) fn first_decision(
     let frame = first
         .primary()
         .ok_or_else(|| invalid("validation_failed", "step 1 has no frame"))?;
+    // #463 KR-1: a key at step 1 is pressed on its primary frame (`would_press_key`).
+    if let Some(key) = &first.step.key {
+        return key_first_decision(plan, first, key, frame, simulate(frame), failures);
+    }
     // #463 R1: a select at step 1 decides on its primary frame by the kernel's dry run; a slot it
     // selects is then simulated as the run taps it, and an empty decision is the run's normal end.
     if let Some(select) = &first.step.select {
@@ -673,6 +677,59 @@ pub(crate) fn first_decision(
     }
     let Some(result) = primary.filter(|_| failures.count() == start) else {
         return Ok(FirstDecision::undecided());
+    };
+    let mut value = serde_json::to_value(&result.decision).map_err(|error| {
+        invalid(
+            "validation_failed",
+            format!("failed to encode the first decision: {error}"),
+        )
+    })?;
+    if let Some(object) = value.as_object_mut() {
+        object.insert("frame".to_string(), json!(frame.frame_id));
+    }
+    Ok(FirstDecision {
+        value,
+        warning: None,
+    })
+}
+
+/// #463 KR-1 (`contracts/lab-recording.md`, "Key steps"): the first decision of a package whose
+/// step 1 presses a key: the offline simulation on step 1's primary frame (`simulated`) presses that
+/// key under its guard (`would_press_key`, the step's operation and its key); a key has no place on
+/// the screen to judge. Anything else is a failure `failures` meets (step 1, its primary frame).
+fn key_first_decision(
+    plan: &Plan,
+    first: &PlanStep,
+    key: &RecordedKey,
+    frame: &RecordedFrame,
+    simulated: LabResult<OfflineSimulationResult>,
+    failures: &mut Failures,
+) -> LabResult<FirstDecision> {
+    let operation = plan.operation_id(first);
+    let decided = simulated.and_then(|result| {
+        let pressed = matches!(
+            &result.decision,
+            OfflineDecision::WouldPressKey { operation_label, key: pressed, .. }
+                if *operation_label == operation && pressed.as_str() == key.key
+        );
+        if pressed {
+            return Ok(result);
+        }
+        Err(admission_failed(
+            "first_decision",
+            format!(
+                "on its primary frame, step 1 must give the press of its key {} ({operation})",
+                key.key
+            ),
+            json!({"decision": result.decision, "frame": frame.frame_id}),
+        ))
+    });
+    let result = match decided {
+        Ok(result) => result,
+        Err(error) => {
+            failures.fail(Locus::on_step(first).with_frame(frame), error)?;
+            return Ok(FirstDecision::undecided());
+        }
     };
     let mut value = serde_json::to_value(&result.decision).map_err(|error| {
         invalid(

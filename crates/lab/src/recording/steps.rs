@@ -19,12 +19,13 @@ use super::frames::{
 };
 use super::generate::{page_required, required_ids};
 use super::inserted::{optional_after_invalid, recording_active as inserted_recording_active};
+use super::key::{apply_key, check_key_step, key_effect_exists, key_on_dropped, key_on_entry};
 use super::marks::{
     EvalFrame, MarkRejection, derive_check, evaluate_mark, prepare_mark, validate_mark_id,
 };
 use super::model::{
     ApplicationAttempt, BoxBecause, BoxFrameTaken, BoxView, ClickExecution, ClickFollow,
-    ClickFollowForm, ClickGesture, ClickSpec, EndingSpec, ForbiddenMarkView,
+    ClickFollowForm, ClickGesture, ClickSpec, EndingSpec, ForbiddenMarkView, KeyRequest,
     LAB_RECORD_MARK_SCHEMA, LAB_RECORDING_DEFAULT_COLOR_MAX_DISTANCE,
     LAB_RECORDING_DEFAULT_MATCH_METRIC, LAB_RECORDING_DEFAULT_SETTLE_MS,
     LAB_RECORDING_DEFAULT_TEMPLATE_THRESHOLD, LAB_RECORDING_MAX_GESTURE_MS, LAB_RECORDING_SCHEMA,
@@ -644,6 +645,10 @@ fn plan_arrival(recording: &LabRecording, mode: ArrivalMode) -> LabResult<Arriva
     if let Some(application) = &step.application {
         return application_arrival(index, application, mode);
     }
+    // #463 KR-1: a key is declared and never sent while recording.
+    if step.key.is_some() {
+        return key_arrival(index, mode);
+    }
     match &step.click {
         None if !has_marks(step) => Ok(ArrivalPlan::Replace(index)),
         None => Err(click_missing(index)),
@@ -722,6 +727,29 @@ fn application_arrival(
     }
 }
 
+/// #463 KR-1 (`contracts/lab-recording.md`, "Key steps"): a frame after the key of the open step.
+/// A key is declared and never sent while recording, so the step reads as a step whose declared
+/// click was not executed: a device frame is `record_step_click_not_executed` and nothing is
+/// captured, an offline frame closes it (`closed_by: "offline_frame"`), and `--close-step`
+/// accepts it.
+fn key_arrival(index: u32, mode: ArrivalMode) -> LabResult<ArrivalPlan> {
+    match mode {
+        ArrivalMode::Device => Err(with_details(
+            blocked(
+                "record_step_click_not_executed",
+                format!(
+                    "step {index} declares a key, which is never sent while recording; close the \
+                     step with `record mark --close-step` before the next screen is captured"
+                ),
+            ),
+            json!({"step": index, "effect": "key"}),
+        )),
+        ArrivalMode::Offline => Ok(ArrivalPlan::Open {
+            close: Some((index, "offline_frame")),
+        }),
+    }
+}
+
 /// Device preflight: refuses before anything is captured.
 pub(crate) fn check_device_arrival(recording: &LabRecording) -> LabResult<()> {
     plan_arrival(recording, ArrivalMode::Device).map(|_| ())
@@ -758,6 +786,7 @@ fn new_step(index: u32, frames: Vec<RecordedFrame>) -> RecordingStep {
         select: None,
         choice: None,
         inserted_after: None,
+        key: None,
         transition: None,
         closed: false,
         closed_by: None,
@@ -1586,6 +1615,8 @@ pub(crate) fn apply_marks(
     request: &super::model::MarkRequest,
     ocr: &LabOcr,
 ) -> LabResult<MarkApplied> {
+    // #463 KR-1: a key named on a dropped or converted step has a word of its own.
+    key_on_dropped(&session.recording, request)?;
     let local = FrameMeta::local();
     let mut opened = false;
     let mut closed_step = None;
@@ -1659,6 +1690,8 @@ pub(crate) fn apply_marks(
                 .map(|application| application.action.clone())
         });
     if let Some(application) = frameless {
+        // #463 KR-1: the entry step has no page to guard a key on.
+        key_on_entry(request, target)?;
         // #463 R1 fix 1: a select is never dropped here. On an application step it is the
         // declaration's `with_application` (one beside an application operation of the same
         // request was refused before); on any other step without a frame it needs one, as a mark.
@@ -1689,7 +1722,9 @@ pub(crate) fn apply_marks(
             || request.clear_anchor
             || !request.boxes.is_empty()
             || request.choice.is_some()
-            || (request.application.is_none() && request.optional.is_none());
+            || (request.application.is_none()
+                && request.optional.is_none()
+                && request.key.is_none());
         if needs_frame {
             return Err(with_details(
                 blocked(
@@ -1931,6 +1966,9 @@ pub(crate) fn apply_marks(
     if request.clear_select {
         clear_select(step_mut(&mut session.recording, target)?)?;
     }
+    // #463 KR-1: a key taken back gives back the click it replaced; one declared replaces the
+    // step's click, kept inside it.
+    apply_key(step_mut(&mut session.recording, target)?, request)?;
     if request.application.is_some() {
         apply_application(session, request, target)?;
     } else {
@@ -1949,6 +1987,8 @@ pub(crate) fn apply_marks(
     // #463 R1: a select step keeps its rules whatever this command changed; #463 S2-6: so does a
     // step marked as holding a choice, which a select refines.
     check_select_rules(effective_step(&session.recording, target)?)?;
+    // #463 KR-1: a key stays the step's one effect whatever this command changed.
+    check_key_step(effective_step(&session.recording, target)?)?;
 
     // #463 S2-5: the step's page as this command leaves it, which the self-test below and the
     // check of each capture stage one stored (fix round 2: one function, `page_check`) test.
@@ -2686,6 +2726,8 @@ pub(crate) fn apply_optional_after(
         click: spec.click.clone(),
         optional: Some(true),
         optional_settle_ms: spec.settle_ms,
+        // #463 KR-1: or the key that closes the pop-up, declared on the new step.
+        key: spec.key.clone().map(KeyRequest::Declare),
         ..MarkRequest::default()
     };
     let mut applied = apply_marks(session, &request, ocr)?;
@@ -3388,6 +3430,10 @@ fn apply_click(
         validate_retry(retry)?;
     }
     let step = step_mut(&mut session.recording, target)?;
+    // #463 KR-1: a click lands on no step whose effect is a key.
+    if step.key.is_some() && declared.is_some() {
+        return Err(key_effect_exists(target));
+    }
     // One step has one effect: a click replaces a declared application operation only with
     // --replace-click; retry and guard belong to a click.
     if let Some(application) = &step.application {
@@ -3478,7 +3524,8 @@ fn apply_click(
         click.retry = Some(retry.clone());
     }
     if let Some(guard) = guard {
-        if step.click.is_none() {
+        // #463 KR-1: a key step's guard is its click guard too.
+        if step.click.is_none() && step.key.is_none() {
             return Err(invalid(
                 "validation_failed",
                 "--click-guard needs a click on the step",
@@ -3868,15 +3915,17 @@ fn step_effect(step: &RecordingStep) -> Option<(&'static str, bool)> {
 }
 
 fn effect_name(effect: &str) -> &'static str {
-    if effect == "click" {
-        "a click"
-    } else {
-        "an application operation"
+    match effect {
+        "click" => "a click",
+        // #463 KR-1.
+        "key" => "a key",
+        _ => "an application operation",
     }
 }
 
-/// The step already has an effect (`click` or `application`); `hint` says what to do.
-fn effect_exists(index: u32, effect: &str, hint: &str) -> LabError {
+/// The step already has an effect (`click` or `application`; #463 KR-1: or `key`); `hint` says
+/// what to do.
+pub(crate) fn effect_exists(index: u32, effect: &str, hint: &str) -> LabError {
     with_details(
         blocked(
             "record_step_effect_exists",
@@ -4074,7 +4123,8 @@ pub(crate) fn apply_transition(
         )
     })?;
     let step = effective_step(&session.recording, index)?;
-    if step.click.is_none() && step.application.is_none() {
+    // #463 KR-1: a transition follows a key as it follows a click.
+    if !step.has_effect() {
         return Err(with_details(
             blocked(
                 "record_transition_without_click",
@@ -4449,7 +4499,8 @@ pub(crate) fn apply_step_action(
                 return Err(step_not_last(requested, Some(index)));
             }
             let step = step_mut(recording, index)?;
-            if step.click.is_none() && step.application.is_none() {
+            // #463 KR-1: a key declared on the step is its effect too.
+            if !step.has_effect() {
                 return Err(click_missing(index));
             }
             step.closed = true;
@@ -4656,10 +4707,9 @@ fn changed_by(
 
 /// #463 S2-7: the frame a step was pressed on, as the step table records it (its click's or its
 /// application operation's `before_frame`), else its live primary frame: the screen a run meets the
-/// step on.
+/// step on. #463 KR-1: a key step's, the press its key replaced.
 fn screen_before(step: &RecordingStep) -> Option<&str> {
-    step.click
-        .as_ref()
+    step.recorded_click()
         .and_then(|click| click.execution.as_ref())
         .and_then(|execution| execution.before_frame.as_deref())
         .or_else(|| {
@@ -4798,8 +4848,8 @@ fn restore_step(recording: &mut LabRecording, index: u32) -> LabResult<()> {
 
 /// #463 stage two, train, fix round (`contracts/lab-recording.md`, "Steps, frames and
 /// remediation"): whether `step` holds a choice: marked as holding one (#463 S2-6) or refined by a
-/// select (#463 R1).
-fn holds_choice(step: &RecordingStep) -> bool {
+/// select (#463 R1). #463 KR-1: a key and a choice are never on one step (`key.rs`).
+pub(crate) fn holds_choice(step: &RecordingStep) -> bool {
     step.choice.is_some() || step.select.is_some()
 }
 
@@ -4861,7 +4911,8 @@ fn to_transition(recording: &mut LabRecording, index: u32) -> LabResult<()> {
         return Err(to_transition_invalid(index, "no_previous_effective_step"));
     };
     let step = effective_step(recording, index)?;
-    if step.click.is_some() || step.application.is_some() {
+    // #463 KR-1: a key is an effect too.
+    if step.has_effect() {
         return Err(to_transition_invalid(index, "step_has_effect"));
     }
     // A transition must be seen; an optional step may not appear (Workflow #339).
@@ -4885,7 +4936,8 @@ fn to_transition(recording: &mut LabRecording, index: u32) -> LabResult<()> {
         return Err(to_transition_invalid(index, "marks_reused_by_other_steps"));
     }
     let target = effective_step(recording, previous)?;
-    if target.click.is_none() && target.application.is_none() {
+    // #463 KR-1: a transition follows a key as it follows a click.
+    if !target.has_effect() {
         return Err(to_transition_invalid(index, "previous_step_has_no_effect"));
     }
     if target.transition.is_some() {
@@ -4958,6 +5010,10 @@ pub(crate) fn plan_click(
              --record` or close the step with `record mark --close-step`, then capture the next \
              screen",
         ));
+    }
+    // #463 KR-1: a key step is pressed by no command while recording.
+    if step.key.is_some() {
+        return Err(key_effect_exists(index));
     }
     if let Some(click) = &step.click
         && click.execution.is_some()
@@ -5180,6 +5236,10 @@ pub(crate) fn plan_press(
             "a press needs a step of its own: execute the operation with `session app <action> \
              --record` or close the step with `record mark --close-step`, then press",
         ));
+    }
+    // #463 KR-1: nothing is pressed on a step whose effect is a key.
+    if step.key.is_some() {
+        return Err(key_effect_exists(index));
     }
     if let Some(declared) = &step.click {
         if declared.execution.is_some() {
@@ -5587,6 +5647,8 @@ pub(crate) fn plan_application(
     };
     let step = effective_step(recording, index)?;
     match (&step.click, &step.application) {
+        // #463 KR-1: no application operation lands on a step whose effect is a key.
+        _ if step.key.is_some() => Err(key_effect_exists(index)),
         (Some(_), _) => Err(effect_exists(index, "click", hint)),
         (None, Some(existing)) if existing.action != action || existing.executed.is_some() => {
             Err(with_details(

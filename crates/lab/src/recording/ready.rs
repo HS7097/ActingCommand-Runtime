@@ -315,6 +315,8 @@ fn stage_two_written(recording: &LabRecording) -> bool {
                 || step.choice.is_some()
                 || step.optional.is_some()
                 || step.transition.is_some()
+                // #463 KR-1: a key is declared in stage two.
+                || step.key.is_some()
                 || step.click.as_ref().is_some_and(|click| {
                     (click.source != POINT_SOURCE && click.source != SWIPE_SOURCE)
                         || (click.source == POINT_SOURCE && !one_pixel(click.rect))
@@ -327,10 +329,10 @@ fn stage_two_written(recording: &LabRecording) -> bool {
 /// The frame the press of `step` happened on, as stage one recorded it: its click's or its
 /// application operation's `before_frame`. Fix round 2: a click without an execution, whose press
 /// `--reopen-step` moved aside, names its last attempt's (an application operation moved aside
-/// keeps no frame). #463 S2-2: `record review` names a step's screen before by it.
+/// keeps no frame). #463 S2-2: `record review` names a step's screen before by it. #463 KR-1: a key
+/// step's is that of the press its key replaced (none for a key that replaced none).
 pub(crate) fn press_frame(step: &RecordingStep) -> Option<String> {
-    step.click
-        .as_ref()
+    step.recorded_click()
         .and_then(|click| click.execution.as_ref().or_else(|| click.attempts.last()))
         .and_then(|execution| execution.before_frame.clone())
         .or_else(|| {
@@ -372,6 +374,10 @@ fn hint(what: ReadyMissing, step: Option<u32>) -> Option<String> {
         | ReadyMissing::OptionalApplication
         | ReadyMissing::OptionalRestartHome => {
             Some(format!("record mark --step {step} --not-optional"))
+        }
+        // #463 KR-1: the guard the agent names.
+        ReadyMissing::KeyGuardMissing => {
+            Some(format!("record mark --step {step} --click-guard <id>"))
         }
         _ => None,
     }

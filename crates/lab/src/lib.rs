@@ -121,6 +121,10 @@ mod gate_463_s26;
 // runner of the case contract.
 #[cfg(test)]
 mod gate_463_s210;
+// #463 KR-1: a recording's step may press the back key, declared after the fact and never sent
+// while recording.
+#[cfg(test)]
+mod gate_463_kr1;
 mod lab_run;
 mod lab_run_api;
 mod ledger_port;
