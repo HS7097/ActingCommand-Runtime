@@ -588,6 +588,8 @@ impl Declaration<'_> {
                 "on_max_runs",
                 "wait",
                 read_list_member(),
+                // Workflow #463 KP-1 (`contracts/linear-steps.md`, "Key steps"): a key step.
+                "key",
             ],
         )?;
         if object.get("verify_template").is_none_or(Value::is_null) {
@@ -636,6 +638,10 @@ impl Declaration<'_> {
         if let Some(read_list) = read_list {
             self.read_list_step(object, read_list, pointer)?;
         }
+        // Workflow #463 KP-1 (`contracts/linear-steps.md`, "Key steps"): or a key step, `{"key":
+        // "<word>"}` (its shape below); Runtime admission holds its word to the vocabulary, its
+        // mode to `linear_steps` and a key beside another effect to `operation_effect`.
+        let key = object.get("key").filter(|value| !value.is_null());
         match (
             object.get("click").filter(|value| !value.is_null()),
             object.get("application").filter(|value| !value.is_null()),
@@ -658,7 +664,7 @@ impl Declaration<'_> {
                     ResourceDeclarationReason::InvalidValue,
                 ));
             }
-            (None, None, None) if wait.is_some() || read_list.is_some() => {}
+            (None, None, None) if wait.is_some() || read_list.is_some() || key.is_some() => {}
             (None, None, None) => {
                 let click = self.required(object, pointer, "click")?;
                 self.click(click, &child(pointer, "click"), canonical)?;
@@ -818,10 +824,22 @@ impl Declaration<'_> {
                 }
                 "max_runs" if !value.is_null() => self.max_runs(value, &pointer)?,
                 "on_max_runs" if !value.is_null() => self.on_max_runs(value, &pointer)?,
+                "key" if !value.is_null() => self.key_effect(value, &pointer)?,
                 _ => {}
             }
         }
         Ok(())
+    }
+
+    /// Workflow #463 KP-1 (`contracts/linear-steps.md`, "Key steps"): a key step's `key`, `{"key":
+    /// "<word>"}`, the word a string, nothing else. Runtime admission holds the word to the
+    /// vocabulary (`reason=key_unknown`), so a word it does not know is no shape error here.
+    fn key_effect(&self, value: &Value, pointer: &str) -> CliOutcome<()> {
+        let object = self.object(value, pointer, &["key"])?;
+        self.string(
+            self.required(object, pointer, "key")?,
+            &child(pointer, "key"),
+        )
     }
 
     /// #411 B36/B19 (A35-S3): a wait step's `wait`, task schema `0.9` only (`UnconsumedField`

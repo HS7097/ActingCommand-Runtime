@@ -14,12 +14,14 @@
 //! (`single_touch_drag_with_pause_and_brake_v1`) and the page flip, a tap sampled in its
 //! rectangle; and the page checks of page-order evidence, judged on the latest frame.
 
+use super::select::not_a_member;
 use super::{
-    ScanDeclaration, ScanDrag, ScanDragMotion, ScanDryRun, ScanInput, ScanReadInstance,
-    ScanReading, ScanSession, ScanSource, u32_of,
+    ScanDeclaration, ScanDrag, ScanDragMotion, ScanDryRun, ScanDryRunDecided, ScanInput,
+    ScanReadInstance, ScanReading, ScanSession, ScanSource, bound_inputs, u32_of,
 };
 use crate::codes::{ExecutionKernelCode, ExecutionKernelLocation};
 use crate::contained_task::RunTables;
+use crate::contained_task::selection::{check_policy_override, on_empty_mode_refusal};
 use crate::contained_task::{
     ContainedTaskBoundaryTiming, ContainedTaskError, ContainedTaskGuardOutcome,
     ContainedTaskRunError, ContainedTaskRuntime, ContainedTaskTimingContext, ContainedTaskTrace,
@@ -30,7 +32,8 @@ use crate::contained_task::{
 use crate::{InputFrameContext, ObservedFrame};
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::{
-    CandidateRect, InputAction, TaskTimingBoundary, TaskTimingBudgetOrigin,
+    CandidateRect, InputAction, InstanceFactSnapshot, TaskSelectionBlocking, TaskTimingBoundary,
+    TaskTimingBudgetOrigin,
 };
 use actingcommand_device::Frame;
 use actingcommand_recognition::color_digest::{ColorDigest, ColorDigestGrid};
@@ -38,7 +41,7 @@ use actingcommand_recognition::{Rect, Scene};
 use actingcommand_recognition_pack::{
     CandidateLayout, RecognitionPackCode, RecognitionPackLocation, TargetSearch,
 };
-use actingcommand_selection_policy::SelectionFactSnapshot;
+use actingcommand_selection_policy::{SelectionFactSnapshot, SelectionOutcome, SelectionPolicy};
 use std::time::{Duration, Instant, SystemTime};
 
 const SELECT_INVALID: ExecutionKernelCode = ExecutionKernelCode::ContainedTaskSelectInvalid;
@@ -720,6 +723,136 @@ pub fn replay_scan_with_tables(
     )
 }
 
+/// Workflow #463 K-R3a (`contracts/selection-graph.md`, "Offline"): the scan select
+/// `operation_id` dry-run over a saved frame sequence as far as its decision, the entry the Lab's
+/// self-test calls. The frames are as for [`dry_run_scan`]: the step's dispatched frame, then
+/// every capture the scan takes, in order (without a target consensus a capture takes one frame,
+/// and a viewport settles once two captures agree, so a forward run of viewports v0 … vn is the
+/// sequence v0, v0, v1, v1, …, vn, vn). The scan is the step's own admitted `scan`. Its policy is
+/// the step's sealed document, or `policy_override`, checked as [`crate::dry_run_select`] checks
+/// one and then held to every admission rule of a scan step that reads the policy, by the
+/// functions admission calls (its last tie-break key, `on_empty`'s mode, the upper bound's
+/// inputs; `contained_task_select_invalid`, the admission's detail). The facts are
+/// `dry_run_select`'s: `snapshot` with `run_parameters` overlaid at `now_unix_ms`, with the rows
+/// of the record lists the evaluated policy declares; a document that declares a shared table
+/// finds none. The session runs as online up to its coverage checks, then decides as the step
+/// does, with its unknown-instance check; nothing returns, confirms or is pressed. A failure
+/// before the decision exists is the error, as `dry_run_scan`'s.
+pub fn dry_run_scan_decide(
+    task: &PreparedContainedTask,
+    operation_id: &str,
+    frames: Vec<Frame>,
+    (snapshot, now_unix_ms): (&InstanceFactSnapshot, u64),
+    run_parameters: &crate::RunParameters,
+    policy_override: Option<&SelectionPolicy>,
+) -> Result<ScanDryRunDecided, ContainedTaskError> {
+    let operation = task
+        .program
+        .operations
+        .iter()
+        .find(|operation| operation.id == operation_id)
+        .ok_or_else(|| {
+            ContainedTaskError::with_detail(
+                ExecutionKernelCode::ContainedTaskOperationMissing.code(),
+                operation_id,
+            )
+        })?;
+    let prepared = operation.prepared_select.as_deref().ok_or_else(|| {
+        ContainedTaskError::with_detail(
+            SELECT_INVALID.code(),
+            format!("operation={operation_id} is not a select step"),
+        )
+    })?;
+    let scan = prepared.scan().ok_or_else(|| {
+        ContainedTaskError::with_detail(
+            SELECT_INVALID.code(),
+            format!("operation={operation_id} scan=undeclared"),
+        )
+    })?;
+    if let Some(policy) = policy_override {
+        let layout = check_policy_override(task, prepared, policy)?;
+        // Fix round K-a: every admission rule of a scan step that reads its policy, in
+        // admission's order and with its details, each by the function admission calls: the
+        // scan's own (its last tie-break key), `on_empty`'s mode where the step declares
+        // `on_empty`, and the upper bound's inputs.
+        let refusal = scan
+            .admission_refusal(
+                layout,
+                Some(policy),
+                &task.evaluator,
+                (
+                    task.control.resolution.width,
+                    task.control.resolution.height,
+                ),
+                task.control.task_timeout().milliseconds,
+            )
+            .or_else(|| {
+                operation
+                    .on_empty_key()
+                    .and_then(|_| on_empty_mode_refusal(policy))
+            })
+            .or_else(|| {
+                bound_inputs(layout, policy, prepared.identity_feature())
+                    .err()
+                    .map(|detail| format!("upper_bound {detail}"))
+            });
+        if let Some(detail) = refusal {
+            return Err(ContainedTaskError::with_detail(
+                SELECT_INVALID.code(),
+                format!("operation={operation_id} {detail}"),
+            ));
+        }
+    }
+    let policy = policy_override.unwrap_or(prepared.policy());
+    let mut snapshot = snapshot.clone();
+    run_parameters.overlay(&mut snapshot, now_unix_ms);
+    let facts = SelectionFactSnapshot::from_instance_snapshot_with_lists(
+        &snapshot,
+        now_unix_ms,
+        &policy.record_list_keys(),
+    );
+    let mut runtime = ReplayRuntime {
+        frames: frames.into_iter(),
+        tables: RunTables::default(),
+    };
+    scan_session(
+        task,
+        &mut runtime,
+        (operation_id, scan, policy_override),
+        (&facts, now_unix_ms),
+        true,
+        |session, source| {
+            let end = session.run(source)?;
+            let summary = session.summary(Some(&end));
+            let (decision, _, unknown_check) = session.decide_attempt(end)?;
+            let chosen = match (&decision.outcome, decision.selected.as_slice()) {
+                (SelectionOutcome::Selected { .. }, [candidate_id])
+                    if unknown_check.blocking == TaskSelectionBlocking::None =>
+                {
+                    // Fix round K-a: a selected candidate the scan holds no member for is an
+                    // invariant broken, never a missing choice.
+                    let position = session.member_position(candidate_id)?;
+                    let member = summary
+                        .members
+                        .iter()
+                        .find(|member| member.position_index == position)
+                        .cloned()
+                        .ok_or_else(|| not_a_member(candidate_id))?;
+                    Some(member)
+                }
+                _ => None,
+            };
+            Ok(ScanDryRunDecided {
+                scan: summary,
+                decision,
+                unknown_check,
+                chosen,
+            })
+        },
+    )
+    .map_err(replay_error)
+}
+
 /// One scan session of the select step `operation_id` over `runtime`, whose next capture is the
 /// step's dispatched frame: the path `dry_run_scan` replays (`replay`) and a runtime drives
 /// online. The scan's time is its `max_ms`, from the runtime's clock.
@@ -730,6 +863,33 @@ pub(in crate::contained_task) fn run_scan<R: ContainedTaskRuntime>(
     (facts, now_unix_ms): (&SelectionFactSnapshot, u64),
     replay: bool,
 ) -> Result<ScanDryRun, ContainedTaskRunError<R::Error>> {
+    scan_session(
+        task,
+        runtime,
+        (operation_id, scan, None),
+        (facts, now_unix_ms),
+        replay,
+        |session, source| {
+            let end = session.run(source)?;
+            Ok(session.summary(Some(&end)))
+        },
+    )
+}
+
+/// Workflow #463 K-R3a: [`run_scan`]'s session over `runtime`, evaluating the step's sealed
+/// policy or `policy_override` (a dry run's checked draft), handed to `body` with its source once
+/// the dispatched frame is the step's page.
+fn scan_session<R: ContainedTaskRuntime, T>(
+    task: &PreparedContainedTask,
+    runtime: &mut R,
+    (operation_id, scan, policy_override): (&str, &ScanDeclaration, Option<&SelectionPolicy>),
+    (facts, now_unix_ms): (&SelectionFactSnapshot, u64),
+    replay: bool,
+    body: impl FnOnce(
+        &mut ScanSession<'_>,
+        &mut RuntimeScanSource<'_, R>,
+    ) -> Result<T, ContainedTaskRunError<R::Error>>,
+) -> Result<T, ContainedTaskRunError<R::Error>> {
     let operation = task
         .program
         .operations
@@ -779,17 +939,19 @@ pub(in crate::contained_task) fn run_scan<R: ContainedTaskRuntime>(
         }
     };
     let frame = (first.scene.width(), first.scene.height());
-    let tables = crate::contained_task::run_tables::evaluation_tables(runtime, prepared.policy())
-        .map_err(|refusal| {
-        ContainedTaskError::with_detail(
-            ExecutionKernelCode::SelectionEvaluationFailed.code(),
-            refusal.to_string(),
-        )
-    })?;
+    let policy = policy_override.unwrap_or(prepared.policy());
+    let tables = crate::contained_task::run_tables::evaluation_tables(runtime, policy).map_err(
+        |refusal| {
+            ContainedTaskError::with_detail(
+                ExecutionKernelCode::SelectionEvaluationFailed.code(),
+                refusal.to_string(),
+            )
+        },
+    )?;
     let mut session = ScanSession::with_tables(
         scan,
         layout,
-        prepared.policy(),
+        policy,
         &tables,
         facts,
         now_unix_ms,
@@ -806,6 +968,5 @@ pub(in crate::contained_task) fn run_scan<R: ContainedTaskRuntime>(
         (0, timing, deadline, PointDraw::uniform(None)),
         replay,
     );
-    let end = session.run(&mut source)?;
-    Ok(session.summary(Some(&end)))
+    body(&mut session, &mut source)
 }

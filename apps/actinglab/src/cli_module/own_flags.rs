@@ -406,8 +406,12 @@ pub(crate) fn accepted(row: &str) -> Option<Accepted> {
             &standard_pack_cli::TRIAL_SWITCHES,
             none,
         ),
-        // Workflow #463 S3-14.
-        "standard-pack status" => from_lists(standard_pack_cli::STATUS_FLAGS, &[], none),
+        // Workflow #463 S3-14. Workflow #463 S3-15a: and its switch `--installation`.
+        "standard-pack status" => from_lists(
+            standard_pack_cli::STATUS_FLAGS,
+            &standard_pack_cli::STATUS_SWITCHES,
+            none,
+        ),
         // Workflow #477 PC-1.
         "standard-pack catalog" => from_lists(
             standard_pack_cli::CATALOG_FLAGS,

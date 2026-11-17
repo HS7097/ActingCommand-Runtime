@@ -249,10 +249,19 @@ mod gate_463_s38;
 // the command line and through `serve --stdio`.
 #[path = "gate_477_pc1.rs"]
 mod gate_477_pc1;
+// Workflow #463 KP-1 fix round 1: `package check` and `package bundle` take a pack directory whose
+// `linear_steps` task has a key step.
+#[path = "gate_463_kp1.rs"]
+mod gate_463_kp1;
 // #463 RC-1: the regression case as a Runtime contract: its reader, its offline runner on the
 // kernel's recognition, and `resource regression` over a checkout's cases.
 #[path = "gate_463_rc1.rs"]
 mod gate_463_rc1;
+// Workflow #463 S3-15a: `standard-pack status --installation` answers the authorization each pack
+// was enabled under and each pair's suspension and break-in (the rescue module, Windows only).
+#[cfg(windows)]
+#[path = "gate_463_s315.rs"]
+mod gate_463_s315;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
 use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{

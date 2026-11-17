@@ -318,6 +318,9 @@ pub(super) struct FakeHost {
     pub(super) crash_after: Cell<Option<usize>>,
     pub(super) crash_between_renames: Cell<Option<usize>>,
     pub(super) crash_before_retire: Cell<bool>,
+    /// Workflow #463 S3-18 fix round 1: stops an `install undo` after it records the step it
+    /// names undone, once (none by default).
+    pub(super) crash_after_undone: Cell<Option<usize>>,
     pub(super) stopped: RefCell<Vec<(String, usize)>>,
     pub(super) processes: RefCell<Vec<RunningImage>>,
     /// Workflow #434 LAB-3 fix 1: the process id the host answers as its own (none by default).
@@ -406,6 +409,7 @@ impl FakeHost {
             crash_after: Cell::new(None),
             crash_between_renames: Cell::new(None),
             crash_before_retire: Cell::new(false),
+            crash_after_undone: Cell::new(None),
             stopped: RefCell::new(Vec::new()),
             processes: RefCell::new(Vec::new()),
             own_pid: Cell::new(None),
@@ -797,6 +801,17 @@ impl Host for FakeHost {
     fn before_retire(&self, operation_id: &str) -> Result<(), Outcome> {
         if self.crash_before_retire.replace(false) {
             self.stopped.borrow_mut().push((operation_id.to_owned(), 0));
+            return Err(crash());
+        }
+        Ok(())
+    }
+
+    fn after_undone(&self, operation_id: &str, step: usize) -> Result<(), Outcome> {
+        if self.crash_after_undone.get() == Some(step) {
+            self.crash_after_undone.set(None);
+            self.stopped
+                .borrow_mut()
+                .push((operation_id.to_owned(), step));
             return Err(crash());
         }
         Ok(())

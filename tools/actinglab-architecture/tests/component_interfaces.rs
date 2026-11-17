@@ -151,6 +151,9 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   PC-1 fix round 1 (0.12.68, register §1.438) raises it to 16: a bundle zip's root file
 ///   `pack-catalog.json`, which no reader of the Runtime opens and which an installer before it
 ///   refuses as a member it does not know; a bundle without it keeps its revision, so [3, 16].
+///   Workflow #463 KP-1 (0.12.69, register §1.448) raises it to 17: a `linear_steps` task's key
+///   step, which every Runtime before it refuses at its declaration gate (`UnknownField` at
+///   `/operations/<i>/key`); a pack without one keeps its revision, so [3, 17].
 /// - `runtime-client` [2, 2]: request v4, receipt v2; requests v1 to v3 are refused. Workflow
 ///   #429 R-0 (0.12.30, register §1.213) raises `max` to 3: the workbench's request kinds and
 ///   members; every revision-2 request is still answered as before, so [2, 3]. Workflow #429
@@ -185,7 +188,7 @@ const V0120: &[(&str, [u64; 2])] = &[
     ("install-control", [0, 0]),
     ("install-selection", [1, 1]),
     ("ledger", [3, 8]),
-    ("package", [3, 16]),
+    ("package", [3, 17]),
     ("runtime-client", [3, 11]),
     ("runtime-outcomes", [1, 1]),
 ];

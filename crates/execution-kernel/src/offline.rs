@@ -8,7 +8,7 @@ use crate::{
     ContainedTaskCode, ContainedTaskGuardOutcome, ContainedTaskRunError, ContainedTaskRunOptions,
     ContainedTaskRuntime, ContainedTaskTrace, InputFrameContext, ObservedFrame,
     PreparedContainedTask, ResourceReadingProblem, RunParameters, SelectionState,
-    SelectionStateRequest, TouchSampling,
+    SelectionStateRequest, StepKey, TouchSampling,
 };
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::{Code, Detail, Outcome, StateProblem};
@@ -105,6 +105,14 @@ pub enum OfflineDecision {
         /// a click that draws no box point (a `point` click, a path drag).
         #[serde(skip_serializing_if = "Option::is_none")]
         sampling: Option<InputSamplingEvidence>,
+        guard: ContainedTaskGuardOutcome,
+    },
+    /// Workflow #463 KP-1 (`contracts/linear-steps.md`, "Tools"): the first effect is a
+    /// `linear_steps` key step's: the operation, the key of the vocabulary it presses and the guard
+    /// outcome it would press it under.
+    WouldPressKey {
+        operation_label: String,
+        key: StepKey,
         guard: ContainedTaskGuardOutcome,
     },
     WouldComplete {
@@ -327,11 +335,19 @@ fn simulate(
             ) => runtime
                 .planned
                 .take()
-                .map(|planned| OfflineDecision::WouldClick {
-                    operation_label: planned.operation_label,
-                    action: planned.action,
-                    sampling: planned.sampling,
-                    guard: planned.guard,
+                .map(|planned| match StepKey::of_action(&planned.action) {
+                    // Workflow #463 KP-1: a key step's press is reported as one.
+                    Some(key) => OfflineDecision::WouldPressKey {
+                        operation_label: planned.operation_label,
+                        key,
+                        guard: planned.guard,
+                    },
+                    None => OfflineDecision::WouldClick {
+                        operation_label: planned.operation_label,
+                        action: planned.action,
+                        sampling: planned.sampling,
+                        guard: planned.guard,
+                    },
                 })
                 .ok_or_else(|| {
                     OfflineSimulationError::new(

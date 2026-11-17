@@ -50,6 +50,10 @@
 // time the run has left (`with_time_left`). Fix round 3: its capture may fail from a given capture
 // on (`with_failing_capture_from`), an operation error of the device; no error it gives is a
 // failure of its bookkeeping (it records every trace it is handed).
+//
+// Workflow #463 KP-1: it answers that its input sends every key (`without_key_input`: that it sends
+// none, as a capability table that says `input.key` unsupported) and keeps each key it was asked
+// about.
 
 use super::super::*;
 use actingcommand_device::CaptureBackendName;
@@ -177,6 +181,9 @@ pub(crate) struct ScriptedRuntime {
     time_left: Option<Duration>,
     // Workflow #463 U1, fix round 3.
     failing_capture_from: Option<usize>,
+    // Workflow #463 KP-1.
+    key_input: KeyInputSupport,
+    key_input_asks: Vec<StepKey>,
 }
 
 // Workflow #463 U1, fix round 3: the operation error of a capture that `with_failing_capture_from`
@@ -230,7 +237,23 @@ impl ScriptedRuntime {
             host_started: false,
             time_left: None,
             failing_capture_from: None,
+            key_input: KeyInputSupport::Supported,
+            key_input_asks: Vec::new(),
         }
+    }
+
+    // Workflow #463 KP-1: the same device, whose input sends no key: it answers every
+    // `key_input_support` with `Unsupported`.
+    pub(crate) fn without_key_input(self) -> Self {
+        Self {
+            key_input: KeyInputSupport::Unsupported,
+            ..self
+        }
+    }
+
+    // Workflow #463 KP-1: the keys the kernel asked whether the input sends, in order.
+    pub(crate) fn key_input_asks(&self) -> &[StepKey] {
+        &self.key_input_asks
     }
 
     // Workflow #463 U1, fix round 2: the same device, showing a shared interrupt page on every
@@ -544,6 +567,11 @@ impl ContainedTaskRuntime for ScriptedRuntime {
             }
             None => Ok(ApplicationEffectSupport::Unsupported),
         }
+    }
+
+    fn key_input_support(&mut self, key: StepKey) -> Result<KeyInputSupport, Self::Error> {
+        self.key_input_asks.push(key);
+        Ok(self.key_input)
     }
 
     fn record(&mut self, trace: ContainedTaskTrace) -> Result<(), Self::Error> {

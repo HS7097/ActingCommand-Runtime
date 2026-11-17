@@ -27866,6 +27866,106 @@ as gate_463_u1 makes a run's budget end fail: no fixture makes them fail otherwi
 **At deploy.** Nothing to do; a pair that ran before starts its break-in at its first run on this
 build that began its package.
 
+### 1.392 Slice #463 K-R3a (0.12.69): the kernel's offline dry run of a scan select as far as its decision (Workflow #463; the owner's rule on board #463 that every package but a complex looping battle is recorded, never written by hand, and the owner's rule that what stands in a list is chosen by what is read, never by its position; the design note `rd-1115/463-r3-scan-design.md`, section 3.1 and its row K-R3a of section 8, which the coordinator accepted; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-463-r3-first-slices.md`, read on main `d32d4d6c`)
+
+1.392 is the number the coordinator gave this slice when it was cut from main `d32d4d6c`, which
+held the sections up to §1.385; main `ff74c80c` (release 0.12.68) leaves it free, and the section
+stands between §1.389 and §1.395 in the order of the numbers. The slice ships in 0.12.69 (releases
+0.12.61 to 0.12.68 were cut without it).
+
+**What it is.** A recording can choose in a list that scrolls only if the Lab can test, on the
+frames it recorded, what the kernel's scan select would decide there (slice R3b). The kernel had
+`dry_run_scan`, which stops at the coverage checks; `Decide` and its unknown-instance rules lived in
+`ScanSession::select`, crate-private. This slice adds, beside it (`scan/online.rs`, exported from
+the crate):
+
+```rust
+pub fn dry_run_scan_decide(
+    task: &PreparedContainedTask, operation_id: &str, frames: Vec<Frame>,
+    (snapshot, now_unix_ms): (&InstanceFactSnapshot, u64), run_parameters: &RunParameters,
+    policy_override: Option<&SelectionPolicy>,
+) -> Result<ScanDryRunDecided, ContainedTaskError>;
+pub struct ScanDryRunDecided {
+    pub scan: ScanDryRun, pub decision: SelectionDecision,
+    pub unknown_check: TaskSelectionUnknownCheck, pub chosen: Option<ScanDryRunMember>,
+}
+```
+
+It reads the step's own admitted `scan` (`PreparedSelect::scan`, new; a step without one is
+`contained_task_select_invalid`, `operation=<id> scan=undeclared`), replays the frames as
+`dry_run_scan` does and decides as the step does. `scan` is the session's account exactly as
+`dry_run_scan` gives it; `unknown_check` is what the step's record would carry; `chosen` is the
+member of the one selected candidate when nothing blocks the decision. Nothing returns, confirms or
+is pressed. A failure before the decision is the error.
+
+**The split.** `ScanSession::select` now runs the session, then `decide_attempt(end)`: the
+evaluator's abort as the decision (P2, P3) or the members evaluated once, the unknown positions,
+their bound and the blocking of rules 2 and 3. What follows (blocked, `on_empty`, `Return`,
+`Confirm`) is unchanged. The abort path is the same as before: `decision_blocking` answers `none`
+for an `unknown` decision, and the match's last arm gives the same `selection_not_selected` the
+early return gave, with the same record. The online path (`scan_select_attempt`) and its records
+are not touched. `run_scan`'s body became `scan_session`, which takes an optional draft policy and
+the body to run on the session; `run_scan` (so `dry_run_scan`, `replay_scan`) and
+`dry_run_scan_decide` are its two bodies, their signatures unchanged.
+
+**The draft policy.** Checked as `dry_run_select` checks one (its check moved into
+`check_policy_override`, shared, unchanged: `contained_task_select_policy_invalid`, `_mismatch`),
+then held to every admission rule of a scan step that reads the policy (the last two since the fix
+round K-a, below): the scan's own `admission_refusal` runs with the draft, and its refusal is the
+admission's, `contained_task_select_invalid`
+`operation=<id> scan tie_break=last_not_candidate_id_lowest_first`; then `on_empty`'s mode and the
+upper bound's inputs, each refused with the admission's detail.
+
+**Facts and frames.** As `dry_run_select` (the snapshot with the run parameters overlaid, the rows
+of the record lists the evaluated policy declares; no snapshot check), and no shared table, as
+`dry_run_scan`. The frames (the design's point not verified, read): `run_scan`'s first capture is
+the dispatched frame, `settle_capture` takes captures until two give the same core anchors, and
+after a move the first capture has nothing to compare with; `capture_frame_gated` takes one frame
+per capture when the pack declares no target consensus. So a forward run of viewports v0 … vn is
+v0, v0, v1, v1, …, vn, vn; with a target consensus each capture takes the pack's sample frames.
+
+**Codes, contract, interface.** No code, word, key or record shape is added; the outcome code index
+does not change. [selection-graph.md](selection-graph.md), "Offline", gains the paragraph. The
+entry is a kernel function the Lab calls in the same build: no interface revision moves.
+
+**Tests** (kernel `gate_463_r3a.rs`, exec gate row "#463 K-R3a"; no clock read), on K1's card list
+(`gate_463_k1`'s scan run: its cards, layout, scan and policy shape, admitted by the kernel's own
+admission) in a list area of the frame's rows 4 to 55 that holds four cards, its band, tracking
+area and moves fitted to it, and with a seventh name no card shows; the frames v0, v0, v1, v1:
+the wanted card on the second viewport only, selected and chosen; a wanted name on no card,
+`empty` with nothing unknown; that card unreadable, `empty` blocked by its one unknown instance; a
+draft that wants a card of the first viewport, the draft's decision and choice; a draft without
+`candidate_id lowest_first` last, refused; the fix round K-a adds two (below). No existing test
+changes (SEL-L3, SEL-L4b, SEL-L6b, K1 run the same code), no golden changes, no test leaves the gate
+map.
+
+**At deploy.** Nothing: no Runtime behaviour, record or configuration changes.
+
+**Fix round K-a** (coordinator work order `rd-1116/brief-01269-1740-ka.md`, after the independent
+review `rd-1116/review-1740.md`; main `ff74c80c`, release 0.12.68, merged in):
+- *The draft runs the checks admission runs.* After the scan's own `admission_refusal`, in
+  admission's order and through the functions admission calls: `on_empty`'s mode where the step
+  declares `on_empty` (`on_empty_mode_refusal`, `on_empty mode=not_none_allowed`) and the upper
+  bound's inputs (`bound_inputs`, `upper_bound <its detail>`), so a draft whose shape admission
+  would refuse gets no decision. Admission's comparison of the mode was written inline; it is now
+  `on_empty_mode_refusal`, which admission calls at the same place with the same condition and
+  detail: admission refuses what it refused and takes what it took.
+- *`chosen` is never silently empty.* A selected candidate the scan holds no member for
+  (`member_position` numbers none, or the account lists no member at its position) is
+  `selection_evaluation_failed`, `selected candidate <id> is not a member`, the detail `Return`
+  gives the same broken invariant; before, the dry run answered no choice.
+- *Tests* (exec gate row "#463 K-R3a", two more): the second kind of scan select, the scan
+  declaring `early_stop` and the policy wanting card 1, the list's top alone fed twice: coverage
+  `early_stopped` over the one viewport, `selected`, the chosen member card 1
+  (`kr3a_an_early_stop_scan_decides_on_the_first_viewport_showing_the_wanted_card`; no test reached
+  `decide_attempt`'s early-stopped arm from this entry before); two members, cards 1 and 4, under
+  the highest candidate ID first: `layout/cards#01` selected and card 4, the second member,
+  chosen (`kr3a_of_two_members_the_one_the_policy_selects_is_chosen`). Every dry run of the file
+  passes `default_run_values()`, what a recording's self-check passes; the package declares no
+  variable, so the five tests before read the same values.
+- No code, word, key, interface revision or record shape is added; the outcome code index does not
+  change; no test leaves the gate map. The slice ships in 0.12.69.
+
 ### 1.395 Slice #469 K1 (0.12.62): a linear step's end says what was seen (Workflow #469; the owner's choice of option A on board #469 on 11-15; the design `rd-1115/status-codes-a-design.md`, Part 2: its three facts, place 1 of A-1 in its linear parts and the row K1 of its slice table, accepted by the coordinator; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1115/brief-469-word-slices.md`, read on main `b6fe6ec2` (after V0, §1.386))
 
 The coordinator gave this slice 1.395: main `b6fe6ec2` holds the sections up to §1.386; 1.387 to
@@ -34166,6 +34266,569 @@ not the owner's words, and the review of #1785). What it changed of this section
   `s314_train_an_unreadable_record_leaves_only_its_pack_not_read`. None of these names was on main,
   so none needs a retirement.
 
+### 1.447 Slice #463 KB-1 (0.12.69): an emulator instance can send the back key (Workflow #463; the owner's ruling on board #463 of the night of 11-15 that a package made from a recording may hold a step that presses the back key, which the agent adds after recording; the read-only study `rd-1116/report-463-key-step-study.md` and the coordinator's rulings at its end and of 11-16 evening, not the owner's words; coordinator work order `rd-1116/brief-463-kb1-nemu-key.md`; first stacked on #1778 at `c7eaabaf`, since fix round 1 on main at `3a17b927`, #1778 merged)
+
+This section takes 1.447, the number the work order gives. It ships in 0.12.69. The package's key
+step (KP-1) and the recording's (KR-1) are other slices; this one makes the key go out.
+
+**The binding (`crates/device`).** Production's instances are emulators whose input is the
+emulator's own library (`nemu_ipc`); before this slice the host refused every key there before
+anything was sent (`nemu_input_capability_unsupported`). The library has two key calls the Runtime
+did not bind. Built: `nemu_input_event_key_down` and `nemu_input_event_key_up`, looked up by name
+beside the touch calls and optional (`NemuTouchPort::key_calls`: a library without both sends no
+key and answers the error every key had before, before any call). A key is the key down, then the
+key up, on the Nemu worker, under the input's check of its step (its lease, deadline and
+cancellation), on the step's committed frame as a tap: the frame's geometry fence and no contact
+left unresolved (`frame_fence`, the part of `perform_events` the touch and the key now share; the
+touch calls are unchanged), the deadline with the final up's reserve (`cover_deadline`), each call
+checked before it, on the display the frame's touches address. Once the key down was called the key
+up is called whatever it answered; a key up that is not confirmed leaves the input unconfirmed, as
+a finger up does. The view sends it as `NemuIpcCommand::InputKey` (`InputBackend::key_in_frame`,
+whose default is `key`; the kernel calls it with the step's context, and the registry's diagnostic
+wrapper forwards it).
+
+**The key code and the calls' parameters (established, not tried on a device).** The vendor's
+header of the library, `external_renderer_ipc.h` (published with the vendor's rights reserved in
+the repository `MaaXYZ/EmulatorExtras`, `Mumu/external_renderer_ipc/external_renderer_ipc.h`, its
+commit `9424dcbe` of 2024-08-15), declares `int nemu_input_event_key_down(int handle, int
+displayid, int key_code)` and `int nemu_input_event_key_up(int handle, int displayid, int
+key_code)`, 0 for success, and says that `key_code` is a code of Linux's
+`include/uapi/linux/input-event-codes.h`, where `KEY_BACK` is 158. The code is one named constant,
+`NEMU_KEY_BACK` (`capture/nemu_input.rs`), with that citation in its comment; nothing of the header
+is copied. The coordinator presses it once on an idle emulator after deployment.
+
+**One key: back.** The closed vocabulary `DeviceKey` (`crates/device` `input.rs`) has one key, the
+back key, named by the word `back` or by the two Android spellings a client sends today, `4`
+(actinglab's `key back`) and `KEYCODE_BACK`; nothing else. `NemuInputSupport::of` says a key it
+names `InFrame` and every other key and every `text` `Unsupported`, so the host refuses those as
+before and the back key without a frame `nemu_input_frame_required`.
+
+**The capability table.** `input.key` is supported on `nemu_ipc` and `adb_shell_input`, whose
+rows' failure semantics name the back key alone (the Nemu row: a library without the two calls
+sends no key; the table is built without opening the library), on `maatouch` (every key, as
+before) and not on `minitouch`; `input.text` stays `maatouch`'s alone. The Lab's hint of a refused
+`key` follows the table (`with_unsendable_hint`, unchanged): none on `nemu_ipc` or
+`adb_shell_input`, the hint on `minitouch`.
+
+**`adb_shell_input`.** The back key is one `adb -s <serial> shell input keyevent KEYCODE_BACK`
+(`Adb::shell_input_keyevent`), through the write path its taps take, once connected; every other
+key answers the fatal device error every key answered before, before anything is sent. `minitouch`
+is unchanged: every key answers a fatal device error ([runtime-interface.md](runtime-interface.md),
+"The keys an input sends").
+
+**The foreground gate.** A key is an input: on a physical instance it passes the gate a tap passes
+(`host/foreground_gate.rs`), a package's key and the Lab's `key` alike; text and the reset are not
+checked, as before.
+
+**The Lab's `key` (the coordinator's ruling 2 of 11-16).** Without it, `key back` from the Lab on
+an emulator instance would be refused `nemu_input_frame_required`, since it sent no frame. Built by
+the path a plain `tap` takes since #1779 (§1.435): `send_direct_touch_command` now sends a
+`PlainPress`, the press of `tap`, `swipe` and `long-tap` or the key of `key`, one implementation
+with two callers: the status read (for a key the Nemu input sends on a frame), where the capability
+table names `nemu_ipc` as the input of the action's capability (`press_capability`: `input.key` for
+a key) one capture and the key sent on that frame, the one retry on `input_frame_unavailable`, the
+warnings in the answer and in a refusal's details; the Runtime's refusal of a key carries its hint
+(`PlainPress::refused`). A key the Nemu input does not send is sent without a frame and refused, and
+on an instance whose input needs no frame nothing is captured; `text` and the stream's relay keep
+their path. The answer of `key` is the plain press's (`direct_touch_answer` takes the action's own
+member), with `input_frame` and `input_frame_captured_twice` where a frame was captured.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| KB1-1 | `DeviceKey` (`back`; `4`, `KEYCODE_BACK`), `InputBackend::key_in_frame` | device type and trait method (no code, no word in the catalog) | KB-1 | `crates/device` `input.rs` | the vocabulary of the keys a back-only input sends |
+| KB1-2 | the Nemu key calls on the frame (`NEMU_KEY_BACK` 158), `NemuIpcCommand::InputKey` | device behaviour | KB-1 | `crates/device` `capture/nemu_input.rs`, `capture.rs` | touch calls unchanged |
+| KB1-3 | `input keyevent KEYCODE_BACK` on `adb_shell_input` | device behaviour | KB-1 | `crates/device` `touch.rs`, `adb.rs` | |
+| KB1-4 | the capability rows `input.key` of `nemu_ipc` and `adb_shell_input`, supported, their failure semantics | status member values (no member) | KB-1 | `crates/runtime-host` `provider.rs` | no interface revision |
+| KB1-5 | a key passes the foreground gate | host behaviour | KB-1 | `crates/runtime-host` `host/foreground_gate.rs` | |
+| KB1-6 | the Lab's `key` on the plain press's path; the row `key`'s `requests` gain `ObserveReadonly` | Lab command behaviour and table | KB-1 | `apps/actinglab` `device_commands.rs`; `contracts/lab-operations.json` | the MCP manual's sentence follows |
+| KB1-7 | `common_causes` and `handling` of `nemu_input_capability_unsupported` and `nemu_input_frame_required` | outcome catalog text (index regenerated) | KB-1 | `contracts/outcome-codes` | no key, word or status changes |
+
+**What is not added.** No outcome code, value key, word of the catalog (the catalog has no key
+vocabulary; `DeviceKey` is the device crate's), configuration key, request kind, record type,
+interface revision or ledger revision. The input request's shape is unchanged (it carried a key
+already). A touch on every backend makes the same calls as before; `text` is refused as before; the
+handset's wake key is not an input and is unchanged.
+
+**Tests.** Gate map `contracts/test-gates/exec.toml`, the row "#463 KB-1": in
+`crates/device/src/capture/nemu_input/gate_463_kb1.rs`, on HS-4's fake device (which now records
+key calls and says whether the library has them):
+`kb1_back_is_one_key_down_and_one_key_up_with_the_vendors_code_on_the_frame` (by each of the three
+spellings: `InFrame`, exactly one key down and one key up with 158, on the frame's display, the
+contact untouched); `kb1_back_is_refused_before_any_call_off_its_frame_or_its_deadline` (no frame,
+a frame of an earlier display generation, a deadline no longer than the final up's reserve: no
+call; one millisecond more: both calls); `kb1_another_key_and_text_are_refused_before_any_call`
+(`home`, `3`, `KEYCODE_HOME`, `BACK`, `Back`, `menu`: `Unsupported`, the error every key had
+before, no call; `text` `Unsupported`); `kb1_a_library_without_the_key_calls_answers_as_before`;
+and in `crates/device/src/touch.rs`, `kb1_adb_shell_input_sends_the_back_key_as_one_keyevent` (the
+three spellings give one `KEYCODE_BACK` each to the shell child once connected, none before; another
+key the old error and no child). Gate map `contracts/test-gates/host.toml`, the row "#463 KB-1": in
+`crates/runtime-host/src/tests/gate_463_kb1.rs`,
+`kb1_the_capability_table_says_which_inputs_send_the_back_key` (minitouch none; `adb_shell_input`
+and `nemu_ipc` supported with the back key alone named, the Nemu row naming a library without the
+calls; `maatouch` every key; text `maatouch`'s alone; through a switch of backends);
+`kb1_the_host_sends_the_back_key_on_a_frame_of_a_nemu_input_and_refuses_the_rest` (on an instance
+configured `nemu_ipc`: `home`, `3`, a word of no key and a text refused
+`nemu_input_capability_unsupported`, the back key without a frame `nemu_input_frame_required`,
+nothing sent; on the frame of a keyless observation, completed and the device's one input the back
+key); `kb1_the_foreground_gate_holds_a_key_as_it_holds_a_tap` (another application in front: the
+back key and a tap refused `application_not_foreground`, nothing sent; the assigned one in front:
+the key completed). Gate map `contracts/test-gates/apps.toml`, the row "#463 KB-1": in
+`apps/actinglab/tests/runtime_input_proxy.rs`, on the fake Runtime host,
+`kb1_key_back_on_an_instance_whose_input_needs_a_frame_is_sent_on_its_capture` (committed, one
+key, one capture, the ledger's capture then the input naming its frame, `input_frame`) and
+`kb1_key_back_on_an_instance_whose_input_needs_no_frame_captures_nothing` (committed, one key, no
+capture, the input names no frame). Changed, not added, because the requirement changes what they
+pin: `provider::gate_hs4::hs4_capability_profile_matches_view` (the key it checks is `back`, and
+the Nemu row claims `input.key`); `tests::gate_hs2::hs2_capabilities_follow_switch` (its instance
+starts on `minitouch`, the input without a key, and the Nemu pair now has a key);
+`tests::lifecycle::runtime_status_lists_configured_instances_and_live_scheduler_state` (`input.key`
+and `input.text` checked apart: `adb_shell_input` supports the key);
+`runtime_input_proxy::lw1_fix2_key_and_text_on_an_input_that_sends_neither_hint_what_presses_instead`
+(the third test the ruling asks for, "another key is refused as the table says": `key home` on the
+Nemu instance is refused `nemu_input_capability_unsupported` with no `details.hint`, the table
+saying the input implements `input.key`, and nothing captured; `text` as before; the fake's table
+says `input.key` supported).
+
+**At deploy.** Nothing to configure. On an emulator instance a package's back key (once KP-1 is
+in) and `actinglab key back` (`ac_key` with `back`) reach the device on a frame the Runtime
+captured; whether the vendor's code 158 is the back key the emulator expects is checked by the
+coordinator's one press on an idle emulator.
+
+**Fix round 1** (coordinator work order `rd-1116/brief-463-kb1-fix1.md`, after the independent
+review `rd-1116/review-1790.md`, with the coordinator's rulings R1 to R5; #1778 merged, main
+merged in, the section's title names the base). (1) A key that may be down is released (R1, the
+review's must-fix 2). Between the key down and the key up the worker checks once more; when that
+check failed (the deadline, the lease's fence, the caller's wait having given up) the key up was
+not sent and nothing remembered it. The Nemu input's state now records the key it pressed last
+(`PressedKey`: its vendor code, and `MayBeDown` from just before its key down, `UpAttempted` from
+just before its key up, `Released` once the key up answers 0), as it records the finger
+(`Contact`). The reset (`reset_contact`) sends one key up for a key that may be down, after the
+finger's lift, as it lifts a finger; the close (`close_input_contact`) does so under the close's
+fence and check, and a key up already attempted without an answer fails the close unconfirmed, as
+a finger's does. While a key may be down the frame's fence (`frame_fence`) refuses every input on
+a frame (`contact_unconfirmed`, as for a contact), the display is not invalidated, and the
+connection does not count as never pressed (`connection_unpressed`). What the record says of such
+a key's effect is what it says of a touch in the same situation: the error is unconfirmed and the
+input's effect `indeterminate`, and the host settles the unconfirmed resources as for a touch. The
+key up after a failed key down is unchanged. A touch makes the same calls as before; of its path
+only `frame_fence` changed (one more check of the state, no call). (2) A library without the key calls refuses, it does not fail (R2,
+the review's (b) and (l)). The worker refuses the key before any call as before, now as the input
+capability's refusal (`DeviceError::with_input_unsupported`, carried by the kernel's failure as
+`ExecutionFailureContext::input_unsupported`); the host answers it, its resources confirmed and
+nothing merged into it, as its own refusal: `nemu_input_capability_unsupported`, receipt `denied`,
+the input's record's effect `not_performed`, the lease kept (the session the kernel closes after any
+input failure is closed as before). The decision reads that typed fact, no code. The capability
+table is built as before, without opening the library; [runtime-interface.md](runtime-interface.md)
+says the refusal in the row of `nemu_ipc`. (3) Only the back key, refused the same way everywhere
+(R3, the review's (o) and (p)). On an instance whose configured touch backend sends the key
+vocabulary alone (`DeviceKey::sent_alone_by`: `nemu_ipc` and `adb_shell_input`) the host refuses
+every other key before anything is sent and before an intent is written, with the Nemu input's
+refusal (`nemu_input_capability_unsupported`, `denied`); before, `adb_shell_input` failed it in the
+backend after its intent, `indeterminate`. The Lab's hint of a refused `key`: where the table says
+the input does not implement `input.key`, as before; where the input it names sends the key
+vocabulary alone and the key is outside it (`DeviceKey::named`), that this input sends only `back`,
+and what presses instead; decided by the vocabulary and the table, not by the refusal's code. (4)
+Texts: [application-lifecycle.md](application-lifecycle.md), "The foreground gate" (a key passes it
+as a tap does, so an agent cannot leave another application with `key back`:
+`application_not_foreground`), the outcome catalog's `common_causes` and `handling` of
+`nemu_input_capability_unsupported` (index regenerated), the MCP manual's sentence, the row `key` of
+`lab-operations.json` and [actinglab-capabilities.md](actinglab-capabilities.md).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| KB1-8 | `PressedKey` in the Nemu input's state; reset, close, fence, display invalidation and `connection_unpressed` read it | device behaviour | KB-1 fix 1 | `crates/device` `capture/nemu_input.rs` | touch calls unchanged |
+| KB1-9 | `DeviceError::with_input_unsupported`, `ExecutionFailureContext::input_unsupported` | device and kernel accessors (no code, no word) | KB-1 fix 1 | `crates/device` `error.rs`, `crates/execution-kernel` `error.rs` | the host's denial of the library's refusal |
+| KB1-10 | `DeviceKey::sent_alone_by`; the host's refusal of a key outside the vocabulary before its intent | device function, host behaviour | KB-1 fix 1 | `crates/device` `input.rs`, `crates/runtime-host` `host/input.rs` | `adb_shell_input` as `nemu_ipc` |
+| KB1-11 | the Lab's hint of a key outside the vocabulary on such an input | Lab command behaviour | KB-1 fix 1 | `apps/actinglab` `device_commands.rs` | |
+
+No outcome code, value key or word is added; `nemu_input_capability_unsupported` keeps its key, its
+category and its words and covers the two new situations in its text.
+
+*Tests of fix round 1* (gate map `contracts/test-gates/exec.toml`, the row "#463 KB-1 fix round 1"):
+in `crates/device/src/capture/nemu_input/gate_463_kb1.rs`, on HS-4's fake device, whose key calls
+now answer the code a test gives them, `kb1_fix1_a_failed_key_down_still_sends_the_key_up` (a key
+down answering 7 fails the key with its code, the key up is called once with 158, the key is
+released and the next long tap is admitted) and
+`kb1_fix1_a_key_left_down_is_lifted_by_the_next_reset_and_fences_input_until_then` (a check with no
+time left at the final up: the key fails unconfirmed after its key down alone and is recorded
+`MayBeDown`; a long tap and another back key on a current frame are refused, nothing called; the
+next reset, without a frame, sends one key up and releases it, the finger untouched; the next long
+tap is admitted); in `crates/execution-kernel/src/session/gate_463_kb1.rs`,
+`kb1_fix1_the_kernel_hands_a_key_with_its_steps_context_to_the_input_on_its_frame` (`execute_action`
+hands the back key with a step's context to the input's `key_in_frame` with that context, whose
+check's answer comes back, and without one to its `key`). Gate map `contracts/test-gates/host.toml`,
+the row "#463 KB-1 fix round 1": in `crates/runtime-host/src/tests/gate_463_kb1.rs`,
+`kb1_fix1_a_key_the_library_cannot_send_is_denied_and_recorded_not_performed` (on an instance
+configured `nemu_ipc`, the back key on a captured frame whose input answers the library's refusal:
+`denied`, `nemu_input_capability_unsupported`, no input performed, the one input record's effect
+`not_performed`, nothing committed, the lease kept) and
+`kb1_fix1_adb_shell_input_refuses_another_key_before_its_intent` (configured `adb_shell_input`:
+`home`, `3` and a word of no key `denied` `nemu_input_capability_unsupported`, no input record of
+any kind in the ledger, nothing on the device; then the back key completed, the device's one
+input); in `crates/runtime-host/src/provider/gate_463_kb1.rs`,
+`kb1_fix1_the_registry_input_hands_a_key_on_its_frame_to_the_input_as_one` (the registry's
+diagnostic wrapper, held as the kernel holds it, hands a key on its frame to the wrapped input's
+`key_in_frame` with the step's context and the plain key to its `key`). No fake provider opens a
+Nemu session, so the frame-bound key path is tested in its two halves, the kernel's and the
+registry's. Changed, not added, because the rulings change what they pin:
+`kb1_a_library_without_the_key_calls_answers_as_before` (R2: the refusal is the capability's,
+`input_unsupported`, nothing unconfirmed, no key recorded; the name stays true: the answer is again
+the denial of before this slice) and
+`runtime_input_proxy::lw1_fix2_key_and_text_on_an_input_that_sends_neither_hint_what_presses_instead`
+(R3: `key home` on the Nemu instance now carries the hint that the input sends only `back`).
+
+**Train** (coordinator work order `rd-1116/brief-463-train-key.md`; the key train of this section
+and §1.448, KP-1, in pull request #1791, which carries §1.448's head `d8aaf8ec` and, merged into it,
+this section's `1305370c`, both on main `3a17b927`, which did not move; the rules are the
+coordinator's, not the owner's words). The two slices touch no Rust function in common; what the
+train read where they meet, and changed (no program behaviour but the one code below):
+- *The key keeps its frame, end to end.* KP-1's key step sends `Key` with its guard's frame context
+  (`linear_input`, `linear_send_input`) to `ContainedTaskRuntime::input`; the host's run
+  (`RuntimeContainedTask::input`) names that frame as the input's `input_frame`; `HostShared::input`
+  takes the back key `InFrame` on the Nemu input (`NemuInputSupport::of`), refuses it without a
+  frame (`nemu_input_frame_required`), resolves the frame, holds the key to the foreground gate,
+  writes the frame as the input record's `before_frame_id` and sends it by
+  `ExecutionKernel::input_prepared_in_frame`; the session's `execute_input` puts the committed
+  frame's geometry into the input's context and `execute_action` hands the key to `key_in_frame`,
+  through the registry's `DeviceRegistryInputDiagnosticBackend::key_in_frame`, to
+  `NemuInputView::key_in_frame`, `NemuIpcCommand::InputKey`, `NemuIpcWorkerState::input_key` and
+  `press_key` (the frame's fence). Nothing on that way drops the frame; nothing changed.
+- *One spelling.* KP-1's step sent `4` from a literal of its own (`StepKey::input_key`), this
+  section's vocabulary took `4` by another (`DeviceKey::named`). Now the device crate decides it:
+  `DeviceKey::android_code` (`4`) and `DeviceKey::ALL`; `named` takes a key's word, code and name
+  through the key's own functions (the same three spellings, nothing more), and `StepKey::input_key`
+  reads `DeviceKey::android_code` through `StepKey::device_key`. The strings are those of before.
+- *The code of `adb_shell_input`'s refusal* (the coordinator's correction of fix round 1's R3: one
+  code for one cause, and no code named after another backend). The catalog had no code for "the
+  instance's input backend does not send this key" that names no backend (`input_action_unsupported`
+  is a build that does not perform an action; `emulator_capability_unavailable` the emulator
+  control's admission), so the train registers `input_key_unsupported` (runtime-host): a key other
+  than the back key on an instance whose touch backend is `adb_shell_input`, refused by the host
+  before anything is sent and before an intent is written (receipt `denied`, no input record,
+  nothing performed; actinglab's `key` answers `device_error`, exit 4, its `input_error` naming the
+  code). The Nemu input keeps `nemu_input_capability_unsupported`, for its other keys, `text` and a
+  library without the key calls. The decision reads the input's support and the key vocabulary, no
+  code; the capability row of `adb_shell_input` and the texts that named the old code for it follow
+  ([runtime-interface.md](runtime-interface.md), [actinglab-capabilities.md](actinglab-capabilities.md),
+  the MCP manual, the row `key` of `lab-operations.json`, the catalog's text of
+  `nemu_input_capability_unsupported`); the index is regenerated. The Lab's hint is decided by the
+  vocabulary and the table, and is unchanged.
+- *The capability table and §1.448's refusal at a run's start; the foreground gate.* Said in §1.448,
+  "Train", and in [linear-steps.md](linear-steps.md), "Key steps".
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| KB1-12 | `DeviceKey::android_code`, `DeviceKey::ALL` (and KP-1's `StepKey::device_key`) | device and kernel functions (no code, no word) | the key train | `crates/device` `input.rs`, `crates/execution-kernel` `contained_task.rs` | one spelling of the back key |
+| KB1-13 | `input_key_unsupported` (runtime-host, error, ladder class `none`, since 0.12.69, review pending) | outcome code (index regenerated) | the key train | `crates/runtime-host` `codes.rs`, `host/input.rs`; `contracts/outcome-codes/runtime-host.json` | refuses, receipt `denied`; was `nemu_input_capability_unsupported` on `adb_shell_input` |
+
+Changed, not added, because the correction changes what it pins:
+`kb1_fix1_adb_shell_input_refuses_another_key_before_its_intent` (its three keys are denied
+`input_key_unsupported`; its gate row says so). The train's own test is §1.448's. Fix round 1 of
+the train (coordinator work order `rd-1116/brief-463-train-key-fix1.md`, after the train's review)
+marks the step witness of `crates/execution-kernel/src/session/gate_463_kb1.rs` and of
+`crates/runtime-host/src/provider/gate_463_kb1.rs` `#[cfg(test)]`, as the kernel's `tests.rs` marks
+its own, since the architecture guard `fenced_close_requires_scheduler_witness` reads an unmarked
+function of a gate file as production code that calls the scheduler's witness bridge; no behaviour,
+code or assertion changes, and nothing else the train added or changed trips that guard or its
+neighbours.
+
+**Train, round 2** (coordinator work order `rd-1116/brief-01269-key-train-round2.md`; main after
+release 0.12.68, `ff74c80c`, merged into pull request #1791 first, by a merge commit that resolves
+its conflicts and changes nothing else; the rules are the coordinator's, not the owner's words). The
+outcome guard's rule G2 (`tools/outcome-guard`, `source.rs`: a function named `code`, `*_code`,
+`reason`, `*_reason`, `key`, `operation` or `stage` answers no string) refused
+`DeviceKey::android_code`, which answered the text `4`. It answers the number now (`u32`, 4,
+Android's `KeyEvent.KEYCODE_BACK`), and the places that need text make it from that one answer:
+`DeviceKey::named` compares a key with its decimal digits, beside its word and its name (the same
+three spellings, nothing more), and `StepKey::input_key` gives those digits as a `String` (it gave a
+`&'static str`), which `StepKey::action` and `StepKey::of_action` read. MaaTouch's key command
+carries a key as it is given, as before; its lines are built by one function now
+(`maatouch_key_lines`), so that a test reads them. The backends receive what they received: `Key`
+`4` from the kernel, 158 into the emulator's library, `KEYCODE_BACK` on `adb_shell_input`, `k 4 o`
+on `maatouch`. The capability table's row `input.key` (`capability_profile`) reads
+`DeviceKey::sent_alone_by` for the inputs that send the key vocabulary alone, beside `maatouch`, so
+it and the host's refusal of another key read one list (the review's second point); the row says
+what it said. Read against G2 to G5 in the members the guard scans (the device crate, the execution
+kernel, the source parser, the Runtime host; not the Lab's members, not test code): no function,
+constant or field the train adds is a getter of a code name that answers a string, a parameter or
+field of a code name that is a string, a `Result` whose error is a string, an `include!`, a
+`json!` key of a code, a location or a category, a construction of a code, or a literal of a
+registered name outside the registries. The test (exec gate "#463, the key train, round 2"):
+`maatouch::tests::train_key_round2_maatouch_writes_the_back_key_of_a_key_step_as_k_4_o` (the back
+key's code in decimal digits is `4`, and MaaTouch's lines for it are `k 4 o` and the commit); the
+kernel's `Key` `4`, the vendor's 158 and `KEYCODE_BACK` stay pinned by KP-1's and KB-1's tests.
+Adapted, not added: the train's test hands `DeviceKey::named` the `String` `StepKey::input_key` now
+gives.
+
+### 1.448 Slice #463 KP-1 (0.12.69): a linear package step that presses the back key (Workflow #463; the owner's ruling on board #463 that the back key is not recorded while playing and that the agent adds such a step in stage two or three; the read-only study `rd-1116/report-463-key-step-study.md`, sections (c), (e) and the slice KP-1 of (f), with the coordinator's rulings at its end; the rules below are the coordinator's rulings in the work order and on the takeover, not the owner's words; coordinator work order `rd-1116/brief-463-kp1-linear-key-step.md`, built on the branch of Workflow #437 G1, §1.433)
+
+The coordinator gave this slice 1.448 and the `package` revision 17: 16 is Workflow #477 PC-1's,
+which merges before it and is not on its base. It ships in 0.12.69. One implementer began it and
+another finished it from its breakpoint (`rd-1116/brief-463-continue.md`).
+
+**What it is.** The package's half of the back key ([linear-steps.md](linear-steps.md), "Key
+steps"): a `linear_steps` operation's effect may be `"key": {"key": "back"}`, a closed vocabulary of
+one word (the owner's ruling names the back key; the coordinator's: no other key and no text). The
+step is guarded as a click step is (a declared guard, never a trusted coordinate), declares no
+retry, and its key goes out through the input as a click's tap does: the step gap (ACT-2), the guard
+on the frame its page passed on, the effect intent, the input `Key` with Android's back code `4`
+(the code the Lab's `key back` sends; `StepKey::input_key`) bound to that frame's input context and
+drawn from no box, the effect completion, the post-input wait, the intermediate state and the
+arrival over the step's candidates. Its one attempt is its last, so where its next page does not
+come the closing decision of Workflow #463 U1 follows and the run ends as a click step's last
+attempt ends (`page_confirmation_failed`, or `contained_task_linear_unrecorded_screen` on a still
+screen the package never declared). Two sibling slices: KB-1 (the emulator backend sends the key;
+its capability row and the foreground gate) is built beside this one, and KR-1 (the agent puts the
+step into a recording) after it.
+
+**Admission** (`contained_task_linear_invalid`, `operation=<id>`; the reason words are detail values
+of that code, registered in [linear-steps.md](linear-steps.md)'s admission tables as their family's
+words are):
+
+| Rule | `reason` |
+|---|---|
+| `key` beside `click`, `application` or `select` | `operation_effect` (widened) |
+| the word is in the vocabulary | `key_unknown` (new) |
+| a key step declares no `retryable`, `max_attempts` or `retry_interval_ms` | `key_retry` (new) |
+| a key step does not start from `any` | `any_requires_application` (widened) |
+
+Before them the common operation check (`TaskOperation::validate`) holds a key step to a declared
+guard and no trusted coordinate (`contained_task_guard_missing`), checks the guard as a click's
+(`contained_task_guard_invalid`) and refuses an `input_recheck` beside it (the recheck asks a
+click). A `key` in a page-graph task is `contained_task_operation_invalid`, detail
+`operation=<id> key requires linear_steps`, as a `transition` or an `optional` there is. The
+declaration gate (`crates/pack-containment/src/source/declarations.rs`, `operation`) admits the
+member `key`: an object whose one member `key` is a string (`InvalidType`, `MissingField`,
+`UnknownField` otherwise), the only effect a step may then carry without a click; the word is
+admission's. A key step may be optional and may stand first.
+
+**The refusal before anything.** A run of a package with a key step asks the runtime once whether
+the instance's input sends the key of its first key step:
+`PreparedContainedTask::refuse_unsendable_key` (`linear.rs`), called in `run_with_collector`'s
+`linear_steps` branch right after the plan is resolved again (`validate_linear`) and before
+`run_linear_steps`, so after `PackageAdmitted` and `RunStarted` and before any capture, input,
+`StepStarted` or `EffectIntent`. The runtime's answer is the new trait method
+`ContainedTaskRuntime::key_input_support(StepKey) -> KeyInputSupport`, `Supported` by default (the
+offline simulation, the replay, the Lab's declared operations, fixtures). The host's
+`RuntimeContainedTask` reads the capability table the run's instance's backends declare
+(`resolve_instance`, `resolve_registered_backend`, `capabilities()`), its row `input.key`:
+`Unsupported` only where that row's implementation is `unsupported`; an instance whose provider
+declares no table answers `Supported`, and its input path still answers for each key it is sent.
+`EntryRecoveryRuntime` (a prerequisite, return-home or entry recovery layer) asks the run's. Where
+the answer is `Unsupported` the run ends with the new code; nothing was sent and no effect was
+intended, so no record of the run calls an effect indeterminate (an input refused after its intent
+is the case the code keeps out). The decision reads a closed vocabulary the runtime answers, no code.
+
+**Offline.** The offline first decision of a package whose first step is a key step is the new
+`OfflineDecision::WouldPressKey {operation_label, key, guard}` (status `would_press_key`, the key
+its word), chosen when the intercepted intent's action is a key of the vocabulary
+(`StepKey::of_action`); a click is reported as before. No consumer outside the kernel matches the
+decision exhaustively.
+
+**Codes and words.**
+
+| Word | The one situation | Refuses or warns | Exit status |
+|---|---|---|---|
+| `contained_task_linear_key_unsupported` (execution-kernel, error, `declaration_error`; key `pack_operation_id`, required; since 0.12.69, review pending) | the instance's input does not send a key step's key, as its capability table declares; the run is refused before any capture, input or intent | refuses the run | the run's failed terminal, as any task failure (category `error`) |
+| `key_unknown` (reason word of `contained_task_linear_invalid`) | a key step's word is not in the vocabulary | refuses admission | as `contained_task_linear_invalid` |
+| `key_retry` (reason word of `contained_task_linear_invalid`) | a key step declares a retry | refuses admission | as `contained_task_linear_invalid` |
+| `back` (the package format's key vocabulary, `StepKey`) | the system back key | none | none |
+| `would_press_key` (status of the offline first decision) | the first effect is a key step's press | none | none |
+
+The catalog fragment `contracts/outcome-codes/execution-kernel.json` gains the code, with its
+texts; the outcome code index is regenerated (its `--check` reads "is current"). A scheduled task
+whose package has a key step, on an instance whose input sends no key, is refused at every attempt:
+each dispatch is a run that fails with the code before anything is sent, which is what a person
+sees, and the task is retried after its retry backoff. The code is not on the list that accumulates
+toward a pause ([policy-suspension.md](policy-suspension.md), "Which failures accumulate") and no
+default recovery trigger names it or its class, so the task is not paused and keeps being retried
+until the instance's input or the package changes (fix round 1 says so in the contract and the
+catalog; the coordinator's ruling leaves the behaviour as it is in this slice).
+
+**Not in this slice** (the coordinator's rulings on the takeover): the foreground gate and the
+capability table are KB-1's, so this slice reads what a backend declares for `input.key` and
+changes nothing of the device crate's backends, the table or the gate. The recording side (an agent
+putting the step into a recording) is KR-1's. The source parser and the Lab's revision table, which
+the first build left as follow-ups, take the key step since fix round 1 (below).
+
+**Interface: `package` 17**, by row 13's reasoning ([component-interfaces.md](component-interfaces.md),
+"What a range means": a bundle's maximum is the revision its packs need). Every Runtime before this
+slice refuses a key step before `PackageAdmitted` (its declaration gate does not know the member:
+`resource_declaration_invalid`, `UnknownField` at `/operations/<i>/key`), so every run of such a
+package would fail and the installer must refuse the bundle instead. The minimum stays 3 (no reader
+stops reading an older pack), so the Runtime declares `package` [3, 17]
+(`distribution/windows/component-interfaces.json`; the row 17, which names 16 as Workflow #477
+PC-1's). A pack without a key step keeps its revision; a bundle whose packs declare one declares
+[17, 17], which the `package` edge of an earlier installer refuses in the plan, before the hold and
+any write. Nobody checks the 17: it is written by the resource repository's packaging and (since
+fix round 1) by the Lab's `standard-pack build`, `place` asks it of no bundle and the Runtime does
+not check a package's declared range at admission, so an earlier installer places such a bundle
+that declares less and an earlier Runtime refuses its package at every run. `ledger`, `runtime-client`, `actingd-config` and `runtime-outcomes` do not
+move: a key step's records are a click's (`EffectIntent` with the action `Key`, its key written
+`[redacted]` as every key input's is, and `EffectCompleted`), with no new record type, member or
+enum value.
+
+**At deploy.** No installed package declares a key step (an earlier build refused one), so nothing
+installed changes. The host's capability table declares `input.key` implemented only for MaaTouch
+input until KB-1 changes it (`capability_profile` in `crates/runtime-host/src/provider.rs`), so a
+package with a key step run on an instance of any other input is refused
+`contained_task_linear_key_unsupported` before any frame. The Runtime declares `package` [3, 17]; a
+bundle that declares 17 is placed only by this build's installer or a later one.
+
+**Rollback** (below 0.12.69). No record shape changes; a build below refuses a package with a key
+step before `PackageAdmitted`, and its installer refuses a bundle that declares `package` 17 through
+its `package` edge. A rollback stays open while no root is placed from such a bundle.
+
+Tests: kernel `crates/execution-kernel/src/contained_task/gate_463_kp1.rs` (exec gate row "#463
+KP-1"), on synthetic `neutral` zip packages through the whole admission (`PreparedContainedTask::load`,
+the declaration gate included) and the kernel's scripted runtime and clock:
+`kp1_a_back_key_step_sends_one_key_after_its_guard_and_goes_on_to_the_next_page` (the second step
+`back` sends one `Key` `4` after its guard passed on the list, its intent naming that guard; the run
+is Completed on done after two steps; the runtime asked once, for `back`; on a list without the
+guard mark `contained_task_guard_refused`, one input, no intent of `back`);
+`kp1_the_next_page_not_coming_fails_as_a_click_step_does` (the list stays after the key:
+`page_confirmation_failed` with a click step's detail, the arrival's postcondition timing and
+`input_not_taken`, `back`'s `StepFinished` on `<unrecognized>`, no second key);
+`kp1_a_backend_without_the_key_refuses_the_run_before_any_capture_input_or_intent` (the new code,
+detail `operation=back`, `pack_operation_id` `back`, no capture, no input, no `StepStarted`, no
+`EffectIntent`, no `EffectCompleted`, `RunStarted` written, one question for `back`; a package
+without a key step on the same device Completed, asked nothing);
+`kp1_admission_refuses_an_unknown_key_a_retried_key_and_a_click_with_a_key` (`key_unknown`,
+`key_retry`, `operation_effect`, each naming `back`);
+`kp1_a_package_with_a_key_step_needs_revision_17_and_one_without_keeps_its_revision` (the build's
+own declaration reads [3, 17]; by the installer's edge rule `package_edge_holds` it holds a bundle
+of [17, 17] and a range ending at 16 refuses it, and both hold a bundle without a key step, [3, 15];
+this build admits both packages); `kp1_the_offline_first_decision_names_the_key_step`
+(`would_press_key` with `back`, the key `back` and the guard that passed). The kernel's scripted
+runtime (`contained_task/tests/scripted.rs`) answers `key_input_support` (`without_key_input`) and
+keeps each question. Adapted because the requirement changes what they pin (the build's `package`
+range), names kept: the rescue module's
+`install::gate_463_v1::v1_the_build_declares_package_through_revision_14` holds [3, 17] and 14
+within it (its gate row in `apps.toml` gains the incident `#463 KP-1`), and the architecture pin
+`the_runtime_declares_each_v0120_interface_revision_once` and its comment. The host's
+`key_input_support` had no test of its own in the first build (fix round 1 adds it). No golden
+changes; no test leaves the gate map.
+
+**Fix round 1** (coordinator work order `rd-1116/brief-463-kp1-fix1.md`, after the independent
+review of `ec64249f`; main `dc4c3622`, the merge of the parent #437 G1, merged in; the rules are the
+coordinator's rulings).
+- *The product's own loading path.* Every path the product loads a package by (a pack directory, a
+  source `.zip` or `.json` container, an installed pack under `packs/<package_id>/`, a package
+  `record stop` generates; so `package check`, `package preflight`, `package bundle`,
+  `standard-pack check`, `adopt`, `trial` and every run) goes through the source parser
+  (`crates/pack-containment/src/source/mod.rs`), which asked a click of the key step, so the first
+  build's key step worked only in an assembled archive. Now one predicate, `is_key_step` (the
+  operation declares `key`), decides in each place: `validate_click_shape` returns for it;
+  `operation_effect` answers it first, with no click, its declared guard made canonical as every
+  guard is (none where it declares none) and no application or select; `canonical_task` neither
+  adds nor removes a click for it and keeps its `key`; `build_primitives` gives its primitive its
+  `key`; the derived navigation and its page operations leave it out, as a select step. The parser
+  judges nothing of the step's form (its word, an effect beside it, its guard, a retry, its mode):
+  every rule is admission's alone (`TaskOperation::validate`, `TaskProgram::validate_linear`), so
+  the two agree by construction. A step without `key` takes each branch it took, byte for byte.
+- *A built bundle declares its revision.* The Lab's revision table
+  (`apps/actinglab/src/resource_verify/revision.rs`) gains row 17: the member `key` holding an
+  object under `operations`, in a `linear_steps` pack only, found where the kernel's admission finds
+  it, as row 13 finds a select step. So `standard-pack build` declares [17, 17] for a bundle whose
+  pack has a key step, which the `package` edge of an installer whose range ends below 17 refuses.
+- *The other places.* `package validate` of an assembled archive checks the format only (its
+  coverage answers `task_prepare` `not_run`), so it takes a key of the right shape with any word;
+  [linear-steps.md](linear-steps.md), "Tools", says so. The places that prepare the task judge it.
+- *Scheduled runs.* The behaviour stays (the coordinator's ruling: changing what accumulates toward
+  a pause is no fix-round change); [linear-steps.md](linear-steps.md), "Key steps", and the code's
+  `handling` say what a person sees, the run's failure with the code at each attempt, and that the
+  task keeps being retried and is not paused.
+- *Texts.* [linear-steps.md](linear-steps.md): "Key steps" (the scheduled task; "The source
+  layout"), "Older builds", "Tools"; [component-interfaces.md](component-interfaces.md), the
+  `package` row 17; [resource-verify.md](resource-verify.md), the table's row 17; this section's
+  "Codes and words", "Not in this slice" and "Interface". The outcome code index is regenerated.
+- *Tests.* Kernel `gate_463_kp1.rs` (exec gate "#463 KP-1"): the test (1) runs on a device that
+  commits every frame as the host does (`FramedDevice`, as `gate_hs4`'s) and asks that the key name
+  a frame committed after the tap and before the key (adapted: the review found it passed with a key
+  sent without its frame); `kp1_fix1_a_source_package_with_a_key_step_is_admitted_by_the_products_entry_and_runs`
+  (the same path in the source layout, admitted by `PreparedContainedTask::load_content_entries`
+  and Completed on done after two steps on that device, one `Key` `4` bound to a frame committed
+  after the tap, its intent naming the guard that passed; the word `home` refused at admission,
+  `key_unknown`). Host `tests/gate_463_kp1.rs` (host gate "#463 KP-1 fix round 1"):
+  `kp1_fix1_an_input_without_the_key_refuses_the_run_with_no_input_and_no_intent` (a direct run on
+  an instance whose capability table says `input.key` unsupported ends Failed with the code and
+  `pack_operation_id` `back` on its receipt and terminal; no input taken, no input record, no
+  effect intent). Lab (apps gate "#463 KP-1 fix round 1"):
+  `gate_464_p2::p2_revision_17_key_step_of_a_linear_steps_pack_only` (over entries that need 15,
+  whose base gains revision 15, a key step of a `linear_steps` pack needs 17, the same key step in a
+  `navigable_route` pack and a click step stay 15) and
+  `gate_463_kp1::kp1_fix1_package_check_and_package_bundle_take_a_pack_with_a_key_step` (on a pack
+  directory with a key step, `package check` admits it and `package bundle` writes it with the key
+  step as declared).
+
+**Train** (coordinator work order `rd-1116/brief-463-train-key.md`; the key train of this section
+and §1.447, KB-1, in this section's pull request #1791: its head `d8aaf8ec`, then §1.447's
+`1305370c` merged in, both on main `3a17b927`; the rules are the coordinator's, not the owner's
+words). Read in the joined tree:
+- *The key keeps its frame, and its spelling is the device layer's*: §1.447, "Train" (one spelling
+  now, `StepKey::input_key` reading `DeviceKey::android_code`).
+- *Which instances a run with a key step starts on.* With KB-1 the registry's table
+  (`capability_profile`) declares `input.key` for `maatouch` (every key), `nemu_ipc` and
+  `adb_shell_input` (the back key alone, this vocabulary's one word), not for `minitouch`; so such a
+  run starts on the first three and `refuse_unsendable_key` refuses it at its start on `minitouch`
+  (`contained_task_linear_key_unsupported`, nothing captured, nothing sent). "At deploy" above (only
+  MaaTouch declared `input.key`) no longer holds in this build: production's emulator instances run
+  the step. The table is built without opening the emulator's library, so on an installation whose
+  library lacks the two key calls the run starts, the guard passes, the effect intent is written,
+  and the key is refused when it is sent, before any call (KB-1's fix round 1): the run ends failed
+  with `nemu_input_capability_unsupported`, the input's record saying its effect `not_performed`;
+  nothing is recorded as indeterminate, and the step is not tried again (it declares no retry).
+  [linear-steps.md](linear-steps.md), "Key steps" ("Which instances such a run starts on"), and the
+  catalog's text of `contained_task_linear_key_unsupported` (which names the backends that send the
+  key, and `minitouch` as the cause) say so; the index is regenerated.
+- *The foreground gate.* KB-1 holds a key to the gate a tap passes. A key step's guard has just
+  recognised its page of the run's own application, so in the ordinary case that application is in
+  front and the gate passes the key; another application come to the front between the guard and
+  the key (or a foreground that cannot be read) refuses it `application_not_foreground` (or
+  `application_foreground_unknown`), nothing sent, and the run ends with that refusal. A key always
+  expects the assigned application, in a store update package's run too (only a declared store
+  step's plain tap expects the store). [linear-steps.md](linear-steps.md), "Key steps" ("On the
+  device", "The foreground gate").
+- *What the join touched of a click, an application action and a choice*: nothing of the kernel's
+  or the source parser's paths; on the device side `frame_fence` reads one more state for a touch
+  (KB-1's fix round 1, unchanged here). `StepKey::input_key` gives the string it gave.
+
+The train's test (host gate "#463, the key train"), in `crates/runtime-host/src/tests/gate_463_train_key.rs`:
+`train_key_a_key_step_reaches_the_device_on_its_frame_or_is_refused_at_the_start`. The kernel's back
+key is the device layer's (`DeviceKey::named`) and `InFrame` on the Nemu input; the registry declares
+`input.key` for `nemu_ipc` and not for `minitouch`. This section's source package (KP-1's host
+fixture, `gate_463_kp1::write_package`, now `pub(super)`), loaded from its directory and run directly
+by the host on a device instance configured `nemu_ipc` with the registry's table: Completed on `done`
+after two steps; the device takes the tap and exactly one key, the kernel's back key; the key's one
+input record names the frame its step's intent names, the last frame captured before it and after
+the tap was committed, and that step as its source; no input fails. The same package on an instance
+configured `minitouch` with the registry's table: Failed, `contained_task_linear_key_unsupported`
+naming `back`, nothing captured, nothing sent, and no capture, input or effect-intent record. Not
+reached: no fake provider opens a Nemu session (a `NemuSessionBackends` holds the vendor library's
+own session, which only the library opens), so below the host the key reaches the fake device as a
+plain key; the session's hand-over with its frame, the registry's wrapper and the worker's key down
+and key up on the scripted library stay KB-1's tests (§1.447). Fix round 1 of the train
+(coordinator work order `rd-1116/brief-463-train-key-fix1.md`, after the train's review; no
+behaviour changes) writes two facts of today's code into [linear-steps.md](linear-steps.md), "Key
+steps", and the catalog's description of `contained_task_linear_key_unsupported`: a scheduled run
+that ends with the code is retried after the first back-off step every time, its pair not paused
+and no recovery ladder started, and on a library without the two key calls every attempt really
+performs the steps before the key step; the outcome code index, regenerated, does not change (its
+row shows the description's start only), and the derived
+navigation and its page operations, which leave a key step out, are said to do so here and in the
+contract already.
+
+**Train, round 2** (coordinator work order `rd-1116/brief-01269-key-train-round2.md`; main after
+release 0.12.68, `ff74c80c`, merged first). Revision 16 of the package format is Workflow #477
+PC-1's (§1.438, a bundle that carries `pack-catalog.json`), so this section keeps 17: the build's
+declaration reads `package` [3, 17] beside S3-8's `runtime-client` [3, 11], the tests that pin it
+say so, and the rows 16 and 17 of [component-interfaces.md](component-interfaces.md) and
+[resource-verify.md](resource-verify.md) stand once each. Main's `place` asks nothing of 16 (its
+row 16 says so, and `crates/lab-rescue/src/install/place.rs` reads the catalog's business part and
+no revision of it), so row 17's sentence on what `place` asks (10 and 14, never 17) stays as it
+was. The key step's key is now made from the number `DeviceKey::android_code` (§1.447, "Train,
+round 2"); the string it gives is the one it gave.
+
 ### 1.450 Slice #463 RC-1 (0.12.69): the regression case of a resource repository as a contract of the Runtime, with a reader and an offline runner (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, whose stage two checks a package against its recorded material and whose stage three builds it; the read-only study `rd-1116/report-463-case-format-study.md` and the coordinator's rulings at its end; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1116/brief-463-rc1-regression-case-runner.md`, read on main `40abd08b`, taken over at its breakpoint under `rd-1116/brief-463-continue.md`)
 
 This section takes 1.450, the number the work order gives. It ships in 0.12.69.
@@ -34309,6 +34972,279 @@ review `rd-1116/review-1793.md` on `efde021d` and CI on it, the coordinator's ru
   values), the other-schema test (its rows asked for with `--game`), the three-case test (the one
   row of the case that did not pass), `writes_nothing` (the checkout it ran on, byte for byte, and
   nothing beside it). No test leaves a gate map.
+
+### 1.451 Slice #463 S3-15a (0.12.69): `standard-pack status --installation` answers the authorization a pack was enabled under and each pair's suspension and break-in (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making, whose stage three shows each package enabled and under which authorization, held, in its break-in period or out of it; the design `rd-1115/pack-stage3-design.md`, §2.3 "One read for one package and for a whole game root" and §4.2 "S3-15", its half of the journals and the pairs; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1116/brief-463-s315a-status-installation.md`, stacked on the stage-three train, pull request #1783, head `ae6b11ed`)
+
+The coordinator gave this slice 1.451. It ships in 0.12.69.
+
+**What it is.** S3-14's row (§1.446) answered every pack's authorization `not_recorded` with
+`journals_not_read` and said nothing of the machine. With `--installation` the row reads the
+installation actinglab runs from and hands the status function (`standard_pack_status_with`) what
+it read: the placement that last enabled each pack, from the rescue module's journals, and each
+pair's suspension and break-in, from one run of the installation's `actingd suspended`
+([standard-pack-schedule.md](standard-pack-schedule.md), "The installation's part";
+[install-cli.md](install-cli.md), "What the placements enabled"). Without `--installation` the
+answer is S3-14's, byte for byte.
+
+**Where the code corrected the design.**
+- *The reader lives where the journals are, the status where the readiness is.* The rescue crate
+  may not reach the resource tooling (the architecture guard
+  `production_packages_cannot_reach_resource_tooling`) and the resource tooling no installation, so
+  actinglab's command joins them: the rescue crate's one new public function
+  (`rescue::placements_enabling(location, game_root)`), `lab-ops`' `SuspensionReport` and its
+  `packs` read, and the resource tooling's status function, which takes what they read as plain
+  values (`StatusInstallation`).
+- *A break-in row names its task, not its package.* `actingd suspended`'s `break_ins` carry
+  `task_id` and `instance_id` only; a task is mapped to its package by the composed bindings as
+  `actingctl packs` reads them (`task_ids` per `package.<package_id>`), for the `suspended` rows too,
+  so one map serves both. Its own word when it cannot be read (`bindings_not_read`).
+- *A pack may have two pairs on one instance* (two rules), so each pair names its `task_id` beside
+  the design's `instance_id`.
+- *`diagnose` read its child inside a private function.* The part of `SuspensionReport::finish`
+  that waits for the child and judges what it printed is now `SuspensionReport::document` (public,
+  with `ReportUnread`), which `finish` calls: one implementation, a diagnosis unchanged. The bound is
+  `diagnose`'s command-line budget, `CLI_READ_BUDGET` (24 s), now public.
+
+**Decided here.** A placement counts when its journal records its end with every `pack_item`
+step `done` and no `undo` or `rollback` record: one that ended before placing (`instances_not_idle`)
+has its items `planned` and does not count; one whose check after the placement failed placed them
+and counts. `at_unix_ms` is the journal's `finished_at_unix_ms`. The authorization is answered
+whatever `enabled.state` says now. `--root` is compared with the installed game root as written,
+then resolved. The child's outcome is answered once, in the root's `installation`, beside the word
+each pack's `pairs` answers. Only the report's `ledger_read_incomplete` is passed on.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| S315A-1 | `rescue::placements_enabling`, `InstalledPlacements`, `EnablingPlacements`, `EnablingPlacement`; (fix round 1) `InstalledGameRoot` | the rescue crate's one new public read | S3-15a | `crates/lab-rescue/src/rescue.rs`; its reading in `install/place.rs` (`enabling`, `placed_enabling`; `packs_root` now `pub(crate)`) | the journal's reader and every write unchanged |
+| S315A-2 | `SuspensionReport::document`, `ReportUnread`, `CLI_READ_BUDGET` public; (fix round 1) `diagnose::same_directory` public | lab-ops | S3-15a | `crates/lab-ops/src/diagnose.rs` | `finish` reads through it; `diagnose` unchanged |
+| S315A-3 | `standard_pack_status_with`, `StatusInstallation`, `InstallationJournals`, `InstallationPairs`, (fix round 1) `ComposedBindings`, `PlacementAuthorization`, `InstallationReading`, `EnabledAuthorization`, `PackPairs`, `PairStatus`, `PairSuspended`; `PackEnabled.authorization` an `EnabledAuthorization`, `authorization_unrecorded` optional; the answer's `installation`, `warnings` and the row's `pairs` | resource tooling function and answer | S3-15a | `crates/resource-tooling/src/standard_pack_status.rs` | each new member absent without an installation |
+| S315A-4 | the switch `installation` of the row `standard-pack status` and its command | operation table row and actinglab command | S3-15a | `contracts/lab-operations.json`, `apps/actinglab/src/standard_pack_cli.rs`, `cli_module/own_flags.rs` | the help's options; the MCP tool's schema follows the row |
+| S315A-5 | two codes, two words of `authorization_unrecorded`, the vocabulary `pairs_unread` | outcome catalog | S3-15a | `crates/resource-tooling/src/codes.rs` | index regenerated |
+
+**Codes and words.**
+
+| Word or code | The one situation | Refuses or a value | Exit |
+|---|---|---|---|
+| `package_status_root_not_installed` (`path`) | `--installation` beside a `--root` that is not the installation's game root of its game, or an installation whose configuration names no `standard_packs.root` | refuses, before anything is read | 1 on actinglab's command line; 2 in a `--via` line's envelope (fix round 1) |
+| `package_status_installation_unbuilt` | `--installation` on a build without the rescue module (not Windows) | refuses, before anything is read | 1 on actinglab's command line; 2 in a `--via` line's envelope (fix round 1) |
+| `authorization_unrecorded` `journals_not_read` | no `--installation` | value | 0 |
+| `authorization_unrecorded` `no_journal_names_it` | every journal read, no counting placement names the pack | value | 0 |
+| `authorization_unrecorded` `journals_unreadable` | no readable journal names it, some could not be read | value | 0 |
+| `pairs_unread` `suspension_report_not_read` | the child gave no report (not started, failed, no report, another state root, ended at its deadline) | value; the child's outcome beside it | 0 |
+| `pairs_unread` `bindings_not_read` | the report was read, the composed bindings not | value; their reader's outcome beside it | 0 |
+| `pairs_unread` `no_task_bound` (fix round 1) | the report and the bindings were read, and the bindings hold no task that runs this pack | value, a pack's own, never the root's | 0 |
+
+A root or configuration the rescue module cannot read refuses with its outcome
+(`install_command_refused` of `install_status`), and a program in no installation with the
+location's (`install_root_unresolved`), each exit 1 on actinglab's command line and 4 in a `--via`
+line's envelope (fix round 1: this paragraph said 4 alone, the `--via` line's). No decision reads a
+code.
+
+**Tests** (`apps/actinglab/src/tests/gate_463_s315.rs`, Windows only; gate map
+`contracts/test-gates/exec.toml` "#463 S3-15a"; a made-up single-location installation whose
+journals are written as `place` writes them, and no actingd): a pack's journal's reference,
+initiator, time and operation; the later of two placements; a later content-only placement changes
+nothing; an undone placement, and one that placed nothing, do not count; a pack no counting journal
+names (an unfinished one and one of another game do) answers `no_journal_names_it`; an unreadable
+journal is listed, hides no other, and makes `journals_unreadable`; the command line without
+`--installation` answers S3-14's function's answer byte for byte; pairs from a report and bindings;
+a child not started (for real), failed and ended at its deadline (the outcomes a diagnosis gives),
+and bindings not read; the two refusals and `--installation` reaching the location before the root;
+nothing written. Adapted, not renamed: `s314_an_enabled_pack_answers_not_recorded_with_journals_not_read`
+and `s314_every_pack_answers_not_recorded_with_journals_not_read` compare `authorization` as an
+`EnabledAuthorization` and `authorization_unrecorded` as an option (the member's type now holds a
+recorded authorization; their JSON assertions are unchanged). No test leaves the gate map.
+
+**What is not changed.** The journals' format and every write of the rescue module (`place`,
+`undo`, `update`, `op status`); `actingd suspended`; a diagnosis; the readiness and its items I1
+to I6, which this row still does not read (S3-15b); the trial; anything on disk. No interface
+revision, record type or configuration key.
+
+**At deploy.** Nothing to configure. Through MCP, `ac_standard_pack_status` gains
+`installation` and is served by a `serve` child, which on Windows holds the rescue module.
+
+**Fix round 1** (0.12.69; coordinator work order `rd-1116/brief-01269-s315a-fix1.md`, after the
+independent review of pull request #1796; merged with main at the release commit of 0.12.68). What
+it changed:
+- *The report's warning is no bare text in `warnings`* (the coordinator's ruling). The word moved
+  into the root's `installation`, as `report_warnings` (the words of the report's warnings the row
+  passes on, as the report spells them: `ledger_read_incomplete`, absent when none); the answer's
+  `warnings` holds outcomes only, in the shape every row of this command line carries them
+  (`Vec<Outcome>`): the composed bindings' warnings that concern the root's game, beside pairs that
+  were read.
+- *Exit statuses as they are.* The two refusals exit 1 on actinglab's command line, which prints
+  the CLI module's line, and 2 in the envelope of a `--via` line (their class `usage_validation`);
+  the rescue module's and the location's refusals 1 and 4. The code table above, the contract's
+  "Exit statuses", the two doc comments and the two descriptions of the outcome fragment say so.
+- *A pack no composed task runs answers its own word*, `no_task_bound` (vocabulary `pairs_unread`,
+  one cause: the bindings hold no task for the pack: a configuration that binds its procedures
+  itself, a game the composition left out, a pack no rule runs), never an empty list; `[]` now
+  means a bound pack of which the report names no pair.
+- *One comparison of two directories*: the rescue module's root check calls `diagnose`'s
+  `same_directory` (now public in `lab-ops`), as written, then resolved, which the "Decided here"
+  sentence above already said; the copy is gone. It differs from the copy only for a root that
+  does not resolve but is the same once made absolute, which the readiness then refused anyway.
+- *The child's outcome follows the detail setting*: under `ACTINGCOMMAND_DETAIL=codes` the root's
+  `pairs_unread_outcome` is the outcome's codes-only projection (`Outcome::codes_only`), its codes
+  and no text, no tail of the child's stderr; the line's own detail decides, as `cli_line` does.
+- *The child starts before the journals are read*: `placements_enabling` now checks the root only
+  (`InstalledPlacements::Installed(InstalledGameRoot)`), the child is started, then the journals
+  (`InstalledGameRoot::placements`) and the composed bindings are read while it runs, then its
+  report is read; the judgement is unchanged (a root refused before anything is read or started;
+  the bindings used only beside a report that was read). A journal listing that fails after the
+  start waits for the child, which is never left running, then refuses.
+- *Tests* (exec gate map "#463 S3-15a", items 12 to 14): a placement whose undo began with its item
+  still `done` does not count (it fails when the `undo` check of `placed_enabling` is deleted); a
+  placement with a `rollback` record does not count (it fails when the `rollback` check is
+  deleted); the composed bindings read from a composer-mode configuration map a break-in row to
+  its pack, and the return-home pack answers `no_task_bound`. The child that fails runs for real:
+  this test program, placed as the installation's `actingd`, prints no report and exits non-zero
+  (`suspended_report_unreadable`, as a diagnosis judges it); "ended at its deadline" stays a given
+  outcome. Adapted: `s315_pairs_show_a_suspension_and_a_break_in_and_a_pack_without_pairs_is_empty`
+  (the undone pack bound, the return-home pack `no_task_bound`, the word in `report_warnings`) and
+  `s315_a_report_not_read_leaves_the_word_the_outcome_and_the_authorization` (the stand-in child,
+  `report_warnings`): the requirement changed what they pin. No test leaves the gate map.
+- *The operation table's help* of the row is 160 bytes at most again (CI's
+  `lab_ops_table_complete` refused 230).
+
+### 1.452 Slice #463 S3-18 (0.12.69): the undo of a placement says which packages re-enter scheduling and which leave (Workflow #463; the owner's standing rule that no tool lets a package enter scheduling by itself without the person seeing it, and her rule that nothing enters normal scheduling without her explicit authorization, recorded on board #463; the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1116/brief-463-s318-undo-schedule-changes.md`, read on main `3a17b927`)
+
+The coordinator gave this slice 1.452. It ships in 0.12.69.
+
+**What it is.** A placement names its authorization and the packages it enables (§1.409), and
+its plan lists what enters and what leaves (§1.408). Its `undo` restored the earlier content and
+said nothing of scheduling: a package the placement had made leave (its rule removed, a hold
+added, a pack no longer carried) came back without the answer or the journal saying so, as
+§1.409's "What the slice does not cover" stated. Now the undo of a `pack_place` operation says
+it, before, in its answer and on record ([install-cli.md](install-cli.md), "The Lab's rescue
+module", "The packages the undo of a placement makes enter or leave scheduling"). It does not ask
+for an authorization: whether it must is the owner's to rule and is open, and the contract says
+so where the undo of a placement is described.
+
+**The computation** (`crates/lab-rescue/src/install/place.rs`, `undone`). Before the undo's first
+step (after the refusals it gives before it writes, and for a placement begun while no Runtime
+ran under the writer lock and after the stopped rule), `ScheduleChanges::between`, the one
+judgement the plan uses, runs from the game root as it is to the game root as the undo leaves it.
+Its two sides are built by the one reading of a game root: `installed_side` became a call of
+`side_read_by`, which takes how each file is read (the plan's bounded `read_root_file` for the
+game root as it is); the side after the undo reads, at each place the undo changes, what the undo
+leaves there. That is found from the `pack_item` steps the undo reverses (those started or done),
+by the rules `reverse_item` reverses them by, read on disk and nothing moved: the kept
+`.old-<ms>` item it puts back, nothing where it sets the placed item aside and puts nothing back,
+the place as it is where it holds neither the placed item nor nothing. The content of each pack
+is what the undo does to it (`retire`, `replace`, `new`). The game and the game root are those the
+operation's `post_check` step records. No list is reversed from what the placement recorded, and
+nothing of the plan's judgement is copied. `unread` names the second side `undone` where the plan
+names the zip's `bundle`.
+
+**Before: a new `--plan`.** `undo` had no form that does nothing (its row declared no plan switch,
+`UNDO_FLAGS` took no switch, and [actinglab-dry-run.md](actinglab-dry-run.md) declares a dry run
+for no rescue row), so the row `undo` gains the switch `plan`, for a
+`pack_place` operation only: another kind is refused `actingctl_usage_invalid` (`unusable`,
+`--plan`) once its journal is loaded. It judges what the undo judges before its first write, the
+same refusals in the same order, but takes no writer lock and writes nothing, as no plan form
+does (so it cannot answer `writer_lock_failed`); then `begin_undo`'s own refusal of another
+unfinished operation. It answers `install_command_done` of `install_undo`
+(`installation_changed` `false`) with `operation_id`, `reverses` (the steps the undo would
+reverse, from the last, each `{n, kind, target}`) and `schedule_changes`. `actingctl install undo`
+keeps its face: it refuses `--plan` as an unknown flag, as before.
+
+**In the answer** of the undo done: `schedule_changes` beside `operation_id` and `kept`. **The
+warnings**, each a note of the answer's `install_command_done` (`install_caveat_noted` of
+`install_undo` with `game`), in the plan form and in the undo done, never a refusal:
+
+| Word | The one situation | Refuses or warns | Exit | Where an agent reads it |
+|---|---|---|---|---|
+| `undo_enters_scheduling` | the undo lets packages enter scheduling, or take a supporting role, again (`enters` not empty); `names` those, sorted | warns | 0 | `outcome.causes`, relation `note`, of the answer's line: `actinglab --json undo …`, `actinglab serve --stdio` and `ac_undo` of the Lab's MCP server (`structuredContent`) answer the same line; (fix round 1) under `op resume` of an undo that ended its steps, in the `causes` of the outcome's `related` link (the undo's own `install_command_done`). On the `--via` line: nowhere, as no `--via` line runs `undo`: only MCP's actinglab child sends `--via` (`lab_ops::lab_child`, `--json --via mcp` before the words), and actinglab gives such a line to its own commands (`apps/actinglab/src/cli_module.rs`, `route`), which have no `undo` and refuse it |
+| `undo_scheduling_unknown` | the game root as the undo leaves it cannot be read, so no list is answered; its failure the `caused_by` link (fix round 1: none when an undo run again, its plan form or `op resume` answers it from the undo record, whose lists are `null`) | warns | 0 | the same as `undo_enters_scheduling`, `--via` included |
+
+Both are words of the vocabulary `install_caveat` of the existing `install_caveat_noted`
+(`crates/lab-ops/src/codes.rs`, the fragment `contracts/outcome-codes/catalog.json`), which takes
+the existing key `names` as an optional value (`contracts/outcome-codes/actingctl.json`); the index
+is regenerated. No code, location or key is new.
+
+**On record.** The journal's undo record (`journal.rs`, `UndoRecord`) gains
+`schedule_changes: Option<UndoSchedule>`, `{enters, leaves}`, each the sorted list or both `null`
+when not known, written with the record when the undo starts (`Operation::begin_undo_with`;
+`begin_undo` is it without the member, for every other kind); an undo that goes on after it
+stopped keeps the record it has and (fix round 1) answers the lists that record holds, computing
+nothing again. A record without the member
+(the undo of another kind, or one an earlier build wrote) loads (`serde(default)`) and `op status`
+shows it without it. The other members of the journal are unchanged.
+
+**Texts.** [install-cli.md](install-cli.md): the new section above, after "The authorization a
+placement names"; the sentence on `undo` under "`place` while the Runtime is stopped" says that
+it still asks for no authorization and that it says what it changes since 0.12.69; the journal's
+undo record; the outcome codes' S3-18 entry and the values of `install_caveat_noted`.
+[lab-operations.json](lab-operations.json): the row `undo` gains `plan`, its `output` and its
+`notes`; the rescue module's constant of the row (`crates/lab-rescue/src/rescue_reads.rs`) hands
+`plan` on as `--plan`, which `UNDO_FLAGS` takes. The MCP manual (`apps/actinglab-mcp/MANUAL.md`,
+section 8) says what `ac_undo` answers of a placement and with `plan`.
+
+**Tests.** `crates/lab-rescue/src/install/gate_463_s318.rs`, gate map `apps.toml` "#463 S3-18", on
+the fake host as the S3-1 and S3-2 gates build their roots and bundles, each of the first four
+and the sixth with the fake Runtime running an instance bound to the game and with no Runtime:
+the undo of two added packs lists both in `leaves` and nothing in `enters`, no note; the undo of a
+placement that removed a pack's rule names it in `enters` and in the note's `names`, asking the
+Runtime nothing; the undo of a content-only placement lists the pack in `content_only` alone; the
+plan form leaves the root and the game root byte for byte and answers what the undo then answers,
+and with no Runtime and an actingd under the root both are refused `runtime_running`; the record
+carries the lists, `op status` shows them, and a record without them loads; an undo that puts
+back a `schedule.json` the reader refuses answers no list and `undo_scheduling_unknown` caused by
+the failure, is done and records `null` lists; the undo of an `adopt` answers its three members and
+its outcome's three values with no link, records no `schedule_changes`, and refuses `--plan`
+(`unusable`; `actingctl install undo` `unknown`). No test is adapted and none leaves the gate map.
+
+**What is not changed.** What `undo` reverses, its order, its refusals, the writer lock and the
+stopped rule it applies, the hold it takes and hands back (the undo of a placement takes none and
+asks the Runtime nothing), and the undo of every other
+kind of operation, whose answers are byte for byte as before; `place` and its plan, and the
+judgement of `ScheduleChanges::between`; the journals on disk; `op resume` (but, fix round 1, its
+answer of an undo of a placement that ended its steps), `rollback`, `update`.
+
+**At deploy.** Nothing to do on the root. A pack_place journal an earlier build undid keeps its
+record without the member; the undo of one begun by an earlier build and undone by this one
+computes and records the lists as any other. (Fix round 1) An undo of a placement that an earlier
+build began and that stopped, gone on with by this build, answers no `schedule_changes` and no
+warning: its record holds none.
+
+**Fix round 1** (coordinator work order `rd-1116/brief-01269-s318-fix1.md`, after the review of
+pull request #1795 at `8a7cb8ce`; the coordinator's rulings, not the owner's words). Main after
+release 0.12.68 (`ff74c80c`) merged first, in one merge commit; this section keeps its number. Then:
+- *An undo run again answers what it recorded* (the review's item 1). The undo reverses its steps
+  from the last, so the root files (placed after the packs) are put back before the packs; an undo
+  stopped between the two left a half-undone game root, from which the lists computed again named
+  no package that the first run let enter, and gave no warning. Now `place::undone` computes only
+  while the operation has no undo record (the undo's first run and the plan form before it); once
+  the record is written, an undo run again, its plan form and `op resume` answer the record's
+  `schedule_changes` `{enters, leaves}` (the shape `op status` shows) and their warnings from it:
+  `undo_enters_scheduling` naming the recorded `enters`, `undo_scheduling_unknown` when they are
+  `null`, then without its cause (the record keeps none). A record without the member (an undo an
+  earlier build began) answers none and no warning. `UndoneScheduling` holds either the computed
+  `ScheduleChanges` or the record (`UndoneLists`); the journal's types are unchanged.
+- *`op resume` of an undo that ended its steps* (the review's third optional change): `install resume`
+  of such an operation (the undo's end journalled, `current.json` not retired) answers the record's
+  `schedule_changes` beside its outcome, and the warnings as notes of the undo's own
+  `install_command_done`, which it links `related`.
+- *One statement of the steps an undo reverses* (the review's (d)): `undo::reversed_steps`, the
+  steps started or done, from the last, read by the undo's loop, the plan form's `reverses` and
+  `place::undone_items` (which took them from the first; it keys what it reads by place and pack,
+  so the order changes no answer).
+- *A test hook*: `Host::after_undone`, called after `install undo` records a step undone,
+  `Ok` in production; the fake host stops the undo there once (`crash_after_undone`), as
+  `after_step` stops an operation.
+- *Texts.* [install-cli.md](install-cli.md): "The packages the undo of a placement makes enter or
+  leave scheduling" loses "computes them again" and gains "An undo run again after it stopped";
+  `resume` and the outcome codes' S3-18 entry say the same; the catalog's two descriptions; the MCP
+  manual; the table above says where each word is read, `--via` included.
+- *Tests* (gate map `apps.toml`, "#463 S3-18 fix round 1"; none adapted, none leaves the gate map):
+  `s318_fix1_an_undo_run_again_answers_what_its_record_holds_hot_and_cold` (an undo stopped
+  after it put `schedule.json` back and before the pack: its plan form and the undo done answer
+  the record and warn of the pack it records entering, and `op resume` of an undo that ended its
+  steps answers the same), `s318_fix1_a_root_file_set_aside_comes_back_and_is_read_as_it_will_be_hot_and_cold`
+  and `s318_fix1_an_undo_that_lets_one_pack_enter_and_others_leave_names_each_hot_and_cold` (one
+  pack enters, two leave, one of them a pack the placement added with no rule, which the
+  placement's own lists never named).
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

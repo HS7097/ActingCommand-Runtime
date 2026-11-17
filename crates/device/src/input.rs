@@ -318,6 +318,70 @@ fn append_maa_2_0_segment(
     }
 }
 
+/// Workflow #463 KB-1 (0.12.69; the owner's ruling on board #463: a package may press the back
+/// key): the keys an input sends that sends only the keys it names, the closed vocabulary of one
+/// word, `back`. The emulator's own input (`nemu_ipc`) and `adb_shell_input` send these and no
+/// other key; `maatouch` sends every key it is given, as before; `minitouch` sends none.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeviceKey {
+    /// The back key.
+    Back,
+}
+
+impl DeviceKey {
+    /// Every key of the vocabulary.
+    pub const ALL: [Self; 1] = [Self::Back];
+
+    /// The key an input request's `key` names: the word `back`, or the Android key event of the
+    /// back key as a client sends it today, its code `4` written in decimal digits (actinglab's
+    /// `key back`; a package's key step, whose spelling is made from [`Self::android_code`]) or
+    /// its name `KEYCODE_BACK`; `None` for every other key.
+    pub fn named(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|known| {
+            key == known.word()
+                || key == known.android_name()
+                || key == known.android_code().to_string()
+        })
+    }
+
+    /// The word of the vocabulary.
+    pub const fn word(self) -> &'static str {
+        match self {
+            Self::Back => "back",
+        }
+    }
+
+    /// Workflow #463, the key train (register §1.447 and §1.448, "Train"): Android's key code of
+    /// the key, a number (`KeyEvent.KEYCODE_BACK` is 4). Its decimal digits are the spelling a
+    /// package's key step sends (`StepKey::input_key` of the execution kernel makes it from this
+    /// answer, so the two cannot disagree), the one [`Self::named`] takes and the one actinglab's
+    /// `key back` sends; MaaTouch's key line carries them as it is given them (`k 4 o`). The key
+    /// train's second round: a number, not its text, so that no getter of a `*_code` answers a
+    /// string (the outcome guard's rule G2).
+    pub const fn android_code(self) -> u32 {
+        match self {
+            Self::Back => 4,
+        }
+    }
+
+    /// Android's name of the key, which `input keyevent` takes.
+    pub const fn android_name(self) -> &'static str {
+        match self {
+            Self::Back => "KEYCODE_BACK",
+        }
+    }
+
+    /// Workflow #463 KB-1 fix round 1 (the coordinator's ruling R3 of 11-16): whether the touch
+    /// backend `backend` sends the keys of this vocabulary alone, refusing every other key before
+    /// anything is sent: the emulator's own input (`nemu_ipc`) and `adb_shell_input`.
+    pub const fn sent_alone_by(backend: crate::TouchBackendChoice) -> bool {
+        matches!(
+            backend,
+            crate::TouchBackendChoice::NemuIpc | crate::TouchBackendChoice::AdbShellInput
+        )
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InputSelectionContext {
     pub backend: crate::TouchBackendName,
@@ -437,6 +501,18 @@ pub trait InputBackend {
     }
 
     fn key(&mut self, witness: &FencedWrite, key: &str) -> DeviceResult<()>;
+
+    /// Workflow #463 KB-1: the key `key` on the frame its step decided on, under the Runtime's
+    /// check of that step (the Nemu input presses its key so, as it presses a tap). A backend that
+    /// needs neither performs [`Self::key`].
+    fn key_in_frame(
+        &mut self,
+        witness: &FencedWrite,
+        key: &str,
+        _context: &crate::InputExecutionContext,
+    ) -> DeviceResult<()> {
+        self.key(witness, key)
+    }
 
     fn text(&mut self, witness: &FencedWrite, text: &str) -> DeviceResult<()>;
 

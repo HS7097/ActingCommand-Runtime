@@ -97,8 +97,9 @@ const CLOCK_SLOTS: usize = 10;
 /// The tail of a failed subprocess's stderr kept in the report status.
 const MAX_STDERR_TAIL: usize = 2048;
 /// How long the CLI reads: MCP's 25 s call budget less the second it keeps back to answer, so
-/// that both sides end a long read alike.
-const CLI_READ_BUDGET: Duration = Duration::from_secs(24);
+/// that both sides end a long read alike. Workflow #463 S3-15a: `standard-pack status
+/// --installation` bounds its one `actingd suspended` by it too.
+pub const CLI_READ_BUDGET: Duration = Duration::from_secs(24);
 /// ROUT-L RL-1c fix 1 (#411 H1): what `actingd suspended` keeps back from the call's deadline to
 /// answer with what it read before it is ended there. RL-1c follow-up (#411 L2, W1-9): by the
 /// tunables rule a configuration key with this default; it stays a constant until the
@@ -1688,8 +1689,10 @@ fn clock_slot_rank(row: &Value) -> u8 {
     }
 }
 
-/// Whether two paths name the same directory, as written or once resolved.
-fn same_directory(left: &Path, right: &Path) -> bool {
+/// Whether two paths name the same directory, as written or once resolved. Workflow #463 S3-15a
+/// fix round 1: the rescue module's read of the placements compares a game root with the
+/// installed one by it too (`lab-rescue` `rescue::placements_enabling`), the one copy.
+pub fn same_directory(left: &Path, right: &Path) -> bool {
     left == right
         || matches!(
             (fs::canonicalize(left), fs::canonicalize(right)),
@@ -1697,25 +1700,39 @@ fn same_directory(left: &Path, right: &Path) -> bool {
         )
 }
 
+/// Workflow #463 S3-15a (register §1.451): why one run of `actingd suspended` gave no report a
+/// reader can use, as a diagnosis says it ([`SuspensionReport::document`]): the report status's
+/// data members (`status` `unavailable`, or `failed` with `exit_code` and, where actingd printed
+/// one, its failure document as `report`) and the outcome that says why.
+pub struct ReportUnread {
+    pub status: Map<String, Value>,
+    pub outcome: Outcome,
+}
+
 impl SuspensionReport {
-    /// Waits for the child (up to the deadline it was started with) and keeps the rows of
-    /// `instance` (alias and instance id), or every row without one.
-    fn finish(
-        self,
-        state_root: Option<&Path>,
-        instance: Option<(&str, Value)>,
-        since_unix_ms: u64,
-    ) -> SuspensionRows {
-        let instance = instance
-            .as_ref()
-            .map(|(alias, instance_id)| (*alias, instance_id));
-        let unavailable = |outcome: Outcome| {
-            SuspensionRows::without_rows(report_status("unavailable", None), outcome)
+    /// Workflow #463 S3-15a (register §1.451): waits for the child (up to the deadline it was
+    /// started with, ended there when it still runs) and answers its whole report as it printed
+    /// it, when it printed a report that succeeded and read the state root `state_root`; else why
+    /// not ([`ReportUnread`]): not started (the outcome [`Self::start`] answered), a reader that
+    /// panicked (`suspended_report_reader_panicked`), a spawn or an I/O that failed
+    /// (`suspended_report_spawn_failed`, `suspended_report_io_failed`, the operating system's
+    /// failure as the cause), a child still running at the deadline and ended there
+    /// (`suspended_report_timeout`), a report of another state root
+    /// (`suspended_report_state_root_mismatch`), actingd's own failure document
+    /// (`suspended_report_failed`) or no JSON (`suspended_report_unreadable`). A diagnosis reads
+    /// its rows through this one function ([`Self::finish`]); `standard-pack status
+    /// --installation` reads its pairs through it.
+    pub fn document(self, state_root: Option<&Path>) -> Result<Value, ReportUnread> {
+        let unavailable = |outcome: Outcome| ReportUnread {
+            status: report_status("unavailable", None),
+            outcome,
         };
         let captured = match self.0.map(JoinHandle::join) {
-            Err(outcome) => return unavailable(outcome),
+            Err(outcome) => return Err(unavailable(outcome)),
             Ok(Err(_)) => {
-                return unavailable(Outcome::new(ActingctlCode::SuspendedReportReaderPanicked));
+                return Err(unavailable(Outcome::new(
+                    ActingctlCode::SuspendedReportReaderPanicked,
+                )));
             }
             Ok(Ok(Err(failure))) => {
                 let code = if failure.reader_panicked() {
@@ -1732,10 +1749,10 @@ impl SuspensionReport {
                     }
                 };
                 let outcome = Outcome::new(code);
-                return unavailable(match failure.os_failure() {
+                return Err(unavailable(match failure.os_failure() {
                     Some(cause) => outcome.caused_by(cause),
                     None => outcome,
-                });
+                }));
             }
             Ok(Ok(Ok(captured))) => captured,
         };
@@ -1763,57 +1780,9 @@ impl SuspensionReport {
                     if let Some(report) = &report_state_root {
                         outcome = outcome.other_root(report);
                     }
-                    return unavailable(outcome);
+                    return Err(unavailable(outcome));
                 }
-                let rows = |key: &str| {
-                    document
-                        .get(key)
-                        .and_then(Value::as_array)
-                        .map(|rows| {
-                            rows.iter()
-                                .filter(|row| of_instance(row, instance))
-                                .cloned()
-                                .collect::<Vec<_>>()
-                        })
-                        .unwrap_or_default()
-                };
-                let (clock_slots, clock_slots_total) = match instance {
-                    Some((alias, instance_id)) => {
-                        clock_slot_rows(&document, alias, instance_id, since_unix_ms)
-                    }
-                    None => clock_slot_rows_of(&document, None, since_unix_ms),
-                };
-                SuspensionRows {
-                    // RL-1c fix 1 (#411 H1): a report whose ledger read ran out of its deadline
-                    // answers with what it read; the diagnosis is then incomplete.
-                    complete: !document
-                        .get("warnings")
-                        .and_then(Value::as_array)
-                        .is_some_and(|warnings| {
-                            warnings
-                                .iter()
-                                .any(|warning| warning == "ledger_read_incomplete")
-                        }),
-                    suspended: rows("suspended"),
-                    packs: pack_rows(&document, instance),
-                    remedies: remedy_rows(&document, instance),
-                    reruns: rerun_rows(&document, instance),
-                    held: held_rows(&document, instance),
-                    lift: rows("lifted"),
-                    repeating: rows("repeating"),
-                    warnings: document
-                        .get("warnings")
-                        .and_then(Value::as_array)
-                        .cloned()
-                        .unwrap_or_default(),
-                    status: json!({
-                        "status": "ok",
-                        "through_sequence": document.get("through_sequence"),
-                    }),
-                    outcome: None,
-                    clock_slots,
-                    clock_slots_total,
-                }
+                Ok(document)
             }
             // actingd's own failure document, as it printed it (`report`):
             // `suspended_report_failed`, caused by the outcome the document carries.
@@ -1825,12 +1794,15 @@ impl SuspensionReport {
                 };
                 let mut status = report_status("failed", Some(exit_code));
                 status.insert("report".to_owned(), document);
-                SuspensionRows::without_rows(status, with_stderr(outcome, &captured.stderr))
+                Err(ReportUnread {
+                    status,
+                    outcome: with_stderr(outcome, &captured.stderr),
+                })
             }
             // No JSON report: the decoder's refusal is the cause.
-            Err(error) => SuspensionRows::without_rows(
-                report_status("failed", Some(exit_code)),
-                with_stderr(
+            Err(error) => Err(ReportUnread {
+                status: report_status("failed", Some(exit_code)),
+                outcome: with_stderr(
                     Outcome::new(ActingctlCode::SuspendedReportUnreadable).caused_by(
                         Outcome::new(ContractCode::ForeignDataError)
                             .raw_source(RawSource::Json)
@@ -1838,7 +1810,74 @@ impl SuspensionReport {
                     ),
                     &captured.stderr,
                 ),
-            ),
+            }),
+        }
+    }
+
+    /// Waits for the child (up to the deadline it was started with) and keeps the rows of
+    /// `instance` (alias and instance id), or every row without one. Workflow #463 S3-15a: the
+    /// report, or why there is none, is [`Self::document`]'s.
+    fn finish(
+        self,
+        state_root: Option<&Path>,
+        instance: Option<(&str, Value)>,
+        since_unix_ms: u64,
+    ) -> SuspensionRows {
+        let instance = instance
+            .as_ref()
+            .map(|(alias, instance_id)| (*alias, instance_id));
+        let document = match self.document(state_root) {
+            Ok(document) => document,
+            Err(unread) => return SuspensionRows::without_rows(unread.status, unread.outcome),
+        };
+        let rows = |key: &str| {
+            document
+                .get(key)
+                .and_then(Value::as_array)
+                .map(|rows| {
+                    rows.iter()
+                        .filter(|row| of_instance(row, instance))
+                        .cloned()
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+        };
+        let (clock_slots, clock_slots_total) = match instance {
+            Some((alias, instance_id)) => {
+                clock_slot_rows(&document, alias, instance_id, since_unix_ms)
+            }
+            None => clock_slot_rows_of(&document, None, since_unix_ms),
+        };
+        SuspensionRows {
+            // RL-1c fix 1 (#411 H1): a report whose ledger read ran out of its deadline
+            // answers with what it read; the diagnosis is then incomplete.
+            complete: !document
+                .get("warnings")
+                .and_then(Value::as_array)
+                .is_some_and(|warnings| {
+                    warnings
+                        .iter()
+                        .any(|warning| warning == "ledger_read_incomplete")
+                }),
+            suspended: rows("suspended"),
+            packs: pack_rows(&document, instance),
+            remedies: remedy_rows(&document, instance),
+            reruns: rerun_rows(&document, instance),
+            held: held_rows(&document, instance),
+            lift: rows("lifted"),
+            repeating: rows("repeating"),
+            warnings: document
+                .get("warnings")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default(),
+            status: json!({
+                "status": "ok",
+                "through_sequence": document.get("through_sequence"),
+            }),
+            outcome: None,
+            clock_slots,
+            clock_slots_total,
         }
     }
 }

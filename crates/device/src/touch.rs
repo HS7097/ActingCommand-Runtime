@@ -4,7 +4,7 @@ use crate::capture::{DeviceRotation, display_size_from_natural, read_device_rota
 use crate::{
     Adb, AdbBoundsAction, AdbBoundsCoordinate, AdbConfig, AdbInputBoundsContext,
     AdbInputConnectGeometry, DeviceCloseAuthority, DeviceError, DeviceErrorCategory,
-    DeviceErrorDiagnosticMessage, DeviceErrorSensitivity, DeviceInfo, DeviceLocation,
+    DeviceErrorDiagnosticMessage, DeviceErrorSensitivity, DeviceInfo, DeviceKey, DeviceLocation,
     DeviceResourceCloseOutcome, DeviceResourceQuiescence, DeviceResult, DeviceTarget,
     HandshakeInfo, InputBackend, MaaTouchBackend, MaaTouchConfig, MinitouchBackend,
     MinitouchConfig, PreparedSegmentedSwipePlan, SegmentedSwipeEvent,
@@ -1404,6 +1404,23 @@ impl AdbShellInputBackend {
         child(x, y)
     }
 
+    /// Workflow #463 KB-1: the key `key` handed to `child` by Android's name of it, when it is the
+    /// back key ([`DeviceKey`]) and the backend is connected; every other key is refused before
+    /// anything is sent, as every key was before.
+    fn key_with_child(
+        &self,
+        key: &str,
+        child: impl FnOnce(&str) -> DeviceResult<()>,
+    ) -> DeviceResult<()> {
+        let Some(key) = DeviceKey::named(key) else {
+            return Err(DeviceError::fatal(
+                "AdbShellInputBackend key input is outside A1 touch fallback scope",
+            ));
+        };
+        self.ensure_connected()?;
+        child(key.android_name())
+    }
+
     fn bounds_failure(
         &self,
         error: DeviceError,
@@ -1605,10 +1622,16 @@ impl InputBackend for AdbShellInputBackend {
         })
     }
 
-    fn key(&mut self, _witness: &FencedWrite, _key: &str) -> DeviceResult<()> {
-        Err(DeviceError::fatal(
-            "AdbShellInputBackend key input is outside A1 touch fallback scope",
-        ))
+    /// Workflow #463 KB-1: the back key as one `input keyevent` through the `adb shell` path its
+    /// taps take ([`Self::key_with_child`]).
+    fn key(&mut self, witness: &FencedWrite, key: &str) -> DeviceResult<()> {
+        let adb_config = self.adb_config.clone();
+        let serial = self.serial.clone();
+        self.key_with_child(key, move |name| {
+            Adb::new(adb_config)
+                .shell_input_keyevent(witness, &serial, name)
+                .map(|_| ())
+        })
     }
 
     fn text(&mut self, _witness: &FencedWrite, _text: &str) -> DeviceResult<()> {
@@ -2923,5 +2946,54 @@ mod tests {
                 && !attempt.ok
                 && attempt.fallback_backend == Some(TouchBackendName::AdbShellInput)
         }));
+    }
+
+    // Workflow #463 KB-1 (register §1.447): adb shell input sends the back key, by its word and by
+    // the Android spellings a client sends (actinglab's `key back` sends `4`), as one `input
+    // keyevent KEYCODE_BACK` through the adb shell path a tap takes, once it is connected; before
+    // it is connected nothing is sent; every other key fails with the error every key had before,
+    // and nothing is sent for it. The child stands for the adb shell invocation.
+    #[test]
+    fn kb1_adb_shell_input_sends_the_back_key_as_one_keyevent() {
+        let mut backend = adb_shell_input_test_backend();
+        let sent = RefCell::new(Vec::new());
+        let disconnected = backend
+            .key_with_child("back", |name| {
+                sent.borrow_mut().push(name.to_owned());
+                Ok(())
+            })
+            .expect_err("not connected");
+        assert_eq!(
+            disconnected.message(),
+            "AdbShellInputBackend is not connected"
+        );
+        assert!(sent.borrow().is_empty());
+        backend
+            .connect_with_steps(
+                || Ok("device".to_owned()),
+                || Ok("Physical size: 720x1280".to_owned()),
+                || Ok(DeviceRotation::R0),
+            )
+            .expect("synthetic connect");
+        for key in ["back", "4", "KEYCODE_BACK"] {
+            backend
+                .key_with_child(key, |name| {
+                    sent.borrow_mut().push(name.to_owned());
+                    Ok(())
+                })
+                .unwrap_or_else(|error| panic!("{key}: {error:?}"));
+        }
+        assert_eq!(*sent.borrow(), ["KEYCODE_BACK"; 3]);
+        for key in ["home", "3", "KEYCODE_HOME", "BACK", "menu"] {
+            let error = backend
+                .key_with_child(key, |_| panic!("{key}: nothing is sent for another key"))
+                .expect_err("another key");
+            assert_eq!(
+                error.message(),
+                "AdbShellInputBackend key input is outside A1 touch fallback scope",
+                "{key}"
+            );
+        }
+        assert_eq!(sent.borrow().len(), 3);
     }
 }

@@ -22,9 +22,9 @@ here.
 
 | Status | Codes |
 |---|---:|
-| active | 3918 |
+| active | 3922 |
 | retired | 89 |
-| all | 4007 |
+| all | 4011 |
 
 ## Active codes by category
 
@@ -33,19 +33,19 @@ here.
 | success | 125 |
 | info | 214 |
 | warning | 168 |
-| error | 3394 |
+| error | 3398 |
 | fatal | 17 |
 
 ## Text and review of the active codes
 
 | Active codes | Codes |
 |---|---:|
-| `common_causes` and `handling` both written | 768 |
+| `common_causes` and `handling` both written | 772 |
 | one of the two written, the other `TBD` or empty | 4 |
 | neither written (`TBD` or empty) | 3146 |
 | `settled` | 154 |
-| `pending` | 3764 |
-| all active codes | 3918 |
+| `pending` | 3768 |
+| all active codes | 3922 |
 
 ## By owner
 
@@ -61,7 +61,7 @@ here.
 | [contract](contract.md) | 928 | 904 | 163 | 32 |
 | [device](device.md) | 33 | 33 | 27 | 23 |
 | [display-adapter](display-adapter.md) | 2 | 2 | 0 | 0 |
-| [execution-kernel](execution-kernel.md) | 204 | 201 | 30 | 0 |
+| [execution-kernel](execution-kernel.md) | 205 | 202 | 31 | 0 |
 | [host-metrics](host-metrics.md) | 17 | 17 | 0 | 0 |
 | [lab](lab.md) | 24 | 24 | 22 | 0 |
 | [ledger](ledger.md) | 293 | 292 | 26 | 0 |
@@ -73,13 +73,13 @@ here.
 | [policy](policy.md) | 119 | 117 | 56 | 0 |
 | [recognition](recognition.md) | 6 | 6 | 0 | 0 |
 | [recognition-pack](recognition-pack.md) | 22 | 22 | 0 | 0 |
-| [resource-tooling](resource-tooling.md) | 103 | 102 | 26 | 0 |
+| [resource-tooling](resource-tooling.md) | 105 | 104 | 28 | 0 |
 | [runtime-client](runtime-client.md) | 211 | 209 | 5 | 0 |
 | [runtime-config](runtime-config.md) | 11 | 11 | 11 | 0 |
 | [runtime-database](runtime-database.md) | 51 | 51 | 2 | 0 |
-| [runtime-host](runtime-host.md) | 1163 | 1116 | 194 | 6 |
+| [runtime-host](runtime-host.md) | 1164 | 1117 | 195 | 6 |
 | [runtime-state](runtime-state.md) | 176 | 176 | 0 | 0 |
 | [scheduler](scheduler.md) | 14 | 14 | 0 | 0 |
 | [selection-policy](selection-policy.md) | 27 | 27 | 0 | 0 |
 | [vision-ffi](vision-ffi.md) | 4 | 4 | 1 | 0 |
-| all | 4007 | 3918 | 768 | 154 |
+| all | 4011 | 3922 | 772 | 154 |

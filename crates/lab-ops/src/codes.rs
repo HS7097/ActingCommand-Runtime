@@ -726,6 +726,12 @@ actingcommand_contract::outcome_vocabulary! {
         // record of another installation, or one that could not be read: the ledger's records
         // that carry fingerprints were made with the salt of the configuration that wrote them.
         FingerprintsDiscontinuous => "fingerprints_discontinuous",
+        // Workflow #463 S3-18 (since 0.12.69): the undo of a `pack_place` operation (done, or its
+        // plan form) lets packages enter scheduling or take a role again (`names` them); or the
+        // game root as it would leave it cannot be read, so what it changes of scheduling is not
+        // known (that failure as the cause). Each a note; the undo goes on.
+        UndoEntersScheduling => "undo_enters_scheduling",
+        UndoSchedulingUnknown => "undo_scheduling_unknown",
     }
 }
 

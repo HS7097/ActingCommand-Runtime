@@ -2154,6 +2154,12 @@ enum NemuIpcCommand {
         context: InputExecutionContext,
         response: mpsc::Sender<DeviceResult<()>>,
     },
+    /// Workflow #463 KB-1: a key, on the step's frame as a tap.
+    InputKey {
+        key: String,
+        context: InputExecutionContext,
+        response: mpsc::Sender<DeviceResult<()>>,
+    },
     InvalidateDisplay(mpsc::Sender<DeviceResult<()>>),
     Shutdown {
         authority: DeviceCloseAuthority,
@@ -2304,6 +2310,19 @@ impl NemuIpcWorker {
                         NemuIpcCommand::InputReset { context, response } => {
                             let result = worker_state_result(&mut state, |state| {
                                 state.input_reset(&context, &worker_poisoned)
+                            });
+                            drop(context);
+                            response
+                                .send(result)
+                                .map_err(|_| DeviceError::fatal("Nemu IPC input response lost"))?;
+                        }
+                        NemuIpcCommand::InputKey {
+                            key,
+                            context,
+                            response,
+                        } => {
+                            let result = worker_state_result(&mut state, |state| {
+                                state.input_key(&key, &context, &worker_poisoned)
                             });
                             drop(context);
                             response
