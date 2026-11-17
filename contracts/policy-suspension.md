@@ -783,7 +783,10 @@ refused it. Admission depends only on the package's content and the kernel, so t
 neither a (task, instance) pair nor a standard package: a standard package is always installed
 and activated whole. Right after the refusal the Runtime measures the package's content hash
 once (the `content-directory.v1` computation, or the SHA-256 of the file for a legacy assembled
-ZIP). Admission itself never computes it. The suspension is memory of the daemon process: a
+ZIP). The suspension never takes it from admission: since Workflow #463 CH-1 (Runtime 0.12.71)
+the admission of a run's package by its path computes the same hash, but only for the run's
+admission record ("Content hash" above), and nothing here reads that record. The suspension is
+memory of the daemon process: a
 restart, and so another build, starts without it, and the background check after start judges
 the packages again.
 

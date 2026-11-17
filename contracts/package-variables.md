@@ -502,12 +502,18 @@ bytes (`MAX_VARIABLE_VALUE_JSON_BYTES`), else `{variable_name, value_sha256, val
 text's SHA-256 (64 lowercase hexadecimal digits) and length only (`AdmittedVariable`):
 
 - a direct run, the trial's run included: the values its request gave (judged before its
-  admission, "A direct run given values", so each is the value the run reads);
+  admission, "A direct run given values", so each is the value the run reads); a variable left
+  to its default is not in it, since its request handed it none;
 - a policy run: the values of its dispatch's `variable_values` that the run read, each as it read
   it, judged under the declaration of the package it prepared by the rule of its overlay
   (`dispatched_variables_read`, beside `dispatched_variable_values`): a variable the dispatch
   names no value for, or whose value that declaration no longer takes, reads its default and is
-  not listed; an `ordered` value taken in part is listed as the run read it;
+  not listed; an `ordered` value taken in part is listed as the run read it. So it holds every
+  value its dispatch carried and the run read, defaults included (a dispatch hands down a default
+  of at most 1024 bytes as it hands down a set value, "The record" above), and does not say which
+  were set and which were defaults (CH-1 fix round 1, the coordinator's ruling: the code stays as
+  it is): the member is what was handed to the run from outside, and the dispatch's own reason
+  says where each value came from (`variable_source`);
 - a run handed no value (none given, a package without variables, a run the host starts itself)
   writes no `variables` member: its record is byte for byte the record without it.
 
@@ -516,7 +522,23 @@ Beside it, `content_hash` is the content hash the admission measured on the byte
 reads them to decide, the record's validation refuses a malformed member
 (`invalid_task_semantic_payload`), and the public projection a client reads carries neither (the
 coordinator's ruling: no data value leaves through it). The Lab's own reading of the record and
-the ledger tools read them; `run show` answering them is a later slice.
+the ledger tools read them; `run show` answering them is a later slice. Which tiers of the
+projection and which exports carry them (an exported evidence package does, so a person who hands
+one on hands the values too): [ledger-observer.md](ledger-observer.md), "Later rulings applied",
+item 1.
+
+**The admission record's size** (CH-1 fix round 1). With a value's text recorded whole only up to
+1024 bytes and at most sixteen values (a package declares at most 16 variables, a direct run's
+request carries at most 16 values), the record is about 20 KB at most: an entry of a 1024-byte
+text, escaped once inside the record (about 1.09 KB for a list of 32 keys), with its name takes
+about 1.2 KB, sixteen of them about 19 KB, and the content hash and the rest of the fact well
+under 1 KB. A longer text is recorded by its SHA-256 and length and can come only from a direct
+run (a dispatch hands down no text above 1024 bytes). Nothing refuses, cuts or fails on it:
+neither the ledger nor this fact's validation sets a byte bound on the record, and the bounds a
+record meets on its way out,
+a query page's 768 KiB (`MAX_RUNTIME_EVENT_QUERY_RESPONSE_BYTES`) and a frame's 1 MiB, are far
+above it; the 32 640 bytes of an outcome's record form ("The record's size" above) bound outcomes,
+not this fact.
 
 **What the next slice reads** (fix round 2, for V3's view; no request, Lab row or view is added
 here). From memory, never from a file:

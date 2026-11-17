@@ -11557,10 +11557,11 @@ coordinator cut LAB-6 into slices that each leave main deployable: LAB-6S0 (`dep
 word, after LAB-6S1a and LAB-6S1b have been deployed by themselves), LAB-6S3 (the UI list on
 `ui`), LAB-6S4a (the five kinds deleted; `install-control` [0, 0]), LAB-6S4b (`cli`, `mcp` and a
 `lab` without a word refused; `via` off the wire; `runtime-client` [8, 8]; `actingd-config` 30)
-and LAB-6S5 (the initiator in the ledger and the settings rows; `ledger` 9). Each has a way back
+and LAB-6S5 (the initiator in the ledger and the settings rows; the next free `ledger` revision
+when it ships: 9 went to Workflow #463 CH-1, §1.455). Each has a way back
 but LAB-6S5. The contract's slice table carries the staging; the numbers LAB-0 planned for LAB-6
 (`runtime-client` 7, `ledger` 8, `actingd-config` 28) were taken by other slices, and are now 8
-(LAB-6S1a), 9 (LAB-6S5) and 30 (LAB-6S4b).
+(LAB-6S1a), the next free `ledger` revision (LAB-6S5; 9 went to §1.455) and 30 (LAB-6S4b).
 
 **This slice is additive.** Every connection that binds today binds as today and reads the bytes
 it reads today; the only new thing is a connection that declares a word, and no program of this
@@ -35153,7 +35154,9 @@ replaced after its dispatch could read a default while the dispatch's record sai
   a direct run, the trial's run (a direct run), a scheduled run, and a run the host starts itself
   (a startup package, a return-home or idle return-home package, a ladder rung's package). A
   layer of a run (a prerequisite, a return home, an interrupt handler, a navigation hop) writes no
-  admission record of its own and records none. Every other admission (by bytes, by a content
+  `PackageAdmitted` of its own: it writes its own entry-recovery record
+  (`EntryRecoveryPackageAdmitted`), which carries neither a content hash nor values (fix round 1:
+  this sentence said "no admission record"). Every other admission (by bytes, by a content
   table already in memory, the metadata reads, `package bundle`, `standard-pack check`, the Lab's
   validation) computes nothing; every path form has the measure (a directory, a `.json` or `.zip`
   content container, an assembled ZIP), so no run's package has a form where it has no meaning.
@@ -35238,6 +35241,43 @@ test reads a clock, so none shows it).
 **At deploy.** Nothing to do on the root. The console that reads `ledger` 9 ships first; once this
 Runtime has run on a root, no build that declares [3, 8] runs on it again.
 
+**Fix round 1** (the independent review of the pull request; coordinator work order
+`rd-1117/brief-463-ch1-fix1.md`). *The architecture guard*
+`contract_has_no_public_value_payload_or_persisted_fact` (`light`) refuses a public function of
+the contract crate's event module that takes a `serde_json::Value`, which `AdmittedVariable::of`
+and `AdmittedVariable::list` did. Of the two ways the review named, the value is now handed in as
+its compact JSON text: `AdmittedVariable::of(name, value_json: String)` and
+`AdmittedVariable::list` of `(name, text)` pairs, so the one place where a value becomes a
+recorded value, and the one rule "at most 1024 bytes whole, else SHA-256 and length", stay in the
+contract crate beside the record's validation that checks the same form; the host turns each value
+into its text (`serde_json::Value`'s `Display`) at its one call in
+`execute_contained_task_with_lease`, for a policy run and a direct run alike. The guard is
+unchanged, and the file's other guards were read for this slice's public surface (nothing else
+there takes or answers a `serde_json::Value`). *Texts*: [policy-suspension.md](policy-suspension.md),
+"What is suspended" (the suspension takes no hash from admission); [package-reference.md](package-reference.md),
+"Content-directory admission" (the one computed hash) and its item 1 (the admission record's
+`content_hash`); [lab-two-entries.md](lab-two-entries.md), the slice table, §4.1 and §10, and
+§1.287 here, "Slice LAB-6S1a" (LAB-6S5 takes the next free `ledger` revision, 9 being this
+slice's); the layer's sentence in "The rule" above (no `PackageAdmitted`, its own entry-recovery
+record); §2's "Failure identity" (the suspension's measuring, beside this record);
+[standard-pack-trial.md](standard-pack-trial.md), "What `--collect` can know" (one sentence: the
+record now carries them, the trial reads them in #463 CH-3); [package-variables.md](package-variables.md),
+"The run's admission record" (a policy run's `variables` holds every value its dispatch carried
+and the run read, defaults included, without saying which were set; a direct run's has no
+default) and "The admission record's size" (about 20 KB at most, nothing refuses, cuts or fails
+on it); [ledger-observer.md](ledger-observer.md), "Later rulings applied", item 1 (the public
+tiers carry neither member; the Lab's and the forensic tiers, so the Lab's `events`, the ledger
+tool's exports and an exported evidence package, carry both; `QueryRuns`, `run show` and `report
+export` do not carry the record). *Tests*: `hash_not_64_lower_hex_refused` also refuses
+`variables` of no entry, of 17 entries, of names not strictly ascending (descending, or one twice),
+with an entry of both forms or of neither, or with a `value_sha256` out of its form, while 16
+ascending entries and one hashed entry validate; `startup_package_run_records_admitted_content`
+(gate map `host.toml` "#463 CH-1"): the instance's startup package, a run the host starts itself,
+run on a key the test holds as `gate_463_u1` runs one, records its directory's content hash and no
+`variables`; `s2_t1_package_facts_name_their_package_by_label_and_refuse_a_digest` builds its
+values by the new signature. What is recorded and when, the public projection, `ledger` 9,
+`measure_content_hash` and `runtime-client` do not change; no code, key or word is added.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
@@ -35254,10 +35294,12 @@ readers in one PR.
 `<base>~v2~k<K>~m<I><H>[~p<I><H>]…[~r<Kh><I><H>]~f<F>`. `I` = the first 8 hex digits of the
 SHA-256 of `package_id`; `H` = the first 12 hex digits of the package's content hash measured at
 suspension (`x` when it could not be measured, D18); the `pre:<digest>` scope becomes `pre:<I>`.
-A v1 string is not read. The content hash is measured only at suspension and at lift checks
-(never on admission) and is stored only inside this string (the failure record's
+A v1 string is not read. For the suspension, the content hash is measured only at suspension and
+at lift checks (never on admission) and is stored only inside this string (the failure record's
 `failure_identity`, §1.15 Q1) and in SR-3's suspension event key
-`actual_digest`. A lift check of one package runs at most once per
+`actual_digest`; since Workflow #463 CH-1 (§1.455) the admission of a run's package also computes
+it once and records it in the run's admission record, which nothing of the suspension reads. A
+lift check of one package runs at most once per
 `scheduling.suspension.lift_check_min_interval_ms` (§5).
 
 ## 3 Wire shapes handed to AO-0 (runtime-client revisions)

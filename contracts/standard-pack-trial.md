@@ -477,7 +477,11 @@ content digest (option 丙 of #336), and the trial keeps nothing before its reco
 `--collect` records is the plan's, the package directory as read at the time of the `--collect`;
 when that directory changed after the run, the record names content that was not what ran. Nor
 can it know the values the run was given (S3-8, S3-9): a direct run records nothing of them, so
-the values a `--collect` records are its own line's `--variable`s, the ones `next` repeats. What
+the values a `--collect` records are its own line's `--variable`s, the ones `next` repeats. Since
+Workflow #463 CH-1 (Runtime 0.12.71, ledger revision 9) the run's admission record carries the
+content hash its admission measured and the values the run was given
+([package-variables.md](package-variables.md), "The run's admission record"); the trial reads them
+in a later slice (#463 CH-3). What
 holds: a run has one record. Before the writer, a record of the run's request id is looked for
 among the package's records whatever content it names, so a second `--collect` of a run that has
 its record, after the directory changed or not, is `trial_record_exists` naming that record and

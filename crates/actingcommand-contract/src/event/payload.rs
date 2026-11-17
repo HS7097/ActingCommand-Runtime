@@ -4274,13 +4274,17 @@ pub struct AdmittedVariable {
 }
 
 impl AdmittedVariable {
-    /// The record of `value`, handed to the run for the variable `name`.
-    pub fn of(name: &str, value: &serde_json::Value) -> Self {
-        let text = value.to_string();
-        if text.len() <= crate::MAX_VARIABLE_VALUE_JSON_BYTES {
+    /// The record of a value handed to the run for the variable `name`, given as its compact JSON
+    /// text `value_json` (what `serde_json::Value`'s `Display` writes): the text whole when it is at
+    /// most [`crate::MAX_VARIABLE_VALUE_JSON_BYTES`] bytes, else its SHA-256 and length only. Fix
+    /// round 1: the one place a value becomes a recorded value and the one rule of its form, which
+    /// the record's validation checks (`validate_admitted_variables`); it takes the text, so that
+    /// no public function of the event module takes a `serde_json::Value`.
+    pub fn of(name: &str, value_json: String) -> Self {
+        if value_json.len() <= crate::MAX_VARIABLE_VALUE_JSON_BYTES {
             Self {
                 variable_name: name.to_owned(),
-                value_json: Some(text),
+                value_json: Some(value_json),
                 value_sha256: None,
                 value_bytes: None,
             }
@@ -4288,22 +4292,20 @@ impl AdmittedVariable {
             Self {
                 variable_name: name.to_owned(),
                 value_json: None,
-                value_sha256: Some(format!("{:x}", Sha256::digest(text.as_bytes()))),
-                value_bytes: Some(text.len() as u64),
+                value_sha256: Some(format!("{:x}", Sha256::digest(value_json.as_bytes()))),
+                value_bytes: Some(value_json.len() as u64),
             }
         }
     }
 
-    /// The records of `values`, `(name, value)` each, sorted by name; `None` when there is none,
-    /// so a run handed no value writes no `variables` member.
-    pub fn list<'a>(
-        values: impl IntoIterator<Item = (&'a str, &'a serde_json::Value)>,
-    ) -> Option<Vec<Self>> {
+    /// The records of `values`, `(name, compact JSON text)` each ([`Self::of`]), sorted by name;
+    /// `None` when there is none, so a run handed no value writes no `variables` member.
+    pub fn list<'a>(values: impl IntoIterator<Item = (&'a str, String)>) -> Option<Vec<Self>> {
         let mut values = values.into_iter().collect::<Vec<_>>();
         values.sort_unstable_by_key(|(name, _)| *name);
         let list = values
             .into_iter()
-            .map(|(name, value)| Self::of(name, value))
+            .map(|(name, value_json)| Self::of(name, value_json))
             .collect::<Vec<_>>();
         (!list.is_empty()).then_some(list)
     }

@@ -8916,21 +8916,20 @@ impl HostShared {
         // run's, those of its dispatch it reads under its prepared package's declaration
         // (`dispatched_variables_read`, the rule `dispatched_variable_values` applies below); a
         // direct run's, those its request gives (judged before its admission, so each is read
-        // whole); none for any other run.
-        let admitted_variables = match &dispatched_parameters {
-            Some(dispatched) => actingcommand_contract::AdmittedVariable::list(
-                prepared
-                    .dispatched_variables_read(&dispatched.variables)
-                    .iter()
-                    .map(|(name, value)| (name.as_str(), value)),
-            ),
-            None => actingcommand_contract::AdmittedVariable::list(
-                task_request
-                    .variables()
-                    .iter()
-                    .map(|(name, value)| (name.as_str(), value)),
-            ),
+        // whole); none for any other run. Fix round 1: each value is handed on as its compact
+        // JSON text, here alone, and `AdmittedVariable::list` makes the record by its one rule.
+        let read_from_dispatch = dispatched_parameters
+            .as_ref()
+            .map(|dispatched| prepared.dispatched_variables_read(&dispatched.variables));
+        let handed: Vec<(&String, &serde_json::Value)> = match &read_from_dispatch {
+            Some(read) => read.iter().map(|entry| (&entry.0, &entry.1)).collect(),
+            None => task_request.variables().iter().collect(),
         };
+        let admitted_variables = actingcommand_contract::AdmittedVariable::list(
+            handed
+                .into_iter()
+                .map(|(name, value)| (name.as_str(), value.to_string())),
+        );
         // Workflow #411 B15 R5 (contracts/remedies.md section 4): a policy run reads the values
         // its dispatch carries, observed at its admission; any other run reads its package's
         // declared defaults. Workflow #411 B8: a policy run also reads the schedule values its

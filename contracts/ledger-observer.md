@@ -22,6 +22,15 @@ the same PR that changes the code.
    to the run (`variables`). It is only computed and recorded: no admission compares it or
    refuses for it, nothing pins it, the public projection does not carry it, and the failure
    identity, the break-in and the lift of a suspension measure the content themselves as before.
+   Where the hash and the values travel (CH-1 fix round 1): the public tiers of the projection
+   (`ui` and `normal`, which carry the public projection; `cli` and `concise` carry no payload)
+   carry neither; the Lab's and the forensic tiers (`lab`, `verbose`, `forensic`) carry the full
+   record, so the Lab's `events`, the ledger tool's exports (`actingledger`) and an exported
+   evidence package (`export evidence`, its `evidence/events.jsonl`) carry the hash and the
+   values: a person who hands such a package to someone else hands them too. `QueryRuns`,
+   `run show` and `report export` do not carry the record. Its size, about 20 KB at most, and
+   why nothing refuses, cuts or fails on it: [package-variables.md](package-variables.md),
+   "The admission record's size".
    Beyond that, no shape, key, code or contract text below computes, pins or compares a
    task-package content digest. The ledger event hash chain, download SHA-256 checks of release
    assets and the screenshot self-check stay.

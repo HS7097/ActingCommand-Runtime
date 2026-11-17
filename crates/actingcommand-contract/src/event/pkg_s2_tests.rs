@@ -44,7 +44,7 @@ fn s2_t1_package_facts_name_their_package_by_label_and_refuse_a_digest() {
         task_label: "task".to_owned(),
         response_deadline_monotonic_ms: Some(60_000),
         content_hash: Some("c".repeat(64)),
-        variables: AdmittedVariable::list([("pick", &json!("item_a"))]),
+        variables: AdmittedVariable::list([("pick", json!("item_a").to_string())]),
     });
     read_back(&admitted);
     assert_eq!(

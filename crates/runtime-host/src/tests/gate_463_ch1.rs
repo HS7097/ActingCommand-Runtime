@@ -29,7 +29,11 @@
 // - `hash_not_64_lower_hex_refused`: that record with a content hash of uppercase digits, 63 or 65
 //   digits, a digit that is no hexadecimal one, none, or a `sha256:` prefix is refused where its
 //   members are validated (`invalid_task_semantic_payload` at `task_semantic_fact`, the stored
-//   reader's form); as written it validates.
+//   reader's form); as written it validates. Fix round 1: so is that record with `variables` of no
+//   entry, of one entry more than the 16 a package declares at most, of names not in strictly
+//   ascending order (descending, or one name twice), with an entry of both forms or of neither,
+//   or with a `value_sha256` that is not 64 lowercase hexadecimal digits; with 16 entries in
+//   ascending order, or one entry of a SHA-256 and a length above 1024, it validates.
 // - `direct_run_records_admitted_content`: a direct run's record carries the content hash of its
 //   package directory as containment measures it; after the package's control declaration is
 //   rewritten, the next run's record carries the new content's hash, another one.
@@ -46,6 +50,10 @@
 //   says the value was set: the run read its default. Its content hash is the replaced content's.
 // - `public_projection_carries_neither_member`: the public projection of a record with both
 //   members is byte for byte the projection of the same record without them.
+// - `startup_package_run_records_admitted_content` (fix round 1): a run the host starts itself,
+//   the instance's startup package, run on a key the test holds as a granted startup claim runs it
+//   (as `gate_463_u1` runs one), completes, and its admission record carries the content hash of
+//   its package directory as containment measures it, and no `variables`.
 
 use super::gate_442_rem1::write_package;
 use super::gate_rl1b::{
@@ -419,23 +427,27 @@ impl Scene {
 
     // The payload of the last admission record (`task.requested`) the ledger holds.
     fn last_admission(&self) -> EventPayload {
-        let mut events = self
-            .host
-            .query_persisted_events_for_test(EventQuery {
-                event_type: Some(EventType::TaskRequested),
-                ..EventQuery::default()
-            })
-            .expect("the ledger's admission records");
-        events.sort_by_key(PersistedEvent::sequence);
-        events
-            .last()
-            .map(|event| event.payload().clone())
-            .expect("an admission record")
+        last_admission(&self.host)
     }
 
     fn close(self) {
         self.host.close().expect("close the composer-mode host");
     }
+}
+
+// The payload of the last admission record (`task.requested`) the ledger of `host` holds.
+fn last_admission(host: &RuntimeHost) -> EventPayload {
+    let mut events = host
+        .query_persisted_events_for_test(EventQuery {
+            event_type: Some(EventType::TaskRequested),
+            ..EventQuery::default()
+        })
+        .expect("the ledger's admission records");
+    events.sort_by_key(PersistedEvent::sequence);
+    events
+        .last()
+        .map(|event| event.payload().clone())
+        .expect("an admission record")
 }
 
 // The admission fact of `payload`.
@@ -493,6 +505,34 @@ fn without_members(stored: &Value) -> Value {
     object.remove("content_hash");
     object.remove("variables");
     stored
+}
+
+// The stored record `stored` with its fact's member `member` set to `value`.
+fn with_member(stored: &Value, member: &str, value: &Value) -> Value {
+    let mut changed = stored.clone();
+    fact_object(&mut changed).insert(member.to_owned(), value.clone());
+    changed
+}
+
+// `stored` with its fact's `member` set to `value` validates.
+fn assert_in_form(stored: &Value, member: &str, value: &Value) {
+    if let Err(error) = read(&with_member(stored, member, value)).validate() {
+        panic!("{member} {value} is in its form: {error:?}");
+    }
+}
+
+// `stored` with its fact's `member` set to `value` is refused where the record's members are
+// validated: `invalid_task_semantic_payload` at `task_semantic_fact`, the stored reader's form.
+fn assert_refused(stored: &Value, member: &str, value: &Value) {
+    let error = read(&with_member(stored, member, value))
+        .validate()
+        .expect_err("a member out of its form is refused");
+    assert_eq!(
+        error.code(),
+        SanitizationCode::InvalidTaskSemanticPayload.code(),
+        "{member} {value}"
+    );
+    assert_eq!(error.field(), "task_semantic_fact", "{member} {value}");
 }
 
 #[test]
@@ -585,19 +625,108 @@ fn hash_not_64_lower_hex_refused() {
         String::new(),
         format!("sha256:{}", "a".repeat(64)),
     ] {
-        let mut refused = stored.clone();
-        fact_object(&mut refused).insert("content_hash".to_owned(), Value::String(hash.clone()));
-        let error = read(&refused)
-            .validate()
-            .expect_err("a content hash out of its form is refused");
-        assert_eq!(
-            error.code(),
-            SanitizationCode::InvalidTaskSemanticPayload.code(),
-            "{hash}"
-        );
-        assert_eq!(error.field(), "task_semantic_fact", "{hash}");
+        assert_refused(&stored, "content_hash", &Value::String(hash));
+    }
+
+    // Fix round 1: `variables` out of its form. An entry of a value's text whole, and one of a
+    // longer text's SHA-256 and length.
+    let whole = |name: &str| json!({"variable_name": name, "value_json": "\"item_a\""});
+    let hashed = |sha256: String| {
+        json!({"variable_name": "pick",
+               "value_sha256": sha256, "value_bytes": 2000})
+    };
+    // As many entries as a package declares variables at most, in strictly ascending order.
+    let most = (0..actingcommand_contract::MAX_PACKAGE_VARIABLES)
+        .map(|index| whole(&format!("v{index:02}")))
+        .collect::<Vec<_>>();
+    let mut one_more = most.clone();
+    one_more.push(whole("v99"));
+    for variables in [json!(most), json!([hashed("a".repeat(64))])] {
+        assert_in_form(&stored, "variables", &variables);
+    }
+    for variables in [
+        // No entry.
+        json!([]),
+        // More than the largest number.
+        json!(one_more),
+        // Names not in strictly ascending order: descending, or one name twice.
+        json!([whole("pick"), whole("order")]),
+        json!([whole("pick"), whole("pick")]),
+        // An entry with both forms, and one with neither.
+        json!([{"variable_name": "pick", "value_json": "\"item_a\"",
+                "value_sha256": "a".repeat(64), "value_bytes": 2000}]),
+        json!([{"variable_name": "pick"}]),
+        // A `value_sha256` that is not 64 lowercase hexadecimal digits.
+        json!([hashed("A".repeat(64))]),
+        json!([hashed("a".repeat(63))]),
+        json!([hashed("a".repeat(65))]),
+        json!([hashed(format!("{}g", "a".repeat(63)))]),
+    ] {
+        assert_refused(&stored, "variables", &variables);
     }
     scene.close();
+}
+
+// Fix round 1: a run the host starts itself, the instance's startup package (the same package
+// directory), run on a key the test holds as a granted startup claim runs it
+// (`run_startup_package_on_key_for_test`, as `gate_463_u1` runs one), from `home` to `result` in
+// one tap: its admission record carries the content hash of its directory as containment measures
+// it, and no `variables` (it was handed none).
+#[test]
+fn startup_package_run_records_admitted_content() {
+    let root = TempDir::new().expect("state root");
+    let package = root.path().join(TASK);
+    write_package(&package, TASK, None, None);
+    let device = Arc::new(FakeState::default());
+    // A run on a device instance whose display is observed (Workflow #392 DA-A).
+    device.physical_task_geometry.store(true, Ordering::Release);
+    *device
+        .physical_task_extent
+        .lock()
+        .expect("fake physical task extent") = Some((2, 1));
+    // `home` until the run's tap, then `result`.
+    *device.pixel_script.lock().expect("pixel script") =
+        Some(Arc::new(|_: usize, inputs: usize| {
+            vec![(0, if inputs == 0 { HOME } else { RESULT })]
+        }));
+    let startup =
+        ContainedTaskRequest::new(package.to_string_lossy().into_owned()).expect("startup package");
+    let host = RuntimeHost::start(
+        config(&root)
+            .with_runtime_clock(Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 0)))
+            .with_startup_packages(BTreeMap::from([(INSTANCE.to_owned(), startup)])),
+        Arc::new(FakeProvider::one(
+            INSTANCE,
+            instance_id(),
+            Arc::clone(&device),
+        )),
+    )
+    .expect("runtime host");
+    let ids = IdentifierIssuer::new().expect("identifier issuer");
+    let acquire = runtime_request(
+        &ids,
+        RuntimeOperation::acquire_lease(INSTANCE, ids.mint_holder_id().expect("holder")),
+    );
+    let connection = ConnectionId::new(463).expect("connection");
+    let granted = host
+        .process_request_for_test(&acquire, connection)
+        .expect("the key's receipt");
+    let Some(RuntimeResult::LeaseGranted { token }) = granted.result() else {
+        panic!("the key: {granted:?}");
+    };
+    let token = token.clone();
+    let ended = host
+        .run_startup_package_on_key_for_test(INSTANCE, acquire, token, connection)
+        .expect("no Runtime failure");
+    assert_eq!(ended, Ok(()), "the startup package completes");
+    let (content_hash, variables) = admitted(&last_admission(&host));
+    assert_eq!(content_hash, Some(measured(&package)));
+    assert_eq!(
+        variables,
+        Value::Null,
+        "a startup package is handed no value"
+    );
+    host.close().expect("close runtime host");
 }
 
 #[test]
