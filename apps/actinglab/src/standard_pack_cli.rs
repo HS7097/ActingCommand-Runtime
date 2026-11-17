@@ -18,7 +18,10 @@
 //! game's standard pack in a resource repository's checkout. Under `--dry-run` it runs every check
 //! and writes nothing in the repository. Workflow #463 S3-4: `--held-reason <text>
 //! [--held-reference <text>]` in place of `--decide` is the decision of the class `held` without a
-//! document, read by the same reader as one.
+//! document, read by the same reader as one. Workflow #463 AD-1: `--session-state-dir <dir>` beside
+//! `--record-id` names the directory the recording is read from (the recording commands' session
+//! state directory), which adoption only reads, so that the state directory, where it writes, may
+//! lie on the checkout's volume.
 //!
 //! Workflow #464 P2 (contracts/resource-verify.md, "`standard-pack build`"): `actinglab
 //! standard-pack build --repo <checkout> --source-repository <owner>/<name> --out <directory>
@@ -157,8 +160,8 @@ pub(crate) const CHECK_FLAGS: [&str; 1] = ["--root"];
 /// after the command's words, `cli_parse::COMMAND_OPTIONS`).
 pub(crate) const COMPOSE_FLAGS: [&str; 3] = ["--root", "--instance", "--out"];
 /// Workflow #464 P1: the flags `standard-pack adopt` takes. Workflow #463 S3-4: and the two of a
-/// held decision without a document.
-pub(crate) const ADOPT_FLAGS: [&str; 8] = [
+/// held decision without a document. Workflow #463 AD-1: and the recordings' own directory.
+pub(crate) const ADOPT_FLAGS: [&str; 9] = [
     "--repo",
     "--record-id",
     "--package",
@@ -167,7 +170,12 @@ pub(crate) const ADOPT_FLAGS: [&str; 8] = [
     HELD_REFERENCE_FLAG,
     "--replace",
     "--state-dir",
+    SESSION_STATE_DIR_FLAG,
 ];
+/// Workflow #463 AD-1: the directory the recording `--record-id` names is read from, named after
+/// the recording commands' own word for it, their session state directory
+/// (`ACTINGLAB_SESSION_STATE_DIR`); without it, the state directory, as before.
+const SESSION_STATE_DIR_FLAG: &str = "--session-state-dir";
 /// Workflow #463 S3-4: the decision document's flag, and the two of a held decision without one.
 const DECIDE_FLAG: &str = "--decide";
 const HELD_REASON_FLAG: &str = "--held-reason";
@@ -254,17 +262,19 @@ pub(crate) fn compose_options() -> [&'static str; 3] {
     ]
 }
 
-/// Workflow #464 P1: the flags of `standard-pack adopt`.
-pub(crate) fn adopt_options() -> [&'static str; 8] {
+/// Workflow #464 P1: the flags of `standard-pack adopt`. Workflow #463 AD-1: and
+/// `--session-state-dir`.
+pub(crate) fn adopt_options() -> [&'static str; 9] {
     [
         "--repo <the game's working root in a resource repository's checkout>",
-        "--record-id <a stopped recording of the state directory>",
+        "--record-id <a stopped recording of the state directory, or of --session-state-dir>",
         "--package <a content directory, .zip or .json container>",
         "--decide <decision.json: actingcommand.pack-decision.v1; a first adoption needs it or --held-reason>",
         "--held-reason <text> (the decision of the class held without a document: its reason; not with --decide)",
         "--held-reference <text> (with --held-reason only: the held decision's reference)",
         "--replace (adopt a package adopted before again)",
-        "--state-dir <the Lab's state directory; default actinglab's>",
+        "--state-dir <the Lab's state directory: the check tree, the kept copies, the trial records; default actinglab's>",
+        "--session-state-dir <with --record-id only: the recording commands' session state directory the recording is read from, only read; default the state directory>",
     ]
 }
 
@@ -478,7 +488,12 @@ fn run_catalog(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
 }
 
 /// Workflow #464 P1: `standard-pack adopt` (module doc). The recording `--record-id` names is the
-/// state directory's `record-artifacts/<record>/lab`, as `record stop` left it.
+/// state directory's `record-artifacts/<record>/lab`, as `record stop` left it. Workflow #463
+/// AD-1: or, with `--session-state-dir <dir>`, that directory's, which adoption only reads;
+/// everything it writes stays under the state directory. Beside `--package`, whose package is read
+/// from its path, the option has no meaning: refused `validation_failed` naming it,
+/// `argument_problem` `conflicting`, before anything is read, as `--held-reference` is without
+/// `--held-reason`.
 fn run_adopt(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse_switches(args, &ADOPT_SWITCHES);
     if let Some(flag) = flags
@@ -504,17 +519,29 @@ fn run_adopt(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let decision = adopt_decision(&flags)?;
     let repo = flags.required_path("--repo")?;
     let state_dir = crate::session_state_dir_from_flags(&flags)?;
+    let session_state_dir = flags.optional_path(SESSION_STATE_DIR_FLAG);
     let source = match (
         flags.optional("--record-id"),
         flags.optional_path("--package"),
     ) {
-        (Some(record_id), None) => AdoptSource::Recording {
-            lab_dir: state_dir
-                .join("record-artifacts")
-                .join(crate::safe_file_stem(&record_id))
-                .join("lab"),
-            record_id,
-        },
+        (Some(record_id), None) => {
+            let recordings = session_state_dir.unwrap_or_else(|| state_dir.clone());
+            AdoptSource::Recording {
+                lab_dir: recordings
+                    .join("record-artifacts")
+                    .join(crate::safe_file_stem(&record_id))
+                    .join("lab"),
+                record_id,
+                session_state_dir: recordings,
+            }
+        }
+        (None, Some(_)) if session_state_dir.is_some() => {
+            return Err(conflicting(
+                SESSION_STATE_DIR_FLAG,
+                "standard-pack adopt takes --session-state-dir only with --record-id <id>: a \
+                 package given by --package is read from its path",
+            ));
+        }
         (None, Some(package)) => AdoptSource::Package(package),
         _ => {
             return Err(CliError::usage(

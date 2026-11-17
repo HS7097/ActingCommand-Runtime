@@ -456,6 +456,8 @@ fn request(
         source: AdoptSource::Recording {
             record_id: record_id.to_owned(),
             lab_dir: lab_dir(state, record_id),
+            // #463 AD-1 (the new member only): the recording lies in the state directory.
+            session_state_dir: PathBuf::from(state),
         },
         decision: (!replace).then(|| AdoptDecision::Held {
             rationale: REASON.to_owned(),
