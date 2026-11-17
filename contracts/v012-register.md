@@ -37809,7 +37809,7 @@ under that pause. No member is added.
 | The shutdown's own reading (fix round 2) | `host/policy_dispatch.rs` `release_obstacles` (`ReleaseObstacles`, read at every check under the admission guard and again, outside it, at the shutdown) |
 | The ask with the guard in hand (fix round 2; fix round 3: before the start's command record) | `host/emulator_instance.rs` `drive_configured_control` (a configured start: `ready_control_phase`, the ask, `append_configured_start_intent`, `perform_control_phase`; `ControlMode::Configured` with `intent_recorded`, `control_failed` returning a failure before the intent unrecorded), `drive_configured_start` answering `KeyedStart`; `host/resource_close.rs` `prepare_recognized_instance` answering `RecognitionPreparation`; `host/emulator_autostart.rs` `KeyedStart`, `drive_autostart`, `drive_recognition`, `recognize_on_key`. Fix round 2's `held_before_start`, `held_start_error`, `ControlFailure::Held` and `FailedControl::held` are gone again |
 | The shutdown that finds nothing in the way (fix round 3) | `host/policy_dispatch.rs` `release_paused_instance` (its shutdown branch: `ReleaseObstacles::none_left` with no refusing queued entry, `keeps_device_session`) |
-| Test hooks (test builds only) | `RuntimeHostConfig::with_scheduling_pause_deadlines_for_test`, `RuntimeHost::run_after_configured_start_drive_for_test`, `RuntimeHost::run_when_pause_release_meets_a_lease_for_test`; fix round 1: `RuntimeHost::pause_release_lease_meetings_for_test`, `RuntimeHost::run_before_autostart_claim_request_for_test`, `RuntimeHost::run_after_autostart_last_read_for_test`; fix round 2: `RuntimeHost::run_when_autostart_claim_granted_for_test` (`host.rs`, `policy_dispatch.rs`, `emulator_instance.rs`, `emulator_autostart.rs`) |
+| Test hooks (test builds only) | `RuntimeHostConfig::with_scheduling_pause_deadlines_for_test`, `RuntimeHost::run_after_configured_start_drive_for_test`, `RuntimeHost::run_when_pause_release_meets_a_lease_for_test`; fix round 1: `RuntimeHost::pause_release_lease_meetings_for_test`, `RuntimeHost::run_before_autostart_claim_request_for_test`, `RuntimeHost::run_after_autostart_last_read_for_test`; fix round 2: `RuntimeHost::run_when_autostart_claim_granted_for_test`; fix round 3: `RuntimeHost::run_before_recognition_admission_for_test` (`host.rs`, `policy_dispatch.rs`, `emulator_instance.rs`, `emulator_autostart.rs`, `resource_close.rs`) |
 | Texts | the outcome catalog (`catalog.json`: the token, the key's text; `runtime-host.json`: the code `scheduling_pause_kept_at_shutdown`, and its regenerated index), the three contracts above, the module text of `emulator_autostart.rs` and the scheduler's `ClaimKind::Autostart` |
 
 **Tests** (`crates/runtime-host/src/tests/gate_480_pg1.rs`, host gate map row "#480 PG-1"; the
@@ -38079,8 +38079,12 @@ Start shows its activity, "pause all" is pressed and the guard let go: no Start,
 person's pause of the instance, whose hand-back comes to wait for that guard too; the claim leaves
 the same, its skip `instance_paused`, and the pause answers success, `released`, its one record
 naming the instance. `pg1_fix3_a_global_pause_while_the_recognition_waits_for_the_guard_binds_nothing`:
-a recognition claim of a pending instance renews its key and waits for the guard; "pause all"
-pressed then: nothing bound (the endpoint pending, no `runtime.instance_bound`), no emulator
+a recognition claim of a pending instance, past its last ask, comes to its preparation, and just
+before that takes the instance's admission guard the test's thread takes it (one new test-only
+hook, `run_before_recognition_admission_for_test`: nothing a recognition does between that ask and
+the guard shows from outside for certain, its renewal recording nothing while the key still has its
+time); "pause all" pressed
+while it waits: nothing bound (the endpoint pending, no `runtime.instance_bound`), no emulator
 control, no `command.*` or `runtime.failed` under the claim, its key released, one skip
 `recognize` `global_paused`. No test adapted or retired; no golden changes.
 

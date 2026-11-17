@@ -2268,6 +2268,8 @@ impl RuntimeHost {
             #[cfg(test)]
             autostart_claim_granted_hook_for_test: Mutex::new(None),
             #[cfg(test)]
+            recognition_admission_hook_for_test: Mutex::new(None),
+            #[cfg(test)]
             contained_settlement_unrecorded_for_test: config
                 .contained_settlement_unrecorded_for_test,
             #[cfg(test)]
@@ -4488,6 +4490,22 @@ impl RuntimeHost {
         Ok(())
     }
 
+    /// #480 PG-1 fix round 3, test builds: runs `hook` once, on the claim's worker, just before
+    /// the watch's next recognition preparation (`prepare_recognized_instance`) takes the
+    /// instance's admission guard, after the claim's last ask of the hold and its renewal.
+    #[cfg(test)]
+    pub(crate) fn run_before_recognition_admission_for_test(
+        &self,
+        hook: Box<dyn FnOnce() + Send>,
+    ) -> RuntimeHostResult<()> {
+        let shared = self.shared_ref(HostLocation::RunEmulatorAutostart)?;
+        *lock(
+            &shared.recognition_admission_hook_for_test,
+            HostLocation::RunEmulatorAutostart,
+        )? = Some(hook);
+        Ok(())
+    }
+
     /// Workflow #427-A fix 1, test builds: whether a policy dispatch could go to the instance
     /// `instance_alias` names now (the admission's occupancy: no holder, no eligible waiting
     /// claim, no registered policy run and no takeover cooldown).
@@ -6677,6 +6695,10 @@ struct HostShared {
     /// granted and holds its key, before its first check.
     #[cfg(test)]
     autostart_claim_granted_hook_for_test: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    /// #480 PG-1 fix round 3, test only: the hook the watch's recognition runs once just before
+    /// its preparation takes the instance's admission guard.
+    #[cfg(test)]
+    recognition_admission_hook_for_test: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     /// #411 A65 (Codex's counterexample on #420), test only: see
     /// [`RuntimeHostConfig::with_contained_settlement_unrecorded_for_test`].
     #[cfg(test)]

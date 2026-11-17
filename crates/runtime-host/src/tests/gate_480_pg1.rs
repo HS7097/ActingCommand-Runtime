@@ -1932,13 +1932,15 @@ fn pg1_fix3_an_instance_pause_while_the_start_waits_for_the_guard_leaves_no_comm
 }
 
 // Fix round 3, the same on the recognition path: the watch's recognition claim of a pending
-// instance it read running makes its last status read; before it asks the hold once more the
-// test's thread takes the instance's admission guard, and the claim goes on: it renews its key
-// and waits for that guard before its preparation. "Pause all" is pressed meanwhile. Once the
-// guard is let go the preparation asks the hold with the guard in hand: nothing is read, bound or
-// prepared (the endpoint stays pending, no `runtime.instance_bound`, no emulator control), under
-// the claim's request no `command.*` and no `runtime.failed` record, its key released, and one
-// skip (`watch_kind` `recognize`, `global_paused`), what a recognition's skip records.
+// instance it read running makes its last status read and asks the hold once more (nothing holds
+// it yet); just before its preparation takes the instance's admission guard
+// (`run_before_recognition_admission_for_test`, the smallest new hook: nothing a recognition
+// does after that ask is seen from outside) the test's thread takes that guard, and the claim
+// goes on to wait for it. "Pause all" is pressed meanwhile. Once the guard is let go the
+// preparation asks the hold with the guard in hand: nothing is read, bound or prepared (the
+// endpoint stays pending, no `runtime.instance_bound`, no emulator control), under the claim's
+// request no `command.*` and no `runtime.failed` record, its key released, and one skip
+// (`watch_kind` `recognize`, `global_paused`), what a recognition's skip records.
 #[test]
 fn pg1_fix3_a_global_pause_while_the_recognition_waits_for_the_guard_binds_nothing() {
     let root = TempDir::new().expect("tempdir");
@@ -1953,13 +1955,13 @@ fn pg1_fix3_a_global_pause_while_the_recognition_waits_for_the_guard_binds_nothi
     let admission = host
         .instance_admission_for_test(FIRST)
         .expect("the instance's admission guard");
-    let (read_tx, read_rx) = mpsc::channel::<()>();
+    let (waits_tx, waits_rx) = mpsc::channel::<()>();
     let (taken_tx, taken_rx) = mpsc::channel::<()>();
-    host.run_after_autostart_last_read_for_test(Box::new(move || {
-        let _ = read_tx.send(());
+    host.run_before_recognition_admission_for_test(Box::new(move || {
+        let _ = waits_tx.send(());
         let _ = taken_rx.recv_timeout(GATE_WAIT);
     }))
-    .expect("the claim's hook");
+    .expect("the recognition's hook");
     let before = head(&host);
     host.start_emulator_watch().expect("the watch starts");
     // The poll's read, then the claim's read just before its recognition.
@@ -1970,22 +1972,19 @@ fn pg1_fix3_a_global_pause_while_the_recognition_waits_for_the_guard_binds_nothi
         .emulator
         .script_read(running_state(FAKE_EMULATOR_PORT));
     clock.advance(WATCH_INTERVAL_MS);
-    read_rx
+    waits_rx
         .recv_timeout(GATE_WAIT)
-        .expect("the claim read the status before its recognition");
-    let [claim] = claims_after(&host, instance, before)[..] else {
-        panic!("one recognition claim");
-    };
-    let renewed = count(&of_request(&host, claim), EventType::LeaseRenewed);
+        .expect("the recognition comes to the admission guard");
     let taken = admission.lock().expect("the instance's admission guard");
-    taken_tx.send(()).expect("the claim goes on");
-    wait_until(
-        "the recognition renews its key, then waits for the guard",
-        || count(&of_request(&host, claim), EventType::LeaseRenewed) > renewed,
-    );
+    taken_tx
+        .send(())
+        .expect("the recognition goes on to wait for the guard");
 
     completed(&pause(&host, SchedulingPauseScope::Global, 981));
     drop(taken);
+    let [claim] = claims_after(&host, instance, before)[..] else {
+        panic!("one recognition claim");
+    };
 
     let lines = await_reports(&host, skip_reported);
     assert_eq!(reported(&lines, "emulator_autostart_preparation_failed"), 0);

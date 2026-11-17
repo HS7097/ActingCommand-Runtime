@@ -2142,6 +2142,9 @@ impl HostShared {
         links: EventLinksDraft,
         key: &super::host_claims::HostKey,
     ) -> Result<RecognitionPreparation, RequestFailure> {
+        // #480 PG-1 fix round 3, tests: just before the wait for the instance's admission guard.
+        #[cfg(test)]
+        self.before_recognition_admission_for_test()?;
         let instance_guard = self.instance_guard(instance_id)?;
         let admission = self.lock_admission(&instance_guard, instance_id)?;
         if let Some(hold) =
@@ -2164,6 +2167,21 @@ impl HostShared {
         drop(admission);
         let prepared = prepared.map_err(RequestFailure::poison_without_terminal)?;
         Ok(RecognitionPreparation::Ran(prepared.ladder.map(Box::new)))
+    }
+
+    /// #480 PG-1 fix round 3, test builds: runs, once, the hook a test set for the watch's
+    /// recognition just before its preparation takes the instance's admission guard.
+    #[cfg(test)]
+    fn before_recognition_admission_for_test(&self) -> RuntimeHostResult<()> {
+        let hook = lock(
+            &self.recognition_admission_hook_for_test,
+            HostLocation::RunEmulatorAutostart,
+        )?
+        .take();
+        if let Some(hook) = hook {
+            hook();
+        }
+        Ok(())
     }
 
     /// `prepare_instance_connection`, also returning the monotonic deadline of the takeover
