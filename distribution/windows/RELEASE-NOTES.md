@@ -9,6 +9,164 @@ Cargo.lock hash, Rust toolchain, target, build profile, Actions run/attempt and
 file identities are recorded in the accompanying `BUILD-MANIFEST.json`; the zip
 and artifact names bind the complete source SHA.
 
+## v0.12.71
+
+本版是 v0.12.70 之后的 2 次合并、6 张 PR：先是 #463 RC-2 #1806 单独合入，再是 0.12.71 列车 #1800（#463 CH-1 自己），带 #463 RG-1 #1810、#463 AC-1 #1808、#398 DB-1 #1807 和 #477 PC-2 #1811。
+列车除了各张的头和合并，有自己的两个提交：AC-1 那条「失败的用例多过上限」的测试改成照读取器和运行器真实的答法（同一个 id 的两个用例是两行，各带自己 `case.json` 的 id），登记册记下几处交界；
+并进 PC-2 以后，`standard-pack catalog` 要从旧文件里丢掉的条目或池子，名字没有警告带得了的，改成整行拒（见下）。
+内容是：账本里「包已准入」那条记录带上准入量出的内容哈希和这次运行从外面拿到的值（账本修订 9，单向）；`recognize` 对定位到的文字答出它的框，算框的只有内核一个函数；
+按录制号收编时把录制的回归用例先在要写进去的包上跑过、再带进检出，判断录制只问 `record ready` 那一个函数；`devices bind` 可以对着还没选中的候选配置绑，来源可以记 `ui`；
+`standard-pack catalog` 可以点名把条目按规则重算、给条目写显示、顺带加分组；回归用例的读取器读过「场景怎么拼的」里的说明成员。
+**生产上跑的是 v0.12.70（2026-11-17 15:41 起，经 Lab 救急模块部署）**：一台实例在跑调度的例行任务，其余实例的调度暂停着。从 v0.12.70 装本版：
+**Lab 救急模块的 `deploy` 不用任何标志，`actingctl install` 要加 `--accept-ledger-one-way`；`ledger_verify` 为 true，计划通知的 `rollback_window_bounded` 为 true，`defaults_diff` 没有一行，没有新文件**。
+**一个接口动了：账本 `ledger` 到 [3, 9]，单向**（最低值不动）；`package` 仍是 [3, 18]，`runtime-client` 仍是 [3, 11]；配置键没加，结果码加了 3 个。
+**本版的 Runtime 一启动就退不回 v0.12.70**；**部署以前控制台先换成界面的 v0.12.22 或更新的**：更旧的控制台离线打不开存着修订 9 记录的账本。按录制号收编，**以前收得下的现在可能被拒**（见下）。
+
+- **为什么有这一版**：主人 11-16 定了准入时算内容哈希并记进账本，只算、只记（看板 #463，待拍板 220 选 A）。
+  在 v0.12.70 上做包的第一天看到的：`recognize` 对带定位的文字目标答「过了」，回答里却没有框，跟着文字的点击离线核不了；收编不带用例，录制停下时写好的用例要手拷进资源仓；
+  `pack-catalog.json` 里规则还没写就建下的条目，以后再也带不回规则；老的手写用例在场景旁边多写一句说明就判没过；界面的安装程序在配置选中以前绑不了手机。
+
+- **在用的安装在部署时和以后碰到的**（逐条核过代码）：
+  - **首先，账本修订 9 是单向的。**
+    - **计划**：账本两条边。`previous_max_in_next`（在线 Rp [3, 8] 的 8 在本版 R* [3, 9] 里）过；`one_way`（R* 的 9 大于 Rp 的 8）只在计划的输入接受单向时过（`crates/lab-rescue/src/install/plan.rs` 298–310）。
+      Lab 救急模块这一面自己接受（`accept_ledger_one_way` 取 `face.rescue()`，`install/update.rs` 93 计划、631 实做），日志记 `one_way: true`、不记确认（`install/deploy.rs` 1883–1896）；
+      `actingctl install` 要加 `--accept-ledger-one-way`，不加就在计划上拒 `interface_edge`（`plan.rs` 1039–1051），加了日志记 `acknowledged: ["accept_ledger_one_way"]`。
+      计划通知的 `rollback_window_bounded` 为 true（`plan.rs` 212），`ledger_verify` 为 true（两边账本范围不同，`plan.rs` 924）。**计划不核控制台**：界面那几条边要等根上有界面成员才算（`plan.rs` 423–439）。
+    - **实做**：救急模块的组合更新先暂停、再关 Runtime（关的那一步读 S0 的账本头），然后才是更新自己的步，第一步就是 `ledger_verify`，在任何 `stage_file` 之前（`install/deploy.rs` 1694–1715，`install/update.rs` 538–548）；
+      `actingctl install` 也是 S0 之后、换文件之前（`contracts/install-cli.md` 326–335）。它跑本版留存构建里的 `actingcommand-actingd.exe ledger-maintenance verify --config <配置>`，不带标志（`install/programs.rs` 603–621，`update.rs` 865–875），是有界的那一遍：
+      数据库格式和视图定义；带钥的头行和它的头；存着的序号正好是 `1..=头`（一条走索引的语句）；最新的 `ledger_observer.open_verify_tail_records` 条（配置文件的值，没有就 4096 条）逐条用本版的解码器认证。
+      不读更早的记录、不读状态表、不做整文件的 `quick_check`（`contracts/ledger-maintenance.md` 95–131）。对账本只读，但要拿状态根的属主，所以属主日志多一开一关两条记录（同一文件 33–42、129–131）。
+      它自己的时限是 120 秒（`crates/runtime-database/src/maintenance.rs` 28），安装工具最多等 `install.child.ledger_verify_timeout_ms`（默认 1800000 毫秒，`contracts/runtime-config.md` 1150）。**在生产这本账本上要多久，代码和测试都没给速率，没量过。**
+      校验失败：这次操作拒 `ledger_verify_failed`，什么都没换；到时限还在跑：操作停在 `install_operation_interrupted`，留给 `install resume`（再校验一遍）或 `install undo`，那个校验进程不结束（`update.rs` 876–891，`install-cli.md` 299–302）。
+    - **退路**：**从本版的 Runtime 第一次启动起（组合更新里 `start` 那一步起）就退不回 v0.12.70。** 此后撤销这次更新被当成退回 v0.12.70 来判，`ledger previous_max_in_next`（9 不在 [3, 8] 里）不过，拒 `interface_edge`，不管账本里有什么；
+      `--accept-ledger-one-way` 只管升级方向（`install-cli.md` 354–360、386–405，`install/undo.rs` 464–529）。组合更新在启动或启动后检查失败时的自动退回按不接受单向来计划，结果是 `rollback_gate_failed`，留在本版（`deploy.rs` 954–965）；`rollback` 到 v0.12.70 同样拒。只能往前修。
+      在 `start` 之前停下的（校验失败或到时限还在跑、换文件那几步失败），本版一样都没跑过，撤销不判边，退路开着。
+      第一条按路径准入的运行写下修订 9 的记录以后，就算用别的办法把 v0.12.70 放回去：这条记录还在最新的 `open_verify_tail_records` 条里时它启动就拒，读到它的页整页失败（`contracts/component-interfaces.md` 146）。部署以后 `op status` 的 `rollback_window` 里没有一个留存的构建 `ledger_edge_passes` 为 true（`install/status.rs` 286–299）。
+    - **控制台**：界面的 v0.12.22 钉的是 CH-1 审过的头 `7b4705ff`（本版提交的祖先，核过），能读修订 9；契约说 Runtime 只和 `ledger` 范围含 9 的控制台配，`[3, 8]` 的读者离线打不开存着这种记录的账本（`component-interfaces.md` 146）。
+      公开那两档投影的页逐字节不变，旧客户端库照读；带整条记录的页和离线账本它解不开（登记 §1.455「What the console re-pins for」）。
+      Runtime 自己的旧版读者碰到这样一条记录：v0.12.70 的 `TaskSemanticFact` 拒不认识的成员（v0.12.70 的 `crates/actingcommand-contract/src/event/payload.rs` 4255–4256），账本读者答 `corrupt_ledger_record`，位置 `decode_sqlite_record`（`crates/ledger/src/global/sqlite.rs` 4148–4154，本版没改），
+      启动、整页读取、退回闸（`ledger_readability`）都是这样；旧版客户端库在线读带整条记录的页（`lab`、`verbose`、`forensic` 三档）解不开回执，答 `runtime_receipt_decode_failed`（致命，`crates/runtime-client/src/ipc.rs` 228–233）。
+    - **部署以后还跑在改名放到一边的旧映像上的 MCP 服务进程**跑的是 v0.12.70 的代码：读到带整条修订 9 记录的页（`ac_events` 带载荷、运行状态读的 `forensic` 页，`crates/runtime-client/src/client/run_status.rs` 672、1199、1266）就解不开。
+      `op status` 的 `mcp_servers_on_old_images` 照旧列出它们；重开那个客户端的会话。
+  - **新记录里有什么**（给导出证据的人）：每一次按路径准入的运行（直接运行、试跑、定时运行、宿主自己起的启动包、回家包、阶梯梯级的包）的 `task.requested`（`PackageAdmitted`）多两个可缺成员（`payload.rs` 4262–4336）：
+    `content_hash`，准入那一次读进内存的字节上量出的内容哈希（和 `measure_content_hash` 同一个函数，包不读第二遍，`crates/pack-containment/src/lib.rs` 207–236、429）；
+    `variables`，从外面交给这次运行的值，按名字排，每个是名字加值的紧凑 JSON 文本，**值的文本不超过 1024 字节时整段记下，超过的只记它的 SHA-256 和字节数**（`AdmittedVariable::of`，`payload.rs` 4283）。
+    直接运行记请求给的值；**定时运行记它从派单读到的值，默认值也在里面，分不出哪些是设的、哪些是默认**（`crates/runtime-host/src/host/contained_task.rs` 8921–8932）；没交值的运行不写这个成员。层（先决、回家、中断、导航）只写自己的入口恢复记录，不带这两项。
+    整条最多约 20 KB，没有上限会拒它（`contracts/package-variables.md`「The admission record's size」）。只算、只记：准入不比也不拒，失败身份、磨合期、暂停和解除都不读它。
+    公开那两档（`ui`、`normal`）的投影两项都不带（`public_summary`，`payload.rs` 5377–5391；`crates/ledger/src/global/projection.rs` 452–455），`cli`、`concise` 不带载荷；**`lab`、`verbose`、`forensic` 三档带整条记录**（`projection.rs` 456–459）：
+    Lab 的 `events`（`crates/lab-ops/src/events.rs` 56）、`export evidence` 写的 `evidence/events.jsonl`（`crates/runtime-host/src/host/evidence_export.rs` 94、139）、`actingledger` 的导出都带哈希和值，**把证据包转给别人，这些值就跟着走**。
+    `QueryRuns`、`run show`、`report export` 不带这条记录（`contracts/ledger-observer.md` 16–36，「Later rulings applied」第 1 条）。
+  - **收编**（AC-1）：`standard-pack adopt --record-id` 现在把录制停下时写在包旁边的用例（`out/<package_id>.cases/`）逐字节带进检出的 `regression/<game>/<package_id>.<用例>/`，写在最后；
+    写之前每个用例先由那一个运行器在「这次要写进去的那份包」上跑一遍。**以前收得下的收编现在可能被拒**：有用例失败拒 `case_failed`，什么都不写，名单照 `resource regression` 的规矩（只列前 10 行、失败的在前、不带检查的 `detail`，给 `failed_total` 和 `listed`；`crates/resource-tooling/src/adopt.rs` 2687 起）；
+    目标目录被手写的用例占着拒 `case_place_taken`；用例名拼不成一个文件名拒 `case_name_invalid`；以前从录制拷进来的那组还在、不带 `--replace` 拒 `pack_exists`（带了整组搬到 `<state>/adopt/<package_id>.cases.old-<毫秒>/`，手写的不动）。
+    判断录制改问 `record ready` 那一个函数：Lab 读不成整份的录制（`lab_recording_unreadable`）照旧用它自己成员的检查；Lab 那边别的失败一律拒 `recording_not_judged`（`adopt.rs` 2256）。收与拒在别的录制上没变。
+    按 `--package` 收编不拷任何用例（`cases.state` 为 `package_path`），录制没有用例目录时为 `none_found`，这两种照旧收编；检出里留着这个包以前从录制拷进来的用例或中断留下的 `.part` 时，给警告 `adopt_cases_left`，不搬不删（`adopt.rs` 1295–1299、1367–1375）。
+    **不取用例的收编也读 `regression/<game>/`：目录在但列不出，拒 `repository_invalid`；目录不存在，什么都不变**（`adopt.rs` 2420–2423）。回答多 `cases`，`next` 只在一个用例都没取时才点名回归用例。
+  - **目录工具**（PC-2）：`standard-pack catalog` 多 `--refresh <包>`（可给多个，MCP 里是列表）和 `--displays <文件>`。**不带这两个选项时，回答和写出的文件和以前逐字节一样，只有一处例外**：
+    已有的文件里要丢掉的条目，它的 `package_id`、或者要丢掉的池子，它的 `pool_id`，长过 256 字节或带控制字符（警告带不了这个名字）时，以前是丢掉再警告，现在整行拒 `standard_pack_root_invalid`，词 `catalog_out_of_limits`，指在原文件里的位置，不回显原值（`crates/actingcommand-contract/src/standard_pack_catalog.rs` 1791）。
+    `--refresh` 把点名条目的产耗按新建条目的同一条规则从排程规则重算，显示和位置不动，回答 `refreshed`（`replaced`、`agrees` 或 `added`）；点名的包还没有条目时照常新建；登记表里没有、或点了两次的，拒 `standard_pack_catalog_refresh_refused`。
+    `--displays` 读一份带版本标记的显示文件，整份替换点名条目的显示，业务部分不动，回答 `display_written`；分组只加、不改、不删，回答 `groups_added`，同 id 换了标题的拒（`catalog_group_title_differs`），总数不超过 64；文件不合格拒 `standard_pack_catalog_display_refused`。拒绝都在写任何东西之前。
+  - **`devices bind`**（DB-1）：`devices bind <别名> <handle> --config <候选配置>`（Lab 的行和 `actingctl devices bind` 都收）到候选文件里找别名，绑定写进候选文件自己写的状态根（要绝对路径），就是 actingd 对这份候选做配置检查时读的那一份；
+    不读任何安装选中项，adb 取 `--root` 的、没有就取程序按自己的位置找到的根（`locate::root_of_place`）；`--state-root` 和 `--config` 不能一起给。**绑定会把状态根和它的 `private` 目录建出来**（`crates/lab-ops/src/devices.rs` 528–530），
+    所以要求状态根为空的操作要排在绑定之前，今天只有 `install new` 一个（`crates/lab-rescue/src/install/new.rs` 251，`state_root_not_empty`）；第一次启动收下只有绑定文件的状态根并认领。
+    `--bound-via ui` 把来源记成 `ui`；MCP 的 `ac_devices_bind` 不给这个参数，多了 `config`。**经 Lab 的 MCP 服务器做的绑定，来源记的仍是 `cli`、不是 `mcp`**（`devices.rs` 692；旧毛病，不是本版的）。不带这两个选项时回答和写入逐字不变。
+  - **`recognize`**（RG-1）：`recognize`（还有 `is-visible`、`tap-target` 回答里的 `evaluation`）对通过了的带定位的文字目标，在 `matched_rect` 里答出找到的文字的框：声明了格子取装着它的格子，没有就取文字块，坐标系和模板的一样（`crates/execution-kernel/src/readonly.rs` 464）。
+    算这个框的只有内核的 `located_text_box`（`crates/execution-kernel/src/contained_task.rs` 12793）：跑包时点哪儿（`target_click_box`，逐字等价）、这几个回答、录制里跟随文字的点击框（`crates/lab/src/recording/follow.rs`）都调它，录制的回答逐字节不变。
+    不带定位的文字目标、没通过的目标、颜色等别的目标照旧不带框；`tap-target` 的预演照旧按声明的静态 `click`，不按定位框。
+  - **回归用例的读取器**（RC-2）：`scene_construction`、它的 `canvas` 和每个矩形里契约没列的成员现在读过去，给警告 `case_member_unknown`，带名字和位置 `json_pointer`（例如 `/scene_construction/note`），一处一名一条（`crates/lab/src/regression_case.rs` 900、1036、1078、1144）；
+    以前这样的用例判 `member_unknown`、算没过。判定只看列出的成员和场景文件；`expect`、`expect.observe`、`expect.recognize` 的条目照旧封闭（1212、1223、1295）。`record stop` 写的用例不出这个警告。
+  - **盘上的东西**：本版照读 v0.12.70 留下的一切（账本修订 3 到 8、配置、录制、包），第一次启动不迁移、不要新状态根；新写的只有修订 9 的准入记录（见上）。配置、录制、包的格式都没变。
+    收编现在往资源仓检出里写用例目录；`devices bind --config` 建出候选配置的状态根和绑定文件（绑定的格式没变，`ui` 是原有的词，v0.12.70 的 `crates/actingcommand-contract/src/device_binding.rs` 57–60）。
+
+- **改了什么**（账本记录、内核、收编、目录工具、绑定、读取器）：
+  - **准入记录**（CH-1，§1.455）：`crates/actingcommand-contract/src/event/payload.rs` 的 `AdmittedVariable`、`PackageAdmitted` 的两个成员、校验和公开投影；`crates/pack-containment/src/lib.rs` 的 `content_hash_of`、`load_path_measured`；
+    内核 `bundle.rs` 的 `load_path_measured`，`contained_task.rs` 的 `load_path_with_resident_bytes` 多答哈希，`contained_task/remedies.rs` 的 `dispatched_variables_read`（和 `dispatched_variable_values` 共用 `dispatched_value`）；宿主 `host/contained_task.rs` 带上并写进记录。
+  - **定位框**（RG-1，§1.463）：内核 `contained_task.rs` 的公开函数 `located_text_box`、`readonly.rs` 的 `matched_rect`；Lab 的 `recording/follow.rs` 删掉自己的那一份、改调内核。
+  - **收编**（AC-1，§1.461）：`crates/resource-tooling/src/adopt.rs`；收编那一层调不到 Lab 的运行器（会成环），所以加了由 Lab 实现的接口 `AdoptLab`（actinglab 的 `LabAdoption`），运行器和「还缺什么」的判断各只有一份；读用例目录合成一个函数，和 `resource regression` 共用（`apps/actinglab/src/resource_verify/regression.rs`）。
+  - **目录工具**（PC-2，§1.462）：契约库 `standard_pack_catalog.rs` 的合并多一个 `CatalogEdits`、显示文件的检查，`outcome.rs` 公开 `key_text_fits`；`crates/resource-tooling/src/standard_pack_catalog.rs`、`api.rs` 的请求和回答；Lab 命令行的两个选项。
+  - **绑定**（DB-1，§1.460）：`crates/lab-ops/src/devices.rs` 的 `bind_candidate`、`locate.rs` 的 `root_of_place` 和 `state_root_of`；Lab 的 MCP 服务器 `tools.rs` 的 `SUPPLIED` 多一行（`bound_via` 经 MCP 不给）。
+  - **读取器**（RC-2，§1.459）：`crates/lab/src/regression_case.rs` 的 `Reader::open`，顶层和场景那三处都走它。
+  - **这些工具不提议区域、不提议挑哪一项、不提议值**：收编只带录制已有的用例，目录工具只照规则重算、照给的文件写显示。
+
+- **部署和退路**：照 v0.12.70 那次的做法，用在线 v0.12.70 留下的那份 `actinglab` 跑 `release stage`、`deploy <提交> --plan` 预看、`deploy <提交> --detach` 实做，再用 `op status` 看结果。
+  救急模块（`crates/lab-rescue`）自 v0.12.70 一个文件没改，在线那份和本版的是同一份代码；上面引的行号对两边都对。
+  - 部署以前：控制台换成界面的 v0.12.22 或更新的（计划不核它）；照旧不留开着的录制，也不跑试跑。
+  - 这一次实做比以往多一步，Runtime 停着的时候用本版的 actingd 校验账本：停机时间比以往长，多长不知道（见上）。
+  - 部署以后 `op status` 的 `mcp_servers_on_old_images` 照旧列出还跑在旧映像上的 MCP 服务进程，重开那个客户端的会话才拿到新的工具表（`ac_devices_bind` 的 `config`，`ac_standard_pack_catalog` 的 `refresh`、`displays`），也才读得了修订 9 的记录。
+  - 部署以后要看的：用 Lab 的 `events` 按实例、从 S0 的账本头往后读 `task.requested` 的载荷，第一条准入记录带 `content_hash`；在存下来的场景上 `recognize` 一个带定位的文字目标，答出 `matched_rect`。
+  - **退路**：只到组合更新的 `start` 那一步为止（见上）；之后只能往前修。
+
+- **已知的限度**（各片审查和验收记录列的，逐条核过）：
+  - 带 `--replace` 再收编时，录制所在的状态目录和检出不在同一个卷上，拒 `replace_across_volumes`；绕法是把 `--state-dir` 放在检出那个卷上、包用 `--package` 给（`adopt.rs` 1004–1024），这样不带用例，用例仍要手拷。
+  - 用例的运行器不判 `expect.step` 和 `expect.after`（读进来答 `not_run`，`not_evaluated`，`regression_case.rs` 105–115）；`standard-pack build` 和 `resource verify` 仍不跑用例。
+  - 离线的预演（`observe`、`do`、`ensure`、`wait`）还不带定位文字的框：它们的回答是 actinglab 自己的另一份构造，只认模板（`apps/actinglab/src/commands/navigation_recovery.rs` 871–882）。
+  - 经 MCP 的 `place --plan` 回答超过预算时不导出：救急模块的行在服务器自己的进程里答，不经导出（`apps/actinglab-mcp/src/calls.rs` 116），放不下就答 `output_budget_exceeded`（同一文件 520–523）。看计划用命令行。
+  - `run show` 还不显示记下的哈希和值，试跑还不比对计划时的内容和实际跑的内容（CH-2、CH-3，另排）。
+  - 目录工具碰到名字没有警告带得了的条目只拒、不修。
+  - 校验账本在生产这本账本上要多久没量过；本版的变化一样都没在设备上跑过。
+
+配置：按代码、`distribution/windows/component-interfaces.json` 和 `contracts/component-interfaces.md` 核过：
+
+- 接口：**`ledger` 从 [3, 8] 升到 [3, 9]**（`component-interfaces.json` 7；契约表 `ledger` 第 9 行，`contracts/component-interfaces.md` 146；架构测试的钉 `tools/actinglab-architecture/tests/component_interfaces.rs` 196）：
+  `task.requested` 的两个可缺成员；SQLite 格式 2、`actingcommand.event.v3`、记录种类、表、索引和视图都不变，所以本版照读修订 3 到 8，不要新状态根、不迁移；没有它们的记录还是修订 8 的字节。
+  最低值留 3。单向：本版的 Runtime 跑过以后，退回声明 [3, 8] 的构建一律拒。其余逐行和 v0.12.70 一样：`actingd-config` [5, 33]、`install-selection` [1, 1]、`install-control` [0, 0]、`runtime-client` [3, 11]、`package` [3, 18]、`runtime-outcomes` [1, 1]（`component-interfaces.json` 4–6、8–10）。
+  `runtime-client` 不升：请求、回执、回答的类型都没变，新成员在账本记录里，客户端只在整条记录的页和账本里碰到它，和修订 4 到 8 一样（登记 §1.455）。没找到该升没升的：别的几片不碰账本，`recognize` 的框、收编的 `cases`、目录工具的回答、绑定的 `config` 都是 Lab 的回答，不属于表里任何一个接口。
+- **Runtime 改了的文件**：契约库 `crates/actingcommand-contract/src/` 的 `event/payload.rs`（准入记录），另有目录工具用的 `codes.rs`、`outcome.rs`、`outcome/keys.rs`、`standard_pack.rs`、`standard_pack_catalog.rs` 和只改注释的 `package.rs`；
+  `crates/pack-containment/src/lib.rs`；内核 `crates/execution-kernel/src/` 的 `bundle.rs`、`contained_task.rs`、`contained_task/remedies.rs`、`readonly.rs`；宿主 `crates/runtime-host/src/host/contained_task.rs`（`suspension_lift.rs` 只改注释）。
+  `crates/ledger` 只改了测试用的生成器 `synthetic.rs` 和两条测试，`crates/runtime-client` 只改了 `client.rs` 的测试模块和四条测试，`apps/actingd` 只多一个开发依赖和一个测试，`apps/actingctl` 只改测试；
+  `crates/lab-rescue`、`crates/runtime-config`、`crates/policy`、`crates/scheduler`、`crates/display-adapter`、`crates/device` 一个文件没改。
+- 配置键：没有加的、没有去掉的；`actingd.defaults.json` 一字没改，sha256 仍是 `e14b0ced7040a6d05046edddd9b0c8ee95a53de4b65d69fcc7d9dae17a433343`；两个配置模板和 `apps/actingd/src/config/manifest.rs` 没改。
+- 结果码：加了 3 个，没有标成 `retired` 的。按片：AC-1 加 `adopt_cases_left`（resource-tooling，warning，退出码 0，必带 `package_id`、`paths`），词表 `adopt_cases`（`taken`、`none_found`、`package_path`），
+  `adopt_problem` 加 `case_name_invalid`、`case_place_taken`、`case_failed`、`recording_not_judged`（`adopt_refused` 的拒，Lab 自己的命令行退出码 1，`--via` 那一行 2），改了 `adopt_refused`、`adopt_write_failed` 的说明；
+  PC-2 加 `standard_pack_catalog_refresh_refused` 和 `standard_pack_catalog_display_refused`（contract，error，拒，Lab 自己的命令行和经 `serve --stdio` 退出码 1，`--via` 那一行 2），键和词表 `catalog_refresh_problem`（`package_not_listed`、`package_repeated`），`standard_pack_problem` 加 `catalog_group_title_differs`，改了 `catalog_out_of_limits` 的说明；
+  RC-2 给 `case_member_unknown`（lab，warning）加可选值 `json_pointer`；DB-1 改了 `device_kind_unsupported` 的说明；CH-1、RG-1 没加码（格式不对的成员是已有的 `invalid_task_semantic_payload`）。
+  合计 4020 个码（在用 3931，`retired` 89），1773 个位置、31 个分片；键 689，词表 280，词 2128；在用码按类别 error 3403、warning 172、info 214、success 125、fatal 17；审阅定稿的在用码 154 个。
+  本版的发布文件 `contracts/outcome-codes/released/0.12.71.json`：0 个码、0 个位置（新码都还没定稿，也没有新标 `retired` 的）；索引由脚本生成，仍是 32 个文件，核过是最新的。
+- Lab 的操作表仍是 194 行，改了 5 行：`devices bind`（加参数 `config`、`bound_via`，帮助 149 字节，说明）、`standard-pack catalog`（加参数 `refresh`、`displays`，帮助 159 字节，输出，说明）、`standard-pack adopt`（输出）、`run start` 和 `resource regression`（说明）；帮助最长 159 字节。
+  命令清单仍是 46 个顶层分派臂、109 条命令（`ratchet/` 没改）。Lab 的 MCP 服务器没加没减工具（操作表没加行），`ac_devices_bind` 多 `config`（不给 `bound_via`），`ac_standard_pack_catalog` 多 `refresh`、`displays`；第一代 MCP 服务器仍是 46 个工具，只改了测试。
+  README 两种语言把工具表标题改成 v0.12.71。两个压缩包的文件表不变（`.github/workflows/windows-remote-build.yml` 没改）：没有新文件、没有去掉的文件。
+- 不稳定表仍是 FLK-08、FLK-10、FLK-14、FLK-15、FLK-16（`ci/flaky-tests.toml`，本版没动）。看板 #71 另登记了 FLK-17、FLK-18（宿主的两条靠机器快慢的门测），没有镜像进这张表。
+  列车的车头 `30a18170` 上 host-lab 红过一次，是 CI 测试机的临时盘在运行中途消失（看板 #71，评论 6943101189）：测试机的事故，不进这张表。
+
+升级与退回（救急模块部署、退回、撤销那几条路，`crates/lab-rescue` 自 v0.12.70 一个文件没改；`actinglab deploy` 和 `actingctl install` 走的都是它）：
+
+- **v0.12.70 的安装工具装本版：Lab 那一面不用标志，`actingctl install` 要 `--accept-ledger-one-way`。** 计划的边：`ledger` 的 `previous_max_in_next` 过，`one_way` 在 Lab 那一面过、在 `actingctl install` 带了标志才过（`install/plan.rs` 298–310）；
+  `runtime-outcomes`、`install-control` 的边过；`runtime-client` 的 `installer_meets_previous`、`installer_meets_next` 是安装工具 I [3, 11] 对在线 Rp [3, 11] 和本版 R* [3, 11]，都过；`package` 的 `bundle_max_in_next` 每个已装的游戏一条，照旧是 `pack_declaration_unknown` 警告，R* 写 [3, 18]，不挡。
+  `installer_knows_keys` 过；`defaults_diff` 没有一行；文件计划里没有 `new`；`ledger_verify` 为 true；通知 `rollback_window_bounded` 为 true。
+- **本版第一次启动多写的**：不迁移、不要新状态根；第一条按路径准入的运行起，`task.requested` 带 `content_hash`（交了值的再带 `variables`），这就是修订 9 的记录。`config.selection` 的默认值哈希不变；v0.12.70 的配置文件照收；`standard-pack check` 对今天的根（都没有 `pack-catalog.json`）答法相同。
+- **退回 v0.12.70：从本版第一次启动起关上**（见上）；在那以前停下的，留存的 v0.12.70 的 `install undo` 不判边、照常撤销（`install-cli.md` 364–368）。
+  关上以后只能往前修：v0.12.70 和更早的构建读不了修订 9 的记录，旧版的工具也解不开带整条记录的页。
+
+配对：
+
+- **控制台 UI**：界面的 v0.12.22（钉 Runtime 的 `7b4705ff`，CH-1 审过的头，本版提交的祖先）读得了修订 9；更旧的离线打不开存着修订 9 记录的账本。所以界面先发、Runtime 后上，次序不能反。
+  本版别的改动（定位框、收编、目录工具、读取器）都在 Lab 和离线工具的回答里，不进 Runtime 的回执，也不写进账本；绑定的 `ui` 下次启动记进 `runtime.instance_bound` 的 `device.bound_via`，是原有的词。
+- **部署工具包**（这次走 Lab 的行）：两个构建清单的 `speaks` 是 `actingd-config` [5, 33]、`install-selection` [1, 1]、`install-control` [0, 0]、**`ledger` [3, 9]**、`runtime-client` [3, 11]、`package` [3, 18]、`runtime-outcomes` [1, 1]；
+  默认值文件的哈希不变；`git diff --stat v0.12.70 <提交> -- apps/actingd/src/config/manifest.rs distribution/windows/actingd.defaults.json` 什么都不打印；`ledger` 两条边写 Rp [3, 8]、R* [3, 9]，都过（Lab 那一面），`runtime-client` 的边写 I、Rp、R* [3, 11]，都过；
+  警告照旧是每个游戏一条 `package` 的 `bundle_max_in_next`；`notice.rollback_window_bounded` 为 true；`ledger_verify` 为 true，实做多一步 `ledger_verify`（在关 Runtime 之后、换文件之前）；日志的 `one_way` 为 true，没有确认；
+  没有新文件、没有去掉的文件；运行中的 `actingctl.exe`（MCP 服务）、`actinglab-mcp.exe` 和做计划的 `actinglab` 改名放到一边，别的跑着的程序文件挡住，和 v0.12.70 一样；`standard-pack check` 不出新的警告码；启动日志不多一行；
+  部署前核控制台是界面 v0.12.22 或更新的、没有开着的录制和试跑；部署以后 MCP 客户端重开会话才看得见新参数；部署以后 `op status` 的 `rollback_window` 里每个留存的构建 `ledger_edge_passes` 都是 false。
+- **热放置工具包**：`place` 和它的计划没变（救急模块一个文件没改）。重钉要换的是账本范围 3,8 到 3,9；`actingd_config` 5,33、`package` 3,18 和默认值哈希不变。
+- **两个 MCP 服务器**：Lab 的工具数不变，`ac_devices_bind` 多 `config`、`ac_standard_pack_catalog` 多 `refresh` 和 `displays`，操作表 `standard-pack adopt` 一行的输出、`run start` 和 `resource regression` 两行的说明改了；第一代的一个没变。
+  旧映像上的进程照旧能答工具表，但读不了带整条修订 9 记录的页。
+
+运行上的变化：
+
+- 从 v0.12.70 部署，经 Lab 的 `release stage`、`deploy`、`op status`：不用标志（`actingctl install` 要 `--accept-ledger-one-way`），`ledger_verify` 为 true，`defaults_diff` 没有行，没有新文件；部署前控制台先换成界面 v0.12.22 或更新的。
+- 部署要多一段 Runtime 停着校验账本的时间，长短没量过；本版一启动就退不回 v0.12.70。
+- 派单和装着的包都不变；每条按路径准入的运行在账本里记下内容哈希和交进来的值，定时运行连默认值一起记；导出的证据包带着它们。
+- 做包时：按录制号收编连用例一起带进检出，用例没过就拒 `case_failed`；`standard-pack catalog --refresh`、`--displays` 能更新条目和写显示；`recognize` 答定位文字的框；`devices bind --config` 能在新装的根上先绑手机。
+
+本版合并的 PR：
+
+- #1800 #463 CH-1（登记 §1.455，同时是 0.12.71 列车的车头）：host 门表 `#463 CH-1` 11 条（含小修加的 1 条）；改了契约门 K22 钉的成员集（`package_sha256` 照旧拒）和 actinglab `lab run` 的金样（规整器把 `content_hash` 写成 `<CONTENT_HASH>`，手改一行，没有重录）；测试里构造这条记录的地方都给两项写 `None`。
+- #1806 #463 RC-2（§1.459）：apps 门表 `#463 RC-2` 5 条；改了 `gate_463_rc1` 的一条（`scene_construction` 里的说明改成读过、带位置警告）。
+- #1810 #463 RG-1（§1.463）：exec 门表 `#463 RG-1` 4 条。
+- #1808 #463 AC-1（§1.461）：apps 门表 `#463 AC-1` 11 条（含小修加的 2 条，列车改了其中一条）；两个旧测试文件的假机器补 `lab()`（`NoLab`），断言没改。
+- #1807 #398 DB-1（§1.460）：apps 门表 `#398 DB-1` 7 条（actingd 6 条，Lab 的 MCP 服务器 1 条）；改了 `gate_434_lab5g2b`、`gate_434_lw1` 钉的 MCP 留空成员表。
+- #1811 #477 PC-2（§1.462）：apps 门表 `#477 PC-2` 10 条（含小修加的 3 条、列车加的 1 条）；PC-1 的契约测试和写入门两处请求初始化只为新成员改了。
+- 合计 48 条新测试；没有测试名记进 `ci/retired-gates.toml`。
+
 ## v0.12.70
 
 本版是 v0.12.69 之后的 1 次合并、6 张 PR：0.12.70 列车 #1804（#463 S2-9b 自己），带 #463 S2-10 #1797、#463 K-b 和 K-c #1799、#463 S2-8′ #1801、#463 S2-9a #1803 和 #463 KR-1 #1802。
@@ -86,6 +244,8 @@ and artifact names bind the complete source SHA.
   - `record ready`、`record review` 每次调用都跑一遍用例（一次最终包准入、一次空画布、每个用例一遍全包判页），包里有文字目标时可能要几秒，没量过。MCP 的回答超过 24 KiB 时 `lab.cases` 只在导出文件里；上一次中断留下的 `.part-`、`.old-` 目录下一次停下不点名。
   - 契约里 `record_*` 拒绝的退出码 3 是带 `--via` 那一行的；Lab 自己的命令行和经 `serve --stdio --front mcp` 都答 1（本版的新词同样）。
   - 写这份说明的时候本版一样都没在设备上跑过：滚动选择的停稳、回卷、回位和确认，生成的包里的按键步，都等第一次试跑。
+    部署当天，维护资源仓的频道在一台模拟器实例上用一个什么都不花的业务走完了一整圈：录制、细化、停下（写出三个回归用例）、按住收编、手拷用例、离线回归通过，试跑在修好包自己的两处标注错误以后第三次成功（看板 #463，评论 6942452797）。
+    滚动选择和按键步仍没在模拟器上走过。
 
 配置：按代码、`distribution/windows/component-interfaces.json` 和 `contracts/component-interfaces.md` 核过：
 
