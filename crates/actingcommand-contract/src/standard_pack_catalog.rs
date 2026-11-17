@@ -1395,6 +1395,18 @@ pub struct CatalogLeftOut {
 }
 
 impl CatalogLeftOut {
+    /// The 0.12.71 train (register §1.462, "The train of 0.12.71"): whether its warning can name
+    /// its package and its pool, each a name of the key table ([`key_text_fits`]: at most 256
+    /// bytes, no control character). [`merge_standard_pack_catalog`] refuses what it cannot name
+    /// before a warning is built.
+    fn nameable(&self) -> bool {
+        key_text_fits(KeyKind::Name, &self.package_id)
+            && self
+                .pool_id
+                .as_deref()
+                .is_none_or(|pool_id| key_text_fits(KeyKind::Name, pool_id))
+    }
+
     /// The warning `standard_pack_catalog_left_out` of the game root of `game` whose
     /// `pack-catalog.json` is at `path`: the problem, the pointer in the existing file, the
     /// package and, for a pool, the pool.
@@ -1612,7 +1624,9 @@ pub struct StandardPackCatalogMerge {
 /// to date: its errors are the answer. Fix round 1: so is each pool a rule of a package that gets a
 /// new entry names and `schedule.json` does not declare, `catalog_pool_undeclared` in
 /// `schedule.json` at the rule's pool (`/rules/<i>/<side>/<j>/pool_id`), the file the pool is
-/// missing from ([`undeclared_rule_pools`]). The written bytes are read back by the reader, and
+/// missing from ([`undeclared_rule_pools`]). The 0.12.71 train: so is an entry or a pool left out
+/// whose `package_id` or `pool_id` no warning can name, `catalog_out_of_limits` at its pointer in
+/// the existing file ([`CatalogLeftOut`]). The written bytes are read back by the reader, and
 /// its errors (none, for a merge that holds) are the answer too.
 ///
 /// Workflow #477 PC-2: `edits` ([`CatalogEdits`]; the default asks nothing, and the rule above is
@@ -1768,6 +1782,18 @@ pub fn merge_standard_pack_catalog(
         listed.insert(package_id.to_owned());
         kept.push(package_id.to_owned());
         packs.push(Value::Object(written));
+    }
+    // The 0.12.71 train (register §1.462): what is left out is warned of by its package and its
+    // pool, names of the key table. An entry whose `package_id`, or a pool whose `pool_id`, no
+    // warning can name (over 256 bytes, or with a control character: no registry holds such a
+    // package, and the reader takes no pool over 128 bytes) is refused at its pointer in the
+    // existing file, before any warning is built and without its value.
+    if let Some(unnamed) = left_out.iter().find(|left| !left.nameable()) {
+        return Err(CatalogMergeRefusal::Root(vec![StandardPackRootIssue::new(
+            STANDARD_PACK_CATALOG_FILE,
+            StandardPackProblem::CatalogOutOfLimits,
+            unnamed.pointer.clone(),
+        )]));
     }
     // Fix round 1: a new entry's pools are its rules'; one that `schedule.json` does not declare is
     // refused there, where it is missing, before anything is made. PC-2: a refreshed entry's are

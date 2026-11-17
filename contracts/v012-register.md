@@ -36917,6 +36917,52 @@ ledger record, configuration key or interface revision.
 catalog --root <the checkout> --refresh <package_id>` (`--plan` first to read `refreshed`), and give
 a new package its display with `--displays <a display file>`; commit `pack-catalog.json` as before.
 
+**The train of 0.12.71** (coordinator work order `rd-1117/brief-train-01271-add-pc2.md`). Pull
+request #1800 (#463 CH-1, §1.455), which carries RG-1 (§1.463), AC-1 (§1.461) and DB-1 (§1.460)
+(§1.461, "The train of 0.12.71"), takes this slice (#1811, at the head of its fix round) by one
+merge commit, both sides whole: this register keeps §1.455, §1.459, §1.460, §1.461, §1.462 and
+§1.463, each once, in the order of their numbers, §1.461 with the train's paragraph at its end; the
+apps gate map keeps this slice's block after AC-1's two; the outcome-code index is regenerated.
+Where the slice meets the train:
+- *One interface, extended on both sides.* AC-1 and this slice both change `standard_pack_cli.rs`
+  and the resource tooling's public interface, in different items. This slice's
+  `StandardPackCatalogRequest::{refresh, displays}` are named by each of its four initializers
+  (the command line, the PC-1 writer gate's two, this slice's gate), the merge's `edits` by both its
+  callers (the writer, the contract crate's PC-1 test), and `StandardPackCatalogResponse`'s three
+  members by its one constructor (the writer); AC-1's trait `AdoptLab` is taken by
+  `standard_pack_adopt` alone, which this slice never calls, and no name one side adds is a name
+  of the other. No change.
+- *The vocabularies.* One word stands in two vocabularies: `package_not_listed`, in
+  `standard_pack_problem` and in `catalog_refresh_problem`, with one meaning (the game root's
+  registry does not hold the package), as fix round 1 chose it. Every other word the five slices add
+  stands in one vocabulary: AC-1's `case_name_invalid`, `case_place_taken`, `case_failed` and
+  `recording_not_judged` (`adopt_problem`) and `taken`, `none_found` and `package_path`
+  (`adopt_cases`), this slice's `package_repeated` and `catalog_group_title_differs`. No change.
+- *A warning that cannot name what it left out.* `standard_pack_catalog_left_out` names the package
+  (required) and the pool, names of the key table (at most 256 bytes, no control character), and a
+  debug build stops on a value it does not take: an old entry of a package the registry no longer
+  holds whose `package_id` is longer or holds a control character, or (the same warning) a dropped
+  pool whose `pool_id` holds a control character (the reader refuses one over 128 bytes already),
+  stopped it. No registry holds such a package. As fix round 1 refused a `--refresh` id that is no
+  name, the merge now refuses such an entry or pool before any warning is built
+  (`CatalogLeftOut::nameable`, by `key_text_fits`): `standard_pack_root_invalid`,
+  `catalog_out_of_limits` at its pointer in the existing file (`/packs/<i>/package_id`,
+  `/packs/<i>/<side>/<j>/pool_id`), its value in neither the message nor the outcome, nothing
+  written, as a file wrong in anything else is (usage or validation: exit 1 on actinglab's own line
+  and through `serve`, 2 on a `--via` line). An entry or pool the warning can name is left out and
+  warned of as before. No new code or word; the description of `catalog_out_of_limits` and
+  [pack-catalog.md](pack-catalog.md) "Who writes it" say it.
+
+The outcome-code index is regenerated and current: 4020 codes, 3931 active, 89 retired. The
+operation table keeps its 194 rows (every help text at most 160 bytes, the longest 159), the
+ratchet its 46 dispatch arms and 109 commands. *Tests*: one added in this slice's gate file,
+`pc2_train_a_left_out_name_no_warning_can_carry_is_refused_at_its_pointer` (apps gate map, this
+slice's block): an unregistered entry's `package_id` of 300 bytes and one with a control
+character, and a dropped pool's `pool_id` with a control character, refused at their pointers with
+and without `--plan`, no `package_id` built, the value not echoed, nothing written; an unregistered
+entry with a nameable id still removed and warned of. No test is adapted; no golden changes; no
+test leaves a gate map.
+
 ### 1.463 Slice #463 RG-1 (0.12.71): `recognize` answers the box of a text it located (Workflow #463; observed on production 0.12.70 by the channel that keeps the resource repositories; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1117/brief-463-rg1-recognize-located-box.md`, on main `ca539cc7`)
 
 This section takes 1.463 (1.460, 1.461 and 1.462 are held by other open slices of the same day).

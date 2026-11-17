@@ -265,7 +265,12 @@ It builds or brings up to date the file from what the root already declares, by 
   its first error. Fix round 1: so is a rule of a package that is to get a new entry when it names
   a pool `schedule.json` does not declare: `standard_pack_root_invalid` at `schedule.json`, the
   file the pool is missing from, `catalog_pool_undeclared` at the rule's
-  `/rules/<i>/<side>/<j>/pool_id`.
+  `/rules/<i>/<side>/<j>/pool_id`. The 0.12.71 train ([v012-register.md](v012-register.md) §1.462,
+  "The train of 0.12.71"): so is an entry the line would leave out whose `package_id`, or a pool it
+  would drop whose `pool_id`, the warning cannot name (over 256 bytes, or with a control character:
+  no registry holds such a package, and a pool over 128 bytes is refused already):
+  `standard_pack_root_invalid`, `catalog_out_of_limits` at its pointer in the existing file, before
+  any warning is built and without its value.
 - **`--refresh <package_id>`** (PC-2; repeatable, once per package) is **the one way an entry's
   business part is brought back to the rules** (fix round 1: a plain line already drops a pool
   `schedule.json` no longer declares, `dropped` above, but never adds one or changes a quantity).

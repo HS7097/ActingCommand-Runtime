@@ -29,6 +29,10 @@
 // - a `refresh` id over 256 bytes or with a control character is a usage error before the root is
 //   read, its value not echoed; a very long locale or member name in the display file or in the
 //   catalog is answered at its entry's pointer, no debug build stops (8).
+// The 0.12.71 train (register §1.462, "The train of 0.12.71"): an entry the line would leave out
+// whose `package_id`, or a pool it would drop whose `pool_id`, the warning
+// `standard_pack_catalog_left_out` cannot name is refused at its pointer, its value not echoed and
+// nothing written; one it can name is still left out and warned of (9).
 // A made-up game `neutral` in temporary directories; every package, pool, rule and text is a
 // placeholder. No clock is read and nothing sleeps.
 
@@ -721,5 +725,119 @@ fn pc2_a_long_name_is_refused_or_answered_at_its_entry() {
             Some(json!("catalog_out_of_limits")),
             Some(json!("/packs/0"))
         )]
+    );
+}
+
+/// (9) The 0.12.71 train (register §1.462, "The train of 0.12.71"): an entry the line would leave
+/// out whose `package_id`, or a pool it would drop whose `pool_id`, the warning
+/// `standard_pack_catalog_left_out` cannot name (over 256 bytes, or with a control character) is
+/// refused `standard_pack_root_invalid`, `catalog_out_of_limits` at its pointer in the existing
+/// file, with or without `--plan`, its value in neither the message nor the outcome, nothing
+/// written; an entry of a package the registry no longer holds whose id the warning can name is
+/// still left out and warned of. No debug build stops.
+#[test]
+fn pc2_train_a_left_out_name_no_warning_can_carry_is_refused_at_its_pointer() {
+    /// An entry of `package_id` that consumes nothing and produces `produces`.
+    fn entry(package_id: &str, produces: Value) -> Value {
+        json!({"package_id": package_id, "consumes": [], "produces": produces})
+    }
+    /// The catalog of `packs`.
+    fn catalog(packs: Vec<Value>) -> Value {
+        json!({"schema_version": "actingcommand.pack-catalog.v1", "game": GAME, "packs": packs})
+    }
+    let (_temp, root) = working_root(vec![collect_rule(2), spend_rule()]);
+    let collect = entry(COLLECT, json!([constant(POINTS, 2)]));
+    let spend = json!({"package_id": SPEND, "consumes": [constant(POINTS, 1)], "produces": []});
+    let long = "x".repeat(300);
+    for (packs, pointer, value) in [
+        (
+            vec![
+                collect.clone(),
+                spend.clone(),
+                entry(long.as_str(), json!([])),
+            ],
+            "/packs/2/package_id",
+            long.as_str(),
+        ),
+        (
+            vec![
+                collect.clone(),
+                spend.clone(),
+                entry("neutral.gone\u{7}", json!([])),
+            ],
+            "/packs/2/package_id",
+            "neutral.gone",
+        ),
+        (
+            vec![
+                entry(
+                    COLLECT,
+                    json!([constant(POINTS, 2), {"pool_id": "pool.neutral.gone\u{7}"}]),
+                ),
+                spend.clone(),
+            ],
+            "/packs/0/produces/1/pool_id",
+            "pool.neutral.gone",
+        ),
+    ] {
+        write_json(&root.join(CATALOG), &catalog(packs));
+        let bytes = fs::read(root.join(CATALOG)).expect("the file");
+        for plan in [false, true] {
+            let error = line(&root, plan, &[], None).expect_err("the line is refused");
+            assert_eq!(
+                error.code, "standard_pack_root_invalid",
+                "{pointer}: {}",
+                error.message
+            );
+            let outcome = refusal(&error);
+            assert_eq!(
+                outcome["values"]["standard_pack_problem"], "catalog_out_of_limits",
+                "{pointer}"
+            );
+            assert_eq!(outcome["values"]["json_pointer"], pointer);
+            assert!(
+                outcome["values"].get("package_id").is_none(),
+                "{pointer}: no name is built"
+            );
+            let details = serde_json::to_string(&error.details).expect("JSON");
+            assert!(
+                !error.message.contains(value) && !details.contains(value),
+                "{pointer}: never echoed"
+            );
+            assert_eq!(
+                fs::read(root.join(CATALOG)).expect("the file"),
+                bytes,
+                "{pointer}: nothing is written"
+            );
+        }
+    }
+
+    write_json(
+        &root.join(CATALOG),
+        &catalog(vec![collect, spend, entry("neutral.gone", json!([]))]),
+    );
+    let answer = write(&root, false, &[], None);
+    assert_eq!(answer.status, "written");
+    assert_eq!(answer.removed, vec!["neutral.gone".to_owned()]);
+    let left_out = answer
+        .warnings
+        .iter()
+        .filter(|warning| warning.is(SharedCode::StandardPackCatalogLeftOut))
+        .map(|warning| {
+            (
+                warning.value("standard_pack_problem").cloned(),
+                warning.value("json_pointer").cloned(),
+                warning.value("package_id").cloned(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        left_out,
+        vec![(
+            Some(json!("package_not_listed")),
+            Some(json!("/packs/2/package_id")),
+            Some(json!("neutral.gone"))
+        )],
+        "an id the warning can name is left out and warned of, as before"
     );
 }

@@ -7384,7 +7384,7 @@
           "description": "display-layout.json breaks one of its rules: its correction.radius_px is above 64 (Workflow #392 DA-4, model 392 v1.2 section 4.1)."
         },
         "catalog_out_of_limits": {
-          "description": "pack-catalog.json is larger than 1 MiB, or one of its lists, texts, locales, words, pool ids or amounts is outside its limit, at the pointer of what exceeds: an error in the business part and of the file as a whole, a warning in the display part (Workflow #477 PC-1, since 0.12.68). It replaced ui_out_of_limits of ui.json (Workflow #429 R-11), which no program reads any more."
+          "description": "pack-catalog.json is larger than 1 MiB, or one of its lists, texts, locales, words, pool ids or amounts is outside its limit, at the pointer of what exceeds: an error in the business part and of the file as a whole, a warning in the display part (Workflow #477 PC-1, since 0.12.68). It replaced ui_out_of_limits of ui.json (Workflow #429 R-11), which no program reads any more. The 0.12.71 train (Workflow #477 PC-2, since 0.12.71): standard-pack catalog refuses so, an error at its pointer, an entry it would leave out whose package_id, or a pool it would drop whose pool_id, no warning can name (over 256 bytes, or with a control character), its value not echoed."
         },
         "catalog_duplicate": {
           "description": "pack-catalog.json lists a package_id twice or a pool twice on one side of an entry (errors), or a group id, a risk word of one package or an aspect ratio twice (warnings), at the later one (Workflow #477 PC-1, since 0.12.68). It replaced ui_duplicate of ui.json."
