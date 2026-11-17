@@ -12767,14 +12767,9 @@ fn target_click_box(target: &TargetEvaluation) -> Result<(ClickRect, bool), Cont
             false,
         ));
     }
-    let located = target
-        .ocr
-        .as_ref()
-        .and_then(|ocr| ocr.located)
-        .ok_or_else(|| {
-            ContainedTaskError::new(ExecutionKernelCode::ContainedTaskGuardTargetInvalid.code())
-        })?;
-    let rect = located.cell_rect.unwrap_or(located.rect);
+    let rect = located_text_box(target).ok_or_else(|| {
+        ContainedTaskError::new(ExecutionKernelCode::ContainedTaskGuardTargetInvalid.code())
+    })?;
     Ok((
         ClickRect {
             x: rect.x,
@@ -12784,6 +12779,19 @@ fn target_click_box(target: &TargetEvaluation) -> Result<(ClickRect, bool), Cont
         },
         true,
     ))
+}
+
+/// Workflow #396 REC-1: the box of the text a locate OCR target found, where a `target` or
+/// `offset` click that follows the text starts: the declared cell holding the found block, else
+/// the block; `None` when the evaluation located no text. #463 RG-1: the one computation of that
+/// box; `recognize` answers it as the target's `matched_rect` from here
+/// ([`crate::target_evaluation_response`]).
+pub(crate) fn located_text_box(target: &TargetEvaluation) -> Option<PackRect> {
+    target
+        .ocr
+        .as_ref()
+        .and_then(|ocr| ocr.located)
+        .map(|located| located.cell_rect.unwrap_or(located.rect))
 }
 
 /// Workflow #396 REC-5: a click `offset` from a template that matched at a declared factor,
