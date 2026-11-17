@@ -2887,6 +2887,10 @@
     "regression_problem": {
       "type": "vocab:regression_problem",
       "description": "The word of the first failed check of a regression case record stop made from a recording for the package it generated, which misses on that package (record_case_failed; #463 S2-10, since 0.12.70); every failed check of the case is in the refusal's details."
+    },
+    "scan_problem": {
+      "type": "vocab:scan_problem",
+      "description": "Why the swipes recorded before a press of a Lab recording cannot be folded into one scrolling search of that press, the fold undone, a step of the fold acted on, or the fold generated (record_scan_invalid; #463 S2-8', since 0.12.70)."
     }
   },
   "vocabularies": {
@@ -5425,6 +5429,9 @@
         },
         "select_unrefined": {
           "description": "#463 S2-6: a step marked as holding a choice that no select refines yet (record_select_invalid, choice_not_refined)."
+        },
+        "scan_without_select": {
+          "description": "#463 S2-8' (since 0.12.70): a press step whose recorded swipes are folded into its scrolling search declares no scrolling select yet (record_scan_invalid, scan_not_selected)."
         }
       }
     },
@@ -11177,6 +11184,49 @@
         },
         "press_region": {
           "description": "The neighbourhood of the press: its rectangle (a point is a rectangle of one pixel, a swipe the rectangle spanned by its two ends) grown on every side by one cell of the whole-frame grid at the recording's size and clamped to the frame, by the same measure over that region."
+        }
+      }
+    },
+    "scan_problem": {
+      "description": "Why the swipes recorded before a press of a Lab recording cannot be folded into one scrolling search of that press, the fold undone, a step of a fold acted on, or the fold generated, the value scan_problem of record_scan_invalid (#463 S2-8', contracts/lab-recording.md \"Folding swipes into a scrolling search\", since 0.12.70). A swipe runs clearly along one axis when its move along it, between its own two points, is not zero and at least twice its move across it.",
+      "review": "pending",
+      "source": {
+        "file": "crates/lab/src/codes.rs",
+        "enum": "ScanProblem"
+      },
+      "tokens": {
+        "fold_range_invalid": {
+          "description": "fold_scan names no fold: its first step is not below its press step; a step of the range is unknown, dropped, converted into a transition, folded or holding a fold already, or inserted after the stop; the press step's effect is no executed tap; or a step between them is no executed swipe."
+        },
+        "would_lose_marks": {
+          "description": "A step the fold would fold has marks of its own, which no page of the package would read any more."
+        },
+        "would_lose_page": {
+          "description": "A step the fold would fold names its page."
+        },
+        "would_lose_optional": {
+          "description": "A step the fold would fold is optional."
+        },
+        "would_lose_choice": {
+          "description": "A step the fold would fold holds a choice (marked as holding one, or refined by a select)."
+        },
+        "would_lose_transition": {
+          "description": "A step the fold would fold has a transition after its effect."
+        },
+        "move_axis_unclear": {
+          "description": "A swipe of the range runs clearly along neither axis (its move along one axis is not at least twice its move across it), or along another axis than the first swipe."
+        },
+        "move_after_back": {
+          "description": "A swipe in the first swipe's direction after one against it: the demonstration goes forward as often as needed, then back as often as needed, then presses."
+        },
+        "not_folded": {
+          "description": "unfold_scan names a step that holds no fold."
+        },
+        "step_in_fold": {
+          "description": "A step action or a mark names a step of a fold: a swipe folded into a press step, or (a step action) the press step that holds the fold; the fold is undone first."
+        },
+        "scan_not_selected": {
+          "description": "record stop meets a press step whose swipes are folded into it and which declares no scrolling select yet, so its package would press without scrolling."
         }
       }
     }

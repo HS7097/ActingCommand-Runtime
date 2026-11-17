@@ -35269,6 +35269,117 @@ release 0.12.68 (`ff74c80c`) merged first, in one merge commit; this section kee
   pack enters, two leave, one of them a pack the placement added with no rule, which the
   placement's own lists never named).
 
+### 1.456 Slice #463 S2-8' (0.12.70): the swipes recorded before a press folded into one scrolling search (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making, and her rule that a scrolling choice has two kinds, to the list's end when what it holds is not known and straight to the wanted item when it is; the read-only study `rd-1116/report-463-scroll-refresh-study.md`, its slice 3, Q2 and Q4, and the coordinator's rulings at its end and in the work order, not the owner's words; coordinator work order `rd-1117/brief-463-s28-fold-scan.md`; stacked on #463 S2-10, §1.441, its branch at `225c1d3c`, which holds main `26698590`, the 0.12.69 train)
+
+This section takes 1.456, the number the work order gives. It ships in 0.12.70.
+
+**Why.** Stage one records a choice in a scrolling list as what the agent did: several swipes,
+each a step with its screens, then the press on the wanted row. A package does not replay those
+swipes: its select declares one scan and the kernel moves the list itself. This slice lets the
+agent say, after the fact, that the swipes and the press are one scrolling search; the swipes stop
+being steps of the package and become the demonstration of the scan the next slice (S2-9a)
+declares on the press step. It folds and unfolds only; it declares no scan and generates nothing
+new.
+
+**The rule** ([lab-recording.md](lab-recording.md), "Folding swipes into a scrolling search").
+- *The request*: the step actions `fold_scan {step: b, first: a}` and `unfold_scan {step: b}` of
+  the mark request (`StepAction` gains `first`, `fold_scan`'s alone), on the command line
+  `--fold-scan b --fold-first a` and `--unfold-scan b`; a step operation, so on an active recording
+  only.
+- *What it writes*: each step `a..b-1` keeps every member and takes `folded_into: b`; `b` takes
+  `scan_fold {first, axis, moves [{step, direction}], folded_at_unix_ms}`. Nothing is moved,
+  renumbered or deleted; a step without a fold carries neither member.
+- *A folded step is no effective step* (`RecordingStep::is_effective`); `kept_on_path` is the old
+  test (neither dropped nor converted), which the archive's material reads.
+- *The refusals*, all `record_scan_invalid` with `scan_problem`, nothing written, in this order:
+  `fold_range_invalid`; per folded step `would_lose_marks`, `would_lose_page`,
+  `would_lose_optional`, `would_lose_choice`, `would_lose_transition`; `move_axis_unclear`;
+  `move_after_back`. `unfold_scan`: `not_folded`. Other step actions on a step of a fold, marks and
+  transitions on a folded swipe, an optional step inserted after one, `record review --step` of
+  one: `step_in_fold`.
+- *Along one axis*: in the numbers of the swipe's own two points, vertical when the vertical move
+  is not zero and at least twice the horizontal move, horizontal the other way round
+  (`fold.rs`, `AXIS_RATIO = 2`), the axis and direction of every swipe against the first's.
+- *Undoing*: `unfold_scan` takes both members off and nothing else: the step table byte for byte
+  as before the fold but for `updated_at_unix_ms`.
+- *Not generated*: a press step that holds a fold is the pre-check `scan_without_select` of the
+  survey (`record ready`'s item, `record stop` and its dry run refusing `scan_not_selected`).
+
+**The coordinator's rulings applied.** The fold lands on the press step `b` (Q2), so the select
+take-over, the choice mark and `clear_select` act on it unchanged. Swipes of different lengths
+along one axis in one direction are accepted (Q4): the old half-built rule "every move the same" is
+void. Of the old half-built slice R3a only the refusal words `record_scan_invalid`,
+`move_axis_unclear` and `move_after_back` and the place of the pre-check in the generator are kept;
+its device half is not rebuilt.
+
+**What the work order asked that this build does not meet, and why.** "An ending added from its
+frame" as a loss of a folded step: an ending belongs to the recording, not to a step, is taken only
+on a stopped recording from a file, and a step operation is refused on a stopped recording, so no
+fold can meet one and a fold loses none: no word. "Inserted after stop" is one of the conditions of
+`fold_range_invalid`, unreachable on an active recording but kept. A choice is refused on a swipe
+(`with_gesture`), so `would_lose_choice` is reached only by a recording changed by hand; the test
+writes one.
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The fold | `crates/lab/src/recording/fold.rs` (new): `fold_scan`, `unfold_scan`, `planned_fold` (the checks in order), `scan_invalid`, `in_fold` (`step_in_fold`), `fold_of`, `effective_or_folded` (`record frames`), `met_on`, `scan_not_selected` |
+| The members | `crates/lab/src/recording/model.rs`: `RecordingStep::folded_into`, `RecordingStep::scan_fold`, `StepScanFold`, `FoldedMove`, `FoldAxis`, `FoldDirection`, `StepActionKind::FoldScan`, `StepActionKind::UnfoldScan`, `StepAction::first`, `is_effective`, `kept_on_path`, `StepView::folded_into`, `StepView::scan_fold`, `MarkOutcome::scan_fold` |
+| The step actions | `crates/lab/src/recording/steps.rs`: `apply_step_action` (the two arms; `first` with another kind; `step_in_fold` first for every other kind naming a step of a fold), `effective_step` (`step_in_fold` for a folded swipe), `apply_optional_after`, `press_changed_nothing` (`met_on`) |
+| The readers | `generate.rs` `unselected_scans` in `survey`; `ready.rs` `stage_two_written`; `review.rs` `RecordReviewStep::folded`, `RecordReviewFolded`, `folded_sheet`; `around.rs` (`effective_or_folded`); `archive.rs` `derived_after`, `click_of` (`kept_on_path`); `recording_api.rs` `step_view`, `mark_session` |
+| The command line | `apps/actinglab/src/commands/session_record.rs`: `--fold-scan`, `--fold-first`, `--unfold-scan`, `fold_actions`; `apps/actinglab/src/lab2_cli.rs` the usage |
+| The words | `crates/lab/src/codes.rs`: `LabCode::RecordScanInvalid`, `ScanProblem`, `ReadyMissing::ScanWithoutSelect`; `crates/actingcommand-contract/src/outcome/keys.rs`: the key `scan_problem` |
+| Texts | [lab-recording.md](lab-recording.md): the new "Folding swipes into a scrolling search", the opening, "recording.json", "record mark", "record status", "Steps, frames and remediation", "The frames around a press", "Reviewing a recording step by step", the item of "What a recording still lacks", "Pre-checks", "Error codes"; the row `record mark` of [lab-operations.json](lab-operations.json) (three params, `notes`; no `help` change); `apps/actinglab-mcp/MANUAL.md`; the lab fragment, the catalog and the regenerated index |
+
+**Every caller of `is_effective`, and what it does with a folded step.** `effective_indices`
+(numbering, `last_effective`, `open_step`): leaves it out, so `artifact_step` is `null` and it is
+never the open step. `effective_step`: `step_in_fold`. `generate::effective_steps` (the survey,
+`record ready`, `point_press_warnings`, `record review`'s list, the cases): leaves it out (no page,
+operation, item or case). `ids_in_use`, `template_assets`, `find_step_mark`, `add_reuse`,
+`forbidden_after`, `reused_elsewhere`, `elsewhere_frames`, `other_pages_on_select_frames`, the drop's
+`used_by_others`, `remove_inserted`, `not_inserted`, `select.rs` (other selects' keys), `ending.rs`
+(a select's `on_empty` key), `review.rs` (the boxes drawn on a screen after): leave it out, which
+changes nothing since a folded step has no marks, select, transition or choice of its own (a mark it
+reuses or forbids no longer holds its source: the source can be taken off, and after the unfold
+`record ready` names it). `apply_optional_after`: `step_in_fold` first. `archive.rs` `derived_after`
+and `click_of`: read `kept_on_path` instead, so the material keeps a folded swipe as recorded.
+
+**Codes and words.**
+
+| Word | What it says | Refuses or warns | Exit |
+|---|---|---|---|
+| `record_scan_invalid` (lab, error, `scan_problem` required) | a fold cannot be made, undone or generated, or a step of a fold is acted on | refuses | 3 (1 on actinglab's own line) |
+| `scan_problem` `fold_range_invalid` | the range is no run of executed swipes before an executed tap, or a step of it is unknown, dropped, converted, in a fold or inserted after the stop | refuses | 3 |
+| `would_lose_marks`, `would_lose_page`, `would_lose_optional`, `would_lose_choice`, `would_lose_transition` | a step the fold would fold carries its own marks, a page name, `optional`, a choice, a transition | refuses | 3 |
+| `move_axis_unclear` | a swipe along no axis clearly, or along another axis than the first | refuses | 3 |
+| `move_after_back` | a swipe forward after one back | refuses | 3 |
+| `not_folded` | `unfold_scan` of a step that holds no fold | refuses | 3 |
+| `step_in_fold` | a step action, a mark or a transition names a step of a fold | refuses | 3 |
+| `scan_not_selected` | `record stop` meets a fold no scrolling select reads | refuses `record stop` | 3 |
+| `scan_without_select` (`ready_missing`) | `record ready`'s item of the same | lists | 0 |
+| key `scan_problem` (`vocab:scan_problem`) | the word of `record_scan_invalid` | | |
+
+No decision added reads a code by name. The outcome-code index is regenerated.
+
+**Tests** (`crates/lab/src/gate_463_s28.rs`, exec gate map "#463 S2-8'"): the eight of the work
+order, as the gate map's comment lists them. Adapted, as the requirement adds a member every
+initializer names: the `StepAction` literals of `gate_390_lab2`, `gate_449_rec_arch`,
+`gate_463_l1`, `gate_463_l2`, `gate_463_s21` and `gate_rc2_a10` gain `first: None`. No golden
+changes; no test leaves a gate map.
+
+**What is not changed.** The fixed-slot select and the marking of a choice; drop and restore of a
+step of no fold; a recording without a fold and the package generated from it, byte for byte; the
+kernel. Nothing proposes a range, a region, a choice or a value.
+
+**What the next slice adds.** It declares the scrolling select on the press step from the fold it
+reads (`scan_fold.first`, `axis`, `moves`, each folded step's frames by `folded_into`), and then:
+`unfold_scan` refuses while that select stands (a word of its own in `scan_problem`, checked in
+`fold::unfold_scan` before anything is changed), and `generate::unselected_scans` lists only a fold
+whose press step declares no scrolling select.
+
+**At deploy.** Nothing to configure.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

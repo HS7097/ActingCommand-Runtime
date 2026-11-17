@@ -20,6 +20,8 @@ pub(crate) mod crosscheck;
 // #463 R2: a screen that ends the business another way after the last press, taken by a stopped
 // recording from a frame.
 pub(crate) mod ending;
+// #463 S2-8': the swipes recorded before a press folded into one scrolling search, and unfolded.
+pub(crate) mod fold;
 pub(crate) mod follow;
 pub(crate) mod frames;
 pub(crate) mod generate;
@@ -65,3 +67,5 @@ pub use review::{
     RecordReviewAfter, RecordReviewBetween, RecordReviewFrame, RecordReviewOutcome,
     RecordReviewPress, RecordReviewRequest, RecordReviewStep,
 };
+// #463 S2-8': a swipe folded into a press step's scrolling search, in that step's sheet.
+pub use review::RecordReviewFolded;

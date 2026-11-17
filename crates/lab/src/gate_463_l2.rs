@@ -1709,6 +1709,7 @@ fn l2_fix2_reopen_step_clears_names_changed_after_press() {
             step_action: Some(StepAction {
                 kind: StepActionKind::ReopenStep,
                 step: Some(1),
+                first: None,
             }),
             ..MarkRequest::default()
         })

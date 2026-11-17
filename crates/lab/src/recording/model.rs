@@ -359,6 +359,17 @@ pub struct RecordingStep {
     /// byte-identical to one an earlier build wrote; an earlier build refuses one that holds it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inserted_after: Option<u32>,
+    /// #463 S2-8' (`contracts/lab-recording.md`, "Folding swipes into a scrolling search"): on a
+    /// recorded swipe folded into the scrolling search of a press step (`fold_scan`), that press
+    /// step's serial number; such a step is no effective step. Absent on every other step, so that
+    /// a recording without a fold is byte-identical to one an earlier build wrote; an earlier build
+    /// refuses one that holds it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folded_into: Option<u32>,
+    /// #463 S2-8': on a press step, the swipes recorded before it that are folded into its
+    /// scrolling search. Absent on every other step, as `folded_into` is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scan_fold: Option<StepScanFold>,
     pub transition: Option<StepTransition>,
     pub closed: bool,
     pub closed_by: Option<String>,
@@ -385,9 +396,56 @@ pub struct StepChoice {
     pub marked_at_unix_ms: u64,
 }
 
+/// #463 S2-8' (`contracts/lab-recording.md`, "Folding swipes into a scrolling search"): the swipes
+/// recorded before a press step, folded into its scrolling search: the first folded step (the
+/// steps from it to the press step's serial number - 1 are folded), the axis they run along, each
+/// folded step in order with its direction, and when they were folded. It records no kind of
+/// scrolling choice: the request of the next slice's scrolling select states it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StepScanFold {
+    pub first: u32,
+    pub axis: FoldAxis,
+    pub moves: Vec<FoldedMove>,
+    pub folded_at_unix_ms: u64,
+}
+
+/// #463 S2-8': one folded swipe: its step and whether it runs in the first swipe's direction
+/// (`forward`) or against it (`back`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FoldedMove {
+    pub step: u32,
+    pub direction: FoldDirection,
+}
+
+/// #463 S2-8': the axis the folded swipes run along.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FoldAxis {
+    Vertical,
+    Horizontal,
+}
+
+/// #463 S2-8': a folded swipe's direction against the first swipe's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FoldDirection {
+    Forward,
+    Back,
+}
+
 impl RecordingStep {
-    /// Neither dropped nor converted into the transition of the previous step.
+    /// Neither dropped nor converted into the transition of the previous step, nor (#463 S2-8')
+    /// folded into the scrolling search of a press step.
     pub fn is_effective(&self) -> bool {
+        self.kept_on_path() && self.folded_into.is_none()
+    }
+
+    /// #463 S2-8': neither dropped nor converted into the transition of the previous step: a step
+    /// of the path as it was recorded and kept, a folded swipe among them (the archive's material
+    /// reads its steps so).
+    pub fn kept_on_path(&self) -> bool {
         !self.dropped && !self.converted_to_transition
     }
 
@@ -1577,6 +1635,12 @@ pub enum StepActionKind {
     /// #463 S2-7 (`contracts/lab-recording.md`, "Steps, frames and remediation"; request form
     /// only): a step `drop_step` dropped is effective again, as it was before the drop.
     RestoreStep,
+    /// #463 S2-8' (`contracts/lab-recording.md`, "Folding swipes into a scrolling search"): the
+    /// swipes recorded from `first` to `step` - 1 are folded into the scrolling search of the
+    /// press `step`.
+    FoldScan,
+    /// #463 S2-8': the fold of the press `step` is undone, the recording as it was before it.
+    UnfoldScan,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1585,6 +1649,10 @@ pub struct StepAction {
     pub kind: StepActionKind,
     #[serde(default)]
     pub step: Option<u32>,
+    /// #463 S2-8': the first swipe `fold_scan` folds; with no other kind. Absent on a request
+    /// without it, which is then byte for byte what it was.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first: Option<u32>,
 }
 
 /// `record start` options; game, server and locale are already canonical.
@@ -1692,6 +1760,10 @@ pub struct MarkOutcome {
     /// #463 S2-6: the step's choice mark, on a step marked as holding a choice.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub choice: Option<StepChoice>,
+    /// #463 S2-8': the swipes folded into the step's scrolling search, on a step that holds a
+    /// fold.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scan_fold: Option<StepScanFold>,
 }
 
 /// #463 S2-5: a box of the request as the step took it: its rectangle and, for a recognize box,
@@ -1857,6 +1929,12 @@ pub struct StepView {
     /// #463 R4: the recorded step an inserted optional step runs after, on such a step only.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub inserted_after: Option<u32>,
+    /// #463 S2-8': on a folded swipe, the press step it is folded into.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub folded_into: Option<u32>,
+    /// #463 S2-8': on a press step, the swipes folded into its scrolling search.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scan_fold: Option<StepScanFold>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]

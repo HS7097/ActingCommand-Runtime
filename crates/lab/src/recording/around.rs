@@ -29,8 +29,9 @@
 //!   keeps the sequence's order; `before` lists its last `n`, `after` its first `n`.
 
 use super::archive::{instance_mismatch, read_recording, step_kind, stored_frame_path};
+use super::fold::effective_or_folded;
 use super::model::{LabRecording, RecordPoint, RecordedFrame, RecordingStep, StepTransition};
-use super::steps::{effective_indices, effective_step, lab_unavailable, not_active};
+use super::steps::{effective_indices, lab_unavailable, not_active};
 use super::store::{LabFile, lab_dir, load_lab, read_old_record, with_details};
 use actingcommand_contract::{LabError, LabResult};
 use serde::Serialize;
@@ -154,7 +155,9 @@ pub fn record_frames(
     let before = side_count("before", request.before, DEFAULT_BEFORE)?;
     let after = side_count("after", request.after, DEFAULT_AFTER)?;
     let recording = read_named(state_dir, instance, request.record_id.as_deref())?;
-    let step = effective_step(&recording, request.step)?;
+    // #463 S2-8': a swipe folded into a press step's scrolling search is listed too: its screens
+    // are the list's.
+    let step = effective_or_folded(&recording, request.step)?;
     let dir = lab_dir(state_dir, &recording.record_id);
     let pressed = press_record(step);
     let sequence = sequence_of(&recording);

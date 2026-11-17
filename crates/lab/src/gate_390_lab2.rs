@@ -1066,6 +1066,7 @@ fn lab2_a_stopped_recording_takes_no_new_step_and_no_step_operation() {
             step_action: Some(StepAction {
                 kind: StepActionKind::DropStep,
                 step: Some(2),
+                first: None,
             }),
             ..MarkRequest::default()
         })

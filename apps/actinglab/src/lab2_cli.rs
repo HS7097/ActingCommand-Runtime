@@ -2903,6 +2903,8 @@ fn lab2_command_contracts() -> Vec<Lab2CommandContract> {
                 "--optional-after <k>",
                 "--remove-inserted <n>",
                 "--box <recognize|press>=x1,y1:x2,y2",
+                "--fold-scan <b> --fold-first <a>",
+                "--unfold-scan <b>",
                 "--dry-run",
                 "--state-dir <dir>",
             ],

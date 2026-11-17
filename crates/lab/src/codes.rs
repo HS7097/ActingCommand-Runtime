@@ -125,6 +125,12 @@ actingcommand_contract::outcome_codes! {
         /// page the bare canvas answers, the canvas with no patch at all, so the case proves
         /// nothing of its page; it is written and named.
         RecordCaseBareCanvas => "record_case_bare_canvas": warning / none,
+        /// Error. #463 S2-8': the swipes recorded before a press cannot be folded into one
+        /// scrolling search of that press (`fold_scan`), the fold cannot be undone (`unfold_scan`),
+        /// a step action or a mark names a step of a fold, or `record stop` meets a fold no
+        /// scrolling select reads yet (key `scan_problem`: why); nothing is written (exit 3;
+        /// actinglab details `step`).
+        RecordScanInvalid => "record_scan_invalid": error / none,
     }
 }
 
@@ -407,6 +413,9 @@ actingcommand_contract::outcome_vocabulary! {
         /// #463 S2-6: a step marked as holding a choice that no select refines yet
         /// (`record_select_invalid`, `choice_not_refined`).
         SelectUnrefined => "select_unrefined",
+        /// #463 S2-8': a press step whose recorded swipes are folded into it declares no scrolling
+        /// select yet (`record_scan_invalid`, `scan_not_selected`).
+        ScanWithoutSelect => "scan_without_select",
     }
 }
 
@@ -620,5 +629,44 @@ actingcommand_contract::outcome_vocabulary! {
         /// The neighbourhood of the press (its rectangle grown by one cell of the whole-frame
         /// measure's grid on every side, clamped to the frame), by the same measure.
         PressRegion => "press_region",
+    }
+}
+
+// #463 S2-8': why the swipes recorded before a press cannot be folded into one scrolling search of
+// that press, or the fold undone, or a step of a fold acted on, or the fold generated.
+actingcommand_contract::outcome_vocabulary! {
+    /// Why a fold of recorded swipes cannot hold (`scan_problem`).
+    pub enum ScanProblem: "scan_problem" {
+        /// `fold_scan` names no fold: its first step is not below its press step; a step of the
+        /// range is unknown, dropped, converted into a transition, folded or holding a fold already,
+        /// or inserted after the stop; the press step's effect is no executed tap; or a step between
+        /// them is no executed swipe.
+        FoldRangeInvalid => "fold_range_invalid",
+        /// A step the fold would fold has marks of its own, which no page of the package would
+        /// read any more.
+        WouldLoseMarks => "would_lose_marks",
+        /// A step the fold would fold names its page.
+        WouldLosePage => "would_lose_page",
+        /// A step the fold would fold is optional.
+        WouldLoseOptional => "would_lose_optional",
+        /// A step the fold would fold holds a choice (marked as holding one, or refined by a
+        /// select).
+        WouldLoseChoice => "would_lose_choice",
+        /// A step the fold would fold has a transition after its effect.
+        WouldLoseTransition => "would_lose_transition",
+        /// A swipe of the range runs clearly along neither axis (its move along one axis is not
+        /// at least twice its move across it), or along another axis than the first swipe.
+        MoveAxisUnclear => "move_axis_unclear",
+        /// A swipe in the first swipe's direction after one against it: the demonstration goes
+        /// forward as often as needed, then back as often as needed, then presses.
+        MoveAfterBack => "move_after_back",
+        /// `unfold_scan` names a step that holds no fold.
+        NotFolded => "not_folded",
+        /// A step action or a mark names a step of a fold: a swipe folded into a press step, or (a
+        /// step action) the press step that holds the fold; the fold is undone first.
+        StepInFold => "step_in_fold",
+        /// `record stop` meets a press step whose swipes are folded into it and which declares no
+        /// scrolling select yet, so its package would press without scrolling.
+        ScanNotSelected => "scan_not_selected",
     }
 }

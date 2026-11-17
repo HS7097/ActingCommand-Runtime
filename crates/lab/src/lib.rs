@@ -121,6 +121,9 @@ mod gate_463_s26;
 // runner of the case contract.
 #[cfg(test)]
 mod gate_463_s210;
+// #463 S2-8': the swipes recorded before a press folded into one scrolling search, and unfolded.
+#[cfg(test)]
+mod gate_463_s28;
 mod lab_run;
 mod lab_run_api;
 mod ledger_port;

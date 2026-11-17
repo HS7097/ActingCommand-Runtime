@@ -9,6 +9,7 @@ use super::boxes::{
     call_frame, expanded_request, flat_boxes, made_box_marks, press_rect, stage_one_captures,
 };
 use super::ending::{ENDING_MARK_STEP, check_new_ending};
+use super::fold::{fold_of, fold_scan, in_fold, met_on, unfold_scan};
 use super::follow::{
     FollowFrames, LocatedClick, check_follow_declaration, check_follow_frames,
     check_located_follow_frames, followed_template,
@@ -376,10 +377,15 @@ fn step_not_found(index: u32) -> LabError {
 
 /// The step `index` while it is effective; `record_step_not_found` for a step that does not exist,
 /// is dropped or was converted into a transition. #463 S2-13: `record frames --step` addresses its
-/// step so too.
+/// step so too (#463 S2-8': and a folded swipe). #463 S2-8': a swipe folded into a press step's
+/// scrolling search is no effective step and answers the fold's own word, `record_scan_invalid`
+/// with `step_in_fold`.
 pub(crate) fn effective_step(recording: &LabRecording, index: u32) -> LabResult<&RecordingStep> {
-    step_ref(recording, index)
-        .filter(|step| step.is_effective())
+    let step = step_ref(recording, index);
+    if let Some(press) = step.and_then(|step| step.folded_into) {
+        return Err(in_fold(index, press));
+    }
+    step.filter(|step| step.is_effective())
         .ok_or_else(|| step_not_found(index))
 }
 
@@ -758,6 +764,8 @@ fn new_step(index: u32, frames: Vec<RecordedFrame>) -> RecordingStep {
         select: None,
         choice: None,
         inserted_after: None,
+        folded_into: None,
+        scan_fold: None,
         transition: None,
         closed: false,
         closed_by: None,
@@ -2608,6 +2616,11 @@ pub(crate) fn apply_optional_after(
     if !session.stopped {
         return Err(inserted_recording_active(named));
     }
+    // #463 S2-8': a swipe folded into a press step's scrolling search is no step a run presses
+    // after; the fold is undone first.
+    if let Some(press) = step_ref(&session.recording, named).and_then(|step| step.folded_into) {
+        return Err(in_fold(named, press));
+    }
     let Some(step) = step_ref(&session.recording, named).filter(|step| step.is_effective()) else {
         return Err(optional_after_invalid(
             OptionalAfterProblem::StepUnknown,
@@ -4351,13 +4364,30 @@ fn last_named(recording: &LabRecording, step: Option<u32>, flag: &str) -> LabRes
 }
 
 /// `--drop-step`, `--reopen-step`, `--close-step`, `--to-transition`; returns the status and
-/// the step acted on.
+/// the step acted on. #463 S2-8': `fold_scan` and `unfold_scan` ([`fold_scan`], [`unfold_scan`]);
+/// every other step action that names a step of a fold is refused first (`step_in_fold`), and
+/// `first` is `fold_scan`'s alone (`validation_failed`).
 pub(crate) fn apply_step_action(
     session: &mut Session,
     action: &super::model::StepAction,
 ) -> LabResult<(&'static str, u32)> {
     use super::model::StepActionKind;
     let recording = &mut session.recording;
+    let folds = matches!(
+        action.kind,
+        StepActionKind::FoldScan | StepActionKind::UnfoldScan
+    );
+    if action.first.is_some() && action.kind != StepActionKind::FoldScan {
+        return Err(invalid(
+            "validation_failed",
+            "first names the first swipe fold_scan folds; no other step operation takes it",
+        ));
+    }
+    if let Some(index) = action.step.filter(|_| !folds)
+        && let Some(press) = step_ref(recording, index).and_then(fold_of)
+    {
+        return Err(in_fold(index, press));
+    }
     match action.kind {
         StepActionKind::DropStep => {
             let index = action
@@ -4470,6 +4500,24 @@ pub(crate) fn apply_step_action(
             restore_step(recording, index)?;
             Ok(("step_restored", index))
         }
+        StepActionKind::FoldScan => {
+            let (Some(index), Some(first)) = (action.step, action.first) else {
+                return Err(invalid(
+                    "validation_failed",
+                    "fold_scan needs step, the press of the wanted row, and first, the first swipe \
+                     before it",
+                ));
+            };
+            fold_scan(recording, index, first)?;
+            Ok(("scan_folded", index))
+        }
+        StepActionKind::UnfoldScan => {
+            let index = action
+                .step
+                .ok_or_else(|| invalid("validation_failed", "unfold_scan needs the step number"))?;
+            unfold_scan(recording, index)?;
+            Ok(("scan_unfolded", index))
+        }
     }
 }
 
@@ -4506,8 +4554,11 @@ fn press_changed_nothing(recording: &LabRecording, index: u32) -> LabResult<()> 
         .into_iter()
         .skip_while(|other| *other != index)
         .nth(1);
+    // #463 S2-8': a next step that holds a fold is met on the screen its scrolling search starts
+    // on, its first folded swipe's.
     let next_before = next
         .and_then(|serial| step_ref(recording, serial))
+        .map(|step| met_on(recording, step))
         .and_then(screen_before);
     let known = json!({
         "before_frame": before_id,

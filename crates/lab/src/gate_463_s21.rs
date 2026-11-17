@@ -630,6 +630,7 @@ fn s21_press_point_only_until_a_press_region_is_set() {
         step_action: Some(StepAction {
             kind: StepActionKind::ReopenStep,
             step: Some(2),
+            first: None,
         }),
         ..MarkRequest::default()
     });
@@ -762,6 +763,7 @@ fn s21_a_reopened_last_step_names_the_frame_of_its_last_attempt() {
         step_action: Some(StepAction {
             kind: StepActionKind::ReopenStep,
             step: Some(2),
+            first: None,
         }),
         ..MarkRequest::default()
     });

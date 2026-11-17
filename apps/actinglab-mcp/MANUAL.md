@@ -481,6 +481,29 @@ naming this file.
   `["self_agreement"]`: the cases were made from the frames the package was built from and say
   nothing about screens it did not meet. A regeneration replaces the set whole and keeps the
   earlier one beside it; `dry_run` writes nothing and lists what would be.
+  #463 S2-8' (0.12.70; `contracts/lab-recording.md`, "Folding swipes into a scrolling search"): a
+  choice in a scrolling list is recorded as several swipes, each a step, then the press on the
+  wanted row. `ac_record_mark` with `step_action` `{"kind": "fold_scan", "step": b, "first": a}`
+  (or the row's `fold_scan` and `fold_first`), on the active recording, folds the swipes `a` to
+  `b - 1` into the scrolling search of the press `b`: they stay in the file whole, each with
+  `folded_into: b`, and are no steps of the package any more (no page, no operation, no case, no
+  item of `ac_record_ready`); `b` holds `scan_fold` (its first step, the axis and each swipe
+  `forward` or `back`). You name the steps; nothing finds them for you. Swipes of different lengths
+  along one axis in one direction are accepted; the demonstration is forward as often as needed,
+  then back as often as needed, then the press. Every refusal is `record_scan_invalid`, nothing
+  written, its `scan_problem`: `fold_range_invalid` (the range is no run of executed swipes before
+  an executed tap), `would_lose_marks`, `would_lose_page`, `would_lose_optional`,
+  `would_lose_choice`, `would_lose_transition` (take that off the swipe first), `move_axis_unclear`
+  (a swipe whose move along one axis is not at least twice its move across, or along another axis),
+  `move_after_back`. `{"kind": "unfold_scan", "step": b}` (`unfold_scan`) gives the recording back
+  as it was (`not_folded` for a step that holds no fold). Any other step action on a folded swipe or
+  its press step, and marks on a folded swipe, are `step_in_fold`: unfold first. `ac_record_status`
+  shows `folded_into` and `scan_fold`; `ac_record_review`'s sheet of the press step lists the
+  folded swipes in order with their screens (`folded`); `ac_record_frames` reads a folded swipe as
+  any step. No scrolling select is declared yet: `ac_record_ready` lists a fold as
+  `scan_without_select` and `ac_record_stop` refuses it (`scan_not_selected`), so a recording with
+  a fold makes no package until the slice that declares the scan; unfold it to make the package
+  without it.
 - **Offline scenes of another size** (Workflow #392 DA-5cd, 0.12.67, as the train of DA-5ab and
   DA-5cd leaves it; `contracts/display-adapter.md` section 12). `ac_recognize`, `ac_detect_page`,
   `ac_current_page`, `ac_is_visible`, `ac_lab_observe` on a saved scene, `ac_tap_target` and

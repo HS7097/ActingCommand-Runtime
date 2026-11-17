@@ -2026,6 +2026,7 @@ fn mark_session(
         removed_ending: None,
         boxes: Vec::new(),
         choice: None,
+        scan_fold: None,
     };
     // #463 R2: an ending of the stopped recording, taken from its frame or given up; it is no
     // step, so the answer names none.
@@ -2104,6 +2105,8 @@ fn mark_session(
         outcome.select = recorded.select.clone();
         // #463 S2-6: the step's choice mark.
         outcome.choice = recorded.choice.clone();
+        // #463 S2-8': the swipes folded into the step's scrolling search.
+        outcome.scan_fold = recorded.scan_fold.clone();
     }
     Ok(outcome)
 }
@@ -3756,5 +3759,8 @@ fn step_view(step: &RecordingStep, effective: &[u32]) -> StepView {
         // #463 S2-6: the choice mark, refined when the step has a select too.
         choice: step.choice.clone(),
         inserted_after: step.inserted_after,
+        // #463 S2-8': what a folded swipe is folded into, and the fold of its press step.
+        folded_into: step.folded_into,
+        scan_fold: step.scan_fold.clone(),
     }
 }

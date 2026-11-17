@@ -301,11 +301,13 @@ pub(crate) fn packaged(recording: &LabRecording) -> bool {
 /// declares a retry; #463 stage two, train 1: or a press box, a press recorded by its point whose
 /// rectangle is no longer that one pixel, the test [`point_press_warnings`] makes), a choice (a
 /// select; #463 S2-6: or a step marked as holding a choice, refined or not), an optional flag or a
-/// transition; or the recording took an ending.
+/// transition (#463 S2-8': or a fold of swipes into a press step's scrolling search); or the
+/// recording took an ending.
 fn stage_two_written(recording: &LabRecording) -> bool {
     !recording.endings.is_empty()
         || recording.steps.iter().any(|step| {
-            step.page.is_some()
+            step.scan_fold.is_some()
+                || step.page.is_some()
                 || !step.marks.is_empty()
                 || !step.reused.is_empty()
                 || !step.forbidden.is_empty()

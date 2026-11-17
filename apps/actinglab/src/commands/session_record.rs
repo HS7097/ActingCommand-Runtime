@@ -3185,6 +3185,10 @@ pub(crate) const RECORD_MARK_SHORTCUT_FLAGS: &[&str] = &[
     "--remove-inserted",
     // #463 S2-5: a box drawn on the step's primary frame by two opposite corners.
     "--box",
+    // #463 S2-8': the swipes before a press folded into its scrolling search, and unfolded.
+    "--fold-scan",
+    "--fold-first",
+    "--unfold-scan",
 ];
 
 /// Workflow #434 LAB-5B2: the other flags `record mark` takes besides its shortcut flags: the
@@ -3824,6 +3828,7 @@ fn record_mark_request_from_flags(flags: &FlagArgs) -> CliOutcome<MarkRequest> {
             actions.push(StepAction {
                 kind,
                 step: Some(step),
+                first: None,
             });
         }
     }
@@ -3831,15 +3836,48 @@ fn record_mark_request_from_flags(flags: &FlagArgs) -> CliOutcome<MarkRequest> {
         actions.push(StepAction {
             kind: StepActionKind::CloseStep,
             step: None,
+            first: None,
         });
     }
+    actions.extend(fold_actions(&number)?);
     if actions.len() > 1 {
         return Err(CliError::usage(
-            "give one of --drop-step, --reopen-step, --close-step and --to-transition",
+            "give one of --drop-step, --reopen-step, --close-step, --to-transition, --fold-scan \
+             and --unfold-scan",
         ));
     }
     request.step_action = actions.pop();
     Ok(request)
+}
+
+/// #463 S2-8' (`contracts/lab-recording.md`, "Folding swipes into a scrolling search"): `--fold-scan
+/// <b> --fold-first <a>`, the request form's step action `{"kind": "fold_scan", "step": b,
+/// "first": a}`, and `--unfold-scan <b>`, `{"kind": "unfold_scan", "step": b}`, read by `number`;
+/// `--fold-first` needs `--fold-scan` and the other way round (`validation_failed`).
+fn fold_actions(number: &dyn Fn(&str) -> CliOutcome<Option<u32>>) -> CliOutcome<Vec<StepAction>> {
+    let mut actions = Vec::new();
+    match (number("--fold-scan")?, number("--fold-first")?) {
+        (Some(step), Some(first)) => actions.push(StepAction {
+            kind: StepActionKind::FoldScan,
+            step: Some(step),
+            first: Some(first),
+        }),
+        (Some(_), None) => {
+            return Err(CliError::usage(
+                "--fold-scan <b> needs --fold-first <a>, the first swipe it folds",
+            ));
+        }
+        (None, Some(_)) => return Err(CliError::usage("--fold-first needs --fold-scan <b>")),
+        (None, None) => {}
+    }
+    if let Some(step) = number("--unfold-scan")? {
+        actions.push(StepAction {
+            kind: StepActionKind::UnfoldScan,
+            step: Some(step),
+            first: None,
+        });
+    }
+    Ok(actions)
 }
 
 /// Workflow #396 REC-4: `--scales f,...`, the factors in milli of a template mark (REC-5); the

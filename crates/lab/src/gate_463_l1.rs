@@ -848,6 +848,7 @@ fn l1_fix1_a_step_operation_is_refused() {
         step_action: Some(StepAction {
             kind: StepActionKind::ReopenStep,
             step: Some(1),
+            first: None,
         }),
         ..MarkRequest::default()
     });

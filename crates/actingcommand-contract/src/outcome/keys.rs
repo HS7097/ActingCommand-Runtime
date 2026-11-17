@@ -895,4 +895,8 @@ outcome_keys! {
     // contracts/lab-recording.md "Regression cases written with the package"): the word of the
     // first failed check of a case that does not pass on its package (`record_case_failed`). ----
     regression_problem: vocab(regression_problem),
+    // ---- #463 S2-8' (`record mark`'s `fold_scan` and `unfold_scan`, contracts/lab-recording.md
+    // "Folding swipes into a scrolling search"): why the swipes recorded before a press cannot be
+    // folded into its scrolling search, the fold undone or generated (`record_scan_invalid`). ----
+    scan_problem: vocab(scan_problem),
 }

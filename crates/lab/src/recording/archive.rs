@@ -1132,12 +1132,13 @@ fn relation(recording: &LabRecording, step: &RecordingStep) -> Relation {
 }
 
 /// The rule's frame after a click of step `index` executed at `executed_at_unix_ms`: the first
-/// frame of the next effective step by serial number, when it was recorded at or after it.
+/// frame of the next effective step by serial number, when it was recorded at or after it. #463
+/// S2-8': a swipe folded into a press step's scrolling search counts here, as recorded.
 fn derived_after(recording: &LabRecording, index: u32, executed_at_unix_ms: u64) -> Option<String> {
     recording
         .steps
         .iter()
-        .filter(|step| step.is_effective() && step.index > index)
+        .filter(|step| step.kept_on_path() && step.index > index)
         .min_by_key(|step| step.index)?
         .frames
         .first()
@@ -1170,13 +1171,14 @@ pub(crate) fn outcome_of(step: &RecordingStep) -> Option<String> {
 
 /// #463 S1-5 ("The manifest", `material.clicks`): the press of the material the row of `step`
 /// gives, when the step is effective and its effect is on record: where it was pressed, as the
-/// step table holds it (a swipe's end only for a swipe), and the frame it happened on.
+/// step table holds it (a swipe's end only for a swipe), and the frame it happened on. #463 S2-8':
+/// a swipe folded into a press step's scrolling search is material as recorded.
 fn click_of(
     step: &RecordingStep,
     row: &ArchiveRow,
     index: &FrameIndex<'_>,
 ) -> Option<ArchiveClick> {
-    if !step.is_effective() {
+    if !step.kept_on_path() {
         return None;
     }
     let outcome = row.outcome.clone()?;

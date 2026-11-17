@@ -6,6 +6,7 @@
 //! their clamp warnings. Everything here is computed in memory; nothing is written.
 
 use super::ending::{ending_page_id, ending_rule_refusals};
+use super::fold::scan_not_selected;
 use super::follow::{follow_invalid, located_page_problem};
 use super::marks::{value_test_declaration, value_test_side_ocr};
 use super::model::{
@@ -723,6 +724,23 @@ fn unrefined_choices(steps: &[PlanStep], lacks: &mut Lacks) {
     }
 }
 
+/// #463 S2-8' (`contracts/lab-recording.md`, "Folding swipes into a scrolling search"): every step
+/// of the package whose recorded swipes are folded into its scrolling search is a failed pre-check
+/// (`scan_without_select`; `record_scan_invalid` with `scan_not_selected`), by step: the fold
+/// stands for a scrolling select, which this build does not declare, so no package is made of a
+/// recording with a fold yet. The folded swipes are no effective steps and have no page here.
+fn unselected_scans(steps: &[PlanStep], lacks: &mut Lacks) {
+    for step in steps {
+        if let Some(fold) = &step.step.scan_fold {
+            lacks.push(
+                ReadyMissing::ScanWithoutSelect,
+                plan_step_number(step),
+                scan_not_selected(step.step.index, fold),
+            );
+        }
+    }
+}
+
 /// The key of the usual ending, `<task_id>_done`.
 pub(crate) fn done_key(task_id: &str) -> String {
     format!("{task_id}_done")
@@ -1249,6 +1267,9 @@ pub(crate) fn survey(recording: &LabRecording, settings: &StopSettings) -> LabRe
     // #463 R1: the rules a select step keeps from its marking on, checked again where the package
     // is generated.
     select_rules(&steps, &recording.task_id, &mut lacks);
+    // #463 S2-8': a press step whose swipes are folded into it and which declares no scrolling
+    // select generates no package.
+    unselected_scans(&steps, &mut lacks);
     // #463 R2: so are an ending's, a select declared after it among them; then each ending's page
     // `ending_kk` (or `ending_kk_<page>`), numbered to the width of the steps' pages.
     for (what, refusal) in ending_rule_refusals(recording) {
@@ -2570,6 +2591,8 @@ pub(crate) fn select_probe_plan(
         select: None,
         choice: None,
         inserted_after: None,
+        folded_into: None,
+        scan_fold: None,
         transition: None,
         closed: true,
         closed_by: None,
