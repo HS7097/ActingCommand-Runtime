@@ -35,7 +35,10 @@ naming this file.
   `ac_material` takes `export` and no `out`, `ac_frame` and `ac_report_export` take no `out`
   (section 6); `ac_run_show`
   and `ac_run_stop` take `wait_s`, `ac_events` and `ac_codes` take `cursor` (section 4);
-  `ac_deploy` and `ac_rollback` take no `detach` (section 9). These are the only parameters of a
+  `ac_deploy` and `ac_rollback` take no `detach` (section 9); `ac_devices_bind` takes no
+  `bound_via` (#398 DB-1, 0.12.71: the channel `ui` is the installer's; a binding made through this
+  server records `cli`, as the row writes it without one), and takes `config`, a candidate
+  configuration whose state root the binding goes into. These are the only parameters of a
   row a tool leaves out; the command line also takes `actinglab`'s global options, a positional
   given as its flag (`--id`, `--instance`) and `devices bind`'s own `--root` (the server hands on
   the root it runs from), which no tool needs. No tool takes `words` either (Workflow #434 LW-1):

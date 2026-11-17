@@ -259,11 +259,42 @@ configuration tools of #387 D1b):
   when the instance is not a handset; actingd reports a handset's broken fields as
   `device_config_invalid`), reads adb's list again (`device_handle_unknown` with `handle` when
   the handle is not in it), and writes the device's serial for the alias, with
-  `bound_at_unix_ms` and `bound_via` `cli` or `mcp`. The new file is checked by the file's own
+  `bound_at_unix_ms` and `bound_via` `cli` or `mcp` (or `ui`, below). The new file is checked by the file's own
   rules before it is written, so a device bound to another alias already is refused
   (`device_bindings_invalid`, `duplicate_serial`); a binding of the same alias is replaced. The
   file is replaced whole through a temporary sibling (`device_bindings_write_failed` with its
   `path` when that fails).
+- **Against a candidate configuration** (#398 DB-1, 0.12.71; [v012-register.md](v012-register.md)
+  §1.459; the coordinator's ruling on board #398). An installer that binds a phone while it
+  installs lays the files, writes the candidate configuration, binds, runs check-config on the
+  candidate, switches it in and starts. check-config refuses a handset without a binding
+  (`device_binding_missing`, above), and `bind` looked its alias up in the selected configuration,
+  which a new installation does not have yet: neither could come first. `devices bind <alias>
+  <handle> --config <file>` (the Lab's row `devices bind` with `config`; `actingctl devices bind`
+  takes it too, the command being one) binds against the candidate `file` instead:
+  - the alias is checked in `file` by the same rules and codes (`instance_unknown`,
+    `device_kind_unsupported`); a file that cannot be read is `config_read_failed`, one that does
+    not decode `config_decode_failed`, each with its `path`;
+  - the binding goes into the private file of the state root `file` names, its `state_root`, which
+    must be absolute (else `install_state_root_unresolved` with `config_path`, the rule the Lab
+    locates a state root by): the file actingd's check-config of `file` reads, with or without
+    `--install-root`, and so the Lab's rescue row `check-config <file>`, which runs it;
+  - no selected configuration and no located state root is read (the Lab's line carries no
+    `--state-root` then, and `--state-root` beside `--config` is `conflicting`); the install root
+    gives its adb alone, found as above, which a root without a configuration has;
+  - before the bind the candidate and the install root's adb must exist; the bind makes the state
+    root's folder and its `private` folder when they are missing, and the private file, nothing
+    else of the state root;
+  - the answer is `bind`'s and `config`, the file as given.
+- **The channel `ui`** (#398 DB-1). `--bound-via ui` (the row's `bound_via`, not named `via`,
+  which is `actinglab`'s global option) writes `bound_via` `ui`, the installer's; another word is
+  `actingctl_usage_invalid` `not_recognised` (the table types it `enum:ui`, so a front refuses it
+  first). Without it a binding records `cli` on the Lab's command line, through `serve --stdio`
+  and through the Lab's MCP server (which serves the row with the command line's code), and `mcp`
+  through `actingctl mcp-serve`'s `ac_device_bind`, as before. The Lab's MCP tool
+  `ac_devices_bind` does not offer it (its schema has `instance`, `handle` and `config`), and one
+  sent there is refused `arguments_invalid` `unknown`. The next start records `ui` as
+  `runtime.instance_bound`'s `device.bound_via`; nothing decides by it.
 - **`unbind`** removes the alias's binding; an alias without one answers `unbound: false` and
   writes nothing. A start then registers the handset unbound (above).
 - A private file that breaks its rules is refused before anything is listed or written

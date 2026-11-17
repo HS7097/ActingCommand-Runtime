@@ -36227,6 +36227,98 @@ kernel. Nothing proposes a region, a choice or a value.
 **At deploy.** Nothing to configure. A bundle `standard-pack build` makes of a package without an
 end mark declares `package` [18, 18], which an installer whose range ends below 18 refuses.
 
+### 1.459 #398 DB-1 (0.12.71): `devices bind` against a candidate configuration, and the channel `ui` (Workflow #398; the coordinator's ruling on board #398, comment 6940490302, that the bind may name a candidate configuration while check-config and the start stay as they are; the rest the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1117/brief-398-db1-bind-candidate-config.md`, read on main `240cdb1a`)
+
+This section takes 1.459, the next free number (1.455 is held by an open pull request). It ships
+in 0.12.71.
+
+**Why.** The interface's installer is being redesigned: the person first says what the
+installation is for, and for a phone the installer binds the device while it installs, in the
+order: lay the files, write the candidate configuration, bind, check-config, switch the
+configuration in, start. check-config refuses a handset the private binding file binds no device
+to (`device_binding_missing`), and `devices bind` looked its alias up in the selected
+configuration, which a new installation does not have yet, and wrote into the state root the Lab
+located from it: neither step could come first.
+
+**The rule** ([device-binding.md](device-binding.md), "Choosing a device", "Against a candidate
+configuration" and "The channel `ui`").
+- *`config`*, a new option (a file) of the row `devices bind` ([lab-operations.json](lab-operations.json)):
+  the alias is checked in that file, not in the selected configuration, by the same rules and codes
+  (`instance_unknown`, `device_kind_unsupported`); a file that cannot be read is
+  `config_read_failed`, one that does not decode `config_decode_failed`, each with its `path` (the
+  two codes the selected configuration's read answers). The binding goes into the private file of
+  the state root the file names, its absolute `state_root` (else `install_state_root_unresolved`
+  with `config_path`, the rule `lab_ops::locate` locates a state root by, now one function,
+  `locate::state_root_of`). The device list is read again with the install root's adb, and the
+  answer is today's with `config`, the file as given.
+- *The state root agrees with check-config's.* actingd's check-config of a file reads the private
+  file of the file's own `state_root`, with `--install-root` or without it (the root changes the
+  adb and the vision root it judges, not the state root); the Lab's rescue row `check-config
+  <file>` runs that check with `--install-root <root>`. The Lab's own line and its MCP server hand
+  `devices bind` the state root they locate (`ACTINGCOMMAND_RUNTIME_STATE_ROOT`, else the selected
+  configuration's `state_root`); a `--via` line (the first face's actinglab child) never reaches
+  `devices bind`, no command of actinglab's own. So against a candidate the row's line carries no
+  module's state root (`core_ops::candidate_words`, which `answer` and `handed_words` take), and
+  `devices` takes the candidate's: no further parameter was needed. `--state-root` beside
+  `--config` is `conflicting`; neither is `--state-root` `required`, as before.
+- *No selected configuration is needed.* On a root without one the Lab locates no state root and
+  no root (its location reads the selected configuration's `state_root`); the candidate's line is
+  built before the located state root is asked for, and `devices` finds the install root's adb as
+  before (`packs::selected_config` answers a root without a selection its
+  `<root>\actingd.config.json` without reading it, or the root the executable runs from).
+- *What the bind needs and makes.* The candidate and the install root's adb. `devices`' writer
+  makes the state root's folder and its `private` folder with `create_dir_all` when they are
+  missing, then the private file through a temporary sibling; nothing else of the state root.
+- *`bound_via`*, a new option `enum:ui`, not named `via`, which is `actinglab`'s global option
+  (`--via mcp|ui`, the first face's actinglab child): `ui` writes `bound_via` `ui`
+  (`DeviceBoundVia::Ui`, which nothing wrote before). Without it the channel is the entry's, as
+  before: `cli` on the Lab's command line, through `serve --stdio` and through the Lab's MCP server
+  (which serves the row with the command line's code, `devices::dispatch`), `mcp` through
+  `actingctl mcp-serve`'s `ac_device_bind`. The next start records it as `runtime.instance_bound`'s
+  `device.bound_via`; nothing decides by it.
+- *The MCP tool leaves it out*: `tools::SUPPLIED` gains `("devices bind", "bound_via",
+  Supplied::Nothing)`, a member the front gives nothing for: the schema of `ac_devices_bind` has no
+  `bound_via`, and one sent is refused `arguments_invalid` `unknown`, as any argument the tool does
+  not know.
+- *The first face*: `ac_device_bind` of `actingctl mcp-serve` gains no parameter, and no shared
+  function's signature changed (`devices::bind` and `Bind` are as they were; the candidate is
+  `devices::bind_candidate`, and `devices::dispatch_with` takes the adb run a test gives). Its
+  command line `actingctl devices bind`, which runs the same parser, takes `--config` and
+  `--bound-via` too.
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The candidate and the channel | `crates/lab-ops/src/devices.rs`: `bind_candidate`, `bound` (the body `bind` shares), `read_candidate`, `configuration_bytes`, `decode_failed`, `Against`, `CONFIG_FLAG`, `BOUND_VIA_FLAG`, `dispatch_with`; `parse` and the usage text |
+| The flags | `crates/lab-ops/src/lib.rs` `flags_of` (`devices bind`) |
+| The row's line | `crates/lab-ops/src/core_reads.rs` (`devices bind`'s `config` and `bound_via`); `crates/lab-ops/src/core_ops.rs` `candidate_words`, `answer`, `handed_words` |
+| The state root's rule | `crates/lab-ops/src/locate.rs` `state_root_of` (from `configured_state_root`) |
+| The MCP front | `apps/actinglab-mcp/src/tools.rs` `Supplied::Nothing`, `SUPPLIED`; `calls.rs` `prepare` |
+| Texts | [lab-operations.json](lab-operations.json) (the row's two parameters, its `help`, its `notes`); [device-binding.md](device-binding.md); `apps/actinglab-mcp/MANUAL.md` section 1; the actingctl fragment's description of `device_kind_unsupported` (it names the candidate too) and the regenerated index |
+
+**Codes and words.** None added. `install_state_root_unresolved` (the Lab cannot tell the state
+root) is newly answered by `devices bind --config` for a candidate without an absolute
+`state_root`, with `config_path`, and the value as `path` when it is not absolute, as the Lab's
+location answers it; it refuses: exit status 1 on the Lab's line and on `actingctl`'s, the same
+line through `serve --stdio`, `isError` true through MCP. No decision reads a code by name.
+
+**Tests** (`apps/actingd/src/gate_398_db1.rs`, and for the MCP tool
+`apps/actinglab-mcp/src/gate_398_db1.rs`, which only that program's code reaches; apps gate map
+"#398 DB-1"): the five of the work order, test 4 being RD-1c's unchanged tests. actingd takes
+`actingcommand-lab-ops` as a dev-dependency, so that its gate binds through the Lab's code and
+reads the binding back as the start's assembly and check-config read it. Adapted, as the
+requirement adds a member the MCP front leaves out: `gate_434_lab5g2b`'s
+`mcp_front_members_in_one_place` (the pinned `SUPPLIED`) and `gate_434_lw1`'s `LEFT_OUT` (its
+reason). No golden changes; no test leaves a gate map.
+
+**What is not changed.** `devices` and `devices unbind`; what `devices bind` answers and writes
+without the two options; check-config (it still refuses an unbound handset) and the start (it still
+registers one unbound and goes on); the private file's format; no answer, outcome value or line
+names a device serial.
+
+**At deploy.** Nothing to configure.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

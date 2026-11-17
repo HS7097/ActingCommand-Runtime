@@ -280,6 +280,15 @@ pub fn configured_state_root(config: &Path) -> Result<PathBuf, Outcome> {
         .map_err(|cause| unresolved().caused_by(cause))?;
     let document = serde_json::from_slice::<Value>(&bytes)
         .map_err(|error| unresolved().caused_by(crate::foreign_data_error(&error).path(config)))?;
+    state_root_of(&document, config)
+}
+
+/// The absolute `state_root` of the configuration `document`, read from the file `config`, else
+/// `install_state_root_unresolved` with `config_path`: alone without the member, or with the value
+/// as `path` when it is not absolute. [`configured_state_root`]'s rule; #398 DB-1: `devices bind`
+/// against a candidate configuration takes the candidate's state root by it too.
+pub fn state_root_of(document: &Value, config: &Path) -> Result<PathBuf, Outcome> {
+    let unresolved = || Outcome::new(ActingctlCode::InstallStateRootUnresolved).config_path(config);
     let state_root = document
         .get("state_root")
         .and_then(Value::as_str)
