@@ -1192,6 +1192,11 @@ fn r4_giving_up_an_inserted_step_whose_mark_another_page_forbids_is_refused() {
 // P4, the design's first test: a second record stop of the same recording keeps the output the
 // first one wrote, set aside as <name>.old-<ms> beside the new one and named in lab.kept: its bytes
 // are the first package's, nothing else is left beside them, and the new package is another.
+// Adapted by #463 S2-10 (register §1.441, fix round 2; contracts/lab-recording.md, "Regression
+// cases written with the package"): the output directory also holds the package's regression cases,
+// <package_id>.cases, and after the second stop the first stop's cases set aside as
+// <package_id>.cases.old-<ms> (lab.cases.kept), holding the first stop's cases; the package and the
+// cases one stop sets aside carry the same <ms>. The listing stays exact.
 #[test]
 fn p4_a_second_stop_keeps_the_output_the_first_wrote() {
     let recording = Recording::new();
@@ -1199,6 +1204,14 @@ fn p4_a_second_stop_keeps_the_output_the_first_wrote() {
     let first_path = PathBuf::from(generated["path"].as_str().expect("package path"));
     let first = fs::read(&first_path).expect("the first package");
     assert_eq!(generated.get("kept"), None, "{generated}");
+    let mut first_cases = generated["cases"]["ids"]
+        .as_array()
+        .unwrap_or_else(|| panic!("no cases in {generated}"))
+        .iter()
+        .map(|id| id.as_str().expect("a case id").to_owned())
+        .collect::<Vec<_>>();
+    assert!(!first_cases.is_empty(), "{generated}");
+    first_cases.sort();
     recording.insert_popup();
 
     let regenerated = recording
@@ -1225,8 +1238,42 @@ fn p4_a_second_stop_keeps_the_output_the_first_wrote() {
         "{kept_name}"
     );
     assert_eq!(fs::read(&kept).expect("the kept package"), first);
+    let cases = format!(
+        "{}.cases",
+        regenerated["package_id"].as_str().expect("package id")
+    );
+    let kept_cases = PathBuf::from(
+        regenerated["cases"]["kept"]
+            .as_str()
+            .unwrap_or_else(|| panic!("no kept cases in {regenerated}")),
+    );
+    let kept_cases_name = kept_cases
+        .file_name()
+        .and_then(|name| name.to_str())
+        .expect("kept cases name")
+        .to_owned();
+    // One stop, one suffix: the package and the cases it set aside carry the same <ms>.
+    let suffix = kept_name
+        .strip_prefix(&format!("{name}.old-"))
+        .expect("the kept package's <ms>");
+    assert_eq!(
+        kept_cases_name,
+        format!("{cases}.old-{suffix}"),
+        "{regenerated}"
+    );
+    // The kept cases are the first stop's: a directory for each of its cases, nothing else.
+    assert_eq!(names_in(&kept_cases), first_cases, "{regenerated}");
     let directory = first_path.parent().expect("out directory");
-    assert_eq!(names_in(directory), [name, kept_name]);
+    // The whole output directory, sorted: the cases, the kept cases, the package, the kept package.
+    assert_eq!(
+        names_in(directory),
+        [
+            cases.as_str(),
+            kept_cases_name.as_str(),
+            name.as_str(),
+            kept_name.as_str()
+        ]
+    );
     let second = fs::read(&first_path).expect("the second package");
     assert_ne!(second, first);
     assert_eq!(
@@ -1299,7 +1346,9 @@ fn p4_a_lab_dir_inside_an_installed_root_is_refused() {
 // the answer keeps binding_example and adds adoption_example, the adopt line with the recording's
 // id and state directory and the decision's skeleton. Fix round 2 (item 4, the owner's rule that a
 // package not yet run through on a real device is registered and stays held): the skeleton is a
-// decision of the class held with its reason blank and nothing else.
+// decision of the class held with its reason blank and nothing else. Adapted by #463 S2-10 (register
+// §1.441, fix round 2): the recording's out directory holds, beside the package, its regression
+// cases, <package_id>.cases, and nothing else; --lab-dir holds the package alone.
 #[test]
 fn p4_a_first_stop_writes_as_before_and_answers_the_adoption_skeleton() {
     let recording = Recording::new();
@@ -1322,9 +1371,10 @@ fn p4_a_first_stop_writes_as_before_and_answers_the_adoption_skeleton() {
         .and_then(|name| name.to_str())
         .expect("file name")
         .to_owned();
+    let cases = format!("{}.cases", lab["package_id"].as_str().expect("package id"));
     assert_eq!(
         names_in(copy.parent().expect("out directory")),
-        [name.as_str()]
+        [cases.as_str(), name.as_str()]
     );
     assert_eq!(names_in(&lab_dir), [name.as_str()]);
     assert_eq!(

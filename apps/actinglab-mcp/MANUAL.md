@@ -460,7 +460,7 @@ naming this file.
   value chooses as before), which `ac_goals_set` sets on an application by name; a package
   generated again from an older recording with a select gains that variable, so its content hash
   changes and its bundle declares `package` 14.
-  #463 S2-10 (0.12.69; `contracts/lab-recording.md`, "Regression cases written with the package"):
+  #463 S2-10 (0.12.70; `contracts/lab-recording.md`, "Regression cases written with the package"):
   `ac_record_stop` writes the package's regression cases beside it,
   `lab/out/<package_id>.cases/<case id>/` (`case.json` and `scene.png`, the case contract's form):
   one per step with a press and a page, on the frame its press was sent on, one for the final

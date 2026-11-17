@@ -3688,7 +3688,7 @@ and, once no pre-check fails, with the self-checks' failures (#463 S2-1c):
   recording's size, the last row of "Pre-checks"), `admission` (item 2, with the evaluator),
   `first_decision` (item 3), `cross_check` (items 4, 5 and 7), `endings` (item 9), `selects` (item
   8), `final_package` (item 1, and items 2 and 3 again on the final package), and (#463 S2-10,
-  0.12.69) `cases` (item 10, the last: the regression cases made from the recording, each run on
+  0.12.70) `cases` (item 10, the last: the regression cases made from the recording, each run on
   the final package; one failing case is one item, with the case's id and the runner's failed
   checks in its `details`, "Regression cases written with the package"). #463 S2-1c (0.12.68):
   **each check lists every failure it meets, not only its first.** It is the one implementation
@@ -4226,7 +4226,7 @@ guard execution still requires the corresponding frames, provider and Runtime ev
    the cross-check `partially_evaluated`. Every refusal comes before every warning. The result is the
    cross-check's `endings[{ending, outcome_key, page, frames[{frame_id, result}], usual}]` (`usual`:
    `distinct`, `passes` or `not_evaluated`), as `lab.endings`, present only with an ending.
-10. **Regression cases** (#463 S2-10, 0.12.69; the self-check `cases`, the last, run once every
+10. **Regression cases** (#463 S2-10, 0.12.70; the self-check `cases`, the last, run once every
     check above and the final package passed, since it reads the final package): the regression
     cases made from the recording, each run on the final package by the one runner of the case
     contract before it is written; a case that misses is `record_case_failed` (3), a page
@@ -4255,7 +4255,7 @@ generated is the same.
 
 ### Regression cases written with the package
 
-#463 S2-10 (0.12.69; the coordinator's work order on board #463: the rules below are the
+#463 S2-10 (0.12.70; the coordinator's work order on board #463: the rules below are the
 coordinator's). A package of a resource repository comes with regression cases
 ([resource-regression-case.md](resource-regression-case.md)): scenes on which its pages must be
 recognised. The recording already knows them (which screen each step was on, the final screen, the
@@ -4345,9 +4345,13 @@ the package it came with.
   `<package_id>.cases.part-<unix_ms>` (a name no entry holds), then an existing directory is set
   aside as `<package_id>.cases.old-<unix_ms>` and kept, never deleted, as "Writing" keeps a replaced
   package, and the new one is renamed into place; a reader finds the old set, the new one or none,
-  never part of one. A failure is `record_state_io_failed` (5) with `details.written_files` (the
-  part directory among them) and `stage`; when the new set cannot be renamed into place the old one
-  is renamed back (`restored`). Under `--dry-run` nothing is written and the answer lists what
+  never part of one. One stop reads the clock once and hands that millisecond to every replacement
+  it makes (fix round 2): the package it sets aside, `<package_id>.<ext>.old-<unix_ms>`, and the
+  cases it sets aside, `<package_id>.cases.old-<unix_ms>`, carry the same `<unix_ms>`, so that the
+  two are recognised as a pair (each name is the first millisecond from that one that no entry
+  holds, so a kept entry is never overwritten). A failure is `record_state_io_failed` (5) with
+  `details.written_files` (the part directory among them) and `stage`; when the new set cannot be
+  renamed into place the old one is renamed back (`restored`). Under `--dry-run` nothing is written and the answer lists what
   would be. The cases stay in the recording's own directory; they enter a resource repository only
   through adoption.
 - **The answer**: `lab.cases{directory, status, kept?, counts{steps, final, endings}, ids,
@@ -4432,7 +4436,7 @@ equal value is accepted.
  catalog_on_failure_example, binding_requires}
 ```
 
-- #463 S2-10 (0.12.69): `cases` is the package's regression cases, written beside it or (under
+- #463 S2-10 (0.12.70): `cases` is the package's regression cases, written beside it or (under
   `--dry-run`) to be written: `{directory, status, kept?, counts, ids, not_proven, warnings,
   limits, limit_texts}`, its `warnings` `record_case_page_ambiguous` and `record_case_bare_canvas`
   ("Regression cases written with the package").

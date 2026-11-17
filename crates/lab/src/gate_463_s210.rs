@@ -1171,7 +1171,11 @@ fn s210_a_later_page_matching_an_earlier_screen_writes_the_case_without_observe(
     let ready = bench.ready();
     assert_eq!(ready["status"], "ready", "{ready}");
     assert_eq!(ready["missing"], json!([]), "{ready}");
-    assert_eq!(named(&ready["warnings"]), [expected.clone()], "{ready}");
+    assert_eq!(
+        named(&ready["warnings"]),
+        std::slice::from_ref(&expected),
+        "{ready}"
+    );
 
     let lab = bench.stopped(false);
     assert_eq!(lab["lab_status"], "generated", "{lab}");

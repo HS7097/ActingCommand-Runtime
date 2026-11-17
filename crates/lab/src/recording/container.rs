@@ -6,7 +6,7 @@
 //! deterministically from the content table and named `<package_id>.<ext>` (Workflow #336
 //! PKG-S5, M-PKG v1.1 §3.5 and D9): a file of that name is replaced in place, never refused.
 
-use super::store::{blocked, invalid, now_unix_ms, state_io, with_details};
+use super::store::{blocked, invalid, state_io, with_details};
 use actingcommand_contract::{LabError, LabResult};
 use actingcommand_pack_containment::{CONTENT_JSON_V1, ContentContainer};
 use serde_json::{Map, Value, json};
@@ -217,10 +217,12 @@ fn written_details(mut error: LabError, written: &[String], extra: Value) -> Lab
 }
 
 /// Section 4.7 step 4: creates the directory when the plan says so, then replaces
-/// `<lab-dir>/<package_id>.<ext>` in place (#464 P4: the replaced file kept, named in `kept`).
+/// `<lab-dir>/<package_id>.<ext>` in place (#464 P4: the replaced file kept, named in `kept`;
+/// `stamp` as [`replace_in_place`] takes it).
 pub(crate) fn write_lab_dir(
     plan: &LabDirPlan,
     bytes: &[u8],
+    stamp: u64,
     written: &mut Vec<String>,
     kept: &mut Vec<String>,
 ) -> LabResult<bool> {
@@ -233,19 +235,24 @@ pub(crate) fn write_lab_dir(
             )
         })?;
     }
-    replace_in_place(&plan.target, bytes, written, kept)
+    replace_in_place(&plan.target, bytes, stamp, written, kept)
 }
 
 /// #464 P4: the name an existing `<name>` is set aside as, `<name>.old-<unix_ms>`: the first
-/// millisecond from now no file of `parent` holds, so that no kept file is ever overwritten.
-fn set_aside_name(parent: &Path, name: &str, written: &[String]) -> LabResult<PathBuf> {
-    free_name(parent, name, "old", written)
+/// millisecond from `stamp` no file of `parent` holds, so that no kept file is ever overwritten.
+fn set_aside_name(parent: &Path, name: &str, stamp: u64, written: &[String]) -> LabResult<PathBuf> {
+    free_name(parent, name, "old", stamp, written)
 }
 
-/// `<name>.<kind>-<unix_ms>` beside `<name>` in `parent`, the first millisecond from now no entry of
-/// `parent` holds (#464 P4's set-aside name; #463 S2-10: and a new directory's part name too).
-fn free_name(parent: &Path, name: &str, kind: &str, written: &[String]) -> LabResult<PathBuf> {
-    let mut stamp = now_unix_ms();
+/// `<name>.<kind>-<unix_ms>` beside `<name>` in `parent`, the first millisecond from `stamp` no entry
+/// of `parent` holds (#464 P4's set-aside name; #463 S2-10: and a new directory's part name too).
+fn free_name(
+    parent: &Path,
+    name: &str,
+    kind: &str,
+    mut stamp: u64,
+    written: &[String],
+) -> LabResult<PathBuf> {
     loop {
         let candidate = parent.join(format!("{name}.{kind}-{stamp}"));
         match fs::symlink_metadata(&candidate) {
@@ -279,10 +286,13 @@ fn free_name(parent: &Path, name: &str, kind: &str, written: &[String]) -> LabRe
 /// name only ever changes by rename, so a reader opens the old file, the new one or none, never
 /// part of one. Every file written is pushed onto `written`. Nothing is skipped and every failed
 /// step is `record_state_io_failed`: the `.part` file is named; when the new file cannot be put in
-/// place the old one is renamed back (`restored`).
+/// place the old one is renamed back (`restored`). #463 S2-10: `stamp` is the caller's one clock
+/// read, from which the set-aside name's millisecond is sought, so that the outputs one `record
+/// stop` sets aside carry one millisecond.
 pub(crate) fn replace_in_place(
     target: &Path,
     bytes: &[u8],
+    stamp: u64,
     written: &mut Vec<String>,
     kept: &mut Vec<String>,
 ) -> LabResult<bool> {
@@ -345,7 +355,7 @@ pub(crate) fn replace_in_place(
         })?;
     drop(file);
     let old = if replaces {
-        let old = set_aside_name(parent, name, written)?;
+        let old = set_aside_name(parent, name, stamp, written)?;
         fs::rename(target, &old).map_err(|error| {
             written_details(
                 state_io(format!(
@@ -393,10 +403,13 @@ pub(crate) fn replace_in_place(
 /// rename, so a reader finds the old set, the new one or none, never part of one. Every failed step
 /// is `record_state_io_failed` naming what was written (`written` before it, then the part
 /// directory); when the new directory cannot be renamed into place the old one is renamed back
-/// (`restored`).
+/// (`restored`). Both names' milliseconds are sought from `stamp`, the stop's one clock read, the
+/// one its package's [`replace_in_place`] takes: the package and the cases one stop sets aside
+/// carry the same `<unix_ms>`.
 pub(crate) fn replace_dir_in_place(
     target: &Path,
     files: &[(String, Vec<u8>)],
+    stamp: u64,
     written: &[String],
 ) -> LabResult<Option<String>> {
     let (parent, name) = match (
@@ -433,7 +446,7 @@ pub(crate) fn replace_dir_in_place(
             ));
         }
     };
-    let part = free_name(parent, name, "part", &written)?;
+    let part = free_name(parent, name, "part", stamp, &written)?;
     let part_display = part.display().to_string();
     fs::create_dir(&part).map_err(|error| {
         written_details(
@@ -456,7 +469,7 @@ pub(crate) fn replace_dir_in_place(
         })?;
     }
     let old = if replaces {
-        let old = set_aside_name(parent, name, &written)?;
+        let old = set_aside_name(parent, name, stamp, &written)?;
         fs::rename(target, &old).map_err(|error| {
             written_details(
                 state_io(format!(

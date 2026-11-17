@@ -53,7 +53,7 @@ regression`, and nothing else.
 `scene_construction`, `canvas`, a rectangle, `expect`, `expect.observe` and an entry of
 `expect.recognize` are closed objects; the top level is open (above). An expectation that is not
 evaluated is read and answered `not_run` with `not_evaluated`, each at its place: never passed. A
-case `record stop` writes (#463 S2-10, 0.12.69; [lab-recording.md](lab-recording.md), "Regression
+case `record stop` writes (#463 S2-10, 0.12.70; [lab-recording.md](lab-recording.md), "Regression
 cases written with the package") names in `source` only its recording and where it comes from:
 `{record_id, step}` (the step's serial number), `{record_id, final: true}` or `{record_id, ending}`
 (the ending's key), never a path of the machine, an instance, an account or a time. Its `id` is

@@ -33275,9 +33275,9 @@ What this round changed:
   `record review` lists step 1's two on step 1, step 3's on step 3, none on steps 2 and 4, and the
   ending's on no step. Its first reading is as before. No golden changes; no test leaves a gate map.
 
-### 1.441 Slice #463 S2-10 (0.12.69): `record stop` writes the package's regression cases, each run first by the one runner of the case contract (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, whose stage two has the Lab check the package against the recorded material; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1116/brief-463-s210b-record-stop-cases.md`, which replaces the withdrawn `rd-1116/brief-463-s210-regression-cases.md`; stacked on #463 RC-1, §1.450, its branch at `a0c22c1a`, which holds main `ff74c80c`, the release of 0.12.68)
+### 1.441 Slice #463 S2-10 (0.12.70): `record stop` writes the package's regression cases, each run first by the one runner of the case contract (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, whose stage two has the Lab check the package against the recorded material; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1116/brief-463-s210b-record-stop-cases.md`, which replaces the withdrawn `rd-1116/brief-463-s210-regression-cases.md`; stacked on #463 RC-1, §1.450, its branch at `a0c22c1a`, which holds main `ff74c80c`, the release of 0.12.68)
 
-This section takes 1.441, the number the work order gives. It ships in 0.12.69.
+This section takes 1.441, the number the work order gives. It ships in 0.12.70.
 
 **Why.** A package of a resource repository comes with regression cases, scenes on which its pages
 must be recognised; an agent wrote them by hand after recording. The recording already knows them:
@@ -33394,6 +33394,29 @@ refuses, and an ambiguous case is written without `observe` with the warning
 for the refusal, so none is restored; the eighth check stays in the lists that name the checks.
 
 **At deploy.** Nothing to configure.
+
+**Fix round 2** (coordinator work order `rd-1117/brief-463-s210-fix2.md`, after the jobs `lint` and
+`exec-tooling` of the pull request failed). The branch takes in main `26698590` (the 0.12.69 train, which holds RC-1) by one merge;
+the slice ships in 0.12.70.
+- *The release*: every label and `since` of this slice says 0.12.70 (this section's heading, the
+  three codes of the lab fragment and the catalog's descriptions of `regression_problem`, `cases`
+  and `case_limit`, the two contracts, the two notes of the operation table, the MCP manual, the
+  gate map); main's own 0.12.69 labels are unchanged.
+- *The lint*: test 10 compares `record ready`'s warnings with `std::slice::from_ref(&expected)`, not
+  a one-element array of a clone (`clippy::cloned_ref_to_slice_refs`).
+- *One stop, one suffix* (the coordinator's ruling): a stop reads the clock once and hands that
+  millisecond to every replacement it makes, so that the package and the cases it sets aside carry
+  the same `<unix_ms>` (`recording_api.rs` `generate_and_write`; `container.rs` `replace_in_place`,
+  `write_lab_dir`, `replace_dir_in_place`, `set_aside_name` and `free_name` take it and seek the
+  first free millisecond from it; `stop_already_generated` hands `write_lab_dir` its own read);
+  [lab-recording.md](lab-recording.md), "Regression cases written with the package", says so.
+- *Tests adapted, as the slice changes what they pin* (the output directory holds the cases, the
+  listings stay exact): `gate_463_r4::p4_a_first_stop_writes_as_before_and_answers_the_adoption_skeleton`,
+  the recording's out directory is exactly `<package_id>.cases` and the package (`--lab-dir` still
+  the package alone); `gate_463_r4::p4_a_second_stop_keeps_the_output_the_first_wrote`, exactly the
+  cases, the cases set aside (`lab.cases.kept`), the package and the package set aside, the cases set
+  aside holding the first stop's cases (their ids) and the two set-aside names carrying the same
+  `<unix_ms>`. No other test lists that directory or names an `.old-` of it.
 
 ### 1.442 Slice #463 S2-6 (0.12.68): a choice in a step, marked first and refined later; its pending item in `record ready` (Workflow #463; the owner's direction on board #463 on 11-15, that a choice inside a step be singled out by marking the step first and refined afterwards, and her approval the same day of the three-stage blueprint of package making; the rules below are the coordinator's rulings in the work order and in the work order of the half-built piece it ports, not the owner's words; coordinator work order `rd-1116/brief-463-s26-select-unrefined.md`, stacked on pull request #1780, the Lab display train)
 

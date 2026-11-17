@@ -2886,7 +2886,7 @@
     },
     "regression_problem": {
       "type": "vocab:regression_problem",
-      "description": "The word of the first failed check of a regression case record stop made from a recording for the package it generated, which misses on that package (record_case_failed; #463 S2-10, since 0.12.69); every failed check of the case is in the refusal's details."
+      "description": "The word of the first failed check of a regression case record stop made from a recording for the package it generated, which misses on that package (record_case_failed; #463 S2-10, since 0.12.70); every failed check of the case is in the refusal's details."
     }
   },
   "vocabularies": {
@@ -5457,12 +5457,12 @@
           "description": "The final package: encoded, expanded again, admitted again, and the same first decision."
         },
         "cases": {
-          "description": "#463 S2-10 (since 0.12.69): the regression cases made from the recording (one per step with a press and a page, the final screen, one per ending), each run on the final package by the one runner of the case contract before it is written; the last check, run only when every other passed."
+          "description": "#463 S2-10 (since 0.12.70): the regression cases made from the recording (one per step with a press and a page, the final screen, one per ending), each run on the final package by the one runner of the case contract before it is written; the last check, run only when every other passed."
         }
       }
     },
     "case_limit": {
-      "description": "A limit the regression cases record stop writes beside its package say of themselves, in lab.cases.limits (#463 S2-10, since 0.12.69); it informs and refuses nothing.",
+      "description": "A limit the regression cases record stop writes beside its package say of themselves, in lab.cases.limits (#463 S2-10, since 0.12.70); it informs and refuses nothing.",
       "source": {
         "file": "crates/lab/src/codes.rs",
         "enum": "CaseLimit"

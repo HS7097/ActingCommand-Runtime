@@ -643,18 +643,22 @@ fn generate_and_write(
                 state_io(format!("failed to create {}: {error}", parent.display()))
             })?;
         }
-        replace_in_place(&copy_path, &bytes, &mut written, &mut kept)?;
+        // #463 S2-10 fix round 2: one clock read for the stop, so that the package and the cases
+        // it sets aside carry one `<unix_ms>` and are recognised as a pair.
+        let stamp = now_unix_ms();
+        replace_in_place(&copy_path, &bytes, stamp, &mut written, &mut kept)?;
         let status = match &lab_dir_plan {
             Some(dir_plan) => Some(written_status(write_lab_dir(
                 dir_plan,
                 &bytes,
+                stamp,
                 &mut written,
                 &mut kept,
             )?)),
             None => None,
         };
         // The new set replaces the directory whole, an earlier set set aside and kept.
-        cases_kept = replace_dir_in_place(&cases_path, &cases.files(), &written)?;
+        cases_kept = replace_dir_in_place(&cases_path, &cases.files(), stamp, &written)?;
         status
     };
     let cases_status = match (options.dry_run, cases_path.exists(), &cases_kept) {
@@ -1707,6 +1711,7 @@ fn stop_already_generated(
         Some(dir_plan) => Some(written_status(write_lab_dir(
             dir_plan,
             &bytes,
+            now_unix_ms(),
             &mut written,
             &mut kept,
         )?)),
