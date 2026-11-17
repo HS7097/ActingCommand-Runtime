@@ -384,11 +384,15 @@ jobs:
             throw "outcome_release_gate_failed: outcome-guard release $release exited with code $LASTEXITCODE"
           }
 
+      # Workflow #479 ACIB-0: acib is left out of this cargo run, so its dependencies take no part
+      # in the feature resolution of the Runtime and Tools executables; they are built exactly as
+      # they were before acib joined the workspace. acib is built in a run of its own below.
       - name: Build Windows executables
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           & cargo build --locked --release --target x86_64-pc-windows-msvc `
+            --workspace --exclude actingcommand-ios-bridge `
             --bin actingcommand-actingd `
             --bin actingctl `
             --bin actingwatch `

@@ -62,6 +62,9 @@ pub enum Problem {
     RsdHandshakeFailed,
     /// The installation proxy did not answer the list of the user's applications.
     AppsLookupFailed,
+    /// More bundle identifiers hold the text than `--max-matching` allows, or all of the user's
+    /// applications do: `apps` names none of them, only the two counts.
+    TooManyMatching,
 }
 
 /// A refusal or failure: the word, and the library's error text where the library gave one.
@@ -179,7 +182,8 @@ pub struct Services {
 }
 
 /// Whether a developer image is mounted, as far as the image mounter's answers tell: `true`,
-/// `false` only when the listing of what is mounted answered an empty list, else `"unknown"`.
+/// `false` only when the listing of what is mounted answered an empty list and no query failed,
+/// else `"unknown"`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mounted {
     Yes,
@@ -199,21 +203,25 @@ impl Serialize for Mounted {
 
 impl Mounted {
     /// The judgement of the queries: an image found by a lookup or a listing that is not empty
-    /// is `Yes`; an empty listing is `No` unless a lookup found an image (`Unknown`, the two
-    /// answers disagree); without a listing and without a found image it is `Unknown`.
+    /// is `Yes`; an empty listing is `No` only when no query failed and no lookup found an
+    /// image; everything else is `Unknown` (an empty listing beside a failed query or a found
+    /// image, no listing and no found image).
     pub fn judged(queries: &[ImageQuery]) -> Self {
         let found = queries
             .iter()
             .any(|query| query.answer == ImageAnswer::Found);
+        let failed = queries
+            .iter()
+            .any(|query| query.answer == ImageAnswer::Failed);
         let listed = queries
             .iter()
             .find(|query| query.answer == ImageAnswer::Listed)
             .and_then(|query| query.listed.as_ref())
             .map(Vec::len);
-        match (listed, found) {
-            (Some(0), false) => Self::No,
-            (Some(0), true) | (None, false) => Self::Unknown,
-            (Some(_), _) | (None, true) => Self::Yes,
+        match (listed, found, failed) {
+            (Some(0), false, false) => Self::No,
+            (Some(0), _, _) | (None, false, _) => Self::Unknown,
+            (Some(_), _, _) | (None, true, _) => Self::Yes,
         }
     }
 }
@@ -331,41 +339,60 @@ pub struct Images {
     pub queries: Vec<ImageQuery>,
 }
 
-/// `acib apps --device <n> --contains <text>`: the bundle identifiers of the user's
-/// applications that hold the text (without regard to case), sorted, and how many user
-/// applications there are. No other application is named, and nothing else of a record shown.
+/// `acib apps --device <n> --contains <text> [--max-matching <m>]`: how many bundle identifiers
+/// of the user's applications hold the text (without regard to case) and how many user
+/// applications there are; and, when the matching ones are at most `<m>` and not all of the
+/// user's applications, those identifiers, sorted. Otherwise no identifier is named and the line
+/// answers `too_many_matching`: the whole list, or most of it, is never printed. Nothing else of
+/// a record is shown.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Apps {
     pub command: CommandName,
     pub device: u32,
     pub contains: String,
-    pub matching: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub matching: Option<Vec<String>>,
+    pub matching_count: usize,
     pub user_applications: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub problem: Option<Problem>,
 }
 
 impl Apps {
-    /// The answer for the bundle identifiers of all user applications.
+    /// The answer for the bundle identifiers of all user applications, naming at most
+    /// `max_matching` of them.
     pub fn of<'a>(
         device: u32,
         contains: &str,
+        max_matching: usize,
         identifiers: impl IntoIterator<Item = &'a str>,
     ) -> Self {
         let wanted = contains.to_lowercase();
         let mut user_applications = 0;
-        let mut matching = Vec::new();
+        let mut held = Vec::new();
         for identifier in identifiers {
             user_applications += 1;
             if identifier.to_lowercase().contains(wanted.as_str()) {
-                matching.push(redact::shown_bundle_identifier(identifier));
+                held.push(redact::shown_bundle_identifier(identifier));
             }
         }
-        matching.sort();
+        let matching_count = held.len();
+        let too_many = matching_count > max_matching
+            || (matching_count > 0 && matching_count == user_applications);
+        let (matching, problem) = if too_many {
+            (None, Some(Problem::TooManyMatching))
+        } else {
+            held.sort();
+            (Some(held), None)
+        };
         Self {
             command: CommandName::Apps,
             device,
             contains: contains.to_owned(),
             matching,
+            matching_count,
             user_applications,
+            problem,
         }
     }
 }
@@ -410,7 +437,8 @@ impl Line {
         match self {
             Self::Refused(_) => false,
             Self::Info(info) => info.problem.is_none(),
-            Self::Devices(_) | Self::Services(_) | Self::Images(_) | Self::Apps(_) => true,
+            Self::Apps(apps) => apps.problem.is_none(),
+            Self::Devices(_) | Self::Services(_) | Self::Images(_) => true,
         }
     }
 }
@@ -593,6 +621,7 @@ mod tests {
                 Line::Apps(Apps::of(
                     3,
                     "Game",
+                    5,
                     [
                         "com.example.GameOne",
                         "com.example.tool",
@@ -600,13 +629,28 @@ mod tests {
                         "com.example.endgame_x",
                     ],
                 )),
-                r#"{"command":"apps","device":3,"contains":"Game","matching":["com.example.GameOne","com.example.game-two","withheld"],"user_applications":4}"#,
+                r#"{"command":"apps","device":3,"contains":"Game","matching":["com.example.GameOne","com.example.game-two","withheld"],"matching_count":3,"user_applications":4}"#,
                 true,
             ),
             (
-                Line::Apps(Apps::of(3, "absent", ["com.example.one"])),
-                r#"{"command":"apps","device":3,"contains":"absent","matching":[],"user_applications":1}"#,
+                Line::Apps(Apps::of(3, "absent", 5, ["com.example.one"])),
+                r#"{"command":"apps","device":3,"contains":"absent","matching":[],"matching_count":0,"user_applications":1}"#,
                 true,
+            ),
+            (
+                Line::Apps(Apps::of(
+                    3,
+                    "example",
+                    2,
+                    [
+                        "com.example.one",
+                        "com.example.two",
+                        "com.example.three",
+                        "org.other.app",
+                    ],
+                )),
+                r#"{"command":"apps","device":3,"contains":"example","matching_count":3,"user_applications":4,"problem":"too_many_matching"}"#,
+                false,
             ),
             (
                 Line::refused(
@@ -689,6 +733,7 @@ mod tests {
             "image_type",
             "listed",
             "matching",
+            "matching_count",
             "members",
             "mounted",
             "name",
@@ -754,6 +799,7 @@ mod tests {
             (Problem::RsdUnreachable, "rsd_unreachable"),
             (Problem::RsdHandshakeFailed, "rsd_handshake_failed"),
             (Problem::AppsLookupFailed, "apps_lookup_failed"),
+            (Problem::TooManyMatching, "too_many_matching"),
         ];
         let mut seen = BTreeSet::new();
         for (problem, word) in words {
@@ -801,8 +847,8 @@ mod tests {
         );
     }
 
-    /// `mounted` is `false` only on an empty listing (and no image found), `true` on a listing
-    /// with an entry or a found image, `"unknown"` otherwise.
+    /// `mounted` is `false` only on an empty listing with no query failed and no image found,
+    /// `true` on a listing with an entry or a found image, `"unknown"` otherwise.
     #[test]
     fn mounted_is_false_only_on_an_empty_listing_and_unknown_without_one() {
         let entry = || ListedImage::of(Some(vec!["ImageType"]));
@@ -825,10 +871,19 @@ mod tests {
                 vec![
                     ImageQuery::listing(Vec::new()),
                     ImageQuery::lookup("Personalized", false),
-                    failed_lookup(),
+                    ImageQuery::lookup("Developer", false),
                 ],
                 Mounted::No,
-                "an empty listing, nothing found",
+                "an empty listing, nothing found, nothing failed",
+            ),
+            (
+                vec![
+                    ImageQuery::listing(Vec::new()),
+                    ImageQuery::lookup("Developer", false),
+                    failed_lookup(),
+                ],
+                Mounted::Unknown,
+                "an empty listing beside a failed lookup",
             ),
             (
                 vec![
@@ -845,6 +900,11 @@ mod tests {
                 ],
                 Mounted::Yes,
                 "a listed entry",
+            ),
+            (
+                vec![ImageQuery::listing(vec![entry()]), failed_lookup()],
+                Mounted::Yes,
+                "a listed entry beside a failed lookup",
             ),
             (
                 vec![failed_listing(), ImageQuery::lookup("Developer", true)],
@@ -875,5 +935,64 @@ mod tests {
             serde_json::to_string(&Mounted::Unknown).unwrap(),
             r#""unknown""#
         );
+    }
+
+    /// `apps` names the matching bundle identifiers only when they are at most the bound and
+    /// not all of the user's applications; otherwise its line holds the two counts and no
+    /// identifier, and answers `too_many_matching` (status 1).
+    #[test]
+    fn apps_names_no_identifier_when_more_than_the_bound_or_all_match() {
+        const ONE: &str = "com.example.game-one";
+        const TWO: &str = "com.example.game-two";
+        const THREE: &str = "com.example.game-three";
+        const OTHER: &str = "com.example.tool";
+        let cases = [
+            (
+                2,
+                vec![ONE, TWO, OTHER],
+                Some(vec![ONE, TWO]),
+                2,
+                "as many as the bound",
+            ),
+            (
+                2,
+                vec![ONE, TWO, THREE, OTHER],
+                None,
+                3,
+                "one more than the bound",
+            ),
+            (1, vec![ONE, OTHER], Some(vec![ONE]), 1, "one, the bound"),
+            (
+                1,
+                vec![ONE, TWO, OTHER],
+                None,
+                2,
+                "one more than a bound of one",
+            ),
+            (5, vec![ONE, TWO], None, 2, "all of them, within the bound"),
+            (5, vec![ONE], None, 1, "the only one"),
+            (5, vec![OTHER], Some(Vec::new()), 0, "none"),
+            (5, Vec::new(), Some(Vec::new()), 0, "no user application"),
+        ];
+        for (bound, identifiers, named, count, case) in cases {
+            let refused = named.is_none();
+            let apps = Apps::of(3, "Game", bound, identifiers.iter().copied());
+            let expected: Option<Vec<String>> =
+                named.map(|names| names.into_iter().map(str::to_owned).collect());
+            assert_eq!(apps.matching, expected, "{case}");
+            assert_eq!(apps.matching_count, count, "{case}");
+            assert_eq!(apps.user_applications, identifiers.len(), "{case}");
+            assert_eq!(
+                apps.problem,
+                refused.then_some(Problem::TooManyMatching),
+                "{case}"
+            );
+            let line = Line::Apps(apps);
+            assert_eq!(line.answered(), !refused, "{case}");
+            if refused {
+                let text = json(&line);
+                assert!(!text.contains("com.example"), "{case}: {text}");
+            }
+        }
     }
 }

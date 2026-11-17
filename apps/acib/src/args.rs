@@ -7,12 +7,12 @@
 //! acib info     --device <n>                     [--timeout-ms <ms>]
 //! acib services --device <n>                     [--timeout-ms <ms>]
 //! acib images   --device <n>                     [--timeout-ms <ms>]
-//! acib apps     --device <n> --contains <text>   [--timeout-ms <ms>]
+//! acib apps     --device <n> --contains <text>   [--max-matching <m>] [--timeout-ms <ms>]
 //! ```
 //!
 //! `<n>` is the device's usbmuxd session number, as `acib devices` lists it. `<text>` is what the
-//! bundle identifiers asked for hold, at least three characters. Anything else is refused with
-//! `command_line_invalid`.
+//! bundle identifiers asked for hold, at least three characters. `<m>` is the most identifiers
+//! `apps` names (at least 1). Anything else is refused with `command_line_invalid`.
 
 use crate::answer::CommandName;
 
@@ -21,6 +21,9 @@ pub const DEFAULT_TIMEOUT_MS: u64 = 30_000;
 /// The fewest characters `--contains` takes: `apps` answers what was asked for, never the
 /// whole list.
 pub const SHORTEST_CONTAINS: usize = 3;
+/// The most bundle identifiers `apps` names when `--max-matching` does not say: more matching
+/// ones answer `too_many_matching` with the counts alone.
+pub const DEFAULT_MAX_MATCHING: usize = 5;
 
 /// What a command line asks.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -29,7 +32,11 @@ pub enum Request {
     Info(u32),
     Services(u32),
     Images(u32),
-    Apps { device: u32, contains: String },
+    Apps {
+        device: u32,
+        contains: String,
+        max_matching: usize,
+    },
 }
 
 impl Request {
@@ -66,12 +73,13 @@ pub struct Invocation {
 
 /// The command line after the program's name; `None` when it is not one of the five commands
 /// with their options (an option given twice, an unknown option, a number that is not one, a
-/// text too short).
+/// text too short, a bound of 0).
 pub fn parse(arguments: &[String]) -> Option<Invocation> {
     let (command, options) = arguments.split_first()?;
     let mut device = None;
     let mut timeout_ms = None;
     let mut contains = None;
+    let mut max_matching = None;
     for pair in options.chunks(2) {
         let [option, value] = pair else {
             return None;
@@ -82,15 +90,22 @@ pub fn parse(arguments: &[String]) -> Option<Invocation> {
                 timeout_ms = Some(number::<u64>(value).filter(|ms| *ms > 0)?);
             }
             "--contains" if contains.is_none() => contains = Some(text(value)?),
+            "--max-matching" if max_matching.is_none() => {
+                max_matching = Some(number::<usize>(value).filter(|most| *most > 0)?);
+            }
             _ => return None,
         }
     }
-    let request = match (command.as_str(), device, contains) {
-        ("devices", None, None) => Request::Devices,
-        ("info", Some(device), None) => Request::Info(device),
-        ("services", Some(device), None) => Request::Services(device),
-        ("images", Some(device), None) => Request::Images(device),
-        ("apps", Some(device), Some(contains)) => Request::Apps { device, contains },
+    let request = match (command.as_str(), device, contains, max_matching) {
+        ("devices", None, None, None) => Request::Devices,
+        ("info", Some(device), None, None) => Request::Info(device),
+        ("services", Some(device), None, None) => Request::Services(device),
+        ("images", Some(device), None, None) => Request::Images(device),
+        ("apps", Some(device), Some(contains), max_matching) => Request::Apps {
+            device,
+            contains,
+            max_matching: max_matching.unwrap_or(DEFAULT_MAX_MATCHING),
+        },
         _ => return None,
     };
     Some(Invocation {
@@ -198,7 +213,8 @@ mod tests {
     }
 
     /// `apps` needs `--device` and `--contains` of at least three characters (counted as
-    /// characters, not bytes); no other command takes `--contains`.
+    /// characters, not bytes) and takes `--max-matching` of at least 1 (default
+    /// [`DEFAULT_MAX_MATCHING`]); no other command takes `--contains` or `--max-matching`.
     #[test]
     fn the_apps_command_takes_a_text_of_three_characters_or_more() {
         assert_eq!(
@@ -207,6 +223,7 @@ mod tests {
                 request: Request::Apps {
                     device: 3,
                     contains: "game".to_owned(),
+                    max_matching: DEFAULT_MAX_MATCHING,
                 },
                 timeout_ms: DEFAULT_TIMEOUT_MS,
             })
@@ -225,6 +242,7 @@ mod tests {
                 request: Request::Apps {
                     device: 4,
                     contains: "Abc".to_owned(),
+                    max_matching: DEFAULT_MAX_MATCHING,
                 },
                 timeout_ms: 9_000,
             })
@@ -235,8 +253,29 @@ mod tests {
             Some(Request::Apps {
                 device: 3,
                 contains: "äöü".to_owned(),
+                max_matching: DEFAULT_MAX_MATCHING,
             })
         );
+        for (bound, most) in [("1", 1), ("12", 12)] {
+            assert_eq!(
+                parsed(&[
+                    "apps",
+                    "--max-matching",
+                    bound,
+                    "--device",
+                    "3",
+                    "--contains",
+                    "game"
+                ])
+                .map(|invocation| invocation.request),
+                Some(Request::Apps {
+                    device: 3,
+                    contains: "game".to_owned(),
+                    max_matching: most,
+                }),
+                "--max-matching {bound}"
+            );
+        }
         let refused: &[&[&str]] = &[
             &["apps"],
             &["apps", "--device", "3"],
@@ -258,6 +297,38 @@ mod tests {
             &["info", "--device", "3", "--contains", "game"],
             &["services", "--device", "3", "--contains", "game"],
             &["images", "--device", "3", "--contains", "game"],
+            &[
+                "apps",
+                "--device",
+                "3",
+                "--contains",
+                "game",
+                "--max-matching",
+                "0",
+            ],
+            &[
+                "apps",
+                "--device",
+                "3",
+                "--contains",
+                "game",
+                "--max-matching",
+                "-1",
+            ],
+            &[
+                "apps",
+                "--device",
+                "3",
+                "--contains",
+                "game",
+                "--max-matching",
+                "2",
+                "--max-matching",
+                "2",
+            ],
+            &["apps", "--device", "3", "--max-matching", "2"],
+            &["images", "--device", "3", "--max-matching", "2"],
+            &["devices", "--max-matching", "2"],
         ];
         for line in refused {
             assert_eq!(parsed(line), None, "{line:?}");

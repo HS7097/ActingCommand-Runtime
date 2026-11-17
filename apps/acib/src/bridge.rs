@@ -47,7 +47,8 @@ pub async fn answer(request: Request) -> Line {
         Request::Apps {
             device: number,
             contains,
-        } => apps(number, &contains).await,
+            max_matching,
+        } => apps(number, &contains, max_matching).await,
     };
     answered.unwrap_or_else(|failure| Line::refused(Some(command), device, failure))
 }
@@ -203,7 +204,7 @@ async fn images(number: u32) -> Result<Line, Failure> {
     }))
 }
 
-async fn apps(number: u32, contains: &str) -> Result<Line, Failure> {
+async fn apps(number: u32, contains: &str, max_matching: usize) -> Result<Line, Failure> {
     let device = find(number).await?;
     let record = paired_record(&device).await?;
     let provider = device.to_provider(UsbmuxdAddr::default(), LABEL);
@@ -215,7 +216,7 @@ async fn apps(number: u32, contains: &str) -> Result<Line, Failure> {
     .await?;
     let mut proxy = InstallationProxyClient::new(connection);
     // The records stay in this function: only the bundle identifiers that hold the text leave
-    // it, with the count of all user applications.
+    // it, with the counts, and none when they are too many or all of them.
     let applications = proxy
         .get_apps(Some(USER_APPLICATIONS), None)
         .await
@@ -223,6 +224,7 @@ async fn apps(number: u32, contains: &str) -> Result<Line, Failure> {
     Ok(Line::Apps(Apps::of(
         number,
         contains,
+        max_matching,
         applications.keys().map(String::as_str),
     )))
 }
