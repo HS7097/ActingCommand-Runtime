@@ -625,7 +625,8 @@ naming this file.
   `"pending"` or a number of the pack's own: a decision that names the origin `model` is refused
   (`value_origin_model`). Its `warnings` are those of the adopted package and of no package
   (#463 AD-1, 0.12.72); those of the root's other packages are counted by code in
-  `other_packages_warnings` (`total`, `counts`).
+  `other_packages_warnings` (`total`, `counts`), unless the split could not be made: then every
+  warning is in `warnings` whole, `adopt_warnings_not_split` last, and no `other_packages_warnings`.
 - **Where a pack stands** (#463 S3-14, 0.12.68; `contracts/standard-pack-schedule.md`, "Where a
   pack stands"). `ac_standard_pack_status` (`root`, `repo`, `package_id`, `state_dir`,
   `installation`) answers, for

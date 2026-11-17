@@ -831,6 +831,9 @@ What the state directory is to each part:
   status` of the package are given that same `--state-dir`: a trial recorded under another
   directory is not read there, and the adoption answers `review.trial` `none` and warns
   `not_tried` for a package that was tried. Where a record is read or written is not changed.
+  At deploy that `--state-dir` lies outside the checkout: `standard-pack trial` refuses a state
+  directory that is or lies inside a repository (`trial_state_dir_refused`, `trial_state_place`
+  `repository`; [standard-pack-trial.md](standard-pack-trial.md), "The record").
 - The advice of `replace_across_volumes`, and of the steps after an interrupted call, names
   `--session-state-dir` beside `--package`.
 

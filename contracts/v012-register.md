@@ -37142,11 +37142,14 @@ their order; the answer's other members; adoption by `--package`; `record stop`'
 
 **At deploy.** Nothing to configure. An agent on a machine whose recordings and checkout lie on two
 volumes adopts by `--record-id <id> --session-state-dir <the recordings' directory> --state-dir
-<a directory on the checkout's volume>`, and `--replace` works there. It gives `standard-pack trial`
-and `standard-pack status` of the package that same `--state-dir` (fix round 1): adoption reads
-`review.trial` from the trial records under its `--state-dir`, and a trial recorded under another
-directory (actinglab's session directory, the trial's default) is not read there, so the adoption
-would answer `review.trial` `none` and warn `not_tried` for a package that was tried.
+<a directory on the checkout's volume>`, and `--replace` works there. That `--state-dir` lies
+outside the checkout: `standard-pack trial`, given the same directory, refuses one that is or lies
+inside a repository (`trial_state_dir_refused`, `trial_state_place` `repository`). It gives
+`standard-pack trial` and `standard-pack status` of the package that same `--state-dir` (fix round
+1): adoption reads `review.trial` from the trial records under its `--state-dir`, and a trial
+recorded under another directory (actinglab's session directory, the trial's default) is not read
+there, so the adoption would answer `review.trial` `none` and warn `not_tried` for a package that
+was tried.
 
 **Fix round 1** (coordinator work order `rd-1118/brief-463-ad1-fix1.md`, after the independent
 review `rd-1118/review-1813.md` on `17017461`, the coordinator's rulings; main `f0c64ae8`, the
